@@ -106,6 +106,7 @@ mod tests {
         check!(raft_error_code(&RaftError::ChangeRejected("no".into())) == INVALID_REGISTRATION,);
         // Anything else is not something the client can act on specifically.
         check!(raft_error_code(&RaftError::Shutdown) == UNKNOWN_SERVER_ERROR);
+        check!(UNKNOWN_SERVER_ERROR == -1);
     }
 
     /// The declared keys are the generated ones. The versions these are served
@@ -114,5 +115,109 @@ mod tests {
     #[test]
     fn lifecycle_api_keys_match_generated_schemas() {
         assert2::assert!(SUPPORTED_APIS == [70]);
+    }
+
+    #[tokio::test]
+    async fn controller_registration_dispatch_and_error_paths() {
+        use krabka_protocol::{
+            Decode, Encode,
+            owned::{
+                controller_registration_request::{
+                    self, ControllerRegistrationRequest, Listener as WireListener,
+                },
+                controller_registration_response::ControllerRegistrationResponse,
+            },
+        };
+
+        use crate::server::test_support::{
+            single_voter_engine, test_engine_with_voters, wait_for_leader,
+        };
+
+        let reg_req = |id: i32| {
+            let req = ControllerRegistrationRequest {
+                controller_id: id,
+                incarnation_id: krabka_protocol::primitives::uuid::Uuid(
+                    *uuid::Uuid::from_u128(1).as_bytes(),
+                ),
+                zk_migration_ready: false,
+                listeners: vec![WireListener {
+                    name: "CONTROLLER".into(),
+                    host: "controller-1".into(),
+                    port: 9093,
+                    security_protocol: 0,
+                    ..Default::default()
+                }],
+                features: vec![],
+                ..Default::default()
+            };
+            let mut buf = bytes::BytesMut::new();
+            req.encode(&mut buf, 0).unwrap();
+            buf.freeze()
+        };
+
+        // Unknown API returns protocol error
+        let (engine_non_leader, _dir1) = test_engine_with_voters(1, std::iter::empty());
+        let err_resp = super::dispatch(999, 0, &[], &engine_non_leader).await;
+        assert2::assert!(err_resp.is_err());
+
+        // 1. Non-leader engine returns NOT_CONTROLLER (41)
+        assert2::assert!(!is_leader(&engine_non_leader));
+        let resp_bytes = super::dispatch(
+            controller_registration_request::API_KEY,
+            0,
+            &reg_req(1),
+            &engine_non_leader,
+        )
+        .await
+        .expect("dispatch");
+        let resp = ControllerRegistrationResponse::decode(&mut resp_bytes.as_ref(), 0).unwrap();
+        assert2::assert!(resp.error_code == NOT_CONTROLLER);
+
+        // 2. Leader engine
+        let (engine_leader, _dir2) = single_voter_engine();
+        wait_for_leader(&engine_leader).await;
+        assert2::assert!(is_leader(&engine_leader));
+
+        // Controller ID not in voters returns UNKNOWN_CONTROLLER_ID (116)
+        let resp_bytes2 = super::dispatch(
+            controller_registration_request::API_KEY,
+            0,
+            &reg_req(99),
+            &engine_leader,
+        )
+        .await
+        .expect("dispatch");
+        let resp2 = ControllerRegistrationResponse::decode(&mut resp_bytes2.as_ref(), 0).unwrap();
+        assert2::assert!(resp2.error_code == UNKNOWN_CONTROLLER_ID);
+
+        // Valid controller ID in voters succeeds (0)
+        let resp_bytes3 = super::dispatch(
+            controller_registration_request::API_KEY,
+            0,
+            &reg_req(1),
+            &engine_leader,
+        )
+        .await
+        .expect("dispatch");
+        let resp3 = ControllerRegistrationResponse::decode(&mut resp_bytes3.as_ref(), 0).unwrap();
+        assert2::assert!(resp3.error_code == SUCCESS);
+        assert2::assert!(
+            engine_leader
+                .current_image()
+                .controller(crate::NodeId(1))
+                .is_some()
+        );
+
+        // Duplicate registration succeeds without error (0)
+        let resp_bytes4 = super::dispatch(
+            controller_registration_request::API_KEY,
+            0,
+            &reg_req(1),
+            &engine_leader,
+        )
+        .await
+        .expect("dispatch");
+        let resp4 = ControllerRegistrationResponse::decode(&mut resp_bytes4.as_ref(), 0).unwrap();
+        assert2::assert!(resp4.error_code == SUCCESS);
     }
 }

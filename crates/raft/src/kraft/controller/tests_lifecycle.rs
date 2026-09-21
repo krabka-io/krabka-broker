@@ -196,3 +196,23 @@ async fn follower_with_live_leader_does_not_elect() {
     assert2::assert!(state.leader_id == Some(NodeId(2)));
     ctrl.shutdown().await;
 }
+
+#[tokio::test]
+async fn controller_handle_reports_node_id_probe_and_shuts_down() {
+    let (ctrl, _dir) = build(NodeId(1), &[NodeId(1)]);
+    check!(ctrl.node_id() == NodeId(1));
+    check!(matches!(
+        ctrl.probe_kraft_version("127.0.0.1:9093", 1).await,
+        Err(RaftError::ChangeRejected(_))
+    ));
+    ctrl.shutdown().await;
+    let mut shutdown_observed = false;
+    for _ in 0..50 {
+        if ctrl.inject_event(Event::ElectionTimeout).await.is_err() {
+            shutdown_observed = true;
+            break;
+        }
+        tokio::time::sleep(StdDuration::from_millis(5)).await;
+    }
+    check!(shutdown_observed);
+}

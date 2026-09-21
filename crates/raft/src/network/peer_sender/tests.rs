@@ -19,6 +19,23 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use super::*;
 use crate::{kraft::transport::api_key, network::dialer::PlaintextDialer};
 
+struct TestRecordingDialer {
+    options: Arc<std::sync::Mutex<Vec<ConnectionOptions>>>,
+}
+
+#[async_trait]
+impl OutboundDialer for TestRecordingDialer {
+    async fn dial(
+        &self,
+        node_id: NodeId,
+        address: &str,
+        options: ConnectionOptions,
+    ) -> Result<krabka_client_core::Connection, krabka_client_core::ClientError> {
+        self.options.lock().unwrap().push(options.clone());
+        PlaintextDialer.dial(node_id, address, options).await
+    }
+}
+
 fn voter_with_controller(id: NodeId, host: &str, port: u16) -> krabka_metadata::Voter {
     krabka_metadata::Voter {
         id,
@@ -172,6 +189,8 @@ async fn probe_reports_kraft_support_only_within_the_advertised_range() {
         buf.to_vec()
     }
 
+    use krabka_protocol::{Decode, owned::api_versions_request::ApiVersionsRequest};
+
     const KRAFT: &str = krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE;
     // (what it is, feature advertised, range, finalized version, supported?)
     let cases: [(&str, &str, i16, i16, u16, bool); 5] = [
@@ -209,18 +228,25 @@ async fn probe_reports_kraft_support_only_within_the_advertised_range() {
             write_response_frame(&mut stream, corr, false, &api_versions_response_v0()).await;
 
             let probe = read_frame(&mut stream).await;
-            let (key, _, corr, client_id, _) = parse_request_header(&probe);
+            let (key, version, corr, client_id, probe_body) = parse_request_header(&probe);
             assert2::assert!(key == ApiKey(18));
             assert2::assert!(client_id == "krabka-voter-probe");
+            let mut cur = probe_body;
+            let req = ApiVersionsRequest::decode(&mut cur, version.get()).expect("decode probe");
+            assert2::assert!(req.client_software_name == "krabka");
+            assert2::assert!(req.client_software_version == env!("CARGO_PKG_VERSION"));
             write_response_frame(&mut stream, corr, false, &body).await;
         });
 
+        let recorded_options = Arc::new(std::sync::Mutex::new(Vec::new()));
         let voters = voter_set_with_controller(NodeId(2), &addr.ip().to_string(), addr.port());
         let sender = RealPeerSender::new(
             voters,
             &[],
             "raft-client".into(),
-            Arc::new(PlaintextDialer),
+            Arc::new(TestRecordingDialer {
+                options: Arc::clone(&recorded_options),
+            }),
             krabka_client_core::ConnectionDispatchQueueCapacity::new(7).unwrap(),
             krabka_client_core::ClientFrameMax::try_from(krabka_units::kibibytes(32)).unwrap(),
         );
@@ -228,6 +254,18 @@ async fn probe_reports_kraft_support_only_within_the_advertised_range() {
             .await
             .expect("probe");
         assert2::check!(got == supported, "{what}");
+        {
+            let opts = recorded_options.lock().unwrap();
+            assert2::assert!(
+                opts.last().unwrap().dispatch_queue_capacity
+                    == krabka_client_core::ConnectionDispatchQueueCapacity::new(7).unwrap()
+            );
+            assert2::assert!(
+                opts.last().unwrap().frame_max
+                    == krabka_client_core::ClientFrameMax::try_from(krabka_units::kibibytes(32))
+                        .unwrap()
+            );
+        }
         server.await.expect("fake peer");
     }
 }
@@ -255,12 +293,15 @@ async fn real_peer_sender_sends_expected_api_version_client_id_and_body() {
         write_response_frame(&mut stream, corr, true, b"raft-response").await;
     });
 
+    let recorded_options = Arc::new(std::sync::Mutex::new(Vec::new()));
     let voters = voter_set_with_controller(NodeId(2), &addr.ip().to_string(), addr.port());
     let sender = RealPeerSender::new(
         voters,
         &[],
         "raft-client".into(),
-        Arc::new(PlaintextDialer),
+        Arc::new(TestRecordingDialer {
+            options: Arc::clone(&recorded_options),
+        }),
         krabka_client_core::ConnectionDispatchQueueCapacity::new(7).unwrap(),
         krabka_client_core::ClientFrameMax::try_from(krabka_units::kibibytes(32)).unwrap(),
     );
@@ -272,6 +313,18 @@ async fn real_peer_sender_sends_expected_api_version_client_id_and_body() {
         .expect("send");
 
     assert2::assert!(response == Bytes::from_static(b"raft-response"));
+    {
+        let opts = recorded_options.lock().unwrap();
+        assert2::assert!(
+            opts[0].dispatch_queue_capacity
+                == krabka_client_core::ConnectionDispatchQueueCapacity::new(7).unwrap()
+        );
+        assert2::assert!(
+            opts[0].frame_max
+                == krabka_client_core::ClientFrameMax::try_from(krabka_units::kibibytes(32))
+                    .unwrap()
+        );
+    }
     let observed = tokio::time::timeout(std::time::Duration::from_secs(5), observed_rx.recv())
         .await
         .expect("server observed request")
@@ -363,4 +416,33 @@ async fn a_peer_stays_reachable_after_it_leaves_the_voter_set() {
         .send(NodeId(9), api_key::FETCH, Bytes::from_static(b"fetch-body"))
         .await;
     assert2::assert!(let Err(RaftError::NotLeader { current_leader: None }) = response);
+
+    // Updating voters from an empty set makes the new voter reachable.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let api_versions = read_frame(&mut stream).await;
+        let (_, _, corr, _, _) = parse_request_header(&api_versions);
+        write_response_frame(&mut stream, corr, false, &api_versions_response_v0()).await;
+        let request = read_frame(&mut stream).await;
+        let (_, _, corr, _, _) = parse_request_header(&request);
+        write_response_frame(&mut stream, corr, true, b"fetch-response").await;
+    });
+    let host = addr.ip().to_string();
+    let new_voter = voter_with_controller(NodeId(5), &host, addr.port());
+    let sender = RealPeerSender::new(
+        VoterSet::default(),
+        &[],
+        "raft-client".into(),
+        Arc::new(PlaintextDialer),
+        krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+        krabka_client_core::ClientFrameMax::default(),
+    );
+    sender.update_voters(&VoterSet::from_voters([new_voter]));
+    let response = sender
+        .send(NodeId(5), api_key::FETCH, Bytes::from_static(b"fetch-body"))
+        .await;
+    server.await.expect("fake peer");
+    assert2::assert!(response.unwrap() == Bytes::from_static(b"fetch-response"));
 }

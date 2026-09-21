@@ -272,4 +272,11 @@ mod tests {
 
         assert2::assert!(let Err(LogError::Io(_)) = remove_optional(&FileIo, &path));
     }
+
+    #[test]
+    fn remove_optional_ignores_missing_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("nonexistent-file");
+        assert2::assert!(remove_optional(&FileIo, &path).is_ok());
+    }
 }

@@ -296,3 +296,74 @@ fn a_supplied_value_identical_to_the_default_still_reports_as_static() {
             ]
     );
 }
+
+/// The KIP-464 pair (#728). A node that never named either key reports
+/// Kafka's default of 1 at `DEFAULT_CONFIG`. A named value heads the chain at
+/// `STATIC_BROKER_CONFIG` with the default beneath it.
+#[test]
+fn topic_creation_defaults_report_their_provenance() {
+    let wanted = |key: &str| {
+        key == config_keys::NUM_PARTITIONS || key == config_keys::DEFAULT_REPLICATION_FACTOR
+    };
+    let default_synonym = |key: &str| DescribeConfigsSynonym {
+        name: key.to_owned(),
+        value: Some("1".to_owned()),
+        source: CONFIG_SOURCE_DEFAULT,
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+    let entry = |key: &str, named: Option<&str>| DescribeConfigsResourceResult {
+        name: key.to_owned(),
+        value: Some(named.unwrap_or("1").to_owned()),
+        read_only: true,
+        config_source: if named.is_some() {
+            CONFIG_SOURCE_STATIC_BROKER
+        } else {
+            CONFIG_SOURCE_DEFAULT
+        },
+        is_sensitive: false,
+        synonyms: named
+            .map(|value| DescribeConfigsSynonym {
+                name: key.to_owned(),
+                value: Some(value.to_owned()),
+                source: CONFIG_SOURCE_STATIC_BROKER,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            })
+            .into_iter()
+            .chain(std::iter::once(default_synonym(key)))
+            .collect(),
+        config_type: INT,
+        documentation: Some(doc_for(key)),
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+
+    for (label, num_partitions, default_replication_factor, expected) in [
+        (
+            "neither named",
+            None,
+            None,
+            vec![
+                entry(config_keys::NUM_PARTITIONS, None),
+                entry(config_keys::DEFAULT_REPLICATION_FACTOR, None),
+            ],
+        ),
+        (
+            "both named",
+            Some(4),
+            Some(3),
+            vec![
+                entry(config_keys::NUM_PARTITIONS, Some("4")),
+                entry(config_keys::DEFAULT_REPLICATION_FACTOR, Some("3")),
+            ],
+        ),
+    ] {
+        let configs = StaticBrokerConfigs {
+            num_partitions,
+            default_replication_factor,
+            ..kafka_default_static_broker()
+        };
+
+        let entries = static_broker_entries(configs, &wanted, BOTH);
+
+        check!(entries == expected, "{label}");
+    }
+}

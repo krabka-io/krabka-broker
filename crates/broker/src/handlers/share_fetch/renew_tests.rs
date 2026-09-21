@@ -395,6 +395,13 @@ async fn renew_acknowledgements_renew_only_the_renew_offsets() {
     for case in cases() {
         let group = format!("renew-{}", case.name);
         let topic_id = create_topic(&broker, &group).await;
+        crate::test_support::initialize_share_state(
+            &broker,
+            &group,
+            uuid::Uuid::from_bytes(topic_id.0),
+            0,
+        )
+        .await;
         if !case.renew_enabled {
             disable_renew(&broker, &group).await;
         }
@@ -492,6 +499,13 @@ async fn a_renew_fetch_answers_a_denied_topic_as_an_acknowledge_error() {
     })
     .await;
     let topic_id = create_topic(&broker, "renew-denied").await;
+    crate::test_support::initialize_share_state(
+        &broker,
+        "renew-denied",
+        uuid::Uuid::from_bytes(topic_id.0),
+        0,
+    )
+    .await;
     let request = |epoch, is_renew_ack, limits: Limits, batches: &[Batch]| ShareFetchRequest {
         group_id: Some("renew-denied".into()),
         member_id: Some("member".into()),

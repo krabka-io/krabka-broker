@@ -165,11 +165,41 @@ mod tests {
         assert2::check!(
             barrier_marker_fence_decision(admitted) == BarrierMarkerFenceDecision::Append
         );
-        for rejected in [
+        let admitted_zero = BarrierMarkerFenceFacts {
+            image_present: true,
+            expected_leader: 2,
+            expected_epoch: 0,
+            image_leader: 2,
+            image_epoch: 0,
+            current_leader: 2,
+            current_epoch: 0,
+        };
+        assert2::check!(
+            barrier_marker_fence_decision(admitted_zero) == BarrierMarkerFenceDecision::Append
+        );
+        for malformed in [
             BarrierMarkerFenceFacts {
                 expected_epoch: -1,
                 ..admitted
             },
+            BarrierMarkerFenceFacts {
+                image_epoch: -1,
+                ..admitted
+            },
+            BarrierMarkerFenceFacts {
+                current_epoch: -1,
+                ..admitted
+            },
+            BarrierMarkerFenceFacts {
+                image_present: false,
+                ..admitted
+            },
+        ] {
+            assert2::check!(
+                barrier_marker_fence_decision(malformed) == BarrierMarkerFenceDecision::Malformed
+            );
+        }
+        for rejected in [
             BarrierMarkerFenceFacts {
                 image_leader: 3,
                 ..admitted

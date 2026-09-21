@@ -40,9 +40,9 @@ macro_rules! api_version {
 /// and 80-82; 4.0.0's schemas carry the same tags.
 ///
 /// This table is that set minus the RPCs the controller listener already
-/// answers without a broker handler: `Fetch`, `ApiVersions`, the KIP-595
-/// quorum RPCs, `FetchSnapshot`, `DescribeCluster`, controller registration,
-/// and the KIP-853 voter RPCs. What remains is the subset that
+/// answers without a broker handler: `Fetch`, `SaslHandshake`, `ApiVersions`,
+/// `SaslAuthenticate`, the KIP-595 quorum RPCs, `FetchSnapshot`,
+/// `DescribeCluster`, controller registration, and the KIP-853 voter RPCs. What remains is the subset that
 /// reuses a broker handler, which is what this router bridges to.
 ///
 /// `BrokerRegistration` and `BrokerHeartbeat` are not Admin APIs, and they
@@ -63,16 +63,10 @@ macro_rules! api_version {
 /// `kafka-clients-4.3.1.jar` is exactly `[CONTROLLER]`, so it is advertised
 /// here and never on the client listener.
 ///
-/// Four of Kafka's keys are in neither list, so krabka's controller listener
-/// advertises 37 of the 41. `SaslHandshake` and `SaslAuthenticate` are
-/// consumed by `BrokerRaftHandshake` before the controller server sees the
-/// stream, so the listener speaks them without listing them. `AlterPartition`
-/// and `AllocateProducerIds` do have broker handlers, but krabka's brokers
-/// send both to a controller's *broker* endpoint rather than to its controller
-/// listener, so routing them here would advertise a path nothing takes -- a
-/// forwarded `AllocateProducerIds` still reaches its handler, through the
-/// `Envelope` above rather than through a key of its own.
-/// `controller_listener_advertises_no_key_kafka_does_not` pins that shortfall.
+/// `AlterPartition` and `AllocateProducerIds` are inter-broker RPCs that a
+/// Kafka broker sends to the active controller over its controller listener,
+/// so they are routed here as well. A broker that does not find them in this
+/// listener's `ApiVersions` table fails them with `UnsupportedVersionException`.
 ///
 /// `DescribeClientQuotas` is deliberately absent for a different reason: its
 /// schema is tagged `broker` only, so a Kafka controller neither advertises
@@ -91,6 +85,7 @@ const SUPPORTED_APIS: &[ControllerApiVersion] = &[
     api_version!(expire_delegation_token_request),
     api_version!(describe_delegation_token_request),
     api_version!(elect_leaders_request),
+    api_version!(alter_partition_request),
     api_version!(incremental_alter_configs_request),
     api_version!(alter_partition_reassignments_request),
     api_version!(list_partition_reassignments_request),
@@ -102,6 +97,7 @@ const SUPPORTED_APIS: &[ControllerApiVersion] = &[
     api_version!(broker_registration_request),
     api_version!(broker_heartbeat_request),
     api_version!(unregister_broker_request),
+    api_version!(allocate_producer_ids_request),
     api_version!(assign_replicas_to_dirs_request),
 ];
 
@@ -440,8 +436,7 @@ mod tests {
     /// The Kafka 4.x controller-listener set, as a live
     /// `mirror.gcr.io/apache/kafka:4.3.1` controller advertises it (the same
     /// set the 4.0.0 request schemas tag `controller`), minus the keys the
-    /// controller listener answers without this router and the four it does
-    /// not answer at all.
+    /// controller listener answers without this router.
     #[test]
     fn supported_set_matches_the_kafka_controller_listener_surface() {
         let keys: BTreeSet<_> = SUPPORTED_APIS.iter().map(|api| api.api_key).collect();
@@ -449,8 +444,8 @@ mod tests {
         check!(keys.len() == SUPPORTED_APIS.len());
         check!(
             keys == maplit::btreeset! {
-                19, 20, 29, 30, 31, 32, 33, 37, 38, 39, 40, 41, 43, 44, 45, 46, 49, 50, 51, 57, 58,
-                62, 63, 64, 73,
+                19, 20, 29, 30, 31, 32, 33, 37, 38, 39, 40, 41, 43, 44, 45, 46, 49, 50, 51, 56, 57,
+                58, 62, 63, 64, 67, 73,
             }
         );
     }

@@ -655,8 +655,9 @@ fn a_broker_that_overrides_nothing_still_reports_its_static_configuration() {
     // whole response. `apache/kafka:4.3.1` answers the same way: values from
     // the node's own configuration, read-only, and the KIP-98 expiry pair and
     // the KIP-211 retention pair at `DEFAULT_CONFIG` because this node never
-    // moved them off Kafka's built-in defaults. The idle window reports the
-    // same way, and sorts to the head of the response.
+    // moved them off Kafka's built-in defaults. The KIP-464 topic-creation
+    // pair reports the same way. So does the idle window, which sorts to the
+    // head of the response.
     let result = describe(
         &MetadataImage::new(Uuid::nil()),
         RESOURCE_TYPE_BROKER,
@@ -680,6 +681,17 @@ fn a_broker_that_overrides_nothing_still_reports_its_static_configuration() {
                     unknown_tagged_fields: UnknownTaggedFields::default(),
                 },
                 DescribeConfigsResourceResult {
+                    name: config_keys::DEFAULT_REPLICATION_FACTOR.to_owned(),
+                    value: Some("1".to_owned()),
+                    read_only: true,
+                    config_source: CONFIG_SOURCE_DEFAULT,
+                    is_sensitive: false,
+                    synonyms: Vec::new(),
+                    config_type: ConfigType::Int.wire(),
+                    documentation: None,
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                },
+                DescribeConfigsResourceResult {
                     name: NODE_ID.to_owned(),
                     value: Some("7".to_owned()),
                     read_only: true,
@@ -687,6 +699,17 @@ fn a_broker_that_overrides_nothing_still_reports_its_static_configuration() {
                     is_sensitive: false,
                     // The request asked for neither, so the entry carries
                     // neither, even though the registry has both.
+                    synonyms: Vec::new(),
+                    config_type: ConfigType::Int.wire(),
+                    documentation: None,
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                },
+                DescribeConfigsResourceResult {
+                    name: config_keys::NUM_PARTITIONS.to_owned(),
+                    value: Some("1".to_owned()),
+                    read_only: true,
+                    config_source: CONFIG_SOURCE_DEFAULT,
+                    is_sensitive: false,
                     synonyms: Vec::new(),
                     config_type: ConfigType::Int.wire(),
                     documentation: None,
@@ -797,9 +820,11 @@ fn the_key_filter_decides_what_a_broker_resource_reports() {
             None,
             vec![
                 config_keys::CONNECTIONS_MAX_IDLE_MS,
+                config_keys::DEFAULT_REPLICATION_FACTOR,
                 crate::throttle::FOLLOWER_THROTTLED_RATE_KEY,
                 crate::throttle::LEADER_THROTTLED_RATE_KEY,
                 NODE_ID,
+                config_keys::NUM_PARTITIONS,
                 config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS,
                 config_keys::OFFSETS_RETENTION_MINUTES,
                 config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
@@ -1374,7 +1399,9 @@ fn a_broker_reports_its_idle_window_beside_the_static_node_id() {
         names
             == vec![
                 config_keys::CONNECTIONS_MAX_IDLE_MS,
+                config_keys::DEFAULT_REPLICATION_FACTOR,
                 NODE_ID,
+                config_keys::NUM_PARTITIONS,
                 config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS,
                 config_keys::OFFSETS_RETENTION_MINUTES,
                 config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,

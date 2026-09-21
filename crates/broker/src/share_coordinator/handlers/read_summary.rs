@@ -190,15 +190,25 @@ mod tests {
             .initialize("share-group", topic_id, 4, 17, Offset(90))
             .await
             .expect("initialize state");
+        let image =
+            crate::share_coordinator::coordinator::test_support::image_with_topic(topic_id, 5);
+        broker
+            .share_coordinator
+            .read(&image, "share-group", topic_id, 4, 3)
+            .await
+            .expect("raise the stored leader epoch");
         broker
             .share_coordinator
             .write(
+                &image,
                 "share-group",
                 topic_id,
                 4,
-                (17, 3),
-                (Offset(101), 9),
-                vec![super::super::test_support::batch(101, 105)],
+                crate::share_coordinator::coordinator::test_support::share_write(
+                    (17, 3),
+                    (101, 9),
+                    vec![super::super::test_support::batch(101, 105)],
+                ),
             )
             .await
             .expect("write state");

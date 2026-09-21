@@ -8,7 +8,11 @@
 use krabka_units::prelude::{Time, secs};
 
 use super::QuorumStateMachine;
-use crate::types::{Epoch, LogOffsetMetadata, LogView, NodeId, QuorumState};
+use crate::{
+    action::Action,
+    event::Event,
+    types::{Epoch, LogOffsetMetadata, LogView, NodeId, QuorumState, SimInstant},
+};
 
 /// The end of `epoch` in a fake log of `end` records that all carry
 /// `last_epoch`: Kafka's lookup over a log with one epoch in it.
@@ -105,3 +109,26 @@ pub fn machine(me: NodeId, ids: &[NodeId]) -> QuorumStateMachine {
 
 /// The base election timeout for every test machine.
 pub const TEST_ELECTION_TIMEOUT: Time = secs(1);
+
+pub fn win_election(
+    m: &mut QuorumStateMachine,
+    log: &dyn LogView,
+    peers: &[NodeId],
+    now: SimInstant,
+) -> Vec<Action> {
+    let mut actions = m.on_event(Event::ElectionTimeout, log, now);
+    for epoch in [0, 1] {
+        for &from in peers {
+            actions.extend(m.on_event(
+                Event::ReceiveVoteResponse {
+                    from,
+                    epoch,
+                    vote_granted: true,
+                },
+                log,
+                now,
+            ));
+        }
+    }
+    actions
+}

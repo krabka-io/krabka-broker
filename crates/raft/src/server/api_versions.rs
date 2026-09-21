@@ -320,11 +320,57 @@ mod tests {
             assert2::assert!(error == expected);
         }
 
+        // Versions below v5 ignore routing validation and return Ok(0)
+        let err_v4 =
+            super::api_versions_routing_error(4, &[], "cluster", 7).expect("v4 routing check");
+        assert2::assert!(err_v4 == 0);
+
         let image = krabka_metadata::MetadataImage::new(Uuid::nil());
         let body =
             super::api_versions_response_body(5, &image, None, API_VERSIONS_REBOOTSTRAP_REQUIRED);
         let response = ApiVersionsResponse::decode(&mut body.as_ref(), 5).unwrap();
         assert2::assert!(response.error_code == API_VERSIONS_REBOOTSTRAP_REQUIRED);
         assert2::assert!(response.api_keys.is_empty());
+    }
+
+    #[test]
+    fn kraft_version_feature_range_and_finalized_features() {
+        use krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE;
+        use krabka_protocol::owned::api_versions_response::ApiVersionsResponse;
+
+        let mut image = krabka_metadata::MetadataImage::new(Uuid::nil());
+        image.apply(&krabka_metadata::MetadataRecord::V1KRaftVersion(
+            krabka_metadata::KRaftVersionRecord { kraft_version: 1 },
+        ));
+
+        // req_version = 3: JVM client < 4 requires min_version >= 1
+        let body_v3 = super::api_versions_response_body(3, &image, None, 0);
+        let resp_v3 = ApiVersionsResponse::decode(&mut &body_v3[..], 3).expect("decode v3");
+        let feat_v3 = resp_v3
+            .supported_features
+            .iter()
+            .find(|f| f.name == KRAFT_VERSION_FEATURE)
+            .expect("kraft.version supported feature");
+        assert2::assert!(feat_v3.min_version == 1);
+
+        // req_version = 4: supports min_version == 0
+        let body_v4 = super::api_versions_response_body(4, &image, None, 0);
+        let resp_v4 = ApiVersionsResponse::decode(&mut &body_v4[..], 4).expect("decode v4");
+        let feat_v4 = resp_v4
+            .supported_features
+            .iter()
+            .find(|f| f.name == KRAFT_VERSION_FEATURE)
+            .expect("kraft.version supported feature");
+        assert2::assert!(feat_v4.min_version == 0);
+
+        // Finalized features must contain kraft.version with exact bounds 1..=1
+        let fin = resp_v4
+            .finalized_features
+            .iter()
+            .find(|f| f.name == KRAFT_VERSION_FEATURE)
+            .expect("kraft.version finalized feature");
+        assert2::assert!(fin.name == KRAFT_VERSION_FEATURE);
+        assert2::assert!(fin.min_version_level == 1);
+        assert2::assert!(fin.max_version_level == 1);
     }
 }
