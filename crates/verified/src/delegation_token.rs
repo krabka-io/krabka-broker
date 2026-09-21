@@ -559,6 +559,13 @@ mod tests {
     #[test]
     fn create_clamps_and_rejects_invalid_or_overflowing_deadlines() {
         check!(
+            create_token_deadlines(0, -1, 1_000, 100)
+                == TokenCreateDecision::Create(TokenDeadlines {
+                    max_timestamp_ms: 1_000,
+                    initial_expiry_ms: 100,
+                })
+        );
+        check!(
             create_token_deadlines(100, -1, 1_000, 100)
                 == TokenCreateDecision::Create(TokenDeadlines {
                     max_timestamp_ms: 1_100,
@@ -579,7 +586,15 @@ mod tests {
                     initial_expiry_ms: 200,
                 })
         );
+        check!(
+            create_token_deadlines(100, -1, i64::MAX - 100, 100)
+                == TokenCreateDecision::Create(TokenDeadlines {
+                    max_timestamp_ms: i64::MAX,
+                    initial_expiry_ms: 200,
+                })
+        );
         for decision in [
+            create_token_deadlines(-1, -1, 1_000, 100),
             create_token_deadlines(100, 0, 1_000, 100),
             create_token_deadlines(100, -2, 1_000, 100),
             create_token_deadlines(100, -1, 0, 100),
@@ -593,12 +608,20 @@ mod tests {
 
     #[test]
     fn renew_never_resurrects_or_wraps() {
+        check!(renew_token_expiry(0, 25, 10, 50, 100) == TokenRenewDecision::Renew(50));
         check!(renew_token_expiry(100, 25, 10, 150, 200) == TokenRenewDecision::Renew(150));
         check!(renew_token_expiry(100, 75, 10, 150, 200) == TokenRenewDecision::Renew(175));
         check!(renew_token_expiry(100, 500, 10, 150, 200) == TokenRenewDecision::Renew(200));
         check!(renew_token_expiry(100, -1, 25, 150, 200) == TokenRenewDecision::Renew(150));
+        check!(
+            renew_token_expiry(100, i64::MAX - 100, 10, 150, 200) == TokenRenewDecision::Renew(200)
+        );
         check!(renew_token_expiry(100, 1, 10, 100, 200) == TokenRenewDecision::Expired);
         check!(renew_token_expiry(100, 1, 10, 150, 100) == TokenRenewDecision::Expired);
+        check!(renew_token_expiry(-1, 25, 10, 50, 100) == TokenRenewDecision::Invalid);
+        check!(renew_token_expiry(100, 0, 10, 150, 200) == TokenRenewDecision::Invalid);
+        check!(renew_token_expiry(100, -1, 0, 150, 200) == TokenRenewDecision::Invalid);
+        check!(renew_token_expiry(100, 25, 10, 250, 200) == TokenRenewDecision::Invalid);
         check!(renew_token_expiry(100, -2, 10, 150, 200) == TokenRenewDecision::Invalid);
         check!(renew_token_expiry(100, i64::MAX, 10, 150, 200) == TokenRenewDecision::Invalid);
     }
@@ -617,11 +640,24 @@ mod tests {
         check!(token_mutation_decision(expected) == TokenMutationDecision::Append);
         check!(
             token_mutation_decision(TokenMutationFacts {
+                now_ms: 0,
+                expected_expiry_ms: 50,
+                incoming_expiry_ms: 75,
+                max_timestamp_ms: 100,
+                ..expected
+            }) == TokenMutationDecision::Append
+        );
+        check!(
+            token_mutation_decision(TokenMutationFacts {
                 incoming_expiry_ms: 150,
                 ..expected
             }) == TokenMutationDecision::Retry
         );
         for facts in [
+            TokenMutationFacts {
+                now_ms: -1,
+                ..expected
+            },
             TokenMutationFacts {
                 state: TokenMutationState::Stale,
                 ..expected
@@ -636,6 +672,11 @@ mod tests {
             },
             TokenMutationFacts {
                 expected_expiry_ms: 100,
+                ..expected
+            },
+            TokenMutationFacts {
+                expected_expiry_ms: 201,
+                max_timestamp_ms: 200,
                 ..expected
             },
             TokenMutationFacts {
@@ -659,23 +700,108 @@ mod tests {
                 ..expected
             }) == TokenMutationDecision::Append
         );
+
+        let expire_expected = TokenMutationFacts {
+            kind: TokenMutationKind::Expire,
+            state: TokenMutationState::Expected,
+            now_ms: 100,
+            expected_expiry_ms: 150,
+            incoming_expiry_ms: 175,
+            max_timestamp_ms: 200,
+            uncommitted_tail: false,
+        };
+        check!(token_mutation_decision(expire_expected) == TokenMutationDecision::Append);
+        check!(
+            token_mutation_decision(TokenMutationFacts {
+                now_ms: 0,
+                expected_expiry_ms: 50,
+                incoming_expiry_ms: 0,
+                max_timestamp_ms: 100,
+                ..expire_expected
+            }) == TokenMutationDecision::Append
+        );
+        for facts in [
+            TokenMutationFacts {
+                now_ms: -1,
+                ..expire_expected
+            },
+            TokenMutationFacts {
+                expected_expiry_ms: 100,
+                ..expire_expected
+            },
+            TokenMutationFacts {
+                expected_expiry_ms: 99,
+                ..expire_expected
+            },
+            TokenMutationFacts {
+                max_timestamp_ms: 100,
+                ..expire_expected
+            },
+            TokenMutationFacts {
+                max_timestamp_ms: 99,
+                ..expire_expected
+            },
+            TokenMutationFacts {
+                expected_expiry_ms: 201,
+                max_timestamp_ms: 200,
+                ..expire_expected
+            },
+            TokenMutationFacts {
+                incoming_expiry_ms: -1,
+                ..expire_expected
+            },
+            TokenMutationFacts {
+                incoming_expiry_ms: 201,
+                max_timestamp_ms: 200,
+                ..expire_expected
+            },
+        ] {
+            check!(token_mutation_decision(facts) == TokenMutationDecision::Reject);
+        }
     }
 
     #[test]
     fn expire_deletes_negative_and_rejects_overflow() {
+        check!(expire_token_deadline(0, 0, 150, 200) == TokenExpireDecision::Update(0));
         check!(expire_token_deadline(100, -1, 100, 100) == TokenExpireDecision::Delete);
         check!(expire_token_deadline(100, 0, 150, 200) == TokenExpireDecision::Update(100));
         check!(expire_token_deadline(100, 500, 150, 200) == TokenExpireDecision::Update(200));
+        check!(
+            expire_token_deadline(100, i64::MAX - 100, 150, 200)
+                == TokenExpireDecision::Update(200)
+        );
         check!(expire_token_deadline(100, 0, 100, 200) == TokenExpireDecision::Expired);
         check!(expire_token_deadline(100, 0, 150, 100) == TokenExpireDecision::Expired);
+        check!(expire_token_deadline(-1, 0, 150, 200) == TokenExpireDecision::Invalid);
+        check!(expire_token_deadline(100, 0, 250, 200) == TokenExpireDecision::Invalid);
         check!(expire_token_deadline(100, i64::MAX, 150, i64::MAX) == TokenExpireDecision::Invalid);
     }
 
     #[test]
     fn active_tokens_require_both_live_ordered_deadlines() {
+        check!(token_is_active(0, 50, 100));
+        check!(!token_is_active(-1, 50, 100));
         check!(token_is_active(100, 150, 200));
         check!(!token_is_active(100, 100, 200));
         check!(!token_is_active(100, 150, 100));
+        check!(expire_token_deadline(100, 50, 200, 200) == TokenExpireDecision::Update(150));
+        check!(renew_token_expiry(100, 50, 50, 200, 200) == TokenRenewDecision::Renew(200));
+        let renew_at_max = TokenMutationFacts {
+            state: TokenMutationState::Expected,
+            kind: TokenMutationKind::Renew,
+            now_ms: 100,
+            expected_expiry_ms: 200,
+            incoming_expiry_ms: 200,
+            max_timestamp_ms: 200,
+            uncommitted_tail: false,
+        };
+        check!(token_mutation_decision(renew_at_max) == TokenMutationDecision::Retry);
+        let renew_over_max = TokenMutationFacts {
+            expected_expiry_ms: 250,
+            incoming_expiry_ms: 250,
+            ..renew_at_max
+        };
+        check!(token_mutation_decision(renew_over_max) == TokenMutationDecision::Reject);
         check!(!token_is_active(100, 201, 200));
     }
 }

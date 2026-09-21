@@ -222,7 +222,7 @@ async fn producer_routes_to_non_bootstrap_leaders() {
         .client_id("routing-consumer-rf1")
         .group_id("routing-producer-grp-rf1")
         .session_timeout(krabka_units::secs(30))
-        .rebalance_timeout(krabka_units::secs(2))
+        .max_poll_interval(krabka_units::secs(2))
         .heartbeat_interval(krabka_units::secs(1))
         .auto_offset_reset(AutoOffsetReset::Earliest)
         .subscribe([topic.to_string()])

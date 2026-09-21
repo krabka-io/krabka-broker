@@ -82,6 +82,13 @@ impl<'a> RequestContext<'a> {
         self.throttle.record(window);
     }
 
+    /// Leaves a quota charge for the dispatch loop to resolve with the request
+    /// quota in one metrics call, and records its window. See
+    /// [`crate::quota::ThrottleSlot::defer`].
+    pub(crate) fn defer_quota_charge(&self, charge: crate::metrics::QuotaCharge) {
+        self.throttle.defer(charge);
+    }
+
     /// Drains the recorded KIP-219 window. It returns a zero extent when no
     /// quota charged this request.
     pub(crate) fn take_throttle(&self) -> krabka_units::Time {
