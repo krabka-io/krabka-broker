@@ -56,7 +56,7 @@ not define.
 | KIP-133 | Implemented | An alter-config policy refusing a topic config change with POLICY_VIOLATION | [`broker/src/topic_policy.rs`](../crates/broker/src/topic_policy.rs) | [`broker/src/handlers/alter_configs/topic_configs.rs`](../crates/broker/src/handlers/alter_configs/topic_configs.rs)<br>[`broker/src/handlers/incremental_alter_configs/topic_scope.rs`](../crates/broker/src/handlers/incremental_alter_configs/topic_scope.rs)<br>[`broker/tests/admin_handlers/admin_topic_policy.rs`](../crates/broker/tests/admin_handlers/admin_topic_policy.rs) | in process | none | The same `[topic_policy]` rule set stands in for the class named by `alter.config.policy.class.name`. Both alter paths check the resolved post-change config map, as `AlterConfigPolicy.validate` does; its `RequestMetadata` carries no partition count and no replication factor, so those two rules apply to `CreateTopics` alone. |
 | KIP-207 | Implemented | The high watermark a new leader reports may regress after an election | [`broker/src/data_path_model/model.rs`](../crates/broker/src/data_path_model/model.rs) | [`broker/src/data_path_model/model.rs`](../crates/broker/src/data_path_model/model.rs) | in process | none | The exhaustive data-path model checks durability without a watermark monotonicity assertion, which is what the KIP allows. |
 | KIP-211 | Implemented | Committed-offset retention measured from the group's last activity | [`broker/src/coordinator/retention.rs`](../crates/broker/src/coordinator/retention.rs) | [`broker/tests/offsets_retention.rs`](../crates/broker/tests/offsets_retention.rs) | in process | none |  |
-| KIP-219 | Implemented | Respond first, then mute the channel for the throttle time | [`broker/src/network/dispatch/response.rs`](../crates/broker/src/network/dispatch/response.rs) | [`broker/tests/client_quotas/throttling.rs`](../crates/broker/tests/client_quotas/throttling.rs)<br>[`broker/src/network/dispatch/throttle_audit.rs::throttle_echo_divergences_are_the_recorded_ones`](../crates/broker/src/network/dispatch/throttle_audit.rs) | in process | none | Every API a request quota can hold on the ordinary dispatch path reports the delay it was held for: the dispatch loop patches a leading `ThrottleTimeMs`, and `Produce`, `Fetch` and `ApiVersions` -- whose schemas bury the field behind an array -- charge the quota in the handler and set it on the typed response instead. The throttle-echo section below lists the buried-field APIs and what each one's `RequestQuotaPolicy` costs; the rest are `InlineExempt`, so only a reply outside their advertised version range can be held without an echo. |
+| KIP-219 | Implemented | Respond first, then mute the channel for the throttle time | [`broker/src/network/dispatch/response.rs`](../crates/broker/src/network/dispatch/response.rs) | [`broker/tests/client_quotas/throttling.rs`](../crates/broker/tests/client_quotas/throttling.rs)<br>[`broker/src/network/dispatch/throttle_audit.rs::throttle_echo_divergences_are_the_recorded_ones`](../crates/broker/src/network/dispatch/throttle_audit.rs) | in process | none | Every API a request quota can hold on the ordinary dispatch path reports the delay it was held for: the dispatch loop patches a leading `ThrottleTimeMs`, and `Produce`, `Fetch` and `ApiVersions` -- whose schemas bury the field behind an array -- charge the quota in the handler and set it on the typed response instead. The dispatch loop decodes and encodes again the other buried-field responses (the delegation-token APIs and `OffsetDelete`) to set the field. The throttle-echo section below lists the buried-field APIs and what each one's `RequestQuotaPolicy` costs. |
 | KIP-226 | Implemented | DescribeConfigs reports the source of every value | [`broker/src/handlers/describe_configs.rs`](../crates/broker/src/handlers/describe_configs.rs) | [`broker/tests/jvm_acceptance_cli/configs.rs`](../crates/broker/tests/jvm_acceptance_cli/configs.rs) | `apache_kafka_4_3_1`, `cp_kafka_6_1_1`, `cp_kafka_7_5_0` | none |  |
 | KIP-227 | Implemented | Incremental fetch sessions | [`broker/src/fetch_session.rs`](../crates/broker/src/fetch_session.rs) | [`broker/tests/fetch_session.rs`](../crates/broker/tests/fetch_session.rs) | in process | none |  |
 | KIP-255 | Implemented | SASL/OAUTHBEARER | [`broker/src/network/auth/oauthbearer.rs`](../crates/broker/src/network/auth/oauthbearer.rs) | [`broker/tests/auth_handlers/oauthbearer.rs`](../crates/broker/tests/auth_handlers/oauthbearer.rs) | in process | none |  |
@@ -292,26 +292,25 @@ columns are kept apart for that reason.
   `ThrottleTimeMs` on the typed response before encoding, so the buried field
   costs nothing and the client does see the delay.
 * `ApplyFallbackAccounting` entries are the ones the dispatch loop charges and
-  delays, so a buried field there really does mean latency without a back-off
-  signal.
-* `InlineExempt` entries -- most of the admin, ACL and delegation-token
-  surface -- are exempt from the request quota on the ordinary path, so they
-  are never delayed by it. The unsupported-version reply path charges every
-  `api_key` regardless of policy, so a request outside the advertised version
-  range is the one case where such an API is held without an echo.
+  delays. For the buried-field APIs below, the dispatch loop decodes the
+  response, sets `ThrottleTimeMs` and encodes it again, so the client does see
+  the delay.
+* `InlineExempt` entries are the APIs Kafka answers through
+  `sendResponseExemptThrottle` (`WriteTxnMarkers`, `AlterPartition`,
+  `FetchSnapshot`, `UpdateRaftVoter`) and the SASL handshake APIs, which Kafka
+  answers in the authenticator. They are never delayed by the request quota on
+  the ordinary path.
 
 `recorded_reach_matches_the_dispatch_registry` in the audit pins the last
 column against the assembled dispatch registry, so a policy change on any of
-these APIs fails the build until this page is regenerated. Echoing the field on
-any of them needs it set on the typed response before encoding rather than a
-byte patch.
+these APIs fails the build until this page is regenerated.
 
 | API | api_key | Versions | Why the field cannot be patched | Runtime effect |
 | :--- | :--- | :--- | :--- | :--- |
 | Produce | 0 | 1-13 | Sits behind the `Responses` array, at an offset the response header does not fix | None. The handler charges its own quota and sets `ThrottleTimeMs` on the typed response before encoding, so the client does see the delay |
 | ApiVersions | 18 | 1-5 | Sits behind the `ApiKeys` array, at an offset the response header does not fix | None. The handler charges its own quota and sets `ThrottleTimeMs` on the typed response before encoding, so the client does see the delay |
-| CreateDelegationToken | 38 | 1-3 | Last field, behind the principal strings, the token timestamps and the HMAC | The ordinary path is `InlineExempt`, so it is never held. Only a request outside the advertised version range is, and that reply reports `throttle_time_ms = 0` |
-| RenewDelegationToken | 39 | 1-2 | Last field, behind `ErrorCode` and the new expiry timestamp | The ordinary path is `InlineExempt`, so it is never held. Only a request outside the advertised version range is, and that reply reports `throttle_time_ms = 0` |
-| ExpireDelegationToken | 40 | 1-2 | Last field, behind `ErrorCode` and the new expiry timestamp | The ordinary path is `InlineExempt`, so it is never held. Only a request outside the advertised version range is, and that reply reports `throttle_time_ms = 0` |
-| DescribeDelegationToken | 41 | 1-3 | Last field, behind `ErrorCode` and the variable-length token list | The ordinary path is `InlineExempt`, so it is never held. Only a request outside the advertised version range is, and that reply reports `throttle_time_ms = 0` |
-| OffsetDelete | 47 | 0 | Leads with `ErrorCode`; the field is at a fixed offset of 2, but the dispatch loop patches leading fields only | The ordinary path is `InlineExempt`, so it is never held. Only a request outside the advertised version range is, and that reply reports `throttle_time_ms = 0` |
+| CreateDelegationToken | 38 | 1-3 | Last field, behind the principal strings, the token timestamps and the HMAC | None. The dispatch loop charges the quota, then decodes the response, sets `ThrottleTimeMs` and encodes it again, so the client does see the delay |
+| RenewDelegationToken | 39 | 1-2 | Last field, behind `ErrorCode` and the new expiry timestamp | None. The dispatch loop charges the quota, then decodes the response, sets `ThrottleTimeMs` and encodes it again, so the client does see the delay |
+| ExpireDelegationToken | 40 | 1-2 | Last field, behind `ErrorCode` and the new expiry timestamp | None. The dispatch loop charges the quota, then decodes the response, sets `ThrottleTimeMs` and encodes it again, so the client does see the delay |
+| DescribeDelegationToken | 41 | 1-3 | Last field, behind `ErrorCode` and the variable-length token list | None. The dispatch loop charges the quota, then decodes the response, sets `ThrottleTimeMs` and encodes it again, so the client does see the delay |
+| OffsetDelete | 47 | 0 | Leads with `ErrorCode`; the field is at a fixed offset of 2, but the dispatch loop patches leading fields only | None. The dispatch loop charges the quota, then decodes the response, sets `ThrottleTimeMs` and encodes it again, so the client does see the delay |
