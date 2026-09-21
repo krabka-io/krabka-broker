@@ -166,7 +166,7 @@
         },
         "super_users": {
           "default": [],
-          "description": "Principals that bypass every ACL check, Kafka's `super.users`. The\nactive authorizer and the delegation-token `act-as` gate both read it.\nEmpty is the default and grants no bypass.",
+          "description": "Principals that bypass every ACL check, Kafka's `super.users`. The\nactive authorizer and the delegation-token `act-as` gate both read it.\nAn entry may use Kafka's `User:<name>` form. `User:ANONYMOUS` is\naccepted, as in Kafka. Empty is the default and grants no bypass.",
           "items": {
             "type": "string"
           },
@@ -1788,6 +1788,16 @@
             "null"
           ]
         },
+        "default_replication_factor": {
+          "description": "Replication factor of a topic that `CreateTopics` creates with\n`replication_factor = -1`, Kafka's `default.replication.factor`.",
+          "format": "int16",
+          "maximum": 32767,
+          "minimum": -32768,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "delegation_token_default_renew_period": {
           "default": null,
           "description": "KIP-48: default renew period, Kafka's\n`delegation.token.expiry.time.ms`. It is the initial expiry offset at\ncreate time, and the implicit renew period when a\n`RenewDelegationToken` request asks for `-1`.",
@@ -2086,6 +2096,14 @@
           "description": "KIP-630: snapshot the metadata log once the committed offset advances\nthis many records past the last snapshot, then prune below it.",
           "format": "uint64",
           "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "num_partitions": {
+          "description": "Partition count of a topic that `CreateTopics` creates with\n`num_partitions = -1`, Kafka's `num.partitions`.",
+          "format": "int32",
           "type": [
             "integer",
             "null"
@@ -3240,7 +3258,7 @@
         "type": "string"
       },
       "default": {},
-      "description": "Raw Apache Kafka `server.properties` keys, for the settings krabka\nreads under their Kafka names rather than a dedicated TOML key. The\nbroker consults `transaction.two.phase.commit.enable`,\n`quota.window.num`, and `quota.window.size.seconds`. Any other entry is\naccepted and ignored. A key set here loses to the equivalent dedicated\nkey, which is applied first.",
+      "description": "Raw Apache Kafka `server.properties` keys, for the settings krabka\nreads under their Kafka names rather than a dedicated TOML key. The\nbroker consults `transaction.two.phase.commit.enable`,\n`quota.window.num`, `quota.window.size.seconds`, `num.partitions`, and\n`default.replication.factor`. Any other entry is accepted and ignored.\nA key set here loses to the equivalent dedicated key, which is applied\nfirst.",
       "type": "object"
     },
     "stretch": {
@@ -3255,7 +3273,7 @@
       "description": "`[stretch]` section — the three-site stretch deployment this node\nbelongs to. Maps to `BrokerConfig::stretch`. Absent leaves the\n`BrokerConfig` default `None`, an ordinary non-stretched cluster."
     },
     "super_users": {
-      "description": "Principals that are unconditionally authorized for\nall operations, including KIP-48 delegation-token `act-as`.\n\nSuper-user status does not substitute for authentication. The\ndelegation-token RPCs (`CreateDelegationToken`,\n`RenewDelegationToken`, `ExpireDelegationToken`) require a principal\nthat authenticated with SASL or mTLS, and answer\n`DELEGATION_TOKEN_REQUEST_NOT_ALLOWED` (64) on a PLAINTEXT or\none-way-TLS connection whatever this list holds. Listing\n`\"ANONYMOUS\"` is therefore rejected by `BrokerConfig::validate`: it\ncannot enable token issuance, and it would make every unauthenticated\nclient a super-user for all operations. Give the token-minting client\na SASL credential or a client certificate and list that principal\nhere.\n\n`None` and `Some(empty)` are equivalent — both leave\n`BrokerConfig.super_users` empty.",
+      "description": "Principals that are unconditionally authorized for\nall operations, including KIP-48 delegation-token `act-as`.\n\nSuper-user status does not substitute for authentication. The\ndelegation-token RPCs (`CreateDelegationToken`,\n`RenewDelegationToken`, `ExpireDelegationToken`) require a principal\nthat authenticated with SASL or mTLS, and answer\n`DELEGATION_TOKEN_REQUEST_NOT_ALLOWED` (64) on a PLAINTEXT or\none-way-TLS connection whatever this list holds.\n\nAn entry may use Kafka's `User:<name>` form. As in Kafka,\n`User:ANONYMOUS` is accepted: it makes every unauthenticated client a\nsuper user, and a `PLAINTEXT` controller listener with a deny-capable\nauthorizer needs it.\n\n`None` and `Some(empty)` are equivalent — both leave\n`BrokerConfig.super_users` empty.",
       "items": {
         "type": "string"
       },

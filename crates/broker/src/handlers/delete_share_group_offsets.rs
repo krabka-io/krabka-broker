@@ -385,7 +385,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_fences_only_requested_state_and_retry_is_exact() {
-        let (broker_handle, dir) =
+        let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer), true).await;
         let broker = broker_handle.broker_arc_for_test();
         let principal = principal();
@@ -398,14 +398,7 @@ mod tests {
             &ctx,
         )
         .await;
-        crate::share_coordinator::handlers::test_support::open_all_state_partitions(
-            &broker.partitions,
-            dir.path(),
-            broker.config.share_coordinator.state_topic_num_partitions,
-        );
-        broker
-            .share_coordinator
-            .lead_all_partitions_for_test()
+        crate::share_coordinator::handlers::test_support::lead_share_state_partitions(&broker)
             .await;
         let persister = broker
             .group_coordinator
@@ -472,24 +465,23 @@ mod tests {
                 "{response:?}"
             );
 
-            let deleted = persister
-                .read_state("g-delete", deleted_id, 0)
+            let (state_epoch, _, start_offset, _) = persister
+                .read_summary("g-delete", deleted_id, 0)
                 .await
                 .expect("read deleted state")
                 .expect("durable deletion fence");
-            assert!(deleted.state_epoch == expected_epoch);
+            assert!(state_epoch == expected_epoch);
             assert!(
-                deleted.start_offset
-                    == crate::share_coordinator::coordinator::UNINITIALIZED_START_OFFSET
+                start_offset == crate::share_coordinator::coordinator::UNINITIALIZED_START_OFFSET
             );
         }
-        let kept = persister
-            .read_state("g-delete", kept_id, 0)
+        let (kept_state_epoch, _, kept_start_offset, _) = persister
+            .read_summary("g-delete", kept_id, 0)
             .await
             .expect("read kept state")
             .expect("kept state");
-        assert!(kept.state_epoch == 6);
-        assert!(kept.start_offset == krabka_log::Offset(20));
+        assert!(kept_state_epoch == 6);
+        assert!(kept_start_offset == krabka_log::Offset(20));
         broker_handle.shutdown().await;
     }
 }

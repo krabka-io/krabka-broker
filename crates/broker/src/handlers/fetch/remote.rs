@@ -573,6 +573,7 @@ mod tests {
             max_bytes: 1_048_576,
             read_committed: false,
             is_follower_fetch: false,
+            fetch_only_leader: false,
             partition: Some(std::sync::Arc::clone(part)),
             out: krabka_protocol::owned::fetch_response::PartitionData {
                 error_code: codes::OFFSET_OUT_OF_RANGE,
@@ -754,6 +755,7 @@ mod tests {
             max_bytes: 1024,
             read_committed: false,
             is_follower_fetch: false,
+            fetch_only_leader: false,
             partition: None,
             out: krabka_protocol::owned::fetch_response::PartitionData {
                 error_code: crate::codes::OFFSET_OUT_OF_RANGE,

@@ -34,6 +34,7 @@ mod persistence;
 mod retention;
 mod seed;
 mod tick;
+mod topic_deletion;
 mod views;
 mod waiters;
 
@@ -51,7 +52,10 @@ use self::{
     dispatch::handle_actor_message, tick::handle_actor_tick, waiters::complete_classic_rebalance,
 };
 pub use self::{
-    messages::{GroupActorMessage, JoinResult, JoinResultMember, LeaveResult, SyncResult},
+    messages::{
+        GroupActorMessage, JoinResult, JoinResultMember, LeaveResult, SyncResult,
+        TxnOffsetReservation,
+    },
     retention::ReapOutcome,
     views::{ClassicMemberView, ClassicView, DescribeMember, DescribeView},
 };

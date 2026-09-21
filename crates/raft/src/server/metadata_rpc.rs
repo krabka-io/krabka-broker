@@ -154,6 +154,17 @@ pub(super) async fn dispatch_delegation_token_mutation(
 
 /// Serve a committed `__cluster_metadata` slice to a broker-only observer (1004)
 /// from the engine's `KraftLog`.
+fn quorum_metadata_leader(
+    quorum: Option<(Option<crate::NodeId>, crate::kraft::Epoch)>,
+) -> (i64, i32) {
+    let leader_hint: i64 = quorum
+        .and_then(|(leader_id, _)| leader_id)
+        .and_then(|l| i64::try_from(l.0).ok())
+        .unwrap_or(LEADER_HINT_UNKNOWN);
+    let leader_epoch = quorum.map_or(-1, |(_, epoch)| i32::try_from(epoch).unwrap_or(i32::MAX));
+    (leader_hint, leader_epoch)
+}
+
 pub(super) async fn dispatch_metadata_fetch(
     body: &[u8],
     engine: &KraftController,
@@ -165,17 +176,14 @@ pub(super) async fn dispatch_metadata_fetch(
     // the request stays byte-exact. A negative budget clamps to zero, as before.
     let max_size = ByteSize::from_bytes_i64(i64::from(req.max_bytes.max(0)));
     let slice = engine.metadata_fetch(fetch_offset, max_size).await?;
-    let leader_hint: i64 = engine
-        .quorum_state()
-        .await
-        .ok()
-        .and_then(|qs| qs.leader_id)
-        .and_then(|l| i64::try_from(l.0).ok())
-        .unwrap_or(LEADER_HINT_UNKNOWN);
+    let quorum = engine.quorum_state().await.ok();
+    let (leader_hint, leader_epoch) =
+        quorum_metadata_leader(quorum.as_ref().map(|qs| (qs.leader_id, qs.leader_epoch)));
 
     let resp = KrabkaMetadataFetchResponse {
         error_code: 0,
         leader_hint,
+        leader_epoch,
         log_start_offset: slice.log_start_offset,
         high_watermark: slice.high_watermark,
         quorum_high_watermark: slice.quorum_high_watermark,
@@ -394,9 +402,71 @@ mod tests {
             (
                 resp.error_code,
                 resp.leader_hint,
+                resp.leader_epoch,
                 resp.high_watermark >= 1,
                 resp.records.is_empty(),
-            ) == (0, 1, true, false)
+            ) == (0, 1, 1, true, false)
         );
+    }
+
+    #[tokio::test]
+    async fn dispatch_routes_delegation_token_mutation() {
+        let (engine, _dir) = single_voter_engine();
+        wait_for_leader(&engine).await;
+
+        let mutation = crate::DelegationTokenMutation::Delete {
+            expected: krabka_metadata::DelegationTokenRecord {
+                token_id: "token-1".into(),
+                owner: krabka_security::KafkaPrincipal {
+                    principal_type: "User".into(),
+                    name: "alice".into(),
+                },
+                hmac: vec![0; 32],
+                issue_timestamp_ms: 0,
+                expiry_timestamp_ms: 0,
+                max_timestamp_ms: 0,
+                renewers: Vec::new(),
+            },
+        };
+        let payload = <serde_wincode::SerdeCompat<Vec<crate::DelegationTokenMutation>> as wincode::Serialize>::serialize(
+            &vec![mutation],
+        ).expect("serialize mutation");
+
+        let req = KrabkaSubmitChangeRequest {
+            records: Bytes::from(payload),
+        };
+        let mut req_body = Vec::new();
+        req.encode_v0(&mut req_body).expect("encode req");
+
+        let resp_bytes = dispatch(
+            ApiKey(crate::wire::API_KEY_DELEGATION_TOKEN_MUTATION),
+            Bytes::from(req_body),
+            &engine,
+        )
+        .await
+        .expect("dispatch delegation token mutation");
+
+        let mut cur = &resp_bytes[..];
+        let resp = KrabkaSubmitChangeResponse::decode_v0(&mut cur).expect("decode response");
+        assert2::assert!(resp.error_code == SUBMIT_CHANGE_APPLIED);
+    }
+
+    #[test]
+    fn quorum_metadata_leader_defaults_on_missing_or_overflow_quorum() {
+        let (hint, epoch) = quorum_metadata_leader(None);
+        check!(hint == -1);
+        check!(epoch == -1);
+
+        let (hint, epoch) = quorum_metadata_leader(Some((Some(crate::NodeId(42)), 5)));
+        check!(hint == 42);
+        check!(epoch == 5);
+
+        let (hint, epoch) = quorum_metadata_leader(Some((None, 0)));
+        check!(hint == -1);
+        check!(epoch == 0);
+
+        let (hint, epoch) = quorum_metadata_leader(Some((Some(crate::NodeId(1)), u32::MAX)));
+        check!(hint == 1);
+        check!(epoch == i32::MAX);
     }
 }

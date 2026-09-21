@@ -66,8 +66,8 @@ pub(super) async fn handle_session_tick(
         );
         return Err(e);
     }
-    // Eviction may drop subscriptions owned by remaining members. Preserve
-    // state when the last member leaves so the durable queue cursor survives.
+    // Initialize the partitions that the remaining members gained. The share
+    // state of a dropped partition stays, as in Kafka.
     reconcile_share_state(state, offsets_log, coordinator, now_ms).await;
     Ok(())
 }

@@ -365,3 +365,52 @@ fn verbatim_create_time_reports_no_stamp() {
     assert!(&stored.bytes[..] == &expected[..]);
     drop(dir);
 }
+
+#[test]
+fn verbatim_stamped_with_log_append_time_patches_attributes_and_crc() {
+    use krabka_protocol::records::TimestampType;
+    let mut producer = test_batch_at(0);
+    producer.attributes = producer.attributes.with_transactional(true);
+    let (_wire, vb) = verbatim_from(&producer, LeaderEpoch(4));
+    let stamped = vb.stamped_with_log_append_time(98765);
+    assert!(stamped.max_timestamp == 98765);
+    let mut cur = &stamped.bytes[..];
+    let decoded = RecordBatch::decode(&mut cur).unwrap();
+    assert!(decoded.max_timestamp == 98765);
+    assert!(decoded.attributes.timestamp_type() == TimestampType::LogAppendTime);
+    assert!(decoded.attributes.is_transactional());
+}
+
+#[test]
+fn verbatim_append_flush_logic() {
+    use crate::log::sync::sync_observer;
+    let (dir, mut log) = test_log();
+    // Default config: flush_on_append is false, stamp_source is None
+    let producer = test_batch_at(0);
+    let (_wire, vb) = verbatim_from(&producer, LeaderEpoch(0));
+
+    sync_observer::take_segment_flushes();
+    log.append_verbatim(&vb).unwrap();
+    // Non-transactional without stamp_source or flush_on_append does not flush
+    assert!(sync_observer::take_segment_flushes().is_empty());
+
+    // With stamp_source, non-transactional flushes
+    log.set_stamp_source(std::sync::Arc::new(
+        crate::stamp_source::MonotonicStampSource::new(10, 1),
+    ))
+    .unwrap();
+    sync_observer::take_segment_flushes();
+    log.append_verbatim(&vb).unwrap();
+    assert!(!sync_observer::take_segment_flushes().is_empty());
+
+    // With stamp_source, transactional does NOT flush
+    let mut txn_producer = test_batch_at(0);
+    txn_producer.producer_id = 100;
+    txn_producer.producer_epoch = 1;
+    txn_producer.attributes = txn_producer.attributes.with_transactional(true);
+    let (_wire, txn_vb) = verbatim_from(&txn_producer, LeaderEpoch(0));
+    sync_observer::take_segment_flushes();
+    log.append_verbatim(&txn_vb).unwrap();
+    assert!(sync_observer::take_segment_flushes().is_empty());
+    drop(dir);
+}

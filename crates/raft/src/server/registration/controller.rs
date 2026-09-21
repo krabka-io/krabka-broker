@@ -16,9 +16,8 @@ use krabka_protocol::{
 };
 
 use super::{
-    CLUSTER_AUTHORIZATION_FAILED, INVALID_REGISTRATION, NOT_CONTROLLER, SUCCESS,
-    UNSUPPORTED_VERSION, is_leader, listeners::decode_controller_listeners, raft_error_code,
-    response::controller_registration_response,
+    INVALID_REGISTRATION, NOT_CONTROLLER, SUCCESS, UNSUPPORTED_VERSION, is_leader,
+    listeners::decode_controller_listeners, raft_error_code, response::controller_registration_response,
 };
 use crate::{RaftError, kraft::KraftController};
 
@@ -30,17 +29,9 @@ pub(super) async fn controller_registration(
     version: i16,
     body: &[u8],
     engine: &KraftController,
-    authorized: bool,
 ) -> Result<Bytes, RaftError> {
     let mut body = body;
     let request = ControllerRegistrationRequest::decode(&mut body, version)?;
-    if !authorized {
-        return controller_registration_response(
-            version,
-            CLUSTER_AUTHORIZATION_FAILED,
-            Some("cluster action denied".into()),
-        );
-    }
     if !is_leader(engine) {
         return controller_registration_response(version, NOT_CONTROLLER, None);
     }
@@ -340,7 +331,7 @@ mod tests {
             let mut body = bytes::BytesMut::new();
             request.encode(&mut body, version).expect("encode");
 
-            let answer = controller_registration(version, &body, &engine, true)
+            let answer = controller_registration(version, &body, &engine)
                 .await
                 .expect("an answer");
 

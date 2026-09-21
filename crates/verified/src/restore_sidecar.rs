@@ -265,4 +265,13 @@ mod tests {
         assert2::check!(!restore_producer_ids_strict(&[7, 9, 8]));
         assert2::check!(!restore_producer_ids_strict(&[7, 9, 9]));
     }
+
+    #[test]
+    fn index_frontier_boundaries() {
+        assert2::check!(super::restore_index_frontier(0, 0) == Some(0));
+        assert2::check!(super::restore_index_frontier(0, i64::from(u32::MAX)) == Some(u32::MAX));
+        assert2::check!(super::restore_index_frontier(-1, 0) == None);
+        assert2::check!(super::restore_index_frontier(10, 5) == None);
+        assert2::check!(super::restore_index_frontier(0, i64::from(u32::MAX) + 1) == None);
+    }
 }

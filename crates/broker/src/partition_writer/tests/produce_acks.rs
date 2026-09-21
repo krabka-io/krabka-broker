@@ -41,6 +41,7 @@ async fn writer_appends_and_acks() {
     tx.send(WriterMessage::Produce(ProduceJob {
         data: ProduceData::Owned(sample_batch(3)),
         ack,
+        producer_check: None,
     }))
     .await
     .expect("send job");
@@ -53,6 +54,7 @@ async fn writer_appends_and_acks() {
     tx.send(WriterMessage::Produce(ProduceJob {
         data: ProduceData::Owned(sample_batch(2)),
         ack,
+        producer_check: None,
     }))
     .await
     .expect("send job 2");
@@ -87,6 +89,7 @@ async fn writer_groups_queued_produces_up_to_configured_cap() {
         tx.send(WriterMessage::Produce(ProduceJob {
             data: ProduceData::Owned(sample_batch(1)),
             ack,
+            producer_check: None,
         }))
         .await
         .expect("queue produce");
@@ -171,6 +174,7 @@ async fn durable_sync_ack_waits_for_diskless_wal() {
     tx.send(WriterMessage::Produce(ProduceJob {
         data: ProduceData::Owned(sample_batch(1)),
         ack: append_ack,
+        producer_check: None,
     }))
     .await
     .expect("send produce");
@@ -235,6 +239,7 @@ async fn writer_appends_and_acks_on_multi_thread_runtime() {
     tx.send(WriterMessage::Produce(ProduceJob {
         data: ProduceData::Owned(sample_batch(3)),
         ack,
+        producer_check: None,
     }))
     .await
     .expect("send job");
@@ -295,6 +300,7 @@ async fn writer_appends_verbatim_byte_exact() {
             is_transactional: false,
         }),
         ack,
+        producer_check: None,
     }))
     .await
     .expect("send verbatim job");
@@ -351,6 +357,7 @@ async fn writer_fires_notify_after_append() {
     tx.send(WriterMessage::Produce(ProduceJob {
         data: ProduceData::Owned(sample_batch(1)),
         ack,
+        producer_check: None,
     }))
     .await
     .expect("send job");

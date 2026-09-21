@@ -69,9 +69,10 @@ pub(crate) fn handle(
     let mut cur: &[u8] = req_bytes;
     let req = ListConfigResourcesRequest::decode(&mut cur, version)?;
 
-    // Whole-request Cluster Describe gate. Mirrors DescribeCluster /
-    // DescribeConfigs: ListConfigResources is a cluster-wide enumeration,
-    // so the same ACL gates it.
+    // Whole-request gate. Kafka's `KafkaApis.handleListConfigResources`
+    // authorizes `DescribeConfigs` on the cluster. Only `AlterConfigs` and
+    // `All` imply it, so a principal with only `Describe` (or `Read`,
+    // `Write`, `Delete`, `Alter`) gets `CLUSTER_AUTHORIZATION_FAILED`.
     let allow = broker.config.authorizer.authorize(
         &*image,
         &AuthorizationRequest {
@@ -79,7 +80,7 @@ pub(crate) fn handle(
             host: ctx.peer,
             resource_type: krabka_metadata::ResourceType::Cluster,
             resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-            operation: AclOperation::Describe,
+            operation: AclOperation::DescribeConfigs,
         },
     );
     if allow == AuthorizationResult::Deny {
@@ -483,6 +484,69 @@ mod tests {
             unknown_tagged_fields: UnknownTaggedFields::default(),
         };
         assert!(resp == expected);
+        broker_handle.shutdown().await;
+    }
+
+    /// Kafka's `KafkaApis.handleListConfigResources` authorizes
+    /// `DescribeConfigs` on the cluster (#660). Only `AlterConfigs` and `All`
+    /// imply it. `Describe` and the operations that imply `Describe` get
+    /// `CLUSTER_AUTHORIZATION_FAILED` and no resources.
+    #[tokio::test]
+    async fn cluster_describe_configs_gates_the_enumeration() {
+        let (broker_handle, _dir) = start_broker(Arc::new(
+            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
+        ))
+        .await;
+        seed_topic(&broker_handle, "orders").await;
+        let broker = broker_handle.broker_arc_for_test();
+        let req = encode_request(&ListConfigResourcesRequest {
+            resource_types: vec![RESOURCE_TYPE_TOPIC],
+            ..Default::default()
+        });
+        let topics = collect_resources(
+            &broker.controller.current_image(),
+            VERSION,
+            &[RESOURCE_TYPE_TOPIC],
+        );
+        assert!(topics.iter().any(|r| r.resource_name == "orders"));
+        let allowed = ListConfigResourcesResponse {
+            throttle_time_ms: 0,
+            error_code: codes::NONE,
+            config_resources: topics,
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        };
+        let denied = ListConfigResourcesResponse {
+            throttle_time_ms: 0,
+            error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
+            config_resources: vec![],
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        };
+
+        for (user, grant, expected) in [
+            ("no-grant", None, &denied),
+            ("describe", Some(AclOperation::Describe), &denied),
+            ("alter", Some(AclOperation::Alter), &denied),
+            ("read", Some(AclOperation::Read), &denied),
+            (
+                "describe-configs",
+                Some(AclOperation::DescribeConfigs),
+                &allowed,
+            ),
+            ("alter-configs", Some(AclOperation::AlterConfigs), &allowed),
+            ("all", Some(AclOperation::All), &allowed),
+        ] {
+            if let Some(operation) = grant {
+                crate::test_support::grant_cluster_operation(&broker_handle, user, operation).await;
+            }
+            let p = principal(user);
+            let peer = peer();
+            let ctx = test_context(&p, &peer);
+
+            let bytes = handle(&broker, VERSION, 123, &req, &ctx).expect("handle");
+            let resp = decode_response(&bytes);
+
+            assert2::check!(resp == *expected, "user {user} with grant {grant:?}");
+        }
         broker_handle.shutdown().await;
     }
 

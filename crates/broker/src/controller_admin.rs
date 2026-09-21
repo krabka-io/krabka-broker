@@ -40,9 +40,9 @@ macro_rules! api_version {
 /// and 80-82; 4.0.0's schemas carry the same tags.
 ///
 /// This table is that set minus the RPCs the controller listener already
-/// answers without a broker handler: `Fetch`, `ApiVersions`, the KIP-595
-/// quorum RPCs, `FetchSnapshot`, `DescribeCluster`, controller registration,
-/// and the KIP-853 voter RPCs. What remains is the subset that
+/// answers without a broker handler: `Fetch`, `SaslHandshake`, `ApiVersions`,
+/// `SaslAuthenticate`, the KIP-595 quorum RPCs, `FetchSnapshot`,
+/// `DescribeCluster`, controller registration, and the KIP-853 voter RPCs. What remains is the subset that
 /// reuses a broker handler, which is what this router bridges to.
 ///
 /// `BrokerRegistration` and `BrokerHeartbeat` are not Admin APIs, and they
@@ -63,16 +63,10 @@ macro_rules! api_version {
 /// `kafka-clients-4.3.1.jar` is exactly `[CONTROLLER]`, so it is advertised
 /// here and never on the client listener.
 ///
-/// Four of Kafka's keys are in neither list, so krabka's controller listener
-/// advertises 37 of the 41. `SaslHandshake` and `SaslAuthenticate` are
-/// consumed by `BrokerRaftHandshake` before the controller server sees the
-/// stream, so the listener speaks them without listing them. `AlterPartition`
-/// and `AllocateProducerIds` do have broker handlers, but krabka's brokers
-/// send both to a controller's *broker* endpoint rather than to its controller
-/// listener, so routing them here would advertise a path nothing takes -- a
-/// forwarded `AllocateProducerIds` still reaches its handler, through the
-/// `Envelope` above rather than through a key of its own.
-/// `controller_listener_advertises_no_key_kafka_does_not` pins that shortfall.
+/// `AlterPartition` and `AllocateProducerIds` are inter-broker RPCs that a
+/// Kafka broker sends to the active controller over its controller listener,
+/// so they are routed here as well. A broker that does not find them in this
+/// listener's `ApiVersions` table fails them with `UnsupportedVersionException`.
 ///
 /// `DescribeClientQuotas` is deliberately absent for a different reason: its
 /// schema is tagged `broker` only, so a Kafka controller neither advertises
@@ -91,6 +85,7 @@ const SUPPORTED_APIS: &[ControllerApiVersion] = &[
     api_version!(expire_delegation_token_request),
     api_version!(describe_delegation_token_request),
     api_version!(elect_leaders_request),
+    api_version!(alter_partition_request),
     api_version!(incremental_alter_configs_request),
     api_version!(alter_partition_reassignments_request),
     api_version!(list_partition_reassignments_request),
@@ -102,6 +97,7 @@ const SUPPORTED_APIS: &[ControllerApiVersion] = &[
     api_version!(broker_registration_request),
     api_version!(broker_heartbeat_request),
     api_version!(unregister_broker_request),
+    api_version!(allocate_producer_ids_request),
     api_version!(assign_replicas_to_dirs_request),
 ];
 
@@ -178,10 +174,6 @@ impl ControllerAdminRouter for BrokerControllerAdminRouter {
                     peer: &request.peer,
                     principal: &principal,
                     authenticated_via_token: request.authenticated_via_token,
-                    // This request arrived on the controller listener itself,
-                    // which already ran the `ClusterAction` gate for the whole
-                    // connection.
-                    listener_authorized_cluster_action: true,
                 },
             )
             .await
@@ -197,9 +189,9 @@ impl ControllerAdminRouter for BrokerControllerAdminRouter {
 
 /// The identity of the peer that opened the controller-listener connection.
 ///
-/// A Plaintext or TLS-only controller listener authenticates nobody, so there
-/// is no principal to carry and the request runs as `ANONYMOUS` — the same
-/// default the SASL-less listener applies everywhere else.
+/// The SASL principal, or the mTLS principal of an `SSL` connection. A peer
+/// with neither runs as `ANONYMOUS`, the same default a broker listener
+/// applies.
 fn outer_principal(request: &ControllerAdminRequest) -> krabka_security::Principal {
     request
         .principal
@@ -227,15 +219,6 @@ struct Invocation<'a> {
     /// this is the *client's* principal, not the forwarding hop's.
     principal: &'a krabka_security::Principal,
     authenticated_via_token: bool,
-    /// Whether the listener has already authorized this identity for
-    /// `ClusterAction`, which is what lets `BrokerHeartbeat` skip its own ACL
-    /// gate. See [`RequestContext::listener_authorized_cluster_action`].
-    ///
-    /// False on the `Envelope` path, and it has to be: the listener authorized
-    /// the *forwarding broker*, while the embedded request runs as the client
-    /// the envelope names. Carrying the flag across would hand every forwarded
-    /// client the inter-broker control plane.
-    listener_authorized_cluster_action: bool,
 }
 
 /// Dispatch `invocation` through the broker's Admin handler registry.
@@ -256,7 +239,6 @@ async fn invoke_registered_handler(
         peer,
         principal,
         authenticated_via_token,
-        listener_authorized_cluster_action,
     } = invocation;
     let entry = broker.handlers().get(api_key).ok_or_else(|| {
         crate::error::BrokerError::UnsupportedApi {
@@ -266,7 +248,8 @@ async fn invoke_registered_handler(
     })?;
     match entry.kind() {
         // A plain handler takes no session at all. `AssignReplicasToDirs` (73)
-        // is the one key that reaches it, straight off the listener.
+        // is the one key that reaches it, straight off the listener, which
+        // checks `ClusterAction` for it before it routes the request here.
         // `AllocateProducerIds` (67), which a JVM broker forwards in an
         // `Envelope`, is a context dispatch: its handler checks `ClusterAction`
         // for the principal that the envelope names.
@@ -280,11 +263,6 @@ async fn invoke_registered_handler(
                 false,
                 "CONTROLLER",
             );
-            let context = if listener_authorized_cluster_action {
-                context.listener_authorized_for_cluster_action()
-            } else {
-                context
-            };
             handler(broker, api_version, correlation_id, body, &context).await
         }
         DispatchKind::Auth(handler) => {
@@ -347,10 +325,6 @@ async fn serve_envelope(
                     // caller from minting or renewing another token, and that
                     // rule has to follow the identity it belongs to.
                     authenticated_via_token: token_authenticated,
-                    // The listener authorized the forwarding broker for
-                    // `ClusterAction`, not the client this request runs as, so
-                    // the embedded handler faces its own ACL gate.
-                    listener_authorized_cluster_action: false,
                 },
             )
             .await
@@ -462,8 +436,7 @@ mod tests {
     /// The Kafka 4.x controller-listener set, as a live
     /// `mirror.gcr.io/apache/kafka:4.3.1` controller advertises it (the same
     /// set the 4.0.0 request schemas tag `controller`), minus the keys the
-    /// controller listener answers without this router and the four it does
-    /// not answer at all.
+    /// controller listener answers without this router.
     #[test]
     fn supported_set_matches_the_kafka_controller_listener_surface() {
         let keys: BTreeSet<_> = SUPPORTED_APIS.iter().map(|api| api.api_key).collect();
@@ -471,8 +444,8 @@ mod tests {
         check!(keys.len() == SUPPORTED_APIS.len());
         check!(
             keys == maplit::btreeset! {
-                19, 20, 29, 30, 31, 32, 33, 37, 38, 39, 40, 41, 43, 44, 45, 46, 49, 50, 51, 57, 58,
-                62, 63, 64, 73,
+                19, 20, 29, 30, 31, 32, 33, 37, 38, 39, 40, 41, 43, 44, 45, 46, 49, 50, 51, 56, 57,
+                58, 62, 63, 64, 67, 73,
             }
         );
     }

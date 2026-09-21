@@ -101,7 +101,10 @@ mod tests {
     #[test]
     fn pending_records_into_batch_emits_one_record_per_key() {
         let mut pending = PendingStreamsRecords {
-            group_metadata: Some(StreamsGroupMetadataValue { epoch: 1 }),
+            group_metadata: Some(StreamsGroupMetadataValue {
+                epoch: 1,
+                metadata_hash: 0,
+            }),
             topology: Some(StreamsGroupTopologyValue::default()),
             ..Default::default()
         };

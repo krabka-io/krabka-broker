@@ -46,7 +46,7 @@ use crate::{
     coordinator::{
         partitioner::{GroupRoutingError, local_partition_for_group},
         unified::{
-            actor::{GroupActorMessage, GroupKindTag, validate_group_commit},
+            actor::{GroupActorMessage, GroupKindTag, TxnOffsetReservation, validate_group_commit},
             streams::actor::validate_streams_group_commit,
         },
     },
@@ -217,6 +217,21 @@ pub(crate) async fn handle(
     //    LSO machinery holds the offsets until EndTxn commits/aborts.
     //    Topics denied by the per-topic Read ACL are skipped from the
     //    batch and surfaced as TOPIC_AUTHORIZATION_FAILED in the response.
+    // Reserve the keys on the group actor before the append, so that a
+    // concurrent `DeleteGroups` either runs first (the actor stops and the
+    // reservation fails before anything is durable) or tombstones these keys
+    // after the records.
+    let reserved = reserved_keys(&req, &denied_topics);
+    if !reserved.is_empty()
+        && reserve_offsets(&handle, req.producer_id, reserved.clone(), true)
+            .await
+            .is_err()
+    {
+        return encode_resp(
+            version,
+            &build_response(&req, codes::COORDINATOR_NOT_AVAILABLE, &denied_topics),
+        );
+    }
     let now_ms = now_millis();
     let appended = match append_txn_batch(
         &req,
@@ -228,7 +243,14 @@ pub(crate) async fn handle(
     .await
     {
         Ok(appended) => appended,
-        Err(code) => return encode_resp(version, &build_response(&req, code, &denied_topics)),
+        Err(code) => {
+            if !reserved.is_empty() {
+                // Nothing is durable, so the reservation goes. An actor that
+                // stopped meanwhile took it with it.
+                let _ = reserve_offsets(&handle, req.producer_id, reserved, false).await;
+            }
+            return encode_resp(version, &build_response(&req, code, &denied_topics));
+        }
     };
 
     // 4. KIP-447: mark those offsets pending on the group actor, so that an
@@ -250,6 +272,48 @@ pub(crate) async fn handle(
     // 5. Success — per-(topic, partition) error_code = NONE for allowed,
     //    TOPIC_AUTHORIZATION_FAILED for denied.
     encode_resp(version, &build_response(&req, codes::NONE, &denied_topics))
+}
+
+/// The `(topic, partition)` keys the transactional append will write: every
+/// partition of every topic the principal may read.
+fn reserved_keys(
+    req: &TxnOffsetCommitRequest,
+    denied_topics: &std::collections::HashSet<String>,
+) -> Vec<(String, i32)> {
+    req.topics
+        .iter()
+        .filter(|topic| !denied_topics.contains(&topic.name))
+        .flat_map(|topic| {
+            topic
+                .partitions
+                .iter()
+                .map(|partition| (topic.name.clone(), partition.partition_index))
+        })
+        .collect()
+}
+
+/// Reserves (`reserve = true`) or releases the keys of an append on the group
+/// actor. `Err` means the actor has stopped.
+async fn reserve_offsets(
+    handle: &crate::coordinator::unified::actor::GroupActorHandle,
+    producer_id: i64,
+    keys: Vec<(String, i32)>,
+    reserve: bool,
+) -> Result<(), ()> {
+    let (reply, ack) = tokio::sync::oneshot::channel();
+    handle
+        .tx
+        .send(GroupActorMessage::TxnOffsetReservation(
+            TxnOffsetReservation {
+                producer_id,
+                keys,
+                reserve,
+                reply,
+            },
+        ))
+        .await
+        .map_err(|_| ())?;
+    ack.await.map_err(|_| ())
 }
 
 /// Marks the appended offsets as belonging to an unresolved transaction.

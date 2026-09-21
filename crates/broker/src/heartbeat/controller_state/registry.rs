@@ -5,7 +5,7 @@
 //! modules, which reach the fields from here.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     time::{Duration, Instant},
 };
 
@@ -47,6 +47,36 @@ pub(super) struct BrokerEntry {
     /// its clock runs so that a broker that never heartbeats still expires,
     /// but it does not hold the broker id against a new registration.
     pub(super) contact: bool,
+    /// The metadata offset the broker reported on its last heartbeat, or -1
+    /// before its first one. Kafka's `BrokerHeartbeatState.metadataOffset`.
+    pub(super) metadata_offset: i64,
+    /// The metadata offset at which the broker's controlled shutdown is
+    /// complete, while the broker is in controlled shutdown. Kafka's
+    /// `BrokerHeartbeatState.controlledShutdownOffset`.
+    pub(super) controlled_shutdown_offset: Option<i64>,
+}
+
+impl BrokerEntry {
+    /// Kafka's active broker: alive, unfenced, and not in controlled shutdown.
+    /// Only an active broker may be elected, and only an active broker holds
+    /// back a controlled shutdown.
+    pub(super) fn is_active(&self) -> bool {
+        self.state == BrokerLivenessState::Alive
+            && !self.fenced
+            && self.controlled_shutdown_offset.is_none()
+    }
+
+    /// A new entry, contacted now or not.
+    pub(super) const fn new(now: Instant, fenced: bool, contact: bool) -> Self {
+        Self {
+            last_heartbeat: now,
+            state: BrokerLivenessState::Alive,
+            fenced,
+            contact,
+            metadata_offset: -1,
+            controlled_shutdown_offset: None,
+        }
+    }
 }
 
 /// Controller-side heartbeat registry.
@@ -59,14 +89,12 @@ pub(crate) struct ControllerLivenessState {
     pub(super) timeout: Duration,
     pub(super) clock: Clock,
     pub(super) brokers: Mutex<HashMap<u64, BrokerEntry>>,
-    /// Brokers that signaled `want_shut_down=true` on a recent
-    /// heartbeat. The controller tries to move leadership away from
-    /// these brokers and returns `should_shut_down=true` once every
-    /// partition has been re-led.
-    pub(super) wants_shutdown: Mutex<HashSet<u64>>,
     /// Serializes `BrokerRegistration`: see
     /// [`registration_turn`](Self::registration_turn).
     pub(super) registrations: Mutex<()>,
+    /// The controller term the registry was last seeded for, or `u64::MAX`
+    /// before the first seed. See [`seed_term`](Self::seed_term).
+    pub(super) seeded_term: std::sync::atomic::AtomicU64,
 }
 
 impl ControllerLivenessState {
@@ -77,7 +105,7 @@ impl ControllerLivenessState {
             clock: Clock::Real,
             brokers: Mutex::new(HashMap::new()),
             registrations: Mutex::new(()),
-            wants_shutdown: Mutex::new(HashSet::new()),
+            seeded_term: std::sync::atomic::AtomicU64::new(u64::MAX),
         }
     }
 
@@ -90,7 +118,7 @@ impl ControllerLivenessState {
             clock,
             brokers: Mutex::new(HashMap::new()),
             registrations: Mutex::new(()),
-            wants_shutdown: Mutex::new(HashSet::new()),
+            seeded_term: std::sync::atomic::AtomicU64::new(u64::MAX),
         }
     }
 

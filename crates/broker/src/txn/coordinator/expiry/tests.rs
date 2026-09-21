@@ -143,7 +143,7 @@ fn transaction_state_partition(dir: &Path) -> Arc<Partition> {
 
 /// A metadata image where `__transaction_state` has one partition, led by
 /// `leader`.
-fn image_with_leader(leader: NodeId) -> MetadataImage {
+fn image_with_leader(leader: NodeId, leader_epoch: i32) -> MetadataImage {
     let mut image = MetadataImage::new(Uuid::nil());
     image.apply(&MetadataRecord::V1Topic(TopicRecord {
         name: bootstrap::TOPIC.to_string(),
@@ -157,6 +157,7 @@ fn image_with_leader(leader: NodeId) -> MetadataImage {
         leader,
         replicas: vec![leader],
         isr: vec![leader],
+        leader_epoch: krabka_metadata::LeaderEpoch(leader_epoch),
         ..Default::default()
     }));
     image
@@ -181,7 +182,7 @@ async fn seeded_coordinator(entry: TxnEntry, leader: NodeId) -> (TxnCoordinator,
         mebibytes(1),
     );
     coordinator
-        .refresh_leader_partitions(&image_with_leader(leader))
+        .refresh_leader_partitions(&image_with_leader(leader, 0))
         .await;
     coordinator
         .put(entry, TxnVersion::Verified)
@@ -374,7 +375,7 @@ async fn replaying_a_tombstone_reclaims_the_producer_id_index() {
     // The broker restarts and replays the log: the value record, then the
     // tombstone that follows it.
     coordinator
-        .recover(&image_with_leader(NodeId(1)))
+        .recover(&image_with_leader(NodeId(1), 0))
         .await
         .expect("replay __transaction_state");
 
@@ -401,7 +402,7 @@ async fn replaying_a_tombstone_keeps_a_pid_that_now_names_another_id() {
         .expect("persist the reissued id");
 
     coordinator
-        .recover(&image_with_leader(NodeId(1)))
+        .recover(&image_with_leader(NodeId(1), 0))
         .await
         .expect("replay __transaction_state");
 
@@ -446,10 +447,10 @@ async fn a_sweep_tick_refreshes_leadership_before_expiring() {
             .is_empty()
     );
 
-    // Leadership moved here. One tick, at a 1ms expiry the entry's epoch
-    // `last_update_ms` is long past under any wall clock.
+    // Leadership moved here at a new leader epoch. One tick, at a 1ms expiry
+    // the entry's epoch `last_update_ms` is long past under any wall clock.
     let source = FakeMetadataSource::builder()
-        .image(image_with_leader(NodeId(1)))
+        .image(image_with_leader(NodeId(1), 1))
         .build();
     crate::txn::id_expiration::sweep_once(
         &coordinator,

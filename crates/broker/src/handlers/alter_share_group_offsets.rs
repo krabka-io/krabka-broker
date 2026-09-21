@@ -447,21 +447,14 @@ mod tests {
 
     #[tokio::test]
     async fn reset_mutates_only_requested_valid_partitions_and_retry_is_exact() {
-        let (broker_handle, dir) =
+        let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer), true).await;
         let broker = broker_handle.broker_arc_for_test();
         let principal = principal();
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         create_topic(&broker_handle, &broker, "reset-topic", &ctx).await;
-        crate::share_coordinator::handlers::test_support::open_all_state_partitions(
-            &broker.partitions,
-            dir.path(),
-            broker.config.share_coordinator.state_topic_num_partitions,
-        );
-        broker
-            .share_coordinator
-            .lead_all_partitions_for_test()
+        crate::share_coordinator::handlers::test_support::lead_share_state_partitions(&broker)
             .await;
         let persister = broker
             .group_coordinator
@@ -497,13 +490,13 @@ mod tests {
                 response.responses[0].partitions[1].error_code == codes::UNKNOWN_TOPIC_OR_PARTITION
             );
 
-            let state = persister
-                .read_state("g-reset", topic_id, 0)
+            let (state_epoch, _, start_offset, _) = persister
+                .read_summary("g-reset", topic_id, 0)
                 .await
                 .expect("read state")
                 .expect("state present");
-            assert!(state.state_epoch == expected_epoch);
-            assert!(state.start_offset == krabka_log::Offset(42));
+            assert!(state_epoch == expected_epoch);
+            assert!(start_offset == krabka_log::Offset(42));
         }
         let leader_epoch = broker
             .controller
@@ -550,7 +543,7 @@ mod tests {
         );
 
         let state = persister
-            .read_state("g-reset", topic_id, 9)
+            .read_summary("g-reset", topic_id, 9)
             .await
             .expect("read unrequested state");
         assert!(state.is_none());
