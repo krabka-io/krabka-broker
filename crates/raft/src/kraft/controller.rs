@@ -95,6 +95,7 @@ mod inbound;
 mod offsets;
 mod peer_rpc;
 mod queries;
+mod quorum_requests;
 mod quorum_state_file;
 mod reconfiguration;
 mod records;
@@ -123,6 +124,8 @@ mod tests_fetch;
 mod tests_lifecycle;
 #[cfg(test)]
 mod tests_offsets;
+#[cfg(test)]
+mod tests_quorum_requests;
 #[cfg(test)]
 mod tests_recovery;
 #[cfg(test)]
