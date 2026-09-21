@@ -97,6 +97,7 @@ mod tests {
     fn visibility_never_ignores_deadline_or_overflow() {
         assert!(scheduled_delivery_visible(false, 250, i64::MAX, i64::MIN));
         assert!(!scheduled_delivery_visible(true, -1, 10_000, 10_000));
+        assert!(scheduled_delivery_visible(true, 0, 10_000, 10_000));
         assert!(!scheduled_delivery_visible(true, 250, 10_000, 10_249));
         assert!(scheduled_delivery_visible(true, 250, 10_000, 10_250));
         assert!(!scheduled_delivery_visible(true, 1, i64::MAX, i64::MAX));
@@ -108,6 +109,7 @@ mod tests {
         assert!(delivery_watermark_advance(5, 7, 6, 10) == 7);
         assert!(delivery_watermark_advance(5, 7, 12, 10) == 10);
         assert!(delivery_watermark_advance(5, 2, 8, 10) == 8);
+        assert!(delivery_watermark_advance(5, 2, 4, 10) == 5);
         assert!(delivery_watermark_advance(5, 12, 12, 10) == 10);
     }
 

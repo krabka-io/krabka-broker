@@ -402,5 +402,13 @@ mod tests {
         for (got, expected) in cases {
             assert!(got == expected);
         }
+        assert!(
+            voter_reconfiguration_decision(
+                (true, true, true),
+                (3, 1, true),
+                (VoterChangeKind::FinalizeKraftVersion, 1, false),
+                (true, true, true),
+            ) == VoterReconfigurationDecision::InvalidVersionTransition
+        );
     }
 }

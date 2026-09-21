@@ -6,13 +6,16 @@
 
 use std::sync::Arc;
 
-use krabka_metadata::MetadataImage;
+use krabka_metadata::{EntityKey, MetadataImage};
 use krabka_units::convert::ByteRateExt as _;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use super::{buckets::QuotaBuckets, positive_f64_to_u64};
+use super::{
+    buckets::{BucketEntry, QuotaBuckets},
+    positive_f64_to_u64,
+};
 use crate::metadata_source::watch_image_loop;
 
 pub async fn run(
@@ -43,13 +46,8 @@ fn token_rate(quota_key: &str, rate: f64) -> u64 {
 fn refresh_buckets(image: &MetadataImage, buckets: &QuotaBuckets) {
     let window = buckets.quota_window();
     for ((quota_key, entity_key), entry) in buckets.iter() {
-        let new_rate: u64 = super::lookup::lookup_quota_with_key(
-            image,
-            &entry.principal,
-            &entry.client_id,
-            &quota_key,
-        )
-        .map_or(0, |(_, rate)| token_rate(&quota_key, rate));
+        let new_rate: u64 = configured_rate(image, &quota_key, &entity_key, &entry)
+            .map_or(0, |rate| token_rate(&quota_key, rate));
 
         let new_rate = super::bucket_rate(new_rate);
         if entry.bucket.byte_rate() != new_rate {
@@ -65,6 +63,34 @@ fn refresh_buckets(image: &MetadataImage, buckets: &QuotaBuckets) {
             entry.bucket.set_byte_rate_with_burst(new_rate, burst);
         }
     }
+}
+
+/// The rate the image configures for one bucket.
+///
+/// An accept-path bucket is keyed by `[("ip", Some(peer))]` and has no
+/// principal or client id, so it is looked up with the `ip` precedence. The
+/// user and client-id lookup would find nothing for it and would remove the
+/// `connection_creation_rate` limit at the next image change.
+///
+/// The rate comes back in the unit the image configures it in; [`token_rate`]
+/// converts it to the bucket's token unit, including the accept path's rule
+/// that a positive `connection_creation_rate` under one connection per second
+/// stays at one instead of rounding down to unlimited.
+fn configured_rate(
+    image: &MetadataImage,
+    quota_key: &str,
+    entity_key: &EntityKey,
+    entry: &BucketEntry,
+) -> Option<f64> {
+    if let [(entity_type, Some(peer))] = entity_key.as_slice()
+        && entity_type == "ip"
+    {
+        let peer_ip = peer.parse().ok()?;
+        return super::lookup::lookup_ip_quota_with_key(image, peer_ip, quota_key)
+            .map(|(_, rate)| rate);
+    }
+    super::lookup::lookup_quota_with_key(image, &entry.principal, &entry.client_id, quota_key)
+        .map(|(_, rate)| rate)
 }
 
 #[cfg(test)]
@@ -133,6 +159,28 @@ mod tests {
         let empty = Arc::new(MetadataImage::new(uuid::Uuid::nil()));
         refresh_buckets(&empty, &buckets);
         assert!(b.byte_rate() == bucket_rate(0));
+    }
+
+    /// An image change keeps the `connection_creation_rate` of an `ip` bucket.
+    /// The rate comes from the exact `ip` entity, or else from the default
+    /// `ip` entity, as on the accept path.
+    #[test]
+    fn refresh_keeps_the_ip_connection_creation_rate() {
+        let cases: [(&str, Option<&str>, f64, u64); 4] = [
+            ("the exact ip entity", Some("127.0.0.1"), 3.0, 3),
+            ("the default ip entity", None, 3.0, 3),
+            ("another ip entity", Some("10.0.0.1"), 3.0, 0),
+            ("a rate under one per second", Some("127.0.0.1"), 0.5, 1),
+        ];
+        for (case, entity_name, rate, expected) in cases {
+            let buckets = Arc::new(QuotaBuckets::new());
+            let key: EntityKey = vec![("ip".into(), Some("127.0.0.1".into()))];
+            let b = buckets.get_or_create("connection_creation_rate", &key, "", "", 1);
+
+            let img = img_with_quota(vec![("ip", entity_name)], "connection_creation_rate", rate);
+            refresh_buckets(&img, &buckets);
+            assert!(b.byte_rate() == bucket_rate(expected), "{case}");
+        }
     }
 
     #[test]

@@ -465,24 +465,23 @@ mod tests {
                 "{response:?}"
             );
 
-            let deleted = persister
-                .read_state("g-delete", deleted_id, 0)
+            let (state_epoch, _, start_offset, _) = persister
+                .read_summary("g-delete", deleted_id, 0)
                 .await
                 .expect("read deleted state")
                 .expect("durable deletion fence");
-            assert!(deleted.state_epoch == expected_epoch);
+            assert!(state_epoch == expected_epoch);
             assert!(
-                deleted.start_offset
-                    == crate::share_coordinator::coordinator::UNINITIALIZED_START_OFFSET
+                start_offset == crate::share_coordinator::coordinator::UNINITIALIZED_START_OFFSET
             );
         }
-        let kept = persister
-            .read_state("g-delete", kept_id, 0)
+        let (kept_state_epoch, _, kept_start_offset, _) = persister
+            .read_summary("g-delete", kept_id, 0)
             .await
             .expect("read kept state")
             .expect("kept state");
-        assert!(kept.state_epoch == 6);
-        assert!(kept.start_offset == krabka_log::Offset(20));
+        assert!(kept_state_epoch == 6);
+        assert!(kept_start_offset == krabka_log::Offset(20));
         broker_handle.shutdown().await;
     }
 }

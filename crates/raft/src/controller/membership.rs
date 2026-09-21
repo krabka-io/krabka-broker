@@ -141,3 +141,51 @@ impl ControllerHandle {
         self.engine.finalize_kraft_version(version).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::{config::ControllerConfig, controller::Controller};
+
+    #[tokio::test]
+    async fn change_membership_validates_delta_count() {
+        let dir = TempDir::new().unwrap();
+        let cfg = ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf());
+        let ctrl = Controller::start(cfg).await.expect("bootstrap");
+
+        // 0 changes: current is {1}, target is {1} -> Ok(())
+        let res_zero = ctrl.change_membership(BTreeSet::from([NodeId(1)])).await;
+        assert2::assert!(res_zero.is_ok());
+
+        // 1 added + 1 removed = 2 changes: {1} -> {2} -> ReconfigRejected
+        let res_swap = ctrl.change_membership(BTreeSet::from([NodeId(2)])).await;
+        assert2::assert!(matches!(
+            res_swap,
+            Err(RaftError::ReconfigRejected(ref msg)) if msg.contains("only one voter change")
+        ));
+
+        // 2 added = 2 changes: {1} -> {1, 2, 3} -> ReconfigRejected
+        let res_multi_add = ctrl
+            .change_membership(BTreeSet::from([NodeId(1), NodeId(2), NodeId(3)]))
+            .await;
+        assert2::assert!(matches!(
+            res_multi_add,
+            Err(RaftError::ReconfigRejected(ref msg)) if msg.contains("only one voter change")
+        ));
+
+        // 1 change: {1} -> {1, 2} -> fails because NodeId(2) is not staged as learner
+        let res_single_add = ctrl
+            .change_membership(BTreeSet::from([NodeId(1), NodeId(2)]))
+            .await;
+        assert2::assert!(matches!(
+            res_single_add,
+            Err(RaftError::ReconfigRejected(ref msg)) if msg.contains("must be staged with add_learner first")
+        ));
+
+        ctrl.shutdown().await;
+    }
+}

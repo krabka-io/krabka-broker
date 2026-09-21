@@ -210,6 +210,20 @@ async fn vote_runs_kafka_request_checks() {
             vote_answer(125),
         ),
         (
+            "voter key names replica 0 which is not local",
+            vote_request(|r| r.voter_id = 0),
+            vote_answer(125),
+        ),
+        (
+            "pre-vote from node 0 is valid",
+            vote_request(|r| {
+                vote_partition(r).replica_id = 0;
+                vote_partition(r).pre_vote = true;
+                vote_partition(r).replica_epoch = 5;
+            }),
+            vote_answer(0),
+        ),
+        (
             "pre-vote while a leader is known",
             vote_request(|r| {
                 vote_partition(r).pre_vote = true;
@@ -762,4 +776,63 @@ async fn a_leader_from_the_adjacent_voter_set_keeps_its_endpoint() {
         BeginQuorumEpochResponse::decode(&mut &body[..], QUORUM_EPOCH_VERSION).expect("decode")
             == begin_answer(0, 3, 6)
     );
+}
+
+#[tokio::test]
+async fn end_quorum_epoch_matches_candidate_directory_id() {
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let mut voters = voter_set(&[NodeId(1), NodeId(2), NodeId(3)]);
+    let mut local = voters.get(NodeId(1)).expect("local voter").clone();
+    local.directory_id = Uuid::from_u128(11);
+    voters = VoterSet::from_voters(
+        voters
+            .ids()
+            .into_iter()
+            .filter(|id| *id != NodeId(1))
+            .filter_map(|id| voters.get(id).cloned())
+            .chain([local]),
+    );
+    engine.core = QuorumStateMachine::new(
+        NodeId(1),
+        crate::kraft::types::QuorumState::bootstrap(Uuid::nil(), voters),
+        engine.election_timeout,
+    );
+    engine.on_event(Event::ReceiveBeginQuorumEpoch {
+        leader_id: NodeId(2),
+        leader_epoch: 5,
+    });
+
+    // Candidate directory matches local directory -> ranks 0, elects at once (kills `!=`)
+    let req = end_request(|r| {
+        r.topics[0].partitions[0].preferred_candidates = vec![eqe_req::ReplicaInfo {
+            candidate_id: 1,
+            candidate_directory_id: WireUuid(*Uuid::from_u128(11).as_bytes()),
+            ..Default::default()
+        }];
+    });
+    let body = deliver(&mut engine, end, encode(&req, QUORUM_EPOCH_VERSION)).expect("an answer");
+    let response =
+        EndQuorumEpochResponse::decode(&mut &body[..], QUORUM_EPOCH_VERSION).expect("decode");
+    check!(response.error_code == 0);
+    check!(engine.core.role().name() == "Prospective");
+
+    // Reset back to follower
+    engine.on_event(Event::ReceiveBeginQuorumEpoch {
+        leader_id: NodeId(2),
+        leader_epoch: 5,
+    });
+
+    // Candidate directory is nil WireUuid -> ranks 0, elects at once (kills `&&`)
+    let req2 = end_request(|r| {
+        r.topics[0].partitions[0].preferred_candidates = vec![eqe_req::ReplicaInfo {
+            candidate_id: 1,
+            candidate_directory_id: WireUuid(*Uuid::nil().as_bytes()),
+            ..Default::default()
+        }];
+    });
+    let body2 = deliver(&mut engine, end, encode(&req2, QUORUM_EPOCH_VERSION)).expect("an answer");
+    let response2 =
+        EndQuorumEpochResponse::decode(&mut &body2[..], QUORUM_EPOCH_VERSION).expect("decode");
+    check!(response2.error_code == 0);
+    check!(engine.core.role().name() == "Prospective");
 }

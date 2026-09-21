@@ -120,6 +120,18 @@ fn fetch_snapshot_response_round_trips() {
 }
 
 #[test]
+fn fetch_snapshot_response_round_trips_error_code() {
+    let resp = PeerResponse::FetchSnapshot {
+        snapshot_id: (42, 3),
+        size: 0,
+        position: 0,
+        bytes: Bytes::new(),
+        error_code: 42,
+    };
+    assert2::assert!(PeerResponse::decode_fetch_snapshot(&resp.encode()) == Some(resp));
+}
+
+#[test]
 fn fetch_response_round_trips() {
     let with_records = PeerResponse::Fetch {
         leader_id: NodeId(2),
@@ -224,4 +236,27 @@ fn encoded_fetch_response_carries_partition_success_fields() {
             partition.current_leader.leader_epoch,
         ) == (METADATA_PARTITION, 0, 7, 2, 5)
     );
+}
+
+#[test]
+fn fetch_snapshot_answer_with_partition_preserves_top_level_error() {
+    use krabka_protocol::{Decode, owned::fetch_snapshot_response::FetchSnapshotResponse};
+
+    let partition = FetchSnapshotPartition {
+        topic: METADATA_TOPIC.to_string(),
+        index: METADATA_PARTITION,
+        error_code: 0,
+        current_leader: false,
+        chunk: None,
+    };
+    let leader = QuorumLeader {
+        leader_id: None,
+        epoch: 0,
+        endpoint: None,
+    };
+    let bytes = encode_fetch_snapshot_answer(7, Some(partition), &leader);
+    let mut cur = &bytes[..];
+    let raw = FetchSnapshotResponse::decode(&mut cur, FETCH_SNAPSHOT_VERSION)
+        .expect("decode FetchSnapshot");
+    assert2::check!(raw.error_code == 7);
 }

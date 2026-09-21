@@ -466,6 +466,14 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "",
     },
     KipAnnotation {
+        key: "KIP-464",
+        claim: "CreateTopics num_partitions and replication_factor -1 take the broker defaults",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/create_topics.rs",
+        tests: &["crates/broker/src/handlers/create_topics/tests.rs"],
+        note: "",
+    },
+    KipAnnotation {
         key: "KIP-467",
         claim: "Per-record error indices and messages in the Produce response",
         status: KipStatus::Implemented,

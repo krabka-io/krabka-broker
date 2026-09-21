@@ -402,4 +402,94 @@ mod tests {
             )
         );
     }
+
+    #[test]
+    fn begin_quorum_epoch_membership_and_duplicate_leader_checks() {
+        let log = FakeLog {
+            end: 5,
+            last_epoch: 1,
+        };
+
+        // 1. When voters known, unknown leader is rejected
+        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2)]);
+        let actions = m.on_event(
+            Event::ReceiveBeginQuorumEpoch {
+                leader_id: NodeId(99),
+                leader_epoch: 4,
+            },
+            &log,
+            SimInstant(10),
+        );
+        check!(actions.is_empty());
+        check!(m.quorum_state().leader_id.is_none());
+
+        // 2. When voters empty but adjacent_voters set, unknown leader is rejected
+        let mut m2 = machine(NodeId(1), &[]);
+        m2.adjacent_voters = Some(voters(&[NodeId(1), NodeId(2)]));
+        let actions = m2.on_event(
+            Event::ReceiveBeginQuorumEpoch {
+                leader_id: NodeId(99),
+                leader_epoch: 4,
+            },
+            &log,
+            SimInstant(10),
+        );
+        check!(actions.is_empty());
+        check!(m2.quorum_state().leader_id.is_none());
+
+        // 3. When bootstrap joiner (voters empty, adjacent_voters None), any leader accepted
+        let mut m3 = machine(NodeId(1), &[]);
+        let actions = m3.on_event(
+            Event::ReceiveBeginQuorumEpoch {
+                leader_id: NodeId(99),
+                leader_epoch: 4,
+            },
+            &log,
+            SimInstant(10),
+        );
+        check!(!actions.is_empty());
+        check!(m3.quorum_state().leader_id == Some(NodeId(99)));
+
+        // 4. Duplicate leader for same epoch is rejected
+        let mut m4 = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+        m4.on_event(
+            Event::ReceiveBeginQuorumEpoch {
+                leader_id: NodeId(2),
+                leader_epoch: 4,
+            },
+            &log,
+            SimInstant(10),
+        );
+        check!(m4.quorum_state().leader_id == Some(NodeId(2)));
+        let actions = m4.on_event(
+            Event::ReceiveBeginQuorumEpoch {
+                leader_id: NodeId(3),
+                leader_epoch: 4,
+            },
+            &log,
+            SimInstant(20),
+        );
+        check!(actions.is_empty());
+        check!(m4.quorum_state().leader_id == Some(NodeId(2)));
+    }
+
+    #[test]
+    fn end_quorum_epoch_ignores_stale_epoch() {
+        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2)]);
+        m.force_epoch(4);
+        let log = FakeLog {
+            end: 5,
+            last_epoch: 1,
+        };
+        let actions = m.on_event(
+            Event::ReceiveEndQuorumEpoch {
+                leader_id: NodeId(2),
+                leader_epoch: 3,
+                successor_rank: SuccessorRank::default(),
+            },
+            &log,
+            SimInstant(10),
+        );
+        check!(actions.is_empty());
+    }
 }

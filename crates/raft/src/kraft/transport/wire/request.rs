@@ -200,12 +200,8 @@ impl PeerRequest {
                     max_wait_ms: 500,
                     min_bytes: 1,
                     max_bytes: 1024 * 1024,
-                    isolation_level: 0,
-                    session_id: 0,
-                    session_epoch: -1,
                     replica_state: fetch_req::ReplicaState {
                         replica_id: node_to_wire(from),
-                        replica_epoch: -1,
                         ..Default::default()
                     },
                     topics: vec![fetch_req::FetchTopic {

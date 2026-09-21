@@ -74,6 +74,10 @@ fn requested_voter(
     }
 }
 
+pub(super) fn add_voter_ack_when_committed(version: i16, request_ack: bool) -> bool {
+    version == 0 || request_ack
+}
+
 pub(super) async fn add_raft_voter_response(
     version: i16,
     body: &[u8],
@@ -121,7 +125,10 @@ pub(super) async fn add_raft_voter_response(
                 .reconfigure(crate::reconfig::VoterChange::Add(
                     crate::reconfig::AddVoter {
                         voter,
-                        ack_when_committed: version == 0 || request.ack_when_committed,
+                        ack_when_committed: add_voter_ack_when_committed(
+                            version,
+                            request.ack_when_committed,
+                        ),
                     },
                 ))
                 .await,

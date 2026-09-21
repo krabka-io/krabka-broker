@@ -84,6 +84,8 @@ async fn describe_quorum_response(
                     };
                     PartitionData {
                         partition_index: 0,
+                        error_code: 0,
+                        error_message: None,
                         leader_id: quorum
                             .leader_id
                             .and_then(|id| i32::try_from(id.0).ok())
@@ -100,7 +102,7 @@ async fn describe_quorum_response(
                             .iter()
                             .map(|id| state(*id, uuid::Uuid::nil()))
                             .collect(),
-                        ..Default::default()
+                        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
                     }
                 })
                 .collect(),
@@ -243,6 +245,8 @@ mod tests {
         use krabka_protocol::{
             Encode,
             owned::{
+                add_raft_voter_request::AddRaftVoterRequest,
+                add_raft_voter_response::AddRaftVoterResponse,
                 describe_quorum_request::{
                     DescribeQuorumRequest, PartitionData as RequestPartition,
                     TopicData as RequestTopic,
@@ -250,6 +254,8 @@ mod tests {
                 describe_quorum_response::DescribeQuorumResponse,
                 remove_raft_voter_request::RemoveRaftVoterRequest,
                 remove_raft_voter_response::RemoveRaftVoterResponse,
+                update_raft_voter_request::UpdateRaftVoterRequest,
+                update_raft_voter_response::UpdateRaftVoterResponse,
             },
         };
 
@@ -277,14 +283,85 @@ mod tests {
         let mut response_bytes = response_body.as_ref();
         let response = DescribeQuorumResponse::decode(&mut response_bytes, 2).unwrap();
         let partition = &response.topics[0].partitions[0];
+        check!(response.topics[0].topic_name == "__cluster_metadata");
+        check!(partition.partition_index == 0);
+        check!(partition.leader_id == 1);
+        check!(partition.leader_epoch >= 1);
+        check!(partition.high_watermark == engine.quorum_state().await.unwrap().high_watermark);
+        check!(partition.current_voters[0].replica_id == 1);
         check!(
-            (
-                partition.leader_id,
-                partition.current_voters[0].replica_id,
-                partition.current_voters[0].replica_directory_id.0,
-                response.nodes[0].listeners[0].host.as_str(),
-            ) == (1, 1, *Uuid::from_u128(1).as_bytes(), "controller-1",)
+            partition.current_voters[0].replica_directory_id.0 == *Uuid::from_u128(1).as_bytes()
         );
+        check!(partition.current_voters[0].log_end_offset >= 0);
+        check!(partition.observers.is_empty());
+        check!(response.nodes[0].node_id == 1);
+        check!(response.nodes[0].listeners[0].name == "CONTROLLER");
+        check!(response.nodes[0].listeners[0].host == "controller-1");
+        check!(response.nodes[0].listeners[0].port == 9093);
+
+        // Deliver Inbound::Fetch from observer so partition.observers is non-empty
+        let req = crate::kraft::transport::wire::PeerRequest::Fetch {
+            from: crate::NodeId(99),
+            fetch_epoch: partition.leader_epoch.cast_unsigned(),
+            fetch_offset: 0,
+            replica_directory_id: Uuid::from_u128(99),
+        };
+        let req_bytes = req.try_encode().expect("encode fetch");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        engine
+            .deliver(crate::kraft::transport::Inbound::Fetch {
+                req: req_bytes,
+                reply: tx,
+            })
+            .await
+            .unwrap();
+        let _ = rx.await;
+
+        let describe_body = {
+            let mut buf = bytes::BytesMut::new();
+            describe.encode(&mut buf, 2).unwrap();
+            buf
+        };
+        let response_body =
+            super::kip853_admin_response(API_KEY_DESCRIBE_QUORUM, 2, &describe_body, &engine)
+                .await
+                .expect("DescribeQuorum with observer");
+        let mut response_bytes = response_body.as_ref();
+        let response = DescribeQuorumResponse::decode(&mut response_bytes, 2).unwrap();
+        let partition = &response.topics[0].partitions[0];
+        check!(partition.observers.len() == 1);
+        check!(partition.observers[0].replica_id == 99);
+
+        // Test API_KEY_ADD_RAFT_VOTER through kip853_admin_response
+        let add = AddRaftVoterRequest {
+            cluster_id: None,
+            voter_id: -1,
+            ..Default::default()
+        };
+        let mut add_body = bytes::BytesMut::new();
+        add.encode(&mut add_body, 0).unwrap();
+        let add_resp_body =
+            super::kip853_admin_response(API_KEY_ADD_RAFT_VOTER, 0, &add_body, &engine)
+                .await
+                .expect("AddRaftVoter");
+        let mut add_resp_bytes = add_resp_body.as_ref();
+        let add_resp = AddRaftVoterResponse::decode(&mut add_resp_bytes, 0).unwrap();
+        check!(add_resp.error_code == 42);
+
+        // Test API_KEY_UPDATE_RAFT_VOTER through kip853_admin_response
+        let update = UpdateRaftVoterRequest {
+            cluster_id: Some("00000000-0000-0000-0000-0000000000ff".into()),
+            ..Default::default()
+        };
+        let mut update_body = bytes::BytesMut::new();
+        update.encode(&mut update_body, 0).unwrap();
+        let update_resp_body =
+            super::kip853_admin_response(API_KEY_UPDATE_RAFT_VOTER, 0, &update_body, &engine)
+                .await
+                .expect("UpdateRaftVoter");
+        let mut update_resp_bytes = update_resp_body.as_ref();
+        let update_resp = UpdateRaftVoterResponse::decode(&mut update_resp_bytes, 0).unwrap();
+        check!(update_resp.error_code == 104);
 
         let remove = RemoveRaftVoterRequest {
             cluster_id: Some(engine.current_image().cluster_id().to_string()),
@@ -311,5 +388,104 @@ mod tests {
         );
 
         engine.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn describe_quorum_response_fields_and_unestablished_leader() {
+        use krabka_protocol::{
+            Encode,
+            owned::{
+                describe_quorum_request::{
+                    DescribeQuorumRequest, PartitionData as RequestPartition,
+                    TopicData as RequestTopic,
+                },
+                describe_quorum_response::DescribeQuorumResponse,
+            },
+        };
+
+        use crate::server::test_support::{
+            controller_endpoint, test_engine_with_voters, topic_record, voter,
+        };
+
+        // 1. Controller with two voters before election:
+        // leader_id is None -> mapped to -1.
+        // Voter 2 has never fetched -> log_end_offset is -1.
+        let (engine, _dir) = test_engine_with_voters(
+            1,
+            [
+                voter(1, vec![controller_endpoint("controller-1", 9093)]),
+                voter(2, vec![controller_endpoint("controller-2", 9093)]),
+                voter(u64::MAX, vec![controller_endpoint("controller-max", 9093)]),
+            ],
+        );
+        let describe = DescribeQuorumRequest {
+            topics: vec![RequestTopic {
+                topic_name: "__cluster_metadata".into(),
+                partitions: vec![RequestPartition {
+                    partition_index: 0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut req_body = bytes::BytesMut::new();
+        describe.encode(&mut req_body, 2).unwrap();
+        let resp_body = super::describe_quorum_response(2, &req_body, &engine)
+            .await
+            .unwrap();
+        let resp = DescribeQuorumResponse::decode(&mut resp_body.as_ref(), 2).unwrap();
+        let part = &resp.topics[0].partitions[0];
+        assert2::assert!(part.leader_id == -1);
+
+        let v2 = part
+            .current_voters
+            .iter()
+            .find(|v| v.replica_id == 2)
+            .expect("voter 2");
+        assert2::assert!(v2.log_end_offset == -1);
+        let vmax = part
+            .current_voters
+            .iter()
+            .find(|v| {
+                v.replica_directory_id
+                    == krabka_protocol::primitives::uuid::Uuid(
+                        *uuid::Uuid::from_u128(u128::from(u64::MAX)).as_bytes(),
+                    )
+            })
+            .expect("voter max");
+        assert2::assert!(vmax.replica_id == -1);
+
+        let n2 = resp.nodes.iter().find(|n| n.node_id == 2).expect("node 2");
+        assert2::assert!(n2.node_id == 2);
+        let nmax = resp
+            .nodes
+            .iter()
+            .find(|n| n.listeners.iter().any(|l| l.host == "controller-max"))
+            .expect("node max");
+        assert2::assert!(nmax.node_id == -1);
+        engine.shutdown().await;
+
+        // 2. Controller with leader and committed record:
+        // Voter 1 is leader with log_end_offset >= 1.
+        let (engine2, _dir2) = single_voter_engine();
+        wait_for_leader(&engine2).await;
+        engine2
+            .submit_change(vec![topic_record("t1")])
+            .await
+            .expect("submit");
+
+        let mut req_body2 = bytes::BytesMut::new();
+        describe.encode(&mut req_body2, 2).unwrap();
+        let resp_body2 = super::describe_quorum_response(2, &req_body2, &engine2)
+            .await
+            .unwrap();
+        let resp2 = DescribeQuorumResponse::decode(&mut resp_body2.as_ref(), 2).unwrap();
+        let part2 = &resp2.topics[0].partitions[0];
+        assert2::assert!(part2.leader_id == 1);
+        assert2::assert!(part2.current_voters[0].replica_id == 1);
+        assert2::assert!(part2.current_voters[0].log_end_offset >= 1);
+        assert2::assert!(resp2.nodes[0].node_id == 1);
+        engine2.shutdown().await;
     }
 }
