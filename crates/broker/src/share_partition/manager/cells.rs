@@ -29,10 +29,13 @@ impl SharePartitionLeaderManager {
     /// loads it lazily on a miss.
     ///
     /// On a cache miss the method reads the durable state from the persister
-    /// and folds it into a fresh [`AcquisitionState`]. If no durable state
-    /// exists, the group's `share.auto.offset.reset` decides where the empty
+    /// and folds it into a fresh [`AcquisitionState`]. The group coordinator
+    /// initializes the state of every assigned share partition first (Kafka's
+    /// Initialize-first flow). When that state has no start offset yet
+    /// (`-1`), the group's `share.auto.offset.reset` decides where the empty
     /// window starts, and the method persists that decision so a later leader
     /// does not resolve it again against a moved log or a moved clock. The
+    /// persister refuses a read of a key that has no state. The
     /// method drops the `DashMap` guard before the load `.await`. A concurrent
     /// loader that loses the insert race adopts the cell of the winner.
     ///
@@ -59,12 +62,16 @@ impl SharePartitionLeaderManager {
 
         // Miss: load from the persister WITHOUT holding any DashMap guard.
         let leader_epoch = self.leader_epoch_for(topic_id, partition);
-        let mut loaded = match self.persister.read_state(group, topic_id, partition).await {
+        let mut loaded = match self
+            .persister
+            .read_state(group, topic_id, partition, leader_epoch)
+            .await
+        {
             // Kafka's `PartitionFactory.UNINITIALIZED_START_OFFSET` is -1: the
             // record the group coordinator writes when it registers a share
             // partition, before any fetch has resolved where the group starts.
             // It is not a start offset, so it takes the strategy path below.
-            Ok(Some(persisted)) if persisted.start_offset.0 >= 0 => {
+            Ok(persisted) if persisted.start_offset.0 >= 0 => {
                 let mut st = AcquisitionState::new(persisted.start_offset);
                 st.load_from(
                     persisted.start_offset,
@@ -75,7 +82,7 @@ impl SharePartitionLeaderManager {
                 );
                 st
             }
-            Ok(uninitialized) => {
+            Ok(registered) => {
                 let start = self.initial_start_offset(group, topic_id, partition).await;
                 let mut st = AcquisitionState::new(start);
                 // The strategy decides only where the window starts. The state
@@ -84,7 +91,7 @@ impl SharePartitionLeaderManager {
                 // and a write-back carrying a lower one is refused with
                 // FENCED_STATE_EPOCH, which would strand every later SPSO
                 // advance in memory.
-                st.state_epoch = uninitialized.map_or(0, |persisted| persisted.state_epoch);
+                st.state_epoch = registered.state_epoch;
                 st.leader_epoch = leader_epoch;
                 // The resolved start is durable state: persist it now so the
                 // next leader inherits it instead of re-resolving a `latest`
