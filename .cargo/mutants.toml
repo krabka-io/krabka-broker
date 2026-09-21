@@ -55,6 +55,10 @@ exclude_re = [
     # KIP-939 2PC gates, the coordinator routing -- is wire-visible and is
     # asserted by `handlers::init_producer_id::tests`.
     "init_producer_id\\.rs.*delete .*error_code.*in handle",
+    # `error.kind() != NotFound` guards only a `tracing::warn!` when cleaning up
+    # a clean-shutdown file. An error other than NotFound is an unobservable
+    # logging-only effect that leaves `take`'s return value unchanged.
+    "clean_shutdown\\.rs:70:.*replace != with == in take",
     # ---- crates/audit --------------------------------------------------
     #
     # `let created = !path.exists()` only decides whether to fsync the newly
