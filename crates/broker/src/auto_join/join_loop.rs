@@ -82,14 +82,7 @@ pub(crate) async fn run(params: AutoJoinParams) {
         if let Some(existing) = controller.current_image().voters().get(self_id)
             && existing.directory_id != params.directory_id
         {
-            let req = RemoveRaftVoterRequest {
-                cluster_id: cluster_id.map(|id| id.to_string()),
-                voter_id,
-                voter_directory_id: krabka_protocol::primitives::uuid::Uuid(
-                    *existing.directory_id.as_bytes(),
-                ),
-                ..Default::default()
-            };
+            let req = build_remove_raft_voter_request(cluster_id, voter_id, existing.directory_id);
             if let Err(error) =
                 send_remove_raft_voter(&client, protocol, &server_name, target, &req).await
             {
@@ -122,6 +115,19 @@ pub(crate) async fn run(params: AutoJoinParams) {
         }
 
         tokio::time::sleep(retry_backoff.to_std()).await;
+    }
+}
+
+pub(crate) fn build_remove_raft_voter_request(
+    cluster_id: Option<uuid::Uuid>,
+    voter_id: i32,
+    stale_directory_id: uuid::Uuid,
+) -> RemoveRaftVoterRequest {
+    RemoveRaftVoterRequest {
+        cluster_id: cluster_id.map(|id| id.to_string()),
+        voter_id,
+        voter_directory_id: krabka_protocol::primitives::uuid::Uuid(*stale_directory_id.as_bytes()),
+        ..Default::default()
     }
 }
 
@@ -223,5 +229,120 @@ mod tests {
 
         assert2::assert!((source.controller_bound_addr_calls()) == (1));
         assert2::assert!((source.current_image_calls()) == (1));
+    }
+
+    #[test]
+    fn build_remove_raft_voter_request_carries_identity() {
+        let cluster = uuid::Uuid::from_u128(1234);
+        let stale = uuid::Uuid::from_u128(5678);
+        let req = build_remove_raft_voter_request(Some(cluster), 42, stale);
+        assert2::assert!(req.cluster_id == Some(cluster.to_string()));
+        assert2::assert!(req.voter_id == 42);
+        assert2::assert!(
+            req.voter_directory_id == krabka_protocol::primitives::uuid::Uuid(*stale.as_bytes())
+        );
+
+        let req_no_cluster = build_remove_raft_voter_request(None, 42, stale);
+        assert2::assert!(req_no_cluster.cluster_id.is_none());
+        assert2::assert!(req_no_cluster.voter_id == 42);
+        assert2::assert!(
+            req_no_cluster.voter_directory_id
+                == krabka_protocol::primitives::uuid::Uuid(*stale.as_bytes())
+        );
+    }
+
+    #[tokio::test]
+    async fn run_attempts_stale_voter_removal_when_directory_id_differs() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+
+        let received_api_key = Arc::new(std::sync::atomic::AtomicI16::new(-1));
+        let key_clone = received_api_key.clone();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            if let Ok((mut socket, _)) = listener.accept().await {
+                // Read ApiVersions request frame
+                let mut len_buf = [0u8; 4];
+                if socket.read_exact(&mut len_buf).await.is_ok() {
+                    let frame_len = u32::from_be_bytes(len_buf) as usize;
+                    let mut frame = vec![0u8; frame_len];
+                    if socket.read_exact(&mut frame).await.is_ok() {
+                        let correlation_id = [frame[4], frame[5], frame[6], frame[7]];
+
+                        // Reply to ApiVersions
+                        let resp = krabka_protocol::owned::api_versions_response::ApiVersionsResponse {
+                            error_code: 0,
+                            api_keys: vec![
+                                krabka_protocol::owned::api_versions_response::ApiVersion {
+                                    api_key: krabka_protocol::owned::remove_raft_voter_request::API_KEY,
+                                    min_version: 0,
+                                    max_version: krabka_protocol::owned::remove_raft_voter_request::MAX_VERSION,
+                                    ..Default::default()
+                                },
+                                krabka_protocol::owned::api_versions_response::ApiVersion {
+                                    api_key: krabka_protocol::owned::add_raft_voter_request::API_KEY,
+                                    min_version: 0,
+                                    max_version: krabka_protocol::owned::add_raft_voter_request::MAX_VERSION,
+                                    ..Default::default()
+                                },
+                            ],
+                            ..Default::default()
+                        };
+                        let mut body = bytes::BytesMut::new();
+                        krabka_protocol::Encode::encode(&resp, &mut body, 0).expect("encode");
+                        let resp_len = u32::try_from(4 + body.len())
+                            .expect("response frame length fits in u32");
+                        let mut resp_frame = Vec::new();
+                        resp_frame.extend_from_slice(&resp_len.to_be_bytes());
+                        resp_frame.extend_from_slice(&correlation_id);
+                        resp_frame.extend_from_slice(&body);
+                        let _ = socket.write_all(&resp_frame).await;
+
+                        // Read the subsequent request frame
+                        if socket.read_exact(&mut len_buf).await.is_ok() {
+                            let req_len = u32::from_be_bytes(len_buf) as usize;
+                            let mut req_frame = vec![0u8; req_len];
+                            if socket.read_exact(&mut req_frame).await.is_ok()
+                                && req_frame.len() >= 2
+                            {
+                                let key = i16::from_be_bytes([req_frame[0], req_frame[1]]);
+                                key_clone.store(key, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        let source = Arc::new(
+            FakeMetadataSource::builder()
+                .image(image_with_voter(NodeId(7)))
+                .controller_bound_addr(addr)
+                .build(),
+        );
+
+        let params = AutoJoinParams {
+            auto_join: true,
+            retry_backoff: millis(7),
+            voter_request_timeout: secs(1),
+            node_id: NodeId(7),
+            directory_id: uuid::Uuid::from_u128(42), // differs from image_with_voter's 7
+            cluster_id: None,
+            bootstrap_servers: vec![addr.to_string()],
+            advertised_controller: None,
+            listener_protocol: krabka_security::ListenerProtocol::Plaintext,
+            inter_broker_server_name: "broker.internal".to_string(),
+            controller: source.clone(),
+            inter_broker_client: Arc::new(crate::network::client::InterBrokerClient::new(
+                None, None,
+            )),
+        };
+
+        let _ = tokio::time::timeout(Duration::from_millis(200), run(params)).await;
+
+        let key = received_api_key.load(std::sync::atomic::Ordering::Relaxed);
+        assert2::assert!(key == krabka_protocol::owned::remove_raft_voter_request::API_KEY);
     }
 }
