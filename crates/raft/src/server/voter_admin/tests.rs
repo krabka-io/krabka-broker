@@ -44,11 +44,11 @@ fn wire_listeners_must_be_usable_and_uniquely_named() {
 }
 
 /// A reconfiguration request is refused before it reaches the quorum when
-/// it names the wrong cluster, a negative voter, or a zero directory id.
+/// it names the wrong cluster, a negative voter, or a zero directory id,
+/// each with the code `KafkaRaftClient.handleRemoveVoterRequest` answers.
 ///
-/// Each is a separate arm returning `INVALID_REQUEST` with a reason, and a
-/// request that slipped past them would be applied to the voter set --
-/// a zero directory id in particular names no real incarnation.
+/// A request that slipped past them would be applied to the voter set -- a
+/// zero directory id in particular names no real incarnation.
 #[tokio::test]
 async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
     use krabka_protocol::{
@@ -66,34 +66,50 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
     let cluster_id = engine.current_image().cluster_id().to_string();
 
     let real_directory = krabka_protocol::primitives::uuid::Uuid([7u8; 16]);
-    // (what it is, cluster id sent, voter id, directory id)
+    let invalid_voter = RemoveRaftVoterResponse {
+        error_code: INVALID_REQUEST,
+        error_message: Some("Remove voter request didn't include a valid voter".into()),
+        ..Default::default()
+    };
+    // (what it is, cluster id sent, voter id, directory id, response)
     let cases: Vec<(
         &str,
         Option<String>,
         i32,
         krabka_protocol::primitives::uuid::Uuid,
+        RemoveRaftVoterResponse,
     )> = vec![
         (
             "another cluster's id",
             Some("00000000-0000-0000-0000-0000000000ff".to_owned()),
             2,
             real_directory,
+            RemoveRaftVoterResponse {
+                error_code: 104,
+                error_message: Some(format!(
+                    "The given id \"00000000-0000-0000-0000-0000000000ff\" doesn't match the \
+                     cluster id \"{cluster_id}\""
+                )),
+                ..Default::default()
+            },
         ),
         (
             "a negative voter id",
             Some(cluster_id.clone()),
             -1,
             real_directory,
+            invalid_voter.clone(),
         ),
         (
             "a zero directory id",
             Some(cluster_id.clone()),
             2,
             krabka_protocol::primitives::uuid::Uuid::ZERO,
+            invalid_voter,
         ),
     ];
 
-    for (what, request_cluster_id, voter_id, voter_directory_id) in cases {
+    for (what, request_cluster_id, voter_id, voter_directory_id, expected) in cases {
         let request = RemoveRaftVoterRequest {
             cluster_id: request_cluster_id,
             voter_id,
@@ -107,8 +123,7 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
             .expect("a refusal is still a response");
         let mut cursor = &bytes[..];
         let decoded = RemoveRaftVoterResponse::decode(&mut cursor, version).expect("decode");
-        check!(decoded.error_code == INVALID_REQUEST, "{what}: error code");
-        check!(decoded.error_message.is_some(), "{what}: says why");
+        check!(decoded == expected, "{what}");
     }
 
     // Omitting the cluster id entirely is allowed: the field is optional,
@@ -334,4 +349,28 @@ async fn updating_a_voter_needs_the_cluster_the_epoch_and_a_coherent_range() {
     let anonymous = code_for(update(None, epoch, range(0, 1))).await;
     check!(anonymous == named);
     check!(anonymous != INCONSISTENT_CLUSTER_ID);
+
+    // Every answer, a refusal included, names the leader and its controller
+    // endpoint, as `RaftUtil.updateVoterResponse` fills it.
+    let mut body = BytesMut::new();
+    update(None, epoch - 1, range(0, 1))
+        .encode(&mut body, version)
+        .expect("encode");
+    let bytes = update_raft_voter_response(version, &body.freeze(), &engine)
+        .await
+        .expect("response");
+    check!(
+        UpdateRaftVoterResponse::decode(&mut &bytes[..], version).expect("decode")
+            == UpdateRaftVoterResponse {
+                error_code: FENCED_LEADER_EPOCH,
+                current_leader: krabka_protocol::owned::update_raft_voter_response::CurrentLeader {
+                    leader_id: 1,
+                    leader_epoch: epoch,
+                    host: "controller-1".into(),
+                    port: 9093,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+    );
 }
