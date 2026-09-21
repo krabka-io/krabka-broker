@@ -33,10 +33,13 @@ mod registration;
 mod sasl;
 #[cfg(test)]
 mod test_support;
+#[cfg(test)]
+mod tests_api_versions;
 mod voter_admin;
 
+pub use self::api_versions::is_valid_client_info;
 use self::{
-    api_versions::{API_KEY_API_VERSIONS, api_versions_response_body, api_versions_routing_error},
+    api_versions::{API_KEY_API_VERSIONS, api_versions_response},
     describe_cluster::{API_KEY_DESCRIBE_CLUSTER, describe_cluster_response_body},
     dispatch::{dispatch_with_router, is_native_raft_api},
     framing::{
@@ -49,6 +52,29 @@ use self::{
     },
 };
 use crate::{error::RaftError, kraft::KraftController};
+
+/// The listener's own `ApiVersions` answer, handed to the handshake for the
+/// requests that arrive before SASL authentication.
+struct ListenerApiVersions {
+    engine: KraftController,
+    admin_router: Option<Arc<dyn crate::ControllerAdminRouter>>,
+}
+
+impl crate::ControllerApiVersions for ListenerApiVersions {
+    fn respond(
+        &self,
+        request_version: i16,
+        request_body: &[u8],
+    ) -> Result<bytes::Bytes, crate::RaftHandshakeError> {
+        api_versions_response(
+            request_version,
+            request_body,
+            &self.engine.current_image(),
+            self.admin_router.as_deref(),
+        )
+        .map_err(|error| crate::RaftHandshakeError::Protocol(error.to_string()))
+    }
+}
 
 struct ConnectionContext {
     peer: SocketAddr,
@@ -82,7 +108,11 @@ pub(crate) async fn run(
                         let admin_router = admin_router.clone();
                         tokio::spawn(async move {
                             let connection = if let Some(hs) = handshake {
-                                match hs.upgrade(stream).await {
+                                let api_versions = ListenerApiVersions {
+                                    engine: engine.clone(),
+                                    admin_router: admin_router.clone(),
+                                };
+                                match hs.upgrade(stream, &api_versions).await {
                                     Ok(s) => s,
                                     Err(e) => {
                                         tracing::debug!(%peer, error = %e, "handshake failed");
@@ -160,19 +190,12 @@ where
                     // are flexible (compact array). Krabka's own client asks at
                     // v0; the JVM controller asks at v4. The generated codec
                     // speaks the raw `int16`, so unwrap the version here.
-                    let image = engine.current_image();
-                    let error_code = api_versions_routing_error(
+                    let resp = api_versions_response(
                         api_version.get(),
                         &body,
-                        &image.cluster_id().to_string(),
-                        engine.node_id().0,
-                    )?;
-                    let resp = api_versions_response_body(
-                        api_version.get(),
-                        &image,
+                        &engine.current_image(),
                         admin_router.as_deref(),
-                        error_code,
-                    );
+                    )?;
                     write_response_no_tagged_fields(&mut stream, correlation_id, resp).await?;
                     continue;
                 }

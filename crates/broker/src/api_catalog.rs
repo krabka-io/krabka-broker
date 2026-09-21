@@ -518,7 +518,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         key: "KIP-511",
         claim: "Client software name and version in ApiVersions v3",
         status: KipStatus::Implemented,
-        module: "crates/broker/src/handlers/api_versions/client_info.rs",
+        module: "crates/raft/src/server/api_versions/client_software.rs",
         tests: &[
             "crates/broker/tests/client_software_versions.rs",
             "crates/broker/tests/librdkafka_conformance.rs::round_trip_group_join_and_api_versions_with_kcat",
