@@ -17,9 +17,9 @@ use crate::kraft::{
             snapshot_fetch_response_invalid,
         },
         test_support::{
-            build_engine_only, build_engine_only_with_policy, elect_single_voter_engine,
-            one_offset_batch, record_peer_sends, recv_peer_send, recv_peer_send_with_api,
-            topic_record,
+            await_leader, build, build_engine_only, build_engine_only_with_policy,
+            elect_single_voter_engine, one_offset_batch, record_peer_sends, recv_peer_send,
+            recv_peer_send_with_api, submit_change_with_timeout, topic_record,
         },
     },
     types::LogOffsetMetadata,
@@ -838,4 +838,145 @@ async fn a_leader_answers_a_diverging_fetch_without_truncating_its_own_log() {
     assert2::check!(engine.log.log_end_offset() == log_end);
     assert2::check!(engine.core.role().is_leader());
     assert2::check!(engine.core.quorum_state().leader_epoch == leader_epoch);
+}
+
+#[tokio::test]
+async fn quorum_state_snapshot_tracks_fetch_timestamps_and_observers() {
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2)]);
+    engine.on_event(Event::ElectionTimeout);
+    engine.on_event(Event::ReceiveVoteResponse {
+        from: NodeId(2),
+        epoch: 0,
+        vote_granted: true,
+    });
+    engine.on_event(Event::ReceiveVoteResponse {
+        from: NodeId(2),
+        epoch: 1,
+        vote_granted: true,
+    });
+    assert!(engine.core.role().is_leader());
+
+    // 1. Before Node 2 fetches, fetch_ms and caught_up_ms are -1
+    let snap1 = engine.quorum_state_snapshot();
+    assert2::check!(snap1.per_replica_last_fetch_ms.get(&NodeId(2)) == Some(&-1));
+    assert2::check!(snap1.per_replica_last_caught_up_ms.get(&NodeId(2)) == Some(&-1));
+    // Leader itself has a real timestamp > 1_700_000_000_000
+    let leader_ms = snap1
+        .per_replica_last_fetch_ms
+        .get(&NodeId(1))
+        .copied()
+        .unwrap_or(0);
+    let leader_caught_ms = snap1
+        .per_replica_last_caught_up_ms
+        .get(&NodeId(1))
+        .copied()
+        .unwrap_or(0);
+    assert2::check!(leader_ms > 1_700_000_000_000);
+    assert2::check!(leader_caught_ms > 1_700_000_000_000);
+
+    // 2. After Node 2 fetches at the current log end offset:
+    tokio::time::sleep(StdDuration::from_millis(10)).await;
+    let (reply, _rx) = oneshot::channel();
+    engine.on_inbound(Inbound::Fetch {
+        req: wire::PeerRequest::Fetch {
+            from: NodeId(2),
+            fetch_epoch: 1,
+            fetch_offset: engine.log.log_end_offset().0,
+            replica_directory_id: uuid::Uuid::nil(),
+        }
+        .encode(),
+        reply,
+    });
+
+    let snap2 = engine.quorum_state_snapshot();
+    let peer_fetch_ms = snap2
+        .per_replica_last_fetch_ms
+        .get(&NodeId(2))
+        .copied()
+        .unwrap_or(0);
+    let peer_caught_ms = snap2
+        .per_replica_last_caught_up_ms
+        .get(&NodeId(2))
+        .copied()
+        .unwrap_or(0);
+    assert2::check!(peer_fetch_ms > 1_700_000_000_000);
+    assert2::check!(peer_caught_ms > 1_700_000_000_000);
+
+    // 3. Observer (Node 99) fetches via inbound
+    let (reply_obs, _rx_obs) = oneshot::channel();
+    engine.on_inbound(Inbound::Fetch {
+        req: wire::PeerRequest::Fetch {
+            from: NodeId(99),
+            fetch_epoch: 1,
+            fetch_offset: 0,
+            replica_directory_id: uuid::Uuid::from_u128(99),
+        }
+        .encode(),
+        reply: reply_obs,
+    });
+
+    let snap3 = engine.quorum_state_snapshot();
+    assert2::check!(snap3.observers == vec![NodeId(99)]);
+    assert2::check!(
+        snap3.observer_directory_ids.get(&NodeId(99)) == Some(&uuid::Uuid::from_u128(99))
+    );
+    assert2::check!(!snap3.observers.contains(&NodeId(1)));
+    assert2::check!(!snap3.observers.contains(&NodeId(2)));
+}
+
+#[tokio::test]
+async fn kraft_controller_metadata_fetch_returns_slice() {
+    let (ctrl, _dir) = build(NodeId(1), &[NodeId(1)]);
+    ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
+    await_leader(&ctrl, Some(NodeId(1))).await;
+    submit_change_with_timeout(&ctrl, topic_record("fetch-test"), "fetch seed")
+        .await
+        .unwrap();
+
+    let slice = ctrl
+        .metadata_fetch(0, krabka_units::prelude::bytes(1024))
+        .await
+        .unwrap();
+    assert2::check!(!slice.records.is_empty());
+    assert2::check!(slice.high_watermark > 0);
+    ctrl.shutdown().await;
+}
+
+#[tokio::test]
+async fn quorum_state_snapshot_negative_timestamp_fallback() {
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2)]);
+    engine.on_event(Event::ElectionTimeout);
+    engine.on_event(Event::ReceiveVoteResponse {
+        from: NodeId(2),
+        epoch: 0,
+        vote_granted: true,
+    });
+    engine.on_event(Event::ReceiveVoteResponse {
+        from: NodeId(2),
+        epoch: 1,
+        vote_granted: true,
+    });
+    assert!(engine.core.role().is_leader());
+
+    // When wall_clock_base is before UNIX_EPOCH, duration_since returns Err,
+    // so map_or fallback -1 must be returned for all timestamps.
+    engine.wall_clock_base = std::time::UNIX_EPOCH - StdDuration::from_secs(100_000);
+    // Shift clock_base back so engine.now() > 0 and progress.last_fetch / progress.last_caught_up > 0
+    engine.clock_base = Instant::now() - StdDuration::from_millis(50);
+    engine.on_inbound(Inbound::Fetch {
+        req: wire::PeerRequest::Fetch {
+            from: NodeId(2),
+            fetch_epoch: 1,
+            fetch_offset: engine.log.log_end_offset().0,
+            replica_directory_id: uuid::Uuid::nil(),
+        }
+        .encode(),
+        reply: oneshot::channel().0,
+    });
+
+    let snap = engine.quorum_state_snapshot();
+    assert2::assert!(snap.per_replica_last_fetch_ms.get(&NodeId(1)) == Some(&-1));
+    assert2::assert!(snap.per_replica_last_caught_up_ms.get(&NodeId(1)) == Some(&-1));
+    assert2::assert!(snap.per_replica_last_fetch_ms.get(&NodeId(2)) == Some(&-1));
+    assert2::assert!(snap.per_replica_last_caught_up_ms.get(&NodeId(2)) == Some(&-1));
 }

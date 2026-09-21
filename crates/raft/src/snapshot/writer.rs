@@ -78,13 +78,14 @@ impl SnapshotWriter {
         let kraft_version = i16::try_from(control_state.kraft_version).map_err(|_| {
             RaftError::ChangeRejected("snapshot kraft.version exceeds int16".into())
         })?;
+        let kv_record = WireKRaftVersionRecord {
+            version: 0,
+            k_raft_version: kraft_version,
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+        };
         out.put_slice(&encode_typed_control_batch(
             SNAPSHOT_KRAFT_VERSION_BASE_OFFSET,
-            &ControlRecord::KRaftVersion(WireKRaftVersionRecord {
-                version: 0,
-                k_raft_version: kraft_version,
-                ..Default::default()
-            }),
+            &ControlRecord::KRaftVersion(kv_record),
         )?);
         out.put_slice(&encode_typed_control_batch(
             SNAPSHOT_VOTERS_BASE_OFFSET,

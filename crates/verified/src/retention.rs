@@ -220,10 +220,16 @@ mod tests {
         assert2::assert!(
             retention_prefix(true, &[true, false, true], &[true; 3], &[1; 3], 0).len == 1
         );
+        assert2::assert!(
+            retention_prefix(true, &[true, true], &[true, true], &[10, 10], 0).len == 2
+        );
     }
 
     #[test]
     fn local_selection_preserves_scheduled_data_and_the_final_segment() {
+        assert2::assert!(
+            local_retention_prefix(&[true, true], &[false, false], &[10, 10], 0, true,).len == 2
+        );
         assert2::assert!(
             local_retention_prefix(
                 &[true, false, true, true],

@@ -337,3 +337,26 @@ fn encoded_fetch_snapshot_request_carries_cluster_id_and_current_leader_epoch() 
         ) == (Some("AAAAAAAAAAAAAAAAAAAACQ"), 2, 4096, 7, 42, 3, 128)
     );
 }
+
+#[test]
+fn fetch_request_wire_encoding_fields() {
+    use krabka_protocol::{Decode, owned::fetch_request::FetchRequest};
+
+    let req = PeerRequest::Fetch {
+        from: NodeId(1),
+        fetch_epoch: 2,
+        fetch_offset: 10,
+        replica_directory_id: uuid::Uuid::from_u128(123),
+    };
+    let bytes = req.try_encode().expect("encodes fetch request");
+    let mut cur = &bytes[..];
+    let decoded = FetchRequest::decode(&mut cur, FETCH_VERSION).expect("decodes fetch request");
+    check!(decoded.max_wait_ms == 500);
+    check!(decoded.min_bytes == 1);
+    check!(decoded.max_bytes == 1024 * 1024);
+    check!(decoded.isolation_level == 0);
+    check!(decoded.session_id == 0);
+    check!(decoded.session_epoch == -1);
+    check!(decoded.replica_state.replica_epoch == -1);
+    check!(decoded.replica_state.replica_id == 1);
+}

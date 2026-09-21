@@ -687,3 +687,192 @@ fn replay_value_blobs(blobs: &[bytes::Bytes], image: &mut MetadataImage) -> Resu
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use krabka_metadata::{DelegationTokenRecord, MetadataRecord, PartitionRecord, TopicRecord};
+    use krabka_security::KafkaPrincipal;
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::types::NodeId;
+
+    fn principal(name: &str) -> KafkaPrincipal {
+        KafkaPrincipal {
+            principal_type: "User".to_string(),
+            name: name.to_string(),
+        }
+    }
+
+    #[test]
+    fn wall_clock_ms_is_real_timestamp() {
+        assert2::check!(Engine::wall_clock_ms() > 1_700_000_000_000);
+    }
+
+    #[test]
+    fn token_generation_matches_checks_all_fields() {
+        let t1 = DelegationTokenRecord {
+            token_id: "tok1".into(),
+            owner: principal("alice"),
+            hmac: vec![1, 2, 3],
+            issue_timestamp_ms: 100,
+            max_timestamp_ms: 200,
+            expiry_timestamp_ms: 150,
+            renewers: vec![principal("bob")],
+        };
+        let mut t2 = t1.clone();
+        assert2::check!(Engine::token_generation_matches(&t1, &t2));
+
+        t2.token_id = "tok2".into();
+        assert2::check!(!Engine::token_generation_matches(&t1, &t2));
+        t2 = t1.clone();
+
+        t2.owner = principal("charlie");
+        assert2::check!(!Engine::token_generation_matches(&t1, &t2));
+        t2 = t1.clone();
+
+        t2.hmac = vec![4, 5, 6];
+        assert2::check!(!Engine::token_generation_matches(&t1, &t2));
+        t2 = t1.clone();
+
+        t2.issue_timestamp_ms = 101;
+        assert2::check!(!Engine::token_generation_matches(&t1, &t2));
+        t2 = t1.clone();
+
+        t2.max_timestamp_ms = 201;
+        assert2::check!(!Engine::token_generation_matches(&t1, &t2));
+        t2 = t1.clone();
+
+        t2.renewers = vec![principal("dan")];
+        assert2::check!(!Engine::token_generation_matches(&t1, &t2));
+    }
+
+    #[test]
+    fn token_mutation_id_extracts_token_id() {
+        let rec = DelegationTokenRecord {
+            token_id: "my-token".into(),
+            owner: principal("alice"),
+            hmac: vec![],
+            issue_timestamp_ms: 0,
+            max_timestamp_ms: 0,
+            expiry_timestamp_ms: 0,
+            renewers: vec![],
+        };
+        let m1 = DelegationTokenMutation::Renew {
+            expected: rec.clone(),
+            replacement: rec.clone(),
+        };
+        assert2::check!(Engine::token_mutation_id(&m1) == "my-token");
+
+        let m2 = DelegationTokenMutation::Expire {
+            expected: rec.clone(),
+            replacement: rec.clone(),
+        };
+        assert2::check!(Engine::token_mutation_id(&m2) == "my-token");
+
+        let m3 = DelegationTokenMutation::Delete { expected: rec };
+        assert2::check!(Engine::token_mutation_id(&m3) == "my-token");
+    }
+
+    #[test]
+    fn rebase_partition_directories_copies_image_directories() {
+        let mut image = MetadataImage::default();
+        let topic_id = Uuid::from_u128(42);
+        image.apply(&MetadataRecord::V1Topic(TopicRecord {
+            name: "test-topic".into(),
+            topic_id,
+            partitions: 1,
+            replication_factor: 1,
+        }));
+        let dir_id = Uuid::from_u128(99);
+        image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+            partition: 0,
+            topic: "test-topic".into(),
+            replicas: vec![NodeId(1)],
+            isr: vec![NodeId(1)],
+            removing_replicas: vec![],
+            adding_replicas: vec![],
+            leader: NodeId(1),
+            leader_epoch: krabka_metadata::LeaderEpoch(0),
+            partition_epoch: 0,
+            directories: vec![dir_id],
+        }));
+
+        let new_part = PartitionRecord {
+            partition: 0,
+            topic: "test-topic".into(),
+            replicas: vec![NodeId(1)],
+            isr: vec![NodeId(1)],
+            removing_replicas: vec![],
+            adding_replicas: vec![],
+            leader: NodeId(1),
+            leader_epoch: krabka_metadata::LeaderEpoch(1),
+            partition_epoch: 1,
+            directories: vec![], // Empty in new record
+        };
+
+        let rebased = rebase_partition_directories(&image, &MetadataRecord::V1Partition(new_part));
+        if let Some(MetadataRecord::V1Partition(p)) = rebased {
+            assert2::check!(p.directories == vec![dir_id]);
+        } else {
+            panic!("expected V1Partition");
+        }
+    }
+
+    #[test]
+    fn unguarded_delegation_token_records_validation() {
+        use krabka_metadata::DeleteDelegationTokenRecord;
+
+        use crate::kraft::controller::test_support::{build_engine_only, one_offset_batch};
+
+        let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+        let t1 = DelegationTokenRecord {
+            token_id: "tok1".into(),
+            owner: principal("alice"),
+            hmac: vec![1, 2, 3],
+            issue_timestamp_ms: 100,
+            max_timestamp_ms: 200,
+            expiry_timestamp_ms: 150,
+            renewers: vec![],
+        };
+        let tok = MetadataRecord::V1DelegationToken(t1);
+
+        // Unguarded delete is always rejected
+        let del = MetadataRecord::V1DeleteDelegationToken(DeleteDelegationTokenRecord {
+            token_id: "tok1".into(),
+        });
+        let res = engine.check_compare_and_set_records(&[del], false);
+        assert2::assert!(matches!(res, Err(RaftError::ChangeRejected(_))));
+
+        // Duplicate token create in the same batch is rejected
+        let res_dup = engine.check_compare_and_set_records(&[tok.clone(), tok.clone()], false);
+        assert2::assert!(matches!(res_dup, Err(RaftError::ChangeRejected(_))));
+
+        // Token that already exists in image is rejected
+        engine.image.apply(&tok);
+        let res_exists = engine.check_compare_and_set_records(std::slice::from_ref(&tok), false);
+        assert2::assert!(matches!(res_exists, Err(RaftError::ChangeRejected(_))));
+
+        // Token create when hwm < log_end_offset (uncommitted tail) is rejected
+        let (mut engine2, _dir2) = build_engine_only(NodeId(1), &[NodeId(1)]);
+        let t2 = DelegationTokenRecord {
+            token_id: "tok2".into(),
+            owner: principal("bob"),
+            hmac: vec![],
+            issue_timestamp_ms: 0,
+            max_timestamp_ms: 0,
+            expiry_timestamp_ms: 0,
+            renewers: vec![],
+        };
+        let tok2 = MetadataRecord::V1DelegationToken(t2);
+        let mut batch = one_offset_batch(0, 0, b"uncommitted");
+        engine2.log.append(&mut batch, 0).unwrap();
+        assert2::assert!(engine2.log.hwm() < engine2.log.log_end_offset());
+        let res_tail = engine2.check_compare_and_set_records(std::slice::from_ref(&tok2), false);
+        assert2::assert!(matches!(res_tail, Err(RaftError::ChangeRejected(_))));
+
+        // When delegation_token_guarded is true, create is admitted
+        let res_guarded = engine2.check_compare_and_set_records(&[tok2], true);
+        assert2::assert!(res_guarded.is_ok());
+    }
+}

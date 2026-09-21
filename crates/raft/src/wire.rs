@@ -341,6 +341,11 @@ mod tests {
         };
         let mut out = Vec::new();
         resp.encode_v0(&mut out).unwrap();
+        assert2::assert!(NO_SNAPSHOT == -1);
+        let snapshot_end_offset = i64::from_be_bytes(out[38..46].try_into().unwrap());
+        let snapshot_epoch = i32::from_be_bytes(out[46..50].try_into().unwrap());
+        assert2::assert!(snapshot_end_offset == -1);
+        assert2::assert!(snapshot_epoch == -1);
         let mut cur: &[u8] = &out;
         assert2::assert!(KrabkaMetadataFetchResponse::decode_v0(&mut cur).unwrap() == resp);
     }

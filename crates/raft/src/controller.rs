@@ -275,6 +275,8 @@ mod tests {
         let leader_last = quorum.last_applied_index;
         assert2::assert!(leader_last >= 2);
         assert2::assert!(quorum.per_voter_matched_index.get(&NodeId(1)) == Some(&leader_last));
+        assert2::assert!(ctrl.quorum_committed_offset() == 2);
+        assert2::assert!(ctrl.voted_directory_id() == Some(Uuid::nil()));
         ctrl.shutdown().await;
     }
 
@@ -289,6 +291,7 @@ mod tests {
         let ctrl = Controller::start(cfg).await.expect("join start");
 
         assert2::assert!(ctrl.quorum_state().current_leader.is_none());
+        assert2::assert!(ctrl.voted_directory_id().is_none());
         ctrl.shutdown().await;
     }
 

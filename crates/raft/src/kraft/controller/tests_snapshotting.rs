@@ -9,7 +9,8 @@ use super::*;
 use crate::kraft::controller::{
     checkpoint::{
         checkpoint_id_is_newer, latest_checkpoint_id, load_checkpoint_by_id,
-        load_latest_checkpoint, parse_checkpoint_name, retain_recent_checkpoints, write_checkpoint,
+        load_latest_checkpoint, parse_checkpoint_name, retain_latest_checkpoint,
+        retain_recent_checkpoints, write_checkpoint,
     },
     records::decode_control_record,
     test_support::{
@@ -65,6 +66,9 @@ fn checkpoint_id_ordering_prefers_higher_offset_then_epoch_without_equal_replace
 fn checkpoint_names_must_use_the_canonical_fixed_width_encoding() {
     assert2::assert!(
         parse_checkpoint_name("00000000000000000010-0000000002.checkpoint") == Some((10, 2))
+    );
+    assert2::assert!(
+        parse_checkpoint_name("00000000000000000000-0000000000.checkpoint") == Some((0, 0))
     );
     for malformed in [
         "10-2.checkpoint",
@@ -230,6 +234,30 @@ fn retain_recent_checkpoints_keeps_a_lone_checkpoint() {
     retain_recent_checkpoints(&cp_dir);
 
     assert2::assert!(load_checkpoint_by_id(&cp_dir, 7, 2) == Some(b"only".to_vec()));
+}
+
+#[test]
+fn retain_latest_checkpoint_keeps_only_the_single_newest_id() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cp_dir = checkpoint_dir(dir.path());
+    write_checkpoint(&cp_dir, 5, 1, b"oldest").expect("write oldest");
+    write_checkpoint(&cp_dir, 6, 0, b"older").expect("write older");
+    write_checkpoint(&cp_dir, 6, 1, b"newest").expect("write newest");
+
+    retain_latest_checkpoint(&cp_dir);
+
+    assert2::assert!(load_checkpoint_by_id(&cp_dir, 6, 1) == Some(b"newest".to_vec()));
+    assert2::assert!(load_checkpoint_by_id(&cp_dir, 6, 0).is_none());
+    assert2::assert!(load_checkpoint_by_id(&cp_dir, 5, 1).is_none());
+    let entries: Vec<_> = std::fs::read_dir(&cp_dir)
+        .expect("read checkpoint dir")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("read entries");
+    assert2::assert!(entries.len() == 1);
+
+    // Empty dir no-ops
+    let empty_dir = tempfile::tempdir().expect("tempdir");
+    retain_latest_checkpoint(empty_dir.path());
 }
 
 /// A snapshot roll leaves the checkpoint it replaces on disk, and only the

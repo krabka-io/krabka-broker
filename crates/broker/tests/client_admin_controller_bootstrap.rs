@@ -37,7 +37,7 @@ async fn controller_bootstrap_routes_supported_and_rejects_unsupported_admin_rpc
                 replicas: 1,
                 configs: BTreeMap::new(),
             }],
-            krabka_units::secs(5),
+            krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(5)),
         )
         .await
         .unwrap();
@@ -80,7 +80,7 @@ async fn controller_bootstrap_routes_supported_and_rejects_unsupported_admin_rpc
                 replicas: 1,
                 configs: BTreeMap::new(),
             }],
-            krabka_units::secs(5),
+            krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(5)),
         )
         .await
         .unwrap();

@@ -131,6 +131,7 @@ mod tests {
         assert2::assert!(timestamp_record_coordinates(i64::MAX, 1, 0, 0).is_none());
         assert2::assert!(timestamp_record_coordinates(0, 0, i64::MAX, 1).is_none());
         assert2::assert!(timestamp_scan_next(10, 8, 2) == Some(11));
+        assert2::assert!(timestamp_scan_next(10, 10, 0) == Some(11));
         assert2::assert!(timestamp_scan_next(10, 8, 1).is_none());
         assert2::assert!(timestamp_scan_next(i64::MAX, i64::MAX, 0).is_none());
         assert2::assert!(timestamp_scan_window(1) == Some(2));

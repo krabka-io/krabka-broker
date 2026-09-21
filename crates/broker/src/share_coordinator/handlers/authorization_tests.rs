@@ -344,6 +344,42 @@ async fn share_state_rpcs_need_cluster_action() {
     )
     .await
     .expect("create __share_group_state");
+    // The data topics that the requests name. The share coordinator refuses a
+    // read or a write of a topic partition that the metadata image does not
+    // hold.
+    let mut data_topics = Vec::new();
+    for (index, topic_id) in TOPICS.iter().enumerate() {
+        let name = format!("share-authorized-{index}");
+        data_topics.push(krabka_metadata::MetadataRecord::V1Topic(
+            krabka_metadata::TopicRecord {
+                name: name.clone(),
+                topic_id: uuid::Uuid::from_bytes(topic_id.0),
+                partitions: 2,
+                replication_factor: 1,
+            },
+        ));
+        for partition in PARTITIONS {
+            data_topics.push(krabka_metadata::MetadataRecord::V1Partition(
+                krabka_metadata::PartitionRecord {
+                    topic: name.clone(),
+                    partition,
+                    leader: broker.config.node_id,
+                    replicas: vec![broker.config.node_id],
+                    isr: vec![broker.config.node_id],
+                    leader_epoch: krabka_metadata::LeaderEpoch(0),
+                    adding_replicas: vec![],
+                    removing_replicas: vec![],
+                    directories: vec![],
+                    partition_epoch: 0,
+                },
+            ));
+        }
+    }
+    broker
+        .controller
+        .submit_change(data_topics)
+        .await
+        .expect("create the data topics");
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         while !(0..state_partitions).all(|partition| {
             broker.partitions.contains(

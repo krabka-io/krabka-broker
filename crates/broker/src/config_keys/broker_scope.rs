@@ -168,6 +168,24 @@ pub(crate) fn resolve_preferred_leader_site(
         .map(String::as_str)
 }
 
+/// KIP-464: the partition count `CreateTopics` gives a topic that asks for
+/// `num_partitions = -1`. Kafka's `ServerLogConfigs.NUM_PARTITIONS_CONFIG`,
+/// default 1, validated `atLeast(1)`.
+///
+/// The key is static in Kafka: the controller reads it once, when it builds
+/// its `ReplicationControlManager`. `DescribeConfigs` reports it read-only
+/// from the node's own configuration, out of
+/// [`crate::config::BrokerConfig::num_partitions`].
+pub(crate) const NUM_PARTITIONS: &str = "num.partitions";
+
+/// KIP-464: the replication factor `CreateTopics` gives a topic that asks for
+/// `replication_factor = -1`. Kafka's
+/// `ReplicationConfigs.DEFAULT_REPLICATION_FACTOR_CONFIG`, default 1.
+///
+/// Static in Kafka, as [`NUM_PARTITIONS`] is. `DescribeConfigs` reports it
+/// read-only out of [`crate::config::BrokerConfig::default_replication_factor`].
+pub(crate) const DEFAULT_REPLICATION_FACTOR: &str = "default.replication.factor";
+
 /// KIP-98: how long a transactional id may sit in a terminal or idle state
 /// before the transaction coordinator tombstones it out of
 /// `__transaction_state`. Kafka defaults it to 604800000 ms (7 days).

@@ -41,8 +41,8 @@ pub(crate) async fn reset_offsets(
 
     let mut results = Vec::with_capacity(requests.len());
     for request in requests {
-        let Ok(state_value) = persister
-            .read_state(&state.group_id, request.topic_id, request.partition)
+        let Ok(summary) = persister
+            .read_summary(&state.group_id, request.topic_id, request.partition)
             .await
         else {
             results.push(codes::COORDINATOR_NOT_AVAILABLE);
@@ -54,12 +54,10 @@ pub(crate) async fn reset_offsets(
             results.push(codes::FENCED_LEADER_EPOCH);
             continue;
         };
-        let exact_retry = state_value.as_ref().is_some_and(|value| {
-            value.start_offset == request.start_offset
-                && value.delivery_complete_count == 0
-                && value.state_batches.is_empty()
+        let exact_retry = summary.is_some_and(|(_, _, start_offset, delivery_complete_count)| {
+            start_offset == request.start_offset && delivery_complete_count == 0
         });
-        let state_epoch = state_value.map_or(0, |value| value.state_epoch);
+        let state_epoch = summary.map_or(0, |(state_epoch, ..)| state_epoch);
         let decision = share_offset_mutation_decision(
             ShareOffsetMutationGate::Admissible { exact_retry },
             request.observed_leader_epoch,
@@ -110,8 +108,8 @@ pub(crate) async fn delete_offsets(
                 error_code = codes::FENCED_LEADER_EPOCH;
                 continue;
             };
-            let Ok(state_value) = persister
-                .read_state(&state.group_id, request.topic_id, partition)
+            let Ok(summary) = persister
+                .read_summary(&state.group_id, request.topic_id, partition)
                 .await
             else {
                 error_code = codes::COORDINATOR_NOT_AVAILABLE;
@@ -123,12 +121,11 @@ pub(crate) async fn delete_offsets(
                 error_code = codes::FENCED_LEADER_EPOCH;
                 continue;
             };
-            let exact_retry = state_value.as_ref().is_some_and(|value| {
-                value.start_offset == UNINITIALIZED_START_OFFSET
-                    && value.delivery_complete_count == 0
-                    && value.state_batches.is_empty()
-            });
-            let state_epoch = state_value.map_or(0, |value| value.state_epoch);
+            let exact_retry =
+                summary.is_some_and(|(_, _, start_offset, delivery_complete_count)| {
+                    start_offset == UNINITIALIZED_START_OFFSET && delivery_complete_count == 0
+                });
+            let state_epoch = summary.map_or(0, |(state_epoch, ..)| state_epoch);
             let decision = share_offset_mutation_decision(
                 ShareOffsetMutationGate::Admissible { exact_retry },
                 observed_leader_epoch,
