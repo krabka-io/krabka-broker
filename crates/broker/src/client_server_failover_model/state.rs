@@ -111,6 +111,7 @@ impl ProducerEntryProjection {
             base_offset: self.base_offset,
             last_timestamp: 0,
             last_activity_ms: 0,
+            earlier: crate::producer_state::NO_EARLIER_BATCHES,
         }
     }
 }
