@@ -179,6 +179,8 @@ mod tests {
         assert2::check!(!local_recovery_segment_chain(&[-1, 10]));
         assert2::check!(!local_recovery_segment_chain(&[0, 10, 10]));
         assert2::check!(local_recovery_sealed_last(0, 10) == Some(9));
+        assert2::check!(local_recovery_sealed_last(5, 10) == Some(9));
+        assert2::check!(local_recovery_sealed_last(-1, 10) == None);
         assert2::check!(local_recovery_sealed_last(10, 10) == None);
         assert2::check!(
             local_recovery_swap_action(true, true) == LocalRecoverySwapAction::DiscardSwap
@@ -200,6 +202,8 @@ mod tests {
         assert2::check!(step.valid_end == 150);
         assert2::check!(step.last_offset == 14);
         assert2::check!(step.next_offset == 15);
+        assert2::check!(local_recovery_batch_step(100, 150, 10, 12, 2, 50).is_some());
+        assert2::check!(local_recovery_batch_step(100, 200, 10, 10, 0, 0) == None);
         assert2::check!(local_recovery_batch_step(100, 149, 10, 12, 2, 50) == None);
         assert2::check!(local_recovery_batch_step(100, 200, 13, 12, 2, 50) == None);
         assert2::check!(local_recovery_batch_step(100, 200, 10, 10, -1, 50) == None);
@@ -209,10 +213,15 @@ mod tests {
 
     #[test]
     fn index_frontier_covers_empty_boundary_and_overflow() {
+        assert2::check!(local_recovery_index_frontier(-1, 0) == None);
+        assert2::check!(local_recovery_index_frontier(0, 0) == Some(1));
         assert2::check!(local_recovery_index_frontier(10, 9) == Some(0));
         assert2::check!(local_recovery_index_frontier(10, 20) == Some(11));
         assert2::check!(local_recovery_index_frontier(10, 8) == None);
         assert2::check!(local_recovery_index_frontier(0, i64::MAX) == None);
+        assert2::check!(
+            local_recovery_index_frontier(0, i64::from(u32::MAX) - 1) == Some(u32::MAX)
+        );
         assert2::check!(local_recovery_index_frontier(0, i64::from(u32::MAX)) == None);
     }
 }

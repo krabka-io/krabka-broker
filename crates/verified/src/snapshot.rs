@@ -154,6 +154,8 @@ mod tests {
         use SnapshotInstallDecision::{Install, Reject, Stale};
 
         for (pending, end, epoch, log_end, expected) in [
+            (false, 0, 0, 0, Stale),
+            (false, 1, 0, 0, Install),
             (false, 11, 3, 10, Install),
             (false, 10, 3, 10, Stale),
             (false, 9, 3, 10, Stale),
@@ -183,6 +185,8 @@ mod tests {
         );
         check!(snapshot_chunk_admission(true, Some(6), 3, 6, 3, 3, 10) == Complete);
         check!(snapshot_chunk_admission(true, None, 0, 0, 0, 0, 10) == Complete);
+        check!(snapshot_chunk_admission(true, None, 0, 0, 0, 0, 0) == Complete);
+        check!(snapshot_chunk_admission(true, None, 0, 10, 0, 10, 10) == Complete);
 
         for decision in [
             snapshot_chunk_admission(false, Some(6), 3, 6, 3, 3, 10),
@@ -191,6 +195,9 @@ mod tests {
             snapshot_chunk_admission(true, Some(6), 3, 6, 2, 3, 10),
             snapshot_chunk_admission(true, Some(6), 3, 6, 4, 2, 10),
             snapshot_chunk_admission(true, Some(6), 3, 6, 3, 4, 10),
+            snapshot_chunk_admission(true, None, -1, 6, -1, 3, 10),
+            snapshot_chunk_admission(true, None, 0, 6, 0, -1, 10),
+            snapshot_chunk_admission(true, None, 0, 6, 0, 3, -1),
             snapshot_chunk_admission(true, None, 0, -1, 0, 0, 10),
             snapshot_chunk_admission(true, None, 0, 11, 0, 1, 10),
             snapshot_chunk_admission(true, None, i64::MAX, i64::MAX, i64::MAX, 1, i64::MAX),

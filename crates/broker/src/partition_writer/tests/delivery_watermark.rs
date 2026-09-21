@@ -57,6 +57,7 @@ async fn a_produce_to_a_scheduled_topic_refreshes_the_mirror_and_rearms_the_sche
     tx.send(WriterMessage::Produce(ProduceJob {
         data: ProduceData::Owned(batch_at(NOW_MS - 60_000)),
         ack,
+        producer_check: None,
     }))
     .await
     .expect("send the active batch");
@@ -71,6 +72,7 @@ async fn a_produce_to_a_scheduled_topic_refreshes_the_mirror_and_rearms_the_sche
     tx.send(WriterMessage::Produce(ProduceJob {
         data: ProduceData::Owned(batch_at(NOW_MS + 200)),
         ack,
+        producer_check: None,
     }))
     .await
     .expect("send the scheduled batch");
@@ -93,6 +95,7 @@ async fn a_produce_to_a_scheduled_topic_refreshes_the_mirror_and_rearms_the_sche
     tx.send(WriterMessage::Produce(ProduceJob {
         data: ProduceData::Owned(batch_at(NOW_MS - 60_000)),
         ack,
+        producer_check: None,
     }))
     .await
     .expect("send a third batch");
@@ -132,6 +135,7 @@ async fn a_produce_to_an_immediate_topic_keeps_the_mirror_at_the_log_end() {
     tx.send(WriterMessage::Produce(ProduceJob {
         data: ProduceData::Owned(sample_batch(3)),
         ack,
+        producer_check: None,
     }))
     .await
     .expect("send job");

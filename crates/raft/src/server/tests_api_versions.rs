@@ -3,6 +3,8 @@
 //! open after each one, and gives the same bytes that the handshake gets for a
 //! request before SASL authentication.
 
+use std::sync::Arc;
+
 use assert2::check;
 use krabka_protocol::{
     Decode, Encode,
@@ -14,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 use super::{
     ConnectionContext, ListenerApiVersions, handle_conn, test_support::single_voter_engine,
 };
-use crate::ControllerApiVersions as _;
+use crate::{AllowAllGrants, ControllerApiVersions as _};
 
 /// A request frame with a v1 header (below v3) or a v2 header (v3 and above,
 /// and every version the listener does not serve above that).
@@ -76,7 +78,7 @@ async fn controller_listener_answers_api_versions_refusals_and_keeps_the_connect
             peer: "127.0.0.1:9093".parse().unwrap(),
             principal: None,
             authenticated_via_token: false,
-            cluster_alter_authorized: true,
+            grants: Arc::new(AllowAllGrants),
         },
     ));
 

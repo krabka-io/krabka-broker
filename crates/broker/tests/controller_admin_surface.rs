@@ -25,6 +25,16 @@ use krabka_client_core::{Connection, ConnectionOptions};
 use krabka_protocol::{
     UnknownTaggedFields,
     owned::{
+        allocate_producer_ids_request::AllocateProducerIdsRequest,
+        allocate_producer_ids_response::AllocateProducerIdsResponse,
+        alter_partition_request::{
+            AlterPartitionRequest, BrokerState, PartitionData as AlterPartitionPartitionData,
+            TopicData as AlterPartitionTopicData,
+        },
+        alter_partition_response::{
+            AlterPartitionResponse, PartitionData as AlterPartitionResultPartition,
+            TopicData as AlterPartitionResultTopic,
+        },
         alter_user_scram_credentials_request::{
             AlterUserScramCredentialsRequest, ScramCredentialUpsertion,
         },
@@ -61,6 +71,10 @@ use krabka_protocol::{
         expire_delegation_token_response::ExpireDelegationTokenResponse,
         renew_delegation_token_request::RenewDelegationTokenRequest,
         renew_delegation_token_response::RenewDelegationTokenResponse,
+        sasl_authenticate_request::SaslAuthenticateRequest,
+        sasl_authenticate_response::SaslAuthenticateResponse,
+        sasl_handshake_request::SaslHandshakeRequest,
+        sasl_handshake_response::SaslHandshakeResponse,
     },
     primitives::uuid::Uuid as WireUuid,
 };
@@ -85,20 +99,6 @@ const KAFKA_CONTROLLER_LISTENER_KEYS: [i16; 41] = [
     1, 17, 18, 19, 20, 29, 30, 31, 32, 33, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 49, 50, 51, 52,
     53, 54, 55, 56, 57, 58, 59, 60, 62, 63, 64, 67, 70, 73, 80, 81, 82,
 ];
-
-/// The keys from [`KAFKA_CONTROLLER_LISTENER_KEYS`] krabka's controller
-/// listener does not advertise, and why each is out of the Admin bridge's
-/// reach:
-///
-/// - `SaslHandshake` (17) and `SaslAuthenticate` (36) are consumed by
-///   `BrokerRaftHandshake` before the controller server sees the stream, so
-///   the listener speaks them without listing them.
-/// - `AlterPartition` (56) and `AllocateProducerIds` (67) have broker handlers,
-///   but krabka's brokers send both to a controller's *broker* endpoint rather
-///   than to its controller listener, which is where Kafka takes them. A
-///   forwarded `AllocateProducerIds` does reach its handler, through
-///   `Envelope` (58) rather than through a key of its own.
-const KEYS_KRABKA_DOES_NOT_ANSWER: [i16; 4] = [17, 36, 56, 67];
 
 /// Start a one-node broker whose controller listener is reachable on its own
 /// port, and return the handle. Both listeners are bound before the broker
@@ -162,7 +162,7 @@ async fn dial_controller(broker: &BrokerHandle) -> Connection {
 /// The keys are the ones a live `mirror.gcr.io/apache/kafka:4.3.1` controller
 /// advertises in `ApiVersions` (the same set 4.0.0's request schemas tag
 /// `controller`), minus the RPCs the controller listener serves without the
-/// Admin bridge and the [`KEYS_KRABKA_DOES_NOT_ANSWER`] shortfall.
+/// Admin bridge.
 /// `DescribeClientQuotas` (48) is tagged `broker` only, so it is absent there,
 /// absent here, and asserted absent below.
 fn expected_admin_versions() -> std::collections::BTreeMap<i16, (i16, i16)> {
@@ -193,6 +193,8 @@ fn expected_admin_versions() -> std::collections::BTreeMap<i16, (i16, i16)> {
         describe_delegation_token_request,
         elect_leaders_request,
         incremental_alter_configs_request,
+        alter_partition_request,
+        allocate_producer_ids_request,
         alter_partition_reassignments_request,
         list_partition_reassignments_request,
         alter_client_quotas_request,
@@ -241,11 +243,9 @@ async fn controller_api_versions_advertises_the_kafka_controller_admin_surface()
 ///
 /// [`controller_api_versions_advertises_the_kafka_controller_admin_surface`]
 /// only inspects the keys the Admin bridge routes, so it cannot see a key
-/// krabka offers that no Kafka controller does, nor record which of Kafka's
-/// the listener still does not answer. This case pins both directions: nothing
-/// outside [`KAFKA_CONTROLLER_LISTENER_KEYS`] is advertised, and the shortfall
-/// is exactly [`KEYS_KRABKA_DOES_NOT_ANSWER`]. Closing one of those gaps has to
-/// come here and delete its entry.
+/// krabka offers that no Kafka controller does, or a key of Kafka's that the
+/// listener does not offer. This case pins both directions: the advertised set
+/// is exactly [`KAFKA_CONTROLLER_LISTENER_KEYS`].
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn controller_listener_advertises_no_key_kafka_does_not() {
     let (broker, _dir) = start_broker().await;
@@ -263,10 +263,7 @@ async fn controller_listener_advertises_no_key_kafka_does_not() {
         KAFKA_CONTROLLER_LISTENER_KEYS.iter().copied().collect();
 
     check!(advertised.difference(&kafka).copied().collect::<Vec<_>>() == Vec::<i16>::new());
-    check!(
-        kafka.difference(&advertised).copied().collect::<Vec<_>>()
-            == KEYS_KRABKA_DOES_NOT_ANSWER.to_vec()
-    );
+    check!(kafka.difference(&advertised).copied().collect::<Vec<_>>() == Vec::<i16>::new());
     broker.shutdown().await;
 }
 
@@ -880,4 +877,121 @@ async fn controller_listener_registers_a_restarted_broker_as_kafka_does() {
     broker.shutdown().await;
 
     check!(outcomes == expected);
+}
+
+/// Kafka's `UNKNOWN_TOPIC_ID`.
+const UNKNOWN_TOPIC_ID: i16 = 100;
+
+/// Kafka's `BROKER_ID_NOT_REGISTERED`.
+const BROKER_ID_NOT_REGISTERED: i16 = 102;
+
+/// Kafka's `ILLEGAL_SASL_STATE`.
+const ILLEGAL_SASL_STATE: i16 = 34;
+
+/// A Kafka broker sends `AlterPartition` and `AllocateProducerIds` to the
+/// active controller over its controller listener, and `ControllerApis`
+/// answers `SaslHandshake` and `SaslAuthenticate` there with
+/// `ILLEGAL_SASL_STATE`. `Connection::send` negotiates each one off this
+/// listener's `ApiVersions` table, so an unadvertised key fails before it is
+/// sent. The requests go to the highest version both sides speak:
+/// `AlterPartition` v3, `AllocateProducerIds` v0, `SaslHandshake` v1 and
+/// `SaslAuthenticate` v2.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controller_listener_serves_the_inter_broker_and_sasl_apis() {
+    let (broker, _dir) = start_broker().await;
+    let connection = dial_controller(&broker).await;
+    let unknown_topic = WireUuid([7; 16]);
+
+    let alter_partition = connection
+        .send(AlterPartitionRequest {
+            broker_id: 1,
+            broker_epoch: -1,
+            topics: vec![AlterPartitionTopicData {
+                topic_id: unknown_topic,
+                partitions: vec![AlterPartitionPartitionData {
+                    partition_index: 0,
+                    leader_epoch: 0,
+                    new_isr_with_epochs: vec![BrokerState {
+                        broker_id: 1,
+                        broker_epoch: -1,
+                        ..Default::default()
+                    }],
+                    partition_epoch: 0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .expect("AlterPartition over the controller listener");
+    check!(
+        alter_partition
+            == AlterPartitionResponse {
+                topics: vec![AlterPartitionResultTopic {
+                    topic_id: unknown_topic,
+                    partitions: vec![AlterPartitionResultPartition {
+                        partition_index: 0,
+                        error_code: UNKNOWN_TOPIC_ID,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }
+    );
+
+    let allocate = connection
+        .send(AllocateProducerIdsRequest {
+            broker_id: 99,
+            broker_epoch: 0,
+            ..Default::default()
+        })
+        .await
+        .expect("AllocateProducerIds over the controller listener");
+    check!(
+        allocate
+            == AllocateProducerIdsResponse {
+                error_code: BROKER_ID_NOT_REGISTERED,
+                producer_id_start: -1,
+                producer_id_len: 0,
+                ..Default::default()
+            }
+    );
+
+    let handshake = connection
+        .send(SaslHandshakeRequest {
+            mechanism: "PLAIN".into(),
+            ..Default::default()
+        })
+        .await
+        .expect("SaslHandshake over the controller listener");
+    check!(
+        handshake
+            == SaslHandshakeResponse {
+                error_code: ILLEGAL_SASL_STATE,
+                ..Default::default()
+            }
+    );
+
+    let authenticate = connection
+        .send(SaslAuthenticateRequest {
+            auth_bytes: Bytes::from_static(b"\0broker\0secret"),
+            ..Default::default()
+        })
+        .await
+        .expect("SaslAuthenticate over the controller listener");
+    check!(
+        authenticate
+            == SaslAuthenticateResponse {
+                error_code: ILLEGAL_SASL_STATE,
+                error_message: Some(
+                    "SaslAuthenticate request received after successful authentication".into()
+                ),
+                ..Default::default()
+            }
+    );
+
+    connection.close();
+    broker.shutdown().await;
 }

@@ -44,11 +44,11 @@ fn wire_listeners_must_be_usable_and_uniquely_named() {
 }
 
 /// A reconfiguration request is refused before it reaches the quorum when
-/// it names the wrong cluster, a negative voter, or a zero directory id.
+/// it names the wrong cluster, a negative voter, or a zero directory id,
+/// each with the code `KafkaRaftClient.handleRemoveVoterRequest` answers.
 ///
-/// Each is a separate arm returning `INVALID_REQUEST` with a reason, and a
-/// request that slipped past them would be applied to the voter set --
-/// a zero directory id in particular names no real incarnation.
+/// A request that slipped past them would be applied to the voter set -- a
+/// zero directory id in particular names no real incarnation.
 #[tokio::test]
 async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
     use krabka_protocol::{
@@ -66,34 +66,50 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
     let cluster_id = engine.current_image().cluster_id().to_string();
 
     let real_directory = krabka_protocol::primitives::uuid::Uuid([7u8; 16]);
-    // (what it is, cluster id sent, voter id, directory id)
+    let invalid_voter = RemoveRaftVoterResponse {
+        error_code: INVALID_REQUEST,
+        error_message: Some("Remove voter request didn't include a valid voter".into()),
+        ..Default::default()
+    };
+    // (what it is, cluster id sent, voter id, directory id, response)
     let cases: Vec<(
         &str,
         Option<String>,
         i32,
         krabka_protocol::primitives::uuid::Uuid,
+        RemoveRaftVoterResponse,
     )> = vec![
         (
             "another cluster's id",
             Some("00000000-0000-0000-0000-0000000000ff".to_owned()),
             2,
             real_directory,
+            RemoveRaftVoterResponse {
+                error_code: 104,
+                error_message: Some(format!(
+                    "The given id \"00000000-0000-0000-0000-0000000000ff\" doesn't match the \
+                     cluster id \"{cluster_id}\""
+                )),
+                ..Default::default()
+            },
         ),
         (
             "a negative voter id",
             Some(cluster_id.clone()),
             -1,
             real_directory,
+            invalid_voter.clone(),
         ),
         (
             "a zero directory id",
             Some(cluster_id.clone()),
             2,
             krabka_protocol::primitives::uuid::Uuid::ZERO,
+            invalid_voter,
         ),
     ];
 
-    for (what, request_cluster_id, voter_id, voter_directory_id) in cases {
+    for (what, request_cluster_id, voter_id, voter_directory_id, expected) in cases {
         let request = RemoveRaftVoterRequest {
             cluster_id: request_cluster_id,
             voter_id,
@@ -107,8 +123,7 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
             .expect("a refusal is still a response");
         let mut cursor = &bytes[..];
         let decoded = RemoveRaftVoterResponse::decode(&mut cursor, version).expect("decode");
-        check!(decoded.error_code == INVALID_REQUEST, "{what}: error code");
-        check!(decoded.error_message.is_some(), "{what}: says why");
+        check!(decoded == expected, "{what}");
     }
 
     // Omitting the cluster id entirely is allowed: the field is optional,
@@ -129,6 +144,26 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
     check!(
         decoded.error_code != INVALID_REQUEST,
         "a well-formed request reaches the quorum, got {}",
+        decoded.error_code
+    );
+
+    // voter_id == 0 is valid (non-negative) and must not be rejected with INVALID_REQUEST
+    let request = RemoveRaftVoterRequest {
+        cluster_id: None,
+        voter_id: 0,
+        voter_directory_id: real_directory,
+        ..Default::default()
+    };
+    let mut body = BytesMut::new();
+    request.encode(&mut body, version).expect("encode request");
+    let bytes = remove_raft_voter_response(version, &body.freeze(), &engine)
+        .await
+        .expect("response");
+    let mut cursor = &bytes[..];
+    let decoded = RemoveRaftVoterResponse::decode(&mut cursor, version).expect("decode");
+    check!(
+        decoded.error_code != INVALID_REQUEST,
+        "voter_id 0 reaches the quorum, got {}",
         decoded.error_code
     );
 }
@@ -163,13 +198,7 @@ async fn adding_a_voter_needs_an_id_and_a_reachable_listener() {
     };
     let directory = krabka_protocol::primitives::uuid::Uuid([9u8; 16]);
 
-    // (what it is, voter id, directory id, listeners)
-    let cases: Vec<(
-        &str,
-        i32,
-        krabka_protocol::primitives::uuid::Uuid,
-        Vec<Listener>,
-    )> = vec![
+    let cases = [
         ("a negative voter id", -1, directory, vec![good_listener()]),
         (
             "a zero directory id",
@@ -216,6 +245,68 @@ async fn adding_a_voter_needs_an_id_and_a_reachable_listener() {
         check!(decoded.error_code == INVALID_REQUEST, "{what}");
         check!(decoded.error_message.is_some(), "{what}: says why");
     }
+
+    // Foreign cluster_id is refused with INCONSISTENT_CLUSTER_ID (104)
+    let request = AddRaftVoterRequest {
+        cluster_id: Some("00000000-0000-0000-0000-0000000000ff".to_owned()),
+        voter_id: 2,
+        voter_directory_id: directory,
+        listeners: vec![good_listener()],
+        ..Default::default()
+    };
+    let mut body = BytesMut::new();
+    request.encode(&mut body, version).expect("encode");
+    let bytes = add_raft_voter_response(version, &body.freeze(), &engine)
+        .await
+        .expect("response");
+    let mut cursor = &bytes[..];
+    let decoded = AddRaftVoterResponse::decode(&mut cursor, version).expect("decode");
+    check!(decoded.error_code == 104);
+
+    // Matching cluster_id is accepted (does not return INVALID_REQUEST)
+    let request = AddRaftVoterRequest {
+        cluster_id: Some(engine.current_image().cluster_id().to_string()),
+        voter_id: 2,
+        voter_directory_id: directory,
+        listeners: vec![good_listener()],
+        ..Default::default()
+    };
+    let mut body = BytesMut::new();
+    request.encode(&mut body, version).expect("encode");
+    let bytes = add_raft_voter_response(version, &body.freeze(), &engine)
+        .await
+        .expect("response");
+    let mut cursor = &bytes[..];
+    let decoded = AddRaftVoterResponse::decode(&mut cursor, version).expect("decode");
+    check!(decoded.error_code != INVALID_REQUEST);
+
+    // At kraft.version >= 1, AddRaftVoter probes the candidate listeners.
+    // Unreachable candidate fails probe with code 7.
+    crate::server::test_support::activate_dynamic_membership(&engine).await;
+    let request = AddRaftVoterRequest {
+        cluster_id: None,
+        voter_id: 2,
+        voter_directory_id: directory,
+        listeners: vec![good_listener()],
+        ..Default::default()
+    };
+    let mut body = BytesMut::new();
+    request.encode(&mut body, version).expect("encode");
+    let bytes = add_raft_voter_response(version, &body.freeze(), &engine)
+        .await
+        .expect("response");
+    let mut cursor = &bytes[..];
+    let decoded = AddRaftVoterResponse::decode(&mut cursor, version).expect("decode");
+    check!(
+        decoded.error_code == 7,
+        "ApiVersions probe failed on unreachable candidate"
+    );
+    check!(
+        decoded
+            .error_message
+            .as_deref()
+            .is_some_and(|m| m.contains("API_VERSIONS returned an error"))
+    );
 }
 
 /// `UpdateRaftVoter` additionally requires the caller to be at the leader's
@@ -334,4 +425,56 @@ async fn updating_a_voter_needs_the_cluster_the_epoch_and_a_coherent_range() {
     let anonymous = code_for(update(None, epoch, range(0, 1))).await;
     check!(anonymous == named);
     check!(anonymous != INCONSISTENT_CLUSTER_ID);
+
+    // Every answer, a refusal included, names the leader and its controller
+    // endpoint, as `RaftUtil.updateVoterResponse` fills it.
+    let mut body = BytesMut::new();
+    update(None, epoch - 1, range(0, 1))
+        .encode(&mut body, version)
+        .expect("encode");
+    let bytes = update_raft_voter_response(version, &body.freeze(), &engine)
+        .await
+        .expect("response");
+    check!(
+        UpdateRaftVoterResponse::decode(&mut &bytes[..], version).expect("decode")
+            == UpdateRaftVoterResponse {
+                error_code: FENCED_LEADER_EPOCH,
+                current_leader: krabka_protocol::owned::update_raft_voter_response::CurrentLeader {
+                    leader_id: 1,
+                    leader_epoch: epoch,
+                    host: "controller-1".into(),
+                    port: 9093,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+    );
+
+    // A negative voter id is rejected as INVALID_REQUEST
+    let mut bad_voter = update(Some(cluster_id.clone()), epoch, range(0, 1));
+    bad_voter.voter_id = -1;
+    check!(code_for(bad_voter).await == INVALID_REQUEST);
+
+    // A zero directory id is rejected as INVALID_REQUEST
+    let mut zero_dir = update(Some(cluster_id.clone()), epoch, range(0, 1));
+    zero_dir.voter_directory_id = krabka_protocol::primitives::uuid::Uuid::ZERO;
+    check!(code_for(zero_dir).await == INVALID_REQUEST);
+
+    // A voter id of 0 is valid and not rejected as INVALID_REQUEST
+    let mut zero_voter = update(Some(cluster_id.clone()), epoch, range(0, 1));
+    zero_voter.voter_id = 0;
+    check!(code_for(zero_voter).await != INVALID_REQUEST);
+}
+
+#[test]
+fn add_voter_ack_when_committed_rules() {
+    // Version 0 always waits for commitment regardless of request flag
+    assert2::assert!(add_voter_ack_when_committed(0, false));
+    assert2::assert!(add_voter_ack_when_committed(0, true));
+
+    // Version >= 1 respects the request flag
+    assert2::assert!(!add_voter_ack_when_committed(1, false));
+    assert2::assert!(add_voter_ack_when_committed(1, true));
+    assert2::assert!(!add_voter_ack_when_committed(2, false));
+    assert2::assert!(add_voter_ack_when_committed(2, true));
 }

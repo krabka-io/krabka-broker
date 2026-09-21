@@ -300,10 +300,10 @@ async fn controller_listener_sasl_plaintext_rejects_mismatched_creds() {
 // *valid, matching* SASL credentials (so the SASL handshake succeeds), but
 // the controller listener is gated by a `SimpleAclAuthorizer` with NO
 // super-users and NO ACLs — so the authenticated principal is DENIED
-// `CLUSTER_ACTION` on `Cluster("kafka-cluster")`. The handshake therefore
-// drops the connection *after* authentication, and the two single-voter
-// clusters can never exchange controller RPCs to merge. b1 must still see
-// only itself.
+// `CLUSTER_ACTION` on `Cluster("kafka-cluster")`. The listener keeps the
+// connection and refuses every raft and metadata RPC on it with
+// `CLUSTER_AUTHORIZATION_FAILED` (#684), so the two single-voter clusters can
+// never exchange controller RPCs to merge. b1 must still see only itself.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn controller_listener_sasl_denies_unauthorized_principal() {
     init_tracing();
@@ -350,8 +350,8 @@ async fn controller_listener_sasl_denies_unauthorized_principal() {
         .expect("start b2");
 
     // Authentication succeeds but CLUSTER_ACTION is denied, so the
-    // controller listener drops every cross-broker connection: the clusters
-    // never merge.
+    // controller listener refuses every cross-broker RPC: the clusters never
+    // merge.
     // intentional: negative test — observe that no convergence happens within a
     // fixed window; there is no awaiter for "state stays put".
     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -367,8 +367,9 @@ async fn controller_listener_sasl_denies_unauthorized_principal() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn controller_listener_plaintext_legacy_path_unchanged() {
-    // Default `controller_listener_protocol = Plaintext` — no
-    // handshake injected. Two brokers converge over the plaintext path.
+    // Default `controller_listener_protocol = Plaintext` and the default
+    // `AllowAllAuthorizer`: every peer is `ANONYMOUS` and every request is
+    // allowed. Two brokers converge over the plaintext path.
     init_tracing();
     let (ctrl_addrs, [ctrl_l1, ctrl_l2]) = reserve_ctrl_listeners().await;
     let voters: Vec<(u64, SocketAddr)> = vec![(1, ctrl_addrs[0]), (2, ctrl_addrs[1])];

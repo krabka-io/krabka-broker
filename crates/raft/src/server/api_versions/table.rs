@@ -22,7 +22,7 @@ use krabka_protocol::owned::{
     add_raft_voter_request, api_versions_request, begin_quorum_epoch_request,
     controller_registration_request, describe_cluster_request, describe_quorum_request,
     end_quorum_epoch_request, fetch_request, fetch_snapshot_request, remove_raft_voter_request,
-    update_raft_voter_request, vote_request,
+    sasl_authenticate_request, sasl_handshake_request, update_raft_voter_request, vote_request,
 };
 
 use crate::{
@@ -106,7 +106,9 @@ const fn pinned(
 /// versions the codec speaks: Fetch v17, Vote v2, and v1 for the other three.
 pub(super) const CONTROLLER_LISTENER_APIS: &[ControllerApiVersion] = &[
     api_version!(fetch_request, pinned = FETCH_VERSION),
+    api_version!(sasl_handshake_request),
     api_version!(api_versions_request),
+    api_version!(sasl_authenticate_request),
     api_version!(vote_request, pinned = VOTE_VERSION),
     api_version!(begin_quorum_epoch_request, pinned = QUORUM_EPOCH_VERSION),
     api_version!(end_quorum_epoch_request, pinned = QUORUM_EPOCH_VERSION),
@@ -203,6 +205,16 @@ mod tests {
             // Decoded at the version the request header carries, across the
             // whole generated range.
             entry(
+                sasl_handshake_request::API_KEY,
+                sasl_handshake_request::MIN_VERSION,
+                sasl_handshake_request::MAX_VERSION,
+            ),
+            entry(
+                sasl_authenticate_request::API_KEY,
+                sasl_authenticate_request::MIN_VERSION,
+                sasl_authenticate_request::MAX_VERSION,
+            ),
+            entry(
                 api_versions_request::API_KEY,
                 api_versions_request::MIN_VERSION,
                 api_versions_request::MAX_VERSION,
@@ -294,6 +306,7 @@ mod tests {
                 PeerRequest::EndQuorumEpoch {
                     leader_id: NodeId(1),
                     leader_epoch: 4,
+                    preferred_candidates: Vec::new(),
                 },
                 decodes_whole::<EndQuorumEpochRequest>,
             ),
@@ -312,7 +325,9 @@ mod tests {
                 "fetch snapshot",
                 api_key::FETCH_SNAPSHOT,
                 PeerRequest::FetchSnapshot {
+                    cluster_id: None,
                     from: NodeId(2),
+                    current_leader_epoch: 1,
                     snapshot_id: (10, 1),
                     position: 0,
                     max_bytes: 32,

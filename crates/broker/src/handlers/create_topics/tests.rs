@@ -222,7 +222,9 @@ async fn handle_reports_invalid_partition_count_and_replication_factor() {
                 name: "bad-count".into(),
                 topic_id: ProtoUuid([0; 16]),
                 error_code: codes::INVALID_PARTITIONS,
-                error_message: None,
+                error_message: Some(
+                    "Number of partitions was set to an invalid non-positive value.".into(),
+                ),
                 num_partitions: -1,
                 replication_factor: -1,
                 configs: None,
@@ -247,6 +249,126 @@ async fn handle_reports_invalid_partition_count_and_replication_factor() {
     for name in ["bad-count", "bad-rf"] {
         let image = broker_handle.controller_image_for_test();
         assert!(image.topic(name).is_none(), "topic {name} not committed");
+    }
+    broker_handle.shutdown().await;
+}
+
+/// KIP-464: `num_partitions = -1` and `replication_factor = -1` take the
+/// broker's `num.partitions` and `default.replication.factor` (#728). That is
+/// what `kafka-topics --create` sends without `--partitions` and
+/// `--replication-factor`. Kafka's `ReplicationControlManager.createTopic`
+/// refuses a replication factor of 0 or below -1 first, then a partition count
+/// of 0 or below -1.
+#[tokio::test]
+async fn minus_one_takes_the_broker_topic_creation_defaults() {
+    const BAD_RF: &str =
+        "Replication factor must be larger than 0, or -1 to use the default value.";
+    const BAD_COUNT: &str = "Number of partitions was set to an invalid non-positive value.";
+    /// (requested partitions, requested replication factor, error code,
+    /// error message, created partitions, created replication factor)
+    type Row = (i32, i16, i16, Option<&'static str>, i32, i16);
+
+    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.num_partitions = 4;
+        cfg.default_replication_factor = 2;
+    })
+    .await;
+    let broker = broker_handle.broker_arc_for_test();
+    for node_id in [2, 3, 4] {
+        broker
+            .controller
+            .submit_change(vec![MetadataRecord::V1BrokerRegistration(
+                krabka_metadata::BrokerRegistrationRecord {
+                    node_id: krabka_raft::NodeId(node_id),
+                    broker_epoch: 0,
+                    incarnation_id: Uuid::nil(),
+                    host: "127.0.0.1".into(),
+                    port: 9092,
+                    rack: None,
+                    log_dirs: vec![],
+                    endpoints: vec![],
+                    features: std::collections::BTreeMap::new(),
+                },
+            )])
+            .await
+            .expect("seed broker registration");
+    }
+
+    let rows: [Row; 8] = [
+        (-1, -1, codes::NONE, None, 4, 2),
+        (-1, 3, codes::NONE, None, 4, 3),
+        (6, -1, codes::NONE, None, 6, 2),
+        (0, 1, codes::INVALID_PARTITIONS, Some(BAD_COUNT), -1, -1),
+        (-2, 1, codes::INVALID_PARTITIONS, Some(BAD_COUNT), -1, -1),
+        (
+            1,
+            0,
+            codes::INVALID_REPLICATION_FACTOR,
+            Some(BAD_RF),
+            -1,
+            -1,
+        ),
+        (
+            0,
+            0,
+            codes::INVALID_REPLICATION_FACTOR,
+            Some(BAD_RF),
+            -1,
+            -1,
+        ),
+        (
+            1,
+            -2,
+            codes::INVALID_REPLICATION_FACTOR,
+            Some(BAD_RF),
+            -1,
+            -1,
+        ),
+    ];
+    for (row, (partitions, rf, error_code, error_message, created, created_rf)) in
+        rows.into_iter().enumerate()
+    {
+        let name = format!("defaults-{row}");
+        let resp = drive(
+            &broker,
+            &request(vec![topic(&name, partitions, rf)]),
+            &principal("admin"),
+            &peer(),
+        )
+        .await;
+
+        let image = broker_handle.controller_image_for_test();
+        let created_ok = error_code == codes::NONE;
+        let expected = CreateTopicsResponse {
+            throttle_time_ms: 0,
+            topics: vec![CreatableTopicResult {
+                name: name.clone(),
+                topic_id: image.topic(&name).map_or(ProtoUuid([0; 16]), |topic| {
+                    ProtoUuid(topic.topic_id.into_bytes())
+                }),
+                error_code,
+                error_message: error_message.map(str::to_owned),
+                num_partitions: created,
+                replication_factor: created_rf,
+                configs: created_ok.then(|| expected_configs(&[])),
+                topic_config_error_code: 0,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            }],
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        };
+        check!(resp == expected, "requested ({partitions}, {rf})");
+
+        let committed = image
+            .partitions_of(&name)
+            .map(|partition| i16::try_from(partition.replicas.len()).expect("replication factor"))
+            .collect::<Vec<_>>();
+        let expected_committed =
+            vec![created_rf; usize::try_from(created.max(0)).expect("partition count")];
+        check!(
+            committed == expected_committed,
+            "requested ({partitions}, {rf})"
+        );
     }
     broker_handle.shutdown().await;
 }
@@ -577,6 +699,52 @@ async fn handle_rejects_diskless_topic_without_a_rack_safe_wal_quorum() {
     broker_handle.shutdown().await;
 }
 
+/// The diskless WAL placement check names the leader the partition will
+/// have, which is the first active replica of a manual assignment (#741), not
+/// the first listed one.
+#[tokio::test]
+async fn diskless_wal_validation_names_the_active_leader_of_a_manual_assignment() {
+    let object_store = tempfile::TempDir::new().expect("object store dir");
+    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+        cfg.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
+            dir: object_store.path().to_path_buf(),
+        });
+    })
+    .await;
+    let broker = broker_handle.broker_arc_for_test();
+    for node_id in [2, 3] {
+        crate::test_support::seed_remote_broker(&broker_handle, node_id).await;
+    }
+    crate::test_support::fence_remote_broker(&broker_handle, 2).await;
+    let req = request(vec![CreatableTopic {
+        name: "manual-diskless".into(),
+        num_partitions: -1,
+        replication_factor: -1,
+        assignments: vec![
+            krabka_protocol::owned::create_topics_request::CreatableReplicaAssignment {
+                partition_index: 0,
+                broker_ids: vec![2, 3],
+                ..Default::default()
+            },
+        ],
+        configs: vec![CreatableTopicConfig {
+            name: "krabka.diskless".into(),
+            value: Some("true".into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }]);
+
+    let resp = drive(&broker, &req, &principal("admin"), &peer()).await;
+
+    assert!(resp.topics[0].error_code == codes::INVALID_CONFIG);
+    let message = resp.topics[0].error_message.as_deref().unwrap_or_default();
+    check!(message.contains("partition 0 leader 3 "), "{message}");
+    broker_handle.shutdown().await;
+}
+
 #[test]
 fn diskless_wal_validation_uses_the_local_registration_fallback() {
     let dir = tempfile::TempDir::new().expect("log dir");
@@ -589,7 +757,10 @@ fn diskless_wal_validation_uses_the_local_registration_fallback() {
             &krabka_metadata::MetadataImage::default(),
             &config,
             0,
-            &[vec![config.node_id]],
+            &[InitialLeadership {
+                leader: config.node_id,
+                isr: vec![config.node_id],
+            }],
         )
         .is_none()
     );
@@ -1108,4 +1279,192 @@ async fn handle_refuses_invalid_and_colliding_topic_names() {
     let created = drive(&broker, &request(vec![topic(&longest, 1, 1)]), &p, &peer).await;
     check!(created.topics[0].error_code == codes::NONE);
     broker_handle.shutdown().await;
+}
+
+/// A manual assignment keeps its replica list, but its ISR holds only the
+/// listed brokers that are active, and its leader is the first of them
+/// (#741). Kafka's `ReplicationControlManager.createTopic` filters the ISR
+/// with `ClusterControlManager.isActive`, and answers
+/// `INVALID_REPLICA_ASSIGNMENT` when no listed broker is active.
+///
+/// Brokers 2, 3 and 4 are remote registrations. A fenced heartbeat on the
+/// controller makes a broker unavailable, as a real fenced broker is.
+#[tokio::test]
+async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
+    const V4: i16 = 4;
+
+    /// One row: the fenced brokers, the witness brokers, the replica list of
+    /// each partition, and the expected error code, error message and
+    /// `(leader, isr)` per partition.
+    type Row = (
+        &'static [u64],
+        &'static [u64],
+        &'static [&'static [i32]],
+        i16,
+        Option<&'static str>,
+        Vec<(krabka_raft::NodeId, Vec<krabka_raft::NodeId>)>,
+    );
+    let n = krabka_raft::NodeId;
+    let rows: [Row; 7] = [
+        (
+            &[],
+            &[],
+            &[&[2, 3, 4]],
+            codes::NONE,
+            None,
+            vec![(n(2), vec![n(2), n(3), n(4)])],
+        ),
+        (
+            &[2],
+            &[],
+            &[&[2, 3, 4]],
+            codes::NONE,
+            None,
+            vec![(n(3), vec![n(3), n(4)])],
+        ),
+        (
+            &[2, 3],
+            &[],
+            &[&[3, 2, 4], &[4, 3, 2]],
+            codes::NONE,
+            None,
+            vec![(n(4), vec![n(4)]), (n(4), vec![n(4)])],
+        ),
+        (
+            &[2],
+            &[],
+            &[&[2]],
+            codes::INVALID_REPLICA_ASSIGNMENT,
+            Some(
+                "All brokers specified in the manual partition assignment for partition 0 are \
+                 fenced or in controlled shutdown.",
+            ),
+            vec![],
+        ),
+        (
+            &[3],
+            &[],
+            &[&[2], &[3]],
+            codes::INVALID_REPLICA_ASSIGNMENT,
+            Some(
+                "All brokers specified in the manual partition assignment for partition 1 are \
+                 fenced or in controlled shutdown.",
+            ),
+            vec![],
+        ),
+        (
+            &[2],
+            &[3],
+            &[&[2, 3, 4]],
+            codes::NONE,
+            None,
+            vec![(n(4), vec![n(3), n(4)])],
+        ),
+        (
+            &[2],
+            &[3],
+            &[&[2, 3]],
+            codes::INVALID_REPLICA_ASSIGNMENT,
+            Some(
+                "All active brokers specified in the manual partition assignment for partition \
+                 0 are witnesses, and a witness cannot lead.",
+            ),
+            vec![],
+        ),
+    ];
+
+    for (fenced, witnesses, lists, error_code, error_message, partitions) in rows {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let broker = broker_handle.broker_arc_for_test();
+        for node_id in [2, 3, 4] {
+            crate::test_support::seed_remote_broker(&broker_handle, node_id).await;
+        }
+        for &node_id in witnesses {
+            crate::test_support::make_witness(&broker_handle, node_id).await;
+        }
+        for &node_id in fenced {
+            crate::test_support::fence_remote_broker(&broker_handle, node_id).await;
+        }
+        let topic = CreatableTopic {
+            name: "manual".into(),
+            num_partitions: -1,
+            replication_factor: -1,
+            assignments: lists
+                .iter()
+                .enumerate()
+                .map(|(index, broker_ids)| {
+                    krabka_protocol::owned::create_topics_request::CreatableReplicaAssignment {
+                        partition_index: i32::try_from(index).expect("index"),
+                        broker_ids: broker_ids.to_vec(),
+                        ..Default::default()
+                    }
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let p = principal("admin");
+        let peer = peer();
+        let ctx = test_context(&p, &peer);
+
+        let bytes = handle(
+            &broker,
+            V4,
+            123,
+            &crate::test_support::encode_request(&request(vec![topic]), V4),
+            &ctx,
+        )
+        .await
+        .expect("handle");
+        let resp: CreateTopicsResponse = crate::test_support::decode_response(&bytes, V4);
+
+        let expected = CreateTopicsResponse {
+            throttle_time_ms: 0,
+            topics: vec![CreatableTopicResult {
+                name: "manual".into(),
+                topic_id: ProtoUuid([0; 16]),
+                error_code,
+                error_message: error_message.map(str::to_owned),
+                num_partitions: -1,
+                replication_factor: -1,
+                configs: None,
+                topic_config_error_code: 0,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            }],
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        };
+        check!(resp == expected, "fenced {fenced:?}, assignment {lists:?}");
+
+        let image = broker_handle.controller_image_for_test();
+        let committed = (0..)
+            .map_while(|index| image.partition("manual", index).cloned())
+            .collect::<Vec<_>>();
+        let expected_records = partitions
+            .into_iter()
+            .zip(lists)
+            .enumerate()
+            .map(
+                |(index, ((leader, isr), replicas))| krabka_metadata::PartitionRecord {
+                    topic: "manual".into(),
+                    partition: i32::try_from(index).expect("index"),
+                    leader,
+                    replicas: replicas
+                        .iter()
+                        .map(|&id| n(u64::try_from(id).expect("broker id")))
+                        .collect(),
+                    isr,
+                    leader_epoch: krabka_metadata::LeaderEpoch(INITIAL_LEADER_EPOCH),
+                    adding_replicas: vec![],
+                    removing_replicas: vec![],
+                    directories: vec![],
+                    partition_epoch: 0,
+                },
+            )
+            .collect::<Vec<_>>();
+        check!(
+            committed == expected_records,
+            "fenced {fenced:?}, assignment {lists:?}"
+        );
+        broker_handle.shutdown().await;
+    }
 }

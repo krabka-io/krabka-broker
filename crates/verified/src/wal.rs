@@ -248,6 +248,7 @@ mod tests {
             (Some(4), 4, 1, 8, WalFetchAdmission::Denied),
             (Some(2), 2, 1, -1, WalFetchAdmission::Serve),
             (Some(2), 2, 1, 8, WalFetchAdmission::Serve),
+            (Some(2), 2, 1, 0, WalFetchAdmission::FencedLeaderEpoch),
             (Some(2), 2, 1, 7, WalFetchAdmission::FencedLeaderEpoch),
             (Some(2), 2, 1, 9, WalFetchAdmission::UnknownLeaderEpoch),
         ] {

@@ -126,6 +126,13 @@ impl MetadataWriter for QuorumForwarder {
                 Ok(resp) if resp.error_code == krabka_raft::SUBMIT_CHANGE_UNCOMMITTED_TAIL => {
                     return Err(RaftError::UncommittedTail);
                 }
+                // Every controller authorizes the same principal the same
+                // way, so another voter would refuse too.
+                Ok(resp)
+                    if resp.error_code == krabka_raft::PRIVATE_CLUSTER_AUTHORIZATION_FAILED =>
+                {
+                    return Err(RaftError::ClusterAuthorizationFailed);
+                }
                 Ok(resp) => {
                     last_err = RaftError::NotLeader {
                         current_leader: (resp.leader_hint >= 0)
@@ -210,6 +217,11 @@ impl MetadataWriter for QuorumForwarder {
                         &response.result,
                     )
                     .map_err(RaftError::from);
+                }
+                Ok(response)
+                    if response.error_code == krabka_raft::PRIVATE_CLUSTER_AUTHORIZATION_FAILED =>
+                {
+                    return Err(RaftError::ClusterAuthorizationFailed);
                 }
                 Ok(response) => {
                     last_error = RaftError::NotLeader {

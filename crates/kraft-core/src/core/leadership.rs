@@ -8,6 +8,7 @@
 use super::QuorumStateMachine;
 use crate::{
     action::{Action, TimerKind},
+    event::SuccessorRank,
     role::Role,
     types::{Epoch, LogView, NodeId, SimInstant},
 };
@@ -75,9 +76,13 @@ impl QuorumStateMachine {
 
     /// A resigning leader asked us to start an election.
     ///
-    /// If the request is not stale, a voter starts a pre-vote round immediately
-    /// and does not wait for the election timer. An observer detaches and
-    /// continues to observe.
+    /// If the request is not stale, a voter backs its election off by its
+    /// place in the leader's preferred candidates, as Kafka's
+    /// `KafkaRaftClient.handleEndQuorumEpochRequest` does. The first candidate
+    /// starts a pre-vote round at once. Any other voter drops the resigned
+    /// leader, so that it can grant the first candidate's pre-vote, and arms
+    /// its election timer for the backoff. An observer detaches and continues
+    /// to observe.
     #[tracing::instrument(
         level = "info",
         skip_all,
@@ -88,18 +93,56 @@ impl QuorumStateMachine {
         log: &dyn LogView,
         _leader_id: NodeId,
         leader_epoch: Epoch,
+        successor_rank: SuccessorRank,
         now: SimInstant,
     ) -> Vec<Action> {
         if leader_epoch < self.state.leader_epoch {
             return Vec::new();
         }
-        if self.is_voter() {
-            self.start_election(log, now)
-        } else {
+        if !self.is_voter() {
             let mut actions = Vec::new();
             self.transition_to_unattached(self.state.leader_epoch, now, &mut actions);
-            actions
+            return actions;
         }
+        let backoff_ms = end_epoch_election_backoff_ms(successor_rank, self.election_timeout_ms);
+        if backoff_ms == 0 {
+            return self.start_election(log, now);
+        }
+        self.state.leader_id = None;
+        let election_deadline = now.saturating_add_ms(backoff_ms);
+        self.role = if self.state.voted_key.is_some() {
+            Role::Voted { election_deadline }
+        } else {
+            Role::Unattached { election_deadline }
+        };
+        vec![
+            Action::PersistQuorumState,
+            Action::TransitionedTo(self.role.name()),
+            Action::ResetTimer {
+                kind: TimerKind::Election,
+                deadline: election_deadline,
+            },
+        ]
+    }
+}
+
+/// Kafka's `KafkaRaftClient.strictExponentialElectionBackoffMs`, with the
+/// election timeout as `controller.quorum.election.backoff.max.ms`.
+///
+/// The first candidate waits 0. A replica the list does not name waits the
+/// maximum. Candidate `n` of `k` waits `(max >> (k - 1)) << (n - 1)`, capped
+/// at the maximum.
+fn end_epoch_election_backoff_ms(rank: SuccessorRank, max_ms: u64) -> u64 {
+    if rank.position == 0 {
+        0
+    } else if rank.position >= rank.successors {
+        max_ms
+    } else {
+        let base = max_ms.checked_shr(rank.successors - 1).unwrap_or(0);
+        // `position < successors`, so the shift keeps the value at or below
+        // `max_ms` and cannot overflow.
+        base.checked_shl(rank.position - 1)
+            .map_or(max_ms, |backoff| backoff.min(max_ms))
     }
 }
 
@@ -172,6 +215,7 @@ mod tests {
             Event::ReceiveEndQuorumEpoch {
                 leader_id: NodeId(2),
                 leader_epoch: 4,
+                successor_rank: SuccessorRank::default(),
             },
             &log,
             SimInstant(11),
@@ -267,5 +311,185 @@ mod tests {
                 leader_id: NodeId(2)
             }
         )));
+    }
+
+    /// Kafka's `strictExponentialElectionBackoffMs` with a 1000 ms maximum.
+    #[test]
+    fn end_epoch_election_backoff_follows_the_candidate_position() {
+        for (position, successors, want) in [
+            (0, 0, 0),
+            (0, 3, 0),
+            (1, 3, 250),
+            (2, 3, 500),
+            (1, 2, 500),
+            (3, 3, 1000),
+            (2, 0, 1000),
+            (1, 11, 0),
+        ] {
+            check!(
+                end_epoch_election_backoff_ms(
+                    SuccessorRank {
+                        position,
+                        successors
+                    },
+                    1000
+                ) == want,
+                "position {position} of {successors}"
+            );
+        }
+    }
+
+    /// A voter that is not the first preferred candidate waits for the backoff
+    /// instead of electing at once, and it drops the resigned leader so that it
+    /// can grant the first candidate's pre-vote.
+    #[test]
+    fn end_quorum_epoch_backs_off_a_later_candidate() {
+        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+        let log = FakeLog {
+            end: 5,
+            last_epoch: 1,
+        };
+        m.on_event(
+            Event::ReceiveBeginQuorumEpoch {
+                leader_id: NodeId(2),
+                leader_epoch: 4,
+            },
+            &log,
+            SimInstant(10),
+        );
+        let actions = m.on_event(
+            Event::ReceiveEndQuorumEpoch {
+                leader_id: NodeId(2),
+                leader_epoch: 4,
+                successor_rank: SuccessorRank {
+                    position: 1,
+                    successors: 2,
+                },
+            },
+            &log,
+            SimInstant(100),
+        );
+        let backoff = end_epoch_election_backoff_ms(
+            SuccessorRank {
+                position: 1,
+                successors: 2,
+            },
+            m.election_timeout_ms,
+        );
+        check!(backoff > 0);
+        check!(
+            actions
+                == vec![
+                    Action::PersistQuorumState,
+                    Action::TransitionedTo("Unattached"),
+                    Action::ResetTimer {
+                        kind: TimerKind::Election,
+                        deadline: SimInstant(100 + backoff),
+                    },
+                ]
+        );
+        check!(
+            (
+                m.role().clone(),
+                m.quorum_state().leader_id,
+                m.quorum_state().leader_epoch
+            ) == (
+                Role::Unattached {
+                    election_deadline: SimInstant(100 + backoff)
+                },
+                None,
+                4
+            )
+        );
+    }
+
+    #[test]
+    fn begin_quorum_epoch_membership_and_duplicate_leader_checks() {
+        let log = FakeLog {
+            end: 5,
+            last_epoch: 1,
+        };
+
+        // 1. When voters known, unknown leader is rejected
+        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2)]);
+        let actions = m.on_event(
+            Event::ReceiveBeginQuorumEpoch {
+                leader_id: NodeId(99),
+                leader_epoch: 4,
+            },
+            &log,
+            SimInstant(10),
+        );
+        check!(actions.is_empty());
+        check!(m.quorum_state().leader_id.is_none());
+
+        // 2. When voters empty but adjacent_voters set, unknown leader is rejected
+        let mut m2 = machine(NodeId(1), &[]);
+        m2.adjacent_voters = Some(voters(&[NodeId(1), NodeId(2)]));
+        let actions = m2.on_event(
+            Event::ReceiveBeginQuorumEpoch {
+                leader_id: NodeId(99),
+                leader_epoch: 4,
+            },
+            &log,
+            SimInstant(10),
+        );
+        check!(actions.is_empty());
+        check!(m2.quorum_state().leader_id.is_none());
+
+        // 3. When bootstrap joiner (voters empty, adjacent_voters None), any leader accepted
+        let mut m3 = machine(NodeId(1), &[]);
+        let actions = m3.on_event(
+            Event::ReceiveBeginQuorumEpoch {
+                leader_id: NodeId(99),
+                leader_epoch: 4,
+            },
+            &log,
+            SimInstant(10),
+        );
+        check!(!actions.is_empty());
+        check!(m3.quorum_state().leader_id == Some(NodeId(99)));
+
+        // 4. Duplicate leader for same epoch is rejected
+        let mut m4 = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+        m4.on_event(
+            Event::ReceiveBeginQuorumEpoch {
+                leader_id: NodeId(2),
+                leader_epoch: 4,
+            },
+            &log,
+            SimInstant(10),
+        );
+        check!(m4.quorum_state().leader_id == Some(NodeId(2)));
+        let actions = m4.on_event(
+            Event::ReceiveBeginQuorumEpoch {
+                leader_id: NodeId(3),
+                leader_epoch: 4,
+            },
+            &log,
+            SimInstant(20),
+        );
+        check!(actions.is_empty());
+        check!(m4.quorum_state().leader_id == Some(NodeId(2)));
+    }
+
+    #[test]
+    fn end_quorum_epoch_ignores_stale_epoch() {
+        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2)]);
+        m.force_epoch(4);
+        let log = FakeLog {
+            end: 5,
+            last_epoch: 1,
+        };
+        let actions = m.on_event(
+            Event::ReceiveEndQuorumEpoch {
+                leader_id: NodeId(2),
+                leader_epoch: 3,
+                successor_rank: SuccessorRank::default(),
+            },
+            &log,
+            SimInstant(10),
+        );
+        check!(actions.is_empty());
     }
 }

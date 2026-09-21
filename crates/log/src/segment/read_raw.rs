@@ -224,6 +224,25 @@ mod tests {
         check!(!read.is_empty());
     }
 
+    #[test]
+    fn batch_too_large_with_nonzero_start_pos_and_pos() {
+        let dir = tempdir().unwrap();
+        let mut seg = Segment::create(dir.path(), Offset(0)).unwrap();
+        seg.append(&sample_batch(0, 2, 100), DENSE_INDEX).unwrap();
+        let p1 = seg.log_size;
+        seg.append(&sample_batch(2, 2, 200), DENSE_INDEX).unwrap();
+        let b1_len = seg.log_size - p1;
+        let no_index = mebibytes(1);
+        seg.append(&sample_batch(4, 2, 300), no_index).unwrap();
+        seg.append(&sample_batch(6, 2, 400), no_index).unwrap();
+
+        let budget = bytes(u32::try_from(b1_len).unwrap() + 61);
+        let read = seg.read_raw(Offset(4), Offset(99), budget).unwrap();
+        check!(read.start_offset == Offset(4));
+        check!(read.last_offset == Offset(5));
+        check!(!read.is_empty());
+    }
+
     /// The byte budget stops the walk once the selected range reaches it, so a
     /// small budget returns fewer batches than an unlimited one.
     #[test]
@@ -247,6 +266,13 @@ mod tests {
             clipped.last_offset,
             everything.last_offset
         );
+
+        let batch_size = u32::try_from(sample_batch(0, 2, 100).encoded_len()).unwrap();
+        let two_batches = seg
+            .read_raw(Offset(0), Offset(99), bytes(batch_size * 2))
+            .unwrap();
+        check!(two_batches.start_offset == Offset(0));
+        check!(two_batches.last_offset == Offset(3));
     }
 
     // `Segment::read_raw` maps the fetch offset to the relative index key the

@@ -8,10 +8,6 @@
 
 use krabka_ids::PartitionIndex;
 use krabka_log::ProducerId;
-use krabka_protocol::owned::{
-    add_partitions_to_txn_request::{AddPartitionsToTxnRequest, AddPartitionsToTxnTransaction},
-    common::add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
-};
 use krabka_verified::transaction::{
     TransactionRegistrationDecision, TransactionRegistrationFacts,
     TransactionRegistrationIdentityFacts, TransactionRegistrationOwnershipFacts,
@@ -21,7 +17,7 @@ use krabka_verified::transaction::{
 use super::TxnCoordinator;
 use crate::{
     coordinator::bootstrap::OFFSETS_TOPIC,
-    txn::{bootstrap, state::TxnState, version::TxnVersion},
+    txn::{state::TxnState, version::TxnVersion},
 };
 
 impl TxnCoordinator {
@@ -137,123 +133,28 @@ impl TxnCoordinator {
         offsets_partition: PartitionIndex,
         txnv: TxnVersion,
     ) -> i16 {
-        let Some(transport) = &self.marker_transport else {
-            return self
-                .register_partitions(
-                    tid,
+        let code = self
+            .add_or_verify_partition(
+                super::produce_verification::PartitionCheck {
+                    transactional_id: tid,
                     producer_id,
                     producer_epoch,
-                    vec![crate::txn::state::TopicPartition {
+                    partition: crate::txn::state::TopicPartition {
                         topic: OFFSETS_TOPIC.to_string(),
                         partition: offsets_partition,
-                    }],
-                    txnv,
-                )
-                .await;
-        };
-        let image = transport.controller.current_image();
-        self.refresh_leader_partitions(&image).await;
-        let coordinator_partition = self.partition_for(tid);
-        let Some(leader) = image
-            .partition(bootstrap::TOPIC, coordinator_partition.get())
-            .map(|partition| partition.leader)
-        else {
-            return crate::codes::COORDINATOR_NOT_AVAILABLE;
-        };
-        if leader == self.node_id {
-            return self
-                .register_partitions(
-                    tid,
-                    producer_id,
-                    producer_epoch,
-                    vec![crate::txn::state::TopicPartition {
-                        topic: OFFSETS_TOPIC.to_string(),
-                        partition: offsets_partition,
-                    }],
-                    txnv,
-                )
-                .await;
-        }
-        let Some(broker) = image.broker(leader) else {
-            return crate::codes::COORDINATOR_NOT_AVAILABLE;
-        };
-        let (host, port) = broker
-            .endpoints
-            .iter()
-            .find(|endpoint| endpoint.name == transport.listener_name)
-            .map_or_else(
-                || (broker.host.clone(), broker.port),
-                |endpoint| (endpoint.host.clone(), endpoint.port),
-            );
-        let topic = AddPartitionsToTxnTopic {
-            name: OFFSETS_TOPIC.to_string(),
-            partitions: vec![offsets_partition.get()],
-            ..Default::default()
-        };
-        let request = AddPartitionsToTxnRequest {
-            transactions: vec![AddPartitionsToTxnTransaction {
-                transactional_id: tid.to_string(),
-                producer_id: producer_id.get(),
-                producer_epoch,
-                topics: vec![topic.clone()],
-                verify_only: false,
-                ..Default::default()
-            }],
-            v3_and_below_transactional_id: tid.to_string(),
-            v3_and_below_producer_id: producer_id.get(),
-            v3_and_below_producer_epoch: producer_epoch,
-            v3_and_below_topics: vec![topic],
-            ..Default::default()
-        };
-        let options = krabka_client_core::ConnectionOptions {
-            client_id: format!("krabka-broker-txn-{}", self.node_id),
-            ..Default::default()
-        };
-        let connection = match transport
-            .inter_broker_client
-            .connect_as_connection(
-                &host,
-                port,
-                transport.protocol,
-                &transport.server_name,
-                options,
+                    },
+                    verify_only: false,
+                },
+                txnv,
             )
-            .await
-        {
-            Ok(connection) => connection,
-            Err(error) => {
-                tracing::warn!(%error, %host, port, "TxnOffsetCommit coordinator connect failed");
-                return crate::codes::COORDINATOR_NOT_AVAILABLE;
-            }
-        };
-        let response = match connection.send(request).await {
-            Ok(response) => response,
-            Err(error) => {
-                connection.close();
-                tracing::warn!(%error, %host, port, "TxnOffsetCommit partition enrollment failed");
-                return crate::codes::COORDINATOR_NOT_AVAILABLE;
-            }
-        };
-        connection.close();
-        response
-            .results_by_transaction
-            .iter()
-            .find(|transaction| transaction.transactional_id == tid)
-            .and_then(|transaction| {
-                transaction
-                    .topic_results
-                    .iter()
-                    .find(|topic| topic.name == OFFSETS_TOPIC)
-            })
-            .and_then(|topic| {
-                topic
-                    .results_by_partition
-                    .iter()
-                    .find(|partition| partition.partition_index == offsets_partition.get())
-            })
-            .map_or(response.error_code, |partition| {
-                partition.partition_error_code
-            })
+            .await;
+        // `TxnOffsetCommit` has answered a coordinator it cannot reach with
+        // COORDINATOR_NOT_AVAILABLE, which its clients retry.
+        if code == crate::codes::NETWORK_EXCEPTION {
+            crate::codes::COORDINATOR_NOT_AVAILABLE
+        } else {
+            code
+        }
     }
 }
 
@@ -282,8 +183,8 @@ mod tests {
     use krabka_log::{Log, LogConfig, ProducerId};
     use tokio::sync::Mutex;
 
-    use super::{TxnCoordinator, TxnState, TxnVersion, bootstrap};
-    use crate::txn::{coordinator::test_support::test_coordinator, state::TxnEntry};
+    use super::{TxnCoordinator, TxnState, TxnVersion};
+    use crate::txn::{bootstrap, coordinator::test_support::test_coordinator, state::TxnEntry};
 
     fn partition(topic: &str, index: i32) -> crate::txn::state::TopicPartition {
         crate::txn::state::TopicPartition {
@@ -295,10 +196,8 @@ mod tests {
     async fn install_entry(coordinator: &TxnCoordinator, entry: TxnEntry) {
         let coordinator_partition = coordinator.partition_for(&entry.transactional_id);
         coordinator
-            .leader_partitions
-            .write()
-            .await
-            .insert(coordinator_partition);
+            .lead_state_partition_for_test(coordinator_partition)
+            .await;
         coordinator
             .state
             .insert(entry.transactional_id.clone(), Arc::new(Mutex::new(entry)));
@@ -346,10 +245,8 @@ mod tests {
                 == crate::codes::NOT_COORDINATOR
         );
         coordinator
-            .leader_partitions
-            .write()
-            .await
-            .insert(coordinator.partition_for("tid-a"));
+            .lead_state_partition_for_test(coordinator.partition_for("tid-a"))
+            .await;
         check!(
             coordinator
                 .register_partitions(

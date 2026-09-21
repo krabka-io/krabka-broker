@@ -10,7 +10,9 @@
 use assert2::assert;
 
 use crate::{
-    cluster::{create_topic_plaintext, start_single_broker_plaintext, wait_partition_exists},
+    cluster::{
+        add_follower, create_topic_plaintext, start_single_broker_plaintext, wait_partition_exists,
+    },
     configs::drive_incremental_alter_configs_plaintext,
     records::{fetch_plaintext_replica, produce_plaintext},
 };
@@ -27,9 +29,11 @@ async fn throttle_rate_caps_fetch_response_size() {
     let (handle, _dir, addr) = start_single_broker_plaintext().await;
     let node_id = handle.node_id();
 
-    // Create topic rf=1 so this broker is always the leader.
+    // Create topic rf=1 so this broker is always the leader, then assign
+    // replica 2 as a follower so its fetch is served.
     create_topic_plaintext(addr, "bar", 1, 1).await;
     wait_partition_exists(&handle, "bar", 0).await;
+    add_follower(&handle, "bar", 2).await;
 
     // Set the leader throttle rate to 512 bytes/sec.
     let err = drive_incremental_alter_configs_plaintext(
@@ -103,6 +107,7 @@ async fn unthrottled_partition_unaffected() {
     // Create topic rf=1.
     create_topic_plaintext(addr, "baz", 1, 1).await;
     wait_partition_exists(&handle, "baz", 0).await;
+    add_follower(&handle, "baz", 2).await;
 
     // Produce 8 KB of data (8 records of 1 KB each). No throttle configured.
     produce_plaintext(addr, "baz", 1024, 8).await;

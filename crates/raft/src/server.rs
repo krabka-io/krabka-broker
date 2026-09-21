@@ -22,12 +22,14 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 mod api_versions;
+mod authorization;
 mod describe_cluster;
 mod dispatch;
 mod framing;
 mod kip853;
 mod metadata_rpc;
 mod registration;
+mod sasl;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
@@ -45,7 +47,7 @@ use self::{
     },
     kip853::{
         API_KEY_ADD_RAFT_VOTER, API_KEY_DESCRIBE_QUORUM, API_KEY_REMOVE_RAFT_VOTER,
-        API_KEY_UPDATE_RAFT_VOTER, kip853_admin_response, kip853_authorization_failure,
+        API_KEY_UPDATE_RAFT_VOTER, kip853_admin_response,
     },
 };
 use crate::{error::RaftError, kraft::KraftController};
@@ -77,7 +79,7 @@ struct ConnectionContext {
     peer: SocketAddr,
     principal: Option<krabka_security::Principal>,
     authenticated_via_token: bool,
-    cluster_alter_authorized: bool,
+    grants: Arc<dyn crate::ClusterGrants>,
 }
 
 pub(crate) async fn run(
@@ -121,7 +123,7 @@ pub(crate) async fn run(
                                     stream: Box::new(stream) as Box<dyn krabka_client_core::ClientDuplex>,
                                     principal: None,
                                     authenticated_via_token: false,
-                                    cluster_alter_authorized: true,
+                                    grants: Arc::new(crate::AllowAllGrants),
                                 }
                             };
                             if let Err(e) = handle_conn(
@@ -134,7 +136,7 @@ pub(crate) async fn run(
                                     peer,
                                     principal: connection.principal,
                                     authenticated_via_token: connection.authenticated_via_token,
-                                    cluster_alter_authorized: connection.cluster_alter_authorized,
+                                    grants: connection.grants,
                                 },
                             ).await {
                                 error!(%peer, error = %e, "controller connection error");
@@ -196,6 +198,25 @@ where
                     write_response_no_tagged_fields(&mut stream, correlation_id, resp).await?;
                     continue;
                 }
+                // Kafka's `ControllerApis` authorizes every request with the
+                // cluster operation its api needs, and answers a denial in the
+                // shape of that api. The apis that the Admin router sends to a
+                // broker handler authorize in that handler.
+                if let Some(operation) = authorization::required_operation(api_key_n.0)
+                    && !context.grants.allows(operation)
+                {
+                    tracing::debug!(
+                        peer = %context.peer,
+                        principal = ?context.principal.as_ref().map(|p| p.name.as_str()),
+                        api_key = api_key_n.0,
+                        ?operation,
+                        "controller-listener request denied"
+                    );
+                    let resp = authorization::refusal(api_key_n.0, api_version.get(), &body)?;
+                    write_response_frame(&mut stream, correlation_id, resp, response_flexible)
+                        .await?;
+                    continue;
+                }
                 // DescribeCluster (60, KIP-919) is served here rather than in
                 // `dispatch` because it needs the request version (for the
                 // flexible body codec) and the controller's metadata image. The
@@ -213,20 +234,6 @@ where
                         | API_KEY_REMOVE_RAFT_VOTER
                         | API_KEY_UPDATE_RAFT_VOTER
                 ) {
-                    if matches!(
-                        api_key_n.0,
-                        API_KEY_ADD_RAFT_VOTER
-                            | API_KEY_REMOVE_RAFT_VOTER
-                            | API_KEY_UPDATE_RAFT_VOTER
-                    ) && !context.cluster_alter_authorized
-                    {
-                        let resp = kip853_authorization_failure(
-                            api_key_n.0,
-                            api_version.get(),
-                        )?;
-                        write_response(&mut stream, correlation_id, resp).await?;
-                        continue;
-                    }
                     let resp = kip853_admin_response(
                         api_key_n.0,
                         api_version.get(),
@@ -237,13 +244,18 @@ where
                     write_response(&mut stream, correlation_id, resp).await?;
                     continue;
                 }
+                if sasl::is_sasl_api(api_key_n.0) {
+                    let resp = sasl::sasl_response(api_key_n.0, api_version.get(), &body)?;
+                    write_response_frame(&mut stream, correlation_id, resp, response_flexible)
+                        .await?;
+                    continue;
+                }
                 if registration::is_controller_api(api_key_n.0) {
                     let resp = registration::dispatch(
                         api_key_n.0,
                         api_version.get(),
                         &body,
                         &engine,
-                        context.cluster_alter_authorized,
                     )
                     .await?;
                     write_response(&mut stream, correlation_id, resp).await?;

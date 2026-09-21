@@ -170,7 +170,10 @@ impl FileConfig {
         // we should preserve. The `[authorization]` block
         // below may overwrite this with its own super-user list.
         if let Some(vec) = self.super_users {
-            cfg.super_users.extend(vec.iter().cloned());
+            cfg.super_users.extend(
+                vec.iter()
+                    .map(|entry| super::authorization::super_user_name(entry)),
+            );
         }
 
         // `[remote_storage]` enables tiered storage broker-

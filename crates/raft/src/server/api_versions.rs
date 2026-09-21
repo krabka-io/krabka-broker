@@ -475,4 +475,45 @@ mod tests {
         let image = krabka_metadata::MetadataImage::new(Uuid::nil());
         assert2::assert!(super::api_versions_response(3, &[0xff], &image, None).is_err());
     }
+
+    #[test]
+    fn kraft_version_feature_range_and_finalized_features() {
+        use krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE;
+        use krabka_protocol::owned::api_versions_response::ApiVersionsResponse;
+
+        let mut image = krabka_metadata::MetadataImage::new(Uuid::nil());
+        image.apply(&krabka_metadata::MetadataRecord::V1KRaftVersion(
+            krabka_metadata::KRaftVersionRecord { kraft_version: 1 },
+        ));
+
+        // req_version = 3: JVM client < 4 requires min_version >= 1
+        let body_v3 = super::api_versions_response_body(3, &image, None);
+        let resp_v3 = ApiVersionsResponse::decode(&mut &body_v3[..], 3).expect("decode v3");
+        let feat_v3 = resp_v3
+            .supported_features
+            .iter()
+            .find(|f| f.name == KRAFT_VERSION_FEATURE)
+            .expect("kraft.version supported feature");
+        assert2::assert!(feat_v3.min_version == 1);
+
+        // req_version = 4: supports min_version == 0
+        let body_v4 = super::api_versions_response_body(4, &image, None);
+        let resp_v4 = ApiVersionsResponse::decode(&mut &body_v4[..], 4).expect("decode v4");
+        let feat_v4 = resp_v4
+            .supported_features
+            .iter()
+            .find(|f| f.name == KRAFT_VERSION_FEATURE)
+            .expect("kraft.version supported feature");
+        assert2::assert!(feat_v4.min_version == 0);
+
+        // Finalized features must contain kraft.version with exact bounds 1..=1
+        let fin = resp_v4
+            .finalized_features
+            .iter()
+            .find(|f| f.name == KRAFT_VERSION_FEATURE)
+            .expect("kraft.version finalized feature");
+        assert2::assert!(fin.name == KRAFT_VERSION_FEATURE);
+        assert2::assert!(fin.min_version_level == 1);
+        assert2::assert!(fin.max_version_level == 1);
+    }
 }

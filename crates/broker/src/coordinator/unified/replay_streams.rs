@@ -15,7 +15,12 @@ use super::{
 };
 
 impl GroupCoordinator {
-    pub fn replay_streams_group_metadata(&self, group_id: &str, epoch: i32) {
+    pub fn replay_streams_group_metadata(
+        &self,
+        group_id: &str,
+        value: streams::persistence::StreamsGroupMetadataValue,
+    ) {
+        let epoch = value.epoch;
         if !replay_write_is_admissible(
             ReplayRecordKind::GroupMetadata,
             self.streams_seeds.contains_key(group_id)
@@ -29,12 +34,14 @@ impl GroupCoordinator {
             let mut seed = self.streams_seeds.entry(group_id.into()).or_default();
             if replay_epoch_is_admissible(seed.group_epoch, epoch) {
                 seed.group_epoch = epoch;
+                seed.metadata_hash = value.metadata_hash;
             }
         }
         {
             let mut cached = self.streams_seeds_cache.entry(group_id.into()).or_default();
             if replay_epoch_is_admissible(cached.group_epoch, epoch) {
                 cached.group_epoch = epoch;
+                cached.metadata_hash = value.metadata_hash;
             }
         }
     }
@@ -305,7 +312,13 @@ mod tests {
             ..Default::default()
         };
 
-        coord.replay_streams_group_metadata("st", 30);
+        coord.replay_streams_group_metadata(
+            "st",
+            streams::persistence::StreamsGroupMetadataValue {
+                epoch: 30,
+                metadata_hash: 44,
+            },
+        );
         coord.replay_streams_member_metadata("st", "streams-member", member.clone());
         coord.replay_streams_topology("st", topology.clone());
         coord.replay_streams_partition_metadata("st", partition_metadata.clone());
@@ -315,6 +328,7 @@ mod tests {
 
         let expected = StreamsGroupSeed {
             group_epoch: 30,
+            metadata_hash: 44,
             assignment_epoch: 32,
             topology: Some(topology),
             partition_metadata: Some(partition_metadata),
@@ -330,7 +344,13 @@ mod tests {
     fn streams_group_tombstone_blocks_orphan_topology_and_member() {
         let coord = make_coord();
         coord.mark_streams("st");
-        coord.replay_streams_group_metadata("st", 2);
+        coord.replay_streams_group_metadata(
+            "st",
+            streams::persistence::StreamsGroupMetadataValue {
+                epoch: 2,
+                metadata_hash: 0,
+            },
+        );
         coord.replay_streams_member_metadata("st", "m", streams_member("m"));
 
         coord.replay_streams_tombstone(&streams::persistence::StreamsGroupKey::GroupMetadata {
