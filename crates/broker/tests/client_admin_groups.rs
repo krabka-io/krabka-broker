@@ -6,6 +6,9 @@ use krabka_client_producer::{Producer, ProducerRecord};
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn lists_groups_and_committed_offsets() {
     let dir = tempfile::TempDir::new().unwrap();
+    // `ListGroups` goes to every broker of the metadata, as Kafka's
+    // `KafkaAdminClient.listGroups` does, so it depends on the broker
+    // advertising a real, dialable port for itself.
     let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
         .await
         .unwrap();
