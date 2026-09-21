@@ -365,6 +365,7 @@ fn each_refusal_is_the_kafka_error_response_of_its_api() {
             Refusal::MetadataFetch(KrabkaMetadataFetchResponse {
                 error_code: 31,
                 leader_hint: -1,
+                leader_epoch: -1,
                 log_start_offset: -1,
                 high_watermark: -1,
                 quorum_high_watermark: -1,

@@ -67,7 +67,7 @@ impl<L: SimNodeLog> Sim<L> {
                     }
                 }
             }
-            Action::SendEndQuorumEpoch { epoch } => {
+            Action::SendEndQuorumEpoch { epoch, .. } => {
                 for peer in self.all_node_ids() {
                     if peer != id {
                         self.send(
@@ -76,6 +76,7 @@ impl<L: SimNodeLog> Sim<L> {
                             Event::ReceiveEndQuorumEpoch {
                                 leader_id: id,
                                 leader_epoch: epoch,
+                                successor_rank: krabka_raft::kraft::event::SuccessorRank::default(),
                             },
                         );
                     }

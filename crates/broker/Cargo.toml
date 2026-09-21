@@ -85,6 +85,8 @@ tracing-subscriber = { workspace = true }
 opentelemetry-proto = { workspace = true }
 clap = { workspace = true, features = ["env"] }
 uuid = { workspace = true }
+# KIP-1071 streams group metadata hash: Kafka hashes topic metadata with XXH3.
+twox-hash = { workspace = true }
 futures-util = { workspace = true }
 object_store = { workspace = true }
 prometheus-client.workspace = true

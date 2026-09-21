@@ -99,6 +99,7 @@ fn streams_group_seed(member_id: &str) -> crate::coordinator::unified::StreamsGr
 
     crate::coordinator::unified::StreamsGroupSeed {
         group_epoch: 5,
+        metadata_hash: 0,
         assignment_epoch: 6,
         topology: None,
         partition_metadata: None,

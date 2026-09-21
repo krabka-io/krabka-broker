@@ -9,9 +9,18 @@
 use krabka_ids::PartitionIndex;
 use krabka_log::ProducerId;
 pub use krabka_verified::ProducerDecision as Decision;
-use krabka_verified::{ProducerBatch, producer_decision};
+use krabka_verified::{ProducerBatch, increment_sequence, producer_decision};
 
-use super::{ProducerEntry, ProducerState};
+use super::{ProducerEntry, ProducerState, RetainedBatch};
+
+/// The decision for one batch, and for a duplicate the batch it repeats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Checked {
+    pub decision: Decision,
+    /// The retained batch a [`Decision::Duplicate`] repeats. `None` for every
+    /// other decision.
+    pub duplicate: Option<RetainedBatch>,
+}
 
 /// Pure idempotent-producer dedup/ordering decision.
 ///
@@ -19,13 +28,42 @@ use super::{ProducerEntry, ProducerState};
 /// decision is a separate function so that the tests can exhaustively test and
 /// property-test it in isolation. The caller has already validated that the
 /// two sequence fields are non-negative. See `producer_state_model.rs`.
+#[cfg(test)]
 pub(crate) fn check_pure(
     entry: Option<&ProducerEntry>,
     producer_epoch: i16,
     base_sequence: i32,
     last_offset_delta: i32,
 ) -> Decision {
-    producer_decision(
+    check_retained(entry, producer_epoch, base_sequence, last_offset_delta).decision
+}
+
+/// [`check_pure`], with the batch a duplicate repeats.
+///
+/// Kafka's `UnifiedLog.analyzeAndValidateProducerState` looks a batch up in
+/// the producer's five retained batches first (`findDuplicateBatch`), and
+/// only a batch that is not one of them goes on to the sequence check against
+/// the last batch. So a retry of any retained batch is a duplicate with that
+/// batch's offsets, and only a sequence outside the retained batches is out
+/// of order.
+pub(crate) fn check_retained(
+    entry: Option<&ProducerEntry>,
+    producer_epoch: i16,
+    base_sequence: i32,
+    last_offset_delta: i32,
+) -> Checked {
+    let last_sequence = increment_sequence(base_sequence, last_offset_delta);
+    if let Some(batch) =
+        entry.and_then(|entry| entry.duplicate_of(producer_epoch, base_sequence, last_sequence))
+    {
+        return Checked {
+            decision: Decision::Duplicate {
+                base_offset: batch.base_offset,
+            },
+            duplicate: Some(batch),
+        };
+    }
+    let decision = producer_decision(
         entry.map(|entry| ProducerBatch {
             epoch: entry.epoch,
             last_sequence: entry.last_sequence,
@@ -38,7 +76,11 @@ pub(crate) fn check_pure(
         producer_epoch,
         base_sequence,
         last_offset_delta,
-    )
+    );
+    Checked {
+        decision,
+        duplicate: None,
+    }
 }
 
 impl ProducerState {
@@ -47,6 +89,7 @@ impl ProducerState {
     /// `base_sequence` is the wire `base_sequence`. `last_offset_delta` is
     /// the batch's `last_offset_delta` field. Together they imply the
     /// batch's `last_sequence = base_sequence + last_offset_delta`.
+    #[cfg(test)]
     pub async fn check(
         &self,
         topic: &str,
@@ -56,9 +99,28 @@ impl ProducerState {
         base_sequence: i32,
         last_offset_delta: i32,
     ) -> Decision {
+        self.check_batch(
+            topic,
+            partition,
+            (producer_id, producer_epoch),
+            (base_sequence, last_offset_delta),
+        )
+        .await
+        .decision
+    }
+
+    /// [`Self::check`], with the retained batch a duplicate repeats, read
+    /// under the same lock.
+    pub async fn check_batch(
+        &self,
+        topic: &str,
+        partition: PartitionIndex,
+        (producer_id, producer_epoch): (i64, i16),
+        (base_sequence, last_offset_delta): (i32, i32),
+    ) -> Checked {
         let handle = self.handle(topic, partition);
         let s = handle.lock().await;
-        check_pure(
+        check_retained(
             s.entries.get(&ProducerId(producer_id)),
             producer_epoch,
             base_sequence,
@@ -127,6 +189,7 @@ mod fuzz {
                             base_offset: next_offset,
                             last_timestamp: 0,
                             last_activity_ms: 0,
+                            earlier: super::super::NO_EARLIER_BATCHES,
                         });
                         next_offset += 1;
                     }
