@@ -387,7 +387,12 @@ fn trim_to_offset_drops_old_segments() {
         log.append(&mut b).expect("append");
     }
     let leo = log.log_end_offset();
+    let sealed_before = log.segments.len();
+    check!(sealed_before > 0);
+    check!(log.sealed_txn_indexes.contains_key(&Offset(0)));
     let new_start = log.trim_to_offset(Offset(15)).expect("trim");
+    check!(log.segments.len() < sealed_before);
+    check!(!log.sealed_txn_indexes.contains_key(&Offset(0)));
     // Trim clamps to next segment boundary <= target; new_start may
     // be less than 15 if 15 falls inside a sealed segment that we
     // can't drop without losing in-range records. LEO is unaffected.

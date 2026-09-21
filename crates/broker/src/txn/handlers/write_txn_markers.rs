@@ -1,17 +1,23 @@
 //! `WriteTxnMarkers` (`api_key=27`). Receives a fan-out from the transaction
 //! coordinator (`EndTxn`) and appends control-marker batches to each
-//! locally-led partition named in the request.
+//! partition this broker leads.
 //!
 //! ## Flow
 //!
 //! For each marker entry in the request:
 //! 1. Determine commit or abort from `transaction_result`.
-//! 2. For each (topic, partition) named in the marker:
-//!    - If the partition is locally led, that is, if it is in
-//!      `broker.partitions`, build a marker batch and call
-//!      `Partition::produce_batch`.
-//!    - If it is not local, return per-partition `NOT_LEADER_OR_FOLLOWER`.
-//! 3. Return a nested per-marker → per-topic → per-partition response.
+//! 2. For each (topic, partition) named in the marker, as Kafka's
+//!    `KafkaApis.handleWriteTxnMarkersRequest` does:
+//!    - A partition this broker does not host, or hosts in an offline log
+//!      directory, answers `UNKNOWN_TOPIC_OR_PARTITION`. Kafka's
+//!      `ReplicaManager.onlinePartition` finds no online partition for both.
+//!    - A partition this broker hosts but does not lead answers
+//!      `NOT_LEADER_OR_FOLLOWER`, and nothing is appended. Kafka appends with
+//!      `AppendOrigin.COORDINATOR`, and the leader append refuses a follower.
+//!    - Otherwise the handler appends the marker batch.
+//! 3. Return a nested per-producer → per-topic → per-partition response.
+//!    Kafka keys the results by producer id, so two marker entries for one
+//!    producer come back as one result.
 //!
 //! Wire format: v1 flexible with tagged fields, and v2 flexible with
 //! `transaction_version`.
@@ -118,8 +124,10 @@ fn serve(
 ) -> BoxFuture<'static, WriteTxnMarkersResponse> {
     let partitions = broker.partitions.clone();
     let group_coordinator = broker.group_coordinator.clone();
+    let log_dir_status = broker.log_dir_status.clone();
+    let node_id = broker.config.node_id;
     Box::pin(async move {
-        let mut marker_results: Vec<WritableTxnMarkerResult> = Vec::new();
+        let mut marker_results = MarkerResults::default();
 
         for marker_entry in &req.markers {
             let marker_type = if marker_entry.transaction_result {
@@ -130,78 +138,152 @@ fn serve(
             // Wrap the wire `i64` into `ProducerId` for the marker builder;
             // unwrapped again below for the raw-`i64` response field.
             let pid = krabka_log::ProducerId(marker_entry.producer_id);
-            let epoch = marker_entry.producer_epoch;
-
-            let mut topic_results: Vec<WritableTxnMarkerTopicResult> = Vec::new();
+            let marker = MarkerAppend {
+                producer_id: pid,
+                producer_epoch: marker_entry.producer_epoch,
+                marker_type,
+                coordinator_epoch: marker_entry.coordinator_epoch,
+                commit_stamp: None,
+            };
 
             for topic in &marker_entry.topics {
-                let mut partition_results: Vec<WritableTxnMarkerPartitionResult> = Vec::new();
-
                 for &p in &topic.partition_indexes {
                     let error_code = match partitions.get(&topic.name, PartitionIndex(p)) {
-                        None => {
+                        Some(part) if !log_dir_status.is_offline(&part.log_dir.load()) => {
+                            append_to_led_partition(
+                                &part,
+                                node_id,
+                                &group_coordinator,
+                                &topic.name,
+                                marker,
+                            )
+                            .await
+                        }
+                        _ => {
                             tracing::debug!(
                                 topic = %topic.name,
                                 partition = p,
-                                "WriteTxnMarkers: partition not local; returning NOT_LEADER_OR_FOLLOWER"
+                                "WriteTxnMarkers: partition not online here; returning UNKNOWN_TOPIC_OR_PARTITION"
                             );
-                            codes::NOT_LEADER_OR_FOLLOWER
-                        }
-                        Some(part) => {
-                            match append_marker_and_materialize(
-                                &part,
-                                Some(&group_coordinator),
-                                &topic.name,
-                                MarkerAppend {
-                                    producer_id: pid,
-                                    producer_epoch: epoch,
-                                    marker_type,
-                                    coordinator_epoch: marker_entry.coordinator_epoch,
-                                    commit_stamp: None,
-                                },
-                            )
-                            .await
-                            {
-                                Ok(()) => codes::NONE,
-                                Err(e) => {
-                                    tracing::warn!(
-                                        topic = %topic.name,
-                                        partition = p,
-                                        error = %e,
-                                        "WriteTxnMarkers: produce_batch failed"
-                                    );
-                                    codes::from_broker_error(&e)
-                                }
-                            }
+                            codes::UNKNOWN_TOPIC_OR_PARTITION
                         }
                     };
-
-                    partition_results.push(WritableTxnMarkerPartitionResult {
-                        partition_index: p,
-                        error_code,
-                        ..Default::default()
-                    });
+                    marker_results.record(pid.get(), &topic.name, p, error_code);
                 }
-
-                topic_results.push(WritableTxnMarkerTopicResult {
-                    name: topic.name.clone(),
-                    partitions: partition_results,
-                    ..Default::default()
-                });
             }
-
-            marker_results.push(WritableTxnMarkerResult {
-                producer_id: pid.get(),
-                topics: topic_results,
-                ..Default::default()
-            });
         }
 
         WriteTxnMarkersResponse {
-            markers: marker_results,
+            markers: marker_results.markers,
             ..Default::default()
         }
     })
+}
+
+/// Append one marker to a partition this broker hosts, and answer the code for
+/// its response row.
+///
+/// The partition's replication-target read guard spans the leader check and
+/// the append, as it does for a Produce. A leadership change takes the write
+/// guard, so it cannot move the partition to a follower between the check and
+/// the append.
+async fn append_to_led_partition(
+    part: &crate::partition::Partition,
+    node_id: krabka_metadata::NodeId,
+    group_coordinator: &std::sync::Arc<crate::coordinator::GroupCoordinator>,
+    topic: &str,
+    marker: MarkerAppend,
+) -> i16 {
+    let transition = part.lock_produce_transition().await;
+    if transition.leader_node_id != node_id && !part.diskless {
+        tracing::debug!(
+            topic,
+            partition = part.index.get(),
+            leader = transition.leader_node_id.0,
+            "WriteTxnMarkers: partition not led here; returning NOT_LEADER_OR_FOLLOWER"
+        );
+        return codes::NOT_LEADER_OR_FOLLOWER;
+    }
+    let result = append_marker_and_materialize(part, Some(group_coordinator), topic, marker).await;
+    drop(transition);
+    match result {
+        Ok(()) => codes::NONE,
+        Err(error) => {
+            tracing::warn!(
+                topic,
+                partition = part.index.get(),
+                %error,
+                "WriteTxnMarkers: marker append failed"
+            );
+            marker_error_code(&error)
+        }
+    }
+}
+
+/// The response code for a marker append that failed.
+///
+/// A log failure is Kafka's `KafkaStorageException`, which the transaction
+/// coordinator retries (`TransactionMarkerRequestCompletionHandler`). Every
+/// other failure keeps its broker-wide code.
+fn marker_error_code(error: &BrokerError) -> i16 {
+    match error {
+        BrokerError::Log(_) | BrokerError::Io(_) => codes::KAFKA_STORAGE_ERROR,
+        other => codes::from_broker_error(other),
+    }
+}
+
+/// The response under construction, in Kafka's shape: one result per
+/// producer id, one topic row per topic name, and one row per partition. The
+/// index maps keep each insert constant time, so a request with many
+/// partitions builds its response in one linear pass.
+#[derive(Default)]
+struct MarkerResults {
+    markers: Vec<WritableTxnMarkerResult>,
+    producers: std::collections::HashMap<i64, usize>,
+    topics: std::collections::HashMap<(i64, String), usize>,
+    partitions: std::collections::HashMap<(i64, String, i32), usize>,
+}
+
+impl MarkerResults {
+    /// Put one partition's code into the response. A repeated partition keeps
+    /// the last code, as Kafka's map does.
+    fn record(&mut self, producer_id: i64, topic: &str, partition_index: i32, error_code: i16) {
+        let marker = *self.producers.entry(producer_id).or_insert_with(|| {
+            self.markers.push(WritableTxnMarkerResult {
+                producer_id,
+                ..Default::default()
+            });
+            self.markers.len() - 1
+        });
+        let topics = &mut self.markers[marker].topics;
+        let topic_row = *self
+            .topics
+            .entry((producer_id, topic.to_owned()))
+            .or_insert_with(|| {
+                topics.push(WritableTxnMarkerTopicResult {
+                    name: topic.to_owned(),
+                    ..Default::default()
+                });
+                topics.len() - 1
+            });
+        let partitions = &mut topics[topic_row].partitions;
+        match self
+            .partitions
+            .entry((producer_id, topic.to_owned(), partition_index))
+        {
+            std::collections::hash_map::Entry::Occupied(row) => {
+                partitions[*row.get()].error_code = error_code;
+            }
+            std::collections::hash_map::Entry::Vacant(row) => {
+                row.insert(partitions.len());
+                partitions.push(WritableTxnMarkerPartitionResult {
+                    partition_index,
+                    error_code,
+                    ..Default::default()
+                });
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -243,57 +325,163 @@ mod tests {
         super::handle(broker, version, correlation_id, body, &ctx).await
     }
 
-    #[tokio::test]
-    async fn handle_returns_marker_topic_and_partition_result_rows() {
-        let (broker_handle, dir) = start_broker().await;
-        let broker = broker_handle.broker_arc_for_test();
-        open_partition(&broker, dir.path(), "orders", 1);
-        let req = WriteTxnMarkersRequest {
-            markers: vec![WritableTxnMarker {
-                producer_id: 91,
-                producer_epoch: 4,
-                transaction_result: true,
-                transaction_version: 1,
-                topics: vec![WritableTxnMarkerTopic {
-                    name: "orders".into(),
-                    partition_indexes: vec![1, 2],
-                    ..Default::default()
-                }],
+    fn marker(producer_id: i64, topic: &str, partitions: Vec<i32>) -> WritableTxnMarker {
+        WritableTxnMarker {
+            producer_id,
+            producer_epoch: 4,
+            transaction_result: true,
+            transaction_version: 1,
+            topics: vec![WritableTxnMarkerTopic {
+                name: topic.into(),
+                partition_indexes: partitions,
                 ..Default::default()
             }],
             ..Default::default()
-        };
-        let req_bytes = encode_request(&req);
+        }
+    }
 
-        let bytes = handle_allowed(&broker, VERSION, 123, &req_bytes)
-            .await
-            .expect("handle");
-        let resp = decode_response(&bytes);
-
-        let expected = WriteTxnMarkersResponse {
-            markers: vec![WritableTxnMarkerResult {
-                producer_id: 91,
-                topics: vec![WritableTxnMarkerTopicResult {
-                    name: "orders".into(),
-                    partitions: vec![
-                        WritableTxnMarkerPartitionResult {
-                            partition_index: 1,
-                            error_code: codes::NONE,
+    fn result(producer_id: i64, topic: &str, rows: &[(i32, i16)]) -> WritableTxnMarkerResult {
+        WritableTxnMarkerResult {
+            producer_id,
+            topics: vec![WritableTxnMarkerTopicResult {
+                name: topic.into(),
+                partitions: rows
+                    .iter()
+                    .map(
+                        |&(partition_index, error_code)| WritableTxnMarkerPartitionResult {
+                            partition_index,
+                            error_code,
                             unknown_tagged_fields: UnknownTaggedFields::default(),
                         },
-                        WritableTxnMarkerPartitionResult {
-                            partition_index: 2,
-                            error_code: codes::NOT_LEADER_OR_FOLLOWER,
-                            unknown_tagged_fields: UnknownTaggedFields::default(),
-                        },
-                    ],
-                    unknown_tagged_fields: UnknownTaggedFields::default(),
-                }],
+                    )
+                    .collect(),
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             }],
             unknown_tagged_fields: UnknownTaggedFields::default(),
-        };
-        assert!(resp == expected);
+        }
+    }
+
+    /// Kafka's `KafkaApis.handleWriteTxnMarkersRequest` answers
+    /// `UNKNOWN_TOPIC_OR_PARTITION` for a partition that is not online on this
+    /// broker, and appends every other marker with `AppendOrigin.COORDINATOR`,
+    /// which refuses a follower with `NOT_LEADER_OR_FOLLOWER`.
+    #[tokio::test]
+    async fn a_marker_appends_only_to_an_online_partition_this_broker_leads() {
+        enum Hosting {
+            Led,
+            Followed,
+            NotHosted,
+            LedInOfflineLogDir,
+        }
+        let cases = [
+            ("hosted and led", Hosting::Led, codes::NONE, 1),
+            (
+                "hosted, led elsewhere",
+                Hosting::Followed,
+                codes::NOT_LEADER_OR_FOLLOWER,
+                0,
+            ),
+            (
+                "not hosted",
+                Hosting::NotHosted,
+                codes::UNKNOWN_TOPIC_OR_PARTITION,
+                0,
+            ),
+            (
+                "led, log directory offline",
+                Hosting::LedInOfflineLogDir,
+                codes::UNKNOWN_TOPIC_OR_PARTITION,
+                0,
+            ),
+        ];
+        for (name, hosting, expected_code, expected_log_end) in cases {
+            let (broker_handle, dir) = start_broker().await;
+            let broker = broker_handle.broker_arc_for_test();
+            let node_id = broker.config.node_id.0;
+            let log_dir = dir.path().join("markers");
+            let part = match hosting {
+                Hosting::NotHosted => None,
+                Hosting::Led | Hosting::Followed | Hosting::LedInOfflineLogDir => {
+                    let part = open_partition(&broker, &log_dir, "orders", 1);
+                    let leader = if matches!(hosting, Hosting::Followed) {
+                        node_id + 1
+                    } else {
+                        node_id
+                    };
+                    part.install_replication_target(None, leader, 3).await;
+                    if matches!(hosting, Hosting::LedInOfflineLogDir) {
+                        broker.log_dir_status.mark_offline(&log_dir, "test");
+                    }
+                    Some(part)
+                }
+            };
+
+            let bytes = handle_allowed(
+                &broker,
+                VERSION,
+                123,
+                &encode_request(&WriteTxnMarkersRequest {
+                    markers: vec![marker(91, "orders", vec![1])],
+                    ..Default::default()
+                }),
+            )
+            .await
+            .expect("handle");
+
+            assert!(
+                decode_response(&bytes)
+                    == WriteTxnMarkersResponse {
+                        markers: vec![result(91, "orders", &[(1, expected_code)])],
+                        unknown_tagged_fields: UnknownTaggedFields::default(),
+                    },
+                "{name}"
+            );
+            if let Some(part) = part {
+                assert!(part.log_end_offset().0 == expected_log_end, "{name}");
+            }
+            broker_handle.shutdown().await;
+        }
+    }
+
+    /// Kafka keys the results by producer id, so two marker entries for one
+    /// producer come back as one result.
+    #[tokio::test]
+    async fn marker_entries_for_one_producer_share_one_result() {
+        let (broker_handle, dir) = start_broker().await;
+        let broker = broker_handle.broker_arc_for_test();
+        let node_id = broker.config.node_id.0;
+        for partition in [1, 2] {
+            open_partition(&broker, dir.path(), "orders", partition)
+                .install_replication_target(None, node_id, 3)
+                .await;
+        }
+
+        let bytes = handle_allowed(
+            &broker,
+            VERSION,
+            123,
+            &encode_request(&WriteTxnMarkersRequest {
+                markers: vec![
+                    marker(91, "orders", vec![1]),
+                    marker(92, "orders", vec![1]),
+                    marker(91, "orders", vec![2]),
+                ],
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("handle");
+
+        assert!(
+            decode_response(&bytes)
+                == WriteTxnMarkersResponse {
+                    markers: vec![
+                        result(91, "orders", &[(1, codes::NONE), (2, codes::NONE)]),
+                        result(92, "orders", &[(1, codes::NONE)]),
+                    ],
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                }
+        );
         broker_handle.shutdown().await;
     }
 

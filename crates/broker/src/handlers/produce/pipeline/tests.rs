@@ -88,6 +88,11 @@ async fn process_partition_non_leader_skips_schema_registry_and_preserves_hint()
             topic_name: "orders".into(),
             freeze: crate::freeze::resolve::FreezeMutationResolution::Admit,
             txn_id_denied: false,
+            transaction: crate::handlers::produce::producer_checks::TransactionRequest {
+                transactional_id: None,
+                version: 9,
+                producer_id_expiration_ms: 86_400_000,
+            },
             acks: 1,
             timeout: Duration::from_millis(1),
         },
@@ -186,6 +191,11 @@ async fn process_partition_leader_without_local_replica_hints_leader() {
             topic_name: "orders".into(),
             freeze: crate::freeze::resolve::FreezeMutationResolution::Admit,
             txn_id_denied: false,
+            transaction: crate::handlers::produce::producer_checks::TransactionRequest {
+                transactional_id: None,
+                version: 9,
+                producer_id_expiration_ms: 86_400_000,
+            },
             acks: 1,
             timeout: Duration::from_millis(1),
         },

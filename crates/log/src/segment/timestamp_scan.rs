@@ -283,6 +283,16 @@ mod tests {
 
         let found = seg.scan_max_timestamp_windowed(kibibytes(64));
         check!(found == Some((Offset(11), 502)), "got {found:?}");
+
+        // Multiple batches: max timestamp is at last_offset
+        seg.append(&sample_batch(13, 1, 600), DENSE_INDEX).unwrap();
+        seg.max_timestamp = i64::MIN;
+        let found_last = seg.scan_max_timestamp_windowed(bytes(1));
+        check!(found_last == Some((Offset(13), 600)));
+
+        // offset_of_max_timestamp routes through scan_max_timestamp_windowed when max_timestamp is MIN
+        let found_via_api = seg.offset_of_max_timestamp();
+        check!(found_via_api == Some((Offset(13), 600)));
     }
 
     #[test]

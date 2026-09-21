@@ -96,6 +96,12 @@ pub struct GroupCoordinator {
     /// tests, where nothing samples group lag and there is no series to
     /// release.
     pub(crate) metrics: std::sync::OnceLock<crate::metrics::BrokerMetrics>,
+    /// The latest topic deletions the image watcher saw, as name and topic id,
+    /// oldest first. A `__consumer_offsets` partition that finishes loading
+    /// after a deletion applies them to its groups. See
+    /// `coordinator::topic_deletion`.
+    pub(crate) recent_topic_deletions:
+        std::sync::Mutex<std::collections::VecDeque<(String, uuid::Uuid)>>,
 }
 
 /// `Debug`-able wrapper around an `Arc<dyn MetadataSource>` so that it can
@@ -140,6 +146,7 @@ impl GroupCoordinator {
             streams_seeds_cache: Arc::new(DashMap::new()),
             metadata_source: std::sync::OnceLock::new(),
             metrics: std::sync::OnceLock::new(),
+            recent_topic_deletions: std::sync::Mutex::default(),
         }
     }
 

@@ -466,6 +466,14 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "",
     },
     KipAnnotation {
+        key: "KIP-464",
+        claim: "CreateTopics num_partitions and replication_factor -1 take the broker defaults",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/create_topics.rs",
+        tests: &["crates/broker/src/handlers/create_topics/tests.rs"],
+        note: "",
+    },
+    KipAnnotation {
         key: "KIP-467",
         claim: "Per-record error indices and messages in the Produce response",
         status: KipStatus::Implemented,
@@ -985,6 +993,18 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         module: "crates/raft/src/server/voter_admin.rs",
         tests: &["crates/broker/tests/jvm_features.rs"],
         note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1222",
+        claim: "Share acquisition lock renewal: the Renew acknowledge type and IsRenewAck on ShareFetch and ShareAcknowledge v2",
+        status: KipStatus::Partial,
+        module: "crates/broker/src/handlers/share_fetch/acknowledge.rs",
+        tests: &[
+            "crates/broker/src/handlers/share_fetch/renew_tests.rs::renew_acknowledgements_renew_only_the_renew_offsets",
+            "crates/broker/src/handlers/share_fetch/renew_tests.rs::a_renew_fetch_answers_a_denied_topic_as_an_acknowledge_error",
+            "crates/broker/tests/share_consume/lock_lifetime.rs::renew_extends_lock_not_redelivered",
+        ],
+        note: "IncrementalAlterConfigs does not accept share.renew.acknowledge.enable yet (#758), and the other validateAcknowledgementBatches rules are open (#724).",
     },
     KipAnnotation {
         key: "KIP-1242",

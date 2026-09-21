@@ -26,6 +26,8 @@ impl BrokerHandle {
             .share_coordinator
             .read_summary(group, topic_id, partition)
             .await
+            .ok()
+            .flatten()
             .map(|(state_epoch, leader_epoch, start_offset, count)| {
                 (state_epoch, leader_epoch, start_offset.0, count)
             })
@@ -157,10 +159,7 @@ impl BrokerHandle {
 mod tests {
     use assert2::check;
 
-    use crate::{
-        broker::{Broker, test_support::local_partition_with_records},
-        config::BrokerConfig,
-    };
+    use crate::{broker::Broker, config::BrokerConfig};
 
     #[tokio::test]
     async fn single_broker_handle_share_and_raft_helpers_observe_real_state() {
@@ -179,22 +178,8 @@ mod tests {
                 .await
                 .is_none()
         );
-        let share_state_partition = broker.share_coordinator.state_partition_for(
-            share_group,
-            &share_topic_id,
-            share_partition,
-        );
-        let share_state_part = local_partition_with_records(
-            dir.path(),
-            crate::share_coordinator::bootstrap::TOPIC,
-            share_state_partition.0,
-            &[],
-        );
-        broker.partitions.insert(
-            crate::share_coordinator::bootstrap::TOPIC.into(),
-            share_state_partition,
-            share_state_part,
-        );
+        crate::share_coordinator::handlers::test_support::lead_share_state_partitions(&broker)
+            .await;
         broker
             .share_coordinator
             .initialize(
@@ -206,20 +191,38 @@ mod tests {
             )
             .await
             .expect("initialize share state");
+        let share_image = crate::share_coordinator::coordinator::test_support::image_with_topic(
+            share_topic_id,
+            share_partition + 1,
+        );
         broker
             .share_coordinator
-            .write(
+            .read(
+                &share_image,
                 share_group,
                 share_topic_id,
                 share_partition,
-                (12, 2),
-                (krabka_log::Offset(95), 7),
-                vec![crate::share_coordinator::persistence::StateBatch {
-                    first_offset: krabka_log::Offset(95),
-                    last_offset: krabka_log::Offset(99),
-                    delivery_state: 0,
-                    delivery_count: 1,
-                }],
+                2,
+            )
+            .await
+            .expect("raise the stored leader epoch");
+        broker
+            .share_coordinator
+            .write(
+                &share_image,
+                share_group,
+                share_topic_id,
+                share_partition,
+                crate::share_coordinator::coordinator::test_support::share_write(
+                    (11, 2),
+                    (95, 7),
+                    vec![crate::share_coordinator::persistence::StateBatch {
+                        first_offset: krabka_log::Offset(95),
+                        last_offset: krabka_log::Offset(99),
+                        delivery_state: 0,
+                        delivery_count: 1,
+                    }],
+                ),
             )
             .await
             .expect("write share state summary");
@@ -227,7 +230,7 @@ mod tests {
             handle
                 .share_state_summary_for_test(share_group, share_topic_id, share_partition)
                 .await
-                == Some((12, 2, 95, 7))
+                == Some((11, 2, 95, 7))
         );
         check!(
             tokio::time::timeout(
@@ -253,11 +256,14 @@ mod tests {
 
         let acquired_group = "handle-share-acquired-mutant-group";
         let acquired_topic_id = uuid::Uuid::from_u128(0xACCD);
-        let acquired_cell = broker
-            .share_partition_leaders
-            .get_or_load(acquired_group, acquired_topic_id, 0)
-            .await
-            .expect("load the share partition");
+        // The share coordinator refuses a read of a key with no state, so the
+        // cell is cached directly. This part checks only the acquired count.
+        let acquired_cell = broker.share_partition_leaders.insert_for_test(
+            acquired_group,
+            acquired_topic_id,
+            0,
+            crate::share_partition::state::AcquisitionState::new(krabka_log::Offset(0)),
+        );
         assert2::assert!(
             tokio::time::timeout(
                 std::time::Duration::from_millis(75),

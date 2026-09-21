@@ -19,7 +19,6 @@
 use std::time::Instant;
 
 use bytes::Bytes;
-use krabka_log::Offset;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
     Decode,
@@ -37,7 +36,10 @@ use crate::{
     broker::Broker,
     codes,
     error::BrokerError,
-    handlers::{group_read_denied, share_fetch::apply_one_ack},
+    handlers::{
+        group_read_denied,
+        share_fetch::{Renewal, apply_one_ack, renew_acknowledge_enabled},
+    },
 };
 
 #[tracing::instrument(
@@ -149,6 +151,11 @@ async fn process_topics(
             },
         ) == AuthorizationResult::Deny;
 
+        let renewal = Renewal {
+            requested: req.is_renew_ack,
+            enabled: renew_acknowledge_enabled(&image, group),
+            lock_duration: cfg.record_lock_duration,
+        };
         let mut parts: Vec<PartitionData> = Vec::with_capacity(topic.partitions.len());
         for ap in &topic.partitions {
             let mut out = PartitionData {
@@ -191,27 +198,15 @@ async fn process_topics(
                 .apply_durably(group, topic_id, ap.partition_index, &cell, &mut st, |st| {
                     let mut err = codes::NONE;
                     for batch in &ap.acknowledgement_batches {
-                        // A renew-ack RENEWs each batch's lock instead of
-                        // acknowledging.
-                        let res = if req.is_renew_ack {
-                            st.renew(
-                                member,
-                                Offset(batch.first_offset),
-                                Offset(batch.last_offset),
-                                now,
-                                cfg.record_lock_duration,
-                            )
-                        } else {
-                            apply_one_ack(
-                                st,
-                                member,
-                                batch.first_offset,
-                                batch.last_offset,
-                                &batch.acknowledge_types,
-                                now,
-                            )
-                        };
-                        if let Err(code) = res {
+                        if let Err(code) = apply_one_ack(
+                            st,
+                            member,
+                            batch.first_offset,
+                            batch.last_offset,
+                            &batch.acknowledge_types,
+                            now,
+                            renewal,
+                        ) {
                             err = code;
                         }
                     }
@@ -508,6 +503,13 @@ mod tests {
     async fn partition_row_error_follows_topic_id() {
         let (broker_handle, _dir) = start_broker(true).await;
         let known = create_topic(&broker_handle, "ack-resolution").await;
+        crate::test_support::initialize_share_state(
+            &broker_handle,
+            "g1",
+            uuid::Uuid::from_bytes(known.0),
+            0,
+        )
+        .await;
 
         let (actual, expected) = drive(&broker_handle, known, codes::NONE).await;
 
@@ -526,6 +528,13 @@ mod tests {
         })
         .await;
         let known = create_topic(&broker_handle, "ack-resolution").await;
+        crate::test_support::initialize_share_state(
+            &broker_handle,
+            "g1",
+            uuid::Uuid::from_bytes(known.0),
+            0,
+        )
+        .await;
 
         let (actual, expected) =
             drive(&broker_handle, known, codes::TOPIC_AUTHORIZATION_FAILED).await;

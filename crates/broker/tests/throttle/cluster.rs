@@ -140,3 +140,34 @@ pub async fn create_topic_plaintext(addr: SocketAddr, topic: &str, partitions: i
 pub async fn wait_partition_exists(handle: &BrokerHandle, topic: &str, partition: i32) {
     handle.wait_until_partition_present(topic, partition).await;
 }
+
+/// Add `follower` to the replicas of partition 0 of `topic`, outside the ISR.
+///
+/// Kafka's leader answers a replica fetch from an id outside the assignment
+/// with `NOT_LEADER_OR_FOLLOWER` (`Partition.followerReplicaOrThrow`), so a
+/// throttle test must fetch as an assigned follower. The single-broker cluster
+/// has no broker `follower`, so the test writes the assignment to the metadata
+/// log directly.
+pub async fn add_follower(handle: &BrokerHandle, topic: &str, follower: u64) {
+    let follower = krabka_metadata::NodeId(follower);
+    let mut record = handle
+        .controller_image_for_test()
+        .partition(topic, 0)
+        .expect("the partition is in the image")
+        .clone();
+    if record.directories.len() == record.replicas.len() {
+        record.directories.push(uuid::Uuid::nil());
+    }
+    record.replicas.push(follower);
+    record.partition_epoch += 1;
+    handle
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(record))
+        .await
+        .expect("submit the partition record");
+    handle
+        .wait_for_image(|img| {
+            img.partition(topic, 0)
+                .is_some_and(|partition| partition.replicas.contains(&follower))
+        })
+        .await;
+}

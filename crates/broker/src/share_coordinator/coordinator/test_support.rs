@@ -5,7 +5,7 @@
 //! Every submodule of `coordinator` needs the same live partition logs, so the
 //! builders live in one place instead of once per test module.
 
-use std::{collections::HashSet, path::Path, sync::Arc};
+use std::{path::Path, sync::Arc};
 
 use krabka_ids::PartitionIndex;
 use krabka_log::{Log, LogConfig, Offset};
@@ -62,9 +62,53 @@ pub(super) fn coordinator(dir: &Path) -> (ShareCoordinator, Arc<PartitionRegistr
 }
 
 pub(super) async fn lead_all(coord: &ShareCoordinator) {
-    let mut set = HashSet::new();
-    for p in 0..coord.config.state_topic_num_partitions {
-        set.insert(PartitionIndex(p));
+    coord.lead_all_partitions_for_test().await;
+}
+
+/// A metadata image that holds one data topic, `t`, with id `topic_id` and
+/// `partitions` partitions.
+pub(crate) fn image_with_topic(
+    topic_id: uuid::Uuid,
+    partitions: i32,
+) -> krabka_metadata::MetadataImage {
+    let mut records = vec![krabka_metadata::MetadataRecord::V1Topic(
+        krabka_metadata::TopicRecord {
+            name: "t".to_owned(),
+            topic_id,
+            partitions,
+            replication_factor: 1,
+        },
+    )];
+    for partition in 0..partitions {
+        records.push(krabka_metadata::MetadataRecord::V1Partition(
+            krabka_metadata::PartitionRecord {
+                topic: "t".to_owned(),
+                partition,
+                leader: krabka_metadata::NodeId(1),
+                replicas: vec![krabka_metadata::NodeId(1)],
+                isr: vec![krabka_metadata::NodeId(1)],
+                leader_epoch: krabka_metadata::LeaderEpoch(0),
+                adding_replicas: vec![],
+                removing_replicas: vec![],
+                directories: vec![],
+                partition_epoch: 0,
+            },
+        ));
     }
-    *coord.leader_partitions.write().await = set;
+    krabka_metadata::MetadataImage::from_records(uuid::Uuid::nil(), &records)
+}
+
+/// A `WriteShareGroupState` partition.
+pub(crate) fn share_write(
+    epochs: (i32, i32),
+    progress: (i64, i32),
+    batches: Vec<StateBatch>,
+) -> super::ShareWrite {
+    super::ShareWrite {
+        state_epoch: epochs.0,
+        leader_epoch: epochs.1,
+        start_offset: Offset(progress.0),
+        delivery_complete_count: progress.1,
+        batches,
+    }
 }

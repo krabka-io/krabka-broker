@@ -112,10 +112,12 @@ impl ReplicatorSupervisor {
             coord.refresh_leader_partitions(image).await;
         }
 
-        // 3b. Refresh the share coordinator's view of locally-led
-        //     __share_group_state partitions (KIP-932). Same shape as txn.
+        // 3b. Apply the leadership of __share_group_state partitions to the
+        //     share coordinator (KIP-932). A newly led partition loads its
+        //     log in a background task, and a lost one drops its state. The
+        //     reconcile does not wait for the loads.
         if let Some(coord) = &self.share_coordinator {
-            coord.refresh_leader_partitions(image).await;
+            drop(coord.refresh_leader_partitions(image).await);
         }
 
         // 4. KIP-858: report any (topic, partition) whose owning log-dir UUID

@@ -117,9 +117,15 @@ fn batch(producer: &Identity, epoch: i16, base_sequence: i32, records: i32) -> R
 
 /// Send one batch. Retry only while the partition or its leader is not ready
 /// after a start, and return the final error code.
-async fn produce(client: &Client, topic: &str, batch: RecordBatch) -> i16 {
+async fn produce(
+    client: &Client,
+    topic: &str,
+    (batch_transactional_id, batch): (Option<&str>, RecordBatch),
+) -> i16 {
     let id = topic_id(client, topic).await;
     let request = ProduceRequest {
+        // A Kafka producer names its transactional id on every request.
+        transactional_id: batch_transactional_id.map(str::to_owned),
         acks: -1,
         timeout_ms: 5_000,
         topic_data: vec![TopicProduceData {
@@ -271,7 +277,15 @@ async fn set_up(client: &Client, case: &Case) -> Identity {
                 producer_id: init.producer_id,
                 epoch: init.producer_epoch,
             };
-            let code = produce(client, case.topic, batch(&producer, producer.epoch, 0, 3)).await;
+            let code = produce(
+                client,
+                case.topic,
+                (
+                    producer.transactional_id,
+                    batch(&producer, producer.epoch, 0, 3),
+                ),
+            )
+            .await;
             assert!(code == 0, "{}: setup produce", case.name);
             Identity {
                 epoch: producer.epoch + 1,
@@ -291,7 +305,15 @@ async fn set_up(client: &Client, case: &Case) -> Identity {
             };
             let added = add_partition(client, &producer, case.topic, producer.epoch).await;
             assert!(added == 0, "{}: AddPartitionsToTxn", case.name);
-            let code = produce(client, case.topic, batch(&producer, producer.epoch, 0, 3)).await;
+            let code = produce(
+                client,
+                case.topic,
+                (
+                    producer.transactional_id,
+                    batch(&producer, producer.epoch, 0, 3),
+                ),
+            )
+            .await;
             assert!(code == 0, "{}: setup produce", case.name);
             let end = client
                 .send(EndTxnRequest {
@@ -331,7 +353,15 @@ async fn probe(
             case.name
         );
     }
-    produce(client, case.topic, batch(producer, epoch, sequence, 1)).await
+    produce(
+        client,
+        case.topic,
+        (
+            producer.transactional_id,
+            batch(producer, epoch, sequence, 1),
+        ),
+    )
+    .await
 }
 
 /// Error codes: the rejected batch live, the rejected batch after a restart,
@@ -376,7 +406,12 @@ async fn first_sequence_at_a_new_epoch_gets_the_same_answer_before_and_after_res
             setup: Setup::Transaction {
                 downgrade_to: Some(1),
             },
-            rejected: (0, 0),
+            // A gap at the kept epoch. The rejected batch must not start
+            // below the accepted one: the KIP-890 verification of the rejected
+            // batch keeps its first sequence as the lowest one, and Kafka's
+            // `ProducerAppendInfo.checkSequence` then refuses any higher first
+            // sequence until a transactional append clears that state.
+            rejected: (0, 4),
             accepted: (0, 3),
         },
         Case {

@@ -15,8 +15,9 @@ use krabka_protocol::records::{Record, RecordBatch};
 use tokio::sync::Mutex;
 use tracing::warn;
 
-use super::ShareCoordinator;
+use super::{ShareCoordinator, ShareErrorCode, ShareStateError, message};
 use crate::{
+    codes,
     error::BrokerError,
     share_coordinator::{
         bootstrap,
@@ -26,6 +27,62 @@ use crate::{
     },
 };
 
+/// A failed append to `__share_group_state`.
+#[derive(Debug, thiserror::Error)]
+pub(super) enum AppendError {
+    /// The partition log is not open on this broker.
+    #[error("__share_group_state-{0} not local")]
+    NotLocal(PartitionIndex),
+    /// The partition log refused the append.
+    #[error(transparent)]
+    Failed(BrokerError),
+}
+
+impl AppendError {
+    /// The error of the append as the coordinator answers it.
+    ///
+    /// The code follows Kafka's
+    /// `CoordinatorOperationExceptionHelper.handleOperationException`.
+    pub(super) fn share_error(&self) -> ShareStateError {
+        let append_code = match self {
+            Self::NotLocal(_) => codes::UNKNOWN_TOPIC_OR_PARTITION,
+            // A local append that fails on the log or the writer task is a
+            // storage failure in Kafka's terms.
+            Self::Failed(BrokerError::Io(_) | BrokerError::Log(_) | BrokerError::Txn(_)) => {
+                codes::KAFKA_STORAGE_ERROR
+            }
+            Self::Failed(error) => codes::from_broker_error(error),
+        };
+        ShareStateError::Operation {
+            code: operation_error_code(append_code),
+            message: append_message(append_code),
+        }
+    }
+}
+
+/// Kafka's `handleOperationException` mapping from an append error code to
+/// the code of the coordinator answer.
+fn operation_error_code(append_code: ShareErrorCode) -> ShareErrorCode {
+    match append_code {
+        codes::UNKNOWN_TOPIC_OR_PARTITION
+        | codes::NOT_ENOUGH_REPLICAS
+        | codes::REQUEST_TIMED_OUT => codes::COORDINATOR_NOT_AVAILABLE,
+        codes::NOT_LEADER_OR_FOLLOWER | codes::KAFKA_STORAGE_ERROR => codes::NOT_COORDINATOR,
+        codes::MESSAGE_TOO_LARGE => codes::UNKNOWN_SERVER_ERROR,
+        other => other,
+    }
+}
+
+/// The message of the append error, before the mapping.
+fn append_message(append_code: ShareErrorCode) -> &'static str {
+    match append_code {
+        codes::UNKNOWN_TOPIC_OR_PARTITION => message::UNKNOWN_TOPIC_OR_PARTITION,
+        codes::KAFKA_STORAGE_ERROR => message::KAFKA_STORAGE_ERROR,
+        codes::NOT_COORDINATOR => message::NOT_COORDINATOR,
+        _ => message::UNKNOWN_SERVER_ERROR,
+    }
+}
+
 impl ShareCoordinator {
     /// Appends one `(key, value)` record to `__share_group_state`-`p`.
     ///
@@ -34,20 +91,18 @@ impl ShareCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns [`BrokerError::Share`] if the partition log is not open
-    /// locally. Returns the append error if `produce_batch` fails.
+    /// Returns [`AppendError::NotLocal`] if the partition log is not open
+    /// locally, and [`AppendError::Failed`] if `produce_batch` fails.
     pub(super) async fn persist_record(
         &self,
         state_partition: PartitionIndex,
         key: ShareStateKey,
         value: Option<Bytes>,
-    ) -> Result<Offset, BrokerError> {
+    ) -> Result<Offset, AppendError> {
         let part = self
             .partitions
             .get(bootstrap::TOPIC, state_partition)
-            .ok_or_else(|| {
-                BrokerError::Share(format!("__share_group_state-{state_partition} not local"))
-            })?;
+            .ok_or(AppendError::NotLocal(state_partition))?;
 
         let mut batch = RecordBatch::default();
         batch.records.push(Record {
@@ -58,7 +113,7 @@ impl ShareCoordinator {
         });
         batch.last_offset_delta = 0;
 
-        part.produce_batch(batch).await
+        part.produce_batch(batch).await.map_err(AppendError::Failed)
     }
 
     /// Prunes the log prefix of `state_partition` on a best-effort basis.
@@ -116,7 +171,9 @@ mod tests {
         partition_registry::PartitionRegistry,
         share_coordinator::{
             config::ShareCoordinatorConfig,
-            coordinator::test_support::{batch, lead_all, open_state_partition},
+            coordinator::test_support::{
+                batch, image_with_topic, lead_all, open_state_partition, share_write,
+            },
         },
     };
 
@@ -141,18 +198,17 @@ mod tests {
             let base = i64::from(i) * 10;
             coord
                 .write(
+                    &image_with_topic(tid, 1),
                     "g",
                     tid,
                     0,
-                    (1, 1),
-                    (Offset(0), 0),
-                    vec![batch(base, base + 9)],
+                    share_write((1, 1), (0, 0), vec![batch(base, base + 9)]),
                 )
                 .await
                 .unwrap();
         }
 
-        let st = coord.read("g", tid, 0).await.expect("present");
+        let st = coord.state_for_test("g", tid, 0).await.expect("present");
         // After the 3rd update crossed the threshold, a snapshot was folded
         // and the counter reset.
         assert!(st.updates_since_snapshot == 0);
@@ -189,11 +245,23 @@ mod tests {
         // records 1,2: updates; the 2nd crosses the threshold and folds a
         // snapshot at record 3, then prunes up to it.
         coord
-            .write("g", tid, 0, (1, 1), (Offset(0), 0), vec![batch(0, 9)])
+            .write(
+                &image_with_topic(tid, 1),
+                "g",
+                tid,
+                0,
+                share_write((1, 1), (0, 0), vec![batch(0, 9)]),
+            )
             .await
             .unwrap();
         coord
-            .write("g", tid, 0, (1, 1), (Offset(0), 0), vec![batch(10, 19)])
+            .write(
+                &image_with_topic(tid, 1),
+                "g",
+                tid,
+                0,
+                share_write((1, 1), (0, 0), vec![batch(10, 19)]),
+            )
             .await
             .unwrap();
 

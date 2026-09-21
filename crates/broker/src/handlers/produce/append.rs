@@ -47,6 +47,8 @@ pub(super) struct AppendContext<'a> {
     /// charged to the remote phase once, by the handler, around the one wait
     /// that covers every partition of the request.
     pub(super) phases: &'a crate::metrics::RequestPhases,
+    /// The transaction check the log runs just before the append.
+    pub(super) producer_check: Option<crate::partition::ProducerAppendCheck>,
 }
 
 /// What the append half of one partition produced.
@@ -171,7 +173,11 @@ pub(super) async fn dispatch_prepared(
     };
     let data = build_produce_data(prepared, context.leader_epoch);
     let (ack_tx, ack_rx) = oneshot::channel();
-    let job = WriterMessage::Produce(ProduceJob { data, ack: ack_tx });
+    let job = WriterMessage::Produce(ProduceJob {
+        data,
+        ack: ack_tx,
+        producer_check: context.producer_check,
+    });
     // The local phase opens here and closes when the writer answers: the
     // enqueue plus the append is the work this broker's own log does for this
     // partition. A send failure is charged too, so the phase covers every exit.
@@ -318,6 +324,12 @@ async fn finalize_ack(
         return AppendOutcome::Answered(out);
     };
     commit.base_offset = base_offset;
+    // Kafka's retained `BatchMetadata.timestamp` is the batch's max timestamp
+    // after the log stamped it, which is the append time on a `LogAppendTime`
+    // topic. A duplicate answers with it.
+    if let Some(stamped) = log_append_time_ms {
+        commit.max_timestamp = stamped;
+    }
     // Unwrap the assigned `Offset` into the wire `base_offset` response field.
     out.base_offset = base_offset.0;
     // KIP-32's `logAppendTimeMs`. Kafka fills it from

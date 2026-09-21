@@ -315,9 +315,10 @@ pub struct FileConfig {
     /// Raw Apache Kafka `server.properties` keys, for the settings krabka
     /// reads under their Kafka names rather than a dedicated TOML key. The
     /// broker consults `transaction.two.phase.commit.enable`,
-    /// `quota.window.num`, and `quota.window.size.seconds`. Any other entry is
-    /// accepted and ignored. A key set here loses to the equivalent dedicated
-    /// key, which is applied first.
+    /// `quota.window.num`, `quota.window.size.seconds`, `num.partitions`, and
+    /// `default.replication.factor`. Any other entry is accepted and ignored.
+    /// A key set here loses to the equivalent dedicated key, which is applied
+    /// first.
     #[serde(default)]
     pub server_properties: std::collections::BTreeMap<String, String>,
 
@@ -348,12 +349,12 @@ pub struct FileConfig {
     /// `RenewDelegationToken`, `ExpireDelegationToken`) require a principal
     /// that authenticated with SASL or mTLS, and answer
     /// `DELEGATION_TOKEN_REQUEST_NOT_ALLOWED` (64) on a PLAINTEXT or
-    /// one-way-TLS connection whatever this list holds. Listing
-    /// `"ANONYMOUS"` is therefore rejected by `BrokerConfig::validate`: it
-    /// cannot enable token issuance, and it would make every unauthenticated
-    /// client a super-user for all operations. Give the token-minting client
-    /// a SASL credential or a client certificate and list that principal
-    /// here.
+    /// one-way-TLS connection whatever this list holds.
+    ///
+    /// An entry may use Kafka's `User:<name>` form. As in Kafka,
+    /// `User:ANONYMOUS` is accepted: it makes every unauthenticated client a
+    /// super user, and a `PLAINTEXT` controller listener with a deny-capable
+    /// authorizer needs it.
     ///
     /// `None` and `Some(empty)` are equivalent — both leave
     /// `BrokerConfig.super_users` empty.

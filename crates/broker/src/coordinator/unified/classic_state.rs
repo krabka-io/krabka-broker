@@ -39,6 +39,14 @@ pub struct OffsetEntry {
     /// `retention_time_ms`. `None` means the entry expires on the broker's
     /// `offsets.retention.minutes` instead.
     pub expire_timestamp_ms: Option<i64>,
+    /// The topic id the metadata image held for the topic name when the
+    /// offset was committed, as Kafka's `OffsetAndMetadata.topicId` does.
+    /// `None` when the image did not know the topic, and for an offset
+    /// replayed from the log or published by a transaction marker, which
+    /// carry no topic id. A topic deletion removes an offset whose id is
+    /// `None` or the deleted id, so an offset committed to a topic created
+    /// again with the same name survives the deletion of the old one.
+    pub topic_id: Option<uuid::Uuid>,
 }
 
 impl OffsetEntry {
@@ -78,6 +86,7 @@ mod offset_entry_tests {
             metadata: String::new(),
             commit_timestamp_ms,
             expire_timestamp_ms,
+            topic_id: None,
         }
     }
 

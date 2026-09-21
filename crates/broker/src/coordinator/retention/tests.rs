@@ -109,6 +109,7 @@ fn seed_replayed_group(
                 metadata: String::new(),
                 commit_timestamp_ms,
                 expire_timestamp_ms: None,
+                topic_id: None,
             },
         )]
         .into(),
@@ -741,6 +742,7 @@ async fn an_acknowledged_commit_is_never_reaped_by_a_concurrent_sweep() {
                         metadata: String::new(),
                         commit_timestamp_ms: now - RETENTION_MS * 10,
                         expire_timestamp_ms: None,
+                        topic_id: None,
                     },
                 )]
                 .into(),

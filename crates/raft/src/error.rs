@@ -47,6 +47,11 @@ pub enum RaftError {
     #[error("the controller leader has uncommitted metadata records")]
     UncommittedTail,
 
+    /// The controller refused a request because the principal of the
+    /// connection lacks the cluster operation that the request needs.
+    #[error("the controller denied the cluster operation to this node's principal")]
+    ClusterAuthorizationFailed,
+
     #[error("reconfiguration rejected: {0}")]
     ReconfigRejected(String),
 

@@ -4,7 +4,8 @@
 //! `(group, topic, partition)` without the full state-batch list. The summary
 //! holds the state epoch, the leader epoch, the start offset, and the
 //! delivery-complete count. A partition this broker does not lead returns
-//! per-partition `NOT_COORDINATOR`. A key that this broker leads but does not
+//! per-partition `NOT_COORDINATOR`, and a partition that still loads returns
+//! `COORDINATOR_LOAD_IN_PROGRESS`. A key that this broker leads but does not
 //! know returns the initial summary, `start_offset = -1`, with
 //! `error_code = 0`.
 
@@ -23,8 +24,7 @@ use krabka_protocol::{
 };
 
 use crate::{
-    broker::Broker, codes, error::BrokerError,
-    share_coordinator::coordinator::UNINITIALIZED_START_OFFSET,
+    broker::Broker, error::BrokerError, share_coordinator::coordinator::UNINITIALIZED_START_OFFSET,
 };
 
 /// Checks `ClusterAction` on the cluster, then serves the request.
@@ -73,41 +73,37 @@ fn serve(
             let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
             let mut partitions: Vec<PartitionResult> = Vec::with_capacity(topic.partitions.len());
             for pd in topic.partitions {
-                let state_partition =
-                    coordinator.state_partition_for(&group_id, &topic_id, pd.partition);
-                let result = if coordinator.is_leader(state_partition).await {
-                    match coordinator
-                        .read_summary(&group_id, topic_id, pd.partition)
-                        .await
-                    {
-                        Some((
-                            state_epoch,
-                            leader_epoch,
-                            start_offset,
-                            delivery_complete_count,
-                        )) => PartitionResult {
-                            partition: pd.partition,
-                            state_epoch,
-                            leader_epoch,
-                            start_offset: start_offset.0,
-                            delivery_complete_count,
-                            ..Default::default()
-                        },
-                        None => PartitionResult {
-                            partition: pd.partition,
-                            start_offset: UNINITIALIZED_START_OFFSET,
-                            delivery_complete_count: 0,
-                            ..Default::default()
-                        },
-                    }
-                } else {
-                    PartitionResult {
+                let result = match coordinator
+                    .read_summary(&group_id, topic_id, pd.partition)
+                    .await
+                {
+                    Ok(Some((
+                        state_epoch,
+                        leader_epoch,
+                        start_offset,
+                        delivery_complete_count,
+                    ))) => PartitionResult {
                         partition: pd.partition,
-                        error_code: codes::NOT_COORDINATOR,
+                        state_epoch,
+                        leader_epoch,
+                        start_offset: start_offset.0,
+                        delivery_complete_count,
+                        ..Default::default()
+                    },
+                    Ok(None) => PartitionResult {
+                        partition: pd.partition,
                         start_offset: UNINITIALIZED_START_OFFSET,
                         delivery_complete_count: 0,
                         ..Default::default()
-                    }
+                    },
+                    // Not the leader, or the state partition still loads.
+                    Err(error_code) => PartitionResult {
+                        partition: pd.partition,
+                        error_code,
+                        start_offset: UNINITIALIZED_START_OFFSET,
+                        delivery_complete_count: 0,
+                        ..Default::default()
+                    },
                 };
                 partitions.push(result);
             }
@@ -144,6 +140,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::codes;
 
     const VERSION: i16 = 1;
 
@@ -193,15 +190,25 @@ mod tests {
             .initialize("share-group", topic_id, 4, 17, Offset(90))
             .await
             .expect("initialize state");
+        let image =
+            crate::share_coordinator::coordinator::test_support::image_with_topic(topic_id, 5);
+        broker
+            .share_coordinator
+            .read(&image, "share-group", topic_id, 4, 3)
+            .await
+            .expect("raise the stored leader epoch");
         broker
             .share_coordinator
             .write(
+                &image,
                 "share-group",
                 topic_id,
                 4,
-                (17, 3),
-                (Offset(101), 9),
-                vec![super::super::test_support::batch(101, 105)],
+                crate::share_coordinator::coordinator::test_support::share_write(
+                    (17, 3),
+                    (101, 9),
+                    vec![super::super::test_support::batch(101, 105)],
+                ),
             )
             .await
             .expect("write state");

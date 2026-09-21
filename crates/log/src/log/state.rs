@@ -172,6 +172,7 @@ impl Log {
         self.active_txn_index = TxnIndex::open(new_active.txn_index_path())?;
         let stamp_index_path = new_active.stamp_index_path();
         self.pending.clear(); // reset_to is a hard reset (after divergence)
+        self.verification_states.clear();
         self.unreplicated.clear();
         self.pending_stamp_ranges.clear();
         self.coordinator_epochs.clear();
@@ -546,5 +547,36 @@ mod tests {
             ..LogConfig::default()
         });
         assert2::assert!(log.config_snapshot().retention == Some(minutes(2)));
+    }
+
+    #[test]
+    fn transaction_marker_state_and_producer_state_entry() {
+        use crate::log::test_support::commit_marker;
+
+        let dir = tempdir().expect("tempdir");
+        let mut log = Log::open(dir.path(), LogConfig::default()).expect("open");
+        let pid = ProducerId(42);
+        assert2::assert!(log.transaction_marker_state(pid) == (-1, -1, false));
+        assert2::assert!(log.producer_state_entry(pid).is_none());
+
+        let mut batch = sample_batch(1);
+        batch.producer_id = 42;
+        batch.producer_epoch = 2;
+        batch.base_sequence = 0;
+        batch.attributes = batch.attributes.with_transactional(true);
+        log.append(&mut batch).unwrap();
+
+        assert2::assert!(log.transaction_marker_state(pid) == (2, -1, true));
+        let entry = log
+            .producer_state_entry(pid)
+            .expect("producer state exists");
+        assert2::assert!(entry.producer_id == 42);
+        assert2::assert!(entry.producer_epoch == 2);
+
+        let mut marker = commit_marker(42, 2);
+        log.append(&mut marker).unwrap();
+        assert2::assert!(log.transaction_marker_state(pid) == (2, 17, false));
+
+        log.close();
     }
 }

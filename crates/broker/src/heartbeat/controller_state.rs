@@ -7,8 +7,8 @@
 //! One concern per module: `registry` holds the state itself, `clock` holds the
 //! time source the windows are measured against, `session` opens, refreshes and
 //! expires a broker's heartbeat session, `snapshot` answers the questions the
-//! controller's maintenance loops ask, and `shutdown` holds the
-//! controlled-shutdown intent.
+//! controller's maintenance loops ask, and `shutdown` holds the heartbeat state
+//! machine: fenced, unfenced, and controlled shutdown.
 
 mod clock;
 mod registry;
@@ -18,7 +18,10 @@ mod snapshot;
 
 #[cfg(test)]
 pub(crate) use self::clock::TestClock;
-pub(crate) use self::registry::{BrokerLivenessState, ControllerLivenessState, LivenessTransition};
+pub(crate) use self::{
+    registry::{BrokerLivenessState, ControllerLivenessState, LivenessTransition},
+    shutdown::{BrokerControlState, HeartbeatFacts, HeartbeatWants, next_broker_state},
+};
 
 /// Every broker the image registers, with the fence the image replicates for
 /// it: what [`ControllerLivenessState::seed_brokers`] starts a controller term

@@ -326,6 +326,41 @@ mod tests {
         );
     }
 
+    /// A voter id too large for Kafka's `i32` node id gets -1 in its replica
+    /// row and in `Nodes`, and a voter the leader has not yet heard from gets
+    /// -1 log end offset and timestamps rather than a stale or default value.
+    #[test]
+    fn an_unmappable_or_never_fetched_voter_gets_blank_fields() {
+        let huge_id = u64::from(u32::MAX) + 1;
+        let snapshot = QuorumStateSnapshot {
+            voters: krabka_metadata::VoterSet::from_voters([
+                voter(1, vec![endpoint(9091)]),
+                voter(huge_id, vec![endpoint(9093)]),
+            ]),
+            per_replica_fetch_offset: BTreeMap::from([(NodeId(1), 42)]),
+            per_replica_last_fetch_ms: BTreeMap::from([(NodeId(1), 1_000)]),
+            per_replica_last_caught_up_ms: BTreeMap::from([(NodeId(1), 1_000)]),
+            observers: vec![],
+            observer_directory_ids: BTreeMap::new(),
+            ..leader_snapshot()
+        };
+
+        let response = describe_quorum(&request(&[(METADATA_TOPIC, &[0])]), &snapshot);
+        let partition = &response.topics[0].partitions[0];
+        let unmapped = partition
+            .current_voters
+            .iter()
+            .find(|voter| voter.replica_id == -1)
+            .expect("the oversized id maps to -1");
+        check!(unmapped.log_end_offset == -1, "never fetched");
+        check!(unmapped.last_fetch_timestamp == -1);
+        check!(unmapped.last_caught_up_timestamp == -1);
+        check!(
+            response.nodes.iter().any(|node| node.node_id == -1),
+            "the same id maps to -1 in Nodes"
+        );
+    }
+
     /// Any request that does not name exactly the metadata partition gets
     /// `UNKNOWN_TOPIC_OR_PARTITION` on every partition it names, whether or
     /// not this node leads.
