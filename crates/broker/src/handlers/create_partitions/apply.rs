@@ -11,7 +11,9 @@ use krabka_metadata::{MetadataRecord, PartitionRecord};
 use krabka_raft::NodeId;
 use krabka_units::Time;
 
-use crate::replicator_supervisor::materialize_partition;
+use crate::{
+    handlers::create_topics::InitialLeadership, replicator_supervisor::materialize_partition,
+};
 
 fn should_materialize_locally(replicas: &[NodeId], node_id: NodeId) -> bool {
     replicas.contains(&node_id)
@@ -24,17 +26,20 @@ pub(super) fn partition_records(
     topic: &str,
     indices: &[i32],
     assignments: &[Vec<NodeId>],
+    leaderships: &[InitialLeadership],
 ) -> Vec<MetadataRecord> {
+    // Kafka's `buildPartitionRegistration`: the leader is the first ISR
+    // member, and the ISR holds only the replicas that were active.
     indices
         .iter()
-        .zip(assignments)
-        .map(|(index, replicas)| {
+        .zip(assignments.iter().zip(leaderships))
+        .map(|(index, (replicas, leadership))| {
             MetadataRecord::V1Partition(PartitionRecord {
                 topic: topic.to_string(),
                 partition: *index,
-                leader: replicas[0],
+                leader: leadership.leader,
                 replicas: replicas.clone(),
-                isr: replicas.clone(),
+                isr: leadership.isr.clone(),
                 leader_epoch: krabka_metadata::LeaderEpoch(0),
                 adding_replicas: vec![],
                 removing_replicas: vec![],
@@ -69,8 +74,9 @@ pub(super) async fn materialize_new_partitions(
     topic: &str,
     indices: &[i32],
     assignments: &[Vec<NodeId>],
+    leaderships: &[InitialLeadership],
 ) {
-    for (index, replicas) in indices.iter().zip(assignments) {
+    for (index, (replicas, leadership)) in indices.iter().zip(assignments.iter().zip(leaderships)) {
         if !should_materialize_locally(replicas, context.node_id) {
             continue;
         }
@@ -108,10 +114,12 @@ pub(super) async fn materialize_new_partitions(
         else {
             continue;
         };
-        let leader = replicas[0];
+        let leader = leadership.leader;
         partition.install_leader_change(leader.0, 0).await;
         if is_local_leader(leader, context.node_id) {
-            partition.install_isr(replicas, replicas, leader).await;
+            partition
+                .install_isr(&leadership.isr, replicas, leader)
+                .await;
         }
     }
 }

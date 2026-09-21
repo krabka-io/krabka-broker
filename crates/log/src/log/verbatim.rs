@@ -297,7 +297,11 @@ impl Log {
                 (batch.producer_id, batch.producer_epoch),
                 (batch.base_sequence, batch.last_offset_delta),
                 (base_offset, batch.max_timestamp, is_transactional),
-            )
+            )?;
+            if is_transactional {
+                self.clear_verification_after_append(pid, batch.producer_epoch, false);
+            }
+            Ok(())
         })();
 
         if let Err(error) = result {

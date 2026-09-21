@@ -152,7 +152,7 @@ mod tests {
                 .unwrap();
         }
 
-        let st = coord.read("g", tid, 0).await.expect("present");
+        let st = coord.read("g", tid, 0).await.unwrap().expect("present");
         // After the 3rd update crossed the threshold, a snapshot was folded
         // and the counter reset.
         assert!(st.updates_since_snapshot == 0);

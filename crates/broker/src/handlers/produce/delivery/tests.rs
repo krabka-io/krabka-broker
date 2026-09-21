@@ -303,6 +303,11 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
                 topic_name: "sched".into(),
                 freeze: crate::freeze::resolve::FreezeMutationResolution::Admit,
                 txn_id_denied: false,
+                transaction: crate::handlers::produce::producer_checks::TransactionRequest {
+                    transactional_id: None,
+                    version: 9,
+                    producer_id_expiration_ms: 86_400_000,
+                },
                 acks: 1,
                 timeout: Duration::from_secs(5),
             },

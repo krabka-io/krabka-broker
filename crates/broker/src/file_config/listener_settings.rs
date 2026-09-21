@@ -172,6 +172,12 @@ pub(super) fn apply_listener_settings(
         && cfg.tls_config.is_none()
     {
         use krabka_security::{ClientAuthMode, TlsConfig};
+        cfg.tls_principal_mapper = crate::SslPrincipalMapper::parse(&tls.principal_mapping_rules)
+            .map_err(|error| {
+            FileConfigError::InvalidConfig(format!(
+                "invalid ssl principal mapping rule in tls_config: {error}"
+            ))
+        })?;
         cfg.tls_config = Some(TlsConfig {
             cert_chain_path: tls.cert_path,
             private_key_path: tls.key_path,
@@ -459,6 +465,40 @@ client_auth = "Required"
                 == Some(std::path::Path::new("/etc/krabka/cluster-ca/ca.crt"))
         );
     }
+    /// The top-level `[tls_config]` carries the KIP-371 principal mapping
+    /// rules that the controller listener applies to a peer certificate.
+    #[test]
+    fn apply_to_parses_top_level_principal_mapping_rules() {
+        let base = r#"
+[tls_config]
+cert_path = "/etc/krabka/tls/node.crt"
+key_path = "/etc/krabka/tls/node.key"
+"#;
+        let dn = "CN=node-1,OU=brokers,O=krabka";
+        let cases = [
+            ("no rules", String::new(), Some(dn)),
+            (
+                "a rule",
+                "principal_mapping_rules = [\"RULE:^CN=(.*?),.*$/$1/\"]\n".to_owned(),
+                Some("node-1"),
+            ),
+            (
+                "a rule that matches nothing",
+                "principal_mapping_rules = [\"RULE:^OU=(.*?)$/$1/\"]\n".to_owned(),
+                None,
+            ),
+        ];
+        for (name, rules, expected) in cases {
+            let file: FileConfig = toml::from_str(&format!("{base}{rules}")).expect("parse");
+            let mut cfg = crate::config::BrokerConfig::default();
+            file.apply_to(&mut cfg).unwrap();
+            check!(
+                cfg.tls_principal_mapper.apply(dn).as_deref() == expected,
+                "{name}"
+            );
+        }
+    }
+
     #[test]
     fn apply_to_empty_listeners_does_not_clear_existing() {
         use crate::config::BrokerConfig;

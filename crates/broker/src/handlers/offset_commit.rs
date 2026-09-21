@@ -174,13 +174,11 @@ fn resolve_topic_names(request: &mut OffsetCommitRequest, image: &krabka_metadat
 /// `GroupCoordinatorService.commitOffsets` does with
 /// `OffsetCommitRequest.getErrorResponse`.
 async fn commit(broker: &Broker, req: &OffsetCommitRequest) -> i16 {
-    {
-        let image = broker.controller.current_image();
-        match local_partition_for_group(&image, broker.config.node_id, &req.group_id) {
-            Ok(_) => {}
-            Err(GroupRoutingError::Unavailable) => return codes::COORDINATOR_NOT_AVAILABLE,
-            Err(GroupRoutingError::NotCoordinator) => return codes::NOT_COORDINATOR,
-        }
+    let image = broker.controller.current_image();
+    match local_partition_for_group(&image, broker.config.node_id, &req.group_id) {
+        Ok(_) => {}
+        Err(GroupRoutingError::Unavailable) => return codes::COORDINATOR_NOT_AVAILABLE,
+        Err(GroupRoutingError::NotCoordinator) => return codes::NOT_COORDINATOR,
     }
 
     let now_ms = now_ms();
@@ -206,6 +204,7 @@ async fn commit(broker: &Broker, req: &OffsetCommitRequest) -> i16 {
     let commit = Commit {
         now_ms,
         expire_timestamp_ms,
+        image: &image,
     };
     match commit_through_actor(&handle, req, commit).await {
         Ok(()) => codes::NONE,
@@ -217,13 +216,17 @@ async fn commit(broker: &Broker, req: &OffsetCommitRequest) -> i16 {
 /// `offsets.retention.minutes`.
 const DEFAULT_RETENTION_TIME_MS: i64 = -1;
 
-/// The two clock values every record of one commit shares.
-#[derive(Debug, Clone, Copy)]
-struct Commit {
+/// The values every record of one commit shares.
+#[derive(Clone, Copy)]
+struct Commit<'a> {
     /// Commit time, stamped on the batch and on every `OffsetCommitValue`.
     now_ms: i64,
     /// The KIP-211 per-commit expiry, when the request asked for one.
     expire_timestamp_ms: Option<i64>,
+    /// The image the commit was validated against. It gives each offset the
+    /// topic id of its topic name, as `KafkaApis.handleOffsetCommitRequest`
+    /// sets it from the metadata cache.
+    image: &'a krabka_metadata::MetadataImage,
 }
 
 /// KIP-211: resolve the absolute expiry that this commit asked for.
@@ -278,7 +281,7 @@ struct CommitRecords {
 }
 
 /// Build both halves of one commit.
-fn commit_records(req: &OffsetCommitRequest, commit: Commit) -> CommitRecords {
+fn commit_records(req: &OffsetCommitRequest, commit: Commit<'_>) -> CommitRecords {
     let mut batch = RecordBatch {
         max_timestamp: commit.now_ms,
         ..RecordBatch::default()
@@ -313,6 +316,7 @@ fn commit_records(req: &OffsetCommitRequest, commit: Commit) -> CommitRecords {
                     metadata: part.committed_metadata.clone().unwrap_or_default(),
                     commit_timestamp_ms: commit.now_ms,
                     expire_timestamp_ms: commit.expire_timestamp_ms,
+                    topic_id: commit.image.topic(&topic.name).map(|t| t.topic_id),
                 },
             ));
             delta += 1;
@@ -337,7 +341,7 @@ fn commit_records(req: &OffsetCommitRequest, commit: Commit) -> CommitRecords {
 async fn commit_through_actor(
     handle: &Arc<GroupActorHandle>,
     req: &OffsetCommitRequest,
-    commit: Commit,
+    commit: Commit<'_>,
 ) -> Result<(), i16> {
     let CommitRecords { batch, entries } = commit_records(req, commit);
     let (reply, result) = oneshot::channel();

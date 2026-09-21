@@ -26,14 +26,23 @@ mod response;
 /// observer sends this RPC itself, and the version on its request header has
 /// to be the one [`PeerRequest::FetchSnapshot`] encoded the body at.
 pub use self::codec::FETCH_SNAPSHOT_VERSION;
-pub(crate) use self::codec::{
-    FETCH_VERSION, NOT_LEADER_OR_FOLLOWER, QUORUM_EPOCH_VERSION, VOTE_VERSION,
+pub(crate) use self::{
+    codec::{
+        FETCH_VERSION, METADATA_PARTITION, METADATA_TOPIC, NOT_LEADER_OR_FOLLOWER,
+        QUORUM_EPOCH_VERSION, VOTE_VERSION,
+    },
+    request::parse_cluster_id,
 };
 pub use self::{
     request::{
-        PeerRequest, decode_begin, decode_end, decode_fetch, decode_fetch_snapshot, decode_vote,
+        PeerRequest, decode_begin, decode_begin_quorum_epoch_request, decode_end,
+        decode_end_quorum_epoch_request, decode_fetch, decode_fetch_snapshot,
+        decode_fetch_snapshot_request, decode_vote, decode_vote_request,
     },
-    response::PeerResponse,
+    response::{
+        FetchSnapshotPartition, PeerResponse, QuorumLeader, encode_begin_quorum_epoch_response,
+        encode_end_quorum_epoch_response, encode_fetch_snapshot_answer, encode_vote_response,
+    },
 };
 
 #[cfg(test)]

@@ -100,6 +100,10 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_delegatio
                 principal_mapper: krabka_broker::SslPrincipalMapper::default(),
             }],
             inter_broker_listener_name: "SASL_PLAINTEXT".to_string(),
+            // The controllers authorize each raft request for the peer
+            // principal. Over SASL that principal is the `admin` super user;
+            // over PLAINTEXT it would be `ANONYMOUS`, which holds nothing.
+            controller_listener_protocol: ListenerProtocol::SaslPlaintext,
             // PLAIN for the admin/inter-broker channel; SCRAM-SHA-256 so the
             // freshly minted delegation token (TokenID/HMAC) can authenticate
             // via the token-fallback path on the SCRAM handler.
