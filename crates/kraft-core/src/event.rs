@@ -4,6 +4,22 @@ use uuid::Uuid;
 
 use crate::types::{Epoch, NodeId};
 
+/// Where a replica stands in a resigning leader's `EndQuorumEpoch`
+/// `PreferredCandidates` list.
+///
+/// Kafka's `KafkaRaftClient.endEpochElectionBackoff` walks the list for the
+/// local replica key and backs the election off by that position, so the most
+/// caught-up voter elects first. The default, position 0 of an empty list,
+/// elects at once.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SuccessorRank {
+    /// The index of the local replica in the list, or the list length when the
+    /// list does not name it.
+    pub position: u32,
+    /// The length of the list.
+    pub successors: u32,
+}
+
 /// A peer's view of its log tip, carried in Vote/Fetch requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LogEnd {
@@ -64,6 +80,8 @@ pub enum Event {
     ReceiveEndQuorumEpoch {
         leader_id: NodeId,
         leader_epoch: Epoch,
+        /// Where this replica stands in the leader's preferred candidates.
+        successor_rank: SuccessorRank,
     },
     /// Leader side: a follower fetched at this position.
     ReceiveFetch {

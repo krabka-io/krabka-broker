@@ -59,6 +59,8 @@ pub struct ShareGroupSeed {
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct StreamsGroupSeed {
     pub group_epoch: i32,
+    /// The `MetadataHash` of the last group metadata record.
+    pub metadata_hash: i64,
     pub assignment_epoch: i32,
     pub topology: Option<streams::persistence::StreamsGroupTopologyValue>,
     pub partition_metadata: Option<streams::persistence::StreamsGroupPartitionMetadataValue>,
