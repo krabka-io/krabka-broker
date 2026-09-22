@@ -1,7 +1,7 @@
 //! A bucket that nothing charged for longer than the expiration is dropped
 //! along with the metric series it published, and an active one is left alone.
 
-use assert2::check;
+use assert2::{assert, check};
 use krabka_metadata::EntityKey;
 use krabka_units::{millis, secs};
 
@@ -101,4 +101,25 @@ fn every_quota_key_a_bucket_is_created_under_names_a_quota_type() {
         check!(QuotaType::from_config_key(config_key) == Some(want));
     }
     check!(QuotaType::from_config_key("not_a_quota") == None);
+}
+
+#[tokio::test]
+async fn run_ticks_until_shutdown() {
+    let buckets = Arc::new(QuotaBuckets::new());
+    let metrics = BrokerMetrics::new();
+    let shutdown = CancellationToken::new();
+
+    let task = tokio::spawn(run(Arc::clone(&buckets), metrics, shutdown.clone()));
+
+    for _ in 0..5 {
+        tokio::task::yield_now().await;
+    }
+    check!(
+        !task.is_finished(),
+        "run should stay active until cancelled"
+    );
+
+    shutdown.cancel();
+    let res = tokio::time::timeout(std::time::Duration::from_secs(2), task).await;
+    assert!(res.is_ok(), "task should exit promptly on shutdown");
 }
