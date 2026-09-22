@@ -622,55 +622,91 @@ pub fn next_producer_identity(
     }
 }
 
-/// Whether an `InitProducerId` caller's supplied producer identity may
-/// re-initialise the transactional id it names.
+/// What `InitProducerId` does with the producer identity a caller supplies.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum InitProducerIdFencingDecision {
-    NoIdentity,
-    Admit,
+pub enum InitProducerIdIdentityDecision {
+    /// The caller names no identity. Kafka bumps the epoch and records no
+    /// last epoch (`prepareIncrementProducerEpoch` with an empty expected
+    /// epoch).
+    BumpWithoutIdentity,
+    /// The caller names the entry's live epoch. Kafka bumps the epoch and
+    /// records the epoch it held as the last epoch.
+    Bump,
+    /// The caller names the epoch the entry held before its last bump. Kafka
+    /// treats this as a retry of the call that made that bump: it answers the
+    /// entry's identity and writes nothing.
+    Retry,
+    /// Kafka answers `PRODUCER_FENCED`.
     Fenced,
 }
 
-/// Fence a stale `(producer_id, producer_epoch)` on `InitProducerId`
-/// (KIP-360).
+/// The epoch at and above which Kafka treats a producer epoch as exhausted
+/// (`TransactionMetadata.isEpochExhausted`). The coordinator keeps one epoch
+/// in hand to fence the producer with, so it never hands out `i16::MAX`.
+pub const EXHAUSTED_PRODUCER_EPOCH: i16 = i16::MAX - 1;
+
+/// What an `InitProducerId` caller's producer identity may do to the entry it
+/// names (KIP-360).
 ///
 /// A request producer id of `-1` supplies no identity, which every
-/// `InitProducerId` below v3 and every first initialisation does; such a
-/// caller is neither admitted nor fenced on identity grounds. An identity that
-/// is supplied must name the entry's live producer id, and carry either the
-/// entry's live epoch or, when an epoch fence failed after it was prepared,
-/// the epoch the entry held before that fence.
-#[ensures((result == InitProducerIdFencingDecision::NoIdentity) == (request_pid@ == -1))]
-#[ensures((result == InitProducerIdFencingDecision::Admit)
+/// `InitProducerId` below v3 and every first initialisation does.
+///
+/// Kafka admits a supplied identity in `TransactionCoordinator`'s
+/// `isValidProducerId`: the identity names the entry's producer id, whatever
+/// its epoch, or it names the producer id from before the last rotation
+/// together with an exhausted epoch. The epoch then decides the outcome in
+/// `TransactionMetadata.prepareIncrementProducerEpoch`: the entry's own epoch
+/// bumps it, the epoch before the last bump is a retry of that bump, and
+/// every other epoch is fenced.
+///
+/// The retry rule also covers a failed epoch fence: that path records the
+/// epoch the producer still holds as the last epoch, so the producer that
+/// owns the transaction is the one the rule admits.
+#[ensures((result == InitProducerIdIdentityDecision::BumpWithoutIdentity)
+    == (request_pid@ == -1))]
+#[ensures((result == InitProducerIdIdentityDecision::Bump)
     == (request_pid@ != -1
         && request_pid@ == entry_pid@
-        && (request_epoch@ == entry_epoch@
-            || (has_failed_epoch_fence && request_epoch@ == last_epoch@))))]
-#[ensures((result == InitProducerIdFencingDecision::Fenced)
+        && request_epoch@ == entry_epoch@))]
+#[ensures((result == InitProducerIdIdentityDecision::Retry)
     == (request_pid@ != -1
-        && !(request_pid@ == entry_pid@
-            && (request_epoch@ == entry_epoch@
-                || (has_failed_epoch_fence && request_epoch@ == last_epoch@)))))]
+        && (request_pid@ == entry_pid@
+            || (request_pid@ == prev_pid@
+                && request_epoch@ >= EXHAUSTED_PRODUCER_EPOCH@))
+        && !(request_pid@ == entry_pid@ && request_epoch@ == entry_epoch@)
+        && request_epoch@ == last_epoch@))]
+#[ensures((result == InitProducerIdIdentityDecision::Fenced)
+    == (request_pid@ != -1
+        && (!(request_pid@ == entry_pid@
+            || (request_pid@ == prev_pid@
+                && request_epoch@ >= EXHAUSTED_PRODUCER_EPOCH@))
+            || (!(request_pid@ == entry_pid@ && request_epoch@ == entry_epoch@)
+                && request_epoch@ != last_epoch@))))]
 #[must_use]
-pub fn init_producer_id_fencing_decision(
+pub fn init_producer_id_identity_decision(
     entry_pid: i64,
     entry_epoch: i16,
     last_epoch: i16,
-    has_failed_epoch_fence: bool,
+    prev_pid: i64,
     request_pid: i64,
     request_epoch: i16,
-) -> InitProducerIdFencingDecision {
+) -> InitProducerIdIdentityDecision {
     if request_pid == -1 {
-        return InitProducerIdFencingDecision::NoIdentity;
+        return InitProducerIdIdentityDecision::BumpWithoutIdentity;
     }
-    let epoch_valid =
-        request_epoch == entry_epoch || (has_failed_epoch_fence && request_epoch == last_epoch);
-    if request_pid == entry_pid && epoch_valid {
-        InitProducerIdFencingDecision::Admit
-    } else {
-        InitProducerIdFencingDecision::Fenced
+    let admitted = request_pid == entry_pid
+        || (request_pid == prev_pid && request_epoch >= EXHAUSTED_PRODUCER_EPOCH);
+    if !admitted {
+        return InitProducerIdIdentityDecision::Fenced;
     }
+    if request_pid == entry_pid && request_epoch == entry_epoch {
+        return InitProducerIdIdentityDecision::Bump;
+    }
+    if request_epoch == last_epoch {
+        return InitProducerIdIdentityDecision::Retry;
+    }
+    InitProducerIdIdentityDecision::Fenced
 }
 
 /// Revalidate the transaction entry after the marker fan-out released its lock.
@@ -1098,37 +1134,56 @@ mod tests {
         }
     }
 
+    /// Kafka `isValidProducerId` and `prepareIncrementProducerEpoch`.
     #[test]
-    fn init_producer_id_fencing_admits_only_the_live_or_failed_fence_identity() {
-        use InitProducerIdFencingDecision::{Admit, Fenced, NoIdentity};
+    fn init_producer_id_identity_bumps_retries_or_fences() {
+        use InitProducerIdIdentityDecision::{Bump, BumpWithoutIdentity, Fenced, Retry};
 
-        // (entry pid, entry epoch, last epoch, failed fence, request pid,
+        // (entry pid, entry epoch, last epoch, prev pid, request pid,
         //  request epoch, expected).
         let cases = [
-            (7_i64, 4_i16, -1_i16, false, -1_i64, -1_i16, NoIdentity),
-            (7, 4, -1, false, -1, 4, NoIdentity),
-            (7, 4, -1, false, 7, 4, Admit),
-            (7, 4, -1, false, 7, 3, Fenced),
-            (7, 4, -1, false, 7, 5, Fenced),
-            (7, 4, -1, false, 9, 4, Fenced),
-            (7, 5, 4, true, 7, 4, Admit),
-            (7, 5, 4, true, 7, 5, Admit),
-            (7, 5, 4, false, 7, 4, Fenced),
-            (7, 5, 4, true, 7, 3, Fenced),
-            (7, 5, 4, true, 9, 4, Fenced),
+            (
+                7_i64,
+                4_i16,
+                -1_i16,
+                -1_i64,
+                -1_i64,
+                -1_i16,
+                BumpWithoutIdentity,
+            ),
+            (7, 4, -1, -1, -1, 4, BumpWithoutIdentity),
+            (7, 4, -1, -1, 7, 4, Bump),
+            (7, 5, 4, -1, 7, 4, Retry),
+            (7, 5, 4, -1, 7, 3, Fenced),
+            (7, 4, -1, -1, 7, 5, Fenced),
+            (7, 4, -1, -1, 9, 4, Fenced),
+            // A producer id rotated at the epoch ceiling: the old id retries
+            // with its exhausted epoch and gets the rotated identity back.
+            (
+                11,
+                0,
+                EXHAUSTED_PRODUCER_EPOCH,
+                7,
+                7,
+                EXHAUSTED_PRODUCER_EPOCH,
+                Retry,
+            ),
+            (11, 0, EXHAUSTED_PRODUCER_EPOCH, 7, 7, i16::MAX, Fenced),
+            (11, 0, EXHAUSTED_PRODUCER_EPOCH, 7, 7, 5, Fenced),
+            (11, 0, -1, 7, 7, EXHAUSTED_PRODUCER_EPOCH, Fenced),
         ];
-        for (entry_pid, entry_epoch, last_epoch, failed_fence, pid, epoch, expected) in cases {
+        for (entry_pid, entry_epoch, last_epoch, prev_pid, pid, epoch, expected) in cases {
             assert!(
-                init_producer_id_fencing_decision(
+                init_producer_id_identity_decision(
                     entry_pid,
                     entry_epoch,
                     last_epoch,
-                    failed_fence,
+                    prev_pid,
                     pid,
                     epoch,
                 ) == expected,
                 "entry=({entry_pid}, {entry_epoch}), last={last_epoch}, \
-                 failed_fence={failed_fence}, request=({pid}, {epoch})"
+                 prev={prev_pid}, request=({pid}, {epoch})"
             );
         }
     }

@@ -1,0 +1,114 @@
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 687 0 694 35 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span stransaction = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 695 22 695 24
+let%span stransaction'0 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 698 19 699 81
+let%span stransaction'1 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 699 56 699 80
+let%span stransaction'2 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 699 11 699 81
+let%span stransaction'3 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 666 10 667 27
+let%span stransaction'4 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 668 10 671 42
+let%span stransaction'5 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 672 10 678 41
+let%span stransaction'6 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 679 10 685 51
+let%span stransaction'7 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 647 53 647 54
+let%span stransaction'8 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 647 42 647 50
+let%span stransaction'9 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 647 42 647 54
+
+use creusot.int.Int64
+use creusot.int.Int16
+use creusot.prelude.Any
+use int.Int
+
+type t_InitProducerIdIdentityDecision = BumpWithoutIdentity | Bump | Retry | Fenced
+
+constant const_MAX: Int16.t = (32767: Int16.t)
+
+type tup2_i16_bool = { f0: Int16.t; f1: bool }
+
+constant const_EXHAUSTED_PRODUCER_EPOCH [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 647 0 647 39] : Int16.t
+
+let set_EXHAUSTED_PRODUCER_EPOCH (return) = bb0
+  [ bb0 = s0
+    [ s0 =
+      [ &_1 <- let (_fst, _snd) = Int16.sub_with_overflow ([%#stransaction'8] const_MAX) ([%#stransaction'7] (1: Int16.t)) in { f0 = _fst;
+                                                                                                                                f1 = _snd } ]
+      s1
+    | s1 = {[@expl:Sub overflow] [%#stransaction'9] not _1.f1} s2
+    | s2 = [ &_ret <- _1.f0 ] s3
+    | s3 = return {_ret} ] ] [ & _ret: Int16.t = Any.any_l () | & _1: tup2_i16_bool = Any.any_l () ]
+  [ return (_const: Int16.t) -> -{const_EXHAUSTED_PRODUCER_EPOCH = _const}- return ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let init_producer_id_identity_decision [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 687 0 694 35]
+  (entry_pid: Int64.t) (entry_epoch: Int16.t) (last_epoch: Int16.t) (prev_pid: Int64.t) (request_pid: Int64.t)
+  (request_epoch: Int16.t) (return (x: t_InitProducerIdIdentityDecision)) = (! set_EXHAUSTED_PRODUCER_EPOCH
+    (bb0
+    [ bb0 = s0
+      [ s0 = [ &_29 <- request_pid = ([%#stransaction] (-1: Int64.t)) ] s1
+      | s1 = any [ br0 -> {_29 = false} (! bb2) | br1 -> {_29} (! bb1) ] ]
+    | bb1 = s0 [ s0 = [ &_ret <- BumpWithoutIdentity ] s1 | s1 = return {_ret} ]
+    | bb2 = s0
+      [ s0 = [ &_33 <- request_pid = entry_pid ] s1 | s1 = any [ br0 -> {_33 = false} (! bb4) | br1 -> {_33} (! bb3) ] ]
+    | bb3 = s0 [ s0 = [ &admitted <- [%#stransaction'0] true ] s1 | s1 = bb8 ]
+    | bb4 = s0
+      [ s0 = [ &_36 <- request_pid = prev_pid ] s1 | s1 = any [ br0 -> {_36 = false} (! bb6) | br1 -> {_36} (! bb5) ] ]
+    | bb5 = s0
+      [ s0 = [ &admitted <- Int16.ge request_epoch ([%#stransaction'1] const_EXHAUSTED_PRODUCER_EPOCH) ] s1 | s1 = bb8 ]
+    | bb6 = s0 [ s0 = [ &admitted <- [%#stransaction'2] false ] s1 | s1 = bb8 ]
+    | bb8 = any [ br0 -> {admitted = false} (! bb9) | br1 -> {admitted} (! bb10) ]
+    | bb10 = s0
+      [ s0 = [ &_44 <- request_pid = entry_pid ] s1
+      | s1 = any [ br0 -> {_44 = false} (! bb15) | br1 -> {_44} (! bb11) ] ]
+    | bb11 = s0
+      [ s0 = [ &_47 <- request_epoch = entry_epoch ] s1
+      | s1 = any [ br0 -> {_47 = false} (! bb15) | br1 -> {_47} (! bb13) ] ]
+    | bb13 = s0 [ s0 = [ &_ret <- Bump ] s1 | s1 = return {_ret} ]
+    | bb15 = s0
+      [ s0 = [ &_52 <- request_epoch = last_epoch ] s1
+      | s1 = any [ br0 -> {_52 = false} (! bb17) | br1 -> {_52} (! bb16) ] ]
+    | bb16 = s0 [ s0 = [ &_ret <- Retry ] s1 | s1 = return {_ret} ]
+    | bb17 = s0 [ s0 = [ &_ret <- Fenced ] s1 | s1 = return {_ret} ]
+    | bb9 = s0 [ s0 = [ &_ret <- Fenced ] s1 | s1 = return {_ret} ] ]
+    [ & _ret: t_InitProducerIdIdentityDecision = Any.any_l ()
+    | & entry_pid: Int64.t = entry_pid
+    | & entry_epoch: Int16.t = entry_epoch
+    | & last_epoch: Int16.t = last_epoch
+    | & prev_pid: Int64.t = prev_pid
+    | & request_pid: Int64.t = request_pid
+    | & request_epoch: Int16.t = request_epoch
+    | & _29: bool = Any.any_l ()
+    | & admitted: bool = Any.any_l ()
+    | & _33: bool = Any.any_l ()
+    | & _36: bool = Any.any_l ()
+    | & _44: bool = Any.any_l ()
+    | & _47: bool = Any.any_l ()
+    | & _52: bool = Any.any_l () ]))
+  [ return (result: t_InitProducerIdIdentityDecision) ->
+  {[@stop_split] [@expl:init_producer_id_identity_decision ensures] ([@stop_split] [@expl:init_producer_id_identity_decision ensures #0] [%#stransaction'3] (result
+        = BumpWithoutIdentity)
+      = (Int64.to_int request_pid = - 1))
+    /\ ([@stop_split] [@expl:init_producer_id_identity_decision ensures #1] [%#stransaction'4] (result = Bump)
+      = (Int64.to_int request_pid <> - 1
+      /\ Int64.to_int request_pid = Int64.to_int entry_pid /\ Int16.to_int request_epoch = Int16.to_int entry_epoch))
+    /\ ([@stop_split] [@expl:init_producer_id_identity_decision ensures #2] [%#stransaction'5] (result = Retry)
+      = (Int64.to_int request_pid <> - 1
+      /\ (Int64.to_int request_pid = Int64.to_int entry_pid
+        \/ Int64.to_int request_pid = Int64.to_int prev_pid
+        /\ ge_log_Int (Int16.to_int request_epoch) (Int16.to_int const_EXHAUSTED_PRODUCER_EPOCH))
+      /\ not (Int64.to_int request_pid = Int64.to_int entry_pid
+        /\ Int16.to_int request_epoch = Int16.to_int entry_epoch)
+      /\ Int16.to_int request_epoch = Int16.to_int last_epoch))
+    /\ ([@stop_split] [@expl:init_producer_id_identity_decision ensures #3] [%#stransaction'6] (result = Fenced)
+    = (Int64.to_int request_pid <> - 1
+    /\ (not (Int64.to_int request_pid = Int64.to_int entry_pid
+      \/ Int64.to_int request_pid = Int64.to_int prev_pid
+      /\ ge_log_Int (Int16.to_int request_epoch) (Int16.to_int const_EXHAUSTED_PRODUCER_EPOCH))
+    \/ not (Int64.to_int request_pid = Int64.to_int entry_pid /\ Int16.to_int request_epoch = Int16.to_int entry_epoch)
+    /\ Int16.to_int request_epoch <> Int16.to_int last_epoch)))}
+    (! return {result}) ]
