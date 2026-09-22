@@ -563,7 +563,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             owned_active: None,
             epoch: 2,
             active: vec![0, 1],
-            status: None,
+            status: Some(vec![]),
         },
         Row {
             name: "partitions are added to the source topic",
@@ -574,7 +574,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             owned_active: Some(vec![0]),
             epoch: 2,
             active: vec![0, 1],
-            status: None,
+            status: Some(vec![]),
         },
         Row {
             name: "the source topic is deleted",
@@ -600,7 +600,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             owned_active: Some(vec![0]),
             epoch: 2,
             active: vec![0],
-            status: None,
+            status: Some(vec![]),
         },
         Row {
             name: "the member sends a new process id",
@@ -611,7 +611,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             owned_active: Some(vec![0]),
             epoch: 2,
             active: vec![0],
-            status: None,
+            status: Some(vec![]),
         },
         Row {
             name: "the internal topic creation failed once",
@@ -622,7 +622,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             owned_active: Some(vec![]),
             epoch: 2,
             active: vec![0],
-            status: None,
+            status: Some(vec![]),
         },
     ];
 
@@ -843,6 +843,7 @@ async fn a_seeded_group_creates_its_missing_internal_topics_again() {
     );
     let expected = StreamsGroupHeartbeatResponse {
         member_id: "m1".into(),
+        status: Some(vec![]),
         active_tasks: Some(vec![TaskIds {
             subtopology_id: "0".into(),
             partitions: vec![0],
@@ -983,6 +984,7 @@ async fn a_join_sizes_the_internal_topics_as_kafka_does() {
         };
         let expected = StreamsGroupHeartbeatResponse {
             member_id: "m1".into(),
+            status: Some(vec![]),
             active_tasks: Some(vec![tasks("0", row.tasks.0), tasks("1", row.tasks.1)]),
             standby_tasks: Some(vec![]),
             warmup_tasks: Some(vec![]),
@@ -1032,4 +1034,208 @@ async fn a_changelog_topic_with_a_partition_count_is_refused() {
         .await
         .unwrap();
     check!(rx.await.unwrap().members.is_empty());
+}
+
+/// Kafka builds the `StreamsGroupHeartbeat` status list on every heartbeat:
+/// `STALE_TOPOLOGY` for a member behind the group topology, the topology
+/// configuration status, and `SHUTDOWN_APPLICATION` while a shutdown request
+/// stands. The list is empty, not null, when nothing holds, and the shutdown
+/// request ends when the group becomes empty. Each row runs its heartbeats on
+/// a fresh group with a one-partition source topic and compares the whole
+/// response of the last one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_heartbeat_status_list_follows_kafka() {
+    use std::collections::HashMap;
+
+    use krabka_protocol::owned::{
+        common::streams_group_heartbeat_response::{status::Status, task_ids::TaskIds},
+        streams_group_heartbeat_request::{Subtopology, Topology},
+    };
+
+    use crate::{
+        coordinator::unified::streams::topology::status, test_support::FakeMetadataSource,
+    };
+
+    #[derive(Clone, Copy)]
+    enum Beat {
+        /// A join with this topology epoch.
+        Join(&'static str, i32),
+        /// A heartbeat at the member epoch, with `shutdown_application`.
+        Heartbeat(&'static str, bool),
+        /// A leave, with `shutdown_application`.
+        Leave(&'static str, bool),
+    }
+    struct Row {
+        name: &'static str,
+        sources: &'static [&'static str],
+        beats: Vec<Beat>,
+        member: &'static str,
+        epoch: i32,
+        active: Vec<i32>,
+        status: Vec<(i8, &'static str)>,
+    }
+    let rows = [
+        Row {
+            name: "a ready group sends an empty list",
+            sources: &["in"],
+            beats: vec![Beat::Join("m1", 1)],
+            member: "m1",
+            epoch: 1,
+            active: vec![0],
+            status: vec![],
+        },
+        Row {
+            name: "two missing source topics give one entry",
+            sources: &["b", "a"],
+            beats: vec![Beat::Join("m1", 1)],
+            member: "m1",
+            epoch: 1,
+            active: vec![],
+            status: vec![(
+                status::MISSING_SOURCE_TOPICS,
+                "Source topics a, b are missing.",
+            )],
+        },
+        Row {
+            name: "a heartbeat requests the shutdown",
+            sources: &["in"],
+            beats: vec![Beat::Join("m1", 1), Beat::Heartbeat("m1", true)],
+            member: "m1",
+            epoch: 1,
+            active: vec![0],
+            status: vec![(
+                status::SHUTDOWN_APPLICATION,
+                "Streams group member m1 encountered a fatal error and requested a shutdown for \
+                 the entire application.",
+            )],
+        },
+        Row {
+            name: "a leave requests the shutdown",
+            sources: &["in"],
+            beats: vec![
+                Beat::Join("m1", 1),
+                Beat::Join("m2", 1),
+                Beat::Leave("m2", true),
+                Beat::Heartbeat("m1", false),
+            ],
+            member: "m1",
+            epoch: 3,
+            active: vec![0],
+            status: vec![(
+                status::SHUTDOWN_APPLICATION,
+                "Streams group member m2 encountered a fatal error and requested a shutdown for \
+                 the entire application.",
+            )],
+        },
+        Row {
+            name: "the shutdown request ends when the group becomes empty",
+            sources: &["in"],
+            beats: vec![
+                Beat::Join("m1", 1),
+                Beat::Heartbeat("m1", true),
+                Beat::Leave("m1", false),
+                Beat::Join("m2", 1),
+            ],
+            member: "m2",
+            epoch: 3,
+            active: vec![0],
+            status: vec![],
+        },
+        Row {
+            name: "a member behind the group topology gets STALE_TOPOLOGY",
+            sources: &["in"],
+            beats: vec![Beat::Join("m1", 2), Beat::Join("m2", 1)],
+            member: "m2",
+            epoch: 2,
+            active: vec![],
+            status: vec![(
+                status::STALE_TOPOLOGY,
+                "The member's topology epoch 1 is behind the group's topology epoch 2.",
+            )],
+        },
+        Row {
+            name: "a member at the group topology does not get STALE_TOPOLOGY",
+            sources: &["in"],
+            beats: vec![
+                Beat::Join("m1", 2),
+                Beat::Join("m2", 1),
+                Beat::Heartbeat("m1", false),
+            ],
+            member: "m1",
+            epoch: 2,
+            active: vec![0],
+            status: vec![],
+        },
+    ];
+
+    for row in rows {
+        let source = Arc::new(
+            FakeMetadataSource::builder()
+                .image(image_of(None, &[("in", 1, 1)]))
+                .build(),
+        );
+        let (coord, _log) = make_coordinator();
+        coord.set_metadata_source(source);
+        let handle = coord.get_or_create_streams("g");
+        let mut epochs: HashMap<&str, i32> = HashMap::new();
+        let mut last = None;
+        for beat in &row.beats {
+            let (member, member_epoch, shutdown, topology_epoch) = match *beat {
+                Beat::Join(member, topology_epoch) => (member, 0, false, Some(topology_epoch)),
+                Beat::Heartbeat(member, shutdown) => (member, epochs[member], shutdown, None),
+                Beat::Leave(member, shutdown) => (member, -1, shutdown, None),
+            };
+            let resp = heartbeat(
+                &handle,
+                StreamsGroupHeartbeatRequest {
+                    group_id: "g".into(),
+                    member_id: member.into(),
+                    member_epoch,
+                    rebalance_timeout_ms: 1_000,
+                    shutdown_application: shutdown,
+                    topology: topology_epoch.map(|epoch| Topology {
+                        epoch,
+                        subtopologies: vec![Subtopology {
+                            subtopology_id: "0".into(),
+                            source_topics: row.sources.iter().map(|s| (*s).to_string()).collect(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await;
+            check!(resp.error_code == codes::NONE, "{}", row.name);
+            epochs.insert(member, resp.member_epoch);
+            last = Some(resp);
+        }
+
+        let expected = StreamsGroupHeartbeatResponse {
+            member_id: row.member.into(),
+            status: Some(
+                row.status
+                    .iter()
+                    .map(|(status_code, detail)| Status {
+                        status_code: *status_code,
+                        status_detail: (*detail).into(),
+                        ..Default::default()
+                    })
+                    .collect(),
+            ),
+            active_tasks: Some(if row.active.is_empty() {
+                vec![]
+            } else {
+                vec![TaskIds {
+                    subtopology_id: "0".into(),
+                    partitions: row.active,
+                    ..Default::default()
+                }]
+            }),
+            standby_tasks: Some(vec![]),
+            warmup_tasks: Some(vec![]),
+            ..super::response::base_resp(codes::NONE, row.epoch, &StreamsGroupConfig::default())
+        };
+        check!(last == Some(expected), "{}", row.name);
+    }
 }

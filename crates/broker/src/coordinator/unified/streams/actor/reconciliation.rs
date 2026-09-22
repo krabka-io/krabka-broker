@@ -22,7 +22,7 @@ use crate::{
             StreamsGroupState, StreamsGroupStatePhase, StreamsMemberAssignmentState,
             StreamsMemberState, StreamsTargetAssignment,
         },
-        topology::{self, status as topo_status},
+        topology,
     },
     metadata_source::MetadataSource,
 };
@@ -74,16 +74,7 @@ pub(super) fn configure_after_load(actor: &mut ActorState, source: &Arc<dyn Meta
         return;
     };
     actor.missing_internal_topics = topology::internal_topic_specs(&configured);
-    let mut status: Vec<(i8, String)> = configured.status.into_iter().collect();
-    status.extend(
-        actor
-            .state
-            .status
-            .iter()
-            .filter(|(code, _)| *code == topo_status::SHUTDOWN_APPLICATION)
-            .cloned(),
-    );
-    actor.state.status = status;
+    actor.state.status = configured.status;
 }
 
 async fn reconcile_dirty(
@@ -113,10 +104,7 @@ async fn reconcile_dirty(
                 %error,
                 "streams topology cannot be configured",
             );
-            actor
-                .state
-                .status
-                .retain(|(code, _)| *code == topo_status::SHUTDOWN_APPLICATION);
+            actor.state.status = None;
             install_empty_target(&mut actor.state, StreamsGroupStatePhase::NotReady);
             return;
         }
@@ -157,18 +145,7 @@ async fn reconcile_dirty(
         }
     }
 
-    // Keep the shutdown request that a member recorded. The topology status
-    // replaces the rest.
-    let mut status: Vec<(i8, String)> = configured.status.clone().into_iter().collect();
-    status.extend(
-        actor
-            .state
-            .status
-            .iter()
-            .filter(|(code, _)| *code == topo_status::SHUTDOWN_APPLICATION)
-            .cloned(),
-    );
-    actor.state.status = status;
+    actor.state.status.clone_from(&configured.status);
 
     if !configured.is_ready() {
         install_empty_target(&mut actor.state, StreamsGroupStatePhase::NotReady);
