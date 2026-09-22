@@ -13,3 +13,15 @@ impl BrokerMetrics {
             .set(i64::try_from(count).unwrap_or(i64::MAX));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sets_offline_log_dirs_gauge() {
+        let metrics = BrokerMetrics::new();
+        metrics.set_offline_log_dirs(3);
+        assert2::check!(metrics.offline_log_dirs.get() == 3);
+    }
+}
