@@ -215,3 +215,50 @@ fn spawn_remote_reader_gauges(
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use assert2::check;
+    use krabka_remote_storage::{
+        InmemoryRemoteLogMetadataManager, LocalTieredStorage, RemoteLogMetadataManager,
+        RemoteStorageManager,
+    };
+    use krabka_units::millis;
+
+    use super::*;
+
+    fn is_percent(got: f64, want: f64) -> bool {
+        (got - want).abs() < f64::EPSILON
+    }
+
+    #[tokio::test]
+    async fn remote_reader_gauges_publish_idle_percent_until_shutdown() {
+        let remote_dir = tempfile::tempdir().expect("tempdir");
+        let rsm: Arc<dyn RemoteStorageManager> =
+            Arc::new(LocalTieredStorage::new(remote_dir.path()));
+        let rlmm: Arc<dyn RemoteLogMetadataManager> =
+            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let reader = Arc::new(crate::remote_reader::RemoteReader::new(rsm, rlmm));
+        let metrics = crate::metrics::BrokerMetrics::new();
+        let shutdown = CancellationToken::new();
+
+        check!(is_percent(
+            metrics.remote_log_reader_avg_idle_percent.get(),
+            0.0
+        ));
+
+        spawn_remote_reader_gauges(reader, metrics.clone(), millis(10), shutdown.clone());
+
+        let mut observed = false;
+        for _ in 0..100 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            if is_percent(metrics.remote_log_reader_avg_idle_percent.get(), 100.0) {
+                observed = true;
+                break;
+            }
+        }
+        check!(observed, "spawn_remote_reader_gauges should update metrics");
+
+        shutdown.cancel();
+    }
+}
