@@ -34,3 +34,56 @@ impl BrokerHandle {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
+
+    use assert2::assert;
+
+    use crate::{
+        broker::{Broker, BrokerConfig},
+        txn::coordinator::fanout_gate::MarkerFanoutMode,
+    };
+
+    #[tokio::test]
+    async fn marker_fanout_helpers_set_mode_and_wait_for_arrivals() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = BrokerConfig::for_tests(dir.path().to_path_buf());
+        let handle = Broker::start(config).await.expect("broker start");
+        let broker = handle.broker_arc_for_test();
+
+        handle.set_transaction_marker_fanout_for_test(MarkerFanoutMode::Hold);
+        let arrived = Arc::new(AtomicBool::new(false));
+        let arrival_flag = Arc::clone(&arrived);
+        let broker_ref = Arc::clone(&broker);
+        let task = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            arrival_flag.store(true, Ordering::Release);
+            let _ = broker_ref.txn_coordinator.marker_fanout_gate.pass().await;
+        });
+
+        handle.wait_for_transaction_marker_fanouts_for_test(1).await;
+        assert!(arrived.load(Ordering::Acquire));
+
+        handle.set_transaction_marker_fanout_for_test(MarkerFanoutMode::Fail);
+        assert!(
+            broker
+                .txn_coordinator
+                .marker_fanout_gate
+                .pass()
+                .await
+                .is_err()
+        );
+
+        handle.set_transaction_marker_fanout_for_test(MarkerFanoutMode::Open);
+        let _ = task.await;
+        handle.shutdown().await;
+    }
+}
