@@ -108,9 +108,11 @@ fn freeze_request(scope: &str, pattern_type: i8) -> SetTopicFreezeRequest {
     }
 }
 
-// `record` signed by `pair` for the test cluster.
+// `record` signed by `pair` for the test cluster, in the same base64 form
+// `krabka-guard` reads from `DescribeCluster` and `check_signature` verifies
+// against (#1082).
 fn sign(pair: &Ed25519KeyPair, record: &TopicFreezeRecord) -> Vec<u8> {
-    let bytes = freeze_signing_bytes(&CLUSTER.to_string(), record);
+    let bytes = freeze_signing_bytes(&crate::cluster_id::encode(CLUSTER), record);
     pair.sign(&bytes).as_ref().to_vec()
 }
 

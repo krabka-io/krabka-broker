@@ -146,7 +146,10 @@ pub(super) fn check_signature(
         return Ok(false);
     }
 
-    let cluster_id = env.image.cluster_id().to_string();
+    // `krabka-guard` reads the cluster id from `DescribeCluster`, which
+    // reports Kafka's base64 `Uuid` form (#1082), and signs that exact
+    // string. The broker must build the same string to verify.
+    let cluster_id = crate::cluster_id::encode(env.image.cluster_id());
     let check = FreezeSignatureCheck {
         keys: &env.config.operator_keys,
         cluster_id: &cluster_id,

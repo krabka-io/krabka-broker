@@ -3893,6 +3893,7 @@ version = "0.5.4"
 dependencies = [
  "assert2",
  "async-trait",
+ "base64 0.23.1",
  "bytes",
  "clap",
  "crc32c",

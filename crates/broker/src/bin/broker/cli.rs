@@ -3,6 +3,7 @@
 
 use std::{net::SocketAddr, path::PathBuf};
 
+use base64::Engine as _;
 use clap::Parser;
 use krabka_units::{ByteSize, Time};
 
@@ -84,8 +85,10 @@ pub struct Args {
 
     /// Cluster UUID. Every broker in the same cluster must share this
     /// value. The operator sets it with the env var `KRABKA_CLUSTER_ID`,
-    /// which holds the `KafkaCluster` UID.
-    #[arg(long, env = "KRABKA_CLUSTER_ID")]
+    /// which holds the `KafkaCluster` UID. Accepts Kafka's base64 `Uuid`
+    /// form -- what `Metadata` and `DescribeCluster` report (#1042) -- or
+    /// `java.util.UUID`'s hyphenated form.
+    #[arg(long, env = "KRABKA_CLUSTER_ID", value_parser = parse_cluster_id)]
     pub cluster_id: Option<uuid::Uuid>,
 
     /// Bind address for the Prometheus `/metrics` HTTP endpoint.
@@ -390,6 +393,20 @@ pub struct Args {
     pub krabka_otlp_heartbeat_interval: Option<Time>,
 }
 
+/// Parses a `--cluster-id` value in Kafka's base64 `Uuid` form (what
+/// `Metadata` and `DescribeCluster` report, e.g. `AQIDBAUGBwgJCgsMDQ4PEA`) or
+/// `java.util.UUID`'s hyphenated form.
+fn parse_cluster_id(value: &str) -> Result<uuid::Uuid, String> {
+    if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(value)
+        && let Ok(bytes) = <[u8; 16]>::try_from(bytes)
+    {
+        return Ok(uuid::Uuid::from_bytes(bytes));
+    }
+    value.parse().map_err(|_| {
+        format!("{value:?} is not a cluster id: neither a base64 Uuid nor a hyphenated UUID")
+    })
+}
+
 fn parse_metadata_raft_command_queue_capacity(value: &str) -> Result<usize, String> {
     let value = value.parse::<usize>().map_err(|error| error.to_string())?;
     krabka_raft::MetadataRaftCommandQueueCapacity::new(value)
@@ -403,6 +420,28 @@ mod tests {
 
     use super::*;
     use crate::test_support::env_guard;
+
+    /// `--cluster-id` accepts Kafka's base64 `Uuid` form -- what `Metadata`
+    /// and `DescribeCluster` report (#1082) -- as well as the hyphenated
+    /// `java.util.UUID` form.
+    #[test]
+    fn cluster_id_accepts_kafka_base64_and_hyphenated_uuid_forms() {
+        let _guard = env_guard();
+        let id = uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
+
+        let base64 =
+            Args::try_parse_from(["krabka-broker", "--cluster-id", "AQIDBAUGBwgJCgsMDQ4PEA"])
+                .expect("parse base64 cluster id");
+        assert!(base64.cluster_id == Some(id));
+
+        let hyphenated = Args::try_parse_from(["krabka-broker", "--cluster-id", &id.to_string()])
+            .expect("parse hyphenated cluster id");
+        assert!(hyphenated.cluster_id == Some(id));
+
+        assert!(
+            Args::try_parse_from(["krabka-broker", "--cluster-id", "not-a-cluster-id"]).is_err()
+        );
+    }
 
     #[test]
     fn profiling_policy_reads_environment_and_cli_wins() {
