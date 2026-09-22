@@ -123,7 +123,7 @@ hex = { workspace = true }
 # audit event so a per-broker divergence in the set is visible afterwards.
 sha2 = { workspace = true }
 tonic = { workspace = true }
-exponential-backoff = "2.1.0"
+exponential-backoff = "2.1.1"
 
 # Heap profiling via jemalloc. Unix-only: tikv-jemallocator does not build on
 # Windows. The `heap-profiling` feature activates this dep; the global
@@ -234,7 +234,7 @@ wiremock = "0.6"
 # `ci.yml`'s `bench` job is what executes these, nightly and on demand, against
 # a criterion `main` baseline it carries between runs. `krabka-log` declares
 # the same dependency for `benches/log.rs`.
-criterion = { version = "5.0.1", package = "codspeed-criterion-compat" }
+criterion = { version = "5.0.2", package = "codspeed-criterion-compat" }
 
 # The produce hot path: `prepare_batch`'s verbatim-versus-owned decision and
 # the log append behind it, over the record shapes a real producer sends.
