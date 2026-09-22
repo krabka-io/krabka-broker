@@ -202,3 +202,42 @@ impl RuntimeFileConfig {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use assert2::check;
+    use krabka_units::{Time, convert::TimeExt as _};
+
+    use super::*;
+    use crate::config::BrokerConfig;
+
+    #[test]
+    fn apply_core_updates_broker_config() {
+        let mut runtime = RuntimeFileConfig {
+            startup_leader_wait_timeout: Some(Time::from_secs(42)),
+            ..Default::default()
+        };
+        let mut cfg = BrokerConfig::default();
+        check!(cfg.startup_leader_wait_timeout != Time::from_secs(42));
+        check!(runtime.apply_core(&mut cfg).is_ok());
+        check!(cfg.startup_leader_wait_timeout == Time::from_secs(42));
+    }
+
+    #[test]
+    fn apply_replication_updates_fetchers_and_rejects_zero() {
+        let mut runtime = RuntimeFileConfig {
+            replica_fetchers: Some(4),
+            ..Default::default()
+        };
+        let mut cfg = BrokerConfig::default();
+        check!(cfg.replication.fetchers == 1);
+        check!(runtime.apply_replication(&mut cfg).is_ok());
+        check!(cfg.replication.fetchers == 4);
+
+        let mut zero_runtime = RuntimeFileConfig {
+            replica_fetchers: Some(0),
+            ..Default::default()
+        };
+        check!(zero_runtime.apply_replication(&mut cfg).is_err());
+    }
+}
