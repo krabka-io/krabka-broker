@@ -468,6 +468,12 @@ mod tests {
 
     /// The all-supported case in the same table Kafka's issue laid out: a
     /// request naming only `TOPIC` still succeeds and returns the topic.
+    /// Real Kafka's `handleListConfigResources` enumerates every topic in the
+    /// metadata cache for `TOPIC`, internal topics included, so the expected
+    /// set is built from the live image (`collect_resources`) rather than
+    /// hardcoded to just the seeded topic — a running broker also carries
+    /// `__consumer_offsets`, seeded at startup like real Kafka does. Same
+    /// pattern as `cluster_describe_configs_gates_the_enumeration`.
     #[tokio::test]
     async fn v1_all_supported_types_still_succeed() {
         let (broker_handle, _dir) =
@@ -485,14 +491,16 @@ mod tests {
         let bytes = handle(&broker, VERSION, 123, &req, &ctx).expect("handle");
         let resp = decode_response(&bytes);
 
+        let topics = collect_resources(
+            &broker.controller.current_image(),
+            VERSION,
+            &[RESOURCE_TYPE_TOPIC],
+        );
+        assert!(topics.iter().any(|r| r.resource_name == "t-a"));
         let expected = ListConfigResourcesResponse {
             throttle_time_ms: 0,
             error_code: codes::NONE,
-            config_resources: vec![ConfigResource {
-                resource_name: "t-a".to_string(),
-                resource_type: RESOURCE_TYPE_TOPIC,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }],
+            config_resources: topics,
             unknown_tagged_fields: UnknownTaggedFields::default(),
         };
         assert!(resp == expected);
