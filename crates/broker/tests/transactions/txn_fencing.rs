@@ -102,7 +102,12 @@ struct Case {
 /// the coordinator does not hold with `PRODUCER_FENCED` (90), before it
 /// re-initialises anything. A caller that names no identity at all — every
 /// request below v3, and every first initialisation — is admitted, which is
-/// what lets a replacement producer take a transactional id over.
+/// what lets a replacement producer take a transactional id over. A caller
+/// that names the entry's producer id at the epoch it held *before* the
+/// entry's last bump is admitted too: Kafka's `isValidProducerId` treats that
+/// as a retry of the call that made the bump (the response to that call may
+/// have been lost), and answers the entry's current, unchanged identity
+/// rather than fencing it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn init_producer_id_fences_a_stale_producer_identity() {
     use krabka_protocol::owned::init_producer_id_request::InitProducerIdRequest;
@@ -123,7 +128,7 @@ async fn init_producer_id_fences_a_stale_producer_identity() {
     let cases = [
         case("no identity supplied", None, 0),
         case("the live identity", Some((0, 0)), 0),
-        case("a stale epoch", Some((0, -1)), 90),
+        case("the epoch before the last bump (a retry)", Some((0, -1)), 0),
         case("an unreached epoch", Some((0, 1)), 90),
         case("another producer id", Some((1, 0)), 90),
         case("another producer id at a stale epoch", Some((1, -1)), 90),
@@ -166,6 +171,15 @@ async fn init_producer_id_fences_a_stale_producer_identity() {
             assert!(
                 (response.producer_id, response.producer_epoch) == (-1, -1),
                 "a fenced InitProducerId returns no identity: {response:?}"
+            );
+        } else if name == "the epoch before the last bump (a retry)" {
+            // A retry answers the entry's current identity unchanged: it
+            // writes nothing, so the epoch this call named (the one before
+            // the last bump) does not become the live epoch.
+            assert!(
+                (response.producer_id, response.producer_epoch) == (producer_id, producer_epoch),
+                "a retried InitProducerId returns the identity already on \
+                 record, unchanged: {response:?}"
             );
         }
     }
