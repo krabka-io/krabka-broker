@@ -120,7 +120,15 @@ async fn fetch_over(
 
     let next_fetch_offset = match resp.snapshot_id {
         Some(snapshot_id) => {
-            install_snapshot(config, conn, target, snapshot_id, image_tx, store).await?
+            install_snapshot(
+                config,
+                conn,
+                (target, resp.leader_epoch),
+                snapshot_id,
+                image_tx,
+                store,
+            )
+            .await?
         }
         None => apply_fetch_records(fetch_offset, &resp.records, image_tx),
     };

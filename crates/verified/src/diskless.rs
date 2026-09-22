@@ -458,6 +458,8 @@ mod tests {
             (10, 10, -1, 0, (true, 10)),
             (-1, 10, 0, 0, (false, 0)),
             (10, -1, 0, 0, (false, 0)),
+            (10, 10, 0, -1, (false, -1)),
+            (0, 0, 0, 0, (false, 0)),
         ] {
             let decision = diskless_trim_decision(frontier, high_watermark, lag, current);
             check!(decision.should_trim == expected.0);
@@ -599,6 +601,23 @@ mod tests {
         assert2::assert!(diskless_span_extension(10, 5, 15, 7, false, 12).is_none());
         assert2::assert!(diskless_span_extension(u64::MAX, 1, 0, 1, true, 2).is_none());
 
+        // Boundary tests for retention prefix:
+        check!(
+            diskless_retention_prefix(&[100, 200], &[10, 10], &[10, 20], None, None, 10, 1_000,)
+                == 0,
+            "floor equal to last_offset does not delete"
+        );
+        check!(
+            diskless_retention_prefix(&[500, 900], &[10, 10], &[10, 20], Some(500), None, 0, 1_000,)
+                == 0,
+            "horizon equal to max_timestamp does not delete"
+        );
+        check!(
+            diskless_retention_prefix(&[100, 200], &[0, 10], &[10, 20], None, Some(10), 0, 1_000,)
+                == 0,
+            "zero size debt with zero byte len does not delete"
+        );
+
         assert2::assert!(
             diskless_batch_step(None, 0, 10, 0, 0, 1, 5) == DisklessBatchStep::Skip(10)
         );
@@ -609,7 +628,14 @@ mod tests {
             diskless_batch_step(Some(10), 20, 10, 2, 0, 1, 20) == DisklessBatchStep::Continue(30)
         );
         assert2::assert!(
+            diskless_batch_step(Some(20), 20, 10, 2, 0, 1, 20) == DisklessBatchStep::Continue(30)
+        );
+        assert2::assert!(
             diskless_batch_step(Some(10), 20, 10, 2, 0, 1, 19) == DisklessBatchStep::Stop
+        );
+        assert2::assert!(diskless_batch_step(None, 0, 0, 0, 0, 1, 5) == DisklessBatchStep::Invalid);
+        assert2::assert!(
+            diskless_batch_step(None, 0, 10, 0, -1, 1, 5) == DisklessBatchStep::Invalid
         );
         assert2::assert!(
             diskless_batch_step(None, usize::MAX, 1, 0, 0, 0, usize::MAX)

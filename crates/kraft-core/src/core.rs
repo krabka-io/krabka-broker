@@ -246,7 +246,8 @@ impl QuorumStateMachine {
             Event::ReceiveEndQuorumEpoch {
                 leader_id,
                 leader_epoch,
-            } => self.handle_end_quorum_epoch(log, leader_id, leader_epoch, now),
+                successor_rank,
+            } => self.handle_end_quorum_epoch(log, leader_id, leader_epoch, successor_rank, now),
             Event::ReceiveFetch {
                 from,
                 fetch_epoch,
@@ -296,7 +297,7 @@ mod tests {
     use krabka_units::prelude::{millis, secs};
 
     use super::*;
-    use crate::core::test_support::{FakeLog, voters};
+    use crate::core::test_support::{FakeLog, machine, voters};
 
     #[test]
     fn election_deadline_is_the_configured_extent_plus_integer_jitter() {
@@ -350,5 +351,11 @@ mod tests {
                 "case {name}"
             );
         }
+    }
+
+    #[test]
+    fn me_returns_configured_node_id() {
+        let m = machine(NodeId(42), &[NodeId(42)]);
+        check!(m.me() == NodeId(42));
     }
 }

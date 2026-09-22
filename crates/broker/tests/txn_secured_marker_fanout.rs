@@ -457,14 +457,23 @@ const ADMIN_PASS: &str = "admin-secret";
 const CLIENT_USER: &str = "client";
 const CLIENT_PASS: &str = "client-secret";
 
-/// Run the brokers with an ACL authorizer. `admin` is the only super user.
-/// The broker user and the client user get their ACLs from the test.
+/// Run the brokers with an ACL authorizer. `admin` and `ANONYMOUS` are the
+/// super users. The broker user and the client user get their ACLs from the
+/// test.
+///
+/// The controller listener of this cluster is `PLAINTEXT`, so every peer on it
+/// is `ANONYMOUS`, and each controller request is authorized for that
+/// principal (#684). Kafka's answer for that setup is
+/// `super.users=User:ANONYMOUS`. Without it the raft peers refuse each other
+/// and the cluster never registers.
 fn apply_acls(cfg: &mut BrokerConfig) {
     for (user, pass) in [(ADMIN_USER, ADMIN_PASS), (CLIENT_USER, CLIENT_PASS)] {
         cfg.plain_credentials
             .insert(user.to_string(), pass.to_string());
     }
-    cfg.super_users = std::iter::once(ADMIN_USER.to_string()).collect();
+    cfg.super_users = [ADMIN_USER.to_string(), "ANONYMOUS".to_string()]
+        .into_iter()
+        .collect();
     cfg.authorizer = Arc::new(SimpleAclAuthorizer::new(cfg.super_users.clone()));
 }
 
@@ -504,6 +513,7 @@ impl<R: ProtocolRequest, const V: i16> ProtocolRequest for At<R, V> {
     const API_KEY: i16 = R::API_KEY;
     const MIN_VERSION: i16 = V;
     const MAX_VERSION: i16 = V;
+    const LATEST_STABLE_VERSION: i16 = V;
     const FLEXIBLE_MIN: i16 = R::FLEXIBLE_MIN;
     type Response = R::Response;
 }

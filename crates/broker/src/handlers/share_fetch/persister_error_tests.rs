@@ -41,7 +41,8 @@ use crate::{
     broker::BrokerHandle,
     codes,
     test_support::{
-        decode_response, encode_request, peer, principal, request_context, start_broker_with,
+        decode_response, encode_request, initialize_share_state, peer, principal, request_context,
+        start_broker_with,
     },
 };
 
@@ -246,6 +247,10 @@ fn topic_uuid(topic_id: WireUuid) -> uuid::Uuid {
     uuid::Uuid::from_bytes(topic_id.0)
 }
 
+async fn initialize_state(broker: &BrokerHandle, group: &str, topic_id: WireUuid) {
+    initialize_share_state(broker, group, topic_uuid(topic_id), 0).await;
+}
+
 /// What a client and the partition cache show after an acknowledgement
 /// whose state write the coordinator fenced.
 #[derive(Debug, PartialEq, Eq)]
@@ -278,6 +283,7 @@ async fn a_fenced_state_write_fails_the_acknowledgement_and_drops_the_partition(
     for api in [Api::ShareAcknowledge, Api::ShareFetch] {
         let name = format!("fenced-{api:?}");
         let topic_id = create_topic(&broker, &name).await;
+        initialize_state(&broker, &name, topic_id).await;
         let opened = share_fetch(&broker, &name, 0, topic_id, None).await;
         assert!(opened.error_code == codes::NONE, "{opened:?}");
         produce_two_records(&broker, &name).await;
@@ -411,6 +417,62 @@ async fn a_failed_state_read_fails_the_partition_and_caches_nothing() {
         ) == (
             (codes::COORDINATOR_NOT_AVAILABLE, Vec::new(), false),
             (codes::COORDINATOR_NOT_AVAILABLE, false)
+        )
+    );
+    broker.shutdown().await;
+}
+
+/// The share coordinator refuses a read of a key that the group coordinator
+/// has not initialized with `INVALID_REQUEST`, as Kafka's
+/// `ShareCoordinatorShard.maybeGetReadStateError` does. The persister reports
+/// that code as a share-state partition error, and Kafka's
+/// `fetchPersisterError` maps it to `UNKNOWN_SERVER_ERROR`. The partition does
+/// not start from `share.auto.offset.reset`, and the broker caches nothing.
+/// Once the group coordinator initializes the key, the next fetch reads it.
+#[tokio::test]
+async fn a_read_of_an_uninitialized_state_fails_until_the_state_is_initialized() {
+    const GROUP: &str = "uninitialized-group";
+    let (broker, _dir) = start().await;
+    let topic_id = create_topic(&broker, "uninitialized").await;
+    let shared = broker.broker_arc_for_test();
+    let persister = shared
+        .group_coordinator
+        .share_persister()
+        .cloned()
+        .expect("share persister");
+    let cached = || {
+        shared
+            .share_partition_leaders
+            .peek_for_test(GROUP, topic_uuid(topic_id), 0)
+            .is_some()
+    };
+
+    let read_code = match persister
+        .read_state(GROUP, topic_uuid(topic_id), 0, 0)
+        .await
+    {
+        Err(crate::error::BrokerError::SharePartitionState { code, .. }) => Some(code),
+        _ => None,
+    };
+    let refused = share_fetch(&broker, GROUP, 0, topic_id, None).await;
+    let refused_cached = cached();
+    initialize_state(&broker, GROUP, topic_id).await;
+    let opened = share_fetch(&broker, GROUP, 1, topic_id, None).await;
+    let opened_cached = cached();
+    produce_two_records(&broker, "uninitialized").await;
+    let fetched = share_fetch(&broker, GROUP, 2, topic_id, None).await;
+
+    assert!(
+        (
+            read_code,
+            (refused.error_code, refused_cached),
+            (opened.error_code, opened_cached),
+            (fetched.error_code, acquired(&fetched))
+        ) == (
+            Some(codes::INVALID_REQUEST),
+            (codes::UNKNOWN_SERVER_ERROR, false),
+            (codes::NONE, true),
+            (codes::NONE, vec![(0, 1)])
         )
     );
     broker.shutdown().await;

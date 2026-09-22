@@ -268,7 +268,7 @@ async fn a_jvm_consumer_reads_across_barrier_markers_unchanged() {
                 replicas: 1,
                 configs: BTreeMap::default(),
             }],
-            krabka_units::secs(10),
+            krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(10)),
         )
         .await
         .expect("create topic");

@@ -7,7 +7,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use krabka_audit::FileEd25519Signer;
-use krabka_client_admin::{AdminClient, TopicConfigOverrides, TopicMetadata};
+use krabka_client_admin::{
+    AdminClient, TopicConfigOverrides, TopicMetadata, groups::ListGroupsOptions,
+};
 use krabka_client_core::{
     Client, CoordinatorKeyType, build_find_coordinator, coordinator_endpoint,
     security::ClientSecurity,
@@ -747,11 +749,18 @@ async fn fetch_group_offsets(
 ) -> Result<GroupOffsetsFile, BackupError> {
     let mut admin = connect_admin(bootstrap_server, security).await?;
     let groups = admin
-        .list_groups()
+        .list_groups(&ListGroupsOptions::default())
         .await
-        .map_err(|error| BackupError::Cluster(format!("ListGroups: {error}")))?;
+        .map_err(|error| BackupError::Cluster(format!("ListGroups: {error}")))?
+        .all()
+        .map_err(|failure| {
+            BackupError::Cluster(format!(
+                "ListGroups on broker {}: {} ({})",
+                failure.node_id, failure.error.name, failure.error.code
+            ))
+        })?;
     let mut captured = GroupOffsetsFile::default();
-    for group in groups {
+    for group in groups.into_iter().map(|listing| listing.group_id) {
         let fetched = admin
             .list_consumer_group_offsets(&group)
             .await

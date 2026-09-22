@@ -85,6 +85,8 @@ tracing-subscriber = { workspace = true }
 opentelemetry-proto = { workspace = true }
 clap = { workspace = true, features = ["env"] }
 uuid = { workspace = true }
+# KIP-1071 streams group metadata hash: Kafka hashes topic metadata with XXH3.
+twox-hash = { workspace = true }
 futures-util = { workspace = true }
 object_store = { workspace = true }
 prometheus-client.workspace = true
@@ -183,7 +185,7 @@ krabka-client-consumer = { version = "0.4" }
 krabka-client-producer = { version = "0.4" }
 # M19's live-registry acceptance runs the real first-party service instead of
 # another HTTP fixture. Keep it on the production serde dependency's revision.
-krabka-schema-registry = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "d7cb5501ea57b0e8ee38953841a7b27762fedb77" }
+krabka-schema-registry = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "ba727e31ca113f8acae0af719984fef5fcbbec4c" }
 krabka-audit-registry = { package = "krabka-audit", version = "0.4.0" }
 prost-reflect = { workspace = true }
 # Host-side raw `Client::send(DescribeGroupsRequest)` against the

@@ -100,9 +100,10 @@ pub(crate) async fn run_liveness_tick(
         let image = controller.current_image();
         if !state.was_leader {
             liveness
-                .seed_brokers(crate::heartbeat::controller_state::replicated_fences(
-                    &image,
-                ))
+                .seed_term(
+                    controller.current_controller_epoch(),
+                    crate::heartbeat::controller_state::replicated_fences(&image),
+                )
                 .await;
         }
         liveness
