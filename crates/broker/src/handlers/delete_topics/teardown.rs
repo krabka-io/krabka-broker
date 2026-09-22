@@ -54,3 +54,36 @@ pub(super) fn remove_local_partitions(
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use assert2::check;
+
+    use super::*;
+    use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
+
+    #[tokio::test]
+    async fn remove_local_partitions_removes_partition_directory() {
+        let (broker_handle, dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let broker = broker_handle.broker_arc_for_test();
+
+        let part_dir = dir.path().join("doomed_topic-0");
+        std::fs::create_dir_all(&part_dir).unwrap();
+        check!(part_dir.exists());
+
+        remove_local_partitions(
+            &broker,
+            &broker.partitions,
+            &[dir.path().to_path_buf()],
+            "doomed_topic",
+            Some(Uuid::new_v4()),
+            vec![PartitionIndex(0)],
+        );
+
+        check!(!part_dir.exists());
+        broker_handle.shutdown().await;
+    }
+}
