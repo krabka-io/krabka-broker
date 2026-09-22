@@ -32,3 +32,33 @@ pub(super) fn cluster_describe_denied(
     );
     allow == AuthorizationResult::Deny
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use assert2::check;
+
+    use super::*;
+    use crate::test_support::{
+        DenyAll, peer, principal, request_context,
+        start_broker_with_authorizer_no_audit as start_broker,
+    };
+
+    #[tokio::test]
+    async fn cluster_describe_denied_reports_authorizer_outcome() {
+        let (denied_handle, _dir1) = start_broker(Arc::new(DenyAll)).await;
+        let denied_broker = denied_handle.broker_arc_for_test();
+        let (allowed_handle, _dir2) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let allowed_broker = allowed_handle.broker_arc_for_test();
+
+        let p = principal("alice");
+        let peer_addr = peer();
+        let ctx = request_context(&p, &peer_addr, "describe-quorum-authz-test");
+
+        let image = denied_broker.controller.current_image();
+        check!(cluster_describe_denied(&denied_broker, &image, &ctx));
+        check!(!cluster_describe_denied(&allowed_broker, &image, &ctx));
+    }
+}
