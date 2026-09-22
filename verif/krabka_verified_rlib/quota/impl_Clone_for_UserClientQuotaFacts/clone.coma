@@ -1,0 +1,27 @@
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/quota.rs" 34 27 34 32 *)
+
+(* <quota::UserClientQuotaFacts as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_QuotaCandidatePresence = Absent | Present
+
+type t_UserClientQuotaFacts = {
+  exact_pair: t_QuotaCandidatePresence;
+  exact_client_default_user: t_QuotaCandidatePresence;
+  default_client_exact_user: t_QuotaCandidatePresence;
+  default_pair: t_QuotaCandidatePresence;
+  exact_user: t_QuotaCandidatePresence;
+  exact_client: t_QuotaCandidatePresence;
+  default_user: t_QuotaCandidatePresence;
+  default_client: t_QuotaCandidatePresence }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_UserClientQuotaFacts [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/quota.rs" 34 27 34 32]
+  (self: t_UserClientQuotaFacts) (return (x: t_UserClientQuotaFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_UserClientQuotaFacts = Any.any_l () | & self: t_UserClientQuotaFacts = self ])
+  [ return (result: t_UserClientQuotaFacts) -> (! return {result}) ]

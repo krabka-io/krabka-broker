@@ -1,0 +1,26 @@
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/producer_id.rs" 18 27 18 32 *)
+
+(* <producer_id::ProducerIdBlockAllocationDecision as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.int.Int32
+use creusot.prelude.Any
+
+type t_ProducerIdBlockPlan = { first: Int64.t; len: Int32.t; next: Int64.t }
+
+type t_ProducerIdBlockAllocationDecision =
+  | BrokerNotRegistered
+  | StaleBrokerEpoch
+  | InvalidFrontier
+  | Exhausted
+  | Allocate t_ProducerIdBlockPlan
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_ProducerIdBlockAllocationDecision [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/producer_id.rs" 18 27 18 32]
+  (self: t_ProducerIdBlockAllocationDecision) (return (x: t_ProducerIdBlockAllocationDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ProducerIdBlockAllocationDecision = Any.any_l () | & self: t_ProducerIdBlockAllocationDecision = self ])
+  [ return (result: t_ProducerIdBlockAllocationDecision) -> (! return {result}) ]

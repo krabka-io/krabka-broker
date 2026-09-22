@@ -1,0 +1,23 @@
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 32 27 32 32 *)
+
+(* <transaction::TransactionReaperCompletionDecision as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_TransactionReaperCompletionDecision =
+  | RejectMalformed
+  | RejectStaleIdentity
+  | RejectChangedPreparedState
+  | AlreadyComplete
+  | Proceed
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_TransactionReaperCompletionDecision [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 32 27 32 32]
+  (self: t_TransactionReaperCompletionDecision) (return (x: t_TransactionReaperCompletionDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_TransactionReaperCompletionDecision = Any.any_l ()
+  | & self: t_TransactionReaperCompletionDecision = self ])
+  [ return (result: t_TransactionReaperCompletionDecision) -> (! return {result}) ]

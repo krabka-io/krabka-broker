@@ -2,9 +2,9 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_init_producer_id_fencing_decision": {
+      "vc_clone_QuotaCandidatePresence": {
         "prover": "alt-ergo",
-        "time": 0.01
+        "time": 0.013
       }
     }
   }

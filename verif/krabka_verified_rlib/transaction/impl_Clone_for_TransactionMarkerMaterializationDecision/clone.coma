@@ -1,0 +1,24 @@
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 20 27 20 32 *)
+
+(* <transaction::TransactionMarkerMaterializationDecision as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_TransactionMarkerMaterializationDecision =
+  | RejectMalformed
+  | RejectProducerEpoch
+  | RejectCoordinatorEpoch
+  | Retry
+  | AppendWithoutOffsetPublication
+  | AppendAndPublishOffsets
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_TransactionMarkerMaterializationDecision [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 20 27 20 32]
+  (self: t_TransactionMarkerMaterializationDecision) (return (x: t_TransactionMarkerMaterializationDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_TransactionMarkerMaterializationDecision = Any.any_l ()
+  | & self: t_TransactionMarkerMaterializationDecision = self ])
+  [ return (result: t_TransactionMarkerMaterializationDecision) -> (! return {result}) ]

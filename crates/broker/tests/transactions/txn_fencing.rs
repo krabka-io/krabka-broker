@@ -123,10 +123,12 @@ async fn init_producer_id_fences_a_stale_producer_identity() {
     let cases = [
         case("no identity supplied", None, 0),
         case("the live identity", Some((0, 0)), 0),
-        case("a stale epoch", Some((0, -1)), 90),
+        // Kafka refuses half an identity with INVALID_REQUEST, whatever the
+        // entry holds (`KafkaApis.handleInitProducerIdRequest`).
+        case("no epoch", Some((0, -1)), 42),
         case("an unreached epoch", Some((0, 1)), 90),
         case("another producer id", Some((1, 0)), 90),
-        case("another producer id at a stale epoch", Some((1, -1)), 90),
+        case("another producer id and no epoch", Some((1, -1)), 42),
     ];
 
     for (index, case) in cases.into_iter().enumerate() {
@@ -139,6 +141,29 @@ async fn init_producer_id_fences_a_stale_producer_identity() {
         // which would move the identity the next case starts from.
         let tid = format!("kip360-tid-{index}");
         let (producer_id, producer_epoch) = init_transaction(&client, &tid).await;
+
+        if name == "a stale epoch" {
+            // A fresh entry's `last_producer_epoch` starts at -1, KIP-360's
+            // `NO_PRODUCER_EPOCH` sentinel for "no bump has happened yet" --
+            // the same value one epoch below a freshly allocated epoch 0.
+            // Probing that epoch straight away would land on the sentinel
+            // and read as a retry of a bump that never happened, not as a
+            // stale epoch. A real bump first gives the entry a genuine,
+            // recorded last epoch, so the probe below tests staleness
+            // against that epoch instead of colliding with the sentinel.
+            let bump = client
+                .send(InitProducerIdRequest {
+                    transactional_id: Some(tid.clone()),
+                    transaction_timeout_ms: 60_000,
+                    producer_id,
+                    producer_epoch,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            assert!(bump.error_code == 0, "priming bump for {name}: {bump:?}");
+        }
+
         let (request_id, request_epoch) = match offset {
             None => (-1, -1),
             Some((id_offset, epoch_offset)) => {
@@ -165,7 +190,7 @@ async fn init_producer_id_fences_a_stale_producer_identity() {
         if expected != 0 {
             assert!(
                 (response.producer_id, response.producer_epoch) == (-1, -1),
-                "a fenced InitProducerId returns no identity: {response:?}"
+                "a refused InitProducerId returns no identity: {response:?}"
             );
         }
     }

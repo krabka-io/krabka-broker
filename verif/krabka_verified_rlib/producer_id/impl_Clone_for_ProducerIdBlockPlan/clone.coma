@@ -1,0 +1,19 @@
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/producer_id.rs" 10 27 10 32 *)
+
+(* <producer_id::ProducerIdBlockPlan as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.int.Int32
+use creusot.prelude.Any
+
+type t_ProducerIdBlockPlan = { first: Int64.t; len: Int32.t; next: Int64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_ProducerIdBlockPlan [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/producer_id.rs" 10 27 10 32]
+  (self: t_ProducerIdBlockPlan) (return (x: t_ProducerIdBlockPlan)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ProducerIdBlockPlan = Any.any_l () | & self: t_ProducerIdBlockPlan = self ])
+  [ return (result: t_ProducerIdBlockPlan) -> (! return {result}) ]

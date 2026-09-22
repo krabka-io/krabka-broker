@@ -1,0 +1,15 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_init_producer_id_identity_decision": {
+        "prover": "alt-ergo",
+        "time": 0.026
+      },
+      "vc_set_EXHAUSTED_PRODUCER_EPOCH": {
+        "prover": "alt-ergo",
+        "time": 0.011
+      }
+    }
+  }
+}
