@@ -86,3 +86,136 @@ pub(in crate::txn) async fn sweep_once(
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use assert2::{assert, check};
+    use krabka_ids::PartitionIndex;
+    use krabka_log::{Log, LogConfig, ProducerId};
+    use krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord};
+    use krabka_units::{mebibytes, millis, secs};
+    use tempfile::{TempDir, tempdir};
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::{
+        partition::Partition,
+        partition_registry::PartitionRegistry,
+        test_support::FakeMetadataSource,
+        txn::{
+            bootstrap,
+            state::{TxnEntry, TxnState},
+            version::TxnVersion,
+        },
+    };
+
+    const TID: &str = "tid-id-expiration";
+
+    fn image_with_leader(leader: NodeId, leader_epoch: i32) -> MetadataImage {
+        let mut image = MetadataImage::new(Uuid::from_u128(1));
+        image.apply(&MetadataRecord::V1Topic(TopicRecord {
+            name: bootstrap::TOPIC.to_string(),
+            topic_id: Uuid::from_u128(1),
+            partitions: 1,
+            replication_factor: 1,
+        }));
+        image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+            topic: bootstrap::TOPIC.to_string(),
+            partition: 0,
+            leader,
+            replicas: vec![leader],
+            isr: vec![leader],
+            leader_epoch: krabka_metadata::LeaderEpoch(leader_epoch),
+            ..Default::default()
+        }));
+        image
+    }
+
+    fn transaction_state_partition(log_root: &std::path::Path) -> Arc<Partition> {
+        let partition_dir = crate::log_dir::partition_dir(log_root, bootstrap::TOPIC, 0);
+        std::fs::create_dir_all(&partition_dir).expect("partition dir");
+        let log = Log::open(&partition_dir, LogConfig::default()).expect("open log");
+        crate::broker::spawn_partition(
+            bootstrap::TOPIC.to_string(),
+            PartitionIndex(0),
+            log_root.to_path_buf(),
+            log,
+            crate::log_dir_status::LogDirRegistry::default(),
+            Arc::new(crate::producer_state::ProducerState::new()),
+            false,
+        )
+    }
+
+    async fn seeded_coordinator(entry: TxnEntry) -> (Arc<TxnCoordinator>, TempDir) {
+        let dir = tempdir().expect("tempdir");
+        let partitions = Arc::new(PartitionRegistry::new());
+        partitions.insert(
+            bootstrap::TOPIC.into(),
+            PartitionIndex(0),
+            transaction_state_partition(dir.path()),
+        );
+        let coordinator = Arc::new(TxnCoordinator::new(
+            NodeId(1),
+            partitions,
+            Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
+            1,
+            mebibytes(1),
+        ));
+        coordinator
+            .refresh_leader_partitions(&image_with_leader(NodeId(1), 0))
+            .await
+            .finished()
+            .await;
+        coordinator
+            .put(entry, TxnVersion::Verified)
+            .await
+            .expect("seed __transaction_state");
+        (coordinator, dir)
+    }
+
+    fn complete_commit_entry(last_update_ms: i64) -> TxnEntry {
+        let mut entry = TxnEntry::new_empty(TID.to_owned(), ProducerId(1000), 3, 60_000, 0);
+        entry.state = TxnState::CompleteCommit;
+        entry.last_update_ms = last_update_ms;
+        entry
+    }
+
+    #[tokio::test]
+    async fn run_ticks_and_expires_until_shutdown() {
+        let (coordinator, _dir) = seeded_coordinator(complete_commit_entry(0)).await;
+        let source = Arc::new(
+            FakeMetadataSource::builder()
+                .image(image_with_leader(NodeId(1), 0))
+                .build(),
+        );
+        let shutdown = CancellationToken::new();
+
+        check!(coordinator.get(TID).is_some());
+
+        let task = tokio::spawn(run(
+            Arc::clone(&coordinator),
+            Arc::clone(&source) as Arc<dyn MetadataSource>,
+            secs(10),
+            millis(1000),
+            shutdown.clone(),
+        ));
+
+        let mut expired = false;
+        for _ in 0..100 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            if coordinator.get(TID).is_none() {
+                expired = true;
+                break;
+            }
+        }
+        check!(expired, "run should execute sweep and expire complete txn");
+        check!(
+            !task.is_finished(),
+            "run should stay active until cancelled"
+        );
+
+        shutdown.cancel();
+        let res = tokio::time::timeout(std::time::Duration::from_secs(2), task).await;
+        assert!(res.is_ok(), "task should exit promptly on shutdown");
+    }
+}
