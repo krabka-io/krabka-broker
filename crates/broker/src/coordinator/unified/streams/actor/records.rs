@@ -19,8 +19,7 @@ use crate::coordinator::unified::{
             StreamsGroupTargetAssignmentMemberValue, StreamsGroupTargetAssignmentMetadataValue,
         },
         state::{
-            StoredTopologyHandle, StreamsGroupState, StreamsGroupStatePhase,
-            StreamsMemberAssignmentState, StreamsMemberState,
+            StoredTopologyHandle, StreamsGroupState, StreamsGroupStatePhase, StreamsMemberState,
         },
     },
 };
@@ -109,6 +108,8 @@ fn current_assignment_value(m: &StreamsMemberState) -> StreamsGroupCurrentMember
         standby: m.standby.clone(),
         warmup: m.warmup.clone(),
         active_pending_revocation: m.active_pending_revocation.clone(),
+        standby_pending_revocation: m.standby_pending_revocation.clone(),
+        warmup_pending_revocation: m.warmup_pending_revocation.clone(),
     }
 }
 
@@ -208,6 +209,8 @@ pub(super) fn apply_seed(actor: &mut ActorState, seed: StreamsGroupSeed) {
             m.standby = cur.standby;
             m.warmup = cur.warmup;
             m.active_pending_revocation = cur.active_pending_revocation;
+            m.standby_pending_revocation = cur.standby_pending_revocation;
+            m.warmup_pending_revocation = cur.warmup_pending_revocation;
             // The member got this assignment before the load.
             m.sent_tasks = [m.active.clone(), m.standby.clone(), m.warmup.clone()];
         }
@@ -223,19 +226,13 @@ pub(super) fn apply_seed(actor: &mut ActorState, seed: StreamsGroupSeed) {
             state.target.warmup.insert(mid, tv.warmup);
         }
     }
-    state.phase = if state.members.is_empty() {
-        StreamsGroupStatePhase::Empty
-    } else if actor.topology.is_none() {
+    state.arm_loaded_rebalance_timeouts(std::time::Instant::now());
+    state.phase = if actor.topology.is_none() {
         StreamsGroupStatePhase::NotReady
-    } else if state
-        .members
-        .values()
-        .any(|member| member.assignment_state != StreamsMemberAssignmentState::Stable)
-    {
-        StreamsGroupStatePhase::Reconciling
     } else {
-        StreamsGroupStatePhase::Stable
+        StreamsGroupStatePhase::Reconciling
     };
+    state.refresh_phase();
     state.dirty = false;
 }
 
@@ -282,6 +279,8 @@ mod tests {
                 standby: BTreeMap::new(),
                 warmup: BTreeMap::new(),
                 active_pending_revocation: BTreeMap::new(),
+                standby_pending_revocation: BTreeMap::new(),
+                warmup_pending_revocation: BTreeMap::new(),
             },
         );
         let mut target = std::collections::HashMap::new();

@@ -18,8 +18,8 @@
 //!   (int8), then six `[]TaskIds`: the three roles, and then the three
 //!   pending-revocation lists in the same role order.
 //!
-//! The broker revokes active tasks only, so it writes the standby and warmup
-//! revocation lists empty, and drops them again on decode.
+//! Every role has its own revocation list, as in Kafka's
+//! `CurrentAssignmentBuilder`.
 
 use std::collections::BTreeMap;
 
@@ -55,8 +55,8 @@ impl From<StreamsMemberAssignmentState> for StreamsMemberWireState {
     fn from(v: StreamsMemberAssignmentState) -> Self {
         match v {
             StreamsMemberAssignmentState::Stable => Self::Stable,
-            StreamsMemberAssignmentState::UnrevokedActiveTasks => Self::UnrevokedTasks,
-            StreamsMemberAssignmentState::UnreleasedActiveTasks => Self::UnreleasedTasks,
+            StreamsMemberAssignmentState::UnrevokedTasks => Self::UnrevokedTasks,
+            StreamsMemberAssignmentState::UnreleasedTasks => Self::UnreleasedTasks,
         }
     }
 }
@@ -65,8 +65,8 @@ impl From<StreamsMemberWireState> for StreamsMemberAssignmentState {
     fn from(v: StreamsMemberWireState) -> Self {
         match v {
             StreamsMemberWireState::Stable => Self::Stable,
-            StreamsMemberWireState::UnrevokedTasks => Self::UnrevokedActiveTasks,
-            StreamsMemberWireState::UnreleasedTasks => Self::UnreleasedActiveTasks,
+            StreamsMemberWireState::UnrevokedTasks => Self::UnrevokedTasks,
+            StreamsMemberWireState::UnreleasedTasks => Self::UnreleasedTasks,
         }
     }
 }
@@ -123,7 +123,8 @@ impl StreamsGroupTargetAssignmentMemberValue {
 }
 
 /// Key v22 value: a member's current in-flight task assignment, with the
-/// reconciliation epochs and state, and any active task pending revocation.
+/// reconciliation epochs and state, and the tasks of each role pending
+/// revocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamsGroupCurrentMemberAssignmentValue {
     pub member_epoch: i32,
@@ -133,6 +134,8 @@ pub struct StreamsGroupCurrentMemberAssignmentValue {
     pub standby: BTreeMap<String, Vec<i32>>,
     pub warmup: BTreeMap<String, Vec<i32>>,
     pub active_pending_revocation: BTreeMap<String, Vec<i32>>,
+    pub standby_pending_revocation: BTreeMap<String, Vec<i32>>,
+    pub warmup_pending_revocation: BTreeMap<String, Vec<i32>>,
 }
 
 impl Default for StreamsGroupCurrentMemberAssignmentValue {
@@ -145,6 +148,8 @@ impl Default for StreamsGroupCurrentMemberAssignmentValue {
             standby: BTreeMap::new(),
             warmup: BTreeMap::new(),
             active_pending_revocation: BTreeMap::new(),
+            standby_pending_revocation: BTreeMap::new(),
+            warmup_pending_revocation: BTreeMap::new(),
         }
     }
 }
@@ -161,8 +166,8 @@ impl StreamsGroupCurrentMemberAssignmentValue {
         encode_task_map(&mut buf, &self.standby);
         encode_task_map(&mut buf, &self.warmup);
         encode_task_map(&mut buf, &self.active_pending_revocation);
-        encode_task_map(&mut buf, &BTreeMap::new());
-        encode_task_map(&mut buf, &BTreeMap::new());
+        encode_task_map(&mut buf, &self.standby_pending_revocation);
+        encode_task_map(&mut buf, &self.warmup_pending_revocation);
         put_empty_tagged_fields(&mut buf);
         buf.freeze()
     }
@@ -177,8 +182,8 @@ impl StreamsGroupCurrentMemberAssignmentValue {
         let standby = decode_task_map(&mut buf)?;
         let warmup = decode_task_map(&mut buf)?;
         let active_pending_revocation = decode_task_map(&mut buf)?;
-        let _standby_pending_revocation = decode_task_map(&mut buf)?;
-        let _warmup_pending_revocation = decode_task_map(&mut buf)?;
+        let standby_pending_revocation = decode_task_map(&mut buf)?;
+        let warmup_pending_revocation = decode_task_map(&mut buf)?;
         skip_tagged_fields(&mut buf)?;
         Ok(Self {
             member_epoch,
@@ -188,6 +193,8 @@ impl StreamsGroupCurrentMemberAssignmentValue {
             standby,
             warmup,
             active_pending_revocation,
+            standby_pending_revocation,
+            warmup_pending_revocation,
         })
     }
 }
@@ -292,6 +299,8 @@ mod tests {
             standby: BTreeMap::new(),
             warmup: BTreeMap::new(),
             active_pending_revocation: pending,
+            standby_pending_revocation: maplit::btreemap! {"1".to_string() => vec![0]},
+            warmup_pending_revocation: maplit::btreemap! {"2".to_string() => vec![4]},
         };
         assert!(StreamsGroupCurrentMemberAssignmentValue::decode(&v.encode()).unwrap() == v);
     }
@@ -305,8 +314,8 @@ mod tests {
         assert!(StreamsMemberWireState::from_i8(0).is_err());
         for state in [
             StreamsMemberAssignmentState::Stable,
-            StreamsMemberAssignmentState::UnrevokedActiveTasks,
-            StreamsMemberAssignmentState::UnreleasedActiveTasks,
+            StreamsMemberAssignmentState::UnrevokedTasks,
+            StreamsMemberAssignmentState::UnreleasedTasks,
         ] {
             let wire = StreamsMemberWireState::from(state);
             assert!(StreamsMemberAssignmentState::from(wire) == state);

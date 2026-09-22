@@ -19,8 +19,7 @@ use crate::{
         config::StreamsGroupConfig,
         persistence::StreamsGroupTopologyValue,
         state::{
-            StreamsGroupState, StreamsGroupStatePhase, StreamsMemberAssignmentState,
-            StreamsMemberState, StreamsTargetAssignment,
+            StreamsGroupState, StreamsGroupStatePhase, StreamsMemberState, StreamsTargetAssignment,
         },
         topology,
     },
@@ -210,19 +209,9 @@ pub(super) fn compute_and_install_target(
         return;
     }
     actor.state.install_target(target);
-
-    let pending_reconciliation = actor
-        .state
-        .members
-        .values()
-        .any(|m| m.assignment_state != StreamsMemberAssignmentState::Stable);
-    actor.state.phase = if actor.state.members.is_empty() {
-        StreamsGroupStatePhase::Empty
-    } else if pending_reconciliation {
-        StreamsGroupStatePhase::Reconciling
-    } else {
-        StreamsGroupStatePhase::Stable
-    };
+    // A computed target ends `NotReady`; the members then reconcile toward it.
+    actor.state.phase = StreamsGroupStatePhase::Reconciling;
+    actor.state.refresh_phase();
     actor.state.dirty = false;
 }
 
