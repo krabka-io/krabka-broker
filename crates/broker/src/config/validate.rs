@@ -300,11 +300,6 @@ impl BrokerConfig {
                 "inter_broker_server_name must be nonempty".into(),
             ));
         }
-        if self.transaction_min_timeout >= self.transaction_max_timeout {
-            return Err(BrokerError::InvalidRuntimeConfig(
-                "transaction minimum timeout must be below maximum".into(),
-            ));
-        }
         // `transaction_max_timeout` is written into an `int32` millisecond wire
         // field, so the saturating conversion must not be the value that pins it.
         if self.transaction_max_timeout.millis_i32() == i32::MAX {
@@ -464,9 +459,6 @@ mod tests {
             }),
             ("inter_broker_server_name must be nonempty", |c| {
                 c.inter_broker_server_name.clear();
-            }),
-            ("transaction minimum timeout must be below maximum", |c| {
-                c.transaction_min_timeout = c.transaction_max_timeout;
             }),
             (
                 "transaction maximum timeout must be below i32::MAX milliseconds",

@@ -132,12 +132,6 @@ impl RuntimeFileConfig {
         );
         set_runtime_time_millis!(
             runtime,
-            transaction_min_timeout,
-            cfg.transaction_min_timeout,
-            positive_i32
-        );
-        set_runtime_time_millis!(
-            runtime,
             transaction_max_timeout,
             cfg.transaction_max_timeout,
             positive_i32

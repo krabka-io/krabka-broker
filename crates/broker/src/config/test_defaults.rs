@@ -145,7 +145,6 @@ impl BrokerConfig {
             transaction_state_replication_factor: 3,
             transaction_state_segment_bytes: mebibytes(100),
             transaction_state_min_isr: 2,
-            transaction_min_timeout: secs(1),
             transaction_max_timeout: minutes(15),
             barrier_state_num_partitions: 50,
             barrier_state_replication_factor: 3,
@@ -336,7 +335,7 @@ mod tests {
 
     use super::*;
 
-    fn additional_policy_snapshot(config: BrokerConfig) -> [String; 31] {
+    fn additional_policy_snapshot(config: BrokerConfig) -> [String; 30] {
         [
             config.self_registration_max_attempts.to_string(),
             config.observer_fetch_max.bytes_u64().to_string(),
@@ -385,7 +384,6 @@ mod tests {
                 .state_topic_num_partitions
                 .to_string(),
             config.transaction_state_num_partitions.to_string(),
-            config.transaction_min_timeout.millis_i32().to_string(),
             config.transaction_max_timeout.millis_i32().to_string(),
         ]
     }
@@ -425,7 +423,6 @@ mod tests {
                     "1048576",
                     "50",
                     "50",
-                    "1000",
                     "900000",
                 ]
         );

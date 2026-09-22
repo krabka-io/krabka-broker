@@ -143,7 +143,6 @@ impl Default for BrokerConfig {
             transaction_state_replication_factor: 3,
             transaction_state_segment_bytes: mebibytes(100),
             transaction_state_min_isr: 2,
-            transaction_min_timeout: secs(1),
             transaction_max_timeout: minutes(15),
             barrier_state_num_partitions: 50,
             barrier_state_replication_factor: 3,

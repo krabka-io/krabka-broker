@@ -520,7 +520,6 @@ Validated operational policy loaded from `[runtime]`.
 | `telemetry_max_decompression_ratio` | string | broker default | ratio | Maximum accepted decompression ratio for a KIP-714 telemetry payload. |
 | `tls_reload_interval` | string | broker default | duration | Cadence at which the TLS watcher polls the certificate, key, and client-CA files and rebuilds the server configuration if any changed. Zero disables the periodic watcher. |
 | `transaction_max_timeout` | string | broker default | duration | Maximum transaction timeout a producer may request, Kafka's `transaction.max.timeout.ms`. |
-| `transaction_min_timeout` | string | broker default | duration | Minimum transaction timeout a producer may request. |
 | `transaction_recovery_read_max` | string | broker default | byte size | Maximum bytes requested by one `__transaction_state` recovery read. |
 | `transaction_state_min_isr` | integer (int32) | broker default |  | `min.insync.replicas` of the `__transaction_state` internal topic, Kafka's `transaction.state.log.min.isr`. |
 | `transaction_state_num_partitions` | integer (int32) | broker default |  | Partition count of the `__transaction_state` internal topic, Kafka's `transaction.state.log.num.partitions`. |
