@@ -10,16 +10,21 @@
 //! the active controller unconditionally (`forwardToController`), so this
 //! handler does the same: [`krabka_raft::ControllerHandle::forward_raw`]
 //! (reached through [`crate::metadata_source::MetadataSource::forward_raw`])
-//! sends the raw request on to the active controller whenever this node
-//! itself is not the leader, whether it is a broker-only observer or a
-//! combined/controller node. A node that IS the active controller answers
-//! locally, from [`krabka_raft::ControllerHandle::quorum_snapshot`], with
-//! the same [`krabka_raft::describe_quorum`] builder the controller listener
-//! uses for a request that arrives there directly (#814, #1034) -- one
+//! sends the request on to the active controller whenever this node itself
+//! is not the leader, whether it is a broker-only observer or a
+//! combined/controller node. It goes wrapped in a KIP-590 `Envelope`
+//! (`forward` submodule) carrying THIS caller's own principal and address,
+//! not this node's inter-broker identity, so the leader authorizes and
+//! audits the caller that actually asked (review of #1034). A node that IS
+//! the active controller answers locally, from
+//! [`krabka_raft::ControllerHandle::quorum_snapshot`], with the same
+//! [`krabka_raft::describe_quorum`] builder the controller listener uses for
+//! a request that arrives there directly (#814, #1034) -- one
 //! implementation on both listeners.
 //!
-//! The authorization gate lives in `authz`. This file holds the wire entry
-//! point: the gate, the forward, and the local answer.
+//! The authorization gate lives in `authz`, the envelope wrap/unwrap in
+//! `forward`. This file holds the wire entry point: the gate, the forward,
+//! and the local answer.
 
 use bytes::Bytes;
 use krabka_protocol::{
@@ -31,6 +36,7 @@ use krabka_protocol::{
 };
 
 mod authz;
+mod forward;
 
 use self::authz::cluster_describe_denied;
 use crate::{broker::Broker, codes, error::BrokerError};
@@ -63,13 +69,36 @@ pub(crate) async fn handle(
 
     // Forward to the active controller whenever this node is not it (#392,
     // #1034): a broker-only observer always forwards; a combined/controller
-    // node forwards only while it is not the leader.
+    // node forwards only while it is not the leader. Wrapped in a KIP-590
+    // `Envelope` carrying this caller's own identity (`forward::build`), not
+    // this node's inter-broker one -- see the module doc and `forward`'s.
+    let envelope_body = forward::build(broker, req_bytes, version, ctx)?;
     if let Some(forwarded) = broker
         .controller
-        .forward_raw(55, version, Bytes::copy_from_slice(req_bytes))
+        .forward_raw(
+            forward::ENVELOPE_API_KEY,
+            forward::ENVELOPE_VERSION,
+            envelope_body,
+        )
         .await
     {
-        return forwarded.map_err(BrokerError::from);
+        return match forwarded {
+            Ok(envelope_response) => forward::unwrap_response(broker, &envelope_response, version),
+            // No leader known yet (startup or an election in progress), an
+            // unresolvable voter address, or the dial/round-trip itself
+            // failed: a Kafka client expects a typed
+            // `NOT_LEADER_OR_FOLLOWER` for this transient case, not a
+            // dropped connection (review of #1034) -- the generic registry
+            // dispatch loop has no response shape to build for a bare
+            // `Err(BrokerError)` here and just closes the connection.
+            Err(_raft_error) => crate::handlers::encode_response(
+                &DescribeQuorumResponse {
+                    error_code: codes::NOT_LEADER_OR_FOLLOWER,
+                    ..Default::default()
+                },
+                version,
+            ),
+        };
     }
 
     let mut cur: &[u8] = req_bytes;

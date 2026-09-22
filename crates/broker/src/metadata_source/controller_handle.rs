@@ -81,7 +81,7 @@ impl MetadataSource for ControllerHandle {
         version: i16,
         body: bytes::Bytes,
     ) -> Option<Result<bytes::Bytes, RaftError>> {
-        // DescribeQuorum (api_key=55) is the one broker-listener admin RPC a
+        // `DescribeQuorum` is the one broker-listener admin RPC a
         // combined/controller node forwards even when IT ITSELF runs a
         // raft voter: Kafka's `KafkaApis` forwards `DescribeQuorum`
         // unconditionally (`forwardToController`), unlike the KIP-853
@@ -89,7 +89,15 @@ impl MetadataSource for ControllerHandle {
         // locally instead of forwarding. A node that IS the active
         // controller answers locally, same as a broker-only observer's
         // writer never gets asked to forward its own leader.
-        if api_key != krabka_protocol::owned::describe_quorum_request::API_KEY
+        //
+        // The handler sends it wrapped in a KIP-590 `Envelope` (api_key=58),
+        // not the bare `DescribeQuorum` api_key=55, so the leader authorizes
+        // the caller's own identity rather than this node's inter-broker one
+        // (`crate::handlers::describe_quorum::forward`, review of #1034).
+        // Nothing else in this codebase forwards an `Envelope` through this
+        // method, so gating on its api key is exactly as exclusive as gating
+        // on `DescribeQuorum`'s own was.
+        if api_key != krabka_protocol::owned::envelope_request::API_KEY
             || ControllerHandle::quorum_snapshot(self).is_leader
         {
             return None;
