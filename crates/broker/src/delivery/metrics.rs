@@ -97,3 +97,50 @@ impl DeliveryMetrics for NoDeliveryMetrics {
     fn activation_late(&self, _lateness: Time) {}
     fn scheduler_woke(&self) {}
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use assert2::check;
+    use krabka_ids::PartitionIndex;
+    use krabka_log::Offset;
+    use krabka_units::Time;
+
+    use super::*;
+    use crate::metrics::{BrokerMetrics, PartitionLabel};
+
+    #[tokio::test]
+    async fn broker_delivery_metrics_records_watermark_lateness_and_wakeups() {
+        let metrics = BrokerMetrics::new();
+        let delivery_metrics = BrokerDeliveryMetrics::new(metrics.clone());
+
+        delivery_metrics.watermark_advanced(
+            "orders",
+            PartitionIndex(2),
+            PartitionDelivery {
+                watermark: Offset(42),
+                pending: 10,
+                next_deadline_ms: None,
+            },
+        );
+
+        let lbl = PartitionLabel {
+            topic: Arc::from("orders"),
+            partition: 2,
+        };
+        check!(metrics.delivery_watermark.get_or_create(&lbl).get() == 42);
+        check!(metrics.delivery_pending_records.get_or_create(&lbl).get() == 10);
+
+        check!(metrics.delivery_scheduler_wakeups_total.get() == 0);
+        delivery_metrics.scheduler_woke();
+        check!(metrics.delivery_scheduler_wakeups_total.get() == 1);
+
+        delivery_metrics.activation_late(Time::from_millis(250));
+        let mut buf = String::new();
+        let registry = metrics.registry.lock().await;
+        prometheus_client::encoding::text::encode(&mut buf, &registry).unwrap();
+        check!(buf.contains("krabka_broker_delivery_activation_lateness_seconds_count 1"));
+        check!(buf.contains("krabka_broker_delivery_activation_lateness_seconds_sum 0.25"));
+    }
+}
