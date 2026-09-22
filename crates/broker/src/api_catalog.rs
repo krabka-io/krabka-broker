@@ -931,6 +931,17 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "",
     },
     KipAnnotation {
+        key: "KIP-1038",
+        claim: "ListTransactions filters transactional ids by an RE2J-compiled pattern",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/list_transactions.rs",
+        tests: &[
+            "crates/broker/src/handlers/list_transactions.rs",
+            "crates/broker/src/re2j.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
         key: "KIP-1071",
         claim: "Streams groups: StreamsGroupHeartbeat and StreamsGroupDescribe",
         status: KipStatus::Implemented,
