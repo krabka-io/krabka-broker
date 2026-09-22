@@ -91,6 +91,20 @@ pub(crate) fn handle(
         return crate::handlers::encode_response(&resp, version);
     }
 
+    // Kafka's `KafkaApis.handleListConfigResources`: if any requested type is
+    // not in `ListConfigResourcesRequest.supportedResourceTypes()`, the whole
+    // request fails with `UNSUPPORTED_VERSION` and no resources, rather than
+    // silently dropping the type it does not recognize.
+    if version >= 1 && req.resource_types.iter().any(|rt| !is_supported_type(*rt)) {
+        let resp = ListConfigResourcesResponse {
+            throttle_time_ms: 0,
+            error_code: codes::UNSUPPORTED_VERSION,
+            config_resources: vec![],
+            ..Default::default()
+        };
+        return crate::handlers::encode_response(&resp, version);
+    }
+
     let resources = collect_resources(&image, version, &req.resource_types);
 
     let resp = ListConfigResourcesResponse {
@@ -102,12 +116,22 @@ pub(crate) fn handle(
     crate::handlers::encode_response(&resp, version)
 }
 
+/// Whether `rt` is one of the types `ListConfigResourcesRequest.
+/// supportedResourceTypes()` reports at v1: `TOPIC`, `BROKER`,
+/// `BROKER_LOGGER`, `CLIENT_METRICS`, `GROUP`.
+fn is_supported_type(rt: i8) -> bool {
+    DEFAULT_RESOURCE_TYPES.contains(&rt)
+}
+
 /// Resolve the effective filter and enumerate each requested type from the
 /// image. v0 gives client-metrics only. v1 with an empty list gives the
 /// default set. v1 with explicit types gives the caller's filter. The function
 /// is pure, so a test can call it without a broker. The output is sorted by
 /// `(resource_type, resource_name)`, so the wire payload is deterministic
-/// whatever the underlying iteration order in `MetadataImage` is.
+/// whatever the underlying iteration order in `MetadataImage` is. Callers at
+/// v1 must have already rejected any unsupported requested type with
+/// `UNSUPPORTED_VERSION`; this function assumes every entry in `requested` is
+/// one `collect_resources` knows how to enumerate.
 fn collect_resources(
     image: &krabka_metadata::MetadataImage,
     version: i16,
@@ -400,42 +424,79 @@ mod tests {
         assert!(out == expected);
     }
 
-    #[test]
-    fn v1_unknown_resource_type_returns_empty() {
-        let img = image_with_topics_and_brokers(&["t-a"], &[1]);
-        // type 64 is past every type KIP-1142 defines.
-        let out = collect_resources(&img, 1, &[64]);
-        assert!(
-            out.is_empty(),
-            "unsupported resource types silently drop; got {out:?}"
-        );
+    /// Kafka's `KafkaApis.handleListConfigResources`: a request naming a type
+    /// outside `ListConfigResourcesRequest.supportedResourceTypes()` answers
+    /// `UNSUPPORTED_VERSION` (35) for the whole request, with no resources —
+    /// even when the request also names types krabka does support. Type 64 is
+    /// past every type KIP-1142 defines.
+    #[tokio::test]
+    async fn v1_unsupported_resource_type_fails_the_whole_request() {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        seed_topic(&broker_handle, "t-a").await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("admin");
+        let peer = peer();
+        let ctx = test_context(&p, &peer);
+
+        let unsupported = ListConfigResourcesResponse {
+            throttle_time_ms: 0,
+            error_code: codes::UNSUPPORTED_VERSION,
+            config_resources: vec![],
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        };
+
+        for (name, resource_types) in [
+            ("unsupported type alone", vec![64]),
+            (
+                "supported type mixed with unsupported",
+                vec![RESOURCE_TYPE_TOPIC, 64, RESOURCE_TYPE_BROKER],
+            ),
+        ] {
+            let req = encode_request(&ListConfigResourcesRequest {
+                resource_types,
+                ..Default::default()
+            });
+
+            let bytes = handle(&broker, VERSION, 123, &req, &ctx).expect("handle");
+            let resp = decode_response(&bytes);
+
+            assert2::check!(resp == unsupported, "case {name}");
+        }
+        broker_handle.shutdown().await;
     }
 
-    #[test]
-    fn v1_mixed_supported_and_unsupported_returns_only_supported() {
-        let img = image_with_topics_and_brokers(&["t-a"], &[1]);
-        let out = collect_resources(
-            &img,
-            1,
-            &[
-                RESOURCE_TYPE_TOPIC,
-                64, // past every KIP-1142 type — dropped
-                RESOURCE_TYPE_BROKER,
-            ],
-        );
-        let expected = vec![
-            ConfigResource {
+    /// The all-supported case in the same table Kafka's issue laid out: a
+    /// request naming only `TOPIC` still succeeds and returns the topic.
+    #[tokio::test]
+    async fn v1_all_supported_types_still_succeed() {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        seed_topic(&broker_handle, "t-a").await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("admin");
+        let peer = peer();
+        let ctx = test_context(&p, &peer);
+
+        let req = encode_request(&ListConfigResourcesRequest {
+            resource_types: vec![RESOURCE_TYPE_TOPIC],
+            ..Default::default()
+        });
+        let bytes = handle(&broker, VERSION, 123, &req, &ctx).expect("handle");
+        let resp = decode_response(&bytes);
+
+        let expected = ListConfigResourcesResponse {
+            throttle_time_ms: 0,
+            error_code: codes::NONE,
+            config_resources: vec![ConfigResource {
                 resource_name: "t-a".to_string(),
                 resource_type: RESOURCE_TYPE_TOPIC,
                 unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-            ConfigResource {
-                resource_name: "1".to_string(),
-                resource_type: RESOURCE_TYPE_BROKER,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-        ];
-        assert!(out == expected);
+            }],
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        };
+        assert!(resp == expected);
+        broker_handle.shutdown().await;
     }
 
     #[test]
