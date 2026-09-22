@@ -4,6 +4,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use assert2::{assert, check};
+use krabka_metadata::{ClientQuotaRecord, MetadataRecord, QuotaEntity};
 use krabka_protocol::{
     owned::{
         delete_topics_request::DeleteTopicsRequest,
@@ -18,7 +19,7 @@ use super::{
     *,
 };
 use crate::{
-    broker::Broker,
+    broker::{Broker, BrokerHandle},
     codes,
     config::BreakGlassConfig,
     test_support::{
@@ -286,5 +287,153 @@ async fn invalid_topic_rows_answer_invalid_request_and_delete_nothing() {
         ));
     }
     assert!(actual == expected);
+    broker_handle.shutdown().await;
+}
+
+async fn seed_controller_quota(handle: &BrokerHandle, rate: f64) {
+    handle
+        .broker_arc_for_test()
+        .controller
+        .submit_change(vec![MetadataRecord::V1ClientQuota(ClientQuotaRecord {
+            entity: vec![
+                QuotaEntity {
+                    entity_type: "user".into(),
+                    entity_name: Some("admin".into()),
+                },
+                QuotaEntity {
+                    entity_type: "client-id".into(),
+                    entity_name: Some("admin-client".into()),
+                },
+            ],
+            config_key: "controller_mutation_rate".into(),
+            config_value: Some(rate),
+        })])
+        .await
+        .expect("seed quota");
+}
+
+#[tokio::test]
+async fn strict_delete_topics_rejects_after_quota_exhaustion() {
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let client = krabka_client_core::Client::builder()
+        .bootstrap(broker_handle.listen_addr().to_string())
+        .client_id("admin-client")
+        .build()
+        .await
+        .expect("client build");
+
+    let created = client
+        .send(
+            krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
+                topics: vec![
+                    krabka_protocol::owned::create_topics_request::CreatableTopic {
+                        name: "t1".to_string(),
+                        num_partitions: 5,
+                        replication_factor: 1,
+                        ..Default::default()
+                    },
+                    krabka_protocol::owned::create_topics_request::CreatableTopic {
+                        name: "t2".to_string(),
+                        num_partitions: 1,
+                        replication_factor: 1,
+                        ..Default::default()
+                    },
+                ],
+                timeout_ms: 5_000,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("CreateTopics");
+    assert!(
+        created.topics.iter().all(|t| t.error_code == codes::NONE),
+        "{created:?}"
+    );
+    broker_handle.wait_until_partition_present("t1", 0).await;
+    broker_handle.wait_until_partition_present("t2", 0).await;
+
+    seed_controller_quota(&broker_handle, 2.0).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let p = principal("admin");
+    let peer = peer();
+
+    let resp1 = drive(&broker, &request(vec![named_state("t1")]), &p, &peer).await;
+    assert!(resp1.responses.len() == 1);
+    assert!(resp1.responses[0].error_code == codes::NONE);
+    assert!(broker.controller.current_image().topic("t1").is_none());
+
+    let resp2 = drive(&broker, &request(vec![named_state("t2")]), &p, &peer).await;
+    assert!(resp2.responses.len() == 1);
+    assert!(resp2.responses[0].error_code == codes::THROTTLING_QUOTA_EXCEEDED);
+    assert!(resp2.throttle_time_ms > 0);
+    assert!(broker.controller.current_image().topic("t2").is_some());
+
+    broker_handle.shutdown().await;
+}
+
+#[tokio::test]
+async fn non_strict_delete_topics_allows_when_quota_exhausted() {
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let client = krabka_client_core::Client::builder()
+        .bootstrap(broker_handle.listen_addr().to_string())
+        .client_id("admin-client")
+        .build()
+        .await
+        .expect("client build");
+
+    let created = client
+        .send(
+            krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
+                topics: vec![
+                    krabka_protocol::owned::create_topics_request::CreatableTopic {
+                        name: "t1".to_string(),
+                        num_partitions: 5,
+                        replication_factor: 1,
+                        ..Default::default()
+                    },
+                    krabka_protocol::owned::create_topics_request::CreatableTopic {
+                        name: "t2".to_string(),
+                        num_partitions: 1,
+                        replication_factor: 1,
+                        ..Default::default()
+                    },
+                ],
+                timeout_ms: 5_000,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("CreateTopics");
+    assert!(
+        created.topics.iter().all(|t| t.error_code == codes::NONE),
+        "{created:?}"
+    );
+    broker_handle.wait_until_partition_present("t1", 0).await;
+    broker_handle.wait_until_partition_present("t2", 0).await;
+
+    seed_controller_quota(&broker_handle, 2.0).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let p = principal("admin");
+    let peer = peer();
+
+    let resp1 = drive(&broker, &request(vec![named_state("t1")]), &p, &peer).await;
+    assert!(resp1.responses[0].error_code == codes::NONE);
+
+    let req_v4 = DeleteTopicsRequest {
+        topic_names: vec!["t2".to_string()],
+        timeout_ms: 5_000,
+        ..Default::default()
+    };
+    let ctx = test_context(&p, &peer);
+    let req_bytes = crate::test_support::encode_request(&req_v4, 4);
+    let bytes = handle(&broker, 4, 124, &req_bytes, &ctx)
+        .await
+        .expect("handle");
+    let resp_v4: DeleteTopicsResponse = crate::test_support::decode_response(&bytes, 4);
+    assert!(resp_v4.responses.len() == 1);
+    assert!(resp_v4.responses[0].error_code == codes::NONE);
+    assert!(resp_v4.throttle_time_ms > 0);
+    assert!(broker.controller.current_image().topic("t2").is_none());
+
     broker_handle.shutdown().await;
 }
