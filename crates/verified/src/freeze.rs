@@ -448,6 +448,12 @@ mod tests {
         assert2::check!(
             freeze_scope_decision(
                 FreezeScopeRank::Prefix { length: 4 },
+                FreezeScopeRank::Prefix { length: 4 },
+            ) == FreezeScopeDecision::Keep
+        );
+        assert2::check!(
+            freeze_scope_decision(
+                FreezeScopeRank::Prefix { length: 4 },
                 FreezeScopeRank::Literal
             ) == FreezeScopeDecision::Replace
         );
@@ -457,6 +463,13 @@ mod tests {
                 FreezeScopeRank::Prefix { length: 5 }
             ) == FreezeScopeDecision::Keep
         );
+    }
+
+    #[test]
+    fn timestamp_window_boundaries() {
+        assert2::check!(freeze_timestamp_in_window(100, 100, 0));
+        assert2::check!(!freeze_timestamp_in_window(100, 100, -1));
+        assert2::check!(!freeze_timestamp_in_window(101, 100, 0));
     }
 
     #[test]

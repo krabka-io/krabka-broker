@@ -136,5 +136,9 @@ mod tests {
         assert2::assert!(select_break_glass_candidate(&[(20, 0, 0), (10, 9, 9)]) == Some(1));
         assert2::assert!(select_break_glass_candidate(&[(10, 4, 9), (10, 3, 99)]) == Some(1));
         assert2::assert!(select_break_glass_candidate(&[(10, 3, 9), (10, 3, 8)]) == Some(1));
+        assert2::assert!(select_break_glass_candidate(&[(10, 3, 8), (10, 3, 8)]) == Some(0));
+        assert2::assert!(select_break_glass_candidate(&[(10, 3, 9), (20, 2, 8)]) == Some(0));
+        assert2::assert!(select_break_glass_candidate(&[(10, 3, 9), (20, 3, 2)]) == Some(0));
+        assert2::assert!(select_break_glass_candidate(&[(10, 3, 9), (10, 4, 2)]) == Some(0));
     }
 }

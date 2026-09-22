@@ -596,4 +596,85 @@ mod tests {
 
         check!(stats.dropped() >= 1);
     }
+
+    #[test]
+    fn fired_reports_timer_outcome() {
+        check!(fired(Ok(()), "test"));
+        check!(!fired(Err(TimeError::InstantOverflow), "test"));
+    }
+
+    #[tokio::test]
+    async fn pending_loss_marker_advances_since_checkpoint_without_spool() {
+        let (signer, _pubkey) = test_signer();
+        let sink = Arc::new(MemorySink::default());
+        let (log, rx) = AuditLog::new(16);
+        let losses = rx.pending_losses();
+        losses.add(1);
+        let dir = tempfile::tempdir().unwrap();
+        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        let mut params =
+            crate::log::test_support::params(sink.clone(), spool, Arc::new(AuditStats::new()));
+        params.signer = Some(signer);
+        params.checkpoint_every_n = 2;
+        params.spool = None;
+        let handle = tokio::spawn(AuditWriter::new(rx, params).run());
+
+        log.emit(life(1));
+        crate::log::test_support::await_until(
+            "loss marker, event, and checkpoint reached sink",
+            || {
+                sink.records()
+                    .iter()
+                    .any(|r| r.class == AuditEventClass::Checkpoint)
+            },
+        )
+        .await;
+        drop(log);
+        handle.await.unwrap();
+
+        let recs = sink.records();
+        check!(
+            recs.iter()
+                .filter(|r| r.class == AuditEventClass::RecordsLost)
+                .count()
+                == 1
+        );
+        check!(
+            recs.iter()
+                .filter(|r| r.class == AuditEventClass::ApplicationLifecycle)
+                .count()
+                == 1
+        );
+        check!(
+            recs.iter()
+                .filter(|r| r.class == AuditEventClass::Checkpoint)
+                .count()
+                >= 1
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_loss_marker_advances_since_checkpoint_with_spool() {
+        let (signer, _pubkey) = test_signer();
+        let sink = Arc::new(crate::log::test_support::FailableSink::default());
+        sink.set_fail(true);
+        let stats = Arc::new(AuditStats::new());
+        let (log, rx) = AuditLog::new(16);
+        let losses = rx.pending_losses();
+        losses.add(1);
+        let dir = tempfile::tempdir().unwrap();
+        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        let mut params = crate::log::test_support::params(sink.clone(), spool, Arc::clone(&stats));
+        params.signer = Some(signer);
+        params.checkpoint_every_n = 2;
+        let handle = tokio::spawn(AuditWriter::new(rx, params).run());
+
+        log.emit(life(1));
+        crate::log::test_support::await_until("loss marker, event, and checkpoint spooled", || {
+            stats.spooled() >= 3
+        })
+        .await;
+        drop(log);
+        handle.await.unwrap();
+    }
 }

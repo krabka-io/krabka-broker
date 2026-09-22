@@ -14,7 +14,7 @@ pub(super) enum JoinOutcome {
     Accepted,
     NotLeader,
     TimedOut,
-    NotCaughtUp,
+    Refused,
     Unexpected(i16),
 }
 
@@ -51,23 +51,25 @@ pub(super) fn log_join_outcome(
             JoinOutcome::NotLeader
         }
         codes::REQUEST_TIMED_OUT => {
-            tracing::debug!(
-                node_id = self_id.0,
-                server = %target,
-                "auto-join: reconfiguration in progress on leader; retrying"
-            );
-            JoinOutcome::TimedOut
-        }
-        codes::INVALID_REQUEST => {
-            // Observer not yet caught up within the lag bound. Keep replicating
-            // (openraft is doing that in the background) and retry shortly.
+            // Kafka's `AddVoterHandler` answers this for a pending voter change
+            // and for a candidate that is not caught up yet. Keep replicating
+            // and retry shortly.
             tracing::debug!(
                 node_id = self_id.0,
                 server = %target,
                 msg = ?resp.error_message,
-                "auto-join: not yet caught up; retrying"
+                "auto-join: reconfiguration pending or not yet caught up; retrying"
             );
-            JoinOutcome::NotCaughtUp
+            JoinOutcome::TimedOut
+        }
+        codes::INVALID_REQUEST => {
+            tracing::debug!(
+                node_id = self_id.0,
+                server = %target,
+                msg = ?resp.error_message,
+                "auto-join: request refused; retrying"
+            );
+            JoinOutcome::Refused
         }
         other => {
             tracing::warn!(
@@ -110,7 +112,7 @@ mod tests {
         );
         assert2::assert!(
             (log_join_outcome(NodeId(1), target, &response(codes::INVALID_REQUEST)))
-                == (JoinOutcome::NotCaughtUp)
+                == (JoinOutcome::Refused)
         );
         assert2::assert!(
             (log_join_outcome(NodeId(1), target, &response(1234)))

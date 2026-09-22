@@ -21,6 +21,7 @@ use krabka_broker::{BootstrapMode, Broker, BrokerConfig};
 use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
+        create_topics_request::{CreatableTopic, CreateTopicsRequest},
         delete_share_group_state_request::{
             DeleteShareGroupStateRequest, DeleteStateData, PartitionData as DeletePart,
         },
@@ -46,6 +47,7 @@ const COORDINATOR_LOAD_IN_PROGRESS: i16 = 14;
 const COORDINATOR_NOT_AVAILABLE: i16 = 15;
 const NOT_COORDINATOR: i16 = 16;
 const FENCED_STATE_EPOCH: i16 = 124;
+const INVALID_REQUEST: i16 = 42;
 
 fn not_ready(code: i16) -> bool {
     code == COORDINATOR_LOAD_IN_PROGRESS
@@ -71,6 +73,30 @@ async fn connect(bootstrap: &str) -> Arc<Client> {
             .await
             .unwrap(),
     )
+}
+
+/// Create a one-partition data topic and return its topic id. The share
+/// coordinator refuses a read or a write of a topic partition that the
+/// metadata image does not hold.
+async fn create_topic(client: &Client, name: &str) -> uuid::Uuid {
+    let resp = client
+        .send(CreateTopicsRequest {
+            topics: vec![CreatableTopic {
+                name: name.into(),
+                num_partitions: 1,
+                replication_factor: 1,
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .expect("CreateTopics");
+    assert!(
+        resp.topics[0].error_code == 0,
+        "topic create failed: {resp:?}"
+    );
+    uuid::Uuid::from_bytes(resp.topics[0].topic_id.0)
 }
 
 fn wire(tid: uuid::Uuid) -> WireUuid {
@@ -254,7 +280,7 @@ async fn find_coordinator_share_returns_broker() {
 async fn persister_round_trip() {
     let (_b, bootstrap, _d) = boot().await;
     let client = connect(&bootstrap).await;
-    let tid = uuid::Uuid::from_bytes([9u8; 16]);
+    let tid = create_topic(&client, "round-trip").await;
 
     // Bootstrap __share_group_state, then initialize (retrying until led).
     let (fc, _) = find_share(&client, &share_coordinator_key("g1", tid, 0)).await;
@@ -320,7 +346,7 @@ async fn persister_round_trip() {
         s.delivery_complete_count
     );
 
-    // Delete, then a fresh read returns the missing/initial sentinel.
+    // Delete, then a fresh read is refused: the key has no state.
     let del = client
         .send(DeleteShareGroupStateRequest {
             group_id: "g1".into(),
@@ -344,15 +370,15 @@ async fn persister_round_trip() {
 
     let after = read_state(&client, "g1", tid, 0).await;
     assert!(
-        after.error_code == 0,
-        "read-after-delete error: {}",
-        after.error_code
-    );
-    assert!(
-        after.start_offset == -1 && after.state_batches.is_empty(),
-        "deleted key must read as missing/initial, got start_offset {} batches {:?}",
-        after.start_offset,
-        after.state_batches
+        after
+            == krabka_protocol::owned::read_share_group_state_response::PartitionResult {
+                partition: 0,
+                error_code: INVALID_REQUEST,
+                error_message: Some(
+                    "Read operation on uninitialized share partition not allowed.".to_owned()
+                ),
+                ..Default::default()
+            }
     );
 }
 
@@ -362,7 +388,7 @@ async fn persister_round_trip() {
 async fn write_fences_stale_state_epoch() {
     let (_b, bootstrap, _d) = boot().await;
     let client = connect(&bootstrap).await;
-    let tid = uuid::Uuid::from_bytes([11u8; 16]);
+    let tid = create_topic(&client, "stale-state-epoch").await;
 
     let (fc, _) = find_share(&client, &share_coordinator_key("g1", tid, 0)).await;
     assert!(fc == 0);
@@ -396,13 +422,13 @@ async fn write_fences_stale_state_epoch() {
 async fn state_survives_restart() {
     let dir = tempfile::TempDir::new().unwrap();
     let log_dir = dir.path().to_path_buf();
-    let tid = uuid::Uuid::from_bytes([13u8; 16]);
 
-    {
+    let tid = {
         let broker = Broker::start(BrokerConfig::for_tests(log_dir.clone()))
             .await
             .unwrap();
         let client = connect(&broker.listen_addr().to_string()).await;
+        let tid = create_topic(&client, "survives-restart").await;
 
         let (fc, _) = find_share(&client, &share_coordinator_key("g1", tid, 0)).await;
         assert!(fc == 0);
@@ -426,7 +452,8 @@ async fn state_survives_restart() {
 
         broker.wait_until_share_spso("g1", tid, 0, 7).await;
         broker.shutdown().await;
-    }
+        tid
+    };
 
     {
         let mut cfg = BrokerConfig::for_tests(log_dir);

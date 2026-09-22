@@ -391,10 +391,15 @@ mod tests {
         check!(
             restore_record_coordinates(i64::MIN, 0, i64::MIN, 0, 0) == Some((i64::MIN, i64::MIN))
         );
+        check!(restore_record_coordinates(10, 0, i64::MIN + 5, 0, -5) == Some((10, i64::MIN)));
     }
 
     #[test]
     fn rewritten_headers_are_checked_and_have_legal_producer_semantics() {
+        check!(restore_rewritten_batch_header((0, 0, 1), (true, false, -1, -1, -1)) == Some(1));
+        check!(restore_rewritten_batch_header((10, 1, 1), (true, false, -1, -1, -1)) == None);
+        check!(restore_rewritten_batch_header((10, 0, 2), (true, false, -1, -1, -1)) == None);
+        check!(restore_rewritten_batch_header((0, -1, 1), (false, false, -1, -1, -1)) == None);
         check!(restore_rewritten_batch_header((10, 2, 2), (false, false, -1, -1, -1)) == Some(13));
         check!(restore_rewritten_batch_header((10, 2, 0), (false, true, 7, 2, 4)) == Some(13));
         check!(restore_rewritten_batch_header((10, 0, 1), (true, true, 7, 2, -1)) == Some(11));

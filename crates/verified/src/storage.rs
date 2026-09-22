@@ -249,7 +249,16 @@ mod tests {
                     keep_active: true,
                 }
         );
+        assert2::check!(
+            local_truncation_plan(&[0, 10], Some(20), 20)
+                == LocalTruncationPlan {
+                    retained_sealed: 2,
+                    keep_active: false,
+                }
+        );
 
+        assert2::check!(truncation_relative_offset(0, 0) == Some(0));
+        assert2::check!(truncation_relative_offset(0, i64::from(u32::MAX)) == Some(u32::MAX));
         assert2::check!(truncation_relative_offset(10, 15) == Some(5));
         assert2::check!(truncation_relative_offset(-1, 0).is_none());
         assert2::check!(truncation_relative_offset(10, 9).is_none());
@@ -263,6 +272,7 @@ mod tests {
 
     #[test]
     fn local_append_coordinates_are_exact_and_fail_closed() {
+        assert2::check!(local_append_coordinates(0, 0, 0) == Some((0, 1)));
         assert2::check!(local_append_coordinates(10, 10, 2) == Some((12, 13)));
         assert2::check!(local_append_coordinates(10, 9, 0).is_none());
         assert2::check!(local_append_coordinates(-1, -1, 0).is_none());
@@ -323,6 +333,7 @@ mod tests {
             (1, 2, false, StoreFinished),
             (1, 3, false, StoreHidden),
             (2, 3, false, StoreHidden),
+            (2, 4, false, Reject),
             (3, 4, false, Remove),
             (3, 2, false, Reject),
             (4, 1, false, Reject),

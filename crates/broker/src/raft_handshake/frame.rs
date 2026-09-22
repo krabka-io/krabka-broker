@@ -69,10 +69,24 @@ pub(super) async fn write_response<R: Encode>(
     corr_id: i32,
     resp: &R,
 ) -> Result<(), RaftHandshakeError> {
+    let mut body = Vec::with_capacity(resp.encoded_len(api_version));
+    resp.encode(&mut body, api_version)
+        .map_err(|e| RaftHandshakeError::Protocol(e.to_string()))?;
+    write_response_body(stream, api_key, api_version, corr_id, &body).await
+}
+
+/// Prepends the `ResponseHeader` (v0 or v1 by the rules below) to an encoded
+/// response body, and writes the length-prefixed frame.
+pub(super) async fn write_response_body(
+    stream: &mut dyn ClientDuplex,
+    api_key: i16,
+    api_version: i16,
+    corr_id: i32,
+    body: &[u8],
+) -> Result<(), RaftHandshakeError> {
     let flexible = is_response_header_flexible(api_key, api_version);
-    let body_len = resp.encoded_len(api_version);
     let header_len = 4 + usize::from(flexible);
-    let total = header_len + body_len;
+    let total = header_len + body.len();
     let total_u32 = u32::try_from(total)
         .map_err(|_| RaftHandshakeError::Protocol("response frame exceeds u32".into()))?;
 
@@ -82,8 +96,7 @@ pub(super) async fn write_response<R: Encode>(
     if flexible {
         out.push(0); // empty tagged-fields
     }
-    resp.encode(&mut out, api_version)
-        .map_err(|e| RaftHandshakeError::Protocol(e.to_string()))?;
+    out.extend_from_slice(body);
     stream.write_all(&out).await?;
     Ok(())
 }

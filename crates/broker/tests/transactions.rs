@@ -15,6 +15,8 @@
 // `.rs` file would become another test binary.
 #[path = "transactions/txn_consume_process_produce.rs"]
 mod txn_consume_process_produce;
+#[path = "transactions/txn_coordinator_failover.rs"]
+mod txn_coordinator_failover;
 #[path = "transactions/txn_fencing.rs"]
 mod txn_fencing;
 #[path = "transactions/txn_harness.rs"]
@@ -23,3 +25,5 @@ mod txn_harness;
 mod txn_isolation;
 #[path = "transactions/txn_sasl.rs"]
 mod txn_sasl;
+
+mod support;

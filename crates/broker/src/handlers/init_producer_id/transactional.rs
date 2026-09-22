@@ -483,14 +483,18 @@ mod tests {
             PartitionIndex(0),
             Arc::clone(&part),
         );
-        let coordinator = TxnCoordinator::new(
+        let coordinator = Arc::new(TxnCoordinator::new(
             NodeId(1),
             partitions,
             Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
             1,
             krabka_units::mebibytes(1),
-        );
-        coordinator.refresh_leader_partitions(&image).await;
+        ));
+        coordinator
+            .refresh_leader_partitions(&image)
+            .await
+            .finished()
+            .await;
 
         let mut entry = TxnEntry::new_empty(tid.to_string(), ProducerId(1000), 3, 60_000, 0);
         entry.state = TxnState::CompleteCommit;
@@ -499,7 +503,7 @@ mod tests {
             .put(entry, TxnVersion::Verified)
             .await
             .expect("seed __transaction_state");
-        (Arc::new(coordinator), part)
+        (coordinator, part)
     }
 
     /// Seeds one `TxnEntry` into a coordinator that already leads its

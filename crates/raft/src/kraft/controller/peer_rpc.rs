@@ -80,10 +80,25 @@ impl Engine {
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(node = self.me.0, epoch))]
-    pub fn broadcast_end_quorum_epoch(&self, epoch: Epoch) {
+    /// Sends `EndQuorumEpoch` to the other voters. `preferred_successors` is
+    /// the core's ranking of them, most caught up first. Each goes into
+    /// `PreferredCandidates` with its directory id from the voter set.
+    pub fn broadcast_end_quorum_epoch(&self, epoch: Epoch, preferred_successors: &[NodeId]) {
+        let voters = &self.core.quorum_state().voters;
         let body = wire::PeerRequest::EndQuorumEpoch {
             leader_id: self.me,
             leader_epoch: epoch,
+            preferred_candidates: preferred_successors
+                .iter()
+                .map(|&id| {
+                    (
+                        id,
+                        voters
+                            .get(id)
+                            .map_or(uuid::Uuid::nil(), |voter| voter.directory_id),
+                    )
+                })
+                .collect(),
         }
         .encode();
         for peer in self.other_voters() {
@@ -131,8 +146,11 @@ impl Engine {
         if leader_id == self.me {
             return;
         }
+        let state = self.core.quorum_state();
         let body = wire::PeerRequest::FetchSnapshot {
+            cluster_id: Some(state.cluster_id),
             from: self.me,
+            current_leader_epoch: i32::try_from(state.leader_epoch).unwrap_or(i32::MAX),
             snapshot_id,
             position,
             // KIP-595 `FetchSnapshot.MaxBytes` is an `int32`; the quantity

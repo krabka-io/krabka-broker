@@ -265,11 +265,12 @@ impl Engine {
 
         let mut records = Vec::with_capacity(2);
         if plan.write_kraft_version {
-            records.push(ControlRecord::KRaftVersion(WireKRaftVersionRecord {
+            let record = WireKRaftVersionRecord {
                 version: 0,
                 k_raft_version: i16::try_from(plan.next_kraft_version).unwrap_or(i16::MAX),
-                ..Default::default()
-            }));
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+            };
+            records.push(ControlRecord::KRaftVersion(record));
         }
         if plan.write_voters {
             records.push(ControlRecord::Voters(voter_set_to_wire(&next)));

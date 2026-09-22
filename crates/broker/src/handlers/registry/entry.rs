@@ -11,10 +11,21 @@ use krabka_protocol::api_key::ApiKey;
 use super::{AuthHandler, ContextHandler, PlainHandler, ProduceHandler, TelemetryHandler};
 use crate::handlers::{ApiKeyCode, ApiVersion};
 
+/// How the KIP-124 request quota reaches an api.
+///
+/// Kafka charges the request quota for every request that `KafkaApis`
+/// answers, through `RequestHandlerHelper.sendResponseMaybeThrottle` and its
+/// siblings. It exempts only a follower `Fetch`, `WriteTxnMarkers`, and a
+/// `Produce` with `acks = 0`, and it answers `SaslHandshake` and
+/// `SaslAuthenticate` in the authenticator, outside `KafkaApis`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RequestQuotaPolicy {
+    /// The dispatch loop charges the quota once the handler returns, and
+    /// reports the delay in the response's `ThrottleTimeMs`.
     ApplyFallbackAccounting,
+    /// The quota is not charged: the apis Kafka exempts.
     InlineExempt,
+    /// The handler charges the quota and sets `ThrottleTimeMs` itself.
     SelfAccounted,
 }
 
@@ -70,25 +81,8 @@ impl DispatchEntry {
             min_version: 0,
             max_version: 0,
             flexible_min,
-            quota_policy: RequestQuotaPolicy::InlineExempt,
-            kind: DispatchKind::Context(handler),
-        }
-    }
-
-    /// A context dispatch that the dispatch loop charges to the KIP-124
-    /// request quota, as it does a plain dispatch.
-    ///
-    /// The inter-broker apis that moved from plain to context dispatches to
-    /// get a principal use it, so their request-quota accounting stays the
-    /// same.
-    pub(crate) fn fallback_accounted_context(
-        api_key: ApiKeyCode,
-        flexible_min: ApiVersion,
-        handler: ContextHandler,
-    ) -> Self {
-        Self {
             quota_policy: RequestQuotaPolicy::ApplyFallbackAccounting,
-            ..Self::context(api_key, flexible_min, handler)
+            kind: DispatchKind::Context(handler),
         }
     }
 
@@ -132,7 +126,7 @@ impl DispatchEntry {
             min_version: 0,
             max_version: 0,
             flexible_min,
-            quota_policy: RequestQuotaPolicy::InlineExempt,
+            quota_policy: RequestQuotaPolicy::ApplyFallbackAccounting,
             kind: DispatchKind::Telemetry(handler),
         }
     }
@@ -147,7 +141,7 @@ impl DispatchEntry {
             min_version: 0,
             max_version: 0,
             flexible_min,
-            quota_policy: RequestQuotaPolicy::InlineExempt,
+            quota_policy: RequestQuotaPolicy::ApplyFallbackAccounting,
             kind: DispatchKind::Auth(handler),
         }
     }
@@ -228,6 +222,16 @@ impl DispatchRegistry {
             entry.min_version = api.min_version;
             entry.max_version = api.max_version;
         }
+    }
+
+    /// Exempt `api_key` from the KIP-124 request quota, as Kafka answers it
+    /// through `sendResponseExemptThrottle`.
+    pub(crate) fn exempt_from_request_quota(&mut self, api_key: ApiKeyCode) {
+        let entry = self
+            .table
+            .get_mut(&api_key)
+            .unwrap_or_else(|| panic!("exempted api_key {api_key} is not registered"));
+        entry.quota_policy = RequestQuotaPolicy::InlineExempt;
     }
 
     pub(crate) fn get(&self, api_key: ApiKeyCode) -> Option<DispatchEntry> {
