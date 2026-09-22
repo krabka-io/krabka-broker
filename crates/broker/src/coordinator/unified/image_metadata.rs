@@ -123,6 +123,7 @@ mod tests {
         let provider = ImageMetadataProvider {
             controller: fixed_source(image),
         };
+        check!(format!("{provider:?}") == "ImageMetadataProvider { .. }");
         let snapshot = provider.snapshot();
         let proto_topic_id = krabka_protocol::primitives::uuid::Uuid(*topic_id.as_bytes());
 
