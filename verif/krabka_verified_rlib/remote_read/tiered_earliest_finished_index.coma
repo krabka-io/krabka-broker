@@ -1,0 +1,210 @@
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_read.rs" 26 0 30 18 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sslice = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span swell_founded = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sremote_read = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_read.rs" 32 20 32 26
+let%span sremote_read'0 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_read.rs" 47 14 47 36
+let%span sremote_read'1 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_read.rs" 48 18 48 30
+let%span sremote_read'2 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_read.rs" 34 16 46 5
+let%span sremote_read'3 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_read.rs" 33 16 33 39
+let%span sremote_read'4 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_read.rs" 49 11 49 26
+let%span sremote_read'5 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_read.rs" 49 30 49 43
+let%span sremote_read'6 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_read.rs" 49 47 49 48
+let%span sremote_read'7 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_read.rs" 49 52 49 65
+let%span sremote_read'8 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_read.rs" 49 69 49 80
+let%span sremote_read'9 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_read.rs" 51 33 51 48
+let%span sremote_read'10 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_read.rs" 51 52 51 65
+let%span sremote_read'11 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_read.rs" 55 17 55 18
+let%span sremote_read'12 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_read.rs" 55 8 55 18
+let%span sremote_read'13 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_read.rs" 10 11 10 39
+let%span sremote_read'14 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_read.rs" 11 11 11 43
+let%span sremote_read'15 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_read.rs" 12 10 24 1
+
+use creusot.int.UInt64
+use seq.Seq
+use creusot.slice.Slice64
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_Option_usize = None | Some UInt64.t
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+let len_i64 (self_: Slice64.slice Int64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+let elim_Some (_x: t_Option_usize) (return (f0: UInt64.t)) = any
+  [ _k (f0: UInt64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let tiered_earliest_finished_index [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_read.rs" 26 0 30 18]
+  (starts: Slice64.slice Int64.t) (ends: Slice64.slice Int64.t) (finished: Slice64.slice bool)
+  (return (x: t_Option_usize)) =
+{[@stop_split] [@expl:tiered_earliest_finished_index requires] ([@stop_split] [@expl:tiered_earliest_finished_index requires #0] [%#sremote_read'13] Seq.length (Slice64.view starts)
+    = Seq.length (Slice64.view ends))
+  /\ ([@stop_split] [@expl:tiered_earliest_finished_index requires #1] [%#sremote_read'14] Seq.length (Slice64.view starts)
+  = Seq.length (Slice64.view finished))}
+  (! bb0
+  [ bb0 = s0 [ s0 = [ &best <- None ] s1 | s1 = [ &index <- [%#sremote_read] (0: UInt64.t) ] s2 | s2 = bb1 ]
+  | bb1 = bb1invariant
+    [ bb1 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb1 ([%#sremote_read'0] Seq.length (Slice64.view starts)
+      - UInt64.t'int index)}
+      bb1invariant
+    | bb1invariant = {[@expl:loop invariant #0] [%#sremote_read'3] UInt64.t'int index
+      <= Seq.length (Slice64.view starts)}
+      {[@expl:loop invariant #1] [%#sremote_read'2] match best with
+        | Some best'0 -> UInt64.t'int best'0 < UInt64.t'int index
+        /\ Seq.get (Slice64.view finished) (UInt64.t'int best'0)
+        /\ 0 <= Int64.to_int (Seq.get (Slice64.view starts) (UInt64.t'int best'0))
+        /\ Int64.to_int (Seq.get (Slice64.view starts) (UInt64.t'int best'0))
+          <= Int64.to_int (Seq.get (Slice64.view ends) (UInt64.t'int best'0))
+        /\ (forall i: int. 0 <= i
+            /\ i < UInt64.t'int index
+            /\ Seq.get (Slice64.view finished) i
+            /\ 0 <= Int64.to_int (Seq.get (Slice64.view starts) i)
+            /\ Int64.to_int (Seq.get (Slice64.view starts) i) <= Int64.to_int (Seq.get (Slice64.view ends) i)
+          -> Int64.to_int (Seq.get (Slice64.view starts) (UInt64.t'int best'0))
+          <= Int64.to_int (Seq.get (Slice64.view starts) i))
+        | None -> forall i: int. 0 <= i /\ i < UInt64.t'int index
+          -> not Seq.get (Slice64.view finished) i
+          \/ Int64.to_int (Seq.get (Slice64.view starts) i) < 0
+          \/ Int64.to_int (Seq.get (Slice64.view ends) i) < Int64.to_int (Seq.get (Slice64.view starts) i)
+        end}
+      (! [ &variant_old_bb1 <- [%#sremote_read'0] Seq.length (Slice64.view starts) - UInt64.t'int index ] s0)
+      [ s0 = len_i64 [%#sremote_read'1] {starts} (fun (_x: UInt64.t) -> [ &_33 <- _x ] s1)
+      | s1 = [ &_31 <- UInt64.lt index _33 ] s2
+      | s2 = any [ br0 -> {_31 = false} (! bb24) | br1 -> {_31} (! bb4) ] ]
+      [ bb4 = s0
+        [ s0 = [ &_37 <- index ] s1
+        | s1 = [ &_38 <- Slice64.length finished ] s2
+        | s2 = [ &_39 <- UInt64.lt _37 _38 ] s3
+        | s3 = {[@expl:index in bounds] [%#sremote_read'4] _39} s4
+        | s4 = Slice64.get [%#sremote_read'4] <bool> {finished} {_37} (fun (r: bool) -> [ &_36 <- r ] s5)
+        | s5 = any [ br0 -> {_36 = false} (! bb23) | br1 -> {_36} (! bb6) ] ]
+      | bb6 = s0
+        [ s0 = [ &_42 <- index ] s1
+        | s1 = [ &_43 <- Slice64.length starts ] s2
+        | s2 = [ &_44 <- UInt64.lt _42 _43 ] s3
+        | s3 = {[@expl:index in bounds] [%#sremote_read'5] _44} s4
+        | s4 = Slice64.get [%#sremote_read'5] <Int64.t> {starts} {_42} (fun (r: Int64.t) -> [ &_41 <- r ] s5)
+        | s5 = [ &_40 <- Int64.ge _41 ([%#sremote_read'6] (0: Int64.t)) ] s6
+        | s6 = any [ br0 -> {_40 = false} (! bb23) | br1 -> {_40} (! bb8) ] ]
+      | bb8 = s0
+        [ s0 = [ &_47 <- index ] s1
+        | s1 = [ &_48 <- Slice64.length starts ] s2
+        | s2 = [ &_49 <- UInt64.lt _47 _48 ] s3
+        | s3 = {[@expl:index in bounds] [%#sremote_read'7] _49} s4
+        | s4 = Slice64.get [%#sremote_read'7] <Int64.t> {starts} {_47} (fun (r: Int64.t) -> [ &_46 <- r ] s5)
+        | s5 = [ &_51 <- index ] s6
+        | s6 = [ &_52 <- Slice64.length ends ] s7
+        | s7 = [ &_53 <- UInt64.lt _51 _52 ] s8
+        | s8 = {[@expl:index in bounds] [%#sremote_read'8] _53} s9
+        | s9 = Slice64.get [%#sremote_read'8] <Int64.t> {ends} {_51} (fun (r: Int64.t) -> [ &_50 <- r ] s10)
+        | s10 = [ &_45 <- Int64.le _46 _50 ] s11
+        | s11 = any [ br0 -> {_45 = false} (! bb23) | br1 -> {_45} (! bb11) ] ]
+      | bb11 = any [ br0 -> {best = None} (! bb12) | br1 (x0: UInt64.t) -> {best = Some x0} (! bb14) ]
+      | bb14 = s0
+        [ s0 = elim_Some {best} (fun (r0: UInt64.t) -> [ &current''0 <- r0 ] s1)
+        | s1 = [ &_60 <- current''0 ] s2
+        | s2 = [ &_61 <- Slice64.length starts ] s3
+        | s3 = [ &_62 <- UInt64.lt _60 _61 ] s4
+        | s4 = {[@expl:index in bounds] [%#sremote_read'9] _62} s5
+        | s5 = Slice64.get [%#sremote_read'9] <Int64.t> {starts} {_60} (fun (r: Int64.t) -> [ &_59 <- r ] s6)
+        | s6 = [ &_64 <- index ] s7
+        | s7 = [ &_65 <- Slice64.length starts ] s8
+        | s8 = [ &_66 <- UInt64.lt _64 _65 ] s9
+        | s9 = {[@expl:index in bounds] [%#sremote_read'10] _66} s10
+        | s10 = Slice64.get [%#sremote_read'10] <Int64.t> {starts} {_64} (fun (r: Int64.t) -> [ &_63 <- r ] s11)
+        | s11 = [ &_58 <- Int64.le _59 _63 ] s12
+        | s12 = any [ br0 -> {_58 = false} (! bb12) | br1 -> {_58} (! bb17) ] ]
+      | bb17 = s0 [ s0 = elim_Some {best} (fun (r0: UInt64.t) -> [ &current' <- r0 ] s1) | s1 = bb23 ]
+      | bb12 = s0 [ s0 = [ &_67 <- Some index ] s1 | s1 = [ &best <- _67 ] s2 | s2 = bb23 ]
+      | bb23 = s0
+        [ s0 = UInt64.add [%#sremote_read'12] {index} {[%#sremote_read'11] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &index <- _x ] s1)
+        | s1 = bb1 ] ] ]
+  | bb24 = s0 [ s0 = [ &_ret <- best ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_usize = Any.any_l ()
+  | & starts: Slice64.slice Int64.t = starts
+  | & ends: Slice64.slice Int64.t = ends
+  | & finished: Slice64.slice bool = finished
+  | & best: t_Option_usize = Any.any_l ()
+  | & index: UInt64.t = Any.any_l ()
+  | & _31: bool = Any.any_l ()
+  | & _33: UInt64.t = Any.any_l ()
+  | & _36: bool = Any.any_l ()
+  | & _37: UInt64.t = Any.any_l ()
+  | & _38: UInt64.t = Any.any_l ()
+  | & _39: bool = Any.any_l ()
+  | & _40: bool = Any.any_l ()
+  | & _41: Int64.t = Any.any_l ()
+  | & _42: UInt64.t = Any.any_l ()
+  | & _43: UInt64.t = Any.any_l ()
+  | & _44: bool = Any.any_l ()
+  | & _45: bool = Any.any_l ()
+  | & _46: Int64.t = Any.any_l ()
+  | & _47: UInt64.t = Any.any_l ()
+  | & _48: UInt64.t = Any.any_l ()
+  | & _49: bool = Any.any_l ()
+  | & _50: Int64.t = Any.any_l ()
+  | & _51: UInt64.t = Any.any_l ()
+  | & _52: UInt64.t = Any.any_l ()
+  | & _53: bool = Any.any_l ()
+  | & current': UInt64.t = Any.any_l ()
+  | & current''0: UInt64.t = Any.any_l ()
+  | & _58: bool = Any.any_l ()
+  | & _59: Int64.t = Any.any_l ()
+  | & _60: UInt64.t = Any.any_l ()
+  | & _61: UInt64.t = Any.any_l ()
+  | & _62: bool = Any.any_l ()
+  | & _63: Int64.t = Any.any_l ()
+  | & _64: UInt64.t = Any.any_l ()
+  | & _65: UInt64.t = Any.any_l ()
+  | & _66: bool = Any.any_l ()
+  | & _67: t_Option_usize = Any.any_l ()
+  | & variant_old_bb1: int = Any.any_l () ])
+  [ return (result: t_Option_usize) ->
+  {[@stop_split] [@expl:tiered_earliest_finished_index ensures] [%#sremote_read'15] match result with
+      | Some best -> UInt64.t'int best < Seq.length (Slice64.view starts)
+      /\ Seq.get (Slice64.view finished) (UInt64.t'int best)
+      /\ 0 <= Int64.to_int (Seq.get (Slice64.view starts) (UInt64.t'int best))
+      /\ Int64.to_int (Seq.get (Slice64.view starts) (UInt64.t'int best))
+        <= Int64.to_int (Seq.get (Slice64.view ends) (UInt64.t'int best))
+      /\ (forall i: int. 0 <= i
+          /\ i < Seq.length (Slice64.view starts)
+          /\ Seq.get (Slice64.view finished) i
+          /\ 0 <= Int64.to_int (Seq.get (Slice64.view starts) i)
+          /\ Int64.to_int (Seq.get (Slice64.view starts) i) <= Int64.to_int (Seq.get (Slice64.view ends) i)
+        -> Int64.to_int (Seq.get (Slice64.view starts) (UInt64.t'int best))
+        <= Int64.to_int (Seq.get (Slice64.view starts) i))
+      | None -> forall i: int. 0 <= i /\ i < Seq.length (Slice64.view starts)
+        -> not Seq.get (Slice64.view finished) i
+        \/ Int64.to_int (Seq.get (Slice64.view starts) i) < 0
+        \/ Int64.to_int (Seq.get (Slice64.view ends) i) < Int64.to_int (Seq.get (Slice64.view starts) i)
+      end}
+    (! return {result}) ]

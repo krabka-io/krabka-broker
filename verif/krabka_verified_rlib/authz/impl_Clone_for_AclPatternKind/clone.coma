@@ -1,0 +1,17 @@
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/authz.rs" 19 27 19 32 *)
+
+(* <authz::AclPatternKind as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_AclPatternKind = Literal | Prefixed
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_AclPatternKind [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/authz.rs" 19 27 19 32]
+  (self: t_AclPatternKind) (return (x: t_AclPatternKind)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_AclPatternKind = Any.any_l () | & self: t_AclPatternKind = self ])
+  [ return (result: t_AclPatternKind) -> (! return {result}) ]

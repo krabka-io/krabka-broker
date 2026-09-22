@@ -1,0 +1,22 @@
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 9 27 9 32 *)
+
+(* <transaction::TransactionPidInstallDecision as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_TransactionPidInstallDecision =
+  | RejectWrongPartition
+  | RejectCurrentIdentity
+  | RejectStagedIdentity
+  | RejectCollision
+  | Apply
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_TransactionPidInstallDecision [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 9 27 9 32]
+  (self: t_TransactionPidInstallDecision) (return (x: t_TransactionPidInstallDecision)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_TransactionPidInstallDecision = Any.any_l () | & self: t_TransactionPidInstallDecision = self ])
+  [ return (result: t_TransactionPidInstallDecision) -> (! return {result}) ]

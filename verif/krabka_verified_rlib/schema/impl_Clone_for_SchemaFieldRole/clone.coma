@@ -1,0 +1,17 @@
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/schema.rs" 48 27 48 32 *)
+
+(* <schema::SchemaFieldRole as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_SchemaFieldRole = Key | Value
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_SchemaFieldRole [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/schema.rs" 48 27 48 32]
+  (self: t_SchemaFieldRole) (return (x: t_SchemaFieldRole)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_SchemaFieldRole = Any.any_l () | & self: t_SchemaFieldRole = self ])
+  [ return (result: t_SchemaFieldRole) -> (! return {result}) ]

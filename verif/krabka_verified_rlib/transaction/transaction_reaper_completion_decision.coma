@@ -1,0 +1,152 @@
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 82 0 87 40 *)
+
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span stransaction = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 91 21 91 22
+let%span stransaction'0 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 92 27 92 28
+let%span stransaction'1 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 93 26 93 27
+let%span stransaction'2 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 94 28 94 29
+let%span stransaction'3 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 95 28 95 29
+let%span stransaction'4 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 96 30 96 31
+let%span stransaction'5 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 47 10 54 38
+let%span stransaction'6 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 55 10 65 37
+let%span stransaction'7 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 66 10 80 35
+
+use creusot.int.Int64
+use creusot.int.Int16
+use creusot.int.Int8
+use creusot.prelude.Any
+use int.Int
+
+type tup3_i64_i16_i8 = { f0: Int64.t; f1: Int16.t; f2: Int8.t }
+
+type t_TransactionReaperCompletionDecision =
+  | RejectMalformed
+  | RejectStaleIdentity
+  | RejectChangedPreparedState
+  | AlreadyComplete
+  | Proceed
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let transaction_reaper_completion_decision [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/transaction.rs" 82 0 87 40]
+  (current': tup3_i64_i16_i8) (prepared: tup3_i64_i16_i8) (completion: tup3_i64_i16_i8) (exact_prepared_snapshot: bool)
+  (return (x: t_TransactionReaperCompletionDecision)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &current_pid <- current'.f0 ] s1
+    | s1 = [ &current_epoch <- current'.f1 ] s2
+    | s2 = [ &current_state <- current'.f2 ] s3
+    | s3 = [ &prepared_pid <- prepared.f0 ] s4
+    | s4 = [ &prepared_epoch <- prepared.f1 ] s5
+    | s5 = [ &prepare_state <- prepared.f2 ] s6
+    | s6 = [ &completion_pid <- completion.f0 ] s7
+    | s7 = [ &completion_epoch <- completion.f1 ] s8
+    | s8 = [ &complete_state <- completion.f2 ] s9
+    | s9 = [ &_44 <- Int64.lt current_pid ([%#stransaction] (0: Int64.t)) ] s10
+    | s10 = any [ br0 -> {_44 = false} (! bb2) | br1 -> {_44} (! bb14) ] ]
+  | bb2 = s0
+    [ s0 = [ &_46 <- Int16.lt current_epoch ([%#stransaction'0] (0: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_46 = false} (! bb4) | br1 -> {_46} (! bb14) ] ]
+  | bb4 = s0
+    [ s0 = [ &_48 <- Int64.lt prepared_pid ([%#stransaction'1] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_48 = false} (! bb6) | br1 -> {_48} (! bb14) ] ]
+  | bb6 = s0
+    [ s0 = [ &_50 <- Int16.lt prepared_epoch ([%#stransaction'2] (0: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_50 = false} (! bb8) | br1 -> {_50} (! bb14) ] ]
+  | bb8 = s0
+    [ s0 = [ &_52 <- Int64.lt completion_pid ([%#stransaction'3] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_52 = false} (! bb10) | br1 -> {_52} (! bb14) ] ]
+  | bb10 = s0
+    [ s0 = [ &_54 <- Int16.lt completion_epoch ([%#stransaction'4] (0: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_54 = false} (! bb12) | br1 -> {_54} (! bb14) ] ]
+  | bb12 = s0
+    [ s0 = [ &_56 <- prepare_state = complete_state ] s1
+    | s1 = any [ br0 -> {_56 = false} (! bb15) | br1 -> {_56} (! bb14) ] ]
+  | bb14 = s0 [ s0 = [ &_ret <- RejectMalformed ] s1 | s1 = return {_ret} ]
+  | bb15 = s0
+    [ s0 = [ &_59 <- current_pid = completion_pid ] s1
+    | s1 = any [ br0 -> {_59 = false} (! bb22) | br1 -> {_59} (! bb16) ] ]
+  | bb16 = s0
+    [ s0 = [ &_62 <- current_epoch = completion_epoch ] s1
+    | s1 = any [ br0 -> {_62 = false} (! bb22) | br1 -> {_62} (! bb17) ] ]
+  | bb17 = s0
+    [ s0 = [ &_65 <- current_state = complete_state ] s1
+    | s1 = any [ br0 -> {_65 = false} (! bb22) | br1 -> {_65} (! bb18) ] ]
+  | bb18 = s0 [ s0 = [ &_ret <- AlreadyComplete ] s1 | s1 = return {_ret} ]
+  | bb22 = s0
+    [ s0 = [ &_68 <- current_pid <> prepared_pid ] s1
+    | s1 = any [ br0 -> {_68 = false} (! bb24) | br1 -> {_68} (! bb26) ] ]
+  | bb24 = s0
+    [ s0 = [ &_71 <- current_epoch <> prepared_epoch ] s1
+    | s1 = any [ br0 -> {_71 = false} (! bb27) | br1 -> {_71} (! bb26) ] ]
+  | bb26 = s0 [ s0 = [ &_ret <- RejectStaleIdentity ] s1 | s1 = return {_ret} ]
+  | bb27 = s0
+    [ s0 = [ &_74 <- current_state <> prepare_state ] s1
+    | s1 = any [ br0 -> {_74 = false} (! bb29) | br1 -> {_74} (! bb30) ] ]
+  | bb29 = any [ br0 -> {exact_prepared_snapshot = false} (! bb30) | br1 -> {exact_prepared_snapshot} (! bb31) ]
+  | bb31 = s0 [ s0 = [ &_ret <- Proceed ] s1 | s1 = return {_ret} ]
+  | bb30 = s0 [ s0 = [ &_ret <- RejectChangedPreparedState ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_TransactionReaperCompletionDecision = Any.any_l ()
+  | & current': tup3_i64_i16_i8 = current'
+  | & prepared: tup3_i64_i16_i8 = prepared
+  | & completion: tup3_i64_i16_i8 = completion
+  | & exact_prepared_snapshot: bool = exact_prepared_snapshot
+  | & current_pid: Int64.t = Any.any_l ()
+  | & current_epoch: Int16.t = Any.any_l ()
+  | & current_state: Int8.t = Any.any_l ()
+  | & prepared_pid: Int64.t = Any.any_l ()
+  | & prepared_epoch: Int16.t = Any.any_l ()
+  | & prepare_state: Int8.t = Any.any_l ()
+  | & completion_pid: Int64.t = Any.any_l ()
+  | & completion_epoch: Int16.t = Any.any_l ()
+  | & complete_state: Int8.t = Any.any_l ()
+  | & _44: bool = Any.any_l ()
+  | & _46: bool = Any.any_l ()
+  | & _48: bool = Any.any_l ()
+  | & _50: bool = Any.any_l ()
+  | & _52: bool = Any.any_l ()
+  | & _54: bool = Any.any_l ()
+  | & _56: bool = Any.any_l ()
+  | & _59: bool = Any.any_l ()
+  | & _62: bool = Any.any_l ()
+  | & _65: bool = Any.any_l ()
+  | & _68: bool = Any.any_l ()
+  | & _71: bool = Any.any_l ()
+  | & _74: bool = Any.any_l () ])
+  [ return (result: t_TransactionReaperCompletionDecision) ->
+  {[@stop_split] [@expl:transaction_reaper_completion_decision ensures] ([@stop_split] [@expl:transaction_reaper_completion_decision ensures #0] [%#stransaction'5] (result
+        = RejectMalformed)
+      = (Int64.to_int current'.f0 < 0
+      \/ Int16.to_int current'.f1 < 0
+      \/ Int64.to_int prepared.f0 < 0
+      \/ Int16.to_int prepared.f1 < 0
+      \/ Int64.to_int completion.f0 < 0 \/ Int16.to_int completion.f1 < 0 \/ prepared.f2 = completion.f2))
+    /\ ([@stop_split] [@expl:transaction_reaper_completion_decision ensures #1] [%#stransaction'6] (result
+        = AlreadyComplete)
+      = (ge_log_Int (Int64.to_int current'.f0) 0
+      /\ ge_log_Int (Int16.to_int current'.f1) 0
+      /\ ge_log_Int (Int64.to_int prepared.f0) 0
+      /\ ge_log_Int (Int16.to_int prepared.f1) 0
+      /\ ge_log_Int (Int64.to_int completion.f0) 0
+      /\ ge_log_Int (Int16.to_int completion.f1) 0
+      /\ prepared.f2 <> completion.f2
+      /\ Int64.to_int current'.f0 = Int64.to_int completion.f0
+      /\ Int16.to_int current'.f1 = Int16.to_int completion.f1 /\ current'.f2 = completion.f2))
+    /\ ([@stop_split] [@expl:transaction_reaper_completion_decision ensures #2] [%#stransaction'7] (result = Proceed)
+    = (ge_log_Int (Int64.to_int current'.f0) 0
+    /\ ge_log_Int (Int16.to_int current'.f1) 0
+    /\ ge_log_Int (Int64.to_int prepared.f0) 0
+    /\ ge_log_Int (Int16.to_int prepared.f1) 0
+    /\ ge_log_Int (Int64.to_int completion.f0) 0
+    /\ ge_log_Int (Int16.to_int completion.f1) 0
+    /\ prepared.f2 <> completion.f2
+    /\ not (Int64.to_int current'.f0 = Int64.to_int completion.f0
+      /\ Int16.to_int current'.f1 = Int16.to_int completion.f1 /\ current'.f2 = completion.f2)
+    /\ Int64.to_int current'.f0 = Int64.to_int prepared.f0
+    /\ Int16.to_int current'.f1 = Int16.to_int prepared.f1 /\ current'.f2 = prepared.f2 /\ exact_prepared_snapshot))}
+    (! return {result}) ]

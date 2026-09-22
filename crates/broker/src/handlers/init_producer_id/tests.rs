@@ -484,3 +484,115 @@ async fn the_timeout_check_runs_before_the_coordinator_check() {
     }
     broker_handle.shutdown().await;
 }
+
+/// Kafka `KafkaApis.handleInitProducerIdRequest` refuses half an identity with
+/// `INVALID_REQUEST`, and answers a client below version 4 with
+/// `INVALID_PRODUCER_EPOCH` in place of `PRODUCER_FENCED`.
+#[tokio::test]
+async fn half_an_identity_is_invalid_and_an_old_client_gets_invalid_producer_epoch() {
+    let (broker_handle, _dir) = start_broker_with(|config| {
+        config.audit_enabled = false;
+    })
+    .await;
+    let broker = broker_handle.broker_arc_for_test();
+    enable_transaction_version_3(&broker).await;
+    let principal = principal("admin");
+    let peer = peer();
+    let context = crate::test_support::request_context(&principal, &peer, "txn-client");
+    let tid = "txn-half-identity";
+    let max = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
+    let find_version = krabka_protocol::owned::find_coordinator_response::MAX_VERSION;
+    let find_request = krabka_protocol::owned::find_coordinator_request::FindCoordinatorRequest {
+        key_type: 1,
+        coordinator_keys: vec![tid.to_string()],
+        ..Default::default()
+    };
+    let found = crate::handlers::find_coordinator::handle(
+        &broker,
+        find_version,
+        1,
+        &crate::test_support::encode_request(&find_request, find_version),
+        &context,
+    )
+    .await
+    .expect("find the transaction coordinator");
+    let found: krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse =
+        crate::test_support::decode_response(&found, find_version);
+    assert!(found.coordinators[0].error_code == codes::NONE);
+    // An entry to be fenced against.
+    let created = handle(
+        &broker,
+        max,
+        1,
+        &crate::test_support::encode_request(
+            &InitProducerIdRequest {
+                transactional_id: Some(tid.to_string()),
+                transaction_timeout_ms: 60_000,
+                producer_id: -1,
+                producer_epoch: -1,
+                ..Default::default()
+            },
+            max,
+        ),
+        &context,
+    )
+    .await
+    .expect("create the transaction entry");
+    let created: InitProducerIdResponse = crate::test_support::decode_response(&created, max);
+    assert!(created.error_code == codes::NONE, "{created:?}");
+    let zombie = (created.producer_id + 1_000, created.producer_epoch);
+
+    // (name, version, request identity, expected code)
+    let cases = [
+        (
+            "a producer id with no epoch",
+            max,
+            (7, -1),
+            codes::INVALID_REQUEST,
+        ),
+        (
+            "an epoch with no producer id",
+            max,
+            (-1, 3),
+            codes::INVALID_REQUEST,
+        ),
+        (
+            "a fenced identity at the newest version",
+            max,
+            zombie,
+            codes::PRODUCER_FENCED,
+        ),
+        (
+            "a fenced identity below version 4",
+            3,
+            zombie,
+            codes::INVALID_PRODUCER_EPOCH,
+        ),
+    ];
+    let mut expected = Vec::new();
+    let mut actual = Vec::new();
+    for (name, version, (producer_id, producer_epoch), code) in cases {
+        let request = InitProducerIdRequest {
+            transactional_id: Some(tid.to_string()),
+            transaction_timeout_ms: 60_000,
+            producer_id,
+            producer_epoch,
+            ..Default::default()
+        };
+        let response = handle(
+            &broker,
+            version,
+            2,
+            &crate::test_support::encode_request(&request, version),
+            &context,
+        )
+        .await
+        .expect("initialize transactional producer");
+        let response: InitProducerIdResponse =
+            crate::test_support::decode_response(&response, version);
+        expected.push((name, code));
+        actual.push((name, response.error_code));
+    }
+    assert!(actual == expected);
+    broker_handle.shutdown().await;
+}
