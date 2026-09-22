@@ -388,8 +388,8 @@ kafka_codes! {
     /// `INCONSISTENT_CLUSTER_ID` (104): the request's `cluster_id` does not
     /// match this cluster's id.
     INCONSISTENT_CLUSTER_ID = 104;
-    /// `UNKNOWN_CONTROLLER_ID` (116): a controller registration names a node
-    /// that is not in the active voter set.
+    /// `UNKNOWN_CONTROLLER_ID` (116): Kafka's "This controller ID is not
+    /// known."
     UNKNOWN_CONTROLLER_ID = 116;
     /// `INVALID_REGISTRATION` (119): a broker/controller registration is
     /// malformed.

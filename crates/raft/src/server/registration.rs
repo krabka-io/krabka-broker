@@ -28,8 +28,8 @@ use crate::{RaftError, kraft::KraftController};
 
 const SUCCESS: i16 = 0;
 const UNKNOWN_SERVER_ERROR: i16 = -1;
+const UNSUPPORTED_VERSION: i16 = 35;
 const NOT_CONTROLLER: i16 = 41;
-const UNKNOWN_CONTROLLER_ID: i16 = 116;
 const INVALID_REGISTRATION: i16 = 119;
 
 /// The lifecycle API keys this module answers. The versions they are served at
@@ -177,8 +177,20 @@ mod tests {
         let (engine_leader, _dir2) = single_voter_engine();
         wait_for_leader(&engine_leader).await;
         assert2::assert!(is_leader(&engine_leader));
+        engine_leader
+            .submit_change(vec![krabka_metadata::MetadataRecord::V1FeatureLevel(
+                krabka_metadata::FeatureLevelRecord {
+                    name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+                    level: 15,
+                },
+            )])
+            .await
+            .expect("finalize metadata.version");
 
-        // Controller ID not in voters returns UNKNOWN_CONTROLLER_ID (116)
+        // A controller id that is not a voter registers too: Kafka's
+        // `ClusterControlManager.registerController` does not require one, so
+        // a KIP-853 observer controller can register before it joins the
+        // voter set.
         let resp_bytes2 = super::dispatch(
             controller_registration_request::API_KEY,
             0,
@@ -188,7 +200,7 @@ mod tests {
         .await
         .expect("dispatch");
         let resp2 = ControllerRegistrationResponse::decode(&mut resp_bytes2.as_ref(), 0).unwrap();
-        assert2::assert!(resp2.error_code == UNKNOWN_CONTROLLER_ID);
+        assert2::assert!(resp2.error_code == SUCCESS);
 
         // Valid controller ID in voters succeeds (0)
         let resp_bytes3 = super::dispatch(
