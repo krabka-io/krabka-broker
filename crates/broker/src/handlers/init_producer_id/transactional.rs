@@ -165,6 +165,17 @@ pub(super) async fn handle_transactional(
                     // durable, other callers must still see Ongoing.
                     let mut prepared = e.clone();
                     prepared.state = TxnState::PrepareAbort;
+                    // A retry token from an earlier, unrelated epoch bump
+                    // names a generation this fence ends. Kafka's own
+                    // fence-then-abort answers `CONCURRENT_TRANSACTIONS` to
+                    // exactly one producer -- the one that owned the
+                    // now-fenced epoch -- and that recognition is
+                    // `last_producer_epoch`/`has_failed_epoch_fence` below,
+                    // set fresh once the fence is known to have succeeded or
+                    // failed. Clearing it here, before either outcome, keeps
+                    // a zombie that still holds the older token from being
+                    // admitted as a retry of this fence.
+                    prepared.last_producer_epoch = -1;
                     // Kafka `prepareFenceProducerEpoch`: the epoch of the
                     // ongoing transaction is raised before the abort, so every
                     // abort marker fences the producer at its partitions. The
@@ -1267,6 +1278,99 @@ mod tests {
         check!(retried.error_code == codes::NONE);
         check!(retried.producer_id == entry.producer_id.get());
         check!(retried.producer_epoch == entry.producer_epoch + 1);
+    }
+
+    /// A zombie holding the retry token from an earlier, unrelated epoch
+    /// bump must not be admitted once that generation has since been fenced
+    /// and aborted.
+    ///
+    /// A legitimate bump from epoch 4 to 5 records 4 as the recognized retry
+    /// token. The live producer then opens a transaction at epoch 5 without
+    /// another `InitProducerId` call, exactly as `a_stale_retry_answers_...`
+    /// sets up. A second `InitProducerId` call finds that transaction
+    /// `Ongoing` and fences it: epoch 5 -> 6, abort, `CompleteAbort`. The old
+    /// token from the 4->5 bump names a generation the fence just ended, so
+    /// a zombie that still holds it must be fenced, not answered the live
+    /// identity as a recognized retry.
+    #[tokio::test]
+    async fn a_fence_clears_the_retry_token_from_an_earlier_bump() {
+        const TID: &str = "tid-stale-token-across-fence";
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (coordinator, _part) = coordinator_with_completed_transaction(dir.path(), TID).await;
+
+        // The seeded entry starts at epoch 3. Bump it once (3 -> 4) so the
+        // legitimate 4 -> 5 bump below has a live epoch to name.
+        handle_transactional(
+            &coordinator,
+            TID,
+            TxnVersion::Verified,
+            60_000,
+            false,
+            false,
+            (1000, 3),
+        )
+        .await
+        .expect("first bump responds");
+
+        // The legitimate 4 -> 5 bump: recorded epoch 4 as the retry token.
+        let bumped = handle_transactional(
+            &coordinator,
+            TID,
+            TxnVersion::Verified,
+            60_000,
+            false,
+            false,
+            (1000, 4),
+        )
+        .await
+        .expect("bump responds");
+        check!(
+            (bumped.error_code, bumped.producer_id, bumped.producer_epoch)
+                == (codes::NONE, 1000, 5)
+        );
+        {
+            let handle = coordinator.get(TID).expect("bumped entry");
+            let mut entry = handle.lock().await;
+            check!(entry.last_producer_epoch == 4);
+            entry.state = TxnState::Ongoing;
+            entry.start_ms = 0;
+        }
+
+        // A second InitProducerId call finds the transaction Ongoing and
+        // fences it, aborting at epoch 6.
+        let fenced = handle_transactional(
+            &coordinator,
+            TID,
+            TxnVersion::Verified,
+            60_000,
+            false,
+            false,
+            (1000, 5),
+        )
+        .await
+        .expect("init responds");
+        check!(fenced == concurrent_transactions_response());
+        let entry = coordinator.get(TID).expect("entry").lock().await.clone();
+        // TV2 bumps once for the fence (5 -> 6) and once more on completion
+        // for the abort marker (6 -> 7).
+        check!((entry.state, entry.producer_epoch) == (TxnState::CompleteAbort, 7));
+
+        // The zombie holding the pre-bump token (4) belongs to the
+        // generation the fence just ended and must be fenced, not admitted
+        // as a retry of the entry the fence produced.
+        let zombie = handle_transactional(
+            &coordinator,
+            TID,
+            TxnVersion::Verified,
+            60_000,
+            false,
+            false,
+            (1000, 4),
+        )
+        .await
+        .expect("init responds");
+        check!(zombie.error_code == codes::PRODUCER_FENCED, "{zombie:?}");
     }
 
     /// KIP-360: a caller retrying its own lost `InitProducerId` response must
