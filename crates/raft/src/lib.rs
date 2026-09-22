@@ -92,7 +92,7 @@ pub use handshake::{
 pub use kraft::MetadataFetchSlice;
 pub use network::{OutboundDialer, PlaintextDialer};
 pub use reconfig::{AddVoter, ReconfigOutcome, RemoveVoter, UpdateVoter};
-pub use server::is_valid_client_info;
+pub use server::{describe_quorum::describe_quorum, is_valid_client_info};
 pub use types::{
     AppData, AppDataResponse, DelegationTokenMutation, Node, NodeId, OffsetReservation,
     SubmitChangeResult,

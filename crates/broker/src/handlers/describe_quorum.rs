@@ -4,28 +4,22 @@
 //! Krabka's `KRaft` setup runs one raft log, the controller quorum that
 //! `controller_quorum_voters` configures, and applies committed records to
 //! `MetadataImage`. Clients, such as the JVM `kafka-metadata-quorum
-//! --describe` admin tool, ask for `__cluster_metadata` partition 0. The
-//! broker answers from [`krabka_raft::ControllerHandle::quorum_state`]:
+//! --describe` admin tool, ask for `__cluster_metadata` partition 0.
 //!
-//! - `leader_id` is `current_leader`. It is `-1` when the leader is unknown,
-//!   for example during an election.
-//! - `leader_epoch` is `current_term`, capped at `i32::MAX`.
-//! - `high_watermark` is `last_applied_index` on this node's state machine,
-//!   capped at `i64::MAX`.
-//! - `current_voters` is openraft's voter set. Each voter's `log_end_offset`
-//!   is openraft's `replication.matched.index`. openraft fills the per-voter
-//!   replication map only on the leader, so on a follower every voter falls
-//!   back to the JVM `-1` "Unknown" sentinel. Callers are meant to route
-//!   `kafka-metadata-quorum --describe` to the leader.
-//! - `observers` is empty, because Krabka has no observer role yet.
+//! Kafka's `KafkaApis` forwards `DescribeQuorum` from the broker listener to
+//! the active controller unconditionally (`forwardToController`), so this
+//! handler does the same: [`krabka_raft::ControllerHandle::forward_raw`]
+//! (reached through [`crate::metadata_source::MetadataSource::forward_raw`])
+//! sends the raw request on to the active controller whenever this node
+//! itself is not the leader, whether it is a broker-only observer or a
+//! combined/controller node. A node that IS the active controller answers
+//! locally, from [`krabka_raft::ControllerHandle::quorum_snapshot`], with
+//! the same [`krabka_raft::describe_quorum`] builder the controller listener
+//! uses for a request that arrives there directly (#814, #1034) -- one
+//! implementation on both listeners.
 //!
-//! For any topic OTHER than `__cluster_metadata`, the per-partition row gets
-//! `INVALID_TOPIC_EXCEPTION` (17). That matches the JVM behavior on a
-//! non-metadata topic.
-//!
-//! The authorization gate lives in `authz`, the per-partition rows in
-//! `topics`, and the KIP-853 `Nodes` block in `nodes`. This file holds only
-//! the wire entry point that stitches them together.
+//! The authorization gate lives in `authz`. This file holds the wire entry
+//! point: the gate, the forward, and the local answer.
 
 use bytes::Bytes;
 use krabka_protocol::{
@@ -37,10 +31,8 @@ use krabka_protocol::{
 };
 
 mod authz;
-mod nodes;
-mod topics;
 
-use self::{authz::cluster_describe_denied, nodes::build_nodes, topics::build_topic_responses};
+use self::authz::cluster_describe_denied;
 use crate::{broker::Broker, codes, error::BrokerError};
 
 #[tracing::instrument(
@@ -69,7 +61,9 @@ pub(crate) async fn handle(
         return crate::handlers::encode_response(&resp, version);
     }
 
-    // Broker-only observer forward to the active controller quorum (#392)
+    // Forward to the active controller whenever this node is not it (#392,
+    // #1034): a broker-only observer always forwards; a combined/controller
+    // node forwards only while it is not the leader.
     if let Some(forwarded) = broker
         .controller
         .forward_raw(55, version, Bytes::copy_from_slice(req_bytes))
@@ -81,25 +75,17 @@ pub(crate) async fn handle(
     let mut cur: &[u8] = req_bytes;
     let req = DescribeQuorumRequest::decode(&mut cur, version)?;
 
-    // Snapshot raft state once — cheap clone of openraft's metrics
-    // watch value. Carries the live current_term, last_applied_index,
-    // and per-voter matched-log indexes (the last one populated only
-    // when this node is the leader).
-    let quorum = broker.controller.quorum_state();
-
-    let topics = build_topic_responses(&req.topics, &quorum);
-
-    // KIP-853 (v2+) adds a top-level `Nodes` block carrying each voter's
-    // directory id + listeners. Encoding skips it on v0/v1 (the fields are
-    // gated `versions: "2+"`), so populating it unconditionally stays
-    // byte-exact for older clients.
-    let nodes = build_nodes(&quorum);
-
-    let resp = DescribeQuorumResponse {
-        error_code: codes::NONE,
-        topics,
-        nodes,
-        ..Default::default()
+    // Reaching here means `forward_raw` answered `None`: this node holds a
+    // quorum snapshot and is the active controller, the only case a
+    // `MetadataSource` implementer declines to forward on.
+    let Some(quorum) = broker.controller.quorum_snapshot() else {
+        let resp = DescribeQuorumResponse {
+            error_code: codes::NOT_LEADER_OR_FOLLOWER,
+            ..Default::default()
+        };
+        return crate::handlers::encode_response(&resp, version);
     };
+
+    let resp = krabka_raft::describe_quorum(&req, &quorum);
     crate::handlers::encode_response(&resp, version)
 }

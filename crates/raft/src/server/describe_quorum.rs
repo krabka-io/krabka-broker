@@ -69,7 +69,15 @@ fn replica_state(
 
 /// Answers a decoded `DescribeQuorum` request from `quorum`, this node's
 /// consensus snapshot.
-pub(super) fn describe_quorum(
+///
+/// Shared between the controller listener (this module's own caller,
+/// `kip853::describe_quorum_response`) and the broker listener, which
+/// forwards to the active controller and answers with this same builder once
+/// it holds the leader's own snapshot (`crates/broker/src/handlers/
+/// describe_quorum.rs`) -- one implementation on both listeners (#814,
+/// #1034).
+#[must_use]
+pub fn describe_quorum(
     request: &DescribeQuorumRequest,
     quorum: &QuorumStateSnapshot,
 ) -> DescribeQuorumResponse {
