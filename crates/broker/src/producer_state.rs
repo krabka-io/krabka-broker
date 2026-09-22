@@ -29,8 +29,8 @@ mod tests;
 #[cfg(test)]
 pub(crate) use self::decision::check_pure;
 pub use self::{
-    decision::Decision,
-    entry::{PartitionProducerState, ProducerEntry},
+    decision::{Checked, Decision},
+    entry::{NO_EARLIER_BATCHES, PartitionProducerState, ProducerEntry, RetainedBatch},
 };
 
 /// Per-partition idempotent-producer state, nested under the owning
@@ -80,12 +80,13 @@ impl ProducerState {
         let (base_offset, last_timestamp) = append;
         let handle = self.handle(topic, partition);
         let mut s = handle.lock().await;
-        if s.entries
-            .get(&ProducerId(producer_id))
-            .is_some_and(|existing| existing.epoch > producer_epoch)
-        {
+        let existing = s.entries.get(&ProducerId(producer_id)).copied();
+        if existing.is_some_and(|existing| existing.epoch > producer_epoch) {
             return;
         }
+        let earlier = existing.map_or(NO_EARLIER_BATCHES, |existing| {
+            existing.earlier_after_append(producer_epoch)
+        });
         let last_sequence = increment_sequence(base_sequence, last_offset_delta);
         let last_offset = base_offset + i64::from(last_offset_delta);
         s.entries.insert(
@@ -97,6 +98,7 @@ impl ProducerState {
                 base_offset,
                 last_timestamp,
                 last_activity_ms: crate::txn::util::now_millis(),
+                earlier,
             },
         );
     }
@@ -142,6 +144,8 @@ impl ProducerState {
         let mut s = handle.lock().await;
         s.entries
             .retain(|_pid, e| e.last_offset >= 0 && e.last_offset < offset);
+        // Every earlier batch ends below the last batch, so a kept entry keeps
+        // all of them.
     }
 
     /// Resolve the per-partition state handle, and create it on a miss.

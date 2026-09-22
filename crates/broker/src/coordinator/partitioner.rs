@@ -81,5 +81,71 @@ mod tests {
         check!(partition_for_group_with_count("consumer-group", 50) == 38);
         check!(partition_for_group_with_count("abc", 7) == 6);
         check!(partition_for_group_with_count("abc", 1) == 0);
+        check!(partition_for_group_with_count("polygenelubricants", 50) == 0);
+    }
+
+    #[test]
+    fn partition_for_group_falls_back_when_offsets_topic_is_unloaded() {
+        let image = MetadataImage::new(uuid::Uuid::nil());
+        check!(partition_for_group(&image, "consumer-group") == 38);
+    }
+
+    #[test]
+    fn partition_for_group_uses_live_partition_count_when_present() {
+        use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
+        use uuid::Uuid;
+
+        let mut image = MetadataImage::new(Uuid::nil());
+        image.apply(&MetadataRecord::V1Topic(TopicRecord {
+            name: OFFSETS_TOPIC.into(),
+            topic_id: Uuid::from_u128(1),
+            partitions: 10,
+            replication_factor: 1,
+        }));
+        for p in 0..10 {
+            image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+                topic: OFFSETS_TOPIC.into(),
+                partition: p,
+                leader: krabka_raft::NodeId(1),
+                ..PartitionRecord::default()
+            }));
+        }
+        check!(partition_for_group(&image, "consumer-group") == 8);
+    }
+
+    #[test]
+    fn local_partition_for_group_routes_or_reports_errors() {
+        use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
+        use uuid::Uuid;
+
+        let empty = MetadataImage::new(Uuid::nil());
+        check!(
+            local_partition_for_group(&empty, krabka_raft::NodeId(1), "consumer-group")
+                == Err(GroupRoutingError::Unavailable)
+        );
+
+        let mut image = MetadataImage::new(Uuid::nil());
+        image.apply(&MetadataRecord::V1Topic(TopicRecord {
+            name: OFFSETS_TOPIC.into(),
+            topic_id: Uuid::from_u128(1),
+            partitions: 10,
+            replication_factor: 1,
+        }));
+        for p in 0..10 {
+            image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+                topic: OFFSETS_TOPIC.into(),
+                partition: p,
+                leader: krabka_raft::NodeId(1),
+                ..PartitionRecord::default()
+            }));
+        }
+
+        check!(
+            local_partition_for_group(&image, krabka_raft::NodeId(1), "consumer-group") == Ok(8)
+        );
+        check!(
+            local_partition_for_group(&image, krabka_raft::NodeId(2), "consumer-group")
+                == Err(GroupRoutingError::NotCoordinator)
+        );
     }
 }

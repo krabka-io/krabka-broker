@@ -246,6 +246,8 @@ mod tests {
         let read = seg.read(Offset(0), NO_LIMIT).unwrap();
         assert2::assert!(seg.last_offset() == Offset(2));
         assert2::assert!(read == vec![sample_batch(0, 3, 100)]);
+        let expected_size: usize = read.iter().map(RecordBatch::encoded_len).sum();
+        assert2::assert!(seg.size().bytes_usize() == expected_size);
     }
 
     #[test]

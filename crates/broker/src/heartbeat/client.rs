@@ -96,7 +96,8 @@ fn heartbeat_connection_options(broker_id: i32, interval: Time) -> ConnectionOpt
     let timeout = heartbeat_rpc_timeout(interval);
     ConnectionOptions {
         client_id: format!("krabka-broker-{broker_id}-heartbeat"),
-        connect_timeout: timeout,
+        socket_connection_setup_timeout: timeout,
+        socket_connection_setup_timeout_max: timeout,
         request_timeout: timeout,
         ..ConnectionOptions::default()
     }
@@ -313,7 +314,8 @@ mod tests {
         let opts = heartbeat_connection_options(9, millis(500));
 
         check!(opts.client_id == "krabka-broker-9-heartbeat");
-        check!(opts.connect_timeout == secs(1));
+        check!(opts.socket_connection_setup_timeout == secs(1));
+        check!(opts.socket_connection_setup_timeout_max == secs(1));
         check!(opts.request_timeout == secs(1));
     }
 

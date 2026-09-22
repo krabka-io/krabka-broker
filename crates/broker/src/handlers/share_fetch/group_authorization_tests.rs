@@ -166,6 +166,13 @@ type Outcome<T> = (i16, Grants, T);
 async fn share_fetch_checks_group_read_before_topic_read() {
     let (broker, _dir) = start().await;
     let topic_id = create_topic(&broker, "share-authorization").await;
+    crate::test_support::initialize_share_state(
+        &broker,
+        GROUP,
+        uuid::Uuid::from_bytes(topic_id.0),
+        0,
+    )
+    .await;
     let shared = broker.broker_arc_for_test();
     let address = peer();
 
@@ -249,6 +256,13 @@ async fn share_fetch_checks_group_read_before_topic_read() {
 async fn share_acknowledge_checks_group_read_before_topic_read() {
     let (broker, _dir) = start().await;
     let topic_id = create_topic(&broker, "share-authorization").await;
+    crate::test_support::initialize_share_state(
+        &broker,
+        GROUP,
+        uuid::Uuid::from_bytes(topic_id.0),
+        0,
+    )
+    .await;
     let shared = broker.broker_arc_for_test();
     let address = peer();
     let topic = uuid::Uuid::from_bytes(topic_id.0);

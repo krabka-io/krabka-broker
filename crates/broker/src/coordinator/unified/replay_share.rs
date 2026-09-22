@@ -301,6 +301,7 @@ mod tests {
         };
         let current = share::persistence::ShareGroupCurrentMemberAssignmentValue {
             member_epoch: 6,
+            previous_member_epoch: 5,
             assigned_partitions: vec![(proto_uuid(4), vec![1])],
         };
 

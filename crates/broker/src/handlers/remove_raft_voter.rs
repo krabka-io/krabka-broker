@@ -8,7 +8,12 @@
 //! The handler needs `Alter` on `Cluster("kafka-cluster")`. On Deny, the whole
 //! response carries `error_code = CLUSTER_AUTHORIZATION_FAILED (31)`.
 //!
-//! [`super::add_raft_voter`] shares the map from an outcome to an error code.
+//! After the ACL gate, the request runs the controller listener's own checks
+//! in `krabka_raft::voter_requests`, in the order of Kafka's
+//! `KafkaRaftClient.handleRemoveVoterRequest`: a foreign cluster id is
+//! `INCONSISTENT_CLUSTER_ID (104)`, a node that is not the leader answers
+//! `NOT_LEADER_OR_FOLLOWER (6)`, and an invalid voter key is
+//! `INVALID_REQUEST (42)`.
 
 use bytes::Bytes;
 use krabka_protocol::{
@@ -18,14 +23,9 @@ use krabka_protocol::{
         remove_raft_voter_response::RemoveRaftVoterResponse,
     },
 };
-use krabka_raft::reconfig::RemoveVoter;
+use krabka_raft::{reconfig::RemoveVoter, voter_requests};
 
-use crate::{
-    broker::Broker,
-    codes,
-    error::BrokerError,
-    handlers::{add_raft_voter::outcome_to_code, cluster_alter_denied},
-};
+use crate::{broker::Broker, codes, error::BrokerError, handlers::cluster_alter_denied};
 
 #[tracing::instrument(
     name = "handle_remove_raft_voter",
@@ -66,38 +66,32 @@ pub(crate) async fn handle(
         return forwarded.map_err(BrokerError::from);
     }
 
-    let cluster_id = image.cluster_id().to_string();
-    if req
-        .cluster_id
-        .as_deref()
-        .is_some_and(|request_cluster| request_cluster != cluster_id)
-        || req.voter_directory_id == krabka_protocol::primitives::uuid::Uuid::ZERO
+    // The request checks, their order and their codes are the controller
+    // listener's own (`krabka_raft::voter_requests`).
+    let Some(quorum) = broker.controller.quorum_snapshot() else {
+        return encode_resp(
+            version,
+            &RemoveRaftVoterResponse {
+                error_code: voter_requests::NOT_LEADER_OR_FOLLOWER,
+                ..Default::default()
+            },
+        );
+    };
+    if let Some((error_code, error_message)) =
+        voter_requests::remove_voter_refusal(&req, &image.cluster_id().to_string(), &quorum)
     {
         return encode_resp(
             version,
             &RemoveRaftVoterResponse {
-                error_code: codes::INVALID_REQUEST,
-                error_message: Some("cluster_id and voter_directory_id must be valid".into()),
+                error_code,
+                error_message,
                 ..Default::default()
             },
         );
     }
 
-    let Ok(id) = u64::try_from(req.voter_id) else {
-        return encode_resp(
-            version,
-            &RemoveRaftVoterResponse {
-                error_code: codes::INVALID_REQUEST,
-                error_message: Some(format!(
-                    "voter_id must be non-negative, got {}",
-                    req.voter_id
-                )),
-                ..Default::default()
-            },
-        );
-    };
-
-    let (error_code, error_message) = outcome_to_code(
+    let id = u64::try_from(req.voter_id).unwrap_or_default();
+    let (error_code, error_message) = voter_requests::reconfiguration_refusal(
         broker
             .controller
             .remove_voter(RemoveVoter {
@@ -105,6 +99,8 @@ pub(crate) async fn handle(
                 directory_id: uuid::Uuid::from_bytes(req.voter_directory_id.0),
             })
             .await,
+        req.voter_id,
+        req.voter_directory_id,
     );
 
     if error_code == codes::NONE {
@@ -235,11 +231,12 @@ mod tests {
             .expect("handle");
         let resp = decode_response(&resp, version);
 
-        assert!(resp.error_code == codes::INVALID_REQUEST);
         assert!(
-            resp.error_message.as_deref().is_some_and(|m| {
-                m.contains("voter_id must be non-negative") && m.contains("-7")
-            })
+            resp == RemoveRaftVoterResponse {
+                error_code: codes::INVALID_REQUEST,
+                error_message: Some("Remove voter request didn't include a valid voter".into()),
+                ..Default::default()
+            }
         );
         broker_handle.shutdown().await;
     }

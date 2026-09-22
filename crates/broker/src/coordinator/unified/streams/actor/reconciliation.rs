@@ -19,10 +19,9 @@ use crate::{
         config::StreamsGroupConfig,
         persistence::StreamsGroupTopologyValue,
         state::{
-            StreamsGroupState, StreamsGroupStatePhase, StreamsMemberAssignmentState,
-            StreamsMemberState, StreamsTargetAssignment,
+            StreamsGroupState, StreamsGroupStatePhase, StreamsMemberState, StreamsTargetAssignment,
         },
-        topology::{self, status as topo_status},
+        topology,
     },
     metadata_source::MetadataSource,
 };
@@ -33,9 +32,11 @@ use crate::{
 /// member supplies a topology, the group stays `NotReady` with an empty
 /// target. Members still advance their epoch but get no tasks.
 ///
-/// Otherwise the function validates the topology, derives the task counts and
-/// the partition metadata, makes sure the internal topics exist, and runs the
-/// assignor.
+/// Otherwise the function configures the topology against the current image
+/// ([`topology::configure_topics`]), makes sure the internal topics exist, and
+/// runs the assignor. A topology that cannot be configured leaves the group
+/// `NotReady`: the heartbeat checks the topology before it gets here, so that
+/// only a metadata change between the two checks reaches that path.
 pub(super) async fn reconcile(
     actor: &mut ActorState,
     config: &StreamsGroupConfig,
@@ -44,7 +45,42 @@ pub(super) async fn reconcile(
     if !actor.state.dirty {
         return;
     }
+    let target_epoch = actor.state.target.epoch;
+    reconcile_dirty(actor, config, metadata_source).await;
+    if actor.state.target.epoch != target_epoch {
+        actor.target_changed = true;
+    }
+}
 
+/// Configures the topology of a seeded group against the current image
+/// without a new target, as Kafka's first heartbeat after a load does.
+///
+/// The function records the topology status and the internal topics that the
+/// image does not hold, so that the heartbeat creates them again. It runs
+/// once per actor, and a reconcile makes it unnecessary.
+pub(super) fn configure_after_load(actor: &mut ActorState, source: &Arc<dyn MetadataSource>) {
+    if actor.configured {
+        return;
+    }
+    let Some(topology) = actor.topology.clone() else {
+        return;
+    };
+    actor.configured = true;
+    let image = source.current_image();
+    // A topology that cannot be configured gets its error from the heartbeat
+    // check, so it records nothing here.
+    let Ok(configured) = topology::configure_topics(&topology, &image) else {
+        return;
+    };
+    actor.missing_internal_topics = topology::internal_topic_specs(&configured);
+    actor.state.status = configured.status;
+}
+
+async fn reconcile_dirty(
+    actor: &mut ActorState,
+    config: &StreamsGroupConfig,
+    metadata_source: Option<&Arc<dyn MetadataSource>>,
+) {
     let (Some(source), Some(topology)) = (metadata_source, actor.topology.clone()) else {
         // No metadata source or no topology yet: cannot assign. Bump the epoch
         // and install an empty target so members still advance (to an empty
@@ -53,17 +89,29 @@ pub(super) async fn reconcile(
         return;
     };
 
-    let image = source.current_image();
+    let mut image = source.current_image();
+    actor.configured = true;
+    actor.metadata_hash = topology::metadata_hash(&topology, &image);
+    actor.missing_internal_topics.clear();
+    actor.partition_metadata = Some(topology::partition_metadata(&topology, &image));
 
-    // 1. Validation status (missing source / copartition mismatch).
-    let mut status = topology::validate_topology(&topology, &image);
+    let mut configured = match topology::configure_topics(&topology, &image) {
+        Ok(configured) => configured,
+        Err(error) => {
+            tracing::warn!(
+                group_id = %actor.state.group_id,
+                %error,
+                "streams topology cannot be configured",
+            );
+            actor.state.status = None;
+            install_empty_target(&mut actor.state, StreamsGroupStatePhase::NotReady);
+            return;
+        }
+    };
 
-    // 2. Derive task counts + the external-topic partition snapshot.
-    let derived = topology::derive_tasks(&topology, &image);
-    actor.partition_metadata = Some(derived.partition_metadata.clone());
-
-    // 3. Materialize required internal topics; any still-missing → status.
-    let specs = topology::required_internal_topics(&topology, &derived.num_tasks);
+    // Materialize the internal topics that the image does not hold. When they
+    // all exist afterwards, configure again against the new image.
+    let specs = topology::internal_topic_specs(&configured);
     if !specs.is_empty() {
         match topology::ensure_internal_topics(
             source,
@@ -72,52 +120,39 @@ pub(super) async fn reconcile(
         )
         .await
         {
-            Ok(still_missing) => {
-                if !still_missing.is_empty() {
-                    status.push((
-                        topo_status::MISSING_INTERNAL_TOPICS,
-                        format!(
-                            "internal topics not yet created: {}",
-                            still_missing.join(", ")
-                        ),
-                    ));
+            Ok(still_missing) if still_missing.is_empty() => {
+                image = source.current_image();
+                if let Ok(reconfigured) = topology::configure_topics(&topology, &image) {
+                    actor.metadata_hash = topology::metadata_hash(&topology, &image);
+                    configured = reconfigured;
                 }
             }
-            Err(e) => {
-                status.push((
-                    topo_status::MISSING_INTERNAL_TOPICS,
-                    format!("internal-topic creation failed: {e}"),
-                ));
+            Ok(still_missing) => {
+                actor.missing_internal_topics = specs
+                    .into_iter()
+                    .filter(|spec| still_missing.contains(&spec.name))
+                    .collect();
+            }
+            Err(error) => {
+                tracing::warn!(
+                    group_id = %actor.state.group_id,
+                    %error,
+                    "streams internal topic creation failed",
+                );
+                actor.missing_internal_topics = specs;
             }
         }
     }
 
-    // Preserve any non-topology status (e.g. SHUTDOWN_APPLICATION) the actor
-    // already recorded; topology-derived status replaces the rest.
-    let preserved: Vec<(i8, String)> = actor
-        .state
-        .status
-        .iter()
-        .filter(|(c, _)| *c == topo_status::SHUTDOWN_APPLICATION)
-        .cloned()
-        .collect();
+    actor.state.status.clone_from(&configured.status);
 
-    let blocking = status.iter().any(|(c, _)| {
-        *c == topo_status::MISSING_SOURCE_TOPICS
-            || *c == topo_status::INCORRECTLY_PARTITIONED_TOPICS
-            || *c == topo_status::MISSING_INTERNAL_TOPICS
-    });
-
-    status.extend(preserved);
-    actor.state.status = status;
-
-    if blocking {
+    if !configured.is_ready() {
         install_empty_target(&mut actor.state, StreamsGroupStatePhase::NotReady);
         return;
     }
 
-    // 4. Build assignor inputs, compute the target, and install it.
-    compute_and_install_target(actor, config, &topology, &derived.num_tasks);
+    // Build assignor inputs, compute the target, and install it.
+    compute_and_install_target(actor, config, &topology, &configured.number_of_tasks());
 }
 
 /// Runs the assignor over the resolved topology and installs its output as the
@@ -174,19 +209,9 @@ pub(super) fn compute_and_install_target(
         return;
     }
     actor.state.install_target(target);
-
-    let pending_reconciliation = actor
-        .state
-        .members
-        .values()
-        .any(|m| m.assignment_state != StreamsMemberAssignmentState::Stable);
-    actor.state.phase = if actor.state.members.is_empty() {
-        StreamsGroupStatePhase::Empty
-    } else if pending_reconciliation {
-        StreamsGroupStatePhase::Reconciling
-    } else {
-        StreamsGroupStatePhase::Stable
-    };
+    // A computed target ends `NotReady`; the members then reconcile toward it.
+    actor.state.phase = StreamsGroupStatePhase::Reconciling;
+    actor.state.refresh_phase();
     actor.state.dirty = false;
 }
 

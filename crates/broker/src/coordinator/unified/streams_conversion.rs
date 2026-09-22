@@ -14,6 +14,73 @@ use super::{
 };
 
 impl GroupCoordinator {
+    /// The `error_message` of the `GROUP_ID_NOT_FOUND` answer to a
+    /// `StreamsGroupHeartbeat` for `group_id`, or `None` when the group is a
+    /// streams group or the heartbeat may create one.
+    ///
+    /// Kafka creates a streams group only on a join (`getOrCreateStreamsGroup`),
+    /// in place of nothing or of an empty classic group, which this method
+    /// converts. Any other heartbeat needs a streams group
+    /// (`getStreamsGroupOrThrow`, and `streamsGroup` for a leave). A group of
+    /// another type is never a streams group (`castToStreamsGroup`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the classic group tombstone cannot be appended.
+    pub(crate) async fn streams_group_lookup_error(
+        self: &Arc<Self>,
+        group_id: &str,
+        member_epoch: i32,
+        now_ms: i64,
+    ) -> Result<Option<String>, crate::error::BrokerError> {
+        let joining = member_epoch == 0;
+        let not_streams = format!("Group {group_id} is not a streams group.");
+        match self.group_type(group_id) {
+            Some(GroupType::Streams) => return Ok(None),
+            Some(GroupType::Share | GroupType::NextGen) => return Ok(Some(not_streams)),
+            Some(GroupType::Classic) if !joining => return Ok(Some(not_streams)),
+            Some(GroupType::Classic) => {
+                return Ok(
+                    match self
+                        .try_convert_classic_to_streams(group_id, now_ms)
+                        .await?
+                    {
+                        streams::migration::ConvertOutcome::RejectLiveMembers => Some(not_streams),
+                        _ => None,
+                    },
+                );
+            }
+            None => {}
+        }
+        // A consumer group lives in the `groups` registry without a type lock.
+        // `ClassicInspect` answers only for a classic group, and an empty
+        // classic group is free for a streams group.
+        if let Some(handle) = self.find(group_id) {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            // An actor that has stopped holds no group.
+            let classic_members = if handle
+                .tx
+                .send(GroupActorMessage::ClassicInspect { reply: tx })
+                .await
+                .is_ok()
+            {
+                rx.await.ok().map(|view| view.members.len())
+            } else {
+                Some(0)
+            };
+            if classic_members != Some(0) {
+                return Ok(Some(not_streams));
+            }
+        }
+        Ok((!joining).then(|| {
+            if member_epoch < 0 {
+                format!("Group {group_id} not found.")
+            } else {
+                format!("Streams group {group_id} not found.")
+            }
+        }))
+    }
+
     /// KIP-1071 cold upgrade: convert a drained classic `group_id` to a
     /// streams group in place.
     ///

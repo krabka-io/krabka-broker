@@ -336,6 +336,7 @@ async fn snapshot_reports_committed_entries() {
             base_offset: 7,
             last_timestamp: 1,
             last_activity_ms: snap[0].1.last_activity_ms,
+            earlier: crate::producer_state::NO_EARLIER_BATCHES,
         },
     )];
     assert!(snap == expected);
@@ -344,6 +345,56 @@ async fn snapshot_reports_committed_entries() {
         assert!(
             s.snapshot(topic, partition).await == vec![],
             "case: {topic}/{partition}"
+        );
+    }
+}
+
+/// The log keeps one batch per producer, so the mirror of a marker entry
+/// keeps the tracker's earlier batches only when the marker leaves the epoch
+/// and the last batch as they are (transaction version 1). A marker at a new
+/// epoch clears them, as Kafka's `ProducerStateEntry.maybeUpdateProducerEpoch`
+/// does.
+#[tokio::test]
+async fn a_marker_mirror_keeps_the_earlier_batches_only_at_the_same_epoch() {
+    let marker_entry =
+        |epoch: i16, last_sequence: i32, last_offset: i64| krabka_log::ProducerSnapshotEntry {
+            producer_id: krabka_log::ProducerId(1000),
+            producer_epoch: epoch,
+            last_sequence,
+            last_offset: krabka_log::Offset(last_offset),
+            offset_delta: 0,
+            // The marker's own timestamp, which differs from the data batch.
+            timestamp: 9,
+            coordinator_epoch: 0,
+            current_txn_first_offset: None,
+        };
+    let cases = [
+        (
+            "transaction version 1 marker",
+            marker_entry(0, 1, 1),
+            Decision::Duplicate { base_offset: 0 },
+            2,
+        ),
+        (
+            "transaction version 2 marker",
+            marker_entry(1, -1, -1),
+            Decision::Fenced,
+            9,
+        ),
+    ];
+    for (name, entry, want, last_timestamp) in cases {
+        let s = ProducerState::new();
+        commit!(s, "t", PartitionIndex(0), 1000, 0, 0, 0, 0, 1).await;
+        commit!(s, "t", PartitionIndex(0), 1000, 0, 1, 0, 1, 2).await;
+        s.mirror_log_entries("t", PartitionIndex(0), vec![entry])
+            .await;
+        check!(
+            s.check("t", PartitionIndex(0), 1000, 0, 0, 0).await == want,
+            "{name}"
+        );
+        check!(
+            s.snapshot("t", PartitionIndex(0)).await[0].1.last_timestamp == last_timestamp,
+            "{name}"
         );
     }
 }

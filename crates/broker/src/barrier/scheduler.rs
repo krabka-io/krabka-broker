@@ -49,3 +49,57 @@ async fn inject_due(coordinator: &BarrierCoordinator, controller: &dyn MetadataS
         info!(count = injected.len(), "barrier scheduler: injected");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use krabka_units::millis;
+
+    use super::*;
+    use crate::barrier::coordinator::test_support::{Fixture, GROUP, spec};
+
+    #[tokio::test]
+    async fn inject_due_injects_due_group() {
+        let fixture = Fixture::new();
+        let coordinator = fixture.coordinator().await;
+        let controller = Arc::clone(&fixture.source) as Arc<dyn MetadataSource>;
+
+        coordinator
+            .create_group(GROUP, spec(&["orders"], Some(millis(1)), 5))
+            .await
+            .expect("create group");
+
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+
+        let before = coordinator.list_cuts(GROUP).await.expect("list cuts");
+        assert2::check!(before.is_empty());
+
+        inject_due(&coordinator, controller.as_ref()).await;
+
+        let after = coordinator.list_cuts(GROUP).await.expect("list cuts");
+        assert2::check!(after.len() == 1);
+    }
+
+    #[tokio::test]
+    async fn run_ticks_and_shuts_down_on_cancellation() {
+        let fixture = Fixture::new();
+        let coordinator = Arc::new(fixture.coordinator().await);
+        let controller = Arc::clone(&fixture.source) as Arc<dyn MetadataSource>;
+
+        coordinator
+            .create_group(GROUP, spec(&["orders"], Some(millis(1)), 5))
+            .await
+            .expect("create group");
+
+        let shutdown = CancellationToken::new();
+        let task = tokio::spawn(run(
+            Arc::clone(&coordinator),
+            Arc::clone(&controller),
+            shutdown.clone(),
+        ));
+
+        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+        assert2::check!(!task.is_finished());
+        shutdown.cancel();
+        task.await.expect("task completes on shutdown");
+    }
+}

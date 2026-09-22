@@ -24,6 +24,44 @@ pub(super) struct ListenerStartup {
         Arc<DashMap<(String, PartitionIndex), Arc<crate::future_log::FutureLogState>>>,
 }
 
+/// Binds the default data-plane listener before the broker registers itself,
+/// when the config asks for an OS-assigned port and the caller supplied no
+/// data-plane listener of its own.
+///
+/// `register_broker` reads `advertised_listener` to build the
+/// `BrokerRegistrationRecord` this node publishes to the controller, and it
+/// runs inside `start_metadata_phase`, before [`bind_listeners_and_recover_moves`]
+/// binds the data plane. A `:0` config would therefore publish port 0 to every
+/// other broker's `Metadata` and `ListGroups` routing. This binds the listener
+/// now and writes the port it got into `listen_addr` and `advertised_listener`
+/// first, exactly as `bind_ephemeral_controller_listener` does for the
+/// controller listener. The bound socket is kept in `data_plane_listeners`, so
+/// `bind_listeners_and_recover_moves` adopts it later instead of binding
+/// again, and no other process can take the port in between.
+///
+/// A caller-supplied data-plane listener, a concrete port, and a
+/// `config.listeners` (KIP-113 multi-listener) setup all keep their config as
+/// it is.
+pub(super) async fn bind_ephemeral_data_plane_listener(
+    config: &mut BrokerConfig,
+    data_plane_listeners: &mut Vec<TcpListener>,
+) -> Result<(), BrokerError> {
+    if !data_plane_listeners.is_empty()
+        || !config.listeners.is_empty()
+        || config.listen_addr.port() != 0
+    {
+        return Ok(());
+    }
+    let listener = TcpListener::bind(config.listen_addr).await?;
+    let bound = listener.local_addr()?;
+    config.listen_addr = bound;
+    if let Some((host, _)) = config.advertised_listener.rsplit_once(':') {
+        config.advertised_listener = format!("{host}:{}", bound.port());
+    }
+    data_plane_listeners.push(listener);
+    Ok(())
+}
+
 pub(super) async fn bind_listeners_and_recover_moves(
     config: &mut BrokerConfig,
     mut supplied_listeners: Vec<TcpListener>,

@@ -1,8 +1,10 @@
-//! `DeleteRecords` (`api_key=21`). Only the leader trims its local segments.
+//! `DeleteRecords` (`api_key=21`). The leader trims its local segments, and
+//! the row waits until every live follower reports a log start at or above
+//! the trim point, as Kafka's `DeleteRecords` purgatory does.
 //!
-//! The follower picks up the new `log_start_offset` on its next Fetch, through
-//! the existing `OFFSET_OUT_OF_RANGE` recovery path. This matches the Apache
-//! Kafka model.
+//! Each follower raises its own log start to the leader's `log_start_offset`
+//! from its next Fetch response, and reports it in the Fetch after that. The
+//! `low_watermark` module holds the wait.
 //!
 //! A trim is bounded by the current high watermark and, on a topic that
 //! schedules delivery, by the partition's delivery watermark. See
@@ -70,6 +72,7 @@ use uuid::Uuid;
 
 mod authz;
 mod gate;
+mod low_watermark;
 mod offsets;
 mod response;
 
@@ -143,6 +146,9 @@ pub(crate) async fn handle(
     // and an exact retry at the current log start answer success and delete
     // nothing, so the wire code cannot say which partitions were trimmed.
     let mut trimmed: Vec<krabka_audit::AuditResource> = Vec::new();
+    // The rows that trimmed on this leader and wait for the followers.
+    let mut waiting: Vec<low_watermark::Waiting> = Vec::new();
+    let timeout_ms = req.timeout_ms;
 
     for topic in req.topics {
         // Per-topic ACL check: if denied, mark every partition in the topic.
@@ -162,7 +168,15 @@ pub(crate) async fn handle(
             Vec::with_capacity(topic.partitions.len());
 
         for fp in topic.partitions {
-            let (row, deleted) = trim_one(&env, &mut spent, &topic.name, &fp).await;
+            let (row, deleted, waiting_for) = trim_one(&env, &mut spent, &topic.name, &fp).await;
+            if let Some(required) = waiting_for {
+                waiting.push(low_watermark::Waiting {
+                    row: (topic_results.len(), part_results.len()),
+                    topic: topic.name.clone(),
+                    partition: row.partition_index,
+                    required,
+                });
+            }
             if deleted {
                 trimmed.push(crate::handlers::audit_resource(
                     "Partition",
@@ -174,6 +188,8 @@ pub(crate) async fn handle(
 
         topic_results.push(topic_result(topic.name, part_results));
     }
+
+    low_watermark::await_followers(broker, &mut topic_results, waiting, timeout_ms).await;
 
     // A gated trim audits itself as a `PrivilegedAction`. On a cluster with no
     // approver set the gate is inert, so every partition that was actually
@@ -294,9 +310,9 @@ async fn trim_one(
     spent: &mut HashSet<Uuid>,
     topic: &str,
     fp: &DeleteRecordsPartition,
-) -> (DeleteRecordsPartitionResult, bool) {
+) -> (DeleteRecordsPartitionResult, bool, Option<i64>) {
     let index = fp.partition_index;
-    let refused = |code| (error_partition_result(index, code), false);
+    let refused = |code| (error_partition_result(index, code), false, None);
 
     // Kafka's `ReplicaManager.deleteRecordsOnLocalLog` refuses every partition
     // of an internal topic with `INVALID_TOPIC_EXCEPTION` before it looks for
@@ -361,7 +377,7 @@ async fn trim_one(
     // gather two signatures again over a typo.
     let consumed = match authorize_trim(env.image, &env.broker.config.break_glass, topic, index) {
         Ok(consumed) => consumed,
-        Err(denial) => return (refuse_trim(env, topic, index, &denial), false),
+        Err(denial) => return (refuse_trim(env, topic, index, &denial), false, None),
     };
 
     let leo = part.log_end_offset();
@@ -441,12 +457,31 @@ async fn trim_one(
     }
 
     match part.trim_to_offset(target).await {
-        Ok(new_start) => {
+        Ok(_) => {
             // On a diskless partition the local trim frontier is already past
             // `target` in the steady state, so `new_start` says nothing about
             // what a client can still read. The floor does, and it is also the
-            // low watermark the response carries.
-            let low_watermark = if part.diskless { target.0 } else { new_start.0 };
+            // low watermark the response carries. Its followers learn the
+            // floor from the WAL index, so the row does not wait for them.
+            //
+            // Any other partition answers Kafka's `lowWatermarkIfLeader`: the
+            // lowest log start of the leader and of every live follower. When
+            // that is still below the offset the request asked for, the row
+            // waits for the followers (see `low_watermark::await_followers`).
+            // Kafka's required offset is the requested one, with `-1` read as
+            // the high watermark; a trim capped below it by the delivery
+            // watermark requires only the offset it trimmed to.
+            let (low_watermark, waiting_for) = if part.diskless {
+                (target.0, None)
+            } else {
+                let requested = if fp.offset == -1 { hw.0 } else { fp.offset };
+                let required = target.0.min(requested);
+                let low_watermark = low_watermark::current(env.broker, &part).await.0;
+                (
+                    low_watermark,
+                    (low_watermark < required).then_some(required),
+                )
+            };
             audit_transition(
                 &env.broker.audit_log,
                 &env.broker.config.break_glass,
@@ -459,7 +494,18 @@ async fn trim_one(
                     reason: "records deleted below the trim point",
                 },
             );
-            (partition_result(index, low_watermark, codes::NONE), deletes)
+            let code = if waiting_for.is_some() {
+                // Kafka's `DelayedDeleteRecords` starts every waiting row at
+                // `REQUEST_TIMED_OUT`, and clears it when the row completes.
+                codes::REQUEST_TIMED_OUT
+            } else {
+                codes::NONE
+            };
+            (
+                partition_result(index, low_watermark, code),
+                deletes,
+                waiting_for,
+            )
         }
         Err(e) => {
             tracing::warn!(

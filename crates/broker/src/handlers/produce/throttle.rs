@@ -39,7 +39,7 @@ pub(super) fn finish_produce_response(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     context: &crate::handlers::RequestContext<'_>,
-    handler_start: std::time::Instant,
+    request_quota_start: Option<std::time::Instant>,
     bytes_by_qos: &std::collections::BTreeMap<String, u64>,
     topic_results: Vec<TopicProduceResponse>,
     version: i16,
@@ -60,21 +60,21 @@ pub(super) fn finish_produce_response(
         .fold(crate::quota::QuotaDelay::zero(), |acc, qd| {
             if qd.delay > acc.delay { qd } else { acc }
         });
-    let elapsed_micros = u64::try_from(
-        handler_start
-            .elapsed()
-            .as_micros()
-            .min(u128::from(u64::MAX)),
-    )
-    .expect("elapsed microseconds clamped to u64");
-    let request_delay = crate::quota::consume_request_quota(
-        image,
-        &broker.quota_buckets,
-        &context.principal.name,
-        context.client_id,
-        elapsed_micros,
-        broker.config.quota_throttle_max,
-    );
+    // Kafka's `KafkaApis.handleProduceRequest` charges no request quota for
+    // `acks = 0`, which `request_quota_start` holds as `None`. The byte-rate
+    // quota above still applies.
+    let request_delay = request_quota_start.map_or_else(crate::quota::QuotaDelay::zero, |start| {
+        let elapsed_micros = u64::try_from(start.elapsed().as_micros().min(u128::from(u64::MAX)))
+            .expect("elapsed microseconds clamped to u64");
+        crate::quota::consume_request_quota(
+            image,
+            &broker.quota_buckets,
+            &context.principal.name,
+            context.client_id,
+            elapsed_micros,
+            broker.config.quota_throttle_max,
+        )
+    });
     // KIP-219: the connection is muted for the larger of the two delays.
     // Resolving it through the metric records the throttle phase and the quota
     // that caused it, and hands back the delay the response reports and the

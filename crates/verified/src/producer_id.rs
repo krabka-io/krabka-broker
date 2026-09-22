@@ -106,7 +106,16 @@ mod tests {
         assert!(producer_id_block_allocation(false, true, 3, 3, 0, 1_000) == BrokerNotRegistered);
         assert!(producer_id_block_allocation(true, false, 3, 3, 0, 1_000) == BrokerNotRegistered);
         assert!(producer_id_block_allocation(true, true, -1, 3, 0, 1_000) == StaleBrokerEpoch);
+        assert!(producer_id_block_allocation(true, true, 1, -1, 0, 1_000) == StaleBrokerEpoch);
         assert!(producer_id_block_allocation(true, true, 2, 3, 0, 1_000) == StaleBrokerEpoch);
+        assert!(
+            producer_id_block_allocation(true, true, 0, 0, 0, 1_000)
+                == Allocate(ProducerIdBlockPlan {
+                    first: 0,
+                    len: 1_000,
+                    next: 1_000,
+                })
+        );
         assert!(producer_id_block_allocation(true, true, 3, 3, -1, 1_000) == InvalidFrontier);
         assert!(producer_id_block_allocation(true, true, 3, 3, 0, 0) == InvalidFrontier);
         assert!(producer_id_block_allocation(true, true, 3, 3, i64::MAX - 999, 1_000) == Exhausted);
