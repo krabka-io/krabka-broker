@@ -11,6 +11,7 @@
 use bytes::{Bytes, BytesMut};
 use futures_util::future::BoxFuture;
 use krabka_ids::PartitionIndex;
+use krabka_log::ProducerId;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
     Decode, Encode,
@@ -27,8 +28,10 @@ use crate::{
     error::BrokerError,
     handlers::{RequestContext, acl_denied, group_read_denied},
     txn::{
-        state::{TopicPartition, TxnState},
+        coordinator::TxnCoordinator,
+        state::{TopicPartition, TxnEntry, TxnState},
         util::now_millis,
+        version::TxnVersion,
     },
 };
 
@@ -42,7 +45,7 @@ pub(crate) async fn handle(
     let mut cur: &[u8] = req_bytes;
     let req = AddOffsetsToTxnRequest::decode(&mut cur, version)?;
     if let Some(error_code) = authorization_error(broker, ctx, &req) {
-        return encode_err(version, error_code);
+        return encode_response(version, error_code);
     }
     serve(broker, version, req).await
 }
@@ -74,13 +77,6 @@ fn authorization_error(
     }
 }
 
-// cargo-mutants: the pid/epoch guard (`||`) is only reachable with a fully-seeded coordinator
-// (this broker must lead the tid's `__transaction_state` partition and hold a
-// live `TxnEntry` in its private `state` map); the entry can only be installed
-// via `coord.put`/raft, so the branch cannot be reached from an in-file unit
-// test. Producer-fencing on `AddOffsetsToTxn` is covered by the live-broker /
-// differential suite.
-#[cfg_attr(test, mutants::skip)]
 fn serve(
     broker: &Broker,
     version: i16,
@@ -96,74 +92,142 @@ fn serve(
         let txnv = crate::txn::version::resolve_txn_version(&image);
         drop(coord.refresh_leader_partitions(&image).await);
 
-        let tid = req.transactional_id.as_str();
-
-        if let Some(code) = coord.coordinator_error(tid).await {
-            return encode_err(version, code);
-        }
-
-        let Some(entry_mutex) = coord.get(tid) else {
-            return encode_err(version, codes::INVALID_PRODUCER_ID_MAPPING);
-        };
-
-        let mut entry = entry_mutex.lock().await;
-
-        if entry.has_staged_producer_identity() {
-            return encode_err(version, codes::INVALID_TXN_STATE);
-        }
-
-        // `req.producer_id` is the raw wire `i64`; wrap to compare with the
-        // coordinator's `ProducerId`.
-        if entry.producer_id != krabka_log::ProducerId(req.producer_id)
-            || entry.producer_epoch != req.producer_epoch
-        {
-            return encode_err(version, codes::INVALID_PRODUCER_EPOCH);
-        }
-
-        // State machine: Empty/Ongoing → Ongoing.
-        if !entry.state.can_transition_to(TxnState::Ongoing) {
-            return encode_err(version, codes::INVALID_TXN_STATE);
-        }
-        entry.state = TxnState::Ongoing;
-
         // KIP-890 / Kafka model: a consumer-group offset commit is represented
         // as the group's __consumer_offsets partition in the txn partition set
         // (Kafka's TransactionLogValue has no group-name field). EndTxn fans a
         // marker to every partition in the set, including this one.
-        //
-        entry.partitions.insert(TopicPartition {
+        let offsets_partition = TopicPartition {
             topic: OFFSETS_TOPIC.to_string(),
             partition: PartitionIndex(partition_for_group(&image, &req.group_id)),
-        });
-        entry.last_update_ms = now_millis();
-
-        let snap = entry.clone();
-        // Drop lock before the async persist call.
-        drop(entry);
-
-        if let Err(e) = coord.put(snap, txnv).await {
-            tracing::error!(
-                tid,
-                group_id = %req.group_id,
-                error = %e,
-                "AddOffsetsToTxn: failed to persist TxnEntry"
-            );
-            return encode_err(version, coord.append_error_code(tid).await);
-        }
-
-        encode_ok(version)
+        };
+        let code = add_offsets_partition(
+            &coord,
+            &req.transactional_id,
+            (ProducerId(req.producer_id), req.producer_epoch),
+            offsets_partition,
+            txnv,
+        )
+        .await;
+        encode_response(version, wire_code(version, code))
     })
 }
 
+/// Kafka `KafkaApis.handleAddOffsetsToTxnRequest`: a client below version 2
+/// does not know `PRODUCER_FENCED`, so it gets `INVALID_PRODUCER_EPOCH`.
+fn wire_code(version: i16, code: i16) -> i16 {
+    if version < 2 && code == codes::PRODUCER_FENCED {
+        codes::INVALID_PRODUCER_EPOCH
+    } else {
+        code
+    }
+}
+
+/// What `AddOffsetsToTxn` does with one coordinator entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AddOffsetsDecision {
+    /// Answer the code without an append.
+    Answer(i16),
+    /// Add the offsets partition and append the entry.
+    Append,
+}
+
+/// Kafka `TransactionCoordinator.handleAddPartitionsToTransaction`, in its
+/// order: a pending transition, the producer id, the producer epoch, a
+/// prepare state, and a partition that the ongoing transaction already
+/// holds.
+fn decide(
+    entry: &TxnEntry,
+    (producer_id, producer_epoch): (ProducerId, i16),
+    offsets_partition: &TopicPartition,
+) -> AddOffsetsDecision {
+    if entry.has_staged_producer_identity() {
+        return AddOffsetsDecision::Answer(codes::CONCURRENT_TRANSACTIONS);
+    }
+    if entry.producer_id != producer_id {
+        return AddOffsetsDecision::Answer(codes::INVALID_PRODUCER_ID_MAPPING);
+    }
+    if entry.producer_epoch != producer_epoch {
+        return AddOffsetsDecision::Answer(codes::PRODUCER_FENCED);
+    }
+    match entry.state {
+        TxnState::PrepareCommit | TxnState::PrepareAbort => {
+            AddOffsetsDecision::Answer(codes::CONCURRENT_TRANSACTIONS)
+        }
+        TxnState::Ongoing if entry.partitions.contains(offsets_partition) => {
+            AddOffsetsDecision::Answer(codes::NONE)
+        }
+        state if state.can_transition_to(TxnState::Ongoing) => AddOffsetsDecision::Append,
+        _ => AddOffsetsDecision::Answer(codes::INVALID_TXN_STATE),
+    }
+}
+
+/// Kafka `TransactionMetadata.prepareAddPartitions`: the transaction becomes
+/// `Ongoing`. A transaction that starts from `Empty`, `CompleteCommit` or
+/// `CompleteAbort` gets `now_ms` as its start time and an empty partition set
+/// first. An ongoing transaction keeps its start time.
+fn add_partition(entry: &mut TxnEntry, offsets_partition: TopicPartition, now_ms: i64) {
+    if entry.state != TxnState::Ongoing {
+        entry.start_ms = now_ms;
+        entry.partitions.clear();
+    }
+    entry.state = TxnState::Ongoing;
+    entry.partitions.insert(offsets_partition);
+    entry.last_update_ms = now_ms;
+}
+
+/// Adds `offsets_partition` to the transaction of `transactional_id` and
+/// returns the Kafka error code.
+async fn add_offsets_partition(
+    coord: &TxnCoordinator,
+    transactional_id: &str,
+    producer: (ProducerId, i16),
+    offsets_partition: TopicPartition,
+    txnv: TxnVersion,
+) -> i16 {
+    // Kafka `TransactionCoordinator.handleAddPartitionsToTransaction` refuses
+    // an empty transactional id before it looks up the coordinator.
+    if transactional_id.is_empty() {
+        return codes::INVALID_REQUEST;
+    }
+    if let Some(code) = coord.coordinator_error(transactional_id).await {
+        return code;
+    }
+    let _state_partition_write = coord.lock_state_partition_for(transactional_id).await;
+    let Some(entry_mutex) = coord.get(transactional_id) else {
+        return codes::INVALID_PRODUCER_ID_MAPPING;
+    };
+    let mut entry = entry_mutex.lock().await;
+    match decide(&entry, producer, &offsets_partition) {
+        AddOffsetsDecision::Answer(code) => return code,
+        AddOffsetsDecision::Append => {}
+    }
+    // Stage on a clone. Until the record is durable, every other caller must
+    // still see the entry as it was.
+    let mut staged = entry.clone();
+    add_partition(&mut staged, offsets_partition, now_millis());
+    match coord
+        .put_under_state_partition_lock(staged.clone(), txnv)
+        .await
+    {
+        Ok(()) => {
+            // The append published a new handle. A caller that already waits
+            // on this one, such as AddPartitionsToTxn's register_partitions,
+            // sees the durable state too, not the pre-append snapshot.
+            *entry = staged;
+            codes::NONE
+        }
+        Err(error) => {
+            tracing::error!(
+                tid = transactional_id,
+                %error,
+                "AddOffsetsToTxn: failed to persist TxnEntry"
+            );
+            coord.append_error_code(transactional_id).await
+        }
+    }
+}
+
 // ── encoding helpers ──────────────────────────────────────────────────────────
-
-fn encode_err(version: i16, error_code: i16) -> Result<Bytes, BrokerError> {
-    encode_response(version, error_code)
-}
-
-fn encode_ok(version: i16) -> Result<Bytes, BrokerError> {
-    encode_response(version, codes::NONE)
-}
 
 fn encode_response(version: i16, error_code: i16) -> Result<Bytes, BrokerError> {
     let resp = AddOffsetsToTxnResponse {
@@ -176,35 +240,4 @@ fn encode_response(version: i16, error_code: i16) -> Result<Bytes, BrokerError> 
 }
 
 #[cfg(test)]
-mod tests {
-    use assert2::assert;
-
-    use super::*;
-
-    fn decode(bytes: &Bytes, version: i16) -> AddOffsetsToTxnResponse {
-        let mut cur: &[u8] = bytes.as_ref();
-        let resp = AddOffsetsToTxnResponse::decode(&mut cur, version).expect("decode response");
-        assert!(cur.is_empty(), "response decoder consumed all bytes");
-        resp
-    }
-
-    #[test]
-    fn encode_err_preserves_error_code_on_the_wire() {
-        let bytes = encode_err(4, codes::NOT_COORDINATOR).expect("encode error");
-        assert!(!bytes.is_empty());
-        let resp = decode(&bytes, 4);
-
-        assert!(resp.throttle_time_ms == 0);
-        assert!(resp.error_code == codes::NOT_COORDINATOR);
-    }
-
-    #[test]
-    fn encode_ok_preserves_success_code_on_the_wire() {
-        let bytes = encode_ok(4).expect("encode ok");
-        assert!(!bytes.is_empty());
-        let resp = decode(&bytes, 4);
-
-        assert!(resp.throttle_time_ms == 0);
-        assert!(resp.error_code == codes::NONE);
-    }
-}
+mod tests;
