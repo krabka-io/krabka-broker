@@ -130,7 +130,16 @@ pub(super) async fn handle_transactional(
             // Reusing tid — bump epoch (KIP-1319 v2). If prior state was
             // Ongoing, write PrepareAbort + dispatch abort markers before
             // responding.
-            let aborted_ongoing = {
+            //
+            // `aborted_ongoing_identity` is `Some((pid, epoch))` when this call
+            // ran that abort, carrying the identity the entry held *before*
+            // it -- the abort's own transitions overwrite the entry's live
+            // producer id and epoch, so the epoch bump below must not
+            // re-derive `previous_pid`/`previous_epoch` from the post-abort
+            // entry, or a retry of this call's original request is fenced
+            // against an epoch it never named, and a producer id rotated
+            // during completion loses its `prev_producer_id` bookkeeping.
+            let aborted_ongoing_identity = {
                 // Lock order: the state-partition write lock, then the entry
                 // lock, as `EndTxn`, the reaper and the completion task take
                 // them. Every append takes the partition lock, so the entry
@@ -143,6 +152,19 @@ pub(super) async fn handle_transactional(
                 }
                 if is_fenced(&e, request_identity) {
                     return Ok(fenced_response());
+                }
+                // A `Retry`-classified identity names the epoch this entry
+                // held before its *last* bump, never its live one (`Bump`
+                // covers that). If the live producer has since opened a new
+                // `Ongoing` transaction at the bumped epoch -- with or
+                // without another `InitProducerId` call in between -- this
+                // stale retry must answer the identity already on the entry,
+                // not fall into the abort below and tear down a transaction
+                // it does not own. Kafka's `prepareIncrementProducerEpoch`
+                // answers a retry from the identity alone, never from the
+                // entry's state.
+                if let Some(response) = retried_bump_response(&e, request_identity) {
+                    return Ok(response);
                 }
                 if matches!(e.state, TxnState::Ongoing) {
                     // Transition to PrepareAbort; persist; dispatch markers.
@@ -220,14 +242,29 @@ pub(super) async fn handle_transactional(
                         coord.request_completion(tid);
                         return Ok(concurrent_transactions_response());
                     }
-                    true
+                    // The abort's own transitions already moved this entry
+                    // past the identity the client held when this call
+                    // started. Everything below must bump from that pre-abort
+                    // identity, not from whatever the abort completed to.
+                    Some((request_pid, fenced_from_epoch))
                 } else {
-                    false
+                    None
                 }
             };
+            let aborted_ongoing = aborted_ongoing_identity.is_some();
 
             // Bump epoch on the existing entry. Persist a new TxnEntry with
             // new epoch, Empty state, cleared partitions.
+            //
+            // Lock order: the state-partition write lock, then the entry
+            // lock, same as the abort above and every other append to this
+            // tid's log. The entry lock stays held across the append itself
+            // -- staged on a local clone, published into the entry only once
+            // `coord.put_under_state_partition_lock` returns -- so a caller
+            // already parked on this exact handle never observes the bumped
+            // identity before it is durable (the bug class PR #1046 fixed for
+            // `AddOffsetsToTxn`'s `add_offsets_partition`).
+            let _state_partition_write = coord.lock_state_partition_for(tid).await;
             let current = coord.get(tid).unwrap_or(existing);
             let mut e3 = current.lock().await;
             // A `Dead` entry is one the KIP-98 expiry sweep marked under this
@@ -262,32 +299,45 @@ pub(super) async fn handle_transactional(
                     return Ok(fenced_response());
                 }
             }
-            let (previous_pid, previous_epoch) =
-                crate::txn::handlers::end_txn::client_producer_identity(&e3);
+            // When this call ran the abort above, `e3` now holds the
+            // *post*-abort identity: re-deriving `previous_pid`/
+            // `previous_epoch` from it here would record the just-bumped
+            // epoch as `last_producer_epoch`, fencing a retry of this call's
+            // original request, and would compare `new_pid` against itself,
+            // silently dropping a producer id rotated during completion.
+            let (previous_pid, previous_epoch) = match aborted_ongoing_identity {
+                Some(pre_abort_identity) => pre_abort_identity,
+                None => crate::txn::handlers::end_txn::client_producer_identity(&e3),
+            };
             let (new_pid, new_epoch) = if aborted_ongoing && txnv.verified() {
                 (e3.producer_id, e3.producer_epoch)
             } else {
                 next_init_producer_identity(&e3, &coord.producer_ids).await?
             };
-            *e3 = TxnEntry::new_empty(tid.to_string(), new_pid, new_epoch, txn_timeout, now_ms);
+            let mut staged =
+                TxnEntry::new_empty(tid.to_string(), new_pid, new_epoch, txn_timeout, now_ms);
             // Kafka's `prepareIncrementProducerEpoch` and
             // `prepareProducerIdRotation` record the epoch the entry held, so
             // a retry of this call is recognised. A caller that named no
             // identity records no last epoch.
             if request_identity.0 >= 0 {
-                e3.last_producer_epoch = previous_epoch;
+                staged.last_producer_epoch = previous_epoch;
             }
             if new_pid != previous_pid {
-                e3.prev_producer_id = previous_pid;
+                staged.prev_producer_id = previous_pid;
             }
-            let snap = e3.clone();
-            drop(e3);
-            coord.put(snap.clone(), txnv).await?;
+            // Stage on a clone: until the append is durable, a caller already
+            // parked on this entry's lock must still see the identity it held
+            // before this bump.
+            coord
+                .put_under_state_partition_lock(staged.clone(), txnv)
+                .await?;
+            *e3 = staged;
             Ok(InitProducerIdResponse {
                 error_code: codes::NONE,
                 // Unwrap the entry's `ProducerId` into the raw-`i64` wire field.
-                producer_id: snap.producer_id.get(),
-                producer_epoch: snap.producer_epoch,
+                producer_id: e3.producer_id.get(),
+                producer_epoch: e3.producer_epoch,
                 ..Default::default()
             })
         }
@@ -965,5 +1015,208 @@ mod tests {
         // the log ends at the tombstone the sweep appended.
         check!(coordinator.get(TID).is_none());
         check!(part.log_end_offset() == 2);
+    }
+
+    /// KIP-360 + producer id rotation: the abort of an `Ongoing` transaction
+    /// inside a bump call must record the identity the entry held *before*
+    /// the abort, not the one the abort's own completion landed on.
+    ///
+    /// Otherwise a retry of this call's own request is fenced against an
+    /// epoch it never named (`last_producer_epoch` would hold the just-bumped
+    /// epoch instead), and a producer id rotated during completion loses its
+    /// `prev_producer_id` bookkeeping: the abort's `new_empty` reset erases
+    /// it, and comparing the post-abort identity against itself never
+    /// restores it.
+    #[tokio::test]
+    async fn an_abort_triggered_rotation_records_the_pre_abort_identity_not_the_completed_one() {
+        const TID: &str = "tid-abort-rotation";
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (coordinator, _part) = coordinator_with_completed_transaction(dir.path(), TID).await;
+
+        // An Ongoing transaction at the exhausted epoch boundary, with no
+        // partitions, so the abort's marker fan-out succeeds at once and its
+        // own `prepare_completion_identities` rotates to a fresh producer id.
+        let mut ongoing =
+            TxnEntry::new_empty(TID.to_string(), ProducerId(1000), i16::MAX - 1, 60_000, 0);
+        ongoing.state = TxnState::Ongoing;
+        seed(&coordinator, ongoing).await;
+
+        // The live producer calls InitProducerId naming its own live
+        // identity: one call both aborts the ongoing transaction and bumps
+        // the epoch, rotating the producer id at the exhausted boundary.
+        let response = handle_transactional(
+            &coordinator,
+            TID,
+            TxnVersion::Verified,
+            60_000,
+            false,
+            false,
+            (1000, i16::MAX - 1),
+        )
+        .await
+        .expect("init responds");
+        check!(response.error_code == codes::NONE);
+        check!(
+            response.producer_id != 1000,
+            "the exhausted epoch rotates the producer id"
+        );
+        check!(response.producer_epoch == 0);
+
+        let entry = coordinator.get(TID).expect("entry").lock().await.clone();
+        // The pre-abort identity is the one recorded, not whatever the
+        // abort's own completion step landed on.
+        check!(entry.prev_producer_id == ProducerId(1000));
+        check!(entry.last_producer_epoch == i16::MAX - 1);
+
+        // A retry of the client's original request -- the one it sent before
+        // this whole call, at its pre-abort identity -- is recognised as a
+        // retry and answered with the rotated identity, not fenced.
+        let retried = handle_transactional(
+            &coordinator,
+            TID,
+            TxnVersion::Verified,
+            60_000,
+            false,
+            false,
+            (1000, i16::MAX - 1),
+        )
+        .await
+        .expect("retry responds");
+        check!(
+            (
+                retried.error_code,
+                retried.producer_id,
+                retried.producer_epoch
+            ) == (codes::NONE, response.producer_id, response.producer_epoch)
+        );
+    }
+
+    /// KIP-360: a caller retrying its own lost `InitProducerId` response must
+    /// never abort a transaction the live producer has since opened at the
+    /// epoch that response bumped to, whether or not another
+    /// `InitProducerId` call carried that epoch to the producer.
+    ///
+    /// Kafka's `prepareIncrementProducerEpoch` decides a retry from the
+    /// identity alone, never from the entry's state: the retry answers the
+    /// current identity and touches nothing.
+    #[tokio::test]
+    async fn a_stale_retry_answers_the_bumped_identity_without_aborting_the_live_transaction() {
+        const TID: &str = "tid-stale-retry-vs-live-ongoing";
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (coordinator, part) = coordinator_with_completed_transaction(dir.path(), TID).await;
+
+        // Bumps epoch 3 -> 4 and records 3 as the last epoch, exactly as a
+        // caller whose response was lost would leave it.
+        let bumped = handle_transactional(
+            &coordinator,
+            TID,
+            TxnVersion::Verified,
+            60_000,
+            false,
+            false,
+            (1000, 3),
+        )
+        .await
+        .expect("bump responds");
+        check!(
+            (bumped.error_code, bumped.producer_id, bumped.producer_epoch)
+                == (codes::NONE, 1000, 4)
+        );
+        check!(part.log_end_offset() == 2);
+
+        // The live producer opens a transaction at the bumped epoch without
+        // another `InitProducerId` call -- Kafka's implicit-begin path, where
+        // `AddPartitionsToTxn` opens a transaction directly once a producer
+        // holds a live epoch.
+        {
+            let handle = coordinator.get(TID).expect("bumped entry");
+            let mut entry = handle.lock().await;
+            entry.state = TxnState::Ongoing;
+            entry.start_ms = 0;
+        }
+
+        // The zombie's retransmitted InitProducerId, still naming the
+        // pre-bump epoch, arrives after the live transaction is already
+        // open.
+        let retried = handle_transactional(
+            &coordinator,
+            TID,
+            TxnVersion::Verified,
+            60_000,
+            false,
+            false,
+            (1000, 3),
+        )
+        .await
+        .expect("retry responds");
+
+        check!(
+            (
+                retried.error_code,
+                retried.producer_id,
+                retried.producer_epoch
+            ) == (codes::NONE, 1000, 4)
+        );
+        // Nothing appended: the retry answered from the entry alone.
+        check!(part.log_end_offset() == 2);
+        // The live transaction is untouched.
+        let entry = coordinator.get(TID).expect("entry").lock().await.clone();
+        check!(entry.state == TxnState::Ongoing);
+    }
+
+    /// PR #1046 fixed this exact bug class for `AddOffsetsToTxn`
+    /// (`add_offsets_partition`): the shared entry must publish the bumped
+    /// identity only through the append that makes it durable, into the very
+    /// same handle a caller from before this call already holds -- never a
+    /// detached copy, and never before `coord.put_under_state_partition_lock`
+    /// returns `Ok`.
+    ///
+    /// This locks in the fix's shape (stage on a local clone, append while
+    /// still holding the entry lock, publish into `*e3` only on success): a
+    /// caller that captured the handle before the bump ran sees the durable
+    /// outcome afterward, on the exact same `Arc`, with nothing appended
+    /// beyond that one durable record.
+    #[tokio::test]
+    async fn a_caller_already_holding_the_handle_sees_the_durable_bumped_identity() {
+        const TID: &str = "tid-durable-publish";
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (coordinator, part) = coordinator_with_completed_transaction(dir.path(), TID).await;
+
+        // Captured before the bump call, the way a concurrent caller parked
+        // on this same tid's lock would hold it.
+        let pre_call_handle = coordinator.get(TID).expect("the seeded entry");
+
+        let response = handle_transactional(
+            &coordinator,
+            TID,
+            TxnVersion::Verified,
+            60_000,
+            false,
+            false,
+            (1000, 3),
+        )
+        .await
+        .expect("bump responds");
+        check!(
+            (
+                response.error_code,
+                response.producer_id,
+                response.producer_epoch
+            ) == (codes::NONE, 1000, 4)
+        );
+
+        // One append: the seed, then the bump.
+        check!(part.log_end_offset() == 2);
+
+        // The pre-existing handle reflects the same durable identity as the
+        // response, not a stale snapshot and not a copy that only a fresh
+        // `coord.get` would see.
+        let via_old_handle = pre_call_handle.lock().await.clone();
+        check!(via_old_handle.producer_id == ProducerId(1000));
+        check!(via_old_handle.producer_epoch == 4);
+        check!(via_old_handle.state == TxnState::Empty);
     }
 }
