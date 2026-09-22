@@ -75,6 +75,27 @@ impl MetadataSource for ControllerHandle {
     async fn finalize_kraft_version(&self, version: u16) -> Result<ReconfigOutcome, RaftError> {
         ControllerHandle::finalize_kraft_version(self, version).await
     }
+    async fn forward_raw(
+        &self,
+        api_key: i16,
+        version: i16,
+        body: bytes::Bytes,
+    ) -> Option<Result<bytes::Bytes, RaftError>> {
+        // DescribeQuorum (api_key=55) is the one broker-listener admin RPC a
+        // combined/controller node forwards even when IT ITSELF runs a
+        // raft voter: Kafka's `KafkaApis` forwards `DescribeQuorum`
+        // unconditionally (`forwardToController`), unlike the KIP-853
+        // voter-admin RPCs (80/81/82), which answer `NOT_LEADER_OR_FOLLOWER`
+        // locally instead of forwarding. A node that IS the active
+        // controller answers locally, same as a broker-only observer's
+        // writer never gets asked to forward its own leader.
+        if api_key != krabka_protocol::owned::describe_quorum_request::API_KEY
+            || ControllerHandle::quorum_snapshot(self).is_leader
+        {
+            return None;
+        }
+        Some(ControllerHandle::forward_raw(self, api_key, version, body).await)
+    }
     async fn cancel(&self) {
         ControllerHandle::cancel(self).await;
     }

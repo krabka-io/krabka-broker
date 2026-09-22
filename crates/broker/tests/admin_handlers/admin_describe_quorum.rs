@@ -1,14 +1,52 @@
 //! `DescribeQuorum` (`api_key` 55, KIP-595): the dispatch glue, the ACL allow
 //! path, and the response encoding, driven against the `__cluster_metadata`
-//! topic of a one-broker cluster.
+//! topic of a one-broker cluster; and the broker-listener forwarding to the
+//! active controller (#1034) on a two-broker combined cluster.
 
 use assert2::{assert, check};
 use krabka_protocol::owned::describe_quorum_request::{
     DescribeQuorumRequest, PartitionData as DescribeQuorumReqPartition,
     TopicData as DescribeQuorumReqTopic,
 };
+use krabka_protocol::owned::describe_quorum_response::DescribeQuorumResponse;
 
-use crate::{admin_harness::build_client, support::start_n_node};
+use crate::{
+    admin_harness::build_client,
+    support::{start_n_node, start_n_node_with_retry},
+};
+
+fn describe_quorum_request() -> DescribeQuorumRequest {
+    DescribeQuorumRequest {
+        topics: vec![DescribeQuorumReqTopic {
+            topic_name: "__cluster_metadata".into(),
+            partitions: vec![DescribeQuorumReqPartition {
+                partition_index: 0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+/// Zero out the per-replica wall-clock timestamps a response carries, so two
+/// responses answered moments apart by the same leader compare equal on
+/// everything else.
+fn without_replica_timestamps(mut resp: DescribeQuorumResponse) -> DescribeQuorumResponse {
+    for topic in &mut resp.topics {
+        for partition in &mut topic.partitions {
+            for replica in partition
+                .current_voters
+                .iter_mut()
+                .chain(&mut partition.observers)
+            {
+                replica.last_fetch_timestamp = 0;
+                replica.last_caught_up_timestamp = 0;
+            }
+        }
+    }
+    resp
+}
 
 /// `DescribeQuorum` against the cluster-metadata topic on a 1-broker
 /// cluster returns one partition row carrying the broker's voter id with
@@ -68,4 +106,110 @@ async fn describe_quorum_reports_cluster_metadata_voter_set() {
         pd.observers.is_empty(),
         "Krabka has no observer-role concept"
     );
+}
+
+/// A combined node that is not the active controller forwards `DescribeQuorum`
+/// to the active controller instead of answering from its own (follower) raft
+/// view (#1034). Before the fix, the follower answered locally and reported
+/// every voter's `log_end_offset` as `-1` (openraft only fills the
+/// replication map on the leader); after the fix it gets the leader's exact
+/// answer, so the two decoded responses compare equal as whole structs (apart
+/// from the wall-clock timestamps, which the leader may have advanced between
+/// the two requests).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn combined_follower_forwards_describe_quorum_to_the_active_controller() {
+    let cluster = start_n_node_with_retry(2).await;
+
+    // Ask node 0 first: whichever role it holds, the fix means it now answers
+    // correctly (forwarded if it is the follower, local if it is the leader),
+    // so its response names the true leader.
+    let (_, first_cfg, _dir0) = &cluster[0];
+    let first_client = build_client(first_cfg.listen_addr).await;
+    let first_resp = first_client
+        .send(describe_quorum_request())
+        .await
+        .expect("describe_quorum from node 0");
+    assert!(first_resp.error_code == 0, "top-level error_code");
+    let leader_id = first_resp.topics[0].partitions[0].leader_id;
+    assert!(leader_id == 1 || leader_id == 2, "a 2-node cluster has an elected leader; got {leader_id}");
+
+    let (_, follower_cfg, _dir1) = cluster
+        .iter()
+        .find(|(_, cfg, _)| cfg.broker_id != leader_id)
+        .expect("the non-leader broker");
+    let follower_client = build_client(follower_cfg.listen_addr).await;
+    let follower_resp = follower_client
+        .send(describe_quorum_request())
+        .await
+        .expect("describe_quorum from the follower");
+
+    check!(follower_resp.error_code == 0, "top-level error_code");
+    let follower_partition = &follower_resp.topics[0].partitions[0];
+    check!(
+        follower_partition.error_code == 0,
+        "forwarded to the leader instead of answered locally"
+    );
+    check!(
+        follower_partition.leader_id == leader_id,
+        "the follower's forwarded answer names the same leader"
+    );
+    assert!(
+        follower_partition
+            .current_voters
+            .iter()
+            .all(|v| v.log_end_offset >= 0),
+        "a follower answering locally would report -1 for every voter; \
+         the forwarded answer carries the leader's real matched indexes: {:?}",
+        follower_partition.current_voters,
+    );
+
+    assert!(
+        without_replica_timestamps(follower_resp) == without_replica_timestamps(first_resp)
+    );
+
+    for (handle, _, _) in cluster {
+        handle.shutdown().await;
+    }
+}
+
+/// A request for a topic other than `__cluster_metadata`, or a partition
+/// other than 0, gets Kafka's `UNKNOWN_TOPIC_OR_PARTITION` (3) with its
+/// message -- not the `INVALID_TOPIC_EXCEPTION` (17) the broker listener used
+/// to answer with locally before it forwarded (#1034). The check runs
+/// against a node forwarding to the active controller (node 0 of a 2-node
+/// cluster is a follower about half the time; either way `forward_raw`
+/// routes the request to whichever node answers it).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn describe_quorum_for_another_topic_is_unknown_topic_or_partition() {
+    let cluster = start_n_node_with_retry(2).await;
+    let (_, cfg, _dir) = &cluster[0];
+    let client = build_client(cfg.listen_addr).await;
+
+    let req = DescribeQuorumRequest {
+        topics: vec![DescribeQuorumReqTopic {
+            topic_name: "not-the-metadata-topic".into(),
+            partitions: vec![DescribeQuorumReqPartition {
+                partition_index: 0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let resp = client.send(req).await.expect("describe_quorum");
+
+    check!(resp.error_code == 0, "top-level error_code");
+    assert!(resp.topics.len() == 1);
+    let pd = &resp.topics[0].partitions[0];
+    check!(pd.error_code == 3, "UNKNOWN_TOPIC_OR_PARTITION, not 17");
+    check!(
+        pd.error_message.as_deref()
+            == Some("This server does not host this topic-partition."),
+        "Kafka's Errors.UNKNOWN_TOPIC_OR_PARTITION.message(); got {:?}",
+        pd.error_message,
+    );
+
+    for (handle, _, _) in cluster {
+        handle.shutdown().await;
+    }
 }

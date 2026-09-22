@@ -34,8 +34,6 @@ mod tests {
     fn trim_decision_covers_bounds_stale_requests_and_retries() {
         let cases = [
             (-1, 8, 10, 2, None, Apply { frontier: 8 }),
-            // Explicit requests cannot enter the uncommitted tail.
-            (9, 8, 10, 2, None, Apply { frontier: 8 }),
             // Scheduled delivery adds a second deletion frontier.
             (8, 8, 10, 2, Some(5), Apply { frontier: 5 }),
             // A stale request and an exact retry preserve the current start.
@@ -64,6 +62,10 @@ mod tests {
             (1, 3, 10, 4, None, RejectMalformed),
             (1, 8, 10, 2, Some(1), RejectMalformed),
             (8, 8, 10, 2, Some(9), Apply { frontier: 8 }),
+            // Explicit requests cannot enter the uncommitted tail, even when
+            // they stay below the log end offset (Kafka:
+            // `UnifiedLog.maybeIncrementLogStartOffset`).
+            (9, 8, 10, 2, None, RejectOutOfRange),
             (11, 8, 10, 2, None, RejectOutOfRange),
             (i64::MAX, 8, 10, 2, None, RejectOutOfRange),
         ] {
