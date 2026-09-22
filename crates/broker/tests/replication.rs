@@ -246,6 +246,126 @@ async fn out_of_range_truncates_and_recovers() {
     }
 }
 
+/// KIP-107 (#746): `DeleteRecords` moves the log start offset on every
+/// replica, and answers only when every live follower has it. A follower reads
+/// the leader's `log_start_offset` from each Fetch response and raises its own,
+/// as Kafka's `ReplicaFetcherThread` does, and the leader's purgatory waits for
+/// the followers to report it. So when the response arrives, no replica still
+/// serves a deleted record, and a leader change cannot bring one back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn delete_records_moves_every_replica_log_start_before_it_answers() {
+    use krabka_protocol::owned::{
+        delete_records_request::{
+            DeleteRecordsPartition, DeleteRecordsRequest, DeleteRecordsTopic,
+        },
+        delete_records_response::DeleteRecordsPartitionResult,
+    };
+
+    let _g = cluster_lock().lock().await;
+    let cluster = support::start_n_node_with_retry(3).await;
+    for (h, _, _) in &cluster {
+        h.wait_until_brokers_registered(3).await;
+    }
+
+    // cluster[0] is node 1, the round-robin leader of partition 0.
+    let leader_addr = cluster[0].1.listen_addr.to_string();
+    let client = Client::builder()
+        .bootstrap(leader_addr)
+        .build()
+        .await
+        .unwrap();
+    let resp = client
+        .send(CreateTopicsRequest {
+            topics: vec![CreatableTopic {
+                name: "trimmed".into(),
+                num_partitions: 1,
+                replication_factor: 3,
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(resp.topics[0].error_code == 0);
+    let topic_id = resp.topics[0].topic_id;
+    for (h, _, _) in &cluster {
+        h.wait_until_partition_present("trimmed", 0).await;
+    }
+
+    let batch = RecordBatch {
+        base_offset: 0,
+        last_offset_delta: 19,
+        records: (0..20)
+            .map(|i| Record {
+                offset_delta: i,
+                value: Some(bytes::Bytes::from(format!("v{i}"))),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let prod = client
+        .send(ProduceRequest {
+            acks: -1,
+            timeout_ms: 5_000,
+            topic_data: vec![TopicProduceData {
+                name: "trimmed".into(),
+                topic_id,
+                partition_data: vec![PartitionProduceData {
+                    index: 0,
+                    records: Some(batch.into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(prod.responses[0].partition_responses[0].error_code == 0);
+    for (h, _, _) in &cluster {
+        h.wait_until_local_log_end_offset("trimmed", 0, 20).await;
+    }
+
+    let deleted = client
+        .send(DeleteRecordsRequest {
+            topics: vec![DeleteRecordsTopic {
+                name: "trimmed".into(),
+                partitions: vec![DeleteRecordsPartition {
+                    partition_index: 0,
+                    offset: 10,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            timeout_ms: 30_000,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(
+        deleted.topics[0].partitions
+            == vec![DeleteRecordsPartitionResult {
+                partition_index: 0,
+                low_watermark: 10,
+                error_code: 0,
+                ..Default::default()
+            }]
+    );
+
+    // The response came after every replica moved, so no wait is needed here.
+    let log_starts: Vec<Option<i64>> = cluster
+        .iter()
+        .map(|(h, _, _)| h.partition_log_start_for_test("trimmed", 0))
+        .collect();
+    assert!(log_starts == vec![Some(10); 3]);
+
+    for (h, _, _) in cluster {
+        h.shutdown().await;
+    }
+}
+
 /// KIP-227 + `num.replica.fetchers`: a follower folds every partition it
 /// follows from one leader into one connection and one in-flight `Fetch`.
 ///

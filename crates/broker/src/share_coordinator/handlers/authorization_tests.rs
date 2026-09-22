@@ -332,18 +332,6 @@ async fn share_state_rpcs_need_cluster_action() {
     })
     .await;
     let broker = handle.broker_arc_for_test();
-    // A real `__share_group_state` topic that this broker leads, so the
-    // leadership that the metadata reconcile loop computes stays in place
-    // while the steps run.
-    let state_partitions = broker.share_coordinator.state_topic_num_partitions();
-    crate::share_coordinator::bootstrap::ensure_topic(
-        &broker.controller,
-        state_partitions,
-        broker.share_coordinator.state_topic_replication_factor(),
-        &broker.share_coordinator.state_topic_configs(),
-    )
-    .await
-    .expect("create __share_group_state");
     // The data topics that the requests name. The share coordinator refuses a
     // read or a write of a topic partition that the metadata image does not
     // hold.
@@ -380,24 +368,16 @@ async fn share_state_rpcs_need_cluster_action() {
         .submit_change(data_topics)
         .await
         .expect("create the data topics");
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        while !(0..state_partitions).all(|partition| {
-            broker.partitions.contains(
-                crate::share_coordinator::bootstrap::TOPIC,
-                krabka_ids::PartitionIndex(partition),
-            )
-        }) {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("every __share_group_state partition opens on this broker");
-    broker
-        .share_coordinator
-        .refresh_leader_partitions(&broker.controller.current_image())
-        .await
-        .finished()
-        .await;
+    // A real `__share_group_state` topic that this broker leads, loaded to
+    // completion. The broker's metadata reconcile loop also refreshes the
+    // share coordinator's leadership on every image change and does not wait
+    // for the load it starts. A single explicit `refresh_leader_partitions`
+    // call here can lose that race: the reconcile loop's own call can already
+    // have claimed the leadership change and started the background load, so
+    // this call's `finished()` sees no load of its own to wait for and
+    // returns before the load ends. Poll for `LoadStatus::Active`, the way
+    // every other live-broker share-coordinator test waits.
+    super::test_support::lead_share_state_partitions(&broker).await;
 
     let initialized = || {
         Response::Initialize(every_partition!(

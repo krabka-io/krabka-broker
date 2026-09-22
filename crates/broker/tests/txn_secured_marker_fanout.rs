@@ -513,6 +513,7 @@ impl<R: ProtocolRequest, const V: i16> ProtocolRequest for At<R, V> {
     const API_KEY: i16 = R::API_KEY;
     const MIN_VERSION: i16 = V;
     const MAX_VERSION: i16 = V;
+    const LATEST_STABLE_VERSION: i16 = V;
     const FLEXIBLE_MIN: i16 = R::FLEXIBLE_MIN;
     type Response = R::Response;
 }

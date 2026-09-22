@@ -55,7 +55,7 @@ jobs:
 
       - uses: ./.github/actions/reclaim-disk
 
-      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+      - uses: aspect-build/setup-aspect@60664fabf0aa15152c69d0ee72c9a660416c7a36 # 2026.38.2
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
@@ -216,7 +216,7 @@ jobs:
 
       - uses: ./.github/actions/reclaim-disk
 
-      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+      - uses: aspect-build/setup-aspect@60664fabf0aa15152c69d0ee72c9a660416c7a36 # 2026.38.2
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
@@ -324,7 +324,7 @@ jobs:
           test -n "${channel}"
           echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
 
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: ${{ steps.toolchain.outputs.channel }}
           components: clippy
@@ -382,7 +382,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+      - uses: aspect-build/setup-aspect@60664fabf0aa15152c69d0ee72c9a660416c7a36 # 2026.38.2
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
       - uses: ./.github/actions/remote-cache
@@ -537,7 +537,7 @@ jobs:
       # whether this job builds anything, so it has to be resolved before the
       # cache-warming setup further down knows whether it is wanted. The Bazel
       # caches stay on that second step, on the path that actually runs Bazel.
-      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+      - uses: aspect-build/setup-aspect@60664fabf0aa15152c69d0ee72c9a660416c7a36 # 2026.38.2
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
       - uses: ./.github/actions/remote-cache
@@ -586,7 +586,7 @@ jobs:
             echo "hit=false" >>"${GITHUB_OUTPUT}"
           fi
 
-      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+      - uses: aspect-build/setup-aspect@60664fabf0aa15152c69d0ee72c9a660416c7a36 # 2026.38.2
         if: steps.cached.outputs.hit != 'true'
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
@@ -676,7 +676,7 @@ jobs:
         with:
           # rdeps needs the merge base, not just the tip.
           fetch-depth: 0
-      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+      - uses: aspect-build/setup-aspect@60664fabf0aa15152c69d0ee72c9a660416c7a36 # 2026.38.2
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
@@ -733,7 +733,7 @@ jobs:
         suite: ${{ fromJSON(needs.select.outputs.suites) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+      - uses: aspect-build/setup-aspect@60664fabf0aa15152c69d0ee72c9a660416c7a36 # 2026.38.2
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
@@ -819,7 +819,7 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+      - uses: aspect-build/setup-aspect@60664fabf0aa15152c69d0ee72c9a660416c7a36 # 2026.38.2
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
@@ -849,7 +849,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+      - uses: aspect-build/setup-aspect@60664fabf0aa15152c69d0ee72c9a660416c7a36 # 2026.38.2
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
@@ -872,7 +872,7 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+      - uses: aspect-build/setup-aspect@60664fabf0aa15152c69d0ee72c9a660416c7a36 # 2026.38.2
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
@@ -935,7 +935,7 @@ jobs:
 
       - uses: ./.github/actions/reclaim-disk
 
-      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+      - uses: aspect-build/setup-aspect@60664fabf0aa15152c69d0ee72c9a660416c7a36 # 2026.38.2
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
@@ -1038,7 +1038,7 @@ jobs:
           test -n "${channel}"
           echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
 
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: ${{ steps.toolchain.outputs.channel }}
 
@@ -1163,7 +1163,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+      - uses: aspect-build/setup-aspect@60664fabf0aa15152c69d0ee72c9a660416c7a36 # 2026.38.2
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true

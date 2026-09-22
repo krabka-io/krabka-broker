@@ -29,7 +29,7 @@ use crate::{
         streams::{
             config::StreamsGroupConfig,
             state::{OwnedTasks, StoredTopologyHandle},
-            topology::{self, status as topo_status},
+            topology,
         },
     },
     metadata_source::MetadataSource,
@@ -78,6 +78,10 @@ pub(super) async fn handle_heartbeat(
     let now = Instant::now();
     let now_ms = chrono_now_ms();
 
+    if let Some(resp) = changelog_partition_count_error(req) {
+        return Ok(resp);
+    }
+
     // ─── Leave path ──────────────────────────────────────────────
     if req.member_epoch == -1 {
         return handle_leave(
@@ -101,15 +105,27 @@ pub(super) async fn handle_heartbeat(
         if actor.state.members.len() >= config.max_size {
             return Ok(error_resp(codes::GROUP_MAX_SIZE_REACHED, config));
         }
+        if let Some(resp) = topology_error(actor, req, metadata_source) {
+            return Ok(resp);
+        }
         let new_member_id = first_join_member_id(&req.member_id);
         let m = build_member(&new_member_id, req, client_id, client_host, now);
         actor.state.add_or_update_member(m);
-        // Topology supplied on first join is accepted before reconcile.
-        if let Some(topo) = &req.topology {
+        // A topology on a join initializes the group topology, or replaces an
+        // older one. A join with an older topology keeps the group topology,
+        // and its responses carry `STALE_TOPOLOGY`.
+        if let Some(topo) = &req.topology
+            && actor
+                .topology
+                .as_ref()
+                .is_none_or(|group| topo.epoch > group.epoch)
+        {
             accept_topology(actor, topo);
         }
-        apply_shutdown_application(actor, req);
         reconcile(actor, config, metadata_source).await;
+        if req.shutdown_application {
+            actor.state.request_shutdown(&new_member_id);
+        }
         actor.state.advance_member_epoch(&new_member_id);
         let reported = req
             .active_tasks
@@ -155,24 +171,18 @@ pub(super) async fn handle_heartbeat(
             Ok(epoch) => epoch,
             Err(error_code) => return Ok(error_resp(error_code, config)),
         };
+    if let Some(resp) = topology_error(actor, req, metadata_source) {
+        return Ok(resp);
+    }
 
     // ─── Steady state ────────────────────────────────────────────
     let mut changed = update_member_steady_state(actor, req, client_id, client_host, now);
-    // Topology handling: newer epoch is accepted, older is flagged STALE.
-    if let Some(topo) = &req.topology {
-        let cur_topo_epoch = actor.state.topology_epoch;
-        if topo.epoch > cur_topo_epoch {
-            accept_topology(actor, topo);
-            changed = true;
-        } else if topo.epoch < cur_topo_epoch {
-            set_status(
-                actor,
-                topo_status::STALE_TOPOLOGY,
-                "member reported a stale topology",
-            );
-        }
-    }
-    if apply_shutdown_application(actor, req) {
+    // A newer topology replaces the group topology. A member with an older
+    // one gets `STALE_TOPOLOGY` in its own responses.
+    if let Some(topo) = &req.topology
+        && topo.epoch > actor.state.topology_epoch
+    {
+        accept_topology(actor, topo);
         changed = true;
     }
     refresh_topic_metadata(actor, config, metadata_source).await;
@@ -205,12 +215,73 @@ pub(super) async fn handle_heartbeat(
     if actor.state.reconcile_member(&req.member_id, &reported) {
         changed = true;
     }
+    if req.shutdown_application {
+        actor.state.request_shutdown(&req.member_id);
+    }
 
     if changed {
         let pending = snapshot_pending_after_change(actor, std::slice::from_ref(&req.member_id));
         flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
     }
     Ok(build_assignment_resp(&actor.state, &req.member_id, config))
+}
+
+/// Kafka's `GroupCoordinatorService.throwIfInvalidTopology`, which runs on a
+/// joining heartbeat before the coordinator: a changelog topic must leave its
+/// partition count undefined, because the coordinator decides it.
+fn changelog_partition_count_error(
+    req: &StreamsGroupHeartbeatRequest,
+) -> Option<StreamsGroupHeartbeatResponse> {
+    if req.member_epoch != 0 {
+        return None;
+    }
+    let topic = req
+        .topology
+        .iter()
+        .flat_map(|topology| topology.subtopologies.iter())
+        .flat_map(|subtopology| subtopology.state_changelog_topics.iter())
+        .find(|topic| topic.partitions != 0)?;
+    Some(StreamsGroupHeartbeatResponse {
+        error_code: codes::STREAMS_INVALID_TOPOLOGY,
+        error_message: Some(format!(
+            "Changelog topic {} must have an undefined partition count, but it is set to {}.",
+            topic.name, topic.partitions
+        )),
+        ..Default::default()
+    })
+}
+
+/// The error response for a topology that Kafka's `configureTopics` refuses
+/// against the current metadata image, or `None` when the topology can be
+/// configured.
+///
+/// The topology is the one that this heartbeat leaves the group with: the
+/// topology of the request when the group has none or an older one, else the
+/// topology of the group. Kafka configures the topology inside the heartbeat
+/// and answers the exception with its code and message, and it writes nothing.
+fn topology_error(
+    actor: &ActorState,
+    req: &StreamsGroupHeartbeatRequest,
+    metadata_source: Option<&Arc<dyn MetadataSource>>,
+) -> Option<StreamsGroupHeartbeatResponse> {
+    let source = metadata_source?;
+    let from_request = req
+        .topology
+        .as_ref()
+        .filter(|wire| {
+            actor
+                .topology
+                .as_ref()
+                .is_none_or(|group| wire.epoch > group.epoch)
+        })
+        .map(topology::to_stored_topology);
+    let topology = from_request.as_ref().or(actor.topology.as_ref())?;
+    let error = topology::configure_topics(topology, &source.current_image()).err()?;
+    Some(StreamsGroupHeartbeatResponse {
+        error_code: error.error_code(),
+        error_message: error.error_message(),
+        ..Default::default()
+    })
 }
 
 /// Marks the group for a reconcile when a topic that the topology needs
@@ -372,8 +443,12 @@ async fn handle_leave(
     req: &StreamsGroupHeartbeatRequest,
     now_ms: i64,
 ) -> Result<StreamsGroupHeartbeatResponse, crate::error::BrokerError> {
-    // Kafka's `streamsGroupLeave` looks the member up with `getMemberOrThrow`:
-    // an unknown member gets `UNKNOWN_MEMBER_ID`, and nothing is written.
+    // Kafka's `streamsGroupLeave` records the shutdown request before it looks
+    // the member up with `getMemberOrThrow`: an unknown member gets
+    // `UNKNOWN_MEMBER_ID`, and nothing is written.
+    if req.shutdown_application {
+        actor.state.request_shutdown(&req.member_id);
+    }
     if actor.state.remove_member(&req.member_id).is_none() {
         return Ok(error_resp(codes::UNKNOWN_MEMBER_ID, config));
     }
@@ -388,7 +463,10 @@ async fn handle_leave(
         .current_per_member
         .push((req.member_id.clone(), None));
     flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
-    Ok(base_resp(codes::NONE, -1, config))
+    Ok(StreamsGroupHeartbeatResponse {
+        status: Some(Vec::new()),
+        ..base_resp(codes::NONE, -1, config)
+    })
 }
 
 /// Accepts a client-supplied topology. It stores the resolved value for
@@ -405,28 +483,4 @@ fn accept_topology(
     actor.state.topology_epoch = stored.epoch;
     actor.topology = Some(stored);
     actor.state.dirty = true;
-}
-
-/// KIP-1071 shutdown-application: any member can signal the whole group to
-/// shut down. This function records the signal as a group status, so later
-/// responses carry it. It returns `true` if it added the status.
-fn apply_shutdown_application(actor: &mut ActorState, req: &StreamsGroupHeartbeatRequest) -> bool {
-    if !req.shutdown_application {
-        return false;
-    }
-    set_status(
-        actor,
-        topo_status::SHUTDOWN_APPLICATION,
-        "a member requested application shutdown",
-    )
-}
-
-/// Adds a `(code, detail)` pair to the group status if no entry with that code
-/// is present. Returns `true` if the function added the pair.
-fn set_status(actor: &mut ActorState, code: i8, detail: &str) -> bool {
-    if actor.state.status.iter().any(|(c, _)| *c == code) {
-        return false;
-    }
-    actor.state.status.push((code, detail.to_string()));
-    true
 }

@@ -38,12 +38,19 @@ pub(super) async fn validate_end_txn(
     if authorizer.authorize(image, &authorization) == AuthorizationResult::Deny {
         return Err(codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED);
     }
-    if !coordinator.is_coordinator_for(transactional_id).await {
-        return Err(codes::NOT_COORDINATOR);
+    if let Some(code) = coordinator.coordinator_error(transactional_id).await {
+        return Err(code);
     }
-    let entry = coordinator
-        .get(transactional_id)
-        .ok_or(codes::INVALID_PRODUCER_ID_MAPPING)?;
+    // A leadership change can unload this partition between the check above
+    // and the lookup below. Recheck the coordinator status before answering
+    // INVALID_PRODUCER_ID_MAPPING, so a client retries a failover with the
+    // retriable COORDINATOR_LOAD_IN_PROGRESS or NOT_COORDINATOR instead of
+    // seeing its valid transaction reported as unknown.
+    let Some(entry) = coordinator.get(transactional_id) else {
+        return Err(missing_entry_error(
+            coordinator.coordinator_error(transactional_id).await,
+        ));
+    };
     {
         let state = entry.lock().await;
         if matches!(
@@ -78,6 +85,21 @@ pub(super) async fn validate_end_txn(
         }
     }
     Ok(EndTxnValidation::Proceed(entry))
+}
+
+/// The error `EndTxn` answers when the coordinator holds no entry for the
+/// requested transactional id.
+///
+/// A leadership change can unload the coordinator partition, and so evict its
+/// entries, between the `coordinator_error` check above and the lookup that
+/// misses. `recheck` is a fresh read of the coordinator status taken after
+/// that miss: when it still names an error, the miss is the unload, and the
+/// caller answers the retriable `COORDINATOR_LOAD_IN_PROGRESS` or
+/// `NOT_COORDINATOR` instead of `INVALID_PRODUCER_ID_MAPPING`, so a client
+/// retries the failover instead of seeing a valid transaction reported as
+/// unknown.
+fn missing_entry_error(recheck: Option<i16>) -> i16 {
+    recheck.unwrap_or(codes::INVALID_PRODUCER_ID_MAPPING)
 }
 
 /// Whether a request for a completed transaction is a retry of the `EndTxn`
@@ -147,6 +169,35 @@ mod tests {
                 is_completed_end_txn_retry(entry, ProducerId(pid), epoch, bumps) == retry,
                 "{label}"
             );
+        }
+    }
+
+    /// Regression: a leadership change can unload the coordinator partition
+    /// between the `coordinator_error` check and the `get` lookup. Before the
+    /// fix, a missing entry always answered `INVALID_PRODUCER_ID_MAPPING`,
+    /// even when a fresh coordinator-status read named a retriable error.
+    #[test]
+    fn a_missing_entry_prefers_a_fresh_coordinator_error_over_invalid_mapping() {
+        // (label, fresh recheck, answer)
+        let cases = [
+            (
+                "healthy coordinator, unknown id",
+                None,
+                codes::INVALID_PRODUCER_ID_MAPPING,
+            ),
+            (
+                "partition unloaded mid-race",
+                Some(codes::NOT_COORDINATOR),
+                codes::NOT_COORDINATOR,
+            ),
+            (
+                "partition still loading mid-race",
+                Some(codes::COORDINATOR_LOAD_IN_PROGRESS),
+                codes::COORDINATOR_LOAD_IN_PROGRESS,
+            ),
+        ];
+        for (label, recheck, answer) in cases {
+            check!(missing_entry_error(recheck) == answer, "{label}");
         }
     }
 }

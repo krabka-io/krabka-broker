@@ -97,10 +97,14 @@ pub struct StreamsGroupState {
     /// pending. It clears the flag once the reconcile installs a target.
     pub dirty: bool,
     pub phase: StreamsGroupStatePhase,
-    /// `(status_code, status_detail)` pairs that `DescribeStreamsGroups`
-    /// reports, for example missing-source-topic and missing-internal-topic
-    /// warnings.
-    pub status: Vec<(i8, String)>,
+    /// The `(status_code, status_detail)` that the most recent topology
+    /// configuration gave, for example `MISSING_SOURCE_TOPICS`: Kafka's
+    /// `topicConfigurationException`. Every heartbeat response carries it.
+    pub status: Option<(i8, String)>,
+    /// The member that first asked the application to shut down (KIP-1071
+    /// `ShutdownApplication`). Kafka keeps it in memory only and clears it
+    /// when the group becomes empty.
+    pub shutdown_request_member_id: Option<String>,
 }
 
 impl StreamsGroupState {
@@ -115,7 +119,8 @@ impl StreamsGroupState {
             target: StreamsTargetAssignment::default(),
             dirty: false,
             phase: StreamsGroupStatePhase::Empty,
-            status: Vec::new(),
+            status: None,
+            shutdown_request_member_id: None,
         }
     }
 
@@ -154,6 +159,7 @@ impl StreamsGroupState {
         let m = self.members.remove(member_id);
         if m.is_some() {
             self.dirty = true;
+            self.clear_shutdown_request_when_empty();
         }
         m
     }
@@ -174,8 +180,27 @@ impl StreamsGroupState {
         }
         if !evicted.is_empty() {
             self.dirty = true;
+            self.clear_shutdown_request_when_empty();
         }
         evicted
+    }
+
+    /// Records `member_id` as the member that asked the application to shut
+    /// down, unless another member asked first (Kafka's
+    /// `setShutdownRequestMemberId`).
+    pub fn request_shutdown(&mut self, member_id: &str) {
+        if self.shutdown_request_member_id.is_none() {
+            self.shutdown_request_member_id = Some(member_id.to_string());
+        }
+    }
+
+    /// Kafka's `clearShutdownRequestMemberId`, which runs when the group
+    /// becomes empty. A restarted application therefore does not get the
+    /// shutdown request of its previous run.
+    fn clear_shutdown_request_when_empty(&mut self) {
+        if self.members.is_empty() {
+            self.shutdown_request_member_id = None;
+        }
     }
 
     /// Installs a newly computed target assignment, stamped at the current

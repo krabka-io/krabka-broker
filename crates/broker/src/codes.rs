@@ -210,9 +210,12 @@ kafka_codes! {
     /// `FENCED_STATE_EPOCH` (124, KIP-932): the share coordinator fenced a
     /// write on a stale state epoch.
     FENCED_STATE_EPOCH = 124;
+    /// `STREAMS_INVALID_TOPOLOGY` (130, KIP-1071): the topology of a
+    /// `StreamsGroupHeartbeat` cannot be configured, for example because a
+    /// repartition source topic is never a sink topic.
+    STREAMS_INVALID_TOPOLOGY = 130;
     /// `SHARE_SESSION_LIMIT_REACHED` (133, KIP-932): the per-broker share
-    /// session cache is full. 133 is the last code the pinned image assigns;
-    /// 130 to 132 are the Streams group codes, which krabka does not serve.
+    /// session cache is full. 133 is the last code the pinned image assigns.
     SHARE_SESSION_LIMIT_REACHED = 133;
 
     // Admin handler codes.

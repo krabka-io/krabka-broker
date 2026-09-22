@@ -559,3 +559,252 @@ async fn an_internal_topic_refuses_a_trim() {
 
     broker_handle.shutdown().await;
 }
+
+// ── KIP-107: the trim reaches the followers ─────────────────────────
+
+/// The follower that [`replicated_topic`] assigns beside this broker.
+const FOLLOWER: u64 = 2;
+
+/// Records [`replicated_topic`] appends to the leader log.
+const APPENDED: i64 = 10;
+
+/// Create `topic` with one partition that this broker leads and that the live,
+/// registered broker [`FOLLOWER`] follows, append [`APPENDED`] records, and
+/// fetch them as the follower so the high watermark reaches the log end.
+async fn replicated_topic(
+    broker_handle: &crate::broker::BrokerHandle,
+    topic: &str,
+) -> Arc<crate::partition::Partition> {
+    use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
+
+    let broker = broker_handle.broker_arc_for_test();
+    register_follower(broker_handle).await;
+    broker.liveness.record_heartbeat(FOLLOWER).await;
+    let replicas = vec![krabka_audit::NodeId(1), krabka_audit::NodeId(FOLLOWER)];
+    for record in [
+        MetadataRecord::V1Topic(TopicRecord {
+            name: topic.to_owned(),
+            topic_id: uuid::Uuid::new_v4(),
+            partitions: 1,
+            replication_factor: 2,
+        }),
+        MetadataRecord::V1Partition(PartitionRecord {
+            topic: topic.to_owned(),
+            partition: 0,
+            leader: krabka_audit::NodeId(1),
+            replicas: replicas.clone(),
+            isr: replicas,
+            leader_epoch: krabka_metadata::LeaderEpoch(0),
+            adding_replicas: Vec::new(),
+            removing_replicas: Vec::new(),
+            directories: vec![uuid::Uuid::nil(); 2],
+            partition_epoch: 0,
+        }),
+    ] {
+        broker_handle
+            .submit_metadata_record_for_test(record)
+            .await
+            .expect("submit topic metadata");
+    }
+    let partition = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if let Some(partition) = broker.partitions.get(topic, krabka_ids::PartitionIndex(0))
+                && partition
+                    .replica_state
+                    .lock()
+                    .await
+                    .isr
+                    .contains(&krabka_raft::NodeId(FOLLOWER))
+            {
+                return partition;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the broker leads the partition with the follower in the ISR");
+    let mut batch = krabka_protocol::records::RecordBatch {
+        last_offset_delta: i32::try_from(APPENDED - 1).expect("delta"),
+        records: (0..APPENDED)
+            .map(|offset| krabka_protocol::records::Record {
+                offset_delta: i32::try_from(offset).expect("delta"),
+                value: Some(bytes::Bytes::from_static(b"v")),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    };
+    partition
+        .log
+        .lock()
+        .expect("partition log lock")
+        .append(&mut batch)
+        .expect("append the records");
+    follower_fetch(&broker, topic, APPENDED, 0).await;
+    assert!(partition.high_watermark().await == krabka_log::Offset(APPENDED));
+    partition
+}
+
+/// Register [`FOLLOWER`] as a broker in the controller's image.
+async fn register_follower(broker_handle: &crate::broker::BrokerHandle) {
+    broker_handle
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1BrokerRegistration(
+            krabka_metadata::BrokerRegistrationRecord {
+                node_id: krabka_raft::NodeId(FOLLOWER),
+                broker_epoch: 0,
+                incarnation_id: uuid::Uuid::nil(),
+                host: "127.0.0.1".into(),
+                port: 9092,
+                rack: None,
+                log_dirs: vec![],
+                endpoints: vec![],
+                features: std::collections::BTreeMap::new(),
+            },
+        ))
+        .await
+        .expect("register the follower");
+}
+
+/// Fence [`FOLLOWER`] the way the controller does: its heartbeat session is
+/// fenced, and the replicated `broker.fenced` config says so.
+async fn fence_follower(broker_handle: &crate::broker::BrokerHandle) {
+    let broker = broker_handle.broker_arc_for_test();
+    broker.liveness.apply_fencing(FOLLOWER, true, true).await;
+    broker_handle
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1BrokerConfig(
+            krabka_metadata::BrokerConfigRecord {
+                node_id: krabka_raft::NodeId(FOLLOWER),
+                config_name: crate::config_keys::BROKER_FENCED.to_string(),
+                config_value: Some(crate::config_keys::FENCED_TRUE.to_string()),
+            },
+        ))
+        .await
+        .expect("fence the follower");
+}
+
+/// One Fetch from [`FOLLOWER`] at `fetch_offset`, reporting `log_start_offset`
+/// as the follower's own log start.
+async fn follower_fetch(broker: &Broker, topic: &str, fetch_offset: i64, log_start_offset: i64) {
+    use krabka_protocol::owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic};
+
+    const VERSION: i16 = 12;
+    let request = FetchRequest {
+        replica_id: i32::try_from(FOLLOWER).expect("replica id"),
+        max_wait_ms: 0,
+        min_bytes: 0,
+        max_bytes: 1_048_576,
+        session_id: crate::fetch_session::INVALID_SESSION_ID,
+        session_epoch: crate::fetch_session::FINAL_EPOCH,
+        topics: vec![FetchTopic {
+            topic: topic.to_owned(),
+            partitions: vec![FetchPartition {
+                partition: 0,
+                fetch_offset,
+                log_start_offset,
+                partition_max_bytes: 1_048_576,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let replicator = principal("replicator");
+    let peer = peer();
+    let ctx = crate::test_support::request_context(&replicator, &peer, "replica-2");
+    let (response, _) = crate::handlers::fetch::handle(
+        broker,
+        VERSION,
+        1,
+        &crate::test_support::encode_request(&request, VERSION),
+        &ctx,
+    )
+    .await
+    .expect("follower fetch");
+    assert!(
+        response.responses[0].partitions[0].error_code == codes::NONE,
+        "{response:?}"
+    );
+}
+
+/// The row a `DeleteRecords` of `topic-0` to `offset` answers, with
+/// `timeout_ms`.
+async fn delete_to(
+    broker: &Broker,
+    topic: &str,
+    offset: i64,
+    timeout_ms: i32,
+) -> Vec<DeleteRecordsTopicResult> {
+    let admin = principal("admin");
+    let peer = peer();
+    let request = DeleteRecordsRequest {
+        timeout_ms,
+        ..request(topic, &[(0, offset)])
+    };
+    drive(broker, &request, &admin, &peer).await.topics
+}
+
+/// Kafka's `DeleteRecords` purgatory (#746): a row answers once the lowest log
+/// start of the leader and every live follower reaches the trim point. A
+/// follower that has not reported it holds the row until `timeout_ms`, which
+/// answers `REQUEST_TIMED_OUT` with the low watermark the trim saw. A follower
+/// on a fenced broker is not live and does not hold the row.
+#[tokio::test]
+async fn a_trim_waits_for_every_live_follower_to_reach_the_trim_point() {
+    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+        // The follower never fetches on its own. Keep it in the ISR and alive
+        // for the whole test, so only the fetches below move its state.
+        cfg.replica_lag_time_max = krabka_units::secs(600);
+        cfg.heartbeat_timeout = krabka_units::secs(600);
+    })
+    .await;
+    let broker = broker_handle.broker_arc_for_test();
+    let topic = "delete-records-followers";
+    let partition = replicated_topic(&broker_handle, topic).await;
+
+    // The follower still reports log start 0, so the row times out with that
+    // low watermark, and the leader log is trimmed all the same.
+    let timed_out = delete_to(&broker, topic, 4, 200).await;
+    check!(timed_out == one_row(topic, 0, codes::REQUEST_TIMED_OUT));
+    check!(partition.log_start_offset() == krabka_log::Offset(4));
+
+    // The follower catches up while a second request waits.
+    let waiting = {
+        let broker = broker.clone();
+        tokio::spawn(async move { delete_to(&broker, topic, 6, 10_000).await })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    check!(!waiting.is_finished(), "the row waits for the follower");
+    follower_fetch(&broker, topic, APPENDED, 6).await;
+    let completed = tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
+        .await
+        .expect("the row completes once the follower reports")
+        .expect("delete task");
+    check!(completed == one_row(topic, 6, codes::NONE));
+
+    // A retry at a point every replica already passed answers at once.
+    let retry = delete_to(&broker, topic, 5, 0).await;
+    check!(retry == one_row(topic, 6, codes::NONE));
+
+    // A leadership this broker has published but not installed yet (no
+    // replica set, no follower progress) still waits for the follower the
+    // metadata image assigns, whose log start it does not know.
+    {
+        let mut state = partition.replica_state.lock().await;
+        let high_watermark = state.hw;
+        *state = crate::replica_state::ReplicaState::new();
+        state.hw = high_watermark;
+    }
+    let not_installed = delete_to(&broker, topic, 7, 200).await;
+    check!(not_installed == one_row(topic, -1, codes::REQUEST_TIMED_OUT));
+    // The follower's next fetch reports its progress to the new leadership.
+    follower_fetch(&broker, topic, APPENDED, 7).await;
+
+    // A fenced follower is not live, so its old log start does not count.
+    fence_follower(&broker_handle).await;
+    let fenced = delete_to(&broker, topic, 8, 10_000).await;
+    check!(fenced == one_row(topic, 8, codes::NONE));
+
+    broker_handle.shutdown().await;
+}

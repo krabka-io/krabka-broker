@@ -44,14 +44,15 @@ pub(super) fn kafka_swap_kickoff(config: &BrokerConfig) -> Option<KafkaSwapKicko
     );
     let security = (protocol.requires_tls() || protocol.requires_sasl()).then(|| {
         let tls = protocol.requires_tls().then(|| {
-            config
-                .tls_config
-                .as_ref()
-                .map(|tls| krabka_client_core::security::TlsConnectorConfig {
-                    trust_roots_pem: tls.trust_roots_path.clone(),
-                    server_name: advertised_host.clone(),
-                    client_identity: None,
-                })
+            config.tls_config.as_ref().map(|tls| {
+                let mut client_tls = krabka_client_core::security::TlsConnectorConfig::default();
+                if let Some(path) = &tls.trust_roots_path {
+                    client_tls.trust_store =
+                        krabka_client_core::security::TrustStore::PemFile(path.clone());
+                }
+                client_tls.server_name.clone_from(&advertised_host);
+                client_tls
+            })
         });
         Box::new(krabka_client_core::security::ClientSecurity {
             protocol,

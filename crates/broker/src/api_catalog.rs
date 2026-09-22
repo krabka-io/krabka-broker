@@ -256,7 +256,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/client_quotas/throttling.rs",
             "crates/broker/src/network/dispatch/throttle_audit.rs::throttle_echo_divergences_are_the_recorded_ones",
         ],
-        note: "Every API a request quota can hold on the ordinary dispatch path reports the delay it was held for: the dispatch loop patches a leading `ThrottleTimeMs`, and `Produce`, `Fetch` and `ApiVersions` -- whose schemas bury the field behind an array -- charge the quota in the handler and set it on the typed response instead. The throttle-echo section below lists the buried-field APIs and what each one's `RequestQuotaPolicy` costs; the rest are `InlineExempt`, so only a reply outside their advertised version range can be held without an echo.",
+        note: "Every API a request quota can hold on the ordinary dispatch path reports the delay it was held for: the dispatch loop patches a leading `ThrottleTimeMs`, and `Produce`, `Fetch` and `ApiVersions` -- whose schemas bury the field behind an array -- charge the quota in the handler and set it on the typed response instead. The dispatch loop decodes and encodes again the other buried-field responses (the delegation-token APIs and `OffsetDelete`) to set the field. The throttle-echo section below lists the buried-field APIs and what each one's `RequestQuotaPolicy` costs.",
     },
     KipAnnotation {
         key: "KIP-226",
@@ -518,7 +518,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         key: "KIP-511",
         claim: "Client software name and version in ApiVersions v3",
         status: KipStatus::Implemented,
-        module: "crates/broker/src/handlers/api_versions/client_info.rs",
+        module: "crates/raft/src/server/api_versions/client_software.rs",
         tests: &[
             "crates/broker/tests/client_software_versions.rs",
             "crates/broker/tests/librdkafka_conformance.rs::round_trip_group_join_and_api_versions_with_kcat",
