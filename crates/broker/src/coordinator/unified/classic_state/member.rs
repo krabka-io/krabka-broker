@@ -97,3 +97,33 @@ pub enum AddMemberOutcome {
     /// `FENCED_INSTANCE_ID`. Nothing changed.
     Fenced { live_member_id: String },
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use assert2::check;
+    use bytes::Bytes;
+
+    use super::*;
+
+    #[test]
+    fn member_is_static_reflects_group_instance_id() {
+        let member = Member::new(
+            "m1",
+            "c1",
+            "h1",
+            Duration::from_secs(10),
+            Duration::from_secs(10),
+            vec![("p1".to_string(), Bytes::from_static(b"meta"))],
+        );
+        check!(!member.is_static());
+        check!(member.protocol_metadata.as_ref() == b"meta");
+
+        let static_member = member.with_instance_id(Some("inst-1".to_string()));
+        check!(static_member.is_static());
+
+        let cleared_member = static_member.with_instance_id(None);
+        check!(!cleared_member.is_static());
+    }
+}
