@@ -78,7 +78,7 @@ pub(crate) async fn validate_group_commit(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
+    use assert2::{assert, check};
     use krabka_log::Offset;
 
     use super::*;
@@ -314,5 +314,19 @@ mod tests {
                 "an upgraded group must run the consumer epoch fence ({label}, epoch {epoch}); got {got:?}"
             );
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn validate_group_commit_returns_none_on_success_and_error_code_on_fence() {
+        let (coord, _log) = make_coordinator();
+        let handle = coord.get_or_create_classic("g");
+
+        // Simple consumer with no member ID is permitted -> returns None
+        let allowed = validate_group_commit(&handle, "", -1, None).await;
+        check!(allowed == None);
+
+        // Unknown member with generation is rejected -> returns Some(UNKNOWN_MEMBER_ID)
+        let rejected = validate_group_commit(&handle, "ghost", 1, None).await;
+        check!(rejected == Some(codes::UNKNOWN_MEMBER_ID));
     }
 }
