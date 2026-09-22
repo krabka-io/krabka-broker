@@ -19,7 +19,7 @@ use super::{
     reconciliation::{configure_after_load, reconcile},
     records::{flush_pending, snapshot_pending_after_change},
     request::{build_member, task_ids_to_map, task_offsets_to_map},
-    response::{base_resp, build_assignment_resp, error_resp},
+    response::{ResponseDelta, build_assignment_resp, endpoint_to_partitions, error_resp},
 };
 use crate::{
     codes,
@@ -77,6 +77,9 @@ pub(super) async fn handle_heartbeat(
     } = client;
     let now = Instant::now();
     let now_ms = chrono_now_ms();
+    // Kafka's `groups.containsKey`: a group that this heartbeat creates
+    // reports endpoint information epoch 0.
+    let group_existed = actor.state.group_epoch > 0;
 
     if let Some(resp) = changelog_partition_count_error(req) {
         return Ok(resp);
@@ -103,7 +106,13 @@ pub(super) async fn handle_heartbeat(
     // path below.
     if req.member_epoch == 0 && !actor.state.members.contains_key(&req.member_id) {
         if actor.state.members.len() >= config.max_size {
-            return Ok(error_resp(codes::GROUP_MAX_SIZE_REACHED, config));
+            return Ok(error_resp(
+                codes::GROUP_MAX_SIZE_REACHED,
+                Some(format!(
+                    "The streams group has reached its maximum capacity of {} members.",
+                    config.max_size
+                )),
+            ));
         }
         if let Some(resp) = topology_error(actor, req, metadata_source) {
             return Ok(resp);
@@ -135,7 +144,15 @@ pub(super) async fn handle_heartbeat(
         actor.state.reconcile_member(&new_member_id, &reported);
         let pending = snapshot_pending_after_change(actor, std::slice::from_ref(&new_member_id));
         flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
-        return Ok(build_assignment_resp(&actor.state, &new_member_id, config));
+        return Ok(accepted_response(
+            actor,
+            config,
+            metadata_source,
+            req,
+            &new_member_id,
+            &MemberBefore::default(),
+            group_existed,
+        ));
     }
 
     // ─── Existing-member: validate epoch ─────────────────────────
@@ -169,8 +186,14 @@ pub(super) async fn handle_heartbeat(
             .validate_heartbeat_epoch(&req.member_id, req.member_epoch, owned)
         {
             Ok(epoch) => epoch,
-            Err(error_code) => return Ok(error_resp(error_code, config)),
+            Err(error_code) => {
+                return Ok(error_resp(
+                    error_code,
+                    epoch_error_message(actor, req, error_code),
+                ));
+            }
         };
+    let before = MemberBefore::of(&actor.state.members[&req.member_id]);
     if let Some(resp) = topology_error(actor, req, metadata_source) {
         return Ok(resp);
     }
@@ -223,7 +246,124 @@ pub(super) async fn handle_heartbeat(
         let pending = snapshot_pending_after_change(actor, std::slice::from_ref(&req.member_id));
         flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
     }
-    Ok(build_assignment_resp(&actor.state, &req.member_id, config))
+    Ok(accepted_response(
+        actor,
+        config,
+        metadata_source,
+        req,
+        &req.member_id,
+        &before,
+        group_existed,
+    ))
+}
+
+/// The user endpoint of a member before a heartbeat changed it. A joining
+/// member starts from none.
+#[derive(Default)]
+struct MemberBefore {
+    user_endpoint: Option<(String, u16)>,
+}
+
+impl MemberBefore {
+    fn of(member: &crate::coordinator::unified::streams::state::StreamsMemberState) -> Self {
+        Self {
+            user_endpoint: member.user_endpoint.clone(),
+        }
+    }
+}
+
+/// Builds the response of an accepted heartbeat, as the end of Kafka's
+/// `streamsGroupHeartbeat` does.
+///
+/// The task lists go out when the member joins or its tasks changed. The
+/// group's endpoint information epoch goes up when the member's endpoint
+/// changed, or its tasks changed and it has an endpoint. Kafka compares the
+/// tasks before and after the heartbeat, because only the member's own
+/// heartbeat changes them. Here a new target also trims the tasks of the
+/// other members, so the comparison is with the tasks that the last response
+/// sent. A member whose last
+/// seen epoch differs from the group's gets the endpoint information of the
+/// whole group. A group that this heartbeat creates keeps epoch 0.
+fn accepted_response(
+    actor: &mut ActorState,
+    config: &StreamsGroupConfig,
+    metadata_source: Option<&Arc<dyn MetadataSource>>,
+    req: &StreamsGroupHeartbeatRequest,
+    member_id: &str,
+    before: &MemberBefore,
+    group_existed: bool,
+) -> StreamsGroupHeartbeatResponse {
+    let member = &actor.state.members[member_id];
+    let tasks = [
+        member.active.clone(),
+        member.standby.clone(),
+        member.warmup.clone(),
+    ];
+    let tasks_changed = member.sent_tasks != tasks;
+    let endpoint_changed = before.user_endpoint != member.user_endpoint;
+    let mut endpoint_epoch = actor.state.endpoint_information_epoch;
+    if endpoint_changed || (tasks_changed && member.user_endpoint.is_some()) {
+        endpoint_epoch = endpoint_epoch.saturating_add(1);
+    }
+    let partitions_by_user_endpoint =
+        (endpoint_epoch != req.endpoint_information_epoch).then(|| {
+            let image = metadata_source.map(|source| source.current_image());
+            let configured = actor
+                .topology
+                .as_ref()
+                .zip(image.as_ref())
+                .and_then(|(topology, image)| topology::configure_topics(topology, image).ok());
+            endpoint_to_partitions(
+                &actor.state,
+                member_id,
+                configured.as_ref().and_then(|c| c.subtopologies.as_ref()),
+                image.as_deref(),
+            )
+        });
+    if group_existed {
+        actor.state.endpoint_information_epoch = endpoint_epoch;
+    }
+    if let Some(member) = actor.state.members.get_mut(member_id) {
+        member.sent_tasks = tasks;
+    }
+    build_assignment_resp(
+        &actor.state,
+        member_id,
+        config,
+        ResponseDelta {
+            send_tasks: req.member_epoch == 0 || tasks_changed,
+            endpoint_information_epoch: actor.state.endpoint_information_epoch,
+            partitions_by_user_endpoint,
+        },
+    )
+}
+
+/// The `error_message` of a heartbeat that the member epoch check refused, in
+/// the words of Kafka's `getMemberOrThrow` and
+/// `throwIfStreamsGroupMemberEpochIsInvalid`.
+fn epoch_error_message(
+    actor: &ActorState,
+    req: &StreamsGroupHeartbeatRequest,
+    error_code: i16,
+) -> Option<String> {
+    let Some(member) = actor.state.members.get(&req.member_id) else {
+        return Some(format!(
+            "Member {} is not a member of group {}.",
+            req.member_id, actor.state.group_id
+        ));
+    };
+    (error_code == codes::FENCED_MEMBER_EPOCH).then(|| {
+        let relation = if req.member_epoch > member.member_epoch {
+            "greater"
+        } else {
+            "smaller"
+        };
+        format!(
+            "The streams group member has a {relation} member epoch ({}) than the one known by \
+             the group coordinator ({}). The member must abandon all its partitions and rejoin.",
+            req.member_epoch, member.member_epoch
+        )
+    })
 }
 
 /// Kafka's `GroupCoordinatorService.throwIfInvalidTopology`, which runs on a
@@ -241,14 +381,13 @@ fn changelog_partition_count_error(
         .flat_map(|topology| topology.subtopologies.iter())
         .flat_map(|subtopology| subtopology.state_changelog_topics.iter())
         .find(|topic| topic.partitions != 0)?;
-    Some(StreamsGroupHeartbeatResponse {
-        error_code: codes::STREAMS_INVALID_TOPOLOGY,
-        error_message: Some(format!(
+    Some(error_resp(
+        codes::STREAMS_INVALID_TOPOLOGY,
+        Some(format!(
             "Changelog topic {} must have an undefined partition count, but it is set to {}.",
             topic.name, topic.partitions
         )),
-        ..Default::default()
-    })
+    ))
 }
 
 /// The error response for a topology that Kafka's `configureTopics` refuses
@@ -277,11 +416,7 @@ fn topology_error(
         .map(topology::to_stored_topology);
     let topology = from_request.as_ref().or(actor.topology.as_ref())?;
     let error = topology::configure_topics(topology, &source.current_image()).err()?;
-    Some(StreamsGroupHeartbeatResponse {
-        error_code: error.error_code(),
-        error_message: error.error_message(),
-        ..Default::default()
-    })
+    Some(error_resp(error.error_code(), error.error_message()))
 }
 
 /// Marks the group for a reconcile when a topic that the topology needs
@@ -450,7 +585,13 @@ async fn handle_leave(
         actor.state.request_shutdown(&req.member_id);
     }
     if actor.state.remove_member(&req.member_id).is_none() {
-        return Ok(error_resp(codes::UNKNOWN_MEMBER_ID, config));
+        return Ok(error_resp(
+            codes::UNKNOWN_MEMBER_ID,
+            Some(format!(
+                "Member {} is not a member of group {}.",
+                req.member_id, actor.state.group_id
+            )),
+        ));
     }
     // `remove_member` set `dirty`; reconcile owns the single `bump_epoch`.
     reconcile(actor, config, metadata_source).await;
@@ -463,9 +604,13 @@ async fn handle_leave(
         .current_per_member
         .push((req.member_id.clone(), None));
     flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
+    // Kafka's leave response echoes the member id and epoch, and sends an
+    // empty status list and no group configuration.
     Ok(StreamsGroupHeartbeatResponse {
+        member_id: req.member_id.clone(),
+        member_epoch: req.member_epoch,
         status: Some(Vec::new()),
-        ..base_resp(codes::NONE, -1, config)
+        ..Default::default()
     })
 }
 

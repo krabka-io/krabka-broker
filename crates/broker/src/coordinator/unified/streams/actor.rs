@@ -34,7 +34,7 @@ mod heartbeat;
 mod reconciliation;
 mod records;
 mod request;
-mod response;
+pub(crate) mod response;
 
 #[cfg(test)]
 mod streams_group_model;
@@ -276,10 +276,10 @@ async fn actor_loop(
                                     error = %e,
                                     "streams-group actor exiting after log-write failure",
                                 );
-                                let _ = reply.send(StreamsGroupHeartbeatResponse {
-                                    error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
-                                    ..Default::default()
-                                });
+                                let _ = reply.send(response::error_resp(
+                                    codes::COORDINATOR_LOAD_IN_PROGRESS,
+                                    None,
+                                ));
                                 break;
                             }
                         }

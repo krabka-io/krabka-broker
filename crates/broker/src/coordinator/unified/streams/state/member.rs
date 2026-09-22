@@ -96,6 +96,10 @@ pub struct StreamsMemberState {
     pub warmup: BTreeMap<String, Vec<i32>>,
     /// Active tasks the member must revoke before it advances (KIP-848).
     pub active_pending_revocation: BTreeMap<String, Vec<i32>>,
+    /// The active, standby and warmup tasks that the last heartbeat response
+    /// sent to the member. A response sends the task lists again only when
+    /// the assignment differs from them.
+    pub sent_tasks: [BTreeMap<String, Vec<i32>>; 3],
 
     // --- reported catch-up progress (for warmup -> active promotion) ---
     /// `(subtopology, partition)` -> the changelog position the member last
@@ -137,6 +141,7 @@ impl StreamsMemberState {
             standby: BTreeMap::new(),
             warmup: BTreeMap::new(),
             active_pending_revocation: BTreeMap::new(),
+            sent_tasks: [BTreeMap::new(), BTreeMap::new(), BTreeMap::new()],
             task_offsets: BTreeMap::new(),
             task_end_offsets: BTreeMap::new(),
             last_seen: Instant::now(),
