@@ -53,13 +53,56 @@ pub(crate) async fn rebuild_producer_state(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
+    use assert2::{assert, check};
     use bytes::Bytes;
     use krabka_protocol::records::{Attributes, Record, RecordBatch};
     use tempfile::tempdir;
 
     use super::*;
     use crate::producer_state::Decision;
+
+    #[test]
+    fn open_config_sets_validate_on_open_when_diskless() {
+        let base = LogConfig {
+            validate_on_open: false,
+            ..Default::default()
+        };
+
+        let non_diskless = open_config(&base, false);
+        check!(!non_diskless.validate_on_open);
+
+        let diskless = open_config(&base, true);
+        check!(diskless.validate_on_open);
+    }
+
+    #[tokio::test]
+    async fn recover_open_log_reconciles_offset_and_rebuilds_state() {
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        log.append(&mut idempotent_batch(0, 0, 2)).unwrap();
+        let producer_state = Arc::new(ProducerState::new());
+
+        recover_open_log(
+            "orders",
+            PartitionIndex(0),
+            &mut log,
+            &producer_state,
+            Some(5),
+        )
+        .await
+        .unwrap();
+
+        let mut next_batch = idempotent_batch(0, 2, 1);
+        let (base_offset, _) = log.append(&mut next_batch).unwrap();
+        check!(base_offset == Offset(5));
+
+        check!(
+            producer_state
+                .check("orders", PartitionIndex(0), 42, 3, 0, 1)
+                .await
+                == Decision::Duplicate { base_offset: 0 }
+        );
+    }
 
     fn idempotent_batch(base_offset: i64, base_sequence: i32, count: i32) -> RecordBatch {
         RecordBatch {
