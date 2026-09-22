@@ -9,14 +9,13 @@
 //! of tasks for a subtopology equals its partition count, which comes from the
 //! partition counts of the topics it reads.
 //!
-//! This module is almost pure. Every function except [`ensure_internal_topics`]
-//! is synchronous and has no side effects, and each one takes a
-//! [`MetadataImage`] for topic lookups. The coordinator drives the flow.
-//! [`to_stored_topology`] ingests the topology of the client into a
-//! [`StreamsGroupTopologyValue`]. [`configure_topics`] decides the task counts
-//! and the internal topic partition counts, and it gives the status that keeps
-//! the group `NotReady`. [`internal_topic_specs`] and [`ensure_internal_topics`]
-//! materialize the internal topics that are still missing.
+//! This module is pure. Every function is synchronous and has no side
+//! effects, and each one takes a [`MetadataImage`] for topic lookups. The
+//! coordinator drives the flow. [`to_stored_topology`] ingests the topology of
+//! the client into a [`StreamsGroupTopologyValue`]. [`configure_topics`]
+//! decides the task counts and the internal topic partition counts, and it
+//! gives the status that keeps the group `NotReady`. [`internal_topic_specs`]
+//! names the internal topics that the heartbeat must create.
 //!
 //! [`MetadataImage`]: krabka_metadata::MetadataImage
 //! [`StreamsGroupTopologyValue`]: super::persistence::StreamsGroupTopologyValue
@@ -37,7 +36,7 @@ pub use self::{
         ConfigureTopicsError, ConfiguredInternalTopic, ConfiguredSubtopology, ConfiguredTopology,
         configure_topics,
     },
-    internal_topics::{InternalTopicSpec, ensure_internal_topics, internal_topic_specs},
+    internal_topics::{InternalTopicSpec, internal_topic_specs},
     metadata_hash::{metadata_hash, required_topics},
     stored::to_stored_topology,
     tasks::{partition_metadata, task_set},

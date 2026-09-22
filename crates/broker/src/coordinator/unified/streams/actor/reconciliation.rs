@@ -33,11 +33,12 @@ use crate::{
 /// target. Members still advance their epoch but get no tasks.
 ///
 /// Otherwise the function configures the topology against the current image
-/// ([`topology::configure_topics`]), makes sure the internal topics exist, and
-/// runs the assignor. A topology that cannot be configured leaves the group
-/// `NotReady`: the heartbeat checks the topology before it gets here, so that
-/// only a metadata change between the two checks reaches that path.
-pub(super) async fn reconcile(
+/// ([`topology::configure_topics`]), records the internal topics that the
+/// heartbeat must create, and runs the assignor. A topology that cannot be
+/// configured leaves the group `NotReady`: the heartbeat checks the topology
+/// before it gets here, so that only a metadata change between the two checks
+/// reaches that path.
+pub(super) fn reconcile(
     actor: &mut ActorState,
     config: &StreamsGroupConfig,
     metadata_source: Option<&Arc<dyn MetadataSource>>,
@@ -46,7 +47,7 @@ pub(super) async fn reconcile(
         return;
     }
     let target_epoch = actor.state.target.epoch;
-    reconcile_dirty(actor, config, metadata_source).await;
+    reconcile_dirty(actor, config, metadata_source);
     if actor.state.target.epoch != target_epoch {
         actor.target_changed = true;
     }
@@ -56,7 +57,7 @@ pub(super) async fn reconcile(
 /// without a new target, as Kafka's first heartbeat after a load does.
 ///
 /// The function records the topology status and the internal topics that the
-/// image does not hold, so that the heartbeat creates them again. It runs
+/// image does not hold, so that the heartbeat asks for them again. It runs
 /// once per actor, and a reconcile makes it unnecessary.
 pub(super) fn configure_after_load(actor: &mut ActorState, source: &Arc<dyn MetadataSource>) {
     if actor.configured {
@@ -72,11 +73,11 @@ pub(super) fn configure_after_load(actor: &mut ActorState, source: &Arc<dyn Meta
     let Ok(configured) = topology::configure_topics(&topology, &image) else {
         return;
     };
-    actor.missing_internal_topics = topology::internal_topic_specs(&configured);
+    actor.creatable_topics = topology::internal_topic_specs(&configured);
     actor.state.status = configured.status;
 }
 
-async fn reconcile_dirty(
+fn reconcile_dirty(
     actor: &mut ActorState,
     config: &StreamsGroupConfig,
     metadata_source: Option<&Arc<dyn MetadataSource>>,
@@ -89,13 +90,13 @@ async fn reconcile_dirty(
         return;
     };
 
-    let mut image = source.current_image();
+    let image = source.current_image();
     actor.configured = true;
     actor.metadata_hash = topology::metadata_hash(&topology, &image);
-    actor.missing_internal_topics.clear();
+    actor.creatable_topics.clear();
     actor.partition_metadata = Some(topology::partition_metadata(&topology, &image));
 
-    let mut configured = match topology::configure_topics(&topology, &image) {
+    let configured = match topology::configure_topics(&topology, &image) {
         Ok(configured) => configured,
         Err(error) => {
             tracing::warn!(
@@ -109,41 +110,9 @@ async fn reconcile_dirty(
         }
     };
 
-    // Materialize the internal topics that the image does not hold. When they
-    // all exist afterwards, configure again against the new image.
-    let specs = topology::internal_topic_specs(&configured);
-    if !specs.is_empty() {
-        match topology::ensure_internal_topics(
-            source,
-            &specs,
-            config.internal_topic_replication_factor,
-        )
-        .await
-        {
-            Ok(still_missing) if still_missing.is_empty() => {
-                image = source.current_image();
-                if let Ok(reconfigured) = topology::configure_topics(&topology, &image) {
-                    actor.metadata_hash = topology::metadata_hash(&topology, &image);
-                    configured = reconfigured;
-                }
-            }
-            Ok(still_missing) => {
-                actor.missing_internal_topics = specs
-                    .into_iter()
-                    .filter(|spec| still_missing.contains(&spec.name))
-                    .collect();
-            }
-            Err(error) => {
-                tracing::warn!(
-                    group_id = %actor.state.group_id,
-                    %error,
-                    "streams internal topic creation failed",
-                );
-                actor.missing_internal_topics = specs;
-            }
-        }
-    }
-
+    // The heartbeat hands the internal topics that the image does not hold to
+    // `CreateTopics`, as Kafka's `KafkaApis` does.
+    actor.creatable_topics = topology::internal_topic_specs(&configured);
     actor.state.status.clone_from(&configured.status);
 
     if !configured.is_ready() {
