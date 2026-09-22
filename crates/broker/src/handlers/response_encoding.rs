@@ -63,4 +63,30 @@ mod tests {
         assert!(decoded.api_keys[0].min_version == 0);
         assert!(decoded.api_keys[0].max_version == 4);
     }
+
+    #[test]
+    fn encode_response_with_context_round_trips_protocol_body() {
+        let resp = ApiVersionsResponse {
+            error_code: crate::codes::NONE,
+            api_keys: vec![ApiVersion {
+                api_key: 18,
+                min_version: 0,
+                max_version: 4,
+                ..Default::default()
+            }],
+            throttle_time_ms: 0,
+            ..Default::default()
+        };
+
+        let bytes =
+            encode_response_with_context(&resp, 3, "test_context").expect("encode response");
+        let mut cur: &[u8] = &bytes;
+        let decoded = ApiVersionsResponse::decode(&mut cur, 3).expect("decode response");
+
+        assert!(decoded.error_code == crate::codes::NONE);
+        assert!(decoded.api_keys.len() == 1);
+        assert!(decoded.api_keys[0].api_key == 18);
+        assert!(decoded.api_keys[0].min_version == 0);
+        assert!(decoded.api_keys[0].max_version == 4);
+    }
 }
