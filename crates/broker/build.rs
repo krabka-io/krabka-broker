@@ -12,6 +12,14 @@
 //! Bazel build, from the same lines of the same file; a disagreement between
 //! the two extractors is a build failure here rather than a silent pass, since
 //! `env!` refuses to compile against a name that was never emitted.
+//!
+//! A downstream Cargo workspace that pulls this crate in as a git dependency
+//! (`krabka-schema-registry`'s own dev-dependency on this crate, for example)
+//! vendors only `crates/broker`, not the sibling `MODULE.bazel` two
+//! directories up, so the file is absent there. The one reader of these
+//! variables is the `#[cfg(test)]` module above, which a downstream build
+//! never compiles, so a missing file in that position emits nothing rather
+//! than failing the whole build.
 
 use std::path::{Path, PathBuf};
 
@@ -26,8 +34,11 @@ fn main() {
         .join("MODULE.bazel");
     println!("cargo::rerun-if-changed={}", module_file.display());
 
-    let source = std::fs::read_to_string(&module_file)
-        .unwrap_or_else(|error| panic!("reading {}: {error}", module_file.display()));
+    let source = match std::fs::read_to_string(&module_file) {
+        Ok(source) => source,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("reading {}: {error}", module_file.display()),
+    };
 
     let mut emitted = 0_usize;
     for (name, digest) in source.lines().filter_map(pinned_image) {
@@ -40,7 +51,9 @@ fn main() {
 
     // Silence is the one answer that must not pass: a MODULE.bazel whose pins
     // moved out of the shape `pinned_image` reads would otherwise emit nothing
-    // and leave every `env!` on those names to fail with no hint of why.
+    // and leave every `env!` on those names to fail with no hint of why. This
+    // only applies once the file was actually read; a file the build never
+    // found takes the early return above instead.
     if emitted == 0 {
         println!(
             "cargo::error=no container-image pins found in {}",

@@ -4,19 +4,12 @@
 
 use krabka_ids::Offset;
 
-use super::{
-    Engine, checkpoint::load_checkpoint_by_id, checkpoint_dir,
-    replication::should_serve_fetch_records,
-};
+use super::{Engine, replication::should_serve_fetch_records};
 use crate::kraft::{
     action::Action,
-    event::{Event, LogEnd},
+    event::Event,
     transport::{Inbound, wire},
 };
-
-/// Krabka-internal "snapshot not available" signal in a `FetchSnapshot`
-/// response (voter↔voter).
-const SNAPSHOT_NOT_FOUND: i16 = 98;
 
 impl Engine {
     #[tracing::instrument(
@@ -28,73 +21,21 @@ impl Engine {
         // Decode the request body, run it through the core, and encode the
         // produced reply back onto the oneshot.
         match inbound {
+            // A body that does not decode drops `reply`, which closes the
+            // connection, as Kafka's `RequestContext.parseRequest` does.
             Inbound::Vote { req, reply } => {
-                let response = if let Some(wire::PeerRequest::Vote {
-                    cluster_id,
-                    voter_id,
-                    voter_directory_id,
-                    candidate_epoch,
-                    candidate,
-                    candidate_directory_id,
-                    last_epoch,
-                    last_offset,
-                    pre_vote,
-                }) = wire::decode_vote(&req)
-                {
-                    let event = Event::ReceiveVoteRequest {
-                        from: candidate,
-                        cluster_id,
-                        voter_id,
-                        voter_directory_id,
-                        candidate_epoch,
-                        candidate,
-                        candidate_directory_id,
-                        candidate_log_end: LogEnd {
-                            last_epoch,
-                            last_offset,
-                        },
-                        pre_vote,
-                    };
-                    self.run_inbound_reply(event)
-                } else {
-                    wire::PeerResponse::Vote {
-                        epoch: self.core.quorum_state().leader_epoch,
-                        granted: false,
-                    }
-                    .encode()
-                };
-                let _ = reply.send(response);
+                if let Some(response) = self.answer_vote(&req) {
+                    let _ = reply.send(response);
+                }
             }
             Inbound::BeginQuorumEpoch { req, reply } => {
-                if let Some(wire::PeerRequest::BeginQuorumEpoch {
-                    leader_id,
-                    leader_epoch,
-                }) = wire::decode_begin(&req)
-                {
-                    self.on_event(Event::ReceiveBeginQuorumEpoch {
-                        leader_id,
-                        leader_epoch,
-                    });
-                    let ack = wire::PeerResponse::Ack {
-                        epoch: self.core.quorum_state().leader_epoch,
-                    };
-                    let _ = reply.send(ack.encode());
+                if let Some(response) = self.answer_begin_quorum_epoch(&req) {
+                    let _ = reply.send(response);
                 }
             }
             Inbound::EndQuorumEpoch { req, reply } => {
-                if let Some(wire::PeerRequest::EndQuorumEpoch {
-                    leader_id,
-                    leader_epoch,
-                }) = wire::decode_end(&req)
-                {
-                    self.on_event(Event::ReceiveEndQuorumEpoch {
-                        leader_id,
-                        leader_epoch,
-                    });
-                    let ack = wire::PeerResponse::Ack {
-                        epoch: self.core.quorum_state().leader_epoch,
-                    };
-                    let _ = reply.send(ack.encode());
+                if let Some(response) = self.answer_end_quorum_epoch(&req) {
+                    let _ = reply.send(response);
                 }
             }
             Inbound::Fetch { req, reply } => {
@@ -190,72 +131,28 @@ impl Engine {
                 }
             }
             Inbound::FetchSnapshot { req, reply } => {
-                if let Some(wire::PeerRequest::FetchSnapshot {
-                    from,
-                    snapshot_id,
-                    position,
-                    max_bytes,
-                }) = wire::decode_fetch_snapshot(&req)
-                {
-                    // A voter catching up through KIP-630 is in contact with us
-                    // even though it sends no Fetch, so score it for
-                    // check-quorum before serving the chunk. Kafka does the same
-                    // in `handleFetchSnapshotRequest`; without it a leader whose
-                    // only reachable follower is mid-snapshot resigns under a
-                    // healthy quorum.
-                    self.on_event(Event::ReceiveFetchSnapshot { from });
-                    let (end_offset, epoch) = snapshot_id;
-                    let resp = match load_checkpoint_by_id(
-                        &checkpoint_dir(&self.data_dir),
-                        end_offset,
-                        epoch,
-                    ) {
-                        Some(bytes) => {
-                            // KIP-595 `FetchSnapshot` addresses a byte window of
-                            // the on-disk checkpoint. Both fields are slice
-                            // indices straight off the wire, so they clamp to
-                            // `usize` here rather than becoming quantities.
-                            let max = usize::try_from(max_bytes.max(0)).unwrap_or(0);
-                            let pos = usize::try_from(position.max(0)).unwrap_or(0);
-                            let chunk =
-                                crate::snapshot::SnapshotReader::byte_range(&bytes, pos, max);
-                            wire::PeerResponse::FetchSnapshot {
-                                snapshot_id,
-                                size: i64::try_from(bytes.len()).unwrap_or(i64::MAX),
-                                position,
-                                bytes: bytes::Bytes::copy_from_slice(chunk),
-                                error_code: 0,
-                            }
-                        }
-                        None => wire::PeerResponse::FetchSnapshot {
-                            snapshot_id,
-                            size: 0,
-                            position,
-                            bytes: bytes::Bytes::new(),
-                            error_code: SNAPSHOT_NOT_FOUND,
-                        },
-                    };
-                    let _ = reply.send(resp.encode());
+                if let Some(response) = self.answer_fetch_snapshot(&req) {
+                    let _ = reply.send(response);
                 }
             }
         }
     }
 
-    /// Run an inbound event whose actions include a `ReplyVote`, returning the
-    /// encoded response body (the loop side-effects from non-reply actions are
-    /// applied too).
-    pub fn run_inbound_reply(&mut self, event: Event) -> bytes::Bytes {
+    /// Run an inbound `ReceiveVoteRequest` and return whether the vote was
+    /// granted. The loop side effects of the other actions apply as well.
+    pub fn run_vote_request(&mut self, event: Event) -> bool {
         let now = self.now();
         let prev_role = self.core.role().name();
         let actions = self.core.on_event(event, &self.log, now);
-        let mut resp = wire::PeerResponse::Vote {
-            epoch: self.core.quorum_state().leader_epoch,
-            granted: false,
-        };
+        let mut granted = false;
         let mut local = Vec::new();
         for action in actions {
-            if let Action::ReplyVote { epoch, granted, .. } = action {
-                resp = wire::PeerResponse::Vote { epoch, granted };
+            if let Action::ReplyVote {
+                granted: reply_granted,
+                ..
+            } = action
+            {
+                granted = reply_granted;
             } else {
                 local.push(action);
             }
@@ -263,6 +160,6 @@ impl Engine {
         self.execute_local_only(local);
         self.reconcile_timers(prev_role);
         self.publish_leader();
-        resp.encode()
+        granted
     }
 }

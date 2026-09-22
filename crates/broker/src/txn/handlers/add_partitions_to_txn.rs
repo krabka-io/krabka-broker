@@ -99,7 +99,7 @@ pub(crate) async fn handle(
     // before checking coordinator-ness, to avoid a race.
     let image = controller.current_image();
     let txnv = crate::txn::version::resolve_txn_version(&image);
-    coord.refresh_leader_partitions(&image).await;
+    drop(coord.refresh_leader_partitions(&image).await);
 
     let dependencies = HandlerDependencies {
         coord: &coord,

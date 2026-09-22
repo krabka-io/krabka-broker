@@ -41,7 +41,7 @@ mod groups;
 mod injection;
 mod recovery;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 pub(crate) use self::{
     groups::{GroupDescription, RetainedCut},

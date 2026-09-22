@@ -71,7 +71,10 @@ fn tiered_local_delete_removes_only_deleted_segment_stamp_indexes() {
         log.append(&mut sample_batch(1)).unwrap();
     }
 
+    check!(log.sealed_txn_indexes.contains_key(&Offset(0)));
     check!(log.delete_local_segments_through(Offset(1)).unwrap() == 1);
+    check!(!log.sealed_txn_indexes.contains_key(&Offset(0)));
+    check!(log.sealed_txn_indexes.contains_key(&Offset(1)));
 
     check!(log.stamp_for_offset(Offset(0)) == None);
     check!(log.stamp_for_offset(Offset(1)) == Some(11));
@@ -107,6 +110,7 @@ fn tierable_segments_excludes_active_and_reports_paths() {
         check!(ex.offset_index_path.exists());
         check!(ex.time_index_path.exists());
         check!(ex.last_offset >= ex.base_offset);
+        check!(ex.max_timestamp == 0);
         check!(ex.base_offset > prev_last, "segments are offset-ordered");
         prev_last = ex.last_offset;
         assert2::assert!(ex.last_offset < active_base);

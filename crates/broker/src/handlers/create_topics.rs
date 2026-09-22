@@ -142,7 +142,7 @@ pub(crate) async fn handle(
     // invalid requests consume quota (bad-faith clients can't escape by
     // sending malformed RPCs). num_partitions == -1 means "use cluster
     // default"; count it as 1 for accounting.
-    let mutation_count = mutation_count(&req);
+    let mutation_count = mutation_count(&req, broker.config.num_partitions);
     let quota = crate::quota::apply_controller_mutation_quota_mode(
         &image,
         &broker.quota_buckets,
@@ -173,9 +173,8 @@ pub(crate) async fn handle(
     // so the policy below sees it exactly as it sees a committing one.
     let validate_only = req.validate_only;
 
-    for topic_req in req.topics {
+    for mut topic_req in req.topics {
         let name = topic_req.name.clone();
-        let partition_count = topic_req.num_partitions;
 
         // Kafka checks the name before anything else. The name becomes part
         // of the partition directory path, so no later step may see a name
@@ -230,11 +229,22 @@ pub(crate) async fn handle(
             continue;
         }
 
-        // Reject invalid partition counts before attempting automatic placement.
-        // Manual assignments use -1 for both count and replication factor.
-        if topic_req.assignments.is_empty() && partition_count <= 0 {
-            results.push(topic_error_result(name, codes::INVALID_PARTITIONS, None));
-            continue;
+        // Kafka's `ReplicationControlManager.createTopic` checks the
+        // replication factor first and the partition count second. Each may
+        // be -1, which KIP-464 resolves to the broker's `num.partitions` or
+        // `default.replication.factor`. A manual assignment requires -1 for
+        // both, and `resolve_assignments` checks that.
+        if topic_req.assignments.is_empty() {
+            if let Some((code, message)) = invalid_topic_shape(&topic_req) {
+                results.push(topic_error_result(name, code, Some(message.to_owned())));
+                continue;
+            }
+            topic_req.num_partitions =
+                resolve_default(topic_req.num_partitions, broker.config.num_partitions);
+            topic_req.replication_factor = resolve_default(
+                topic_req.replication_factor,
+                broker.config.default_replication_factor,
+            );
         }
 
         // Read the current broker set from the controller's image, with the
@@ -428,6 +438,37 @@ pub(crate) async fn handle(
     }
 
     finish_response(broker, ctx, results, validate_only, quota.delay(), version)
+}
+
+/// Kafka's refusal of a requested topic shape without a manual assignment:
+/// `INVALID_REPLICATION_FACTOR` for a replication factor of 0 or below -1,
+/// else `INVALID_PARTITIONS` for a partition count of 0 or below -1. The
+/// messages are Kafka's.
+fn invalid_topic_shape(
+    topic: &krabka_protocol::owned::create_topics_request::CreatableTopic,
+) -> Option<(i16, &'static str)> {
+    if topic.replication_factor < -1 || topic.replication_factor == 0 {
+        Some((
+            codes::INVALID_REPLICATION_FACTOR,
+            "Replication factor must be larger than 0, or -1 to use the default value.",
+        ))
+    } else if topic.num_partitions < -1 || topic.num_partitions == 0 {
+        Some((
+            codes::INVALID_PARTITIONS,
+            "Number of partitions was set to an invalid non-positive value.",
+        ))
+    } else {
+        None
+    }
+}
+
+/// KIP-464: a requested value of -1 means the broker default.
+fn resolve_default<T: From<i8> + PartialEq>(requested: T, default: T) -> T {
+    if requested == T::from(-1) {
+        default
+    } else {
+        requested
+    }
 }
 
 /// Fill in what KIP-525 discloses about a topic the create just made: its

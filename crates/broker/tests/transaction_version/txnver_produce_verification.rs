@@ -56,6 +56,7 @@ impl<const V: i16> ProtocolRequest for ProduceAt<V> {
     const API_KEY: i16 = produce_request::API_KEY;
     const MIN_VERSION: i16 = V;
     const MAX_VERSION: i16 = V;
+    const LATEST_STABLE_VERSION: i16 = V;
     const FLEXIBLE_MIN: i16 = produce_request::FLEXIBLE_MIN;
     type Response = ProduceResponse;
 }

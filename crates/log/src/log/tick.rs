@@ -440,6 +440,36 @@ mod tests {
         check!(log.stamp_for_offset(Offset(0)) == None);
         check!(log.stamp_for_offset(Offset(1)) == None);
         check!(log.stamp_for_offset(Offset(2)) == Some(12));
+        check!(!log.sealed_txn_indexes.contains_key(&Offset(0)));
+        check!(!log.sealed_txn_indexes.contains_key(&Offset(1)));
+    }
+
+    #[test]
+    fn tick_retention_size_debt_calculation() {
+        let dir = tempdir().unwrap();
+        let config = LogConfig {
+            segment_size: bytes(1),
+            retention_size: Some(bytes(100_000)),
+            ..LogConfig::default()
+        };
+        let mut log = Log::open(dir.path(), config).unwrap();
+        for _ in 0..5 {
+            log.append(&mut sample_batch(1)).unwrap();
+        }
+        let total = log.size();
+        assert2::assert!(total < bytes(100_000));
+        // Under budget: nothing is evicted by size
+        log.tick(SystemTime::UNIX_EPOCH).unwrap();
+        assert2::assert!(log.segments.len() == 4);
+
+        // Budget smaller than total size: only excess is evicted
+        let target_budget = total - bytes(100);
+        let mut new_config = log.config_snapshot();
+        new_config.retention_size = Some(target_budget);
+        log.set_config(new_config);
+        log.tick(SystemTime::UNIX_EPOCH).unwrap();
+        // Evicts at least one segment
+        assert2::assert!(log.segments.len() < 4);
     }
 
     #[test]

@@ -217,8 +217,7 @@ impl ReaperBackend for TxnCoordinator {
     // cargo-mutants: thin adapter over inherent method / live lock state
     #[cfg_attr(test, mutants::skip)]
     async fn is_coordinator_for(&self, tid: &str) -> bool {
-        let p = self.partition_for(tid);
-        self.leader_partitions.read().await.contains(&p)
+        TxnCoordinator::is_coordinator_for(self, tid).await
     }
 
     // cargo-mutants: I/O over live entry locks + raft persistence

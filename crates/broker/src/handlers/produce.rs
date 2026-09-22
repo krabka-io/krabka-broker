@@ -160,6 +160,7 @@ pub(crate) async fn handle(
     // up-converted (never passthrough-eligible), so they take the full owned
     // decode and feed every partition the owned path directly.
     let req = decode_produce_request(req_bytes, body_bytes, version)?;
+    let acks = req.acks;
     let timeout = Duration::from_millis(u64::try_from(req.timeout_ms.max(0)).unwrap_or(0));
 
     // ── ACL preamble ────────────────────────────────────────
@@ -429,7 +430,7 @@ pub(crate) async fn handle(
         broker,
         &image,
         ctx,
-        handler_start,
+        (acks != 0).then_some(handler_start),
         &produce_bytes_by_qos_tier,
         topic_results,
         version,

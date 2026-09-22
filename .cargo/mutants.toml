@@ -27,6 +27,7 @@ exclude_globs = [
     # diagrams, not the broker -- 143 survivors of a 187-survivor crate, none of
     # them about anything a cluster does.
     "crates/kraft-core/src/sim.rs",
+    "crates/kraft-core/src/sim/**",
     # `krabka-broker`'s `main` is pure entrypoint glue: parse CLI args, derive
     # the controller listener and self single-voter set, build `BrokerConfig`,
     # hand it to `Broker::start`, then wait for a termination signal and
@@ -54,6 +55,31 @@ exclude_re = [
     # KIP-939 2PC gates, the coordinator routing -- is wire-visible and is
     # asserted by `handlers::init_producer_id::tests`.
     "init_producer_id\\.rs.*delete .*error_code.*in handle",
+    # `error.kind() != NotFound` guards only a `tracing::warn!` when cleaning up
+    # a clean-shutdown file. An error other than NotFound is an unobservable
+    # logging-only effect that leaves `take`'s return value unchanged.
+    "clean_shutdown\\.rs:70:.*replace != with == in take",
+    # ---- crates/audit --------------------------------------------------
+    #
+    # `let created = !path.exists()` only decides whether to fsync the newly
+    # created file and parent directory. `sync_all` and `sync_parent` are pure
+    # I/O barriers with no in-process effect, so calling them on new vs existing
+    # spool file cannot be observed by in-process tests.
+    "spool\\.rs:330:.*delete ! in Spool::open_with_sync_every",
+    #
+    # `s.count.0 == 0 && s.replay_offset > 0` truncates the spool when all records
+    # have been replayed. Relaxing `>` to `>=` calls `truncate()` on a freshly
+    # opened empty spool (`count == 0` and `replay_offset == 0`). Truncating an
+    # already-empty spool sets length to 0 and replay_offset to 0, which is identical
+    # to the untruncated state. An equivalent mutant at the boundary 0.
+    "spool\\.rs:371:.*replace > with >= in Spool::open_with_sync_every",
+    # ---- crates/kraft-core ---------------------------------------------
+    #
+    # `LogOffsetMetadata::end_of_epoch_in`'s early return for `epoch > last_epoch`
+    # is an optimization: at equality `epoch == last_epoch`, and for `epoch > last_epoch`,
+    # the fallthrough loop position/filter yields `offset = end` and `epoch = last_epoch`,
+    # which is the identical result.
+    "types\\.rs:70:.*replace LogOffsetMetadata::end_of_epoch_in with [=>]=",
     # ---- crates/log ----------------------------------------------------
     #
     # The epoch guard in each append path is `epoch.is_known() && latest is none
@@ -142,4 +168,92 @@ exclude_re = [
     # mask clears exactly the bits the code sets, so `|` and `^` compute the
     # same function. An equivalent mutant, not a gap.
     "replace \\| with \\^ in attrs_with_compression",
+    # Four disjoint byte slices: for non-overlapping masks A and B, `A | B == A ^ B`.
+    "replace \\| with \\^ in reverse_bytes",
+    # Min/max comparisons: at equality both arms yield the same value or assigning
+    # assigns the existing value.
+    "replace < with <= in (list_offsets_(bound|selection)_decision|list_offsets_earliest)",
+    "replace < with <= in (first_unstable_offset|isr_high_watermark|share_prune_frontier|truncation_frontier)",
+    "replace > with >= in (coalesce_delivery_range|delete_records_trim_application)",
+    "replace < with <= in delete_records_trim_decision",
+    # Clamping boundaries: at equality both branches produce the identical bound.
+    "replace [<>] with [<>]= in (resolve_transaction_timeout|delivery_watermark_advance)",
+    # `if generation < 0 { 0 } else { generation }`: at 0 both arms yield 0.
+    "replace < with <= in (classic_upgrade|consumer_downgrade)_epoch",
+    # At 0, -0 == 0.
+    "replace < with <= in java_string_hash_partition",
+    # `incoming == expected` or `requested == current` already handled on earlier branch.
+    "replace < with <= in list_offsets_epoch_decision",
+    "replace > with >= in token_mutation_decision",
+    "replace < with <= in wal_fetch_admission",
+    # Expiry bounds and selection implication:
+    "replace > with >= in (token_is_active|preferred_rebalance_admission)",
+    # At `now == start`, `0 >= timeout` is false since `timeout > 0`.
+    "replace < with <= in should_abort_idle_transaction",
+    # At `safety_lag == hw`, target is 0 <= current_start; at 0 target <= current_start.
+    "replace [<>] with [<>=]= in diskless_trim_decision",
+    "replace \\|\\| with && in diskless_trim_decision",
+    # When `position == file_end`, `encoded_len != 0` ensures `valid_end > file_end` on line 124 returning `None`.
+    "replace > with (>=|==) in local_recovery_batch_step",
+    # `(requested < 0 && registered < 0) || requested != registered` is equivalent to the disjoint disjunction.
+    "producer_id\\.rs:74:.*replace \\|\\| with && in producer_id_block_allocation",
+    # In `snapshot_chunk_admission`, `declared_size < 0` is caught by line 140's `else { Restart }`.
+    "snapshot\\.rs:122:.*replace \\|\\| with && in snapshot_chunk_admission",
+    # `0.saturating_sub(x) == 0`.
+    "replace > with >= in (local_)?retention_prefix",
+    # At `batch_base == i64::MAX - delta`, offset is i64::MAX >= end returning Skip.
+    "replace > with (>=|==) in replay_record_decision",
+    # `first <= last < snapshot` implies `first < snapshot`.
+    "replace < with <= in producer_snapshot_entry_valid",
+    # `LogIo::sync_*` flushes file/dir state to stable storage, which has no observable effect in in-memory / unit-test execution.
+    "replace (LogIo::(sync_dir|sync_data|sync_file)|real_sync_dir) with Ok\\(\\)",
+    # `batch_last > last_kept_offset` guards `last_kept_offset = batch_last`; at equality it assigns the value already there.
+    "replace > with >= in rewrite_segments",
+    # Single-chunk and empty match arms in `Log::read_raw` are allocations/capacity shortcuts; fallthrough produces identical Bytes.
+    "read\\.rs:288:.*replace Log::read_raw with ",
+    "read\\.rs:289:.*replace Log::read_raw with ",
+    # `Log::close(self)` consumes `self`; dropping on return produces identical destructor effects as `drop(self)`.
+    "state\\.rs:295:.*replace Log::close with \\(\\)",
+    # `recovered.valid_end < self.log_size`: at equality, set_len(valid_end) is an identical no-op.
+    "open\\.rs:118:.*replace Segment::recover_active_tail with <=",
+    # `total_size > budget`: at equality, `total_size - budget` is 0, matching the else branch.
+    "tick\\.rs:80:.*replace Log::tick with >=",
+    # `reclaimed` in `deleted_orphan_recover` only records to a tracing::Span with no semantic impact.
+    "recovery\\.rs:180:.*replace deleted_orphan_recover with \\*=",
+    # `NotFound` in `deleted_orphan_recover` handles concurrent deletion; skipping it does not affect return.
+    "recovery\\.rs:181:.*replace deleted_orphan_recover with (false|true|!=)",
+    # ---- crates/raft ---------------------------------------------------
+    #
+    # In `advance_and_apply`:
+    # - At equality `cursor == applied_hwm`, `read_decoded` produces batches
+    #   outside the apply window, which are skipped; mutating `<` to `<=`
+    #   executes an extra read that immediately terminates.
+    # - `metadata_version_downgraded |= is_metadata_version_downgrade`: at line 120,
+    #   `self.downgrade_snapshot_pending` is unconditionally populated, so line 158
+    #   skips regular image broadcasts regardless of this flag.
+    # - `*next > cursor`: offsets returned by `read_decoded` are strictly monotonic;
+    #   `next == cursor` never occurs.
+    "apply\\.rs:55:.*replace < with <= in .*advance_and_apply",
+    "apply\\.rs:126:.*replace \\|= with &= in .*advance_and_apply",
+    "apply\\.rs:147:.*replace > with >= in .*advance_and_apply",
+    #
+    # In `recovery.rs`: at `cursor == target` / `cursor == end_offset`,
+    # `replay_record_decision` drops records at or beyond the target offset;
+    # mutating `<` to `<=` reads empty/uncommitted batches and halts.
+    "recovery\\.rs:(35|95|159):.*replace < with <= in (replay_committed|replay_control_records|control_state_at)",
+    #
+    # In `KraftLog::advance_hwm`: at equality `next == self.hwm`, reassigning
+    # and persisting stores the identical offset value.
+    "log\\.rs:191:.*replace > with >= in KraftLog::advance_hwm",
+    #
+    # `Vec::new()` and `vec![]` construct identical empty vectors.
+    "transport/peer_sender\\.rs:46:.*replace PeerSender::discovery_peers.*with vec!\\[\\]",
+    #
+    # In `KraftLog::timestamp_below`, `last < start || last >= end` guards against
+    # out-of-range reads: for `last < start`, `read_decoded` bubbles an OffsetOutOfRange
+    # error converted to `None` by `ok()?`; for `last >= end`, `read_decoded` returns
+    # an empty slice whose `last()` is `None`. Since `start <= end`, `last < start && last >= end`
+    # is impossible, so replacing `||` with `&&` skips early return to yield identical `None`.
+    "log\\.rs:153:.*replace \\|\\| with && in KraftLog::timestamp_below",
 ]
+

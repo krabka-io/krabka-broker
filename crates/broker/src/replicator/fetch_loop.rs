@@ -366,6 +366,9 @@ fn partition_row(cfg: &Config, partition_max_cap: ByteSize) -> Option<PartitionR
             fetch_offset: fetch_offset.0,
             current_leader_epoch: leader_epoch,
             last_fetched_epoch,
+            // The leader's `DeleteRecords` waits until every live follower
+            // reports a log start at or above the trim point.
+            log_start_offset: entry.log_start_offset().0,
             partition_max_bytes: partition_max_cap.bytes_i32(),
             ..FetchPartition::default()
         },

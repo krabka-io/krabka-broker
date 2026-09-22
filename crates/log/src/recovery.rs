@@ -459,4 +459,21 @@ mod tests {
             Err(LogError::Corrupt(message)) if message.contains("no log file")
         ));
     }
+
+    #[test]
+    fn canonical_base_and_swap_filename_reject_leading_sign() {
+        check!(canonical_base("+0000000000000000001.log", "log").is_none());
+        check!(canonical_base("00000000000000000001.log", "log") == Some(1));
+        check!(parse_swap_filename("+0000000000000000001.log.swap").is_none());
+        check!(parse_swap_filename("00000000000000000001.log.swap") == Some((1, true)));
+    }
+
+    #[test]
+    fn promote_or_create_creates_target_when_neither_exists() {
+        let dir = tempdir().unwrap();
+        let swap = dir.path().join("swap");
+        let target = dir.path().join("target");
+        promote_or_create(&swap, &target).unwrap();
+        check!(target.exists());
+    }
 }

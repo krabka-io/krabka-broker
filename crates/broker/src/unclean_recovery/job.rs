@@ -78,3 +78,27 @@ impl UncleanRecoveryHandle {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn enqueue_sends_job_to_channel() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let handle = UncleanRecoveryHandle::for_tests(tx);
+
+        let job = RecoveryJob {
+            topic: "test-topic".into(),
+            partition: 0,
+            strategy: RecoveryStrategy::Balanced,
+            reply: None,
+            proposal: None,
+        };
+
+        handle.enqueue(job).await;
+        let received = rx.recv().await.expect("job received");
+        assert2::check!(received.topic == "test-topic");
+        assert2::check!(received.partition == 0);
+    }
+}

@@ -206,4 +206,66 @@ mod tests {
             "no read is issued for no bytes"
         );
     }
+
+    #[test]
+    fn write_all_and_vectored_handle_interrupted() {
+        use std::io::ErrorKind;
+
+        #[derive(Debug)]
+        struct MockIo {
+            calls: std::sync::atomic::AtomicUsize,
+            error_kind: ErrorKind,
+        }
+
+        impl LogIo for MockIo {
+            fn write(&self, _file: &File, buf: &[u8]) -> std::io::Result<usize> {
+                if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    Err(std::io::Error::from(self.error_kind))
+                } else {
+                    Ok(buf.len())
+                }
+            }
+
+            fn write_vectored(&self, _file: &File, bufs: &[IoSlice<'_>]) -> std::io::Result<usize> {
+                if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    Err(std::io::Error::from(self.error_kind))
+                } else {
+                    Ok(bufs.iter().map(|b| b.len()).sum())
+                }
+            }
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let file = File::create(temp.path().join("test")).unwrap();
+
+        // Interrupted is retried
+        let io = MockIo {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            error_kind: ErrorKind::Interrupted,
+        };
+        assert2::check!(write_all(&io, &file, b"hello").is_ok());
+
+        let io = MockIo {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            error_kind: ErrorKind::Interrupted,
+        };
+        let slice = *b"hi";
+        let mut slices = [IoSlice::new(&slice)];
+        assert2::check!(write_all_vectored(&io, &file, &mut slices).is_ok());
+
+        // Non-interrupted error propagates
+        let io = MockIo {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            error_kind: ErrorKind::PermissionDenied,
+        };
+        assert2::check!(write_all(&io, &file, b"hello").is_err());
+
+        let io = MockIo {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            error_kind: ErrorKind::PermissionDenied,
+        };
+        let slice = *b"hi";
+        let mut slices = [IoSlice::new(&slice)];
+        assert2::check!(write_all_vectored(&io, &file, &mut slices).is_err());
+    }
 }

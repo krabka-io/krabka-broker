@@ -282,11 +282,15 @@ async fn add_partitions_to_txn_authorizes_by_version_and_fails_the_whole_transac
     .expect("bootstrap __transaction_state");
     seed_topic(&broker, "a", 1).await;
     seed_topic(&broker, "b", 1).await;
+    // Wait for the coordinator's own leadership/load bookkeeping, not just
+    // the partition object. The broker's metadata reconcile loop also calls
+    // refresh_leader_partitions on every image change and does not wait for
+    // the load it starts, so a caller can otherwise see the partition object
+    // exist locally before the coordinator itself considers the partition
+    // loaded, and puts before that point fail "does not coordinate".
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        while broker
-            .partitions
-            .get(crate::txn::bootstrap::TOPIC, PartitionIndex(0))
-            .is_none()
+        while broker.txn_coordinator.load_status(PartitionIndex(0)).await
+            != Some(crate::txn::coordinator::leadership::LoadStatus::Loaded)
         {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }

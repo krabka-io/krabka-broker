@@ -600,3 +600,35 @@ fn foreign_cluster_is_denied_before_epoch_mutation() {
     );
     assert2::assert!((m.quorum_state().leader_epoch, m.quorum_state().voted_key) == (0, None));
 }
+
+#[test]
+fn prevote_rejected_when_candidate_log_is_not_up_to_date() {
+    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let log = FakeLog {
+        end: 10,
+        last_epoch: 2,
+    };
+    let actions = m.on_event(
+        Event::ReceiveVoteRequest {
+            from: NodeId(2),
+            cluster_id: None,
+            voter_id: NodeId(1),
+            voter_directory_id: uuid::Uuid::nil(),
+            candidate_epoch: 2,
+            candidate: NodeId(2),
+            candidate_directory_id: uuid::Uuid::nil(),
+            candidate_log_end: LogEnd {
+                last_epoch: 1,
+                last_offset: 5,
+            },
+            pre_vote: true,
+        },
+        &log,
+        SimInstant(0),
+    );
+    assert2::assert!(
+        actions
+            .iter()
+            .any(|action| matches!(action, Action::ReplyVote { granted: false, .. }))
+    );
+}

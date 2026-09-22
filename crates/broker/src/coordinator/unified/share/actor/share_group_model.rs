@@ -6,7 +6,9 @@
 //! two member identities, one subscribed topic with one or two partitions, a
 //! logical clock through four ticks, and group epochs through five. The search
 //! explores join, current/stale/forward heartbeat, leave, timeout, metadata
-//! resize, and one crash/replay in every reachable ordering.
+//! resize, and one crash/replay in every reachable ordering. A stale heartbeat
+//! sends the member epoch minus one: Kafka accepts it when it is the previous
+//! member epoch or 0 (a rejoin), and fences it otherwise.
 //!
 //! Share assignments intentionally permit the same partition across members
 //! when members outnumber partitions. The ownership property therefore proves
@@ -30,7 +32,6 @@ use crate::coordinator::unified::{
     actor::MetadataProvider,
     reconciler::ReconcileInput,
     share::state::{ShareGroupState, ShareMemberState},
-    validate_member_epoch,
 };
 
 const TOPIC: Uuid = Uuid([42; 16]);
@@ -47,7 +48,7 @@ const MAX_DEPTH: usize = 64;
 // considering a field -- into a failure instead of a silently smaller search
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
-const PINNED_UNIQUE_STATES: usize = 23_084;
+const PINNED_UNIQUE_STATES: usize = 54_304;
 const WITNESS_STALE_FENCED: u8 = 1 << 0;
 const WITNESS_FORWARD_FENCED: u8 = 1 << 1;
 const WITNESS_TIMEOUT: u8 = 1 << 2;
@@ -82,8 +83,8 @@ struct State {
     witnesses: u8,
 }
 
-type MemberProjection = (String, i32, Vec<String>, Vec<i32>, Instant);
-type DurableMemberProjection = (String, i32, Vec<String>, Vec<i32>);
+type MemberProjection = (String, i32, i32, Vec<String>, Vec<i32>, Instant);
+type DurableMemberProjection = (String, i32, i32, Vec<String>, Vec<i32>);
 type GroupProjection = (
     i32,
     i32,
@@ -114,6 +115,7 @@ impl State {
                 (
                     member.member_id.clone(),
                     member.member_epoch,
+                    member.previous_member_epoch,
                     subscriptions,
                     assigned,
                     member.last_seen,
@@ -255,6 +257,7 @@ fn durable_projection(group: &ShareGroupState) -> DurableProjection {
             (
                 member.member_id.clone(),
                 member.member_epoch,
+                member.previous_member_epoch,
                 subscriptions,
                 assigned,
             )
@@ -351,7 +354,7 @@ impl Model for ShareModel {
                     EpochKind::Stale => current.saturating_sub(1),
                     EpochKind::Forward => current.saturating_add(1),
                 };
-                match validate_member_epoch(Some(current), requested) {
+                match state.group.validate_member_epoch(member_id, requested) {
                     Ok(_) => {
                         state.group.members.get_mut(member_id)?.last_seen = at(&state);
                         if !reconcile(&mut state.group, &metadata(state.partitions)) {
@@ -363,7 +366,7 @@ impl Model for ShareModel {
                     }
                     Err(error) => match kind {
                         EpochKind::Stale => {
-                            assert2::assert!(error == crate::codes::STALE_MEMBER_EPOCH);
+                            assert2::assert!(error == crate::codes::FENCED_MEMBER_EPOCH);
                             state.witnesses |= WITNESS_STALE_FENCED;
                         }
                         EpochKind::Forward => {
@@ -408,7 +411,10 @@ impl Model for ShareModel {
                 state.group.members.get_mut(member_id)?.last_seen = at(&state);
             }
             Action::UnknownHeartbeat => {
-                let error = validate_member_epoch(None, 0).expect_err("unknown member is rejected");
+                let error = state
+                    .group
+                    .validate_member_epoch("unknown", 1)
+                    .expect_err("unknown member is rejected");
                 assert2::assert!(error == crate::codes::UNKNOWN_MEMBER_ID);
                 state.witnesses |= WITNESS_UNKNOWN;
             }

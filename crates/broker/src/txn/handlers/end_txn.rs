@@ -90,7 +90,7 @@ pub(crate) async fn handle(
     // before checking coordinator-ness.
     let image = controller.current_image();
     let txnv = crate::txn::version::resolve_txn_version(&image);
-    coord.refresh_leader_partitions(&image).await;
+    drop(coord.refresh_leader_partitions(&image).await);
 
     let tid = req.transactional_id.as_str();
     let entry_mutex = match validate_end_txn(&coord, authorizer, &image, ctx, &req, txnv).await {

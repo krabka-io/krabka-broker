@@ -109,7 +109,9 @@ impl ReplicatorSupervisor {
         // 3. Refresh the txn coordinator's view of locally-led
         //    __transaction_state partitions. Cheap (Arc clone + lock).
         if let Some(coord) = &self.txn_coordinator {
-            coord.refresh_leader_partitions(image).await;
+            // The loads run in the background. The reconcile loop does not
+            // wait for them.
+            drop(coord.refresh_leader_partitions(image).await);
         }
 
         // 3b. Apply the leadership of __share_group_state partitions to the
