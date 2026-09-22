@@ -183,6 +183,7 @@ mod tests {
         use AuditLossMarkerAdmission::{AdmitLegacy, AdmitPersisted, Reject};
 
         check!(audit_loss_marker_admission(true, 1, 3, false, 0, 0) == AdmitLegacy);
+        check!(audit_loss_marker_admission(true, 1, 3, true, 0, 0) == Reject);
         check!(audit_loss_marker_admission(true, 2, 3, true, 2, 1) == AdmitPersisted);
         check!(audit_loss_marker_admission(true, 2, 0, true, 2, 1) == Reject);
         check!(audit_loss_marker_admission(true, 2, 3, true, 1, 1) == Reject);

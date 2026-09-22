@@ -315,9 +315,10 @@ pub struct FileConfig {
     /// Raw Apache Kafka `server.properties` keys, for the settings krabka
     /// reads under their Kafka names rather than a dedicated TOML key. The
     /// broker consults `transaction.two.phase.commit.enable`,
-    /// `quota.window.num`, and `quota.window.size.seconds`. Any other entry is
-    /// accepted and ignored. A key set here loses to the equivalent dedicated
-    /// key, which is applied first.
+    /// `quota.window.num`, `quota.window.size.seconds`, `num.partitions`, and
+    /// `default.replication.factor`. Any other entry is accepted and ignored.
+    /// A key set here loses to the equivalent dedicated key, which is applied
+    /// first.
     #[serde(default)]
     pub server_properties: std::collections::BTreeMap<String, String>,
 
@@ -426,4 +427,18 @@ pub struct FileConfig {
     /// change. Absent declares no rule, which is Kafka's default of no policy
     /// class.
     pub topic_policy: Option<FileTopicPolicyConfig>,
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::assert;
+
+    use super::*;
+
+    #[test]
+    fn config_schema_produces_non_empty_json_object() {
+        let schema = config_schema();
+        assert!(schema.is_object());
+        assert!(schema.get("properties").is_some());
+    }
 }

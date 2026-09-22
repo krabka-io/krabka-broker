@@ -196,7 +196,7 @@ async fn add_offsets_partition(
     let Some(entry_mutex) = coord.get(transactional_id) else {
         return codes::INVALID_PRODUCER_ID_MAPPING;
     };
-    let entry = entry_mutex.lock().await;
+    let mut entry = entry_mutex.lock().await;
     match decide(&entry, producer, &offsets_partition) {
         AddOffsetsDecision::Answer(code) => return code,
         AddOffsetsDecision::Append => {}
@@ -205,8 +205,17 @@ async fn add_offsets_partition(
     // still see the entry as it was.
     let mut staged = entry.clone();
     add_partition(&mut staged, offsets_partition, now_millis());
-    match coord.put_under_state_partition_lock(staged, txnv).await {
-        Ok(()) => codes::NONE,
+    match coord
+        .put_under_state_partition_lock(staged.clone(), txnv)
+        .await
+    {
+        Ok(()) => {
+            // The append published a new handle. A caller that already waits
+            // on this one, such as AddPartitionsToTxn's register_partitions,
+            // sees the durable state too, not the pre-append snapshot.
+            *entry = staged;
+            codes::NONE
+        }
         Err(error) => {
             tracing::error!(
                 tid = transactional_id,

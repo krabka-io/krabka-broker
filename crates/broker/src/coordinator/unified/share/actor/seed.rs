@@ -30,6 +30,7 @@ pub(super) fn apply_seed(state: &mut ShareGroupState, seed: ShareGroupSeed) {
     for (mid, cur) in seed.current_per_member {
         if let Some(m) = state.members.get_mut(&mid) {
             m.member_epoch = cur.member_epoch;
+            m.previous_member_epoch = cur.previous_member_epoch;
             for (tid, parts) in cur.assigned_partitions {
                 m.assigned_partitions.insert(tid, parts);
             }
@@ -77,6 +78,7 @@ pub(super) fn snapshot_seed(state: &ShareGroupState) -> ShareGroupSeed {
             mid.clone(),
             ShareGroupCurrentMemberAssignmentValue {
                 member_epoch: m.member_epoch,
+                previous_member_epoch: m.previous_member_epoch,
                 assigned_partitions: m
                     .assigned_partitions
                     .iter()

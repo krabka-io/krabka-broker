@@ -324,6 +324,7 @@ mod tests {
             ((true, None, 3, true), UnknownCoordinator),
             ((true, Some(2), 3, true), FencedCoordinator),
             ((true, Some(3), 3, true), FinalizePartial),
+            ((true, Some(0), 0, true), FinalizePartial),
             ((true, Some(4), 3, true), FinalizePartial),
         ] {
             let (has_pending, current, frozen, targets_valid) = facts;

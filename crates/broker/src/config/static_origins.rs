@@ -36,4 +36,16 @@ pub struct StaticConfigOrigins {
     /// `transaction.remove.expired.transaction.cleanup.interval.ms` was
     /// supplied.
     pub txn_id_expiration_cleanup_interval: bool,
+    /// Which of the KIP-464 topic-creation defaults were supplied.
+    pub topic_creation: TopicCreationOrigins,
+}
+
+/// Which of the two KIP-464 topic-creation defaults this node's configuration
+/// named explicitly.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TopicCreationOrigins {
+    /// `num.partitions` was supplied.
+    pub num_partitions: bool,
+    /// `default.replication.factor` was supplied.
+    pub default_replication_factor: bool,
 }

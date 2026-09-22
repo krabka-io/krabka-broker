@@ -82,10 +82,15 @@ fn range_max_bytes(config: &ObserverConfig) -> i32 {
 /// Returns the offset to fetch from next — the snapshot's end offset — or
 /// `None` when the transfer failed, which leaves the caller's fetch offset
 /// unchanged so the next poll asks again (and rotates to another voter).
+///
+/// `target` carries the controller and the quorum epoch its metadata fetch
+/// reported. `FetchSnapshot` is a leader-only KIP-595 request, so a controller
+/// that is not the leader of that epoch refuses the transfer, and the observer
+/// rotates until it reaches the leader.
 pub(super) async fn install_snapshot(
     config: &ObserverConfig,
     conn: &Connection,
-    target: NodeId,
+    target: (NodeId, i32),
     snapshot_id: (i64, i32),
     image_tx: &watch::Sender<Arc<MetadataImage>>,
     store: &mut ObserverStore,
@@ -119,14 +124,16 @@ pub(super) async fn install_snapshot(
 async fn transfer(
     config: &ObserverConfig,
     conn: &Connection,
-    target: NodeId,
+    (target, leader_epoch): (NodeId, i32),
     snapshot_id: (i64, i32),
 ) -> Option<bytes::Bytes> {
     let mut state = SnapshotFetchState::with_max(snapshot_id, target, config.snapshot_fetch_max);
     loop {
         let position = state.next_position();
         let request = PeerRequest::FetchSnapshot {
+            cluster_id: Some(config.cluster_id),
             from: config.node_id,
+            current_leader_epoch: leader_epoch,
             snapshot_id,
             position,
             // KIP-595 `FetchSnapshot.MaxBytes` is an `int32`; the range bound
@@ -227,6 +234,7 @@ mod tests {
         krabka_raft::KrabkaMetadataFetchResponse {
             error_code: 0,
             leader_hint: 1,
+            leader_epoch: 3,
             log_start_offset: snapshot_id.0,
             high_watermark: snapshot_id.0,
             quorum_high_watermark: snapshot_id.0,

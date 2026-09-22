@@ -86,3 +86,64 @@ impl Segment {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::ops::ControlFlow;
+
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::segment::test_support::{DENSE_INDEX, sample_batch};
+
+    #[test]
+    fn position_for_and_walk_batch_headers_semantics() {
+        let dir = tempdir().unwrap();
+        let mut seg = Segment::create(dir.path(), Offset(10)).unwrap();
+        seg.append(&sample_batch(10, 5, 1_000), DENSE_INDEX)
+            .unwrap();
+        let pos2 = seg.log_size;
+        seg.append(&sample_batch(15, 5, 2_000), DENSE_INDEX)
+            .unwrap();
+
+        // position_for uses the sparse offset index:
+        let p1 = seg.position_for(Offset(10)).unwrap();
+        let p2 = seg.position_for(Offset(15)).unwrap();
+        assert2::check!(p1 == 0);
+        assert2::check!(p2 == pos2);
+        assert2::check!(p2 > 0);
+
+        // walk from 0 visits both batches:
+        let mut views = Vec::new();
+        seg.walk_batch_headers(0, |v| {
+            views.push((v.base_offset, v.last_offset, v.max_timestamp));
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+        assert2::check!(
+            views
+                == vec![
+                    (Offset(10), Offset(14), 1_004),
+                    (Offset(15), Offset(19), 2_004),
+                ]
+        );
+
+        // walk from pos2 visits only the second batch:
+        let mut views2 = Vec::new();
+        seg.walk_batch_headers(pos2, |v| {
+            views2.push((v.base_offset, v.last_offset, v.max_timestamp));
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+        assert2::check!(views2 == vec![(Offset(15), Offset(19), 2_004)]);
+
+        // break early stops walk:
+        let mut count = 0;
+        seg.walk_batch_headers(0, |_| {
+            count += 1;
+            ControlFlow::Break(())
+        })
+        .unwrap();
+        assert2::check!(count == 1);
+    }
+}

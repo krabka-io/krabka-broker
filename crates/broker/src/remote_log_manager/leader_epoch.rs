@@ -19,3 +19,20 @@ pub(super) fn leader_epoch_index_bytes(epochs: &BTreeMap<krabka_ids::LeaderEpoch
     }
     Bytes::from(s.into_bytes())
 }
+
+#[cfg(test)]
+mod tests {
+    use krabka_ids::LeaderEpoch;
+
+    use super::*;
+
+    #[test]
+    fn serializes_leader_epoch_index() {
+        let mut map = BTreeMap::new();
+        map.insert(LeaderEpoch(1), 100);
+        map.insert(LeaderEpoch(2), 200);
+
+        let bytes = leader_epoch_index_bytes(&map);
+        assert2::check!(bytes == Bytes::from_static(b"0\n2\n1 100\n2 200\n"));
+    }
+}

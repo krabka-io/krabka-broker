@@ -18,12 +18,43 @@ use std::time::Duration;
 use assert2::assert;
 use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
 use krabka_client_producer::Producer;
-use krabka_protocol::owned::{
-    describe_transactions_request::DescribeTransactionsRequest,
-    init_producer_id_request::InitProducerIdRequest,
-    update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
+use krabka_protocol::{
+    Encode, ProtocolError, ProtocolRequest,
+    owned::{
+        describe_transactions_request::DescribeTransactionsRequest,
+        init_producer_id_request::{self, InitProducerIdRequest},
+        init_producer_id_response::InitProducerIdResponse,
+        update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
+    },
 };
 use tempfile::TempDir;
+
+/// An `InitProducerId` request that keeps the two-phase commit fields.
+///
+/// Kafka marks `InitProducerId` v6 `latestVersionUnstable`, so a client
+/// negotiates v5 at the most and leaves `enable2Pc` and `keepPreparedTxn` off
+/// the wire. These tests drive the v6 semantics, so they pin v6.
+#[derive(Clone, Debug)]
+struct TwoPhaseCommitInitProducerId(InitProducerIdRequest);
+
+impl Encode for TwoPhaseCommitInitProducerId {
+    fn encode<B: bytes::BufMut>(&self, buf: &mut B, version: i16) -> Result<(), ProtocolError> {
+        self.0.encode(buf, version)
+    }
+
+    fn encoded_len(&self, version: i16) -> usize {
+        self.0.encoded_len(version)
+    }
+}
+
+impl ProtocolRequest for TwoPhaseCommitInitProducerId {
+    const API_KEY: i16 = init_producer_id_request::API_KEY;
+    const MIN_VERSION: i16 = init_producer_id_request::MAX_VERSION;
+    const MAX_VERSION: i16 = init_producer_id_request::MAX_VERSION;
+    const LATEST_STABLE_VERSION: i16 = init_producer_id_request::MAX_VERSION;
+    const FLEXIBLE_MIN: i16 = init_producer_id_request::FLEXIBLE_MIN;
+    type Response = InitProducerIdResponse;
+}
 
 // Kafka error codes (see crates/broker/src/codes.rs).
 const NONE: i16 = 0;
@@ -73,7 +104,7 @@ async fn enable_2pc_rejected_when_cluster_disabled() {
     let client = client(&bootstrap).await;
 
     let resp = client
-        .send(InitProducerIdRequest {
+        .send(TwoPhaseCommitInitProducerId(InitProducerIdRequest {
             transactional_id: Some("tid-2pc".into()),
             transaction_timeout_ms: 30_000,
             producer_id: -1,
@@ -81,7 +112,7 @@ async fn enable_2pc_rejected_when_cluster_disabled() {
             enable2_pc: true,
             keep_prepared_txn: false,
             ..Default::default()
-        })
+        }))
         .await
         .expect("InitProducerId");
 
@@ -109,7 +140,7 @@ async fn keep_prepared_txn_without_ongoing_transaction_is_a_noop() {
     let client = client(&bootstrap).await;
 
     let resp = client
-        .send(InitProducerIdRequest {
+        .send(TwoPhaseCommitInitProducerId(InitProducerIdRequest {
             transactional_id: Some("tid-keep".into()),
             transaction_timeout_ms: 30_000,
             producer_id: -1,
@@ -117,7 +148,7 @@ async fn keep_prepared_txn_without_ongoing_transaction_is_a_noop() {
             enable2_pc: true,
             keep_prepared_txn: true,
             ..Default::default()
-        })
+        }))
         .await
         .expect("InitProducerId");
 
@@ -156,7 +187,7 @@ async fn enable_2pc_persists_no_timeout_sentinel() {
     // Re-init the SAME tid with enable2Pc → flips it to a no-timeout 2PC txn.
     let client = client(&bootstrap).await;
     let resp = client
-        .send(InitProducerIdRequest {
+        .send(TwoPhaseCommitInitProducerId(InitProducerIdRequest {
             transactional_id: Some("tid-2pc-ok".into()),
             transaction_timeout_ms: 30_000,
             producer_id: -1,
@@ -164,7 +195,7 @@ async fn enable_2pc_persists_no_timeout_sentinel() {
             enable2_pc: true,
             keep_prepared_txn: false,
             ..Default::default()
-        })
+        }))
         .await
         .expect("InitProducerId(enable2Pc)");
     assert!(

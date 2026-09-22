@@ -2,8 +2,9 @@
 //!
 //! DRIVEN production code: [`StreamsGroupState`] membership and timeout
 //! transitions, the real streams assignor through
-//! [`compute_and_install_target`], the shared member-epoch fence, active-task
-//! withholding through [`StreamsGroupState::reconcile_member`], and the real
+//! [`compute_and_install_target`], the shared member-epoch fence, the port of
+//! Kafka's `CurrentAssignmentBuilder` through
+//! [`StreamsGroupState::reconcile_member`], and the real
 //! snapshot/apply replay adapters. MODELED: two member identities, one
 //! subtopology with one or two tasks, a logical clock through three ticks,
 //! topology epochs through two, group epochs through five, and one
@@ -30,8 +31,8 @@ use crate::coordinator::unified::streams::{
     config::{StreamsAssignorKind, StreamsGroupConfig},
     persistence::{StoredSubtopology, StreamsGroupTopologyValue},
     state::{
-        OwnedTasks, StreamsGroupState, StreamsGroupStatePhase, StreamsMemberAssignmentState,
-        StreamsMemberState,
+        OwnedTasks, RoleTasks, StreamsGroupState, StreamsGroupStatePhase,
+        StreamsMemberAssignmentState, StreamsMemberState,
     },
 };
 
@@ -49,7 +50,7 @@ const MAX_DEPTH: usize = 64;
 // considering a field -- into a failure instead of a silently smaller search
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
-const PINNED_UNIQUE_STATES: usize = 42_936;
+const PINNED_UNIQUE_STATES: usize = 37_688;
 const WITNESS_STALE_FENCED: u16 = 1 << 0;
 const WITNESS_FORWARD_FENCED: u16 = 1 << 1;
 const WITNESS_UNKNOWN_FENCED: u16 = 1 << 2;
@@ -309,22 +310,33 @@ fn durable_projection(actor: &ActorState) -> DurableProjection {
     )
 }
 
-fn reported_active(state: &State, member_id: &str, kind: ReportKind) -> BTreeMap<String, Vec<i32>> {
+/// The tasks of all three roles that a heartbeat of `member_id` reports: its
+/// assigned tasks, and its tasks pending revocation while it still holds
+/// them.
+fn reported_tasks(state: &State, member_id: &str, kind: ReportKind) -> RoleTasks {
     let member = &state.actor.state.members[member_id];
-    let mut reported = member.active.clone();
-    if kind == ReportKind::Holding {
-        for (subtopology, partitions) in &member.active_pending_revocation {
-            reported
-                .entry(subtopology.clone())
-                .or_default()
-                .extend(partitions.iter().copied());
+    let with_pending = |assigned: &BTreeMap<String, Vec<i32>>,
+                        pending: &BTreeMap<String, Vec<i32>>| {
+        let mut reported = assigned.clone();
+        if kind == ReportKind::Holding {
+            for (subtopology, partitions) in pending {
+                reported
+                    .entry(subtopology.clone())
+                    .or_default()
+                    .extend(partitions.iter().copied());
+            }
         }
+        for partitions in reported.values_mut() {
+            partitions.sort_unstable();
+            partitions.dedup();
+        }
+        reported
+    };
+    RoleTasks {
+        active: with_pending(&member.active, &member.active_pending_revocation),
+        standby: with_pending(&member.standby, &member.standby_pending_revocation),
+        warmup: with_pending(&member.warmup, &member.warmup_pending_revocation),
     }
-    for partitions in reported.values_mut() {
-        partitions.sort_unstable();
-        partitions.dedup();
-    }
-    reported
 }
 
 fn active_task_exclusive(group: &StreamsGroupState) -> bool {
@@ -397,10 +409,12 @@ fn phase_coherent(group: &StreamsGroupState) -> bool {
     if group.members.is_empty() {
         return group.phase == StreamsGroupStatePhase::Empty;
     }
-    let reconciling = group
-        .members
-        .values()
-        .any(|member| member.assignment_state != StreamsMemberAssignmentState::Stable);
+    // Kafka's `maybeUpdateGroupState`: a member that is not stable at the
+    // assignment epoch keeps the group reconciling.
+    let reconciling = group.members.values().any(|member| {
+        member.assignment_state != StreamsMemberAssignmentState::Stable
+            || member.member_epoch != group.target.epoch
+    });
     if reconciling {
         group.phase == StreamsGroupStatePhase::Reconciling
     } else {
@@ -482,11 +496,10 @@ impl Model for StreamsModel {
                 if !reconcile(&mut state) {
                     return None;
                 }
-                state.actor.state.advance_member_epoch(member_id);
                 state
                     .actor
                     .state
-                    .reconcile_member(member_id, &BTreeMap::new());
+                    .reconcile_member(member_id, Some(&RoleTasks::default()));
             }
             Action::CurrentHeartbeat(member_id, report_kind) => {
                 let current = state.actor.state.members.get(member_id)?.member_epoch;
@@ -499,13 +512,13 @@ impl Model for StreamsModel {
                     .active_pending_revocation
                     .is_empty();
                 let before_unreleased = state.actor.state.members[member_id].assignment_state
-                    == StreamsMemberAssignmentState::UnreleasedActiveTasks;
-                let reported = reported_active(&state, member_id, report_kind);
+                    == StreamsMemberAssignmentState::UnreleasedTasks;
+                let reported = reported_tasks(&state, member_id, report_kind);
                 state.actor.state.members.get_mut(member_id)?.last_seen = at(&state);
-                if state.actor.state.target.epoch > current {
-                    state.actor.state.advance_member_epoch(member_id);
-                }
-                state.actor.state.reconcile_member(member_id, &reported);
+                state
+                    .actor
+                    .state
+                    .reconcile_member(member_id, Some(&reported));
                 let member = &state.actor.state.members[member_id];
                 if before_pending && member.active_pending_revocation.is_empty() {
                     state.witnesses |= WITNESS_RELEASED;
@@ -603,9 +616,13 @@ impl Model for StreamsModel {
             }
         }
 
-        if state.actor.state.members.values().any(|member| {
-            member.assignment_state == StreamsMemberAssignmentState::UnreleasedActiveTasks
-        }) {
+        if state
+            .actor
+            .state
+            .members
+            .values()
+            .any(|member| member.assignment_state == StreamsMemberAssignmentState::UnreleasedTasks)
+        {
             state.witnesses |= WITNESS_WITHHELD;
         }
         assert2::assert!(active_task_exclusive(&state.actor.state));

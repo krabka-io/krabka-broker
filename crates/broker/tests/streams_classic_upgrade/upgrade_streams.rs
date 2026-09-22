@@ -32,10 +32,13 @@ pub fn topology(source_topic: &str) -> Topology {
 pub fn first_join(group: &str, topo: Topology) -> StreamsGroupHeartbeatRequest {
     StreamsGroupHeartbeatRequest {
         group_id: group.into(),
-        member_id: String::new(),
+        member_id: uuid::Uuid::new_v4().to_string(),
         member_epoch: 0,
         process_id: Some("p1".into()),
         rebalance_timeout_ms: 30_000,
+        active_tasks: Some(Vec::new()),
+        standby_tasks: Some(Vec::new()),
+        warmup_tasks: Some(Vec::new()),
         topology: Some(topo),
         ..Default::default()
     }
@@ -51,6 +54,8 @@ pub fn follow_up(
         group_id: group.into(),
         member_id: member_id.into(),
         member_epoch: epoch,
+        standby_tasks: active.as_ref().map(|_| Vec::new()),
+        warmup_tasks: active.as_ref().map(|_| Vec::new()),
         active_tasks: active,
         ..Default::default()
     }
@@ -66,7 +71,7 @@ pub async fn streams_join_and_converge(
     tries: usize,
 ) -> (String, StreamsGroupHeartbeatResponse) {
     let mut resp = client
-        .send(first_join(group, topo))
+        .send(first_join(group, topo.clone()))
         .await
         .expect("first streams heartbeat");
     let mut member_id = resp.member_id.clone();
@@ -74,7 +79,7 @@ pub async fn streams_join_and_converge(
     for _ in 0..tries {
         if resp.error_code == 14 {
             resp = client
-                .send(first_join(group, topology("")))
+                .send(first_join(group, topo.clone()))
                 .await
                 .expect("retry streams heartbeat");
             member_id = resp.member_id.clone();

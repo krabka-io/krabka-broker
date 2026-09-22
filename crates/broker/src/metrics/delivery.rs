@@ -30,3 +30,21 @@ impl BrokerMetrics {
         self.track_partition_series(&lbl);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn records_delivery_watermark_and_pending() {
+        let metrics = BrokerMetrics::new();
+        metrics.record_delivery_watermark("scheduled-orders", 1, 42, 10);
+
+        let lbl = PartitionLabel {
+            topic: Arc::from("scheduled-orders"),
+            partition: 1,
+        };
+        assert2::check!(metrics.delivery_watermark.get_or_create(&lbl).get() == 42);
+        assert2::check!(metrics.delivery_pending_records.get_or_create(&lbl).get() == 10);
+    }
+}
