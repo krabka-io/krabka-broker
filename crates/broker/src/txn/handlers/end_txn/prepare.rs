@@ -6,7 +6,7 @@ use super::producer_identity::prepare_completion_identities;
 use crate::{
     codes,
     txn::{
-        decision::decide_phase1_transition,
+        decision::{apply_end_txn_prepare, decide_phase1_transition},
         marker::MarkerType,
         state::{TxnEntry, TxnState},
         util::now_millis,
@@ -16,7 +16,7 @@ use crate::{
 pub(super) async fn prepare_transaction(
     coordinator: &crate::txn::coordinator::TxnCoordinator,
     entry: &std::sync::Arc<tokio::sync::Mutex<TxnEntry>>,
-    committed: bool,
+    (committed, no_partition_added): (bool, bool),
     version: crate::txn::version::TxnVersion,
     transactional_id: &str,
 ) -> Result<(MarkerType, TxnState, TxnState, TxnEntry), i16> {
@@ -41,7 +41,18 @@ pub(super) async fn prepare_transaction(
     // Stage on a clone. Until the Prepare record is durable, every other
     // caller must still see the state before it.
     let mut staged = state.clone();
-    let (prepare, complete) = decide_phase1_transition(&mut staged, committed)?;
+    // Kafka `prepareAbortOrCommit(..., noPartitionAdded = true)`: transaction
+    // version 2 accepts an abort of a transaction that added no partition,
+    // from `Empty`, `CompleteCommit` and `CompleteAbort`. It has nothing to
+    // mark, and its start time is the update time. Every other transition
+    // comes from `Ongoing`.
+    let (prepare, complete) = if no_partition_added {
+        staged.partitions.clear();
+        staged.start_ms = now_millis();
+        apply_end_txn_prepare(&mut staged, committed)
+    } else {
+        decide_phase1_transition(&mut staged, committed)?
+    };
     prepare_completion_identities(&mut staged, version, &coordinator.producer_ids)
         .await
         .map_err(|error| {

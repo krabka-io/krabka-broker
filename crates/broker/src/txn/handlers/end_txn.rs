@@ -43,6 +43,7 @@ mod prepare;
 mod producer_identity;
 mod reacquire;
 mod response;
+mod state_table;
 mod validation;
 
 #[cfg(test)]
@@ -93,21 +94,32 @@ pub(crate) async fn handle(
     drop(coord.refresh_leader_partitions(&image).await);
 
     let tid = req.transactional_id.as_str();
-    let entry_mutex = match validate_end_txn(&coord, authorizer, &image, ctx, &req, txnv).await {
-        Ok(EndTxnValidation::Proceed(entry)) => entry,
-        Ok(EndTxnValidation::AlreadyComplete(pid, epoch)) => {
-            return encode_ok(version, pid.get(), epoch);
-        }
-        Err(code) => return encode_err(version, code),
-    };
+    let (entry_mutex, no_partition_added) =
+        match validate_end_txn(&coord, authorizer, &image, ctx, &req, txnv).await {
+            Ok(EndTxnValidation::Proceed {
+                entry,
+                no_partition_added,
+            }) => (entry, no_partition_added),
+            Ok(EndTxnValidation::AlreadyComplete(pid, epoch)) => {
+                return encode_ok(version, pid.get(), epoch);
+            }
+            Err(code) => return encode_err(version, code),
+        };
 
     // ── Phase 1: Ongoing → Prepare{Commit,Abort} ──────────────────────
 
-    let (marker_type, prepare, complete, prepare_snap) =
-        match prepare_transaction(&coord, &entry_mutex, req.committed, txnv, tid).await {
-            Ok(prepared) => prepared,
-            Err(code) => return encode_err(version, code),
-        };
+    let (marker_type, prepare, complete, prepare_snap) = match prepare_transaction(
+        &coord,
+        &entry_mutex,
+        (req.committed, no_partition_added),
+        txnv,
+        tid,
+    )
+    .await
+    {
+        Ok(prepared) => prepared,
+        Err(code) => return encode_err(version, code),
+    };
 
     // The Prepare record is durable. From here Kafka answers NONE with the
     // completion identity whatever happens to the markers: its
