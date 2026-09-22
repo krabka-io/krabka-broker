@@ -3,20 +3,17 @@
 //! The coordinator owns the in-memory state map of every `transactional_id`
 //! whose `__transaction_state` partition this broker leads. It persists every
 //! state change as a record in the matching `__transaction_state` partition.
-//! On `Broker::start` it recovers the state by replaying those partitions.
+//! It loads a partition when this broker becomes its leader, and it unloads
+//! the partition when this broker stops leading it (see `leadership`).
 
 use std::{
     collections::BTreeSet,
-    sync::{
-        Arc, Mutex as StdMutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Mutex as StdMutex, atomic::AtomicU64},
 };
 
 use dashmap::DashMap;
 use krabka_ids::PartitionIndex;
 use krabka_log::ProducerId;
-use krabka_metadata::MetadataImage;
 use krabka_security::ListenerProtocol;
 use krabka_units::ByteSize;
 use tokio::sync::{Mutex, Notify, RwLock};
@@ -33,7 +30,8 @@ pub(crate) mod completion;
 pub(crate) mod expiry;
 #[cfg(any(test, feature = "test-helpers"))]
 pub(crate) mod fanout_gate;
-mod leadership;
+pub(crate) mod leadership;
+mod load;
 mod markers;
 mod persistence;
 mod pid_index;
@@ -67,9 +65,10 @@ pub(crate) struct TxnCoordinator {
     /// Serializes the multi-key PID ownership check and publication after a
     /// durable transaction-state append.
     pid_install: StdMutex<()>,
-    /// Latches a recovery failure so later metadata refreshes cannot restore
-    /// coordinator ownership over a partial or rejected replay image.
-    recovery_valid: AtomicBool,
+    /// Source of [`leadership::LeaderTerm::generation`].
+    next_generation: AtomicU64,
+    /// Wakes the callers of [`Self::wait_for_load`] when a load ends.
+    load_finished: Notify,
     /// Transactional ids whose `Prepare*` record is durable, queued for
     /// [`crate::txn::completion`] by recovery or by a failed request.
     pending_completions: StdMutex<BTreeSet<String>>,
@@ -112,7 +111,8 @@ impl TxnCoordinator {
             leader_partitions: RwLock::new(leadership::StatePartitionLeaders::new()),
             pid_to_tid: DashMap::new(),
             pid_install: StdMutex::new(()),
-            recovery_valid: AtomicBool::new(true),
+            next_generation: AtomicU64::new(0),
+            load_finished: Notify::new(),
             pending_completions: StdMutex::new(BTreeSet::new()),
             completion_requested: Notify::new(),
             marker_transport: None,
@@ -141,31 +141,8 @@ impl TxnCoordinator {
         self.group_coordinator = Some(group_coordinator);
     }
 
-    /// Applies the `__transaction_state` leadership of `image`. `recover` calls
-    /// it, and so does every metadata change and every transaction handler.
-    /// An image that is older than one already applied changes nothing.
-    pub(crate) async fn refresh_leader_partitions(&self, image: &MetadataImage) {
-        if !self.recovery_valid.load(Ordering::Acquire) {
-            self.leader_partitions.write().await.clear();
-            return;
-        }
-        self.install_leader_partitions(image).await;
-    }
-
-    async fn install_leader_partitions(&self, image: &MetadataImage) {
-        leadership::apply_image(
-            &mut *self.leader_partitions.write().await,
-            self.node_id,
-            image,
-            |partition| {
-                self.partitions
-                    .get(crate::txn::bootstrap::TOPIC, partition)
-                    .is_some()
-            },
-        );
-    }
-
-    /// Test-only: makes this broker the leader of `partition` without an image.
+    /// Test-only: makes this broker the loaded leader of `partition` without
+    /// an image.
     #[cfg(test)]
     pub(crate) async fn lead_state_partition_for_test(&self, partition: PartitionIndex) {
         self.leader_partitions.write().await.insert(
@@ -173,7 +150,12 @@ impl TxnCoordinator {
             leadership::StatePartitionLeadership {
                 topic_id: uuid::Uuid::nil(),
                 leader_epoch: krabka_metadata::LeaderEpoch(0),
-                leads: true,
+                term: Some(leadership::LeaderTerm {
+                    generation: self
+                        .next_generation
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                    status: leadership::LoadStatus::Loaded,
+                }),
             },
         );
     }
@@ -183,12 +165,38 @@ impl TxnCoordinator {
         PartitionIndex(partition_for_tid(tid, self.num_partitions))
     }
 
-    /// Returns `true` if this broker is the transaction coordinator for `tid`.
+    /// Returns `true` if this broker is the transaction coordinator for `tid`
+    /// and its `__transaction_state` partition is loaded.
     pub(crate) async fn is_coordinator_for(&self, tid: &str) -> bool {
-        leadership::leads(
-            &*self.leader_partitions.read().await,
-            self.partition_for(tid),
-        )
+        self.coordinator_error(tid).await.is_none()
+    }
+
+    /// The Kafka error code for a request about `tid`, or `None` when this
+    /// broker coordinates `tid` and its partition is loaded.
+    ///
+    /// The code is `COORDINATOR_LOAD_IN_PROGRESS` while the partition loads,
+    /// and `NOT_COORDINATOR` when this broker does not lead the partition or
+    /// its load failed.
+    pub(crate) async fn coordinator_error(&self, tid: &str) -> Option<i16> {
+        leadership::coordinator_error(self.load_status(self.partition_for(tid)).await)
+    }
+
+    /// The error code for a failed append about `tid`: the coordinator error
+    /// when the coordinator term changed, and `UNKNOWN_SERVER_ERROR`
+    /// otherwise.
+    pub(crate) async fn append_error_code(&self, tid: &str) -> i16 {
+        self.coordinator_error(tid)
+            .await
+            .unwrap_or(crate::codes::UNKNOWN_SERVER_ERROR)
+    }
+
+    /// The load status of `partition`, or `None` when this broker does not
+    /// lead it.
+    pub(crate) async fn load_status(
+        &self,
+        partition: PartitionIndex,
+    ) -> Option<leadership::LoadStatus> {
+        leadership::status(&*self.leader_partitions.read().await, partition)
     }
 
     /// Returns the locked `TxnEntry` for `tid`, or `None` if `tid` is
@@ -254,153 +262,6 @@ mod tests {
         check!(coordinator.partition_for("my-tid") == PartitionIndex(20));
         check!(coordinator.partition_for("producer-1") == PartitionIndex(30));
         check!(coordinator.partition_for("tx-orders-prod") == PartitionIndex(16));
-    }
-
-    /// An image with no `__transaction_state` topic, as the image before the
-    /// topic was created is.
-    fn image_without_state_topic() -> MetadataImage {
-        MetadataImage::new(uuid::Uuid::nil())
-    }
-
-    fn image_with_leader(
-        topic_id: u128,
-        leader: krabka_metadata::NodeId,
-        leader_epoch: i32,
-    ) -> MetadataImage {
-        use krabka_metadata::{LeaderEpoch, MetadataRecord, PartitionRecord, TopicRecord};
-
-        let mut image = MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&MetadataRecord::V1Topic(TopicRecord {
-            name: crate::txn::bootstrap::TOPIC.to_string(),
-            topic_id: uuid::Uuid::from_u128(topic_id),
-            partitions: 1,
-            replication_factor: 1,
-        }));
-        image.apply(&MetadataRecord::V1Partition(PartitionRecord {
-            topic: crate::txn::bootstrap::TOPIC.to_string(),
-            partition: 0,
-            leader,
-            replicas: vec![leader],
-            isr: vec![leader],
-            leader_epoch: LeaderEpoch(leader_epoch),
-            ..Default::default()
-        }));
-        image
-    }
-
-    /// Many tasks apply the image that each one read, so an older image can
-    /// arrive after a newer one. Before the fix, the reconcile loop applied
-    /// the image from before `__transaction_state` existed after
-    /// `InitProducerId` had applied a newer one, and a transactional Produce
-    /// got `NOT_COORDINATOR` (#975).
-    #[tokio::test]
-    async fn only_a_higher_leader_epoch_changes_the_coordinator_leadership() {
-        const THIS_BROKER: krabka_metadata::NodeId = krabka_metadata::NodeId(1);
-        const OTHER_BROKER: krabka_metadata::NodeId = krabka_metadata::NodeId(2);
-        struct Step {
-            name: &'static str,
-            image: MetadataImage,
-            /// Whether the `__transaction_state-0` log is open on this broker.
-            local: bool,
-            coordinates: bool,
-        }
-        let steps = [
-            Step {
-                name: "an image before the topic exists",
-                image: image_without_state_topic(),
-                local: false,
-                coordinates: false,
-            },
-            Step {
-                name: "this broker is elected at epoch 0",
-                image: image_with_leader(1, THIS_BROKER, 0),
-                local: true,
-                coordinates: true,
-            },
-            Step {
-                name: "a stale image from before the topic existed",
-                image: image_without_state_topic(),
-                local: true,
-                coordinates: true,
-            },
-            Step {
-                name: "another broker is elected at epoch 1",
-                image: image_with_leader(1, OTHER_BROKER, 1),
-                local: true,
-                coordinates: false,
-            },
-            Step {
-                name: "a stale image of epoch 0",
-                image: image_with_leader(1, THIS_BROKER, 0),
-                local: true,
-                coordinates: false,
-            },
-            Step {
-                name: "a stale image from before the topic existed, after a resignation",
-                image: image_without_state_topic(),
-                local: true,
-                coordinates: false,
-            },
-            Step {
-                name: "this broker is elected again at epoch 2",
-                image: image_with_leader(1, THIS_BROKER, 2),
-                local: true,
-                coordinates: true,
-            },
-            Step {
-                name: "the topic is deleted and its log is removed",
-                image: image_without_state_topic(),
-                local: false,
-                coordinates: false,
-            },
-            Step {
-                name: "another broker leads the created topic at epoch 0",
-                image: image_with_leader(2, OTHER_BROKER, 0),
-                local: true,
-                coordinates: false,
-            },
-            Step {
-                name: "the topic is created again and this broker leads it at epoch 0",
-                image: image_with_leader(3, THIS_BROKER, 0),
-                local: true,
-                coordinates: true,
-            },
-        ];
-        let directory = tempfile::tempdir().expect("tempdir");
-        let partition_dir =
-            crate::log_dir::partition_dir(directory.path(), crate::txn::bootstrap::TOPIC, 0);
-        std::fs::create_dir_all(&partition_dir).expect("create transaction-state directory");
-        let log = krabka_log::Log::open(&partition_dir, krabka_log::LogConfig::default())
-            .expect("open transaction-state log");
-        let state_partition = crate::broker::spawn_partition(
-            crate::txn::bootstrap::TOPIC.to_string(),
-            PartitionIndex(0),
-            directory.path().to_path_buf(),
-            log,
-            crate::log_dir_status::LogDirRegistry::default(),
-            Arc::new(crate::producer_state::ProducerState::new()),
-            false,
-        );
-        let coordinator = test_coordinator_with_partitions(1);
-        for step in steps {
-            if step.local {
-                coordinator.partitions.insert(
-                    crate::txn::bootstrap::TOPIC.into(),
-                    PartitionIndex(0),
-                    Arc::clone(&state_partition),
-                );
-            } else {
-                coordinator
-                    .partitions
-                    .remove(crate::txn::bootstrap::TOPIC, PartitionIndex(0));
-            }
-            coordinator.refresh_leader_partitions(&step.image).await;
-            check!(
-                coordinator.is_coordinator_for("any-tid").await == step.coordinates,
-                "{}",
-                step.name
-            );
-        }
     }
 
     #[test]

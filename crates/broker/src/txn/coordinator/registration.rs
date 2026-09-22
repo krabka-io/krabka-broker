@@ -32,6 +32,11 @@ impl TxnCoordinator {
         partitions: Vec<crate::txn::state::TopicPartition>,
         txnv: TxnVersion,
     ) -> i16 {
+        if let Some(code @ crate::codes::COORDINATOR_LOAD_IN_PROGRESS) =
+            self.coordinator_error(tid).await
+        {
+            return code;
+        }
         let is_coordinator = self.is_coordinator_for(tid).await;
         if !is_coordinator {
             return registration_code(transaction_partition_registration(
@@ -118,7 +123,7 @@ impl TxnCoordinator {
 
         if let Err(error) = self.put(snapshot, txnv).await {
             tracing::error!(tid, %error, "failed to persist registered transaction partitions");
-            return crate::codes::UNKNOWN_SERVER_ERROR;
+            return self.append_error_code(tid).await;
         }
         crate::codes::NONE
     }
@@ -126,7 +131,7 @@ impl TxnCoordinator {
     /// KIP-890: route the offsets partition enrollment to the transaction
     /// coordinator before a v5+ `TxnOffsetCommit` append.
     pub(crate) async fn register_offsets_partition(
-        &self,
+        self: &std::sync::Arc<Self>,
         tid: &str,
         producer_id: ProducerId,
         producer_epoch: i16,

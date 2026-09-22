@@ -82,7 +82,7 @@ const CONCURRENT_TRANSACTIONS_RETRY: std::time::Duration = std::time::Duration::
 pub(super) async fn verify_transactional_produce(
     batch: &PreparedBatch,
     partition: &crate::partition::Partition,
-    coordinator: &crate::txn::coordinator::TxnCoordinator,
+    coordinator: &std::sync::Arc<crate::txn::coordinator::TxnCoordinator>,
     (image, topic_name): (&krabka_metadata::MetadataImage, &str),
     request: TransactionRequest<'_>,
 ) -> Result<Option<crate::partition::ProducerAppendCheck>, (i16, Option<String>)> {
@@ -337,13 +337,13 @@ mod tests {
     #[tokio::test]
     async fn transactional_produce_rejects_malformed_producers() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let coordinator = crate::txn::coordinator::TxnCoordinator::new(
+        let coordinator = Arc::new(crate::txn::coordinator::TxnCoordinator::new(
             krabka_audit::NodeId(1),
             Arc::new(crate::partition_registry::PartitionRegistry::new()),
             Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
             1,
             krabka_units::mebibytes(1),
-        );
+        ));
         let image = krabka_metadata::MetadataImage::new(Uuid::nil());
         let partition = crate::broker::spawn_partition(
             "orders".to_string(),

@@ -139,6 +139,9 @@ impl TxnCoordinator {
             if !self.is_coordinator_for(&tid).await {
                 continue;
             }
+            // A load holds the state-partition lock across its replay, so the
+            // tombstone cannot land after the replay read the log.
+            let _state_partition_write = self.lock_state_partition_for(&tid).await;
             let Some(handle) = self.get(&tid) else {
                 continue;
             };

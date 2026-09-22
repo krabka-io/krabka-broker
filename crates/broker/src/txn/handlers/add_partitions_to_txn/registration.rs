@@ -67,9 +67,9 @@ pub(super) async fn process_one_txn(
     //    down. A client that reached the wrong broker has to learn that first:
     //    it then retries at the real coordinator, which is the broker that
     //    owns the decision and answers the freeze.
-    if !coord.is_coordinator_for(tid).await {
+    if let Some(code) = coord.coordinator_error(tid).await {
         let unread = std::collections::HashSet::new();
-        return per_topic_with_refusals(topics, denied, &unread, codes::NOT_COORDINATOR);
+        return per_topic_with_refusals(topics, denied, &unread, code);
     }
 
     // 2. Look up entry for the TV_2 verify-only path.
