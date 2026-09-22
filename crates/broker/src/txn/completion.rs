@@ -54,13 +54,15 @@ pub(crate) async fn run(
 
 /// Try each queued transaction once, and return the ones to try again.
 pub(crate) async fn complete_once(
-    coordinator: &TxnCoordinator,
+    coordinator: &Arc<TxnCoordinator>,
     controller: &dyn MetadataSource,
     queued: BTreeSet<String>,
 ) -> BTreeSet<String> {
     let image = controller.current_image();
     let txnv = crate::txn::version::resolve_txn_version(&image);
-    coordinator.refresh_leader_partitions(&image).await;
+    // A load queues its own `Prepare*` transactions when it ends, so the task
+    // does not wait for the loads it starts.
+    drop(coordinator.refresh_leader_partitions(&image).await);
     let mut retry = BTreeSet::new();
     for transactional_id in queued {
         if coordinator

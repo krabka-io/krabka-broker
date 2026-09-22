@@ -94,12 +94,12 @@ fn serve(
         // finalized transaction.version from the same image read.
         let image = controller.current_image();
         let txnv = crate::txn::version::resolve_txn_version(&image);
-        coord.refresh_leader_partitions(&image).await;
+        drop(coord.refresh_leader_partitions(&image).await);
 
         let tid = req.transactional_id.as_str();
 
-        if !coord.is_coordinator_for(tid).await {
-            return encode_err(version, codes::NOT_COORDINATOR);
+        if let Some(code) = coord.coordinator_error(tid).await {
+            return encode_err(version, code);
         }
 
         let Some(entry_mutex) = coord.get(tid) else {
@@ -148,7 +148,7 @@ fn serve(
                 error = %e,
                 "AddOffsetsToTxn: failed to persist TxnEntry"
             );
-            return encode_err(version, codes::UNKNOWN_SERVER_ERROR);
+            return encode_err(version, coord.append_error_code(tid).await);
         }
 
         encode_ok(version)

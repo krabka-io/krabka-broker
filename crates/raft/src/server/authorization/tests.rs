@@ -186,17 +186,12 @@ fn fetch_request(version: i16) -> Bytes {
 /// `CLUSTER_AUTHORIZATION_FAILED`, and the krabka-private apis refuse in
 /// their own response.
 #[test]
-fn each_refusal_is_the_kafka_error_response_of_its_api() {
+fn fetch_and_quorum_refusals_are_kafka_error_responses() {
     let fetch_row = |partition_index| fetch_response::PartitionData {
         partition_index,
         error_code: 31,
         high_watermark: -1,
         ..Default::default()
-    };
-    let private_submit = KrabkaSubmitChangeResponse {
-        error_code: 31,
-        leader_hint: -1,
-        result: Bytes::new(),
     };
     let cases = [
         (
@@ -214,6 +209,17 @@ fn each_refusal_is_the_kafka_error_response_of_its_api() {
                     partitions: vec![fetch_row(0), fetch_row(1)],
                     ..Default::default()
                 }],
+                ..Default::default()
+            }),
+        ),
+        (
+            "Fetch at exactly v13 has only the top-level error",
+            api_key::FETCH,
+            13,
+            fetch_request(13),
+            Refusal::Fetch(FetchResponse {
+                error_code: 31,
+                session_id: 7,
                 ..Default::default()
             }),
         ),
@@ -268,6 +274,21 @@ fn each_refusal_is_the_kafka_error_response_of_its_api() {
                 ..Default::default()
             }),
         ),
+    ];
+    for (name, api, version, body, expected) in cases {
+        let bytes = refusal(api, version, &body).expect("encode the refusal");
+        check!(decode(api, version, &bytes) == expected, "{name}");
+    }
+}
+
+#[test]
+fn admin_and_private_refusals_are_kafka_error_responses() {
+    let private_submit = KrabkaSubmitChangeResponse {
+        error_code: 31,
+        leader_hint: -1,
+        result: Bytes::new(),
+    };
+    let cases = [
         (
             "AssignReplicasToDirs",
             73,
@@ -365,6 +386,7 @@ fn each_refusal_is_the_kafka_error_response_of_its_api() {
             Refusal::MetadataFetch(KrabkaMetadataFetchResponse {
                 error_code: 31,
                 leader_hint: -1,
+                leader_epoch: -1,
                 log_start_offset: -1,
                 high_watermark: -1,
                 quorum_high_watermark: -1,

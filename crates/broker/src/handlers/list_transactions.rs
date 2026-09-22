@@ -327,6 +327,7 @@ mod tests {
         broker
             .partitions
             .insert(crate::txn::bootstrap::TOPIC.into(), p, part);
+        coord.lead_state_partition_for_test(p).await;
 
         let entry = TxnEntry::new_empty(tid.to_string(), ProducerId(100), 0, 60_000, 0);
         coord

@@ -34,13 +34,13 @@ use krabka_protocol::{
     owned::{api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse},
 };
 
-mod client_info;
 mod feature_keys;
 
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::client_info::is_valid_client_info;
+pub(crate) use krabka_raft::is_valid_client_info;
+
 use self::feature_keys::{finalized_feature_keys, supported_feature_keys};
 use crate::{broker::Broker, codes, error::BrokerError};
 

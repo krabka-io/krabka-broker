@@ -215,12 +215,17 @@ mod tests {
     async fn fetch_metadata_from_passes_configured_client_id_to_dialer() {
         let dir = TempDir::new().unwrap();
         let client_ids = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded_options = Arc::new(std::sync::Mutex::new(Vec::new()));
         let dialer = RecordingDialer {
             client_ids: Arc::clone(&client_ids),
+            options: Arc::clone(&recorded_options),
         };
         let mut cfg = ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf());
         cfg.election_timeout = FAST_ELECTION_TIMEOUT;
         cfg.client_id = "metadata-fetch-client".into();
+        cfg.client_dispatch_queue_capacity =
+            krabka_client_core::ConnectionDispatchQueueCapacity::new(7).unwrap();
+        cfg.client_frame_max = krabka_client_core::ClientFrameMax::try_from(mebibytes(8)).unwrap();
         cfg.dialer = Some(Arc::new(dialer));
 
         let ctrl = Controller::start(cfg).await.expect("bootstrap");
@@ -243,6 +248,18 @@ mod tests {
 
         assert2::assert!(resp.error_code == 0);
         assert2::assert!(client_ids.lock().unwrap().as_slice() == ["metadata-fetch-client"]);
+        {
+            let opts = recorded_options.lock().unwrap();
+            assert2::assert!(opts.len() == 1);
+            assert2::assert!(
+                opts[0].dispatch_queue_capacity
+                    == krabka_client_core::ConnectionDispatchQueueCapacity::new(7).unwrap()
+            );
+            assert2::assert!(
+                opts[0].frame_max
+                    == krabka_client_core::ClientFrameMax::try_from(mebibytes(8)).unwrap()
+            );
+        }
         ctrl.shutdown().await;
     }
 }

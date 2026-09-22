@@ -353,6 +353,8 @@ mod tests {
         let finished = [true, true, true, false];
         check!(tiered_earliest_finished_index(&starts, &ends, &finished) == Some(1));
         check!(tiered_latest_finished_index(&starts, &ends, &finished) == Some(0));
+        check!(tiered_earliest_finished_index(&[10, 20], &[15, 25], &[true, true]) == Some(0));
+        check!(tiered_latest_finished_index(&[10, 20], &[15, 25], &[true, true]) == Some(1));
         check!(tiered_earliest_finished_index(&[], &[], &[]) == None);
         check!(tiered_latest_finished_index(&[], &[], &[]) == None);
     }
@@ -362,6 +364,7 @@ mod tests {
         let epochs = [0, 2, -1, 4];
         let starts = [20, 30, 38, 35];
         check!(tiered_owning_epoch_index(&epochs, &starts, 20, 39) == Some(3));
+        check!(tiered_owning_epoch_index(&[0, 1], &[30, 20], 10, 50) == Some(0));
         check!(tiered_owning_epoch_index(&[7], &[40], 20, 39) == None);
     }
 
@@ -416,6 +419,7 @@ mod tests {
             (100, 199, 150, false, Some(100), None, None),
             (100, 199, 150, true, None, None, None),
             (0, 99, 49, true, Some(0), Some(50), Some(49)),
+            (0, 99, 49, true, Some(0), Some(99), Some(49)),
             (0, 99, 50, true, Some(0), Some(50), None),
             (0, 99, 49, true, Some(50), None, None),
             (0, 99, 50, true, Some(50), None, Some(50)),

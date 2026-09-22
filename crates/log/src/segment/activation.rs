@@ -179,6 +179,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let seg = Segment::create(dir.path(), Offset(0)).unwrap();
 
+        assert2::check!(seg.is_wholly_active(0, 1_000));
         let scan = seg.scan_activation(Offset(0), 0, 1_000).unwrap();
         assert2::check!(scan.pending_at == None);
 

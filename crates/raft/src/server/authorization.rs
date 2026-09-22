@@ -184,6 +184,7 @@ pub(super) fn refusal(api_key: i16, version: i16, body: &[u8]) -> Result<Bytes, 
             KrabkaMetadataFetchResponse {
                 error_code: PRIVATE_CLUSTER_AUTHORIZATION_FAILED,
                 leader_hint: -1,
+                leader_epoch: -1,
                 log_start_offset: -1,
                 high_watermark: -1,
                 quorum_high_watermark: -1,
@@ -232,7 +233,7 @@ fn fetch_refusal(
                         ..Default::default()
                     })
                     .collect(),
-                ..Default::default()
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
             })
             .collect()
     } else {

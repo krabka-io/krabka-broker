@@ -50,7 +50,10 @@ pub(super) async fn create_topics(
         })
         .collect();
     let outcomes = admin
-        .create_topics(&specs, krabka_units::secs(30))
+        .create_topics(
+            &specs,
+            krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(30)),
+        )
         .await
         .expect("create topics");
     for outcome in outcomes {

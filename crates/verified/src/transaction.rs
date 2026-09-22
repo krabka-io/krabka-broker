@@ -808,6 +808,7 @@ mod tests {
             ((true, 1, 0, -1, -1, false, true), RejectCollision),
             ((true, 1, 0, 2, 0, true, false), RejectCollision),
             ((true, 1, 0, -1, -1, true, true), Apply),
+            ((true, 0, 0, -1, -1, true, true), Apply),
             ((true, 1, 0, 2, 0, true, true), Apply),
         ] {
             assert!(
@@ -833,6 +834,26 @@ mod tests {
 
         assert!(
             transaction_marker_materialization_decision((-1, 0, 0), (-1, -1, true), (true, true))
+                == RejectMalformed
+        );
+        assert!(
+            transaction_marker_materialization_decision((0, -1, 0), (-1, -1, true), (true, true))
+                == RejectMalformed
+        );
+        assert!(
+            transaction_marker_materialization_decision((0, -1, 0), (0, 0, true), (true, true))
+                == RejectMalformed
+        );
+        assert!(
+            transaction_marker_materialization_decision((0, 0, 0), (0, 0, false), (true, true))
+                == Retry
+        );
+        assert!(
+            transaction_marker_materialization_decision((0, 0, 0), (-1, 0, false), (true, true))
+                == AppendWithoutOffsetPublication
+        );
+        assert!(
+            transaction_marker_materialization_decision((0, 0, 0), (-1, 0, true), (true, true))
                 == RejectMalformed
         );
         assert!(
@@ -881,6 +902,14 @@ mod tests {
         };
 
         assert!(
+            transaction_reaper_completion_decision((0, 0, 3), (0, 0, 3), (0, 0, 5), true)
+                == Proceed
+        );
+        assert!(
+            transaction_reaper_completion_decision((0, 0, 3), (0, 0, 3), (0, 1, 5), true)
+                == Proceed
+        );
+        assert!(
             transaction_reaper_completion_decision((7, 3, 3), (7, 3, 3), (7, 4, 5), true)
                 == Proceed
         );
@@ -896,10 +925,20 @@ mod tests {
             transaction_reaper_completion_decision((7, 4, 5), (7, 3, 3), (7, 4, 5), false)
                 == AlreadyComplete
         );
-        assert!(
-            transaction_reaper_completion_decision((-1, 0, 3), (7, 3, 3), (7, 4, 5), false)
-                == RejectMalformed
-        );
+        for malformed in [
+            ((-1, 0, 3), (0, 0, 3), (0, 1, 5)),
+            ((0, -1, 3), (0, 0, 3), (0, 1, 5)),
+            ((0, 0, 3), (-1, 0, 3), (0, 1, 5)),
+            ((0, 0, 3), (0, -1, 3), (0, 1, 5)),
+            ((0, 0, 3), (0, 0, 3), (-1, 1, 5)),
+            ((0, 0, 3), (0, 0, 3), (0, -1, 5)),
+            ((0, 0, 3), (0, 0, 3), (0, 1, 3)),
+        ] {
+            assert!(
+                transaction_reaper_completion_decision(malformed.0, malformed.1, malformed.2, true)
+                    == RejectMalformed
+            );
+        }
     }
 
     #[test]
@@ -963,11 +1002,13 @@ mod tests {
     #[test]
     fn local_lso_marker_and_aborted_interval_decisions_fail_closed() {
         assert2::assert!(first_unstable_offset(&[], 20) == Some(20));
+        assert2::assert!(first_unstable_offset(&[20], 20) == Some(20));
         assert2::assert!(first_unstable_offset(&[9, 3, 14], 20) == Some(3));
         assert2::assert!(first_unstable_offset(&[9, 21], 20).is_none());
         assert2::assert!(transaction_marker_closes(true, false, true));
         assert2::assert!(!transaction_marker_closes(false, false, true));
         assert2::assert!(!transaction_marker_closes(true, false, false));
+        assert2::assert!(aborted_transaction_interval(Some(7), 7, 0) == Some((7, 7)));
         assert2::assert!(aborted_transaction_interval(Some(3), 7, 1) == Some((3, 7)));
         assert2::assert!(aborted_transaction_interval(Some(8), 7, 1).is_none());
         assert2::assert!(aborted_transaction_interval(Some(3), 7, -1).is_none());
@@ -976,12 +1017,16 @@ mod tests {
         assert2::assert!(!aborted_transaction_overlaps(10, 14, 0, 10));
         assert2::assert!(!aborted_transaction_overlaps(14, 10, 0, 20));
         assert2::assert!(!aborted_transaction_overlaps(10, 14, 20, 20));
+        assert2::assert!(!aborted_transaction_overlaps(10, 14, 12, 12));
     }
 
     #[test]
     fn two_pc_timeout_and_reaper_are_fail_closed() {
         assert2::assert!(resolve_transaction_timeout(true, -1, 2_000, 8_000) == i32::MAX);
         assert2::assert!(resolve_transaction_timeout(false, -1, 2_000, 8_000) == 2_000);
+        assert2::assert!(resolve_transaction_timeout(false, 2_000, 2_000, 8_000) == 2_000);
+        assert2::assert!(resolve_transaction_timeout(false, 5_000, 2_000, 8_000) == 5_000);
+        assert2::assert!(resolve_transaction_timeout(false, 8_000, 2_000, 8_000) == 8_000);
         assert2::assert!(resolve_transaction_timeout(false, i32::MAX, 2_000, 8_000) == 8_000);
         assert2::assert!(!should_abort_idle_transaction(
             IdleTransactionState::Ongoing,
@@ -1000,6 +1045,30 @@ mod tests {
             1,
             10,
             9,
+        ));
+        assert2::assert!(!should_abort_idle_transaction(
+            IdleTransactionState::Ongoing,
+            0,
+            10,
+            9,
+        ));
+        assert2::assert!(should_abort_idle_transaction(
+            IdleTransactionState::Ongoing,
+            0,
+            10,
+            10,
+        ));
+        assert2::assert!(!should_abort_idle_transaction(
+            IdleTransactionState::Ongoing,
+            10,
+            10,
+            10,
+        ));
+        assert2::assert!(should_abort_idle_transaction(
+            IdleTransactionState::Ongoing,
+            10,
+            10,
+            20,
         ));
         assert2::assert!(should_abort_idle_transaction(
             IdleTransactionState::Ongoing,

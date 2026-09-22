@@ -262,7 +262,7 @@ mod tests {
     #[test]
     fn advertised_versions_are_the_versions_the_listener_decodes_with() {
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let body = super::super::api_versions_response_body(4, &image, None, 0);
+        let body = super::super::api_versions_response_body(4, &image, None);
         let response = ApiVersionsResponse::decode(&mut &body[..], 4).expect("decode response");
         assert!(response.api_keys == expected_entries());
     }
@@ -306,6 +306,7 @@ mod tests {
                 PeerRequest::EndQuorumEpoch {
                     leader_id: NodeId(1),
                     leader_epoch: 4,
+                    preferred_candidates: Vec::new(),
                 },
                 decodes_whole::<EndQuorumEpochRequest>,
             ),
@@ -324,7 +325,9 @@ mod tests {
                 "fetch snapshot",
                 api_key::FETCH_SNAPSHOT,
                 PeerRequest::FetchSnapshot {
+                    cluster_id: None,
                     from: NodeId(2),
+                    current_leader_epoch: 1,
                     snapshot_id: (10, 1),
                     position: 0,
                     max_bytes: 32,

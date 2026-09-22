@@ -110,6 +110,10 @@ pub(in crate::handlers::describe_configs) struct StaticBrokerConfigs<'a> {
     pub(in crate::handlers::describe_configs) offsets_retention: Option<Time>,
     /// `offsets.retention.check.interval.ms`, as the operator named it.
     pub(in crate::handlers::describe_configs) offsets_retention_check_interval: Option<Time>,
+    /// KIP-464 `num.partitions`, as the operator named it.
+    pub(in crate::handlers::describe_configs) num_partitions: Option<i32>,
+    /// KIP-464 `default.replication.factor`, as the operator named it.
+    pub(in crate::handlers::describe_configs) default_replication_factor: Option<i16>,
     /// `connections.max.idle.ms`, as the operator named it. `None` is a key
     /// the process never saw, which reports the registry default alone.
     pub(in crate::handlers::describe_configs) connections_max_idle: Option<Time>,
@@ -226,6 +230,16 @@ pub(super) fn static_broker_entries(
                     .offsets_retention_check_interval
                     .map(|interval| interval.millis_i64().to_string()),
             ),
+            (
+                config_keys::NUM_PARTITIONS,
+                configs.num_partitions.map(|count| count.to_string()),
+            ),
+            (
+                config_keys::DEFAULT_REPLICATION_FACTOR,
+                configs
+                    .default_replication_factor
+                    .map(|factor| factor.to_string()),
+            ),
         ]
         .into_iter()
         .filter(|(key, _)| wanted(key))
@@ -251,6 +265,8 @@ pub(in crate::handlers::describe_configs) fn kafka_default_static_broker()
         },
         offsets_retention: None,
         offsets_retention_check_interval: None,
+        num_partitions: None,
+        default_replication_factor: None,
         connections_max_idle: None,
         connections_max_idle_overrides: NO_IDLE_OVERRIDES.get_or_init(Default::default),
     }

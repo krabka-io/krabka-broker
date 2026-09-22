@@ -56,11 +56,12 @@ pub(super) fn voter_set_to_wire(voters: &VoterSet) -> Result<WireVotersRecord, R
             })
         })
         .collect::<Result<Vec<_>, RaftError>>()?;
-    Ok(WireVotersRecord {
+    let record = WireVotersRecord {
         version: 0,
         voters,
-        ..Default::default()
-    })
+        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+    };
+    Ok(record)
 }
 
 pub(super) fn voter_set_from_wire(record: &WireVotersRecord) -> Result<VoterSet, RaftError> {
@@ -105,4 +106,42 @@ pub(super) fn voter_set_from_wire(record: &WireVotersRecord) -> Result<VoterSet,
         ));
     }
     Ok(voters)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_voters_wire_round_trip_and_version_range() {
+        let voter = Voter {
+            id: NodeId(2),
+            directory_id: Uuid::nil(),
+            endpoints: vec![VoterEndpoint {
+                name: "CONTROLLER".into(),
+                host: "127.0.0.1".into(),
+                port: 9092,
+            }],
+            kraft_version: KRaftVersionRange { min: 1, max: 1 },
+        };
+        let set = VoterSet::from_voters([voter]);
+        let wire = voter_set_to_wire(&set).unwrap();
+        assert2::assert!(wire.version == 0);
+        assert2::assert!(wire.voters[0].k_raft_version_feature.min_supported_version == 1);
+        assert2::assert!(wire.voters[0].k_raft_version_feature.max_supported_version == 1);
+
+        // min == max must succeed
+        let decoded = voter_set_from_wire(&wire).unwrap();
+        assert2::assert!(decoded == set);
+
+        // min > max must fail
+        let mut inverted = wire.clone();
+        inverted.voters[0]
+            .k_raft_version_feature
+            .min_supported_version = 2;
+        inverted.voters[0]
+            .k_raft_version_feature
+            .max_supported_version = 1;
+        assert2::assert!(voter_set_from_wire(&inverted).is_err());
+    }
 }
