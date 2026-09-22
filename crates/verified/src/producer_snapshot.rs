@@ -187,6 +187,12 @@ mod tests {
             (4, 9, 3),
             (-2, -1)
         ));
+        assert2::check!(!producer_snapshot_entry_valid(
+            10,
+            (7, 2),
+            (4, 4, 0),
+            (0, 5)
+        ));
         assert2::check!(producer_snapshot_entry_valid(
             i64::MAX,
             (i64::MAX, i16::MAX),
@@ -197,6 +203,7 @@ mod tests {
 
     #[test]
     fn replay_start_and_truncation_retention_cover_boundaries() {
+        assert2::check!(producer_snapshot_replay_start(0, 0, None) == Some(0));
         assert2::check!(producer_snapshot_replay_start(5, 10, None) == Some(5));
         assert2::check!(producer_snapshot_replay_start(5, 10, Some(3)) == Some(5));
         assert2::check!(producer_snapshot_replay_start(5, 10, Some(7)) == Some(7));

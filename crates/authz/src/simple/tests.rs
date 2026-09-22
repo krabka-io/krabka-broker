@@ -214,3 +214,9 @@ fn multi_super_user_all_bypass() {
             ]
     );
 }
+
+#[test]
+fn simple_acl_authorizer_is_configured() {
+    let auth = SimpleAclAuthorizer::new(no_super());
+    assert2::assert!(auth.is_configured());
+}

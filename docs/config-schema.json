@@ -1788,6 +1788,16 @@
             "null"
           ]
         },
+        "default_replication_factor": {
+          "description": "Replication factor of a topic that `CreateTopics` creates with\n`replication_factor = -1`, Kafka's `default.replication.factor`.",
+          "format": "int16",
+          "maximum": 32767,
+          "minimum": -32768,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "delegation_token_default_renew_period": {
           "default": null,
           "description": "KIP-48: default renew period, Kafka's\n`delegation.token.expiry.time.ms`. It is the initial expiry offset at\ncreate time, and the implicit renew period when a\n`RenewDelegationToken` request asks for `-1`.",
@@ -2086,6 +2096,14 @@
           "description": "KIP-630: snapshot the metadata log once the committed offset advances\nthis many records past the last snapshot, then prune below it.",
           "format": "uint64",
           "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "num_partitions": {
+          "description": "Partition count of a topic that `CreateTopics` creates with\n`num_partitions = -1`, Kafka's `num.partitions`.",
+          "format": "int32",
           "type": [
             "integer",
             "null"
@@ -3240,7 +3258,7 @@
         "type": "string"
       },
       "default": {},
-      "description": "Raw Apache Kafka `server.properties` keys, for the settings krabka\nreads under their Kafka names rather than a dedicated TOML key. The\nbroker consults `transaction.two.phase.commit.enable`,\n`quota.window.num`, and `quota.window.size.seconds`. Any other entry is\naccepted and ignored. A key set here loses to the equivalent dedicated\nkey, which is applied first.",
+      "description": "Raw Apache Kafka `server.properties` keys, for the settings krabka\nreads under their Kafka names rather than a dedicated TOML key. The\nbroker consults `transaction.two.phase.commit.enable`,\n`quota.window.num`, `quota.window.size.seconds`, `num.partitions`, and\n`default.replication.factor`. Any other entry is accepted and ignored.\nA key set here loses to the equivalent dedicated key, which is applied\nfirst.",
       "type": "object"
     },
     "stretch": {

@@ -24,7 +24,7 @@ async fn delete_records_truncates_wal_and_maps_outcome() {
                 replicas: 1,
                 configs: std::collections::BTreeMap::default(),
             }],
-            krabka_units::secs(5),
+            krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(5)),
         )
         .await
         .unwrap();

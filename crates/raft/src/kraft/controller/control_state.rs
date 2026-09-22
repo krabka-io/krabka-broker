@@ -135,7 +135,7 @@ pub fn voter_set_to_wire(voters: &VoterSet) -> WireVotersRecord {
     WireVotersRecord {
         version: 0,
         voters,
-        ..Default::default()
+        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
     }
 }
 
@@ -237,4 +237,47 @@ pub fn voter_set_from_wire(record: &WireVotersRecord) -> Result<VoterSet, RaftEr
         })
         .collect::<Result<Vec<_>, RaftError>>()?;
     Ok(VoterSet::from_voters(voters))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn voter_supports_version_checks_both_bounds() {
+        let voter = krabka_metadata::voters::Voter {
+            id: NodeId(1),
+            directory_id: uuid::Uuid::nil(),
+            endpoints: vec![krabka_metadata::voters::VoterEndpoint {
+                name: "CONTROLLER".into(),
+                host: "127.0.0.1".into(),
+                port: 9092,
+            }],
+            kraft_version: krabka_metadata::voters::KRaftVersionRange { min: 2, max: 4 },
+        };
+        assert2::check!(!voter_supports_version(&voter, 1));
+        assert2::check!(voter_supports_version(&voter, 2));
+        assert2::check!(voter_supports_version(&voter, 3));
+        assert2::check!(voter_supports_version(&voter, 4));
+        assert2::check!(!voter_supports_version(&voter, 5));
+    }
+
+    #[test]
+    fn voter_set_to_wire_encodes_version_and_features() {
+        let voter = krabka_metadata::voters::Voter {
+            id: NodeId(1),
+            directory_id: uuid::Uuid::nil(),
+            endpoints: vec![krabka_metadata::voters::VoterEndpoint {
+                name: "CONTROLLER".into(),
+                host: "127.0.0.1".into(),
+                port: 9092,
+            }],
+            kraft_version: krabka_metadata::voters::KRaftVersionRange { min: 2, max: 4 },
+        };
+        let set = VoterSet::from_voters([voter]);
+        let wire = voter_set_to_wire(&set);
+        assert2::assert!(wire.version == 0);
+        assert2::assert!(wire.voters[0].k_raft_version_feature.min_supported_version == 2);
+        assert2::assert!(wire.voters[0].k_raft_version_feature.max_supported_version == 4);
+    }
 }

@@ -33,6 +33,7 @@ use crate::txnver_harness::{admin_client, create_topic, downgrade_transaction_ve
 const OUT_OF_ORDER_SEQUENCE_NUMBER: i16 = 45;
 const NOT_LEADER_OR_FOLLOWER: i16 = 6;
 const UNKNOWN_TOPIC_OR_PARTITION: i16 = 3;
+const COORDINATOR_LOAD_IN_PROGRESS: i16 = 14;
 const COORDINATOR_NOT_AVAILABLE: i16 = 15;
 const NOT_COORDINATOR: i16 = 16;
 const CONCURRENT_TRANSACTIONS: i16 = 51;
@@ -168,7 +169,10 @@ where
         let code = send().await;
         let loading = matches!(
             code,
-            COORDINATOR_NOT_AVAILABLE | NOT_COORDINATOR | CONCURRENT_TRANSACTIONS
+            COORDINATOR_LOAD_IN_PROGRESS
+                | COORDINATOR_NOT_AVAILABLE
+                | NOT_COORDINATOR
+                | CONCURRENT_TRANSACTIONS
         );
         if !loading || Instant::now() >= deadline {
             return code;
@@ -248,7 +252,10 @@ async fn init_transactional_producer(
             .expect("InitProducerId");
         let loading = matches!(
             response.error_code,
-            COORDINATOR_NOT_AVAILABLE | NOT_COORDINATOR | CONCURRENT_TRANSACTIONS
+            COORDINATOR_LOAD_IN_PROGRESS
+                | COORDINATOR_NOT_AVAILABLE
+                | NOT_COORDINATOR
+                | CONCURRENT_TRANSACTIONS
         );
         if !loading || Instant::now() >= deadline {
             assert!(response.error_code == 0, "InitProducerId: {response:?}");

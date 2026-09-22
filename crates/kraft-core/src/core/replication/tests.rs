@@ -1,3 +1,5 @@
+use assert2::check;
+
 use super::*;
 use crate::{
     core::test_support::{CellLog, FakeLog, RunsLog, machine},
@@ -624,7 +626,10 @@ fn check_quorum_expiry_resigns_the_leader() {
     assert2::assert!(
         actions
             == vec![
-                Action::SendEndQuorumEpoch { epoch: 1 },
+                Action::SendEndQuorumEpoch {
+                    epoch: 1,
+                    preferred_successors: vec![NodeId(2), NodeId(3)],
+                },
                 Action::PersistQuorumState,
                 Action::TransitionedTo("Resigned"),
                 Action::ResetTimer {
@@ -836,7 +841,10 @@ fn a_removed_leader_resigns_into_observer_discovery() {
     assert2::assert!(
         actions
             == vec![
-                Action::SendEndQuorumEpoch { epoch: 1 },
+                Action::SendEndQuorumEpoch {
+                    epoch: 1,
+                    preferred_successors: vec![NodeId(2), NodeId(3)],
+                },
                 Action::PersistQuorumState,
                 Action::TransitionedTo("Observer"),
                 Action::ResetTimer {
@@ -900,4 +908,128 @@ fn an_observer_whose_fetches_time_out_looks_for_the_current_leader() {
             }
     );
     assert2::assert!((m.quorum_state().leader_id, m.quorum_state().leader_epoch) == (None, 1));
+}
+
+/// A resigning leader ranks the other voters by the fetch offsets it
+/// validated. A divergent fetch moves no progress, so it cannot promote a
+/// lagging voter.
+#[test]
+fn a_resigning_leader_ranks_successors_by_validated_progress() {
+    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3), NodeId(4)]);
+    let log = FakeLog {
+        end: 10,
+        last_epoch: 1,
+    };
+    win_election(&mut m, &log, &[NodeId(2), NodeId(3)], SimInstant(2000));
+    assert2::assert!(m.role().is_leader());
+    for (from, fetch_epoch, fetch_offset) in [(3, 1, 10), (2, 1, 4), (4, 7, 20)] {
+        m.on_event(
+            Event::ReceiveFetch {
+                from: NodeId(from),
+                fetch_epoch,
+                fetch_offset,
+            },
+            &log,
+            SimInstant(2100),
+        );
+    }
+
+    assert2::assert!(m.preferred_successors() == vec![NodeId(3), NodeId(2), NodeId(4)]);
+}
+
+#[test]
+fn fetch_at_offset_zero_with_unknown_epoch_does_not_diverge() {
+    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2)]);
+    let log = FakeLog {
+        end: 10,
+        last_epoch: 1,
+    };
+    win_election(&mut m, &log, &[NodeId(2)], SimInstant(2000));
+    let actions = m.on_event(
+        Event::ReceiveFetch {
+            from: NodeId(2),
+            fetch_epoch: 99,
+            fetch_offset: 0,
+        },
+        &log,
+        SimInstant(2100),
+    );
+    assert2::assert!(
+        !actions
+            .iter()
+            .any(|a| matches!(a, Action::ReplyDivergingEpoch(_)))
+    );
+}
+
+#[test]
+fn preferred_successors_ranks_offset_zero_above_unfetched_voter() {
+    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let log = FakeLog {
+        end: 10,
+        last_epoch: 1,
+    };
+    win_election(&mut m, &log, &[NodeId(2)], SimInstant(2000));
+    m.on_event(
+        Event::ReceiveFetch {
+            from: NodeId(2),
+            fetch_epoch: 1,
+            fetch_offset: 0,
+        },
+        &log,
+        SimInstant(2100),
+    );
+    assert2::assert!(m.preferred_successors() == vec![NodeId(2), NodeId(3)]);
+}
+
+#[test]
+fn fetch_caught_up_updates_last_caught_up_and_observer_does_not_reset_check_quorum() {
+    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let log = FakeLog {
+        end: 10,
+        last_epoch: 1,
+    };
+    win_election(&mut m, &log, &[NodeId(2), NodeId(3)], SimInstant(2000));
+
+    m.on_event(
+        Event::ReceiveFetch {
+            from: NodeId(2),
+            fetch_epoch: 1,
+            fetch_offset: 5,
+        },
+        &log,
+        SimInstant(2100),
+    );
+    if let Role::Leader { replicas, .. } = m.role() {
+        check!(replicas[&NodeId(2)].last_caught_up == SimInstant(0));
+    }
+
+    m.on_event(
+        Event::ReceiveFetch {
+            from: NodeId(2),
+            fetch_epoch: 1,
+            fetch_offset: 10,
+        },
+        &log,
+        SimInstant(2200),
+    );
+    if let Role::Leader { replicas, .. } = m.role() {
+        check!(replicas[&NodeId(2)].last_caught_up == SimInstant(2200));
+    }
+
+    let actions = m.on_event(
+        Event::ReceiveFetch {
+            from: NodeId(99),
+            fetch_epoch: 1,
+            fetch_offset: 10,
+        },
+        &log,
+        SimInstant(2300),
+    );
+    check!(!actions.iter().any(|a| matches!(
+        a,
+        Action::ResetTimer {
+            kind: TimerKind::CheckQuorum,
+            ..
+        }
+    )));
 }
