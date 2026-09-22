@@ -90,3 +90,32 @@ pub(crate) fn truncate_to(entries: &mut Vec<EpochEntry>, end_offset: Offset) {
 #[cfg(test)]
 #[path = "leader_epoch_model.rs"]
 mod leader_epoch_model;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strict_successor_requires_strictly_increasing_epoch_and_offset() {
+        let e1 = EpochEntry {
+            epoch: LeaderEpoch(1),
+            start_offset: Offset(0),
+        };
+        let e2 = EpochEntry {
+            epoch: LeaderEpoch(1),
+            start_offset: Offset(5),
+        };
+        assert2::assert!(!is_strict_successor(&e1, &e2));
+        assert2::assert!(!is_strict_successor(&e1, &e1));
+        let e3 = EpochEntry {
+            epoch: LeaderEpoch(2),
+            start_offset: Offset(0),
+        };
+        assert2::assert!(!is_strict_successor(&e1, &e3));
+        let e4 = EpochEntry {
+            epoch: LeaderEpoch(2),
+            start_offset: Offset(5),
+        };
+        assert2::assert!(is_strict_successor(&e1, &e4));
+    }
+}

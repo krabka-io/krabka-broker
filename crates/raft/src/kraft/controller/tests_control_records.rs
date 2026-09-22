@@ -8,7 +8,7 @@ use super::*;
 use crate::kraft::controller::{
     control_state::{voter_set_from_wire, voter_set_to_wire},
     records::leader_change_batch,
-    test_support::{build_engine_only, elect_single_voter_engine, voter_set},
+    test_support::{build_engine_only, elect_single_voter_engine, one_offset_batch, voter_set},
 };
 
 fn wire_voter(id: i32, directory_byte: u8) -> krabka_protocol::owned::voters_record::Voter {
@@ -307,4 +307,209 @@ fn a_reconfiguration_is_refused_with_the_reason_it_was_refused_for() {
         ),
         "adding a voter at version 0 is refused as unsupported"
     );
+}
+
+#[test]
+fn update_voter_preflight_at_level_0_updates_voter_history() {
+    use crate::reconfig::{ReconfigOutcome, UpdateVoter, VoterChange};
+
+    let (mut leader, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    elect_single_voter_engine(&mut leader);
+
+    let update = VoterChange::Update(UpdateVoter {
+        voter: krabka_metadata::Voter {
+            id: NodeId(1),
+            directory_id: uuid::Uuid::from_u128(99),
+            endpoints: vec![],
+            kraft_version: krabka_metadata::KRaftVersionRange::default(),
+        },
+    });
+    let (reply, mut rx) = oneshot::channel();
+    leader.on_reconfigure(update, reply);
+    check!(matches!(rx.try_recv(), Ok(Ok(ReconfigOutcome::Committed))));
+    check!(leader.controls.voter_history.contains_key(&-1));
+    check!(
+        leader
+            .controls
+            .voters_at(Offset(0))
+            .get(NodeId(1))
+            .unwrap()
+            .directory_id
+            == uuid::Uuid::from_u128(99)
+    );
+}
+
+#[tokio::test]
+async fn reconfiguration_refuses_when_epoch_not_committed_and_admits_when_committed() {
+    use crate::reconfig::{AddVoter, ReconfigOutcome, RemoveVoter, UpdateVoter, VoterChange};
+
+    fn add_of(id: u64) -> VoterChange {
+        VoterChange::Add(AddVoter {
+            voter: krabka_metadata::Voter {
+                id: NodeId(id),
+                directory_id: uuid::Uuid::nil(),
+                endpoints: vec![krabka_metadata::voters::VoterEndpoint {
+                    name: "CONTROLLER".into(),
+                    host: "127.0.0.1".into(),
+                    port: 9_093,
+                }],
+                kraft_version: krabka_metadata::KRaftVersionRange { min: 0, max: 1 },
+            },
+            ack_when_committed: true,
+        })
+    }
+
+    let (mut leader, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    leader.on_event(Event::ElectionTimeout);
+    leader.on_event(Event::ReceiveVoteResponse {
+        from: NodeId(2),
+        epoch: 0,
+        vote_granted: true,
+    });
+    leader.on_event(Event::ReceiveVoteResponse {
+        from: NodeId(2),
+        epoch: 1,
+        vote_granted: true,
+    });
+    assert2::assert!(leader.core.role().is_leader());
+
+    // Update committed version to 1 and ensure all existing voters support version 1
+    leader.controls.version_history.insert(-1, 1);
+    leader.controls.committed_version = 1;
+    leader.core.set_kraft_version(1);
+    let mut v = leader.controls.committed_voters.clone();
+    for id in [NodeId(1), NodeId(2), NodeId(3)] {
+        let mut voter = v.get(id).unwrap().clone();
+        voter.kraft_version = krabka_metadata::KRaftVersionRange { min: 0, max: 1 };
+        v = v.with_voter(voter);
+    }
+    leader.controls.committed_voters = v.clone();
+    leader.controls.voter_history.insert(-1, v);
+
+    // Epoch not committed (hwm == 0, epoch_start_offset == 0)
+    let (reply, mut rx) = oneshot::channel();
+    leader.on_reconfigure(add_of(4), reply);
+    let r1 = rx.try_recv();
+    check!(
+        matches!(r1, Ok(Err(RaftError::ReconfigInProgress))),
+        "reconfigure refused when leader has not committed in this epoch"
+    );
+
+    // Advance HWM so epoch is committed
+    leader.log.advance_hwm(leader.log.log_end_offset() + 10);
+
+    // Target not caught up
+    let (reply, mut rx) = oneshot::channel();
+    leader.on_reconfigure(add_of(4), reply);
+    let r2 = rx.try_recv();
+    check!(
+        matches!(r2, Ok(Err(RaftError::VoterNotCaughtUp { .. }))),
+        "observer with fetch offset 0 is not caught up"
+    );
+
+    // Observer caught up
+    leader
+        .replica_fetch_offsets
+        .insert(NodeId(4), leader.log.log_end_offset().0);
+    let (reply, mut rx) = oneshot::channel();
+    leader.on_reconfigure(add_of(4), reply);
+    leader.advance_and_apply(leader.log.log_end_offset());
+    let res = rx.try_recv();
+    check!(
+        matches!(res, Ok(Ok(ReconfigOutcome::Committed))),
+        "caught up observer is admitted"
+    );
+
+    // Single flight clear
+    leader.pending_reconfig = Some(crate::kraft::controller::PendingReconfig {
+        need_offset: Offset(100),
+        reply: None,
+        removed_local_leader: false,
+    });
+    let (reply, mut rx) = oneshot::channel();
+    leader.on_reconfigure(add_of(5), reply);
+    check!(
+        matches!(rx.try_recv(), Ok(Err(RaftError::ReconfigInProgress))),
+        "reconfig in progress is refused"
+    );
+    leader.pending_reconfig = None;
+
+    // Update with nil directory
+    let update_matching = VoterChange::Update(UpdateVoter {
+        voter: krabka_metadata::Voter {
+            id: NodeId(1),
+            directory_id: uuid::Uuid::from_u128(99),
+            endpoints: vec![krabka_metadata::voters::VoterEndpoint {
+                name: "CONTROLLER".into(),
+                host: "127.0.0.1".into(),
+                port: 9_093,
+            }],
+            kraft_version: krabka_metadata::KRaftVersionRange { min: 0, max: 1 },
+        },
+    });
+    let (reply, mut rx) = oneshot::channel();
+    leader.on_reconfigure(update_matching, reply);
+    leader.advance_and_apply(leader.log.log_end_offset());
+    let r4 = rx.try_recv();
+    check!(
+        matches!(r4, Ok(Ok(ReconfigOutcome::Committed))),
+        "updating voter with nil directory is admitted"
+    );
+
+    // Remove local leader
+    let remove_self = VoterChange::Remove(RemoveVoter {
+        id: NodeId(1),
+        directory_id: uuid::Uuid::from_u128(99),
+    });
+    let (reply, _rx) = oneshot::channel();
+    leader.on_reconfigure(remove_self, reply);
+    check!(
+        leader
+            .pending_reconfig
+            .as_ref()
+            .unwrap()
+            .removed_local_leader,
+        "removing self sets removed_local_leader"
+    );
+}
+
+#[test]
+fn apply_and_restore_control_records_updates_core_voters() {
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    let two_voters = voter_set(&[NodeId(1), NodeId(2)]);
+    let batch = crate::kraft::controller::records::typed_control_batch(
+        1,
+        &[ControlRecord::Voters(voter_set_to_wire(&two_voters))],
+    )
+    .unwrap();
+    engine.apply_control_batch(&batch).unwrap();
+    check!(engine.core.quorum_state().voters.contains(NodeId(2)));
+
+    engine.restore_control_state_after_truncation(batch.base_offset);
+    check!(!engine.core.quorum_state().voters.contains(NodeId(2)));
+
+    let (reply, mut rx) = oneshot::channel();
+    engine.pending_reconfig = Some(crate::kraft::controller::PendingReconfig {
+        need_offset: Offset(10),
+        reply: Some(reply),
+        removed_local_leader: false,
+    });
+    engine.restore_control_state_after_truncation(11);
+    check!(engine.pending_reconfig.is_some());
+    check!(rx.try_recv().is_err());
+
+    engine.restore_control_state_after_truncation(10);
+    check!(engine.pending_reconfig.is_some());
+    check!(rx.try_recv().is_err());
+
+    engine.restore_control_state_after_truncation(9);
+    check!(engine.pending_reconfig.is_none());
+    check!(matches!(
+        rx.try_recv(),
+        Ok(Err(RaftError::NotLeader { .. }))
+    ));
+
+    engine.apply_control_batch(&batch).unwrap();
+    engine.commit_control_state(Offset(batch.base_offset + 1));
+    check!(engine.controls.committed_voters.contains(NodeId(2)));
 }

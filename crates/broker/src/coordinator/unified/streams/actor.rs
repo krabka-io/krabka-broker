@@ -34,7 +34,7 @@ mod heartbeat;
 mod reconciliation;
 mod records;
 mod request;
-mod response;
+pub(crate) mod response;
 
 #[cfg(test)]
 mod streams_group_model;
@@ -201,6 +201,23 @@ struct ActorState {
     /// Partition metadata from the most recent reconcile. The actor persists
     /// it as the group's `StreamsGroupPartitionMetadataValue`.
     partition_metadata: Option<StreamsGroupPartitionMetadataValue>,
+    /// Kafka's `StreamsGroup.metadataHash`: the hash of the required topics in
+    /// the image that the most recent reconcile configured the topology
+    /// against. A heartbeat that sees another hash reconciles again.
+    metadata_hash: i64,
+    /// The internal topics that the most recent reconcile could not create.
+    /// Every heartbeat tries them again, as Kafka's `KafkaApis` sends the
+    /// `internalTopicsToBeCreated` of each heartbeat to the controller.
+    missing_internal_topics: Vec<super::topology::InternalTopicSpec>,
+    /// Set when a reconcile installed a new target. The next record batch then
+    /// carries the target and current assignment of every member, because the
+    /// new target changed all of them.
+    target_changed: bool,
+    /// Whether the topology was configured against the metadata image since
+    /// the actor started. A seeded actor has not, so its first heartbeat
+    /// configures the topology again, as Kafka does when the configured
+    /// topology of a loaded group is empty.
+    configured: bool,
 }
 
 impl ActorState {
@@ -209,6 +226,10 @@ impl ActorState {
             state: StreamsGroupState::new(group_id),
             topology: None,
             partition_metadata: None,
+            metadata_hash: 0,
+            missing_internal_topics: Vec::new(),
+            target_changed: false,
+            configured: false,
         }
     }
 }
@@ -255,10 +276,10 @@ async fn actor_loop(
                                     error = %e,
                                     "streams-group actor exiting after log-write failure",
                                 );
-                                let _ = reply.send(StreamsGroupHeartbeatResponse {
-                                    error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
-                                    ..Default::default()
-                                });
+                                let _ = reply.send(response::error_resp(
+                                    codes::COORDINATOR_LOAD_IN_PROGRESS,
+                                    None,
+                                ));
                                 break;
                             }
                         }
@@ -296,6 +317,11 @@ async fn actor_loop(
                     break;
                 }
             }
+            () = wait_for_rebalance_deadline(actor.state.next_rebalance_deadline()) => {
+                if handle_session_tick(&mut actor, &config, &*offsets_log, metadata_source.as_ref(), &coordinator).await.is_err() {
+                    break;
+                }
+            }
             image = wait_for_metadata_change(&mut metadata_rx) => {
                 let Some(image) = image else {
                     metadata_rx = None;
@@ -312,7 +338,7 @@ async fn actor_loop(
                     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                     actor.state.dirty = true;
                     reconcile(&mut actor, &config, metadata_source.as_ref()).await;
-                    let pending = snapshot_pending_after_change(&actor, &[]);
+                    let pending = snapshot_pending_after_change(&mut actor, &[]);
                     if flush_pending(
                         &actor,
                         pending,
@@ -356,6 +382,14 @@ fn resolve_group_config_from_image(
             tracing::error!(group_id, %error, "ignoring invalid persisted streams group config");
             defaults.clone()
         }
+    }
+}
+
+/// Sleeps until `deadline`, or for ever when no rebalance timeout is armed.
+async fn wait_for_rebalance_deadline(deadline: Option<std::time::Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline.into()).await,
+        None => std::future::pending().await,
     }
 }
 

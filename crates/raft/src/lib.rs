@@ -63,6 +63,7 @@ pub mod handshake;
 pub mod kraft;
 mod network;
 pub mod reconfig;
+pub mod voter_requests;
 /// The deterministic `KRaft` failure-scenario simulator with trace recording,
 /// re-exported from the leaf [`krabka_kraft_core::sim`] module. `krabka-docgen`
 /// runs [`scenarios::scenarios`] in-process to render the failure-scenario
@@ -85,12 +86,13 @@ pub use controller::{
 };
 pub use error::RaftError;
 pub use handshake::{
-    AllowAllGrants, ClusterGrants, ClusterOperation, RaftConnection, RaftHandshakeError,
-    RaftListenerHandshake,
+    AllowAllGrants, ClusterGrants, ClusterOperation, ControllerApiVersions, RaftConnection,
+    RaftHandshakeError, RaftListenerHandshake,
 };
 pub use kraft::MetadataFetchSlice;
 pub use network::{OutboundDialer, PlaintextDialer};
 pub use reconfig::{AddVoter, ReconfigOutcome, RemoveVoter, UpdateVoter};
+pub use server::is_valid_client_info;
 pub use types::{
     AppData, AppDataResponse, DelegationTokenMutation, Node, NodeId, OffsetReservation,
     SubmitChangeResult,

@@ -38,7 +38,10 @@ mod response;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::placement::{round_robin_replicas, site_broker_views};
+pub(crate) use self::placement::{
+    InitialLeadership, automatic_leaderships, manual_leaderships, round_robin_replicas,
+    site_broker_views,
+};
 use self::{
     authorization::{cluster_create_denied, describe_configs_denied},
     materialize::{TopicMaterialization, materialize_topic},
@@ -66,7 +69,7 @@ pub(crate) fn diskless_wal_placement_error(
     image: &krabka_metadata::MetadataImage,
     config: &crate::config::BrokerConfig,
     first_partition: i32,
-    assignments: &[Vec<krabka_raft::NodeId>],
+    leaderships: &[InitialLeadership],
 ) -> Option<String> {
     let mut brokers = image
         .brokers()
@@ -78,11 +81,11 @@ pub(crate) fn diskless_wal_placement_error(
     brokers.sort_by_key(|(node_id, _)| node_id.0);
 
     let required = config.diskless_wal_local_replica_count;
-    assignments
+    leaderships
         .iter()
         .enumerate()
-        .find_map(|(offset, assignment)| {
-            let leader = *assignment.first()?;
+        .find_map(|(offset, leadership)| {
+            let leader = leadership.leader;
             let available = crate::wal::quorum::placement::select_voters_from_sorted_racks(
                 &brokers, leader, required,
             )
@@ -139,7 +142,7 @@ pub(crate) async fn handle(
     // invalid requests consume quota (bad-faith clients can't escape by
     // sending malformed RPCs). num_partitions == -1 means "use cluster
     // default"; count it as 1 for accounting.
-    let mutation_count = mutation_count(&req);
+    let mutation_count = mutation_count(&req, broker.config.num_partitions);
     let quota = crate::quota::apply_controller_mutation_quota_mode(
         &image,
         &broker.quota_buckets,
@@ -170,9 +173,8 @@ pub(crate) async fn handle(
     // so the policy below sees it exactly as it sees a committing one.
     let validate_only = req.validate_only;
 
-    for topic_req in req.topics {
+    for mut topic_req in req.topics {
         let name = topic_req.name.clone();
-        let partition_count = topic_req.num_partitions;
 
         // Kafka checks the name before anything else. The name becomes part
         // of the partition directory path, so no later step may see a name
@@ -227,26 +229,38 @@ pub(crate) async fn handle(
             continue;
         }
 
-        // Reject invalid partition counts before attempting automatic placement.
-        // Manual assignments use -1 for both count and replication factor.
-        if topic_req.assignments.is_empty() && partition_count <= 0 {
-            results.push(topic_error_result(name, codes::INVALID_PARTITIONS, None));
-            continue;
+        // Kafka's `ReplicationControlManager.createTopic` checks the
+        // replication factor first and the partition count second. Each may
+        // be -1, which KIP-464 resolves to the broker's `num.partitions` or
+        // `default.replication.factor`. A manual assignment requires -1 for
+        // both, and `resolve_assignments` checks that.
+        if topic_req.assignments.is_empty() {
+            if let Some((code, message)) = invalid_topic_shape(&topic_req) {
+                results.push(topic_error_result(name, code, Some(message.to_owned())));
+                continue;
+            }
+            topic_req.num_partitions =
+                resolve_default(topic_req.num_partitions, broker.config.num_partitions);
+            topic_req.replication_factor = resolve_default(
+                topic_req.replication_factor,
+                broker.config.default_replication_factor,
+            );
         }
 
         // Read the current broker set from the controller's image, with the
         // site and the witness role of each broker. `site_broker_views` sorts
         // by node id for determinism, and it covers the race in which the
         // self-registration record has not reached the local image yet.
-        let unavailable = if topic_req.assignments.is_empty() {
-            super::offline_replicas::unavailable_brokers(broker, &image).await
-        } else {
-            std::collections::HashSet::new()
-        };
+        // The automatic placement never picks an unavailable broker. A manual
+        // assignment may name one, because Kafka checks only that the broker
+        // is registered, and the ISR below leaves it out.
+        let unavailable = super::offline_replicas::unavailable_brokers(broker, &image).await;
+        let manual = !topic_req.assignments.is_empty();
+        let no_exclusion = std::collections::HashSet::new();
         let brokers = site_broker_views(
             &image,
             broker.config.is_broker().then_some(node_id),
-            &unavailable,
+            if manual { &no_exclusion } else { &unavailable },
         );
 
         let assignments = match resolve_assignments(&topic_req, &brokers, preferred_site) {
@@ -269,9 +283,30 @@ pub(crate) async fn handle(
             continue;
         }
 
+        let leaderships = if manual {
+            match manual_leaderships(
+                &assignments,
+                &unavailable,
+                &config_keys::witness_node_ids(&image),
+                0,
+            ) {
+                Ok(leaderships) => leaderships,
+                Err(message) => {
+                    results.push(topic_error_result(
+                        name,
+                        codes::INVALID_REPLICA_ASSIGNMENT,
+                        Some(message),
+                    ));
+                    continue;
+                }
+            }
+        } else {
+            automatic_leaderships(&assignments)
+        };
+
         if diskless
             && let Some(reason) =
-                diskless_wal_placement_error(&image, &broker.config, 0, &assignments)
+                diskless_wal_placement_error(&image, &broker.config, 0, &leaderships)
         {
             results.push(topic_error_result(
                 name,
@@ -319,7 +354,13 @@ pub(crate) async fn handle(
             codes::NONE
         } else {
             // Build the batch: one TopicRecord + N PartitionRecords.
-            let records = topic_records(&topic_req, topic_id, &assignments, &config_overrides);
+            let records = topic_records(
+                &topic_req,
+                topic_id,
+                &assignments,
+                &leaderships,
+                &config_overrides,
+            );
 
             match controller.submit_change(records).await {
                 Ok(_) => {
@@ -347,6 +388,7 @@ pub(crate) async fn handle(
                         },
                         &name,
                         &assignments,
+                        &leaderships,
                     )
                     .await;
                     codes::NONE
@@ -396,6 +438,37 @@ pub(crate) async fn handle(
     }
 
     finish_response(broker, ctx, results, validate_only, quota.delay(), version)
+}
+
+/// Kafka's refusal of a requested topic shape without a manual assignment:
+/// `INVALID_REPLICATION_FACTOR` for a replication factor of 0 or below -1,
+/// else `INVALID_PARTITIONS` for a partition count of 0 or below -1. The
+/// messages are Kafka's.
+fn invalid_topic_shape(
+    topic: &krabka_protocol::owned::create_topics_request::CreatableTopic,
+) -> Option<(i16, &'static str)> {
+    if topic.replication_factor < -1 || topic.replication_factor == 0 {
+        Some((
+            codes::INVALID_REPLICATION_FACTOR,
+            "Replication factor must be larger than 0, or -1 to use the default value.",
+        ))
+    } else if topic.num_partitions < -1 || topic.num_partitions == 0 {
+        Some((
+            codes::INVALID_PARTITIONS,
+            "Number of partitions was set to an invalid non-positive value.",
+        ))
+    } else {
+        None
+    }
+}
+
+/// KIP-464: a requested value of -1 means the broker default.
+fn resolve_default<T: From<i8> + PartialEq>(requested: T, default: T) -> T {
+    if requested == T::from(-1) {
+        default
+    } else {
+        requested
+    }
 }
 
 /// Fill in what KIP-525 discloses about a topic the create just made: its

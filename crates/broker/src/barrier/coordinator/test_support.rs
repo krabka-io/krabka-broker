@@ -24,7 +24,7 @@ use crate::{
     test_support::FakeMetadataSource,
 };
 
-pub(super) const GROUP: &str = "orders-cut";
+pub(crate) const GROUP: &str = "orders-cut";
 
 fn config() -> BarrierConfig {
     BarrierConfig {
@@ -32,11 +32,12 @@ fn config() -> BarrierConfig {
         injection_timeout: millis(30),
         retry_backoff: millis(1),
         retry_backoff_max: millis(2),
+        min_injection_interval: millis(1),
         ..BarrierConfig::default()
     }
 }
 
-pub(super) fn spec(topics: &[&str], interval: Option<Time>, retained_cuts: i32) -> GroupSpec {
+pub(crate) fn spec(topics: &[&str], interval: Option<Time>, retained_cuts: i32) -> GroupSpec {
     GroupSpec {
         topics: topics.iter().map(|t| (*t).to_owned()).collect(),
         interval,
@@ -54,17 +55,17 @@ fn cluster_records() -> Vec<MetadataRecord> {
 }
 
 // A broker that leads every state partition and every data partition.
-pub(super) struct Fixture {
+pub(crate) struct Fixture {
     _dir: TempDir,
     pub(super) registry: Arc<PartitionRegistry>,
-    pub(super) source: Arc<FakeMetadataSource>,
+    pub(crate) source: Arc<FakeMetadataSource>,
     config: BarrierConfig,
 }
 
 impl Fixture {
     // Every partition of the cluster is open here, and this broker leads
     // all of them.
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::with_data_partitions(&[("orders", 2), ("payments", 1)])
     }
 
@@ -88,7 +89,7 @@ impl Fixture {
         }
     }
 
-    pub(super) async fn coordinator(&self) -> BarrierCoordinator {
+    pub(crate) async fn coordinator(&self) -> BarrierCoordinator {
         for (topic, count) in [("orders", 2), ("payments", 1)] {
             for partition in 0..count {
                 if let Some(handle) = self

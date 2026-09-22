@@ -679,4 +679,58 @@ mod tests {
                 }]
         );
     }
+
+    #[test]
+    fn append_rejects_overlapping_single_offset_range_as_corrupt() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("00.stampindex");
+        let mut idx = StampIndex::open(path).unwrap();
+        idx.append(StampEntry {
+            base_offset: Offset(0),
+            last_offset: Offset(5),
+            stamp: 10,
+        })
+        .unwrap();
+
+        // Overlapping single-offset range (last_offset == base_offset)
+        let err = idx
+            .append(StampEntry {
+                base_offset: Offset(2),
+                last_offset: Offset(2),
+                stamp: 20,
+            })
+            .unwrap_err();
+        assert2::assert!(let LogError::Corrupt(_) = err);
+    }
+
+    #[test]
+    fn set_io_routes_stamp_index_writes() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        #[derive(Debug)]
+        struct SpyIo(Arc<AtomicBool>);
+        impl LogIo for SpyIo {
+            fn write_at(
+                &self,
+                _t: IoTarget,
+                file: &std::fs::File,
+                buf: &[u8],
+            ) -> std::io::Result<usize> {
+                use std::io::Write;
+                self.0.store(true, Ordering::SeqCst);
+                (&*file).write(buf)
+            }
+        }
+        let called = Arc::new(AtomicBool::new(false));
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("00.stampindex");
+        let mut idx = StampIndex::open(path).unwrap();
+        idx.set_io(Arc::new(SpyIo(called.clone())));
+        idx.append(StampEntry {
+            base_offset: Offset(0),
+            last_offset: Offset(0),
+            stamp: 1,
+        })
+        .unwrap();
+        assert2::assert!(called.load(Ordering::SeqCst));
+    }
 }

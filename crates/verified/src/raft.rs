@@ -235,6 +235,7 @@ mod tests {
         assert!(metadata_record_coordinates(3, 2) == Some((2, 2)));
         assert!(metadata_record_coordinates(0, 0) == None);
         assert!(metadata_record_coordinates(3, 3) == None);
+        assert!(metadata_record_coordinates(i32::MAX as usize + 1, 0) == Some((0, i32::MAX)));
         assert!(metadata_record_coordinates(i32::MAX as usize + 2, 0) == None);
     }
 

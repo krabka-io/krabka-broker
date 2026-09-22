@@ -325,6 +325,43 @@ async fn add_offsets_answers_kafka_codes_and_appends_only_a_change() {
     assert!(actual == expected);
 }
 
+/// Regression: a caller that already holds the entry handle from before this
+/// append, such as `AddPartitionsToTxn`'s `register_partitions` queued on the
+/// same mutex, must see the durable post-append state once it gets the lock,
+/// not the pre-append snapshot. The append publishes a new handle in the
+/// coordinator map, but an already-captured handle stays the old object
+/// unless this function writes the staged value back into it too.
+#[tokio::test]
+async fn a_caller_already_holding_the_handle_sees_the_durable_state() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let (coordinator, _partition) = coordinator_with_log(directory.path());
+    coordinator
+        .lead_state_partition_for_test(PartitionIndex(0))
+        .await;
+    coordinator
+        .put(entry(TxnState::Ongoing, &[]), TxnVersion::Verified)
+        .await
+        .expect("seed the transaction");
+
+    // Capture the handle the way a concurrent register_partitions call would,
+    // before this append runs.
+    let pre_append_handle = coordinator.get(TID).expect("entry");
+
+    let code = add_offsets_partition(
+        &coordinator,
+        TID,
+        (ProducerId(7), 3),
+        offsets_partition(4),
+        TxnVersion::Verified,
+    )
+    .await;
+    assert!(code == codes::NONE);
+
+    let via_old_handle = pre_append_handle.lock().await.clone();
+    assert!(via_old_handle.partitions.contains(&offsets_partition(4)));
+    assert!(via_old_handle.state == TxnState::Ongoing);
+}
+
 /// What one `AddOffsetsToTxn` call left behind.
 #[derive(Debug, PartialEq, Eq)]
 enum Outcome {

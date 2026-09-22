@@ -503,6 +503,13 @@ mod tests {
     async fn partition_row_error_follows_topic_id() {
         let (broker_handle, _dir) = start_broker(true).await;
         let known = create_topic(&broker_handle, "ack-resolution").await;
+        crate::test_support::initialize_share_state(
+            &broker_handle,
+            "g1",
+            uuid::Uuid::from_bytes(known.0),
+            0,
+        )
+        .await;
 
         let (actual, expected) = drive(&broker_handle, known, codes::NONE).await;
 
@@ -521,6 +528,13 @@ mod tests {
         })
         .await;
         let known = create_topic(&broker_handle, "ack-resolution").await;
+        crate::test_support::initialize_share_state(
+            &broker_handle,
+            "g1",
+            uuid::Uuid::from_bytes(known.0),
+            0,
+        )
+        .await;
 
         let (actual, expected) =
             drive(&broker_handle, known, codes::TOPIC_AUTHORIZATION_FAILED).await;

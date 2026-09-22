@@ -122,6 +122,34 @@ pub(crate) async fn finalize_elr_version_on(broker: &crate::Broker) {
     .expect("eligible.leader.replicas.version visible");
 }
 
+/// Initialize the share state of `(group, topic_id, partition)` at state
+/// epoch 1 with no start offset, as the group coordinator does when it
+/// assigns the partition to a member (Kafka's Initialize-first flow). The
+/// share coordinator refuses a read of a key with no state, so a handler test
+/// that fetches or acknowledges without a share group heartbeat calls this
+/// first.
+pub(crate) async fn initialize_share_state(
+    broker: &crate::broker::BrokerHandle,
+    group: &str,
+    topic_id: uuid::Uuid,
+    partition: i32,
+) {
+    broker
+        .broker_arc_for_test()
+        .group_coordinator
+        .share_persister()
+        .expect("share persister")
+        .initialize(
+            group,
+            topic_id,
+            partition,
+            1,
+            krabka_log::Offset(crate::share_coordinator::coordinator::UNINITIALIZED_START_OFFSET),
+        )
+        .await
+        .expect("initialize the share state");
+}
+
 /// End the heartbeat session of `broker_id` on the controller `broker`, as if
 /// that broker stopped and its session expired.
 ///
@@ -152,6 +180,64 @@ pub(crate) fn principal(name: &str) -> Principal {
 /// requests to.
 pub(crate) fn peer() -> SocketAddr {
     "127.0.0.1:9092".parse().unwrap()
+}
+
+/// Register `node_id` as a remote broker in the controller's image.
+pub(crate) async fn seed_remote_broker(handle: &BrokerHandle, node_id: u64) {
+    handle
+        .broker_arc_for_test()
+        .controller
+        .submit_change(vec![MetadataRecord::V1BrokerRegistration(
+            krabka_metadata::BrokerRegistrationRecord {
+                node_id: krabka_raft::NodeId(node_id),
+                broker_epoch: 0,
+                incarnation_id: uuid::Uuid::nil(),
+                host: "127.0.0.1".into(),
+                port: 9092,
+                rack: None,
+                log_dirs: vec![],
+                endpoints: vec![],
+                features: std::collections::BTreeMap::new(),
+            },
+        )])
+        .await
+        .expect("seed broker registration");
+}
+
+/// Fence `node_id` the way the controller does: its heartbeat session is
+/// fenced, and the replicated `broker.fenced` config says so, which is what
+/// every node reads.
+pub(crate) async fn fence_remote_broker(handle: &BrokerHandle, node_id: u64) {
+    let broker = handle.broker_arc_for_test();
+    broker.liveness.record_fenced_heartbeat(node_id).await;
+    broker
+        .controller
+        .submit_change(vec![MetadataRecord::V1BrokerConfig(
+            krabka_metadata::BrokerConfigRecord {
+                node_id: krabka_raft::NodeId(node_id),
+                config_name: crate::config_keys::BROKER_FENCED.to_string(),
+                config_value: Some(crate::config_keys::FENCED_TRUE.to_string()),
+            },
+        )])
+        .await
+        .expect("publish broker fencing");
+}
+
+/// Give `node_id` the witness role, as the controller-managed
+/// `broker.witness` broker config does.
+pub(crate) async fn make_witness(handle: &BrokerHandle, node_id: u64) {
+    handle
+        .broker_arc_for_test()
+        .controller
+        .submit_change(vec![MetadataRecord::V1BrokerConfig(
+            krabka_metadata::BrokerConfigRecord {
+                node_id: krabka_raft::NodeId(node_id),
+                config_name: crate::config_keys::BROKER_WITNESS.to_string(),
+                config_value: Some(crate::config_keys::WITNESS_TRUE.to_string()),
+            },
+        )])
+        .await
+        .expect("publish the witness role");
 }
 
 /// Build a [`RequestContext`] over the given principal, peer, and client id.
@@ -461,6 +547,7 @@ pub(crate) struct FakeMetadataSource {
     submitted: Mutex<Vec<Vec<MetadataRecord>>>,
     on_submit: SubmitOutcome,
     stall_submits: bool,
+    commit_submits: bool,
     current_image_calls: AtomicUsize,
     controller_bound_addr_calls: AtomicUsize,
 }
@@ -478,6 +565,7 @@ impl FakeMetadataSource {
             owns_controller_epoch: true,
             on_submit: None,
             stall_submits: false,
+            commit_submits: false,
         }
     }
 
@@ -544,6 +632,7 @@ pub(crate) struct FakeMetadataSourceBuilder {
     owns_controller_epoch: bool,
     on_submit: Option<SubmitOutcome>,
     stall_submits: bool,
+    commit_submits: bool,
 }
 
 impl FakeMetadataSourceBuilder {
@@ -609,6 +698,14 @@ impl FakeMetadataSourceBuilder {
         self
     }
 
+    /// Apply every accepted `submit_change` batch to the served image, as a
+    /// raft commit does. Without this seam the image never changes on a
+    /// submit.
+    pub(crate) fn commit_submits(mut self) -> Self {
+        self.commit_submits = true;
+        self
+    }
+
     pub(crate) fn build(self) -> FakeMetadataSource {
         let (image_tx, _) = watch::channel(self.image);
         let (leader_tx, _) = watch::channel(self.leader);
@@ -623,6 +720,7 @@ impl FakeMetadataSourceBuilder {
                 .on_submit
                 .unwrap_or_else(|| Box::new(|_| Ok(SubmitChangeResult::default()))),
             stall_submits: self.stall_submits,
+            commit_submits: self.commit_submits,
             current_image_calls: AtomicUsize::new(0),
             controller_bound_addr_calls: AtomicUsize::new(0),
         }
@@ -690,6 +788,13 @@ impl MetadataSource for FakeMetadataSource {
             std::future::pending::<()>().await;
         }
         let outcome = (self.on_submit)(&records);
+        if self.commit_submits && outcome.is_ok() {
+            let mut image = MetadataImage::clone(&self.image_tx.borrow());
+            for record in &records {
+                image.apply(record);
+            }
+            self.set_image(image);
+        }
         self.submitted
             .lock()
             .expect("the submitted batches are not poisoned")
