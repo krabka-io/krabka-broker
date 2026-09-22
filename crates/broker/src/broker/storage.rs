@@ -61,11 +61,7 @@ pub(super) async fn recover_storage_and_groups(
                         topic_id,
                         partition: PartitionIndex(partition_id),
                     };
-                    if wal_placements
-                        .get(&shard)
-                        .and_then(|placement| placement.voters.first())
-                        == Some(&config.node_id)
-                    {
+                    if is_primary_wal_voter(&wal_placements, &shard, config.node_id) {
                         // Promotion hydration is deliberately repeated before
                         // the partition writer starts. If the preceding process
                         // crashed after adopting only part of the checkpointed
@@ -189,4 +185,69 @@ pub(super) async fn recover_storage_and_groups(
         group_coordinator,
         producer_ids,
     })
+}
+
+pub(super) fn is_primary_wal_voter(
+    wal_placements: &std::collections::HashMap<
+        crate::wal::quorum::registry::ShardId,
+        crate::wal::quorum::registry::WalPlacement,
+    >,
+    shard: &crate::wal::quorum::registry::ShardId,
+    node_id: krabka_raft::NodeId,
+) -> bool {
+    wal_placements
+        .get(shard)
+        .and_then(|placement| placement.voters.first())
+        == Some(&node_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use assert2::check;
+    use krabka_ids::PartitionIndex;
+    use krabka_raft::NodeId;
+    use uuid::Uuid;
+
+    use super::is_primary_wal_voter;
+    use crate::wal::quorum::registry::{ShardId, WalPlacement};
+
+    #[test]
+    fn primary_wal_voter_requires_node_to_be_first_voter() {
+        let shard1 = ShardId {
+            topic_id: Uuid::from_u128(1),
+            partition: PartitionIndex(0),
+        };
+        let shard2 = ShardId {
+            topic_id: Uuid::from_u128(2),
+            partition: PartitionIndex(0),
+        };
+        let shard3 = ShardId {
+            topic_id: Uuid::from_u128(3),
+            partition: PartitionIndex(0),
+        };
+
+        let mut placements = HashMap::new();
+        placements.insert(
+            shard1,
+            WalPlacement {
+                voters: vec![NodeId(1), NodeId(2)],
+                leader_epoch: 1,
+            },
+        );
+        placements.insert(
+            shard2,
+            WalPlacement {
+                voters: vec![],
+                leader_epoch: 1,
+            },
+        );
+
+        check!(is_primary_wal_voter(&placements, &shard1, NodeId(1)) == true);
+        check!(is_primary_wal_voter(&placements, &shard1, NodeId(2)) == false);
+        check!(is_primary_wal_voter(&placements, &shard1, NodeId(3)) == false);
+        check!(is_primary_wal_voter(&placements, &shard2, NodeId(1)) == false);
+        check!(is_primary_wal_voter(&placements, &shard3, NodeId(1)) == false);
+    }
 }
