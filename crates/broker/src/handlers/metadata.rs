@@ -15,6 +15,7 @@
 //! `DescribeTopicPartitions` cannot report a replica offline in one column and
 //! leading in another.
 
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
@@ -167,7 +168,9 @@ pub(crate) async fn handle(
     let resp = MetadataResponse {
         throttle_time_ms: 0,
         brokers,
-        cluster_id: Some(image.cluster_id().to_string()),
+        // Kafka's `Uuid.toString()` is URL-safe unpadded base64 of the 16 raw
+        // bytes, not `java.util.UUID`'s hyphenated form. See #1042.
+        cluster_id: Some(URL_SAFE_NO_PAD.encode(image.cluster_id().as_bytes())),
         controller_id,
         topics: topics_out,
         cluster_authorized_operations,
@@ -582,5 +585,29 @@ mod tests {
         let out = project_broker(&rec, "tls", "plain");
         assert!(out.host == "legacy-host");
         assert!(out.port == 1000);
+    }
+
+    /// `MetadataResponse.ClusterId` reports Kafka's base64 `Uuid` form, not
+    /// `java.util.UUID`'s hyphenated form (#1042). The expected string is what
+    /// `org.apache.kafka.common.Uuid(0x0102030405060708L, 0x090a0b0c0d0e0f10L)
+    /// .toString()` produces for the same 16 bytes.
+    #[tokio::test]
+    async fn reports_cluster_id_in_kafka_base64_form() {
+        let known_cluster_id = uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
+        let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+            cfg.cluster_id = Some(known_cluster_id);
+        })
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = crate::test_support::principal("describer");
+        let peer = crate::test_support::peer();
+        let ctx = crate::test_support::request_context(&p, &peer, "metadata-client");
+        let req = crate::test_support::encode_request(&MetadataRequest::default(), 9);
+
+        let bytes = handle(&broker, 9, 1, &req, &ctx).await.expect("handle");
+        let resp: MetadataResponse = crate::test_support::decode_response(&bytes, 9);
+
+        assert!(resp.cluster_id.as_deref() == Some("AQIDBAUGBwgJCgsMDQ4PEA"));
+        broker_handle.shutdown().await;
     }
 }
