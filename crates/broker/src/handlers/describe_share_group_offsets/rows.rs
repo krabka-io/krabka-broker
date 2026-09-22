@@ -101,8 +101,8 @@ async fn describe_partition(
     topic_id: uuid::Uuid,
     p: i32,
 ) -> DescribeShareGroupOffsetsResponsePartition {
-    let (start_offset, error_code) = match persister.read_state(gid, topic_id, p).await {
-        Ok(Some(state)) => (state.start_offset.0, codes::NONE),
+    let (start_offset, error_code) = match persister.read_summary(gid, topic_id, p).await {
+        Ok(Some((_, _, start_offset, _))) => (start_offset.0, codes::NONE),
         Ok(None) => (UNINITIALIZED_START_OFFSET, codes::NONE),
         Err(_) => (UNINITIALIZED_START_OFFSET, codes::COORDINATOR_NOT_AVAILABLE),
     };

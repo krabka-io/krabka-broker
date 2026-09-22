@@ -68,9 +68,10 @@ async fn on_leadership_wake(
     if current == Some(node_id) {
         let image = controller.current_image();
         liveness
-            .seed_brokers(crate::heartbeat::controller_state::replicated_fences(
-                &image,
-            ))
+            .seed_term(
+                controller.current_controller_epoch(),
+                crate::heartbeat::controller_state::replicated_fences(&image),
+            )
             .await;
     }
 }

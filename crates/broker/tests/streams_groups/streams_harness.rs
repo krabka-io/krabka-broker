@@ -100,15 +100,18 @@ pub fn topology(source_topic: &str, changelogs: Vec<TopicInfo>) -> Topology {
     }
 }
 
-/// First-join heartbeat. It sends an empty member id, so the server mints one,
+/// First-join heartbeat. It sends a client-generated member id, empty task lists,
 /// epoch 0, a process id, a rebalance timeout, and the supplied topology.
 pub fn first_join(group: &str, topo: Topology) -> StreamsGroupHeartbeatRequest {
     StreamsGroupHeartbeatRequest {
         group_id: group.into(),
-        member_id: String::new(),
+        member_id: uuid::Uuid::new_v4().to_string(),
         member_epoch: 0,
         process_id: Some("p1".into()),
         rebalance_timeout_ms: 30_000,
+        active_tasks: Some(Vec::new()),
+        standby_tasks: Some(Vec::new()),
+        warmup_tasks: Some(Vec::new()),
         topology: Some(topo),
         ..Default::default()
     }
@@ -126,6 +129,8 @@ pub fn follow_up(
         group_id: group.into(),
         member_id: member_id.into(),
         member_epoch: epoch,
+        standby_tasks: active.as_ref().map(|_| Vec::new()),
+        warmup_tasks: active.as_ref().map(|_| Vec::new()),
         active_tasks: active,
         ..Default::default()
     }
@@ -188,7 +193,7 @@ pub async fn join_and_converge(
 ) -> (String, StreamsGroupHeartbeatResponse) {
     // First join. Tolerate a transient coordinator-load on the very first call.
     let mut resp = client
-        .send(first_join(group, topo))
+        .send(first_join(group, topo.clone()))
         .await
         .expect("first heartbeat");
     let mut member_id = resp.member_id.clone();
@@ -197,7 +202,7 @@ pub async fn join_and_converge(
         // COORDINATOR_LOAD_IN_PROGRESS (14): retry the first join.
         if resp.error_code == 14 {
             resp = client
-                .send(first_join(group, topology("", vec![])))
+                .send(first_join(group, topo.clone()))
                 .await
                 .expect("retry first heartbeat");
             member_id = resp.member_id.clone();

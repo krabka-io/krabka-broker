@@ -93,3 +93,8 @@ fn only_the_held_epoch_proves_a_clean_restart() {
         90
     ));
 }
+
+#[test]
+fn unproven_constant_is_negative_one() {
+    assert!(UNPROVEN == -1);
+}

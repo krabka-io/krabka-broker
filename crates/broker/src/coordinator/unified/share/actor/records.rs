@@ -139,6 +139,7 @@ pub(super) fn snapshot_pending_after_change(
                 mid.clone(),
                 Some(ShareGroupCurrentMemberAssignmentValue {
                     member_epoch: m.member_epoch,
+                    previous_member_epoch: m.previous_member_epoch,
                     assigned_partitions: m
                         .assigned_partitions
                         .iter()

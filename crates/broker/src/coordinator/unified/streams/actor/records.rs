@@ -19,8 +19,7 @@ use crate::coordinator::unified::{
             StreamsGroupTargetAssignmentMemberValue, StreamsGroupTargetAssignmentMetadataValue,
         },
         state::{
-            StoredTopologyHandle, StreamsGroupState, StreamsGroupStatePhase,
-            StreamsMemberAssignmentState, StreamsMemberState,
+            StoredTopologyHandle, StreamsGroupState, StreamsGroupStatePhase, StreamsMemberState,
         },
     },
 };
@@ -29,15 +28,27 @@ use crate::coordinator::unified::{
 ///
 /// The result always holds the current group epoch. It holds the topology and
 /// the partition metadata when both are present, and the target metadata once
-/// the actor has installed the target, that is, when `epoch > 0`.
+/// the actor has installed the target, that is, when `epoch > 0`. After a
+/// reconcile that installed a new target, it holds the records of every
+/// member, because the new target changed the assignment of all of them.
 pub(super) fn snapshot_pending_after_change(
-    actor: &ActorState,
+    actor: &mut ActorState,
     affected_members: &[String],
 ) -> PendingStreamsRecords {
+    let all_members: Vec<String>;
+    let affected_members = if std::mem::take(&mut actor.target_changed) {
+        let mut ids: Vec<String> = actor.state.members.keys().cloned().collect();
+        ids.sort_unstable();
+        all_members = ids;
+        all_members.as_slice()
+    } else {
+        affected_members
+    };
     let state = &actor.state;
     let mut pending = PendingStreamsRecords {
         group_metadata: Some(StreamsGroupMetadataValue {
             epoch: state.group_epoch,
+            metadata_hash: actor.metadata_hash,
         }),
         ..Default::default()
     };
@@ -97,6 +108,8 @@ fn current_assignment_value(m: &StreamsMemberState) -> StreamsGroupCurrentMember
         standby: m.standby.clone(),
         warmup: m.warmup.clone(),
         active_pending_revocation: m.active_pending_revocation.clone(),
+        standby_pending_revocation: m.standby_pending_revocation.clone(),
+        warmup_pending_revocation: m.warmup_pending_revocation.clone(),
     }
 }
 
@@ -149,6 +162,7 @@ pub(super) fn snapshot_seed(actor: &ActorState) -> StreamsGroupSeed {
     }
     StreamsGroupSeed {
         group_epoch: state.group_epoch,
+        metadata_hash: actor.metadata_hash,
         assignment_epoch: state.target.epoch,
         topology: actor.topology.clone(),
         partition_metadata: actor.partition_metadata.clone(),
@@ -163,6 +177,7 @@ pub(super) fn snapshot_seed(actor: &ActorState) -> StreamsGroupSeed {
 pub(super) fn apply_seed(actor: &mut ActorState, seed: StreamsGroupSeed) {
     let state = &mut actor.state;
     state.group_epoch = seed.group_epoch;
+    actor.metadata_hash = seed.metadata_hash;
     state.target.epoch = seed.assignment_epoch;
     state.assignment_epoch = seed.assignment_epoch;
     if let Some(topology) = &seed.topology {
@@ -194,6 +209,10 @@ pub(super) fn apply_seed(actor: &mut ActorState, seed: StreamsGroupSeed) {
             m.standby = cur.standby;
             m.warmup = cur.warmup;
             m.active_pending_revocation = cur.active_pending_revocation;
+            m.standby_pending_revocation = cur.standby_pending_revocation;
+            m.warmup_pending_revocation = cur.warmup_pending_revocation;
+            // The member got this assignment before the load.
+            m.sent_tasks = [m.active.clone(), m.standby.clone(), m.warmup.clone()];
         }
     }
     for (mid, tv) in seed.target_per_member {
@@ -207,19 +226,13 @@ pub(super) fn apply_seed(actor: &mut ActorState, seed: StreamsGroupSeed) {
             state.target.warmup.insert(mid, tv.warmup);
         }
     }
-    state.phase = if state.members.is_empty() {
-        StreamsGroupStatePhase::Empty
-    } else if actor.topology.is_none() {
+    state.arm_loaded_rebalance_timeouts(std::time::Instant::now());
+    state.phase = if actor.topology.is_none() {
         StreamsGroupStatePhase::NotReady
-    } else if state
-        .members
-        .values()
-        .any(|member| member.assignment_state != StreamsMemberAssignmentState::Stable)
-    {
-        StreamsGroupStatePhase::Reconciling
     } else {
-        StreamsGroupStatePhase::Stable
+        StreamsGroupStatePhase::Reconciling
     };
+    state.refresh_phase();
     state.dirty = false;
 }
 
@@ -266,6 +279,8 @@ mod tests {
                 standby: BTreeMap::new(),
                 warmup: BTreeMap::new(),
                 active_pending_revocation: BTreeMap::new(),
+                standby_pending_revocation: BTreeMap::new(),
+                warmup_pending_revocation: BTreeMap::new(),
             },
         );
         let mut target = std::collections::HashMap::new();
@@ -279,6 +294,7 @@ mod tests {
         );
         let seed = StreamsGroupSeed {
             group_epoch: 4,
+            metadata_hash: 11,
             assignment_epoch: 4,
             topology: Some(StreamsGroupTopologyValue {
                 epoch: 2,
@@ -292,6 +308,7 @@ mod tests {
         apply_seed(&mut actor, seed);
 
         check!(actor.state.group_epoch == 4);
+        check!(actor.metadata_hash == 11);
         check!(actor.state.target.epoch == 4);
         check!(actor.state.topology_epoch == 2);
         let m = actor.state.members.get("m1").expect("member restored");

@@ -133,7 +133,9 @@ mod tests {
                 }
         );
         assert2::assert!(reassignment_set_membership(true, false).removing);
+        assert2::assert!(reassignment_set_membership(true, false).in_union);
         assert2::assert!(reassignment_set_membership(false, true).adding);
+        assert2::assert!(reassignment_set_membership(false, true).in_union);
         assert2::assert!(reassignment_set_membership(true, true).in_union);
 
         assert2::assert!(reassignment_plan_admission(

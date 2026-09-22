@@ -1,5 +1,5 @@
 //! One streams-group member: its identity, its epochs, its three per-role task
-//! sets, and the reconciliation state of its active tasks.
+//! sets, and the reconciliation state of its tasks.
 //!
 //! The member is the unit the KIP-848-style epoch exchange acts on, so the
 //! [`StreamsMemberAssignmentState`] enum and the `i8` conversions that
@@ -9,10 +9,9 @@ use std::{collections::BTreeMap, time::Instant};
 
 use krabka_log::Offset;
 
-/// The reconciliation state of one streams-group member's **active** task set.
-///
-/// It mirrors KIP-848's `MemberAssignmentState`. Standby and warmup tasks take
-/// no part in it.
+/// The reconciliation state of one streams-group member, Kafka's
+/// `org.apache.kafka.coordinator.group.streams.MemberState`. It covers the
+/// active, standby and warmup tasks.
 ///
 /// This is the broker's own numbering, which counts from zero. Kafka's
 /// `org.apache.kafka.coordinator.group.streams.MemberState` counts from one, so
@@ -22,16 +21,16 @@ use krabka_log::Offset;
 /// compare states as numbers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StreamsMemberAssignmentState {
-    /// The member's active tasks match its target, and nothing is pending.
+    /// The member's tasks match its target at its member epoch.
     #[default]
     Stable = 0,
-    /// The member still owns active tasks the new target took away from it.
-    /// It must revoke them and acknowledge that in a heartbeat before it
-    /// advances.
-    UnrevokedActiveTasks = 1,
-    /// The member's target includes active tasks that another member still
-    /// owns and has not revoked. The member must wait for their release.
-    UnreleasedActiveTasks = 2,
+    /// The member still owns tasks that the new target took away from it. It
+    /// keeps its member epoch until a heartbeat no longer reports them.
+    UnrevokedTasks = 1,
+    /// The member's target includes tasks that another member still owns, or
+    /// that another member of the same process still runs in another role.
+    /// The member waits for their release.
+    UnreleasedTasks = 2,
 }
 
 impl StreamsMemberAssignmentState {
@@ -48,8 +47,8 @@ impl StreamsMemberAssignmentState {
     pub fn from_i8(v: i8) -> Option<Self> {
         match v {
             0 => Some(Self::Stable),
-            1 => Some(Self::UnrevokedActiveTasks),
-            2 => Some(Self::UnreleasedActiveTasks),
+            1 => Some(Self::UnrevokedTasks),
+            2 => Some(Self::UnreleasedTasks),
             _ => None,
         }
     }
@@ -59,8 +58,8 @@ impl StreamsMemberAssignmentState {
 ///
 /// A member holds three disjoint sets of tasks by role: `active`, `standby`,
 /// and `warmup`. Each set keys by subtopology id and holds a sorted, deduped
-/// partition list. The `active_pending_revocation` map holds the active tasks
-/// the member must give up before it can advance its epoch.
+/// partition list. The pending revocation maps hold the tasks of each role
+/// that the member must give up before it can advance its epoch.
 #[derive(Debug, Clone)]
 pub struct StreamsMemberState {
     // --- identity ---
@@ -94,8 +93,16 @@ pub struct StreamsMemberState {
     pub standby: BTreeMap<String, Vec<i32>>,
     /// Assigned warmup tasks.
     pub warmup: BTreeMap<String, Vec<i32>>,
-    /// Active tasks the member must revoke before it advances (KIP-848).
+    /// Active tasks the member must revoke before it advances.
     pub active_pending_revocation: BTreeMap<String, Vec<i32>>,
+    /// Standby tasks the member must revoke before it advances.
+    pub standby_pending_revocation: BTreeMap<String, Vec<i32>>,
+    /// Warmup tasks the member must revoke before it advances.
+    pub warmup_pending_revocation: BTreeMap<String, Vec<i32>>,
+    /// The active, standby and warmup tasks that the last heartbeat response
+    /// sent to the member. A response sends the task lists again only when
+    /// the assignment differs from them.
+    pub sent_tasks: [BTreeMap<String, Vec<i32>>; 3],
 
     // --- reported catch-up progress (for warmup -> active promotion) ---
     /// `(subtopology, partition)` -> the changelog position the member last
@@ -137,6 +144,9 @@ impl StreamsMemberState {
             standby: BTreeMap::new(),
             warmup: BTreeMap::new(),
             active_pending_revocation: BTreeMap::new(),
+            standby_pending_revocation: BTreeMap::new(),
+            warmup_pending_revocation: BTreeMap::new(),
+            sent_tasks: [BTreeMap::new(), BTreeMap::new(), BTreeMap::new()],
             task_offsets: BTreeMap::new(),
             task_end_offsets: BTreeMap::new(),
             last_seen: Instant::now(),
@@ -154,8 +164,8 @@ mod tests {
     fn assignment_state_i8_roundtrips() {
         for s in [
             StreamsMemberAssignmentState::Stable,
-            StreamsMemberAssignmentState::UnrevokedActiveTasks,
-            StreamsMemberAssignmentState::UnreleasedActiveTasks,
+            StreamsMemberAssignmentState::UnrevokedTasks,
+            StreamsMemberAssignmentState::UnreleasedTasks,
         ] {
             assert!(StreamsMemberAssignmentState::from_i8(s.as_i8()) == Some(s));
         }

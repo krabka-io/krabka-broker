@@ -84,6 +84,8 @@ tracing-subscriber = { workspace = true }
 opentelemetry-proto = { workspace = true }
 clap = { workspace = true, features = ["env"] }
 uuid = { workspace = true }
+# KIP-1071 streams group metadata hash: Kafka hashes topic metadata with XXH3.
+twox-hash = { workspace = true }
 futures-util = { workspace = true }
 object_store = { workspace = true }
 prometheus-client.workspace = true
@@ -120,7 +122,7 @@ hex = { workspace = true }
 # audit event so a per-broker divergence in the set is visible afterwards.
 sha2 = { workspace = true }
 tonic = { workspace = true }
-exponential-backoff = "2.1.0"
+exponential-backoff = "2.1.1"
 
 # Heap profiling via jemalloc. Unix-only: tikv-jemallocator does not build on
 # Windows. The `heap-profiling` feature activates this dep; the global
@@ -182,7 +184,7 @@ krabka-client-consumer = { version = "0.4" }
 krabka-client-producer = { version = "0.4" }
 # M19's live-registry acceptance runs the real first-party service instead of
 # another HTTP fixture. Keep it on the production serde dependency's revision.
-krabka-schema-registry = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "d7cb5501ea57b0e8ee38953841a7b27762fedb77" }
+krabka-schema-registry = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "ba727e31ca113f8acae0af719984fef5fcbbec4c" }
 krabka-audit-registry = { package = "krabka-audit", version = "0.4.0" }
 prost-reflect = { workspace = true }
 # Host-side raw `Client::send(DescribeGroupsRequest)` against the
@@ -231,7 +233,7 @@ wiremock = "0.6"
 # `ci.yml`'s `bench` job is what executes these, nightly and on demand, against
 # a criterion `main` baseline it carries between runs. `krabka-log` declares
 # the same dependency for `benches/log.rs`.
-criterion = { version = "5.0.1", package = "codspeed-criterion-compat" }
+criterion = { version = "5.0.2", package = "codspeed-criterion-compat" }
 
 # The produce hot path: `prepare_batch`'s verbatim-versus-owned decision and
 # the log append behind it, over the record shapes a real producer sends.

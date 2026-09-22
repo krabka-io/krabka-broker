@@ -114,10 +114,10 @@ impl BacklogPoller {
                 for partition in partitions {
                     let spso = self
                         .persister
-                        .read_state(&group_id, topic_id, partition)
+                        .read_summary(&group_id, topic_id, partition)
                         .await
                         .map_err(|error| error.to_string())?
-                        .map_or(-1, |state| state.start_offset.0);
+                        .map_or(-1, |(_, _, start_offset, _)| start_offset.0);
                     let (hwm, log_start) = self.offsets(image, &topic, partition).await?;
                     snapshot.insert(
                         ShareGroupLabel {

@@ -81,3 +81,15 @@ pub(crate) const RECORD_VERSION: i16 = 0;
 /// The epoch that a group record writes, because a group definition belongs to
 /// no single epoch.
 pub(crate) const NO_EPOCH: i64 = -1;
+
+#[cfg(test)]
+mod tests {
+    use assert2::assert;
+
+    use super::*;
+
+    #[test]
+    fn no_epoch_constant_is_negative_one() {
+        assert!(NO_EPOCH == -1);
+    }
+}

@@ -325,6 +325,25 @@ async fn baseline(fixture: &Fixture) -> MetadataResponse {
     response
 }
 
+/// The response envelope for `fixture`'s own broker: `brokers`, `cluster_id`,
+/// `controller_id` and `cluster_authorized_operations`, with no topic row.
+///
+/// An empty topic list asks for nothing, so no per-topic authorization runs,
+/// and this works under any authorizer. `Fixture::expected` borrows these
+/// fields for every case whose rows do not name `Row::Described`. Reading
+/// them from `fixture` itself, rather than from a differently-authorized
+/// sibling broker, matters because each `for_tests` broker binds its own
+/// listener: two instances answer with two different ports, so a shared
+/// baseline across instances no longer round-trips through `==`.
+async fn envelope(fixture: &Fixture) -> MetadataResponse {
+    let request = MetadataRequest {
+        topics: Some(Vec::new()),
+        allow_auto_topic_creation: false,
+        ..Default::default()
+    };
+    metadata(&fixture.broker, 12, &request).await
+}
+
 #[tokio::test]
 async fn topic_ids_follow_kafka_version_rules() {
     use Expect::{Failed, Rows};
@@ -422,10 +441,8 @@ async fn a_denied_topic_row_follows_how_the_request_names_it() {
             expect: Rows(vec![Row::DeniedName]),
         },
     ];
-    let allowed = start(Arc::new(AllowAllAuthorizer)).await;
-    let baseline = baseline(&allowed).await;
-    allowed.broker.shutdown().await;
     let denied = start(Arc::new(DenyTopicDescribe)).await;
+    let baseline = envelope(&denied).await;
 
     denied.run(&cases, &baseline).await;
     denied.broker.shutdown().await;

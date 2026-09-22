@@ -172,3 +172,122 @@ fn deadline_instant_offsets_from_engine_clock_base() {
     let at = instant_from_clock_base(base, SimInstant(250));
     assert2::assert!(at.checked_duration_since(base) == Some(Duration::from_millis(250)));
 }
+
+#[tokio::test]
+async fn discovery_peer_distinguishes_voter_and_observer() {
+    use crate::kraft::controller::test_support::build_engine_only;
+
+    let (voter, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2)]);
+    check!(voter.discovery_peer().is_none());
+
+    let (observer, _dir) = build_engine_only(NodeId(3), &[NodeId(1), NodeId(2)]);
+    check!(observer.discovery_peer() == Some(NodeId(1)));
+
+    let (mut attached_observer, _dir) = build_engine_only(NodeId(3), &[NodeId(1), NodeId(2)]);
+    attached_observer.on_event(Event::ReceiveBeginQuorumEpoch {
+        leader_id: NodeId(1),
+        leader_epoch: 1,
+    });
+    check!(attached_observer.following_leader() == Some(NodeId(1)));
+    check!(attached_observer.discovery_peer().is_none());
+}
+
+#[tokio::test]
+async fn fetch_misses_increment_and_trigger_timeout_at_limit() {
+    use crate::kraft::{controller::test_support::build_engine_only, transport::TimerTick};
+
+    let (mut follower, _dir) = build_engine_only(NodeId(2), &[NodeId(1), NodeId(2)]);
+    follower.on_event(Event::ReceiveBeginQuorumEpoch {
+        leader_id: NodeId(1),
+        leader_epoch: 1,
+    });
+    check!(follower.following_leader() == Some(NodeId(1)));
+    check!(follower.fetch_misses == 0);
+
+    // Miss 1
+    follower.on_timer(TimerTick::Fetch);
+    check!(follower.fetch_misses == 1);
+    check!(follower.fetch_at.is_some());
+    check!(follower.fetch_at.unwrap() > Instant::now());
+    check!(follower.following_leader() == Some(NodeId(1)));
+
+    // Miss 2
+    follower.on_timer(TimerTick::Fetch);
+    check!(follower.fetch_misses == 2);
+    check!(follower.following_leader() == Some(NodeId(1)));
+
+    // Miss 3 (limit is 3 by default)
+    follower.on_timer(TimerTick::Fetch);
+    check!(follower.fetch_misses == 0);
+    check!(follower.following_leader().is_none());
+}
+
+#[test]
+fn response_to_event_maps_vote_response() {
+    use crate::kraft::{
+        controller::engine_loop::response_to_event,
+        transport::{api_key, wire::PeerResponse},
+    };
+
+    let vote = PeerResponse::Vote {
+        epoch: 5,
+        granted: true,
+    };
+    let encoded = vote.encode();
+    let event = response_to_event(NodeId(3), api_key::VOTE, &encoded);
+    check!(
+        event
+            == Some(Event::ReceiveVoteResponse {
+                from: NodeId(3),
+                epoch: 5,
+                vote_granted: true,
+            })
+    );
+
+    check!(response_to_event(NodeId(3), 999, &encoded).is_none());
+    check!(response_to_event(NodeId(3), api_key::VOTE, b"invalid").is_none());
+}
+
+#[tokio::test]
+async fn sleep_until_opt_completes_for_past_deadline() {
+    use crate::kraft::controller::engine_loop::sleep_until_opt;
+
+    sleep_until_opt(Some(Instant::now())).await;
+}
+
+#[test]
+fn inbound_fetch_records_non_nil_directory_id() {
+    use crate::kraft::{controller::test_support::build_engine_only, transport::wire::PeerRequest};
+
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    let dir_id = uuid::Uuid::from_u128(999);
+    let req = PeerRequest::Fetch {
+        from: NodeId(2),
+        fetch_epoch: 0,
+        fetch_offset: 0,
+        replica_directory_id: dir_id,
+    };
+    let (reply, _rx) = oneshot::channel();
+    engine.on_inbound(Inbound::Fetch {
+        req: req.encode(),
+        reply,
+    });
+
+    let qs = engine.quorum_state_snapshot();
+    assert2::assert!(qs.observer_directory_ids.get(&NodeId(2)) == Some(&dir_id));
+
+    // A fetch with nil directory ID does not overwrite the recorded ID
+    let nil_req = PeerRequest::Fetch {
+        from: NodeId(2),
+        fetch_epoch: 0,
+        fetch_offset: 0,
+        replica_directory_id: uuid::Uuid::nil(),
+    };
+    let (reply2, _rx2) = oneshot::channel();
+    engine.on_inbound(Inbound::Fetch {
+        req: nil_req.encode(),
+        reply: reply2,
+    });
+    let qs2 = engine.quorum_state_snapshot();
+    assert2::assert!(qs2.observer_directory_ids.get(&NodeId(2)) == Some(&dir_id));
+}

@@ -14,13 +14,13 @@ module(
 # That label resolved transitively until the rules_img work reshaped the module
 # graph; naming it here makes the visibility explicit rather than incidental.
 bazel_dep(name = "platforms", version = "1.1.0")
-bazel_dep(name = "rules_rs", version = "0.0.110")
+bazel_dep(name = "rules_rs", version = "0.0.111")
 bazel_dep(name = "rules_rs_mutants", version = "0.1.1")
 
-# rules_rs 0.0.110 treats unknown cfg keys as false, so a dependency guarded by
+# rules_rs treats unknown cfg keys as false, so a dependency guarded by
 # `not(target_has_atomic = "64")` becomes unconditional on 64-bit targets.
 #
-# 0.0.110 also fetches the zlib1g .deb its rustc toolchain links against from
+# 0.0.111 also fetches the zlib1g .deb its rustc toolchain links against from
 # launchpad.net and a pinned snapshot.ubuntu.com snapshot. 0.0.107 used one
 # archive.ubuntu.com pool URL, which 404s once Ubuntu supersedes the build, so
 # this module no longer patches that URL.
@@ -28,7 +28,7 @@ single_version_override(
     module_name = "rules_rs",
     patch_strip = 1,
     patches = ["//bazel/patches:rules-rs-target-has-atomic.patch"],
-    version = "0.0.110",
+    version = "0.0.111",
 )
 
 # Expose the metadata rules already used by rules_rs so workspace crates appear
@@ -66,7 +66,7 @@ register_toolchains("@llvm//toolchain:all")
 # platform selection or a mutable tag. Images built here start from apko lock
 # files; see //packaging and //tools/creusot.
 # ---------------------------------------------------------------------------
-bazel_dep(name = "rules_img", version = "0.3.20")
+bazel_dep(name = "rules_img", version = "0.3.21")
 bazel_dep(name = "rules_apko", version = "1.5.56")
 
 # `sh_test`, for the wrapper that loads those images before a suite runs.
@@ -186,7 +186,7 @@ single_version_override(
     version = "0.0.2",
 )
 
-bazel_dep(name = "buildifier_prebuilt", version = "8.5.1.4")
+bazel_dep(name = "buildifier_prebuilt", version = "10.0.1")
 
 # rules_rs vends its own patched @rules_rust. `rust_doc_test` has no rules_rs
 # wrapper, so it is loaded from there directly rather than from a second copy.
@@ -232,9 +232,9 @@ register_toolchains("@krabka_rust_toolchains//...")
 # headers, none of which the hermetic toolchain governs. Pointing them at the
 # BCR's own builds puts that C under the same toolchain as everything else.
 # ---------------------------------------------------------------------------
-bazel_dep(name = "aws-lc", version = "5.1.0.bcr.2")
+bazel_dep(name = "aws-lc", version = "5.1.0.bcr.3")
 bazel_dep(name = "jemalloc", version = "5.3.0-bcr.alpha.5")
-bazel_dep(name = "zstd", version = "1.5.7.bcr.1")
+bazel_dep(name = "zstd", version = "1.5.7.bcr.2")
 
 # aws-lc-sys' bindings are generated, and rules_rs prefers the pregenerated set
 # to running bindgen; the toolchain is still required for the paths that do.

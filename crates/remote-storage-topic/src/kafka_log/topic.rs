@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use krabka_client_admin::{AdminClient, CreateTopicSpec, IncrementalAlterOp};
+use krabka_client_admin::{AdminClient, CreateTopicSpec, IncrementalAlterOp, TopicMutationOptions};
 use krabka_client_core::ConnectionOptions;
 use krabka_protocol::primitives::uuid::Uuid as WireUuid;
 use tracing::{debug, instrument, warn};
@@ -81,7 +81,10 @@ pub(super) async fn ensure_topic(
         configs,
     };
     let outcomes = admin
-        .create_topics(&[spec], cfg.topic_create_timeout)
+        .create_topics(
+            &[spec],
+            TopicMutationOptions::with_timeout(cfg.topic_create_timeout),
+        )
         .await
         .map_err(|e| MetadataLogError::Other(format!("create_topics failed: {e}")))?;
     let outcome = outcomes
