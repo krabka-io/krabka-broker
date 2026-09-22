@@ -428,3 +428,17 @@ pub struct FileConfig {
     /// class.
     pub topic_policy: Option<FileTopicPolicyConfig>,
 }
+
+#[cfg(test)]
+mod tests {
+    use assert2::assert;
+
+    use super::*;
+
+    #[test]
+    fn config_schema_produces_non_empty_json_object() {
+        let schema = config_schema();
+        assert!(schema.is_object());
+        assert!(schema.get("properties").is_some());
+    }
+}
