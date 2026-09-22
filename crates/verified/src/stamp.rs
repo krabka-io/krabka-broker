@@ -154,5 +154,10 @@ mod tests {
         assert2::assert!(exact_stamp_range_index(&bases, &lasts, 5, 8).is_none());
         assert2::assert!(covering_stamp_range_index(&bases, &lasts, 7) == Some(1));
         assert2::assert!(covering_stamp_range_index(&bases, &lasts, 8).is_none());
+        assert2::assert!(stamp_ranges_valid(&[1], &[1]));
+        assert2::assert!(stamp_range_insertion_index(&[5], &[7], 1, 1) == Some(0));
+        assert2::assert!(stamp_range_insertion_index(&[5], &[7], 10, 10) == Some(1));
+        assert2::assert!(stamp_range_insertion_index(&[5], &[7], 5, 5).is_none());
+        assert2::assert!(stamp_range_insertion_index(&[5], &[7], 4, 5).is_none());
     }
 }

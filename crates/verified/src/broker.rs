@@ -883,16 +883,49 @@ mod tests {
 
     #[test]
     fn broker_arithmetic_edges_are_explicit() {
+        use DeleteRecordsTrimDecision::{Apply, Noop, RejectMalformed, RejectOutOfRange};
+
+        let facts = |requested, high_watermark, log_end, current_start, has_delivery, delivery| {
+            DeleteRecordsTrimFacts {
+                requested,
+                high_watermark,
+                log_end,
+                current_start,
+                has_delivery_watermark: has_delivery,
+                delivery_watermark: delivery,
+            }
+        };
+
+        // Malformed checks
+        assert!(delete_records_trim_decision(facts(-2, 7, 9, 2, false, 0)) == RejectMalformed);
+        assert!(delete_records_trim_decision(facts(5, 7, 9, -1, false, 0)) == RejectMalformed);
+        assert!(delete_records_trim_decision(facts(5, 1, 9, 2, false, 0)) == RejectMalformed);
+        assert!(delete_records_trim_decision(facts(5, 7, 6, 2, false, 0)) == RejectMalformed);
+        assert!(delete_records_trim_decision(facts(5, 7, 9, 2, true, 1)) == RejectMalformed);
+        assert!(delete_records_trim_decision(facts(5, 7, 9, 2, false, 1)) == Apply { frontier: 5 });
+
+        // Out of range vs log_end boundary
+        assert!(delete_records_trim_decision(facts(10, 7, 9, 2, false, 0)) == RejectOutOfRange);
+        assert!(delete_records_trim_decision(facts(9, 9, 9, 2, false, 0)) == Apply { frontier: 9 });
+
+        // Requested = -1 resolves to high_watermark
         assert!(
-            delete_records_trim_decision(DeleteRecordsTrimFacts {
-                requested: -1,
-                high_watermark: 7,
-                log_end: 9,
-                current_start: 2,
-                has_delivery_watermark: false,
-                delivery_watermark: 0,
-            }) == DeleteRecordsTrimDecision::Apply { frontier: 7 }
+            delete_records_trim_decision(facts(-1, 7, 9, 2, false, 0)) == Apply { frontier: 7 }
         );
+
+        // Zero boundary
+        assert!(delete_records_trim_decision(facts(0, 0, 0, 0, false, 0)) == Noop { frontier: 0 });
+        assert!(delete_records_trim_decision(facts(0, 0, 0, 0, true, 0)) == Noop { frontier: 0 });
+
+        // Clamping by high_watermark and delivery_watermark
+        assert!(delete_records_trim_decision(facts(8, 7, 9, 2, false, 0)) == Apply { frontier: 7 });
+        assert!(delete_records_trim_decision(facts(8, 7, 9, 2, true, 6)) == Apply { frontier: 6 });
+        assert!(delete_records_trim_decision(facts(5, 7, 9, 2, true, 6)) == Apply { frontier: 5 });
+
+        // Noop when bounded <= current_start
+        assert!(delete_records_trim_decision(facts(2, 7, 9, 2, false, 0)) == Noop { frontier: 2 });
+        assert!(delete_records_trim_decision(facts(1, 7, 9, 2, false, 0)) == Noop { frontier: 2 });
+
         assert!(effective_share_backlog(12, -1, 4) == 8);
         assert!(effective_share_backlog(5, 9, 4) == 0);
         assert!(effective_share_backlog(i64::MAX, i64::MIN, i64::MIN) == i64::MAX);
@@ -903,6 +936,9 @@ mod tests {
         use DeleteRecordsTrimApplication::{Complete, RejectMalformed, TrimLocal, TrimWal};
 
         assert!(delete_records_trim_application(-1, 0, 0) == RejectMalformed);
+        assert!(delete_records_trim_application(0, -1, 0) == RejectMalformed);
+        assert!(delete_records_trim_application(0, 0, -1) == RejectMalformed);
+        assert!(delete_records_trim_application(0, 0, 0) == Complete { frontier: 0 });
         assert!(delete_records_trim_application(8, 2, 2) == TrimWal { frontier: 8 });
         assert!(delete_records_trim_application(8, 8, 2) == TrimLocal { frontier: 8 });
         assert!(delete_records_trim_application(8, 8, 8) == Complete { frontier: 8 });

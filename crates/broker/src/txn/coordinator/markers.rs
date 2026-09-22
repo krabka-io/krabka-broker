@@ -35,17 +35,18 @@ impl TxnCoordinator {
         };
         let image = transport.controller.current_image();
         let coordinator_partition = self.partition_for(&entry.transactional_id);
-        let coordinator_epoch = image
-            .partition(bootstrap::TOPIC, coordinator_partition.get())
+        // Kafka sends the coordinator epoch that the partition was loaded at,
+        // not the epoch of a later image.
+        let coordinator_epoch = self
+            .loaded_leader_epoch(coordinator_partition)
+            .await
             .ok_or_else(|| {
                 BrokerError::Txn(format!(
-                    "transaction coordinator partition {}-{} is missing from metadata",
+                    "this broker does not coordinate {}-{}",
                     bootstrap::TOPIC,
                     coordinator_partition.get()
                 ))
-            })?
-            .leader_epoch
-            .get();
+            })?;
         dispatch_markers(
             MarkerDispatchContext {
                 node_id: self.node_id,

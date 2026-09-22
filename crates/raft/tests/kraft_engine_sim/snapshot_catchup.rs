@@ -8,7 +8,9 @@ use std::{
     time::Duration,
 };
 
-use krabka_protocol::records::RecordBatch;
+use krabka_protocol::{
+    Decode, owned::fetch_snapshot_response::FetchSnapshotResponse, records::RecordBatch,
+};
 use krabka_raft::kraft::{
     NodeId, PeerSender, checkpoint_dir,
     transport::{api_key, wire},
@@ -154,12 +156,14 @@ async fn lagging_follower_catches_up_via_snapshot() {
 
 /// Every voter snapshots and prunes on its own (#364): a follower that never
 /// held leadership still checkpoints once the committed offset advances past
-/// `snapshot_interval_records`, and the resulting on-disk checkpoint is
-/// enough for it to serve a lagging peer's `Fetch`/`FetchSnapshot` directly —
-/// the leader stays up and reachable throughout, so this isolates the
+/// `snapshot_interval_records`, and a lagging peer's `Fetch` below the
+/// follower's own log start points at that checkpoint. `FetchSnapshot` is
+/// leader-only, as Kafka's `validateLeaderOnlyRequest` makes it, so the
+/// follower refuses the transfer with `NOT_LEADER_OR_FOLLOWER` and names the
+/// leader. The leader stays up and reachable throughout, so this isolates the
 /// follower's own serve path from election/discovery timing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn follower_that_pruned_independently_still_serves_a_lagging_fetch() {
+async fn follower_that_pruned_independently_points_a_lagging_fetch_at_its_checkpoint() {
     let net = SimNet::new();
     let ids = [NodeId(1), NodeId(2), NodeId(3)];
     let cid = uuid::Uuid::from_u128(501);
@@ -181,7 +185,7 @@ async fn follower_that_pruned_independently_still_serves_a_lagging_fetch() {
     }
 
     let live = [NodeId(1), NodeId(2)];
-    let (leader, _epoch) = await_single_leader(&net, &live, Duration::from_secs(10)).await;
+    let (leader, epoch) = await_single_leader(&net, &live, Duration::from_secs(10)).await;
     assert2::assert!(leader == NodeId(1));
     let follower = NodeId(2);
 
@@ -214,9 +218,7 @@ async fn follower_that_pruned_independently_still_serves_a_lagging_fetch() {
     let follower_dir = dirs[&follower].path().to_path_buf();
     let names = checkpoint_names(&follower_dir);
     assert2::assert!((1..=2).contains(&names.len()), "{names:?}");
-    let latest = names.last().expect("a checkpoint exists");
-    let want_bytes = std::fs::read(checkpoint_dir(&follower_dir).join(latest))
-        .expect("read the follower's latest checkpoint file");
+    let latest = names.last().expect("a checkpoint exists").clone();
 
     // A lagging peer (node 3, never registered — this exercises the wire
     // protocol directly rather than through election/discovery) asks the
@@ -242,43 +244,35 @@ async fn follower_that_pruned_independently_still_serves_a_lagging_fetch() {
     else {
         panic!("follower did not return a decodable Fetch response");
     };
-    let (end_offset, epoch) =
+    let (end_offset, snapshot_epoch) =
         snapshot_id.expect("fetch below the follower's own log_start returns a snapshot id");
     assert2::assert!(records.is_empty());
+    // The id names the follower's own latest checkpoint.
+    assert2::assert!(latest == format!("{end_offset:020}-{snapshot_epoch:010}.checkpoint"));
 
-    // Fetch the whole snapshot from the follower directly, exactly as a
-    // lagging peer's `FetchSnapshot` loop would, and confirm it reassembles
-    // to the follower's own on-disk checkpoint byte-for-byte.
-    let mut got_bytes = Vec::new();
-    loop {
-        let position = i64::try_from(got_bytes.len()).unwrap();
-        let req = wire::PeerRequest::FetchSnapshot {
-            from: NodeId(3),
-            snapshot_id: (end_offset, epoch),
-            position,
-            max_bytes: i32::MAX,
-        }
-        .encode();
-        let resp_body = net
-            .send(follower, api_key::FETCH_SNAPSHOT, req)
-            .await
-            .expect("fetch snapshot chunk from the follower succeeds");
-        let Some(wire::PeerResponse::FetchSnapshot {
-            size,
-            bytes,
-            error_code,
-            ..
-        }) = wire::PeerResponse::decode_fetch_snapshot(&resp_body)
-        else {
-            panic!("follower did not return a decodable FetchSnapshot response");
-        };
-        assert2::assert!(error_code == 0);
-        got_bytes.extend_from_slice(&bytes);
-        if i64::try_from(got_bytes.len()).unwrap() >= size {
-            break;
-        }
+    let req = wire::PeerRequest::FetchSnapshot {
+        cluster_id: Some(cid),
+        from: NodeId(3),
+        current_leader_epoch: i32::try_from(epoch).unwrap(),
+        snapshot_id: (end_offset, snapshot_epoch),
+        position: 0,
+        max_bytes: i32::MAX,
     }
-    assert2::assert!(got_bytes == want_bytes);
+    .encode();
+    let resp_body = net
+        .send(follower, api_key::FETCH_SNAPSHOT, req)
+        .await
+        .expect("fetch snapshot to the follower gets an answer");
+    let response = FetchSnapshotResponse::decode(&mut &resp_body[..], wire::FETCH_SNAPSHOT_VERSION)
+        .expect("decode the FetchSnapshot answer");
+    let partition = &response.topics[0].partitions[0];
+    assert2::assert!(
+        (
+            partition.error_code,
+            partition.current_leader.leader_id,
+            partition.current_leader.leader_epoch,
+        ) == (6, 1, i32::try_from(epoch).unwrap())
+    );
 
     for &id in &live {
         if let Some(c) = net.get(id) {
@@ -324,7 +318,7 @@ async fn a_snapshot_fetch_in_flight_survives_the_leader_rolling_to_a_new_checkpo
         dirs.insert(id, dir);
     }
     let live = [NodeId(1), NodeId(2)];
-    let (leader, _epoch) = await_single_leader(&net, &live, Duration::from_secs(10)).await;
+    let (leader, epoch) = await_single_leader(&net, &live, Duration::from_secs(10)).await;
     let leader_dir = dirs[&leader].path().to_path_buf();
 
     let submit = async |name: String, id: u128| {
@@ -391,7 +385,9 @@ async fn a_snapshot_fetch_in_flight_survives_the_leader_rolling_to_a_new_checkpo
     let mut assembled = Vec::new();
     let chunk = async |position: usize, max_bytes: i32| {
         let req = wire::PeerRequest::FetchSnapshot {
+            cluster_id: Some(cid),
             from: NodeId(3),
+            current_leader_epoch: i32::try_from(epoch).unwrap(),
             snapshot_id: id,
             position: i64::try_from(position).unwrap(),
             max_bytes,

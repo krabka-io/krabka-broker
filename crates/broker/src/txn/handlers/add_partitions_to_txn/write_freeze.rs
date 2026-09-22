@@ -312,7 +312,22 @@ mod tests {
                 .is_some()
         })
         .await;
-        let txnv = crate::txn::version::resolve_txn_version(&broker.controller.current_image());
+        let image = broker.controller.current_image();
+        drop(
+            broker
+                .txn_coordinator
+                .refresh_leader_partitions(&image)
+                .await,
+        );
+        assert!(
+            broker
+                .txn_coordinator
+                .wait_for_load(PartitionIndex(0), std::time::Duration::from_secs(30))
+                .await
+                == Some(crate::txn::coordinator::leadership::LoadStatus::Loaded),
+            "__transaction_state-0 loads"
+        );
+        let txnv = crate::txn::version::resolve_txn_version(&image);
         broker
             .txn_coordinator
             .put(

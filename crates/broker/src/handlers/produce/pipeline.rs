@@ -171,7 +171,7 @@ async fn ready_transition(
 async fn verify_before_append(
     prepared: &super::prepare::PreparedBatch,
     part: &crate::partition::Partition,
-    txn_coordinator: &crate::txn::coordinator::TxnCoordinator,
+    txn_coordinator: &std::sync::Arc<crate::txn::coordinator::TxnCoordinator>,
     topic: (&krabka_metadata::MetadataImage, &str),
     (transaction, mut refused): (TransactionRequest<'_>, PartitionProduceResponse),
 ) -> Result<Option<crate::partition::ProducerAppendCheck>, Box<PartitionProduceResponse>> {

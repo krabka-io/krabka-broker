@@ -222,7 +222,9 @@ async fn handle_reports_invalid_partition_count_and_replication_factor() {
                 name: "bad-count".into(),
                 topic_id: ProtoUuid([0; 16]),
                 error_code: codes::INVALID_PARTITIONS,
-                error_message: None,
+                error_message: Some(
+                    "Number of partitions was set to an invalid non-positive value.".into(),
+                ),
                 num_partitions: -1,
                 replication_factor: -1,
                 configs: None,
@@ -247,6 +249,126 @@ async fn handle_reports_invalid_partition_count_and_replication_factor() {
     for name in ["bad-count", "bad-rf"] {
         let image = broker_handle.controller_image_for_test();
         assert!(image.topic(name).is_none(), "topic {name} not committed");
+    }
+    broker_handle.shutdown().await;
+}
+
+/// KIP-464: `num_partitions = -1` and `replication_factor = -1` take the
+/// broker's `num.partitions` and `default.replication.factor` (#728). That is
+/// what `kafka-topics --create` sends without `--partitions` and
+/// `--replication-factor`. Kafka's `ReplicationControlManager.createTopic`
+/// refuses a replication factor of 0 or below -1 first, then a partition count
+/// of 0 or below -1.
+#[tokio::test]
+async fn minus_one_takes_the_broker_topic_creation_defaults() {
+    const BAD_RF: &str =
+        "Replication factor must be larger than 0, or -1 to use the default value.";
+    const BAD_COUNT: &str = "Number of partitions was set to an invalid non-positive value.";
+    /// (requested partitions, requested replication factor, error code,
+    /// error message, created partitions, created replication factor)
+    type Row = (i32, i16, i16, Option<&'static str>, i32, i16);
+
+    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.num_partitions = 4;
+        cfg.default_replication_factor = 2;
+    })
+    .await;
+    let broker = broker_handle.broker_arc_for_test();
+    for node_id in [2, 3, 4] {
+        broker
+            .controller
+            .submit_change(vec![MetadataRecord::V1BrokerRegistration(
+                krabka_metadata::BrokerRegistrationRecord {
+                    node_id: krabka_raft::NodeId(node_id),
+                    broker_epoch: 0,
+                    incarnation_id: Uuid::nil(),
+                    host: "127.0.0.1".into(),
+                    port: 9092,
+                    rack: None,
+                    log_dirs: vec![],
+                    endpoints: vec![],
+                    features: std::collections::BTreeMap::new(),
+                },
+            )])
+            .await
+            .expect("seed broker registration");
+    }
+
+    let rows: [Row; 8] = [
+        (-1, -1, codes::NONE, None, 4, 2),
+        (-1, 3, codes::NONE, None, 4, 3),
+        (6, -1, codes::NONE, None, 6, 2),
+        (0, 1, codes::INVALID_PARTITIONS, Some(BAD_COUNT), -1, -1),
+        (-2, 1, codes::INVALID_PARTITIONS, Some(BAD_COUNT), -1, -1),
+        (
+            1,
+            0,
+            codes::INVALID_REPLICATION_FACTOR,
+            Some(BAD_RF),
+            -1,
+            -1,
+        ),
+        (
+            0,
+            0,
+            codes::INVALID_REPLICATION_FACTOR,
+            Some(BAD_RF),
+            -1,
+            -1,
+        ),
+        (
+            1,
+            -2,
+            codes::INVALID_REPLICATION_FACTOR,
+            Some(BAD_RF),
+            -1,
+            -1,
+        ),
+    ];
+    for (row, (partitions, rf, error_code, error_message, created, created_rf)) in
+        rows.into_iter().enumerate()
+    {
+        let name = format!("defaults-{row}");
+        let resp = drive(
+            &broker,
+            &request(vec![topic(&name, partitions, rf)]),
+            &principal("admin"),
+            &peer(),
+        )
+        .await;
+
+        let image = broker_handle.controller_image_for_test();
+        let created_ok = error_code == codes::NONE;
+        let expected = CreateTopicsResponse {
+            throttle_time_ms: 0,
+            topics: vec![CreatableTopicResult {
+                name: name.clone(),
+                topic_id: image.topic(&name).map_or(ProtoUuid([0; 16]), |topic| {
+                    ProtoUuid(topic.topic_id.into_bytes())
+                }),
+                error_code,
+                error_message: error_message.map(str::to_owned),
+                num_partitions: created,
+                replication_factor: created_rf,
+                configs: created_ok.then(|| expected_configs(&[])),
+                topic_config_error_code: 0,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            }],
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        };
+        check!(resp == expected, "requested ({partitions}, {rf})");
+
+        let committed = image
+            .partitions_of(&name)
+            .map(|partition| i16::try_from(partition.replicas.len()).expect("replication factor"))
+            .collect::<Vec<_>>();
+        let expected_committed =
+            vec![created_rf; usize::try_from(created.max(0)).expect("partition count")];
+        check!(
+            committed == expected_committed,
+            "requested ({partitions}, {rf})"
+        );
     }
     broker_handle.shutdown().await;
 }

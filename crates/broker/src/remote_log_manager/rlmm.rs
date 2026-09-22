@@ -32,3 +32,31 @@ where
         ))),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use krabka_remote_storage::InmemoryRemoteLogMetadataManager;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn rlmm_mutate_runs_op_and_propagates_error() {
+        let rlmm: Arc<dyn RemoteLogMetadataManager> =
+            Arc::new(InmemoryRemoteLogMetadataManager::new());
+        let called = Arc::new(AtomicBool::new(false));
+        let called_clone = Arc::clone(&called);
+
+        let res = rlmm_mutate(&rlmm, move |_| {
+            called_clone.store(true, Ordering::SeqCst);
+            Err(krabka_remote_storage::RemoteStorageError::Backend(
+                "injected error".into(),
+            ))
+        })
+        .await;
+
+        assert2::check!(called.load(Ordering::SeqCst));
+        assert2::check!(res.is_err());
+    }
+}

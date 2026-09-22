@@ -83,12 +83,12 @@ impl Broker {
     /// trick leaves open. That trick reads an ephemeral port and then drops the
     /// probe before it re-binds. In the window between the two steps, another
     /// process can claim the just-released port, which is the `AddrInUse` flake
-    /// that test harnesses hit under parallel execution. The data-plane port
-    /// must still be concrete in `config` up front, because the broker
-    /// self-registers `listen_addr.port()` before it binds the data plane.
-    /// Callers therefore read the port back from the live listener's
-    /// `local_addr()` and set `config.listen_addr` and
-    /// `advertised_listener` to it before the call.
+    /// that test harnesses hit under parallel execution. A caller that needs
+    /// to know the data-plane port before this call still binds it first and
+    /// passes the live listener in, for that reason. A `config.listen_addr`
+    /// of port 0 with no supplied listener binds and registers itself, so a
+    /// caller that only wants a broker no other process can steal the port
+    /// from need not pre-bind at all.
     ///
     /// [`ListenerSpec`]: crate::config::ListenerSpec
     // sequential bring-up; splitting hurts readability more than it helps
@@ -127,9 +127,19 @@ impl Broker {
     async fn start_with_listeners_inner(
         mut config: BrokerConfig,
         controller_listener: Option<tokio::net::TcpListener>,
-        data_plane_listeners: Vec<tokio::net::TcpListener>,
+        mut data_plane_listeners: Vec<tokio::net::TcpListener>,
         health: HealthState,
     ) -> Result<BrokerHandle, BrokerError> {
+        // Binds the default data-plane listener now, and publishes its real
+        // port into `config`, when the config asks for one and the caller
+        // supplied none. `start_metadata_phase` below registers this node
+        // with the controller, and that registration must carry the bound
+        // port, not a `:0` that names nothing a peer can dial.
+        crate::broker::listeners::bind_ephemeral_data_plane_listener(
+            &mut config,
+            &mut data_plane_listeners,
+        )
+        .await?;
         let StartupTransport {
             tls_dynamic,
             ktls_enabled,

@@ -282,3 +282,33 @@ fn read_raw_after_reopen_does_not_skip_first_sealed_segment() {
         .unwrap();
     assert2::assert!(r.start_offset == 0);
 }
+
+#[test]
+fn read_raw_multi_segment_budget_and_limit() {
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+    let cfg = LogConfig {
+        segment_size: bytes(1),
+        ..LogConfig::default()
+    };
+    let mut log = Log::open(dir.path(), cfg).unwrap();
+    log.append(&mut sample_batch(1)).unwrap();
+    log.append(&mut sample_batch(1)).unwrap();
+    log.append(&mut sample_batch(1)).unwrap();
+
+    let full = log.read_raw(Offset(0), Offset(3), mebibytes(1)).unwrap();
+    assert2::assert!(full.start_offset == Offset(0));
+    assert2::assert!(full.last_offset == Some(Offset(2)));
+
+    let first_len = u32::try_from(full.total / 3).unwrap();
+    let clipped = log
+        .read_raw(Offset(0), Offset(3), bytes(first_len))
+        .unwrap();
+    assert2::assert!(clipped.start_offset == Offset(0));
+    assert2::assert!(clipped.last_offset == Some(Offset(0)));
+    assert2::assert!(clipped.total < full.total);
+
+    let limited = log.read_raw(Offset(0), Offset(2), mebibytes(1)).unwrap();
+    assert2::assert!(limited.start_offset == Offset(0));
+    assert2::assert!(limited.last_offset == Some(Offset(1)));
+}

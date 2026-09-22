@@ -107,7 +107,7 @@ fn completion_decision_accepts_only_the_exact_prepared_snapshot() {
     );
 }
 
-fn image(leader: NodeId) -> MetadataImage {
+fn image(leader: NodeId, leader_epoch: i32) -> MetadataImage {
     let mut image = MetadataImage::new(Uuid::nil());
     image.apply(&MetadataRecord::V1Topic(TopicRecord {
         name: bootstrap::TOPIC.to_owned(),
@@ -121,6 +121,7 @@ fn image(leader: NodeId) -> MetadataImage {
         leader,
         replicas: vec![leader],
         isr: vec![leader],
+        leader_epoch: krabka_metadata::LeaderEpoch(leader_epoch),
         ..Default::default()
     }));
     image
@@ -140,14 +141,15 @@ fn open_partition(dir: &Path, topic: &str) -> Arc<Partition> {
     )
 }
 
-/// A coordinator that leads `__transaction_state-0` when `leader` is this
-/// broker, with `entry` persisted. `with_data_partition` hosts the data
-/// partition locally, so a local marker fan-out can succeed.
+/// A coordinator that persisted `entry` as the leader of
+/// `__transaction_state-0`, after which `leader` was elected at a higher
+/// leader epoch. `with_data_partition` hosts the data partition locally, so a
+/// local marker fan-out can succeed.
 async fn coordinator(
     entry: TxnEntry,
     leader: NodeId,
     with_data_partition: bool,
-) -> (TxnCoordinator, TempDir) {
+) -> (Arc<TxnCoordinator>, TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let partitions = Arc::new(PartitionRegistry::new());
     partitions.insert(
@@ -162,26 +164,37 @@ async fn coordinator(
             open_partition(dir.path(), DATA_TOPIC),
         );
     }
-    let coordinator = TxnCoordinator::new(
+    let coordinator = Arc::new(TxnCoordinator::new(
         NodeId(1),
         partitions,
         Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
         1,
         krabka_units::mebibytes(1),
-    );
+    ));
     coordinator
-        .refresh_leader_partitions(&image(NodeId(1)))
+        .refresh_leader_partitions(&image(NodeId(1), 0))
+        .await
+        .finished()
         .await;
     coordinator
         .put(entry, TxnVersion::Verified)
         .await
         .expect("seed __transaction_state");
-    coordinator.refresh_leader_partitions(&image(leader)).await;
+    // The election of `leader` comes at a higher leader epoch. This broker
+    // loads the partition again, or unloads it.
+    coordinator
+        .refresh_leader_partitions(&image(leader, 1))
+        .await
+        .finished()
+        .await;
     (coordinator, dir)
 }
 
-async fn current(coordinator: &TxnCoordinator) -> TxnEntry {
-    coordinator.get(TID).expect("entry").lock().await.clone()
+async fn current(coordinator: &TxnCoordinator) -> Option<TxnEntry> {
+    match coordinator.get(TID) {
+        Some(entry) => Some(entry.lock().await.clone()),
+        None => None,
+    }
 }
 
 #[tokio::test]
@@ -192,8 +205,9 @@ async fn one_attempt_completes_retries_or_leaves_the_entry_alone() {
         leader: NodeId,
         with_data_partition: bool,
         attempt: CompletionAttempt,
-        /// The state after the attempt.
-        state: TxnState,
+        /// The state after the attempt, or `None` when this broker unloaded
+        /// the transaction.
+        state: Option<TxnState>,
     }
     let cases = [
         Case {
@@ -202,7 +216,7 @@ async fn one_attempt_completes_retries_or_leaves_the_entry_alone() {
             leader: NodeId(1),
             with_data_partition: true,
             attempt: CompletionAttempt::Completed,
-            state: TxnState::CompleteCommit,
+            state: Some(TxnState::CompleteCommit),
         },
         Case {
             name: "prepared abort completes",
@@ -210,7 +224,7 @@ async fn one_attempt_completes_retries_or_leaves_the_entry_alone() {
             leader: NodeId(1),
             with_data_partition: true,
             attempt: CompletionAttempt::Completed,
-            state: TxnState::CompleteAbort,
+            state: Some(TxnState::CompleteAbort),
         },
         Case {
             name: "a failed marker fan-out retries",
@@ -218,15 +232,15 @@ async fn one_attempt_completes_retries_or_leaves_the_entry_alone() {
             leader: NodeId(1),
             with_data_partition: false,
             attempt: CompletionAttempt::Retry,
-            state: TxnState::PrepareCommit,
+            state: Some(TxnState::PrepareCommit),
         },
         Case {
-            name: "another coordinator owns it",
+            name: "another coordinator owns it, and this broker unloaded it",
             entry: prepared_entry(TxnState::PrepareCommit),
             leader: NodeId(2),
             with_data_partition: true,
             attempt: CompletionAttempt::NothingToComplete,
-            state: TxnState::PrepareCommit,
+            state: None,
         },
         Case {
             name: "an ongoing transaction is not prepared",
@@ -234,7 +248,7 @@ async fn one_attempt_completes_retries_or_leaves_the_entry_alone() {
             leader: NodeId(1),
             with_data_partition: true,
             attempt: CompletionAttempt::NothingToComplete,
-            state: TxnState::Ongoing,
+            state: Some(TxnState::Ongoing),
         },
     ];
     for case in cases {
@@ -245,9 +259,13 @@ async fn one_attempt_completes_retries_or_leaves_the_entry_alone() {
             .await;
         check!(attempt == case.attempt, "{}", case.name);
         let after = current(&coordinator).await;
-        check!(after.state == case.state, "{}", case.name);
-        if case.state == case.entry.state {
-            check!(after == case.entry, "{}: entry unchanged", case.name);
+        check!(
+            after.as_ref().map(|entry| entry.state) == case.state,
+            "{}",
+            case.name
+        );
+        if case.state == Some(case.entry.state) {
+            check!(after == Some(case.entry), "{}: entry unchanged", case.name);
         }
     }
 }
@@ -256,6 +274,8 @@ async fn one_attempt_completes_retries_or_leaves_the_entry_alone() {
 async fn recovery_queues_every_prepared_transaction_for_completion() {
     let (coordinator, _dir) =
         coordinator(prepared_entry(TxnState::PrepareCommit), NodeId(1), true).await;
+    // The second load of the fixture queued the prepared transaction already.
+    check!(coordinator.take_completion_requests() == vec![TID.to_owned()]);
     let mut ongoing = TxnEntry::new_empty("tid-ongoing".to_owned(), ProducerId(3000), 0, 60_000, 0);
     ongoing.state = TxnState::Ongoing;
     coordinator
@@ -264,8 +284,9 @@ async fn recovery_queues_every_prepared_transaction_for_completion() {
         .expect("persist an ongoing transaction");
     assert!(coordinator.take_completion_requests().is_empty());
 
+    // A new election loads the partition again.
     coordinator
-        .recover(&image(NodeId(1)))
+        .recover(&image(NodeId(1), 2))
         .await
         .expect("replay __transaction_state");
 

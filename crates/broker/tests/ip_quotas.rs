@@ -4,9 +4,9 @@
 //! 1. `ip_quota_alter_then_describe_round_trip`. Over SASL/PLAIN, it alters
 //!    (ip=127.0.0.1) `connection_creation_rate=2.0`, describes it, and
 //!    asserts.
-//! 2. `connection_creation_rate_throttles_accept`. Over PLAINTEXT with
-//!    rate=1, it opens 5 connections one after another and asserts a wall
-//!    time ≥3s.
+//! 2. `connection_creation_rate_closes_the_throttled_connection`. Over
+//!    PLAINTEXT with rate=1, a second connection from the same ip closes
+//!    without a response, and a connection from another ip is served at once.
 //! 3. `unthrottled_ip_unaffected`. Over PLAINTEXT with no quota, it opens 5
 //!    connections and asserts a wall time <500ms.
 
@@ -90,27 +90,22 @@ async fn ip_quota_alter_then_describe_round_trip() {
     );
 }
 
-/// Test 2: sets rate=1 connection per second for the loopback IP through
+/// Test 2: sets rate=1 connection per second for `127.0.0.1` through
 /// `submit_metadata_record_for_test`, because a PLAINTEXT cluster has no SASL
-/// admin path. It opens 5 connections one after another and asserts a wall
-/// time >= 3 seconds, which proves that the throttle fires.
+/// admin path. Kafka's acceptor (`SocketServer.Acceptor.accept`) never serves
+/// a connection over the ip rate: it holds the socket in `throttledSockets`
+/// for the throttle time and then closes it, and it keeps accepting other
+/// connections meanwhile (#760).
 ///
-/// The timeline with rate=1, capacity=1, and cap=1s is:
-///   connection 1: free, from the initial token
-///   connections 2 to 5: the bucket is empty, so each sleeps 1s and is then
-///   free
-///
-/// The total is about 4s, and the tolerance is >=3s.
-///
-/// Each connection sends `ApiVersions` and waits for the response. The accept
-/// loop therefore finishes the throttle sleep for that connection before the
-/// test opens the next one. The OS backlog alone would complete the TCP
-/// handshake immediately and measure no throttle time.
+/// | connection | expected |
+/// |---|---|
+/// | first from `127.0.0.1` | served, `ApiVersions` answers |
+/// | second from `127.0.0.1`, inside the window | closed without a response |
+/// | from `127.0.0.2`, while the second is held | served with no added delay |
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn connection_creation_rate_throttles_accept() {
+async fn connection_creation_rate_closes_the_throttled_connection() {
     let (handle, _dir, addr) = start_single_broker_plaintext().await;
 
-    // Seed rate=1 connection/sec for 127.0.0.1 directly into the image.
     let rec = krabka_metadata::MetadataRecord::V1ClientQuota(krabka_metadata::ClientQuotaRecord {
         entity: vec![krabka_metadata::QuotaEntity {
             entity_type: "ip".into(),
@@ -123,8 +118,6 @@ async fn connection_creation_rate_throttles_accept() {
         .submit_metadata_record_for_test(rec)
         .await
         .expect("seed quota");
-
-    // Wait until the quota is visible in the image.
     handle
         .wait_for_image(|img| {
             let key: krabka_metadata::EntityKey = vec![("ip".into(), Some("127.0.0.1".into()))];
@@ -135,40 +128,64 @@ async fn connection_creation_rate_throttles_accept() {
         })
         .await;
 
-    // Open 5 connections in sequence. For each connection, send ApiVersions
-    // and wait for the response — this ensures the accept loop has processed
-    // the throttle sleep for that connection before we open the next.
-    // (Without this, the OS TCP backlog completes the SYN-ACK handshake for
-    // all connections immediately and TcpStream::connect returns without
-    // waiting for the accept-side throttle sleep.)
-    let started = std::time::Instant::now();
-    let mut streams = Vec::with_capacity(5);
-    for _ in 0..5 {
-        let mut s = tokio::net::TcpStream::connect(addr).await.expect("connect");
-        // Send ApiVersions v0 (non-flexible) and read the response.
-        // This round-trip blocks until the accept loop has spawned this
-        // connection's handler, which only happens after the throttle sleep.
-        let av_req = ApiVersionsRequest::default();
-        let mut av_body = BytesMut::new();
-        av_req.encode(&mut av_body, 0).expect("encode ApiVersions");
-        round_trip(&mut s, 18, 0, 1, false, &av_body)
-            .await
-            .expect("ApiVersions round-trip");
-        streams.push(s);
-    }
-    let elapsed = started.elapsed();
-    drop(streams);
+    let api_versions = || {
+        let mut body = BytesMut::new();
+        ApiVersionsRequest::default()
+            .encode(&mut body, 0)
+            .expect("encode ApiVersions");
+        body
+    };
+    let connect_from = |source: [u8; 4]| async move {
+        let socket = tokio::net::TcpSocket::new_v4().expect("socket");
+        socket
+            .bind(std::net::SocketAddr::from((source, 0)))
+            .expect("bind source address");
+        socket.connect(addr).await.expect("connect")
+    };
 
-    // Expected: with rate=1 and 1s bucket capacity, connections alternate
-    // between free (bucket refills during the 1s sleep) and throttled.
-    // Pattern: conn1=free, conn2=sleep1s, conn3=free(refilled), conn4=sleep1s,
-    // conn5=free(refilled). Total: 2 sleeps ≈ 2s.
-    // Tolerance: >=1.5s proves the throttle fired. This is stable even with
-    // slight timing variations in the test runner.
+    // Kafka's rate sensor starts empty. The broker's own connections may have
+    // spent this bucket's token, so wait out one refill first.
+    tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+
+    let mut first = connect_from([127, 0, 0, 1]).await;
+    let served = round_trip(&mut first, 18, 0, 1, false, &api_versions()).await;
+    assert!(served.is_ok(), "first connection is served: {served:?}");
+
+    let mut throttled = connect_from([127, 0, 0, 1]).await;
+    let body = api_versions();
+    let throttled_task =
+        tokio::spawn(async move { round_trip(&mut throttled, 18, 0, 2, false, &body).await });
+    // Let the accept loop take the throttled connection before the next one.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let started = std::time::Instant::now();
+    let mut other = connect_from([127, 0, 0, 2]).await;
+    let other_served = round_trip(&mut other, 18, 0, 3, false, &api_versions()).await;
+    let other_elapsed = started.elapsed();
     assert!(
-        elapsed >= std::time::Duration::from_millis(1500),
-        "expected >=1.5s of throttle, got {elapsed:?}"
+        other_served.is_ok(),
+        "another ip is served: {other_served:?}"
     );
+    assert!(
+        other_elapsed < std::time::Duration::from_millis(500),
+        "another ip waits for no throttle, took {other_elapsed:?}"
+    );
+
+    let refused = tokio::time::timeout(std::time::Duration::from_secs(5), throttled_task)
+        .await
+        .expect("the throttled connection closes after the throttle")
+        .expect("round-trip task");
+    // The broker closes the socket with the request unread, so the client sees
+    // an end of stream or, when the kernel answers the unread bytes with a
+    // reset, a reset.
+    assert!(
+        refused.as_ref().is_err_and(|error| matches!(
+            error.kind(),
+            std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
+        )),
+        "the throttled connection closes without a response: {refused:?}"
+    );
+    drop((first, other));
 }
 
 /// Test 3: no `connection_creation_rate` quota is configured. The test opens 5

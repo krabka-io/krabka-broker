@@ -115,6 +115,7 @@ mod tests {
 
     #[test]
     fn pending_frontier_is_exact_contiguous_and_bounded() {
+        assert!(wal_reservation_frontier(0, 0, 1) == Some(1));
         assert!(wal_reservation_frontier(10, 10, 3) == Some(13));
         assert!(wal_reservation_frontier(10, 9, 3).is_none());
         assert!(wal_reservation_frontier(10, 11, 3).is_none());
@@ -131,6 +132,7 @@ mod tests {
 
     #[test]
     fn response_admission_binds_identity_epoch_and_exact_range() {
+        assert!(wal_reservation_response(true, 0, 0, 0, 0, 1) == Some(0));
         assert!(wal_reservation_response(true, 7, 7, 7, 11, 3) == Some(11));
         assert!(wal_reservation_response(true, -1, -1, 7, 11, 3) == Some(11));
         for rejected in [

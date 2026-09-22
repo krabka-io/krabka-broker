@@ -115,6 +115,20 @@ mod tests {
             expiry_ms: 100,
         };
         assert2::check!(jwks_cache_admission(fresh) == JwksCacheDecision::Admit);
+        assert2::check!(
+            jwks_cache_admission(JwksCacheFacts {
+                expiry_enabled: false,
+                ..fresh
+            }) == JwksCacheDecision::Admit
+        );
+        assert2::check!(
+            jwks_cache_admission(JwksCacheFacts {
+                now_ms: 100,
+                last_successful_fetch_ms: 100,
+                expiry_ms: 0,
+                ..fresh
+            }) == JwksCacheDecision::Admit
+        );
         for rejected in [
             JwksCacheFacts {
                 generation_before: 1,
@@ -125,6 +139,11 @@ mod tests {
                 ..fresh
             },
             JwksCacheFacts {
+                last_successful_fetch_ms: 0,
+                ..fresh
+            },
+            JwksCacheFacts {
+                now_ms: 0,
                 last_successful_fetch_ms: 0,
                 ..fresh
             },
@@ -147,6 +166,29 @@ mod tests {
 
     #[test]
     fn on_demand_limit_is_monotonic_and_overflow_safe() {
+        assert2::check!(
+            jwks_on_demand_refresh_decision(0, 0, 0)
+                == JwksOnDemandDecision::Refresh { next_refresh_ms: 0 }
+        );
+        assert2::check!(
+            jwks_on_demand_refresh_decision(5, 0, 10)
+                == JwksOnDemandDecision::Refresh { next_refresh_ms: 5 }
+        );
+        assert2::check!(
+            jwks_on_demand_refresh_decision(110, 100, 10)
+                == JwksOnDemandDecision::Refresh {
+                    next_refresh_ms: 110
+                }
+        );
+        assert2::check!(
+            jwks_on_demand_refresh_decision(109, 100, 10) == JwksOnDemandDecision::RateLimited
+        );
+        assert2::check!(
+            jwks_on_demand_refresh_decision(-1, 0, 10) == JwksOnDemandDecision::RateLimited
+        );
+        assert2::check!(
+            jwks_on_demand_refresh_decision(100, 0, -1) == JwksOnDemandDecision::RateLimited
+        );
         assert2::check!(
             jwks_on_demand_refresh_decision(100, 0, 10)
                 == JwksOnDemandDecision::Refresh {

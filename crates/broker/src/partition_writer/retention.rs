@@ -43,3 +43,22 @@ pub(super) async fn handle_retention(
     .await;
     let _ = ack.send(result);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::partition_writer::test_support::open_log_with_records;
+
+    #[tokio::test]
+    async fn handle_retention_completes_ack() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = Arc::new(Mutex::new(open_log_with_records(dir.path(), 5)));
+        let log_dir = Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf()));
+        let log_dir_status = LogDirRegistry::default();
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+
+        handle_retention((&log, &log_dir, &log_dir_status), ack_tx).await;
+        let result = ack_rx.await.expect("ack sent");
+        assert2::check!(result.is_ok());
+    }
+}
