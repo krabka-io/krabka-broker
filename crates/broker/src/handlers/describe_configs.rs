@@ -217,8 +217,69 @@ pub(crate) fn handle(
         let resp = DescribeConfigsResponse {
             throttle_time_ms: 0,
             results,
-            ..Default::default()
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         crate::handlers::encode_response(&resp, version)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use assert2::check;
+    use krabka_protocol::{
+        Encode,
+        owned::{
+            describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
+            describe_configs_response::DescribeConfigsResponse,
+        },
+    };
+
+    use super::*;
+    use crate::test_support::{
+        peer, principal, request_context, start_broker_with_authorizer_no_audit as start_broker,
+    };
+
+    #[tokio::test]
+    async fn handle_describes_configs_and_returns_encoded_results() {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let broker = broker_handle.broker_arc_for_test();
+
+        let req = DescribeConfigsRequest {
+            resources: vec![DescribeConfigsResource {
+                resource_type: 4, // BROKER
+                resource_name: broker.config.node_id.0.to_string(),
+                configuration_keys: Some(vec!["node.id".to_string()]),
+                ..Default::default()
+            }],
+            include_synonyms: false,
+            include_documentation: false,
+            ..Default::default()
+        };
+        let mut buf = Vec::new();
+        req.encode(&mut buf, 1).expect("encode request");
+
+        let p = principal("alice");
+        let peer = peer();
+        let ctx = request_context(&p, &peer, "admin");
+
+        let resp_bytes = handle(&broker, 1, 1, &buf, &ctx).expect("handle describe configs");
+        check!(!resp_bytes.is_empty());
+
+        let mut cur = &resp_bytes[..];
+        let resp = DescribeConfigsResponse::decode(&mut cur, 1).expect("decode response");
+        check!(resp.throttle_time_ms == 0);
+        check!(resp.results.len() == 1);
+        check!(resp.results[0].resource_type == 4);
+        check!(resp.results[0].configs.len() == 1);
+        check!(resp.results[0].configs[0].name == "node.id");
+        check!(
+            resp.results[0].configs[0].value.as_deref()
+                == Some(broker.config.node_id.0.to_string().as_str())
+        );
+
+        broker_handle.shutdown().await;
     }
 }
