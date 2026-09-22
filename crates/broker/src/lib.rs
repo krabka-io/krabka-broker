@@ -172,6 +172,7 @@ mod client_metrics;
 /// `acks=all` durability and idempotent producer-state checks.
 #[cfg(test)]
 mod client_server_failover_model;
+pub(crate) mod cluster_id;
 pub mod codes;
 pub mod config;
 pub(crate) mod config_keys;

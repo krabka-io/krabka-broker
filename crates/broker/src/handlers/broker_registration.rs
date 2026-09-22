@@ -2,7 +2,6 @@
 
 use std::collections::HashSet;
 
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use bytes::Bytes;
 use krabka_metadata::{
     AclOperation, BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord, NodeId, ResourceType,
@@ -58,7 +57,7 @@ pub(crate) async fn handle(
     };
     // The checks run in the order of `ClusterControlManager.registerBroker`,
     // so a request with more than one fault gets Kafka's error code.
-    if !cluster_id_matches(&req.cluster_id, image.cluster_id()) {
+    if !crate::cluster_id::matches(&req.cluster_id, image.cluster_id()) {
         return response(version, codes::INCONSISTENT_CLUSTER_ID, -1);
     }
     let incarnation_id = uuid::Uuid::from_bytes(req.incarnation_id.0);
@@ -262,10 +261,6 @@ fn clean_shutdown_proven(
         && crate::clean_shutdown::restart_was_clean(image, node_id, req.previous_broker_epoch)
 }
 
-fn cluster_id_matches(request: &str, cluster_id: uuid::Uuid) -> bool {
-    request == cluster_id.to_string() || request == URL_SAFE_NO_PAD.encode(cluster_id.as_bytes())
-}
-
 fn decode_listeners(listeners: &[Listener]) -> Result<Vec<BrokerEndpoint>, i16> {
     if listeners.is_empty() {
         return Err(codes::INVALID_REGISTRATION);
@@ -399,17 +394,6 @@ mod tests {
     use krabka_protocol::owned::broker_registration_request::Feature;
 
     use super::*;
-
-    #[test]
-    fn accepts_uuid_and_kafka_base64_cluster_ids() {
-        let id = uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
-        assert2::assert!(cluster_id_matches(&id.to_string(), id));
-        assert2::assert!(cluster_id_matches(
-            &URL_SAFE_NO_PAD.encode(id.as_bytes()),
-            id
-        ));
-        assert2::assert!(!cluster_id_matches("different", id));
-    }
 
     #[test]
     fn listener_validation_rejects_duplicates_and_unknown_protocol() {

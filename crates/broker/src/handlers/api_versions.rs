@@ -124,7 +124,7 @@ pub(crate) fn handle<'a>(
         .listener_kind(context.connection_listener_name);
     let metrics = broker.metrics.clone();
     let image = broker.controller.current_image();
-    let expected_cluster_id = image.cluster_id().to_string();
+    let expected_cluster_id = image.cluster_id();
     let expected_node_id = i32::try_from(broker.config.node_id.0).ok();
     Box::pin(async move {
         let mut cur: &[u8] = req_bytes;
@@ -140,7 +140,8 @@ pub(crate) fn handle<'a>(
                 (None, -1) => None,
                 (Some(_), -1) | (None, _) => Some(codes::INVALID_REQUEST),
                 (Some(cluster_id), node_id)
-                    if cluster_id != &expected_cluster_id || Some(node_id) != expected_node_id =>
+                    if !crate::cluster_id::matches(cluster_id, expected_cluster_id)
+                        || Some(node_id) != expected_node_id =>
                 {
                     Some(codes::REBOOTSTRAP_REQUIRED)
                 }

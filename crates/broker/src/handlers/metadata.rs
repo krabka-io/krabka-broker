@@ -15,7 +15,6 @@
 //! `DescribeTopicPartitions` cannot report a replica offline in one column and
 //! leading in another.
 
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
@@ -170,7 +169,7 @@ pub(crate) async fn handle(
         brokers,
         // Kafka's `Uuid.toString()` is URL-safe unpadded base64 of the 16 raw
         // bytes, not `java.util.UUID`'s hyphenated form. See #1042.
-        cluster_id: Some(URL_SAFE_NO_PAD.encode(image.cluster_id().as_bytes())),
+        cluster_id: Some(crate::cluster_id::encode(image.cluster_id())),
         controller_id,
         topics: topics_out,
         cluster_authorized_operations,

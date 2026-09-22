@@ -61,9 +61,10 @@ pub fn replica_key(voter_id: i32, directory_id: WireUuid) -> String {
     format!("ReplicaKey(id={voter_id}, directoryId={directory})")
 }
 
-/// Whether a request's cluster id names this cluster. krabka reports its
-/// cluster id in the hyphenated form, and a Kafka tool may send Kafka's base64
-/// `Uuid` form of the same id, so both match.
+/// Whether a request's cluster id names this cluster. `cluster_id` is
+/// `java.util.UUID`'s hyphenated form, while krabka now reports its cluster
+/// id in Kafka's base64 `Uuid` form (`Metadata`, `DescribeCluster`; see
+/// #1042), so a caller may send either form of the same id, and both match.
 fn names_this_cluster(request_cluster_id: &str, cluster_id: &str) -> bool {
     request_cluster_id == cluster_id
         || uuid::Uuid::parse_str(cluster_id)

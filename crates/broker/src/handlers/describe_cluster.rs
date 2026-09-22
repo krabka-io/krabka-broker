@@ -11,7 +11,6 @@
 //! flag is not set, the field stays at `i32::MIN`, which is Kafka's "not
 //! present" sentinel.
 
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
@@ -157,7 +156,7 @@ pub(crate) async fn handle(
         endpoint_type: req.endpoint_type,
         // Kafka's `Uuid.toString()` is URL-safe unpadded base64 of the 16 raw
         // bytes, not `java.util.UUID`'s hyphenated form. See #1042.
-        cluster_id: URL_SAFE_NO_PAD.encode(image.cluster_id().as_bytes()),
+        cluster_id: crate::cluster_id::encode(image.cluster_id()),
         controller_id,
         brokers,
         cluster_authorized_operations,
@@ -283,7 +282,7 @@ mod tests {
                 codes::NONE,
                 None,
                 1,
-                URL_SAFE_NO_PAD.encode(broker.controller.current_image().cluster_id().as_bytes()),
+                crate::cluster_id::encode(broker.controller.current_image().cluster_id()),
                 i32::MIN,
                 0
             )
