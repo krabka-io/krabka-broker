@@ -261,6 +261,21 @@ mod tests {
     }
 
     #[test]
+    fn leader_and_replicas_reports_installed_state() {
+        let mut s = fresh();
+        let empty: HashSet<NodeId> = HashSet::new();
+        assert!(s.leader_and_replicas() == (None, &empty));
+
+        let replicas = [NodeId(1), NodeId(2), NodeId(3)];
+        s.install_isr(&replicas, &replicas, NodeId(1), now());
+        let expected_replicas: HashSet<NodeId> = replicas.into_iter().collect();
+        assert!(s.leader_and_replicas() == (Some(NodeId(1)), &expected_replicas));
+
+        s.reset_for_leader(NodeId(2));
+        assert!(s.leader_and_replicas() == (Some(NodeId(2)), &expected_replicas));
+    }
+
+    #[test]
     fn install_isr_seeds_non_leader_followers_at_zero() {
         let mut s = fresh();
         let t = now();
