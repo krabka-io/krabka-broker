@@ -65,6 +65,11 @@ enum QuotaReach {
     /// be delayed by the request quota, and the response it waits behind
     /// reports `throttle_time_ms = 0`.
     FallbackAccounted,
+    /// `RequestQuotaPolicy::ApplyFallbackAccounting` on an api that
+    /// [`super::response::buried_throttle_is_reencoded`] names. The dispatch
+    /// loop decodes the response, sets `ThrottleTimeMs` and encodes it again,
+    /// so the client does see the delay.
+    Reencoded,
     /// `RequestQuotaPolicy::InlineExempt`. The ordinary dispatch path never
     /// charges the request quota for this API, so `send_registry_response`
     /// never delays one. The unsupported-version reply path charges every
@@ -84,10 +89,8 @@ enum QuotaReach {
 /// * `OffsetDelete` (47) leads with `ErrorCode`, an int16 that a leading int32
 ///   patch would overwrite. Its throttle is the one that sits at a fixed
 ///   offset, so it alone could be patched by a second, per-API offset table.
-///   That is not worth a second patching mode for one API: the fix that
-///   covers all seven is to set the field on the typed response before
-///   encoding, the way the Produce, Fetch and `ApiVersions` handlers already
-///   do.
+///   The dispatch loop instead decodes these five responses, sets the field
+///   on the typed response, and encodes it again.
 ///
 /// The `reach` column says what that costs on the wire, which is not the same
 /// for all seven -- see [`QuotaReach`].
@@ -98,13 +101,13 @@ enum QuotaReach {
 /// renders, so the page cannot omit a divergence added here; CI regenerates
 /// the page and fails on a diff.
 const THROTTLE_ECHO_DIVERGENCES: &[(ApiKeyCode, ApiVersion, ApiVersion, QuotaReach)] = &[
-    (0, 1, 13, QuotaReach::SelfAccounted),          // Produce
-    (18, 1, 5, QuotaReach::SelfAccounted),          // ApiVersions
-    (38, 1, 3, QuotaReach::UnsupportedVersionOnly), // CreateDelegationToken
-    (39, 1, 2, QuotaReach::UnsupportedVersionOnly), // RenewDelegationToken
-    (40, 1, 2, QuotaReach::UnsupportedVersionOnly), // ExpireDelegationToken
-    (41, 1, 3, QuotaReach::UnsupportedVersionOnly), // DescribeDelegationToken
-    (47, 0, 0, QuotaReach::UnsupportedVersionOnly), // OffsetDelete
+    (0, 1, 13, QuotaReach::SelfAccounted), // Produce
+    (18, 1, 5, QuotaReach::SelfAccounted), // ApiVersions
+    (38, 1, 3, QuotaReach::Reencoded),     // CreateDelegationToken
+    (39, 1, 2, QuotaReach::Reencoded),     // RenewDelegationToken
+    (40, 1, 2, QuotaReach::Reencoded),     // ExpireDelegationToken
+    (41, 1, 3, QuotaReach::Reencoded),     // DescribeDelegationToken
+    (47, 0, 0, QuotaReach::Reencoded),     // OffsetDelete
 ];
 
 /// Encodes `response` at `version` and reports where `ThrottleTimeMs` landed.
@@ -474,6 +477,11 @@ fn recorded_reach_matches_the_dispatch_registry() {
                 .quota_policy();
             let reach = match policy {
                 RequestQuotaPolicy::SelfAccounted => QuotaReach::SelfAccounted,
+                RequestQuotaPolicy::ApplyFallbackAccounting
+                    if super::response::buried_throttle_is_reencoded(api_key) =>
+                {
+                    QuotaReach::Reencoded
+                }
                 RequestQuotaPolicy::ApplyFallbackAccounting => QuotaReach::FallbackAccounted,
                 RequestQuotaPolicy::InlineExempt => QuotaReach::UnsupportedVersionOnly,
             };

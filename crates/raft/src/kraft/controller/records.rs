@@ -209,9 +209,10 @@ mod metadata_record_batch_tests {
 
     #[test]
     fn metadata_record_coordinates_cover_empty_single_and_multiple_batches() {
-        let empty = metadata_record_batch(1, &[]).expect("empty batch");
+        let empty = metadata_record_batch(5, &[]).expect("empty batch");
         check!(empty.records.is_empty());
         check!(empty.last_offset_delta == 0);
+        check!(empty.partition_leader_epoch == 5);
 
         for (blobs, expected_deltas) in [
             (vec![bytes::Bytes::from_static(b"a")], vec![0]),
@@ -224,7 +225,8 @@ mod metadata_record_batch_tests {
                 vec![0, 1, 2],
             ),
         ] {
-            let batch = metadata_record_batch(1, &blobs).expect("metadata batch");
+            let batch = metadata_record_batch(5, &blobs).expect("metadata batch");
+            check!(batch.partition_leader_epoch == 5);
             check!(
                 batch
                     .records
@@ -235,5 +237,14 @@ mod metadata_record_batch_tests {
             );
             check!(batch.last_offset_delta == *expected_deltas.last().expect("non-empty"));
         }
+
+        let control = typed_control_batch(
+            7,
+            &[ControlRecord::KRaftVersion(
+                krabka_protocol::owned::k_raft_version_record::KRaftVersionRecord::default(),
+            )],
+        )
+        .expect("control batch");
+        check!(control.partition_leader_epoch == 7);
     }
 }

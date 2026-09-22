@@ -3,27 +3,24 @@
 //! The coordinator owns the in-memory state map of every `transactional_id`
 //! whose `__transaction_state` partition this broker leads. It persists every
 //! state change as a record in the matching `__transaction_state` partition.
-//! On `Broker::start` it recovers the state by replaying those partitions.
+//! It loads a partition when this broker becomes its leader, and it unloads
+//! the partition when this broker stops leading it (see `leadership`).
 
 use std::{
-    collections::{BTreeSet, HashSet},
-    sync::{
-        Arc, Mutex as StdMutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    collections::BTreeSet,
+    sync::{Arc, Mutex as StdMutex, atomic::AtomicU64},
 };
 
 use dashmap::DashMap;
 use krabka_ids::PartitionIndex;
 use krabka_log::ProducerId;
-use krabka_metadata::MetadataImage;
 use krabka_security::ListenerProtocol;
 use krabka_units::ByteSize;
 use tokio::sync::{Mutex, Notify, RwLock};
 
 use crate::{
     partition_registry::PartitionRegistry,
-    txn::{bootstrap, partitioner::partition_for_tid, state::TxnEntry},
+    txn::{partitioner::partition_for_tid, state::TxnEntry},
 };
 
 /// KIP-98 transactional-id expiry: the decision core and the sweep over the
@@ -33,6 +30,8 @@ pub(crate) mod completion;
 pub(crate) mod expiry;
 #[cfg(any(test, feature = "test-helpers"))]
 pub(crate) mod fanout_gate;
+pub(crate) mod leadership;
+mod load;
 mod markers;
 mod persistence;
 mod pid_index;
@@ -57,17 +56,19 @@ pub(crate) struct TxnCoordinator {
     /// The reaper holds the matching lock across its post-marker recheck and
     /// completion append so no staged writer can slip between them.
     state_partition_writes: Vec<Mutex<()>>,
-    /// Set of `__transaction_state` partition indices this broker leads.
-    leader_partitions: RwLock<HashSet<PartitionIndex>>,
+    /// The newest known leadership of each `__transaction_state` partition.
+    /// [`leadership::apply_image`] orders updates by leader epoch.
+    leader_partitions: RwLock<leadership::StatePartitionLeaders>,
     /// Reverse lookup: `producer_id` → `transactional_id`. The Produce
     /// handler reads it to verify transactional batches (KIP-1319 v2).
     pid_to_tid: DashMap<ProducerId, String>,
     /// Serializes the multi-key PID ownership check and publication after a
     /// durable transaction-state append.
     pid_install: StdMutex<()>,
-    /// Latches a recovery failure so later metadata refreshes cannot restore
-    /// coordinator ownership over a partial or rejected replay image.
-    recovery_valid: AtomicBool,
+    /// Source of [`leadership::LeaderTerm::generation`].
+    next_generation: AtomicU64,
+    /// Wakes the callers of [`Self::wait_for_load`] when a load ends.
+    load_finished: Notify,
     /// Transactional ids whose `Prepare*` record is durable, queued for
     /// [`crate::txn::completion`] by recovery or by a failed request.
     pending_completions: StdMutex<BTreeSet<String>>,
@@ -107,10 +108,11 @@ impl TxnCoordinator {
             recovery_read_max,
             state: DashMap::new(),
             state_partition_writes: (0..state_partition_count).map(|_| Mutex::new(())).collect(),
-            leader_partitions: RwLock::new(HashSet::new()),
+            leader_partitions: RwLock::new(leadership::StatePartitionLeaders::new()),
             pid_to_tid: DashMap::new(),
             pid_install: StdMutex::new(()),
-            recovery_valid: AtomicBool::new(true),
+            next_generation: AtomicU64::new(0),
+            load_finished: Notify::new(),
             pending_completions: StdMutex::new(BTreeSet::new()),
             completion_requested: Notify::new(),
             marker_transport: None,
@@ -139,25 +141,23 @@ impl TxnCoordinator {
         self.group_coordinator = Some(group_coordinator);
     }
 
-    /// Recomputes which `__transaction_state` partitions this broker leads,
-    /// from the current `MetadataImage`. `recover` calls it, and so does
-    /// every metadata change.
-    pub(crate) async fn refresh_leader_partitions(&self, image: &MetadataImage) {
-        if !self.recovery_valid.load(Ordering::Acquire) {
-            self.leader_partitions.write().await.clear();
-            return;
-        }
-        self.install_leader_partitions(image).await;
-    }
-
-    async fn install_leader_partitions(&self, image: &MetadataImage) {
-        let mut set = HashSet::new();
-        for p in image.partitions_of(bootstrap::TOPIC) {
-            if p.leader == self.node_id {
-                set.insert(PartitionIndex(p.partition));
-            }
-        }
-        *self.leader_partitions.write().await = set;
+    /// Test-only: makes this broker the loaded leader of `partition` without
+    /// an image.
+    #[cfg(test)]
+    pub(crate) async fn lead_state_partition_for_test(&self, partition: PartitionIndex) {
+        self.leader_partitions.write().await.insert(
+            partition,
+            leadership::StatePartitionLeadership {
+                topic_id: uuid::Uuid::nil(),
+                leader_epoch: krabka_metadata::LeaderEpoch(0),
+                term: Some(leadership::LeaderTerm {
+                    generation: self
+                        .next_generation
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                    status: leadership::LoadStatus::Loaded,
+                }),
+            },
+        );
     }
 
     /// Returns the `__transaction_state` partition index responsible for `tid`.
@@ -165,10 +165,38 @@ impl TxnCoordinator {
         PartitionIndex(partition_for_tid(tid, self.num_partitions))
     }
 
-    /// Returns `true` if this broker is the transaction coordinator for `tid`.
+    /// Returns `true` if this broker is the transaction coordinator for `tid`
+    /// and its `__transaction_state` partition is loaded.
     pub(crate) async fn is_coordinator_for(&self, tid: &str) -> bool {
-        let p = self.partition_for(tid);
-        self.leader_partitions.read().await.contains(&p)
+        self.coordinator_error(tid).await.is_none()
+    }
+
+    /// The Kafka error code for a request about `tid`, or `None` when this
+    /// broker coordinates `tid` and its partition is loaded.
+    ///
+    /// The code is `COORDINATOR_LOAD_IN_PROGRESS` while the partition loads,
+    /// and `NOT_COORDINATOR` when this broker does not lead the partition or
+    /// its load failed.
+    pub(crate) async fn coordinator_error(&self, tid: &str) -> Option<i16> {
+        leadership::coordinator_error(self.load_status(self.partition_for(tid)).await)
+    }
+
+    /// The error code for a failed append about `tid`: the coordinator error
+    /// when the coordinator term changed, and `UNKNOWN_SERVER_ERROR`
+    /// otherwise.
+    pub(crate) async fn append_error_code(&self, tid: &str) -> i16 {
+        self.coordinator_error(tid)
+            .await
+            .unwrap_or(crate::codes::UNKNOWN_SERVER_ERROR)
+    }
+
+    /// The load status of `partition`, or `None` when this broker does not
+    /// lead it.
+    pub(crate) async fn load_status(
+        &self,
+        partition: PartitionIndex,
+    ) -> Option<leadership::LoadStatus> {
+        leadership::status(&*self.leader_partitions.read().await, partition)
     }
 
     /// Returns the locked `TxnEntry` for `tid`, or `None` if `tid` is

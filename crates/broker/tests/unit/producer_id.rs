@@ -31,11 +31,16 @@ async fn init_producer_id_without_coordinator_bootstrap_returns_not_coordinator(
     // Without a prior FindCoordinator(TRANSACTION) call, the broker has not
     // yet refreshed its leader_partitions set for __transaction_state, so it
     // cannot confirm it is the coordinator and returns NOT_COORDINATOR (16).
+    // A valid timeout isolates that path: `InitProducerId` now validates
+    // transaction.timeout.ms before the coordinator lookup, and the wire
+    // default of 0 is itself invalid, which would otherwise answer
+    // INVALID_TRANSACTION_TIMEOUT (50) instead of the case this test names.
     let p = support::start().await;
     let r = p
         .client
         .send(InitProducerIdRequest {
             transactional_id: Some("tx-1".into()),
+            transaction_timeout_ms: 60_000,
             ..Default::default()
         })
         .await

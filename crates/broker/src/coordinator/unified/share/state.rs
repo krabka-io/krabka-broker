@@ -22,6 +22,11 @@ pub struct ShareMemberState {
     pub client_host: String,
     pub subscribed_topic_names: HashSet<String>,
     pub member_epoch: i32,
+    /// The member epoch before the last bump, or `-1` before the first one.
+    /// A heartbeat that carries it is accepted, because the response with the
+    /// bumped epoch may have been lost (Kafka's
+    /// `ShareGroupMember.previousMemberEpoch`).
+    pub previous_member_epoch: i32,
     pub assigned_partitions: HashMap<Uuid, Vec<i32>>,
     pub last_seen: Instant,
 }
@@ -41,6 +46,7 @@ impl ShareMemberState {
             client_host: client_host.into(),
             subscribed_topic_names: subs,
             member_epoch: 0,
+            previous_member_epoch: -1,
             assigned_partitions: HashMap::new(),
             last_seen: Instant::now(),
         }
@@ -136,6 +142,33 @@ impl ShareGroupState {
         r
     }
 
+    /// Validates the `member_epoch` of a heartbeat from `member_id`, as Kafka's
+    /// `throwIfShareGroupMemberEpochIsInvalid` does, and returns the member
+    /// epoch that the group holds.
+    ///
+    /// Epoch 0 from a known member is a rejoin. The member epoch and the
+    /// previous member epoch are accepted. Any other epoch gets
+    /// `FENCED_MEMBER_EPOCH`. An unknown member gets `UNKNOWN_MEMBER_ID`.
+    /// This API never answers `STALE_MEMBER_EPOCH`: the share consumer treats
+    /// it as fatal.
+    ///
+    /// # Errors
+    ///
+    /// Returns the wire error code of a refused heartbeat.
+    pub fn validate_member_epoch(&self, member_id: &str, requested_epoch: i32) -> Result<i32, i16> {
+        let Some(member) = self.members.get(member_id) else {
+            return Err(crate::codes::UNKNOWN_MEMBER_ID);
+        };
+        if requested_epoch == 0
+            || requested_epoch == member.member_epoch
+            || requested_epoch == member.previous_member_epoch
+        {
+            Ok(member.member_epoch)
+        } else {
+            Err(crate::codes::FENCED_MEMBER_EPOCH)
+        }
+    }
+
     /// Remove members whose `last_seen` is older than `session_timeout`, and
     /// return the evicted member ids.
     pub fn evict_expired(&mut self, now: Instant, session_timeout: Duration) -> Vec<String> {
@@ -168,7 +201,10 @@ impl ShareGroupState {
     /// that the latest target assignment gave it.
     pub fn advance_member_epoch(&mut self, member_id: &str) {
         if let Some(m) = self.members.get_mut(member_id) {
-            m.member_epoch = self.group_epoch;
+            if m.member_epoch != self.group_epoch {
+                m.previous_member_epoch = m.member_epoch;
+                m.member_epoch = self.group_epoch;
+            }
             if let Some(a) = self.target.per_member.get(member_id) {
                 m.assigned_partitions.clone_from(a);
             }

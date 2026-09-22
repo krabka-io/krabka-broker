@@ -58,6 +58,7 @@ pub use self::{
 };
 pub(crate) use self::{
     eviction::spawn_metric_series_evictor, labels::UNKNOWN_LABEL, phases::RequestPhases,
+    request::QuotaCharge,
 };
 
 /// Shared registry owning every metric the broker emits. Wrapped in

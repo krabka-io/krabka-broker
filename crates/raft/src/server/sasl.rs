@@ -66,6 +66,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn is_sasl_api_matches_handshake_and_authenticate() {
+        check!(is_sasl_api(sasl_handshake_request::API_KEY));
+        check!(is_sasl_api(sasl_authenticate_request::API_KEY));
+        check!(!is_sasl_api(0));
+        check!(!is_sasl_api(-1));
+    }
+
+    #[test]
     fn sasl_requests_get_illegal_sasl_state() {
         for version in sasl_handshake_request::MIN_VERSION..=sasl_handshake_request::MAX_VERSION {
             let mut body = BytesMut::new();

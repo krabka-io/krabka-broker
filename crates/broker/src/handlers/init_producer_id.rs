@@ -40,7 +40,13 @@ use crate::{
     codes,
     error::BrokerError,
     replicator_supervisor::materialize_partition,
+    txn::coordinator::leadership::LoadStatus,
 };
+
+/// How long a transactional `InitProducerId` waits for the load of its
+/// `__transaction_state` partition before it answers
+/// `COORDINATOR_LOAD_IN_PROGRESS`.
+const INIT_LOAD_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 #[tracing::instrument(
     name = "handle_init_producer_id",
@@ -151,22 +157,29 @@ pub(crate) async fn handle(
             if req.keep_prepared_txn && (req.producer_id != -1 || req.producer_epoch != -1) {
                 return encode_err(version, codes::INVALID_REQUEST);
             }
+            // Kafka validates the timeout before the coordinator lookup, so a
+            // broker that does not coordinate the id answers the same code.
+            let txn_timeout = match crate::txn::two_pc::resolve_txn_timeout(
+                req.enable2_pc,
+                req.transaction_timeout_ms,
+                broker.config.transaction_max_timeout.millis_i32(),
+            ) {
+                Ok(timeout) => timeout,
+                Err(error_code) => return encode_err(version, error_code),
+            };
             if (req.enable2_pc || req.keep_prepared_txn) && !txnv.two_phase() {
                 return encode_err(version, codes::UNSUPPORTED_VERSION);
             }
-            coord.refresh_leader_partitions(&image).await;
-
-            // Verify we're the coordinator for this tid.
-            if coord.is_coordinator_for(tid).await {
-                // Ensure the __transaction_state partition for this tid
-                // is materialized on disk. The replicator-supervisor
-                // handles this asynchronously, but we may race with it
-                // when FindCoordinator just bootstrapped the topic in
-                // the same request round-trip. `materialize_partition`
-                // uses `DashMap::entry()` to atomically check-and-insert,
-                // so two concurrent InitProducerId calls for the same
-                // partition cannot both spawn independent writer tasks.
-                let txn_partition = coord.partition_for(tid);
+            drop(coord.refresh_leader_partitions(&image).await);
+            let txn_partition = coord.partition_for(tid);
+            if coord.load_status(txn_partition).await == Some(LoadStatus::Pending) {
+                // This broker leads the `__transaction_state` partition, but
+                // its log is not open yet. The replicator supervisor opens it
+                // asynchronously, and this request can race it when
+                // `FindCoordinator` just created the topic. Open it here, and
+                // refresh again so the load starts. `materialize_partition`
+                // uses `DashMap::entry()` to check and insert atomically, so
+                // two concurrent calls cannot both spawn a writer task.
                 materialize_partition(crate::replicator_supervisor::MaterializePartitionConfig {
                     partitions: &coord.partitions,
                     topic: crate::txn::bootstrap::TOPIC,
@@ -188,31 +201,39 @@ pub(crate) async fn handle(
                     sequencer: None,
                 })
                 .map_err(BrokerError::Txn)?;
-                let txn_timeout = crate::txn::two_pc::resolve_txn_timeout(
-                    req.enable2_pc,
-                    req.transaction_timeout_ms,
-                    broker.config.transaction_min_timeout.millis_i32(),
-                    broker.config.transaction_max_timeout.millis_i32(),
-                );
-                handle_transactional(
-                    &coord,
-                    tid,
-                    txnv,
-                    txn_timeout,
-                    req.enable2_pc,
-                    req.keep_prepared_txn,
-                    // KIP-360: the identity the caller believes it holds. It
-                    // is `(-1, -1)` below v3 and for a first initialisation.
-                    (req.producer_id, req.producer_epoch),
-                )
-                .await?
-            } else {
-                InitProducerIdResponse {
-                    error_code: codes::NOT_COORDINATOR,
-                    producer_id: -1,
-                    producer_epoch: -1,
-                    ..Default::default()
-                }
+                drop(coord.refresh_leader_partitions(&image).await);
+            }
+            // The load of a partition that was just elected usually takes
+            // milliseconds. `InitProducerId` is the first coordinator call of
+            // a producer, so it waits a short time for that load before it
+            // answers `COORDINATOR_LOAD_IN_PROGRESS`. Later calls do not wait.
+            coord.wait_for_load(txn_partition, INIT_LOAD_WAIT).await;
+            if let Some(error_code) = coord.coordinator_error(tid).await {
+                return encode_err(version, error_code);
+            }
+            let handled = handle_transactional(
+                &coord,
+                tid,
+                txnv,
+                txn_timeout,
+                req.enable2_pc,
+                req.keep_prepared_txn,
+                // KIP-360: the identity the caller believes it holds. It
+                // is `(-1, -1)` below v3 and for a first initialisation.
+                (req.producer_id, req.producer_epoch),
+            )
+            .await;
+            match handled {
+                Ok(response) => response,
+                // An append that ends in a newer coordinator term fails. Kafka
+                // answers the coordinator error in that case.
+                Err(error) => match coord.coordinator_error(tid).await {
+                    Some(error_code) => {
+                        tracing::warn!(tid, %error, error_code, "InitProducerId: coordinator term changed");
+                        return encode_err(version, error_code);
+                    }
+                    None => return Err(error),
+                },
             }
         }
     };

@@ -87,3 +87,16 @@ impl SharePartitionLeaderManager {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::manager;
+
+    #[test]
+    fn format_debug_reports_node_id_and_live_partitions() {
+        let mgr = manager();
+        let debug = format!("{mgr:?}");
+        assert2::check!(debug.contains("SharePartitionLeaderManager"));
+        assert2::check!(debug.contains("live_partitions: 0"));
+    }
+}

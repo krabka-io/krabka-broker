@@ -436,6 +436,7 @@ impl BrokerConfig {
                 "default_min_insync_replicas",
                 self.default_min_insync_replicas,
             ),
+            ("num_partitions", self.num_partitions),
             (
                 "share_state_num_partitions",
                 self.share_coordinator.state_topic_num_partitions,
@@ -466,7 +467,6 @@ impl BrokerConfig {
             }
         }
         for (name, value) in [
-            ("transaction_min_timeout", self.transaction_min_timeout),
             ("transaction_max_timeout", self.transaction_max_timeout),
             (
                 "barrier_min_injection_interval",
@@ -484,6 +484,10 @@ impl BrokerConfig {
             (
                 "offsets_topic_replication_factor",
                 self.offsets_topic_replication_factor,
+            ),
+            (
+                "default_replication_factor",
+                self.default_replication_factor,
             ),
             (
                 "transaction_state_replication_factor",

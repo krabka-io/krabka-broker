@@ -34,7 +34,7 @@ jobs:
       MANIFEST: ${{ inputs.manifest || 'qualification/milestone-20.json' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+      - uses: aspect-build/setup-aspect@60664fabf0aa15152c69d0ee72c9a660416c7a36 # 2026.38.2
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
       - name: require completed evidence
@@ -85,7 +85,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+      - uses: aspect-build/setup-aspect@60664fabf0aa15152c69d0ee72c9a660416c7a36 # 2026.38.2
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
       - name: freeze candidate inputs
@@ -135,7 +135,7 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: qualification-input
-      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+      - uses: aspect-build/setup-aspect@60664fabf0aa15152c69d0ee72c9a660416c7a36 # 2026.38.2
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
@@ -184,7 +184,7 @@ jobs:
         with:
           pattern: qualification-*
           path: qualification-downloads
-      - uses: aspect-build/setup-aspect@1ccd1e095c68556648eb5482231283e445e3dc5e # 2026.34
+      - uses: aspect-build/setup-aspect@60664fabf0aa15152c69d0ee72c9a660416c7a36 # 2026.38.2
         with:
           aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
       - name: assemble and validate exact candidate receipts

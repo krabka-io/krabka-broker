@@ -241,6 +241,10 @@ pub struct RuntimeArgs {
     pub partition_writer_queue_depth: Option<PositiveCount>,
     #[arg(long, env = "KRABKA_DEFAULT_MIN_INSYNC_REPLICAS", value_parser = parse_positive_i32)]
     pub default_min_insync_replicas: Option<PositiveI32>,
+    #[arg(long, env = "KRABKA_NUM_PARTITIONS", value_parser = parse_positive_i32)]
+    pub num_partitions: Option<PositiveI32>,
+    #[arg(long, env = "KRABKA_DEFAULT_REPLICATION_FACTOR", value_parser = parse_positive_i16)]
+    pub default_replication_factor: Option<PositiveI16>,
     #[arg(long, env = "KRABKA_FUTURE_LOG_MOVE_READ_CHUNK", value_parser = krabka_units::parse::positive_byte_size)]
     pub future_log_move_read_chunk: Option<ByteSize>,
     #[arg(long, env = "KRABKA_SHARE_STATE_NUM_PARTITIONS", value_parser = parse_positive_i32)]
@@ -271,8 +275,6 @@ pub struct RuntimeArgs {
     pub transaction_state_segment_bytes: Option<ByteSize>,
     #[arg(long, env = "KRABKA_TRANSACTION_STATE_MIN_ISR", value_parser = parse_positive_i32)]
     pub transaction_state_min_isr: Option<PositiveI32>,
-    #[arg(long, env = "KRABKA_TRANSACTION_MIN_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
-    pub transaction_min_timeout: Option<Time>,
     #[arg(long, env = "KRABKA_TRANSACTION_MAX_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub transaction_max_timeout: Option<Time>,
 

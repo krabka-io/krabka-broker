@@ -157,6 +157,10 @@ kafka_codes! {
 
     // Transactional protocol codes.
     INVALID_TXN_STATE = 48;
+    /// `INVALID_TRANSACTION_TIMEOUT` (50): the `InitProducerId` request asked
+    /// for a transaction timeout that is not positive, or that is above
+    /// `transaction.max.timeout.ms`.
+    INVALID_TRANSACTION_TIMEOUT = 50;
     CONCURRENT_TRANSACTIONS = 51;
     /// `TRANSACTION_COORDINATOR_FENCED` (52): the marker came from an older
     /// transaction-coordinator generation than the partition has observed.
@@ -394,8 +398,8 @@ kafka_codes! {
     /// `INCONSISTENT_CLUSTER_ID` (104): the request's `cluster_id` does not
     /// match this cluster's id.
     INCONSISTENT_CLUSTER_ID = 104;
-    /// `UNKNOWN_CONTROLLER_ID` (116): a controller registration names a node
-    /// that is not in the active voter set.
+    /// `UNKNOWN_CONTROLLER_ID` (116): Kafka's "This controller ID is not
+    /// known."
     UNKNOWN_CONTROLLER_ID = 116;
     /// `INVALID_REGISTRATION` (119): a broker/controller registration is
     /// malformed.

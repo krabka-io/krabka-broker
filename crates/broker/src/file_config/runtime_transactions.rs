@@ -41,6 +41,18 @@ impl RuntimeFileConfig {
             default_min_insync_replicas,
             cfg.default_min_insync_replicas
         );
+        // `DescribeConfigs` reports these two as `STATIC_BROKER_CONFIG` when
+        // the operator named them, so the loader records the provenance.
+        if let Some(value) = runtime.num_partitions {
+            cfg.num_partitions = positive_i32("num_partitions", value)?;
+            cfg.static_config_origins.topic_creation.num_partitions = true;
+        }
+        if let Some(value) = runtime.default_replication_factor {
+            cfg.default_replication_factor = positive_i16("default_replication_factor", value)?;
+            cfg.static_config_origins
+                .topic_creation
+                .default_replication_factor = true;
+        }
         set_runtime_size_bytes!(
             runtime,
             future_log_move_read_chunk,
@@ -117,12 +129,6 @@ impl RuntimeFileConfig {
             runtime,
             transaction_state_min_isr,
             cfg.transaction_state_min_isr
-        );
-        set_runtime_time_millis!(
-            runtime,
-            transaction_min_timeout,
-            cfg.transaction_min_timeout,
-            positive_i32
         );
         set_runtime_time_millis!(
             runtime,

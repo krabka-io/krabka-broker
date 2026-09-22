@@ -422,6 +422,12 @@ pub struct RuntimeFileConfig {
     /// Broker default for a topic's `min.insync.replicas`, Kafka's
     /// `min.insync.replicas`. A topic override wins over it.
     pub default_min_insync_replicas: Option<i32>,
+    /// Partition count of a topic that `CreateTopics` creates with
+    /// `num_partitions = -1`, Kafka's `num.partitions`.
+    pub num_partitions: Option<i32>,
+    /// Replication factor of a topic that `CreateTopics` creates with
+    /// `replication_factor = -1`, Kafka's `default.replication.factor`.
+    pub default_replication_factor: Option<i16>,
     /// Bytes copied per read during a KIP-113 future-log move.
     #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
@@ -480,10 +486,6 @@ pub struct RuntimeFileConfig {
     /// `min.insync.replicas` of the `__transaction_state` internal topic,
     /// Kafka's `transaction.state.log.min.isr`.
     pub transaction_state_min_isr: Option<i32>,
-    /// Minimum transaction timeout a producer may request.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
-    pub transaction_min_timeout: Option<Time>,
     /// Maximum transaction timeout a producer may request, Kafka's
     /// `transaction.max.timeout.ms`.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]

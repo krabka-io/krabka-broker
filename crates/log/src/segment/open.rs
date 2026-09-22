@@ -298,6 +298,7 @@ mod tests {
                 .unwrap();
         assert2::assert!(seg.last_offset() == Offset(4));
         assert2::assert!(seg.log_size == valid_size);
+        assert2::assert!(std::fs::metadata(&log_path).unwrap().len() == valid_size);
         assert2::assert!(seg.offset_index.entry_count() == 2);
         assert2::assert!(seg.time_index.entry_count() == 2);
         assert2::assert!(u64::from(seg.offset_index.lookup(999)) < valid_size);
@@ -311,7 +312,16 @@ mod tests {
                 .unwrap();
         assert2::assert!(retry.last_offset() == Offset(4));
         assert2::assert!(retry.log_size == valid_size);
+        assert2::assert!(std::fs::metadata(&log_path).unwrap().len() == valid_size);
         assert2::assert!(retry.offset_index.entry_count() == 2);
         assert2::assert!(retry.time_index.entry_count() == 2);
+    }
+
+    #[test]
+    fn unvalidated_open_reports_last_offset_as_base_minus_one() {
+        let dir = tempdir().unwrap();
+        Segment::create(dir.path(), Offset(10)).unwrap();
+        let seg = Segment::open(dir.path(), Offset(10)).unwrap();
+        assert2::assert!(seg.last_offset() == Offset(9));
     }
 }

@@ -42,13 +42,13 @@ krabka-protocol = { version = "0.4.0", default-features = false }
 krabka-security = { workspace = true }
 krabka-units = { workspace = true }
 derive_more = { workspace = true }
-exponential-backoff = "2.1.0"
+exponential-backoff = "2.1.1"
 futures = "0.3"
 hdrhistogram = { version = "7.6", default-features = false }
 # The failover scenario deletes a broker Pod and watches the cluster recover,
 # so the driver talks to the Kubernetes API directly.
 k8s-openapi = { version = "0.28", default-features = false, features = ["v1_32"] }
-kube = { version = "4.0", default-features = false, features = ["client", "runtime", "derive", "rustls-tls"] }
+kube = { version = "4.2", default-features = false, features = ["client", "runtime", "derive", "rustls-tls"] }
 num-traits = { workspace = true }
 # HTML/Plotly.js graph rendering for the benchmark report. Default features
 # only. `kaleido` and static export pull a native browser binary this does not

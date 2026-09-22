@@ -112,8 +112,10 @@ pub async fn init_transaction(
         if response.error_code == 0 {
             return (response.producer_id, response.producer_epoch);
         }
+        // COORDINATOR_LOAD_IN_PROGRESS, COORDINATOR_NOT_AVAILABLE and
+        // NOT_COORDINATOR are the answers of a coordinator that is not ready.
         assert!(
-            response.error_code == 15 || response.error_code == 16,
+            matches!(response.error_code, 14..=16),
             "InitProducerId: {response:?}"
         );
         assert!(

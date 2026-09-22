@@ -4,13 +4,18 @@
 
 use krabka_protocol::owned::create_topics_request::CreateTopicsRequest;
 
-pub(super) fn mutation_count(request: &CreateTopicsRequest) -> u64 {
+use super::resolve_default;
+
+pub(super) fn mutation_count(request: &CreateTopicsRequest, default_num_partitions: i32) -> u64 {
     request
         .topics
         .iter()
         .map(|topic| {
             if topic.assignments.is_empty() {
-                u64::try_from(topic.num_partitions.max(1)).expect("mutation count is positive")
+                // KIP-464: -1 creates `num.partitions` partitions, and Kafka's
+                // `validateTotalNumberOfPartitions` counts it that way.
+                let count = resolve_default(topic.num_partitions, default_num_partitions);
+                u64::try_from(count.max(1)).expect("mutation count is positive")
             } else {
                 u64::try_from(topic.assignments.len()).unwrap_or(u64::MAX)
             }
