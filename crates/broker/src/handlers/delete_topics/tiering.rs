@@ -75,3 +75,132 @@ pub(super) fn spawn_remote_cascades(broker: &Broker, tiered_to_cascade: Vec<Topi
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use assert2::check;
+    use krabka_ids::LeaderEpoch;
+    use krabka_log::{Log, LogConfig};
+    use krabka_remote_storage::{
+        RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentMetadataUpdate,
+        RemoteLogSegmentState,
+    };
+    use uuid::Uuid;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn tiered_partitions_and_spawn_remote_cascades() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let remote_dir = tempfile::tempdir().expect("remote tempdir");
+        let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        config.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
+            dir: remote_dir.path().to_path_buf(),
+        });
+        config.remote_log_metadata = crate::config::RlmmKind::InMemory;
+        let handle = crate::broker::Broker::start(config)
+            .await
+            .expect("start broker");
+        let broker = handle.broker_arc_for_test();
+
+        let topic_id = Uuid::new_v4();
+        let mut image = krabka_metadata::MetadataImage::new(topic_id);
+        image.apply(&krabka_metadata::MetadataRecord::V1Topic(
+            krabka_metadata::TopicRecord {
+                name: "tiered_topic".into(),
+                topic_id,
+                partitions: 1,
+                replication_factor: 1,
+            },
+        ));
+
+        let part_dir = dir.path().join("tiered_topic-0");
+        std::fs::create_dir_all(&part_dir).unwrap();
+        let log = Log::open(
+            &part_dir,
+            LogConfig {
+                remote_storage_enable: true,
+                ..LogConfig::default()
+            },
+        )
+        .unwrap();
+        let part = crate::broker::spawn_partition(
+            "tiered_topic".to_string(),
+            PartitionIndex(0),
+            dir.path().to_path_buf(),
+            log,
+            broker.log_dir_status.clone(),
+            broker.producer_state.clone(),
+            false,
+        );
+        broker.partitions.insert(
+            std::sync::Arc::from("tiered_topic"),
+            PartitionIndex(0),
+            part,
+        );
+
+        let tiered = tiered_partitions(
+            &broker,
+            &broker.partitions,
+            &image,
+            "tiered_topic",
+            &[PartitionIndex(0)],
+        );
+        check!(tiered.len() == 1);
+        check!(tiered[0].topic_id == topic_id);
+        check!(tiered[0].partition == 0);
+
+        let reader = broker.remote_reader.as_ref().unwrap();
+        let seg = RemoteLogSegmentMetadata::new(
+            RemoteLogSegmentId::new(tiered[0].clone(), Uuid::from_u128(100)),
+            0,
+            10,
+            100,
+            1,
+            100,
+            krabka_remote_storage::RemoteLogSegmentDetails::new(
+                1024,
+                RemoteLogSegmentState::CopySegmentStarted,
+                BTreeMap::from([(LeaderEpoch(0), 0)]),
+            ),
+        )
+        .unwrap();
+        reader.rlmm.add_remote_log_segment_metadata(seg).unwrap();
+        let upd = RemoteLogSegmentMetadataUpdate {
+            remote_log_segment_id: RemoteLogSegmentId::new(tiered[0].clone(), Uuid::from_u128(100)),
+            event_timestamp_ms: 101,
+            custom_metadata: None,
+            state: RemoteLogSegmentState::CopySegmentFinished,
+            broker_id: 1,
+        };
+        reader.rlmm.update_remote_log_segment_metadata(upd).unwrap();
+        check!(
+            !reader
+                .rlmm
+                .list_remote_log_segments(&tiered[0])
+                .unwrap()
+                .is_empty()
+        );
+
+        spawn_remote_cascades(&broker, tiered.clone());
+
+        let mut cleared = false;
+        for _ in 0..50 {
+            if reader
+                .rlmm
+                .list_remote_log_segments(&tiered[0])
+                .unwrap()
+                .is_empty()
+            {
+                cleared = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        check!(cleared);
+
+        handle.shutdown().await;
+    }
+}
