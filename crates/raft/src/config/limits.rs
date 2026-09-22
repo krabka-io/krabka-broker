@@ -221,5 +221,8 @@ mod tests {
             MetadataRaftFetchMax::try_from(ByteSize::from_bytes_i64(i64::from(i32::MAX) + 1))
                 .is_err()
         );
+        check!(format!("{}", ControllerFetchMissLimit::default()) == "3");
+        check!(format!("{}", MetadataRaftCommandQueueCapacity::default()) == "256");
+        check!(format!("{}", MetadataRaftFetchMax::default()) == "8MiB");
     }
 }

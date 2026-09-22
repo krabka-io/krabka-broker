@@ -259,4 +259,12 @@ mod tests {
         let error = log.emit_required(life(1)).await.unwrap_err();
         check!(error.to_string().contains("queue is full"));
     }
+
+    #[test]
+    fn mode_returns_configured_mode() {
+        let (closed, _rx) = AuditLog::new_with_mode(1, AuditMode::FailClosed);
+        check!(closed.mode() == AuditMode::FailClosed);
+        let (open, _rx) = AuditLog::new_with_mode(1, AuditMode::FailOpen);
+        check!(open.mode() == AuditMode::FailOpen);
+    }
 }

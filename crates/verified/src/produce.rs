@@ -96,6 +96,7 @@ mod tests {
 
     #[test]
     fn durability_frontier_is_exact_and_fail_closed() {
+        assert2::assert!(produce_durability_frontier(0, 0) == Some(1));
         assert2::assert!(produce_durability_frontier(10, 2) == Some(13));
         assert2::assert!(produce_durability_frontier(-1, 0).is_none());
         assert2::assert!(produce_durability_frontier(10, -1).is_none());
@@ -108,6 +109,8 @@ mod tests {
         use ProduceBatchAdmission::{Admit, InvalidRecord, InvalidTimestamp};
 
         assert2::assert!(produce_batch_admission(0, 0, 1, false, -1, -1, true) == Admit);
+        assert2::assert!(produce_batch_admission(0, 1, 2, false, 7, 0, true) == Admit);
+        assert2::assert!(produce_batch_admission(0, 0, 2, false, -1, -1, true) == InvalidRecord);
         assert2::assert!(produce_batch_admission(1, 0, 1, false, -1, -1, true) == InvalidRecord);
         assert2::assert!(produce_batch_admission(0, -1, 0, false, -1, -1, true) == InvalidRecord);
         assert2::assert!(

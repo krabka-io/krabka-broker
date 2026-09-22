@@ -165,6 +165,14 @@ pub(crate) fn handle(
             offsets_retention_check_interval: broker
                 .config
                 .offsets_retention_check_interval_override,
+            num_partitions: origins
+                .topic_creation
+                .num_partitions
+                .then_some(broker.config.num_partitions),
+            default_replication_factor: origins
+                .topic_creation
+                .default_replication_factor
+                .then_some(broker.config.default_replication_factor),
             connections_max_idle: broker.config.connections_max_idle,
             connections_max_idle_overrides: &broker.config.connections_max_idle_overrides,
         };

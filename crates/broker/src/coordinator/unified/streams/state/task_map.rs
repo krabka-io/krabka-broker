@@ -1,9 +1,8 @@
 //! Arithmetic over a role's task map, the `BTreeMap` from `subtopology_id` to
 //! a sorted, deduped partition list.
 //!
-//! Both functions here are pure and total. The state machine calls them to
-//! normalize an incoming assignment and to compute the revoke-before-assign
-//! split for a member's active tasks.
+//! The function here is pure and total. The state machine calls it to
+//! normalize an assignment.
 
 use std::collections::BTreeMap;
 
@@ -18,30 +17,6 @@ pub(super) fn normalize_task_map(
         !parts.is_empty()
     });
     map
-}
-
-/// Splits a member's currently-owned active tasks against its new active
-/// target. The function *keeps* tasks that are in both, and *revokes* tasks
-/// the member owns that the target no longer holds. It normalizes both halves:
-/// sorted, deduped, and with empty entries dropped.
-pub(super) fn compute_active_revoke_split(
-    current: &BTreeMap<String, Vec<i32>>,
-    target: &BTreeMap<String, Vec<i32>>,
-) -> (BTreeMap<String, Vec<i32>>, BTreeMap<String, Vec<i32>>) {
-    let mut revoke: BTreeMap<String, Vec<i32>> = BTreeMap::new();
-    let mut keep: BTreeMap<String, Vec<i32>> = BTreeMap::new();
-    for (sub, parts) in current {
-        let target_set: std::collections::HashSet<i32> =
-            target.get(sub).into_iter().flatten().copied().collect();
-        for &p in parts {
-            if target_set.contains(&p) {
-                keep.entry(sub.clone()).or_default().push(p);
-            } else {
-                revoke.entry(sub.clone()).or_default().push(p);
-            }
-        }
-    }
-    (normalize_task_map(keep), normalize_task_map(revoke))
 }
 
 #[cfg(test)]

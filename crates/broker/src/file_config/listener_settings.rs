@@ -23,6 +23,49 @@ pub(super) struct ListenerSettings {
     pub(super) tls_config: Option<FileTlsConfig>,
 }
 
+/// KIP-464: `num.partitions` and `default.replication.factor` under their
+/// Kafka names. A dedicated `[runtime]` key or CLI flag wins, so a property
+/// applies only when no dedicated source named the setting. A value that is
+/// not a positive integer refuses the configuration, as Kafka's `ConfigDef`
+/// refuses it at startup.
+fn apply_topic_creation_properties(
+    properties: &std::collections::BTreeMap<String, String>,
+    cfg: &mut crate::config::BrokerConfig,
+) -> Result<(), FileConfigError> {
+    let origins = &mut cfg.static_config_origins.topic_creation;
+    if !origins.num_partitions
+        && let Some(value) = properties.get(crate::config_keys::NUM_PARTITIONS)
+    {
+        cfg.num_partitions = parse_positive(crate::config_keys::NUM_PARTITIONS, value)?;
+        origins.num_partitions = true;
+    }
+    if !origins.default_replication_factor
+        && let Some(value) = properties.get(crate::config_keys::DEFAULT_REPLICATION_FACTOR)
+    {
+        cfg.default_replication_factor =
+            parse_positive(crate::config_keys::DEFAULT_REPLICATION_FACTOR, value)?;
+        origins.default_replication_factor = true;
+    }
+    Ok(())
+}
+
+/// A positive integer `server_properties` value.
+fn parse_positive<T: std::str::FromStr + Default + PartialOrd>(
+    name: &str,
+    value: &str,
+) -> Result<T, FileConfigError> {
+    value
+        .trim()
+        .parse::<T>()
+        .ok()
+        .filter(|parsed| *parsed > T::default())
+        .ok_or_else(|| {
+            FileConfigError::InvalidConfig(format!(
+                "server_properties `{name}` must be a positive integer, got `{value}`"
+            ))
+        })
+}
+
 pub(super) fn apply_listener_settings(
     settings: ListenerSettings,
     cfg: &mut crate::config::BrokerConfig,
@@ -99,6 +142,7 @@ pub(super) fn apply_listener_settings(
         cfg.features.transaction_two_phase_commit_enable =
             value.trim().eq_ignore_ascii_case("true");
     }
+    apply_topic_creation_properties(&settings.server_properties, cfg)?;
     let num_val = settings
         .server_properties
         .get("quota.window.num")
@@ -242,6 +286,80 @@ connections_max_idle = "5s"
         );
         check!(cfg.connections_max_idle_for("EXTERNAL") == Some(Duration::from_secs(5)));
         check!(cfg.connections_max_idle_for("INTERNAL") == Some(Duration::from_secs(45)));
+    }
+
+    /// KIP-464: `num.partitions` and `default.replication.factor` under their
+    /// Kafka names in `[server_properties]`. A dedicated `[runtime]` key wins
+    /// over the property, and a value that is not a positive integer refuses
+    /// the file.
+    #[test]
+    fn apply_to_reads_the_topic_creation_defaults_from_server_properties() {
+        use crate::config::{BrokerConfig, TopicCreationOrigins};
+
+        for (label, src, expected) in [
+            (
+                "neither named",
+                "broker_id = 0\n",
+                Ok((1, 1, TopicCreationOrigins::default())),
+            ),
+            (
+                "both as properties",
+                "[server_properties]\n\"num.partitions\" = \"6\"\n\
+                 \"default.replication.factor\" = \"3\"\n",
+                Ok((
+                    6,
+                    3,
+                    TopicCreationOrigins {
+                        num_partitions: true,
+                        default_replication_factor: true,
+                    },
+                )),
+            ),
+            (
+                "a dedicated key wins over the property",
+                "[runtime]\nnum_partitions = 4\n\
+                 [server_properties]\n\"num.partitions\" = \"6\"\n",
+                Ok((
+                    4,
+                    1,
+                    TopicCreationOrigins {
+                        num_partitions: true,
+                        default_replication_factor: false,
+                    },
+                )),
+            ),
+            (
+                "a zero is refused",
+                "[server_properties]\n\"default.replication.factor\" = \"0\"\n",
+                Err(
+                    "server_properties `default.replication.factor` must be a positive integer, got `0`",
+                ),
+            ),
+            (
+                "a word is refused",
+                "[server_properties]\n\"num.partitions\" = \"many\"\n",
+                Err("server_properties `num.partitions` must be a positive integer, got `many`"),
+            ),
+        ] {
+            let file: FileConfig = toml::from_str(src).expect("parse");
+            let mut cfg = BrokerConfig::default();
+            let result = file.apply_to(&mut cfg).map(|()| {
+                (
+                    cfg.num_partitions,
+                    cfg.default_replication_factor,
+                    cfg.static_config_origins.topic_creation,
+                )
+            });
+            let result = result.map_err(|error| error.to_string());
+
+            check!(
+                result
+                    .as_ref()
+                    .map_err(|message| message.contains(expected.err().unwrap_or("-")))
+                    == expected.as_ref().map_err(|_| true),
+                "{label}: {result:?}"
+            );
+        }
     }
 
     /// Omitted everywhere, the broker keeps Kafka's 600000 default and no

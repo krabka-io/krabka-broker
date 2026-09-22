@@ -33,6 +33,10 @@ pub(super) struct EffectivePartition {
     /// with session-cached partitions that never set the field.
     pub(super) last_fetched_epoch: i32,
     pub(super) fetch_offset: i64,
+    /// The log start offset the fetcher reports, from Fetch v5. A follower
+    /// sends its own local log start, which the leader's `DeleteRecords`
+    /// waits on. `-1` means "not set".
+    pub(super) log_start_offset: i64,
     pub(super) partition_max_bytes: i32,
 }
 
@@ -116,6 +120,7 @@ pub(super) fn prepare_fetch(
                         current_leader_epoch: partition.current_leader_epoch,
                         last_fetched_epoch: partition.last_fetched_epoch,
                         fetch_offset: partition.fetch_offset,
+                        log_start_offset: partition.log_start_offset,
                         partition_max_bytes: partition.partition_max_bytes,
                     })
                     .collect(),
@@ -220,6 +225,7 @@ fn group_cached_into_effective_topics(
             current_leader_epoch: s.current_leader_epoch,
             last_fetched_epoch: s.last_fetched_epoch,
             fetch_offset: s.fetch_offset,
+            log_start_offset: s.log_start_offset,
             partition_max_bytes: s.max_bytes,
         });
         if !order.contains(&identity) {

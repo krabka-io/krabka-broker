@@ -235,6 +235,7 @@ mod tests {
         krabka_raft::KrabkaMetadataFetchResponse {
             error_code: 0,
             leader_hint: 1,
+            leader_epoch: 3,
             log_start_offset: 0,
             high_watermark,
             quorum_high_watermark,

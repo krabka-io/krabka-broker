@@ -442,6 +442,14 @@ mod tests {
         .expect_err("an uncommitted tail is an error");
         assert2::assert!(matches!(err, RaftError::UncommittedTail));
 
+        // Cluster auth failure maps directly to ClusterAuthorizationFailed
+        let err = translate_submit_change_response(
+            &submit_change_response_bytes(crate::wire::PRIVATE_CLUSTER_AUTHORIZATION_FAILED, -1),
+            NodeId(5),
+        )
+        .expect_err("cluster auth failed");
+        assert2::assert!(matches!(err, RaftError::ClusterAuthorizationFailed));
+
         // Any other code collapses to NotLeader, taking the response's
         // leader_hint when non-negative.
         let err = translate_submit_change_response(&submit_change_response_bytes(1, 9), NodeId(5))
@@ -542,5 +550,76 @@ mod tests {
         .await
         .expect_err("network error");
         assert2::assert!(matches!(err, RaftError::Network(_)));
+    }
+
+    #[test]
+    fn encode_delegation_token_mutation_body_frames_mutations() {
+        use krabka_metadata::DelegationTokenRecord;
+        use krabka_security::KafkaPrincipal;
+
+        let rec = DelegationTokenRecord {
+            token_id: "tok".into(),
+            owner: KafkaPrincipal {
+                principal_type: "User".into(),
+                name: "alice".into(),
+            },
+            issue_timestamp_ms: 10,
+            max_timestamp_ms: 20,
+            expiry_timestamp_ms: 15,
+            renewers: vec![],
+            hmac: vec![1, 2, 3],
+        };
+        let mutations = vec![crate::DelegationTokenMutation::Delete { expected: rec }];
+        let body = encode_delegation_token_mutation_body(&mutations).expect("encode");
+        assert2::assert!(body.len() > 10);
+        let mut cur: &[u8] = &body;
+        let req =
+            crate::wire::KrabkaSubmitChangeRequest::decode_v0(&mut cur).expect("decode frame");
+        let decoded = <serde_wincode::SerdeCompat<
+            Vec<crate::DelegationTokenMutation>,
+        > as wincode::Deserialize>::deserialize(&req.records)
+        .expect("wincode decode");
+        assert2::assert!(decoded == mutations);
+    }
+
+    #[tokio::test]
+    async fn controller_handle_voter_addr_resolves_known_voter() {
+        use tempfile::TempDir;
+
+        use crate::{config::ControllerConfig, controller::Controller};
+
+        let dir = TempDir::new().unwrap();
+        let cfg = ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf());
+        let ctrl = Controller::start(cfg).await.expect("start");
+        let addr = ctrl.voter_addr(NodeId(1));
+        assert2::assert!(addr == Some("127.0.0.1:0".to_string()));
+        assert2::assert!(ctrl.voter_addr(NodeId(999)).is_none());
+        ctrl.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn submit_delegation_token_mutations_on_join_node_rejects_not_leader() {
+        use tempfile::TempDir;
+
+        use crate::{
+            config::{BootstrapMode, ControllerConfig},
+            controller::Controller,
+        };
+
+        let dir = TempDir::new().unwrap();
+        let cfg = ControllerConfig {
+            bootstrap_mode: BootstrapMode::Join,
+            initial_voters: krabka_metadata::VoterSet::from_voters(std::iter::empty()),
+            ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
+        };
+        let ctrl = Controller::start(cfg).await.expect("join start");
+        let res = ctrl.submit_delegation_token_mutations(vec![]).await;
+        assert2::assert!(matches!(
+            res,
+            Err(RaftError::NotLeader {
+                current_leader: None
+            })
+        ));
+        ctrl.shutdown().await;
     }
 }

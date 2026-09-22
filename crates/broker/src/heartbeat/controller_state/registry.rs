@@ -92,6 +92,9 @@ pub(crate) struct ControllerLivenessState {
     /// Serializes `BrokerRegistration`: see
     /// [`registration_turn`](Self::registration_turn).
     pub(super) registrations: Mutex<()>,
+    /// The controller term the registry was last seeded for, or `u64::MAX`
+    /// before the first seed. See [`seed_term`](Self::seed_term).
+    pub(super) seeded_term: std::sync::atomic::AtomicU64,
 }
 
 impl ControllerLivenessState {
@@ -102,6 +105,7 @@ impl ControllerLivenessState {
             clock: Clock::Real,
             brokers: Mutex::new(HashMap::new()),
             registrations: Mutex::new(()),
+            seeded_term: std::sync::atomic::AtomicU64::new(u64::MAX),
         }
     }
 
@@ -114,6 +118,7 @@ impl ControllerLivenessState {
             clock,
             brokers: Mutex::new(HashMap::new()),
             registrations: Mutex::new(()),
+            seeded_term: std::sync::atomic::AtomicU64::new(u64::MAX),
         }
     }
 

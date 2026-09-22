@@ -84,14 +84,22 @@ impl PendingRead {
     }
 }
 
-async fn update_follower_progress(partition: &Partition, follower_id: i32, fetch_offset: i64) {
+async fn update_follower_progress(
+    partition: &Partition,
+    follower_id: i32,
+    request: &EffectivePartition,
+) {
     let leader_leo = partition.log_end_offset();
+    let follower = krabka_metadata::NodeId(u64::try_from(follower_id).unwrap_or(0));
     let advanced = {
         let mut state = partition.replica_state.lock().await;
         let previous = state.hw;
+        // Kafka's `Replica.updateFetchStateOrThrow` records the follower's log
+        // start offset with its fetch offset. A `DeleteRecords` waits for it.
+        state.record_follower_log_start(follower, Offset(request.log_start_offset));
         state.update_follower_leo(
-            krabka_metadata::NodeId(u64::try_from(follower_id).unwrap_or(0)),
-            Offset(fetch_offset),
+            follower,
+            Offset(request.fetch_offset),
             leader_leo,
             std::time::Instant::now(),
         ) > previous
@@ -430,7 +438,7 @@ pub(super) async fn plan_partition_read(
     if context.mode.1
         && let Some(partition) = partition.as_ref()
     {
-        update_follower_progress(partition, context.follower_id, request.fetch_offset).await;
+        update_follower_progress(partition, context.follower_id, request).await;
     }
     if partition.is_none() || topic_name.is_empty() {
         let output = refused_partition(request.partition, codes::UNKNOWN_TOPIC_OR_PARTITION);
@@ -629,6 +637,7 @@ mod tests {
             current_leader_epoch: -1,
             last_fetched_epoch: -1,
             fetch_offset: 0,
+            log_start_offset: -1,
             partition_max_bytes: 1024,
         };
 

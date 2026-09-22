@@ -332,36 +332,52 @@ async fn share_state_rpcs_need_cluster_action() {
     })
     .await;
     let broker = handle.broker_arc_for_test();
-    // A real `__share_group_state` topic that this broker leads, so the
-    // leadership that the metadata reconcile loop computes stays in place
-    // while the steps run.
-    let state_partitions = broker.share_coordinator.state_topic_num_partitions();
-    crate::share_coordinator::bootstrap::ensure_topic(
-        &broker.controller,
-        state_partitions,
-        broker.share_coordinator.state_topic_replication_factor(),
-        &broker.share_coordinator.state_topic_configs(),
-    )
-    .await
-    .expect("create __share_group_state");
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        while !(0..state_partitions).all(|partition| {
-            broker.partitions.contains(
-                crate::share_coordinator::bootstrap::TOPIC,
-                krabka_ids::PartitionIndex(partition),
-            )
-        }) {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    // The data topics that the requests name. The share coordinator refuses a
+    // read or a write of a topic partition that the metadata image does not
+    // hold.
+    let mut data_topics = Vec::new();
+    for (index, topic_id) in TOPICS.iter().enumerate() {
+        let name = format!("share-authorized-{index}");
+        data_topics.push(krabka_metadata::MetadataRecord::V1Topic(
+            krabka_metadata::TopicRecord {
+                name: name.clone(),
+                topic_id: uuid::Uuid::from_bytes(topic_id.0),
+                partitions: 2,
+                replication_factor: 1,
+            },
+        ));
+        for partition in PARTITIONS {
+            data_topics.push(krabka_metadata::MetadataRecord::V1Partition(
+                krabka_metadata::PartitionRecord {
+                    topic: name.clone(),
+                    partition,
+                    leader: broker.config.node_id,
+                    replicas: vec![broker.config.node_id],
+                    isr: vec![broker.config.node_id],
+                    leader_epoch: krabka_metadata::LeaderEpoch(0),
+                    adding_replicas: vec![],
+                    removing_replicas: vec![],
+                    directories: vec![],
+                    partition_epoch: 0,
+                },
+            ));
         }
-    })
-    .await
-    .expect("every __share_group_state partition opens on this broker");
+    }
     broker
-        .share_coordinator
-        .refresh_leader_partitions(&broker.controller.current_image())
+        .controller
+        .submit_change(data_topics)
         .await
-        .finished()
-        .await;
+        .expect("create the data topics");
+    // A real `__share_group_state` topic that this broker leads, loaded to
+    // completion. The broker's metadata reconcile loop also refreshes the
+    // share coordinator's leadership on every image change and does not wait
+    // for the load it starts. A single explicit `refresh_leader_partitions`
+    // call here can lose that race: the reconcile loop's own call can already
+    // have claimed the leadership change and started the background load, so
+    // this call's `finished()` sees no load of its own to wait for and
+    // returns before the load ends. Poll for `LoadStatus::Active`, the way
+    // every other live-broker share-coordinator test waits.
+    super::test_support::lead_share_state_partitions(&broker).await;
 
     let initialized = || {
         Response::Initialize(every_partition!(

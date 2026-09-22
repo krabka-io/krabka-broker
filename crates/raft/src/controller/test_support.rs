@@ -74,9 +74,10 @@ pub(super) async fn bind_eventually(addr: SocketAddr) -> tokio::net::TcpListener
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(super) struct RecordingDialer {
     pub(super) client_ids: Arc<std::sync::Mutex<Vec<String>>>,
+    pub(super) options: Arc<std::sync::Mutex<Vec<krabka_client_core::ConnectionOptions>>>,
 }
 
 #[async_trait::async_trait]
@@ -91,6 +92,7 @@ impl OutboundDialer for RecordingDialer {
             .lock()
             .unwrap()
             .push(options.client_id.clone());
+        self.options.lock().unwrap().push(options.clone());
         let sock = tokio::net::lookup_host(addr)
             .await
             .map_err(krabka_client_core::ClientError::Io)?

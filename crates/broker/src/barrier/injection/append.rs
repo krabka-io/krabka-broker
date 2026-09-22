@@ -65,3 +65,40 @@ pub(crate) async fn append_marker(
     let batch = build_barrier_batch(marker, partition.log_end_offset(), expected_epoch);
     Ok(partition.produce_control_batch(batch).await?)
 }
+
+#[cfg(test)]
+mod tests {
+    use krabka_ids::PartitionIndex;
+
+    use super::*;
+    use crate::{barrier::test_support::open_partition, partition_registry::PartitionRegistry};
+
+    #[tokio::test]
+    async fn append_marker_appends_when_fencing_matches_and_fences_when_mismatched() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = PartitionRegistry::new();
+        open_partition(&registry, dir.path(), "test-barrier", 0);
+        let partition = registry.get("test-barrier", PartitionIndex(0)).unwrap();
+
+        partition.install_leader_change(1, 5).await;
+
+        let marker = BarrierMarker {
+            group: "bg-1".into(),
+            epoch: 1,
+            triggered_at: 1000,
+        };
+
+        let err = append_marker(&partition, &marker, NodeId(1), 4).await;
+        assert2::check!(matches!(err, Err(MarkerAppendError::Fence(_))));
+
+        let off1 = append_marker(&partition, &marker, NodeId(1), 5)
+            .await
+            .expect("first append");
+        assert2::check!(off1 == Offset(0));
+
+        let off2 = append_marker(&partition, &marker, NodeId(1), 5)
+            .await
+            .expect("second append");
+        assert2::check!(off2 == Offset(1));
+    }
+}

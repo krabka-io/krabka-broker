@@ -130,10 +130,33 @@ async fn pending_offset_reservations_are_contiguous_before_commit() {
     .unwrap();
     create.await.unwrap().unwrap();
 
+    let create_other_ctrl = ctrl.clone();
+    let create_other =
+        tokio::spawn(async move { create_other_ctrl.submit_change(topic_record("other")).await });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    let qs = ctrl.quorum_state().await.unwrap();
+    ctrl.inject_event(Event::ReceiveFetch {
+        from: NodeId(2),
+        fetch_epoch: qs.leader_epoch,
+        fetch_offset: qs.log_end_offset,
+    })
+    .await
+    .unwrap();
+    create_other.await.unwrap().unwrap();
+
     let advance = |count| {
         vec![MetadataRecord::V1PartitionOffsetAdvance(
             PartitionOffsetAdvanceRecord {
                 topic: "topic".to_string(),
+                partition: 0,
+                count,
+            },
+        )]
+    };
+    let advance_other = |count| {
+        vec![MetadataRecord::V1PartitionOffsetAdvance(
+            PartitionOffsetAdvanceRecord {
+                topic: "other".to_string(),
                 partition: 0,
                 count,
             },
@@ -144,6 +167,9 @@ async fn pending_offset_reservations_are_contiguous_before_commit() {
     tokio::time::sleep(StdDuration::from_millis(20)).await;
     let second_ctrl = ctrl.clone();
     let second = tokio::spawn(async move { second_ctrl.submit_change(advance(5)).await });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    let third_ctrl = ctrl.clone();
+    let third = tokio::spawn(async move { third_ctrl.submit_change(advance_other(4)).await });
     tokio::time::sleep(StdDuration::from_millis(20)).await;
 
     let qs = ctrl.quorum_state().await.unwrap();
@@ -157,13 +183,18 @@ async fn pending_offset_reservations_are_contiguous_before_commit() {
 
     let first = first.await.unwrap().unwrap();
     let second = second.await.unwrap().unwrap();
+    let third = third.await.unwrap().unwrap();
     assert!(first.offset_reservations[0].base_offset == 0);
     assert!(first.offset_reservations[0].count == 3);
     assert!(first.offset_reservations[0].leader_epoch == u64::from(qs.leader_epoch));
     assert!(second.offset_reservations[0].base_offset == 3);
     assert!(second.offset_reservations[0].count == 5);
     assert!(second.offset_reservations[0].leader_epoch == u64::from(qs.leader_epoch));
+    assert!(third.offset_reservations[0].base_offset == 0);
+    assert!(third.offset_reservations[0].count == 4);
+    assert!(third.offset_reservations[0].leader_epoch == u64::from(qs.leader_epoch));
     assert!(ctrl.current_image().partition_next_offset("topic", 0) == Some(8));
+    assert!(ctrl.current_image().partition_next_offset("other", 0) == Some(4));
     ctrl.shutdown().await;
 }
 

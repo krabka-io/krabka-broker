@@ -51,6 +51,37 @@ pub(super) enum RowAction {
     Backoff(Time),
 }
 
+/// Raise this follower's log start offset to the leader's, as Kafka's
+/// `ReplicaFetcherThread.processPartitionData` does with
+/// `maybeIncrementLogStartOffset(leaderLogStartOffset)`.
+///
+/// The records below the leader's log start are deleted on the leader, by a
+/// `DeleteRecords` or by retention, so a follower that kept them would serve
+/// them again after a leader change. The new start never passes this
+/// follower's high watermark, which is the bound Kafka's
+/// `UnifiedLog.maybeIncrementLogStartOffset` enforces.
+///
+/// A diskless partition's local log start is the flusher's trim frontier, and
+/// its delete floor travels through the WAL index instead, so it is left
+/// alone here.
+async fn follow_leader_log_start(
+    part: &crate::partition::Partition,
+    cfg: &Config,
+    leader_log_start: i64,
+) {
+    if part.diskless {
+        return;
+    }
+    let target = Offset(leader_log_start).min(part.high_watermark().await);
+    if target <= part.log_start_offset() {
+        return;
+    }
+    if let Err(error) = part.trim_to_offset(target).await {
+        warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error,
+            leader_log_start, "replicator: raising the log start to the leader's failed");
+    }
+}
+
 /// Applies one partition row of a response against the partition it names.
 ///
 /// `part_resp` is taken by *mutable* reference so the record batches can be
@@ -225,6 +256,7 @@ pub(super) async fn handle_partition_response(
                 return RowAction::Drop;
             }
             part.set_follower_hw(Offset(part_resp.high_watermark)).await;
+            follow_leader_log_start(&part, cfg, part_resp.log_start_offset).await;
             RowAction::Continue
         }
 

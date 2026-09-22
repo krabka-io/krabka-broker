@@ -204,4 +204,10 @@ mod tests {
         assert2::assert!(time_index_lookup(&[], 42) == 0);
         assert2::assert!(offset_index_position_at_or_after(&[], 42) == None);
     }
+
+    #[test]
+    fn position_at_or_after_exact_match() {
+        let entries = [(10, 100), (20, 200), (30, 300)];
+        assert2::assert!(offset_index_position_at_or_after(&entries, 20) == Some(200));
+    }
 }

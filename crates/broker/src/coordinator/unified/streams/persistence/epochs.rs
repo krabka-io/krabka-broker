@@ -13,8 +13,8 @@
 //! - `StreamsGroupMetadataValue`: `Epoch` (int32) and `MetadataHash` (int64),
 //!   both plain fields, then the tagged `ValidatedTopologyEpoch` (int32, tag 0,
 //!   default -1) and `LastAssignmentConfigs` (tag 1, nullable, default null).
-//!   The broker keeps none of the three, so it writes the hash as 0 and omits
-//!   both tagged fields, which restores them at their defaults.
+//!   The broker keeps the hash, and it omits both tagged fields, which
+//!   restores them at their defaults.
 //! - `StreamsGroupTargetAssignmentMetadataValue`: `AssignmentEpoch` (int32),
 //!   then the tagged `AssignmentTimestamp` (int64, tag 0, default 0) from
 //!   KIP-1263, also omitted.
@@ -29,14 +29,14 @@ use crate::{
     error::BrokerError,
 };
 
-/// The `MetadataHash` the broker writes. It keeps no subscribed-topic hash of
-/// its own.
-const METADATA_HASH: i64 = 0;
-
-/// Key v17 value: the streams group epoch.
+/// Key v17 value: the streams group epoch and the metadata hash that the group
+/// last configured its topology against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StreamsGroupMetadataValue {
     pub epoch: i32,
+    /// Kafka's `MetadataHash`: see
+    /// [`metadata_hash`](crate::coordinator::unified::streams::topology::metadata_hash).
+    pub metadata_hash: i64,
 }
 
 impl StreamsGroupMetadataValue {
@@ -45,7 +45,7 @@ impl StreamsGroupMetadataValue {
         let mut buf = BytesMut::new();
         buf.put_i16(0);
         buf.put_i32(self.epoch);
-        buf.put_i64(METADATA_HASH);
+        buf.put_i64(self.metadata_hash);
         put_empty_tagged_fields(&mut buf);
         buf.freeze()
     }
@@ -54,9 +54,12 @@ impl StreamsGroupMetadataValue {
     pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
         let _v = get_i16(&mut buf)?;
         let epoch = get_i32(&mut buf)?;
-        let _metadata_hash = get_i64(&mut buf)?;
+        let metadata_hash = get_i64(&mut buf)?;
         skip_tagged_fields(&mut buf)?;
-        Ok(Self { epoch })
+        Ok(Self {
+            epoch,
+            metadata_hash,
+        })
     }
 }
 
@@ -98,8 +101,11 @@ mod tests {
 
     #[test]
     fn group_metadata_bytes_match_kafka_schema() {
-        let v = StreamsGroupMetadataValue { epoch: 7 };
-        assert!(&v.encode()[..] == b"\x00\x00\x00\x00\x00\x07\x00\x00\x00\x00\x00\x00\x00\x00\x00");
+        let v = StreamsGroupMetadataValue {
+            epoch: 7,
+            metadata_hash: 0x0102_0304_0506_0708,
+        };
+        assert!(&v.encode()[..] == b"\x00\x00\x00\x00\x00\x07\x01\x02\x03\x04\x05\x06\x07\x08\x00");
     }
 
     #[test]
@@ -114,7 +120,10 @@ mod tests {
                 }
         );
 
-        let v = StreamsGroupMetadataValue { epoch: 7 };
+        let v = StreamsGroupMetadataValue {
+            epoch: 7,
+            metadata_hash: -9,
+        };
         assert!(StreamsGroupMetadataValue::decode(&v.encode()).unwrap() == v);
     }
 
@@ -146,7 +155,11 @@ mod tests {
 
     #[test]
     fn epoch_records_reject_a_missing_tagged_trailer() {
-        let g = StreamsGroupMetadataValue { epoch: 1 }.encode();
+        let g = StreamsGroupMetadataValue {
+            epoch: 1,
+            metadata_hash: 0,
+        }
+        .encode();
         assert!(StreamsGroupMetadataValue::decode(&g[..g.len() - 1]).is_err());
     }
 }

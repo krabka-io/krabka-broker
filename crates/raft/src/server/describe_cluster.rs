@@ -180,7 +180,7 @@ mod tests {
 
         // DescribeCluster (60) is advertised so clients negotiate it (KIP-919).
         let image = krabka_metadata::MetadataImage::new(Uuid::nil());
-        let av = api_versions_response_body(4, &image, None, 0);
+        let av = api_versions_response_body(4, &image, None);
         let mut cur = &av[..];
         let avr = ApiVersionsResponse::decode(&mut cur, 4).unwrap();
         assert2::assert!(avr.api_keys.iter().any(|k| k.api_key == 60));

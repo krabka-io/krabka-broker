@@ -44,6 +44,20 @@ mod tests {
     }
 
     #[test]
+    fn record_decompression_builds_custom_policy() {
+        let cfg = BrokerConfig {
+            record_decompression_max_ratio: fraction(50.0),
+            record_decompression_output_floor: mebibytes(32),
+            record_decompression_output_ceiling: mebibytes(512),
+            ..BrokerConfig::default()
+        };
+        let policy = cfg.record_decompression_policy().unwrap();
+        assert!(policy.max_ratio() == fraction(50.0));
+        assert!(policy.output_floor() == mebibytes(32));
+        assert!(policy.output_ceiling() == mebibytes(512));
+    }
+
+    #[test]
     fn record_decompression_rejects_invalid_security_bounds() {
         for cfg in [
             BrokerConfig {

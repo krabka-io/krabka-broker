@@ -70,6 +70,7 @@ async fn share_group_records_replay_into_seed() {
             }),
             sp::ShareGroupCurrentMemberAssignmentValue {
                 member_epoch: 4,
+                previous_member_epoch: 3,
                 assigned_partitions: vec![(tid, vec![0, 1])],
             }
             .encode(),
@@ -139,7 +140,11 @@ async fn streams_group_records_replay_into_seed() {
             sp::encode_streams_key(&sp::StreamsGroupKey::GroupMetadata {
                 group_id: "stg".into(),
             }),
-            sp::StreamsGroupMetadataValue { epoch: 7 }.encode(),
+            sp::StreamsGroupMetadataValue {
+                epoch: 7,
+                metadata_hash: 0,
+            }
+            .encode(),
         ),
         (
             sp::encode_streams_key(&sp::StreamsGroupKey::MemberMetadata {
@@ -172,6 +177,8 @@ async fn streams_group_records_replay_into_seed() {
                 standby: BTreeMap::new(),
                 warmup: BTreeMap::new(),
                 active_pending_revocation: BTreeMap::new(),
+                standby_pending_revocation: BTreeMap::new(),
+                warmup_pending_revocation: BTreeMap::new(),
             }
             .encode(),
         ),

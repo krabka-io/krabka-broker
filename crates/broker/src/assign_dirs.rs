@@ -126,10 +126,7 @@ pub(crate) async fn send_assignments(
             port,
             dialer.listener_protocol,
             &dialer.server_name,
-            krabka_client_core::ConnectionOptions {
-                client_id: client_id.to_owned(),
-                ..krabka_client_core::ConnectionOptions::default()
-            },
+            assign_dirs_connection_options(client_id),
         )
         .await
         .map_err(|e| format!("connect: {e}"))?;
@@ -141,6 +138,15 @@ pub(crate) async fn send_assignments(
     connection.close();
     let current_leader = *controller.watch_leader().borrow();
     validate_assign_response(resp.error_code, leader_id, current_leader)
+}
+
+pub(crate) fn assign_dirs_connection_options(
+    client_id: &str,
+) -> krabka_client_core::ConnectionOptions {
+    krabka_client_core::ConnectionOptions {
+        client_id: client_id.to_string(),
+        ..Default::default()
+    }
 }
 
 fn validate_assign_response(
@@ -427,5 +433,11 @@ mod tests {
                 assert!(err.contains("leader changed"));
             }
         }
+    }
+
+    #[test]
+    fn assign_dirs_connection_options_sets_client_id() {
+        let opts = assign_dirs_connection_options("test-client");
+        assert2::assert!(opts.client_id == "test-client");
     }
 }

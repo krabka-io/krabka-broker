@@ -325,4 +325,33 @@ mod tests {
         log.close();
         drop(dir);
     }
+
+    #[test]
+    fn legacy_offsets_before_semantics() {
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        assert2::assert!(log.legacy_offsets_before(-1, 10).unwrap() == vec![Offset(0)]);
+        assert2::assert!(log.legacy_offsets_before(-2, 10).unwrap() == vec![Offset(0)]);
+        assert2::assert!(log.legacy_offsets_before(0, 10).unwrap().is_empty());
+
+        let mut b = ts_batch(100);
+        log.append(&mut b).unwrap();
+
+        // -1 (latest): log end offset then segment base
+        let latest = log.legacy_offsets_before(-1, 10).unwrap();
+        assert2::assert!(latest == vec![Offset(1), Offset(0)]);
+
+        // -2 (earliest): segment base only
+        let earliest = log.legacy_offsets_before(-2, 10).unwrap();
+        assert2::assert!(earliest == vec![Offset(0)]);
+
+        // 0 timestamp: earlier than file mtime, empty
+        assert2::assert!(log.legacy_offsets_before(0, 10).unwrap().is_empty());
+
+        // Future timestamp: both offsets returned, capped by max_num_offsets
+        let all = log.legacy_offsets_before(i64::MAX, 10).unwrap();
+        assert2::assert!(all == vec![Offset(1), Offset(0)]);
+        let capped = log.legacy_offsets_before(i64::MAX, 1).unwrap();
+        assert2::assert!(capped == vec![Offset(1)]);
+    }
 }

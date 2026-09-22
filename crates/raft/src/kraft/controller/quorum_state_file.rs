@@ -216,3 +216,42 @@ pub fn load_quorum_state(
             .expect("load admission proves the schema version is zero or one"),
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_and_load_quorum_state_with_no_leader() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cluster_id = Uuid::new_v4();
+        let voter = krabka_metadata::voters::Voter {
+            id: NodeId(1),
+            directory_id: Uuid::nil(),
+            endpoints: vec![krabka_metadata::voters::VoterEndpoint {
+                name: "CONTROLLER".into(),
+                host: "127.0.0.1".into(),
+                port: 9092,
+            }],
+            kraft_version: krabka_metadata::voters::KRaftVersionRange::default(),
+        };
+        let state = QuorumState {
+            cluster_id,
+            leader_epoch: 3,
+            leader_id: None,
+            voted_key: None,
+            voters: krabka_metadata::VoterSet::from_voters([voter]),
+            kraft_version: 0,
+        };
+        save_quorum_state(dir.path(), &state).expect("save");
+        let path = dir.path().join(QUORUM_STATE_FILE);
+        let content = std::fs::read_to_string(&path).expect("read");
+        assert2::assert!(content.contains("\"leaderId\":-1"));
+
+        let loaded = load_quorum_state(dir.path(), cluster_id, &state.voters)
+            .expect("load")
+            .expect("some");
+        assert2::assert!(loaded.leader_id == None);
+        assert2::assert!(loaded.leader_epoch == 3);
+    }
+}
