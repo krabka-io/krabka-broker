@@ -113,7 +113,9 @@ mod publish_race {
 
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         image.apply(&MetadataRecord::V1BrokerRegistration(registration));
-        image_tx.send(Arc::new(image)).expect("test receiver kept alive");
+        image_tx
+            .send(Arc::new(image))
+            .expect("test receiver kept alive");
 
         let result = tokio::time::timeout(Duration::from_secs(1), &mut call)
             .await
