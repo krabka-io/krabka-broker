@@ -509,14 +509,20 @@ async fn controller_listener_serves_the_scram_write_path() {
     broker.shutdown().await;
 }
 
-/// `AssignReplicasToDirs` is the one routed key whose broker handler takes no
-/// per-request context, so it also covers the bridge's plain-handler arm.
+/// `AssignReplicasToDirs` is a context dispatch, so it also covers the
+/// bridge's `ClusterAction`-authorized inter-broker arm; the default
+/// `AllowAllAuthorizer` admits the connection's `ANONYMOUS` principal.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn controller_listener_serves_assign_replicas_to_dirs() {
     const LOG_DIR_ID: WireUuid = WireUuid([7; 16]);
 
     let (broker, _dir) = start_broker().await;
     let connection = dial_controller(&broker).await;
+    let broker_epoch = broker
+        .controller_image_for_test()
+        .broker(NodeId(1))
+        .expect("registered broker")
+        .broker_epoch;
 
     let created = connection
         .send(CreateTopicsRequest {
@@ -537,7 +543,7 @@ async fn controller_listener_serves_assign_replicas_to_dirs() {
     let assigned = connection
         .send(AssignReplicasToDirsRequest {
             broker_id: 1,
-            broker_epoch: -1,
+            broker_epoch,
             directories: vec![DirectoryData {
                 id: LOG_DIR_ID,
                 topics: vec![TopicData {

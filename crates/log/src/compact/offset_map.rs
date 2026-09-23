@@ -288,6 +288,7 @@ mod tests {
             start_offset: Offset(10),
             last_offset: Offset(15),
             producer_id: ProducerId(2000),
+            last_stable_offset: Offset(16),
         })
         .unwrap();
 

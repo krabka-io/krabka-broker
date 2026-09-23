@@ -528,18 +528,20 @@ mod tests {
             }
         }
 
+        // KafkaApis.allowTokenRequests refuses every delegation-token API,
+        // Describe included, to a token-authenticated caller: a session
+        // minted from one token must not be able to describe (and so leak
+        // the HMACs of) any token at all, including its own.
         let token_auth = authenticated(
             AuthMethod::SaslScramSha256,
             SaslMechanism::ScramSha256,
             true,
         );
-        for (api, expected) in [
-            (TokenApi::Create, TokenApiAdmission::Reject),
-            (TokenApi::Renew, TokenApiAdmission::Reject),
-            (TokenApi::Expire, TokenApiAdmission::Reject),
-            (TokenApi::Describe, TokenApiAdmission::Allow),
-        ] {
-            check!(token_auth.token_api_admission(api) == expected, "{api:?}");
+        for api in apis {
+            check!(
+                token_auth.token_api_admission(api) == TokenApiAdmission::Reject,
+                "{api:?}"
+            );
         }
     }
 

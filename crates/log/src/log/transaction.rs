@@ -129,10 +129,34 @@ impl Log {
                     "invalid aborted transaction interval for producer {producer_id}"
                 )));
             };
+            // Kafka's `ProducerStateManager.lastStableOffset(completedTxn)`:
+            // the first offset of another still-open transaction, or of an
+            // earlier completed transaction whose marker has not yet crossed
+            // the high watermark (still in `self.unreplicated`, exactly as
+            // `refresh_lso` also chains in), or one past this transaction's
+            // own last offset when none of those remain.
+            let other_starts: Vec<i64> = self
+                .pending
+                .iter()
+                .filter(|(other_pid, _)| **other_pid != producer_id)
+                .map(|(_, offset)| offset.0)
+                .chain(self.unreplicated.keys().next().map(|offset| offset.0))
+                .collect();
+            let last_stable_offset = krabka_verified::first_unstable_offset(
+                &other_starts,
+                last_offset.0 + 1,
+            )
+            .map(Offset)
+            .ok_or_else(|| {
+                LogError::Corrupt(format!(
+                    "pending transaction starts beyond aborted marker offset for producer {producer_id}"
+                ))
+            })?;
             self.active_txn_index.append(AbortedTxn {
                 start_offset: Offset(start),
                 last_offset: Offset(last),
                 producer_id,
+                last_stable_offset,
             })?;
         }
         let stamp_ranges = self
@@ -267,6 +291,47 @@ mod tests {
                     start_offset: Offset(0),
                     last_offset: Offset(3),
                     producer_id: ProducerId(1000),
+                    last_stable_offset: Offset(4),
+                }]
+        );
+    }
+
+    /// An earlier completed transaction, still held in `unreplicated`
+    /// because the high watermark has not passed its marker yet, holds the
+    /// last-stable-offset written for a later transaction's abort marker --
+    /// the same way it holds `refresh_lso`'s in-memory `lso`. Before this
+    /// fix, `other_starts` only chained `self.pending` (other still-open
+    /// transactions), so this scenario wrote `last_offset + 1` into the
+    /// `.txnindex` entry instead of the earlier unreplicated start.
+    #[test]
+    fn abort_marker_lso_is_held_by_an_earlier_unreplicated_transaction() {
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+
+        // Producer 1000 commits first: its marker lands at offset 2, and it
+        // stays in `unreplicated` (this test never advances the high
+        // watermark past it).
+        let mut t1 = transactional_batch(1000, 0, &["a", "b"]);
+        log.append(&mut t1).unwrap();
+        log.append(&mut commit_marker(1000, 0)).unwrap();
+
+        // Producer 2000 opens after that and then aborts.
+        let mut t2 = transactional_batch(2000, 0, &["c"]);
+        log.append(&mut t2).unwrap();
+        log.append(&mut abort_marker(2000, 0)).unwrap();
+
+        let idx = TxnIndex::open(dir.path().join("00000000000000000000.txnindex")).unwrap();
+        let entries = idx.entries();
+        // Producer 1000's transaction started at offset 0: that is the
+        // earlier unreplicated start, and it must be the recorded LSO, not
+        // producer 2000's own last_offset + 1.
+        assert2::assert!(
+            entries
+                == [AbortedTxn {
+                    start_offset: Offset(3),
+                    last_offset: Offset(4),
+                    producer_id: ProducerId(2000),
+                    last_stable_offset: Offset(0),
                 }]
         );
     }
@@ -292,6 +357,7 @@ mod tests {
                     start_offset: Offset(0),
                     last_offset: Offset(3),
                     producer_id: ProducerId(1000),
+                    last_stable_offset: Offset(4),
                 }]
         );
     }
@@ -320,6 +386,7 @@ mod tests {
                     start_offset: Offset(0),
                     last_offset: Offset(4), // 3 + 1, not 3 - 1
                     producer_id: ProducerId(1000),
+                    last_stable_offset: Offset(5),
                 }]
         );
     }

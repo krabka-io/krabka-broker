@@ -312,13 +312,17 @@ async fn assign_replicas_to_dirs_reports_and_echoes() {
         .find(|t| t.name == TOPIC)
         .map(|t| t.topic_id)
         .expect("topic must be in the image after wait_all_partitions");
+    let broker_epoch = image
+        .broker(krabka_raft::NodeId(1))
+        .expect("broker 1 is self-registered")
+        .broker_epoch;
 
     // Choose an arbitrary dir UUID to assign partition 0 on broker 1.
     let dir_uuid = uuid::Uuid::from_u128(0xCAFE_BABE);
 
     let req = AssignReplicasToDirsRequest {
         broker_id: 1, // for_tests default broker_id
-        broker_epoch: -1,
+        broker_epoch,
         directories: vec![ReqDirData {
             id: ProtocolUuid(dir_uuid.into_bytes()),
             topics: vec![ReqTopicData {

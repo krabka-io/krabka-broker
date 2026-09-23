@@ -1,14 +1,20 @@
 //! `DescribeDelegationToken` tests that drive [`super::handle`] against a live
 //! single-voter controller.
 //!
-//! Every case here is about the KIP-48 visible set: who sees which tokens with
-//! and without an owner filter, the token-authed caller's isolation, and the
-//! spec §5.3 extension that a `Describe` ACL on `TOKEN:<owner>` grants.
+//! Every case here is about the KIP-48 visible set: `filterToken`'s
+//! owner-or-renewer filter, the owner/renewer/ACL relationship it then
+//! requires, the token id used as the ACL resource name, the empty-list
+//! sentinel, and `allowTokenRequests`' blanket refusal of a
+//! delegation-token-authenticated caller — the credential-disclosure gate
+//! this suite exists to pin down.
 
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use assert2::assert;
-use krabka_metadata::{DelegationTokenRecord, MetadataRecord};
+use krabka_metadata::{
+    AclEntry, AclOperation, DelegationTokenRecord, MetadataRecord, PatternType, PermissionType,
+    ResourceType,
+};
 use krabka_protocol::owned::describe_delegation_token_request::{
     DescribeDelegationTokenOwner, DescribeDelegationTokenRequest,
 };
@@ -78,22 +84,37 @@ fn peer() -> SocketAddr {
     "127.0.0.1:0".parse().unwrap()
 }
 
-/// The tests below want the "real ACL" semantics. The
-/// describe-via-ACL extension should add tokens if and only if the
-/// caller holds a matching `Describe` ACL on `TOKEN:<owner>`. This
-/// helper builds a [`SimpleAclAuthorizer`] for that. With
-/// [`AllowAllAuthorizer`] every token would surface. That is correct
-/// under "allow everything", but it does not exercise the ACL filter
-/// these tests are written against.
+/// The tests below want the "real ACL" semantics: the ACL extension should
+/// add a token if and only if the caller holds a matching `Describe` ACL on
+/// `DelegationToken:<token_id>`. With [`crate::authorizer::AllowAllAuthorizer`]
+/// every token would surface, which is correct under "allow everything" but
+/// does not exercise the ACL filter these tests are written against.
 fn simple_authz() -> crate::authorizer::SimpleAclAuthorizer {
     crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new())
 }
 
-async fn seed_acl(controller: &ControllerHandle, entry: krabka_metadata::AclEntry) {
+async fn seed_acl(controller: &ControllerHandle, entry: AclEntry) {
     controller
         .submit_change(vec![MetadataRecord::V1AccessControlEntry(entry)])
         .await
         .expect("seed acl");
+}
+
+/// A `Describe` ACL on `DelegationToken:<token_id>` for `principal`, which is
+/// the resource-name convention Kafka's own authorizer call
+/// (`authHelper.authorize(..., DESCRIBE, DELEGATION_TOKEN, tokenId)`) and its
+/// admin tooling use. A resource name of the owner's principal string
+/// instead would grant every token of that owner from one ACL.
+fn describe_token_acl(token_id: &str, principal: &str) -> AclEntry {
+    AclEntry {
+        resource_type: ResourceType::DelegationToken,
+        resource_name: token_id.into(),
+        pattern_type: PatternType::Literal,
+        principal: format!("User:{principal}"),
+        host: "*".into(),
+        operation: AclOperation::Describe,
+        permission_type: PermissionType::Allow,
+    }
 }
 
 async fn seed_token(
@@ -115,6 +136,12 @@ async fn seed_token(
         .submit_change(vec![MetadataRecord::V1DelegationToken(rec)])
         .await
         .expect("seed token");
+}
+
+fn token_ids(
+    resp: &krabka_protocol::owned::describe_delegation_token_response::DescribeDelegationTokenResponse,
+) -> std::collections::HashSet<&str> {
+    resp.tokens.iter().map(|t| t.token_id.as_str()).collect()
 }
 
 #[tokio::test]
@@ -155,47 +182,164 @@ async fn anonymous_caller_is_rejected_without_exposing_token_hmacs() {
     controller.cancel().await;
 }
 
+/// `allowTokenRequests`: a delegation-token-authenticated caller is refused
+/// entirely, with no tokens returned, regardless of what it owns. This is
+/// the fix for the credential-disclosure bug: a caller holding one token
+/// must never be able to read a sibling token's HMAC by calling
+/// `DescribeDelegationToken`.
 #[tokio::test]
-async fn empty_filter_returns_all_tokens_visible_to_caller() {
+async fn token_authed_caller_is_refused_entirely() {
     let dir = TempDir::new().unwrap();
     let controller = test_controller(dir.path().into()).await;
     let secret = SecretBytes::new(b"k".to_vec());
-    // alice owns t-a; bob owns t-b; alice is a renewer on t-b.
+    // alice owns both t-a and t-b: a token-authed session must not be able
+    // to read either one, including its own token's sibling.
     seed_token(&controller, "t-a", kp("alice"), vec![]).await;
-    seed_token(&controller, "t-b", kp("bob"), vec![kp("alice")]).await;
-    // carol owns an unrelated token — alice should not see it.
-    seed_token(&controller, "t-c", kp("carol"), vec![]).await;
+    seed_token(&controller, "t-b", kp("alice"), vec![]).await;
 
-    let req = DescribeDelegationTokenRequest::default();
+    let resp = handle(
+        &DescribeDelegationTokenRequest::default(),
+        &authed_with_token("alice", true),
+        Some(&secret),
+        &*controller,
+        &peer(),
+        &crate::authorizer::AllowAllAuthorizer,
+    );
+
+    assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
+    assert!(
+        resp.tokens.is_empty(),
+        "token-authed caller must never see any token's HMAC, got {:?}",
+        token_ids(&resp)
+    );
+    controller.cancel().await;
+}
+
+/// Check order: `allowTokenRequests` (64) fires before the
+/// `tokenAuthEnabled` check (61), so a token-authed caller gets 64 even
+/// when the broker also has no secret key configured.
+#[tokio::test]
+async fn token_authed_caller_gets_request_not_allowed_before_auth_disabled() {
+    let dir = TempDir::new().unwrap();
+    let controller = test_controller(dir.path().into()).await;
+
+    let resp = handle(
+        &DescribeDelegationTokenRequest::default(),
+        &authed_with_token("alice", true),
+        None,
+        &*controller,
+        &peer(),
+        &crate::authorizer::AllowAllAuthorizer,
+    );
+
+    assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
+    controller.cancel().await;
+}
+
+/// `ownersListEmpty`: a present-but-empty `owners` list returns no tokens
+/// with `error_code = NONE`, distinct from a missing (null) list.
+#[tokio::test]
+async fn empty_owners_list_returns_no_tokens_without_error() {
+    let dir = TempDir::new().unwrap();
+    let controller = test_controller(dir.path().into()).await;
+    let secret = SecretBytes::new(b"k".to_vec());
+    seed_token(&controller, "t-a", kp("alice"), vec![]).await;
+
+    let req = DescribeDelegationTokenRequest {
+        owners: Some(vec![]),
+        ..Default::default()
+    };
     let resp = handle(
         &req,
         &authed("alice"),
         Some(&secret),
         &*controller,
         &peer(),
-        &simple_authz(),
+        &crate::authorizer::AllowAllAuthorizer,
     );
     assert!(resp.error_code == 0);
-    let ids: std::collections::HashSet<&str> =
-        resp.tokens.iter().map(|t| t.token_id.as_str()).collect();
-    let expected: std::collections::HashSet<&str> = maplit::hashset! {"t-a", "t-b"};
-    assert!(ids == expected);
+    assert!(resp.tokens.is_empty());
     controller.cancel().await;
 }
 
+/// Table-driven: which tokens a caller sees, varying the caller's
+/// relationship to each token and the ACL state, matching
+/// `DelegationTokenManager.filterToken`.
 #[tokio::test]
-async fn owner_filter_intersects_with_visibility() {
+async fn filter_token_matches_owner_renewer_or_token_id_acl() {
+    struct Case {
+        name: &'static str,
+        acl: Option<AclEntry>,
+        expected: &'static [&'static str],
+    }
+
+    let cases = [
+        Case {
+            name: "owner sees own token, not a sibling owned by someone else",
+            acl: None,
+            expected: &["t-owner"],
+        },
+        Case {
+            name: "describe acl on the exact token id grants only that token",
+            acl: Some(describe_token_acl("t-other", "alice")),
+            expected: &["t-owner", "t-other"],
+        },
+        Case {
+            name: "describe acl on a different token id grants exactly that token, nothing else",
+            acl: Some(describe_token_acl("t-unrelated", "alice")),
+            expected: &["t-owner", "t-unrelated"],
+        },
+    ];
+
+    for Case {
+        name,
+        acl,
+        expected,
+    } in cases
+    {
+        let dir = TempDir::new().unwrap();
+        let controller = test_controller(dir.path().into()).await;
+        let secret = SecretBytes::new(b"k".to_vec());
+        seed_token(&controller, "t-owner", kp("alice"), vec![]).await;
+        seed_token(&controller, "t-renewer", kp("bob"), vec![kp("carol")]).await;
+        seed_token(&controller, "t-other", kp("bob"), vec![]).await;
+        seed_token(&controller, "t-unrelated", kp("dave"), vec![]).await;
+        if let Some(entry) = acl {
+            seed_acl(&controller, entry).await;
+        }
+
+        let resp = handle(
+            &DescribeDelegationTokenRequest::default(),
+            &authed("alice"),
+            Some(&secret),
+            &*controller,
+            &peer(),
+            &simple_authz(),
+        );
+        assert!(resp.error_code == 0, "{name}");
+        let expected: std::collections::HashSet<&str> = expected.iter().copied().collect();
+        assert!(token_ids(&resp) == expected, "{name}");
+        controller.cancel().await;
+    }
+}
+
+/// A caller who is a listed renewer (not the owner) sees the token too, and
+/// the owner filter matches on owner-OR-renewer, not owner alone.
+#[tokio::test]
+async fn renewer_sees_the_token_and_owner_filter_matches_renewer_too() {
     let dir = TempDir::new().unwrap();
     let controller = test_controller(dir.path().into()).await;
     let secret = SecretBytes::new(b"k".to_vec());
-    seed_token(&controller, "t-a", kp("alice"), vec![]).await;
-    // bob's token: alice is a renewer.
-    seed_token(&controller, "t-b", kp("bob"), vec![kp("alice")]).await;
-    // carol's token: alice has no relationship.
-    seed_token(&controller, "t-c", kp("carol"), vec![]).await;
+    // bob's token: carol is a listed renewer.
+    seed_token(&controller, "t-b", kp("bob"), vec![kp("carol")]).await;
+    // dave's token: carol has no relationship.
+    seed_token(&controller, "t-d", kp("dave"), vec![]).await;
 
-    // Ask for tokens owned by either bob or carol. alice can see
-    // t-b (renewer) but not t-c (no relationship).
+    // Filter asks for tokens whose owner-or-renewer is bob or dave. carol
+    // is a renewer of t-b (owned by bob), so the filter matches it, and
+    // carol's renewer relationship then makes it visible; t-d's owner
+    // (dave) matches the filter too, but carol has no owner/renewer/ACL
+    // relationship to it, so it stays hidden.
     let req = DescribeDelegationTokenRequest {
         owners: Some(vec![
             DescribeDelegationTokenOwner {
@@ -205,7 +349,7 @@ async fn owner_filter_intersects_with_visibility() {
             },
             DescribeDelegationTokenOwner {
                 principal_type: "User".into(),
-                principal_name: "carol".into(),
+                principal_name: "dave".into(),
                 ..Default::default()
             },
         ]),
@@ -213,89 +357,34 @@ async fn owner_filter_intersects_with_visibility() {
     };
     let resp = handle(
         &req,
-        &authed("alice"),
+        &authed("carol"),
         Some(&secret),
         &*controller,
         &peer(),
         &simple_authz(),
     );
     assert!(resp.error_code == 0);
-    let ids: std::collections::HashSet<&str> =
-        resp.tokens.iter().map(|t| t.token_id.as_str()).collect();
-    assert!(ids.len() == 1);
-    assert!(ids.contains("t-b"));
+    assert!(token_ids(&resp) == std::collections::HashSet::from(["t-b"]));
     controller.cancel().await;
 }
 
+/// A caller with a cluster-wide `Describe` ACL on the token's own id sees
+/// it even without an owner filter naming that owner, and a `Describe` ACL
+/// on one token id does not leak a second token owned by the same
+/// principal — the resource-name fix this issue is about.
 #[tokio::test]
-async fn token_authed_caller_sees_only_own_owned_tokens() {
+async fn describe_acl_on_token_id_grants_exactly_that_token() {
     let dir = TempDir::new().unwrap();
     let controller = test_controller(dir.path().into()).await;
     let secret = SecretBytes::new(b"k".to_vec());
-    // alice owns t-a; bob owns t-b; alice is a renewer on t-b.
+    // alice owns two tokens; bob has no owner/renewer relationship to
+    // either.
     seed_token(&controller, "t-a", kp("alice"), vec![]).await;
-    seed_token(&controller, "t-b", kp("bob"), vec![kp("alice")]).await;
+    seed_token(&controller, "t-b", kp("alice"), vec![]).await;
+    seed_acl(&controller, describe_token_acl("t-a", "bob")).await;
 
-    // Wire owner filter asks for bob's tokens — but a token-authed
-    // alice is restricted to her own owned set regardless.
-    let req = DescribeDelegationTokenRequest {
-        owners: Some(vec![DescribeDelegationTokenOwner {
-            principal_type: "User".into(),
-            principal_name: "bob".into(),
-            ..Default::default()
-        }]),
-        ..Default::default()
-    };
     let resp = handle(
-        &req,
-        &authed_with_token("alice", true),
-        Some(&secret),
-        &*controller,
-        &peer(),
-        &simple_authz(),
-    );
-    assert!(resp.error_code == 0);
-    let ids: std::collections::HashSet<&str> =
-        resp.tokens.iter().map(|t| t.token_id.as_str()).collect();
-    assert!(ids.len() == 1);
-    assert!(ids.contains("t-a"));
-    controller.cancel().await;
-}
-
-/// Spec §5.3: a caller who is neither owner nor a listed renewer can
-/// still see a token when the owner grants it `Describe` on
-/// `TOKEN:<owner_principal_string>`. Token-authed callers do NOT
-/// pick this extension up. The test
-/// `token_authed_caller_acl_extension_does_not_apply` below covers
-/// that.
-#[tokio::test]
-async fn describe_grants_visibility_via_token_acl() {
-    use krabka_metadata::{AclEntry, AclOperation, PatternType, PermissionType, ResourceType};
-    let dir = TempDir::new().unwrap();
-    let controller = test_controller(dir.path().into()).await;
-    let secret = SecretBytes::new(b"k".to_vec());
-    // alice owns t-a; bob has no owner/renewer relationship to it.
-    seed_token(&controller, "t-a", kp("alice"), vec![]).await;
-    // Grant bob `Describe` on `TOKEN:User:alice`.
-    seed_acl(
-        &controller,
-        AclEntry {
-            resource_type: ResourceType::DelegationToken,
-            resource_name: "User:alice".into(),
-            pattern_type: PatternType::Literal,
-            principal: "User:bob".into(),
-            host: "*".into(),
-            operation: AclOperation::Describe,
-            permission_type: PermissionType::Allow,
-        },
-    )
-    .await;
-
-    // bob queries with an empty filter; the ACL extension should
-    // surface alice's token.
-    let req = DescribeDelegationTokenRequest::default();
-    let resp = handle(
-        &req,
+        &DescribeDelegationTokenRequest::default(),
         &authed("bob"),
         Some(&secret),
         &*controller,
@@ -303,53 +392,33 @@ async fn describe_grants_visibility_via_token_acl() {
         &simple_authz(),
     );
     assert!(resp.error_code == 0);
-    let ids: std::collections::HashSet<&str> =
-        resp.tokens.iter().map(|t| t.token_id.as_str()).collect();
     assert!(
-        ids.contains("t-a"),
-        "expected ACL Describe on TOKEN:User:alice to make t-a visible to bob; got {ids:?}"
+        token_ids(&resp) == std::collections::HashSet::from(["t-a"]),
+        "an ACL on t-a must not also surface t-b, same owner or not; got {:?}",
+        token_ids(&resp)
     );
     controller.cancel().await;
 }
 
-/// Token-authenticated callers stay restricted to their own owned
-/// tokens even when an ACL would otherwise extend visibility.
+/// A caller with no owner/renewer relationship and no matching ACL sees
+/// nothing — pure token possession (proven by nothing here, since the
+/// handler never inspects HMACs) grants no visibility on its own.
 #[tokio::test]
-async fn token_authed_caller_acl_extension_does_not_apply() {
-    use krabka_metadata::{AclEntry, AclOperation, PatternType, PermissionType, ResourceType};
+async fn unrelated_caller_sees_nothing() {
     let dir = TempDir::new().unwrap();
     let controller = test_controller(dir.path().into()).await;
     let secret = SecretBytes::new(b"k".to_vec());
     seed_token(&controller, "t-a", kp("alice"), vec![]).await;
-    seed_acl(
-        &controller,
-        AclEntry {
-            resource_type: ResourceType::DelegationToken,
-            resource_name: "User:alice".into(),
-            pattern_type: PatternType::Literal,
-            principal: "User:bob".into(),
-            host: "*".into(),
-            operation: AclOperation::Describe,
-            permission_type: PermissionType::Allow,
-        },
-    )
-    .await;
 
-    let req = DescribeDelegationTokenRequest::default();
     let resp = handle(
-        &req,
-        &authed_with_token("bob", true),
+        &DescribeDelegationTokenRequest::default(),
+        &authed("eve"),
         Some(&secret),
         &*controller,
         &peer(),
         &simple_authz(),
     );
     assert!(resp.error_code == 0);
-    // bob owns nothing — ACL extension MUST NOT surface alice's t-a.
-    assert!(
-        resp.tokens.is_empty(),
-        "token-authed bob must not see alice's token via ACL; got {:?}",
-        resp.tokens.iter().map(|t| &t.token_id).collect::<Vec<_>>()
-    );
+    assert!(resp.tokens.is_empty());
     controller.cancel().await;
 }

@@ -66,6 +66,7 @@ fn truncation_clamps_tail_state_to_the_actual_retained_batch_prefix() {
             start_offset: Offset(3),
             last_offset: Offset(5),
             producer_id: ProducerId(9),
+            last_stable_offset: Offset(6),
         })
         .unwrap();
     log.delivery_watermark = Offset(6);

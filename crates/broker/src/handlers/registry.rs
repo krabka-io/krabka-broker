@@ -17,9 +17,6 @@ use crate::{
     handlers::{ApiVersion, CorrelationId, RequestContext, TelemetryContext},
 };
 
-pub(crate) type PlainHandler =
-    fn(&Broker, ApiVersion, CorrelationId, &[u8]) -> BoxFuture<'static, Result<Bytes, BrokerError>>;
-
 pub(crate) type ContextHandler = for<'a> fn(
     &'a Broker,
     ApiVersion,
@@ -53,24 +50,6 @@ pub(crate) type AuthHandler = for<'a> fn(
     &'a crate::network::auth::ConnectionAuth,
     &'a std::net::SocketAddr,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>>;
-
-macro_rules! plain_dispatches {
-    ($register_fn:ident; $(($api:ident, $request:ident, $handler:path)),+ $(,)?) => {
-        pub(super) fn $register_fn(registry: &mut DispatchRegistry) {
-            $(
-                assert2::assert!(
-                    registry.register(DispatchEntry::plain(
-                        ApiKey::$api as i16,
-                        krabka_protocol::owned::$request::FLEXIBLE_MIN,
-                        $handler,
-                    )),
-                    "duplicate dispatch registration for {:?}",
-                    ApiKey::$api
-                );
-            )+
-        }
-    };
-}
 
 macro_rules! context_adapter {
     ($adapter:ident, $handler:expr) => {
@@ -276,7 +255,6 @@ mod context;
 mod decoded;
 mod entry;
 mod krabka_private;
-mod plain;
 mod telemetry;
 #[cfg(test)]
 mod tests;
@@ -294,7 +272,6 @@ use self::{
         register_decoded_sync_context_dispatches, update_features_adapter,
     },
     krabka_private::register_krabka_private_context_dispatches,
-    plain::register_plain_dispatches,
     telemetry::{get_telemetry_subscriptions_adapter, push_telemetry_adapter},
 };
 
@@ -318,8 +295,6 @@ fn produce_adapter<'a>(
 
 pub(crate) fn build_registry() -> DispatchRegistry {
     let mut registry = DispatchRegistry::new();
-
-    register_plain_dispatches(&mut registry);
 
     // KIP-219: `ApiVersionsResponse` carries `ThrottleTimeMs` behind the
     // `ApiKeys` array, so the dispatch loop's leading-int32 patch cannot report
