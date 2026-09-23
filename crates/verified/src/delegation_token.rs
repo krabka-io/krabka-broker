@@ -64,56 +64,57 @@ pub fn scram_credential_source(
 }
 
 /// Whether one delegation token is visible to a Describe caller.
-#[ensures(result == if authenticated_via_token {
-    caller_is_owner
-} else {
-    owner_filter_matches && (caller_is_owner || caller_is_renewer || acl_allows)
-})]
+///
+/// Matches `DelegationTokenManager.filterToken` in Kafka trunk: a caller sees
+/// a token only when the (possibly absent) owner filter matches it, and even
+/// then only as the token's owner, a listed renewer, or the holder of a
+/// `Describe` ACL on that exact token. The caller is never a delegation-token-
+/// authenticated identity here — [`token_api_admission`] refuses every such
+/// caller before the host ever builds this predicate, so this kernel does not
+/// re-derive that isolation; folding it into the owner/renewer/ACL relation
+/// would let a filter-matching owner or ACL grant leak a token-authed
+/// caller's sibling tokens back in.
+#[ensures(result == (owner_filter_matches && (caller_is_owner || caller_is_renewer || acl_allows)))]
 #[allow(
     clippy::fn_params_excessive_bools,
     reason = "the proof classifies independent token visibility relationships"
 )]
 #[must_use]
 pub fn token_describe_visible(
-    authenticated_via_token: bool,
     owner_filter_matches: bool,
     caller_is_owner: bool,
     caller_is_renewer: bool,
     acl_allows: bool,
 ) -> bool {
-    if authenticated_via_token {
-        caller_is_owner
-    } else {
-        owner_filter_matches && (caller_is_owner || caller_is_renewer || acl_allows)
-    }
+    owner_filter_matches && (caller_is_owner || caller_is_renewer || acl_allows)
 }
 
-/// Admit delegation-token APIs only for a securely authenticated identity.
+/// Admit delegation-token APIs only for a securely authenticated, non-token
+/// identity.
 ///
-/// A delegation-token-authenticated identity may describe its own tokens, but
-/// may not create, renew, or expire tokens. The host adapter is responsible
-/// for treating an anonymous listener principal as unauthenticated.
+/// Matches `KafkaApis.allowTokenRequests`: a delegation-token-authenticated
+/// identity may not invoke ANY delegation-token API, including
+/// `DescribeDelegationToken`. KIP-48 forbids a token-issued session from
+/// bootstrapping further token access; letting it describe would leak the
+/// HMACs of every other token the same owner holds. The host adapter is
+/// responsible for treating an anonymous listener principal as
+/// unauthenticated.
 #[ensures((result == TokenApiAdmission::Allow) == (
-    has_authenticated_identity
-        && (!authenticated_via_token || api == TokenApi::Describe)
+    has_authenticated_identity && !authenticated_via_token
 ))]
 #[ensures((result == TokenApiAdmission::Reject) == (
-    !has_authenticated_identity
-        || (authenticated_via_token && api != TokenApi::Describe)
+    !has_authenticated_identity || authenticated_via_token
 ))]
 #[must_use]
 pub fn token_api_admission(
     has_authenticated_identity: bool,
     authenticated_via_token: bool,
-    api: TokenApi,
+    _api: TokenApi,
 ) -> TokenApiAdmission {
-    if !has_authenticated_identity {
-        return TokenApiAdmission::Reject;
-    }
-
-    match (authenticated_via_token, api) {
-        (true, TokenApi::Create | TokenApi::Renew | TokenApi::Expire) => TokenApiAdmission::Reject,
-        _ => TokenApiAdmission::Allow,
+    if has_authenticated_identity && !authenticated_via_token {
+        TokenApiAdmission::Allow
+    } else {
+        TokenApiAdmission::Reject
     }
 }
 
@@ -508,17 +509,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn token_visibility_respects_token_isolation_filter_and_acl() {
-        for (token_auth, filter, owner, renewer, acl, visible) in [
-            (true, false, true, false, false, true),
-            (true, true, false, true, true, false),
-            (false, false, true, false, false, false),
-            (false, true, true, false, false, true),
-            (false, true, false, true, false, true),
-            (false, true, false, false, true, true),
-            (false, true, false, false, false, false),
+    fn token_visibility_requires_owner_filter_plus_a_relationship() {
+        for (filter, owner, renewer, acl, visible) in [
+            (false, true, false, false, false),
+            (true, true, false, false, true),
+            (true, false, true, false, true),
+            (true, false, false, true, true),
+            (true, false, false, false, false),
         ] {
-            check!(token_describe_visible(token_auth, filter, owner, renewer, acl) == visible);
+            check!(token_describe_visible(filter, owner, renewer, acl) == visible);
         }
     }
 
@@ -538,7 +537,7 @@ mod tests {
     }
 
     #[test]
-    fn token_api_admission_requires_identity_and_blocks_token_mutations() {
+    fn token_api_admission_requires_identity_and_blocks_every_token_authed_call() {
         for api in [
             TokenApi::Create,
             TokenApi::Renew,
@@ -548,12 +547,10 @@ mod tests {
             check!(token_api_admission(false, false, api) == TokenApiAdmission::Reject);
             check!(token_api_admission(false, true, api) == TokenApiAdmission::Reject);
             check!(token_api_admission(true, false, api) == TokenApiAdmission::Allow);
-        }
-
-        for api in [TokenApi::Create, TokenApi::Renew, TokenApi::Expire] {
+            // KafkaApis.allowTokenRequests refuses every delegation-token API,
+            // Describe included, to a token-authenticated caller.
             check!(token_api_admission(true, true, api) == TokenApiAdmission::Reject);
         }
-        check!(token_api_admission(true, true, TokenApi::Describe) == TokenApiAdmission::Allow);
     }
 
     #[test]
