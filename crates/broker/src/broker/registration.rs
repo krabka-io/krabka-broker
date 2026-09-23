@@ -269,7 +269,43 @@ pub(super) async fn register_broker(
         return Ok(());
     }
     let records = broker_restart_batch(config, &controller.current_image());
-    submit_startup_records(config, controller, records, "broker self-registration").await
+    submit_startup_records(config, controller, records, "broker self-registration").await?;
+    wait_for_self_registration_published(config, controller).await;
+    Ok(())
+}
+
+/// Waits until `current_image()` actually carries this broker's own
+/// registration, rather than trusting that [`submit_startup_records`]'s `Ok`
+/// already implies it.
+///
+/// `submit_change` returns once the record is committed AND applied on the
+/// leader, but publishing the resulting `Arc<MetadataImage>` to
+/// `current_image()`/`watch_image()` is a separate step that can trail that
+/// reply by a scheduler tick -- `spawn_deferred_controller_registration`
+/// below waits out the exact same gap for the controller-registration
+/// record, with the comment that explains it. Left unclosed here, a handler
+/// that reads `current_image()` immediately after `Broker::start` returns --
+/// the first `CreateTopics` on a freshly booted broker, most commonly --
+/// can still observe an image with no registered brokers at all. On a
+/// single-node cluster this outraces `site_broker_views`'s own "no
+/// registrations yet" fallback (see `crate::handlers::create_topics`): under
+/// CPU-starved CI parallelism, this broker's very first `CreateTopics` at its
+/// cluster default replication factor can see a live broker count of zero and
+/// misreport `INVALID_REPLICATION_FACTOR`, even though it just finished
+/// registering.
+async fn wait_for_self_registration_published(
+    config: &BrokerConfig,
+    controller: &dyn crate::metadata_source::MetadataSource,
+) {
+    let mut images = controller.watch_image();
+    loop {
+        if images.borrow().broker(config.node_id).is_some() {
+            return;
+        }
+        if images.changed().await.is_err() {
+            return;
+        }
+    }
 }
 
 pub(super) async fn submit_bootstrap_records(
