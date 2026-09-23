@@ -421,7 +421,15 @@ async fn handle_heartbeat(
 ) -> Result<ConsumerGroupHeartbeatResponse, crate::error::BrokerError> {
     let now = Instant::now();
     let now_ms = chrono_now_ms();
-    let step = step_heartbeat(state, config, metadata, req, client, now, regex_denied_topics);
+    let step = step_heartbeat(
+        state,
+        config,
+        metadata,
+        req,
+        client,
+        now,
+        regex_denied_topics,
+    );
     flush_pending(state, step.pending, offsets_log, coordinator, now_ms).await?;
     Ok(step.response)
 }

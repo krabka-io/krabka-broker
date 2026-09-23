@@ -223,7 +223,13 @@ pub(super) fn try_build_member(
     if let Some(pattern) = req.subscribed_topic_regex.as_deref() {
         check_subscribed_topic_regex(pattern)?;
     }
-    Ok(build_member(member_id, req, client, now, regex_denied_topics))
+    Ok(build_member(
+        member_id,
+        req,
+        client,
+        now,
+        regex_denied_topics,
+    ))
 }
 
 pub(super) fn build_member(

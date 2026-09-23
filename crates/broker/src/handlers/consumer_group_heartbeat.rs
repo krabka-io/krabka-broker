@@ -620,7 +620,10 @@ mod tests {
             .await
             .expect("ConsumerGroupHeartbeat handler");
         let resp = decode_response(&bytes);
-        assert!(resp.error_code == codes::TOPIC_AUTHORIZATION_FAILED, "{resp:?}");
+        assert!(
+            resp.error_code == codes::TOPIC_AUTHORIZATION_FAILED,
+            "{resp:?}"
+        );
 
         let actor = broker
             .group_coordinator
