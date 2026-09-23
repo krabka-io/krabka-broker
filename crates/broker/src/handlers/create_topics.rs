@@ -20,7 +20,7 @@ use krabka_protocol::{
     Decode,
     owned::{
         create_topics_request::CreateTopicsRequest,
-        create_topics_response::{CreatableTopicResult, CreateTopicsResponse},
+        create_topics_response::CreatableTopicResult,
     },
     primitives::uuid::Uuid as ProtoUuid,
 };
@@ -43,10 +43,10 @@ pub(crate) use self::placement::{
     site_broker_views,
 };
 use self::{
-    authorization::{cluster_create_denied, describe_configs_denied},
+    authorization::{authorize_create_topics, describe_configs_denied},
     materialize::{TopicMaterialization, materialize_topic},
     mutation_quota::mutation_count,
-    name::topic_name_error,
+    name::{CLUSTER_METADATA_TOPIC, topic_name_error},
     placement::resolve_assignments,
     records::{topic_config_overrides, topic_records},
     response::{
@@ -55,6 +55,7 @@ use self::{
     },
 };
 use crate::{
+    authorizer::AuthorizationResult,
     broker::Broker,
     codes,
     config_keys::{self, resolve_preferred_leader_site},
@@ -119,14 +120,44 @@ pub(crate) async fn handle(
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
     // ── ACL preamble ────────────────────────────────────────
-    // Whole-request Cluster Create gate. On Deny, return
-    // CLUSTER_AUTHORIZATION_FAILED on every topic row and short-circuit.
     let mut cursor = req_bytes;
     let req = CreateTopicsRequest::decode(&mut cursor, version)?;
     let image = broker.controller.current_image();
-    if cluster_create_denied(broker, &image, ctx) {
-        return encode_response(&cluster_denied_response(&req), version);
-    }
+
+    // Kafka removes duplicate names from the request before authorizing
+    // (`ControllerApis.handleCreateTopics`): every row that shares a
+    // duplicated name answers INVALID_REQUEST and never reaches the
+    // authorizer.
+    let duplicate_names: std::collections::HashSet<String> = {
+        let mut name_counts: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        for topic in &req.topics {
+            *name_counts.entry(topic.name.as_str()).or_insert(0) += 1;
+        }
+        name_counts
+            .into_iter()
+            .filter(|(_, count)| *count > 1)
+            .map(|(name, _)| name.to_owned())
+            .collect()
+    };
+
+    // Cluster `Create` is a shortcut; on Deny, `authorize_create_topics`
+    // falls back to topic-level `Create` per surviving name, so a principal
+    // with only a topic-scoped ACL can still create the topics it covers.
+    // Duplicate and protected names are excluded here exactly as Kafka
+    // excludes them from `allowedTopicNames` before authorizing.
+    let candidate_names: Vec<&str> = req
+        .topics
+        .iter()
+        .map(|topic| topic.name.as_str())
+        .filter(|name| !duplicate_names.contains(*name) && *name != CLUSTER_METADATA_TOPIC)
+        .collect();
+    let denied_names: std::collections::HashSet<String> =
+        authorize_create_topics(broker, &image, ctx, candidate_names.iter().copied())
+            .into_iter()
+            .filter(|(_, result)| *result == AuthorizationResult::Deny)
+            .map(|(name, _)| name.to_owned())
+            .collect();
 
     let controller = broker.controller.clone();
     let node_id = broker.config.node_id;
@@ -175,6 +206,43 @@ pub(crate) async fn handle(
 
     for mut topic_req in req.topics {
         let name = topic_req.name.clone();
+
+        // Duplicate and protected names never reached the authorizer above,
+        // and Kafka answers every one of them INVALID_REQUEST before any
+        // other check.
+        if duplicate_names.contains(&name) {
+            results.push(topic_error_result(
+                name,
+                codes::INVALID_REQUEST,
+                Some("Duplicate topic name.".into()),
+            ));
+            continue;
+        }
+        if name == CLUSTER_METADATA_TOPIC {
+            results.push(topic_error_result(
+                name,
+                codes::INVALID_REQUEST,
+                Some(format!(
+                    "Creation of internal topic {CLUSTER_METADATA_TOPIC} is prohibited."
+                )),
+            ));
+            continue;
+        }
+
+        // The Create decision computed above: an Allow either from the
+        // cluster-wide shortcut or from a per-topic ACL. Kafka answers a
+        // denial TOPIC_AUTHORIZATION_FAILED with this exact message
+        // (`ControllerApis.createTopics`), never CLUSTER_AUTHORIZATION_FAILED
+        // -- the cluster check was only ever a shortcut to skip the per-topic
+        // lookup, not a distinct failure mode.
+        if denied_names.contains(&name) {
+            results.push(topic_error_result(
+                name,
+                codes::TOPIC_AUTHORIZATION_FAILED,
+                Some("Authorization failed.".into()),
+            ));
+            continue;
+        }
 
         // Kafka checks the name before anything else. The name becomes part
         // of the partition directory path, so no later step may see a name
@@ -535,21 +603,3 @@ fn disclose_created_topic(
     }
 }
 
-/// Every topic row answered `CLUSTER_AUTHORIZATION_FAILED`, which is what a
-/// request that fails the whole-request `Cluster` `Create` gate gets: the
-/// handler learns nothing else about the topics, so no row can carry a
-/// different verdict.
-fn cluster_denied_response(req: &CreateTopicsRequest) -> CreateTopicsResponse {
-    let results = req
-        .topics
-        .iter()
-        .map(|topic| {
-            topic_error_result(
-                topic.name.clone(),
-                codes::CLUSTER_AUTHORIZATION_FAILED,
-                Some("create-topics denied".into()),
-            )
-        })
-        .collect();
-    create_topics_response(results, 0)
-}
