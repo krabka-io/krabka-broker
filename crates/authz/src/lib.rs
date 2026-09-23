@@ -40,6 +40,7 @@
 
 mod allow_all;
 pub mod cache;
+mod host_format;
 #[cfg(test)]
 mod precedence;
 mod simple;
@@ -49,6 +50,7 @@ use std::net::SocketAddr;
 
 pub use allow_all::AllowAllAuthorizer;
 pub use cache::AclCache;
+pub use host_format::jdk_host_address;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_security::Principal;
 pub use simple::SimpleAclAuthorizer;

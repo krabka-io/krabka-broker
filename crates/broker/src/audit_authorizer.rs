@@ -54,7 +54,7 @@ impl Authorizer for AuditingAuthorizer {
                     auth_method: format!("{:?}", req.principal.auth_method),
                 },
                 source: AuditEndpoint {
-                    ip: req.host.ip().to_string(),
+                    ip: krabka_authz::jdk_host_address(req.host.ip()),
                     port: req.host.port(),
                 },
                 resource_type: format!("{:?}", req.resource_type),
