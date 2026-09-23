@@ -192,10 +192,10 @@ pub(super) async fn handle_transactional(
                     )
                     .await?;
                     prepared.last_update_ms = now_ms;
-                    coord
+                    let persisted = coord
                         .put_under_state_partition_lock(prepared.clone(), txnv)
                         .await?;
-                    *e = prepared.clone();
+                    *e = persisted;
                     drop(e);
                     drop(state_partition_write);
                     // `put` republishes the tid under a fresh handle, so the
@@ -321,10 +321,10 @@ pub(super) async fn handle_transactional(
             // Stage on a clone: until the append is durable, a caller already
             // parked on this entry's lock must still see the identity it held
             // before this bump.
-            coord
+            let persisted = coord
                 .put_under_state_partition_lock(staged.clone(), txnv)
                 .await?;
-            *e3 = staged;
+            *e3 = persisted;
             Ok(InitProducerIdResponse {
                 error_code: codes::NONE,
                 // Unwrap the entry's `ProducerId` into the raw-`i64` wire field.
