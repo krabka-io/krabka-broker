@@ -337,6 +337,11 @@ kafka_codes! {
     /// caller retries after a brief wait.
     UNKNOWN_LEADER_EPOCH = 75;
 
+    /// `TRANSACTIONAL_ID_NOT_FOUND` (105, KIP-664): `DescribeTransactions`
+    /// named a transactional id this broker's coordinator holds no entry
+    /// for, or one whose entry is `Dead`.
+    TRANSACTIONAL_ID_NOT_FOUND = 105;
+
     /// `INELIGIBLE_REPLICA` (107, KIP-903): an `AlterPartition` proposed a new
     /// ISR that holds at least one ineligible replica. Such a replica is a
     /// broker that is not currently registered, or one whose stamped broker

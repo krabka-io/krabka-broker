@@ -89,7 +89,11 @@ async fn describe_transaction(
             .first()
             .expect("one row per requested id")
             .clone();
-        if !matches!(row.error_code, 14 | 16) || std::time::Instant::now() >= deadline {
+        if !matches!(
+            row.error_code,
+            codes::COORDINATOR_LOAD_IN_PROGRESS | codes::NOT_COORDINATOR
+        ) || std::time::Instant::now() >= deadline
+        {
             return row;
         }
         // intentional: the coordinator load has no awaiter reachable from a
@@ -358,7 +362,7 @@ async fn describe_transactions_returns_not_found_for_unknown_tid() {
     let row = describe_transaction(&client, "ghost-tid").await;
     assert!(
         row == DescribedTransactionState {
-            error_code: 75,
+            error_code: codes::TRANSACTIONAL_ID_NOT_FOUND,
             transactional_id: "ghost-tid".into(),
             ..Default::default()
         }
