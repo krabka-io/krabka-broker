@@ -97,8 +97,7 @@ pub(crate) async fn handle(
                     version,
                 );
             }
-            if !required.is_empty()
-                && topic_authz::describe_denied(broker, &image, ctx, &required)
+            if !required.is_empty() && topic_authz::describe_denied(broker, &image, ctx, &required)
             {
                 return crate::handlers::encode_response(
                     &error(codes::TOPIC_AUTHORIZATION_FAILED),
@@ -389,7 +388,10 @@ mod tests {
 
         for (group_id, source_topic, message) in rows {
             let mut req = request(group_id);
-            req.topology.as_mut().expect("the join carries a topology").subtopologies[0]
+            req.topology
+                .as_mut()
+                .expect("the join carries a topology")
+                .subtopologies[0]
                 .source_topics = vec![source_topic.into()];
 
             let bytes = handle(&broker, version, 1, &encode_request(&req), &ctx)
@@ -404,7 +406,10 @@ mod tests {
                     ),
                 "{group_id}"
             );
-            assert!(broker.group_coordinator.find_streams(group_id).is_none(), "{group_id}");
+            assert!(
+                broker.group_coordinator.find_streams(group_id).is_none(),
+                "{group_id}"
+            );
         }
         broker_handle.shutdown().await;
     }
@@ -487,7 +492,10 @@ mod tests {
         assert!(resp.error_code == codes::NONE, "{resp:?}");
         let status = resp.status.unwrap_or_default();
         assert!(
-            status.iter().map(|s| s.status_detail.clone()).collect::<Vec<_>>()
+            status
+                .iter()
+                .map(|s| s.status_detail.clone())
+                .collect::<Vec<_>>()
                 == vec![
                     "Internal topics are missing: no-create-grant-changelog; Unauthorized to \
                      CREATE on topics no-create-grant-changelog."

@@ -134,7 +134,10 @@ pub(super) async fn create_internal_topics(
     // `MISSING_INTERNAL_TOPICS` status tries the whole set again.
     let unauthorized = create_unauthorized(broker, ctx, specs);
     if !unauthorized.is_empty() {
-        let detail = format!("Unauthorized to CREATE on topics {}.", unauthorized.join(", "));
+        let detail = format!(
+            "Unauthorized to CREATE on topics {}.",
+            unauthorized.join(", ")
+        );
         append_missing_internal_topics_detail(response, &detail);
         return Ok(());
     }

@@ -22,7 +22,12 @@ pub(super) fn required_topics(topology: &Topology) -> Vec<String> {
             .source_topics
             .iter()
             .map(String::as_str)
-            .chain(subtopology.repartition_sink_topics.iter().map(String::as_str))
+            .chain(
+                subtopology
+                    .repartition_sink_topics
+                    .iter()
+                    .map(String::as_str),
+            )
             .chain(
                 subtopology
                     .repartition_source_topics
