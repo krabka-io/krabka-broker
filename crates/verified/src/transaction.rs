@@ -486,34 +486,6 @@ pub enum IdleTransactionState {
     Other,
 }
 
-/// Resolve the persisted timeout without colliding with the 2PC sentinel.
-#[requires(0 < min_timeout_ms@)]
-#[requires(min_timeout_ms@ <= max_timeout_ms@)]
-#[requires(max_timeout_ms@ < i32::MAX@)]
-#[ensures(enable_2pc ==> result@ == i32::MAX@)]
-#[ensures(!enable_2pc ==> min_timeout_ms@ <= result@ && result@ <= max_timeout_ms@)]
-#[ensures(!enable_2pc && requested_ms@ < min_timeout_ms@ ==> result@ == min_timeout_ms@)]
-#[ensures(!enable_2pc && requested_ms@ > max_timeout_ms@ ==> result@ == max_timeout_ms@)]
-#[ensures(!enable_2pc && min_timeout_ms@ <= requested_ms@ && requested_ms@ <= max_timeout_ms@
-    ==> result@ == requested_ms@)]
-#[must_use]
-pub fn resolve_transaction_timeout(
-    enable_2pc: bool,
-    requested_ms: i32,
-    min_timeout_ms: i32,
-    max_timeout_ms: i32,
-) -> i32 {
-    if enable_2pc {
-        NO_TRANSACTION_TIMEOUT_MS
-    } else if requested_ms < min_timeout_ms {
-        min_timeout_ms
-    } else if requested_ms > max_timeout_ms {
-        max_timeout_ms
-    } else {
-        requested_ms
-    }
-}
-
 /// Whether the idle reaper may abort one persisted transaction.
 #[requires(0 < txn_timeout_ms@)]
 #[ensures(state != IdleTransactionState::Ongoing ==> !result)]
@@ -1057,13 +1029,7 @@ mod tests {
     }
 
     #[test]
-    fn two_pc_timeout_and_reaper_are_fail_closed() {
-        assert2::assert!(resolve_transaction_timeout(true, -1, 2_000, 8_000) == i32::MAX);
-        assert2::assert!(resolve_transaction_timeout(false, -1, 2_000, 8_000) == 2_000);
-        assert2::assert!(resolve_transaction_timeout(false, 2_000, 2_000, 8_000) == 2_000);
-        assert2::assert!(resolve_transaction_timeout(false, 5_000, 2_000, 8_000) == 5_000);
-        assert2::assert!(resolve_transaction_timeout(false, 8_000, 2_000, 8_000) == 8_000);
-        assert2::assert!(resolve_transaction_timeout(false, i32::MAX, 2_000, 8_000) == 8_000);
+    fn idle_transaction_reaper_is_fail_closed() {
         assert2::assert!(!should_abort_idle_transaction(
             IdleTransactionState::Ongoing,
             i32::MAX,
