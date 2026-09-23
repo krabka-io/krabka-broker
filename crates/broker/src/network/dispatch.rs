@@ -510,8 +510,8 @@ async fn serve_connection_stream<S>(
         // `ListenerKind::Client` listener, and accepts these keys on
         // `InterBroker` and `ClientAndInterBroker` alike, where krabka's own
         // peers send them and the per-handler `ClusterAction` check applies.
-        if broker.config.listener_kind(&spec.name) == crate::api_catalog::ListenerKind::Client
-            && crate::api_catalog::INTER_BROKER_ONLY_APIS.contains(&parsed.api_key)
+        if crate::api_catalog::INTER_BROKER_ONLY_APIS.contains(&parsed.api_key)
+            && broker.config.listener_kind(&spec.name) == crate::api_catalog::ListenerKind::Client
         {
             broker.metrics.record_api_request(parsed.api_key);
             tracing::warn!(
