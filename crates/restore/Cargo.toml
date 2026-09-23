@@ -59,8 +59,7 @@ futures-util = { workspace = true }
 object_store = { workspace = true }
 # RE2 semantics: `--exclude-key` and `--exclude-header` run over millions of
 # archived records, so an operator-supplied pattern must stay linear in the
-# input. `java_regex` is for the KIP-664 `ListTransactions` wire surface and
-# offers no such bound.
+# input.
 regex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

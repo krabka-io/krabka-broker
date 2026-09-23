@@ -18,7 +18,6 @@
 //! so the mapping is direct.
 
 use bytes::Bytes;
-use java_regex::{PatternSyntaxError, Regex};
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
     Decode,
@@ -36,18 +35,23 @@ use crate::{
     txn::state::TxnState,
 };
 
-/// Every transaction state the coordinator can report. The handler compares
-/// filter strings against this set with [`txn_state_str`]. It echoes any
-/// filter string outside the set back in the KIP-664
+/// Every state name Kafka's `TransactionState.fromName` resolves. The handler
+/// echoes any filter string outside this set back in the KIP-664
 /// `unknown_state_filters` response field.
-const ALL_TXN_STATES: [TxnState; 7] = [
-    TxnState::Empty,
-    TxnState::Ongoing,
-    TxnState::PrepareCommit,
-    TxnState::PrepareAbort,
-    TxnState::CompleteCommit,
-    TxnState::CompleteAbort,
-    TxnState::Dead,
+///
+/// `PrepareEpochFence` is one of Kafka's eight states. krabka never holds it,
+/// because its epoch fence is not persisted, so the name is a known filter
+/// that matches nothing. `Dead` is a known filter too, and it also matches
+/// nothing, because a `Dead` transaction is never listed.
+const ALL_TXN_STATE_NAMES: [&str; 8] = [
+    "Empty",
+    "Ongoing",
+    "PrepareCommit",
+    "PrepareAbort",
+    "PrepareEpochFence",
+    "CompleteCommit",
+    "CompleteAbort",
+    "Dead",
 ];
 
 /// JVM-canonical string form of a Krabka [`TxnState`]. These names match the
@@ -70,14 +74,16 @@ fn matches_duration_filter(start_ms: i64, now_ms: i64, duration_filter: i64) -> 
     duration_filter < 0 || now_ms.saturating_sub(start_ms) > duration_filter
 }
 
-/// Java's `Matcher.matches()` requires the pattern to match the complete
-/// transactional id.
-fn compile_transactional_id_pattern(
-    pattern: Option<&str>,
-) -> Result<Option<Regex>, PatternSyntaxError> {
+/// Kafka compiles the KIP-1038 pattern with RE2J and matches the complete
+/// transactional id (`Matcher.matches()`).
+///
+/// # Errors
+///
+/// Returns the reason a pattern does not compile.
+fn compile_transactional_id_pattern(pattern: Option<&str>) -> Result<Option<regex::Regex>, String> {
     pattern
         .filter(|pattern| !pattern.is_empty())
-        .map(Regex::new)
+        .map(crate::re2j::compile_full_match)
         .transpose()
 }
 
@@ -121,6 +127,20 @@ pub(crate) async fn handle(
             }
         };
 
+    // Kafka answers COORDINATOR_LOAD_IN_PROGRESS while any owned transaction
+    // state partition loads, because the list would be short of whatever those
+    // partitions hold.
+    if broker.txn_coordinator.any_partition_loading().await {
+        return crate::handlers::encode_response(
+            &ListTransactionsResponse {
+                throttle_time_ms: 0,
+                error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
+                ..Default::default()
+            },
+            version,
+        );
+    }
+
     let image = broker.controller.current_image();
 
     // Snapshot every coordinator-local txn entry.
@@ -135,17 +155,25 @@ pub(crate) async fn handle(
     // KIP-664: if filtered states include a string the broker doesn't
     // recognize, surface it in `unknown_state_filters` so the client
     // knows its filter is overly conservative.
-    let known_states: std::collections::HashSet<&'static str> =
-        ALL_TXN_STATES.into_iter().map(txn_state_str).collect();
+    // Kafka turns the filter list into a Set in `KafkaApis`, so each unknown
+    // name is reported once. `ALL_TXN_STATE_NAMES` is eight entries, so a
+    // linear scan beats hashing it into a set on every request.
+    let mut seen_unknown = std::collections::HashSet::new();
     let unknown_state_filters: Vec<String> = req
         .state_filters
         .iter()
-        .filter(|s| !known_states.contains(s.as_str()))
+        .filter(|name| !ALL_TXN_STATE_NAMES.contains(&name.as_str()))
+        .filter(|name| seen_unknown.insert(name.as_str()))
         .cloned()
         .collect();
 
     let mut out: Vec<TransactionState> = Vec::with_capacity(entries.len());
     for entry in entries {
+        // Kafka filters the `Dead` state out: it means the transactional id
+        // and its metadata are being expired.
+        if entry.state == TxnState::Dead {
+            continue;
+        }
         let state = txn_state_str(entry.state);
 
         // State filter: empty = no filter; otherwise the entry's state
@@ -167,7 +195,7 @@ pub(crate) async fn handle(
         // to `None`, while a non-empty pattern is a full-string match.
         if transactional_id_pattern
             .as_ref()
-            .is_some_and(|pattern| !pattern.matches(&entry.transactional_id))
+            .is_some_and(|pattern| !pattern.is_match(&entry.transactional_id))
         {
             continue;
         }
@@ -266,25 +294,20 @@ mod tests {
             let compiled = compile_transactional_id_pattern(pattern).expect("valid pattern");
             let matches = compiled
                 .as_ref()
-                .is_none_or(|pattern| pattern.matches(transactional_id));
+                .is_none_or(|pattern| pattern.is_match(transactional_id));
             assert!(
                 matches == expected,
                 "{pattern:?} against {transactional_id}"
             );
         }
-        assert!(
-            compile_transactional_id_pattern(Some("(?=txn-).*"))
-                .unwrap()
-                .unwrap()
-                .matches("txn-alpha")
-        );
-        assert!(
-            compile_transactional_id_pattern(Some(r"(txn)-\1"))
-                .unwrap()
-                .unwrap()
-                .matches("txn-txn")
-        );
-        assert!(compile_transactional_id_pattern(Some("(unclosed")).is_err());
+        // Kafka compiles the pattern with RE2J, which has no lookahead, no
+        // backreferences and no possessive quantifiers.
+        for refused in ["(?=txn-).*", r"(txn)-\1", "a*+", "(unclosed"] {
+            assert!(
+                compile_transactional_id_pattern(Some(refused)).is_err(),
+                "{refused}"
+            );
+        }
     }
 
     crate::test_support::wire_helpers!(
@@ -428,6 +451,111 @@ mod tests {
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected);
+        broker_handle.shutdown().await;
+    }
+
+    /// Kafka lists no `Dead` transaction, resolves all eight state names, and
+    /// reports each unknown name once (`TransactionState.fromName` and the
+    /// `Set` in `KafkaApis`).
+    #[tokio::test]
+    async fn dead_transactions_are_never_listed_and_unknown_filters_are_unique() {
+        use krabka_log::ProducerId;
+
+        use crate::txn::state::TxnEntry;
+
+        let version = krabka_protocol::owned::list_transactions_response::MAX_VERSION;
+        let (broker_handle, dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let coordinator = &broker.txn_coordinator;
+        // Two transactions in one state partition: one ongoing, one dying.
+        let (ongoing_id, dead_id) = ("txn-list-ongoing", "txn-list-dead");
+        for tid in [ongoing_id, dead_id] {
+            let partition = coordinator.partition_for(tid);
+            let partition_dir = crate::log_dir::partition_dir(
+                dir.path(),
+                crate::txn::bootstrap::TOPIC,
+                partition.get(),
+            );
+            std::fs::create_dir_all(&partition_dir).expect("create the state directory");
+            let log = krabka_log::Log::open(&partition_dir, krabka_log::LogConfig::default())
+                .expect("open the state log");
+            broker.partitions.insert(
+                crate::txn::bootstrap::TOPIC.into(),
+                partition,
+                crate::broker::spawn_partition(
+                    crate::txn::bootstrap::TOPIC.to_string(),
+                    partition,
+                    dir.path().to_path_buf(),
+                    log,
+                    crate::log_dir_status::LogDirRegistry::default(),
+                    Arc::new(crate::producer_state::ProducerState::new()),
+                    false,
+                ),
+            );
+            coordinator.lead_state_partition_for_test(partition).await;
+            let dead = tid == dead_id;
+            let producer_id = if dead { 200 } else { 100 };
+            let mut entry =
+                TxnEntry::new_empty(tid.to_string(), ProducerId(producer_id), 0, 60_000, 0);
+            entry.state = if dead {
+                TxnState::Dead
+            } else {
+                TxnState::Ongoing
+            };
+            coordinator
+                .put(entry, crate::txn::version::TxnVersion::Classic)
+                .await
+                .expect("seed the transaction");
+        }
+
+        let p = principal("admin");
+        let peer = peer();
+        let ctx = test_context(&p, &peer);
+        // (state filters, listed ids, unknown filters)
+        let cases = [
+            (Vec::new(), vec![ongoing_id.to_string()], Vec::new()),
+            (vec!["Dead".to_string()], Vec::new(), Vec::new()),
+            (
+                vec!["PrepareEpochFence".to_string()],
+                Vec::new(),
+                Vec::new(),
+            ),
+            (
+                vec!["Nope".to_string(), "Nope".to_string()],
+                Vec::new(),
+                vec!["Nope".to_string()],
+            ),
+        ];
+        let mut expected = Vec::new();
+        let mut actual = Vec::new();
+        for (state_filters, listed, unknown) in cases {
+            let request = encode_request(
+                &ListTransactionsRequest {
+                    state_filters: state_filters.clone(),
+                    duration_filter: -1,
+                    ..Default::default()
+                },
+                version,
+            );
+            let response = decode_response(
+                &handle(&broker, version, 1, &request, &ctx)
+                    .await
+                    .expect("handle"),
+                version,
+            );
+            expected.push((state_filters.clone(), listed, unknown));
+            actual.push((
+                state_filters,
+                response
+                    .transaction_states
+                    .iter()
+                    .map(|row| row.transactional_id.clone())
+                    .collect(),
+                response.unknown_state_filters,
+            ));
+        }
+        assert!(actual == expected);
         broker_handle.shutdown().await;
     }
 
