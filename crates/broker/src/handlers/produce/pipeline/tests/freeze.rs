@@ -239,7 +239,6 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
                 schema: None,
                 topic_name: topic.into(),
                 freeze,
-                txn_id_denied: false,
                 transaction: crate::handlers::produce::producer_checks::TransactionRequest {
                     transactional_id: None,
                     version: 9,
