@@ -184,20 +184,18 @@ pub(crate) fn handle(
                     continue;
                 }
 
-                let current_epoch = p.current_leader_epoch.load(Ordering::Acquire);
-
                 // Compute end_offset via the epoch checkpoint.
                 // `end_offset_for_epoch` returns log_end_offset when
-                // leader_epoch == current_epoch (the epoch is still open),
-                // the start-offset of the next epoch (the truncation point)
-                // for an older epoch the checkpoint tracked, or the
-                // `UNDEFINED_OFFSET` sentinel (`-1`) when the checkpoint has
-                // no entry for the requested epoch at all -- which includes
-                // a requested epoch above `current_epoch`, exactly like
-                // `LeaderEpochFileCache.endOffsetFor` answering an epoch
-                // past the latest tracked one. No error either way: Kafka's
-                // hosting checks above are what set an error code, not this
-                // KIP-101 lookup.
+                // leader_epoch == the partition's current epoch (the epoch is
+                // still open), the start-offset of the next epoch (the
+                // truncation point) for an older epoch the checkpoint
+                // tracked, or the `UNDEFINED_OFFSET` sentinel (`-1`) when the
+                // checkpoint has no entry for the requested epoch at all --
+                // which includes a requested epoch above the current one,
+                // exactly like `LeaderEpochFileCache.endOffsetFor` answering
+                // an epoch past the latest tracked one. No error either way:
+                // Kafka's hosting checks above are what set an error code,
+                // not this KIP-101 lookup.
                 let log = p.log.lock().expect("log mutex poisoned");
                 let leo = log.log_end_offset();
                 // Wrap the raw wire `requested_epoch` for the log-crate seam.
@@ -214,7 +212,7 @@ pub(crate) fn handle(
                 out.leader_epoch = if end_offset.0 == -1 {
                     -1
                 } else {
-                    current_epoch
+                    part.leader_epoch
                 };
 
                 parts_out.push(out);
