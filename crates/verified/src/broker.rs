@@ -263,10 +263,14 @@ pub enum DeleteRecordsTrimDecision {
 
 /// Admit a trim and cap it at every logical deletion frontier.
 ///
-/// `-1` means the current high watermark. Explicit requests may name the
-/// uncommitted tail, so the committed high watermark still caps them. A
-/// scheduled topic adds its delivery watermark as a second cap. Stale and
-/// repeated requests return the current start and never move it backwards.
+/// `-1` means the current high watermark, which is always admitted. An
+/// explicit request above the high watermark is refused
+/// `RejectOutOfRange`, matching `UnifiedLog.maybeIncrementLogStartOffset`
+/// on Kafka trunk: an explicit offset never enters the uncommitted tail,
+/// even when it is still below the log end offset. A scheduled topic adds
+/// its delivery watermark as a second cap on top of the high watermark.
+/// Stale and repeated requests return the current start and never move it
+/// backwards.
 #[must_use]
 #[ensures({
     let malformed = facts.requested@ < -1
@@ -275,23 +279,20 @@ pub enum DeleteRecordsTrimDecision {
         || facts.log_end@ < facts.high_watermark@
         || (facts.has_delivery_watermark
             && facts.delivery_watermark@ < facts.current_start@);
-    let out_of_range = !malformed && facts.requested@ > facts.log_end@;
+    let out_of_range = !malformed
+        && facts.requested@ != -1
+        && facts.requested@ > facts.high_watermark@;
     let resolved = if facts.requested@ == -1 {
         facts.high_watermark@
     } else {
         facts.requested@
     };
-    let committed = if resolved < facts.high_watermark@ {
-        resolved
-    } else {
-        facts.high_watermark@
-    };
     let bounded = if facts.has_delivery_watermark
-        && facts.delivery_watermark@ < committed
+        && facts.delivery_watermark@ < resolved
     {
         facts.delivery_watermark@
     } else {
-        committed
+        resolved
     };
     match result {
         DeleteRecordsTrimDecision::RejectMalformed => malformed,
@@ -323,7 +324,7 @@ pub const fn delete_records_trim_decision(
     {
         return DeleteRecordsTrimDecision::RejectMalformed;
     }
-    if facts.requested > facts.log_end {
+    if facts.requested != -1 && facts.requested > facts.high_watermark {
         return DeleteRecordsTrimDecision::RejectOutOfRange;
     }
     let resolved = if facts.requested == -1 {
@@ -331,19 +332,14 @@ pub const fn delete_records_trim_decision(
     } else {
         facts.requested
     };
-    let committed = if resolved < facts.high_watermark {
-        resolved
-    } else {
-        facts.high_watermark
-    };
     let bounded = if facts.has_delivery_watermark {
-        if committed < facts.delivery_watermark {
-            committed
+        if resolved < facts.delivery_watermark {
+            resolved
         } else {
             facts.delivery_watermark
         }
     } else {
-        committed
+        resolved
     };
     if bounded <= facts.current_start {
         DeleteRecordsTrimDecision::Noop {
@@ -904,11 +900,15 @@ mod tests {
         assert!(delete_records_trim_decision(facts(5, 7, 9, 2, true, 1)) == RejectMalformed);
         assert!(delete_records_trim_decision(facts(5, 7, 9, 2, false, 1)) == Apply { frontier: 5 });
 
-        // Out of range vs log_end boundary
+        // Out of range: an explicit offset above the log end, and one above
+        // the high watermark but still within the log end (KIP-107: the
+        // uncommitted tail is never a valid explicit target).
         assert!(delete_records_trim_decision(facts(10, 7, 9, 2, false, 0)) == RejectOutOfRange);
+        assert!(delete_records_trim_decision(facts(8, 7, 9, 2, false, 0)) == RejectOutOfRange);
         assert!(delete_records_trim_decision(facts(9, 9, 9, 2, false, 0)) == Apply { frontier: 9 });
 
-        // Requested = -1 resolves to high_watermark
+        // Requested = -1 resolves to high_watermark and is always admitted,
+        // even though an explicit request for that same offset is refused.
         assert!(
             delete_records_trim_decision(facts(-1, 7, 9, 2, false, 0)) == Apply { frontier: 7 }
         );
@@ -917,9 +917,8 @@ mod tests {
         assert!(delete_records_trim_decision(facts(0, 0, 0, 0, false, 0)) == Noop { frontier: 0 });
         assert!(delete_records_trim_decision(facts(0, 0, 0, 0, true, 0)) == Noop { frontier: 0 });
 
-        // Clamping by high_watermark and delivery_watermark
-        assert!(delete_records_trim_decision(facts(8, 7, 9, 2, false, 0)) == Apply { frontier: 7 });
-        assert!(delete_records_trim_decision(facts(8, 7, 9, 2, true, 6)) == Apply { frontier: 6 });
+        // Clamping by delivery_watermark
+        assert!(delete_records_trim_decision(facts(7, 7, 9, 2, true, 6)) == Apply { frontier: 6 });
         assert!(delete_records_trim_decision(facts(5, 7, 9, 2, true, 6)) == Apply { frontier: 5 });
 
         // Noop when bounded <= current_start
