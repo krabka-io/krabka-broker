@@ -87,10 +87,25 @@ fn publish_leader_updates_leader_and_quorum_watchers() {
 #[test]
 fn metadata_fetch_slice_excludes_negative_hwm_and_uncommitted_batches() {
     let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
-    let mut first = one_offset_batch(0, 1, b"a");
-    let mut second = one_offset_batch(1, 1, b"b");
-    engine.log.append(&mut first, 0).expect("append first");
-    engine.log.append(&mut second, 0).expect("append second");
+    let mut multi = RecordBatch {
+        base_offset: 0,
+        partition_leader_epoch: 1,
+        last_offset_delta: 1,
+        records: vec![
+            krabka_protocol::records::Record {
+                value: Some(bytes::Bytes::from_static(b"a")),
+                offset_delta: 0,
+                ..Default::default()
+            },
+            krabka_protocol::records::Record {
+                value: Some(bytes::Bytes::from_static(b"b")),
+                offset_delta: 1,
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    engine.log.append(&mut multi, 0).expect("append multi");
     engine.log.advance_hwm(Offset(1));
 
     assert2::assert!(

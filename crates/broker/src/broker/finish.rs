@@ -73,6 +73,7 @@ pub(super) async fn finish_broker_startup(
         .queued_max_request_bytes
         .map(|budget| crate::network::dispatch::RequestByteBudget::of(budget.bytes_usize()));
     let broker = Arc::new(Broker {
+        streams_internal_topics: Arc::default(),
         config,
         controller,
         partitions,

@@ -24,8 +24,8 @@ use uuid::Uuid;
 use self::{
     timestamp::parse_timestamp,
     value::{
-        parse_header_pattern, parse_node_id, parse_offset_bound, parse_offset_range,
-        parse_producer_id, parse_regex, parse_topic_name,
+        parse_cluster_id, parse_header_pattern, parse_node_id, parse_offset_bound,
+        parse_offset_range, parse_producer_id, parse_regex, parse_topic_name,
     },
 };
 use crate::report::ReportFormat;
@@ -150,7 +150,10 @@ pub struct TargetArgs {
     pub log_dir: PathBuf,
 
     /// Cluster id of the restored cluster. Generated if not provided.
-    #[arg(long)]
+    /// Accepts Kafka's base64 `Uuid` form -- what `Metadata` and
+    /// `DescribeCluster` report (#1042) -- or `java.util.UUID`'s hyphenated
+    /// form.
+    #[arg(long, value_parser = parse_cluster_id)]
     pub cluster_id: Option<Uuid>,
 
     /// This node's raft id. Required with `--standalone` and

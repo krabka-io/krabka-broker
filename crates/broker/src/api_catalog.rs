@@ -256,7 +256,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/client_quotas/throttling.rs",
             "crates/broker/src/network/dispatch/throttle_audit.rs::throttle_echo_divergences_are_the_recorded_ones",
         ],
-        note: "Every API a request quota can hold on the ordinary dispatch path reports the delay it was held for: the dispatch loop patches a leading `ThrottleTimeMs`, and `Produce`, `Fetch` and `ApiVersions` -- whose schemas bury the field behind an array -- charge the quota in the handler and set it on the typed response instead. The throttle-echo section below lists the buried-field APIs and what each one's `RequestQuotaPolicy` costs; the rest are `InlineExempt`, so only a reply outside their advertised version range can be held without an echo.",
+        note: "Every API a request quota can hold on the ordinary dispatch path reports the delay it was held for: the dispatch loop patches a leading `ThrottleTimeMs`, and `Produce`, `Fetch` and `ApiVersions` -- whose schemas bury the field behind an array -- charge the quota in the handler and set it on the typed response instead. The dispatch loop decodes and encodes again the other buried-field responses (the delegation-token APIs and `OffsetDelete`) to set the field. The throttle-echo section below lists the buried-field APIs and what each one's `RequestQuotaPolicy` costs.",
     },
     KipAnnotation {
         key: "KIP-226",
@@ -466,6 +466,14 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "",
     },
     KipAnnotation {
+        key: "KIP-464",
+        claim: "CreateTopics num_partitions and replication_factor -1 take the broker defaults",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/create_topics.rs",
+        tests: &["crates/broker/src/handlers/create_topics/tests.rs"],
+        note: "",
+    },
+    KipAnnotation {
         key: "KIP-467",
         claim: "Per-record error indices and messages in the Produce response",
         status: KipStatus::Implemented,
@@ -510,7 +518,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         key: "KIP-511",
         claim: "Client software name and version in ApiVersions v3",
         status: KipStatus::Implemented,
-        module: "crates/broker/src/handlers/api_versions/client_info.rs",
+        module: "crates/raft/src/server/api_versions/client_software.rs",
         tests: &[
             "crates/broker/tests/client_software_versions.rs",
             "crates/broker/tests/librdkafka_conformance.rs::round_trip_group_join_and_api_versions_with_kcat",
@@ -923,6 +931,17 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "",
     },
     KipAnnotation {
+        key: "KIP-1038",
+        claim: "ListTransactions filters transactional ids by an RE2J-compiled pattern",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/list_transactions.rs",
+        tests: &[
+            "crates/broker/src/handlers/list_transactions.rs",
+            "crates/broker/src/re2j.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
         key: "KIP-1071",
         claim: "Streams groups: StreamsGroupHeartbeat and StreamsGroupDescribe",
         status: KipStatus::Implemented,
@@ -957,7 +976,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::OutOfScope,
         module: "crates/broker/src/coordinator/unified/persistence_next_gen/epochs.rs",
         tests: &[],
-        note: "The hash is how Kafka decides a group must rebalance because its subscribed topics changed shape; krabka decides that from the metadata image instead, so it keeps no such hash. The field is tagged and its default is 0, so the record krabka writes is what Kafka writes for a group whose hash is unset, and Kafka's own reader accepts it. krabka keeps the streams partition-metadata snapshot this KIP retired, on the key version Kafka no longer assigns, where Kafka's serde skips it as an unknown type rather than mis-reading it.",
+        note: "The hash is how Kafka decides a group must rebalance because its subscribed topics changed shape. The consumer and share groups of krabka decide that from the metadata image instead and write the hash as 0, which is what Kafka writes for a group whose hash is unset, and Kafka's own reader accepts it. The streams group keeps Kafka's hash, because KIP-1071 configures the topology again when it changes, and writes it in its group metadata record. krabka keeps the streams partition-metadata snapshot this KIP retired, on the key version Kafka no longer assigns, where Kafka's serde skips it as an unknown type rather than mis-reading it.",
     },
     KipAnnotation {
         key: "KIP-1142",

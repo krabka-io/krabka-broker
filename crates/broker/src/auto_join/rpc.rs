@@ -146,8 +146,6 @@ fn auto_join_connection_options() -> krabka_client_core::ConnectionOptions {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-
     use super::*;
 
     #[test]
@@ -177,6 +175,52 @@ mod tests {
         )
         .await
         .expect_err("closed port must not produce a successful default response");
-        assert!(err.contains("dial"), "unexpected error: {err}");
+        assert2::assert!(err.contains("dial"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn send_update_voter_errors_when_target_is_unreachable() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ephemeral port");
+        let target = listener.local_addr().expect("local addr");
+        drop(listener);
+        let target = target.to_string();
+
+        let client = crate::network::client::InterBrokerClient::new(None, None);
+        let req = UpdateRaftVoterRequest::default();
+        let err = send_update_voter(
+            &client,
+            krabka_security::ListenerProtocol::Plaintext,
+            "broker.internal",
+            &target,
+            &req,
+        )
+        .await
+        .expect_err("closed port must not produce a successful default response");
+        assert2::assert!(err.contains("dial"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn send_remove_raft_voter_errors_when_target_is_unreachable() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ephemeral port");
+        let target = listener.local_addr().expect("local addr");
+        drop(listener);
+        let target = target.to_string();
+
+        let client = crate::network::client::InterBrokerClient::new(None, None);
+        let req = RemoveRaftVoterRequest::default();
+        let err = send_remove_raft_voter(
+            &client,
+            krabka_security::ListenerProtocol::Plaintext,
+            "broker.internal",
+            &target,
+            &req,
+        )
+        .await
+        .expect_err("closed port must not produce a successful default response");
+        assert2::assert!(err.contains("dial"), "unexpected error: {err}");
     }
 }

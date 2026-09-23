@@ -462,3 +462,72 @@ async fn unassigned_partitions_keep_their_share_state() {
         broker.shutdown().await;
     }
 }
+
+/// The start offset that the group coordinator initializes a share partition
+/// at, as Kafka's `buildInitializeShareGroupStateRequest` picks it: `-1` for
+/// every partition of a topic that the group sees for the first time, and `0`
+/// for a new partition of a topic that the group already knows, so records
+/// produced to that partition before its share partition loads are not
+/// skipped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn new_partitions_of_a_known_topic_start_at_offset_zero() {
+    use krabka_protocol::owned::create_partitions_request::{
+        CreatePartitionsRequest, CreatePartitionsTopic,
+    };
+
+    let (broker, bootstrap, _d) = boot().await;
+    let client = connect(&bootstrap).await;
+    create_topic(&client, "t-grow", 2).await;
+    let tid = topic_id(&broker, "t-grow");
+
+    let mut join = heartbeat("g-grow", "member-a", 0);
+    join.subscribed_topic_names = Some(vec!["t-grow".into()]);
+    let joined = client.send(join).await.unwrap();
+    assert!(
+        joined.error_code == 0,
+        "join failed: {:?}",
+        joined.error_code
+    );
+    heartbeat_until_initialized(
+        &broker,
+        &client,
+        "g-grow",
+        &[("member-a", joined.member_epoch, "t-grow")],
+        tid,
+        0..2,
+    )
+    .await;
+
+    let grown = client
+        .send(CreatePartitionsRequest {
+            topics: vec![CreatePartitionsTopic {
+                name: "t-grow".into(),
+                count: 4,
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .expect("CreatePartitions");
+    assert!(grown.results[0].error_code == 0, "{grown:?}");
+    heartbeat_until_initialized(
+        &broker,
+        &client,
+        "g-grow",
+        &[("member-a", joined.member_epoch, "t-grow")],
+        tid,
+        0..4,
+    )
+    .await;
+
+    let mut start_offsets = Vec::new();
+    for p in 0..4 {
+        let (_, _, start_offset, _) = broker
+            .share_state_summary_for_test("g-grow", tid, p)
+            .await
+            .expect("initialized");
+        start_offsets.push(start_offset);
+    }
+    assert!(start_offsets == vec![UNINITIALIZED_START_OFFSET, UNINITIALIZED_START_OFFSET, 0, 0]);
+}

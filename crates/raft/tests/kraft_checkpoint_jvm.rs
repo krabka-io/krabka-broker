@@ -4,7 +4,10 @@
 //! on-checkpoint bytes are genuine KIP-631 records (`RegisterBroker` / `Topic` /
 //! `Partition` / `Config`), not Krabka-private wincode, and that the header
 //! names the create-time of the last batch the snapshot contains rather than
-//! the epoch.
+//! the epoch. The krabka-only records (the features epoch, a diskless offset
+//! advance, a write freeze and a break-glass proposal) decode as Kafka
+//! `NoOpRecord`s, so `kafka-dump-log` reports no error and
+//! `kafka-metadata-shell` loads the snapshot.
 //!
 //! ```text
 //! cargo test -p krabka-raft --test kraft_checkpoint_jvm -- --ignored --nocapture
@@ -15,8 +18,10 @@ use std::{io::Write as _, process::Command};
 use assert2::check;
 use krabka_ids::Offset;
 use krabka_metadata::{
-    BrokerConfigRecord, BrokerRegistrationRecord, LeaderEpoch, MetadataImage, MetadataRecord,
-    NodeId, PartitionRecord, TopicConfigRecord, TopicRecord,
+    BreakGlassAction, BreakGlassProposalRecord, BrokerConfigRecord, BrokerRegistrationRecord,
+    FeatureLevelRecord, LeaderEpoch, MetadataImage, MetadataRecord, NodeId,
+    PartitionOffsetAdvanceRecord, PartitionRecord, PatternType, TopicConfigRecord,
+    TopicFreezeRecord, TopicRecord,
 };
 use krabka_protocol::records::{Record, RecordBatch};
 use krabka_raft::{kraft::KraftLog, serialize_metadata_snapshot};
@@ -99,6 +104,45 @@ fn jvm_dump_log_parses_engine_snapshot() {
         overrides: [("retention.ms".to_string(), "604800000".to_string())].into(),
     }));
 
+    // The krabka-only records. A finalized feature makes `to_records` emit
+    // the features epoch, which every formatted cluster carries.
+    image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+        name: "metadata.version".into(),
+        level: 25,
+    }));
+    image.apply(&MetadataRecord::V1PartitionOffsetAdvance(
+        PartitionOffsetAdvanceRecord {
+            topic: "orders".into(),
+            partition: 0,
+            count: 12,
+        },
+    ));
+    image.apply(&MetadataRecord::V1TopicFreeze(TopicFreezeRecord {
+        scope: "orders".into(),
+        pattern_type: PatternType::Literal,
+        frozen: true,
+        reason: "incident 4711".into(),
+        set_by: "User:alice".into(),
+        set_at_ms: APPEND_TIMESTAMP_MS,
+        proposal_id: Uuid::nil(),
+        key_id: String::new(),
+        signature: vec![],
+    }));
+    image.apply(&MetadataRecord::V1BreakGlassProposal(
+        BreakGlassProposalRecord {
+            proposal_id: Uuid::from_u128(0xB1),
+            action: BreakGlassAction::ThawTopicFreeze,
+            target: "literal:orders".into(),
+            proposer: "User:alice".into(),
+            reason: "incident 4711 closed".into(),
+            created_at_ms: APPEND_TIMESTAMP_MS,
+            expires_at_ms: APPEND_TIMESTAMP_MS + 600_000,
+            approvals: vec![],
+            consumed_at_ms: 0,
+            withdrawn: false,
+        },
+    ));
+
     // The header timestamp travels the engine's own route: stamped onto the
     // batch at append, read back off the last batch the snapshot contains, and
     // written into `SnapshotHeaderRecord.lastContainedLogTimestamp`.
@@ -146,6 +190,8 @@ fn jvm_dump_log_parses_engine_snapshot() {
         "TOPIC_RECORD",
         "PARTITION_RECORD",
         "CONFIG_RECORD",
+        "FEATURE_LEVEL_RECORD",
+        "NO_OP_RECORD",
     ] {
         assert2::assert!(text.contains(needle));
     }
@@ -157,8 +203,12 @@ fn jvm_dump_log_parses_engine_snapshot() {
     //    nil UUID is all-zeros).
     // 3. All Partition records must have partitionEpoch >= 0 after Slice 6
     //    (not -1, the schema default).
+    // `DumpLogSegments` prints "Error at <offset>, skipping." for a record
+    // that `MetadataRecordSerde` cannot read, for example an unknown apiKey.
     check!(
-        !text.contains("isvalid: false") && !text.to_lowercase().contains("could not"),
+        !text.contains("isvalid: false")
+            && !text.to_lowercase().contains("could not")
+            && !text.contains("Error at"),
         "dump-log record-validity check failed: {text}"
     );
     check!(
@@ -179,5 +229,38 @@ fn jvm_dump_log_parses_engine_snapshot() {
     check!(
         text.contains(&last_contained_log_timestamp.to_string()),
         "dump-log header timestamp check failed, want {last_contained_log_timestamp}: {text}"
+    );
+
+    // `kafka-metadata-shell` replays the whole snapshot through
+    // `MetadataRecordSerde` and `MetadataDelta`. A record it cannot read
+    // fails the load, and the shell then prints no topic.
+    let shell = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-v",
+            &format!("{}:/work", dir.path().display()),
+            "mirror.gcr.io/apache/kafka:4.0.0",
+            "/opt/kafka/bin/kafka-metadata-shell.sh",
+            "--snapshot",
+            "/work/00000000000000000000-0000000000.checkpoint",
+            "ls",
+            "/image/topics/byName",
+        ])
+        .output()
+        .expect("docker run kafka-metadata-shell");
+    let shell_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&shell.stdout),
+        String::from_utf8_lossy(&shell.stderr)
+    );
+    eprintln!("{shell_text}");
+    check!(
+        shell.status.success(),
+        "metadata shell failed: {shell_text}"
+    );
+    check!(
+        shell_text.lines().any(|l| l.trim() == "orders"),
+        "metadata shell did not load the snapshot: {shell_text}"
     );
 }

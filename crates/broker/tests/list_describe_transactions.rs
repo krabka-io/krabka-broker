@@ -10,7 +10,7 @@ use std::{sync::Arc, time::Duration};
 
 use assert2::{assert, check};
 use bytes::Bytes;
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_broker::{Broker, BrokerConfig, BrokerHandle, codes};
 use krabka_client_producer::{OwnedTransaction, Producer, ProducerRecord};
 use krabka_protocol::owned::{
     create_topics_request::{CreatableTopic, CreateTopicsRequest},
@@ -45,7 +45,9 @@ async fn list_transactions(
             .send(request.clone())
             .await
             .expect("ListTransactions");
-        if response.error_code != 14 || std::time::Instant::now() >= deadline {
+        if response.error_code != codes::COORDINATOR_LOAD_IN_PROGRESS
+            || std::time::Instant::now() >= deadline
+        {
             return response;
         }
         // intentional: the coordinator load has no awaiter reachable from a

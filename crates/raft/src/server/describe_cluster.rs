@@ -3,6 +3,7 @@
 //! `--bootstrap-controller` discover the controllers, and the encoder that turns
 //! that projection into a response body.
 
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use bytes::{Bytes, BytesMut};
 
 use crate::{error::RaftError, kraft::KraftController};
@@ -61,11 +62,15 @@ pub(super) async fn describe_cluster_response_body(
         .and_then(|l| i32::try_from(l.0).ok())
         .unwrap_or(-1);
 
+    // Kafka's `Uuid.toString()` is URL-safe unpadded base64 of the 16 raw
+    // bytes, not `java.util.UUID`'s hyphenated form. See #1042.
+    let cluster_id = URL_SAFE_NO_PAD.encode(image.cluster_id().as_bytes());
+
     Ok(build_describe_cluster_body(
         version,
         req.endpoint_type,
         &voters,
-        &image.cluster_id().to_string(),
+        &cluster_id,
         controller_id,
     )?)
 }
@@ -166,6 +171,11 @@ mod tests {
                     .collect::<Vec<_>>(),
             ) == (-1, vec![(-1, "", -1)])
         );
+        // `test_engine_with_voters` opens the engine on the nil cluster id
+        // (#1042). Kafka's `Uuid.toString()` is base64 of the 16 raw bytes,
+        // not `java.util.UUID`'s hyphenated form, so the all-zero id reads as
+        // "AAAAAAAAAAAAAAAAAAAAAA", not "00000000-0000-0000-0000-000000000000".
+        check!(resp.cluster_id == "AAAAAAAAAAAAAAAAAAAAAA");
     }
 
     #[test]
@@ -180,7 +190,7 @@ mod tests {
 
         // DescribeCluster (60) is advertised so clients negotiate it (KIP-919).
         let image = krabka_metadata::MetadataImage::new(Uuid::nil());
-        let av = api_versions_response_body(4, &image, None, 0);
+        let av = api_versions_response_body(4, &image, None);
         let mut cur = &av[..];
         let avr = ApiVersionsResponse::decode(&mut cur, 4).unwrap();
         assert2::assert!(avr.api_keys.iter().any(|k| k.api_key == 60));

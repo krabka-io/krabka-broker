@@ -279,3 +279,84 @@ fn a_truncation_and_a_reset_clear_the_verification_state() {
         );
     }
 }
+
+#[test]
+fn verification_guard_verifies_semantics() {
+    assert!(!VerificationGuard::SENTINEL.verifies(VerificationGuard::SENTINEL));
+    let g1 = VerificationGuard(1);
+    let g2 = VerificationGuard(2);
+    assert!(!g1.verifies(VerificationGuard::SENTINEL));
+    assert!(!g1.verifies(g2));
+    assert!(g1.verifies(g1));
+}
+
+#[test]
+fn verification_state_updates_lowest_sequence_and_epoch() {
+    let (_dir, mut log) = log_at(Start::Empty);
+    let guard = log
+        .maybe_start_transaction_verification(batch(0, 10, true), false, CLOCK)
+        .unwrap();
+    // Same epoch, lower sequence lowers lowest_sequence
+    let guard2 = log
+        .maybe_start_transaction_verification(batch(0, 5, true), false, CLOCK)
+        .unwrap();
+    assert!(guard == guard2);
+    // Appending sequence 7 is refused because 7 > lowest_sequence (5)
+    assert!(
+        log.check_transactional_append(batch(0, 7, true), guard)
+            == Err(TransactionAppendRefusal::OutOfOrderSequence)
+    );
+    // Appending sequence 5 is accepted
+    assert!(log.check_transactional_append(batch(0, 5, true), guard) == Ok(()));
+
+    // Higher epoch updates epoch and resets lowest_sequence
+    let guard3 = log
+        .maybe_start_transaction_verification(batch(1, 20, true), false, CLOCK)
+        .unwrap();
+    assert!(guard3 == guard);
+    assert!(log.check_transactional_append(batch(1, 20, true), guard3) == Ok(()));
+    assert!(
+        log.check_transactional_append(batch(1, 21, true), guard3)
+            == Err(TransactionAppendRefusal::OutOfOrderSequence)
+    );
+}
+
+#[test]
+fn check_transactional_append_validates_producer_id_zero() {
+    let (_dir, log) = log_at(Start::Empty);
+    let mut b = batch(0, 0, true);
+    b.producer_id = ProducerId(0);
+    // Producer 0 without verification guard must be refused
+    assert!(
+        log.check_transactional_append(b, VerificationGuard::SENTINEL)
+            == Err(TransactionAppendRefusal::InvalidTransactionState)
+    );
+    // Control batch with producer 0 is accepted
+    let mut ctrl = b;
+    ctrl.is_control = true;
+    assert!(log.check_transactional_append(ctrl, VerificationGuard::SENTINEL) == Ok(()));
+}
+
+#[test]
+fn clear_verification_after_append_preserves_guard_only_for_epoch_bump_control() {
+    let (_dir, mut log) = log_at(Start::Empty);
+    // Start verification with supports_epoch_bump = true
+    let _guard = log
+        .maybe_start_transaction_verification(batch(0, 0, true), true, CLOCK)
+        .unwrap();
+    assert!(!log.verification_states.is_empty());
+
+    // Mismatched epoch control marker clears guard
+    log.clear_verification_after_append(ProducerId(PID), 1, true);
+    assert!(log.verification_states.is_empty());
+
+    // Re-start and verify matching epoch control marker preserves guard
+    log.maybe_start_transaction_verification(batch(0, 0, true), true, CLOCK)
+        .unwrap();
+    log.clear_verification_after_append(ProducerId(PID), 0, true);
+    assert!(!log.verification_states.is_empty());
+
+    // Non-control batch at matching epoch clears guard
+    log.clear_verification_after_append(ProducerId(PID), 0, false);
+    assert!(log.verification_states.is_empty());
+}

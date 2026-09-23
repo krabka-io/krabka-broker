@@ -34,13 +34,13 @@ use krabka_protocol::{
     owned::{api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse},
 };
 
-mod client_info;
 mod feature_keys;
 
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::client_info::is_valid_client_info;
+pub(crate) use krabka_raft::is_valid_client_info;
+
 use self::feature_keys::{finalized_feature_keys, supported_feature_keys};
 use crate::{broker::Broker, codes, error::BrokerError};
 
@@ -124,7 +124,7 @@ pub(crate) fn handle<'a>(
         .listener_kind(context.connection_listener_name);
     let metrics = broker.metrics.clone();
     let image = broker.controller.current_image();
-    let expected_cluster_id = image.cluster_id().to_string();
+    let expected_cluster_id = image.cluster_id();
     let expected_node_id = i32::try_from(broker.config.node_id.0).ok();
     Box::pin(async move {
         let mut cur: &[u8] = req_bytes;
@@ -140,7 +140,8 @@ pub(crate) fn handle<'a>(
                 (None, -1) => None,
                 (Some(_), -1) | (None, _) => Some(codes::INVALID_REQUEST),
                 (Some(cluster_id), node_id)
-                    if cluster_id != &expected_cluster_id || Some(node_id) != expected_node_id =>
+                    if !crate::cluster_id::matches(cluster_id, expected_cluster_id)
+                        || Some(node_id) != expected_node_id =>
                 {
                     Some(codes::REBOOTSTRAP_REQUIRED)
                 }

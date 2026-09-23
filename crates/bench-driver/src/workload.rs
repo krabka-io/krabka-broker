@@ -22,7 +22,7 @@ use hdrhistogram::Histogram;
 use krabka_client_consumer::{AutoOffsetReset, Consumer};
 use krabka_client_core::{
     ClientFrameMax, ConnectionDispatchQueueCapacity,
-    security::{ClientSecurity, TlsConnectorConfig},
+    security::{ClientSecurity, KeyStore, TlsConnectorConfig, TrustStore},
 };
 use krabka_client_producer::{Producer, ProducerError, ProducerRecord, RecordMetadata};
 use krabka_security::ListenerProtocol;
@@ -343,13 +343,20 @@ impl TlsParams {
     /// set.
     #[must_use]
     pub fn to_security(&self) -> ClientSecurity {
+        let mut tls = TlsConnectorConfig::default();
+        tls.trust_store = TrustStore::PemFile(self.ca_path.clone());
+        tls.server_name.clone_from(&self.server_name);
+        tls.key_store = self
+            .client_identity
+            .clone()
+            .map(|(certificate_chain, private_key)| KeyStore::PemFiles {
+                certificate_chain,
+                private_key,
+                key_password: None,
+            });
         ClientSecurity {
             protocol: ListenerProtocol::Ssl,
-            tls: Some(TlsConnectorConfig {
-                trust_roots_pem: Some(self.ca_path.clone()),
-                server_name: self.server_name.clone(),
-                client_identity: self.client_identity.clone(),
-            }),
+            tls: Some(tls),
             sasl: None,
             sasl_host: None,
         }
@@ -1534,10 +1541,8 @@ mod tests {
         assert2::assert!(
             tls.server_name.as_str() == "demo-broker-headless.default.svc.cluster.local"
         );
-        assert2::assert!(
-            tls.trust_roots_pem == Some(std::path::PathBuf::from("/etc/bench-ca/ca.crt"))
-        );
-        assert2::assert!(tls.client_identity == None);
+        assert2::assert!(tls.trust_store == TrustStore::PemFile("/etc/bench-ca/ca.crt".into()));
+        assert2::assert!(tls.key_store == None);
     }
 
     // mTLS variant: a client identity threads through to the TLS config.
@@ -1551,11 +1556,12 @@ mod tests {
         let sec = params.to_security();
         let tls = sec.tls.expect("TLS config present");
         assert2::assert!(
-            tls.client_identity
-                == Some((
-                    std::path::PathBuf::from("/c/tls.crt"),
-                    std::path::PathBuf::from("/c/tls.key"),
-                ))
+            tls.key_store
+                == Some(KeyStore::PemFiles {
+                    certificate_chain: "/c/tls.crt".into(),
+                    private_key: "/c/tls.key".into(),
+                    key_password: None,
+                })
         );
     }
 

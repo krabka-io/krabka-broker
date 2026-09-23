@@ -115,6 +115,8 @@ QUOTA_REACH_EFFECT = {
                      "the typed response before encoding, so the client does see the delay",
     "FallbackAccounted": "An ordinary request can be held by the request quota, and the " +
                          "response it waits behind reports `throttle_time_ms = 0`",
+    "Reencoded": "None. The dispatch loop charges the quota, then decodes the response, " +
+                 "sets `ThrottleTimeMs` and encodes it again, so the client does see the delay",
     "UnsupportedVersionOnly": "The ordinary path is `InlineExempt`, so it is never held. Only a " +
                               "request outside the advertised version range is, and that reply " +
                               "reports `throttle_time_ms = 0`",
@@ -1240,19 +1242,18 @@ columns are kept apart for that reason.
   `ThrottleTimeMs` on the typed response before encoding, so the buried field
   costs nothing and the client does see the delay.
 * `ApplyFallbackAccounting` entries are the ones the dispatch loop charges and
-  delays, so a buried field there really does mean latency without a back-off
-  signal.
-* `InlineExempt` entries -- most of the admin, ACL and delegation-token
-  surface -- are exempt from the request quota on the ordinary path, so they
-  are never delayed by it. The unsupported-version reply path charges every
-  `api_key` regardless of policy, so a request outside the advertised version
-  range is the one case where such an API is held without an echo.
+  delays. For the buried-field APIs below, the dispatch loop decodes the
+  response, sets `ThrottleTimeMs` and encodes it again, so the client does see
+  the delay.
+* `InlineExempt` entries are the APIs Kafka answers through
+  `sendResponseExemptThrottle` (`WriteTxnMarkers`, `AlterPartition`,
+  `FetchSnapshot`, `UpdateRaftVoter`) and the SASL handshake APIs, which Kafka
+  answers in the authenticator. They are never delayed by the request quota on
+  the ordinary path.
 
 `recorded_reach_matches_the_dispatch_registry` in the audit pins the last
 column against the assembled dispatch registry, so a policy change on any of
-these APIs fails the build until this page is regenerated. Echoing the field on
-any of them needs it set on the typed response before encoding rather than a
-byte patch.
+these APIs fails the build until this page is regenerated.
 
 | API | api_key | Versions | Why the field cannot be patched | Runtime effect |
 | :--- | :--- | :--- | :--- | :--- |

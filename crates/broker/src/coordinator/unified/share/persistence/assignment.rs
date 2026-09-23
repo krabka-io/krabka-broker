@@ -19,10 +19,11 @@
 //!   (int8), `AssignedPartitions` (`[]TopicPartitions{TopicId uuid, Partitions
 //!   []int32}`).
 //!
-//! Both of the current record's fields that the broker keeps no state for are
-//! plain, not tagged, so they are always on the wire. A share member that never
-//! revokes is at `MemberState.STABLE`, whose discriminant is 0, and its
-//! previous epoch is its current one; the decoder drops both again.
+//! The current record's `State` field is plain, not tagged, so it is always on
+//! the wire. A share member that never revokes is at `MemberState.STABLE`,
+//! whose discriminant is 0, and the decoder drops it again.
+//! `PreviousMemberEpoch` is the member epoch before the last bump, which the
+//! heartbeat still accepts (`throwIfShareGroupMemberEpochIsInvalid`).
 
 use bytes::{BufMut, Bytes, BytesMut};
 use krabka_protocol::primitives::uuid::Uuid;
@@ -68,6 +69,7 @@ impl ShareGroupTargetAssignmentMemberValue {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ShareGroupCurrentMemberAssignmentValue {
     pub member_epoch: i32,
+    pub previous_member_epoch: i32,
     pub assigned_partitions: Vec<(Uuid, Vec<i32>)>,
 }
 
@@ -77,7 +79,7 @@ impl ShareGroupCurrentMemberAssignmentValue {
         let mut buf = BytesMut::new();
         buf.put_i16(0);
         buf.put_i32(self.member_epoch);
-        buf.put_i32(self.member_epoch);
+        buf.put_i32(self.previous_member_epoch);
         buf.put_i8(MEMBER_STATE_STABLE);
         encode_topic_partitions(&mut buf, &self.assigned_partitions);
         put_empty_tagged_fields(&mut buf);
@@ -88,12 +90,13 @@ impl ShareGroupCurrentMemberAssignmentValue {
     pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
         let _v = get_i16(&mut buf)?;
         let member_epoch = get_i32(&mut buf)?;
-        let _previous_member_epoch = get_i32(&mut buf)?;
+        let previous_member_epoch = get_i32(&mut buf)?;
         let _state = get_i8(&mut buf)?;
         let assigned_partitions = decode_topic_partitions(&mut buf)?;
         skip_tagged_fields(&mut buf)?;
         Ok(Self {
             member_epoch,
+            previous_member_epoch,
             assigned_partitions,
         })
     }
@@ -165,11 +168,12 @@ mod tests {
     fn current_member_assignment_bytes_match_kafka_schema() {
         let v = ShareGroupCurrentMemberAssignmentValue {
             member_epoch: 5,
+            previous_member_epoch: 4,
             assigned_partitions: vec![],
         };
         let mut want: Vec<u8> = vec![0x00, 0x00];
         want.extend_from_slice(&5i32.to_be_bytes()); // MemberEpoch
-        want.extend_from_slice(&5i32.to_be_bytes()); // PreviousMemberEpoch
+        want.extend_from_slice(&4i32.to_be_bytes()); // PreviousMemberEpoch
         want.push(0x00); // MemberState.STABLE
         want.push(0x01); // empty AssignedPartitions
         want.push(0x00); // message tagged fields
@@ -189,6 +193,7 @@ mod tests {
 
         let v = ShareGroupCurrentMemberAssignmentValue {
             member_epoch: 5,
+            previous_member_epoch: 2,
             assigned_partitions: vec![(Uuid([3; 16]), vec![0, 1])],
         };
         assert!(ShareGroupCurrentMemberAssignmentValue::decode(&v.encode()).unwrap() == v);

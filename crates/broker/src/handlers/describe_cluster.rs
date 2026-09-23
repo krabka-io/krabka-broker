@@ -154,7 +154,9 @@ pub(crate) async fn handle(
         // Echo the requested endpoint type (KIP-919). v0 has no such field; the
         // request default of `1` keeps the response byte-identical there.
         endpoint_type: req.endpoint_type,
-        cluster_id: image.cluster_id().to_string(),
+        // Kafka's `Uuid.toString()` is URL-safe unpadded base64 of the 16 raw
+        // bytes, not `java.util.UUID`'s hyphenated form. See #1042.
+        cluster_id: crate::cluster_id::encode(image.cluster_id()),
         controller_id,
         brokers,
         cluster_authorized_operations,
@@ -280,7 +282,7 @@ mod tests {
                 codes::NONE,
                 None,
                 1,
-                broker.controller.current_image().cluster_id().to_string(),
+                crate::cluster_id::encode(broker.controller.current_image().cluster_id()),
                 i32::MIN,
                 0
             )
@@ -334,6 +336,32 @@ mod tests {
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(decode_response(&bytes) == expected);
+        broker_handle.shutdown().await;
+    }
+
+    /// `DescribeClusterResponse.ClusterId` reports Kafka's base64 `Uuid` form,
+    /// not `java.util.UUID`'s hyphenated form (#1042). The expected string is
+    /// what `org.apache.kafka.common.Uuid(0x0102030405060708L,
+    /// 0x090a0b0c0d0e0f10L).toString()` produces for the same 16 bytes.
+    #[tokio::test]
+    async fn reports_cluster_id_in_kafka_base64_form() {
+        let known_cluster_id = uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
+        let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+            cfg.cluster_id = Some(known_cluster_id);
+        })
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("describer");
+        let peer = peer();
+        let ctx = test_context(&p, &peer);
+        let req = encode_request(&request(false));
+
+        let bytes = handle(&broker, VERSION, 123, &req, &ctx)
+            .await
+            .expect("handle");
+        let resp = decode_response(&bytes);
+
+        assert!(resp.cluster_id.as_str() == "AQIDBAUGBwgJCgsMDQ4PEA");
         broker_handle.shutdown().await;
     }
 

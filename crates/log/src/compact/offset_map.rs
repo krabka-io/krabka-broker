@@ -274,17 +274,39 @@ mod tests {
             records: vec![make_record(5, Some(b"k1"), Some(b"v2"))],
             ..RecordBatch::default()
         };
-        let seg = write_sealed_batches(dir.path(), &[old, newest]);
+        let p0 = RecordBatch {
+            base_offset: 20,
+            last_offset_delta: 0,
+            producer_id: 0,
+            attributes: Attributes::default().with_transactional(true),
+            records: vec![make_record(0, Some(b"k0"), Some(b"v0"))],
+            ..RecordBatch::default()
+        };
+        let seg = write_sealed_batches(dir.path(), &[old, newest, p0]);
+        let mut idx = TxnIndex::open(seg.txn_index_path()).unwrap();
+        idx.append(AbortedTxn {
+            start_offset: Offset(10),
+            last_offset: Offset(15),
+            producer_id: ProducerId(2000),
+        })
+        .unwrap();
+
         let segment_refs: Vec<&Segment> = vec![&seg];
         let map = build_offset_map(&segment_refs).unwrap();
-        // Sanity: the newest-for-key absolute offset is 15 (10 + 5).
-        assert2::assert!(map == maplit::hashmap! {Bytes::from_static(b"k1") => Offset(15)});
+        assert2::assert!(
+            map == maplit::hashmap! {
+                Bytes::from_static(b"k1") => Offset(15),
+                Bytes::from_static(b"k0") => Offset(20),
+            }
+        );
 
         let txn = CleanedTransactionMetadata::build(&segment_refs, &map).unwrap();
-        // Producer 2000's newest data survives; producer 1000's is superseded.
+        // Producer 2000's and 0's newest data survives; producer 1000's is superseded.
         assert2::assert!(txn.txn_state(ProducerId(2000)) == TxnDataState::DataSurvives);
         assert2::assert!(txn.txn_state(ProducerId(1000)) == TxnDataState::DataFullyGone);
-        assert2::assert!(txn.txn_state(ProducerId(0)) == TxnDataState::DataFullyGone);
+        assert2::assert!(txn.txn_state(ProducerId(0)) == TxnDataState::DataSurvives);
+        assert2::assert!(txn.txn_state(ProducerId(999)) == TxnDataState::DataFullyGone);
         assert2::assert!(txn.txn_state(ProducerId(-2)) == TxnDataState::NotTransactional);
+        assert2::assert!(txn.retained_aborted().count() == 1);
     }
 }
