@@ -210,4 +210,20 @@ mod tests {
         );
         assert!(let Err(SchemaValidatorError::ZeroCache) = got);
     }
+
+    #[test]
+    fn debug_format_includes_key_fields() {
+        let validator = SchemaValidator::new(
+            "http://localhost:8081".into(),
+            true,
+            10,
+            minutes(5),
+            secs(5),
+        )
+        .expect("build validator");
+        let formatted = format!("{validator:?}");
+        assert!(formatted.contains("SchemaValidator"));
+        assert!(formatted.contains("expire_after"));
+        assert!(formatted.contains("fail_open: true"));
+    }
 }
