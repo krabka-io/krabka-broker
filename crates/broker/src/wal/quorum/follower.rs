@@ -131,8 +131,7 @@ async fn run_inner(config: &Config, follower: &FollowerLog) -> Result<(), String
         match partition.error_code {
             codes::NONE => {
                 let frontiers = validate_fetch_frontiers(&partition)?;
-                if partition.diverging_epoch.end_offset >= 0 {
-                    let divergence = krabka_ids::Offset(partition.diverging_epoch.end_offset);
+                if let Some(divergence) = diverging_offset(&partition) {
                     follower
                         .resolve_divergence(divergence, frontiers.start, requested)
                         .await
@@ -190,11 +189,21 @@ async fn run_inner(config: &Config, follower: &FollowerLog) -> Result<(), String
     }
 }
 
+fn diverging_offset(
+    partition: &krabka_protocol::owned::fetch_response::PartitionData,
+) -> Option<krabka_ids::Offset> {
+    if partition.diverging_epoch.end_offset >= 0 {
+        Some(krabka_ids::Offset(partition.diverging_epoch.end_offset))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{path::Path, sync::Mutex};
 
-    use assert2::assert;
+    use assert2::{assert, check};
     use bytes::Bytes;
     use krabka_ids::{Offset, PartitionIndex};
     use krabka_log::Log;
@@ -468,5 +477,22 @@ mod tests {
             }],
             ..RecordBatch::default()
         }
+    }
+
+    #[test]
+    fn diverging_offset_detects_nonnegative_end_offset() {
+        use krabka_protocol::owned::fetch_response::PartitionData;
+
+        let mut no_divergence = PartitionData::default();
+        no_divergence.diverging_epoch.end_offset = -1;
+        check!(diverging_offset(&no_divergence).is_none());
+
+        let mut with_divergence = PartitionData::default();
+        with_divergence.diverging_epoch.end_offset = 0;
+        check!(diverging_offset(&with_divergence) == Some(Offset(0)));
+
+        let mut with_pos_divergence = PartitionData::default();
+        with_pos_divergence.diverging_epoch.end_offset = 42;
+        check!(diverging_offset(&with_pos_divergence) == Some(Offset(42)));
     }
 }
