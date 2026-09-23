@@ -94,7 +94,7 @@ fn encode_denied(version: i16) -> Result<Bytes, BrokerError> {
     let resp = HeartbeatResponse {
         error_code: codes::GROUP_AUTHORIZATION_FAILED,
         throttle_time_ms: 0,
-        ..Default::default()
+        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
     };
     crate::handlers::encode_response(&resp, version)
 }
