@@ -129,9 +129,11 @@ fn time_index_bytes(entries: &[(i64, u32)]) -> Bytes {
 fn txn_index_bytes(entries: &[(i64, i64, i64)]) -> Bytes {
     let mut buf = BytesMut::new();
     for &(start, last, producer_id) in entries {
+        buf.put_i16(0); // version
+        buf.put_i64(producer_id);
         buf.put_i64(start);
         buf.put_i64(last);
-        buf.put_i64(producer_id);
+        buf.put_i64(last + 1); // last_stable_offset
     }
     buf.freeze()
 }
@@ -496,7 +498,7 @@ async fn sparse_indexes_require_complete_strict_bounded_entries() {
         Sidecar::Transaction(txn_index_bytes(&[(99, 102, 7)])),
         Sidecar::Transaction(txn_index_bytes(&[(100, 105, 7)])),
         Sidecar::Transaction(txn_index_bytes(&[(100, 102, -1)])),
-        Sidecar::Transaction(Bytes::from_static(&[0; 23])),
+        Sidecar::Transaction(Bytes::from_static(&[0; 33])),
     ];
 
     for sidecar in cases {

@@ -429,4 +429,81 @@ mod tests {
             "prefix_test"
         ));
     }
+
+    /// The ACL host comparison must use the JDK's `getHostAddress()` text,
+    /// not Rust's `Display` text, because that is what Kafka tooling writes
+    /// into ACL host strings. See the module doc on
+    /// [`crate::jdk_host_address`].
+    #[test]
+    fn host_matching_uses_jdk_address_text() {
+        let cases: &[(&str, &str, AuthorizationResult)] = &[
+            ("127.0.0.1:5000", "127.0.0.1", AuthorizationResult::Allow),
+            (
+                "[::ffff:10.0.0.5]:5000",
+                "10.0.0.5",
+                AuthorizationResult::Allow,
+            ),
+            (
+                "[::ffff:10.0.0.5]:5000",
+                "::ffff:10.0.0.5",
+                AuthorizationResult::Deny,
+            ),
+            ("[::1]:5000", "0:0:0:0:0:0:0:1", AuthorizationResult::Allow),
+            ("[::1]:5000", "::1", AuthorizationResult::Deny),
+            (
+                "[2001:db8::5]:5000",
+                "2001:db8:0:0:0:0:0:5",
+                AuthorizationResult::Allow,
+            ),
+        ];
+        let a = alice();
+        let auth = SimpleAclAuthorizer::new(no_super());
+        for (peer, acl_host, expected) in cases {
+            let mut img = img();
+            img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+                PermissionType::Allow,
+                AclOperation::Read,
+                "User:alice",
+                acl_host,
+                PatternType::Literal,
+                "foo",
+            )));
+            let h: SocketAddr = peer.parse().unwrap();
+            assert2::assert!(
+                auth.authorize(&img, &req(&a, &h, "foo", AclOperation::Read)) == *expected,
+                "peer {peer} vs acl host {acl_host}"
+            );
+        }
+    }
+
+    /// A DENY ACL written in Kafka's JDK host-address form must still deny an
+    /// IPv4-mapped IPv6 peer even though a wildcard-host ALLOW exists --
+    /// the security-relevant direction of the bug in #651.
+    #[test]
+    fn deny_acl_in_jdk_host_form_blocks_ipv4_mapped_peer() {
+        let mut img = img();
+        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+            PermissionType::Allow,
+            AclOperation::Read,
+            "User:alice",
+            "*",
+            PatternType::Literal,
+            "foo",
+        )));
+        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+            PermissionType::Deny,
+            AclOperation::Read,
+            "User:alice",
+            "10.0.0.5",
+            PatternType::Literal,
+            "foo",
+        )));
+        let a = alice();
+        let h: SocketAddr = "[::ffff:10.0.0.5]:5000".parse().unwrap();
+        let auth = SimpleAclAuthorizer::new(no_super());
+        assert2::assert!(
+            auth.authorize(&img, &req(&a, &h, "foo", AclOperation::Read))
+                == AuthorizationResult::Deny
+        );
+    }
 }

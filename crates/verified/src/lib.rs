@@ -258,8 +258,8 @@ pub use transaction::{
     IdleTransactionState, NO_TRANSACTION_TIMEOUT_MS, TransactionCompletionDecision,
     TransactionIdentity, TransactionMarkerMaterializationDecision,
     TransactionReaperCompletionDecision, TransactionSnapshot, aborted_transaction_interval,
-    aborted_transaction_overlaps, first_unstable_offset, resolve_transaction_timeout,
-    should_abort_idle_transaction, transaction_completion_decision, transaction_marker_closes,
+    aborted_transaction_overlaps, first_unstable_offset, should_abort_idle_transaction,
+    transaction_completion_decision, transaction_marker_closes,
     transaction_marker_materialization_decision, transaction_reaper_completion_decision,
 };
 pub use uniform_assignor::select_uniform_member;

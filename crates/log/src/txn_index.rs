@@ -1,11 +1,14 @@
-//! Per-segment `.txnindex` file. One fixed-width record per aborted
-//! transaction in the segment:
+//! Per-segment `.txnindex` file. One fixed-width, version-prefixed record per
+//! aborted transaction in the segment:
 //!
-//!   `start_offset`: i64 (big-endian)
-//!   `last_offset`:  i64 (big-endian)
-//!   `producer_id`:  i64 (big-endian)
+//!   `version`:             i16 (big-endian), always 0
+//!   `producer_id`:         i64 (big-endian)
+//!   `first_offset`:        i64 (big-endian)
+//!   `last_offset`:         i64 (big-endian)
+//!   `last_stable_offset`:  i64 (big-endian)
 //!
-//! The byte layout matches Apache Kafka's `TransactionIndex`, so
+//! The byte layout matches Apache Kafka's `TransactionIndex` (a version
+//! prefix on every record, derived from `AbortedTxn.json`'s field order), so
 //! `kafka-dump-log --offsets-decoder` can dump it.
 
 use std::{fs::OpenOptions, io::Write, path::PathBuf};
@@ -13,18 +16,25 @@ use std::{fs::OpenOptions, io::Write, path::PathBuf};
 use krabka_ids::{Offset, ProducerId};
 use tracing::instrument;
 use zerocopy::{
-    BigEndian, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned, byteorder::I64,
+    BigEndian, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned,
+    byteorder::{I16, I64},
 };
 
 use crate::error::LogError;
 
-const ENTRY_BYTES: usize = 24;
+const ENTRY_BYTES: usize = 34;
+
+/// The only aborted-transaction record version krabka writes or accepts.
+const SUPPORTED_VERSION: i16 = 0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AbortedTxn {
     pub start_offset: Offset,
     pub last_offset: Offset,
     pub producer_id: ProducerId,
+    /// The last stable offset at the moment this transaction aborted, that
+    /// is, Kafka's `ProducerStateManager.lastStableOffset(completedTxn)`.
+    pub last_stable_offset: Offset,
 }
 
 /// On-disk byte layout of one `AbortedTxn` entry. `zerocopy` reinterprets it
@@ -32,12 +42,26 @@ pub struct AbortedTxn {
 #[derive(Debug, Clone, Copy, FromBytes, IntoBytes, KnownLayout, Immutable, Unaligned)]
 #[repr(C)]
 struct AbortedTxnRaw {
-    start_offset: I64<BigEndian>,
-    last_offset: I64<BigEndian>,
+    version: I16<BigEndian>,
     producer_id: I64<BigEndian>,
+    first_offset: I64<BigEndian>,
+    last_offset: I64<BigEndian>,
+    last_stable_offset: I64<BigEndian>,
 }
 
 const _: [(); ENTRY_BYTES] = [(); std::mem::size_of::<AbortedTxnRaw>()];
+
+impl AbortedTxnRaw {
+    fn new(entry: AbortedTxn) -> Self {
+        Self {
+            version: I16::new(SUPPORTED_VERSION),
+            producer_id: I64::new(entry.producer_id.0),
+            first_offset: I64::new(entry.start_offset.0),
+            last_offset: I64::new(entry.last_offset.0),
+            last_stable_offset: I64::new(entry.last_stable_offset.0),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct TxnIndex {
@@ -75,10 +99,18 @@ impl TxnIndex {
                     .expect("length is a multiple of ENTRY_BYTES and AbortedTxnRaw is Unaligned");
                 entries.reserve(raws.len());
                 for raw in raws {
+                    if raw.version.get() != SUPPORTED_VERSION {
+                        return Err(LogError::Corrupt(format!(
+                            "txnindex {} contains an unsupported record version {}",
+                            path.display(),
+                            raw.version.get(),
+                        )));
+                    }
                     let entry = AbortedTxn {
-                        start_offset: Offset(raw.start_offset.get()),
+                        start_offset: Offset(raw.first_offset.get()),
                         last_offset: Offset(raw.last_offset.get()),
                         producer_id: ProducerId(raw.producer_id.get()),
+                        last_stable_offset: Offset(raw.last_stable_offset.get()),
                     };
                     if !Self::entry_valid(entry) {
                         return Err(LogError::Corrupt(format!(
@@ -122,11 +154,7 @@ impl TxnIndex {
             .append(true)
             .open(&self.path)
             .map_err(LogError::Io)?;
-        let raw = AbortedTxnRaw {
-            start_offset: I64::new(entry.start_offset.0),
-            last_offset: I64::new(entry.last_offset.0),
-            producer_id: I64::new(entry.producer_id.0),
-        };
+        let raw = AbortedTxnRaw::new(entry);
         f.write_all(raw.as_bytes()).map_err(LogError::Io)?;
         f.sync_data().map_err(LogError::Io)?;
         self.entries.push(entry);
@@ -157,11 +185,7 @@ impl TxnIndex {
             .open(&self.path)
             .map_err(LogError::Io)?;
         for entry in &entries {
-            let raw = AbortedTxnRaw {
-                start_offset: I64::new(entry.start_offset.0),
-                last_offset: I64::new(entry.last_offset.0),
-                producer_id: I64::new(entry.producer_id.0),
-            };
+            let raw = AbortedTxnRaw::new(*entry);
             file.write_all(raw.as_bytes()).map_err(LogError::Io)?;
         }
         file.sync_data().map_err(LogError::Io)?;
@@ -207,12 +231,88 @@ mod tests {
     use super::*;
 
     fn write_entry(path: &std::path::Path, entry: AbortedTxn) {
-        let raw = AbortedTxnRaw {
-            start_offset: I64::new(entry.start_offset.0),
-            last_offset: I64::new(entry.last_offset.0),
-            producer_id: I64::new(entry.producer_id.0),
-        };
+        let raw = AbortedTxnRaw::new(entry);
         std::fs::write(path, raw.as_bytes()).unwrap();
+    }
+
+    /// The exact 34-byte wire layout of one aborted-transaction record:
+    /// a big-endian i16 version of 0, then `producer_id`, `first_offset`,
+    /// `last_offset`, and `last_stable_offset`, each a big-endian i64.
+    #[test]
+    fn append_writes_the_exact_kafka_wire_layout() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("00.txnindex");
+        let entry = AbortedTxn {
+            start_offset: Offset(5),
+            last_offset: Offset(9),
+            producer_id: ProducerId(1000),
+            last_stable_offset: Offset(10),
+        };
+        let mut index = TxnIndex::open(path.clone()).unwrap();
+        index.append(entry).unwrap();
+
+        let bytes = std::fs::read(&path).unwrap();
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&0_i16.to_be_bytes()); // version
+        expected.extend_from_slice(&1000_i64.to_be_bytes()); // producer_id
+        expected.extend_from_slice(&5_i64.to_be_bytes()); // first_offset
+        expected.extend_from_slice(&9_i64.to_be_bytes()); // last_offset
+        expected.extend_from_slice(&10_i64.to_be_bytes()); // last_stable_offset
+        assert2::assert!(bytes.len() == ENTRY_BYTES);
+        assert2::assert!(bytes == expected);
+    }
+
+    /// Three aborted transactions produce a file whose length is exactly
+    /// `3 * 34` and whose decoded entries round-trip exactly.
+    #[test]
+    fn three_entries_round_trip_at_the_exact_kafka_entry_size() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("00.txnindex");
+        let entries = [
+            AbortedTxn {
+                start_offset: Offset(0),
+                last_offset: Offset(3),
+                producer_id: ProducerId(1000),
+                last_stable_offset: Offset(4),
+            },
+            AbortedTxn {
+                start_offset: Offset(4),
+                last_offset: Offset(6),
+                producer_id: ProducerId(2000),
+                last_stable_offset: Offset(7),
+            },
+            AbortedTxn {
+                start_offset: Offset(8),
+                last_offset: Offset(10),
+                producer_id: ProducerId(3000),
+                last_stable_offset: Offset(11),
+            },
+        ];
+        let mut index = TxnIndex::open(path.clone()).unwrap();
+        for entry in entries {
+            index.append(entry).unwrap();
+        }
+
+        let bytes = std::fs::read(&path).unwrap();
+        assert2::assert!(bytes.len() == 3 * ENTRY_BYTES);
+
+        let reopened = TxnIndex::open(path).unwrap();
+        assert2::assert!(reopened.entries() == entries);
+    }
+
+    /// A record whose version prefix is not 0 is refused on open.
+    #[test]
+    fn an_unsupported_version_is_refused_on_open() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("00.txnindex");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1_i16.to_be_bytes()); // unsupported version
+        bytes.extend_from_slice(&1000_i64.to_be_bytes());
+        bytes.extend_from_slice(&0_i64.to_be_bytes());
+        bytes.extend_from_slice(&3_i64.to_be_bytes());
+        bytes.extend_from_slice(&4_i64.to_be_bytes());
+        std::fs::write(&path, bytes).unwrap();
+        assert2::assert!(let LogError::Corrupt(_) = TxnIndex::open(path).unwrap_err());
     }
 
     /// The range end is exclusive: an aborted transaction that begins exactly
@@ -230,6 +330,7 @@ mod tests {
                 start_offset: Offset(10),
                 last_offset: Offset(20),
                 producer_id: ProducerId(1),
+                last_stable_offset: Offset(21),
             })
             .unwrap();
 
@@ -259,11 +360,13 @@ mod tests {
                 start_offset: Offset(8),
                 last_offset: Offset(7),
                 producer_id: ProducerId(1),
+                last_stable_offset: Offset(8),
             },
             AbortedTxn {
                 start_offset: Offset(7),
                 last_offset: Offset(8),
                 producer_id: ProducerId(-1),
+                last_stable_offset: Offset(9),
             },
         ] {
             assert2::assert!(let LogError::InvalidArgument(_) = index.append(entry).unwrap_err());
@@ -281,6 +384,7 @@ mod tests {
                     start_offset: Offset(8),
                     last_offset: Offset(7),
                     producer_id: ProducerId(1),
+                    last_stable_offset: Offset(8),
                 },
             ),
             (
@@ -289,6 +393,7 @@ mod tests {
                     start_offset: Offset(7),
                     last_offset: Offset(8),
                     producer_id: ProducerId(-1),
+                    last_stable_offset: Offset(9),
                 },
             ),
         ] {
@@ -306,17 +411,14 @@ mod tests {
             start_offset: Offset(5),
             last_offset: Offset(7),
             producer_id: ProducerId(1000),
+            last_stable_offset: Offset(8),
         };
         let mut index = TxnIndex::open(path.clone()).unwrap();
         index.append(entry).unwrap();
         index.append(entry).unwrap();
         assert2::assert!(index.entries() == [entry]);
 
-        let raw = AbortedTxnRaw {
-            start_offset: I64::new(entry.start_offset.0),
-            last_offset: I64::new(entry.last_offset.0),
-            producer_id: I64::new(entry.producer_id.0),
-        };
+        let raw = AbortedTxnRaw::new(entry);
         let mut bytes = raw.as_bytes().to_vec();
         bytes.extend_from_slice(raw.as_bytes());
         std::fs::write(&path, bytes).unwrap();
@@ -331,6 +433,7 @@ mod tests {
             start_offset: Offset(5),
             last_offset: Offset(7),
             producer_id: ProducerId(1000),
+            last_stable_offset: Offset(8),
         };
         let mut index = TxnIndex::open(path.clone()).unwrap();
         index.append(original).unwrap();
@@ -343,6 +446,7 @@ mod tests {
                     start_offset: Offset(10),
                     last_offset: Offset(12),
                     producer_id: ProducerId(1000),
+                    last_stable_offset: Offset(13),
                 })
                 .unwrap_err()
         );
@@ -360,6 +464,7 @@ mod tests {
                 start_offset: Offset(10),
                 last_offset: Offset(20),
                 producer_id: ProducerId(1),
+                last_stable_offset: Offset(21),
             })
             .unwrap();
         assert2::assert!(index.aborted_in_range(Offset(10), Offset(10)).count() == 0);
@@ -375,12 +480,14 @@ mod tests {
             start_offset: Offset(5),
             last_offset: Offset(7),
             producer_id: ProducerId(1000),
+            last_stable_offset: Offset(8),
         })
         .unwrap();
         idx.append(AbortedTxn {
             start_offset: Offset(10),
             last_offset: Offset(12),
             producer_id: ProducerId(1000),
+            last_stable_offset: Offset(13),
         })
         .unwrap();
 
@@ -391,12 +498,14 @@ mod tests {
                     AbortedTxn {
                         start_offset: Offset(5),
                         last_offset: Offset(7),
-                        producer_id: ProducerId(1000)
+                        producer_id: ProducerId(1000),
+                        last_stable_offset: Offset(8)
                     },
                     AbortedTxn {
                         start_offset: Offset(10),
                         last_offset: Offset(12),
-                        producer_id: ProducerId(1000)
+                        producer_id: ProducerId(1000),
+                        last_stable_offset: Offset(13)
                     },
                 ]
         );
@@ -413,6 +522,7 @@ mod tests {
                     start_offset: Offset(start),
                     last_offset: Offset(last),
                     producer_id: ProducerId(1),
+                    last_stable_offset: Offset(last + 1),
                 })
                 .unwrap();
         }
@@ -438,12 +548,14 @@ mod tests {
             start_offset: Offset(0),
             last_offset: Offset(4),
             producer_id: ProducerId(1),
+            last_stable_offset: Offset(5),
         })
         .unwrap();
         idx.append(AbortedTxn {
             start_offset: Offset(10),
             last_offset: Offset(14),
             producer_id: ProducerId(2),
+            last_stable_offset: Offset(15),
         })
         .unwrap();
 
@@ -462,11 +574,13 @@ mod tests {
                         start_offset: Offset(0),
                         last_offset: Offset(4),
                         producer_id: ProducerId(1),
+                        last_stable_offset: Offset(5),
                     },
                     AbortedTxn {
                         start_offset: Offset(10),
                         last_offset: Offset(14),
                         producer_id: ProducerId(2),
+                        last_stable_offset: Offset(15),
                     },
                 ]
         );
