@@ -2,20 +2,26 @@
 //! `CreateTopics` path that serves a client.
 //!
 //! Kafka's coordinator returns the topics to create with the heartbeat
-//! response, and `KafkaApis` hands them to
-//! `AutoTopicCreationManager.createStreamsInternalTopics`, which sends a
-//! `CreateTopics` request to the controller with the principal of the caller.
-//! The controller then validates the configs, applies the topic policy and
-//! places the replicas. A failure goes into an error cache for twice the
-//! heartbeat interval, and the `MISSING_INTERNAL_TOPICS` status of the next
-//! heartbeats names it.
+//! response, and `KafkaApis` checks `Create` on the whole set before it hands
+//! them to `AutoTopicCreationManager.createStreamsInternalTopics`: `Create`
+//! on the `Cluster` once, else `Create` on each topic. A caller that fails
+//! both gets none of the topics created and a `MISSING_INTERNAL_TOPICS`
+//! status detail naming them, so a principal with only group `Read` can never
+//! make the broker create a topic on its behalf. An authorized creation sends
+//! a `CreateTopics` request to the controller with the principal of the
+//! caller, which validates the configs, applies the topic policy and places
+//! the replicas. A failure goes into an error cache for twice the heartbeat
+//! interval, and the `MISSING_INTERNAL_TOPICS` status of the next heartbeats
+//! names it.
 
 use std::collections::BTreeMap;
 
 use dashmap::DashMap;
+use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
     Decode,
     owned::{
+        common::streams_group_heartbeat_response::status::Status,
         create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
         create_topics_response::CreateTopicsResponse,
         streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
@@ -27,6 +33,7 @@ use crate::{
     codes,
     coordinator::unified::streams::topology::{InternalTopicSpec, status as topo_status},
     error::BrokerError,
+    handlers::{acl_denied, acl_wire::CLUSTER_RESOURCE_NAME},
 };
 
 /// How many failures the `MISSING_INTERNAL_TOPICS` status names, as Kafka's
@@ -120,6 +127,18 @@ pub(super) async fn create_internal_topics(
     response: &mut StreamsGroupHeartbeatResponse,
     specs: &[InternalTopicSpec],
 ) -> Result<(), BrokerError> {
+    // Kafka checks `Create` on the whole `topicsToCreate` set before any of
+    // them is created: `Create` on the `Cluster` once, else `Create` on each
+    // topic name. A topic that fails the per-topic fallback holds back every
+    // topic in this heartbeat, not only itself -- the next heartbeat's
+    // `MISSING_INTERNAL_TOPICS` status tries the whole set again.
+    let unauthorized = create_unauthorized(broker, ctx, specs);
+    if !unauthorized.is_empty() {
+        let detail = format!("Unauthorized to CREATE on topics {}.", unauthorized.join(", "));
+        append_missing_internal_topics_detail(response, &detail);
+        return Ok(());
+    }
+
     let creator = &broker.streams_internal_topics;
     let now_ms = crate::time_util::now_ms();
     // Kafka caches a failure for twice the heartbeat interval of the group,
@@ -163,6 +182,68 @@ pub(super) async fn create_internal_topics(
         }
     }
     Ok(())
+}
+
+/// Kafka's `CREATE` gate before `createStreamsInternalTopics`: `Create` on
+/// the `Cluster` once, else `Create` on each topic name of `specs`. Returns
+/// the names creation is not authorized for, in name order -- empty when the
+/// whole request may create every one of `specs`, whether because the
+/// `Cluster` grant covers them or because each one has its own.
+fn create_unauthorized(
+    broker: &Broker,
+    ctx: &crate::handlers::RequestContext<'_>,
+    specs: &[InternalTopicSpec],
+) -> Vec<String> {
+    let image = broker.controller.current_image();
+    let cluster_create_denied = acl_denied(
+        broker.config.authorizer.as_ref(),
+        &image,
+        ctx,
+        ResourceType::Cluster,
+        CLUSTER_RESOURCE_NAME,
+        AclOperation::Create,
+    );
+    if !cluster_create_denied {
+        return Vec::new();
+    }
+    let mut unauthorized: Vec<String> = specs
+        .iter()
+        .filter(|spec| {
+            acl_denied(
+                broker.config.authorizer.as_ref(),
+                &image,
+                ctx,
+                ResourceType::Topic,
+                &spec.name,
+                AclOperation::Create,
+            )
+        })
+        .map(|spec| spec.name.clone())
+        .collect();
+    unauthorized.sort_unstable();
+    unauthorized
+}
+
+/// Kafka's `MISSING_INTERNAL_TOPICS` status append: joins `detail` onto the
+/// existing status with `"; "`, or adds a new status holding only `detail`
+/// when the response carries none yet.
+fn append_missing_internal_topics_detail(
+    response: &mut StreamsGroupHeartbeatResponse,
+    detail: &str,
+) {
+    let statuses = response.status.get_or_insert_with(Vec::new);
+    if let Some(status) = statuses
+        .iter_mut()
+        .find(|status| status.status_code == topo_status::MISSING_INTERNAL_TOPICS)
+    {
+        status.status_detail = format!("{}; {detail}", status.status_detail);
+    } else {
+        statuses.push(Status {
+            status_code: topo_status::MISSING_INTERNAL_TOPICS,
+            status_detail: detail.to_string(),
+            ..Default::default()
+        });
+    }
 }
 
 /// Sends one `CreateTopics` request for `specs` with the principal of the

@@ -27,6 +27,7 @@ use crate::{
 };
 
 mod creation;
+mod topic_authz;
 mod validation;
 
 pub(crate) use self::creation::StreamsInternalTopics;
@@ -64,8 +65,7 @@ pub(crate) async fn handle(
 
         // ── ACL preamble ────────────────────────────────────────────
         // `Read` on `Group(group_id)`. On Deny → whole-response
-        // `error_code = GROUP_AUTHORIZATION_FAILED (30)`. Topology/topic ACLs
-        // are not evaluated by this handler.
+        // `error_code = GROUP_AUTHORIZATION_FAILED (30)`.
         if group_read_denied(
             broker.config.authorizer.as_ref(),
             &image,
@@ -76,6 +76,35 @@ pub(crate) async fn handle(
                 &error(codes::GROUP_AUTHORIZATION_FAILED),
                 version,
             );
+        }
+
+        // Kafka's `KafkaApis.handleStreamsGroupHeartbeat` reads the topology
+        // straight off the wire, before the group coordinator ever sees the
+        // request: a topology that names a Kafka internal topic or an
+        // invalid topic name is `STREAMS_INVALID_TOPOLOGY`, and a required
+        // topic (source, repartition sink, repartition source or changelog)
+        // that `Describe` denies fails the whole request with
+        // `TOPIC_AUTHORIZATION_FAILED` -- no partial disclosure, and the
+        // group coordinator never runs.
+        if let Some(topology) = req.topology.as_ref() {
+            let required = topic_authz::required_topics(topology);
+            if let Some(message) = topic_authz::invalid_topology_message(broker, &required) {
+                return crate::handlers::encode_response(
+                    &crate::coordinator::unified::streams::actor::response::error_resp(
+                        codes::STREAMS_INVALID_TOPOLOGY,
+                        Some(message),
+                    ),
+                    version,
+                );
+            }
+            if !required.is_empty()
+                && topic_authz::describe_denied(broker, &image, ctx, &required)
+            {
+                return crate::handlers::encode_response(
+                    &error(codes::TOPIC_AUTHORIZATION_FAILED),
+                    version,
+                );
+            }
         }
 
         // Kafka's `GroupCoordinatorService` checks the request before it
@@ -328,6 +357,149 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
+    /// Kafka's `handleStreamsGroupHeartbeat` reads the topology straight off
+    /// the wire before the group coordinator sees it: a required topic (here,
+    /// the one source topic) that names a Kafka internal topic or an invalid
+    /// name is refused with `STREAMS_INVALID_TOPOLOGY` and Kafka's message,
+    /// and no group is created.
+    #[tokio::test]
+    async fn handle_refuses_a_topology_naming_a_prohibited_or_invalid_topic() {
+        let version = streams_group_heartbeat_response::MAX_VERSION;
+        let (broker_handle, _dir) = start_broker(true).await;
+        let broker = broker_handle.broker_arc_for_test();
+        finalize_streams_version(&broker).await;
+        let principal = principal();
+        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let ctx = context(&principal, &peer);
+
+        // (group id, source topic, the expected error message)
+        let rows = [
+            (
+                "internal-topic",
+                "__consumer_offsets",
+                "Use of Kafka internal topics __consumer_offsets in a Kafka Streams topology is \
+                 prohibited.",
+            ),
+            (
+                "invalid-name",
+                "bad topic",
+                "Topic names bad topic are not valid topic names.",
+            ),
+        ];
+
+        for (group_id, source_topic, message) in rows {
+            let mut req = request(group_id);
+            req.topology.as_mut().expect("the join carries a topology").subtopologies[0]
+                .source_topics = vec![source_topic.into()];
+
+            let bytes = handle(&broker, version, 1, &encode_request(&req), &ctx)
+                .await
+                .expect("handle");
+
+            assert!(
+                decode_response(&bytes)
+                    == crate::coordinator::unified::streams::actor::response::error_resp(
+                        codes::STREAMS_INVALID_TOPOLOGY,
+                        Some(message.into()),
+                    ),
+                "{group_id}"
+            );
+            assert!(broker.group_coordinator.find_streams(group_id).is_none(), "{group_id}");
+        }
+        broker_handle.shutdown().await;
+    }
+
+    /// Kafka's `filterByAuthorized(DESCRIBE, TOPIC, requiredTopics)`: a
+    /// principal that can `Read` the group but not `Describe` one of the
+    /// topology's required topics gets `TOPIC_AUTHORIZATION_FAILED` (29) for
+    /// the whole request, and the group coordinator never runs, so no group
+    /// is created.
+    #[tokio::test]
+    async fn handle_refuses_a_required_topic_denied_for_describe() {
+        let version = streams_group_heartbeat_response::MAX_VERSION;
+        let (broker_handle, _dir) = start_broker_with_grants().await;
+        let broker = broker_handle.broker_arc_for_test();
+        finalize_streams_version(&broker).await;
+        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        // `Group:Read` only: the source topic `in` gets no `Describe`.
+        let principal = crate::test_support::principal("Group:Read");
+        let ctx = context(&principal, &peer);
+
+        let bytes = handle(
+            &broker,
+            version,
+            1,
+            &encode_request(&request("describe-denied")),
+            &ctx,
+        )
+        .await
+        .expect("handle");
+
+        assert!(
+            decode_response(&bytes)
+                == crate::coordinator::unified::streams::actor::response::error_resp(
+                    codes::TOPIC_AUTHORIZATION_FAILED,
+                    None,
+                )
+        );
+        assert!(
+            broker
+                .group_coordinator
+                .find_streams("describe-denied")
+                .is_none()
+        );
+        broker_handle.shutdown().await;
+    }
+
+    /// Kafka's `CREATE` gate before `createStreamsInternalTopics`: `Create`
+    /// on the `Cluster` once, else `Create` on each topic. A principal with
+    /// only `Read` on the group and `Describe` on the topics gets none of
+    /// the internal topics created, and the `MISSING_INTERNAL_TOPICS` status
+    /// names them as unauthorized instead -- unlike the no-ACL-check path
+    /// this replaces, which let any principal with group `Read` make the
+    /// broker create arbitrary topics.
+    #[tokio::test]
+    async fn handle_reports_topics_unauthorized_to_create_in_status() {
+        let version = streams_group_heartbeat_response::MAX_VERSION;
+        let (broker_handle, _dir) = start_broker_with_grants().await;
+        let broker = broker_handle.broker_arc_for_test();
+        finalize_streams_version(&broker).await;
+        create_source_topic(&broker, "in").await;
+        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        // `Read` on the group and `Describe` on the topics, but no `Create`
+        // anywhere.
+        let principal = crate::test_support::principal("Group:Read+Topic:Describe");
+        let ctx = context(&principal, &peer);
+        use krabka_protocol::owned::common::streams_group_heartbeat_request::topic_info::TopicInfo;
+
+        let mut req = request("no-create-grant");
+        let topology = req.topology.as_mut().expect("the join carries a topology");
+        topology.subtopologies[0].state_changelog_topics = vec![TopicInfo {
+            name: "no-create-grant-changelog".into(),
+            ..Default::default()
+        }];
+
+        let bytes = handle(&broker, version, 1, &encode_request(&req), &ctx)
+            .await
+            .expect("handle");
+        let resp = decode_response(&bytes);
+
+        assert!(resp.error_code == codes::NONE, "{resp:?}");
+        let status = resp.status.unwrap_or_default();
+        assert!(
+            status.iter().map(|s| s.status_detail.clone()).collect::<Vec<_>>()
+                == vec![
+                    "Internal topics are missing: no-create-grant-changelog; Unauthorized to \
+                     CREATE on topics no-create-grant-changelog."
+                        .to_string()
+                ],
+            "{status:?}"
+        );
+        let image = broker.controller.current_image();
+        assert!(image.topic("no-create-grant-changelog").is_none());
+        broker_handle.shutdown().await;
+    }
+
     /// Kafka creates a streams group only on a join, and answers
     /// `GROUP_ID_NOT_FOUND` to a heartbeat or a leave for a group that does not
     /// exist and to any heartbeat for a group of another type
@@ -468,6 +640,18 @@ mod tests {
         crate::test_support::start_broker_with(|cfg| {
             cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
             cfg.streams_group.enable = streams_enabled;
+        })
+        .await
+    }
+
+    /// A broker whose authorizer grants exactly the operations named in the
+    /// caller's principal (see [`crate::test_support::GrantsInPrincipalName`]),
+    /// for the tests that drive a specific ACL gate rather than allow
+    /// everything.
+    async fn start_broker_with_grants() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
+        crate::test_support::start_broker_with(|cfg| {
+            cfg.authorizer = Arc::new(crate::test_support::GrantsInPrincipalName);
+            cfg.streams_group.enable = true;
         })
         .await
     }
