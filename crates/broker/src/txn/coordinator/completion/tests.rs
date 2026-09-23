@@ -259,7 +259,9 @@ async fn one_attempt_completes_retries_or_leaves_the_entry_alone() {
     for case in cases {
         let (coordinator, _dir) =
             coordinator(case.entry.clone(), case.leader, case.with_data_partition).await;
-        let attempt = coordinator.complete_prepared_transaction(TID).await;
+        let attempt = coordinator
+            .complete_prepared_transaction(TID, TxnVersion::Verified)
+            .await;
         check!(attempt == case.attempt, "{}", case.name);
         let after = current(&coordinator).await;
         check!(
@@ -275,11 +277,16 @@ async fn one_attempt_completes_retries_or_leaves_the_entry_alone() {
 
 #[tokio::test]
 async fn a_client_transaction_version_zero_completion_stays_classic() {
-    // #892: completion honors the transaction version the record was
-    // prepared under (`TransactionLogValue.ClientTransactionVersion`), not
-    // the cluster's live level. A version-0 client never staged a recovery
-    // identity, so completion leaves the epoch untouched and persists the
-    // completed entry under `TxnVersion::Classic`, writing no v1 tags.
+    // #892: `client_transaction_version` records the version the *record*
+    // was prepared under (`TransactionLogValue.ClientTransactionVersion`),
+    // not the cluster's live level, so `complete_prepared_transaction`
+    // carries it forward unchanged even when the cluster has since moved
+    // past `Classic`. A version-0 client never staged a recovery identity,
+    // so completion also leaves the epoch untouched. The wire format of the
+    // `Complete*` append itself does follow the live level passed in below
+    // (`TxnVersion::Verified`, simulating a cluster that upgraded since this
+    // was prepared): completing under a stale format would drop v1-only
+    // tags such as `LastProducerEpoch` that a live append would carry.
     //
     // The shared `coordinator()` fixture always seeds through
     // `TxnVersion::Verified`, which would stamp `client_transaction_version`
@@ -318,7 +325,9 @@ async fn a_client_transaction_version_zero_completion_stays_classic() {
         .await
         .expect("seed __transaction_state under TxnVersion::Classic");
 
-    let attempt = coordinator.complete_prepared_transaction(TID).await;
+    let attempt = coordinator
+        .complete_prepared_transaction(TID, TxnVersion::Verified)
+        .await;
     check!(attempt == CompletionAttempt::Completed);
 
     let after = current(&coordinator).await.expect("entry still tracked");

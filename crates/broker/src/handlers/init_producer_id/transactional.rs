@@ -1106,7 +1106,9 @@ mod tests {
             .partitions
             .insert("ghost".into(), PartitionIndex(0), ghost);
         check!(
-            coordinator.complete_prepared_transaction(TID).await
+            coordinator
+                .complete_prepared_transaction(TID, TxnVersion::Verified)
+                .await
                 == crate::txn::coordinator::completion::CompletionAttempt::Completed
         );
 

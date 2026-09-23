@@ -51,17 +51,6 @@ impl TxnVersion {
             TxnVersion::TwoPhase => 3,
         }
     }
-
-    /// The version a `transaction.version` level names. An unknown level reads
-    /// as `Classic`, as `resolve_txn_version` reads an unfinalized feature.
-    pub(crate) fn from_level(level: i16) -> Self {
-        match level {
-            3 => TxnVersion::TwoPhase,
-            2 => TxnVersion::Verified,
-            1 => TxnVersion::Flexible,
-            _ => TxnVersion::Classic,
-        }
-    }
 }
 
 pub(crate) fn resolve_txn_version(image: &MetadataImage) -> TxnVersion {
@@ -109,7 +98,7 @@ mod tests {
     }
 
     #[test]
-    fn a_level_round_trips_through_the_version() {
+    fn level_maps_each_version() {
         for (version, level) in [
             (TxnVersion::Classic, 0),
             (TxnVersion::Flexible, 1),
@@ -117,11 +106,7 @@ mod tests {
             (TxnVersion::TwoPhase, 3),
         ] {
             assert!(version.level() == level, "{version:?}");
-            assert!(TxnVersion::from_level(level) == version, "{level}");
         }
-        // An unknown level reads as the safest behaviour.
-        assert!(TxnVersion::from_level(7) == TxnVersion::Classic);
-        assert!(TxnVersion::from_level(-1) == TxnVersion::Classic);
     }
 
     #[test]

@@ -141,6 +141,13 @@ impl TxnCoordinator {
     /// `Complete*` append, the method holds the state-partition write lock and
     /// the entry lock, and it requires the entry to be the exact snapshot the
     /// markers were written for.
+    ///
+    /// `txnv` is the broker's current `transaction.version`, and it selects
+    /// only the `Complete*` record's wire format. The record's
+    /// `client_transaction_version` is not re-derived from it: `apply_completion`
+    /// leaves the field the `Prepare*` record already stamped in place, since
+    /// that is the version this transaction completes under, independent of
+    /// whatever level the cluster has reached by the time completion runs.
     // cargo-mutants: I/O over live entry locks, marker fan-out and log appends;
     // `completion_for`, `apply_completion` and `completion_decision` carry the
     // decisions and are tested on their own.
@@ -148,6 +155,7 @@ impl TxnCoordinator {
     pub(crate) async fn complete_prepared_transaction(
         &self,
         transactional_id: &str,
+        txnv: TxnVersion,
     ) -> CompletionAttempt {
         if !self.is_coordinator_for(transactional_id).await {
             return CompletionAttempt::NothingToComplete;
@@ -159,11 +167,6 @@ impl TxnCoordinator {
         let Some((marker, complete)) = completion_for(prepared.state) else {
             return CompletionAttempt::NothingToComplete;
         };
-        // Kafka completes a prepared transaction with the
-        // `transaction.version` it was prepared under
-        // (`TransactionLogValue.ClientTransactionVersion`), not with the level
-        // the cluster runs now.
-        let txnv = TxnVersion::from_level(prepared.client_transaction_version);
         if let Err(error) = self.dispatch_transaction_markers(&prepared, marker).await {
             warn!(
                 tid = transactional_id,
@@ -197,8 +200,8 @@ impl TxnCoordinator {
                     identity,
                     crate::txn::util::now_millis(),
                 );
-                match self.put_under_state_partition_lock(completed, txnv).await {
-                    Ok(()) => {
+                match self.append_and_publish(completed, txnv).await {
+                    Ok(_) => {
                         info!(
                             tid = transactional_id,
                             state = ?complete,

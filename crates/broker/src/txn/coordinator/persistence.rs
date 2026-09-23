@@ -34,7 +34,11 @@ impl TxnCoordinator {
 
     /// Persists `entry` to the matching `__transaction_state` partition log,
     /// then updates the in-memory map. The partition's writer task appends the
-    /// batch, in order with all other produce appends.
+    /// batch, in order with all other produce appends. Returns the entry as
+    /// persisted, with its stamped `client_transaction_version`: a caller that
+    /// retains its own pre-append snapshot for a later comparison, such as the
+    /// reaper's `prepare_abort`/`complete_abort` pair, must use this one
+    /// instead, since it is the value publication actually holds.
     ///
     /// `txnv` is the finalized `transaction.version` that the caller resolved
     /// from the live metadata image. It selects the byte-exact Kafka
@@ -55,7 +59,7 @@ impl TxnCoordinator {
         &self,
         entry: TxnEntry,
         txnv: crate::txn::version::TxnVersion,
-    ) -> Result<(), BrokerError> {
+    ) -> Result<TxnEntry, BrokerError> {
         let _state_partition_write = self.lock_state_partition_for(&entry.transactional_id).await;
         self.put_under_state_partition_lock(entry, txnv).await
     }
@@ -65,10 +69,9 @@ impl TxnCoordinator {
     /// serialized operation.
     pub(crate) async fn put_under_state_partition_lock(
         &self,
-        entry: TxnEntry,
+        mut entry: TxnEntry,
         txnv: crate::txn::version::TxnVersion,
-    ) -> Result<(), BrokerError> {
-        let mut entry = entry;
+    ) -> Result<TxnEntry, BrokerError> {
         // Kafka writes the client's transaction version with the record
         // (`TransactionLogValue.ClientTransactionVersion`). It is `TV_2` for a
         // client on the version-2 protocol, where completion bumps the epoch,
@@ -78,6 +81,33 @@ impl TxnCoordinator {
         } else {
             0
         };
+        self.append_and_publish(entry, txnv).await
+    }
+
+    /// Appends `entry` exactly as given, at the wire format `format_txnv`
+    /// selects, and publishes it. Every other append derives both `entry`'s
+    /// `client_transaction_version` stamp and the wire format from the same
+    /// live `transaction.version`, which [`Self::put_under_state_partition_lock`]
+    /// does above. Completing a previously prepared transaction is the one
+    /// exception: `client_transaction_version` must stay the value the
+    /// `Prepare*` record already stamped, since it is what recovery
+    /// completes under (`Self::put_under_state_partition_lock`'s caller in
+    /// [`crate::txn::coordinator::completion`] sets it before calling this),
+    /// while the wire format still follows the broker's current
+    /// `transaction.version`: format capability is not part of what a
+    /// specific transaction negotiated, and completing under a stale, lower
+    /// format would drop `TransactionLogValue`'s v1-only tagged fields, such
+    /// as `LastProducerEpoch`, that a live append would otherwise carry.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::Txn`] if the partition is not locally held
+    /// or the append fails.
+    pub(crate) async fn append_and_publish(
+        &self,
+        entry: TxnEntry,
+        format_txnv: crate::txn::version::TxnVersion,
+    ) -> Result<TxnEntry, BrokerError> {
         let tid = entry.transactional_id.clone();
         let p = self.partition_for(&tid);
         let generation = self.loaded_generation(p).await?;
@@ -89,7 +119,7 @@ impl TxnCoordinator {
 
         // Byte-exact Kafka TransactionLogKey(v0) + TransactionLogValue(v0/v1).
         let key = crate::txn::log_record::encode_key(&tid);
-        let value = crate::txn::log_record::encode_value(&entry, txnv);
+        let value = crate::txn::log_record::encode_value(&entry, format_txnv);
 
         let mut batch = RecordBatch::default();
         batch.records.push(Record {
@@ -122,9 +152,9 @@ impl TxnCoordinator {
             self.pid_to_tid
                 .insert(entry.next_producer_id, entry.transactional_id.clone());
         }
-        self.state.insert(tid, Arc::new(Mutex::new(entry)));
+        self.state.insert(tid, Arc::new(Mutex::new(entry.clone())));
         drop(leaders);
-        Ok(())
+        Ok(entry)
     }
 
     /// Appends a `TransactionLogKey` tombstone for `entry`'s transactional id,
