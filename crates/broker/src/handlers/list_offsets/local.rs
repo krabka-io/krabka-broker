@@ -264,10 +264,13 @@ mod tests {
     #[tokio::test]
     async fn scheduled_latest_recomputes_the_watermark_instead_of_reading_the_mirror() {
         const TOPIC: &str = "list-offsets-delivery-recompute";
-        // Another broker leads this partition, so the broker-wide delivery
-        // scheduler passes over it. The mirror then moves only when the
-        // request path itself publishes a recompute, which is what this test
-        // is about.
+        // Another broker leads this partition at construction, so submitting
+        // the metadata record below promotes it without the controller's
+        // real reconciliation path re-spawning (and so replacing) this test's
+        // hand-built fixture -- which would drop its injected manual clock
+        // for a real one and report every activation already due. Only once
+        // that has settled is the local role flipped directly to this broker,
+        // matching what `ListOffsets` now also requires of the image.
         const OTHER_BROKER: u64 = 7;
 
         let (broker_handle, _dir) =
@@ -286,11 +289,10 @@ mod tests {
             &clock,
         );
         crate::delivery::test_support::register(&broker.partitions, &partition);
-        // The image reports this broker as the leader `ListOffsets` answers
-        // through, independently of the partition's own `current_leader`
-        // field above, which exists only to keep the broker-wide scheduler
-        // off this fixture.
         install_partition_leader_record(&broker_handle, TOPIC, broker.config.node_id.get()).await;
+        partition
+            .install_leader_change(broker.config.node_id.get(), 0)
+            .await;
         let admin = principal("admin");
         let peer = peer();
         let ctx = test_context(&admin, &peer);

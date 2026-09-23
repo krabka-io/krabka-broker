@@ -109,10 +109,14 @@ async fn resolve_partition(
         topic,
         request.index,
         replica_id,
-        &broker.partitions,
-        &broker.log_dir_status,
-        &broker.controller.current_image(),
-        broker.config.node_id,
+        // v0 predates KIP-320 and carries no leader-epoch field to assert.
+        -1,
+        super::leadership::LeadershipContext {
+            partitions: &broker.partitions,
+            log_dir_status: &broker.log_dir_status,
+            image: &broker.controller.current_image(),
+            node_id: broker.config.node_id,
+        },
     ) {
         Ok(partition) => partition,
         Err(error_code) => return error_response(request.index, error_code),
