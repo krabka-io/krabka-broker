@@ -34,3 +34,32 @@ pub(super) fn group_authorized(
         },
     ) == AuthorizationResult::Allow
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use assert2::check;
+
+    use super::*;
+    use crate::test_support::{
+        DenyAll, peer, principal, request_context,
+        start_broker_with_authorizer_no_audit as start_broker,
+    };
+
+    #[tokio::test]
+    async fn group_authorized_reports_authorizer_outcome() {
+        let (denied_handle, _dir1) = start_broker(Arc::new(DenyAll)).await;
+        let denied_broker = denied_handle.broker_arc_for_test();
+        let (allowed_handle, _dir2) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let allowed_broker = allowed_handle.broker_arc_for_test();
+
+        let p = principal("alice");
+        let peer_addr = peer();
+        let ctx = request_context(&p, &peer_addr, "offset-fetch-authz-test");
+
+        check!(!group_authorized(&denied_broker, &ctx, "my-group"));
+        check!(group_authorized(&allowed_broker, &ctx, "my-group"));
+    }
+}
