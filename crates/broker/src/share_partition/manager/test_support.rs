@@ -92,6 +92,33 @@ pub(super) fn manager_with_image_and_partitions(
     ))
 }
 
+pub(super) fn manager_with_config(config: ShareGroupConfig) -> Arc<SharePartitionLeaderManager> {
+    let reg = Arc::new(PartitionRegistry::new());
+    let controller = fake_source(Arc::new(MetadataImage::new(uuid::Uuid::nil())));
+    let coord = Arc::new(ShareCoordinator::new(
+        krabka_audit::NodeId(1),
+        reg.clone(),
+        ShareCoordinatorConfig::default(),
+    ));
+    let client = Arc::new(InterBrokerClient::new(None, None));
+    let persister = Arc::new(SharePersister::new(
+        krabka_audit::NodeId(1),
+        coord,
+        controller.clone(),
+        client,
+        ListenerProtocol::Plaintext,
+        "INTERNAL".to_string(),
+    ));
+    Arc::new(SharePartitionLeaderManager::new(
+        krabka_audit::NodeId(1),
+        reg,
+        controller,
+        persister,
+        Arc::new(config),
+        crate::config::BrokerConfig::default().share_session_cache_max_when_unlimited,
+    ))
+}
+
 pub(super) fn manager_with_unlimited_fallback(fallback: usize) -> Arc<SharePartitionLeaderManager> {
     let reg = Arc::new(PartitionRegistry::new());
     let controller = fake_source(Arc::new(MetadataImage::new(uuid::Uuid::nil())));
