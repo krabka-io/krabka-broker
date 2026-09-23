@@ -156,14 +156,13 @@ pub(crate) async fn handle(
     // recognize, surface it in `unknown_state_filters` so the client
     // knows its filter is overly conservative.
     // Kafka turns the filter list into a Set in `KafkaApis`, so each unknown
-    // name is reported once.
-    let known_states: std::collections::HashSet<&'static str> =
-        ALL_TXN_STATE_NAMES.into_iter().collect();
+    // name is reported once. `ALL_TXN_STATE_NAMES` is eight entries, so a
+    // linear scan beats hashing it into a set on every request.
     let mut seen_unknown = std::collections::HashSet::new();
     let unknown_state_filters: Vec<String> = req
         .state_filters
         .iter()
-        .filter(|name| !known_states.contains(name.as_str()))
+        .filter(|name| !ALL_TXN_STATE_NAMES.contains(&name.as_str()))
         .filter(|name| seen_unknown.insert(name.as_str()))
         .cloned()
         .collect();
