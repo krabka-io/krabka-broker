@@ -86,7 +86,7 @@ pub(super) async fn handle_compact(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
+    use assert2::{assert, check};
     use krabka_units::millis;
 
     use super::*;
@@ -125,5 +125,30 @@ mod tests {
                     .into_iter()
                     .collect()
         );
+    }
+
+    #[tokio::test]
+    async fn handle_compact_completes_ack() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = Arc::new(Mutex::new(
+            crate::partition_writer::test_support::open_log_with_records(dir.path(), 5),
+        ));
+        let log_dir = Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf()));
+        let log_dir_status = LogDirRegistry::default();
+        let producer_state = ProducerState::new();
+        let replica_state = tokio::sync::Mutex::new(ReplicaState::new());
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+
+        handle_compact(
+            ("t", PartitionIndex(0)),
+            (&log, &log_dir, &log_dir_status),
+            &producer_state,
+            krabka_units::millis(1000),
+            &replica_state,
+            ack_tx,
+        )
+        .await;
+        let result = ack_rx.await.expect("ack sent");
+        check!(result.is_ok());
     }
 }
