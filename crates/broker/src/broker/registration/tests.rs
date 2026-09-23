@@ -28,17 +28,29 @@ mod publish_race {
     /// but whose published image is driven by the test alone through
     /// `image_tx`, standing in for the scheduling gap between a leader's
     /// commit-and-apply and the moment that state reaches `current_image()`.
+    ///
+    /// `drop_sender_on_submit` reproduces the other half of that gap: a
+    /// broker-only observer whose connection to the controller drops right
+    /// after a forwarded submit succeeds, so no image is ever published.
+    /// `submit_change` takes the sender out from under `watch_image()`'s
+    /// still-live receivers, closing the channel the same way losing that
+    /// connection would.
     struct DelayedPublishSource {
-        image_tx: watch::Sender<Arc<MetadataImage>>,
+        image_tx: std::sync::Mutex<Option<watch::Sender<Arc<MetadataImage>>>>,
+        /// A receiver kept alive independently of `image_tx`, so
+        /// `watch_image()` still hands back a (now-closed) receiver after
+        /// `drop_sender_on_submit` empties `image_tx`.
+        image_rx: watch::Receiver<Arc<MetadataImage>>,
+        drop_sender_on_submit: bool,
     }
 
     #[async_trait::async_trait]
     impl MetadataSource for DelayedPublishSource {
         fn current_image(&self) -> Arc<MetadataImage> {
-            self.image_tx.borrow().clone()
+            self.image_rx.borrow().clone()
         }
         fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>> {
-            self.image_tx.subscribe()
+            self.image_rx.clone()
         }
         fn watch_leader(&self) -> watch::Receiver<Option<NodeId>> {
             watch::channel(None).1
@@ -50,6 +62,9 @@ mod publish_race {
             &self,
             _records: Vec<MetadataRecord>,
         ) -> Result<SubmitChangeResult, RaftError> {
+            if self.drop_sender_on_submit {
+                self.image_tx.lock().expect("lock").take();
+            }
             Ok(SubmitChangeResult::default())
         }
         async fn change_membership(&self, _new_voters: BTreeSet<NodeId>) -> Result<(), RaftError> {
@@ -92,10 +107,11 @@ mod publish_race {
             ..BrokerConfig::for_tests(std::path::PathBuf::new())
         };
         let registration = self_registration_record(&config);
-        let (image_tx, _keep_alive) =
-            watch::channel(Arc::new(MetadataImage::new(uuid::Uuid::nil())));
+        let (image_tx, image_rx) = watch::channel(Arc::new(MetadataImage::new(uuid::Uuid::nil())));
         let source = DelayedPublishSource {
-            image_tx: image_tx.clone(),
+            image_tx: std::sync::Mutex::new(Some(image_tx.clone())),
+            image_rx,
+            drop_sender_on_submit: false,
         };
 
         let mut call = tokio::spawn(async move { register_broker(&config, &source).await });
@@ -143,9 +159,11 @@ mod publish_race {
 
         let mut initial = MetadataImage::new(uuid::Uuid::nil());
         initial.apply(&MetadataRecord::V1BrokerRegistration(stale));
-        let (image_tx, _keep_alive) = watch::channel(Arc::new(initial));
+        let (image_tx, image_rx) = watch::channel(Arc::new(initial));
         let source = DelayedPublishSource {
-            image_tx: image_tx.clone(),
+            image_tx: std::sync::Mutex::new(Some(image_tx.clone())),
+            image_rx,
+            drop_sender_on_submit: false,
         };
 
         let mut call = tokio::spawn(async move { register_broker(&config, &source).await });
@@ -180,14 +198,43 @@ mod publish_race {
             node_id: NodeId(9),
             ..BrokerConfig::for_tests(std::path::PathBuf::new())
         };
-        let (image_tx, _keep_alive) =
-            watch::channel(Arc::new(MetadataImage::new(uuid::Uuid::nil())));
-        let source = DelayedPublishSource { image_tx };
+        let (image_tx, image_rx) = watch::channel(Arc::new(MetadataImage::new(uuid::Uuid::nil())));
+        let source = DelayedPublishSource {
+            image_tx: std::sync::Mutex::new(Some(image_tx)),
+            image_rx,
+            drop_sender_on_submit: false,
+        };
 
         let err = register_broker(&config, &source)
             .await
             .expect_err("the image never publishes the registration");
         assert!(matches!(err, BrokerError::Startup(_)));
+    }
+
+    /// The other half of the "connection lost" scenario: the sender closes
+    /// entirely (rather than merely staying silent) right after `submit_change`
+    /// returns. `wait_for_self_registration_published` must give up cleanly --
+    /// as `Ok`, the same way `spawn_deferred_controller_registration` treats a
+    /// closed image channel -- rather than hang on a `changed()` that can now
+    /// never resolve.
+    #[tokio::test(start_paused = true)]
+    async fn register_broker_stops_waiting_once_the_image_channel_closes() {
+        let config = BrokerConfig {
+            node_id: NodeId(9),
+            ..BrokerConfig::for_tests(std::path::PathBuf::new())
+        };
+        let (image_tx, image_rx) = watch::channel(Arc::new(MetadataImage::new(uuid::Uuid::nil())));
+        let source = DelayedPublishSource {
+            image_tx: std::sync::Mutex::new(Some(image_tx)),
+            image_rx,
+            drop_sender_on_submit: true,
+        };
+
+        let result =
+            tokio::time::timeout(Duration::from_secs(1), register_broker(&config, &source))
+                .await
+                .expect("register_broker did not notice the closed channel");
+        assert!(result.is_ok());
     }
 }
 
