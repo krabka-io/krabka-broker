@@ -274,6 +274,60 @@ async fn one_attempt_completes_retries_or_leaves_the_entry_alone() {
 }
 
 #[tokio::test]
+async fn a_client_transaction_version_zero_completion_stays_classic() {
+    // #892: completion honors the transaction version the record was
+    // prepared under (`TransactionLogValue.ClientTransactionVersion`), not
+    // the cluster's live level. A version-0 client never staged a recovery
+    // identity, so completion leaves the epoch untouched and persists the
+    // completed entry under `TxnVersion::Classic`, writing no v1 tags.
+    //
+    // The shared `coordinator()` fixture always seeds through
+    // `TxnVersion::Verified`, which would stamp `client_transaction_version`
+    // back to `2` before this test could observe the classic case, so this
+    // seeds directly with `TxnVersion::Classic` instead.
+    let mut entry = prepared_entry(TxnState::PrepareCommit);
+    entry.client_transaction_version = 0;
+    let epoch_before = entry.producer_epoch;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let partitions = Arc::new(PartitionRegistry::new());
+    partitions.insert(
+        bootstrap::TOPIC.into(),
+        PartitionIndex(0),
+        open_partition(dir.path(), bootstrap::TOPIC),
+    );
+    partitions.insert(
+        DATA_TOPIC.into(),
+        PartitionIndex(0),
+        open_partition(dir.path(), DATA_TOPIC),
+    );
+    let coordinator = Arc::new(TxnCoordinator::new(
+        NodeId(1),
+        partitions,
+        Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
+        1,
+        krabka_units::mebibytes(1),
+    ));
+    coordinator
+        .refresh_leader_partitions(&image(NodeId(1), 0))
+        .await
+        .finished()
+        .await;
+    coordinator
+        .put(entry, TxnVersion::Classic)
+        .await
+        .expect("seed __transaction_state under TxnVersion::Classic");
+
+    let attempt = coordinator.complete_prepared_transaction(TID).await;
+    check!(attempt == CompletionAttempt::Completed);
+
+    let after = current(&coordinator).await.expect("entry still tracked");
+    check!(after.state == TxnState::CompleteCommit);
+    check!(after.producer_epoch == epoch_before, "epoch not bumped");
+    check!(after.client_transaction_version == 0, "stays classic");
+}
+
+#[tokio::test]
 async fn recovery_queues_every_prepared_transaction_for_completion() {
     let (coordinator, _dir) =
         coordinator(prepared_entry(TxnState::PrepareCommit), NodeId(1), true).await;

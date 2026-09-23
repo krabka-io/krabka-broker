@@ -209,6 +209,62 @@ async fn a_new_term_refuses_the_generation_of_the_old_term() {
     check!(TxnCoordinator::require_generation(&leaders, P0, newer).is_ok());
 }
 
+/// #892: `last_producer_epoch` (`TransactionLogValue`'s `LastProducerEpoch`,
+/// tag 4) is persisted, so it survives the entry moving to a new coordinator
+/// through the log, and a retried `InitProducerId` naming it is still
+/// admitted after the reload.
+#[tokio::test]
+async fn a_reload_preserves_last_producer_epoch_and_admits_its_retry() {
+    let dir = TempDir::new().expect("tempdir");
+    let partitions = Arc::new(PartitionRegistry::new());
+    partitions.insert(
+        bootstrap::TOPIC.into(),
+        P0,
+        open_state_partition(dir.path()),
+    );
+    let first = coordinator(NodeId(1), &partitions);
+    let second = coordinator(NodeId(2), &partitions);
+
+    first
+        .refresh_leader_partitions(&image(NodeId(1), 0))
+        .await
+        .finished()
+        .await;
+    let mut entry = prepared_entry();
+    // The entry's live epoch has moved past the one a failed epoch fence
+    // recorded, per `prepareIncrementProducerEpoch`/`prepareProducerIdRotation`,
+    // so a retry naming the recorded epoch is distinct from a fresh bump.
+    entry.producer_epoch = 5;
+    entry.last_producer_epoch = 4;
+    entry.has_failed_epoch_fence = true;
+    first
+        .put(entry, TxnVersion::Verified)
+        .await
+        .expect("persist the entry with a recorded last epoch");
+
+    second
+        .refresh_leader_partitions(&image(NodeId(2), 1))
+        .await
+        .finished()
+        .await;
+
+    let reloaded = view(&second).await.entry.expect("reloaded from disk");
+    check!(reloaded.last_producer_epoch == 4);
+
+    let decision = krabka_verified::transaction::init_producer_id_identity_decision(
+        reloaded.producer_id.get(),
+        reloaded.producer_epoch,
+        reloaded.last_producer_epoch,
+        reloaded.prev_producer_id.get(),
+        reloaded.producer_id.get(),
+        reloaded.last_producer_epoch,
+    );
+    check!(
+        decision == krabka_verified::transaction::InitProducerIdIdentityDecision::Retry,
+        "a retry naming the persisted last epoch is admitted, not fenced"
+    );
+}
+
 /// A replay that fails leaves the partition unloaded until the next election.
 #[tokio::test]
 async fn a_failed_load_answers_not_coordinator() {

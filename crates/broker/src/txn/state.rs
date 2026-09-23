@@ -100,18 +100,22 @@ pub struct TxnEntry {
     pub prev_producer_id: ProducerId,
     pub next_producer_id: ProducerId,
     pub next_producer_epoch: i16,
-    /// KIP-360 in-memory fencing state, not part of `TransactionLogValue` and
-    /// therefore reset by replay. `last_producer_epoch` is the epoch the entry
-    /// held before an epoch fence was prepared for an abort, and
-    /// `has_failed_epoch_fence` says that abort then failed, so the producer
-    /// that still holds `last_producer_epoch` may retry its `InitProducerId`.
+    /// KIP-360 fencing state. `last_producer_epoch` is `TransactionLogValue`'s
+    /// `LastProducerEpoch` (tag 4), the epoch the entry held before an epoch
+    /// fence was prepared for an abort, so it survives a coordinator restart
+    /// or a partition move (#892). `has_failed_epoch_fence` says that abort
+    /// then failed, so the producer that still holds `last_producer_epoch`
+    /// may retry its `InitProducerId`; it stays in-memory only, since a
+    /// reload always sees the fence as not yet attempted.
     pub last_producer_epoch: i16,
     pub has_failed_epoch_fence: bool,
     pub last_update_ms: i64,
     pub start_ms: i64,
-    /// `TransactionLogValue.ClientTransactionVersion`: the
-    /// `transaction.version` level the last record of this transaction was
-    /// written under. A reloaded `Prepare*` transaction completes with it.
+    /// `TransactionLogValue.ClientTransactionVersion`: the transaction
+    /// version the *client* asked for on this append, not the cluster's live
+    /// transaction.version level. `2` when completion bumped the epoch under
+    /// KIP-890's version-2 rule, `0` otherwise. A reloaded `Prepare*`
+    /// transaction completes under the version this stamps.
     pub client_transaction_version: i16,
 }
 
