@@ -71,3 +71,26 @@ impl TestClock {
         Clock::Test(self.0.clone())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use assert2::check;
+
+    use super::*;
+
+    #[test]
+    fn test_clock_advance_moves_now_forward() {
+        let test_clock = TestClock::new();
+        let clock = test_clock.clock();
+        let t0 = clock.now();
+        test_clock.advance(Duration::from_secs(10));
+        let t1 = clock.now();
+        check!(t1 > t0);
+        check!(t1 - t0 == Duration::from_secs(10));
+
+        let real = Clock::Real;
+        check!(real.now() >= t0);
+    }
+}
