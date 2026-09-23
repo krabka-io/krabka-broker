@@ -96,3 +96,198 @@ pub async fn bootstrap_audit_topic(
         Err(e) => Err(BrokerError::Startup(e.to_string())),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use assert2::{assert, check};
+    use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord};
+    use krabka_raft::NodeId;
+
+    use super::*;
+    use crate::{
+        config::BrokerConfig, metadata_source::MetadataSource, test_support::FakeMetadataSource,
+    };
+
+    fn broker_registration(node_id: u64) -> MetadataRecord {
+        MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
+            node_id: NodeId(node_id),
+            broker_epoch: 0,
+            incarnation_id: uuid::Uuid::from_u128(u128::from(node_id)),
+            host: "127.0.0.1".into(),
+            port: 9092,
+            rack: None,
+            endpoints: vec![],
+            log_dirs: vec![],
+            features: std::collections::BTreeMap::new(),
+        })
+    }
+
+    #[tokio::test]
+    async fn audit_topic_skipped_when_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+        config.audit_enabled = false;
+        config.node_id = NodeId(1);
+        let fake = Arc::new(
+            FakeMetadataSource::builder()
+                .leader(Some(NodeId(1)))
+                .commit_submits()
+                .build(),
+        );
+        let controller: Arc<dyn MetadataSource> = fake.clone();
+
+        let res = bootstrap_audit_topic(&config, &controller).await;
+        check!(res.is_ok());
+        check!(fake.submitted().is_empty());
+        check!(
+            controller
+                .current_image()
+                .topic(&config.audit_topic)
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_topic_skipped_when_not_leader() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+        config.audit_enabled = true;
+        config.node_id = NodeId(2);
+        let fake = Arc::new(
+            FakeMetadataSource::builder()
+                .leader(Some(NodeId(1)))
+                .commit_submits()
+                .build(),
+        );
+        let controller: Arc<dyn MetadataSource> = fake.clone();
+
+        let res = bootstrap_audit_topic(&config, &controller).await;
+        check!(res.is_ok());
+        check!(fake.submitted().is_empty());
+        check!(
+            controller
+                .current_image()
+                .topic(&config.audit_topic)
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_topic_created_when_leader_and_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+        config.audit_enabled = true;
+        config.node_id = NodeId(1);
+        let fake = Arc::new(
+            FakeMetadataSource::builder()
+                .leader(Some(NodeId(1)))
+                .commit_submits()
+                .build(),
+        );
+        let controller: Arc<dyn MetadataSource> = fake.clone();
+
+        let res = bootstrap_audit_topic(&config, &controller).await;
+        check!(res.is_ok());
+        check!(fake.submitted().len() == 1);
+
+        let image = controller.current_image();
+        let topic = image.topic(&config.audit_topic);
+        assert!(topic.is_some());
+        let t = topic.unwrap();
+        check!(t.partitions == 1);
+        check!(t.replication_factor == 1);
+        check!(image.partition(&config.audit_topic, 0).is_some());
+
+        // Second call is idempotent: topic already exists in image, so nothing is submitted
+        let res2 = bootstrap_audit_topic(&config, &controller).await;
+        check!(res2.is_ok());
+        check!(fake.submitted().len() == 1);
+    }
+
+    #[tokio::test]
+    async fn audit_topic_scales_partitions_to_all_registered_brokers() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+        config.audit_enabled = true;
+        config.node_id = NodeId(1);
+
+        let fake = Arc::new(
+            FakeMetadataSource::builder()
+                .records(&[
+                    broker_registration(1),
+                    broker_registration(2),
+                    broker_registration(3),
+                ])
+                .leader(Some(NodeId(1)))
+                .commit_submits()
+                .build(),
+        );
+        let controller: Arc<dyn MetadataSource> = fake.clone();
+
+        let res = bootstrap_audit_topic(&config, &controller).await;
+        check!(res.is_ok());
+        check!(fake.submitted().len() == 1);
+
+        let image = controller.current_image();
+        let topic = image.topic(&config.audit_topic);
+        assert!(topic.is_some());
+        let t = topic.unwrap();
+        check!(t.partitions == 3);
+        check!(t.replication_factor == 1);
+        for p in 0..3i32 {
+            let part = image.partition(&config.audit_topic, p);
+            assert!(part.is_some());
+            let node = u64::try_from(p).unwrap_or(0) + 1;
+            check!(part.unwrap().leader == NodeId(node));
+        }
+    }
+
+    #[tokio::test]
+    async fn audit_topic_handles_topic_exists_error_idempotently() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+        let audit_topic = config.audit_topic.clone();
+        config.audit_enabled = true;
+        config.node_id = NodeId(1);
+
+        let fake = Arc::new(
+            FakeMetadataSource::builder()
+                .leader(Some(NodeId(1)))
+                .on_submit(move |_| {
+                    Err(krabka_raft::RaftError::Metadata(
+                        krabka_metadata::MetadataError::TopicExists(audit_topic.clone()),
+                    ))
+                })
+                .build(),
+        );
+        let controller: Arc<dyn MetadataSource> = fake.clone();
+
+        let res = bootstrap_audit_topic(&config, &controller).await;
+        check!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn audit_topic_fails_on_raft_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+        config.audit_enabled = true;
+        config.node_id = NodeId(1);
+
+        let fake = Arc::new(
+            FakeMetadataSource::builder()
+                .leader(Some(NodeId(1)))
+                .on_submit(|_| {
+                    Err(krabka_raft::RaftError::NotLeader {
+                        current_leader: None,
+                    })
+                })
+                .build(),
+        );
+        let controller: Arc<dyn MetadataSource> = fake.clone();
+
+        let res = bootstrap_audit_topic(&config, &controller).await;
+        check!(res.is_err());
+    }
+}
