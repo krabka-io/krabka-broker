@@ -337,5 +337,45 @@ mod tests {
         let failed = classic_leave_result(3, Err(codes::COORDINATOR_LOAD_IN_PROGRESS));
         check!(failed.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
         check!(failed.members.is_empty());
+
+        let legacy_empty = classic_leave_result(2, Ok(vec![]));
+        check!(legacy_empty.error_code == codes::NONE);
+        check!(legacy_empty.members.is_empty());
+    }
+
+    #[test]
+    fn txn_offset_reservation_reserves_and_releases_keys() {
+        let mut group = CoordinatorGroup::new_classic("g");
+        let (tx1, rx1) = oneshot::channel();
+        let res1 = TxnOffsetReservation {
+            producer_id: 10,
+            keys: vec![("topic".to_string(), 0)],
+            reserve: true,
+            reply: tx1,
+        };
+        let keep_running = res1.apply(&mut group);
+        check!(keep_running);
+        check!(rx1.blocking_recv().is_ok());
+        check!(
+            group
+                .unresolved_txn_keys()
+                .contains(&("topic".to_string(), 0))
+        );
+
+        let (tx2, rx2) = oneshot::channel();
+        let res2 = TxnOffsetReservation {
+            producer_id: 10,
+            keys: vec![("topic".to_string(), 0)],
+            reserve: false,
+            reply: tx2,
+        };
+        let keep_running2 = res2.apply(&mut group);
+        check!(keep_running2);
+        check!(rx2.blocking_recv().is_ok());
+        check!(
+            !group
+                .unresolved_txn_keys()
+                .contains(&("topic".to_string(), 0))
+        );
     }
 }
