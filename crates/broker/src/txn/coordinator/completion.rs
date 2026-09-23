@@ -141,6 +141,13 @@ impl TxnCoordinator {
     /// `Complete*` append, the method holds the state-partition write lock and
     /// the entry lock, and it requires the entry to be the exact snapshot the
     /// markers were written for.
+    ///
+    /// `txnv` is the broker's current `transaction.version`, and it selects
+    /// only the `Complete*` record's wire format. The record's
+    /// `client_transaction_version` is not re-derived from it: `apply_completion`
+    /// leaves the field the `Prepare*` record already stamped in place, since
+    /// that is the version this transaction completes under, independent of
+    /// whatever level the cluster has reached by the time completion runs.
     // cargo-mutants: I/O over live entry locks, marker fan-out and log appends;
     // `completion_for`, `apply_completion` and `completion_decision` carry the
     // decisions and are tested on their own.
@@ -193,8 +200,8 @@ impl TxnCoordinator {
                     identity,
                     crate::txn::util::now_millis(),
                 );
-                match self.put_under_state_partition_lock(completed, txnv).await {
-                    Ok(()) => {
+                match self.append_and_publish(completed, txnv).await {
+                    Ok(_) => {
                         info!(
                             tid = transactional_id,
                             state = ?complete,

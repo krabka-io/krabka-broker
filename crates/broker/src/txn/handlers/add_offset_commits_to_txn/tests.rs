@@ -19,6 +19,8 @@ fn offsets_partition(index: i32) -> TopicPartition {
 fn entry(state: TxnState, partitions: &[TopicPartition]) -> TxnEntry {
     let mut entry = TxnEntry::new_empty(TID.into(), ProducerId(7), 3, 60_000, 0);
     entry.state = state;
+    // Every append stamps the client's transaction version on the record.
+    entry.client_transaction_version = 2;
     entry.partitions.extend(partitions.iter().cloned());
     entry
 }

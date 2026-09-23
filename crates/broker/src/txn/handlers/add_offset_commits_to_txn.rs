@@ -205,15 +205,14 @@ async fn add_offsets_partition(
     // still see the entry as it was.
     let mut staged = entry.clone();
     add_partition(&mut staged, offsets_partition, now_millis());
-    match coord
-        .put_under_state_partition_lock(staged.clone(), txnv)
-        .await
-    {
-        Ok(()) => {
+    match coord.put_under_state_partition_lock(staged, txnv).await {
+        Ok(persisted) => {
             // The append published a new handle. A caller that already waits
             // on this one, such as AddPartitionsToTxn's register_partitions,
-            // sees the durable state too, not the pre-append snapshot.
-            *entry = staged;
+            // sees the durable state too, not the pre-append snapshot. Use
+            // what publication actually holds, since it stamped
+            // `client_transaction_version` on its own clone of `staged`.
+            *entry = persisted;
             codes::NONE
         }
         Err(error) => {

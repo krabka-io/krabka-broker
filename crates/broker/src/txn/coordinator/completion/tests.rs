@@ -46,6 +46,8 @@ fn only_a_prepare_state_has_a_completion() {
 fn prepared_entry(state: TxnState) -> TxnEntry {
     let mut entry = TxnEntry::new_empty(TID.to_owned(), ProducerId(1000), 4, 60_000, 0);
     entry.state = state;
+    // Every append stamps the client's transaction version on the record.
+    entry.client_transaction_version = 2;
     entry.partitions.insert(TopicPartition {
         topic: DATA_TOPIC.to_owned(),
         partition: PartitionIndex(0),
@@ -73,6 +75,9 @@ fn completion_adopts_the_staged_identity_and_clears_the_transaction() {
             state: TxnState::CompleteCommit,
             prev_producer_id,
             last_update_ms: 77,
+            // The completion keeps the transaction version of the record it
+            // completes.
+            client_transaction_version: 2,
             ..TxnEntry::new_empty(TID.to_owned(), identity.0, identity.1, 60_000, 0)
         };
         check!(entry == expected, "{label}");
@@ -268,6 +273,67 @@ async fn one_attempt_completes_retries_or_leaves_the_entry_alone() {
             check!(after == Some(case.entry), "{}: entry unchanged", case.name);
         }
     }
+}
+
+#[tokio::test]
+async fn a_client_transaction_version_zero_completion_stays_classic() {
+    // #892: `client_transaction_version` records the version the *record*
+    // was prepared under (`TransactionLogValue.ClientTransactionVersion`),
+    // not the cluster's live level, so `complete_prepared_transaction`
+    // carries it forward unchanged even when the cluster has since moved
+    // past `Classic`. A version-0 client never staged a recovery identity,
+    // so completion also leaves the epoch untouched. The wire format of the
+    // `Complete*` append itself does follow the live level passed in below
+    // (`TxnVersion::Verified`, simulating a cluster that upgraded since this
+    // was prepared): completing under a stale format would drop v1-only
+    // tags such as `LastProducerEpoch` that a live append would carry.
+    //
+    // The shared `coordinator()` fixture always seeds through
+    // `TxnVersion::Verified`, which would stamp `client_transaction_version`
+    // back to `2` before this test could observe the classic case, so this
+    // seeds directly with `TxnVersion::Classic` instead.
+    let mut entry = prepared_entry(TxnState::PrepareCommit);
+    entry.client_transaction_version = 0;
+    let epoch_before = entry.producer_epoch;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let partitions = Arc::new(PartitionRegistry::new());
+    partitions.insert(
+        bootstrap::TOPIC.into(),
+        PartitionIndex(0),
+        open_partition(dir.path(), bootstrap::TOPIC),
+    );
+    partitions.insert(
+        DATA_TOPIC.into(),
+        PartitionIndex(0),
+        open_partition(dir.path(), DATA_TOPIC),
+    );
+    let coordinator = Arc::new(TxnCoordinator::new(
+        NodeId(1),
+        partitions,
+        Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
+        1,
+        krabka_units::mebibytes(1),
+    ));
+    coordinator
+        .refresh_leader_partitions(&image(NodeId(1), 0))
+        .await
+        .finished()
+        .await;
+    coordinator
+        .put(entry, TxnVersion::Classic)
+        .await
+        .expect("seed __transaction_state under TxnVersion::Classic");
+
+    let attempt = coordinator
+        .complete_prepared_transaction(TID, TxnVersion::Verified)
+        .await;
+    check!(attempt == CompletionAttempt::Completed);
+
+    let after = current(&coordinator).await.expect("entry still tracked");
+    check!(after.state == TxnState::CompleteCommit);
+    check!(after.producer_epoch == epoch_before, "epoch not bumped");
+    check!(after.client_transaction_version == 0, "stays classic");
 }
 
 #[tokio::test]

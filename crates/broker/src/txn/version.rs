@@ -40,6 +40,17 @@ impl TxnVersion {
     pub(crate) fn two_phase(self) -> bool {
         matches!(self, TxnVersion::TwoPhase)
     }
+
+    /// The finalized `transaction.version` level, which
+    /// `TransactionLogValue.ClientTransactionVersion` carries.
+    pub(crate) fn level(self) -> i16 {
+        match self {
+            TxnVersion::Classic => 0,
+            TxnVersion::Flexible => 1,
+            TxnVersion::Verified => 2,
+            TxnVersion::TwoPhase => 3,
+        }
+    }
 }
 
 pub(crate) fn resolve_txn_version(image: &MetadataImage) -> TxnVersion {
@@ -83,6 +94,18 @@ mod tests {
                 resolve_txn_version(&image_with_tv(level)) == want,
                 "{level:?}"
             );
+        }
+    }
+
+    #[test]
+    fn level_maps_each_version() {
+        for (version, level) in [
+            (TxnVersion::Classic, 0),
+            (TxnVersion::Flexible, 1),
+            (TxnVersion::Verified, 2),
+            (TxnVersion::TwoPhase, 3),
+        ] {
+            assert!(version.level() == level, "{version:?}");
         }
     }
 

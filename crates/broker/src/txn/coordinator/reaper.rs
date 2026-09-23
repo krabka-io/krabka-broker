@@ -247,14 +247,18 @@ impl ReaperBackend for TxnCoordinator {
             warn!(tid, %error, "txn reaper: failed to allocate completion identity");
             return None;
         }
-        if let Err(e) = self
-            .put_under_state_partition_lock(prepared.clone(), txnv)
-            .await
-        {
-            warn!(tid, error = %e, "txn reaper: failed to persist PrepareAbort; skipping");
-            return None;
+        // `put_under_state_partition_lock` stamps `client_transaction_version`
+        // on its own clone before it persists; the entry it returns, not
+        // `prepared`, is what publication actually holds. `complete_abort`
+        // compares its retained snapshot against the live entry by full
+        // equality, so a stale, unstamped `prepared` would reject there.
+        match self.put_under_state_partition_lock(prepared, txnv).await {
+            Ok(persisted) => Some(persisted),
+            Err(e) => {
+                warn!(tid, error = %e, "txn reaper: failed to persist PrepareAbort; skipping");
+                None
+            }
         }
-        Some(prepared)
     }
 
     // cargo-mutants: writes abort markers to live partition logs
@@ -306,13 +310,12 @@ impl ReaperBackend for TxnCoordinator {
         let mut complete = entry.clone();
         let (new_pid, new_epoch) = completion_producer_identity(&complete);
         apply_complete_abort(&mut complete, new_pid, new_epoch, now_ms);
-        if let Err(e) = self
-            .put_under_state_partition_lock(complete.clone(), txnv)
-            .await
-        {
-            warn!(tid, error = %e, "txn reaper: failed to persist CompleteAbort; skipping");
-            return None;
+        match self.put_under_state_partition_lock(complete, txnv).await {
+            Ok(persisted) => Some(persisted),
+            Err(e) => {
+                warn!(tid, error = %e, "txn reaper: failed to persist CompleteAbort; skipping");
+                None
+            }
         }
-        Some(complete)
     }
 }
