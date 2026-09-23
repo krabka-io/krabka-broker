@@ -192,6 +192,16 @@ pub(crate) async fn handle(
     // UNKNOWN_TOPIC_ID at v13+ still answers 53. So this runs ahead of the
     // topic-resolution loop below, not inside it.
     let image = controller.current_image();
+
+    // ── KIP-13: measure total request bytes before consuming the topic_data ──
+    // Computed here, ahead of every early-return below (including the
+    // transactional-authorization refusal), so a denied request is still
+    // charged to `producer_byte_rate` the same as an accepted one -- Kafka
+    // throttles on bytes received, not on whether the request was allowed to
+    // write. Computed once here so the iterator doesn't conflict with `for
+    // topic in req.topic_data` below (which moves the vector).
+    let produce_bytes_by_qos_tier = produce_bytes_by_qos_tier(&image, &req.topic_data);
+
     if req.has_transactional_batch()
         && !is_authorized_transactional(broker, &image, ctx, req.transactional_id.as_deref())
     {
@@ -207,7 +217,7 @@ pub(crate) async fn handle(
             &image,
             ctx,
             (acks != 0).then_some(handler_start),
-            &std::collections::BTreeMap::new(),
+            &produce_bytes_by_qos_tier,
             topic_results,
             version,
         );
@@ -230,11 +240,6 @@ pub(crate) async fn handle(
     // topic while the waits are driven once, after every partition has
     // appended.
     let mut awaiting: Vec<PendingPartition> = Vec::new();
-
-    // ── KIP-13: measure total request bytes before consuming the topic_data ──
-    // Computed here so the iterator doesn't conflict with `for topic in req.topic_data`
-    // below (which moves the vector).
-    let produce_bytes_by_qos_tier = produce_bytes_by_qos_tier(&image, &req.topic_data);
 
     for topic in req.topic_data {
         // v ≤ 12 sends the topic name; v ≥ 13 sends only topic_id and

@@ -20,16 +20,18 @@ use crate::{
 /// in the request carries the transactional attribute
 /// ([`ProduceFramed::has_transactional_batch`]).
 ///
-/// An empty `transactional_id` is treated the same as a wire-null one: never
-/// authorized, so a transactional batch under an empty id is refused rather
-/// than checked against an empty-string `TransactionalId` resource.
+/// Kafka's predicate is `transactionalId != null`: only a wire-null id is
+/// rejected outright here. A non-null empty id is passed to the configured
+/// authorizer like any other resource name, exactly as Kafka's own
+/// `authHelper.authorize` call does -- an `AllowAllAuthorizer` allows it, and
+/// a deny-capable one decides on the empty resource name itself.
 pub(super) fn is_authorized_transactional(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     context: &crate::handlers::RequestContext<'_>,
     transactional_id: Option<&str>,
 ) -> bool {
-    let Some(id) = transactional_id.filter(|id| !id.is_empty()) else {
+    let Some(id) = transactional_id else {
         return false;
     };
     broker.config.authorizer.authorize(
