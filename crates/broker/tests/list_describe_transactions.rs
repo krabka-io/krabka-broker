@@ -56,6 +56,52 @@ async fn list_transactions(
     }
 }
 
+/// `DescribeTransactions` for one id, after the coordinator of that id has
+/// loaded its `__transaction_state` partition. `FindCoordinator` creates the
+/// topic, and the row carries `COORDINATOR_LOAD_IN_PROGRESS` (14) or
+/// `NOT_COORDINATOR` (16) until the load ends.
+async fn describe_transaction(
+    client: &krabka_client_core::Client,
+    transactional_id: &str,
+) -> DescribedTransactionState {
+    let _ = client
+        .send(
+            krabka_protocol::owned::find_coordinator_request::FindCoordinatorRequest {
+                key: transactional_id.into(),
+                key_type: 1,
+                coordinator_keys: vec![transactional_id.into()],
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("FindCoordinator");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let response = client
+            .send(DescribeTransactionsRequest {
+                transactional_ids: vec![transactional_id.into()],
+                ..Default::default()
+            })
+            .await
+            .expect("DescribeTransactions");
+        let row = response
+            .transaction_states
+            .first()
+            .expect("one row per requested id")
+            .clone();
+        if !matches!(
+            row.error_code,
+            codes::COORDINATOR_LOAD_IN_PROGRESS | codes::NOT_COORDINATOR
+        ) || std::time::Instant::now() >= deadline
+        {
+            return row;
+        }
+        // intentional: the coordinator load has no awaiter reachable from a
+        // client; the answer is the signal.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 async fn create_topic(bootstrap: &str, name: &str) {
     let client = krabka_client_core::Client::builder()
         .bootstrap(bootstrap)
@@ -313,20 +359,13 @@ async fn describe_transactions_returns_not_found_for_unknown_tid() {
     let (broker, bootstrap, _dir) = boot_single().await;
 
     let client = admin_client(&bootstrap).await;
-    let r = client
-        .send(DescribeTransactionsRequest {
-            transactional_ids: vec!["ghost-tid".into()],
-            ..Default::default()
-        })
-        .await
-        .expect("DescribeTransactions");
+    let row = describe_transaction(&client, "ghost-tid").await;
     assert!(
-        r.transaction_states
-            == [DescribedTransactionState {
-                error_code: 75,
-                transactional_id: "ghost-tid".into(),
-                ..Default::default()
-            }]
+        row == DescribedTransactionState {
+            error_code: codes::TRANSACTIONAL_ID_NOT_FOUND,
+            transactional_id: "ghost-tid".into(),
+            ..Default::default()
+        }
     );
 
     broker.shutdown().await;
