@@ -465,6 +465,8 @@ mod tests {
     /// broker create arbitrary topics.
     #[tokio::test]
     async fn handle_reports_topics_unauthorized_to_create_in_status() {
+        use krabka_protocol::owned::common::streams_group_heartbeat_request::topic_info::TopicInfo;
+
         let version = streams_group_heartbeat_response::MAX_VERSION;
         let (broker_handle, _dir) = start_broker_with_grants().await;
         let broker = broker_handle.broker_arc_for_test();
@@ -475,7 +477,6 @@ mod tests {
         // anywhere.
         let principal = crate::test_support::principal("Group:Read+Topic:Describe");
         let ctx = context(&principal, &peer);
-        use krabka_protocol::owned::common::streams_group_heartbeat_request::topic_info::TopicInfo;
 
         let mut req = request("no-create-grant");
         let topology = req.topology.as_mut().expect("the join carries a topology");
