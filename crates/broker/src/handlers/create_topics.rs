@@ -19,7 +19,8 @@ use bytes::Bytes;
 use krabka_protocol::{
     Decode,
     owned::{
-        create_topics_request::CreateTopicsRequest, create_topics_response::CreatableTopicResult,
+        create_topics_request::{CreatableTopic, CreateTopicsRequest},
+        create_topics_response::CreatableTopicResult,
     },
     primitives::uuid::Uuid as ProtoUuid,
 };
@@ -158,6 +159,25 @@ pub(crate) async fn handle(
             .map(|(name, _)| name.to_owned())
             .collect();
 
+    // The topics that will actually attempt creation: not a duplicate
+    // request entry, not the protected raft metadata topic, and not denied
+    // `Create`. Both mutation-quota accounting and the quota-rejected
+    // response below charge and throttle only these, matching the per-topic
+    // loop's own precheck order -- a topic this request will answer
+    // INVALID_REQUEST or TOPIC_AUTHORIZATION_FAILED regardless of quota must
+    // keep that result rather than being overwritten with
+    // THROTTLING_QUOTA_EXCEEDED, and must not consume budget for a mutation
+    // that never happens.
+    let authorized_topics: Vec<&CreatableTopic> = req
+        .topics
+        .iter()
+        .filter(|topic| {
+            !duplicate_names.contains(topic.name.as_str())
+                && topic.name != CLUSTER_METADATA_TOPIC
+                && !denied_names.contains(topic.name.as_str())
+        })
+        .collect();
+
     let controller = broker.controller.clone();
     let node_id = broker.config.node_id;
     let log_dirs = broker.config.all_log_dirs();
@@ -172,7 +192,10 @@ pub(crate) async fn handle(
     // invalid requests consume quota (bad-faith clients can't escape by
     // sending malformed RPCs). num_partitions == -1 means "use cluster
     // default"; count it as 1 for accounting.
-    let mutation_count = mutation_count(&req, broker.config.num_partitions);
+    let mutation_count = mutation_count(
+        authorized_topics.iter().copied(),
+        broker.config.num_partitions,
+    );
     let quota = crate::quota::apply_controller_mutation_quota_mode(
         &image,
         &broker.quota_buckets,
@@ -184,11 +207,35 @@ pub(crate) async fn handle(
         version >= 6,
     );
     if quota.is_rejected() {
+        let mut emitted_duplicates: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         let results = req
             .topics
             .iter()
-            .map(|topic| {
-                topic_error_result(topic.name.clone(), codes::THROTTLING_QUOTA_EXCEEDED, None)
+            .filter_map(|topic| {
+                let name = topic.name.clone();
+                if let Some((code, message)) = duplicate_or_protected_error(&duplicate_names, &name)
+                {
+                    // One row per duplicated name, not one per occurrence --
+                    // Kafka removes the repeats from the request before it
+                    // ever builds a response row for them.
+                    if !emitted_duplicates.insert(name.clone()) {
+                        return None;
+                    }
+                    return Some(topic_error_result(name, code, Some(message)));
+                }
+                if denied_names.contains(&name) {
+                    return Some(topic_error_result(
+                        name,
+                        codes::TOPIC_AUTHORIZATION_FAILED,
+                        Some("Authorization failed.".into()),
+                    ));
+                }
+                Some(topic_error_result(
+                    name,
+                    codes::THROTTLING_QUOTA_EXCEEDED,
+                    None,
+                ))
             })
             .collect();
         return encode_response(
@@ -198,6 +245,8 @@ pub(crate) async fn handle(
     }
 
     let mut results: Vec<CreatableTopicResult> = Vec::with_capacity(req.topics.len());
+    let mut emitted_duplicates: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     let preferred_site = resolve_preferred_leader_site(&image);
     // KIP-108: a validate-only request runs every check and commits nothing,
     // so the policy below sees it exactly as it sees a committing one.
@@ -209,22 +258,14 @@ pub(crate) async fn handle(
         // Duplicate and protected names never reached the authorizer above,
         // and Kafka answers every one of them INVALID_REQUEST before any
         // other check.
-        if duplicate_names.contains(&name) {
-            results.push(topic_error_result(
-                name,
-                codes::INVALID_REQUEST,
-                Some("Duplicate topic name.".into()),
-            ));
-            continue;
-        }
-        if name == CLUSTER_METADATA_TOPIC {
-            results.push(topic_error_result(
-                name,
-                codes::INVALID_REQUEST,
-                Some(format!(
-                    "Creation of internal topic {CLUSTER_METADATA_TOPIC} is prohibited."
-                )),
-            ));
+        if let Some((code, message)) = duplicate_or_protected_error(&duplicate_names, &name) {
+            // Kafka removes every repeat of a duplicated name from the
+            // request before it builds a response, so only its first
+            // occurrence gets a row -- not one row per repeat.
+            if duplicate_names.contains(&name) && !emitted_duplicates.insert(name.clone()) {
+                continue;
+            }
+            results.push(topic_error_result(name, code, Some(message)));
             continue;
         }
 
@@ -505,6 +546,29 @@ pub(crate) async fn handle(
     }
 
     finish_response(broker, ctx, results, validate_only, quota.delay(), version)
+}
+
+/// The error a topic name fails before `Create` authorization even has a
+/// chance to run: a duplicate request entry, or the protected raft metadata
+/// topic. Both answer `INVALID_REQUEST` unconditionally
+/// (`ControllerApis.handleCreateTopics` removes both from `allowedTopicNames`
+/// before it authorizes), so their result must not depend on the quota
+/// decision either -- checked here both for the quota-rejected response and
+/// for the ordinary per-topic loop, so the two branches cannot drift apart.
+fn duplicate_or_protected_error(
+    duplicate_names: &std::collections::HashSet<String>,
+    name: &str,
+) -> Option<(i16, String)> {
+    if duplicate_names.contains(name) {
+        return Some((codes::INVALID_REQUEST, "Duplicate topic name.".into()));
+    }
+    if name == CLUSTER_METADATA_TOPIC {
+        return Some((
+            codes::INVALID_REQUEST,
+            format!("Creation of internal topic {CLUSTER_METADATA_TOPIC} is prohibited."),
+        ));
+    }
+    None
 }
 
 /// Kafka's refusal of a requested topic shape without a manual assignment:

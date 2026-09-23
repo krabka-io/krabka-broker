@@ -1488,6 +1488,14 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
 /// `__cluster_metadata`; both are refused under every ACL shape.
 #[tokio::test]
 async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
+    struct Case {
+        acls: Vec<AclEntry>,
+        // Which of "a" and "app-x" this ACL shape lets `alice` create.
+        // "b" (duplicate) and "__cluster_metadata" (protected) are refused
+        // under every shape and are not repeated here.
+        created: &'static [&'static str],
+    }
+
     fn acl(
         resource_type: ResourceType,
         resource_name: &str,
@@ -1523,14 +1531,6 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
         PatternType::Prefixed,
         AclOperation::Create,
     );
-
-    struct Case {
-        acls: Vec<AclEntry>,
-        // Which of "a" and "app-x" this ACL shape lets `alice` create.
-        // "b" (duplicate) and "__cluster_metadata" (protected) are refused
-        // under every shape and are not repeated here.
-        created: &'static [&'static str],
-    }
 
     let cases = [
         (
@@ -1651,7 +1651,9 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
             topics: vec![
                 row(0, "a"),
                 row(1, "app-x"),
-                duplicate_row("b"),
+                // "b" appears twice in the request but gets exactly one
+                // result row -- Kafka removes every duplicate entry before
+                // it ever builds a response for the name.
                 duplicate_row("b"),
                 protected_row,
             ],
