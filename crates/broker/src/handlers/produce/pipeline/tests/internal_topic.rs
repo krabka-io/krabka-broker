@@ -167,6 +167,7 @@ async fn a_denied_internal_topic_is_refused_and_its_log_end_offset_does_not_move
                 index: 0,
                 error_code: crate::codes::NONE,
                 base_offset: 1,
+                log_start_offset: 0,
                 ..Default::default()
             },
         ),
