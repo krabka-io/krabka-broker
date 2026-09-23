@@ -323,6 +323,19 @@ pub(crate) async fn handle(
             FreezeMutationKind::Produce,
         );
 
+        // Kafka's internal-topic gate, resolved here for the same reason as
+        // the freeze above: it is a property of the topic and of the request
+        // (its `client_id`), not of a partition or a batch. The group,
+        // transaction and share coordinators never reach this handler at all
+        // — they append to their own topics through the partition writer
+        // directly — so this is the only path an ordinary client Produce can
+        // take to `__consumer_offsets`, `__transaction_state` or
+        // `__share_group_state`, and the one Kafka refuses unless `client_id`
+        // is its own admin tooling's `"__admin_client"`.
+        let internal_topic_denied =
+            crate::internal_topics::is_internal_topic(&broker.config, &topic_name)
+                && !crate::internal_topics::produce_internal_topics_allowed(ctx.client_id);
+
         for part_data in topic.partition_data {
             let idx = part_data.index;
             // Time the per-partition handler work for the rebalancer's
@@ -345,6 +358,7 @@ pub(crate) async fn handle(
                     topic_name: topic_name.clone(),
                     freeze,
                     txn_id_denied,
+                    internal_topic_denied,
                     transaction: TransactionRequest {
                         transactional_id: req.transactional_id.as_deref(),
                         version,

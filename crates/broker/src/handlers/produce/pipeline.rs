@@ -76,6 +76,12 @@ pub(super) struct PartitionInput<'a> {
     /// Only `Frozen` carries registry detail, after authorization succeeded.
     pub(super) freeze: FreezeMutationResolution<'a>,
     pub(super) txn_id_denied: bool,
+    /// Whether this partition's topic is one of [`crate::internal_topics::
+    /// INTERNAL_TOPICS`] (or the configured audit topic) and the request's
+    /// `client_id` is not Kafka's admin-tooling exception. Resolved once per
+    /// topic, beside `freeze`, since it is a property of the topic and the
+    /// request, not of a partition or a batch.
+    pub(super) internal_topic_denied: bool,
     /// The request fields of the KIP-890 transaction check.
     pub(super) transaction: TransactionRequest<'a>,
     pub(super) acks: i16,
@@ -202,6 +208,7 @@ pub(super) async fn process_partition(
         topic_name,
         freeze,
         txn_id_denied,
+        internal_topic_denied,
         transaction,
         acks,
         timeout,
@@ -267,6 +274,30 @@ pub(super) async fn process_partition(
             return Ok(PartitionOutcome::Done(out));
         }
         FreezeMutationResolution::Admit => {}
+    }
+
+    // ── internal-topic gate ──────────────────────────────────────────
+    // Kafka's `ReplicaManager.appendToLocalLog` refuses every partition of
+    // `Topic.isInternal(topic)` with `InvalidTopicException` before it even
+    // looks up the partition's local log, unless the request's `client_id` is
+    // `"__admin_client"` (`KafkaApis.handleProduceRequest`'s
+    // `internalTopicsAllowed`). `__consumer_offsets`, `__transaction_state`
+    // and `__share_group_state` are replayed by this broker's own
+    // coordinators to rebuild group and transaction state, so an ordinary
+    // client append to one of them is a forged coordinator record, not a
+    // message. On a cluster with no authorizer configured — the default —
+    // nothing else stands between an unauthenticated client and that record,
+    // which is what makes this gate an authority gate rather than a content
+    // one: it ranks beside the freeze and ACL checks above, and ahead of
+    // every gate that reads the batch.
+    //
+    // The coordinators themselves never take this path: each one appends
+    // through the partition writer directly (see
+    // `crate::internal_topics::PRODUCE_ADMIN_CLIENT_ID`), so this gate cannot
+    // refuse the broker's own replay of its coordinator logs.
+    if internal_topic_denied {
+        out.error_code = codes::INVALID_TOPIC_EXCEPTION;
+        return Ok(PartitionOutcome::Done(out));
     }
 
     // ── max.message.bytes ────────────────────────────────────────────

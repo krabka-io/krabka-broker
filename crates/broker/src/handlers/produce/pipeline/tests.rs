@@ -88,6 +88,7 @@ async fn process_partition_non_leader_skips_schema_registry_and_preserves_hint()
             topic_name: "orders".into(),
             freeze: crate::freeze::resolve::FreezeMutationResolution::Admit,
             txn_id_denied: false,
+            internal_topic_denied: false,
             transaction: crate::handlers::produce::producer_checks::TransactionRequest {
                 transactional_id: None,
                 version: 9,
@@ -191,6 +192,7 @@ async fn process_partition_leader_without_local_replica_hints_leader() {
             topic_name: "orders".into(),
             freeze: crate::freeze::resolve::FreezeMutationResolution::Admit,
             txn_id_denied: false,
+            internal_topic_denied: false,
             transaction: crate::handlers::produce::producer_checks::TransactionRequest {
                 transactional_id: None,
                 version: 9,
@@ -244,3 +246,10 @@ async fn process_partition_leader_without_local_replica_hints_leader() {
 // The gate that refuses every partition row of a frozen topic, and the
 // per-topic resolve the handler feeds it.
 mod freeze;
+
+// ── internal-topic gate ───────────────────────────────────────────
+//
+// The gate that refuses a client Produce to a broker-owned topic such as
+// `__consumer_offsets`, unless the request's `client_id` is Kafka's own
+// admin-tooling exception.
+mod internal_topic;
