@@ -23,7 +23,7 @@ A partition lives in `<log_dir>/<topic>-<partition>/`, named by [`name.rs`](../s
 | `<base>.log` | Append-only v2 `RecordBatch` stream. | [`segment/append.rs`](../src/segment/append.rs), [`segment/read_raw.rs`](../src/segment/read_raw.rs) |
 | `<base>.index` | Sparse 8-byte entries: relative offset to byte position, one per `index.interval.bytes`. | [`index/offset.rs`](../src/index/offset.rs) |
 | `<base>.timeindex` | Sparse 12-byte entries: timestamp to relative offset. | [`index/time.rs`](../src/index/time.rs) |
-| `<base>.txnindex` | 24-byte records, one per aborted transaction in the segment. | [`txn_index.rs`](../src/txn_index.rs) |
+| `<base>.txnindex` | 34-byte version-prefixed records, one per aborted transaction in the segment. | [`txn_index.rs`](../src/txn_index.rs) |
 | `<base>.snapshot` | Producer state at the segment boundary, in Kafka's snapshot format. | [`producer_snapshot.rs`](../src/producer_snapshot.rs) |
 | `<base>.stampindex` | Krabka-private commit-stamp sidecar, present only when a stamp source is injected. | [`stamp_index.rs`](../src/stamp_index.rs) |
 | `.leader-epoch-checkpoint` | Per-partition two-column text file of `(epoch, start_offset)`. | [`leader_epoch_checkpoint.rs`](../src/leader_epoch_checkpoint.rs) |

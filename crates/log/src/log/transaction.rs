@@ -129,10 +129,30 @@ impl Log {
                     "invalid aborted transaction interval for producer {producer_id}"
                 )));
             };
+            // Kafka's `ProducerStateManager.lastStableOffset(completedTxn)`:
+            // the first offset of another still-open transaction, or one past
+            // this transaction's own last offset when none remains open.
+            let other_starts: Vec<i64> = self
+                .pending
+                .iter()
+                .filter(|(other_pid, _)| **other_pid != producer_id)
+                .map(|(_, offset)| offset.0)
+                .collect();
+            let last_stable_offset = krabka_verified::first_unstable_offset(
+                &other_starts,
+                last_offset.0 + 1,
+            )
+            .map(Offset)
+            .ok_or_else(|| {
+                LogError::Corrupt(format!(
+                    "pending transaction starts beyond aborted marker offset for producer {producer_id}"
+                ))
+            })?;
             self.active_txn_index.append(AbortedTxn {
                 start_offset: Offset(start),
                 last_offset: Offset(last),
                 producer_id,
+                last_stable_offset,
             })?;
         }
         let stamp_ranges = self
@@ -267,6 +287,7 @@ mod tests {
                     start_offset: Offset(0),
                     last_offset: Offset(3),
                     producer_id: ProducerId(1000),
+                    last_stable_offset: Offset(4),
                 }]
         );
     }
@@ -292,6 +313,7 @@ mod tests {
                     start_offset: Offset(0),
                     last_offset: Offset(3),
                     producer_id: ProducerId(1000),
+                    last_stable_offset: Offset(4),
                 }]
         );
     }
@@ -320,6 +342,7 @@ mod tests {
                     start_offset: Offset(0),
                     last_offset: Offset(4), // 3 + 1, not 3 - 1
                     producer_id: ProducerId(1000),
+                    last_stable_offset: Offset(5),
                 }]
         );
     }

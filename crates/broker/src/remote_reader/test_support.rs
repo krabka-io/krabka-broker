@@ -362,10 +362,10 @@ pub fn populated_reader(
 
 /// Works like `populated_reader`, but before the copy it writes one
 /// aborted-txn entry into the first sealed segment's `.txnindex`. The
-/// entry is 24 BE bytes: `start_offset`, `last_offset`, and
-/// `producer_id`. The copy path then carries it to the remote tier. It
-/// returns the reader, the log, and the written
-/// `(start_offset, last_offset, producer_id)`.
+/// entry is 34 BE bytes: a 2-byte version (0), then `producer_id`,
+/// `start_offset`, `last_offset`, and `last_stable_offset`. The copy path
+/// then carries it to the remote tier. It returns the reader, the log, and
+/// the written `(start_offset, last_offset, producer_id)`.
 pub fn populated_reader_with_abort(
     log_dir: &std::path::Path,
     remote_dir: &std::path::Path,
@@ -391,9 +391,11 @@ pub fn populated_reader_with_abort(
     // Unwrap the log-layer `Offset`s into this helper's `i64` tuple at the seam.
     let abort = (first.base_offset.0, first.last_offset.0, 7777_i64);
     let mut txn_bytes = Vec::new();
-    txn_bytes.extend_from_slice(&abort.0.to_be_bytes());
-    txn_bytes.extend_from_slice(&abort.1.to_be_bytes());
-    txn_bytes.extend_from_slice(&abort.2.to_be_bytes());
+    txn_bytes.extend_from_slice(&0_i16.to_be_bytes()); // version
+    txn_bytes.extend_from_slice(&abort.2.to_be_bytes()); // producer_id
+    txn_bytes.extend_from_slice(&abort.0.to_be_bytes()); // start_offset
+    txn_bytes.extend_from_slice(&abort.1.to_be_bytes()); // last_offset
+    txn_bytes.extend_from_slice(&(abort.1 + 1).to_be_bytes()); // last_stable_offset
     let txn_path = first.log_path.with_extension("txnindex");
     std::fs::write(&txn_path, &txn_bytes).unwrap();
 
