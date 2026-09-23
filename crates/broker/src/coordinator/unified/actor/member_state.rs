@@ -67,9 +67,15 @@ pub(super) fn update_member_state(
     req: &ConsumerGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
     now: Instant,
-    cur_epoch: i32,
     regex_denied_topics: &HashSet<String>,
 ) -> Result<bool, String> {
+    // The member's epoch before this heartbeat's updates -- nothing below
+    // touches `member_epoch` until `advance_member_epoch`, so reading it here
+    // (before any mutation) matches what the caller would have measured.
+    let cur_epoch = state
+        .members
+        .get(&req.member_id)
+        .map_or(0, |m| m.member_epoch);
     // Kafka validates the pattern before it touches member state, and only
     // when the heartbeat carries one that differs from the member's stored
     // pattern. Do the same, so a rejected heartbeat leaves the group exactly
@@ -483,7 +489,6 @@ mod tests {
                     host: "other-host",
                 },
                 Instant::now(),
-                member_epoch,
                 &HashSet::new(),
             );
 

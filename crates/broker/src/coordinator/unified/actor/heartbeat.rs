@@ -36,13 +36,12 @@ use super::{
 use crate::{
     codes,
     coordinator::unified::{
-        ClientIdentity, GroupCoordinator,
+        ClientIdentity,
         config::NextGenConfig,
         consumer_state::GroupState,
         first_join_member_id,
         group::{CoordinatorGroup, GroupKind},
         migration,
-        offsets_log::OffsetsLog,
     },
 };
 
@@ -98,18 +97,7 @@ pub(super) async fn handle_actor_heartbeat(
         });
         return true;
     };
-    match handle_heartbeat(
-        state,
-        services.config,
-        services.metadata,
-        services.offsets_log,
-        services.coordinator,
-        &request,
-        client,
-        regex_denied_topics,
-    )
-    .await
-    {
+    match handle_heartbeat(state, services, &request, client, regex_denied_topics).await {
         Ok(response) => {
             let _ = reply.send(response);
         }
@@ -255,10 +243,6 @@ pub(crate) fn step_heartbeat(
         }
         Resolved::New | Resolved::Existing => None,
     };
-    let cur_epoch = state
-        .members
-        .get(&member_id)
-        .map_or(0, |member| member.member_epoch);
 
     // ─── Steady-state: update last_seen / subscription / owned ───
     let request_for_member;
@@ -279,7 +263,6 @@ pub(crate) fn step_heartbeat(
         req,
         client,
         now,
-        cur_epoch,
         regex_denied_topics,
     ) {
         Ok(changed) => changed,
@@ -411,10 +394,7 @@ fn rejected(error: HeartbeatError, config: &NextGenConfig) -> HeartbeatStep {
 
 async fn handle_heartbeat(
     state: &mut GroupState,
-    config: &NextGenConfig,
-    metadata: &dyn MetadataProvider,
-    offsets_log: &dyn OffsetsLog,
-    coordinator: &GroupCoordinator,
+    services: ActorServices<'_>,
     req: &ConsumerGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
     regex_denied_topics: &HashSet<String>,
@@ -423,14 +403,21 @@ async fn handle_heartbeat(
     let now_ms = chrono_now_ms();
     let step = step_heartbeat(
         state,
-        config,
-        metadata,
+        services.config,
+        services.metadata,
         req,
         client,
         now,
         regex_denied_topics,
     );
-    flush_pending(state, step.pending, offsets_log, coordinator, now_ms).await?;
+    flush_pending(
+        state,
+        step.pending,
+        services.offsets_log,
+        services.coordinator,
+        now_ms,
+    )
+    .await?;
     Ok(step.response)
 }
 
