@@ -75,16 +75,15 @@ pub(crate) async fn handle(
             );
         }
 
-        if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
-            return crate::handlers::encode_response(&error(error_code), version);
-        }
-
         // `Describe` on every distinct name in `subscribed_topic_names`
         // (Kafka's `filterByAuthorized(request.context, DESCRIBE, TOPIC,
         // subscribedTopicSet)`). Any denial fails the WHOLE heartbeat with
         // `TOPIC_AUTHORIZATION_FAILED` (29); the group is never touched, so an
         // unauthorized caller cannot learn the denied topic's id or
-        // partitions by being admitted as a member.
+        // partitions by being admitted as a member. This runs before
+        // `group_coordinator_error` -- Kafka authorizes the request before it
+        // ever reaches coordinator routing, so an unauthorized subscription
+        // must not be masked by `NOT_COORDINATOR` / `COORDINATOR_NOT_AVAILABLE`.
         if subscribed_names_describe_denied(broker, &image, ctx, &req) {
             return crate::handlers::encode_response(
                 &error(codes::TOPIC_AUTHORIZATION_FAILED),
@@ -94,14 +93,19 @@ pub(crate) async fn handle(
 
         // `subscribed_topic_regex` (KIP-848 v1+): resolve it against every
         // topic the image currently knows about and precompute the subset of
-        // matches this principal may NOT `Describe`. The actor stores this
-        // set on the member and the reconciler excludes these names from the
-        // live regex match before assignment — Kafka's
+        // matches this principal may `Describe` right now. The actor stores
+        // this set on the member and the reconciler ANDs it against the live
+        // regex match before assignment — Kafka's
         // `TopicRegexResolver.filterTopicDescribeAuthorizedTopics`. A pattern
         // that fails to compile here is left alone: the actor's own
         // `check_subscribed_topic_regex` rejects it with
         // `INVALID_REGULAR_EXPRESSION` before any member state changes.
-        let regex_denied_topics = regex_subscription_describe_denied(broker, &image, ctx, &req);
+        let regex_authorized_topics =
+            regex_subscription_describe_authorized(broker, &image, ctx, &req);
+
+        if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
+            return crate::handlers::encode_response(&error(error_code), version);
+        }
 
         // Route to the one actor for this id, spawning a consumer-kind actor if
         // the id is brand-new. Both RPC families reach the same actor; a classic
@@ -116,7 +120,7 @@ pub(crate) async fn handle(
                 request: req,
                 client_id: ctx.client_id.to_owned(),
                 client_host: ctx.client_host(),
-                regex_denied_topics,
+                regex_authorized_topics,
                 reply: tx,
             })
             .await
@@ -177,23 +181,30 @@ fn subscribed_names_describe_denied(
 
 /// Resolves `req.subscribed_topic_regex` against every topic name `image`
 /// currently knows about, and returns the subset of matches that
-/// `ctx.principal` may not `Describe`.
+/// `ctx.principal` may `Describe` right now.
 ///
-/// Returns an empty set when there is no pattern, or when it fails to
-/// compile — a heartbeat with a pattern that does not compile never reaches
-/// assignment: the actor's own `check_subscribed_topic_regex` rejects it with
+/// The reconciler ANDs a live regex match against this set (fail-closed): a
+/// topic this call never authorized is excluded even if it starts matching
+/// later, whether because it is new (a race between this snapshot and the
+/// actor's own, later `MetadataProvider` read) or because the member's state
+/// was rebuilt from a raft seed that carries no authorization decision at
+/// all (`apply_seed`). Both cases default to "not yet authorized" rather
+/// than "not yet denied".
+///
+/// Returns an empty set when there is no pattern or it fails to compile — a
+/// heartbeat with a pattern that does not compile never reaches assignment:
+/// the actor's own `check_subscribed_topic_regex` rejects it with
 /// `INVALID_REGULAR_EXPRESSION` first, so no filtering is needed here.
-fn regex_subscription_describe_denied(
+/// `Some("")` is a pattern like any other: `Regex::new("")` compiles and
+/// matches every topic name, so it goes through the same authorization walk
+/// as any other pattern rather than being read as "no regex".
+fn regex_subscription_describe_authorized(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     ctx: &crate::handlers::RequestContext<'_>,
     req: &ConsumerGroupHeartbeatRequest,
 ) -> HashSet<String> {
-    let Some(pattern) = req
-        .subscribed_topic_regex
-        .as_deref()
-        .filter(|pattern| !pattern.is_empty())
-    else {
+    let Some(pattern) = req.subscribed_topic_regex.as_deref() else {
         return HashSet::new();
     };
     let Ok(re) = regex::Regex::new(pattern) else {
@@ -216,7 +227,7 @@ fn regex_subscription_describe_denied(
         matched,
     )
     .into_iter()
-    .filter(|(_, result)| *result == AuthorizationResult::Deny)
+    .filter(|(_, result)| *result == AuthorizationResult::Allow)
     .map(|(name, _)| name.to_string())
     .collect()
 }
@@ -582,6 +593,40 @@ mod tests {
             );
             broker_handle.shutdown().await;
         }
+    }
+
+    /// `Some("")` is a valid regex that matches every topic name, not "no
+    /// regex" -- it must go through the same Describe authorization walk as
+    /// any other pattern. This is the #716 regression case: treating an
+    /// empty pattern as absent skipped authorization entirely and returned
+    /// every topic as a free pass.
+    #[tokio::test]
+    async fn regex_subscription_describe_authorized_treats_empty_pattern_as_a_real_regex() {
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        image.apply(&describe_acl("orders"));
+        image.apply(&topic_record("orders", uuid::Uuid::from_u128(1), 1));
+        image.apply(&topic_record("payments", uuid::Uuid::from_u128(2), 1));
+        let (broker_handle, _dir) = start_broker(Arc::new(
+            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
+        ))
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        let principal = alice();
+        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+        let ctx = crate::test_support::request_context(&principal, &peer, "c");
+        let req = ConsumerGroupHeartbeatRequest {
+            group_id: "g".into(),
+            subscribed_topic_regex: Some(String::new()),
+            ..Default::default()
+        };
+
+        let authorized = regex_subscription_describe_authorized(&broker, &image, &ctx, &req);
+
+        assert!(
+            authorized == std::collections::HashSet::from(["orders".to_string()]),
+            "{authorized:?}"
+        );
+        broker_handle.shutdown().await;
     }
 
     /// A `SubscribedTopicNames` entry this principal cannot `Describe` fails

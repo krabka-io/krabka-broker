@@ -41,7 +41,7 @@ async fn first_join_emits_one_batch() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_denied_topics: std::collections::HashSet::new(),
+            regex_authorized_topics: std::collections::HashSet::new(),
             reply: tx,
         })
         .await
@@ -75,7 +75,7 @@ async fn first_join_adopts_client_member_id() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_denied_topics: std::collections::HashSet::new(),
+            regex_authorized_topics: std::collections::HashSet::new(),
             reply: tx,
         })
         .await
@@ -525,7 +525,7 @@ async fn unchanged_heartbeat_emits_no_batch() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_denied_topics: std::collections::HashSet::new(),
+            regex_authorized_topics: std::collections::HashSet::new(),
             reply: tx,
         })
         .await
@@ -548,7 +548,7 @@ async fn unchanged_heartbeat_emits_no_batch() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_denied_topics: std::collections::HashSet::new(),
+            regex_authorized_topics: std::collections::HashSet::new(),
             reply: tx,
         })
         .await
@@ -579,7 +579,7 @@ async fn leave_emits_tombstone_batch() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_denied_topics: std::collections::HashSet::new(),
+            regex_authorized_topics: std::collections::HashSet::new(),
             reply: tx,
         })
         .await
@@ -599,7 +599,7 @@ async fn leave_emits_tombstone_batch() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_denied_topics: std::collections::HashSet::new(),
+            regex_authorized_topics: std::collections::HashSet::new(),
             reply: tx,
         })
         .await
@@ -737,7 +737,7 @@ async fn consumer_heartbeat_upgrades_a_classic_group() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_denied_topics: std::collections::HashSet::new(),
+            regex_authorized_topics: std::collections::HashSet::new(),
             reply: tx,
         })
         .await
@@ -784,7 +784,7 @@ async fn failed_upgrade_append_keeps_the_atomic_batch_unpublished() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
-            regex_denied_topics: std::collections::HashSet::new(),
+            regex_authorized_topics: std::collections::HashSet::new(),
             reply: tx,
         })
         .await

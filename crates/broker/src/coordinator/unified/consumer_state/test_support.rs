@@ -18,7 +18,7 @@ pub(crate) fn member(id: &str) -> MemberState {
         subscribed_topic_names: HashSet::new(),
         subscribed_topic_regex: None,
         compiled_regex: crate::coordinator::unified::consumer_state::CompiledRegex::Absent,
-        regex_denied_topics: HashSet::new(),
+        regex_authorized_topics: HashSet::new(),
         server_assignor: None,
         rebalance_timeout: Duration::from_mins(1),
         member_epoch: 0,

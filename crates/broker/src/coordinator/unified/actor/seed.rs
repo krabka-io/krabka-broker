@@ -138,7 +138,14 @@ pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed, image: &Reconc
             subscribed_topic_names: sub,
             subscribed_topic_regex: meta.subscribed_topic_regex,
             compiled_regex: crate::coordinator::unified::consumer_state::CompiledRegex::Absent,
-            regex_denied_topics: HashSet::new(),
+            // Fail-closed: no authorization decision is persisted in the raft
+            // log, so a member rebuilt after a coordinator failover starts
+            // with none of its regex matches authorized, exactly as if it had
+            // just joined. The member's next heartbeat re-derives this set
+            // from a live authorizer check and the reconciler grants the
+            // matches back once it lands, rather than the seed silently
+            // trusting whatever the pattern happens to match right now.
+            regex_authorized_topics: HashSet::new(),
             server_assignor: meta.server_assignor,
             rebalance_timeout: Duration::from_millis(
                 u64::try_from(meta.rebalance_timeout_ms.max(0))

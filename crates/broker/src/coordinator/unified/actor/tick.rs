@@ -420,7 +420,7 @@ mod tests {
                         client_id: "c".into(),
                         client_host: "h".into(),
                         reply,
-                        regex_denied_topics: std::collections::HashSet::new(),
+                        regex_authorized_topics: std::collections::HashSet::new(),
                     })
                     .await
                     .unwrap();

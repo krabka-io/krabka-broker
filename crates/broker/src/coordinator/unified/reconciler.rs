@@ -80,7 +80,7 @@ fn collect_subscribed_topic_ids(
     }
     if let Some(re) = member.compiled_regex() {
         for (name, id) in topic_id_by_name {
-            if re.is_match(name) && !member.regex_denied_topics.contains(name) {
+            if re.is_match(name) && member.regex_authorized_topics.contains(name) {
                 out.insert(*id);
             }
         }
@@ -129,7 +129,7 @@ mod tests {
             subscribed_topic_names: sub,
             subscribed_topic_regex: None,
             compiled_regex: crate::coordinator::unified::consumer_state::CompiledRegex::Absent,
-            regex_denied_topics: HashSet::new(),
+            regex_authorized_topics: HashSet::new(),
             server_assignor: None,
             rebalance_timeout: Duration::from_mins(1),
             member_epoch: 0,
@@ -239,15 +239,11 @@ mod tests {
         }
     }
 
-    fn member_with_regex(id: &str, names: &[&str], regex: Option<&str>) -> MemberState {
-        member_with_regex_denying(id, names, regex, &[])
-    }
-
-    fn member_with_regex_denying(
+    fn member_with_regex(
         id: &str,
         names: &[&str],
         regex: Option<&str>,
-        denied: &[&str],
+        authorized: &[&str],
     ) -> MemberState {
         let mut sub = HashSet::new();
         for n in names {
@@ -262,7 +258,7 @@ mod tests {
             subscribed_topic_names: sub,
             subscribed_topic_regex: regex.map(String::from),
             compiled_regex: crate::coordinator::unified::consumer_state::CompiledRegex::Absent,
-            regex_denied_topics: denied.iter().map(|n| (*n).to_string()).collect(),
+            regex_authorized_topics: authorized.iter().map(|n| (*n).to_string()).collect(),
             server_assignor: None,
             rebalance_timeout: Duration::from_mins(1),
             member_epoch: 0,
@@ -278,7 +274,12 @@ mod tests {
     #[test]
     fn regex_resolves_to_matching_topic_ids() {
         let mut g = GroupState::new("g");
-        g.add_or_update_member(member_with_regex("m1", &[], Some("^orders-.*")));
+        g.add_or_update_member(member_with_regex(
+            "m1",
+            &[],
+            Some("^orders-.*"),
+            &["orders-eu", "orders-us"],
+        ));
         let inp = input_with_topics(&[("orders-eu", 1), ("orders-us", 1), ("shipments", 1)]);
         let orders_eu = inp.topic_id_by_name["orders-eu"];
         let orders_us = inp.topic_id_by_name["orders-us"];
@@ -295,25 +296,30 @@ mod tests {
     #[test]
     fn regex_match_excludes_describe_denied_topics() {
         let mut g = GroupState::new("g");
-        g.add_or_update_member(member_with_regex_denying(
+        g.add_or_update_member(member_with_regex(
             "m1",
             &[],
             Some("^orders-.*"),
-            &["orders-us"],
+            &["orders-eu"],
         ));
         let inp = input_with_topics(&[("orders-eu", 1), ("orders-us", 1), ("shipments", 1)]);
         let orders_eu = inp.topic_id_by_name["orders-eu"];
         reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
         let assigned: HashSet<Uuid> = g.target.per_member["m1"].keys().copied().collect();
-        // `orders-us` matches the pattern but is Describe-denied, so only
-        // `orders-eu` is assigned.
+        // `orders-us` matches the pattern but is not (yet) Describe-authorized,
+        // so only `orders-eu` is assigned.
         assert!(assigned == maplit::hashset! {orders_eu});
     }
 
     #[test]
     fn regex_unions_with_names() {
         let mut g = GroupState::new("g");
-        g.add_or_update_member(member_with_regex("m1", &["audit"], Some("^orders-.*")));
+        g.add_or_update_member(member_with_regex(
+            "m1",
+            &["audit"],
+            Some("^orders-.*"),
+            &["orders-eu"],
+        ));
         let inp = input_with_topics(&[("orders-eu", 1), ("audit", 1), ("shipments", 1)]);
         let orders_eu = inp.topic_id_by_name["orders-eu"];
         let audit = inp.topic_id_by_name["audit"];
@@ -330,7 +336,7 @@ mod tests {
         // `*` at the start is an invalid Rust regex (and invalid in JVM
         // too — `PatternSyntaxException`). We must not panic; just fall
         // back to the names-only subscription.
-        g.add_or_update_member(member_with_regex("m1", &["audit"], Some("*invalid")));
+        g.add_or_update_member(member_with_regex("m1", &["audit"], Some("*invalid"), &[]));
         let inp = input_with_topics(&[("audit", 1), ("orders-eu", 1)]);
         let audit = inp.topic_id_by_name["audit"];
         let orders_eu = inp.topic_id_by_name["orders-eu"];
@@ -352,7 +358,7 @@ mod tests {
         // covers the operator-intended "subscribe to all topics" case
         // without forcing the client to enumerate them.
         let mut g = GroupState::new("g");
-        g.add_or_update_member(member_with_regex("m1", &[], Some("")));
+        g.add_or_update_member(member_with_regex("m1", &[], Some(""), &["a", "b", "c"]));
         let inp = input_with_topics(&[("a", 1), ("b", 1), ("c", 1)]);
         reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
         let assigned: HashSet<Uuid> = g.target.per_member["m1"].keys().copied().collect();
@@ -365,7 +371,7 @@ mod tests {
     #[test]
     fn regex_change_marks_group_dirty() {
         let mut g = GroupState::new("g");
-        g.add_or_update_member(member_with_regex("m1", &[], Some("^a")));
+        g.add_or_update_member(member_with_regex("m1", &[], Some("^a"), &["a1"]));
         let inp = input_with_topics(&[("a1", 1), ("b1", 1)]);
         reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
         assert!(!g.dirty, "fresh recompute clears dirty");
@@ -373,7 +379,7 @@ mod tests {
 
         // Change the regex pattern → must dirty the group so the next
         // reconcile re-runs.
-        g.add_or_update_member(member_with_regex("m1", &[], Some("^b")));
+        g.add_or_update_member(member_with_regex("m1", &[], Some("^b"), &["b1"]));
         assert!(g.dirty, "regex change must mark group dirty");
         let outcome = reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
         assert!(outcome == ReconcileOutcome::Recomputed);
@@ -383,7 +389,12 @@ mod tests {
     #[test]
     fn membership_topic_ids_includes_regex_matches() {
         let mut g = GroupState::new("g");
-        g.add_or_update_member(member_with_regex("m1", &[], Some("^orders-")));
+        g.add_or_update_member(member_with_regex(
+            "m1",
+            &[],
+            Some("^orders-"),
+            &["orders-eu"],
+        ));
         let inp = input_with_topics(&[("orders-eu", 1), ("shipments", 1)]);
         let orders = inp.topic_id_by_name["orders-eu"];
         let ids = membership_topic_ids(&g, &inp);
