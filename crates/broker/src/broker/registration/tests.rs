@@ -22,7 +22,7 @@ mod publish_race {
     use tokio::sync::watch;
 
     use super::{super::register_broker, self_registration_record};
-    use crate::{config::BrokerConfig, metadata_source::MetadataSource};
+    use crate::{config::BrokerConfig, error::BrokerError, metadata_source::MetadataSource};
 
     /// A `MetadataSource` whose `submit_change` always succeeds immediately,
     /// but whose published image is driven by the test alone through
@@ -122,6 +122,72 @@ mod publish_race {
             .expect("register_broker did not observe the published image")
             .expect("register_broker task");
         assert!(result.is_ok());
+    }
+
+    /// The restart case: `image` already carries a registration for this node
+    /// -- from before this call's own submit -- so a wait that only checks
+    /// "is a registration present" would return immediately on that stale
+    /// entry, before the controller republished anything at all. Every
+    /// commit assigns a fresh `broker_epoch`, so the fixture tells the two
+    /// apart by epoch, the same way the real controller would.
+    #[tokio::test(start_paused = true)]
+    async fn register_broker_on_restart_waits_for_the_new_epoch_not_the_stale_one() {
+        let config = BrokerConfig {
+            node_id: NodeId(9),
+            ..BrokerConfig::for_tests(std::path::PathBuf::new())
+        };
+        let mut stale = self_registration_record(&config);
+        stale.broker_epoch = 3;
+        let mut fresh = self_registration_record(&config);
+        fresh.broker_epoch = 7;
+
+        let mut initial = MetadataImage::new(uuid::Uuid::nil());
+        initial.apply(&MetadataRecord::V1BrokerRegistration(stale));
+        let (image_tx, _keep_alive) = watch::channel(Arc::new(initial));
+        let source = DelayedPublishSource {
+            image_tx: image_tx.clone(),
+        };
+
+        let mut call = tokio::spawn(async move { register_broker(&config, &source).await });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            !call.is_finished(),
+            "register_broker must not return on the strength of the pre-existing (stale) \
+             registration already in the image at boot"
+        );
+
+        let mut published = MetadataImage::new(uuid::Uuid::nil());
+        published.apply(&MetadataRecord::V1BrokerRegistration(fresh));
+        image_tx
+            .send(Arc::new(published))
+            .expect("test receiver kept alive");
+
+        let result = tokio::time::timeout(Duration::from_secs(1), &mut call)
+            .await
+            .expect("register_broker did not observe the freshly published registration")
+            .expect("register_broker task");
+        assert!(result.is_ok());
+    }
+
+    /// A publish that never arrives -- the observer's connection to the
+    /// controller drops right after a forwarded submit succeeded, say -- must
+    /// not hang `Broker::start` forever. The wait gives up once
+    /// `startup_leader_wait_timeout` elapses and reports a startup error.
+    #[tokio::test(start_paused = true)]
+    async fn register_broker_gives_up_once_the_startup_deadline_elapses() {
+        let config = BrokerConfig {
+            node_id: NodeId(9),
+            ..BrokerConfig::for_tests(std::path::PathBuf::new())
+        };
+        let (image_tx, _keep_alive) =
+            watch::channel(Arc::new(MetadataImage::new(uuid::Uuid::nil())));
+        let source = DelayedPublishSource { image_tx };
+
+        let err = register_broker(&config, &source)
+            .await
+            .expect_err("the image never publishes the registration");
+        assert!(matches!(err, BrokerError::Startup(_)));
     }
 }
 
