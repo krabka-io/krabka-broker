@@ -37,16 +37,20 @@ pub(super) struct ReplicaQuery {
     pub(super) server_name: String,
 }
 
-/// This sends `GetReplicaLogInfo` through
-/// [`krabka_client_core::Connection::raw_request`] rather than the typed
-/// `send`, for the same reason `isr_maintenance::alter_partition` sends
-/// `AlterPartition` that way: `send` negotiates its version off the peer's
-/// advertised `ApiVersions` table, and since #843 that table withholds every
+/// `send` negotiates its version off the peer's advertised `ApiVersions`
+/// table, and since #843 that table withholds every
 /// [`crate::api_catalog::INTER_BROKER_ONLY_APIS`] key -- `GetReplicaLogInfo`
 /// included -- from any listener a client can reach, which is the only
-/// listener the default single-listener broker has. `raw_request` sends at
-/// an explicit version instead, sound here only because `query.host:port` is
-/// always another krabka broker of this same build.
+/// listener the default single-listener broker has. When the peer still
+/// advertises the key (a pre-#843 peer, or a future dedicated
+/// `ListenerKind::InterBroker` listener), this negotiates normally through
+/// `send`, so a mixed-version fleet keeps working through a rolling upgrade.
+/// Only when [`krabka_client_core::Connection::advertised_api_range`] returns
+/// `None` does it fall back to
+/// [`krabka_client_core::Connection::raw_request`] at `MIN_VERSION`, the
+/// floor every krabka build has dispatched and ever will -- see
+/// `isr_maintenance::alter_partition::send_alter_partition_to`, which follows
+/// the same pattern.
 pub(super) async fn query_replica(
     client: &InterBrokerClient,
     query: ReplicaQuery,
@@ -74,18 +78,25 @@ pub(super) async fn query_replica(
         }],
         ..Default::default()
     };
-    let version = get_replica_log_info_request::MAX_VERSION;
-    let mut body = BytesMut::with_capacity(req.encoded_len(version));
-    req.encode(&mut body, version).ok()?;
-    let resp_body = conn
-        .raw_request(
-            get_replica_log_info_request::API_KEY,
-            version,
-            body.freeze(),
-        )
-        .await
-        .ok()?;
-    let resp = GetReplicaLogInfoResponse::decode(&mut resp_body.as_ref(), version).ok()?;
+    let resp = if conn
+        .advertised_api_range(get_replica_log_info_request::API_KEY)
+        .is_some()
+    {
+        conn.send(req).await.ok()?
+    } else {
+        let version = get_replica_log_info_request::MIN_VERSION;
+        let mut body = BytesMut::with_capacity(req.encoded_len(version));
+        req.encode(&mut body, version).ok()?;
+        let resp_body = conn
+            .raw_request(
+                get_replica_log_info_request::API_KEY,
+                version,
+                body.freeze(),
+            )
+            .await
+            .ok()?;
+        GetReplicaLogInfoResponse::decode(&mut resp_body.as_ref(), version).ok()?
+    };
     for t in &resp.topic_partition_log_info_list {
         for pli in &t.partition_log_info {
             if pli.partition == query.partition && pli.error_code == 0 {
