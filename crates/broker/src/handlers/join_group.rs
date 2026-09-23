@@ -174,3 +174,25 @@ pub(crate) async fn handle(
 fn encode(version: i16, resp: &JoinGroupResponse) -> Result<Bytes, BrokerError> {
     crate::handlers::encode_response(resp, version)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encodes_join_group_response() {
+        let resp = JoinGroupResponse {
+            error_code: codes::NONE,
+            generation_id: 1,
+            protocol_type: Some("consumer".into()),
+            protocol_name: Some("range".into()),
+            leader: "member-1".into(),
+            member_id: "member-1".into(),
+            members: vec![],
+            throttle_time_ms: 0,
+            ..Default::default()
+        };
+        let bytes = encode(5, &resp).expect("encode");
+        assert2::check!(!bytes.is_empty());
+    }
+}

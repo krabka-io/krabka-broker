@@ -255,7 +255,12 @@ async fn handle_applies_kip1242_routing_checks() {
     let principal = anonymous_principal();
     let peer = crate::test_support::peer();
     let context = crate::test_support::request_context(&principal, &peer, "krabka-test");
-    let cluster_id = broker.controller.current_image().cluster_id().to_string();
+    let raw_cluster_id = broker.controller.current_image().cluster_id();
+    // A real KIP-1242 client learned this cluster id from a `Metadata` or
+    // `DescribeCluster` response, which reports Kafka's base64 `Uuid` form
+    // (#1082), and echoes that exact string back here.
+    let cluster_id = crate::cluster_id::encode(raw_cluster_id);
+    let hyphenated_cluster_id = raw_cluster_id.to_string();
     let node_id = i32::try_from(broker.config.node_id.0).expect("node id fits Kafka wire");
     assert!(node_id != broker.config.broker_id);
 
@@ -264,6 +269,8 @@ async fn handle_applies_kip1242_routing_checks() {
         (Some(cluster_id.clone()), -1, codes::INVALID_REQUEST),
         (None, node_id, codes::INVALID_REQUEST),
         (Some(cluster_id.clone()), node_id, codes::NONE),
+        // The hyphenated `java.util.UUID` form still matches too.
+        (Some(hyphenated_cluster_id.clone()), node_id, codes::NONE),
         (
             Some("wrong-cluster".into()),
             node_id,

@@ -189,6 +189,14 @@ macro_rules! tuning_fields {
             pub partition_writer_queue_depth: usize,
             /// Default minimum in-sync replica count.
             pub default_min_insync_replicas: i32,
+            /// KIP-464: the partition count of a topic that `CreateTopics`
+            /// creates with `num_partitions = -1`. Kafka's `num.partitions`,
+            /// default 1.
+            pub num_partitions: i32,
+            /// KIP-464: the replication factor of a topic that `CreateTopics`
+            /// creates with `replication_factor = -1`. Kafka's
+            /// `default.replication.factor`, default 1.
+            pub default_replication_factor: i16,
             /// Bytes copied per future-log move read.
             pub future_log_move_read_chunk: ByteSize,
             /// Partition count for the consumer-offsets internal topic.

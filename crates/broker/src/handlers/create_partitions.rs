@@ -46,7 +46,9 @@ use crate::{
     codes,
     config_keys::resolve_preferred_leader_site,
     error::BrokerError,
-    handlers::create_topics::{diskless_wal_placement_error, site_broker_views},
+    handlers::create_topics::{
+        automatic_leaderships, diskless_wal_placement_error, manual_leaderships, site_broker_views,
+    },
 };
 
 #[tracing::instrument(
@@ -155,15 +157,20 @@ pub(crate) async fn handle(
             continue;
         }
 
-        let unavailable = if t.assignments.is_none() {
-            crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await
-        } else {
-            std::collections::HashSet::new()
-        };
+        // The automatic placement never picks an unavailable broker. A manual
+        // assignment may name one, because Kafka checks only that the broker
+        // is registered, and the ISR below leaves it out.
+        let unavailable =
+            crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
+        let no_exclusion = std::collections::HashSet::new();
         let brokers = site_broker_views(
             &image,
             broker.config.is_broker().then_some(node_id),
-            &unavailable,
+            if t.assignments.is_some() {
+                &no_exclusion
+            } else {
+                &unavailable
+            },
         );
         let rf = topic_rec.replication_factor;
         let new_count = t.count;
@@ -186,9 +193,28 @@ pub(crate) async fn handle(
             }
         };
 
+        let leaderships = if t.assignments.is_some() {
+            match manual_leaderships(
+                &new_assignments,
+                &unavailable,
+                &crate::config_keys::witness_node_ids(&image),
+                existing,
+            ) {
+                Ok(leaderships) => leaderships,
+                Err(message) => {
+                    out.error_code = codes::INVALID_REPLICA_ASSIGNMENT;
+                    out.error_message = Some(message);
+                    results.push(out);
+                    continue;
+                }
+            }
+        } else {
+            automatic_leaderships(&new_assignments)
+        };
+
         if diskless
             && let Some(reason) =
-                diskless_wal_placement_error(&image, &broker.config, existing, &new_assignments)
+                diskless_wal_placement_error(&image, &broker.config, existing, &leaderships)
         {
             out.error_code = codes::INVALID_CONFIG;
             out.error_message = Some(reason);
@@ -208,7 +234,12 @@ pub(crate) async fn handle(
         // grown count from the partitions map as these apply. (Re-submitting a
         // `V1Topic` would round-trip back to the pre-grow count and be rejected
         // by the strict-expansion `validate` on the apply path.)
-        let records = partition_records(&t.name, &new_partition_indices, &new_assignments);
+        let records = partition_records(
+            &t.name,
+            &new_partition_indices,
+            &new_assignments,
+            &leaderships,
+        );
 
         match broker.controller.submit_change(records).await {
             Ok(_) => {
@@ -235,6 +266,7 @@ pub(crate) async fn handle(
                     &t.name,
                     &new_partition_indices,
                     &new_assignments,
+                    &leaderships,
                 )
                 .await;
             }
@@ -268,5 +300,5 @@ pub(crate) async fn handle(
     // KIP-599: report the controller_mutation_rate throttle after response
     // assembly. It sets throttle_time_ms and records the window for the
     // connection loop's post-send mute (KIP-219).
-    finish_response(broker, ctx, quota.delay(), results, version)
+    finish_response(ctx, quota.delay(), results, version)
 }

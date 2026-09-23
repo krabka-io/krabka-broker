@@ -57,11 +57,30 @@ impl TokenBucket {
             }
 
             let now = self.now_nanos();
-            let last = self.last_refill_nanos.swap(now, Relaxed);
+            let last = self.last_refill_nanos.load(Relaxed);
             let elapsed = now.saturating_sub(last);
             let refill = (u128::from(elapsed) * u128::from(rate)) / 1_000_000_000;
             let refill = u64::try_from(refill.min(u128::from(u64::MAX)))
                 .expect("refill is capped at u64::MAX");
+            // Claim only the time the whole refilled tokens account for. The
+            // remainder stays unclaimed for the next call, so a caller that
+            // retries faster than one token per interval still sees the bucket
+            // refill at `rate`. Claiming the whole gap would drop that remainder
+            // on every call, and a bucket polled often enough would never
+            // refill at all.
+            let claimed = u64::try_from(
+                (u128::from(refill) * 1_000_000_000 / u128::from(rate)).min(u128::from(elapsed)),
+            )
+            .expect("the claimed time is at most the elapsed time");
+            if claimed > 0
+                && self
+                    .last_refill_nanos
+                    .compare_exchange(last, last.saturating_add(claimed), Relaxed, Relaxed)
+                    .is_err()
+            {
+                // A concurrent consumer claimed this gap first.
+                continue;
+            }
 
             let cur = self.available.load(Relaxed);
             let (grant, new_avail) = plan_consume(
@@ -190,6 +209,26 @@ mod tests {
             .expect("manual time moves forward");
         let g = try_consume_with_timeout(&b, 1024);
         assert2::assert!(g == 512);
+    }
+
+    /// A bucket polled faster than one token per interval still refills at its
+    /// rate: the part of an interval that did not make a whole token carries
+    /// over to the next call instead of being dropped.
+    #[test]
+    fn frequent_empty_polls_keep_the_partial_refill() {
+        let (b, clock) = manual_bucket();
+        b.set_token_rate_with_burst(1, 1);
+        check!(try_consume_with_timeout(&b, 1) == 1);
+
+        let mut grants = Vec::new();
+        for _ in 0..10 {
+            clock
+                .advance(Duration::from_millis(100))
+                .expect("manual time moves forward");
+            grants.push(try_consume_with_timeout(&b, 1));
+        }
+
+        check!(grants == vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
     }
 
     #[test]

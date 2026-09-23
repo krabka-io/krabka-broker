@@ -128,6 +128,31 @@ impl ControllerLivenessState {
         }
     }
 
+    /// [`seed_brokers`](Self::seed_brokers) once per controller term.
+    ///
+    /// The leadership watcher, the first liveness tick of a term, and a
+    /// controller request that reads the registry all call it, and the first
+    /// one seeds. A request served right after this node became the leader
+    /// then never reads a registry left over from an earlier term, whichever
+    /// task runs first. With no known term every call seeds.
+    pub(crate) async fn seed_term(
+        &self,
+        term: Option<u64>,
+        brokers: impl IntoIterator<Item = (u64, bool)>,
+    ) {
+        use std::sync::atomic::Ordering;
+        // One registration turn at a time decides whether to seed, so two
+        // callers in the same new term cannot both seed.
+        let _turn = self.registrations.lock().await;
+        if term.is_some_and(|term| self.seeded_term.load(Ordering::Acquire) == term) {
+            return;
+        }
+        self.seed_brokers(brokers).await;
+        if let Some(term) = term {
+            self.seeded_term.store(term, Ordering::Release);
+        }
+    }
+
     /// Whether `broker_id` still holds a heartbeat session: the broker was in
     /// contact with this controller within the timeout. Kafka's
     /// `BrokerHeartbeatManager.hasValidSession`, which
@@ -473,6 +498,25 @@ mod tests {
             clock.advance(Duration::from_millis(10));
             assert2::check!(liveness.tick().await == vec![], "{what}");
         }
+    }
+
+    /// A term is seeded once, whichever caller comes first, and a new term is
+    /// seeded again.
+    #[tokio::test]
+    async fn a_term_is_seeded_once() {
+        let clock = TestClock::new();
+        let liveness = ControllerLivenessState::with_test_clock(Duration::from_millis(10), &clock);
+
+        liveness.seed_term(Some(3), [(1, false)]).await;
+        clock.advance(Duration::from_millis(11));
+        // A second caller in term 3 does not refresh the window.
+        liveness.seed_term(Some(3), [(1, false), (2, false)]).await;
+        assert!(liveness.tick().await == vec![LivenessTransition::AliveToDead(1)]);
+        assert!(liveness.state(2).await == None);
+
+        // Term 4 seeds again.
+        liveness.seed_term(Some(4), [(1, false), (2, false)]).await;
+        assert!(liveness.alive_snapshot().await == [1, 2].into_iter().collect());
     }
 
     #[tokio::test]

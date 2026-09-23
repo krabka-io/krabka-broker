@@ -16,27 +16,29 @@ use krabka_protocol::owned::{
 
 use super::{
     ActorState, chrono_now_ms,
-    reconciliation::reconcile,
+    reconciliation::{configure_after_load, reconcile},
     records::{flush_pending, snapshot_pending_after_change},
     request::{build_member, task_ids_to_map, task_offsets_to_map},
-    response::{base_resp, build_assignment_resp, error_resp},
+    response::{ResponseDelta, build_assignment_resp, endpoint_to_partitions, error_resp},
 };
 use crate::{
     codes,
     coordinator::unified::{
-        ClientIdentity, GroupCoordinator, first_join_member_id,
+        ClientIdentity, GroupCoordinator,
         offsets_log::OffsetsLog,
         streams::{
             config::StreamsGroupConfig,
-            state::{OwnedTasks, StoredTopologyHandle},
-            topology::{self, status as topo_status},
+            persistence::StreamsGroupTopologyValue,
+            state::{OwnedTasks, RoleTasks, StoredTopologyHandle},
+            topology,
         },
     },
     metadata_source::MetadataSource,
 };
 
-/// Evict members silent past the session timeout, reconcile, and persist the
-/// resulting tombstones. Returns `Err` if the log write fails (the actor exits).
+/// Evict members silent past the session timeout, fence members past their
+/// rebalance timeout, reconcile, and persist the resulting tombstones.
+/// Returns `Err` if the log write fails (the actor exits).
 pub(super) async fn handle_session_tick(
     actor: &mut ActorState,
     config: &StreamsGroupConfig,
@@ -44,14 +46,17 @@ pub(super) async fn handle_session_tick(
     metadata_source: Option<&Arc<dyn MetadataSource>>,
     coordinator: &GroupCoordinator,
 ) -> Result<(), crate::error::BrokerError> {
-    let evicted = actor
-        .state
-        .evict_expired(Instant::now(), config.session_timeout);
+    let now = Instant::now();
+    let mut evicted = actor.state.evict_expired(now, config.session_timeout);
+    // A member that did not revoke its tasks within its rebalance timeout is
+    // fenced like a member whose session expired
+    // (`scheduleStreamsGroupRebalanceTimeout`).
+    evicted.extend(actor.state.fence_rebalance_timeouts(now));
     if evicted.is_empty() {
         return Ok(());
     }
     // `evict_expired` set `dirty`; reconcile owns the single `bump_epoch`.
-    reconcile(actor, config, metadata_source).await;
+    reconcile(actor, config, metadata_source);
     let mut pending = snapshot_pending_after_change(actor, &[]);
     for mid in &evicted {
         pending.member_metadata.push((mid.clone(), None));
@@ -77,9 +82,13 @@ pub(super) async fn handle_heartbeat(
     } = client;
     let now = Instant::now();
     let now_ms = chrono_now_ms();
+    // Kafka's `groups.containsKey`: a group that this heartbeat creates
+    // reports endpoint information epoch 0.
+    let group_existed = actor.state.group_epoch > 0;
 
     // ─── Leave path ──────────────────────────────────────────────
-    if req.member_epoch == -1 {
+    // -1 leaves, and -2 is the temporary leave of a static member.
+    if req.member_epoch < 0 {
         return handle_leave(
             actor,
             config,
@@ -92,34 +101,77 @@ pub(super) async fn handle_heartbeat(
         .await;
     }
 
+    // ─── Static membership ───────────────────────────────────────
+    // Kafka's `getOrMaybeCreateStaticStreamsGroupMember`: resolve the instance
+    // id before the member id. A released static member is replaced by the
+    // joining member.
+    let mut replaced = None;
+    if let Some(instance_id) = &req.instance_id {
+        let existing = static_member_id(actor, instance_id);
+        if let Some(resp) = static_member_error(req, instance_id, existing.as_deref(), actor) {
+            return Ok(resp);
+        }
+        if req.member_epoch == 0
+            && let Some(previous) = existing
+        {
+            if let Some(resp) = topology_error(actor, req, metadata_source) {
+                return Ok(resp);
+            }
+            replace_static_member(actor, &previous, &req.member_id);
+            replaced = Some(previous);
+        }
+    }
+
     // ─── First-join path ─────────────────────────────────────────
     // KIP-1071 mirrors KIP-848: epoch 0 from an unknown member is a first
-    // join. The client may supply its own id; an empty id mints a server UUID.
-    // Epoch 0 from a known member is a rejoin and takes the existing-member
-    // path below.
+    // join, with the member id that the client generated. Epoch 0 from a
+    // known member is a rejoin and takes the existing-member path below.
     if req.member_epoch == 0 && !actor.state.members.contains_key(&req.member_id) {
+        // Kafka's `throwIfStreamsGroupIsFull` does not count a known member.
         if actor.state.members.len() >= config.max_size {
-            return Ok(error_resp(codes::GROUP_MAX_SIZE_REACHED, config));
+            return Ok(error_resp(
+                codes::GROUP_MAX_SIZE_REACHED,
+                Some(format!(
+                    "The streams group has reached its maximum capacity of {} members.",
+                    config.max_size
+                )),
+            ));
         }
-        let new_member_id = first_join_member_id(&req.member_id);
+        if let Some(resp) = topology_error(actor, req, metadata_source) {
+            return Ok(resp);
+        }
+        let new_member_id = req.member_id.clone();
         let m = build_member(&new_member_id, req, client_id, client_host, now);
         actor.state.add_or_update_member(m);
-        // Topology supplied on first join is accepted before reconcile.
-        if let Some(topo) = &req.topology {
+        // Kafka's `maybeUpdateTopology`: a join initializes the topology of a
+        // group that has none. A join with an older topology keeps the group
+        // topology, and its responses carry `STALE_TOPOLOGY`.
+        if actor.topology.is_none()
+            && let Some(topo) = &req.topology
+        {
             accept_topology(actor, topo);
         }
-        apply_shutdown_application(actor, req);
-        reconcile(actor, config, metadata_source).await;
-        actor.state.advance_member_epoch(&new_member_id);
-        let reported = req
-            .active_tasks
-            .as_ref()
-            .map(|active| task_ids_to_map(active))
-            .unwrap_or_default();
-        actor.state.reconcile_member(&new_member_id, &reported);
+        reconcile(actor, config, metadata_source);
+        if req.shutdown_application {
+            actor.state.request_shutdown(&new_member_id);
+        }
+        if actor
+            .state
+            .reconcile_member(&new_member_id, owned_role_tasks(req).as_ref())
+        {
+            actor.state.track_rebalance_timeout(&new_member_id, now);
+        }
         let pending = snapshot_pending_after_change(actor, std::slice::from_ref(&new_member_id));
         flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
-        return Ok(build_assignment_resp(&actor.state, &new_member_id, config));
+        return Ok(accepted_response(
+            actor,
+            config,
+            metadata_source,
+            req,
+            &new_member_id,
+            &MemberBefore::default(),
+            group_existed,
+        ));
     }
 
     // ─── Existing-member: validate epoch ─────────────────────────
@@ -147,69 +199,291 @@ pub(super) async fn handle_heartbeat(
                     warmup: warmup.as_ref(),
                 }
             });
-    let cur_epoch =
-        match actor
+    if let Err(error_code) =
+        actor
             .state
             .validate_heartbeat_epoch(&req.member_id, req.member_epoch, owned)
-        {
-            Ok(epoch) => epoch,
-            Err(error_code) => return Ok(error_resp(error_code, config)),
-        };
+    {
+        return Ok(error_resp(
+            error_code,
+            epoch_error_message(actor, req, error_code),
+        ));
+    }
+    let before = MemberBefore::of(&actor.state.members[&req.member_id]);
+    if let Some(resp) = topology_error(actor, req, metadata_source) {
+        return Ok(resp);
+    }
 
     // ─── Steady state ────────────────────────────────────────────
     let mut changed = update_member_steady_state(actor, req, client_id, client_host, now);
-    // Topology handling: newer epoch is accepted, older is flagged STALE.
-    if let Some(topo) = &req.topology {
-        let cur_topo_epoch = actor.state.topology_epoch;
-        if topo.epoch > cur_topo_epoch {
-            accept_topology(actor, topo);
-            changed = true;
-        } else if topo.epoch < cur_topo_epoch {
-            set_status(
-                actor,
-                topo_status::STALE_TOPOLOGY,
-                "member reported a stale topology",
-            );
-        }
-    }
-    if apply_shutdown_application(actor, req) {
-        changed = true;
-    }
+    refresh_topic_metadata(actor, metadata_source);
 
     if actor.state.dirty {
-        reconcile(actor, config, metadata_source).await;
+        reconcile(actor, config, metadata_source);
         changed = true;
     }
-    // If the member's target advanced past its current epoch, hand it over.
-    if actor.state.target.epoch > cur_epoch {
-        actor.state.advance_member_epoch(&req.member_id);
+    // Kafka's `maybeReconcile`: move the member toward the target, and arm
+    // or cancel its rebalance timeout when its assignment changed.
+    if actor
+        .state
+        .reconcile_member(&req.member_id, owned_role_tasks(req).as_ref())
+    {
+        actor.state.track_rebalance_timeout(&req.member_id, now);
         changed = true;
     }
-    let reported = req.active_tasks.as_ref().map_or_else(
-        || {
-            let Some(member) = actor.state.members.get(&req.member_id) else {
-                return BTreeMap::new();
-            };
-            let mut reported = member.active.clone();
-            for (subtopology, partitions) in &member.active_pending_revocation {
-                reported
-                    .entry(subtopology.clone())
-                    .or_default()
-                    .extend(partitions.iter().copied());
-            }
-            reported
-        },
-        |active| task_ids_to_map(active),
-    );
-    if actor.state.reconcile_member(&req.member_id, &reported) {
-        changed = true;
+    if req.shutdown_application {
+        actor.state.request_shutdown(&req.member_id);
     }
 
-    if changed {
-        let pending = snapshot_pending_after_change(actor, std::slice::from_ref(&req.member_id));
+    if changed || replaced.is_some() {
+        let mut pending =
+            snapshot_pending_after_change(actor, std::slice::from_ref(&req.member_id));
+        if let Some(previous) = replaced.filter(|previous| *previous != req.member_id) {
+            pending.member_metadata.push((previous.clone(), None));
+            pending.target_per_member.push((previous.clone(), None));
+            pending.current_per_member.push((previous, None));
+        }
         flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
     }
-    Ok(build_assignment_resp(&actor.state, &req.member_id, config))
+    Ok(accepted_response(
+        actor,
+        config,
+        metadata_source,
+        req,
+        &req.member_id,
+        &before,
+        group_existed,
+    ))
+}
+
+/// The owned tasks of a heartbeat, when it reports all three roles, as
+/// Kafka's `TasksTuple.fromHeartbeatRequest` builds them.
+fn owned_role_tasks(req: &StreamsGroupHeartbeatRequest) -> Option<RoleTasks> {
+    match (&req.active_tasks, &req.standby_tasks, &req.warmup_tasks) {
+        (Some(active), Some(standby), Some(warmup)) => Some(RoleTasks {
+            active: task_ids_to_map(active),
+            standby: task_ids_to_map(standby),
+            warmup: task_ids_to_map(warmup),
+        }),
+        _ => None,
+    }
+}
+
+/// The user endpoint of a member before a heartbeat changed it. A joining
+/// member starts from none.
+#[derive(Default)]
+struct MemberBefore {
+    user_endpoint: Option<(String, u16)>,
+}
+
+impl MemberBefore {
+    fn of(member: &crate::coordinator::unified::streams::state::StreamsMemberState) -> Self {
+        Self {
+            user_endpoint: member.user_endpoint.clone(),
+        }
+    }
+}
+
+/// Builds the response of an accepted heartbeat, as the end of Kafka's
+/// `streamsGroupHeartbeat` does.
+///
+/// The task lists go out when the member joins or its tasks changed. The
+/// group's endpoint information epoch goes up when the member's endpoint
+/// changed, or its tasks changed and it has an endpoint. Kafka compares the
+/// tasks before and after the heartbeat, because only the member's own
+/// heartbeat changes them. Here a new target also trims the tasks of the
+/// other members, so the comparison is with the tasks that the last response
+/// sent. A member whose last
+/// seen epoch differs from the group's gets the endpoint information of the
+/// whole group. A group that this heartbeat creates keeps epoch 0.
+fn accepted_response(
+    actor: &mut ActorState,
+    config: &StreamsGroupConfig,
+    metadata_source: Option<&Arc<dyn MetadataSource>>,
+    req: &StreamsGroupHeartbeatRequest,
+    member_id: &str,
+    before: &MemberBefore,
+    group_existed: bool,
+) -> StreamsGroupHeartbeatResponse {
+    let member = &actor.state.members[member_id];
+    let tasks = [
+        member.active.clone(),
+        member.standby.clone(),
+        member.warmup.clone(),
+    ];
+    let tasks_changed = member.sent_tasks != tasks;
+    let endpoint_changed = before.user_endpoint != member.user_endpoint;
+    let mut endpoint_epoch = actor.state.endpoint_information_epoch;
+    if endpoint_changed || (tasks_changed && member.user_endpoint.is_some()) {
+        endpoint_epoch = endpoint_epoch.saturating_add(1);
+    }
+    let partitions_by_user_endpoint =
+        (endpoint_epoch != req.endpoint_information_epoch).then(|| {
+            let image = metadata_source.map(|source| source.current_image());
+            let configured = actor
+                .topology
+                .as_ref()
+                .zip(image.as_ref())
+                .and_then(|(topology, image)| topology::configure_topics(topology, image).ok());
+            endpoint_to_partitions(
+                &actor.state,
+                member_id,
+                configured.as_ref().and_then(|c| c.subtopologies.as_ref()),
+                image.as_deref(),
+            )
+        });
+    if group_existed {
+        actor.state.endpoint_information_epoch = endpoint_epoch;
+    }
+    if let Some(member) = actor.state.members.get_mut(member_id) {
+        member.sent_tasks = tasks;
+    }
+    build_assignment_resp(
+        &actor.state,
+        member_id,
+        config,
+        ResponseDelta {
+            send_tasks: req.member_epoch == 0 || tasks_changed,
+            endpoint_information_epoch: actor.state.endpoint_information_epoch,
+            partitions_by_user_endpoint,
+        },
+    )
+}
+
+/// The `error_message` of a heartbeat that the member epoch check refused, in
+/// the words of Kafka's `getMemberOrThrow` and
+/// `throwIfStreamsGroupMemberEpochIsInvalid`.
+fn epoch_error_message(
+    actor: &ActorState,
+    req: &StreamsGroupHeartbeatRequest,
+    error_code: i16,
+) -> Option<String> {
+    let Some(member) = actor.state.members.get(&req.member_id) else {
+        return Some(format!(
+            "Member {} is not a member of group {}.",
+            req.member_id, actor.state.group_id
+        ));
+    };
+    (error_code == codes::FENCED_MEMBER_EPOCH).then(|| {
+        let relation = if req.member_epoch > member.member_epoch {
+            "greater"
+        } else {
+            "smaller"
+        };
+        format!(
+            "The streams group member has a {relation} member epoch ({}) than the one known by \
+             the group coordinator ({}). The member must abandon all its partitions and rejoin.",
+            req.member_epoch, member.member_epoch
+        )
+    })
+}
+
+/// The error response for a heartbeat that Kafka refuses inside the
+/// coordinator because of its topology or its owned tasks, or `None`.
+///
+/// In Kafka's order:
+///
+/// 1. `maybeUpdateTopology`: a join whose topology differs from the group
+///    topology, at the same or a higher topology epoch, gets
+///    `INVALID_REQUEST`, because topology updates are not supported.
+/// 2. `configureTopics`: a topology that cannot be configured against the
+///    current metadata image gets Kafka's error. The topology is the group
+///    topology, or the topology of the join that initializes the group.
+/// 3. `throwIfRequestContainsInvalidTasks`: once the topology is ready, an
+///    owned task of an unknown subtopology or with a partition out of range
+///    gets `INVALID_REQUEST`.
+///
+/// Kafka writes nothing for such a heartbeat.
+fn topology_error(
+    actor: &ActorState,
+    req: &StreamsGroupHeartbeatRequest,
+    metadata_source: Option<&Arc<dyn MetadataSource>>,
+) -> Option<StreamsGroupHeartbeatResponse> {
+    let from_request = req.topology.as_ref().map(topology::to_stored_topology);
+    if let (Some(group), Some(requested)) = (actor.topology.as_ref(), from_request.as_ref())
+        && requested.epoch >= group.epoch
+        && !same_topology(group, requested)
+    {
+        return Some(error_resp(
+            codes::INVALID_REQUEST,
+            Some("Topology updates are not supported yet.".into()),
+        ));
+    }
+    let source = metadata_source?;
+    let topology = actor.topology.as_ref().or(from_request.as_ref())?;
+    let configured = match topology::configure_topics(topology, &source.current_image()) {
+        Ok(configured) => configured,
+        Err(error) => return Some(error_resp(error.error_code(), error.error_message())),
+    };
+    let subtopologies = configured
+        .subtopologies
+        .as_ref()
+        .filter(|_| configured.is_ready())?;
+    [&req.active_tasks, &req.standby_tasks, &req.warmup_tasks]
+        .into_iter()
+        .flatten()
+        .flatten()
+        .find_map(|task| {
+            let Some(subtopology) = subtopologies.get(&task.subtopology_id) else {
+                return Some(format!(
+                    "Subtopology {} does not exist in the topology.",
+                    task.subtopology_id
+                ));
+            };
+            let number_of_tasks = subtopology.number_of_tasks;
+            task.partitions
+                .iter()
+                .find(|partition| **partition < 0 || **partition >= number_of_tasks)
+                .map(|partition| {
+                    format!(
+                        "Task {partition} for subtopology {} is invalid. Number of tasks for this \
+                         subtopology: {number_of_tasks}",
+                        task.subtopology_id
+                    )
+                })
+        })
+        .map(|message| error_resp(codes::INVALID_REQUEST, Some(message)))
+}
+
+/// Kafka's `StreamsTopology.equals`: the same epoch and the same subtopologies
+/// by id.
+fn same_topology(a: &StreamsGroupTopologyValue, b: &StreamsGroupTopologyValue) -> bool {
+    a.epoch == b.epoch && subtopologies_by_id(a) == subtopologies_by_id(b)
+}
+
+fn subtopologies_by_id(
+    topology: &StreamsGroupTopologyValue,
+) -> BTreeMap<&str, &crate::coordinator::unified::streams::persistence::StoredSubtopology> {
+    topology
+        .subtopologies
+        .iter()
+        .map(|subtopology| (subtopology.subtopology_id.as_str(), subtopology))
+        .collect()
+}
+
+/// Marks the group for a reconcile when a topic that the topology needs
+/// changed since the last reconcile.
+///
+/// Kafka's `onMetadataUpdate` requests a metadata refresh for every streams
+/// group that uses a created, changed or deleted topic, and the next heartbeat
+/// computes the metadata hash again. A new hash configures the topology again
+/// and bumps the group epoch.
+fn refresh_topic_metadata(
+    actor: &mut ActorState,
+    metadata_source: Option<&Arc<dyn MetadataSource>>,
+) {
+    let Some(source) = metadata_source else {
+        return;
+    };
+    if !actor.state.dirty {
+        configure_after_load(actor, source);
+    }
+    let Some(topology) = actor.topology.as_ref() else {
+        return;
+    };
+    if topology::metadata_hash(topology, &source.current_image()) != actor.metadata_hash {
+        actor.state.dirty = true;
+    }
 }
 
 /// Updates a steady-state member's reported ownership, catch-up offsets, and
@@ -235,11 +509,23 @@ fn update_member_steady_state(
         m.client_host = client_host.to_string();
         changed = true;
     }
+    let epoch_relevant = |m: &crate::coordinator::unified::streams::state::StreamsMemberState| {
+        (
+            m.topology_epoch,
+            m.rack_id.clone(),
+            m.client_tags.clone(),
+            m.process_id.clone(),
+        )
+    };
+    let before = epoch_relevant(m);
     if update_member_metadata(m, req) {
         // Kafka's `hasStreamsMemberMetadataChanged`: a changed member bumps
         // the group epoch, so the assignor sees the new process, rack, tags
-        // and endpoint.
-        actor.state.dirty = true;
+        // and endpoint. A static member bumps it only for a change that the
+        // assignment reads (`hasEpochRelevantMemberConfigChanged`).
+        if req.instance_id.is_none() || before != epoch_relevant(m) {
+            actor.state.dirty = true;
+        }
         changed = true;
     }
 
@@ -328,13 +614,32 @@ async fn handle_leave(
     req: &StreamsGroupHeartbeatRequest,
     now_ms: i64,
 ) -> Result<StreamsGroupHeartbeatResponse, crate::error::BrokerError> {
-    // Kafka's `streamsGroupLeave` looks the member up with `getMemberOrThrow`:
-    // an unknown member gets `UNKNOWN_MEMBER_ID`, and nothing is written.
+    // Kafka's `streamsGroupLeave` records the shutdown request before it looks
+    // the member up: an unknown member gets `UNKNOWN_MEMBER_ID`, and nothing
+    // is written.
+    if req.shutdown_application {
+        actor.state.request_shutdown(&req.member_id);
+    }
+    if let Some(instance_id) = &req.instance_id {
+        let existing = static_member_id(actor, instance_id);
+        if let Some(resp) = static_member_error(req, instance_id, existing.as_deref(), actor) {
+            return Ok(resp);
+        }
+        if req.member_epoch == LEAVE_GROUP_STATIC_MEMBER_EPOCH {
+            return leave_static_member(actor, offsets_log, coordinator, req, now_ms).await;
+        }
+    }
     if actor.state.remove_member(&req.member_id).is_none() {
-        return Ok(error_resp(codes::UNKNOWN_MEMBER_ID, config));
+        return Ok(error_resp(
+            codes::UNKNOWN_MEMBER_ID,
+            Some(format!(
+                "Member {} is not a member of group {}.",
+                req.member_id, actor.state.group_id
+            )),
+        ));
     }
     // `remove_member` set `dirty`; reconcile owns the single `bump_epoch`.
-    reconcile(actor, config, metadata_source).await;
+    reconcile(actor, config, metadata_source);
     let mut pending = snapshot_pending_after_change(actor, &[]);
     pending.member_metadata.push((req.member_id.clone(), None));
     pending
@@ -344,7 +649,133 @@ async fn handle_leave(
         .current_per_member
         .push((req.member_id.clone(), None));
     flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
-    Ok(base_resp(codes::NONE, -1, config))
+    // Kafka's leave response echoes the member id and epoch, and sends an
+    // empty status list and no group configuration.
+    Ok(StreamsGroupHeartbeatResponse {
+        member_id: req.member_id.clone(),
+        member_epoch: req.member_epoch,
+        status: Some(Vec::new()),
+        ..Default::default()
+    })
+}
+
+/// `LEAVE_GROUP_STATIC_MEMBER_EPOCH`: the epoch of a static member that left
+/// for a while and keeps its assignment.
+const LEAVE_GROUP_STATIC_MEMBER_EPOCH: i32 = -2;
+
+/// The id of the member that holds `instance_id`.
+fn static_member_id(actor: &ActorState, instance_id: &str) -> Option<String> {
+    actor
+        .state
+        .members
+        .values()
+        .find(|member| member.instance_id.as_deref() == Some(instance_id))
+        .map(|member| member.member_id.clone())
+}
+
+/// Kafka's static member checks: a join may not take an instance id that a
+/// member still holds (`throwIfInstanceIdIsUnreleased`), and any other
+/// heartbeat must come from the member that holds a known instance id
+/// (`throwIfStaticMemberIsUnknown`, `throwIfInstanceIdIsFenced`).
+fn static_member_error(
+    req: &StreamsGroupHeartbeatRequest,
+    instance_id: &str,
+    existing: Option<&str>,
+    actor: &ActorState,
+) -> Option<StreamsGroupHeartbeatResponse> {
+    if req.member_epoch == 0 {
+        let existing = existing?;
+        let released =
+            actor.state.members[existing].member_epoch == LEAVE_GROUP_STATIC_MEMBER_EPOCH;
+        return (!released).then(|| {
+            error_resp(
+                codes::UNRELEASED_INSTANCE_ID,
+                Some(format!(
+                    "Static member {} with instance id {instance_id} cannot join the group \
+                     because the instance id is owned by {existing} member.",
+                    req.member_id
+                )),
+            )
+        });
+    }
+    let Some(existing) = existing else {
+        return Some(error_resp(
+            codes::UNKNOWN_MEMBER_ID,
+            Some(format!("Instance id {instance_id} is unknown.")),
+        ));
+    };
+    (existing != req.member_id).then(|| {
+        error_resp(
+            codes::FENCED_INSTANCE_ID,
+            Some(format!(
+                "Static member {} with instance id {instance_id} was fenced by member {existing}.",
+                req.member_id
+            )),
+        )
+    })
+}
+
+/// Kafka's static member replacement: the joining member `member_id` takes
+/// the place of the released member `previous`, with its assignment, its
+/// target and its metadata, at epoch 0. The group epoch does not change.
+///
+/// Kafka writes the copy over any member that already holds `member_id`. That
+/// member goes first, with its target, so that it leaves nothing of its own
+/// behind and the group reassigns its tasks.
+fn replace_static_member(actor: &mut ActorState, previous: &str, member_id: &str) {
+    let state = &mut actor.state;
+    let Some(mut member) = state.members.remove(previous) else {
+        return;
+    };
+    state.rebalance_deadlines.remove(previous);
+    if member_id != previous {
+        state.remove_member(member_id);
+    }
+    member.member_id = member_id.to_string();
+    member.member_epoch = 0;
+    member.previous_member_epoch = 0;
+    for role in [
+        &mut state.target.active,
+        &mut state.target.standby,
+        &mut state.target.warmup,
+    ] {
+        match role.remove(previous) {
+            Some(tasks) => {
+                role.insert(member_id.to_string(), tasks);
+            }
+            None => {
+                role.remove(member_id);
+            }
+        }
+    }
+    state.members.insert(member_id.to_string(), member);
+}
+
+/// Kafka's `streamsGroupStaticMemberGroupLeave`: the static member stays in
+/// the group at epoch -2 with its assignment, so that its instance can come
+/// back without a rebalance. Its tasks pending revocation are dropped.
+async fn leave_static_member(
+    actor: &mut ActorState,
+    offsets_log: &dyn OffsetsLog,
+    coordinator: &GroupCoordinator,
+    req: &StreamsGroupHeartbeatRequest,
+    now_ms: i64,
+) -> Result<StreamsGroupHeartbeatResponse, crate::error::BrokerError> {
+    if let Some(member) = actor.state.members.get_mut(&req.member_id) {
+        member.member_epoch = LEAVE_GROUP_STATIC_MEMBER_EPOCH;
+        member.active_pending_revocation.clear();
+        member.standby_pending_revocation.clear();
+        member.warmup_pending_revocation.clear();
+    }
+    actor.state.rebalance_deadlines.remove(&req.member_id);
+    let pending = snapshot_pending_after_change(actor, std::slice::from_ref(&req.member_id));
+    flush_pending(actor, pending, offsets_log, coordinator, now_ms).await?;
+    Ok(StreamsGroupHeartbeatResponse {
+        member_id: req.member_id.clone(),
+        member_epoch: LEAVE_GROUP_STATIC_MEMBER_EPOCH,
+        status: Some(Vec::new()),
+        ..Default::default()
+    })
 }
 
 /// Accepts a client-supplied topology. It stores the resolved value for
@@ -361,28 +792,4 @@ fn accept_topology(
     actor.state.topology_epoch = stored.epoch;
     actor.topology = Some(stored);
     actor.state.dirty = true;
-}
-
-/// KIP-1071 shutdown-application: any member can signal the whole group to
-/// shut down. This function records the signal as a group status, so later
-/// responses carry it. It returns `true` if it added the status.
-fn apply_shutdown_application(actor: &mut ActorState, req: &StreamsGroupHeartbeatRequest) -> bool {
-    if !req.shutdown_application {
-        return false;
-    }
-    set_status(
-        actor,
-        topo_status::SHUTDOWN_APPLICATION,
-        "a member requested application shutdown",
-    )
-}
-
-/// Adds a `(code, detail)` pair to the group status if no entry with that code
-/// is present. Returns `true` if the function added the pair.
-fn set_status(actor: &mut ActorState, code: i8, detail: &str) -> bool {
-    if actor.state.status.iter().any(|(c, _)| *c == code) {
-        return false;
-    }
-    actor.state.status.push((code, detail.to_string()));
-    true
 }

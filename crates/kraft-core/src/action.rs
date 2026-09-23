@@ -29,7 +29,13 @@ pub enum Action {
     /// New leader announces its epoch to all voters.
     SendBeginQuorumEpoch { epoch: Epoch },
     /// Resigning leader tells voters to elect.
-    SendEndQuorumEpoch { epoch: Epoch },
+    SendEndQuorumEpoch {
+        epoch: Epoch,
+        /// The other voters, most caught up first by the fetch progress the
+        /// leader validated: Kafka's
+        /// `LeaderState.nonLeaderVotersByDescendingFetchOffset`.
+        preferred_successors: Vec<NodeId>,
+    },
     /// The follower or observer should fetch from this leader.
     SendFetch { leader_id: NodeId },
     /// We changed role. The variant carries the new role name for

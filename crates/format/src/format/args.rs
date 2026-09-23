@@ -9,6 +9,7 @@
 
 use std::path::PathBuf;
 
+use base64::Engine as _;
 use clap::Args;
 use krabka_metadata::AclEntry;
 use krabka_security::SaslMechanism;
@@ -22,8 +23,10 @@ pub struct FormatArgs {
     /// Directory to format. Must be empty or non-existent.
     #[arg(long)]
     pub(super) log_dir: PathBuf,
-    /// Cluster id. Generated if not provided.
-    #[arg(long)]
+    /// Cluster id. Generated if not provided. Accepts Kafka's base64 `Uuid`
+    /// form -- what `Metadata` and `DescribeCluster` report (#1042) -- or
+    /// `java.util.UUID`'s hyphenated form.
+    #[arg(long, value_parser = parse_cluster_id)]
     pub(super) cluster_id: Option<Uuid>,
     /// Bootstrap `metadata.version` (KIP-778), e.g. `4.0` or `4.0-IV3`.
     /// Defaults to the broker's maximum supported level when omitted.
@@ -104,6 +107,20 @@ fn parse_node_id(s: &str) -> Result<krabka_metadata::NodeId, String> {
     Ok(krabka_metadata::NodeId(id))
 }
 
+/// Parses a `--cluster-id` value in Kafka's base64 `Uuid` form (what
+/// `Metadata` and `DescribeCluster` report, e.g. `AQIDBAUGBwgJCgsMDQ4PEA`) or
+/// `java.util.UUID`'s hyphenated form.
+fn parse_cluster_id(s: &str) -> Result<Uuid, String> {
+    if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s)
+        && let Ok(bytes) = <[u8; 16]>::try_from(bytes)
+    {
+        return Ok(Uuid::from_bytes(bytes));
+    }
+    Uuid::parse_str(s).map_err(|_| {
+        format!("{s:?} is not a cluster id: neither a base64 Uuid nor a hyphenated UUID")
+    })
+}
+
 fn parse_directory_id(s: &str) -> Result<DirectoryId, String> {
     Uuid::parse_str(s)
         .map(DirectoryId)
@@ -116,6 +133,17 @@ mod tests {
     use assert2::check;
 
     use super::*;
+
+    /// `--cluster-id` accepts Kafka's base64 `Uuid` form -- what `Metadata`
+    /// and `DescribeCluster` report (#1082) -- as well as the hyphenated
+    /// `java.util.UUID` form.
+    #[test]
+    fn parse_cluster_id_accepts_kafka_base64_and_hyphenated_uuid_forms() {
+        let id = Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
+        check!(parse_cluster_id("AQIDBAUGBwgJCgsMDQ4PEA") == Ok(id));
+        check!(parse_cluster_id(&id.to_string()) == Ok(id));
+        check!(parse_cluster_id("not-a-cluster-id").is_err());
+    }
 
     /// A node id is a bare `u64`, and everything else is an error rather than
     /// a silent zero.

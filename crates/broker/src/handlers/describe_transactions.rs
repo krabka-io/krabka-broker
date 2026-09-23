@@ -8,7 +8,7 @@
 //! `Describe` on `TransactionalId(name)`, for each tid. A deny gives that row
 //! `error_code = TRANSACTIONAL_ID_AUTHORIZATION_FAILED (53)` and clears every
 //! other field. An unknown tid gives that row `TRANSACTIONAL_ID_NOT_FOUND
-//! (75)`. This matches the JVM `KafkaApis` shape.
+//! (105)`. This matches the JVM `KafkaApis` shape.
 
 use std::collections::BTreeMap;
 
@@ -31,10 +31,6 @@ use crate::{
     error::BrokerError,
     txn::state::{TxnEntry, TxnState},
 };
-
-/// Kafka's `TRANSACTIONAL_ID_NOT_FOUND`, the row a tid the coordinator does
-/// not hold earns.
-pub(crate) const TRANSACTIONAL_ID_NOT_FOUND: i16 = 75;
 
 fn txn_state_str(s: TxnState) -> &'static str {
     match s {
@@ -85,7 +81,7 @@ pub(crate) fn transaction_state_row(tid: &str, entry: Option<&TxnEntry>) -> Tran
     // are being expired.
     let Some(entry) = entry.filter(|entry| entry.state != TxnState::Dead) else {
         return TransactionState {
-            error_code: TRANSACTIONAL_ID_NOT_FOUND,
+            error_code: codes::TRANSACTIONAL_ID_NOT_FOUND,
             transactional_id: tid.to_owned(),
             ..Default::default()
         };
@@ -121,7 +117,18 @@ pub(crate) async fn handle(
     let mut cur: &[u8] = req_bytes;
     let req = DescribeTransactionsRequest::decode(&mut cur, version)?;
 
+    // Refresh leader-partition view from the current metadata image before
+    // checking coordinator-ness, as EndTxn, AddPartitionsToTxn and
+    // AddOffsetsToTxn do. Otherwise a stale `leader_partitions` cache can
+    // answer TRANSACTIONAL_ID_NOT_FOUND, or stale transaction details, from a
+    // broker that already lost leadership instead of NOT_COORDINATOR.
     let image = broker.controller.current_image();
+    drop(
+        broker
+            .txn_coordinator
+            .refresh_leader_partitions(&image)
+            .await,
+    );
 
     let mut rows: Vec<TransactionState> = Vec::with_capacity(req.transactional_ids.len());
     for tid in &req.transactional_ids {
@@ -165,7 +172,7 @@ pub(crate) async fn handle(
             continue;
         }
 
-        // Look up the coordinator's local entry. Unknown → 75.
+        // Look up the coordinator's local entry. Unknown → 105.
         let row = match broker.txn_coordinator.get(tid.as_str()) {
             None => transaction_state_row(tid, None),
             Some(handle) => {
@@ -258,7 +265,7 @@ mod tests {
         let context = test_context(&principal, &peer);
 
         // Two ids this broker coordinates, and one it does not.
-        let (ongoing_id, dead_id, foreign_id) = ("tx-ongoing", "tx-dead", "tx-foreign");
+        let (ongoing_id, dead_id) = ("tx-ongoing", "tx-dead");
         for (tid, state) in [(ongoing_id, TxnState::Ongoing), (dead_id, TxnState::Dead)] {
             let partition = coordinator.partition_for(tid);
             let partition_dir = crate::log_dir::partition_dir(
@@ -302,13 +309,22 @@ mod tests {
             .map(|n| format!("tx-empty-{n}"))
             .find(|tid| coordinator.partition_for(tid) == coordinator.partition_for(ongoing_id))
             .expect("an id in a led partition");
+        // An id in a partition this broker does not lead.
+        let foreign_id = (0..1_000)
+            .map(|n| format!("tx-foreign-{n}"))
+            .find(|tid| {
+                let p = coordinator.partition_for(tid);
+                p != coordinator.partition_for(ongoing_id)
+                    && p != coordinator.partition_for(dead_id)
+            })
+            .expect("an id in an unled partition");
 
         let request = encode_request(
             &DescribeTransactionsRequest {
                 transactional_ids: vec![
                     String::new(),
                     empty_id.clone(),
-                    foreign_id.to_string(),
+                    foreign_id.clone(),
                     dead_id.to_string(),
                     ongoing_id.to_string(),
                 ],
@@ -324,7 +340,7 @@ mod tests {
         );
 
         let not_found = |tid: &str| TransactionState {
-            error_code: TRANSACTIONAL_ID_NOT_FOUND,
+            error_code: codes::TRANSACTIONAL_ID_NOT_FOUND,
             transactional_id: tid.to_owned(),
             ..Default::default()
         };
@@ -338,7 +354,7 @@ mod tests {
                     not_found(&empty_id),
                     TransactionState {
                         error_code: codes::NOT_COORDINATOR,
-                        transactional_id: foreign_id.to_owned(),
+                        transactional_id: foreign_id.clone(),
                         ..Default::default()
                     },
                     not_found(dead_id),

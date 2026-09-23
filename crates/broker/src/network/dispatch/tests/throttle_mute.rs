@@ -454,3 +454,290 @@ async fn a_request_tripping_two_quotas_is_muted_once_for_the_longest_window() {
     server.await.expect("serve loop joins on client EOF");
     handle.shutdown().await;
 }
+
+/// One request of [`every_charged_api_reports_its_delay_and_mutes`]: the api,
+/// the version, whether the body is flexible, the encoded body, and how to
+/// read `throttle_time_ms` back out of the response body.
+struct QuotaCase {
+    name: &'static str,
+    api_key: i16,
+    version: i16,
+    flexible: bool,
+    body: BytesMut,
+    throttle_time_ms: fn(&[u8], i16) -> Option<i32>,
+}
+
+/// Encodes `request` at `version`.
+fn encoded<R: krabka_protocol::Encode>(request: &R, version: i16) -> BytesMut {
+    let mut body = BytesMut::new();
+    request.encode(&mut body, version).expect("encode request");
+    body
+}
+
+/// Decodes `body` as `R` at `version`, and reads its `throttle_time_ms`.
+fn throttle_of<R: for<'de> Decode<'de>>(body: &[u8], version: i16, read: fn(&R) -> i32) -> i32 {
+    let mut cursor = body;
+    let response = R::decode(&mut cursor, version).expect("decode response body");
+    assert2::assert!(cursor.is_empty(), "the decoder consumed every byte");
+    read(&response)
+}
+
+/// KIP-124 (#692): every request that Kafka charges to the request quota is
+/// charged. Each response
+/// reports the delay in `throttle_time_ms`, wherever the schema puts the
+/// field, and the connection is muted afterwards. `WriteTxnMarkers` is exempt,
+/// as Kafka answers it through `sendResponseExemptThrottle`.
+#[tokio::test]
+async fn every_charged_api_reports_its_delay_and_mutes() {
+    use krabka_protocol::owned::{
+        describe_delegation_token_request::DescribeDelegationTokenRequest,
+        describe_delegation_token_response::DescribeDelegationTokenResponse,
+        find_coordinator_request::FindCoordinatorRequest,
+        find_coordinator_response::FindCoordinatorResponse,
+        get_telemetry_subscriptions_request::GetTelemetrySubscriptionsRequest,
+        get_telemetry_subscriptions_response::GetTelemetrySubscriptionsResponse,
+        metadata_request::MetadataRequest, metadata_response::MetadataResponse,
+        offset_delete_request::OffsetDeleteRequest, offset_delete_response::OffsetDeleteResponse,
+        write_txn_markers_request::WriteTxnMarkersRequest,
+    };
+
+    let mute_window = millis(1000);
+    let window_ms = i32::try_from(mute_window.millis_i64()).expect("a window");
+    let (handle, _dir) =
+        broker_with_anonymous_quotas(mute_window, &[("request_percentage", 0.0001)]).await;
+
+    let cases = [
+        QuotaCase {
+            name: "Metadata, a context dispatch",
+            api_key: 3,
+            version: 12,
+            flexible: true,
+            body: encoded(
+                &MetadataRequest {
+                    topics: Some(Vec::new()),
+                    ..Default::default()
+                },
+                12,
+            ),
+            throttle_time_ms: |body, version| {
+                Some(throttle_of::<MetadataResponse>(body, version, |r| {
+                    r.throttle_time_ms
+                }))
+            },
+        },
+        QuotaCase {
+            name: "FindCoordinator, a context dispatch",
+            api_key: 10,
+            version: 4,
+            flexible: true,
+            body: encoded(
+                &FindCoordinatorRequest {
+                    coordinator_keys: vec!["group".to_owned()],
+                    ..Default::default()
+                },
+                4,
+            ),
+            throttle_time_ms: |body, version| {
+                Some(throttle_of::<FindCoordinatorResponse>(body, version, |r| {
+                    r.throttle_time_ms
+                }))
+            },
+        },
+        QuotaCase {
+            name: "OffsetDelete, whose throttle follows the error code",
+            api_key: 47,
+            version: 0,
+            flexible: false,
+            body: encoded(
+                &OffsetDeleteRequest {
+                    group_id: "group".to_owned(),
+                    ..Default::default()
+                },
+                0,
+            ),
+            throttle_time_ms: |body, version| {
+                Some(throttle_of::<OffsetDeleteResponse>(body, version, |r| {
+                    r.throttle_time_ms
+                }))
+            },
+        },
+        QuotaCase {
+            name: "DescribeDelegationToken, an auth dispatch whose throttle is last",
+            api_key: 41,
+            version: 3,
+            flexible: true,
+            body: encoded(&DescribeDelegationTokenRequest::default(), 3),
+            throttle_time_ms: |body, version| {
+                Some(throttle_of::<DescribeDelegationTokenResponse>(
+                    body,
+                    version,
+                    |r| r.throttle_time_ms,
+                ))
+            },
+        },
+        QuotaCase {
+            name: "GetTelemetrySubscriptions, a telemetry dispatch",
+            api_key: 71,
+            version: 0,
+            flexible: true,
+            body: encoded(&GetTelemetrySubscriptionsRequest::default(), 0),
+            throttle_time_ms: |body, version| {
+                Some(throttle_of::<GetTelemetrySubscriptionsResponse>(
+                    body,
+                    version,
+                    |r| r.throttle_time_ms,
+                ))
+            },
+        },
+        QuotaCase {
+            name: "WriteTxnMarkers, exempt",
+            api_key: 27,
+            version: 1,
+            flexible: true,
+            body: encoded(&WriteTxnMarkersRequest::default(), 1),
+            throttle_time_ms: |_, _| None,
+        },
+    ];
+
+    for case in cases {
+        let (server, mut framed) = connect_to_serve_loop(&handle).await;
+        let frame = super::request_frame(
+            case.api_key,
+            case.version,
+            1,
+            None,
+            case.flexible.then_some(0),
+            &case.body,
+        )
+        .freeze();
+        framed.send(frame).await.expect("send request");
+        let response = tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
+            .await
+            .expect("the response must beat the client timeout")
+            .expect("a response frame")
+            .expect("response decode");
+        let answered_at = Instant::now();
+        check!(response_correlation_id(&response) == 1, "{}", case.name);
+        let header_len = if case.flexible { 5 } else { 4 };
+        let exempt = case.api_key == 27;
+        check!(
+            (case.throttle_time_ms)(&response[header_len..], case.version)
+                == (!exempt).then_some(window_ms),
+            "{}",
+            case.name
+        );
+
+        send_api_versions(&mut framed, 2).await;
+        if exempt {
+            let next = tokio::time::timeout(CLIENT_TIMEOUT, framed.next()).await;
+            check!(
+                next.is_ok(),
+                "{}: an exempt request does not mute the connection",
+                case.name
+            );
+        } else {
+            let (next, muted_for) = read_after_mute(&mut framed, answered_at).await;
+            check!(response_correlation_id(&next) == 2, "{}", case.name);
+            check!(
+                muted_for >= mute_window.to_std().saturating_sub(SLACK),
+                "{}",
+                case.name
+            );
+        }
+
+        drop(framed);
+        server.await.expect("serve loop joins on client EOF");
+    }
+    handle.shutdown().await;
+}
+
+/// Kafka's `KafkaApis.handleProduceRequest` charges no request quota for an
+/// `acks = 0` produce (#692), so a connection with only a `request_percentage`
+/// quota is not muted by one.
+#[tokio::test]
+async fn acks_zero_produce_is_exempt_from_the_request_quota() {
+    let mute_window = millis(1000);
+    let (handle, _dir) =
+        broker_with_anonymous_quotas(mute_window, &[("request_percentage", 0.0001)]).await;
+    let (server, mut framed) = connect_to_serve_loop(&handle).await;
+
+    send_request(
+        &mut framed,
+        PRODUCE_KEY,
+        PRODUCE_VERSION,
+        1,
+        &produce_body("no-such-topic", 0, 1024, 8),
+    )
+    .await;
+    send_api_versions(&mut framed, 2).await;
+
+    let next = tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
+        .await
+        .expect("an acks=0 produce must not mute the connection")
+        .expect("a response frame")
+        .expect("response decode");
+    check!(response_correlation_id(&next) == 2);
+
+    drop(framed);
+    server.await.expect("serve loop joins on client EOF");
+    handle.shutdown().await;
+}
+
+/// A `CreateTopics` charges `controller_mutation_rate` in its handler and
+/// `request_percentage` in the dispatch loop. Kafka resolves the two as one
+/// throttle decision (`sendResponseMaybeThrottleWithControllerQuota`), so the
+/// per-api throttle metric observes the request once, not once per quota.
+#[tokio::test]
+async fn a_controller_mutation_and_the_request_quota_resolve_in_one_observation() {
+    use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
+
+    const VERSION: i16 = 7;
+    let (handle, _dir) = broker_with_anonymous_quotas(
+        millis(1000),
+        &[
+            ("controller_mutation_rate", 1.0),
+            ("request_percentage", 0.0001),
+        ],
+    )
+    .await;
+    let (server, mut framed) = connect_to_serve_loop(&handle).await;
+
+    let body = encoded(
+        &CreateTopicsRequest {
+            topics: vec![CreatableTopic {
+                name: "one-observation".to_owned(),
+                num_partitions: 1,
+                replication_factor: 1,
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        },
+        VERSION,
+    );
+    send_request(&mut framed, 19, VERSION, 1, &body).await;
+    let response = tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
+        .await
+        .expect("the response must beat the client timeout")
+        .expect("a response frame")
+        .expect("response decode");
+    check!(response_correlation_id(&response) == 1);
+
+    let rendered = {
+        let metrics = &handle.broker_arc_for_test().metrics;
+        let registry = metrics.registry.lock().await;
+        let mut out = String::new();
+        prometheus_client::encoding::text::encode(&mut out, &registry).expect("encode registry");
+        out
+    };
+    check!(
+        rendered.contains(
+            "krabka_broker_request_throttle_duration_seconds_count{api_key=\"CreateTopics\"} 1\n"
+        ),
+        "{rendered}"
+    );
+
+    drop(framed);
+    server.await.expect("serve loop joins on client EOF");
+    handle.shutdown().await;
+}

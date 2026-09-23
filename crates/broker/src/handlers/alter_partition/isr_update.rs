@@ -31,6 +31,7 @@ use crate::codes;
 /// takes the broker IDs from `new_isr_with_epochs`.
 pub(super) fn handle_partition_with_recovery(
     image: &krabka_metadata::MetadataImage,
+    active: &std::collections::HashSet<u64>,
     topic_name: &str,
     request: &ReqPartitionData,
     changes: &mut Vec<MetadataRecord>,
@@ -84,15 +85,31 @@ pub(super) fn handle_partition_with_recovery(
         .as_ref()
         .is_some_and(|isr| isr.iter().all(|n| replicas_set.contains(n)));
 
-    // KIP-903: fence ineligible replicas. A broker in the proposed ISR is
-    // ineligible if it is not currently registered, or if its stamped broker
-    // epoch is non-sentinel (-1) and disagrees with the controller's
-    // registration epoch. Any ineligible replica fails the whole partition.
-    let replicas_eligible = new_isr_with_epochs.iter().all(|bstate| {
-        let node = krabka_metadata::NodeId(u64::try_from(bstate.broker_id).unwrap_or(u64::MAX));
-        let registered = image.broker_epoch(node);
+    // Kafka's `ReplicationControlManager.ineligibleReplicasForIsr`: a broker
+    // in the proposed ISR is ineligible if it is not registered, is in
+    // controlled shutdown, is fenced, or carries a broker epoch other than -1
+    // that disagrees with its registration (KIP-903). The controller's
+    // heartbeat registry holds the fence and the controlled shutdown, and
+    // `active` is its snapshot. A request older than v3 carries no epochs,
+    // so Kafka checks its `new_isr` with -1 for each. Any ineligible replica
+    // fails the whole partition.
+    let proposed_states: Vec<(i32, i64)> =
+        if !new_isr_i32.is_empty() || new_isr_with_epochs.is_empty() {
+            effective_isr_i32.iter().map(|&id| (id, -1)).collect()
+        } else {
+            new_isr_with_epochs
+                .iter()
+                .map(|state| (state.broker_id, state.broker_epoch))
+                .collect()
+        };
+    let replicas_eligible = proposed_states.iter().all(|&(broker_id, broker_epoch)| {
+        let Ok(id) = u64::try_from(broker_id) else {
+            return false;
+        };
+        let registered = image.broker_epoch(krabka_metadata::NodeId(id));
         registered.is_some()
-            && (bstate.broker_epoch == -1 || registered == Some(bstate.broker_epoch))
+            && active.contains(&id)
+            && (broker_epoch == -1 || registered == Some(broker_epoch))
     });
     let proposed_isr = match isr_admission(
         req_leader_epoch == part_rec.leader_epoch,
@@ -207,7 +224,7 @@ pub(super) fn handle_partition_with_recovery(
 }
 
 /// Runs [`handle_partition_with_recovery`] for one row that asks for the
-/// `Recovered` state.
+/// `Recovered` state, with every broker the image registers active.
 #[cfg(test)]
 fn handle_partition(
     image: &krabka_metadata::MetadataImage,
@@ -218,8 +235,10 @@ fn handle_partition(
     new_isr_with_epochs: &[krabka_protocol::owned::alter_partition_request::BrokerState],
     changes: &mut Vec<MetadataRecord>,
 ) -> RespPartitionData {
+    let active = image.brokers().map(|broker| broker.node_id.0).collect();
     handle_partition_with_recovery(
         image,
+        &active,
         topic_name,
         &ReqPartitionData {
             partition_index,
@@ -409,14 +428,20 @@ mod tests {
         assert!(changes.len() == 1);
     }
 
+    /// A v2 request carries no broker epochs, so none is compared, but every
+    /// replica in its ISR must still be registered: Kafka checks `new_isr`
+    /// with -1 for each epoch.
     #[test]
-    fn v2_no_epochs_path_unaffected() {
+    fn a_v2_request_checks_registration_without_epochs() {
         let image = image_with(&[(1, 10), (2, 20)]);
-        let mut changes = Vec::new();
-        // v2: new_isr populated, new_isr_with_epochs empty -> no epoch fencing.
-        let resp = handle_partition(&image, "t", 0, 5, &[1, 2, 3], &[], &mut changes);
-        assert!(resp.error_code == codes::NONE, "got {}", resp.error_code);
-        assert!(changes.len() == 1);
+        for (new_isr, expected) in [
+            (&[1, 2][..], codes::NONE),
+            (&[1, 2, 3][..], codes::INELIGIBLE_REPLICA),
+        ] {
+            let mut changes = Vec::new();
+            let resp = handle_partition(&image, "t", 0, 5, new_isr, &[], &mut changes);
+            assert2::check!(resp.error_code == expected, "new_isr {new_isr:?}");
+        }
     }
 
     #[test]
@@ -451,8 +476,10 @@ mod tests {
         ));
         let mut changes = Vec::new();
 
+        let active = image.brokers().map(|broker| broker.node_id.0).collect();
         let rejected = handle_partition_with_recovery(
             &image,
+            &active,
             "t",
             &ReqPartitionData {
                 partition_index: 0,
@@ -469,6 +496,7 @@ mod tests {
 
         let recovered = handle_partition_with_recovery(
             &image,
+            &active,
             "t",
             &ReqPartitionData {
                 partition_index: 0,
@@ -490,5 +518,87 @@ mod tests {
                 })
             ]
         ));
+    }
+
+    /// krabka-io/krabka-broker#825: Kafka's `ineligibleReplicasForIsr`. The
+    /// leader, broker 1, proposes the ISR `[1, 2]`. Broker 2 is in each row's
+    /// state, as the controller's heartbeat registry holds it.
+    #[tokio::test]
+    async fn a_replica_that_is_not_active_is_ineligible_for_the_isr() {
+        use crate::heartbeat::controller_state::{BrokerControlState, ControllerLivenessState};
+
+        /// Where broker 2 stands.
+        #[derive(Debug, Clone, Copy)]
+        enum Broker2 {
+            Unfenced,
+            Fenced,
+            InControlledShutdown,
+            NeverHeartbeated,
+            NotRegistered,
+        }
+
+        let cases: &[(Broker2, i16)] = &[
+            (Broker2::Unfenced, codes::NONE),
+            (Broker2::Fenced, codes::INELIGIBLE_REPLICA),
+            (Broker2::InControlledShutdown, codes::INELIGIBLE_REPLICA),
+            (Broker2::NeverHeartbeated, codes::INELIGIBLE_REPLICA),
+            (Broker2::NotRegistered, codes::INELIGIBLE_REPLICA),
+        ];
+        for (broker_2, expected) in cases {
+            let registered: &[(u64, i64)] = match broker_2 {
+                Broker2::NotRegistered => &[(1, 10)],
+                _ => &[(1, 10), (2, 20)],
+            };
+            let image = image_with(registered);
+            let liveness = ControllerLivenessState::new(krabka_units::secs(10));
+            for (node, _) in registered {
+                if *node == 2 && matches!(broker_2, Broker2::NeverHeartbeated) {
+                    liveness.track_registered([2]).await;
+                    continue;
+                }
+                liveness.record_fenced_heartbeat(*node).await;
+                liveness.touch(*node, BrokerControlState::Unfenced, 0).await;
+            }
+            match broker_2 {
+                Broker2::Fenced => liveness.touch(2, BrokerControlState::Fenced, 0).await,
+                Broker2::InControlledShutdown => {
+                    liveness
+                        .touch(2, BrokerControlState::ControlledShutdown, 0)
+                        .await;
+                    liveness.enter_controlled_shutdown(2, 5).await;
+                }
+                _ => {}
+            }
+            let active = liveness.alive_snapshot().await;
+            let mut changes = Vec::new();
+
+            for (form, request) in [
+                (
+                    "v2 new_isr",
+                    ReqPartitionData {
+                        partition_index: 0,
+                        leader_epoch: 5,
+                        new_isr: vec![1, 2],
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "v3 new_isr_with_epochs",
+                    ReqPartitionData {
+                        partition_index: 0,
+                        leader_epoch: 5,
+                        new_isr_with_epochs: vec![bs(1, 10), bs(2, -1)],
+                        ..Default::default()
+                    },
+                ),
+            ] {
+                let response =
+                    handle_partition_with_recovery(&image, &active, "t", &request, &mut changes);
+                assert2::check!(
+                    response.error_code == *expected,
+                    "broker 2 {broker_2:?}, {form}"
+                );
+            }
+        }
     }
 }

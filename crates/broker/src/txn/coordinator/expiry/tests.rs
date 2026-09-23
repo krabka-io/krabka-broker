@@ -18,7 +18,8 @@ use uuid::Uuid;
 
 use super::*;
 use crate::{
-    handlers::describe_transactions::{TRANSACTIONAL_ID_NOT_FOUND, transaction_state_row},
+    codes,
+    handlers::describe_transactions::transaction_state_row,
     partition::Partition,
     partition_registry::PartitionRegistry,
     test_support::FakeMetadataSource,
@@ -270,7 +271,7 @@ async fn an_expired_completed_transaction_is_tombstoned_and_dropped() {
     check!(
         describe_transactions_row(&coordinator).await
             == TransactionState {
-                error_code: TRANSACTIONAL_ID_NOT_FOUND,
+                error_code: codes::TRANSACTIONAL_ID_NOT_FOUND,
                 transactional_id: TID.to_owned(),
                 ..Default::default()
             }
@@ -478,7 +479,7 @@ async fn a_sweep_tick_refreshes_leadership_before_expiring() {
     check!(
         describe_transactions_row(&coordinator).await
             == TransactionState {
-                error_code: TRANSACTIONAL_ID_NOT_FOUND,
+                error_code: codes::TRANSACTIONAL_ID_NOT_FOUND,
                 transactional_id: TID.to_owned(),
                 ..Default::default()
             }

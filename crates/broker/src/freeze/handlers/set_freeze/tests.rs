@@ -108,8 +108,41 @@ fn freeze_request(scope: &str, pattern_type: i8) -> SetTopicFreezeRequest {
     }
 }
 
-// `record` signed by `pair` for the test cluster.
+// `record` signed by `pair` for the test cluster, in the same base64 form
+// `krabka-guard` reads from `DescribeCluster` and `check_signature` verifies
+// against (#1082).
 fn sign(pair: &Ed25519KeyPair, record: &TopicFreezeRecord) -> Vec<u8> {
-    let bytes = freeze_signing_bytes(&CLUSTER.to_string(), record);
+    let bytes = freeze_signing_bytes(&crate::cluster_id::encode(CLUSTER), record);
     pair.sign(&bytes).as_ref().to_vec()
+}
+
+#[tokio::test]
+async fn handle_processes_request_and_encodes_response() {
+    use krabka_protocol::Encode;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let (config, _) = config_with_alice(&dir);
+    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.operator_keys = config.operator_keys;
+    })
+    .await;
+    let broker = broker_handle.broker_arc_for_test();
+
+    let p = principal();
+    let s = peer();
+    let ctx = context(&p, &s);
+    let req = freeze_request(
+        "test-topic",
+        krabka_protocol::krabka::freeze::PATTERN_TYPE_LITERAL,
+    );
+    let mut req_bytes = bytes::BytesMut::new();
+    req.encode(&mut req_bytes, 0).unwrap();
+
+    let resp_bytes = super::handle(&broker, 0, 1, &req_bytes, &ctx)
+        .await
+        .expect("handle");
+    assert2::check!(!resp_bytes.is_empty());
+
+    broker_handle.shutdown().await;
 }

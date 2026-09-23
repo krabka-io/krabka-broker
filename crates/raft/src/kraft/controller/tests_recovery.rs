@@ -13,7 +13,7 @@ use crate::kraft::{
         control_state::voter_set_to_wire,
         quorum_state_file::{load_quorum_state, save_quorum_state},
         records::typed_control_batch,
-        recovery::{replay_committed, replay_control_records},
+        recovery::{control_state_at, replay_committed, replay_control_records},
         test_support::{
             TEST_ELECTION_TIMEOUT, await_leader, build_engine_only, elect_single_voter_engine,
             submit_change_with_timeout, topic_record, voter_set,
@@ -97,6 +97,146 @@ fn replay_committed_rebuilds_image_from_log_records() {
     assert2::assert!(recovered.topic("replayed").is_some());
 }
 
+#[test]
+fn replay_committed_captures_metadata_downgrade_snapshot() {
+    use krabka_metadata::FeatureLevelRecord;
+
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    elect_single_voter_engine(&mut engine);
+    let (reply, mut rx) = oneshot::channel();
+    engine.on_submit_change(
+        &[MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+            name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+            level: 25,
+        })],
+        reply,
+    );
+    assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
+
+    let (reply, mut rx) = oneshot::channel();
+    engine.downgrade_snapshot_failures_remaining = 1;
+    engine.on_submit_change(
+        &[MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+            name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+            level: 16,
+        })],
+        reply,
+    );
+    assert2::assert!(matches!(rx.try_recv(), Ok(Ok(_))));
+
+    let mut recovered = MetadataImage::new(uuid::Uuid::nil());
+    let pending = replay_committed(
+        &engine.log,
+        &mut recovered,
+        Offset(0),
+        MetadataRaftFetchMax::default(),
+    )
+    .expect("replay")
+    .expect("captured downgrade snapshot");
+
+    assert2::assert!(pending.end_offset == engine.log.log_end_offset());
+    assert2::assert!(recovered.finalized_metadata_version() == Some(16));
+}
+
+#[test]
+fn downgrade_snapshot_failures_remaining_decrements_and_eventually_succeeds() {
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    elect_single_voter_engine(&mut engine);
+    let (reply, _rx) = oneshot::channel();
+    engine.on_submit_change(
+        &[MetadataRecord::V1FeatureLevel(
+            krabka_metadata::FeatureLevelRecord {
+                name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+                level: 25,
+            },
+        )],
+        reply,
+    );
+    let (reply, _rx) = oneshot::channel();
+    engine.downgrade_snapshot_failures_remaining = 3;
+    engine.on_submit_change(
+        &[MetadataRecord::V1FeatureLevel(
+            krabka_metadata::FeatureLevelRecord {
+                name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+                level: 16,
+            },
+        )],
+        reply,
+    );
+    assert2::assert!(engine.write_downgrade_snapshot_and_prune().is_err());
+    assert2::assert!(engine.downgrade_snapshot_failures_remaining == 1);
+    assert2::assert!(engine.write_downgrade_snapshot_and_prune().is_err());
+    assert2::assert!(engine.downgrade_snapshot_failures_remaining == 0);
+    assert2::assert!(engine.write_downgrade_snapshot_and_prune().is_ok());
+}
+
+#[test]
+fn control_state_at_replays_version_and_voters_at_boundary_offsets() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let initial = voter_set(&[NodeId(1)]);
+    let committed = voter_set(&[NodeId(1), NodeId(2)]);
+    let bootstrap = QuorumState::bootstrap(uuid::Uuid::nil(), initial.clone());
+    let max = MetadataRaftFetchMax::default();
+
+    {
+        let mut log = KraftLog::open(dir.path()).expect("open log");
+        let mut batch0 = typed_control_batch(
+            1,
+            &[ControlRecord::KRaftVersion(
+                krabka_protocol::owned::k_raft_version_record::KRaftVersionRecord {
+                    version: 0,
+                    k_raft_version: 1,
+                    ..Default::default()
+                },
+            )],
+        )
+        .expect("batch 0");
+        log.append(&mut batch0, 0).expect("append 0");
+        log.advance_hwm(log.log_end_offset());
+
+        let mut batch1 =
+            typed_control_batch(1, &[ControlRecord::Voters(voter_set_to_wire(&committed))])
+                .expect("batch 1");
+        log.append(&mut batch1, 0).expect("append 1");
+        log.advance_hwm(log.log_end_offset());
+
+        let mut batch2 = typed_control_batch(
+            1,
+            &[ControlRecord::KRaftVersion(
+                krabka_protocol::owned::k_raft_version_record::KRaftVersionRecord {
+                    version: 0,
+                    k_raft_version: -1,
+                    ..Default::default()
+                },
+            )],
+        )
+        .expect("batch 2");
+        log.append(&mut batch2, 0).expect("append 2");
+        log.advance_hwm(log.log_end_offset());
+    }
+
+    let log = KraftLog::open(dir.path()).expect("reopen log");
+
+    // end_offset 0: no records applied
+    let s0 = control_state_at(&log, &bootstrap, Offset(0), max).expect("offset 0");
+    check!(s0.kraft_version == 0);
+    check!(s0.voters == initial);
+
+    // end_offset 1: only KRaftVersion applied
+    let s1 = control_state_at(&log, &bootstrap, Offset(1), max).expect("offset 1");
+    check!(s1.kraft_version == 1);
+    check!(s1.voters == initial);
+
+    // end_offset 2: KRaftVersion and Voters applied
+    let s2 = control_state_at(&log, &bootstrap, Offset(2), max).expect("offset 2");
+    check!(s2.kraft_version == 1);
+    check!(s2.voters == committed);
+
+    // end_offset 3: negative kraft version errors
+    let s3 = control_state_at(&log, &bootstrap, Offset(3), max);
+    check!(matches!(s3, Err(RaftError::ChangeRejected(_))));
+}
+
 #[tokio::test]
 async fn snapshot_then_restart_recovers_image() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -157,6 +297,50 @@ async fn snapshot_then_restart_recovers_image() {
     .expect("reopen");
     assert2::assert!(ctrl2.current_image().topic("recovered").is_some());
     ctrl2.shutdown().await;
+}
+
+#[tokio::test]
+async fn open_with_legacy_54_byte_quorum_state_advances_hwm() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data_dir = dir.path().to_path_buf();
+    let cluster_id = uuid::Uuid::new_v4();
+    let voters = voter_set(&[NodeId(1)]);
+
+    {
+        let mut log = KraftLog::open(&data_dir).expect("open log");
+        let mut batch = crate::kraft::controller::records::metadata_record_batch(
+            0,
+            &[bytes::Bytes::from_static(b"test")],
+        )
+        .expect("batch");
+        log.append(&mut batch, 0).expect("append");
+        assert2::assert!(log.hwm() == 0);
+        assert2::assert!(log.log_end_offset() > 0);
+    }
+
+    std::fs::write(data_dir.join(QUORUM_STATE_FILE), [0u8; 54]).expect("write 54 bytes");
+
+    let ctrl = KraftController::open(
+        data_dir,
+        NodeId(1),
+        cluster_id,
+        voters,
+        TEST_ELECTION_TIMEOUT,
+        None,
+        ControllerFetchMissLimit::default(),
+        MetadataRaftCommandQueueCapacity::default(),
+        MetadataRaftFetchMax::default(),
+        Arc::new(NullPeerSender),
+        0,
+        krabka_units::prelude::bytes(0),
+        krabka_units::prelude::millis(0),
+        MetadataSnapshotFetchMax::default(),
+    )
+    .expect("open");
+
+    let hwm = ctrl.quorum_state().await.unwrap().high_watermark;
+    assert2::assert!(hwm > 0);
+    ctrl.shutdown().await;
 }
 
 #[tokio::test]

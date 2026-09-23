@@ -115,6 +115,60 @@ impl ControllerHandle {
         translate_submit_change_response(&response, leader)
     }
 
+    /// Forward a raw Kafka-wire request for `api_key`/`version` to the
+    /// current quorum leader's controller listener and return its raw
+    /// response bytes, unmodified.
+    ///
+    /// Used by the broker's `DescribeQuorum` handler: Kafka's `KafkaApis`
+    /// forwards `DescribeQuorum` from the broker listener to the active
+    /// controller unconditionally (`forwardToController`), so a combined or
+    /// controller node that is not itself the leader must reach the leader
+    /// the same way a broker-only observer already does.
+    ///
+    /// # Errors
+    /// `RaftError::NotLeader` when no leader is known or the leader's
+    /// address cannot be resolved, `RaftError::Network` when the dial or
+    /// round trip fails.
+    // cargo-mutants: an I/O-only wrapper with no in-process signal (dial + one
+    // raw request + close, over a `krabka_client_core::Connection` that no
+    // test in this process can build). Covered by a live two-node cluster
+    // test below.
+    #[cfg_attr(test, mutants::skip)]
+    pub async fn forward_raw(
+        &self,
+        api_key: i16,
+        version: i16,
+        body: bytes::Bytes,
+    ) -> Result<bytes::Bytes, RaftError> {
+        let Some(leader) = self.engine.quorum_snapshot().leader_id else {
+            return Err(RaftError::NotLeader {
+                current_leader: None,
+            });
+        };
+        let Some(addr) = self.voter_addr(leader) else {
+            return Err(RaftError::NotLeader {
+                current_leader: Some(leader),
+            });
+        };
+        let opts = krabka_client_core::ConnectionOptions {
+            client_id: self.client_id.clone(),
+            dispatch_queue_capacity: self.client_dispatch_queue_capacity,
+            frame_max: self.client_frame_max,
+            ..krabka_client_core::ConnectionOptions::default()
+        };
+        let conn = self
+            .dialer
+            .dial(leader, &addr, opts)
+            .await
+            .map_err(RaftError::Network)?;
+        let resp = conn
+            .raw_request(api_key, version, body)
+            .await
+            .map_err(RaftError::Network)?;
+        conn.close();
+        Ok(resp)
+    }
+
     /// Resolve a voter's controller listener `<host>:<port>` from the static
     /// voter set's CONTROLLER endpoint. See [`controller_endpoint_addr`].
     fn voter_addr(&self, node_id: NodeId) -> Option<String> {
@@ -442,6 +496,14 @@ mod tests {
         .expect_err("an uncommitted tail is an error");
         assert2::assert!(matches!(err, RaftError::UncommittedTail));
 
+        // Cluster auth failure maps directly to ClusterAuthorizationFailed
+        let err = translate_submit_change_response(
+            &submit_change_response_bytes(crate::wire::PRIVATE_CLUSTER_AUTHORIZATION_FAILED, -1),
+            NodeId(5),
+        )
+        .expect_err("cluster auth failed");
+        assert2::assert!(matches!(err, RaftError::ClusterAuthorizationFailed));
+
         // Any other code collapses to NotLeader, taking the response's
         // leader_hint when non-negative.
         let err = translate_submit_change_response(&submit_change_response_bytes(1, 9), NodeId(5))
@@ -542,5 +604,106 @@ mod tests {
         .await
         .expect_err("network error");
         assert2::assert!(matches!(err, RaftError::Network(_)));
+    }
+
+    #[test]
+    fn encode_delegation_token_mutation_body_frames_mutations() {
+        use krabka_metadata::DelegationTokenRecord;
+        use krabka_security::KafkaPrincipal;
+
+        let rec = DelegationTokenRecord {
+            token_id: "tok".into(),
+            owner: KafkaPrincipal {
+                principal_type: "User".into(),
+                name: "alice".into(),
+            },
+            issue_timestamp_ms: 10,
+            max_timestamp_ms: 20,
+            expiry_timestamp_ms: 15,
+            renewers: vec![],
+            hmac: vec![1, 2, 3],
+        };
+        let mutations = vec![crate::DelegationTokenMutation::Delete { expected: rec }];
+        let body = encode_delegation_token_mutation_body(&mutations).expect("encode");
+        assert2::assert!(body.len() > 10);
+        let mut cur: &[u8] = &body;
+        let req =
+            crate::wire::KrabkaSubmitChangeRequest::decode_v0(&mut cur).expect("decode frame");
+        let decoded = <serde_wincode::SerdeCompat<
+            Vec<crate::DelegationTokenMutation>,
+        > as wincode::Deserialize>::deserialize(&req.records)
+        .expect("wincode decode");
+        assert2::assert!(decoded == mutations);
+    }
+
+    #[tokio::test]
+    async fn controller_handle_voter_addr_resolves_known_voter() {
+        use tempfile::TempDir;
+
+        use crate::{config::ControllerConfig, controller::Controller};
+
+        let dir = TempDir::new().unwrap();
+        let cfg = ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf());
+        let ctrl = Controller::start(cfg).await.expect("start");
+        let addr = ctrl.voter_addr(NodeId(1));
+        assert2::assert!(addr == Some("127.0.0.1:0".to_string()));
+        assert2::assert!(ctrl.voter_addr(NodeId(999)).is_none());
+        ctrl.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn forward_raw_with_no_known_leader_rejects_not_leader() {
+        use tempfile::TempDir;
+
+        use crate::{
+            config::{BootstrapMode, ControllerConfig},
+            controller::Controller,
+        };
+
+        let dir = TempDir::new().unwrap();
+        let cfg = ControllerConfig {
+            bootstrap_mode: BootstrapMode::Join,
+            initial_voters: krabka_metadata::VoterSet::from_voters(std::iter::empty()),
+            ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
+        };
+        let ctrl = Controller::start(cfg).await.expect("join start");
+
+        let err = ctrl
+            .forward_raw(crate::wire::API_KEY_METADATA_FETCH, 0, bytes::Bytes::new())
+            .await
+            .expect_err("no leader is known yet");
+        assert2::assert!(matches!(
+            err,
+            RaftError::NotLeader {
+                current_leader: None
+            }
+        ));
+        ctrl.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn submit_delegation_token_mutations_on_join_node_rejects_not_leader() {
+        use tempfile::TempDir;
+
+        use crate::{
+            config::{BootstrapMode, ControllerConfig},
+            controller::Controller,
+        };
+
+        let dir = TempDir::new().unwrap();
+        let cfg = ControllerConfig {
+            bootstrap_mode: BootstrapMode::Join,
+            initial_voters: krabka_metadata::VoterSet::from_voters(std::iter::empty()),
+            ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
+        };
+        let ctrl = Controller::start(cfg).await.expect("join start");
+        let res = ctrl.submit_delegation_token_mutations(vec![]).await;
+        assert2::assert!(matches!(
+            res,
+            Err(RaftError::NotLeader {
+                current_leader: None
+            })
+        ));
+        ctrl.shutdown().await;
     }
 }

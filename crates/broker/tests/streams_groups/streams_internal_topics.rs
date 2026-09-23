@@ -78,9 +78,8 @@ async fn stateful_member_triggers_internal_topic_creation() {
                 })
                 .collect()
         });
-        // Repeat the topology so the reconcile keeps the changelog requirement.
-        let mut hb = follow_up("streams-app-2", &member_id, resp.member_epoch, active);
-        hb.topology = Some(topo.clone());
+        // A heartbeat after the join carries no topology: Kafka refuses one.
+        let hb = follow_up("streams-app-2", &member_id, resp.member_epoch, active);
         resp = client.send(hb).await.expect("follow-up heartbeat");
         member_id = resp.member_id.clone();
     }

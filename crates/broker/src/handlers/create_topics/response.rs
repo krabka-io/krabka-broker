@@ -6,7 +6,6 @@
 use bytes::Bytes;
 use krabka_protocol::{
     Encode,
-    api_key::ApiKey,
     owned::create_topics_response::{
         CreatableTopicConfigs, CreatableTopicResult, CreateTopicsResponse,
     },
@@ -131,18 +130,14 @@ pub(super) fn finish_response(
         context,
         created_topic_resources(&results, validate_only),
     );
-    // The KIP-599 delay is the only throttle this api applies — the dispatch
-    // loop marks it quota-exempt and never charges it the request quota — so
-    // resolving it through the metric records the throttle phase and the quota
-    // that caused it exactly once per request.
-    let delay = broker.metrics.record_applied_throttle(
-        ApiKey::CreateTopics as i16,
-        &[(crate::metrics::QuotaType::ControllerMutation, delay).into()],
-    );
+    // KIP-599: the controller-mutation delay goes to the dispatch loop, which
+    // resolves it with the KIP-124 request quota in one metrics call and
+    // reports the larger of the two, as Kafka's
+    // `sendResponseMaybeThrottleWithControllerQuota` does. The response
+    // carries the controller-mutation delay now; the dispatch loop raises it
+    // when the request quota asks for more.
+    context.defer_quota_charge((crate::metrics::QuotaType::ControllerMutation, delay).into());
     let response = create_topics_response(results, crate::quota::throttle_time_ms(delay));
-    // KIP-219: the KIP-599 window is reported here and enforced by the
-    // connection loop, which mutes the connection after the response is sent.
-    context.record_throttle(delay);
     encode_response(&response, version)
 }
 

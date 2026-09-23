@@ -34,7 +34,7 @@ mod heartbeat;
 mod reconciliation;
 mod records;
 mod request;
-mod response;
+pub(crate) mod response;
 
 #[cfg(test)]
 mod streams_group_model;
@@ -66,7 +66,7 @@ pub enum StreamsGroupActorMessage {
         request: Box<StreamsGroupHeartbeatRequest>,
         client_id: String,
         client_host: String,
-        reply: oneshot::Sender<StreamsGroupHeartbeatResponse>,
+        reply: oneshot::Sender<StreamsHeartbeatResult>,
     },
     Describe {
         reply: oneshot::Sender<StreamsDescribeView>,
@@ -86,6 +86,14 @@ pub enum StreamsGroupActorMessage {
     },
     Seed(super::super::StreamsGroupSeed),
     Shutdown(oneshot::Sender<()>),
+}
+
+/// Kafka's `StreamsGroupHeartbeatResult`: the response, and the internal
+/// topics that the handler must create through `CreateTopics`.
+#[derive(Debug, Default)]
+pub struct StreamsHeartbeatResult {
+    pub response: StreamsGroupHeartbeatResponse,
+    pub creatable_topics: Vec<super::topology::InternalTopicSpec>,
 }
 
 /// Read-only projection of [`StreamsGroupState`] for the
@@ -201,6 +209,24 @@ struct ActorState {
     /// Partition metadata from the most recent reconcile. The actor persists
     /// it as the group's `StreamsGroupPartitionMetadataValue`.
     partition_metadata: Option<StreamsGroupPartitionMetadataValue>,
+    /// Kafka's `StreamsGroup.metadataHash`: the hash of the required topics in
+    /// the image that the most recent reconcile configured the topology
+    /// against. A heartbeat that sees another hash reconciles again.
+    metadata_hash: i64,
+    /// The internal topics that the topology needs and the metadata image
+    /// does not hold. Every heartbeat answer carries them, as Kafka's
+    /// `StreamsGroupHeartbeatResult.creatableTopics` does, and `KafkaApis`
+    /// sends them to the controller as a `CreateTopics` request.
+    creatable_topics: Vec<super::topology::InternalTopicSpec>,
+    /// Set when a reconcile installed a new target. The next record batch then
+    /// carries the target and current assignment of every member, because the
+    /// new target changed all of them.
+    target_changed: bool,
+    /// Whether the topology was configured against the metadata image since
+    /// the actor started. A seeded actor has not, so its first heartbeat
+    /// configures the topology again, as Kafka does when the configured
+    /// topology of a loaded group is empty.
+    configured: bool,
 }
 
 impl ActorState {
@@ -209,6 +235,10 @@ impl ActorState {
             state: StreamsGroupState::new(group_id),
             topology: None,
             partition_metadata: None,
+            metadata_hash: 0,
+            creatable_topics: Vec::new(),
+            target_changed: false,
+            configured: false,
         }
     }
 }
@@ -246,8 +276,18 @@ async fn actor_loop(
                         )
                         .await
                         {
-                            Ok(resp) => {
-                                let _ = reply.send(resp);
+                            Ok(response) => {
+                                // Kafka answers the internal topics to create
+                                // only with a response that the group accepted.
+                                let creatable_topics = if response.error_code == codes::NONE {
+                                    actor.creatable_topics.clone()
+                                } else {
+                                    Vec::new()
+                                };
+                                let _ = reply.send(StreamsHeartbeatResult {
+                                    response,
+                                    creatable_topics,
+                                });
                             }
                             Err(e) => {
                                 tracing::warn!(
@@ -255,9 +295,12 @@ async fn actor_loop(
                                     error = %e,
                                     "streams-group actor exiting after log-write failure",
                                 );
-                                let _ = reply.send(StreamsGroupHeartbeatResponse {
-                                    error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
-                                    ..Default::default()
+                                let _ = reply.send(StreamsHeartbeatResult {
+                                    response: response::error_resp(
+                                        codes::COORDINATOR_LOAD_IN_PROGRESS,
+                                        None,
+                                    ),
+                                    creatable_topics: Vec::new(),
                                 });
                                 break;
                             }
@@ -296,6 +339,11 @@ async fn actor_loop(
                     break;
                 }
             }
+            () = wait_for_rebalance_deadline(actor.state.next_rebalance_deadline()) => {
+                if handle_session_tick(&mut actor, &config, &*offsets_log, metadata_source.as_ref(), &coordinator).await.is_err() {
+                    break;
+                }
+            }
             image = wait_for_metadata_change(&mut metadata_rx) => {
                 let Some(image) = image else {
                     metadata_rx = None;
@@ -311,8 +359,8 @@ async fn actor_loop(
                     tick = tokio::time::interval(config.heartbeat_interval);
                     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                     actor.state.dirty = true;
-                    reconcile(&mut actor, &config, metadata_source.as_ref()).await;
-                    let pending = snapshot_pending_after_change(&actor, &[]);
+                    reconcile(&mut actor, &config, metadata_source.as_ref());
+                    let pending = snapshot_pending_after_change(&mut actor, &[]);
                     if flush_pending(
                         &actor,
                         pending,
@@ -356,6 +404,14 @@ fn resolve_group_config_from_image(
             tracing::error!(group_id, %error, "ignoring invalid persisted streams group config");
             defaults.clone()
         }
+    }
+}
+
+/// Sleeps until `deadline`, or for ever when no rebalance timeout is armed.
+async fn wait_for_rebalance_deadline(deadline: Option<std::time::Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline.into()).await,
+        None => std::future::pending().await,
     }
 }
 
