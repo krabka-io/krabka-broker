@@ -41,6 +41,8 @@
 //! [`fetch_bound`](self::bound::fetch_bound) and
 //! [`last_fetchable_offset`](self::bound::last_fetchable_offset).
 
+use std::collections::HashSet;
+
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
@@ -73,6 +75,28 @@ use self::{
     response::error_response,
 };
 use crate::{broker::Broker, codes, error::BrokerError};
+
+/// The `(topic, partition)` tuples that `topics` names more than once.
+///
+/// Kafka collects these once over the whole request, before authorization or
+/// resolution runs, so a topic-partition named twice -- whether within one
+/// topic entry or across two entries for the same topic -- is answered
+/// `INVALID_REQUEST` on every row that names it.
+fn duplicate_partitions(
+    topics: &[krabka_protocol::owned::list_offsets_request::ListOffsetsTopic],
+) -> HashSet<(String, i32)> {
+    let mut seen = HashSet::new();
+    let mut duplicates = HashSet::new();
+    for topic in topics {
+        for part in &topic.partitions {
+            let key = (topic.name.clone(), part.partition_index);
+            if !seen.insert(key.clone()) {
+                duplicates.insert(key);
+            }
+        }
+    }
+    duplicates
+}
 
 #[tracing::instrument(
     name = "handle_list_offsets",
@@ -113,8 +137,15 @@ pub(crate) async fn handle(
                 broker.config.node_id,
             ),
         );
+        // Kafka's `ListOffsetRequest.duplicatePartitions()` is computed once
+        // over the whole request, ahead of authorization and resolution, and
+        // every row of a topic-partition it names more than once is answered
+        // `INVALID_REQUEST` instead of being resolved. See
+        // `ReplicaManager.scala:1473-1478`.
+        let duplicates = duplicate_partitions(&req.topics);
         let topics_out = concurrently(req.topics.into_iter().map(|topic| {
             let acl_image = acl_image.clone();
+            let duplicates = &duplicates;
             async move {
                 let name = topic.name;
                 let partitions = if crate::handlers::acl_denied(
@@ -134,7 +165,17 @@ pub(crate) async fn handle(
                         .collect()
                 } else {
                     concurrently(topic.partitions.into_iter().map(|part| {
-                        resolve_partition(broker, &name, part, version, timeout, bound)
+                        let is_duplicate =
+                            duplicates.contains(&(name.clone(), part.partition_index));
+                        let name = name.clone();
+                        async move {
+                            if is_duplicate {
+                                error_response(part.partition_index, codes::INVALID_REQUEST)
+                            } else {
+                                resolve_partition(broker, &name, part, version, timeout, bound)
+                                    .await
+                            }
+                        }
                     }))
                     .await
                 };
