@@ -203,9 +203,7 @@ async fn dispatch_registered_bytes(
                 .await,
             )))
         }
-        crate::handlers::DispatchKind::Plain(_)
-        | crate::handlers::DispatchKind::Fetch
-        | crate::handlers::DispatchKind::SaslMetadata => None,
+        crate::handlers::DispatchKind::Fetch | crate::handlers::DispatchKind::SaslMetadata => None,
     }
 }
 
@@ -267,32 +265,9 @@ async fn dispatch_registry_response(
     entry: crate::handlers::DispatchEntry,
     context: DispatchContext<'_, '_>,
 ) -> Result<Option<ThrottledResponse>, BrokerError> {
-    let DispatchContext { broker, parsed, .. } = context;
     match dispatch_registered_bytes(entry, context).await {
         Some(result) => result.map(Some),
-        None => match entry.kind() {
-            crate::handlers::DispatchKind::Plain(handler) => {
-                let body = handler(
-                    broker,
-                    parsed.api_version,
-                    parsed.correlation_id,
-                    parsed.body,
-                )
-                .await?;
-                encode_response(
-                    parsed.api_key,
-                    parsed.correlation_id,
-                    parsed.body_flexible,
-                    &body,
-                    broker.config.socket_request_max.bytes_usize(),
-                )
-                .map(|bytes| Some(ThrottledResponse::unthrottled(bytes)))
-            }
-            crate::handlers::DispatchKind::Fetch | crate::handlers::DispatchKind::SaslMetadata => {
-                Ok(None)
-            }
-            _ => Ok(None),
-        },
+        None => Ok(None),
     }
 }
 

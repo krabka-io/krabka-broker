@@ -14,6 +14,7 @@ use crate::{
 };
 
 context_dispatches!(register_context_dispatches;
+    (assign_replicas_to_dirs_adapter, AssignReplicasToDirs, assign_replicas_to_dirs_request, crate::handlers::assign_replicas_to_dirs::handle),
     (metadata_adapter, Metadata, metadata_request, crate::handlers::metadata::handle),
     (describe_cluster_adapter, DescribeCluster, describe_cluster_request, crate::handlers::describe_cluster::handle),
     (describe_topic_partitions_adapter, DescribeTopicPartitions, describe_topic_partitions_request, crate::handlers::describe_topic_partitions::handle),

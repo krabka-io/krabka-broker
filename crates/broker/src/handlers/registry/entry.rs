@@ -8,7 +8,7 @@
 
 use krabka_protocol::api_key::ApiKey;
 
-use super::{AuthHandler, ContextHandler, PlainHandler, ProduceHandler, TelemetryHandler};
+use super::{AuthHandler, ContextHandler, ProduceHandler, TelemetryHandler};
 use crate::handlers::{ApiKeyCode, ApiVersion};
 
 /// How the KIP-124 request quota reaches an api.
@@ -31,7 +31,6 @@ pub(crate) enum RequestQuotaPolicy {
 
 #[derive(Clone, Copy)]
 pub(crate) enum DispatchKind {
-    Plain(PlainHandler),
     Context(ContextHandler),
     Produce(ProduceHandler),
     Telemetry(TelemetryHandler),
@@ -56,21 +55,6 @@ pub(crate) struct DispatchRegistry {
 }
 
 impl DispatchEntry {
-    pub(crate) fn plain(
-        api_key: ApiKeyCode,
-        flexible_min: ApiVersion,
-        handler: PlainHandler,
-    ) -> Self {
-        Self {
-            api_key,
-            min_version: 0,
-            max_version: 0,
-            flexible_min,
-            quota_policy: RequestQuotaPolicy::ApplyFallbackAccounting,
-            kind: DispatchKind::Plain(handler),
-        }
-    }
-
     pub(crate) fn context(
         api_key: ApiKeyCode,
         flexible_min: ApiVersion,
@@ -191,11 +175,6 @@ impl DispatchEntry {
     #[cfg(test)]
     pub(crate) fn version_range(self) -> std::ops::RangeInclusive<ApiVersion> {
         self.min_version..=self.max_version
-    }
-
-    #[cfg(test)]
-    pub(crate) fn is_plain(self) -> bool {
-        matches!(self.kind, DispatchKind::Plain(_))
     }
 
     #[cfg(test)]

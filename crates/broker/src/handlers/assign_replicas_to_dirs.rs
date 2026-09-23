@@ -9,13 +9,14 @@
 //! Only the leader serves this RPC, and any other broker returns
 //! `NOT_CONTROLLER`. This mirrors `alter_partition`.
 //!
-//! This file holds the leader check and the request-to-controller flow. The
-//! two pure halves live beside it: `changes` maps a reported directory onto a
-//! metadata delta and a per-partition error code, and `response` builds the
-//! fixed responses and encodes what goes back on the wire.
+//! This file holds the ACL preamble, the broker-epoch fence, the leader
+//! check, and the request-to-controller flow. The pure halves live beside it:
+//! `validation` checks the reporting broker's registration and epoch,
+//! `changes` maps a reported directory onto a metadata delta and a
+//! per-partition error code, and `response` builds the fixed responses and
+//! encodes what goes back on the wire.
 
 use bytes::Bytes;
-use futures_util::future::BoxFuture;
 use krabka_protocol::{
     Decode,
     owned::{
@@ -24,64 +25,101 @@ use krabka_protocol::{
     },
 };
 
-use crate::{broker::Broker, codes, error::BrokerError};
+use crate::{
+    broker::Broker,
+    codes,
+    error::BrokerError,
+    handlers::{ApiVersion, CorrelationId, RequestContext},
+};
 
 mod changes;
 mod response;
 #[cfg(test)]
 mod test_support;
+mod validation;
 
 use self::{
     changes::{AssignmentPlan, plan_assignments},
     response::{encode_resp, not_controller_response},
+    validation::check_broker_epoch,
 };
 
-pub(crate) fn handle(
+pub(crate) async fn handle(
     broker: &Broker,
-    version: crate::handlers::ApiVersion,
-    _correlation_id: crate::handlers::CorrelationId,
+    version: ApiVersion,
+    _correlation_id: CorrelationId,
     req_bytes: &[u8],
-) -> BoxFuture<'static, Result<Bytes, BrokerError>> {
-    let req_bytes = req_bytes.to_vec();
+    ctx: &RequestContext<'_>,
+) -> Result<Bytes, BrokerError> {
+    let mut cur: &[u8] = req_bytes;
+    let req = AssignReplicasToDirsRequest::decode(&mut cur, version)?;
+
     let controller = broker.controller.clone();
     let node_id = broker.config.node_id;
-    Box::pin(async move {
-        let mut cur: &[u8] = &req_bytes;
-        let req = AssignReplicasToDirsRequest::decode(&mut cur, version)?;
+    let image = controller.current_image();
 
-        let is_leader = controller
-            .watch_leader()
-            .borrow()
-            .is_some_and(|n| is_controller_leader(Some(n.0), node_id.0));
-        if !is_leader {
-            return encode_resp(version, &not_controller_response());
-        }
+    // ── ACL preamble ────────────────────────────────────────────
+    // Inter-broker control-plane RPC: `ClusterAction` on
+    // `Cluster("kafka-cluster")`. On Deny → whole-response
+    // `error_code = CLUSTER_AUTHORIZATION_FAILED (31)`, as Kafka's
+    // `ControllerApis.handleAssignReplicasToDirs` requires before it forwards
+    // to the controller.
+    if crate::handlers::cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
+        return encode_resp(
+            version,
+            &AssignReplicasToDirsResponse {
+                error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
+                ..Default::default()
+            },
+        );
+    }
 
-        let Ok(broker_slot_id) = u64::try_from(req.broker_id) else {
-            return encode_resp(version, &AssignReplicasToDirsResponse::default());
-        };
-        let image = controller.current_image();
-        if image.finalized_metadata_version().is_some_and(|level| {
-            level < krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL
-        }) {
+    let is_leader = controller
+        .watch_leader()
+        .borrow()
+        .is_some_and(|n| is_controller_leader(Some(n.0), node_id.0));
+    if !is_leader {
+        return encode_resp(version, &not_controller_response());
+    }
+
+    // Kafka's `ClusterControlManager.checkBrokerEpoch`, which
+    // `ReplicationControlManager.handleAssignReplicasToDirs` runs before it
+    // looks at the reported rows. Fences out a stale or restarted broker: an
+    // unregistered id (a negative wire value included) gets
+    // `BROKER_ID_NOT_REGISTERED`, and a registered id reporting the wrong
+    // epoch gets `STALE_BROKER_EPOCH`.
+    let broker_slot_id = match check_broker_epoch(&image, req.broker_id, req.broker_epoch) {
+        Ok(broker_slot_id) => broker_slot_id,
+        Err(error_code) => {
             return encode_resp(
                 version,
                 &AssignReplicasToDirsResponse {
-                    error_code: codes::UNSUPPORTED_VERSION,
+                    error_code,
                     ..Default::default()
                 },
             );
         }
-        let AssignmentPlan { changes, response } = plan_assignments(&image, broker_slot_id, &req);
+    };
+    if image.finalized_metadata_version().is_some_and(|level| {
+        level < krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL
+    }) {
+        return encode_resp(
+            version,
+            &AssignReplicasToDirsResponse {
+                error_code: codes::UNSUPPORTED_VERSION,
+                ..Default::default()
+            },
+        );
+    }
+    let AssignmentPlan { changes, response } = plan_assignments(&image, broker_slot_id, &req);
 
-        if !changes.is_empty()
-            && let Err(e) = controller.submit_change(changes).await
-        {
-            return Err(BrokerError::Replication(format!("submit_change: {e}")));
-        }
+    if !changes.is_empty()
+        && let Err(e) = controller.submit_change(changes).await
+    {
+        return Err(BrokerError::Replication(format!("submit_change: {e}")));
+    }
 
-        encode_resp(version, &response)
-    })
+    encode_resp(version, &response)
 }
 
 fn is_controller_leader(leader: Option<u64>, node_id: u64) -> bool {
@@ -100,7 +138,10 @@ mod tests {
     };
 
     use super::{
-        test_support::{VERSION, decode_response, request, start_broker, wait_for_leader},
+        test_support::{
+            VERSION, decode_response, handle_allowed, own_broker_epoch, request, start_broker,
+            wait_for_leader,
+        },
         *,
     };
 
@@ -133,6 +174,7 @@ mod tests {
         let (broker_handle, _dir) = start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
         wait_for_leader(&broker).await;
+        let broker_epoch = own_broker_epoch(&broker);
         let dir_uuid = uuid::Uuid::from_u128(0xAA);
         let topic_uuid = uuid::Uuid::from_u128(0xBB);
         seed_topic(&broker, topic_uuid).await;
@@ -152,11 +194,11 @@ mod tests {
                 Report::UnknownTopicId => (uuid::Uuid::from_u128(0xCC), 0),
                 Report::ZeroTopicId => (uuid::Uuid::nil(), 0),
             };
-            let bytes = handle(
+            let bytes = handle_allowed(
                 &broker,
                 VERSION,
                 9,
-                &request(dir_uuid, topic_id, partition_index),
+                &request(broker_epoch, dir_uuid, topic_id, partition_index),
             )
             .await
             .expect("AssignReplicasToDirs handler");
@@ -250,9 +292,9 @@ mod tests {
             ])
             .await
             .expect("seed partition");
-        let req = request(dir_uuid, topic_uuid, 0);
+        let req = request(own_broker_epoch(&broker), dir_uuid, topic_uuid, 0);
 
-        let bytes = handle(&broker, VERSION, 9, &req)
+        let bytes = handle_allowed(&broker, VERSION, 9, &req)
             .await
             .expect("AssignReplicasToDirs handler");
         let resp = decode_response(&bytes);
@@ -304,11 +346,16 @@ mod tests {
             .await
             .expect("seed downgraded partition");
 
-        let bytes = handle(
+        let bytes = handle_allowed(
             &broker,
             VERSION,
             9,
-            &request(uuid::Uuid::from_u128(0xAA), topic_uuid, 0),
+            &request(
+                own_broker_epoch(&broker),
+                uuid::Uuid::from_u128(0xAA),
+                topic_uuid,
+                0,
+            ),
         )
         .await
         .expect("AssignReplicasToDirs handler");
@@ -326,6 +373,164 @@ mod tests {
                 .directories
                 .is_empty()
         );
+        broker_handle.shutdown().await;
+    }
+
+    /// Kafka's `ControllerApis.handleAssignReplicasToDirs` checks
+    /// `ClusterAction` on the cluster before the controller applies any
+    /// assignment (#636). A denial answers `CLUSTER_AUTHORIZATION_FAILED` and
+    /// commits nothing.
+    #[tokio::test]
+    async fn handle_needs_cluster_action() {
+        let (broker_handle, _dir) = crate::test_support::start_broker_with(|config| {
+            config.audit_enabled = false;
+            config.authorizer = std::sync::Arc::new(crate::test_support::GrantsInPrincipalName);
+        })
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        wait_for_leader(&broker).await;
+        let broker_epoch = own_broker_epoch(&broker);
+        let dir_uuid = uuid::Uuid::from_u128(0xAA);
+        let topic_uuid = uuid::Uuid::from_u128(0xBB);
+        seed_topic(&broker, topic_uuid).await;
+
+        let cases = [
+            ("none", codes::CLUSTER_AUTHORIZATION_FAILED),
+            (
+                "Cluster:Alter+Cluster:Describe",
+                codes::CLUSTER_AUTHORIZATION_FAILED,
+            ),
+            ("Cluster:ClusterAction", codes::NONE),
+        ];
+        let address = crate::test_support::peer();
+        for (grants, expected_error) in cases {
+            let user = crate::test_support::principal(grants);
+            let ctx = crate::test_support::request_context(&user, &address, "assign-test");
+            let bytes = handle(
+                &broker,
+                VERSION,
+                9,
+                &request(broker_epoch, dir_uuid, topic_uuid, 0),
+                &ctx,
+            )
+            .await
+            .expect("AssignReplicasToDirs handler");
+            let resp = decode_response(&bytes);
+            assert!(resp.error_code == expected_error, "{grants}: {resp:?}");
+        }
+        broker_handle.shutdown().await;
+    }
+
+    /// Kafka's `ClusterControlManager.checkBrokerEpoch`, which
+    /// `ReplicationControlManager.handleAssignReplicasToDirs` runs before it
+    /// looks at the reported rows (#636). A stale epoch or an unregistered id
+    /// is refused and commits nothing; only the current epoch commits the
+    /// assignment.
+    #[tokio::test]
+    async fn handle_fences_stale_and_unregistered_brokers() {
+        let (broker_handle, _dir) = start_broker().await;
+        let broker = broker_handle.broker_arc_for_test();
+        wait_for_leader(&broker).await;
+        let broker_epoch = own_broker_epoch(&broker);
+        let dir_uuid = uuid::Uuid::from_u128(0xAA);
+        let topic_uuid = uuid::Uuid::from_u128(0xBB);
+        seed_topic(&broker, topic_uuid).await;
+
+        // A stale epoch is refused, and the seeded directory slot is
+        // untouched. `+ 1` rather than `- 1`: a registered epoch of 0 would
+        // otherwise turn "stale" into `-1`, which means "not provided" and
+        // matches any registration (see `validation::check_broker_epoch`).
+        let stale = decode_response(
+            &handle_allowed(
+                &broker,
+                VERSION,
+                9,
+                &request(broker_epoch + 1, dir_uuid, topic_uuid, 0),
+            )
+            .await
+            .expect("AssignReplicasToDirs handler"),
+        );
+        assert!(stale.error_code == codes::STALE_BROKER_EPOCH, "{stale:?}");
+        assert!(
+            broker
+                .controller
+                .current_image()
+                .partition("t", 0)
+                .expect("partition")
+                .directories
+                == vec![uuid::Uuid::nil()]
+        );
+
+        // The current epoch succeeds and commits the assignment.
+        let current = decode_response(
+            &handle_allowed(
+                &broker,
+                VERSION,
+                10,
+                &request(broker_epoch, dir_uuid, topic_uuid, 0),
+            )
+            .await
+            .expect("AssignReplicasToDirs handler"),
+        );
+        assert!(current.error_code == codes::NONE, "{current:?}");
+        assert!(
+            broker
+                .controller
+                .current_image()
+                .partition("t", 0)
+                .expect("partition")
+                .directories
+                == vec![dir_uuid]
+        );
+
+        // `-1` ("not provided") also succeeds: it is the epoch
+        // `crate::assign_dirs::build_request` sends for this broker's own
+        // self-reported directory assignments.
+        let unspecified = decode_response(
+            &handle_allowed(&broker, VERSION, 11, &request(-1, dir_uuid, topic_uuid, 0))
+                .await
+                .expect("AssignReplicasToDirs handler"),
+        );
+        assert!(unspecified.error_code == codes::NONE, "{unspecified:?}");
+
+        broker_handle.shutdown().await;
+    }
+
+    /// An id that names no registration is refused with
+    /// `BROKER_ID_NOT_REGISTERED`, the negative wire sentinel included.
+    #[tokio::test]
+    async fn handle_refuses_an_unregistered_broker_id() {
+        use krabka_protocol::{
+            Encode,
+            owned::assign_replicas_to_dirs_request::{
+                AssignReplicasToDirsRequest, DirectoryData as ReqDirData,
+            },
+        };
+
+        let (broker_handle, _dir) = start_broker().await;
+        let broker = broker_handle.broker_arc_for_test();
+        wait_for_leader(&broker).await;
+
+        for broker_id in [99i32, -1] {
+            let req = AssignReplicasToDirsRequest {
+                broker_id,
+                broker_epoch: -1,
+                directories: Vec::<ReqDirData>::new(),
+                ..Default::default()
+            };
+            let mut buf = bytes::BytesMut::with_capacity(req.encoded_len(VERSION));
+            req.encode(&mut buf, VERSION).expect("encode request");
+
+            let resp = decode_response(
+                &handle_allowed(&broker, VERSION, 12, &buf.freeze())
+                    .await
+                    .expect("AssignReplicasToDirs handler"),
+            );
+            assert!(
+                resp.error_code == codes::BROKER_ID_NOT_REGISTERED,
+                "broker_id {broker_id}: {resp:?}"
+            );
+        }
         broker_handle.shutdown().await;
     }
 }
