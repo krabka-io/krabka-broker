@@ -1511,7 +1511,12 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
         PatternType::Literal,
         AclOperation::Create,
     );
-    let literal_a = acl(ResourceType::Topic, "a", PatternType::Literal, AclOperation::Create);
+    let literal_a = acl(
+        ResourceType::Topic,
+        "a",
+        PatternType::Literal,
+        AclOperation::Create,
+    );
     let prefixed_app = acl(
         ResourceType::Topic,
         "app-",
@@ -1528,22 +1533,34 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
     }
 
     let cases = [
-        ("cluster Create authorizes every survivor", Case {
-            acls: vec![cluster_create.clone()],
-            created: &["a", "app-x"],
-        }),
-        ("a literal ACL authorizes only its exact name", Case {
-            acls: vec![literal_a.clone()],
-            created: &["a"],
-        }),
-        ("an app- prefixed ACL authorizes only its prefix", Case {
-            acls: vec![prefixed_app.clone()],
-            created: &["app-x"],
-        }),
-        ("no ACL authorizes nothing", Case {
-            acls: vec![],
-            created: &[],
-        }),
+        (
+            "cluster Create authorizes every survivor",
+            Case {
+                acls: vec![cluster_create.clone()],
+                created: &["a", "app-x"],
+            },
+        ),
+        (
+            "a literal ACL authorizes only its exact name",
+            Case {
+                acls: vec![literal_a.clone()],
+                created: &["a"],
+            },
+        ),
+        (
+            "an app- prefixed ACL authorizes only its prefix",
+            Case {
+                acls: vec![prefixed_app.clone()],
+                created: &["app-x"],
+            },
+        ),
+        (
+            "no ACL authorizes nothing",
+            Case {
+                acls: vec![],
+                created: &[],
+            },
+        ),
     ];
 
     for (label, case) in cases {

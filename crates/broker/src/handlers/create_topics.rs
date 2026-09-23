@@ -19,8 +19,7 @@ use bytes::Bytes;
 use krabka_protocol::{
     Decode,
     owned::{
-        create_topics_request::CreateTopicsRequest,
-        create_topics_response::CreatableTopicResult,
+        create_topics_request::CreateTopicsRequest, create_topics_response::CreatableTopicResult,
     },
     primitives::uuid::Uuid as ProtoUuid,
 };
@@ -602,4 +601,3 @@ fn disclose_created_topic(
         result.topic_config_error_code = codes::TOPIC_AUTHORIZATION_FAILED;
     }
 }
-
