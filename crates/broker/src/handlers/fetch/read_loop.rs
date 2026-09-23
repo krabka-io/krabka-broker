@@ -296,6 +296,7 @@ fn revalidate_epochs(broker: &Broker, pending: &mut [PendingRead]) -> bool {
                 // Kafka's `DelayedFetch.tryComplete` checks the leader again
                 // and does not check the replica id again.
                 assigned_follower: true,
+                log_dir_offline: broker.log_dir_status.is_offline(&part.log_dir.load()),
             },
             &mut fresh,
         ) {
