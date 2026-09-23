@@ -97,8 +97,14 @@ mod tests {
     // watermark is 2.
     const ACTIVATIONS: [i64; 2] = [DELIVERED_MS, PENDING_MS];
 
-    // Put a partition holding both activations under `topic` on this broker.
-    fn register_delivery_partition(
+    // Put a partition holding both activations under `topic` on this broker,
+    // and tell the metadata image this broker leads it. `ListOffsets` now
+    // answers from what it holds locally only when the image agrees this
+    // node leads the partition, so a fixture that skips the image is refused
+    // `NOT_LEADER_OR_FOLLOWER`/`UNKNOWN_TOPIC_OR_PARTITION` before it ever
+    // reaches the delivery-watermark logic under test.
+    async fn register_delivery_partition(
+        broker_handle: &crate::broker::BrokerHandle,
         broker: &Broker,
         logs: &tempfile::TempDir,
         topic: &str,
@@ -114,6 +120,46 @@ mod tests {
             &clock,
         );
         crate::delivery::test_support::register(&broker.partitions, &partition);
+        install_partition_leader_record(broker_handle, topic, broker.config.node_id.get()).await;
+    }
+
+    /// Tell `handle`'s metadata image that `leader` leads `topic`'s single
+    /// partition, so the `ListOffsets` leadership gate admits a request this
+    /// node answers from a locally spawned test fixture rather than from the
+    /// real topic-creation path.
+    async fn install_partition_leader_record(
+        handle: &crate::broker::BrokerHandle,
+        topic: &str,
+        leader: u64,
+    ) {
+        handle
+            .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Topic(
+                krabka_metadata::TopicRecord {
+                    name: topic.to_string(),
+                    topic_id: uuid::Uuid::new_v4(),
+                    partitions: 1,
+                    replication_factor: 1,
+                },
+            ))
+            .await
+            .expect("submit topic record");
+        handle
+            .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(
+                krabka_metadata::PartitionRecord {
+                    topic: topic.to_string(),
+                    partition: 0,
+                    leader: krabka_audit::NodeId(leader),
+                    replicas: vec![krabka_audit::NodeId(leader)],
+                    isr: vec![krabka_audit::NodeId(leader)],
+                    leader_epoch: krabka_metadata::LeaderEpoch(0),
+                    adding_replicas: Vec::new(),
+                    removing_replicas: Vec::new(),
+                    directories: vec![uuid::Uuid::nil()],
+                    partition_epoch: 0,
+                },
+            ))
+            .await
+            .expect("submit partition record");
     }
 
     async fn list_partition(
@@ -168,8 +214,22 @@ mod tests {
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
         let logs = tempfile::tempdir().expect("log root");
-        register_delivery_partition(&broker, &logs, IMMEDIATE, DeliveryPolicy::Immediate);
-        register_delivery_partition(&broker, &logs, SCHEDULED, DeliveryPolicy::Scheduled);
+        register_delivery_partition(
+            &broker_handle,
+            &broker,
+            &logs,
+            IMMEDIATE,
+            DeliveryPolicy::Immediate,
+        )
+        .await;
+        register_delivery_partition(
+            &broker_handle,
+            &broker,
+            &logs,
+            SCHEDULED,
+            DeliveryPolicy::Scheduled,
+        )
+        .await;
         let admin = principal("admin");
         let peer = peer();
         let ctx = test_context(&admin, &peer);
@@ -204,10 +264,13 @@ mod tests {
     #[tokio::test]
     async fn scheduled_latest_recomputes_the_watermark_instead_of_reading_the_mirror() {
         const TOPIC: &str = "list-offsets-delivery-recompute";
-        // Another broker leads this partition, so the broker-wide delivery
-        // scheduler passes over it. The mirror then moves only when the
-        // request path itself publishes a recompute, which is what this test
-        // is about.
+        // Another broker leads this partition at construction, so submitting
+        // the metadata record below promotes it without the controller's
+        // real reconciliation path re-spawning (and so replacing) this test's
+        // hand-built fixture -- which would drop its injected manual clock
+        // for a real one and report every activation already due. Only once
+        // that has settled is the local role flipped directly to this broker,
+        // matching what `ListOffsets` now also requires of the image.
         const OTHER_BROKER: u64 = 7;
 
         let (broker_handle, _dir) =
@@ -226,6 +289,10 @@ mod tests {
             &clock,
         );
         crate::delivery::test_support::register(&broker.partitions, &partition);
+        install_partition_leader_record(&broker_handle, TOPIC, broker.config.node_id.get()).await;
+        partition
+            .install_leader_change(broker.config.node_id.get(), 0)
+            .await;
         let admin = principal("admin");
         let peer = peer();
         let ctx = test_context(&admin, &peer);
