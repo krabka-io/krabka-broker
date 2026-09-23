@@ -16,7 +16,7 @@
 //! exactly as it did before it.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     time::{Duration, Instant},
 };
 
@@ -138,6 +138,7 @@ pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed, image: &Reconc
             subscribed_topic_names: sub,
             subscribed_topic_regex: meta.subscribed_topic_regex,
             compiled_regex: crate::coordinator::unified::consumer_state::CompiledRegex::Absent,
+            regex_denied_topics: HashSet::new(),
             server_assignor: meta.server_assignor,
             rebalance_timeout: Duration::from_millis(
                 u64::try_from(meta.rebalance_timeout_ms.max(0))

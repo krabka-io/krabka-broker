@@ -39,6 +39,7 @@ async fn actor_exits_on_append_error() {
             },
             client_id: "client-a".into(),
             client_host: String::new(),
+            regex_denied_topics: std::collections::HashSet::new(),
             reply: tx,
         })
         .await;

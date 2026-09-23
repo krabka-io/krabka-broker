@@ -76,6 +76,19 @@ pub struct MemberState {
     /// through [`MemberState::set_regex`] and
     /// [`MemberState::sync_regex_cache`].
     pub compiled_regex: CompiledRegex,
+    /// Topic names that currently match `subscribed_topic_regex` but that this
+    /// member's principal may not `Describe`. Kafka's `TopicRegexResolver`
+    /// removes these from the resolved regex before assignment
+    /// (`filterTopicDescribeAuthorizedTopics`); krabka's reconciler does the
+    /// same by skipping every name in this set when it matches the compiled
+    /// regex against the cluster's topics.
+    ///
+    /// The handler recomputes this set on every heartbeat that carries a
+    /// `SubscribedTopicRegex`, from the authorizer decision at request time,
+    /// and it is empty whenever there is no regex subscription. It is not
+    /// persisted; a replayed member starts with an empty set and gets a fresh
+    /// one on its next heartbeat.
+    pub regex_denied_topics: HashSet<String>,
     pub server_assignor: Option<String>,
     pub rebalance_timeout: Duration,
     pub member_epoch: i32,

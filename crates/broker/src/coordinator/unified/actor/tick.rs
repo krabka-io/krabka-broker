@@ -200,6 +200,7 @@ mod tests {
                 host: "h",
             },
             Instant::now(),
+            &std::collections::HashSet::new(),
         );
         // Force the member to look session-expired. 50ms is always within
         // `Instant`'s range (no underflow on any host) yet far exceeds the
@@ -318,6 +319,7 @@ mod tests {
                         },
                         client,
                         earlier,
+                        &std::collections::HashSet::new(),
                     )
                     .response
                 };
@@ -418,6 +420,7 @@ mod tests {
                         client_id: "c".into(),
                         client_host: "h".into(),
                         reply,
+                   regex_denied_topics: std::collections::HashSet::new(),
                     })
                     .await
                     .unwrap();

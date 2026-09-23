@@ -73,6 +73,7 @@ pub(super) async fn handle_actor_message(
             request,
             client_id,
             client_host,
+            regex_denied_topics,
             reply,
         } => {
             handle_actor_heartbeat(
@@ -83,6 +84,7 @@ pub(super) async fn handle_actor_message(
                     id: &client_id,
                     host: &client_host,
                 },
+                &regex_denied_topics,
                 reply,
             )
             .await

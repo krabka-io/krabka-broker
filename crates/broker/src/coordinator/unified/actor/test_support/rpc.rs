@@ -112,6 +112,7 @@ pub async fn consumer_heartbeat(
             },
             client_id: "client-a".into(),
             client_host: String::new(),
+            regex_denied_topics: std::collections::HashSet::new(),
             reply: tx,
         })
         .await

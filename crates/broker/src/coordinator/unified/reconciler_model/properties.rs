@@ -116,6 +116,7 @@ impl Model for ReconModel {
                     &req,
                     ClientIdentity { id: "", host: "" },
                     Instant::now(),
+                    &HashSet::new(),
                 );
                 assert_epoch_monotonic(last, &g);
                 owned.entry(id.clone()).or_default(); // new member owns nothing yet
@@ -133,6 +134,7 @@ impl Model for ReconModel {
                     &req,
                     ClientIdentity { id: "", host: "" },
                     Instant::now(),
+                    &HashSet::new(),
                 );
                 assert_epoch_monotonic(last, &g);
                 owned.remove(&id);
@@ -151,6 +153,7 @@ impl Model for ReconModel {
                     &req,
                     ClientIdentity { id: "", host: "" },
                     Instant::now(),
+                    &HashSet::new(),
                 );
                 assert_epoch_monotonic(last, &g);
                 adv.insert(id, advertised_of(&step));

@@ -6,7 +6,7 @@
 //! async wrappers around it flush the records it produces and drive the
 //! in-place upgrade a heartbeat against a classic group triggers.
 
-use std::time::Instant;
+use std::{collections::HashSet, time::Instant};
 
 use krabka_protocol::owned::{
     consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
@@ -55,6 +55,7 @@ pub(super) async fn handle_actor_heartbeat(
     services: ActorServices<'_>,
     request: ConsumerGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
+    regex_denied_topics: &HashSet<String>,
     reply: oneshot::Sender<ConsumerGroupHeartbeatResponse>,
 ) -> bool {
     if group.is_classic() {
@@ -105,6 +106,7 @@ pub(super) async fn handle_actor_heartbeat(
         services.coordinator,
         &request,
         client,
+        regex_denied_topics,
     )
     .await
     {
@@ -158,6 +160,7 @@ pub(crate) fn step_heartbeat(
     req: &ConsumerGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
     now: Instant,
+    regex_denied_topics: &HashSet<String>,
 ) -> HeartbeatStep {
     // ─── Leave path ──────────────────────────────────────────────
     // Kafka's `consumerGroupHeartbeat`: -1 leaves the group, and -2 is a
@@ -209,7 +212,7 @@ pub(crate) fn step_heartbeat(
 
     // ─── First-join path ─────────────────────────────────────────
     if resolved == Resolved::New {
-        let m = match try_build_member(&member_id, req, client, now) {
+        let m = match try_build_member(&member_id, req, client, now, regex_denied_topics) {
             Ok(m) => m,
             Err(message) => {
                 return HeartbeatStep {
@@ -269,8 +272,16 @@ pub(crate) fn step_heartbeat(
         &request_for_member
     };
     let previous_target_epoch = state.target.epoch;
-    let any_change = match update_member_state(state, config, metadata, req, client, now, cur_epoch)
-    {
+    let any_change = match update_member_state(
+        state,
+        config,
+        metadata,
+        req,
+        client,
+        now,
+        cur_epoch,
+        regex_denied_topics,
+    ) {
         Ok(changed) => changed,
         Err(message) => {
             return HeartbeatStep {
@@ -406,10 +417,11 @@ async fn handle_heartbeat(
     coordinator: &GroupCoordinator,
     req: &ConsumerGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
+    regex_denied_topics: &HashSet<String>,
 ) -> Result<ConsumerGroupHeartbeatResponse, crate::error::BrokerError> {
     let now = Instant::now();
     let now_ms = chrono_now_ms();
-    let step = step_heartbeat(state, config, metadata, req, client, now);
+    let step = step_heartbeat(state, config, metadata, req, client, now, regex_denied_topics);
     flush_pending(state, step.pending, offsets_log, coordinator, now_ms).await?;
     Ok(step.response)
 }

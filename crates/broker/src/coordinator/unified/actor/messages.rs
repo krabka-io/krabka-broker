@@ -35,6 +35,15 @@ pub enum GroupActorMessage {
         request: ConsumerGroupHeartbeatRequest,
         client_id: String,
         client_host: String,
+        /// Names of the topics that currently match `request`'s
+        /// `subscribed_topic_regex` but that this principal may not
+        /// `Describe`, precomputed by the handler's ACL preamble from the
+        /// authorizer and the image at request time. Empty whenever the
+        /// request carries no regex. The actor stores this on the member and
+        /// the reconciler excludes these names from the regex match, so a
+        /// denied topic is never assigned — Kafka's
+        /// `filterTopicDescribeAuthorizedTopics`.
+        regex_denied_topics: std::collections::HashSet<String>,
         reply: oneshot::Sender<ConsumerGroupHeartbeatResponse>,
     },
     /// Validate an `OffsetCommit` against the group's LIVE protocol. The actor

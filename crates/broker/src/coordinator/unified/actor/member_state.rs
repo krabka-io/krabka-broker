@@ -3,7 +3,7 @@
 //! driving the reconciler when the group is dirty.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -68,6 +68,7 @@ pub(super) fn update_member_state(
     client: ClientIdentity<'_>,
     now: Instant,
     cur_epoch: i32,
+    regex_denied_topics: &HashSet<String>,
 ) -> Result<bool, String> {
     // Kafka validates the pattern before it touches member state, and only
     // when the heartbeat carries one that differs from the member's stored
@@ -129,6 +130,17 @@ pub(super) fn update_member_state(
             // pattern actually changes (the client re-sends the same regex
             // every heartbeat while the subscription is stable).
             m.set_regex(req.subscribed_topic_regex.clone());
+            state.dirty = true;
+        }
+        // The handler recomputes the Describe-denied subset of the
+        // regex-matched topics on every heartbeat that carries a pattern (see
+        // `consumer_group_heartbeat::regex_subscription_describe_denied`), because
+        // ACLs and cluster topics can both change between heartbeats. Refresh
+        // it here even when the pattern string itself is unchanged, and mark
+        // the group dirty when the authorized set shrinks or grows so the
+        // reconciler drops or regains those topics.
+        if &m.regex_denied_topics != regex_denied_topics {
+            m.regex_denied_topics.clone_from(regex_denied_topics);
             state.dirty = true;
         }
     }
@@ -206,11 +218,12 @@ pub(super) fn try_build_member(
     req: &ConsumerGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
     now: Instant,
+    regex_denied_topics: &HashSet<String>,
 ) -> Result<MemberState, String> {
     if let Some(pattern) = req.subscribed_topic_regex.as_deref() {
         check_subscribed_topic_regex(pattern)?;
     }
-    Ok(build_member(member_id, req, client, now))
+    Ok(build_member(member_id, req, client, now, regex_denied_topics))
 }
 
 pub(super) fn build_member(
@@ -218,6 +231,7 @@ pub(super) fn build_member(
     req: &ConsumerGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
     now: Instant,
+    regex_denied_topics: &HashSet<String>,
 ) -> MemberState {
     let subs: std::collections::HashSet<String> = req
         .subscribed_topic_names
@@ -234,6 +248,7 @@ pub(super) fn build_member(
         subscribed_topic_names: subs,
         subscribed_topic_regex: req.subscribed_topic_regex.clone(),
         compiled_regex: crate::coordinator::unified::consumer_state::CompiledRegex::Absent,
+        regex_denied_topics: regex_denied_topics.clone(),
         server_assignor: req.server_assignor.clone(),
         rebalance_timeout: Duration::from_millis(
             u64::try_from(req.rebalance_timeout_ms.max(0)).unwrap_or(FALLBACK_REBALANCE_TIMEOUT_MS),
@@ -303,6 +318,7 @@ mod tests {
                     host: "host",
                 },
                 Instant::now(),
+                &HashSet::new(),
             ));
         }
         run_reconcile(&mut state, &config, &metadata);
@@ -327,6 +343,7 @@ mod tests {
                 host: "host",
             },
             Instant::now(),
+            &HashSet::new(),
         );
 
         let mut target_ids: Vec<&str> = step
@@ -366,6 +383,7 @@ mod tests {
                 host: "host",
             },
             Instant::now(),
+            &HashSet::new(),
         ));
         run_reconcile(&mut state, &config, metadata);
         state.advance_member_epoch("m1");
@@ -409,6 +427,7 @@ mod tests {
                     host: "host",
                 },
                 Instant::now(),
+                &HashSet::new(),
             );
 
             check!(
@@ -459,6 +478,7 @@ mod tests {
                 },
                 Instant::now(),
                 member_epoch,
+                &HashSet::new(),
             );
 
             check!(result.is_err(), "{pattern}");
@@ -499,6 +519,7 @@ mod tests {
                 host: "host",
             },
             Instant::now(),
+            &HashSet::new(),
         );
 
         check!(step.response.error_code == 0);
@@ -616,6 +637,7 @@ mod tests {
                 host: "h",
             },
             Instant::now(),
+            &HashSet::new(),
         );
         m.server_assignor = Some("ghost".into());
         state.members.insert("m1".into(), m);
@@ -659,6 +681,7 @@ mod tests {
                 },
                 client_id: "client-a".into(),
                 client_host: String::new(),
+                regex_denied_topics: std::collections::HashSet::new(),
                 reply: tx,
             })
             .await
