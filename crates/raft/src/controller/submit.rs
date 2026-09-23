@@ -115,6 +115,60 @@ impl ControllerHandle {
         translate_submit_change_response(&response, leader)
     }
 
+    /// Forward a raw Kafka-wire request for `api_key`/`version` to the
+    /// current quorum leader's controller listener and return its raw
+    /// response bytes, unmodified.
+    ///
+    /// Used by the broker's `DescribeQuorum` handler: Kafka's `KafkaApis`
+    /// forwards `DescribeQuorum` from the broker listener to the active
+    /// controller unconditionally (`forwardToController`), so a combined or
+    /// controller node that is not itself the leader must reach the leader
+    /// the same way a broker-only observer already does.
+    ///
+    /// # Errors
+    /// `RaftError::NotLeader` when no leader is known or the leader's
+    /// address cannot be resolved, `RaftError::Network` when the dial or
+    /// round trip fails.
+    // cargo-mutants: an I/O-only wrapper with no in-process signal (dial + one
+    // raw request + close, over a `krabka_client_core::Connection` that no
+    // test in this process can build). Covered by a live two-node cluster
+    // test below.
+    #[cfg_attr(test, mutants::skip)]
+    pub async fn forward_raw(
+        &self,
+        api_key: i16,
+        version: i16,
+        body: bytes::Bytes,
+    ) -> Result<bytes::Bytes, RaftError> {
+        let Some(leader) = self.engine.quorum_snapshot().leader_id else {
+            return Err(RaftError::NotLeader {
+                current_leader: None,
+            });
+        };
+        let Some(addr) = self.voter_addr(leader) else {
+            return Err(RaftError::NotLeader {
+                current_leader: Some(leader),
+            });
+        };
+        let opts = krabka_client_core::ConnectionOptions {
+            client_id: self.client_id.clone(),
+            dispatch_queue_capacity: self.client_dispatch_queue_capacity,
+            frame_max: self.client_frame_max,
+            ..krabka_client_core::ConnectionOptions::default()
+        };
+        let conn = self
+            .dialer
+            .dial(leader, &addr, opts)
+            .await
+            .map_err(RaftError::Network)?;
+        let resp = conn
+            .raw_request(api_key, version, body)
+            .await
+            .map_err(RaftError::Network)?;
+        conn.close();
+        Ok(resp)
+    }
+
     /// Resolve a voter's controller listener `<host>:<port>` from the static
     /// voter set's CONTROLLER endpoint. See [`controller_endpoint_addr`].
     fn voter_addr(&self, node_id: NodeId) -> Option<String> {
@@ -594,6 +648,36 @@ mod tests {
         let addr = ctrl.voter_addr(NodeId(1));
         assert2::assert!(addr == Some("127.0.0.1:0".to_string()));
         assert2::assert!(ctrl.voter_addr(NodeId(999)).is_none());
+        ctrl.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn forward_raw_with_no_known_leader_rejects_not_leader() {
+        use tempfile::TempDir;
+
+        use crate::{
+            config::{BootstrapMode, ControllerConfig},
+            controller::Controller,
+        };
+
+        let dir = TempDir::new().unwrap();
+        let cfg = ControllerConfig {
+            bootstrap_mode: BootstrapMode::Join,
+            initial_voters: krabka_metadata::VoterSet::from_voters(std::iter::empty()),
+            ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
+        };
+        let ctrl = Controller::start(cfg).await.expect("join start");
+
+        let err = ctrl
+            .forward_raw(crate::wire::API_KEY_METADATA_FETCH, 0, bytes::Bytes::new())
+            .await
+            .expect_err("no leader is known yet");
+        assert2::assert!(matches!(
+            err,
+            RaftError::NotLeader {
+                current_leader: None
+            }
+        ));
         ctrl.shutdown().await;
     }
 
