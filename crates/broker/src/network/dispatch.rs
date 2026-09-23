@@ -502,6 +502,25 @@ async fn serve_connection_stream<S>(
             );
             break;
         };
+        // KIP scope check (#683): `crate::api_catalog::INTER_BROKER_ONLY_APIS`
+        // is tagged `controller`-only by its request schema, so no Kafka
+        // broker listener ever routes it to a handler.
+        // `ApiVersionManager.isApiEnabled` closes the connection before the
+        // request is even parsed further; krabka does the same on a pure
+        // `ListenerKind::Client` listener, and accepts these keys on
+        // `InterBroker` and `ClientAndInterBroker` alike, where krabka's own
+        // peers send them and the per-handler `ClusterAction` check applies.
+        if broker.config.listener_kind(&spec.name) == crate::api_catalog::ListenerKind::Client
+            && crate::api_catalog::INTER_BROKER_ONLY_APIS.contains(&parsed.api_key)
+        {
+            broker.metrics.record_api_request(parsed.api_key);
+            tracing::warn!(
+                api_key = parsed.api_key,
+                listener = %spec.name,
+                "controller-scoped api key received on a client-reachable listener, closing connection"
+            );
+            break;
+        }
         if !entry.supports_version(parsed.api_version) {
             match send_unsupported_version(&mut framed, &broker, entry, &parsed, &auth, &spec.name)
                 .await
