@@ -415,7 +415,18 @@ mod tests {
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
         let (broker_handle, _dir) = start_broker(Arc::new(authorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        // group.version is deliberately left UNFINALIZED.
+        // `start_broker`'s bootstrap seeds every feature at its release
+        // default for a modern metadata.version, which finalizes
+        // group.version >= 1 automatically. Explicitly downgrade it back to
+        // 0 (unfinalized/disabled) so this test observes the protocol gate.
+        broker
+            .controller
+            .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+                name: krabka_metadata::group_version::GROUP_VERSION_FEATURE.into(),
+                level: 0,
+            })])
+            .await
+            .expect("disable group.version");
         let principal = anonymous_principal();
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
         let ctx = test_context(&principal, &peer);
