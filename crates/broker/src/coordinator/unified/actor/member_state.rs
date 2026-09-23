@@ -531,7 +531,7 @@ mod tests {
                 host: "host",
             },
             Instant::now(),
-            &HashSet::new(),
+            &HashSet::from(["orders-eu".to_string()]),
         );
 
         check!(step.response.error_code == 0);
