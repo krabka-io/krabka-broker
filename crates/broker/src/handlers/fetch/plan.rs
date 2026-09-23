@@ -281,13 +281,32 @@ pub(super) fn apply_epoch_checks(
     if request.last_fetched_epoch < 0 {
         return false;
     }
-    let (found_epoch, end_offset) = {
+    let (log_start_offset, found_epoch, end_offset) = {
         let log = partition.log.lock().expect("log mutex poisoned");
-        log.epoch_checkpoint().epoch_and_offset_for(
+        let log_start_offset = log.log_start_offset();
+        let (found_epoch, end_offset) = log.epoch_checkpoint().epoch_and_offset_for(
             LeaderEpoch(request.last_fetched_epoch),
             log.log_end_offset(),
-        )
+        );
+        (log_start_offset, found_epoch, end_offset)
     };
+    // Kafka's `Partition.readRecords` (roughly lines 1385-1412): a fetch
+    // offset below the log start is OFFSET_OUT_OF_RANGE whatever the epochs
+    // say, checked before any divergence row is built. And an epoch lookup
+    // that could not place `last_fetched_epoch` on this log -- an empty
+    // epoch history, or a `last_fetched_epoch` above every recorded epoch,
+    // either of which leaves `found_epoch` at `UNDEFINED_EPOCH` (-1) -- is
+    // OFFSET_OUT_OF_RANGE too, never a `diverging_epoch` of -1 answered as
+    // `NONE`. A real Kafka client tests `divergingEpoch().epoch() >= 0` and
+    // never sees this row otherwise, so once a row does carry a diverging
+    // epoch, that epoch is always defined.
+    if request.fetch_offset < log_start_offset.0 || found_epoch.0 < 0 || end_offset.0 < 0 {
+        *output = PartitionData {
+            log_start_offset: log_start_offset.0,
+            ..refused_read(partition_index, codes::OFFSET_OUT_OF_RANGE)
+        };
+        return true;
+    }
     if found_epoch >= request.last_fetched_epoch && end_offset.0 >= request.fetch_offset {
         return false;
     }
@@ -540,7 +559,7 @@ pub(super) async fn build_pending_reads(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, sync::Arc};
 
     use assert2::assert;
     use krabka_ids::PartitionIndex;
@@ -749,5 +768,167 @@ mod tests {
             assert!(got == want, "{name}");
         }
         assert!(super::leader_refusal(&image, ("orders", 0), &partition, None) == None);
+    }
+
+    /// Append one single-record batch at `epoch` and return the offset it
+    /// landed at.
+    fn append_at_epoch(log: &mut Log, epoch: i32) -> i64 {
+        use krabka_protocol::records::{Record, RecordBatch};
+
+        let mut batch = RecordBatch {
+            partition_leader_epoch: epoch,
+            records: vec![Record::default()],
+            ..Default::default()
+        };
+        log.append(&mut batch).expect("append").0.0
+    }
+
+    fn epoch_checks_partition(dir: &std::path::Path) -> Arc<crate::partition::Partition> {
+        crate::broker::spawn_partition(
+            "diverge".to_string(),
+            PartitionIndex(0),
+            dir.to_path_buf(),
+            Log::open(dir, LogConfig::default()).expect("open partition log"),
+            crate::log_dir_status::LogDirRegistry::default(),
+            std::sync::Arc::new(crate::producer_state::ProducerState::new()),
+            false,
+        )
+    }
+
+    fn read_role(partition: &crate::partition::Partition) -> super::ReadRole<'_> {
+        super::ReadRole {
+            partition,
+            required_leader: None,
+            assigned_follower: true,
+        }
+    }
+
+    fn effective_partition(
+        last_fetched_epoch: i32,
+        fetch_offset: i64,
+    ) -> super::EffectivePartition {
+        super::EffectivePartition {
+            partition: 0,
+            // -1 skips the KIP-101 fence so the KIP-320 check below it runs.
+            current_leader_epoch: -1,
+            last_fetched_epoch,
+            fetch_offset,
+            log_start_offset: -1,
+            partition_max_bytes: 1024,
+        }
+    }
+
+    /// KIP-320: an epoch lookup that cannot place `last_fetched_epoch` on this
+    /// log -- an empty epoch history, or a `last_fetched_epoch` above every
+    /// recorded epoch -- answers `OFFSET_OUT_OF_RANGE`, never a `diverging_epoch`
+    /// of -1 answered as NONE. A fetch offset below the log start answers
+    /// `OFFSET_OUT_OF_RANGE` too, checked before the epoch lookup runs at all. A
+    /// true divergence still gets its `diverging_epoch` row, and that row's
+    /// epoch is always `>= 0`.
+    #[tokio::test]
+    async fn undefined_epoch_and_below_log_start_answer_offset_out_of_range() {
+        // No records at all: the epoch cache is empty.
+        let empty_dir = tempfile::tempdir().expect("tempdir");
+        let empty = epoch_checks_partition(empty_dir.path());
+
+        // Two epochs of two records each: checkpoint `0 -> 0`, `1 -> 2`, LEO 4.
+        let history_dir = tempfile::tempdir().expect("tempdir");
+        let with_history = epoch_checks_partition(history_dir.path());
+        {
+            let mut log = with_history.log.lock().expect("log mutex poisoned");
+            append_at_epoch(&mut log, 0);
+            append_at_epoch(&mut log, 0);
+            append_at_epoch(&mut log, 1);
+            append_at_epoch(&mut log, 1);
+        }
+
+        // Three epochs of two records each: checkpoint `0 -> 0`, `1 -> 2`,
+        // `2 -> 4`, LEO 6. The log start then moves to 5, above the epoch-0
+        // boundary (2) that a `last_fetched_epoch = 0` fetch would otherwise
+        // diverge to.
+        let trimmed_dir = tempfile::tempdir().expect("tempdir");
+        let trimmed = epoch_checks_partition(trimmed_dir.path());
+        {
+            let mut log = trimmed.log.lock().expect("log mutex poisoned");
+            append_at_epoch(&mut log, 0);
+            append_at_epoch(&mut log, 0);
+            append_at_epoch(&mut log, 1);
+            append_at_epoch(&mut log, 1);
+            append_at_epoch(&mut log, 2);
+            append_at_epoch(&mut log, 2);
+            log.set_log_start_offset(super::Offset(5))
+                .expect("move log start");
+        }
+
+        for (name, partition, last_fetched_epoch, fetch_offset, want_final, want_out) in [
+            (
+                "empty epoch history",
+                Arc::clone(&empty),
+                0,
+                0,
+                true,
+                super::PartitionData {
+                    log_start_offset: 0,
+                    ..super::refused_read(0, crate::codes::OFFSET_OUT_OF_RANGE)
+                },
+            ),
+            (
+                "last_fetched_epoch above every recorded epoch",
+                Arc::clone(&with_history),
+                5,
+                4,
+                true,
+                super::PartitionData {
+                    log_start_offset: 0,
+                    ..super::refused_read(0, crate::codes::OFFSET_OUT_OF_RANGE)
+                },
+            ),
+            (
+                "fetch offset below the log start, even though the epoch\
+                 history alone would diverge",
+                Arc::clone(&trimmed),
+                0,
+                4,
+                true,
+                super::PartitionData {
+                    log_start_offset: 5,
+                    ..super::refused_read(0, crate::codes::OFFSET_OUT_OF_RANGE)
+                },
+            ),
+            (
+                "a true divergence still answers a diverging_epoch with epoch >= 0",
+                Arc::clone(&with_history),
+                0,
+                4,
+                true,
+                super::PartitionData {
+                    partition_index: 0,
+                    error_code: crate::codes::NONE,
+                    diverging_epoch: super::EpochEndOffset {
+                        epoch: 0,
+                        end_offset: 2,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let request = effective_partition(last_fetched_epoch, fetch_offset);
+            let mut output = super::PartitionData {
+                partition_index: 0,
+                ..Default::default()
+            };
+            let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+            let final_ = super::apply_epoch_checks(
+                &image,
+                "diverge",
+                0,
+                &request,
+                read_role(&partition),
+                &mut output,
+            );
+            assert!(final_ == want_final, "{name}: final");
+            assert!(output == want_out, "{name}: got {output:?}");
+        }
     }
 }
