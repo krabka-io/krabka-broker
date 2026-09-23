@@ -7,9 +7,14 @@
 
 use std::time::Duration;
 
+use bytes::BytesMut;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use krabka_protocol::{
-    owned::get_replica_log_info_request::{GetReplicaLogInfoRequest, TopicPartitions},
+    Decode, Encode,
+    owned::{
+        get_replica_log_info_request::{self, GetReplicaLogInfoRequest, TopicPartitions},
+        get_replica_log_info_response::GetReplicaLogInfoResponse,
+    },
     primitives::uuid::Uuid as WireUuid,
 };
 use krabka_raft::NodeId;
@@ -32,6 +37,16 @@ pub(super) struct ReplicaQuery {
     pub(super) server_name: String,
 }
 
+/// This sends `GetReplicaLogInfo` through
+/// [`krabka_client_core::Connection::raw_request`] rather than the typed
+/// `send`, for the same reason `isr_maintenance::alter_partition` sends
+/// `AlterPartition` that way: `send` negotiates its version off the peer's
+/// advertised `ApiVersions` table, and since #843 that table withholds every
+/// [`crate::api_catalog::INTER_BROKER_ONLY_APIS`] key -- `GetReplicaLogInfo`
+/// included -- from any listener a client can reach, which is the only
+/// listener the default single-listener broker has. `raw_request` sends at
+/// an explicit version instead, sound here only because `query.host:port` is
+/// always another krabka broker of this same build.
 pub(super) async fn query_replica(
     client: &InterBrokerClient,
     query: ReplicaQuery,
@@ -59,7 +74,18 @@ pub(super) async fn query_replica(
         }],
         ..Default::default()
     };
-    let resp = conn.send(req).await.ok()?;
+    let version = get_replica_log_info_request::MAX_VERSION;
+    let mut body = BytesMut::with_capacity(req.encoded_len(version));
+    req.encode(&mut body, version).ok()?;
+    let resp_body = conn
+        .raw_request(
+            get_replica_log_info_request::API_KEY,
+            version,
+            body.freeze(),
+        )
+        .await
+        .ok()?;
+    let resp = GetReplicaLogInfoResponse::decode(&mut resp_body.as_ref(), version).ok()?;
     for t in &resp.topic_partition_log_info_list {
         for pli in &t.partition_log_info {
             if pli.partition == query.partition && pli.error_code == 0 {

@@ -6,7 +6,14 @@
 
 use std::sync::Arc;
 
-use krabka_protocol::owned::alter_partition_request::AlterPartitionRequest;
+use bytes::BytesMut;
+use krabka_protocol::{
+    Decode, Encode,
+    owned::{
+        alter_partition_request::{self, AlterPartitionRequest},
+        alter_partition_response::AlterPartitionResponse,
+    },
+};
 use krabka_raft::NodeId;
 use tracing::{debug, warn};
 
@@ -116,6 +123,23 @@ enum AlterPartitionSendError {
     Transport(String),
 }
 
+/// Send one `AlterPartition` to `host:port` and decode its response.
+///
+/// This goes out through [`krabka_client_core::Connection::raw_request`]
+/// rather than the typed [`krabka_client_core::Connection::send`], the same
+/// way [`crate::auto_join::rpc`] already sends `UpdateRaftVoter`: `send`
+/// negotiates its version from the peer's advertised `ApiVersions` table, and
+/// since #843 that table withholds every
+/// [`crate::api_catalog::INTER_BROKER_ONLY_APIS`] key -- `AlterPartition`
+/// included -- from any listener a client can reach, which on the default
+/// single-listener broker is the only listener there is
+/// (`ListenerKind::ClientAndInterBroker`). Negotiation off that table always
+/// fails with `IncompatibleVersion`, even though the peer's dispatch registry
+/// accepts and answers the request. `raw_request` skips negotiation and sends
+/// at an explicitly chosen version instead, which is sound here only because
+/// both ends of this connection are the same krabka broker binary: the target
+/// is always running `alter_partition_request::MAX_VERSION`, never an
+/// independent Kafka client that would need to discover it first.
 async fn send_alter_partition_to(
     broker_id: i32,
     host: &str,
@@ -139,10 +163,16 @@ async fn send_alter_partition_to(
         .await
         .map_err(|e| AlterPartitionSendError::Transport(format!("connect: {e}")))?;
 
-    let resp = client
-        .send(req)
+    let version = alter_partition_request::MAX_VERSION;
+    let mut body = BytesMut::with_capacity(req.encoded_len(version));
+    req.encode(&mut body, version)
+        .map_err(|e| AlterPartitionSendError::Transport(format!("encode: {e}")))?;
+    let resp_body = client
+        .raw_request(alter_partition_request::API_KEY, version, body.freeze())
         .await
         .map_err(|e| AlterPartitionSendError::Transport(format!("send: {e}")))?;
+    let resp = AlterPartitionResponse::decode(&mut resp_body.as_ref(), version)
+        .map_err(|e| AlterPartitionSendError::Transport(format!("decode: {e}")))?;
     let global_err = resp.error_code;
     let part_err = resp
         .topics
@@ -177,7 +207,7 @@ mod tests {
     use krabka_metadata::MetadataImage;
 
     use super::*;
-    use crate::isr_maintenance::test_support::fake_source;
+    use crate::{broker::Broker, isr_maintenance::test_support::fake_source};
 
     fn plaintext_client() -> Arc<crate::network::client::InterBrokerClient> {
         Arc::new(crate::network::client::InterBrokerClient::new(None, None))
@@ -225,6 +255,56 @@ mod tests {
         .expect_err("closed local port should fail as transport");
 
         assert2::assert!(matches!(err, AlterPartitionSendError::Transport(_)));
+    }
+
+    /// #843/#1098 regression: a default single-listener broker withholds
+    /// `AlterPartition` from `ApiVersions` on its one listener
+    /// (`ListenerKind::ClientAndInterBroker`), because that listener is also
+    /// what a client reaches. Before `send_alter_partition_to` moved off
+    /// negotiated `send` and onto `raw_request`, that withholding broke ISR
+    /// shrink/expand outright: `Connection::send::<AlterPartitionRequest>`
+    /// negotiates its version against the advertised table, finds no entry,
+    /// and fails every proposal with `IncompatibleVersion` before the peer's
+    /// dispatch registry -- which still accepts and answers the request --
+    /// ever sees it. This starts a real broker with the production default
+    /// (no declared `listeners`) and drives `send_alter_partition_to` at its
+    /// bound address, asserting the RPC actually completes: whatever the
+    /// single-node broker answers, it must not be
+    /// `AlterPartitionSendError::Transport`, which is what a negotiation
+    /// failure (or any other connect/codec fault) surfaces as.
+    #[tokio::test]
+    async fn send_alter_partition_to_completes_on_the_default_single_listener_broker() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        assert2::assert!(config.effective_listeners().len() == 1);
+        assert2::assert!(config.inter_broker_listener_name == "PLAINTEXT");
+        assert2::assert!(
+            config.listener_kind("PLAINTEXT")
+                == crate::api_catalog::ListenerKind::ClientAndInterBroker
+        );
+
+        let handle = Broker::start(config).await.expect("start broker");
+        let addr = handle.listen_addr();
+
+        let client = plaintext_client();
+        let req = AlterPartitionRequest::default();
+        let result = send_alter_partition_to(
+            1,
+            &addr.ip().to_string(),
+            addr.port(),
+            req,
+            &client,
+            krabka_security::ListenerProtocol::Plaintext,
+            "localhost",
+        )
+        .await;
+
+        assert2::assert!(
+            !matches!(result, Err(AlterPartitionSendError::Transport(_))),
+            "AlterPartition must negotiate and dispatch on the default listener: {result:?}"
+        );
+
+        handle.shutdown().await;
     }
 
     #[test]
