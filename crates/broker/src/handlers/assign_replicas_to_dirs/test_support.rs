@@ -18,14 +18,24 @@ use krabka_protocol::{
     primitives::uuid::Uuid as ProtocolUuid,
 };
 
-use crate::broker::Broker;
+use crate::{broker::Broker, error::BrokerError, handlers::assign_replicas_to_dirs::handle};
 
 pub(super) const VERSION: i16 = 0;
 
-pub(super) fn request(dir_uuid: uuid::Uuid, topic_uuid: uuid::Uuid, partition_index: i32) -> Bytes {
+/// Builds a request reported by broker 1 at `broker_epoch`. Most tests pass
+/// the broker's actual registered epoch (see
+/// [`crate::test_support::broker_epoch`]-style lookups on the started
+/// broker's image); the authorization and epoch tests pass a wrong one on
+/// purpose.
+pub(super) fn request(
+    broker_epoch: i64,
+    dir_uuid: uuid::Uuid,
+    topic_uuid: uuid::Uuid,
+    partition_index: i32,
+) -> Bytes {
     let req = AssignReplicasToDirsRequest {
         broker_id: 1,
-        broker_epoch: -1,
+        broker_epoch,
         directories: vec![ReqDirData {
             id: ProtocolUuid(dir_uuid.into_bytes()),
             topics: vec![ReqTopicData {
@@ -52,6 +62,30 @@ pub(super) fn decode_response(bytes: &Bytes) -> AssignReplicasToDirsResponse {
 
 pub(super) async fn start_broker() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
     crate::test_support::start_broker_with(|_cfg| {}).await
+}
+
+/// The epoch broker 1 (the started broker itself) registered with. A request
+/// naming this epoch is the current, non-stale one.
+pub(super) fn own_broker_epoch(broker: &Broker) -> i64 {
+    broker
+        .controller
+        .current_image()
+        .broker_epoch(broker.config.node_id)
+        .expect("broker 1 is self-registered")
+}
+
+/// Dispatches `body` as an `ANONYMOUS` principal that the default
+/// `AllowAllAuthorizer` admits.
+pub(super) async fn handle_allowed(
+    broker: &Broker,
+    version: i16,
+    correlation_id: i32,
+    body: &[u8],
+) -> Result<Bytes, BrokerError> {
+    let user = crate::test_support::principal("ANONYMOUS");
+    let address = crate::test_support::peer();
+    let ctx = crate::test_support::request_context(&user, &address, "assign-replicas-test");
+    handle(broker, version, correlation_id, body, &ctx).await
 }
 
 pub(super) async fn wait_for_leader(broker: &Broker) {

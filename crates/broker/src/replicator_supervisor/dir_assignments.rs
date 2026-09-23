@@ -104,7 +104,12 @@ impl ReplicatorSupervisor {
         if wire.is_empty() {
             return;
         }
-        let req = crate::assign_dirs::build_request(self.broker_id, &wire);
+        let broker_epoch = image
+            .broker_epoch(krabka_raft::NodeId(
+                u64::try_from(self.broker_id).unwrap_or(u64::MAX),
+            ))
+            .unwrap_or(crate::assign_dirs::UNKNOWN_BROKER_EPOCH);
+        let req = crate::assign_dirs::build_request(self.broker_id, broker_epoch, &wire);
         match self
             .assign_dirs_reporter
             .send(&self.controller, &self.client_id, req)
