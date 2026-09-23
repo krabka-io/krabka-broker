@@ -230,3 +230,24 @@ impl BrokerMetrics {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use assert2::check;
+    use prometheus_client::registry::Registry;
+
+    use crate::metrics::BrokerMetrics;
+
+    #[test]
+    fn register_group_9_registers_cluster_and_quorum_metrics() {
+        let m = BrokerMetrics::new();
+        let mut r = Registry::default();
+        m.active_brokers.set(42);
+        m.register_group_9(&mut r);
+
+        let mut buf = String::new();
+        prometheus_client::encoding::text::encode(&mut buf, &r).unwrap();
+        check!(buf.contains("active_brokers"));
+        check!(buf.contains("42"));
+    }
+}
