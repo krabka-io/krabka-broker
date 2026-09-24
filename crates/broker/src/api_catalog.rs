@@ -1034,6 +1034,18 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "Kafka stamps each target assignment with the time it was computed, for its own assignment metrics. krabka does not measure assignment latency from the log, so it writes the tagged field's default of 0, which is what Kafka writes when it has no timestamp to record.",
     },
     KipAnnotation {
+        key: "KIP-1276",
+        claim: "CIDR-range ACL hosts (10.0.0.0/8, 2001:db8::/32) in CreateAcls and host matching",
+        status: KipStatus::Implemented,
+        module: "crates/authz/src/cidr.rs",
+        tests: &[
+            "crates/authz/src/cidr.rs",
+            "crates/authz/src/simple/matching.rs",
+            "crates/broker/src/handlers/create_acls/validate.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
         key: "KIP-1319",
         claim: "Transactions v2 producer-id rotation and verification on Produce",
         status: KipStatus::Implemented,
