@@ -7,7 +7,7 @@
 //! operation-implication table, which is why it lives beside them rather than
 //! in the decision loop.
 
-use krabka_metadata::{AclEntry, AclOperation, PatternType, ResourceType};
+use krabka_metadata::{AclEntry, AclOperation, PatternType, PermissionType, ResourceType};
 use krabka_verified::{
     AclOperationKind, AclPatternKind, acl_identity_match, acl_operation_match, acl_resource_match,
 };
@@ -36,11 +36,11 @@ pub(super) fn matches_resource(entry: &AclEntry, resource_type: ResourceType, na
     )
 }
 
-/// Returns true when an ACL with the `stored` operation grants access for an
-/// authorization request with the `requested` operation.
+/// Returns true when an ACL with the `stored` operation and `permission`
+/// grants access for an authorization request with the `requested` operation.
 ///
 /// Beyond an exact match and the `All` wildcard, this function applies Kafka's
-/// operation-implication table:
+/// operation-implication table, which only widens what an ALLOW ACL matches:
 ///
 /// | stored          | implies                |
 /// |-----------------|------------------------|
@@ -51,9 +51,19 @@ pub(super) fn matches_resource(entry: &AclEntry, resource_type: ResourceType, na
 /// | `AlterConfigs`  | `DescribeConfigs`      |
 /// | All             | Everything             |
 ///
-/// The table is one-way: Describe does NOT imply Read, and so on.
-pub(super) fn matches_operation(stored: AclOperation, requested: AclOperation) -> bool {
-    acl_operation_match(operation_kind(stored), operation_kind(requested))
+/// The table is one-way: Describe does NOT imply Read, and so on. A DENY ACL
+/// never gains the implied operations -- a DENY `Read` ACL does not also deny
+/// `Describe`.
+pub(super) fn matches_operation(
+    stored: AclOperation,
+    requested: AclOperation,
+    permission: PermissionType,
+) -> bool {
+    acl_operation_match(
+        operation_kind(stored),
+        operation_kind(requested),
+        permission == PermissionType::Allow,
+    )
 }
 
 fn operation_kind(operation: AclOperation) -> AclOperationKind {
@@ -118,10 +128,41 @@ mod tests {
         ];
         for stored in operations {
             for requested in operations {
-                let expected =
-                    stored == requested || stored == All || arrows.contains(&(stored, requested));
-                assert2::assert!(matches_operation(stored, requested) == expected);
+                for permission in [PermissionType::Allow, PermissionType::Deny] {
+                    let expected = stored == requested
+                        || stored == All
+                        || (permission == PermissionType::Allow
+                            && arrows.contains(&(stored, requested)));
+                    assert2::assert!(matches_operation(stored, requested, permission) == expected);
+                }
             }
+        }
+    }
+
+    /// #649: the operation-implication table (e.g. Read implies Describe)
+    /// must apply only to ALLOW ACLs. A DENY Read ACL must not also deny
+    /// Describe.
+    #[test]
+    fn implication_table_applies_only_to_allow_acls() {
+        use AclOperation::{Alter, AlterConfigs, Delete, Describe, DescribeConfigs, Read, Write};
+
+        let cases = [
+            (PermissionType::Allow, Read, Describe, true),
+            (PermissionType::Allow, Write, Describe, true),
+            (PermissionType::Allow, Delete, Describe, true),
+            (PermissionType::Allow, Alter, Describe, true),
+            (PermissionType::Allow, AlterConfigs, DescribeConfigs, true),
+            (PermissionType::Deny, Read, Describe, false),
+            (PermissionType::Deny, Write, Describe, false),
+            (PermissionType::Deny, Delete, Describe, false),
+            (PermissionType::Deny, Alter, Describe, false),
+            (PermissionType::Deny, AlterConfigs, DescribeConfigs, false),
+        ];
+        for (permission, stored, requested, expected) in cases {
+            assert2::assert!(
+                matches_operation(stored, requested, permission) == expected,
+                "permission={permission:?} stored={stored:?} requested={requested:?}"
+            );
         }
     }
 
