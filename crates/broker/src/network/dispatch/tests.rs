@@ -172,6 +172,74 @@ async fn raft_voter_registry_routes_to_real_handlers() {
     handle.shutdown().await;
 }
 
+/// #683: every key in `INTER_BROKER_ONLY_APIS` is scoped exactly the way
+/// Kafka scopes a `"listeners": ["controller"]` request schema -- closed, no
+/// response frame -- on any listener a client can reach. Table-driven over
+/// every key, each sent at its dispatched maximum version; the body content
+/// does not matter, because the scope check runs before any body is decoded.
+#[tokio::test]
+async fn inter_broker_only_apis_close_the_connection_on_a_client_listener() {
+    let registry = crate::handlers::registry::build_registry();
+    let dispatched = crate::api_catalog::dispatched_apis();
+
+    for &api_key in crate::api_catalog::INTER_BROKER_ONLY_APIS {
+        let version = dispatched
+            .iter()
+            .find(|a| a.api_key == api_key)
+            .unwrap_or_else(|| panic!("api_catalog carries api_key {api_key}"))
+            .max_version;
+        let entry = registry
+            .get(api_key)
+            .unwrap_or_else(|| panic!("registry carries api_key {api_key}"));
+
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        let handle = Broker::start(cfg).await.expect("start broker");
+        let broker = handle.broker_arc_for_test();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let addr = listener.local_addr().expect("listener addr");
+        let server = tokio::spawn(async move {
+            let (stream, peer) = listener.accept().await.expect("accept");
+            let spec = crate::config::ListenerSpec {
+                // Not `PLAINTEXT`, the `inter_broker_listener_name`
+                // `BrokerConfig::for_tests` defaults to, so this is a pure
+                // `ListenerKind::Client` listener.
+                name: "EXTERNAL".to_string(),
+                bind_addr: addr,
+                advertised: "127.0.0.1:9092".to_string(),
+                protocol: krabka_security::ListenerProtocol::Plaintext,
+                tls_config: None,
+                sasl_mechanisms: None,
+                principal_mapper: crate::SslPrincipalMapper::default(),
+            };
+            serve_connection_stream(broker, stream, spec, peer, None).await;
+        });
+
+        let client = TcpStream::connect(addr).await.expect("connect");
+        let mut framed = codec::frame(client, DEFAULT_MAX_FRAME_BYTES);
+        let frame = request_frame(
+            api_key,
+            version,
+            7,
+            None,
+            entry.body_flexible(version).then_some(0),
+            &[],
+        );
+        framed.send(frame.freeze()).await.expect("send request");
+        check!(
+            framed.next().await.is_none(),
+            "api_key {api_key} on a client listener must carry no response frame"
+        );
+        server
+            .await
+            .expect("serve loop joins after closing on a scoped api_key");
+        handle.shutdown().await;
+    }
+}
+
 #[tokio::test]
 async fn unsupported_versions_return_typed_errors_before_dispatch() {
     use krabka_protocol::{Decode, owned::api_versions_response::ApiVersionsResponse};
@@ -259,13 +327,14 @@ async fn unsupported_versions_return_typed_errors_before_dispatch() {
             check!(decoded.error_code == codes::UNSUPPORTED_VERSION);
             // The `PLAINTEXT` listener above is the only one this broker
             // binds, so it is also the one `inter_broker_listener_name` names
-            // and it advertises the inter-broker table. The point here is that
+            // and it carries client and inter-broker traffic together
+            // (`ListenerKind::ClientAndInterBroker`). The point here is that
             // the rejected-version path is scoped to the same listener the
             // accepted path is, not which table that turns out to be.
             check!(
                 decoded.api_keys
                     == crate::api_catalog::supported_apis(
-                        crate::api_catalog::ListenerKind::InterBroker,
+                        crate::api_catalog::ListenerKind::ClientAndInterBroker,
                         crate::api_catalog::ClientMetricsReceiver::Absent,
                     )
             );
