@@ -29,6 +29,7 @@ pub(super) const PINNED_UNIQUE_STATES_INFLIGHT_ONE: usize = 9_694;
 pub(super) const PINNED_UNIQUE_STATES_FAILOVER: usize = 689;
 pub(super) const PINNED_UNIQUE_STATES_DEFERRAL: usize = 1_166;
 pub(super) const PINNED_UNIQUE_STATES_DEFERRAL_WIDE: usize = 7_964;
+pub(super) const PINNED_UNIQUE_STATES_LOG_START_ADVANCE: usize = 8_158;
 
 /// Run one bounded config to completion. Assert that the run was exhaustive,
 /// that is, that no cap truncated it, and that all properties hold.
