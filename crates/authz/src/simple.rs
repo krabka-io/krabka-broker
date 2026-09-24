@@ -9,9 +9,10 @@
 //! behavior matches Kafka's `StandardAuthorizer` once an operator explicitly
 //! configures an authorizer.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, net::SocketAddr};
 
-use krabka_metadata::PermissionType;
+use krabka_metadata::{AclOperation, PermissionType, ResourceType};
+use krabka_security::Principal;
 use krabka_verified::{AclDecision, acl_decision};
 
 mod matching;
@@ -99,5 +100,68 @@ impl Authorizer for SimpleAclAuthorizer {
         };
         span.record("decision", label);
         result
+    }
+
+    /// Scans every stored entry of `resource_type` for an ALLOW ACL, matching
+    /// `principal`, `host`, and `operation`, that no DENY covers.
+    ///
+    /// For each such ALLOW entry, the resource name its own pattern names is
+    /// a resource that grant covers -- a literal names itself, and a prefixed
+    /// pattern's own prefix is a name it covers by definition. Running the
+    /// ordinary [`Self::authorize`] decision against that one candidate name
+    /// reuses its ordering (super-user bypass, deny-wins) and its resource
+    /// matching, so a DENY that reaches that candidate -- an exact-pattern
+    /// DENY, a DENY on the `*` wildcard, or a broader PREFIXED DENY -- is
+    /// exactly the DENY that would also apply if a real resource used that
+    /// name. This is Kafka's `AclAuthorizer.authorizeByResourceType`: an ALLOW
+    /// grants only when some concrete resource it covers survives that scan.
+    #[tracing::instrument(
+        level = "debug",
+        skip_all,
+        fields(
+            principal = %principal.name,
+            resource_type = ?resource_type,
+            operation = ?operation,
+            host = %jdk_host_address(host.ip()),
+            decision = tracing::field::Empty,
+        )
+    )]
+    fn authorize_by_resource_type(
+        &self,
+        source: &dyn AclSource,
+        principal: &Principal,
+        host: &SocketAddr,
+        resource_type: ResourceType,
+        operation: AclOperation,
+    ) -> AuthorizationResult {
+        let span = tracing::Span::current();
+        if self.super_users.contains(&principal.name) {
+            span.record("decision", "allow-superuser");
+            return AuthorizationResult::Allow;
+        }
+        let user_pattern = format!("User:{}", principal.name);
+        let host_str = jdk_host_address(host.ip());
+        for entry in source.acls_of_type(resource_type) {
+            if entry.permission_type != PermissionType::Allow
+                || !matches_principal(entry, &user_pattern)
+                || !matches_host(entry, &host_str)
+                || !matches_operation(entry.operation, operation)
+            {
+                continue;
+            }
+            let candidate = AuthorizationRequest {
+                principal,
+                host,
+                resource_type,
+                resource_name: entry.resource_name.as_str(),
+                operation,
+            };
+            if self.authorize(source, &candidate) == AuthorizationResult::Allow {
+                span.record("decision", "allow-acl");
+                return AuthorizationResult::Allow;
+            }
+        }
+        span.record("decision", "deny-default");
+        AuthorizationResult::Deny
     }
 }

@@ -20,6 +20,13 @@ pub trait AclSource {
         rt: ResourceType,
         name: &'a str,
     ) -> Box<dyn Iterator<Item = &'a AclEntry> + 'a>;
+
+    /// Every stored entry of resource type `rt`, regardless of resource name.
+    ///
+    /// [`crate::SimpleAclAuthorizer`]'s `authorize_by_resource_type` scans
+    /// this set for an ALLOW grant that no DENY covers, so unlike
+    /// `matching_acls` it is not scoped to one candidate resource name.
+    fn acls_of_type<'a>(&'a self, rt: ResourceType) -> Box<dyn Iterator<Item = &'a AclEntry> + 'a>;
 }
 
 // The broker's MetadataImage already implements the exact matching semantics;
@@ -34,5 +41,11 @@ impl AclSource for krabka_metadata::MetadataImage {
         Box::new(krabka_metadata::MetadataImage::matching_acls(
             self, rt, name,
         ))
+    }
+
+    fn acls_of_type<'a>(&'a self, rt: ResourceType) -> Box<dyn Iterator<Item = &'a AclEntry> + 'a> {
+        Box::new(
+            krabka_metadata::MetadataImage::all_acls(self).filter(move |e| e.resource_type == rt),
+        )
     }
 }

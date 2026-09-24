@@ -5,13 +5,19 @@
 //! the transactional id and the cluster has finalised `transaction.version` 3.
 //! Keeping them out of the module root leaves the request flow readable.
 
+use std::{collections::HashSet, sync::Arc};
+
 use assert2::assert;
-use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
+use krabka_metadata::{
+    AclEntry, AclOperation, FeatureLevelRecord, MetadataRecord, PatternType, PermissionType,
+    ResourceType,
+};
 use krabka_units::secs;
 
 use super::*;
 use crate::{
-    test_support::{peer, principal, start_broker_with},
+    authorizer::SimpleAclAuthorizer,
+    test_support::{peer, principal, start_broker_with, start_broker_with_authorizer_no_audit},
     txn::state::TxnState,
 };
 
@@ -597,4 +603,318 @@ async fn half_an_identity_is_invalid_and_an_old_client_gets_invalid_producer_epo
     }
     assert!(actual == expected);
     broker_handle.shutdown().await;
+}
+
+/// A stripped-down [`AclEntry`] builder for the ACL-preamble table below: only
+/// the resource type/name/pattern, operation, and Allow/Deny vary per row.
+fn acl(
+    permission_type: PermissionType,
+    resource_type: ResourceType,
+    resource_name: &str,
+    pattern_type: PatternType,
+    operation: AclOperation,
+) -> AclEntry {
+    AclEntry {
+        resource_type,
+        resource_name: resource_name.into(),
+        pattern_type,
+        principal: "User:alice".into(),
+        host: "*".into(),
+        operation,
+        permission_type,
+    }
+}
+
+/// #685: the null-transactional-id and empty-transactional-id branches of the
+/// `InitProducerId` ACL preamble, matching Kafka's
+/// `KafkaApis.handleInitProducerIdRequest`.
+///
+/// Neither branch reaches the transaction coordinator (null allocates
+/// directly; empty is rejected before dispatch), so each case starts its own
+/// broker with only the authorizer configured, with no coordinator bring-up.
+#[tokio::test]
+async fn acl_preamble_for_null_and_empty_transactional_id() {
+    struct Case {
+        label: &'static str,
+        transactional_id: Option<&'static str>,
+        acls: Vec<AclEntry>,
+        expected_error: i16,
+    }
+
+    let cases = [
+        Case {
+            label: "null id: cluster IdempotentWrite allows",
+            transactional_id: None,
+            acls: vec![acl(
+                PermissionType::Allow,
+                ResourceType::Cluster,
+                crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+                PatternType::Literal,
+                AclOperation::IdempotentWrite,
+            )],
+            expected_error: codes::NONE,
+        },
+        Case {
+            label: "null id: literal Write on one topic allows",
+            transactional_id: None,
+            acls: vec![acl(
+                PermissionType::Allow,
+                ResourceType::Topic,
+                "orders",
+                PatternType::Literal,
+                AclOperation::Write,
+            )],
+            expected_error: codes::NONE,
+        },
+        Case {
+            label: "null id: prefixed Write on topics allows",
+            transactional_id: None,
+            acls: vec![acl(
+                PermissionType::Allow,
+                ResourceType::Topic,
+                "ord",
+                PatternType::Prefixed,
+                AclOperation::Write,
+            )],
+            expected_error: codes::NONE,
+        },
+        Case {
+            label: "null id: topic Write fully covered by a Deny on Topic \"*\" denies",
+            transactional_id: None,
+            acls: vec![
+                acl(
+                    PermissionType::Allow,
+                    ResourceType::Topic,
+                    "orders",
+                    PatternType::Literal,
+                    AclOperation::Write,
+                ),
+                acl(
+                    PermissionType::Deny,
+                    ResourceType::Topic,
+                    "*",
+                    PatternType::Literal,
+                    AclOperation::Write,
+                ),
+            ],
+            expected_error: codes::CLUSTER_AUTHORIZATION_FAILED,
+        },
+        Case {
+            label: "null id: Read (not Write) on a topic denies",
+            transactional_id: None,
+            acls: vec![acl(
+                PermissionType::Allow,
+                ResourceType::Topic,
+                "orders",
+                PatternType::Literal,
+                AclOperation::Read,
+            )],
+            expected_error: codes::CLUSTER_AUTHORIZATION_FAILED,
+        },
+        Case {
+            label: "empty id: no ACLs denies with TRANSACTIONAL_ID_AUTHORIZATION_FAILED",
+            transactional_id: Some(""),
+            acls: vec![],
+            expected_error: codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
+        },
+        Case {
+            label: "empty id: Write on TransactionalId \"*\" passes the ACL gate, \
+                     but the coordinator still rejects the empty id",
+            transactional_id: Some(""),
+            acls: vec![acl(
+                PermissionType::Allow,
+                ResourceType::TransactionalId,
+                "*",
+                PatternType::Literal,
+                AclOperation::Write,
+            )],
+            expected_error: codes::INVALID_REQUEST,
+        },
+    ];
+
+    let mut expected = Vec::new();
+    let mut actual = Vec::new();
+    for case in cases {
+        let (broker_handle, _dir) = start_broker_with_authorizer_no_audit(Arc::new(
+            SimpleAclAuthorizer::new(HashSet::new()),
+        ))
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        if !case.acls.is_empty() {
+            broker
+                .controller
+                .submit_change(
+                    case.acls
+                        .into_iter()
+                        .map(MetadataRecord::V1AccessControlEntry)
+                        .collect(),
+                )
+                .await
+                .expect("seed acls");
+        }
+
+        let principal = principal("alice");
+        let peer = peer();
+        let context = crate::test_support::request_context(&principal, &peer, "idempotent-client");
+        let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
+        let request = InitProducerIdRequest {
+            transactional_id: case.transactional_id.map(ToString::to_string),
+            transaction_timeout_ms: 60_000,
+            ..Default::default()
+        };
+        let response = handle(
+            &broker,
+            version,
+            1,
+            &crate::test_support::encode_request(&request, version),
+            &context,
+        )
+        .await
+        .expect("handle InitProducerId");
+        let response: InitProducerIdResponse =
+            crate::test_support::decode_response(&response, version);
+
+        expected.push((case.label, case.expected_error));
+        actual.push((case.label, response.error_code));
+        if case.expected_error != codes::NONE {
+            assert!(response.producer_id == -1, "{}", case.label);
+        }
+        broker_handle.shutdown().await;
+    }
+    assert!(actual == expected);
+}
+
+/// #685: `keep_prepared_txn` alone must not run the KIP-939 two-phase-commit
+/// gate -- only `enable_2pc` does. Both cases share a Write ACL on the
+/// transactional id (which the ACL preamble above already covers) and differ
+/// only in which KIP-939 flag is set and whether a `TwoPhaseCommit` ACL
+/// exists.
+#[tokio::test]
+async fn two_phase_commit_gate_is_scoped_to_enable_2pc_not_keep_prepared_txn() {
+    struct Case {
+        label: &'static str,
+        tid: &'static str,
+        enable_2pc: bool,
+        keep_prepared_txn: bool,
+        two_phase_commit_acl: bool,
+        // `None` means "any success code (not TRANSACTIONAL_ID_AUTHORIZATION_FAILED)".
+        expected_error: Option<i16>,
+    }
+
+    let cases = [
+        Case {
+            label: "keep_prepared_txn alone skips the 2PC ACL/config gate",
+            tid: "tx-keep-only",
+            enable_2pc: false,
+            keep_prepared_txn: true,
+            two_phase_commit_acl: false,
+            expected_error: None,
+        },
+        Case {
+            label: "enable_2pc without a TwoPhaseCommit ACL is denied",
+            tid: "tx-enable-2pc",
+            enable_2pc: true,
+            keep_prepared_txn: false,
+            two_phase_commit_acl: false,
+            expected_error: Some(codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED),
+        },
+    ];
+
+    for case in cases {
+        let (broker_handle, _dir) = start_broker_with(|config| {
+            config.audit_enabled = false;
+            config.transaction_state_num_partitions = 7;
+            config.transaction_max_timeout = secs(8);
+            config.features.transaction_two_phase_commit_enable = true;
+            config.authorizer = Arc::new(SimpleAclAuthorizer::new(HashSet::new()));
+        })
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        enable_transaction_version_3(&broker).await;
+
+        let mut acls = vec![acl(
+            PermissionType::Allow,
+            ResourceType::TransactionalId,
+            case.tid,
+            PatternType::Literal,
+            AclOperation::Write,
+        )];
+        if case.two_phase_commit_acl {
+            acls.push(acl(
+                PermissionType::Allow,
+                ResourceType::TransactionalId,
+                case.tid,
+                PatternType::Literal,
+                AclOperation::TwoPhaseCommit,
+            ));
+        }
+        broker
+            .controller
+            .submit_change(
+                acls.into_iter()
+                    .map(MetadataRecord::V1AccessControlEntry)
+                    .collect(),
+            )
+            .await
+            .expect("seed acls");
+
+        let principal = principal("alice");
+        let peer = peer();
+        let context = crate::test_support::request_context(&principal, &peer, "txn-client");
+
+        let find_version = krabka_protocol::owned::find_coordinator_response::MAX_VERSION;
+        let find_request =
+            krabka_protocol::owned::find_coordinator_request::FindCoordinatorRequest {
+                key_type: 1,
+                coordinator_keys: vec![case.tid.to_string()],
+                ..Default::default()
+            };
+        let find_response = crate::handlers::find_coordinator::handle(
+            &broker,
+            find_version,
+            1,
+            &crate::test_support::encode_request(&find_request, find_version),
+            &context,
+        )
+        .await
+        .expect("find transaction coordinator");
+        let find_response: krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse =
+            crate::test_support::decode_response(&find_response, find_version);
+        assert!(
+            find_response.coordinators[0].error_code == codes::NONE,
+            "{}",
+            case.label
+        );
+
+        let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
+        let request = InitProducerIdRequest {
+            transactional_id: Some(case.tid.to_string()),
+            transaction_timeout_ms: 500,
+            enable2_pc: case.enable_2pc,
+            keep_prepared_txn: case.keep_prepared_txn,
+            ..Default::default()
+        };
+        let response = handle(
+            &broker,
+            version,
+            2,
+            &crate::test_support::encode_request(&request, version),
+            &context,
+        )
+        .await
+        .expect("handle InitProducerId");
+        let response: InitProducerIdResponse =
+            crate::test_support::decode_response(&response, version);
+
+        match case.expected_error {
+            Some(code) => assert!(response.error_code == code, "{}", case.label),
+            None => assert!(
+                response.error_code != codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
+                "{}: {:?}",
+                case.label,
+                response
+            ),
+        }
+        broker_handle.shutdown().await;
+    }
 }

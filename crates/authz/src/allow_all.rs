@@ -29,6 +29,19 @@ impl Authorizer for AllowAllAuthorizer {
     fn is_configured(&self) -> bool {
         false
     }
+
+    /// Always `Allow`, for the same reason `authorize` is: this authorizer
+    /// never denies anything, on any resource of any type.
+    fn authorize_by_resource_type(
+        &self,
+        _source: &dyn AclSource,
+        _principal: &krabka_security::Principal,
+        _host: &std::net::SocketAddr,
+        _resource_type: krabka_metadata::ResourceType,
+        _operation: krabka_metadata::AclOperation,
+    ) -> AuthorizationResult {
+        AuthorizationResult::Allow
+    }
 }
 
 #[cfg(test)]
@@ -63,5 +76,25 @@ mod tests {
     #[test]
     fn allow_all_is_not_a_configured_authorizer() {
         assert2::assert!(!AllowAllAuthorizer.is_configured());
+    }
+
+    #[test]
+    fn allow_all_authorizes_by_resource_type_for_any_request() {
+        let img = MetadataImage::new(Uuid::nil());
+        let p = Principal {
+            name: "alice".into(),
+            auth_method: AuthMethod::SaslPlain,
+            groups: vec![],
+        };
+        let host: SocketAddr = "1.2.3.4:9092".parse().unwrap();
+        assert2::assert!(
+            AllowAllAuthorizer.authorize_by_resource_type(
+                &img,
+                &p,
+                &host,
+                ResourceType::Topic,
+                AclOperation::Write,
+            ) == AuthorizationResult::Allow
+        );
     }
 }
