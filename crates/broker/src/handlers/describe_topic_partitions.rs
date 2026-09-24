@@ -178,10 +178,12 @@ pub(crate) async fn handle(
         Vec::with_capacity(authorized_names.len());
     let mut next_cursor: Option<ResponseCursor> = None;
 
-    // Apply the request cursor's partition_index only to the first topic
-    // we process (the resume topic); every subsequent topic starts at
-    // partition 0.
-    let mut first_topic_partition_offset = cursor_partition;
+    // Apply the request cursor's partition_index only to the topic it
+    // actually names, wherever that topic lands after authorization
+    // filtering -- not just the first topic this loop happens to process.
+    // A cursor naming a topic that is now Deny-filtered out must not leak
+    // its offset onto the next authorized topic.
+    let cursor_topic_name = req.cursor.as_ref().map(|cursor| cursor.topic_name.as_str());
 
     for name in &authorized_names {
         // Kafka checks the remaining budget at the top of every topic's
@@ -200,7 +202,6 @@ pub(crate) async fn handle(
         let topic = image.topic(name.as_str());
         let Some(t) = topic else {
             topics_out.push(unknown_topic_row(broker, &image, ctx, name.as_str()));
-            first_topic_partition_offset = 0;
             continue;
         };
 
@@ -208,14 +209,13 @@ pub(crate) async fn handle(
         // order the cursor pagination below depends on.
         let mut sorted_parts: Vec<_> = image.partitions_of(name.as_str()).collect();
 
-        // Skip partitions before the cursor's `partition_index` on the
-        // resume-topic only. `cursor_partition = 0` is a no-op skip.
-        if first_topic_partition_offset > 0 {
-            sorted_parts.retain(|p| p.partition >= first_topic_partition_offset);
+        // Skip partitions before the cursor's `partition_index`, but only on
+        // the topic the cursor actually names -- not just the first topic
+        // this loop happens to reach, which may differ once Deny-filtering
+        // and pagination truncation are applied.
+        if cursor_topic_name == Some(name.as_str()) {
+            sorted_parts.retain(|p| p.partition >= cursor_partition);
         }
-        // Reset the cursor offset; future topics in this response start
-        // from partition 0.
-        first_topic_partition_offset = 0;
 
         // KIP-966: one read of the topic's published ELR state feeds every
         // partition row below; see `crate::elr`.
@@ -594,6 +594,62 @@ mod tests {
                     partition_index: 0,
                     ..Default::default()
                 }),
+                ..Default::default()
+            }
+        );
+
+        broker_handle.shutdown().await;
+    }
+
+    /// A cursor naming a topic that authorization then filters out must not
+    /// leak its `partition_index` onto whichever authorized topic the loop
+    /// reaches first. `a` is Deny (and thus never appears in
+    /// `authorized_names`), so `b`'s partitions must start at 0, not at the
+    /// cursor's offset into `a`.
+    #[tokio::test]
+    async fn cursor_offset_on_a_denied_topic_does_not_leak_onto_the_next_topic() {
+        let (broker_handle, _dir) = start_broker(Arc::new(DenyTopics(&["a"]))).await;
+        seed_topic(&broker_handle, "a", 1, 1).await;
+        seed_topic(&broker_handle, "b", 2, 3).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("admin");
+        let peer = peer();
+        let ctx = test_context(&p, &peer);
+        let cursor = Some(RequestCursor {
+            topic_name: "a".into(),
+            partition_index: 2,
+            ..Default::default()
+        });
+        let req = encode_request(&request(vec!["a", "b"], 2000, cursor));
+
+        let bytes = handle(&broker, VERSION, 123, &req, &ctx)
+            .await
+            .expect("handle");
+        let resp = decode_response(&bytes);
+
+        assert!(
+            resp == DescribeTopicPartitionsResponse {
+                throttle_time_ms: 0,
+                topics: vec![
+                    DescribeTopicPartitionsResponseTopic {
+                        error_code: codes::NONE,
+                        name: Some("b".into()),
+                        topic_id: WireUuid(uuid::Uuid::from_u128(2).into_bytes()),
+                        is_internal: false,
+                        partitions: vec![partition_row(0), partition_row(1), partition_row(2),],
+                        topic_authorized_operations: authorized_operations_bits(
+                            broker.config.authorizer.as_ref(),
+                            &broker.controller.current_image(),
+                            &p,
+                            &peer,
+                            ResourceType::Topic,
+                            "b",
+                        ),
+                        ..Default::default()
+                    },
+                    error_topic("a", codes::TOPIC_AUTHORIZATION_FAILED),
+                ],
+                next_cursor: None,
                 ..Default::default()
             }
         );
