@@ -334,6 +334,37 @@ pub(crate) async fn grant_cluster_operation(
         .expect("commit cluster acl");
 }
 
+/// Commit one literal `Allow` ACL for `User:<user>` on a `Topic` resource.
+///
+/// `topic` is the literal resource name; pass `"*"` for Kafka's
+/// grant-on-every-topic wildcard. A test that starts its broker with a
+/// [`crate::authorizer::SimpleAclAuthorizer`] uses it to check a handler
+/// against Kafka's per-topic ACL filtering, including the operation-implication
+/// table (for example, `Read` implies `Describe`).
+pub(crate) async fn grant_topic_operation(
+    handle: &BrokerHandle,
+    user: &str,
+    topic: &str,
+    operation: krabka_metadata::AclOperation,
+) {
+    handle
+        .broker_arc_for_test()
+        .controller
+        .submit_change(vec![MetadataRecord::V1AccessControlEntry(
+            krabka_metadata::AclEntry {
+                resource_type: krabka_metadata::ResourceType::Topic,
+                resource_name: topic.to_string(),
+                pattern_type: krabka_metadata::PatternType::Literal,
+                principal: format!("User:{user}"),
+                host: "*".to_string(),
+                operation,
+                permission_type: krabka_metadata::PermissionType::Allow,
+            },
+        )])
+        .await
+        .expect("commit topic acl");
+}
+
 /// Serve one request through the broker's dispatch registry, as the connection
 /// loop does for a [`crate::handlers::DispatchKind::Context`] entry.
 ///
