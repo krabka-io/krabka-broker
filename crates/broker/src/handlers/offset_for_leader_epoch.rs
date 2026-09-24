@@ -58,34 +58,50 @@ pub(crate) fn handle(
         let req = OffsetForLeaderEpochRequest::decode(&mut cur, version)?;
 
         // ── ACL preamble ────────────────────────────────────────────
-        // Per-topic `Describe` on `Topic(name)`. A denied topic gets
+        // Kafka checks `ClusterAction` on `Cluster("kafka-cluster")` once as
+        // a shortcut: an Allow there authorizes every topic in the request,
+        // with no further lookup. This is what lets a follower broker (whose
+        // principal typically holds `ClusterAction` but no topic ACLs) fetch
+        // leader-epoch info from other brokers. A Deny falls back to
+        // per-topic `Describe` on `Topic(name)`; a denied topic gets
         // `TOPIC_AUTHORIZATION_FAILED (29)` on every partition row it
-        // requested; authorized topics proceed unchanged.
+        // requested, with `leader_epoch` and `end_offset` both `-1` (Kafka's
+        // schema default for an unauthorized row), and authorized topics
+        // proceed unchanged.
         let acl_image = broker.controller.current_image();
+        let cluster_action_allowed = !crate::handlers::cluster_action_denied(
+            broker.config.authorizer.as_ref(),
+            &acl_image,
+            ctx,
+        );
 
-        let mut topics_out: Vec<OffsetForLeaderTopicResult> = Vec::with_capacity(req.topics.len());
+        let mut authorized_out: Vec<OffsetForLeaderTopicResult> =
+            Vec::with_capacity(req.topics.len());
+        let mut unauthorized_out: Vec<OffsetForLeaderTopicResult> = Vec::new();
 
         for topic in req.topics {
-            if crate::handlers::acl_denied(
-                broker.config.authorizer.as_ref(),
-                &acl_image,
-                ctx,
-                ResourceType::Topic,
-                &topic.topic,
-                AclOperation::Describe,
-            ) {
+            if !cluster_action_allowed
+                && crate::handlers::acl_denied(
+                    broker.config.authorizer.as_ref(),
+                    &acl_image,
+                    ctx,
+                    ResourceType::Topic,
+                    &topic.topic,
+                    AclOperation::Describe,
+                )
+            {
                 let parts_out = topic
                     .partitions
                     .iter()
                     .map(|part| EpochEndOffset {
                         partition: part.partition,
-                        leader_epoch: part.leader_epoch,
+                        leader_epoch: -1,
                         end_offset: -1,
                         error_code: codes::TOPIC_AUTHORIZATION_FAILED,
                         ..Default::default()
                     })
                     .collect();
-                topics_out.push(OffsetForLeaderTopicResult {
+                unauthorized_out.push(OffsetForLeaderTopicResult {
                     topic: topic.topic,
                     partitions: parts_out,
                     ..Default::default()
@@ -141,16 +157,20 @@ pub(crate) fn handle(
                 parts_out.push(out);
             }
 
-            topics_out.push(OffsetForLeaderTopicResult {
+            authorized_out.push(OffsetForLeaderTopicResult {
                 topic: topic.topic,
                 partitions: parts_out,
                 ..Default::default()
             });
         }
 
+        // Authorized rows first, then unauthorized rows -- matches Kafka's
+        // `endOffsetsForAuthorizedPartitions ++ endOffsetsForUnauthorizedPartitions`.
+        authorized_out.extend(unauthorized_out);
+
         let resp = OffsetForLeaderEpochResponse {
             throttle_time_ms: 0,
-            topics: topics_out,
+            topics: authorized_out,
             ..Default::default()
         };
         crate::handlers::encode_response(&resp, version)
@@ -159,66 +179,187 @@ pub(crate) fn handle(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use assert2::assert;
-    use bytes::BytesMut;
-    use krabka_protocol::Encode;
+    use krabka_protocol::owned::{
+        offset_for_leader_epoch_request::{
+            OffsetForLeaderEpochRequest, OffsetForLeaderPartition, OffsetForLeaderTopic,
+        },
+        offset_for_leader_epoch_response::{
+            self, EpochEndOffset, OffsetForLeaderEpochResponse, OffsetForLeaderTopicResult,
+        },
+    };
 
     use super::*;
+    use crate::{
+        authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
+        test_support::{peer, principal, request_context, start_broker_with_authorizer_no_audit},
+    };
 
-    #[test]
-    fn topic_describe_denied_yields_topic_authorization_failed_rows() {
-        use krabka_protocol::owned::offset_for_leader_epoch_response::{
-            self, EpochEndOffset, OffsetForLeaderEpochResponse, OffsetForLeaderTopicResult,
-        };
+    const VERSION: i16 = offset_for_leader_epoch_response::MAX_VERSION;
 
-        let authorizer =
-            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
-        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let principal = krabka_security::Principal {
-            name: "ANONYMOUS".into(),
-            auth_method: krabka_security::AuthMethod::Anonymous,
-            groups: vec![],
-        };
-        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+    /// A topic named `"orders"` is always `Describe`-authorized (it stands
+    /// in for a topic a follower's principal has an ACL on); `"payments"`'s
+    /// `Describe` and the cluster's `ClusterAction` both vary per test case.
+    /// Every other request is denied.
+    #[derive(Debug)]
+    struct TestAuthorizer {
+        cluster_action: bool,
+        payments_describe: bool,
+    }
 
-        let ctx = crate::handlers::RequestContext {
-            principal: &principal,
-            peer: &peer,
-            client_id: "client-a",
-            connection_id: "connection-a",
-            sendfile_capable: false,
-            connection_listener_name: "PLAINTEXT",
-            throttle: crate::quota::ThrottleSlot::default(),
-        };
-        assert!(crate::handlers::acl_denied(
-            &authorizer,
-            &image,
-            &ctx,
-            ResourceType::Topic,
-            "t",
-            AclOperation::Describe,
-        ));
+    impl Authorizer for TestAuthorizer {
+        fn authorize(
+            &self,
+            _source: &dyn crate::authorizer::AclSource,
+            req: &AuthorizationRequest<'_>,
+        ) -> AuthorizationResult {
+            let allow = match (req.resource_type, req.operation) {
+                (ResourceType::Cluster, AclOperation::ClusterAction) => self.cluster_action,
+                (ResourceType::Topic, AclOperation::Describe) if req.resource_name == "orders" => {
+                    true
+                }
+                (ResourceType::Topic, AclOperation::Describe)
+                    if req.resource_name == "payments" =>
+                {
+                    self.payments_describe
+                }
+                _ => false,
+            };
+            if allow {
+                AuthorizationResult::Allow
+            } else {
+                AuthorizationResult::Deny
+            }
+        }
+    }
 
-        let resp = OffsetForLeaderEpochResponse {
-            throttle_time_ms: 0,
-            topics: vec![OffsetForLeaderTopicResult {
-                topic: "t".into(),
-                partitions: vec![EpochEndOffset {
-                    partition: 0,
-                    leader_epoch: 0,
-                    end_offset: -1,
-                    error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+    fn request() -> OffsetForLeaderEpochRequest {
+        OffsetForLeaderEpochRequest {
+            topics: vec![
+                OffsetForLeaderTopic {
+                    topic: "orders".into(),
+                    partitions: vec![OffsetForLeaderPartition {
+                        partition: 0,
+                        leader_epoch: 7,
+                        ..Default::default()
+                    }],
                     ..Default::default()
-                }],
+                },
+                OffsetForLeaderTopic {
+                    topic: "payments".into(),
+                    partitions: vec![OffsetForLeaderPartition {
+                        partition: 0,
+                        leader_epoch: 7,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    /// The row a topic that isn't hosted anywhere on this broker gets, once
+    /// it clears authorization: `UNKNOWN_TOPIC_OR_PARTITION`, with the
+    /// requested `leader_epoch` echoed back (Kafka does not reset it for
+    /// this error) and `end_offset = -1`.
+    fn unknown_topic_row(topic: &str) -> OffsetForLeaderTopicResult {
+        OffsetForLeaderTopicResult {
+            topic: topic.into(),
+            partitions: vec![EpochEndOffset {
+                partition: 0,
+                leader_epoch: 7,
+                end_offset: -1,
+                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
                 ..Default::default()
             }],
             ..Default::default()
-        };
-        let version = offset_for_leader_epoch_response::MAX_VERSION;
-        let mut buf = BytesMut::with_capacity(resp.encoded_len(version));
-        resp.encode(&mut buf, version).expect("encode");
-        let mut cur: &[u8] = &buf;
-        let decoded = OffsetForLeaderEpochResponse::decode(&mut cur, version).unwrap();
-        assert!(decoded.topics[0].partitions[0].error_code == codes::TOPIC_AUTHORIZATION_FAILED);
+        }
+    }
+
+    /// The row a `Describe`-denied topic gets: only the partition index and
+    /// `TOPIC_AUTHORIZATION_FAILED (29)` are meaningful, and Kafka's schema
+    /// default puts `-1` in both `leader_epoch` and `end_offset` rather than
+    /// echoing the request.
+    fn denied_row(topic: &str) -> OffsetForLeaderTopicResult {
+        OffsetForLeaderTopicResult {
+            topic: topic.into(),
+            partitions: vec![EpochEndOffset {
+                partition: 0,
+                leader_epoch: -1,
+                end_offset: -1,
+                error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// `(cluster ClusterAction, topic Describe on "payments")` ->
+    /// `expected topics`, in the order the response must carry them.
+    ///
+    /// When `ClusterAction` is allowed, Kafka's `ClusterAction` fast path
+    /// authorizes every topic without a per-topic `Describe` lookup, so
+    /// `"payments"` is never denied even when its own `Describe` ACL would
+    /// deny it. Only the `(deny, deny)` case denies `"payments"`, and its
+    /// row is appended after the authorized `"orders"` row rather than kept
+    /// in request order.
+    #[tokio::test]
+    async fn cluster_action_fast_path_table() {
+        let cases: [(bool, bool, Vec<OffsetForLeaderTopicResult>); 4] = [
+            (
+                true,
+                false,
+                vec![unknown_topic_row("orders"), unknown_topic_row("payments")],
+            ),
+            (
+                false,
+                true,
+                vec![unknown_topic_row("orders"), unknown_topic_row("payments")],
+            ),
+            (
+                false,
+                false,
+                vec![unknown_topic_row("orders"), denied_row("payments")],
+            ),
+            (
+                true,
+                true,
+                vec![unknown_topic_row("orders"), unknown_topic_row("payments")],
+            ),
+        ];
+
+        for (cluster_action, payments_describe, expected_topics) in cases {
+            let authorizer = Arc::new(TestAuthorizer {
+                cluster_action,
+                payments_describe,
+            });
+            let (broker_handle, _dir) = start_broker_with_authorizer_no_audit(authorizer).await;
+            let broker = broker_handle.broker_arc_for_test();
+
+            let p = principal("follower");
+            let peer = peer();
+            let ctx = request_context(&p, &peer, "follower-client");
+            let req_bytes = crate::test_support::encode_request(&request(), VERSION);
+
+            let bytes = handle(&broker, VERSION, 123, &req_bytes, &ctx).expect("handle");
+            let resp: OffsetForLeaderEpochResponse =
+                crate::test_support::decode_response(&bytes, VERSION);
+
+            let expected = OffsetForLeaderEpochResponse {
+                throttle_time_ms: 0,
+                topics: expected_topics,
+                ..Default::default()
+            };
+            assert!(
+                resp == expected,
+                "cluster_action={cluster_action} payments_describe={payments_describe}: \
+                 got {resp:?}, want {expected:?}"
+            );
+
+            broker_handle.shutdown().await;
+        }
     }
 }
