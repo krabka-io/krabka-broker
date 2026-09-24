@@ -153,6 +153,11 @@
       "additionalProperties": false,
       "description": "TOML shape of `[authorization]`. `type` (renamed to `authz_type` on\nthe Rust side to avoid shadowing the keyword) defaults to\n`AllowAll`; `super_users` is the principal bypass list consulted by\nevery concrete authorizer impl.\n\nOmitting the whole block leaves the cluster with no authorizer, which is\nwhat Kafka has when `authorizer.class.name` is unset: every principal is\nallowed everything, and the ACL administration RPCs -- `DescribeAcls`,\n`CreateAcls` and `DeleteAcls` -- answer `SECURITY_DISABLED` (54) with\n\"No Authorizer is configured on the broker\" rather than an empty listing\nor a stored binding nothing would consult. `kafka-acls` reports that\nrefusal.\n\n`deny_unknown_fields` so a misspelled `super_user` typo at the top\nof the `[authorization]` block is rejected at parse time rather\nthan silently producing the wrong authorizer.",
       "properties": {
+        "allow_everyone_if_no_acl_found": {
+          "default": false,
+          "description": "Kafka's `allow.everyone.if.no.acl.found`. Only consulted by\n`type = \"simple\"`. When `true`, a request is allowed if NO ACL at all\napplies to the resource -- by type, name, and LITERAL/PREFIXED/wildcard\npattern, regardless of principal, host, operation, or permission type.\nIf at least one ACL applies to the resource and none of them matches,\nthe request is still denied. Default `false`, matching Kafka's\n`StandardAuthorizer`.",
+          "type": "boolean"
+        },
         "opa": {
           "anyOf": [
             {
