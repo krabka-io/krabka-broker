@@ -67,9 +67,8 @@ async fn topic_resource_denial_uses_topic_authorization_error() {
     assert!(resp == expected);
 }
 
-/// KIP-1017 / dynamic broker config extensions: legacy `AlterConfigs`
-/// authorizes GROUP resources against `AlterConfigs` on `Group(name)`, the
-/// same target `IncrementalAlterConfigs` uses.
+/// Legacy `AlterConfigs` authorizes GROUP resources against `AlterConfigs`
+/// on `Group(name)`, the same target `IncrementalAlterConfigs` uses.
 #[tokio::test]
 async fn group_resource_denial_uses_group_authorization_error() {
     let resp = Box::pin(drive_one(
