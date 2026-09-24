@@ -370,3 +370,66 @@ fn a_topic_replacement_audits_every_key_whose_value_moves() {
         assert!(audited == expected, "{label}");
     }
 }
+
+/// A GROUP or CLIENT_METRICS `AlterConfigs` also replaces the whole override
+/// map, so a replacement that omits a stored key must audit that key as
+/// changed -- the same rule topic resources already get, extended to the
+/// full-map-replacement types #1122 added authorization for.
+#[test]
+fn a_group_or_client_metrics_replacement_audits_a_key_it_drops_by_omission() {
+    use crate::handlers::audit_resource;
+
+    let group_image = crate::handlers::alter_configs::test_support::image_with_group_config(
+        "streams-app",
+        &[
+            (
+                crate::coordinator::unified::streams::config::KEY_NUM_STANDBY_REPLICAS,
+                "1",
+            ),
+            (
+                crate::coordinator::unified::streams::config::KEY_TASK_OFFSET_INTERVAL_MS,
+                "5000",
+            ),
+        ],
+    );
+    let group_audited = super::audit_resources_for(
+        &crate::handlers::alter_configs::test_support::group_resource(
+            "streams-app",
+            &[(
+                crate::coordinator::unified::streams::config::KEY_NUM_STANDBY_REPLICAS,
+                "1",
+            )],
+        ),
+        &group_image,
+    );
+    assert!(
+        group_audited
+            == vec![
+                audit_resource("Group", "streams-app"),
+                audit_resource(
+                    "ConfigKey",
+                    crate::coordinator::unified::streams::config::KEY_TASK_OFFSET_INTERVAL_MS
+                ),
+            ]
+    );
+
+    let client_metrics_image =
+        crate::handlers::alter_configs::test_support::image_with_client_metrics_config(
+            "sub1",
+            &[("interval.ms", "30000"), ("metrics", "*")],
+        );
+    let client_metrics_audited = super::audit_resources_for(
+        &crate::handlers::alter_configs::test_support::client_metrics_resource(
+            "sub1",
+            &[("interval.ms", "30000")],
+        ),
+        &client_metrics_image,
+    );
+    assert!(
+        client_metrics_audited
+            == vec![
+                audit_resource("ClientMetrics", "sub1"),
+                audit_resource("ConfigKey", "metrics"),
+            ]
+    );
+}
