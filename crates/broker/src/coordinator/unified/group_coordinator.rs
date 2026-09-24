@@ -102,6 +102,14 @@ pub struct GroupCoordinator {
     /// `coordinator::topic_deletion`.
     pub(crate) recent_topic_deletions:
         std::sync::Mutex<std::collections::VecDeque<(String, uuid::Uuid)>>,
+    /// Cache of the `ConsumerGroupHeartbeat` handler's
+    /// `subscribed_topic_regex` → Describe-authorized-topics computation,
+    /// keyed by `(group_id, member_id, principal)`. See
+    /// [`crate::handlers::consumer_group_heartbeat::RegexAuthzCacheEntry`].
+    pub(crate) regex_authz_cache: DashMap<
+        (String, String, String),
+        crate::handlers::consumer_group_heartbeat::RegexAuthzCacheEntry,
+    >,
 }
 
 /// `Debug`-able wrapper around an `Arc<dyn MetadataSource>` so that it can
@@ -147,6 +155,7 @@ impl GroupCoordinator {
             metadata_source: std::sync::OnceLock::new(),
             metrics: std::sync::OnceLock::new(),
             recent_topic_deletions: std::sync::Mutex::default(),
+            regex_authz_cache: DashMap::new(),
         }
     }
 
