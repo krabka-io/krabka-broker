@@ -328,3 +328,20 @@ async fn json_response_parse_error_returns_per_allow_on_error_config() {
     .unwrap();
     assert!(auth_closed.authorize(&image, &req(&p, &h, "t")) == AuthorizationResult::Deny);
 }
+
+/// A caller-side cache built on [`Authorizer::decision_ttl`] must not outlive
+/// OPA's own decision-cache TTL, since a policy change there never touches
+/// the Kafka metadata log a caller might otherwise key its own cache on.
+#[tokio::test(flavor = "multi_thread")]
+async fn decision_ttl_reports_the_configured_cache_expiry() {
+    let auth = OpaAuthorizer::new(
+        HashSet::new(),
+        "http://localhost/v1/data/kafka/authz/allow".into(),
+        false,
+        100,
+        minutes(1),
+        secs(5),
+    )
+    .unwrap();
+    assert!(auth.decision_ttl() == Some(Duration::from_secs(60)));
+}

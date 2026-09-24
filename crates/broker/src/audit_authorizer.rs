@@ -203,4 +203,45 @@ mod tests {
         check!(!over_allow_all.is_configured());
         check!(over_deny_all.is_configured());
     }
+
+    /// A fake authorizer that reports a fixed [`Authorizer::decision_ttl`],
+    /// standing in for `OpaAuthorizer` without pulling in its HTTP setup.
+    #[derive(Debug)]
+    struct FixedTtl(std::time::Duration);
+
+    impl Authorizer for FixedTtl {
+        fn authorize(
+            &self,
+            _source: &dyn krabka_authz::AclSource,
+            _req: &AuthorizationRequest<'_>,
+        ) -> AuthorizationResult {
+            AuthorizationResult::Allow
+        }
+
+        fn decision_ttl(&self) -> Option<std::time::Duration> {
+            Some(self.0)
+        }
+    }
+
+    /// This decorator adds auditing around a decision, not a cache; it must
+    /// forward the wrapped authorizer's `decision_ttl` unchanged, the same
+    /// way it forwards `is_configured`.
+    #[test]
+    fn decision_ttl_follows_the_wrapped_authorizer() {
+        let metrics = crate::metrics::BrokerMetrics::new();
+        let ttl = std::time::Duration::from_secs(42);
+        let over_fixed_ttl = AuditingAuthorizer::new(
+            Arc::new(FixedTtl(ttl)),
+            krabka_audit::AuditLog::disabled(),
+            metrics.clone(),
+        );
+        let over_no_ttl = AuditingAuthorizer::new(
+            Arc::new(DenyAll),
+            krabka_audit::AuditLog::disabled(),
+            metrics,
+        );
+
+        check!(over_fixed_ttl.decision_ttl() == Some(ttl));
+        check!(over_no_ttl.decision_ttl() == None);
+    }
 }
