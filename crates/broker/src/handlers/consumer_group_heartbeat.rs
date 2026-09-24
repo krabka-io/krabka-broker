@@ -930,6 +930,14 @@ mod tests {
     struct CountingAuthorizer {
         inner: crate::authorizer::SimpleAclAuthorizer,
         calls: Arc<std::sync::atomic::AtomicUsize>,
+        /// Only an `authorize` call against one of these `Topic` resource
+        /// names is counted. `broker.config.authorizer` is shared by the
+        /// whole broker, not scoped to one test's requests, so anything
+        /// else that runs on it during the test -- the heartbeat's own
+        /// `Group` Read check foremost, but also whatever background work a
+        /// live broker does -- would otherwise add unpredictable noise to
+        /// an exact-count assertion.
+        watched_topics: std::collections::HashSet<&'static str>,
         /// `None` matches every other production authorizer in this
         /// codebase: a decision is exactly as fresh as the metadata image it
         /// was computed from. `Some(ttl)` mimics an OPA-style authorizer
@@ -943,7 +951,11 @@ mod tests {
             source: &dyn crate::authorizer::AclSource,
             req: &crate::authorizer::AuthorizationRequest<'_>,
         ) -> crate::authorizer::AuthorizationResult {
-            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if req.resource_type == krabka_metadata::ResourceType::Topic
+                && self.watched_topics.contains(req.resource_name)
+            {
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
             self.inner.authorize(source, req)
         }
 
@@ -962,6 +974,7 @@ mod tests {
         let authorizer = Arc::new(CountingAuthorizer {
             inner: crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
             calls: calls.clone(),
+            watched_topics: std::collections::HashSet::from(["orders-eu"]),
             decision_ttl: None,
         });
         let (broker_handle, _dir) = start_broker(authorizer).await;
@@ -1003,20 +1016,16 @@ mod tests {
             },
             VERSION,
         );
-        let before_first = calls.load(std::sync::atomic::Ordering::SeqCst);
         let bytes = handle(&broker, VERSION, 7, &req, &ctx)
             .await
             .expect("first heartbeat");
         let resp = decode_response(&bytes);
         assert!(resp.error_code == codes::NONE, "{resp:?}");
-        // The first heartbeat must consult the authorizer for the `Group`
-        // Read check (uncached, and not part of this fix) AND at least once
-        // more for "orders-eu" under `subscribed_topic_regex`.
-        let after_first = calls.load(std::sync::atomic::Ordering::SeqCst);
+        // The first heartbeat must consult the authorizer for "orders-eu"
+        // under `subscribed_topic_regex`: a cache miss.
         assert!(
-            after_first - before_first >= 2,
-            "the first heartbeat must consult the authorizer for the regex match too: \
-                before={before_first} after={after_first}"
+            calls.load(std::sync::atomic::Ordering::SeqCst) == 1,
+            "the first heartbeat must consult the authorizer for the regex match"
         );
 
         // Steady-state heartbeat: same member, same epoch, same pattern,
@@ -1037,13 +1046,10 @@ mod tests {
             .expect("steady-state heartbeat");
         let resp2 = decode_response(&bytes2);
         assert!(resp2.error_code == codes::NONE, "{resp2:?}");
-        // Only the uncached `Group` Read check calls the authorizer on an
-        // unchanged heartbeat -- the regex cache hit adds zero calls.
-        let after_second = calls.load(std::sync::atomic::Ordering::SeqCst);
+        // The regex cache hit adds zero further calls for "orders-eu".
         assert!(
-            after_second - after_first == 1,
-            "an unchanged heartbeat must not call the authorizer for the regex match again: \
-                after_first={after_first} after_second={after_second}"
+            calls.load(std::sync::atomic::Ordering::SeqCst) == 1,
+            "an unchanged heartbeat must not call the authorizer for the regex match again"
         );
 
         broker_handle.shutdown().await;
@@ -1059,6 +1065,7 @@ mod tests {
         let authorizer = Arc::new(CountingAuthorizer {
             inner: crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
             calls: calls.clone(),
+            watched_topics: std::collections::HashSet::from(["orders-eu", "orders-us"]),
             decision_ttl: None,
         });
         let (broker_handle, _dir) = start_broker(authorizer).await;
@@ -1116,7 +1123,10 @@ mod tests {
             assigned == std::collections::HashSet::from([orders_eu]),
             "{assigned:?}"
         );
-        let calls_before_new_topic = calls.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            calls.load(std::sync::atomic::Ordering::SeqCst) == 1,
+            "the first heartbeat must consult the authorizer for the one topic that exists"
+        );
 
         // The cluster's topic set changes: "orders-us" now exists, and this
         // principal's Describe grant already covers it.
@@ -1143,8 +1153,13 @@ mod tests {
             .expect("heartbeat after the topic-set change");
         let resp2 = decode_response(&bytes2);
         assert!(resp2.error_code == codes::NONE, "{resp2:?}");
+        // The topic-set change advances `current_metadata_offset()`, which
+        // invalidates the whole cached entry for this member (it is keyed
+        // per member, not per topic) -- so both "orders-eu" and the newly
+        // matching "orders-us" are freshly consulted here, not just the
+        // latter. Three calls total, not the one from the first heartbeat.
         assert!(
-            calls.load(std::sync::atomic::Ordering::SeqCst) > calls_before_new_topic,
+            calls.load(std::sync::atomic::Ordering::SeqCst) == 3,
             "a topic-set change must force a fresh authorizer consult"
         );
         let assigned2: std::collections::HashSet<uuid::Uuid> = resp2
@@ -1172,6 +1187,7 @@ mod tests {
         let authorizer = Arc::new(CountingAuthorizer {
             inner: crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
             calls: calls.clone(),
+            watched_topics: std::collections::HashSet::from(["orders-us"]),
             decision_ttl: None,
         });
         let (broker_handle, _dir) = start_broker(authorizer).await;
@@ -1208,14 +1224,15 @@ mod tests {
             },
             VERSION,
         );
-        let before_first = calls.load(std::sync::atomic::Ordering::SeqCst);
         let bytes = handle(&broker, VERSION, 7, &req, &ctx)
             .await
             .expect("first heartbeat");
         let resp = decode_response(&bytes);
         assert!(resp.error_code == codes::NONE, "{resp:?}");
-        let after_first = calls.load(std::sync::atomic::Ordering::SeqCst);
-        let delta_first = after_first - before_first;
+        assert!(
+            calls.load(std::sync::atomic::Ordering::SeqCst) == 1,
+            "the first heartbeat must consult the authorizer for the denied topic"
+        );
 
         let req2 = crate::test_support::encode_request(
             &ConsumerGroupHeartbeatRequest {
@@ -1233,11 +1250,11 @@ mod tests {
             .expect("second heartbeat");
         let resp2 = decode_response(&bytes2);
         assert!(resp2.error_code == codes::NONE, "{resp2:?}");
-        let delta_second = calls.load(std::sync::atomic::Ordering::SeqCst) - after_first;
+        // A cache hit would leave this at 1; a still-denied topic must be
+        // re-asked about on every heartbeat instead.
         assert!(
-            delta_second == delta_first,
-            "a still-denied topic must be re-asked about on every heartbeat, \
-                not cached: delta_first={delta_first} delta_second={delta_second}"
+            calls.load(std::sync::atomic::Ordering::SeqCst) == 2,
+            "a still-denied topic must be re-asked about on every heartbeat, not cached"
         );
         assert!(
             resp2
@@ -1263,6 +1280,7 @@ mod tests {
         let authorizer = Arc::new(CountingAuthorizer {
             inner: crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
             calls: calls.clone(),
+            watched_topics: std::collections::HashSet::from(["orders-eu"]),
             decision_ttl: Some(std::time::Duration::from_millis(20)),
         });
         let (broker_handle, _dir) = start_broker(authorizer).await;
@@ -1302,7 +1320,10 @@ mod tests {
             .expect("first heartbeat");
         let resp = decode_response(&bytes);
         assert!(resp.error_code == codes::NONE, "{resp:?}");
-        let after_first = calls.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            calls.load(std::sync::atomic::Ordering::SeqCst) == 1,
+            "the first heartbeat must consult the authorizer"
+        );
 
         // Nothing in the cluster or its ACLs changes, but wait past the
         // authorizer's own decision TTL before the next heartbeat.
@@ -1325,7 +1346,7 @@ mod tests {
         let resp2 = decode_response(&bytes2);
         assert!(resp2.error_code == codes::NONE, "{resp2:?}");
         assert!(
-            calls.load(std::sync::atomic::Ordering::SeqCst) > after_first,
+            calls.load(std::sync::atomic::Ordering::SeqCst) == 2,
             "a decision past the authorizer's own TTL must be re-asked about, \
                 not reused from the cache"
         );
