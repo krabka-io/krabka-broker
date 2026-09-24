@@ -72,6 +72,13 @@ impl Authorizer for AuditingAuthorizer {
     fn is_configured(&self) -> bool {
         self.inner.is_configured()
     }
+
+    /// Forward the wrapped authorizer's answer, for the same reason as
+    /// `is_configured`: this decorator adds auditing around a decision, it
+    /// does not change how long that decision stays fresh.
+    fn decision_ttl(&self) -> Option<std::time::Duration> {
+        self.inner.decision_ttl()
+    }
 }
 
 #[cfg(test)]

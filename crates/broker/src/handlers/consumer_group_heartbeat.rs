@@ -39,6 +39,12 @@ pub(crate) async fn handle(
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
     let coordinator = broker.group_coordinator.clone();
+    // Read the offset BEFORE the image, not after: if a record commits in
+    // between, `image` may reflect it while `metadata_offset` does not, which
+    // is the safe direction for `regex_authz_cache` below (it may cause one
+    // extra, unneeded recompute; the reverse order could tag a cache entry
+    // computed from a stale image with an offset that looks current).
+    let metadata_offset = broker.controller.current_metadata_offset();
     let image = broker.controller.current_image();
     {
         let mut cur: &[u8] = req_bytes;
@@ -101,7 +107,7 @@ pub(crate) async fn handle(
         // `check_subscribed_topic_regex` rejects it with
         // `INVALID_REGULAR_EXPRESSION` before any member state changes.
         let regex_authorized_topics =
-            regex_subscription_describe_authorized(broker, &image, ctx, &req);
+            regex_subscription_describe_authorized(broker, &image, metadata_offset, ctx, &req);
 
         if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
             return crate::handlers::encode_response(&error(error_code), version);
@@ -179,27 +185,43 @@ fn subscribed_names_describe_denied(
     .any(|result| result == AuthorizationResult::Deny)
 }
 
+/// Capacity of [`crate::coordinator::unified::GroupCoordinator::regex_authz_cache`].
+/// Matches the order of magnitude the OPA authorizer's own decision cache
+/// already accepts as "good enough" (see `authorizer::opa`'s module doc) --
+/// this cache holds one entry per live `(group_id, member_id, principal,
+/// host)`, not per topic, so it stays far smaller in practice.
+pub(crate) const REGEX_AUTHZ_CACHE_CAPACITY: std::num::NonZeroUsize =
+    std::num::NonZeroUsize::new(65_536).expect("65_536 is nonzero");
+
 /// A cached result of [`regex_subscription_describe_authorized`], keyed by
-/// `(group_id, member_id, principal)` in
+/// `(group_id, member_id, principal, host)` in
 /// [`crate::coordinator::unified::GroupCoordinator::regex_authz_cache`].
 ///
-/// `metadata_offset` is `broker.controller.current_metadata_offset()` at the
-/// time `authorized` was computed. Every metadata-log record — a topic
-/// create/delete or an ACL change alike — advances that offset, so comparing
-/// it on the next heartbeat is a cheap, sufficient test for "could the
-/// authorized set possibly be different now". A cache hit therefore requires
-/// both the pattern and the offset to match; either one to change forces a
-/// fresh, fail-closed recompute.
+/// Only ever holds topics the last check found `Describe`-`Allow`ed --
+/// [`regex_subscription_describe_authorized`] always re-asks the authorizer
+/// for a regex-matched topic this entry does NOT list, so a `Deny` (and any
+/// auditing or metrics side effect a decorator like `AuditingAuthorizer`
+/// attaches to it) is never silently skipped by a cache hit.
 #[derive(Debug, Clone)]
 pub(crate) struct RegexAuthzCacheEntry {
     pattern: String,
+    /// `broker.controller.current_metadata_offset()` at the time `authorized`
+    /// was computed. Every metadata-log record -- a topic create/delete or an
+    /// ACL change alike -- advances that offset, so comparing it on the next
+    /// heartbeat is a cheap, sufficient test for "could an ACL-backed
+    /// authorizer's answer possibly be different now".
     metadata_offset: i64,
+    /// Wall-clock time `authorized` was computed, checked against
+    /// `Authorizer::decision_ttl()` so a policy engine whose grants live
+    /// outside `metadata_offset` entirely (OPA) cannot have a revoked
+    /// `Allow` reused past its own decision-cache TTL.
+    computed_at: std::time::Instant,
     authorized: HashSet<String>,
 }
 
 /// Resolves `req.subscribed_topic_regex` against every topic name `image`
 /// currently knows about, and returns the subset of matches that
-/// `ctx.principal` may `Describe` right now.
+/// `ctx.principal` may `Describe` right now, from `ctx.peer`.
 ///
 /// The reconciler ANDs a live regex match against this set (fail-closed): a
 /// topic this call never authorized is excluded even if it starts matching
@@ -217,17 +239,24 @@ pub(crate) struct RegexAuthzCacheEntry {
 /// matches every topic name, so it goes through the same authorization walk
 /// as any other pattern rather than being read as "no regex".
 ///
-/// This recomputes only when something relevant to the decision could have
-/// changed since the last heartbeat from the same `(group_id, member_id,
-/// principal)`: the pattern itself, or `broker.controller.current_metadata_offset()`
-/// (which advances on every topic and every ACL change). Otherwise it reuses
-/// the cached result, at [`RegexAuthzCacheEntry`], with no call to the
-/// authorizer at all — the expensive part on a remote/OPA-backed
-/// `Authorizer`, and one that would otherwise run on every heartbeat a
-/// regex-subscribed member sends.
+/// `metadata_offset` MUST be read from `broker.controller` before `image` is,
+/// not after: see the comment at its call site in `handle`.
+///
+/// Every regex-matched topic is always resolved to a decision here -- this
+/// never skips calling the authorizer outright. What it skips is re-asking
+/// for a topic the cache already knows this exact `(group_id, member_id,
+/// principal, host, pattern)` was allowed to `Describe`, as of a metadata
+/// offset that has not advanced since (or, for an authorizer whose grants can
+/// go stale independently of the metadata log, within its own
+/// [`crate::authorizer::Authorizer::decision_ttl`]). A topic that is not in
+/// the cached allow-set -- because it was previously denied, is brand new, or
+/// the cache enty doesn't qualify at all -- is always asked about fresh, so a
+/// `Deny` decision (and whatever auditing a decorator attaches to it) keeps
+/// happening on every heartbeat, exactly as before this cache existed.
 fn regex_subscription_describe_authorized(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
+    metadata_offset: i64,
     ctx: &crate::handlers::RequestContext<'_>,
     req: &ConsumerGroupHeartbeatRequest,
 ) -> HashSet<String> {
@@ -235,70 +264,109 @@ fn regex_subscription_describe_authorized(
         broker
             .group_coordinator
             .regex_authz_cache
-            .remove(&cache_key(req, ctx));
+            .lock()
+            .expect("regex_authz_cache mutex poisoned")
+            .pop(&cache_key(req, ctx));
         return HashSet::new();
     };
-
-    let cache_key = cache_key(req, ctx);
-    let metadata_offset = broker.controller.current_metadata_offset();
-    if let Some(cached) = broker.group_coordinator.regex_authz_cache.get(&cache_key)
-        && cached.pattern == pattern
-        && cached.metadata_offset == metadata_offset
-    {
-        return cached.authorized.clone();
-    }
-
     let Ok(re) = regex::Regex::new(pattern) else {
         return HashSet::new();
     };
-    let matched: Vec<&str> = image
+    let matched: HashSet<&str> = image
         .topics()
         .map(|topic| topic.name.as_str())
         .filter(|name| re.is_match(name))
         .collect();
-    let authorized: HashSet<String> = if matched.is_empty() {
-        HashSet::new()
-    } else {
-        authorize_topics(
-            broker.config.authorizer.as_ref(),
-            image,
-            ctx.principal,
-            ctx.peer,
-            AclOperation::Describe,
-            matched,
-        )
-        .into_iter()
-        .filter(|(_, result)| *result == AuthorizationResult::Allow)
-        .map(|(name, _)| name.to_string())
-        .collect()
+    if matched.is_empty() {
+        return HashSet::new();
+    }
+
+    let key = cache_key(req, ctx);
+    let decision_ttl = broker.config.authorizer.decision_ttl();
+    let trusted_allowed: HashSet<String> = {
+        let mut cache = broker
+            .group_coordinator
+            .regex_authz_cache
+            .lock()
+            .expect("regex_authz_cache mutex poisoned");
+        cache
+            .get(&key)
+            .filter(|cached| cached.pattern == pattern && cached.metadata_offset == metadata_offset)
+            .filter(|cached| decision_ttl.is_none_or(|ttl| cached.computed_at.elapsed() < ttl))
+            .map(|cached| {
+                matched
+                    .iter()
+                    .filter(|name| cached.authorized.contains(**name))
+                    .map(|name| (*name).to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
     };
 
-    broker.group_coordinator.regex_authz_cache.insert(
-        cache_key,
-        RegexAuthzCacheEntry {
-            pattern: pattern.to_string(),
-            metadata_offset,
-            authorized: authorized.clone(),
-        },
-    );
+    // Every matched topic not already trusted as allowed is asked about
+    // fresh -- this is every topic on a cache miss, and only the previously
+    // denied / brand-new ones on a hit.
+    let to_check: Vec<&str> = matched
+        .iter()
+        .filter(|name| !trusted_allowed.contains(**name))
+        .copied()
+        .collect();
+    let mut authorized = trusted_allowed;
+    if !to_check.is_empty() {
+        authorized.extend(
+            authorize_topics(
+                broker.config.authorizer.as_ref(),
+                image,
+                ctx.principal,
+                ctx.peer,
+                AclOperation::Describe,
+                to_check,
+            )
+            .into_iter()
+            .filter(|(_, result)| *result == AuthorizationResult::Allow)
+            .map(|(name, _)| name.to_string()),
+        );
+    }
+
+    broker
+        .group_coordinator
+        .regex_authz_cache
+        .lock()
+        .expect("regex_authz_cache mutex poisoned")
+        .put(
+            key,
+            RegexAuthzCacheEntry {
+                pattern: pattern.to_string(),
+                metadata_offset,
+                computed_at: std::time::Instant::now(),
+                authorized: authorized.clone(),
+            },
+        );
     authorized
 }
 
 /// The [`GroupCoordinator::regex_authz_cache`] key for `req`'s member under
-/// `ctx.principal`. Principal is part of the key, not just `(group_id,
-/// member_id)`, because a first-join heartbeat may carry an empty
-/// `member_id` (the raw-RPC fallback `first_join_member_id` mints a
-/// server-side id for) — without the principal, two distinct callers racing
-/// that fallback in the same group could otherwise read back each other's
-/// cached authorization.
+/// `ctx.principal` from `ctx.peer`.
+///
+/// Principal is part of the key, not just `(group_id, member_id)`, because a
+/// first-join heartbeat may carry an empty `member_id` (the raw-RPC fallback
+/// `first_join_member_id` mints a server-side id for) — without the
+/// principal, two distinct callers racing that fallback in the same group
+/// could otherwise read back each other's cached authorization.
+///
+/// The host is part of the key too: `SimpleAclAuthorizer` and the OPA
+/// authorizer both let a grant depend on the caller's host address, not only
+/// its principal, so two connections from different addresses under the same
+/// principal are not interchangeable here either.
 fn cache_key(
     req: &ConsumerGroupHeartbeatRequest,
     ctx: &crate::handlers::RequestContext<'_>,
-) -> (String, String, String) {
+) -> (String, String, String, std::net::IpAddr) {
     (
         req.group_id.clone(),
         req.member_id.clone(),
         ctx.principal.name.clone(),
+        ctx.peer.ip(),
     )
 }
 
@@ -718,7 +786,7 @@ mod tests {
             ..Default::default()
         };
 
-        let authorized = regex_subscription_describe_authorized(&broker, &image, &ctx, &req);
+        let authorized = regex_subscription_describe_authorized(&broker, &image, 0, &ctx, &req);
 
         assert!(
             authorized == std::collections::HashSet::from(["orders".to_string()]),
@@ -852,6 +920,11 @@ mod tests {
     struct CountingAuthorizer {
         inner: crate::authorizer::SimpleAclAuthorizer,
         calls: Arc<std::sync::atomic::AtomicUsize>,
+        /// `None` matches every other production authorizer in this
+        /// codebase: a decision is exactly as fresh as the metadata image it
+        /// was computed from. `Some(ttl)` mimics an OPA-style authorizer
+        /// whose grants can go stale independently of the metadata log.
+        decision_ttl: Option<std::time::Duration>,
     }
 
     impl crate::authorizer::Authorizer for CountingAuthorizer {
@@ -862,6 +935,10 @@ mod tests {
         ) -> crate::authorizer::AuthorizationResult {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.inner.authorize(source, req)
+        }
+
+        fn decision_ttl(&self) -> Option<std::time::Duration> {
+            self.decision_ttl
         }
     }
 
@@ -875,6 +952,7 @@ mod tests {
         let authorizer = Arc::new(CountingAuthorizer {
             inner: crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
             calls: calls.clone(),
+            decision_ttl: None,
         });
         let (broker_handle, _dir) = start_broker(authorizer).await;
         let broker = broker_handle.broker_arc_for_test();
@@ -966,6 +1044,7 @@ mod tests {
         let authorizer = Arc::new(CountingAuthorizer {
             inner: crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
             calls: calls.clone(),
+            decision_ttl: None,
         });
         let (broker_handle, _dir) = start_broker(authorizer).await;
         let broker = broker_handle.broker_arc_for_test();
@@ -1063,6 +1142,168 @@ mod tests {
         assert!(
             assigned2 == std::collections::HashSet::from([orders_eu, orders_us]),
             "{assigned2:?}"
+        );
+
+        broker_handle.shutdown().await;
+    }
+
+    /// A `Deny` outcome must never be a cache hit: it is asked about fresh on
+    /// every heartbeat, exactly as before this cache existed, so a decorator
+    /// like `AuditingAuthorizer` keeps emitting its per-denial audit event
+    /// and metric on every heartbeat a still-denied topic matches, not only
+    /// the first.
+    #[tokio::test]
+    async fn regex_subscription_describe_authorized_rechecks_denied_topics_every_heartbeat() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let authorizer = Arc::new(CountingAuthorizer {
+            inner: crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
+            calls: calls.clone(),
+            decision_ttl: None,
+        });
+        let (broker_handle, _dir) = start_broker(authorizer).await;
+        let broker = broker_handle.broker_arc_for_test();
+        finalize_group_version(&broker).await;
+        // Deliberately no Describe grant for "orders-us": the regex matches
+        // it, but it must always be denied.
+        let mut records = vec![group_read_acl("g")];
+        records.push(topic_record("orders-us", uuid::Uuid::from_u128(1), 2));
+        records.extend(partition_records("orders-us", 2));
+        broker
+            .controller
+            .submit_change(records)
+            .await
+            .expect("create the denied topic");
+        let principal = alice();
+        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+        let ctx = crate::test_support::request_context(&principal, &peer, "c");
+        let member_id = uuid::Uuid::new_v4().to_string();
+
+        let req = crate::test_support::encode_request(
+            &ConsumerGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: member_id.clone(),
+                member_epoch: 0,
+                rebalance_timeout_ms: 30_000,
+                subscribed_topic_regex: Some("^orders-.*".into()),
+                ..Default::default()
+            },
+            VERSION,
+        );
+        let before_first = calls.load(std::sync::atomic::Ordering::SeqCst);
+        let bytes = handle(&broker, VERSION, 7, &req, &ctx)
+            .await
+            .expect("first heartbeat");
+        let resp = decode_response(&bytes);
+        assert!(resp.error_code == codes::NONE, "{resp:?}");
+        let after_first = calls.load(std::sync::atomic::Ordering::SeqCst);
+        let delta_first = after_first - before_first;
+
+        let req2 = crate::test_support::encode_request(
+            &ConsumerGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: member_id.clone(),
+                member_epoch: resp.member_epoch,
+                rebalance_timeout_ms: 30_000,
+                subscribed_topic_regex: Some("^orders-.*".into()),
+                ..Default::default()
+            },
+            VERSION,
+        );
+        let bytes2 = handle(&broker, VERSION, 8, &req2, &ctx)
+            .await
+            .expect("second heartbeat");
+        let resp2 = decode_response(&bytes2);
+        assert!(resp2.error_code == codes::NONE, "{resp2:?}");
+        let delta_second = calls.load(std::sync::atomic::Ordering::SeqCst) - after_first;
+        assert!(
+            delta_second == delta_first,
+            "a still-denied topic must be re-asked about on every heartbeat, \
+                not cached: delta_first={delta_first} delta_second={delta_second}"
+        );
+        assert!(
+            resp2
+                .assignment
+                .into_iter()
+                .all(|a| a.topic_partitions.is_empty()),
+            "the denied topic must never be assigned"
+        );
+
+        broker_handle.shutdown().await;
+    }
+
+    /// An authorizer that reports [`crate::authorizer::Authorizer::decision_ttl`]
+    /// (an OPA-style policy engine, whose grants can change without ever
+    /// touching the Kafka metadata log) must not have its cached `Allow`
+    /// reused past that TTL, even though the cluster's topic set and ACLs --
+    /// as far as `broker.controller.current_metadata_offset()` can see --
+    /// never change. Without this, revoking the grant in the external policy
+    /// store could leave the member authorized indefinitely.
+    #[tokio::test]
+    async fn regex_subscription_describe_authorized_expires_after_the_authorizers_own_ttl() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let authorizer = Arc::new(CountingAuthorizer {
+            inner: crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
+            calls: calls.clone(),
+            decision_ttl: Some(std::time::Duration::from_millis(20)),
+        });
+        let (broker_handle, _dir) = start_broker(authorizer).await;
+        let broker = broker_handle.broker_arc_for_test();
+        finalize_group_version(&broker).await;
+        let mut records = vec![group_read_acl("g"), describe_acl("orders-eu")];
+        records.push(topic_record("orders-eu", uuid::Uuid::from_u128(1), 2));
+        records.extend(partition_records("orders-eu", 2));
+        broker
+            .controller
+            .submit_change(records)
+            .await
+            .expect("grant ACLs and create topic");
+        let principal = alice();
+        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+        let ctx = crate::test_support::request_context(&principal, &peer, "c");
+        let member_id = uuid::Uuid::new_v4().to_string();
+
+        let req = crate::test_support::encode_request(
+            &ConsumerGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: member_id.clone(),
+                member_epoch: 0,
+                rebalance_timeout_ms: 30_000,
+                subscribed_topic_regex: Some("^orders-.*".into()),
+                ..Default::default()
+            },
+            VERSION,
+        );
+        let bytes = handle(&broker, VERSION, 7, &req, &ctx)
+            .await
+            .expect("first heartbeat");
+        let resp = decode_response(&bytes);
+        assert!(resp.error_code == codes::NONE, "{resp:?}");
+        let after_first = calls.load(std::sync::atomic::Ordering::SeqCst);
+
+        // Nothing in the cluster or its ACLs changes, but wait past the
+        // authorizer's own decision TTL before the next heartbeat.
+        std::thread::sleep(std::time::Duration::from_millis(60));
+
+        let req2 = crate::test_support::encode_request(
+            &ConsumerGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: member_id.clone(),
+                member_epoch: resp.member_epoch,
+                rebalance_timeout_ms: 30_000,
+                subscribed_topic_regex: Some("^orders-.*".into()),
+                ..Default::default()
+            },
+            VERSION,
+        );
+        let bytes2 = handle(&broker, VERSION, 8, &req2, &ctx)
+            .await
+            .expect("heartbeat after the TTL elapsed");
+        let resp2 = decode_response(&bytes2);
+        assert!(resp2.error_code == codes::NONE, "{resp2:?}");
+        assert!(
+            calls.load(std::sync::atomic::Ordering::SeqCst) > after_first,
+            "a decision past the authorizer's own TTL must be re-asked about, \
+                not reused from the cache"
         );
 
         broker_handle.shutdown().await;
