@@ -104,6 +104,44 @@ pub(super) fn image_with_topic_config(
     image
 }
 
+pub(super) fn group_resource(
+    resource_name: &str,
+    configs: &[(&str, &str)],
+) -> AlterConfigsResource {
+    AlterConfigsResource {
+        resource_type: super::RESOURCE_TYPE_GROUP,
+        resource_name: resource_name.into(),
+        configs: configs
+            .iter()
+            .map(|(name, value)| AlterableConfig {
+                name: (*name).into(),
+                value: Some((*value).into()),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }
+}
+
+pub(super) fn client_metrics_resource(
+    resource_name: &str,
+    configs: &[(&str, &str)],
+) -> AlterConfigsResource {
+    AlterConfigsResource {
+        resource_type: super::RESOURCE_TYPE_CLIENT_METRICS,
+        resource_name: resource_name.into(),
+        configs: configs
+            .iter()
+            .map(|(name, value)| AlterableConfig {
+                name: (*name).into(),
+                value: Some((*value).into()),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }
+}
+
 pub(super) fn broker_resource(
     resource_name: &str,
     configs: &[(&str, &str)],
@@ -127,6 +165,13 @@ pub(super) async fn drive_one(
     authorizer: Arc<dyn Authorizer>,
     resource: AlterConfigsResource,
 ) -> AlterConfigsResponse {
+    drive_many(authorizer, vec![resource]).await
+}
+
+pub(super) async fn drive_many(
+    authorizer: Arc<dyn Authorizer>,
+    resources: Vec<AlterConfigsResource>,
+) -> AlterConfigsResponse {
     let version = 2;
     let (broker_handle, _dir) = start_broker(authorizer).await;
     let broker = broker_handle.broker_arc_for_test();
@@ -138,7 +183,7 @@ pub(super) async fn drive_one(
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
     let req = AlterConfigsRequest {
-        resources: vec![resource],
+        resources,
         validate_only: false,
         ..Default::default()
     };
