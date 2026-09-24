@@ -324,7 +324,7 @@ mod tests {
     }
 
     #[test]
-    fn deny_wins_over_allow_in_bitfield() {
+    fn deny_wins_the_exact_operation_but_not_its_implied_describe() {
         let mut img = MetadataImage::new(Uuid::nil());
         img.apply(&MetadataRecord::V1AccessControlEntry(allow_acl(
             ResourceType::Topic,
@@ -340,10 +340,13 @@ mod tests {
         let p = principal("alice");
         let h = addr();
         let bits = authorized_operations_bits(&auth, &img, &p, &h, ResourceType::Topic, "foo");
-        // Read is denied; the Describe-via-Read implication also collapses
-        // because the matching ACL row that would have granted it now
-        // resolves to Deny under matches_operation. Bitfield is 0.
-        assert!(bits == 0);
+        // Read itself is denied: both ACL rows match the exact Read request,
+        // and DENY wins precedence. But Kafka's operation-implication table
+        // only ever widens what an ALLOW ACL matches -- a DENY Read ACL does
+        // not also deny the implied Describe. Only the ALLOW row matches a
+        // Describe request (via the Read -> Describe arrow); the DENY row
+        // does not apply to it at all. So Describe is allowed.
+        assert!(bits == bit(AclOperation::Describe));
     }
 
     #[test]
