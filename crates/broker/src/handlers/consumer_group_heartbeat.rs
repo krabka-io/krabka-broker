@@ -553,7 +553,18 @@ mod tests {
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
         let (broker_handle, _dir) = start_broker(Arc::new(authorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
-        // group.version is deliberately left UNFINALIZED.
+        // `start_broker`'s bootstrap seeds every feature at its release
+        // default for a modern metadata.version, which finalizes
+        // group.version >= 1 automatically. Explicitly downgrade it back to
+        // 0 (unfinalized/disabled) so this test observes the protocol gate.
+        broker
+            .controller
+            .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+                name: krabka_metadata::group_version::GROUP_VERSION_FEATURE.into(),
+                level: 0,
+            })])
+            .await
+            .expect("disable group.version");
         let principal = anonymous_principal();
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
         let ctx = test_context(&principal, &peer);
@@ -666,32 +677,35 @@ mod tests {
         })
     }
 
-    /// `topic_record`'s `partitions` field is only the requested count: a
-    /// `TopicRecord`'s `partitions` in the image is a derived cache that
-    /// starts at 0 and is restored only by the `V1Partition` records that
-    /// follow it in log order (`krabka_metadata::MetadataImage::apply`'s own
-    /// doc comment on the `V1Topic` arm says so). A test that submits a bare
-    /// `topic_record` and then expects the reconciler to assign the topic's
-    /// partitions needs one of these per partition index too, or
-    /// `ImageMetadataProvider::snapshot`'s `partitions_per_topic` reads back
-    /// 0 and the assignor has nothing to hand out.
-    fn partition_records(name: &str, partitions: i32) -> Vec<MetadataRecord> {
-        (0..partitions)
-            .map(|partition| {
-                MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
-                    topic: name.into(),
-                    partition,
-                    leader: krabka_metadata::NodeId(1),
-                    replicas: vec![krabka_metadata::NodeId(1)],
-                    isr: vec![krabka_metadata::NodeId(1)],
-                    leader_epoch: krabka_metadata::LeaderEpoch(0),
-                    adding_replicas: vec![],
-                    removing_replicas: vec![],
-                    directories: vec![],
-                    partition_epoch: 0,
-                })
+    /// A `V1Topic` record plus one `V1Partition` per index, assigned to
+    /// `node`. The KIP-631 wire framing does not carry `TopicRecord.partitions`
+    /// -- a decoded `V1Topic` round-trips back at `partitions == 0`, and the
+    /// real count comes from the `V1Partition` records that follow it -- so a
+    /// topic meant to be assignable needs both, unlike [`topic_record`] alone
+    /// (used only where a test never reaches the assignor).
+    fn topic_with_partitions(
+        name: &str,
+        topic_id: uuid::Uuid,
+        partitions: i32,
+        node: krabka_raft::NodeId,
+    ) -> Vec<MetadataRecord> {
+        let replicas = vec![node];
+        let mut records = vec![topic_record(name, topic_id, partitions)];
+        records.extend((0..partitions).map(|partition| {
+            MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
+                topic: name.into(),
+                partition,
+                leader: node,
+                replicas: replicas.clone(),
+                isr: replicas.clone(),
+                leader_epoch: krabka_metadata::LeaderEpoch(0),
+                adding_replicas: vec![],
+                removing_replicas: vec![],
+                directories: vec![],
+                partition_epoch: 0,
             })
-            .collect()
+        }));
+        records
     }
 
     fn alice() -> krabka_security::Principal {
@@ -867,14 +881,10 @@ mod tests {
         finalize_group_version(&broker).await;
         let allowed_id = uuid::Uuid::from_u128(1);
         let denied_id = uuid::Uuid::from_u128(2);
-        let mut records = vec![
-            group_read_acl("g"),
-            describe_acl("orders-eu"),
-            topic_record("orders-eu", allowed_id, 2),
-            topic_record("orders-us", denied_id, 2),
-        ];
-        records.extend(partition_records("orders-eu", 2));
-        records.extend(partition_records("orders-us", 2));
+        let node = krabka_raft::NodeId(broker_handle.node_id());
+        let mut records = vec![group_read_acl("g"), describe_acl("orders-eu")];
+        records.extend(topic_with_partitions("orders-eu", allowed_id, 2, node));
+        records.extend(topic_with_partitions("orders-us", denied_id, 2, node));
         broker
             .controller
             .submit_change(records)
@@ -957,9 +967,14 @@ mod tests {
         let (broker_handle, _dir) = start_broker(authorizer).await;
         let broker = broker_handle.broker_arc_for_test();
         finalize_group_version(&broker).await;
+        let node = krabka_raft::NodeId(broker_handle.node_id());
         let mut records = vec![group_read_acl("g"), describe_acl("orders-eu")];
-        records.push(topic_record("orders-eu", uuid::Uuid::from_u128(1), 2));
-        records.extend(partition_records("orders-eu", 2));
+        records.extend(topic_with_partitions(
+            "orders-eu",
+            uuid::Uuid::from_u128(1),
+            2,
+            node,
+        ));
         broker
             .controller
             .submit_change(records)
@@ -1049,6 +1064,7 @@ mod tests {
         let (broker_handle, _dir) = start_broker(authorizer).await;
         let broker = broker_handle.broker_arc_for_test();
         finalize_group_version(&broker).await;
+        let node = krabka_raft::NodeId(broker_handle.node_id());
         let orders_eu = uuid::Uuid::from_u128(1);
         let orders_us = uuid::Uuid::from_u128(2);
         let mut records = vec![
@@ -1058,9 +1074,8 @@ mod tests {
             // cannot yet match it.
             describe_acl("orders-eu"),
             describe_acl("orders-us"),
-            topic_record("orders-eu", orders_eu, 2),
         ];
-        records.extend(partition_records("orders-eu", 2));
+        records.extend(topic_with_partitions("orders-eu", orders_eu, 2, node));
         broker
             .controller
             .submit_change(records)
@@ -1105,8 +1120,7 @@ mod tests {
 
         // The cluster's topic set changes: "orders-us" now exists, and this
         // principal's Describe grant already covers it.
-        let mut new_topic_records = vec![topic_record("orders-us", orders_us, 2)];
-        new_topic_records.extend(partition_records("orders-us", 2));
+        let new_topic_records = topic_with_partitions("orders-us", orders_us, 2, node);
         broker
             .controller
             .submit_change(new_topic_records)
@@ -1165,9 +1179,14 @@ mod tests {
         finalize_group_version(&broker).await;
         // Deliberately no Describe grant for "orders-us": the regex matches
         // it, but it must always be denied.
+        let node = krabka_raft::NodeId(broker_handle.node_id());
         let mut records = vec![group_read_acl("g")];
-        records.push(topic_record("orders-us", uuid::Uuid::from_u128(1), 2));
-        records.extend(partition_records("orders-us", 2));
+        records.extend(topic_with_partitions(
+            "orders-us",
+            uuid::Uuid::from_u128(1),
+            2,
+            node,
+        ));
         broker
             .controller
             .submit_change(records)
@@ -1249,9 +1268,14 @@ mod tests {
         let (broker_handle, _dir) = start_broker(authorizer).await;
         let broker = broker_handle.broker_arc_for_test();
         finalize_group_version(&broker).await;
+        let node = krabka_raft::NodeId(broker_handle.node_id());
         let mut records = vec![group_read_acl("g"), describe_acl("orders-eu")];
-        records.push(topic_record("orders-eu", uuid::Uuid::from_u128(1), 2));
-        records.extend(partition_records("orders-eu", 2));
+        records.extend(topic_with_partitions(
+            "orders-eu",
+            uuid::Uuid::from_u128(1),
+            2,
+            node,
+        ));
         broker
             .controller
             .submit_change(records)
