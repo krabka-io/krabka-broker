@@ -539,6 +539,37 @@ mod tests {
         })
     }
 
+    /// A `V1Topic` record plus one `V1Partition` per index, assigned to
+    /// `node`. The KIP-631 wire framing does not carry `TopicRecord.partitions`
+    /// -- a decoded `V1Topic` round-trips back at `partitions == 0`, and the
+    /// real count comes from the `V1Partition` records that follow it -- so a
+    /// topic meant to be assignable needs both, unlike [`topic_record`] alone
+    /// (used only where a test never reaches the assignor).
+    fn topic_with_partitions(
+        name: &str,
+        topic_id: uuid::Uuid,
+        partitions: i32,
+        node: krabka_raft::NodeId,
+    ) -> Vec<MetadataRecord> {
+        let replicas = vec![node];
+        let mut records = vec![topic_record(name, topic_id, partitions)];
+        records.extend((0..partitions).map(|partition| {
+            MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
+                topic: name.into(),
+                partition,
+                leader: node,
+                replicas: replicas.clone(),
+                isr: replicas.clone(),
+                leader_epoch: krabka_metadata::LeaderEpoch(0),
+                adding_replicas: vec![],
+                removing_replicas: vec![],
+                directories: vec![],
+                partition_epoch: 0,
+            })
+        }));
+        records
+    }
+
     fn alice() -> krabka_security::Principal {
         krabka_security::Principal {
             name: "alice".into(),
@@ -712,14 +743,13 @@ mod tests {
         finalize_group_version(&broker).await;
         let allowed_id = uuid::Uuid::from_u128(1);
         let denied_id = uuid::Uuid::from_u128(2);
+        let node = krabka_raft::NodeId(broker_handle.node_id());
+        let mut records = vec![group_read_acl("g"), describe_acl("orders-eu")];
+        records.extend(topic_with_partitions("orders-eu", allowed_id, 2, node));
+        records.extend(topic_with_partitions("orders-us", denied_id, 2, node));
         broker
             .controller
-            .submit_change(vec![
-                group_read_acl("g"),
-                describe_acl("orders-eu"),
-                topic_record("orders-eu", allowed_id, 2),
-                topic_record("orders-us", denied_id, 2),
-            ])
+            .submit_change(records)
             .await
             .expect("grant ACLs and create topics");
         let principal = alice();
