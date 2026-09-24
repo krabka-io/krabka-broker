@@ -305,3 +305,37 @@ async fn handle_rejects_cidr_host_below_the_cidr_metadata_version() {
     assert!(all_acls(&broker_handle).is_empty());
     broker_handle.shutdown().await;
 }
+
+/// A broker whose image has never finalized `metadata.version` at all (a
+/// pre-bootstrap or legacy image) must still reject a CIDR host, not treat
+/// the absent level as a pass. `require_feature`'s permissive-on-absence
+/// default would wrongly accept this; `cidr_hosts_supported` must not.
+#[tokio::test]
+async fn handle_rejects_cidr_host_when_metadata_version_is_unfinalized() {
+    let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let p = principal("admin");
+    let peer = peer();
+    let ctx = test_context(&p, &peer);
+    let mut cidr_creation = creation("topic-a", "User:alice", OPERATION_READ);
+    cidr_creation.host = "10.0.0.0/8".into();
+    let req = request(vec![cidr_creation]);
+
+    let resp = handle(&broker, req, &ctx, VERSION).await.expect("handle");
+    let resp = decode_response(&resp);
+
+    let expected = CreateAclsResponse {
+        throttle_time_ms: 0,
+        results: vec![AclCreationResult {
+            error_code: codes::UNSUPPORTED_VERSION,
+            error_message: Some(
+                "CIDR-based ACL host patterns require metadata version 4.4-IV1 or higher.".into(),
+            ),
+            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+        }],
+        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+    };
+    assert!(resp == expected);
+    assert!(all_acls(&broker_handle).is_empty());
+    broker_handle.shutdown().await;
+}

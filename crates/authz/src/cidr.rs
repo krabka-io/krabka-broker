@@ -45,6 +45,19 @@ impl Cidr {
         let ip: IpAddr = ip_part
             .parse()
             .map_err(|_| format!("'{ip_part}' is not an IP address"))?;
+        // `contains` canonicalizes only the matched candidate, not the
+        // stored range, so an IPv4-mapped IPv6 range here (`::ffff:10.0.0.0`)
+        // would keep comparing as V6 against a canonicalized-to-V4 candidate,
+        // always hitting the address-family-mismatch arm and silently never
+        // matching. Reject it up front instead: the operator meant the plain
+        // IPv4 form, `10.0.0.0`, and should write that.
+        if let IpAddr::V6(v6) = ip
+            && v6.to_ipv4_mapped().is_some()
+        {
+            return Err(format!(
+                "'{ip_part}' is an IPv4-mapped IPv6 address; use its plain IPv4 form instead"
+            ));
+        }
         let max_prefix_len: u8 = match ip {
             IpAddr::V4(_) => 32,
             IpAddr::V6(_) => 128,
@@ -155,6 +168,10 @@ mod tests {
             ),
             ("10.0.0.0", "expected exactly one '/'"),
             ("10.0.0.0/8/8", "expected exactly one '/'"),
+            (
+                "::ffff:10.0.0.0/104",
+                "'::ffff:10.0.0.0' is an IPv4-mapped IPv6 address; use its plain IPv4 form instead",
+            ),
         ];
         for (input, reason) in cases {
             check!(
@@ -206,7 +223,7 @@ mod tests {
     #[test]
     fn zero_prefix_len_matches_everything_in_family() {
         let v4_any = Cidr::parse("0.0.0.0/0").unwrap();
-        check!(v4_any.contains(IpAddr::V4(Ipv4Addr::new(255, 255, 255, 255))));
+        check!(v4_any.contains(IpAddr::V4(Ipv4Addr::BROADCAST)));
         check!(!v4_any.contains(IpAddr::V6(Ipv6Addr::LOCALHOST)));
 
         let v6_any = Cidr::parse("::/0").unwrap();

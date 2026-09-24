@@ -93,12 +93,10 @@ pub(crate) async fn handle(
     // per request rather than per binding, the way
     // `AclControlManager.createAcls` resolves `metadataVersion.isCidrAclSupported()`
     // a single time and passes it into `validateNewAcl` for every creation.
-    let cidr_hosts_supported = crate::features::require_feature(
-        &image,
-        crate::features::METADATA_VERSION,
-        crate::features::CIDR_ACL_HOST_MIN_LEVEL,
-    )
-    .is_ok();
+    // `require_feature` is deliberately not used here: it is permissive on an
+    // unfinalized metadata.version, which would let a pre-bootstrap or legacy
+    // image create CIDR ACLs no real cluster can finalize yet.
+    let cidr_hosts_supported = crate::features::cidr_hosts_supported(&image);
 
     let mut results: Vec<AclCreationResult> = Vec::with_capacity(req.creations.len());
     let mut to_submit: Vec<(usize, MetadataRecord)> = Vec::with_capacity(req.creations.len());
