@@ -371,7 +371,7 @@ fn a_topic_replacement_audits_every_key_whose_value_moves() {
     }
 }
 
-/// A GROUP or CLIENT_METRICS `AlterConfigs` also replaces the whole override
+/// A GROUP or `CLIENT_METRICS` `AlterConfigs` also replaces the whole override
 /// map, so a replacement that omits a stored key must audit that key as
 /// changed -- the same rule topic resources already get, extended to the
 /// full-map-replacement types #1122 added authorization for.
