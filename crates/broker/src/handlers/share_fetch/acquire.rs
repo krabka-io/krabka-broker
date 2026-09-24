@@ -110,11 +110,19 @@ async fn grow_readable_window(
     max_inflight: i32,
     read_committed: bool,
 ) -> Result<(), BrokerError> {
-    let mut scan_from = state.start_offset;
+    // The scan floor must never sit below the log's own start offset: an
+    // `Acquired` batch below a moved log start keeps `state.start_offset`
+    // (the SPSO) pinned there until its lock expires (see
+    // `AcquisitionState::advance_past_log_start`), but the log itself no
+    // longer has that range to read. Without this clamp, every pass would
+    // re-scan the now-deleted prefix and hit `LogError::OffsetTooLow` again,
+    // even though `Available` offsets exist at or above the log start.
+    let log_start = partition.log_start_offset();
+    let mut scan_from = state.start_offset.max(log_start);
     loop {
         let end_before = state.end_offset;
         materialize_within_deferral_bound(state, upper, max_inflight);
-        let scan_start = scan_from.max(state.start_offset);
+        let scan_start = scan_from.max(state.start_offset).max(log_start);
         for (first, last) in
             unreadable_batch_ranges(partition, scan_start, state.end_offset, read_committed).await?
         {
@@ -337,21 +345,18 @@ async fn acquire_pass(
         // first, so it cannot hold the window shut.
         st.archive_exhausted(cfg.max_delivery_attempts);
         let remaining_records = remaining_record_budget(max_records, total);
-        let outcome = grow_and_acquire(
-            &mut st,
-            &mut p.out,
-            GrowAndAcquireArgs {
-                part: &part,
-                upper,
-                cfg,
-                read_committed,
-                member,
-                max_bytes: read_budget(p.partition_max_bytes, max_bytes),
-                remaining_records,
-                now,
-            },
-        )
-        .await;
+        let read_max_bytes = read_budget(p.partition_max_bytes, max_bytes);
+        let grow_and_acquire_args = || GrowAndAcquireArgs {
+            part: &part,
+            upper,
+            cfg,
+            read_committed,
+            member,
+            max_bytes: read_max_bytes,
+            remaining_records,
+            now,
+        };
+        let outcome = grow_and_acquire(&mut st, &mut p.out, grow_and_acquire_args()).await;
         let acquired_count = match outcome {
             Ok(count) => count,
             Err(err) if log_start_moved_past_spso(&err) => {
@@ -359,13 +364,31 @@ async fn acquire_pass(
                 // `SharePartition.updateCacheAndOffsets`: the log start offset
                 // moved past the SPSO. Archive the Available/Deferred records
                 // below it, move the SPSO (and the SPEO, if the window had not
-                // grown that far), and answer this partition with NONE and no
-                // records instead of failing the whole request. An Acquired
-                // record below the new start stays locked until it times out.
+                // grown that far). An Acquired record below the new start
+                // stays locked until it times out.
                 st.advance_past_log_start(part.log_start_offset());
                 p.out.records = None;
                 p.out.acquired_records.clear();
-                0
+                // Retry once in place, now that the SPSO/scan floor is
+                // repaired: without this, a repair that leaves readable
+                // records at the new log start would still report 0
+                // acquired, and the caller (which only long-polls when the
+                // WHOLE pass acquires nothing) would park for the full
+                // max_wait_ms even though a retry right now would already
+                // find them.
+                match grow_and_acquire(&mut st, &mut p.out, grow_and_acquire_args()).await {
+                    Ok(count) => count,
+                    Err(err) if log_start_moved_past_spso(&err) => {
+                        // The log start moved again between the two attempts.
+                        // Report the partition as caught up with no records
+                        // rather than failing the whole request.
+                        st.advance_past_log_start(part.log_start_offset());
+                        p.out.records = None;
+                        p.out.acquired_records.clear();
+                        0
+                    }
+                    Err(err) => return Err(err),
+                }
             }
             Err(err) => return Err(err),
         };

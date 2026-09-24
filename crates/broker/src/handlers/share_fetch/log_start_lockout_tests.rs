@@ -7,9 +7,10 @@
 //! `OFFSET_OUT_OF_RANGE` from the log read, calls
 //! `SharePartition.updateCacheAndOffsets` to archive the `Available` records
 //! below the new log start and move the SPSO and SPEO, and answers the
-//! partition with `NONE` and no records. These tests drive that same
-//! scenario against a live broker: produce records, move the log start with a
-//! real `DeleteRecords`, and fetch again.
+//! partition with `NONE`, retrying the fetch so a record already readable at
+//! or above the new log start is not held back for another round trip. These
+//! tests drive that same scenario against a live broker: produce records,
+//! move the log start with a real `DeleteRecords`, and fetch again.
 
 use std::sync::Arc;
 
@@ -277,14 +278,18 @@ struct Row {
     new_log_start: i64,
     /// The lockout fetch's partition error.
     expected_error: i16,
-    /// The lockout fetch's acquired ranges: none, because a partition that
-    /// hit the log-start move answers with no records this pass.
+    /// The lockout fetch's acquired ranges. The handler retries once in
+    /// place after repairing the SPSO, so any record already readable at or
+    /// above the new log start is handed out on this same pass -- not on a
+    /// later fetch.
     expected_acquired: Vec<(i64, i64)>,
     /// The SPSO right after the lockout fetch.
     expected_spso: i64,
-    /// What a follow-up fetch acquires, once the log-start move has been
-    /// absorbed (and, for the "acquired stays locked" row, before its lock
-    /// would ever expire).
+    /// What a follow-up fetch acquires: empty whenever the lockout fetch
+    /// already handed out everything currently acquirable (the in-place
+    /// retry means there is usually nothing left), and still empty for the
+    /// "acquired stays locked" row, whose lock the lockout fetch cannot and
+    /// must not touch.
     expected_next_acquired: Vec<(i64, i64)>,
 }
 
@@ -301,20 +306,25 @@ async fn share_fetch_survives_the_log_start_moving_past_the_spso() {
             prime_max_records: 0,
             new_log_start: 3,
             expected_error: codes::NONE,
-            expected_acquired: vec![],
+            // The lockout fetch repairs the SPSO and retries in place, so it
+            // already hands out [3,4] itself.
+            expected_acquired: vec![(3, 4)],
             expected_spso: 3,
-            expected_next_acquired: vec![(3, 4)],
+            expected_next_acquired: vec![],
         },
         Row {
             name: "available records below the new start are archived, acquired stay locked",
             prime_max_records: 2,
             new_log_start: 3,
             expected_error: codes::NONE,
-            expected_acquired: vec![],
             // [0,1] is Acquired by the priming fetch's member and blocks the
-            // advance; only offset 2, which was Available, is archived.
+            // SPSO from following the log start; offset 2, which was
+            // Available, is archived. Offsets [3,4] are unaffected by either
+            // and are handed out on this same lockout fetch, in place.
+            expected_acquired: vec![(3, 4)],
             expected_spso: 0,
-            // The [0,1] lock is still held, so nothing new is handed out.
+            // The [0,1] lock is still held, and [3,4] were already handed
+            // out above, so nothing new is left for a follow-up fetch.
             expected_next_acquired: vec![],
         },
         Row {
@@ -431,6 +441,12 @@ async fn a_healthy_partition_in_the_same_request_is_unaffected() {
         .map(|row| (row.partition_index, row.error_code, acquired(row)))
         .collect();
 
-    assert!(by_partition == vec![(0, codes::NONE, vec![]), (1, codes::NONE, vec![(0, 4)]),]);
+    assert!(
+        by_partition
+            == vec![
+                (0, codes::NONE, vec![(3, 4)]),
+                (1, codes::NONE, vec![(0, 4)]),
+            ]
+    );
     broker.shutdown().await;
 }
