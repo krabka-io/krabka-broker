@@ -87,7 +87,7 @@ pub fn acl_operation_match(
     requested: AclOperationKind,
     is_allow: bool,
 ) -> bool {
-    if stored == requested || stored == AclOperationKind::All {
+    if same_operation(stored, requested) || matches!(stored, AclOperationKind::All) {
         return true;
     }
     if !is_allow {
@@ -97,8 +97,8 @@ pub fn acl_operation_match(
         AclOperationKind::Read
         | AclOperationKind::Write
         | AclOperationKind::Delete
-        | AclOperationKind::Alter => requested == AclOperationKind::Describe,
-        AclOperationKind::AlterConfigs => requested == AclOperationKind::DescribeConfigs,
+        | AclOperationKind::Alter => matches!(requested, AclOperationKind::Describe),
+        AclOperationKind::AlterConfigs => matches!(requested, AclOperationKind::DescribeConfigs),
         AclOperationKind::All
         | AclOperationKind::Create
         | AclOperationKind::Describe
@@ -106,6 +106,27 @@ pub fn acl_operation_match(
         | AclOperationKind::DescribeConfigs
         | AclOperationKind::IdempotentWrite
         | AclOperationKind::TwoPhaseCommit => false,
+    }
+}
+
+/// `AclOperationKind` carries no `PartialEq` under `creusot` (its derive list
+/// is `DeepModel`-only there, for the specification-level equality that
+/// `#[ensures]` uses), so the executable body compares variants by matching
+/// instead of `==`.
+fn same_operation(a: AclOperationKind, b: AclOperationKind) -> bool {
+    match a {
+        AclOperationKind::All => matches!(b, AclOperationKind::All),
+        AclOperationKind::Read => matches!(b, AclOperationKind::Read),
+        AclOperationKind::Write => matches!(b, AclOperationKind::Write),
+        AclOperationKind::Create => matches!(b, AclOperationKind::Create),
+        AclOperationKind::Delete => matches!(b, AclOperationKind::Delete),
+        AclOperationKind::Alter => matches!(b, AclOperationKind::Alter),
+        AclOperationKind::Describe => matches!(b, AclOperationKind::Describe),
+        AclOperationKind::ClusterAction => matches!(b, AclOperationKind::ClusterAction),
+        AclOperationKind::DescribeConfigs => matches!(b, AclOperationKind::DescribeConfigs),
+        AclOperationKind::AlterConfigs => matches!(b, AclOperationKind::AlterConfigs),
+        AclOperationKind::IdempotentWrite => matches!(b, AclOperationKind::IdempotentWrite),
+        AclOperationKind::TwoPhaseCommit => matches!(b, AclOperationKind::TwoPhaseCommit),
     }
 }
 
