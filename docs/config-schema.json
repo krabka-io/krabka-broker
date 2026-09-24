@@ -2038,6 +2038,14 @@
             "null"
           ]
         },
+        "max_request_partition_size_limit": {
+          "description": "Upper clamp on `DescribeTopicPartitions`' `response_partition_limit`,\nKafka's `max.request.partition.size.limit`.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "message_max_bytes": {
           "default": null,
           "description": "Kafka's broker-wide `message.max.bytes`: the largest record batch a\ntopic that sets no `max.message.bytes` accepts.",
