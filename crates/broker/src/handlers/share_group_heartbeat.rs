@@ -70,6 +70,19 @@ pub(crate) async fn handle(
             );
         }
 
+        // ── Malformed-request check ────────────────────────────────
+        // Kafka's `ShareGroupHeartbeatRequestManager` validates the request
+        // shape -- a non-zero `member_epoch` (rejoin, steady-state, or leave)
+        // must carry a non-empty `member_id` -- between the group ACL check
+        // and topic filtering. Only `member_epoch == 0` (first join) allows
+        // an empty id, which the actor mints a fresh member id for. Running
+        // this before `subscribed_names_describe_denied` matters: a malformed
+        // request with a Describe-denied topic must answer `INVALID_REQUEST`,
+        // not `TOPIC_AUTHORIZATION_FAILED`.
+        if req.member_epoch != 0 && req.member_id.is_empty() {
+            return crate::handlers::encode_response(&error(codes::INVALID_REQUEST), version);
+        }
+
         // `Describe` on every distinct name in `subscribed_topic_names`
         // (Kafka's `filterByAuthorized(request.context, DESCRIBE, TOPIC,
         // subscribedTopicSet)`). Any denial fails the WHOLE heartbeat with
@@ -405,6 +418,54 @@ mod tests {
             resp.error_code == codes::GROUP_AUTHORIZATION_FAILED,
             "{resp:?}"
         );
+
+        broker_handle.shutdown().await;
+    }
+
+    /// A non-zero `member_epoch` with an empty `member_id` is malformed
+    /// (Kafka rejects it before topic filtering) and answers
+    /// `INVALID_REQUEST` even when the request also names a Describe-denied
+    /// topic -- the malformed-request check must win, not
+    /// `TOPIC_AUTHORIZATION_FAILED`.
+    #[tokio::test]
+    async fn handle_malformed_member_id_precedes_topic_authorization() {
+        let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+            cfg.authorizer = Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
+                std::collections::HashSet::new(),
+            ));
+            cfg.share_group.enable = true;
+        })
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        broker
+            .controller
+            .submit_change(vec![group_read_acl("g")])
+            .await
+            .expect("grant group Read");
+        let principal = alice();
+        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+        let ctx = crate::test_support::request_context(&principal, &peer, "c");
+        // No Describe grant for "topic-b" -- if the malformed-request check
+        // did not run first, this would answer `TOPIC_AUTHORIZATION_FAILED`.
+        let req = ShareGroupHeartbeatRequest {
+            group_id: "g".into(),
+            member_id: String::new(),
+            member_epoch: 5,
+            subscribed_topic_names: Some(vec!["topic-b".into()]),
+            ..Default::default()
+        };
+
+        let bytes = handle(
+            &broker,
+            share_group_heartbeat_response::MAX_VERSION,
+            9,
+            &crate::test_support::encode_request(&req, share_group_heartbeat_response::MAX_VERSION),
+            &ctx,
+        )
+        .await
+        .expect("ShareGroupHeartbeat handler");
+        let resp = decode_response(&bytes);
+        assert!(resp.error_code == codes::INVALID_REQUEST, "{resp:?}");
 
         broker_handle.shutdown().await;
     }
