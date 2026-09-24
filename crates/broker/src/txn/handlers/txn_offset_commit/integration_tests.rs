@@ -237,3 +237,64 @@ async fn txn_offset_commit_runs_the_existence_check_after_the_topic_read_gate() 
 
     handle.shutdown().await;
 }
+
+/// A v3+ request that both names an unknown row and fails KIP-447 group
+/// fencing (a non-empty, never-registered `member_id` against a fresh
+/// classic group) must keep `UNKNOWN_TOPIC_OR_PARTITION` on the unknown row
+/// rather than have the fencing error overwrite it, and the valid row must
+/// still get the fencing error and skip the append.
+#[tokio::test]
+async fn unknown_rows_survive_a_group_fencing_failure() {
+    let (handle, _dir) = start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.authorizer = Arc::new(GrantsInPrincipalName);
+    })
+    .await;
+    let broker = handle.broker_arc_for_test();
+    seed_topic_a(&broker).await;
+
+    let address = peer();
+    let version = 3;
+    let group_id = "group-fencing";
+    let user = principal(READ_ON_STAR);
+    let ctx = request_context(&user, &address, "txn-offset-commit-fencing");
+    let request = TxnOffsetCommitRequest {
+        transactional_id: "tid-fencing".to_string(),
+        group_id: group_id.to_string(),
+        producer_id: 42,
+        producer_epoch: 0,
+        member_id: "never-registered-member".to_string(),
+        generation_id: 0,
+        topics: vec![topic("a", &[0]), topic("missing", &[0])],
+        ..Default::default()
+    };
+    let bytes = dispatch_context(
+        &broker,
+        txn_offset_commit_request::API_KEY,
+        version,
+        &encode_request(&request, version),
+        &ctx,
+    )
+    .await;
+    let response: TxnOffsetCommitResponse = decode_response(&bytes, version);
+
+    let got: Vec<(String, i32, i16)> = response
+        .topics
+        .iter()
+        .flat_map(|t| {
+            t.partitions
+                .iter()
+                .map(|p| (t.name.clone(), p.partition_index, p.error_code))
+        })
+        .collect();
+    let expected = vec![
+        ("a".to_string(), 0, codes::UNKNOWN_MEMBER_ID),
+        ("missing".to_string(), 0, codes::UNKNOWN_TOPIC_OR_PARTITION),
+    ];
+    check!(got == expected, "fenced response preserves unknown rows");
+
+    check!(!log_holds_key(&broker, group_id, "a", 0));
+    check!(!log_holds_key(&broker, group_id, "missing", 0));
+
+    handle.shutdown().await;
+}

@@ -29,9 +29,12 @@
 //! After the topic `Read` gate, every partition of an authorized topic goes
 //! through the same existence check Kafka runs in
 //! `KafkaApis.handleTxnOffsetCommitRequest` (lines 2124-2150): a topic the
-//! metadata image does not hold, or a partition without a leader, answers
-//! `UNKNOWN_TOPIC_OR_PARTITION (3)` on that row and is left out of the
-//! transactional append. See [`existence::unknown_partitions`].
+//! metadata image does not hold, or a partition index outside that topic's
+//! range, answers `UNKNOWN_TOPIC_OR_PARTITION (3)` on that row and is left
+//! out of the transactional append. This code survives a later group-fencing
+//! failure too: the fenced-request response still carries
+//! `UNKNOWN_TOPIC_OR_PARTITION` on these rows rather than the fencing error.
+//! See [`existence::unknown_partitions`].
 
 use bytes::Bytes;
 use krabka_ids::PartitionIndex;
@@ -198,7 +201,10 @@ pub(crate) async fn handle(
             .await
         };
         if let Some(code) = code {
-            return encode_err_all(version, &req, code);
+            return encode_resp(
+                version,
+                &build_response(&req, code, &denied_topics, &unknown_rows),
+            );
         }
     }
 
