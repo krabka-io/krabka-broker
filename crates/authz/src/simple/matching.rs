@@ -7,17 +7,33 @@
 //! operation-implication table, which is why it lives beside them rather than
 //! in the decision loop.
 
+use std::net::IpAddr;
+
 use krabka_metadata::{AclEntry, AclOperation, PatternType, ResourceType};
 use krabka_verified::{
     AclOperationKind, AclPatternKind, acl_identity_match, acl_operation_match, acl_resource_match,
 };
 
+use crate::cidr::Cidr;
+
 pub(super) fn matches_principal(entry: &AclEntry, user_pattern: &str) -> bool {
     acl_identity_match(entry.principal == "User:*", entry.principal == user_pattern)
 }
 
-pub(super) fn matches_host(entry: &AclEntry, host: &str) -> bool {
-    acl_identity_match(entry.host == "*", entry.host == host)
+/// True when `entry`'s host applies to a request from `host` (the JDK
+/// `getHostAddress()` text of the peer, as `SimpleAclAuthorizer::authorize`
+/// derives it) whose original address is `peer_ip`.
+///
+/// A stored host is the wildcard, a literal address compared as text, or --
+/// KIP-1276 -- a CIDR range compared against `peer_ip` numerically. An entry
+/// host that fails to parse as a CIDR (no `/`, or `/` in ordinary text that is
+/// not one) falls back to the literal comparison, exactly as `CreateAcls`,
+/// `DescribeAcls` and `DeleteAcls` filters treat it.
+pub(super) fn matches_host(entry: &AclEntry, host: &str, peer_ip: IpAddr) -> bool {
+    if acl_identity_match(entry.host == "*", entry.host == host) {
+        return true;
+    }
+    entry.host.contains('/') && Cidr::parse(&entry.host).is_ok_and(|cidr| cidr.contains(peer_ip))
 }
 
 pub(super) fn matches_resource(entry: &AclEntry, resource_type: ResourceType, name: &str) -> bool {
@@ -472,6 +488,81 @@ mod tests {
             assert2::assert!(
                 auth.authorize(&img, &req(&a, &h, "foo", AclOperation::Read)) == *expected,
                 "peer {peer} vs acl host {acl_host}"
+            );
+        }
+    }
+
+    /// KIP-1276: a CIDR ACL host matches by numeric range, not by comparing
+    /// the peer's JDK host-address text against the CIDR literal.
+    #[test]
+    fn cidr_host_matches_peer_address_by_range() {
+        let cases: &[(&str, &str, AuthorizationResult)] = &[
+            ("10.1.2.3:5000", "10.0.0.0/8", AuthorizationResult::Allow),
+            ("11.0.0.1:5000", "10.0.0.0/8", AuthorizationResult::Deny),
+            (
+                "[2001:db8::5]:5000",
+                "2001:db8::/32",
+                AuthorizationResult::Allow,
+            ),
+            (
+                "[2001:db9::5]:5000",
+                "2001:db8::/32",
+                AuthorizationResult::Deny,
+            ),
+        ];
+        let a = alice();
+        let auth = SimpleAclAuthorizer::new(no_super());
+        for (peer, acl_host, expected) in cases {
+            let mut img = img();
+            img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+                PermissionType::Allow,
+                AclOperation::Read,
+                "User:alice",
+                acl_host,
+                PatternType::Literal,
+                "foo",
+            )));
+            let h: SocketAddr = peer.parse().unwrap();
+            assert2::assert!(
+                auth.authorize(&img, &req(&a, &h, "foo", AclOperation::Read)) == *expected,
+                "peer {peer} vs acl host {acl_host}"
+            );
+        }
+    }
+
+    /// A CIDR DENY still wins over a wildcard ALLOW for a peer inside the
+    /// range, and the wildcard ALLOW still covers a peer outside it -- the
+    /// same deny-wins-over-allow rule as a literal host ACL.
+    #[test]
+    fn cidr_deny_overrides_wildcard_allow_inside_range() {
+        let mut img = img();
+        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+            PermissionType::Allow,
+            AclOperation::Read,
+            "User:alice",
+            "*",
+            PatternType::Literal,
+            "foo",
+        )));
+        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+            PermissionType::Deny,
+            AclOperation::Read,
+            "User:alice",
+            "10.0.0.0/8",
+            PatternType::Literal,
+            "foo",
+        )));
+        let a = alice();
+        let auth = SimpleAclAuthorizer::new(no_super());
+        let cases: &[(&str, AuthorizationResult)] = &[
+            ("10.1.2.3:5000", AuthorizationResult::Deny),
+            ("192.168.0.1:5000", AuthorizationResult::Allow),
+        ];
+        for (peer, expected) in cases {
+            let h: SocketAddr = peer.parse().unwrap();
+            assert2::assert!(
+                auth.authorize(&img, &req(&a, &h, "foo", AclOperation::Read)) == *expected,
+                "peer {peer}"
             );
         }
     }

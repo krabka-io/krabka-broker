@@ -75,7 +75,7 @@ impl Authorizer for SimpleAclAuthorizer {
             for entry in source.matching_acls(req.resource_type, req.resource_name) {
                 if !matches_resource(entry, req.resource_type, req.resource_name)
                     || !matches_principal(entry, &user_pattern)
-                    || !matches_host(entry, &host_str)
+                    || !matches_host(entry, &host_str, req.host.ip())
                     || !matches_operation(entry.operation, req.operation)
                 {
                     continue;

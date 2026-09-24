@@ -8,7 +8,10 @@
 use std::sync::Arc;
 
 use assert2::assert;
-use krabka_metadata::{AclEntry, AclOperation, PatternType, PermissionType, ResourceType};
+use krabka_metadata::{
+    AclEntry, AclOperation, FeatureLevelRecord, MetadataRecord, PatternType, PermissionType,
+    ResourceType,
+};
 use krabka_protocol::{
     UnknownTaggedFields,
     owned::create_acls_response::{AclCreationResult, CreateAclsResponse},
@@ -207,6 +210,95 @@ async fn handle_answers_security_disabled_for_each_creation_when_no_authorizer_i
     let expected = CreateAclsResponse {
         throttle_time_ms: 0,
         results: vec![disabled.clone(), disabled],
+        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+    };
+    assert!(resp == expected);
+    assert!(all_acls(&broker_handle).is_empty());
+    broker_handle.shutdown().await;
+}
+
+/// #652 / KIP-1276: a CIDR host is accepted, and stored as the literal text
+/// the operator typed, once `metadata.version` reaches
+/// [`crate::features::CIDR_ACL_HOST_MIN_LEVEL`]. The gate cannot be reached
+/// through a real `UpdateFeatures` negotiation yet -- see the constant's own
+/// doc comment -- so the test seeds it with a raw controller submit, the same
+/// way the `alter_user_scram_credentials` and `create_delegation_token` gate
+/// tests seed their own metadata-version floors.
+#[tokio::test]
+async fn handle_accepts_cidr_host_at_the_cidr_metadata_version() {
+    let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
+    let broker = broker_handle.broker_arc_for_test();
+    broker
+        .controller
+        .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+            name: crate::features::METADATA_VERSION.to_string(),
+            level: crate::features::CIDR_ACL_HOST_MIN_LEVEL,
+        })])
+        .await
+        .expect("seed cidr-supporting metadata.version");
+    let p = principal("admin");
+    let peer = peer();
+    let ctx = test_context(&p, &peer);
+    let mut cidr_creation = creation("topic-a", "User:alice", OPERATION_READ);
+    cidr_creation.host = "10.0.0.0/8".into();
+    let req = request(vec![cidr_creation]);
+
+    let resp = handle(&broker, req, &ctx, VERSION).await.expect("handle");
+    let resp = decode_response(&resp);
+
+    let expected = CreateAclsResponse {
+        throttle_time_ms: 0,
+        results: vec![AclCreationResult::default()],
+        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+    };
+    assert!(resp == expected);
+    let acls = all_acls(&broker_handle);
+    let expected_acls = vec![AclEntry {
+        resource_type: ResourceType::Topic,
+        resource_name: "topic-a".into(),
+        pattern_type: PatternType::Literal,
+        principal: "User:alice".into(),
+        host: "10.0.0.0/8".into(),
+        operation: AclOperation::Read,
+        permission_type: PermissionType::Allow,
+    }];
+    assert!(acls == expected_acls);
+    broker_handle.shutdown().await;
+}
+
+/// The same CIDR host is refused below `CIDR_ACL_HOST_MIN_LEVEL`, with
+/// Kafka's exact `UNSUPPORTED_VERSION` message, and nothing is stored.
+#[tokio::test]
+async fn handle_rejects_cidr_host_below_the_cidr_metadata_version() {
+    let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
+    let broker = broker_handle.broker_arc_for_test();
+    broker
+        .controller
+        .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+            name: crate::features::METADATA_VERSION.to_string(),
+            level: crate::features::CIDR_ACL_HOST_MIN_LEVEL - 1,
+        })])
+        .await
+        .expect("seed pre-cidr metadata.version");
+    let p = principal("admin");
+    let peer = peer();
+    let ctx = test_context(&p, &peer);
+    let mut cidr_creation = creation("topic-a", "User:alice", OPERATION_READ);
+    cidr_creation.host = "10.0.0.0/8".into();
+    let req = request(vec![cidr_creation]);
+
+    let resp = handle(&broker, req, &ctx, VERSION).await.expect("handle");
+    let resp = decode_response(&resp);
+
+    let expected = CreateAclsResponse {
+        throttle_time_ms: 0,
+        results: vec![AclCreationResult {
+            error_code: codes::UNSUPPORTED_VERSION,
+            error_message: Some(
+                "CIDR-based ACL host patterns require metadata version 4.4-IV1 or higher.".into(),
+            ),
+            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+        }],
         unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
     };
     assert!(resp == expected);

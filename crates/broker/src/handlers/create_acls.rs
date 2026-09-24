@@ -89,6 +89,17 @@ pub(crate) async fn handle(
         return encode_response(&create_acls_response(results), api_version);
     }
 
+    // KIP-1276: whether a `/`-bearing host may be a CIDR range, computed once
+    // per request rather than per binding, the way
+    // `AclControlManager.createAcls` resolves `metadataVersion.isCidrAclSupported()`
+    // a single time and passes it into `validateNewAcl` for every creation.
+    let cidr_hosts_supported = crate::features::require_feature(
+        &image,
+        crate::features::METADATA_VERSION,
+        crate::features::CIDR_ACL_HOST_MIN_LEVEL,
+    )
+    .is_ok();
+
     let mut results: Vec<AclCreationResult> = Vec::with_capacity(req.creations.len());
     let mut to_submit: Vec<(usize, MetadataRecord)> = Vec::with_capacity(req.creations.len());
 
@@ -97,6 +108,7 @@ pub(crate) async fn handle(
             c,
             broker.config.acl_max_principal.bytes_usize(),
             broker.config.acl_max_resource_name.bytes_usize(),
+            cidr_hosts_supported,
         ) {
             Ok(entry) => {
                 let idx = results.len();
