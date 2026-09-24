@@ -200,6 +200,9 @@ fn rejects_invalid_additional_runtime_scalars() {
         ("default_min_insync_replicas must be positive", |c| {
             c.default_min_insync_replicas = 0;
         }),
+        ("max_request_partition_size_limit must be positive", |c| {
+            c.max_request_partition_size_limit = 0
+        }),
         ("future_log_move_read_chunk must be positive", |c| {
             c.future_log_move_read_chunk = <ByteSize as ByteSizeExt>::ZERO;
         }),

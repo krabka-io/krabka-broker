@@ -23,6 +23,29 @@
 //! Deny makes the broker omit the topic. This matches `Metadata` fetch-all, so
 //! the broker does not leak topic names to unauthorized clients.
 //!
+//! Every Deny row for a named request is collected up front, for every
+//! requested name, and appended after the (possibly truncated) paginated
+//! rows -- regardless of where the partition budget ran out. Only the
+//! Allow rows are deduplicated, sorted by name, and walked under the
+//! partition budget; see
+//! `KRaftMetadataCache.describeTopicResponse`/`KafkaApis.handleDescribeTopicPartitionsRequest`.
+//!
+//! ## Cursor validation
+//!
+//! A cursor naming a topic absent from a non-empty requested-topic list, or
+//! carrying a negative `partition_index`, fails the whole request with
+//! `INVALID_REQUEST (42)` before any authorization or pagination happens.
+//!
+//! ## Partition budget exhaustion at a topic boundary
+//!
+//! `KRaftMetadataCache.describeTopicResponse` checks the remaining partition
+//! budget at the top of every topic's turn, before resolving the topic or
+//! writing a row for it. When the budget already hit zero, that topic gets
+//! no row at all: the response's `next_cursor` points at
+//! `(topic_name, 0)` and the walk stops. This is also why a cursor can point
+//! at a requested name that turns out not to exist in the image -- the
+//! budget check runs before the existence check ever would.
+//!
 //! ## KIP-430 integration
 //!
 //! Every Allow row carries `topic_authorized_operations`. The v0 schema always
@@ -82,13 +105,29 @@ pub(crate) async fn handle(
     let mut cur: &[u8] = req_bytes;
     let req = DescribeTopicPartitionsRequest::decode(&mut cur, version)?;
 
+    // ── 0. Cursor validation. ───────────────────────────────────────────
+    // `KafkaApis.handleDescribeTopicPartitionsRequest` checks this before
+    // anything else -- before authorization, before pagination -- and
+    // fails the whole request with INVALID_REQUEST when it does not hold.
+    if let Some(cursor) = &req.cursor {
+        let named = !req.topics.is_empty();
+        let cursor_topic_missing = named
+            && !req
+                .topics
+                .iter()
+                .any(|topic| topic.name == cursor.topic_name);
+        if cursor_topic_missing || cursor.partition_index < 0 {
+            return crate::handlers::encode_response(&invalid_request_response(&req), version);
+        }
+    }
+
     let image = broker.controller.current_image();
     // KIP-112 / KIP-858 `offline_replicas` needs the fenced-broker set as well
     // as the image; see `handlers::offline_replicas`.
     let unavailable = crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
 
     // ── 1. Resolve the topic-name iteration order ──────────────────────
-    // Named request: return every requested name, in request order, even
+    // Named request: every requested name, deduplicated and sorted, even
     // if some don't exist (those rows carry UNKNOWN_TOPIC_OR_PARTITION).
     // Fetch-all (empty `topics`): walk every topic from the image,
     // alphabetical for deterministic pagination.
@@ -104,11 +143,39 @@ pub(crate) async fn handle(
         ordered_names.iter().map(String::as_str),
     );
 
-    // ── 4. Walk topics, building rows under the partition-limit budget. ─
-    let partition_limit = req.response_partition_limit.max(0);
+    // Split by authorization result up front. Every Deny row for a named
+    // request is collected here, unconditionally, so it survives even when
+    // the partition budget runs out before pagination reaches it -- Kafka
+    // appends the whole Deny set after the (possibly truncated) paginated
+    // rows, not in request/iteration position. A fetch-all Deny is silently
+    // omitted, matching `Metadata` fetch-all, so the broker doesn't leak
+    // topic existence to unauthorized clients.
+    let mut authorized_names: Vec<&String> = Vec::with_capacity(ordered_names.len());
+    let mut denied_out: Vec<DescribeTopicPartitionsResponseTopic> = Vec::new();
+    for name in &ordered_names {
+        let allowed = acl_by_name
+            .get(name.as_str())
+            .copied()
+            .unwrap_or(AuthorizationResult::Deny)
+            == AuthorizationResult::Allow;
+        if allowed {
+            authorized_names.push(name);
+        } else if named {
+            denied_out.push(error_topic(name, codes::TOPIC_AUTHORIZATION_FAILED));
+        }
+    }
+
+    // ── 4. Walk the authorized topics, building rows under the
+    // partition-limit budget. Kafka's clamp: `max(min(
+    // max.request.partition.size.limit, response_partition_limit), 1)`.
+    let partition_limit = broker
+        .config
+        .max_request_partition_size_limit
+        .min(req.response_partition_limit)
+        .max(1);
     let mut emitted_partitions: i32 = 0;
     let mut topics_out: Vec<DescribeTopicPartitionsResponseTopic> =
-        Vec::with_capacity(ordered_names.len());
+        Vec::with_capacity(authorized_names.len());
     let mut next_cursor: Option<ResponseCursor> = None;
 
     // Apply the request cursor's partition_index only to the first topic
@@ -116,32 +183,30 @@ pub(crate) async fn handle(
     // partition 0.
     let mut first_topic_partition_offset = cursor_partition;
 
-    for name in &ordered_names {
-        let allowed = acl_by_name
-            .get(name.as_str())
-            .copied()
-            .unwrap_or(AuthorizationResult::Deny)
-            == AuthorizationResult::Allow;
-        if !allowed {
-            if named {
-                topics_out.push(error_topic(name, codes::TOPIC_AUTHORIZATION_FAILED));
-            }
-            // Fetch-all Deny: silently omit so the broker doesn't leak
-            // topic existence to unauthorized clients.
-            first_topic_partition_offset = 0;
-            continue;
+    for name in &authorized_names {
+        // Kafka checks the remaining budget at the top of every topic's
+        // turn, before resolving it or writing a row: when the budget is
+        // already exhausted, this topic (existent or not) gets no row at
+        // all, and the cursor just points at it.
+        if emitted_partitions >= partition_limit {
+            next_cursor = Some(ResponseCursor {
+                topic_name: (*name).clone(),
+                partition_index: 0,
+                ..Default::default()
+            });
+            break;
         }
 
-        let topic = image.topic(name);
+        let topic = image.topic(name.as_str());
         let Some(t) = topic else {
-            topics_out.push(error_topic(name, codes::UNKNOWN_TOPIC_OR_PARTITION));
+            topics_out.push(unknown_topic_row(broker, &image, ctx, name.as_str()));
             first_topic_partition_offset = 0;
             continue;
         };
 
         // `partitions_of` yields ascending partition-index order — the
         // order the cursor pagination below depends on.
-        let mut sorted_parts: Vec<_> = image.partitions_of(name).collect();
+        let mut sorted_parts: Vec<_> = image.partitions_of(name.as_str()).collect();
 
         // Skip partitions before the cursor's `partition_index` on the
         // resume-topic only. `cursor_partition = 0` is a no-op skip.
@@ -154,7 +219,7 @@ pub(crate) async fn handle(
 
         // KIP-966: one read of the topic's published ELR state feeds every
         // partition row below; see `crate::elr`.
-        let topic_elr = TopicElr::of_topic(&image, name);
+        let topic_elr = TopicElr::of_topic(&image, name.as_str());
 
         let mut row_partitions: Vec<DescribeTopicPartitionsResponsePartition> =
             Vec::with_capacity(sorted_parts.len());
@@ -183,9 +248,9 @@ pub(crate) async fn handle(
 
         topics_out.push(DescribeTopicPartitionsResponseTopic {
             error_code: codes::NONE,
-            name: Some(name.clone()),
+            name: Some((*name).clone()),
             topic_id: WireUuid(t.topic_id.into_bytes()),
-            is_internal: is_internal_topic(&broker.config, name),
+            is_internal: is_internal_topic(&broker.config, name.as_str()),
             partitions: row_partitions,
             topic_authorized_operations,
             ..Default::default()
@@ -193,13 +258,17 @@ pub(crate) async fn handle(
 
         if truncated {
             next_cursor = Some(ResponseCursor {
-                topic_name: name.clone(),
+                topic_name: (*name).clone(),
                 partition_index: next_partition_index,
                 ..Default::default()
             });
             break;
         }
     }
+
+    // Deny rows are appended last, after the (possibly truncated) paginated
+    // Allow rows -- see the module docs.
+    topics_out.extend(denied_out);
 
     let resp = DescribeTopicPartitionsResponse {
         throttle_time_ms: 0,
@@ -259,13 +328,65 @@ fn error_topic(name: &str, error_code: i16) -> DescribeTopicPartitionsResponseTo
     }
 }
 
+/// The `UNKNOWN_TOPIC_OR_PARTITION` row for a named topic the image doesn't
+/// hold.
+///
+/// Kafka's `describeTopicResponse` still answers `Topic.isInternal(name)` and
+/// `topic_authorized_operations` on this row, computed from the name alone --
+/// so a request for a missing `__consumer_offsets` still reports
+/// `is_internal: true`, and the KIP-430 bitfield is never left unset.
+fn unknown_topic_row(
+    broker: &Broker,
+    image: &krabka_metadata::MetadataImage,
+    ctx: &crate::handlers::RequestContext<'_>,
+    name: &str,
+) -> DescribeTopicPartitionsResponseTopic {
+    DescribeTopicPartitionsResponseTopic {
+        error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+        name: Some(name.to_string()),
+        topic_id: WireUuid::ZERO,
+        is_internal: is_internal_topic(&broker.config, name),
+        partitions: Vec::new(),
+        topic_authorized_operations: authorized_operations_bits(
+            broker.config.authorizer.as_ref(),
+            image,
+            ctx.principal,
+            ctx.peer,
+            ResourceType::Topic,
+            name,
+        ),
+        ..Default::default()
+    }
+}
+
+/// The whole-request `INVALID_REQUEST` response for a bad cursor: one row per
+/// requested topic (in request order, not deduplicated), each carrying the
+/// error code and nothing else -- the same shape `MetadataResponse`'s
+/// equivalent error response uses, since neither schema has a top-level error
+/// code field to carry it instead.
+fn invalid_request_response(
+    req: &DescribeTopicPartitionsRequest,
+) -> DescribeTopicPartitionsResponse {
+    DescribeTopicPartitionsResponse {
+        topics: req
+            .topics
+            .iter()
+            .map(|topic| error_topic(&topic.name, codes::INVALID_REQUEST))
+            .collect(),
+        ..Default::default()
+    }
+}
+
 fn resolve_names(
     image: &krabka_metadata::MetadataImage,
     req: &DescribeTopicPartitionsRequest,
 ) -> (bool, Vec<String>, i32) {
     let named = !req.topics.is_empty();
     let mut ordered_names: Vec<String> = if named {
-        req.topics.iter().map(|topic| topic.name.clone()).collect()
+        let mut deduped: Vec<String> = req.topics.iter().map(|topic| topic.name.clone()).collect();
+        deduped.sort();
+        deduped.dedup();
+        deduped
     } else {
         let mut all_topics: Vec<_> = image.topics().map(|topic| topic.name.clone()).collect();
         all_topics.sort();
@@ -284,9 +405,13 @@ mod tests {
 
     use assert2::assert;
     use krabka_metadata::{MetadataRecord, NodeId, PartitionRecord, TopicRecord};
+    use krabka_protocol::owned::describe_topic_partitions_request::{
+        Cursor as RequestCursor, TopicRequest,
+    };
 
     use super::*;
     use crate::{
+        authorizer::{AuthorizationRequest, Authorizer},
         broker::BrokerHandle,
         test_support::{peer, principal},
     };
@@ -328,6 +453,378 @@ mod tests {
             ])
             .await
             .expect("seed topic + partition");
+    }
+
+    /// Seed a topic with `partitions` single-replica partitions, leader node
+    /// 1, no ELR. `id_seed` gives each seeded topic a distinct `topic_id` so
+    /// row comparisons can pin it.
+    async fn seed_topic(handle: &BrokerHandle, name: &str, id_seed: u128, partitions: i32) {
+        let mut records = vec![MetadataRecord::V1Topic(TopicRecord {
+            name: name.to_string(),
+            topic_id: uuid::Uuid::from_u128(id_seed),
+            partitions,
+            replication_factor: 1,
+        })];
+        for index in 0..partitions {
+            records.push(MetadataRecord::V1Partition(PartitionRecord {
+                topic: name.to_string(),
+                partition: index,
+                leader: NodeId(1),
+                replicas: vec![NodeId(1)],
+                isr: vec![NodeId(1)],
+                leader_epoch: krabka_metadata::LeaderEpoch(0),
+                adding_replicas: vec![],
+                removing_replicas: vec![],
+                directories: vec![uuid::Uuid::nil()],
+                partition_epoch: 0,
+            }));
+        }
+        handle
+            .broker_arc_for_test()
+            .controller
+            .submit_change(records)
+            .await
+            .expect("seed topic + partitions");
+    }
+
+    /// Denies `Describe` on `Topic(name)` for every name in the list, allows
+    /// everything else.
+    #[derive(Debug)]
+    struct DenyTopics(&'static [&'static str]);
+
+    impl Authorizer for DenyTopics {
+        fn authorize(
+            &self,
+            _source: &dyn krabka_authz::AclSource,
+            request: &AuthorizationRequest<'_>,
+        ) -> AuthorizationResult {
+            if request.resource_type == ResourceType::Topic
+                && request.operation == AclOperation::Describe
+                && self.0.contains(&request.resource_name)
+            {
+                AuthorizationResult::Deny
+            } else {
+                AuthorizationResult::Allow
+            }
+        }
+    }
+
+    fn request(
+        topics: Vec<&str>,
+        response_partition_limit: i32,
+        cursor: Option<RequestCursor>,
+    ) -> DescribeTopicPartitionsRequest {
+        DescribeTopicPartitionsRequest {
+            topics: topics
+                .into_iter()
+                .map(|name| TopicRequest {
+                    name: name.to_string(),
+                    ..Default::default()
+                })
+                .collect(),
+            response_partition_limit,
+            cursor,
+            ..Default::default()
+        }
+    }
+
+    fn partition_row(index: i32) -> DescribeTopicPartitionsResponsePartition {
+        DescribeTopicPartitionsResponsePartition {
+            error_code: codes::NONE,
+            partition_index: index,
+            leader_id: 1,
+            leader_epoch: 0,
+            replica_nodes: vec![1],
+            isr_nodes: vec![1],
+            eligible_leader_replicas: Some(vec![]),
+            last_known_elr: Some(vec![]),
+            offline_replicas: vec![],
+            ..Default::default()
+        }
+    }
+
+    /// A denied topic that would fall after the point pagination truncates
+    /// at still gets its `TOPIC_AUTHORIZATION_FAILED` row: Kafka collects
+    /// every Deny row up front and appends the whole set after the
+    /// (possibly truncated) paginated Allow rows, regardless of where the
+    /// partition budget ran out.
+    #[tokio::test]
+    async fn denied_topic_survives_truncation() {
+        let (broker_handle, _dir) = start_broker(Arc::new(DenyTopics(&["c"]))).await;
+        seed_topic(&broker_handle, "a", 1, 1).await;
+        seed_topic(&broker_handle, "b", 2, 1).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("admin");
+        let peer = peer();
+        let ctx = test_context(&p, &peer);
+        // Budget of 1: "a" fills it, "b" is truncated with no row (the
+        // partition-budget-at-topic-boundary rule), "c" is denied. Without
+        // the fix, "c" would vanish instead of appearing after "b".
+        let req = encode_request(&request(vec!["a", "b", "c"], 1, None));
+
+        let bytes = handle(&broker, VERSION, 123, &req, &ctx)
+            .await
+            .expect("handle");
+        let resp = decode_response(&bytes);
+
+        assert!(
+            resp == DescribeTopicPartitionsResponse {
+                throttle_time_ms: 0,
+                topics: vec![
+                    DescribeTopicPartitionsResponseTopic {
+                        error_code: codes::NONE,
+                        name: Some("a".into()),
+                        topic_id: WireUuid(uuid::Uuid::from_u128(1).into_bytes()),
+                        is_internal: false,
+                        partitions: vec![partition_row(0)],
+                        topic_authorized_operations: authorized_operations_bits(
+                            broker.config.authorizer.as_ref(),
+                            &broker.controller.current_image(),
+                            &p,
+                            &peer,
+                            ResourceType::Topic,
+                            "a",
+                        ),
+                        ..Default::default()
+                    },
+                    error_topic("c", codes::TOPIC_AUTHORIZATION_FAILED),
+                ],
+                next_cursor: Some(ResponseCursor {
+                    topic_name: "b".into(),
+                    partition_index: 0,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }
+        );
+
+        broker_handle.shutdown().await;
+    }
+
+    /// Duplicate requested names in reverse alphabetical order are
+    /// deduplicated and the surviving (Allow) names are sorted before
+    /// pagination walks them.
+    #[tokio::test]
+    async fn duplicate_requested_names_dedupe_and_sort() {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        seed_topic(&broker_handle, "a", 1, 1).await;
+        seed_topic(&broker_handle, "b", 2, 1).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("admin");
+        let peer = peer();
+        let ctx = test_context(&p, &peer);
+        let req = encode_request(&request(vec!["b", "a", "b", "a"], 2000, None));
+
+        let bytes = handle(&broker, VERSION, 123, &req, &ctx)
+            .await
+            .expect("handle");
+        let resp = decode_response(&bytes);
+
+        let names: Vec<&str> = resp
+            .topics
+            .iter()
+            .map(|topic| topic.name.as_deref().expect("named topic"))
+            .collect();
+        assert!(names == vec!["a", "b"]);
+
+        broker_handle.shutdown().await;
+    }
+
+    /// The cursor's topic name must be present in a non-empty requested-topic
+    /// list, and its partition index must not be negative. Either failure
+    /// answers `INVALID_REQUEST` for the whole request: one row per
+    /// requested topic, in request order, none of them paginated.
+    #[tokio::test]
+    async fn invalid_cursor_fails_the_whole_request() {
+        let cases: [(&str, Option<RequestCursor>); 2] = [
+            (
+                "cursor topic absent from a non-empty topic list",
+                Some(RequestCursor {
+                    topic_name: "missing".into(),
+                    partition_index: 0,
+                    ..Default::default()
+                }),
+            ),
+            (
+                "negative cursor partition index",
+                Some(RequestCursor {
+                    topic_name: "a".into(),
+                    partition_index: -1,
+                    ..Default::default()
+                }),
+            ),
+        ];
+
+        for (name, cursor) in cases {
+            let (broker_handle, _dir) =
+                start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+            seed_topic(&broker_handle, "a", 1, 1).await;
+            let broker = broker_handle.broker_arc_for_test();
+            let p = principal("admin");
+            let peer = peer();
+            let ctx = test_context(&p, &peer);
+            let req = encode_request(&request(vec!["a"], 2000, cursor));
+
+            let bytes = handle(&broker, VERSION, 123, &req, &ctx)
+                .await
+                .expect("handle");
+            let resp = decode_response(&bytes);
+
+            assert!(
+                resp == DescribeTopicPartitionsResponse {
+                    throttle_time_ms: 0,
+                    topics: vec![error_topic("a", codes::INVALID_REQUEST)],
+                    next_cursor: None,
+                    ..Default::default()
+                },
+                "case: {name}"
+            );
+
+            broker_handle.shutdown().await;
+        }
+    }
+
+    /// `response_partition_limit = 0` floors to 1 partition, not 0 --
+    /// Kafka's clamp is `max(min(max.request.partition.size.limit,
+    /// response_partition_limit), 1)`.
+    #[tokio::test]
+    async fn zero_partition_limit_floors_to_one() {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        seed_topic(&broker_handle, "a", 1, 2).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("admin");
+        let peer = peer();
+        let ctx = test_context(&p, &peer);
+        let req = encode_request(&request(vec!["a"], 0, None));
+
+        let bytes = handle(&broker, VERSION, 123, &req, &ctx)
+            .await
+            .expect("handle");
+        let resp = decode_response(&bytes);
+
+        let topic = resp
+            .topics
+            .iter()
+            .find(|t| t.name.as_deref() == Some("a"))
+            .expect("topic a row");
+        assert!(topic.partitions == vec![partition_row(0)]);
+        assert!(
+            resp.next_cursor
+                == Some(ResponseCursor {
+                    topic_name: "a".into(),
+                    partition_index: 1,
+                    ..Default::default()
+                })
+        );
+
+        broker_handle.shutdown().await;
+    }
+
+    /// When the partition budget runs out exactly at a topic boundary, Kafka
+    /// writes no row for the next topic at all -- it just points the cursor
+    /// at it, `(name, 0)`. This holds whether that next topic exists in the
+    /// image or not: the budget check runs before the existence check ever
+    /// would, so a cursor can legitimately name a topic the image doesn't
+    /// hold without krabka resolving it to an `UNKNOWN_TOPIC_OR_PARTITION`
+    /// row.
+    #[tokio::test]
+    async fn budget_exhausted_at_topic_boundary_emits_no_row_for_the_next_topic() {
+        for next_topic_exists in [true, false] {
+            let (broker_handle, _dir) =
+                start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+            seed_topic(&broker_handle, "a", 1, 1).await;
+            if next_topic_exists {
+                seed_topic(&broker_handle, "b", 2, 1).await;
+            }
+            let broker = broker_handle.broker_arc_for_test();
+            let p = principal("admin");
+            let peer = peer();
+            let ctx = test_context(&p, &peer);
+            let req = encode_request(&request(vec!["a", "b"], 1, None));
+
+            let bytes = handle(&broker, VERSION, 123, &req, &ctx)
+                .await
+                .expect("handle");
+            let resp = decode_response(&bytes);
+
+            let names: Vec<&str> = resp
+                .topics
+                .iter()
+                .map(|topic| topic.name.as_deref().expect("named topic"))
+                .collect();
+            assert!(
+                names == vec!["a"],
+                "next_topic_exists = {next_topic_exists}"
+            );
+            assert!(
+                resp.next_cursor
+                    == Some(ResponseCursor {
+                        topic_name: "b".into(),
+                        partition_index: 0,
+                        ..Default::default()
+                    }),
+                "next_topic_exists = {next_topic_exists}"
+            );
+
+            broker_handle.shutdown().await;
+        }
+    }
+
+    /// An `UNKNOWN_TOPIC_OR_PARTITION` row still answers `is_internal` (by
+    /// name, since the image has no record of the topic to look it up on)
+    /// and `topic_authorized_operations` -- neither field is left at its
+    /// unset default the way a Deny row's is.
+    ///
+    /// Uses `__transaction_state` rather than `__consumer_offsets`: the
+    /// broker's coordinator bootstrap creates `__consumer_offsets` eagerly on
+    /// startup (`coordinator::bootstrap::bootstrap`), so it would not be
+    /// `UNKNOWN_TOPIC_OR_PARTITION` by the time this request runs.
+    /// `__transaction_state` is internal (`INTERNAL_TOPICS`) but has no such
+    /// eager bootstrap.
+    #[tokio::test]
+    async fn unknown_topic_row_computes_is_internal_and_authorized_operations() {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("admin");
+        let peer = peer();
+        let ctx = test_context(&p, &peer);
+        let req = encode_request(&request(vec!["__transaction_state"], 2000, None));
+
+        let bytes = handle(&broker, VERSION, 123, &req, &ctx)
+            .await
+            .expect("handle");
+        let resp = decode_response(&bytes);
+
+        let expected_ops = authorized_operations_bits(
+            broker.config.authorizer.as_ref(),
+            &broker.controller.current_image(),
+            &p,
+            &peer,
+            ResourceType::Topic,
+            "__transaction_state",
+        );
+        assert!(expected_ops != i32::MIN);
+        assert!(
+            resp == DescribeTopicPartitionsResponse {
+                throttle_time_ms: 0,
+                topics: vec![DescribeTopicPartitionsResponseTopic {
+                    error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+                    name: Some("__transaction_state".into()),
+                    topic_id: WireUuid::ZERO,
+                    is_internal: true,
+                    partitions: Vec::new(),
+                    topic_authorized_operations: expected_ops,
+                    ..Default::default()
+                }],
+                next_cursor: None,
+                ..Default::default()
+            }
+        );
+
+        broker_handle.shutdown().await;
     }
 
     /// Seed a two-partition RF=3 topic whose partition 0 carries the KIP-966
