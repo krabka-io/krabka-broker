@@ -30,6 +30,25 @@ use crate::{
 /// (`Errors.TOPIC_AUTHORIZATION_FAILED.message()`).
 const TOPIC_AUTHORIZATION_FAILED_MESSAGE: &str = "Topic authorization failed.";
 
+/// The group's initialized partitions for `topic_id`, or empty when the
+/// group has no metadata yet or none of it names this topic. Shared by
+/// [`describe_topic`] and [`unauthorized_topic`], both of which must expand
+/// an empty request `partitions` list to "every initialized partition" the
+/// same way.
+fn initialized_partitions(
+    topic_id: uuid::Uuid,
+    metadata: Option<&ShareGroupStatePartitionMetadataValue>,
+) -> Vec<i32> {
+    metadata
+        .and_then(|m| {
+            m.initialized
+                .iter()
+                .find(|topic| topic.topic_id == topic_id)
+                .map(|topic| topic.partitions.clone())
+        })
+        .unwrap_or_default()
+}
+
 /// Build the response row for a topic the request named explicitly, but which
 /// the caller may not `Describe`.
 ///
@@ -38,12 +57,23 @@ const TOPIC_AUTHORIZATION_FAILED_MESSAGE: &str = "Topic authorization failed.";
 /// unauthorized name never reaches the persister. Every partition the request
 /// asked about for that topic answers `TOPIC_AUTHORIZATION_FAILED` with the
 /// `-1` sentinels and the all-zero topic id, and the row is appended after the
-/// coordinator-returned rows.
+/// coordinator-returned rows. An empty request `partitions` list means "every
+/// initialized partition", same as [`describe_topic`] -- otherwise a denied
+/// all-partitions request would silently answer with no rows at all.
 pub(super) fn unauthorized_topic(
+    image: &krabka_metadata::MetadataImage,
+    metadata: Option<&ShareGroupStatePartitionMetadataValue>,
     rt: DescribeShareGroupOffsetsRequestTopic,
 ) -> DescribeShareGroupOffsetsResponseTopic {
-    let partitions = rt
-        .partitions
+    let part_indices = if rt.partitions.is_empty() {
+        image
+            .topic(&rt.topic_name)
+            .map(|t| initialized_partitions(t.topic_id, metadata))
+            .unwrap_or_default()
+    } else {
+        rt.partitions
+    };
+    let partitions = part_indices
         .into_iter()
         .map(|p| DescribeShareGroupOffsetsResponsePartition {
             partition_index: p,
@@ -100,14 +130,7 @@ pub(super) async fn describe_topic(
     // Empty request partitions ⇒ enumerate the group's initialized partitions
     // for this topic_id.
     let part_indices: Vec<i32> = if rt.partitions.is_empty() {
-        metadata
-            .and_then(|m| {
-                m.initialized
-                    .iter()
-                    .find(|topic| topic.topic_id == topic_id)
-                    .map(|topic| topic.partitions.clone())
-            })
-            .unwrap_or_default()
+        initialized_partitions(topic_id, metadata)
     } else {
         rt.partitions
     };

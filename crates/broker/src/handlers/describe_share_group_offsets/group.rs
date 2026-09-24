@@ -53,22 +53,24 @@ pub(super) async fn describe_group(
             ..Default::default()
         };
     }
-    if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &gid) {
-        return DescribeShareGroupOffsetsResponseGroup {
-            group_id: gid,
-            error_code,
-            ..Default::default()
-        };
-    }
-
     // KIP-932: an explicit, empty topic list asks for nothing. Kafka's
     // `describeShareGroupOffsetsForGroup` answers with the group id and an
     // empty topic list without ever dispatching to the coordinator, so this
-    // never touches the persister.
+    // never touches the persister -- and never the coordinator-routing check
+    // either: there is no coordinator work to route, so the answer must not
+    // depend on which broker in the cluster happens to receive it.
     if matches!(&group.topics, Some(topics) if topics.is_empty()) {
         return DescribeShareGroupOffsetsResponseGroup {
             group_id: gid,
             error_code: codes::NONE,
+            ..Default::default()
+        };
+    }
+
+    if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &gid) {
+        return DescribeShareGroupOffsetsResponseGroup {
+            group_id: gid,
+            error_code,
             ..Default::default()
         };
     }
@@ -117,7 +119,7 @@ pub(super) async fn describe_group(
             acl_by_topic.get(rt.topic_name.as_str()).copied() == Some(AuthorizationResult::Allow);
         if !allowed {
             if explicit_request {
-                unauthorized.push(unauthorized_topic(rt));
+                unauthorized.push(unauthorized_topic(image, metadata.as_ref(), rt));
             }
             // Fetch-all: silently omit, matching Kafka's leak-avoidance.
             continue;
@@ -228,12 +230,101 @@ mod tests {
         }
     }
 
+    /// A denied topic requested with an empty `partitions` list (Kafka's
+    /// "all initialized partitions" shape) must expand to every one of the
+    /// group's initialized partitions for that topic, the same way the
+    /// authorized path does -- not to an empty row that looks like success.
+    #[tokio::test]
+    async fn explicit_all_partitions_request_expands_denied_topic_partitions() {
+        let orders_id = uuid::Uuid::from_u128(1);
+        let secret_id = uuid::Uuid::from_u128(2);
+        let mut image = image_with_topic("orders", orders_id);
+        image.apply(&MetadataRecord::V1Topic(TopicRecord {
+            name: "secret".into(),
+            topic_id: secret_id,
+            partitions: 2,
+            replication_factor: 1,
+        }));
+
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(DenyDescribeOnTopic("secret")), true).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let persister = broker
+            .group_coordinator
+            .share_persister()
+            .cloned()
+            .expect("share persister");
+        persister
+            .initialize("g3", orders_id, 0, 1, Offset(5))
+            .await
+            .expect("seed orders state");
+
+        broker
+            .group_coordinator
+            .replay_share_group_metadata("g3", ShareGroupMetadataValue { epoch: 1 });
+        broker
+            .group_coordinator
+            .replay_share_state_partition_metadata(
+                "g3",
+                ShareGroupStatePartitionMetadataValue {
+                    initialized: vec![
+                        InitializedTopic {
+                            topic_id: orders_id,
+                            topic_name: "orders".into(),
+                            partitions: vec![0],
+                        },
+                        InitializedTopic {
+                            topic_id: secret_id,
+                            topic_name: "secret".into(),
+                            partitions: vec![0, 1],
+                        },
+                    ],
+                    deleting: Vec::new(),
+                },
+            );
+
+        let principal = crate::test_support::principal("alice");
+        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let ctx = crate::test_support::request_context(&principal, &peer, "admin-client");
+
+        let result = describe_group(
+            &broker,
+            Some(broker.group_coordinator.as_ref()),
+            &image,
+            &ctx,
+            request_group(
+                "g3",
+                Some(vec![topic("orders", vec![0]), topic("secret", vec![])]),
+            ),
+        )
+        .await;
+
+        let secret_row = result
+            .topics
+            .iter()
+            .find(|t| t.topic_name == "secret")
+            .expect("denied topic row present");
+        assert!(
+            secret_row.partitions == vec![denied_partition(0), denied_partition(1)],
+            "{secret_row:?}"
+        );
+
+        broker_handle.shutdown().await;
+    }
+
     /// Table-driven: an explicit topic list, either all allowed or one topic
     /// denied. The denied topic's row must follow the allowed one, with the
     /// all-zero topic id and `TOPIC_AUTHORIZATION_FAILED` on every requested
     /// partition.
     #[tokio::test]
     async fn explicit_topic_list_partitions_by_describe_acl() {
+        struct Case {
+            name: &'static str,
+            authorizer: Arc<dyn Authorizer>,
+            include_secret: bool,
+            expected: Vec<DescribeShareGroupOffsetsResponseTopic>,
+        }
+
         let topic_id = uuid::Uuid::from_u128(0xD5C0);
         let orders_wire_id = WireUuid(*topic_id.as_bytes());
         let orders_row = DescribeShareGroupOffsetsResponseTopic {
@@ -248,13 +339,6 @@ mod tests {
             partitions: vec![denied_partition(0), denied_partition(1)],
             unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
         };
-
-        struct Case {
-            name: &'static str,
-            authorizer: Arc<dyn Authorizer>,
-            include_secret: bool,
-            expected: Vec<DescribeShareGroupOffsetsResponseTopic>,
-        }
         let cases = vec![
             Case {
                 name: "all topics allowed returns the normal row",
