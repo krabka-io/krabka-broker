@@ -80,24 +80,29 @@ pub(crate) async fn handle(
     if broker.config.authorizer.authorize(&*image, &acl_req) == AuthorizationResult::Deny {
         return encode_top_level(version, codes::GROUP_AUTHORIZATION_FAILED);
     }
-    if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &gid) {
-        return encode_top_level(version, error_code);
-    }
-
     // Kafka's `GroupCoordinatorService.alterShareGroupOffsets` refuses the
-    // empty group id before any group lookup.
+    // empty group id before any group lookup. This structural check runs
+    // before coordinator routing: an empty id hashes to some partition, and a
+    // broker that does not lead it would otherwise answer `NOT_COORDINATOR`
+    // instead of `INVALID_GROUP_ID`, so the error a client sees would depend
+    // on which broker happened to receive the request.
     if gid.is_empty() {
         return encode_top_level(version, codes::INVALID_GROUP_ID);
+    }
+    if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &gid) {
+        return encode_top_level(version, error_code);
     }
     // `GroupMetadataManager.getOrMaybeCreateShareGroup` throws
     // `GroupIdNotFoundException` for a group id already locked to another
     // protocol type. A share group not yet created (`None`) is fine: the
     // actor below creates and persists it.
-    if let Some(existing_type) = broker.group_coordinator.group_type(&gid)
+    let existing_type = broker.group_coordinator.group_type(&gid);
+    if let Some(existing_type) = existing_type
         && existing_type != GroupType::Share
     {
         return encode_top_level(version, codes::GROUP_ID_NOT_FOUND);
     }
+    let group_already_exists = existing_type.is_some();
 
     // Per-topic `Read` ACL — per-partition `TOPIC_AUTHORIZATION_FAILED` on
     // Deny, checked BEFORE the unknown-topic lookup below. Decided up front
@@ -189,6 +194,26 @@ pub(crate) async fn handle(
             partitions,
             ..Default::default()
         });
+    }
+
+    // No partition survived denial/unknown-topic filtering, and the group id
+    // does not exist yet: every response row already carries its final error
+    // code, and there is nothing to send an actor. Answer now, without
+    // claiming the group id as `Share` -- locking a not-yet-existing id for a
+    // request that mutates nothing would block classic/consumer/streams use
+    // of that id for the broker's lifetime while leaving no persisted trace
+    // of the group (a phantom that vanishes on restart). An id that already
+    // exists as a share group still goes to the actor below even with an
+    // empty batch, so its own emptiness/existence checks (e.g.
+    // `NON_EMPTY_GROUP`) still run.
+    if actor_requests.is_empty() && !group_already_exists {
+        let resp = AlterShareGroupOffsetsResponse {
+            throttle_time_ms: 0,
+            error_code: codes::NONE,
+            responses,
+            ..Default::default()
+        };
+        return crate::handlers::encode_response(&resp, version);
     }
 
     // The actor checks emptiness and applies the complete requested batch in

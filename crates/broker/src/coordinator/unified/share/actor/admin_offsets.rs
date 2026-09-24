@@ -87,7 +87,10 @@ pub(crate) async fn reset_offsets(
     }
 
     let mut results = Vec::with_capacity(requests.len());
-    let mut newly_initialized: Vec<(Uuid, i32, String)> = Vec::new();
+    // `(result index, topic id, partition, topic name)` for every partition
+    // this loop actually initialized, so a later durability failure (below)
+    // can find and downgrade exactly those `results` entries.
+    let mut newly_initialized: Vec<(usize, Uuid, i32, String)> = Vec::new();
     for request in requests {
         let Some(fresh_leader_epoch) =
             current_leader_epoch(coordinator, &request.topic_name, request.partition)
@@ -99,23 +102,49 @@ pub(crate) async fn reset_offsets(
             results.push(codes::FENCED_LEADER_EPOCH);
             continue;
         }
+        // An upgraded broker can hold a partition whose persisted state
+        // epoch was advanced independently by the pre-rewrite code path, and
+        // so already sits above `new_epoch`. `ShareCoordinator::initialize`
+        // rejects an epoch that does not exceed the stored one, so read the
+        // existing epoch first and initialize at whichever of the two is
+        // higher -- the group's own epoch is a floor here, not the only
+        // input.
+        let existing_state_epoch = match persister
+            .read_summary(&state.group_id, request.topic_id, request.partition)
+            .await
+        {
+            Ok(summary) => summary.map_or(0, |(state_epoch, ..)| state_epoch),
+            Err(e) => {
+                tracing::warn!(
+                    group_id = %state.group_id,
+                    topic_id = %request.topic_id,
+                    partition = request.partition,
+                    error = %e,
+                    "AlterShareGroupOffsets read_summary failed",
+                );
+                results.push(codes::COORDINATOR_NOT_AVAILABLE);
+                continue;
+            }
+        };
+        let init_epoch = new_epoch.max(existing_state_epoch.saturating_add(1));
         match persister
             .initialize(
                 &state.group_id,
                 request.topic_id,
                 request.partition,
-                new_epoch,
+                init_epoch,
                 Offset(request.start_offset),
             )
             .await
         {
             Ok(()) => {
+                results.push(codes::NONE);
                 newly_initialized.push((
+                    results.len() - 1,
                     Uuid(*request.topic_id.as_bytes()),
                     request.partition,
                     request.topic_name,
                 ));
-                results.push(codes::NONE);
             }
             Err(e) => {
                 tracing::warn!(
@@ -131,7 +160,7 @@ pub(crate) async fn reset_offsets(
     }
 
     if !newly_initialized.is_empty() {
-        for (topic_id, partition, topic_name) in &newly_initialized {
+        for (_, topic_id, partition, topic_name) in &newly_initialized {
             state.initialized.insert((*topic_id, *partition));
             state
                 .topic_names
@@ -152,10 +181,26 @@ pub(crate) async fn reset_offsets(
         .await
         .is_err()
         {
+            // The share-partition data itself was already durably
+            // initialized above -- only the group's own record of which
+            // partitions are initialized failed to persist. Reporting NONE
+            // here would let the caller believe the whole operation
+            // succeeded while a restart (or a fresh actor load) would come
+            // back without these partitions in `state.initialized`, hiding
+            // them from `DescribeShareGroupOffsets`/`DeleteShareGroupOffsets`
+            // and letting a later heartbeat re-`Initialize` them at `-1`,
+            // silently overwriting the reset offset. Roll the in-memory set
+            // back to match what is actually durable, and tell the caller to
+            // retry instead of claiming success.
+            for (result_index, topic_id, partition, _) in &newly_initialized {
+                state.initialized.remove(&(*topic_id, *partition));
+                results[*result_index] = codes::COORDINATOR_NOT_AVAILABLE;
+            }
             tracing::warn!(
                 group_id = %state.group_id,
                 "persisting ShareGroupStatePartitionMetadata after \
-                 AlterShareGroupOffsets failed; in-memory set retained",
+                 AlterShareGroupOffsets failed; reporting the affected \
+                 partitions as not available for retry",
             );
         }
     }
