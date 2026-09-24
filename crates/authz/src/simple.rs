@@ -149,16 +149,33 @@ impl Authorizer for SimpleAclAuthorizer {
             {
                 continue;
             }
-            let candidate = AuthorizationRequest {
-                principal,
-                host,
-                resource_type,
-                resource_name: entry.resource_name.as_str(),
-                operation,
-            };
-            if self.authorize(source, &candidate) == AuthorizationResult::Allow {
-                span.record("decision", "allow-acl");
-                return AuthorizationResult::Allow;
+            // Testing only the ALLOW entry's own stored name misses a
+            // PREFIXED grant when a LITERAL DENY happens to name that exact
+            // prefix string: e.g. ALLOW prefixed "ord" plus DENY literal
+            // "ord" would report the whole grant denied, even though
+            // "orders" and every other name under the prefix is still
+            // allowed. Test the prefix name itself (for a LITERAL entry,
+            // the only resource it can ever grant) and, for a PREFIXED
+            // entry, a synthetic name that is strictly under the prefix but
+            // cannot equal any real LITERAL ACL name, so a LITERAL DENY on
+            // the bare prefix string cannot shadow the grant it does not
+            // actually cover.
+            let mut candidate_names = vec![entry.resource_name.clone()];
+            if entry.pattern_type == krabka_metadata::PatternType::Prefixed {
+                candidate_names.push(format!("{}\u{10ffff}", entry.resource_name));
+            }
+            for resource_name in &candidate_names {
+                let candidate = AuthorizationRequest {
+                    principal,
+                    host,
+                    resource_type,
+                    resource_name: resource_name.as_str(),
+                    operation,
+                };
+                if self.authorize(source, &candidate) == AuthorizationResult::Allow {
+                    span.record("decision", "allow-acl");
+                    return AuthorizationResult::Allow;
+                }
             }
         }
         span.record("decision", "deny-default");

@@ -336,4 +336,36 @@ mod authorize_by_resource_type {
                 == AuthorizationResult::Allow
         );
     }
+
+    /// A literal DENY on the bare prefix string must not shadow a prefixed
+    /// ALLOW grant: "orders", "order-events", and every other resource
+    /// strictly under the "ord" prefix are still allowed, even though the
+    /// prefix string itself, taken as a literal resource name, is denied.
+    #[test]
+    fn literal_deny_on_the_bare_prefix_string_does_not_shadow_the_prefixed_allow() {
+        let mut img = img();
+        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+            PermissionType::Allow,
+            AclOperation::Write,
+            "User:alice",
+            "*",
+            PatternType::Prefixed,
+            "ord",
+        )));
+        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+            PermissionType::Deny,
+            AclOperation::Write,
+            "User:alice",
+            "*",
+            PatternType::Literal,
+            "ord",
+        )));
+        let a = alice();
+        let h = addr();
+        let auth = SimpleAclAuthorizer::new(no_super());
+        assert2::assert!(
+            auth.authorize_by_resource_type(&img, &a, &h, ResourceType::Topic, AclOperation::Write)
+                == AuthorizationResult::Allow
+        );
+    }
 }
