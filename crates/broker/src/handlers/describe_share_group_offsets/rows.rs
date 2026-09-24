@@ -26,6 +26,43 @@ use crate::{
     },
 };
 
+/// Kafka's message for `TOPIC_AUTHORIZATION_FAILED`
+/// (`Errors.TOPIC_AUTHORIZATION_FAILED.message()`).
+const TOPIC_AUTHORIZATION_FAILED_MESSAGE: &str = "Topic authorization failed.";
+
+/// Build the response row for a topic the request named explicitly, but which
+/// the caller may not `Describe`.
+///
+/// Kafka's `describeShareGroupOffsetsForGroup` partitions the requested names
+/// by topic `Describe` before it ever dispatches to the coordinator, so an
+/// unauthorized name never reaches the persister. Every partition the request
+/// asked about for that topic answers `TOPIC_AUTHORIZATION_FAILED` with the
+/// `-1` sentinels and the all-zero topic id, and the row is appended after the
+/// coordinator-returned rows.
+pub(super) fn unauthorized_topic(
+    rt: DescribeShareGroupOffsetsRequestTopic,
+) -> DescribeShareGroupOffsetsResponseTopic {
+    let partitions = rt
+        .partitions
+        .into_iter()
+        .map(|p| DescribeShareGroupOffsetsResponsePartition {
+            partition_index: p,
+            start_offset: -1,
+            leader_epoch: -1,
+            lag: -1,
+            error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+            error_message: Some(TOPIC_AUTHORIZATION_FAILED_MESSAGE.to_string()),
+            ..Default::default()
+        })
+        .collect();
+    DescribeShareGroupOffsetsResponseTopic {
+        topic_name: rt.topic_name,
+        topic_id: Uuid::default(),
+        partitions,
+        ..Default::default()
+    }
+}
+
 /// Build one response topic. It resolves `name → id`, and an unknown name
 /// gives per-partition `UNKNOWN_TOPIC_OR_PARTITION`. It enumerates the
 /// initialized partitions when the request omits an explicit list. It then
