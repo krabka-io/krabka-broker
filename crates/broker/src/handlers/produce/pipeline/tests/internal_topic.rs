@@ -36,10 +36,10 @@ fn internal_topic_denied(config: &BrokerConfig, topic: &str, client_id: &str) ->
 }
 
 // Kafka's three coordinator topics plus krabka's own broker-owned topics are
-// denied for every `client_id` but the admin-tooling exception; an ordinary
-// topic is never denied, whatever the `client_id`.
+// denied for every `client_id` but the admin-tooling and diskless-index-writer
+// exceptions; an ordinary topic is never denied, whatever the `client_id`.
 #[test]
-fn only_the_admin_client_may_produce_to_an_internal_topic() {
+fn only_the_admin_client_or_the_diskless_index_writer_may_produce_to_an_internal_topic() {
     let config = BrokerConfig::for_tests(PathBuf::from("/nonexistent"));
     let cases = [
         (
@@ -83,6 +83,18 @@ fn only_the_admin_client_may_produce_to_an_internal_topic() {
             "__consumer_offsets",
             "",
             true,
+        ),
+        (
+            "the diskless WAL index topic, an ordinary application",
+            "__diskless_wal_index",
+            "my-app",
+            true,
+        ),
+        (
+            "the diskless WAL index topic, the broker's own index writer",
+            "__diskless_wal_index",
+            "krabka-diskless-index-broker-1-producer",
+            false,
         ),
     ];
     for (label, topic, client_id, expected) in cases {
