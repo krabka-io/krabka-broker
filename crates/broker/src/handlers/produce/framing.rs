@@ -10,7 +10,7 @@ use krabka_protocol::{
     Decode,
     owned::produce_request::ProduceRequest,
     primitives::uuid::Uuid as WireUuid,
-    records::{RecordsPayload, count_records_in_v2_batches, produce_framing},
+    records::{Attributes, RecordsPayload, count_records_in_v2_batches, produce_framing},
 };
 
 use crate::error::BrokerError;
@@ -88,6 +88,67 @@ impl PartitionPayload {
             Self::Null => 0,
         }
     }
+
+    /// Whether any v2 batch in this field carries the KIP-98 transactional
+    /// attribute bit.
+    ///
+    /// This is Kafka's `RequestUtils.hasTransactionalRecords` per partition:
+    /// the ACL preamble needs it for every partition of the request, before
+    /// any batch is otherwise decoded, so it peeks each v2 batch header's
+    /// `attributes` field the same way `largest_batch_len` peeks
+    /// `batch_length` -- no CRC check, no decompression, no record body
+    /// read.
+    pub(super) fn has_transactional_batch(&self) -> bool {
+        match self {
+            Self::Slice(b) => any_v2_batch_transactional(b),
+            Self::Owned(p) => p
+                .as_v2()
+                .is_some_and(|batches| batches.iter().any(|b| b.attributes.is_transactional())),
+            Self::Null => false,
+        }
+    }
+}
+
+/// Offset of the 2-byte `attributes` field in a v2 batch header, counted from
+/// the header's start (`base_offset`). `MAGIC_OFFSET` (the `magic` byte) is
+/// followed by the 4-byte `crc`, then `attributes`.
+const ATTRIBUTES_OFFSET: usize = MAGIC_OFFSET + 1 + 4;
+
+/// Whether any v2 batch in `buf` carries the transactional attribute bit.
+///
+/// Walks the same header sequence `largest_v2_batch_len` walks, stopping at
+/// the same malformed or truncated tail: such a tail cannot decode as a
+/// transactional batch downstream either, since `prepare_batch` rejects it
+/// before an append is possible. A slice that is not v2 at all (a legacy
+/// `MessageSet`) is never transactional -- the attribute predates neither the
+/// idempotent producer nor v2 batches.
+fn any_v2_batch_transactional(buf: &[u8]) -> bool {
+    if buf.len() <= MAGIC_OFFSET || buf[MAGIC_OFFSET] != 2 {
+        return false;
+    }
+    let mut remaining = buf;
+    while remaining.len() >= V2_HEADER_LEN && remaining[MAGIC_OFFSET] == 2 {
+        let batch_length =
+            i32::from_be_bytes([remaining[8], remaining[9], remaining[10], remaining[11]]);
+        let Ok(batch_length) = usize::try_from(batch_length) else {
+            break;
+        };
+        let Some(total_len) = batch_length.checked_add(LOG_OVERHEAD) else {
+            break;
+        };
+        if total_len < V2_HEADER_LEN || total_len > remaining.len() {
+            break;
+        }
+        let attributes = i16::from_be_bytes([
+            remaining[ATTRIBUTES_OFFSET],
+            remaining[ATTRIBUTES_OFFSET + 1],
+        ]);
+        if Attributes(attributes).is_transactional() {
+            return true;
+        }
+        remaining = &remaining[total_len..];
+    }
+    false
 }
 
 /// Offset of the magic byte in a v2 batch header. Only magic 2 carries the
@@ -179,6 +240,29 @@ impl ProduceFramed {
                 })
                 .collect(),
         }
+    }
+
+    /// Kafka's `RequestUtils.hasTransactionalRecords(produceRequest)`: true
+    /// when any batch of any partition of this request carries the
+    /// transactional attribute, regardless of what `transactional_id` the
+    /// request itself carries.
+    ///
+    /// The ACL preamble uses this, not `transactional_id.is_some()`, to
+    /// decide whether the `TransactionalId` `Write` check applies at all.
+    /// Gating on the request field alone would both skip the check for a
+    /// transactional batch sent with no `transactional_id` -- letting a
+    /// principal with plain topic `Write` write into another producer's open
+    /// transaction, since `verify_transactional_produce` resolves the
+    /// transaction from the batch's `producer_id` -- and wrongly run it for a
+    /// request that names a `transactional_id` but carries only
+    /// non-transactional batches.
+    pub(super) fn has_transactional_batch(&self) -> bool {
+        self.topic_data.iter().any(|topic| {
+            topic
+                .partition_data
+                .iter()
+                .any(|p| p.payload.has_transactional_batch())
+        })
     }
 
     /// v0-2: wrap the fully-decoded legacy request. Every partition takes the
