@@ -9,8 +9,8 @@
 use super::{
     FileConfigError, RuntimeFileConfig,
     validate::{
-        kafka_int_bytes, positive_i64, positive_ratio, positive_time, positive_u32, positive_usize,
-        whole_bytes_u32, whole_bytes_u64, whole_bytes_usize,
+        kafka_int_bytes, positive_i32, positive_i64, positive_ratio, positive_time, positive_u32,
+        positive_usize, whole_bytes_u32, whole_bytes_u64, whole_bytes_usize,
     },
 };
 
@@ -211,6 +211,11 @@ impl RuntimeFileConfig {
             acl_max_resource_name,
             cfg.acl_max_resource_name,
             whole_bytes_usize
+        );
+        set_runtime_i32!(
+            runtime,
+            max_request_partition_size_limit,
+            cfg.max_request_partition_size_limit
         );
         if let Some(value) = runtime.telemetry_max_decompression_ratio {
             cfg.telemetry_max_decompression_ratio =

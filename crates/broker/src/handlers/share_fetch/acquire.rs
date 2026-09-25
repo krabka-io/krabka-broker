@@ -8,7 +8,7 @@
 
 use std::{sync::Arc, time::Instant};
 
-use krabka_log::Offset;
+use krabka_log::{LogError, Offset};
 
 use super::{
     acknowledge::apply_one_ack,
@@ -110,11 +110,19 @@ async fn grow_readable_window(
     max_inflight: i32,
     read_committed: bool,
 ) -> Result<(), BrokerError> {
-    let mut scan_from = state.start_offset;
+    // The scan floor must never sit below the log's own start offset: an
+    // `Acquired` batch below a moved log start keeps `state.start_offset`
+    // (the SPSO) pinned there until its lock expires (see
+    // `AcquisitionState::advance_past_log_start`), but the log itself no
+    // longer has that range to read. Without this clamp, every pass would
+    // re-scan the now-deleted prefix and hit `LogError::OffsetTooLow` again,
+    // even though `Available` offsets exist at or above the log start.
+    let log_start = partition.log_start_offset();
+    let mut scan_from = state.start_offset.max(log_start);
     loop {
         let end_before = state.end_offset;
         materialize_within_deferral_bound(state, upper, max_inflight);
-        let scan_start = scan_from.max(state.start_offset);
+        let scan_start = scan_from.max(state.start_offset).max(log_start);
         for (first, last) in
             unreadable_batch_ranges(partition, scan_start, state.end_offset, read_committed).await?
         {
@@ -131,6 +139,80 @@ fn remaining_record_budget(max_records: i32, acquired: i64) -> i32 {
     max_records
         .saturating_sub(i32::try_from(acquired).unwrap_or(i32::MAX))
         .max(0)
+}
+
+/// The read-only inputs [`grow_and_acquire`] needs, gathered into one value so
+/// the function itself takes few enough arguments for `clippy::pedantic`.
+struct GrowAndAcquireArgs<'a> {
+    part: &'a Arc<crate::partition::Partition>,
+    upper: Offset,
+    cfg: &'a crate::coordinator::unified::share::config::ShareGroupConfig,
+    read_committed: bool,
+    member: &'a str,
+    max_bytes: i32,
+    remaining_records: i32,
+    now: Instant,
+}
+
+/// Grows the readable window, promotes due deferrals, and acquires records
+/// for one partition, in that order.
+///
+/// This is everything an acquire pass does with a partition's log once its
+/// acknowledgements are applied and its exhausted records are archived. It is
+/// split out so the caller can catch [`LogError::OffsetTooLow`] around the
+/// whole sequence: any of these steps can read at the share-partition start
+/// offset, and that offset can sit below the log's start offset.
+async fn grow_and_acquire(
+    st: &mut crate::share_partition::state::AcquisitionState,
+    out: &mut krabka_protocol::owned::share_fetch_response::PartitionData,
+    args: GrowAndAcquireArgs<'_>,
+) -> Result<i64, BrokerError> {
+    let GrowAndAcquireArgs {
+        part,
+        upper,
+        cfg,
+        read_committed,
+        member,
+        max_bytes,
+        remaining_records,
+        now,
+    } = args;
+    grow_readable_window(st, part, upper, cfg.max_inflight_records, read_committed).await?;
+    // KFC-1: re-derive the deferral from the log and this partition's own
+    // clock on every pass, exactly as the control-batch ranges above are.
+    // Dropping it first is what keeps a batch that has since come due from
+    // staying held back by an older clock reading.
+    st.promote_deferred();
+    let deferred =
+        pending_activation_ranges(part, st.start_offset, st.end_offset, part.delivery.now_ms())
+            .await?;
+    for (first, last) in deferred {
+        st.defer_internal(first, last);
+    }
+    if remaining_records <= 0 {
+        return Ok(0);
+    }
+    let request = AcquireRequest {
+        member,
+        max_records: remaining_records,
+        max_bytes,
+        upper,
+        now,
+        lock_duration: cfg.record_lock_duration,
+        max_attempts: cfg.max_delivery_attempts,
+    };
+    acquire_read_records(out, part, st, &request).await
+}
+
+/// True when `err` is the log answering that a read started below its log
+/// start offset: `Log::check_locally_readable`'s [`LogError::OffsetTooLow`].
+///
+/// This is the retention/`DeleteRecords`/old-earliest-reset race the SPSO
+/// cannot see coming: the log start offset moved past it between one acquire
+/// pass and the next. It is not a partition-fencing error and not a corrupt
+/// read, so the caller recovers from it in place of failing the request.
+fn log_start_moved_past_spso(err: &BrokerError) -> bool {
+    matches!(err, BrokerError::Log(LogError::OffsetTooLow { .. }))
 }
 
 /// Runs one acquire pass over the pending partitions that this broker can
@@ -262,43 +344,53 @@ async fn acquire_pass(
         // A released or expired record at the delivery limit is archived
         // first, so it cannot hold the window shut.
         st.archive_exhausted(cfg.max_delivery_attempts);
-        grow_readable_window(
-            &mut st,
-            &part,
-            upper,
-            cfg.max_inflight_records,
-            read_committed,
-        )
-        .await?;
-        // KFC-1: re-derive the deferral from the log and this partition's own
-        // clock on every pass, exactly as the control-batch ranges above are.
-        // Dropping it first is what keeps a batch that has since come due from
-        // staying held back by an older clock reading.
-        st.promote_deferred();
-        let deferred = pending_activation_ranges(
-            &part,
-            st.start_offset,
-            st.end_offset,
-            part.delivery.now_ms(),
-        )
-        .await?;
-        for (first, last) in deferred {
-            st.defer_internal(first, last);
-        }
         let remaining_records = remaining_record_budget(max_records, total);
-        let acquired_count = if remaining_records > 0 {
-            let request = AcquireRequest {
-                member,
-                max_records: remaining_records,
-                max_bytes: read_budget(p.partition_max_bytes, max_bytes),
-                upper,
-                now,
-                lock_duration: cfg.record_lock_duration,
-                max_attempts: cfg.max_delivery_attempts,
-            };
-            acquire_read_records(&mut p.out, &part, &mut st, &request).await?
-        } else {
-            0
+        let read_max_bytes = read_budget(p.partition_max_bytes, max_bytes);
+        let grow_and_acquire_args = || GrowAndAcquireArgs {
+            part: &part,
+            upper,
+            cfg,
+            read_committed,
+            member,
+            max_bytes: read_max_bytes,
+            remaining_records,
+            now,
+        };
+        let outcome = grow_and_acquire(&mut st, &mut p.out, grow_and_acquire_args()).await;
+        let acquired_count = match outcome {
+            Ok(count) => count,
+            Err(err) if log_start_moved_past_spso(&err) => {
+                // Kafka's `ShareFetchUtils.processFetchResponse` /
+                // `SharePartition.updateCacheAndOffsets`: the log start offset
+                // moved past the SPSO. Archive the Available/Deferred records
+                // below it, move the SPSO (and the SPEO, if the window had not
+                // grown that far). An Acquired record below the new start
+                // stays locked until it times out.
+                st.advance_past_log_start(part.log_start_offset());
+                p.out.records = None;
+                p.out.acquired_records.clear();
+                // Retry once in place, now that the SPSO/scan floor is
+                // repaired: without this, a repair that leaves readable
+                // records at the new log start would still report 0
+                // acquired, and the caller (which only long-polls when the
+                // WHOLE pass acquires nothing) would park for the full
+                // max_wait_ms even though a retry right now would already
+                // find them.
+                match grow_and_acquire(&mut st, &mut p.out, grow_and_acquire_args()).await {
+                    Ok(count) => count,
+                    Err(err) if log_start_moved_past_spso(&err) => {
+                        // The log start moved again between the two attempts.
+                        // Report the partition as caught up with no records
+                        // rather than failing the whole request.
+                        st.advance_past_log_start(part.log_start_offset());
+                        p.out.records = None;
+                        p.out.acquired_records.clear();
+                        0
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
+            Err(err) => return Err(err),
         };
 
         p.out.error_code = codes::NONE;

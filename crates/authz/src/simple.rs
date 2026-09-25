@@ -95,7 +95,7 @@ impl Authorizer for SimpleAclAuthorizer {
                 }
                 has_resource_acls = true;
                 if !matches_principal(entry, &user_pattern)
-                    || !matches_host(entry, &host_str)
+                    || !matches_host(entry, &host_str, req.host.ip())
                     || !matches_operation(entry.operation, req.operation, entry.permission_type)
                 {
                     continue;

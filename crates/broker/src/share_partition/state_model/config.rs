@@ -37,6 +37,9 @@ pub(super) struct ShareModel {
     /// Whether the model generates the KFC-1 `Defer` and `PromoteDeferred`
     /// actions.
     pub(super) allow_defer: bool,
+    /// Whether the model generates `AdvanceLogStart` (retention /
+    /// `DeleteRecords` moving the log start offset past the SPSO).
+    pub(super) allow_log_start_advance: bool,
 }
 
 impl ShareModel {
@@ -53,6 +56,7 @@ impl ShareModel {
             max_inflight,
             allow_reload: false,
             allow_defer: false,
+            allow_log_start_advance: false,
         }
     }
 
@@ -68,6 +72,7 @@ impl ShareModel {
             max_inflight: 2,
             allow_reload: true,
             allow_defer: false,
+            allow_log_start_advance: false,
         }
     }
 
@@ -108,6 +113,30 @@ impl ShareModel {
             max_inflight: 3,
             allow_reload: false,
             allow_defer: true,
+            allow_log_start_advance: false,
+        }
+    }
+
+    /// Log-start-advance config: retention/`DeleteRecords` moving the log
+    /// start offset past the SPSO (issue #948), combined with `Acquire`,
+    /// `Acknowledge`, `Renew`, `ExpireLocks` (always available), and
+    /// `Reload` (leader failover) so the interaction between an in-flight
+    /// retention move and a crash-recovery round trip is checked too. One
+    /// member and a 3-offset window: wide enough for an `Acquired` run to
+    /// block an advance while an `Available` run ahead of it is archived
+    /// (mirrors `advance_past_log_start_leaves_other_members_acquired_records_alone`
+    /// in `share_partition::state::acquire`'s unit tests).
+    pub(super) fn log_start_advance() -> Self {
+        Self {
+            t0: Instant::now(),
+            members: 1,
+            max_offset: Offset(3),
+            max_tick: 2,
+            max_attempts: 2,
+            max_inflight: 3,
+            allow_reload: true,
+            allow_defer: false,
+            allow_log_start_advance: true,
         }
     }
 

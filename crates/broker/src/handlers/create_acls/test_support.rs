@@ -65,8 +65,11 @@ pub(super) fn all_acls(handle: &BrokerHandle) -> Vec<krabka_metadata::AclEntry> 
         .collect()
 }
 
-pub(super) fn validate(c: &AclCreation) -> Result<AclEntry, (i16, &'static str)> {
-    super::validate::validate(c, usize::MAX, usize::MAX)
+/// Validates `c` with unlimited principal/resource-name bytes and CIDR ACL
+/// hosts supported, which is what every test not specifically about those
+/// limits or the CIDR gate wants.
+pub(super) fn validate(c: &AclCreation) -> Result<AclEntry, (i16, String)> {
+    super::validate::validate(c, usize::MAX, usize::MAX, true)
 }
 
 /// An authorizer an operator actually configured, which lets the `admin` test

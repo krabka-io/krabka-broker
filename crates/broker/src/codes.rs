@@ -129,6 +129,10 @@ kafka_codes! {
     // Group coordinator codes.
     ILLEGAL_GENERATION = 22;
     INCONSISTENT_GROUP_PROTOCOL = 23;
+    /// `INVALID_GROUP_ID` (24): the request named the empty string as its
+    /// `group_id`. Kafka's `GroupCoordinatorService` checks this before any
+    /// group lookup.
+    INVALID_GROUP_ID = 24;
     UNKNOWN_MEMBER_ID = 25;
     REBALANCE_IN_PROGRESS = 27;
     /// `INVALID_TIMESTAMP` (32): a producer supplied a timestamp type or value
@@ -198,6 +202,10 @@ kafka_codes! {
     /// `MISMATCHED_ENDPOINT_TYPE` (114, KIP-919): the request reached a broker
     /// endpoint while asking for controllers, or vice versa.
     MISMATCHED_ENDPOINT_TYPE = 114;
+    /// `UNSUPPORTED_ENDPOINT_TYPE` (115, KIP-919): the request named an
+    /// `endpoint_type` this broker does not recognize (neither `BROKER` nor
+    /// `CONTROLLER`).
+    UNSUPPORTED_ENDPOINT_TYPE = 115;
     /// `UNKNOWN_SUBSCRIPTION_ID` (117, KIP-848): the coordinator did not find
     /// the consumer's persisted subscription identifier.
     UNKNOWN_SUBSCRIPTION_ID = 117;

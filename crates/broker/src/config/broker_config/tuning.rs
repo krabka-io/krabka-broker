@@ -197,6 +197,12 @@ macro_rules! tuning_fields {
             /// creates with `replication_factor = -1`. Kafka's
             /// `default.replication.factor`, default 1.
             pub default_replication_factor: i16,
+            /// Upper clamp on `DescribeTopicPartitions`'
+            /// `response_partition_limit`. Kafka's
+            /// `max.request.partition.size.limit`
+            /// (`ServerConfigs.MAX_REQUEST_PARTITION_SIZE_LIMIT_DEFAULT`),
+            /// default 2000.
+            pub max_request_partition_size_limit: i32,
             /// Bytes copied per future-log move read.
             pub future_log_move_read_chunk: ByteSize,
             /// Partition count for the consumer-offsets internal topic.

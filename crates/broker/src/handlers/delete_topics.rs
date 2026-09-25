@@ -109,16 +109,12 @@ pub(crate) async fn handle(
     let mut validated = resolve_topic_names(&req, &image);
 
     // ── ACL preamble ────────────────────────────────────────
-    // Batch-authorize every topic name for `Delete`. Topics that come
-    // back `Deny` short-circuit the delete loop and emit
-    // TOPIC_AUTHORIZATION_FAILED on that topic row.
-    let denied_topics = denied_topic_names(
-        broker.config.authorizer.as_ref(),
-        &image,
-        ctx.principal,
-        ctx.peer,
-        &validated.topics,
-    );
+    // Cluster `Delete` is a shortcut: an Allow there authorizes every topic
+    // name without a further lookup. Only a Deny falls back to `Delete` on
+    // each `Topic(name)` individually. Topics that come back `Deny` (or every
+    // topic, when even the fallback denies) short-circuit the delete loop and
+    // emit TOPIC_AUTHORIZATION_FAILED on that topic row.
+    let denied_topics = denied_topic_names(broker, &image, ctx, &validated.topics);
     // A name whose topic id another row carries is INVALID_REQUEST too, but
     // Kafka decides that only for a topic the principal may delete.
     validated.reject_names_of_supplied_ids(&image, &denied_topics);

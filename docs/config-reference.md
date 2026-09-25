@@ -434,6 +434,7 @@ Validated operational policy loaded from `[runtime]`.
 | `max_connections_per_ip` | integer (uint) | broker default |  | Maximum number of live connections from any single client IP, Kafka's `max.connections.per.ip`. |
 | `max_incremental_fetch_session_cache_slots` | integer (uint) | broker default |  | KIP-227: maximum number of incremental-fetch sessions kept in the per- broker cache, Kafka's `max.incremental.fetch.session.cache.slots`. When the cache is full a non-privileged session is evicted in LRU order. |
 | `max_produce_group` | integer (uint) | broker default |  | Maximum number of produce requests combined into one append group. |
+| `max_request_partition_size_limit` | integer (int32) | broker default |  | Upper clamp on `DescribeTopicPartitions`' `response_partition_limit`, Kafka's `max.request.partition.size.limit`. |
 | `message_max_bytes` | string | broker default | byte size | Kafka's broker-wide `message.max.bytes`: the largest record batch a topic that sets no `max.message.bytes` accepts. |
 | `metadata_max_bytes_between_snapshots` | string | broker default | byte size | Committed metadata-log bytes between snapshots, Kafka's `metadata.log.max.record.bytes.between.snapshots`. |
 | `metadata_max_snapshot_interval` | string | broker default | duration | Maximum time between metadata-log snapshots, Kafka's `metadata.log.max.snapshot.interval.ms`. Zero disables the time-based cap. |
