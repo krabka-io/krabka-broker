@@ -129,6 +129,10 @@ kafka_codes! {
     // Group coordinator codes.
     ILLEGAL_GENERATION = 22;
     INCONSISTENT_GROUP_PROTOCOL = 23;
+    /// `INVALID_GROUP_ID` (24): the request named the empty string as its
+    /// `group_id`. Kafka's `GroupCoordinatorService` checks this before any
+    /// group lookup.
+    INVALID_GROUP_ID = 24;
     UNKNOWN_MEMBER_ID = 25;
     REBALANCE_IN_PROGRESS = 27;
     /// `INVALID_TIMESTAMP` (32): a producer supplied a timestamp type or value
