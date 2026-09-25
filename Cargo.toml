@@ -85,18 +85,18 @@ num-traits = "0.2.19"
 object_store = { version = "0.14", features = ["aws", "gcp"] }
 # Slice 42: OTLP distributed tracing. opentelemetry-otlp 0.32 lines up with
 # the tonic 0.14 / prost 0.14 / reqwest 0.13 stack already in the dep graph.
-opentelemetry = { version = "0.32", default-features = false, features = ["trace", "logs"] }
+opentelemetry = { version = "0.33", default-features = false, features = ["trace", "logs"] }
 # Bridges `tracing` events → OTLP log records so services emit logs over OTLP
 # (alloy:4317 → logs-distributor) rather than relying on container-stdout tailing
 # (which doesn't stream on Docker Desktop). Version tracks the opentelemetry 0.32 stack.
-opentelemetry-appender-tracing = { version = "0.32", default-features = false }
-opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "logs", "grpc-tonic", "http-proto", "reqwest-blocking-client"] }
+opentelemetry-appender-tracing = { version = "0.33", default-features = false }
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["trace", "logs", "grpc-tonic", "http-proto", "reqwest-blocking-client"] }
 # Slice KIP-714: prost-generated OTLP MetricsData / MetricsService types
 # (opentelemetry 0.32 stack). `gen-tonic` exposes the OTLP gRPC service traits the
 # metrics distributor implements; `gen-tonic-messages` + `trace` serve the traces
 # signal; `tonic-prost` carries the prost codec for tonic 0.14.
-opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic", "gen-tonic-messages", "metrics", "trace"] }
-opentelemetry_sdk = { version = "0.32", default-features = false, features = ["trace", "logs"] }
+opentelemetry-proto = { version = "0.33", default-features = false, features = ["gen-tonic", "gen-tonic-messages", "metrics", "trace"] }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace", "logs"] }
 pbkdf2 = { version = "=0.13.0", default-features = false, features = ["kdf", "hmac"] }
 prometheus-client = "0.25"
 proptest = "1"
