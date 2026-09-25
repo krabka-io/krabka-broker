@@ -163,7 +163,7 @@ async fn actor_loop(
                         let _ = reply.send(build_describe(&state));
                     }
                     ShareGroupActorMessage::ResetOffsets { requests, reply } => {
-                        let result = reset_offsets(&state, &coordinator, requests).await;
+                        let result = reset_offsets(&mut state, &coordinator, requests).await;
                         let _ = reply.send(result);
                     }
                     ShareGroupActorMessage::DeleteOffsets { requests, reply } => {

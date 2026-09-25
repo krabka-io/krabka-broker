@@ -50,7 +50,7 @@ use self::{
     runner::{
         PINNED_UNIQUE_STATES_DEFERRAL, PINNED_UNIQUE_STATES_DEFERRAL_WIDE,
         PINNED_UNIQUE_STATES_FAILOVER, PINNED_UNIQUE_STATES_INFLIGHT_FULL,
-        PINNED_UNIQUE_STATES_INFLIGHT_ONE, run,
+        PINNED_UNIQUE_STATES_INFLIGHT_ONE, PINNED_UNIQUE_STATES_LOG_START_ADVANCE, run,
     },
 };
 
@@ -103,5 +103,17 @@ fn share_deferral_wide() {
         ShareModel::deferral_wide(),
         "share_deferral_wide",
         PINNED_UNIQUE_STATES_DEFERRAL_WIDE,
+    );
+}
+
+#[test]
+fn share_log_start_advance() {
+    // Issue #948: the log start offset (retention / DeleteRecords) can move
+    // past the SPSO, combined with Reload so the interaction with a
+    // crash-recovery round trip is checked too.
+    run(
+        ShareModel::log_start_advance(),
+        "share_log_start_advance",
+        PINNED_UNIQUE_STATES_LOG_START_ADVANCE,
     );
 }

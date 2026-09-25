@@ -40,6 +40,7 @@
 
 mod allow_all;
 pub mod cache;
+pub mod cidr;
 mod host_format;
 #[cfg(test)]
 mod precedence;

@@ -27,6 +27,7 @@ impl Model for ShareModel {
             sm: AcquisitionState::new(Offset(0)),
             clock: 0,
             hwm: Offset(0),
+            log_start: Offset(0),
         }]
     }
 
@@ -127,6 +128,13 @@ impl Model for ShareModel {
         }
         if self.allow_reload && state.sm.end_offset > state.sm.start_offset {
             actions.push(ShareAction::Reload);
+        }
+        if self.allow_log_start_advance {
+            for raw in (state.log_start.0 + 1)..=state.sm.end_offset.0 {
+                actions.push(ShareAction::AdvanceLogStart {
+                    new_start: Offset(raw),
+                });
+            }
         }
     }
 
@@ -246,6 +254,13 @@ impl Model for ShareModel {
                 );
                 state.sm = fresh;
             }
+            ShareAction::AdvanceLogStart { new_start } => {
+                if new_start <= state.log_start {
+                    return None; // log start never moves backward
+                }
+                state.sm.advance_past_log_start(new_start);
+                state.log_start = new_start;
+            }
         }
         assert_transition(&last.sm, &state.sm, action);
         Some(state)
@@ -292,6 +307,27 @@ impl Model for ShareModel {
                 s.sm.batches.iter().any(|b| b.delivery_count >= 2)
             }),
         ];
+        if self.allow_log_start_advance {
+            // The log start offset never runs ahead of what was produced: it
+            // can only move over records that exist.
+            properties.push(Property::always(
+                "log_start_never_exceeds_hwm",
+                |_, s: &ShareState| s.log_start <= s.hwm,
+            ));
+            // The scenario `advance_past_log_start_leaves_other_members_acquired_records_alone`
+            // covers by hand: the log start moves past the SPSO while an
+            // Acquired run still blocks the SPSO itself from following it.
+            properties.push(Property::sometimes(
+                "log_start_advance_blocked_by_acquired",
+                |_, s: &ShareState| {
+                    s.log_start > s.sm.start_offset
+                        && s.sm
+                            .batches
+                            .iter()
+                            .any(|b| b.state == RecordState::Acquired)
+                },
+            ));
+        }
         if self.allow_defer {
             properties.push(Property::sometimes("can_defer", |_, s: &ShareState| {
                 !deferred_offsets(&s.sm).is_empty()
@@ -321,6 +357,7 @@ impl Model for ShareModel {
         state.clock <= self.max_tick
             && state.hwm <= self.max_offset
             && state.sm.end_offset <= self.max_offset
+            && state.log_start <= self.max_offset
             && state.sm.batches.len() <= 12
     }
 }

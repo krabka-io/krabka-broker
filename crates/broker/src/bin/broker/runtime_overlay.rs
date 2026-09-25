@@ -171,6 +171,7 @@ impl RuntimeArgs {
             record_decompression_output_floor,
             record_decompression_output_ceiling,
         );
+        copy_refined_runtime!(self, runtime, max_request_partition_size_limit);
         runtime
             .inter_broker_server_name
             .clone_from(&self.inter_broker_server_name);

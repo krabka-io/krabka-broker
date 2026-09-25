@@ -3,8 +3,14 @@
 //!
 //! ## ACL
 //!
-//! `Alter` on `Cluster("kafka-cluster")`. Deny → whole-response
-//! `error_code = CLUSTER_AUTHORIZATION_FAILED (31)`.
+//! `ClusterAction` on `Cluster("kafka-cluster")`, matching
+//! `ControllerApis.handleUpdateRaftVoter`, which calls
+//! `authorizeClusterOperation(request, CLUSTER_ACTION)`. This differs from
+//! `AddRaftVoter` and `RemoveRaftVoter`, which both check `Alter`: a
+//! controller sends `UpdateRaftVoter` for itself to update its own endpoints
+//! (KIP-853), and its principal usually holds `ClusterAction` rather than
+//! `Alter`. Deny → whole-response `error_code =
+//! CLUSTER_AUTHORIZATION_FAILED (31)`.
 //!
 //! After the ACL gate, the request runs the controller listener's own checks
 //! in `krabka_raft::voter_requests`, which follow
@@ -32,7 +38,7 @@ use krabka_protocol::{
 };
 use krabka_raft::{reconfig::UpdateVoter, voter_requests};
 
-use crate::{broker::Broker, codes, error::BrokerError, handlers::cluster_alter_denied};
+use crate::{broker::Broker, codes, error::BrokerError, handlers::cluster_action_denied};
 
 #[tracing::instrument(
     name = "handle_update_raft_voter",
@@ -53,7 +59,7 @@ pub(crate) async fn handle(
 
     let image = broker.controller.current_image();
 
-    if cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
+    if cluster_action_denied(broker.config.authorizer.as_ref(), &image, ctx) {
         return refuse(version, codes::CLUSTER_AUTHORIZATION_FAILED);
     }
 
@@ -370,6 +376,131 @@ mod tests {
 
         assert!(codes_seen == vec![codes::VOTER_NOT_FOUND, codes::VOTER_NOT_FOUND]);
         broker_handle.shutdown().await;
+    }
+
+    /// `UpdateRaftVoter` checks `ClusterAction`, matching Kafka's
+    /// `ControllerApis.handleUpdateRaftVoter`. `AddRaftVoter` and
+    /// `RemoveRaftVoter` keep checking `Alter` (#688): a principal with only
+    /// the operation each api actually needs gets past the ACL gate, and a
+    /// principal with only the other one does not.
+    #[tokio::test]
+    async fn each_raft_voter_api_checks_its_own_cluster_operation() {
+        use assert2::check;
+        use krabka_metadata::AclOperation;
+        use krabka_protocol::owned::{
+            add_raft_voter_request::{self, AddRaftVoterRequest},
+            add_raft_voter_response::AddRaftVoterResponse,
+            remove_raft_voter_request::RemoveRaftVoterRequest,
+            remove_raft_voter_response::RemoveRaftVoterResponse,
+        };
+
+        /// Authorizer that allows exactly one cluster operation and denies
+        /// every other one, including on other resources.
+        #[derive(Debug)]
+        struct GrantOnly(AclOperation);
+
+        impl crate::authorizer::Authorizer for GrantOnly {
+            fn authorize(
+                &self,
+                _source: &dyn krabka_authz::AclSource,
+                req: &crate::authorizer::AuthorizationRequest<'_>,
+            ) -> crate::authorizer::AuthorizationResult {
+                if req.operation == self.0 {
+                    crate::authorizer::AuthorizationResult::Allow
+                } else {
+                    crate::authorizer::AuthorizationResult::Deny
+                }
+            }
+        }
+
+        enum Api {
+            Update,
+            Add,
+            Remove,
+        }
+
+        let version = 0;
+        let cases: [(&str, Api, AclOperation, bool); 5] = [
+            (
+                "UpdateRaftVoter",
+                Api::Update,
+                AclOperation::ClusterAction,
+                false,
+            ),
+            ("UpdateRaftVoter", Api::Update, AclOperation::Alter, true),
+            ("AddRaftVoter", Api::Add, AclOperation::Alter, false),
+            ("AddRaftVoter", Api::Add, AclOperation::ClusterAction, true),
+            ("RemoveRaftVoter", Api::Remove, AclOperation::Alter, false),
+        ];
+
+        for (api_name, api, grant, want_cluster_authorization_failed) in cases {
+            let (broker_handle, _dir) = start_broker(Arc::new(GrantOnly(grant))).await;
+            let broker = broker_handle.broker_arc_for_test();
+            let principal = Principal {
+                name: "alice".into(),
+                auth_method: AuthMethod::Anonymous,
+                groups: Vec::new(),
+            };
+            let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+            let ctx = test_context(&principal, &peer);
+
+            let error_code = match api {
+                Api::Update => {
+                    let req_bytes = encode_request(&request(2), version);
+                    let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
+                        .await
+                        .expect("handle");
+                    decode_response(&resp, version).error_code
+                }
+                Api::Add => {
+                    let req = AddRaftVoterRequest {
+                        cluster_id: Some("cluster".into()),
+                        timeout_ms: 1_000,
+                        voter_id: 2,
+                        voter_directory_id: ProtoUuid([2; 16]),
+                        listeners: vec![add_raft_voter_request::Listener {
+                            name: "CONTROLLER".into(),
+                            host: "127.0.0.1".into(),
+                            port: 9093,
+                            ..Default::default()
+                        }],
+                        ack_when_committed: true,
+                        ..Default::default()
+                    };
+                    let req_bytes = crate::test_support::encode_request(&req, version);
+                    let resp = crate::handlers::add_raft_voter::handle(
+                        &broker, version, 123, &req_bytes, &ctx,
+                    )
+                    .await
+                    .expect("handle");
+                    crate::test_support::decode_response::<AddRaftVoterResponse>(&resp, version)
+                        .error_code
+                }
+                Api::Remove => {
+                    let req = RemoveRaftVoterRequest {
+                        cluster_id: Some("cluster".into()),
+                        voter_id: 2,
+                        voter_directory_id: ProtoUuid([3; 16]),
+                        ..Default::default()
+                    };
+                    let req_bytes = crate::test_support::encode_request(&req, version);
+                    let resp = crate::handlers::remove_raft_voter::handle(
+                        &broker, version, 123, &req_bytes, &ctx,
+                    )
+                    .await
+                    .expect("handle");
+                    crate::test_support::decode_response::<RemoveRaftVoterResponse>(&resp, version)
+                        .error_code
+                }
+            };
+
+            check!(
+                (error_code == codes::CLUSTER_AUTHORIZATION_FAILED)
+                    == want_cluster_authorization_failed,
+                "{api_name} with {grant:?} only"
+            );
+            broker_handle.shutdown().await;
+        }
     }
 
     #[tokio::test]
