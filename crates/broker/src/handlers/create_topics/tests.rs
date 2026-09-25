@@ -5,7 +5,9 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use assert2::{assert, check};
-use krabka_metadata::MetadataRecord;
+use krabka_metadata::{
+    AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
+};
 use krabka_protocol::{
     UnknownTaggedFields,
     owned::{
@@ -157,8 +159,12 @@ async fn seed_controller_quota(handle: &BrokerHandle, rate: f64) {
         .expect("seed quota");
 }
 
+/// A denial on cluster `Create` is a shortcut only. `DenyAll` also denies the
+/// per-topic `Create` fallback, so the request still ends every row in
+/// `TOPIC_AUTHORIZATION_FAILED` -- but never `CLUSTER_AUTHORIZATION_FAILED`,
+/// which Kafka's `ControllerApis.createTopics` never answers for a topic row.
 #[tokio::test]
-async fn handle_denies_cluster_create_for_each_topic() {
+async fn handle_falls_back_to_topic_authorization_failed_for_each_topic() {
     let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
     let broker = broker_handle.broker_arc_for_test();
     let p = principal("alice");
@@ -173,8 +179,8 @@ async fn handle_denies_cluster_create_for_each_topic() {
             CreatableTopicResult {
                 name: "orders".into(),
                 topic_id: ProtoUuid([0; 16]),
-                error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
-                error_message: Some("create-topics denied".into()),
+                error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+                error_message: Some("Authorization failed.".into()),
                 num_partitions: -1,
                 replication_factor: -1,
                 configs: None,
@@ -184,8 +190,8 @@ async fn handle_denies_cluster_create_for_each_topic() {
             CreatableTopicResult {
                 name: "payments".into(),
                 topic_id: ProtoUuid([0; 16]),
-                error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
-                error_message: Some("create-topics denied".into()),
+                error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+                error_message: Some("Authorization failed.".into()),
                 num_partitions: -1,
                 replication_factor: -1,
                 configs: None,
@@ -1465,6 +1471,211 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
             committed == expected_records,
             "fenced {fenced:?}, assignment {lists:?}"
         );
+        broker_handle.shutdown().await;
+    }
+}
+
+/// #698 / #1058: Kafka's `Create` decision for a `CreateTopics` request,
+/// table-driven over which ACL `alice` holds.
+///
+/// `ControllerApis.handleCreateTopics`/`createTopics` filters duplicate names
+/// and the protected `__cluster_metadata` name out before authorizing either
+/// way, then checks cluster `Create` once as a shortcut, and falls back to
+/// `Create` on each surviving `Topic(name)` when that shortcut is denied. A
+/// literal ACL on `a` never covers `app-x`, and a prefixed ACL on `app-`
+/// never covers `a` -- exactly the Kafka Streams/Connect application-id ACL
+/// shape #698 reported as unusable. The request repeats `b` and asks for
+/// `__cluster_metadata`; both are refused under every ACL shape.
+#[tokio::test]
+async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
+    struct Case {
+        acls: Vec<AclEntry>,
+        // Which of "a" and "app-x" this ACL shape lets `alice` create.
+        // "b" (duplicate) and "__cluster_metadata" (protected) are refused
+        // under every shape and are not repeated here.
+        created: &'static [&'static str],
+    }
+
+    fn acl(
+        resource_type: ResourceType,
+        resource_name: &str,
+        pattern_type: PatternType,
+        operation: AclOperation,
+    ) -> AclEntry {
+        AclEntry {
+            resource_type,
+            resource_name: resource_name.into(),
+            pattern_type,
+            principal: "User:alice".into(),
+            host: "*".into(),
+            operation,
+            permission_type: PermissionType::Allow,
+        }
+    }
+
+    let cluster_create = acl(
+        ResourceType::Cluster,
+        crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+        PatternType::Literal,
+        AclOperation::Create,
+    );
+    let literal_a = acl(
+        ResourceType::Topic,
+        "a",
+        PatternType::Literal,
+        AclOperation::Create,
+    );
+    let prefixed_app = acl(
+        ResourceType::Topic,
+        "app-",
+        PatternType::Prefixed,
+        AclOperation::Create,
+    );
+
+    let cases = [
+        (
+            "cluster Create authorizes every survivor",
+            Case {
+                acls: vec![cluster_create.clone()],
+                created: &["a", "app-x"],
+            },
+        ),
+        (
+            "a literal ACL authorizes only its exact name",
+            Case {
+                acls: vec![literal_a.clone()],
+                created: &["a"],
+            },
+        ),
+        (
+            "an app- prefixed ACL authorizes only its prefix",
+            Case {
+                acls: vec![prefixed_app.clone()],
+                created: &["app-x"],
+            },
+        ),
+        (
+            "no ACL authorizes nothing",
+            Case {
+                acls: vec![],
+                created: &[],
+            },
+        ),
+    ];
+
+    for (label, case) in cases {
+        let (broker_handle, _dir) = start_broker(Arc::new(
+            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
+        ))
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        if !case.acls.is_empty() {
+            broker
+                .controller
+                .submit_change(
+                    case.acls
+                        .into_iter()
+                        .map(MetadataRecord::V1AccessControlEntry)
+                        .collect(),
+                )
+                .await
+                .expect("seed acls");
+        }
+
+        let p = principal("alice");
+        let peer = peer();
+        let req = request(vec![
+            topic("a", 1, 1),
+            topic("app-x", 1, 1),
+            topic("b", 1, 1),
+            topic("b", 1, 1),
+            topic("__cluster_metadata", 1, 1),
+        ]);
+
+        let resp = drive(&broker, &req, &p, &peer).await;
+
+        let row = |index: usize, name: &str| -> CreatableTopicResult {
+            if case.created.contains(&name) {
+                CreatableTopicResult {
+                    name: name.into(),
+                    topic_id: resp.topics[index].topic_id,
+                    error_code: codes::NONE,
+                    error_message: None,
+                    num_partitions: -1,
+                    replication_factor: -1,
+                    configs: Some(Vec::new()),
+                    topic_config_error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                }
+            } else {
+                CreatableTopicResult {
+                    name: name.into(),
+                    topic_id: ProtoUuid([0; 16]),
+                    error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+                    error_message: Some("Authorization failed.".into()),
+                    num_partitions: -1,
+                    replication_factor: -1,
+                    configs: None,
+                    topic_config_error_code: 0,
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                }
+            }
+        };
+        let duplicate_row = |name: &str| CreatableTopicResult {
+            name: name.into(),
+            topic_id: ProtoUuid([0; 16]),
+            error_code: codes::INVALID_REQUEST,
+            error_message: Some("Duplicate topic name.".into()),
+            num_partitions: -1,
+            replication_factor: -1,
+            configs: None,
+            topic_config_error_code: 0,
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        };
+        let protected_row = CreatableTopicResult {
+            name: "__cluster_metadata".into(),
+            topic_id: ProtoUuid([0; 16]),
+            error_code: codes::INVALID_REQUEST,
+            error_message: Some(
+                "Creation of internal topic __cluster_metadata is prohibited.".into(),
+            ),
+            num_partitions: -1,
+            replication_factor: -1,
+            configs: None,
+            topic_config_error_code: 0,
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        };
+
+        let expected = CreateTopicsResponse {
+            throttle_time_ms: 0,
+            topics: vec![
+                row(0, "a"),
+                row(1, "app-x"),
+                // "b" appears twice in the request but gets exactly one
+                // result row -- Kafka removes every duplicate entry before
+                // it ever builds a response for the name.
+                duplicate_row("b"),
+                protected_row,
+            ],
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        };
+        check!(resp == expected, "case: {label}");
+
+        let image = broker_handle.controller_image_for_test();
+        check!(
+            image.topic("a").is_some() == case.created.contains(&"a"),
+            "case: {label}, topic a"
+        );
+        check!(
+            image.topic("app-x").is_some() == case.created.contains(&"app-x"),
+            "case: {label}, topic app-x"
+        );
+        check!(image.topic("b").is_none(), "case: {label}, topic b");
+        check!(
+            image.topic("__cluster_metadata").is_none(),
+            "case: {label}, topic __cluster_metadata"
+        );
+
         broker_handle.shutdown().await;
     }
 }

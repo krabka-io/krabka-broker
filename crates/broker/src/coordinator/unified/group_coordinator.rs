@@ -102,6 +102,20 @@ pub struct GroupCoordinator {
     /// `coordinator::topic_deletion`.
     pub(crate) recent_topic_deletions:
         std::sync::Mutex<std::collections::VecDeque<(String, uuid::Uuid)>>,
+    /// Cache of the `ConsumerGroupHeartbeat` handler's
+    /// `subscribed_topic_regex` → Describe-authorized-topics computation,
+    /// keyed by `(group_id, member_id, principal, host)`. Bounded LRU, not an
+    /// unbounded map: a caller can name arbitrary `member_id`s in a heartbeat
+    /// that the actor later rejects (an unknown epoch, a full group), and
+    /// this cache is populated before that rejection happens, so nothing
+    /// upstream of it caps how many distinct keys it could otherwise see. See
+    /// [`crate::handlers::consumer_group_heartbeat::RegexAuthzCacheEntry`].
+    pub(crate) regex_authz_cache: std::sync::Mutex<
+        lru::LruCache<
+            (String, String, String, std::net::IpAddr),
+            crate::handlers::consumer_group_heartbeat::RegexAuthzCacheEntry,
+        >,
+    >,
 }
 
 /// `Debug`-able wrapper around an `Arc<dyn MetadataSource>` so that it can
@@ -147,6 +161,9 @@ impl GroupCoordinator {
             metadata_source: std::sync::OnceLock::new(),
             metrics: std::sync::OnceLock::new(),
             recent_topic_deletions: std::sync::Mutex::default(),
+            regex_authz_cache: std::sync::Mutex::new(lru::LruCache::new(
+                crate::handlers::consumer_group_heartbeat::REGEX_AUTHZ_CACHE_CAPACITY,
+            )),
         }
     }
 

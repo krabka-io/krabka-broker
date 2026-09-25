@@ -19,7 +19,12 @@ use crate::support;
 ///
 /// This test asserts that:
 ///   1. The broker denies a `CreateTopics` request with
-///      `CLUSTER_AUTHORIZATION_FAILED`.
+///      `TOPIC_AUTHORIZATION_FAILED` -- a deny-all authorizer denies the
+///      cluster-wide `Create` shortcut, then denies the per-topic `Create`
+///      fallback too (#698's per-topic fallback), so this is the same error
+///      Kafka's `ControllerApis.createTopics` answers for a denied topic row,
+///      not the whole-request `CLUSTER_AUTHORIZATION_FAILED` a pre-#698
+///      broker answered when the cluster shortcut alone was ever checked.
 ///   2. The broker stays healthy and does not crash.
 ///
 /// This test does NOT assert that the broker emitted an `AuthorizationDenied`
@@ -39,7 +44,7 @@ use crate::support;
 /// `crates/broker/src/audit_authorizer.rs` already proves the audit emit on a
 /// deny.
 #[tokio::test]
-async fn denied_operation_returns_cluster_authorization_failed() {
+async fn denied_operation_returns_topic_authorization_failed() {
     // Start a broker with a deny-all authorizer.
     let p = support::start_with_deny_all_authz().await;
 
@@ -60,11 +65,12 @@ async fn denied_operation_returns_cluster_authorization_failed() {
         .unwrap();
 
     // Verify the broker actually denied the request (error_code
-    // CLUSTER_AUTHORIZATION_FAILED = 31).
+    // TOPIC_AUTHORIZATION_FAILED = 29): the deny-all authorizer denies the
+    // cluster Create shortcut, then denies the per-topic Create fallback too.
     let denied = resp
         .topics
         .iter()
-        .any(|t| t.error_code == krabka_broker::codes::CLUSTER_AUTHORIZATION_FAILED);
+        .any(|t| t.error_code == krabka_broker::codes::TOPIC_AUTHORIZATION_FAILED);
     assert2::check!(denied, "expected CreateTopics to be denied; resp: {resp:?}");
 
     // Verify the broker is still alive by checking the audit topic is reachable.

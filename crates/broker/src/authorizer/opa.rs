@@ -248,6 +248,17 @@ impl Authorizer for OpaAuthorizer {
         }
         decision
     }
+
+    /// OPA's policy lives on the remote decision endpoint, entirely outside
+    /// `source` (the broker's `MetadataImage`): revoking a grant there never
+    /// advances the Kafka metadata log, so a caller-side cache that keys
+    /// freshness on that log alone could reuse an `Allow` forever. Reporting
+    /// this authorizer's own decision-cache TTL lets such a cache bound
+    /// itself to it, matching the staleness window OPA itself already
+    /// accepts.
+    fn decision_ttl(&self) -> Option<std::time::Duration> {
+        Some(self.expire_after.to_std())
+    }
 }
 
 /// Constructor-time failures for [`OpaAuthorizer::new`]. They travel
