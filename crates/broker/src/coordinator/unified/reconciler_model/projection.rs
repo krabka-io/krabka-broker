@@ -58,6 +58,7 @@ pub(super) fn rebuild_group(s: &ReconState) -> GroupState {
             subscribed_topic_names: subs,
             subscribed_topic_regex: None,
             compiled_regex: crate::coordinator::unified::consumer_state::CompiledRegex::Absent,
+            regex_authorized_topics: HashSet::new(),
             server_assignor: None,
             rebalance_timeout: Duration::from_mins(1),
             member_epoch: m.member_epoch,

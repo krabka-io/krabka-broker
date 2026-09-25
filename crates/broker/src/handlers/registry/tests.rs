@@ -9,22 +9,12 @@ use super::*;
 use crate::handlers::{self, ApiKeyCode};
 
 #[test]
-fn registry_registers_plain_handlers() {
-    let registry = build_registry();
-
-    let key = ApiKey::AssignReplicasToDirs as i16;
-    let entry = registry
-        .get(key)
-        .unwrap_or_else(|| panic!("registered api_key {key}"));
-    assert!(entry.is_plain(), "api_key {key}");
-}
-
-#[test]
 fn registry_registers_raw_context_handlers() {
     let registry = build_registry();
 
     for api_key in [
         ApiKey::Produce as i16,
+        ApiKey::AssignReplicasToDirs as i16,
         ApiKey::Metadata as i16,
         ApiKey::OffsetCommit as i16,
         ApiKey::OffsetFetch as i16,

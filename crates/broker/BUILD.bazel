@@ -104,6 +104,20 @@ crate_tests(
     # are anything but starved. If either fails again once this suite is out of
     # the lane, that reading was wrong: read its log before tagging it.
     #
+    # `elect_leaders` is `leader_election`'s shape again: a 3-broker cluster
+    # driven over the wire, gated on `wait_for_image` waits for the resulting
+    # partition state to land in the controller's committed metadata image.
+    # On the run that surfaced it (PR #1098, a listener-scope routing change
+    # that touches neither leader election nor metadata propagation) the whole
+    # target first failed the Bazel test-size timeout, then on re-run two
+    # individual cases -- `auto_rebalance_restores_preferred_leader` and
+    # `preferred_election_via_wire_returns_success` -- failed the 30s
+    # `TEST_AWAITER_TIMEOUT` bound inside `wait_for_image`, each reporting the
+    # image still short of the target offset rather than a wrong one. Both are
+    # convergence waits, not assertion failures, so the fix is the same one
+    # `leader_election` already has: give the suite the CPU a raft quorum needs
+    # to commit under contention instead of loosening what it checks.
+    #
     # Leaving the lane costs no coverage. Of the 118 `//crates/broker` targets
     # in that run only four emit a `coverage.dat` -- `broker_test`,
     # `cli_smoke_test`, `config_reference_test` and `krabka-broker_test` -- and
@@ -113,6 +127,7 @@ crate_tests(
         "compaction",
         "diskless_e2e",
         "durability",
+        "elect_leaders",
         "ip_quotas",
         "leader_election",
         "sharegroup_backlog",

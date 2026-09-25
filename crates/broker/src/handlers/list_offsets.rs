@@ -55,6 +55,7 @@ use krabka_protocol::{
 
 mod bound;
 mod diskless;
+mod leadership;
 mod local;
 mod remote;
 mod resolve;

@@ -247,13 +247,12 @@ async fn invoke_registered_handler(
         }
     })?;
     match entry.kind() {
-        // A plain handler takes no session at all. `AssignReplicasToDirs` (73)
-        // is the one key that reaches it, straight off the listener, which
-        // checks `ClusterAction` for it before it routes the request here.
-        // `AllocateProducerIds` (67), which a JVM broker forwards in an
-        // `Envelope`, is a context dispatch: its handler checks `ClusterAction`
-        // for the principal that the envelope names.
-        DispatchKind::Plain(handler) => handler(broker, api_version, correlation_id, body).await,
+        // Every krabka-registered controller-listener handler is a context
+        // dispatch, so it receives a principal to authorize: `AssignReplicasToDirs`
+        // (73) checks `ClusterAction` against the outer connection's identity
+        // straight off the listener, and `AllocateProducerIds` (67), which a
+        // JVM broker forwards in an `Envelope`, checks it against the
+        // principal the envelope names.
         DispatchKind::Context(handler) => {
             let context = RequestContext::new(
                 principal,
@@ -523,15 +522,16 @@ mod tests {
         check!(error.to_string() == "controller admin dispatch: broker startup is incomplete");
     }
 
-    /// `AssignReplicasToDirs` is the one advertised key whose broker handler
-    /// takes no principal and no connection, so it is the only key that
-    /// reaches the [`DispatchKind::Plain`] arm straight off the listener
-    /// rather than through an `Envelope`. Route it against a bound broker and
-    /// decode
-    /// what comes back, which is what proves the arm hands the body to the
-    /// registry rather than falling through to the incompatible-kind error.
+    /// `AssignReplicasToDirs` is a context dispatch that reaches the broker
+    /// registry straight off the listener, rather than through an
+    /// `Envelope`. Route it, with the reporting broker's actual epoch,
+    /// against a bound broker and decode what comes back, which is what
+    /// proves the arm hands the body to the registry -- authorized by the
+    /// outer connection's `ANONYMOUS` principal, which the default
+    /// `AllowAllAuthorizer` admits -- rather than falling through to the
+    /// incompatible-kind error.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_plain_kind_api_key_routes_to_the_broker_registry() {
+    async fn a_context_kind_api_key_routes_to_the_broker_registry() {
         use krabka_protocol::{Decode as _, Encode as _};
 
         let dir = tempfile::TempDir::new().expect("tempdir");
@@ -563,10 +563,16 @@ mod tests {
 
         let api_key = krabka_protocol::owned::assign_replicas_to_dirs_request::API_KEY;
         let api_version = krabka_protocol::owned::assign_replicas_to_dirs_request::MAX_VERSION;
+        let broker_epoch = handle
+            .broker_arc_for_test()
+            .controller
+            .current_image()
+            .broker_epoch(krabka_raft::NodeId(1))
+            .expect("broker 1 is self-registered");
         let mut body = bytes::BytesMut::new();
         krabka_protocol::owned::assign_replicas_to_dirs_request::AssignReplicasToDirsRequest {
             broker_id: 1,
-            broker_epoch: -1,
+            broker_epoch,
             directories: Vec::new(),
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         }
@@ -579,7 +585,7 @@ mod tests {
                 ..request(api_key, api_version)
             })
             .await
-            .expect("the plain arm routes without error")
+            .expect("the context arm routes without error")
             .expect("a routed key answers with a body");
 
         let mut cursor = answer.body.clone();

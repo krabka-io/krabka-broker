@@ -514,6 +514,9 @@ async fn assign_node1_dirs(cluster: &Cluster, primary: &[i32], extra: &[i32]) {
         .expect("assignment controller client")
         .send(AssignReplicasToDirsRequest {
             broker_id: 1,
+            // -1 means "not provided" (KIP-903) and matches any
+            // registration; the controller still checks that broker 1 is
+            // registered at all (#636).
             broker_epoch: -1,
             directories: vec![
                 directory(directory_id(&cluster.primary), primary),

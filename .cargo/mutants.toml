@@ -177,7 +177,7 @@ exclude_re = [
     "replace > with >= in (coalesce_delivery_range|delete_records_trim_application)",
     "replace < with <= in delete_records_trim_decision",
     # Clamping boundaries: at equality both branches produce the identical bound.
-    "replace [<>] with [<>]= in (resolve_transaction_timeout|delivery_watermark_advance)",
+    "replace [<>] with [<>]= in delivery_watermark_advance",
     # `if generation < 0 { 0 } else { generation }`: at 0 both arms yield 0.
     "replace < with <= in (classic_upgrade|consumer_downgrade)_epoch",
     # At 0, -0 == 0.

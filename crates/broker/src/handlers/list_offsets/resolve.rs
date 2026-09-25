@@ -28,6 +28,7 @@ use krabka_verified::{
 use super::{
     bound::{FetchBound, last_fetchable_offset},
     diskless::diskless_earliest_candidate,
+    leadership::resolve_leadership,
     local::{latest_offset, leader_epoch_for_offset},
     remote::await_remote,
     response::error_response,
@@ -94,20 +95,33 @@ pub(super) async fn resolve_partition(
         response.offset = UNKNOWN_OFFSET;
         return response;
     }
-    let Some(partition) = broker
-        .partitions
-        .get(topic_name, krabka_ids::PartitionIndex(index))
-    else {
-        response.error_code = codes::UNKNOWN_TOPIC_OR_PARTITION;
-        return response;
+    // Kafka answers from whatever this node holds only when it leads the
+    // partition, or the request carries the offline-debugging sentinel
+    // `replica_id == -2` and this node holds it as a follower. KIP-320's
+    // epoch fence -- the `current_leader_epoch` field decodes from v4 up and
+    // holds the `-1` sentinel below it, so a v1-v3 request never trips it --
+    // runs ahead of that leadership check, matching Kafka's order. Anyone
+    // refused leadership gets `NOT_LEADER_OR_FOLLOWER` when the metadata
+    // image and the installed local role do not both name this node leader,
+    // `UNKNOWN_TOPIC_OR_PARTITION` when the image does not know the
+    // partition at all, and `KAFKA_STORAGE_ERROR` when the partition's log
+    // directory is offline. See
+    // [`resolve_leadership`](super::leadership::resolve_leadership).
+    let partition = match resolve_leadership(
+        topic_name,
+        index,
+        bound.replica_id(),
+        request.current_leader_epoch,
+        super::leadership::LeadershipContext {
+            partitions: &broker.partitions,
+            log_dir_status: &broker.log_dir_status,
+            image: &broker.controller.current_image(),
+            node_id: broker.config.node_id,
+        },
+    ) {
+        Ok(partition) => partition,
+        Err(error_code) => return error_response(index, error_code),
     };
-    // KIP-320. The `current_leader_epoch` field decodes from v4 up and holds
-    // the `-1` sentinel below it, so a v1-v3 request never trips the fence.
-    if let Some((error_code, _)) =
-        partition.list_offsets_leader_epoch_fence(request.current_leader_epoch)
-    {
-        return error_response(index, error_code);
-    }
     let (local_start, deleted_below, local_end, local_log_start, log_config) = {
         let log = partition.log.lock().expect("log mutex poisoned");
         (

@@ -268,6 +268,7 @@ mod tests {
                     start_offset: Offset(0),
                     last_offset: Offset(3),
                     producer_id: ProducerId(1000),
+                    last_stable_offset: Offset(4),
                 }],
                 vec![None, None, None, None],
             ),

@@ -14,9 +14,12 @@ use krabka_protocol::owned::assign_replicas_to_dirs_request::{
     AssignReplicasToDirsRequest, DirectoryData, PartitionData, TopicData,
 };
 
-/// Kafka sentinel for "broker epoch unknown" in `AssignReplicasToDirs`. It
-/// matches the convention in `send_alter_partition`.
-const UNKNOWN_BROKER_EPOCH: i64 = -1;
+/// Kafka sentinel for "broker epoch unknown" in `AssignReplicasToDirs`, sent
+/// only when this broker's own epoch is not yet known (for example, before
+/// registration has landed in the image). `check_broker_epoch` treats it as
+/// "skip the fence", the same KIP-903 convention `AlterPartition`'s ISR
+/// eligibility check uses.
+pub(crate) const UNKNOWN_BROKER_EPOCH: i64 = -1;
 
 /// Groups flat `(topic_id, partition, dir_uuid)` assignments into the nested
 /// `AssignReplicasToDirs` wire shape, which is `directories[]`, then
@@ -26,10 +29,14 @@ const UNKNOWN_BROKER_EPOCH: i64 = -1;
 /// 16-byte UUID representation. The request is therefore stable across calls,
 /// which matters for unit tests.
 ///
-/// This function sets `broker_epoch` to `-1`, which means unknown, and matches
-/// the convention in `send_alter_partition`.
+/// `broker_epoch` should be this broker's own current epoch, read from the
+/// image at the call site (`image.broker_epoch(NodeId(broker_id))`), so the
+/// controller's `check_broker_epoch` fence actually has something to check
+/// against a stale or restarted broker. Pass `UNKNOWN_BROKER_EPOCH` only when
+/// that lookup comes back empty.
 pub(crate) fn build_request(
     broker_id: i32,
+    broker_epoch: i64,
     assignments: &[(uuid::Uuid, i32, uuid::Uuid)], // (topic_id, partition, dir_uuid)
 ) -> AssignReplicasToDirsRequest {
     // dir_uuid → topic_id → [partition_index]
@@ -74,7 +81,7 @@ pub(crate) fn build_request(
 
     AssignReplicasToDirsRequest {
         broker_id,
-        broker_epoch: UNKNOWN_BROKER_EPOCH,
+        broker_epoch,
         directories,
         unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
     }
@@ -195,11 +202,11 @@ mod tests {
 
         let assignments = [(ta, 0i32, dx), (ta, 1i32, dx), (tb, 0i32, dy)];
 
-        let req = build_request(7, &assignments);
+        let req = build_request(7, 41, &assignments);
 
         // broker_id, epoch, and two directories.
         check!(req.broker_id == 7);
-        check!(req.broker_epoch == -1);
+        check!(req.broker_epoch == 41);
         check!(req.directories.len() == 2);
 
         // Find dir dX and dY by their UUID bytes.
@@ -242,15 +249,28 @@ mod tests {
 
     #[test]
     fn build_request_empty_assignments() {
-        let req = build_request(1, &[]);
+        let req = build_request(1, UNKNOWN_BROKER_EPOCH, &[]);
         check!(req.broker_id == 1);
         check!(req.broker_epoch == -1);
         check!(req.directories.is_empty());
     }
 
     #[test]
-    fn build_request_encodes_unknown_broker_epoch() {
-        let req = build_request(3, &[]);
+    fn build_request_encodes_the_given_broker_epoch() {
+        let req = build_request(3, 9, &[]);
+        let mut bytes = bytes::BytesMut::new();
+
+        req.encode(&mut bytes, 0).expect("encode request");
+        let decoded =
+            AssignReplicasToDirsRequest::decode(&mut bytes.freeze(), 0).expect("decode request");
+
+        assert!(decoded.broker_id == 3);
+        assert!(decoded.broker_epoch == 9);
+    }
+
+    #[test]
+    fn build_request_encodes_unknown_broker_epoch_as_the_kafka_sentinel() {
+        let req = build_request(3, UNKNOWN_BROKER_EPOCH, &[]);
         let mut bytes = bytes::BytesMut::new();
 
         req.encode(&mut bytes, 0).expect("encode request");
@@ -349,7 +369,7 @@ mod tests {
                 &source,
                 &plaintext_dialer(Vec::new()),
                 "assign-test",
-                build_request(1, &[]),
+                build_request(1, UNKNOWN_BROKER_EPOCH, &[]),
             )
             .await
             .expect_err("bad controller leader must fail");
@@ -380,7 +400,7 @@ mod tests {
             &source,
             &plaintext_dialer(Vec::new()),
             "assign-test",
-            build_request(1, &[]),
+            build_request(1, UNKNOWN_BROKER_EPOCH, &[]),
         )
         .await;
 
@@ -408,9 +428,14 @@ mod tests {
         let mut dialer = plaintext_dialer(Vec::new());
         dialer.listener_protocol = krabka_security::ListenerProtocol::Ssl;
 
-        let err = send_assignments(&source, &dialer, "assign-test", build_request(1, &[]))
-            .await
-            .expect_err("an SSL controller listener needs the configured TLS client");
+        let err = send_assignments(
+            &source,
+            &dialer,
+            "assign-test",
+            build_request(1, UNKNOWN_BROKER_EPOCH, &[]),
+        )
+        .await
+        .expect_err("an SSL controller listener needs the configured TLS client");
 
         assert!(err == "connect: config: TLS listener without TlsConnector");
         broker.shutdown().await;
