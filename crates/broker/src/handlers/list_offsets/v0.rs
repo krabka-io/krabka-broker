@@ -185,47 +185,55 @@ pub(super) async fn handle(
     let request = decode(req_bytes)?;
     let acl_image = broker.controller.current_image();
     let duplicates = duplicate_partitions(&request.topics);
-    let topics = concurrently(request.topics.into_iter().enumerate().map(
-        |(topic_index, topic)| {
-            let acl_image = acl_image.clone();
-            let duplicates = &duplicates;
-            async move {
-                let name = topic.name;
-                let partitions = if crate::handlers::acl_denied(
-                    broker.config.authorizer.as_ref(),
-                    &acl_image,
-                    ctx,
-                    ResourceType::Topic,
-                    &name,
-                    AclOperation::Describe,
-                ) {
-                    topic
-                        .partitions
-                        .into_iter()
-                        .map(|partition| {
-                            error_response(partition.index, codes::TOPIC_AUTHORIZATION_FAILED)
-                        })
-                        .collect()
-                } else {
-                    concurrently(topic.partitions.into_iter().map(|partition| {
-                        let is_duplicate = duplicates.contains(&(topic_index, partition.index));
-                        let name = name.clone();
-                        async move {
-                            if is_duplicate {
-                                error_response(partition.index, codes::INVALID_REQUEST)
-                            } else {
-                                resolve_partition(broker, &name, partition, request.replica_id)
-                                    .await
-                            }
-                        }
-                    }))
-                    .await
-                };
-                TopicResponse { name, partitions }
-            }
-        },
-    ))
+
+    let (authorized_topics, denied_topics): (Vec<_>, Vec<_>) = request
+        .topics
+        .into_iter()
+        .enumerate()
+        .partition(|(_, topic)| {
+            !crate::handlers::acl_denied(
+                broker.config.authorizer.as_ref(),
+                &acl_image,
+                ctx,
+                ResourceType::Topic,
+                &topic.name,
+                AclOperation::Describe,
+            )
+        });
+
+    let mut topics = concurrently(authorized_topics.into_iter().map(|(topic_index, topic)| {
+        let duplicates = &duplicates;
+        async move {
+            let name = topic.name;
+            let partitions = concurrently(topic.partitions.into_iter().map(|partition| {
+                let is_duplicate = duplicates.contains(&(topic_index, partition.index));
+                let name = name.clone();
+                async move {
+                    if is_duplicate {
+                        error_response(partition.index, codes::INVALID_REQUEST)
+                    } else {
+                        resolve_partition(broker, &name, partition, request.replica_id).await
+                    }
+                }
+            }))
+            .await;
+            TopicResponse { name, partitions }
+        }
+    }))
     .await;
+
+    topics.extend(denied_topics.into_iter().map(|(_, topic)| {
+        let partitions = topic
+            .partitions
+            .into_iter()
+            .map(|partition| error_response(partition.index, codes::TOPIC_AUTHORIZATION_FAILED))
+            .collect();
+        TopicResponse {
+            name: topic.name,
+            partitions,
+        }
+    }));
+
     Ok(encode(&topics))
 }
 
@@ -312,6 +320,74 @@ mod tests {
             .collect();
         assert!(offsets == vec![4, 3, 2], "{offsets:?}");
         assert!(response.is_empty());
+
+        broker_handle.shutdown().await;
+    }
+
+    /// Same ordering guarantee as the v1+ path (`super::tests::
+    /// denied_topic_rows_are_appended_after_authorized_rows_regardless_of_request_order`):
+    /// a denied topic's row always lands last, regardless of where it sat in
+    /// the v0 request.
+    #[derive(Debug)]
+    struct DenyNamed(std::collections::HashSet<&'static str>);
+
+    impl crate::authorizer::Authorizer for DenyNamed {
+        fn authorize(
+            &self,
+            _source: &dyn krabka_authz::AclSource,
+            req: &crate::authorizer::AuthorizationRequest<'_>,
+        ) -> crate::authorizer::AuthorizationResult {
+            if self.0.contains(req.resource_name) {
+                crate::authorizer::AuthorizationResult::Deny
+            } else {
+                crate::authorizer::AuthorizationResult::Allow
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn denied_topic_row_is_appended_last_regardless_of_request_order() {
+        let (broker_handle, _dir) = start_broker_with_authorizer_no_audit(Arc::new(DenyNamed(
+            std::collections::HashSet::from(["denied"]),
+        )))
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        let admin = principal("admin");
+        let socket = peer();
+
+        let mut request = BytesMut::new();
+        put_i32(&mut request, -1);
+        put_array_len(&mut request, 3, false);
+        for name in ["a", "denied", "c"] {
+            put_string(&mut request, name);
+            put_array_len(&mut request, 1, false);
+            put_i32(&mut request, 0);
+            put_i64(&mut request, LATEST_TIMESTAMP);
+            put_i32(&mut request, 1);
+        }
+
+        let response = handle(&broker, &request, &test_context(&admin, &socket))
+            .await
+            .expect("ListOffsets v0");
+        let mut response: &[u8] = &response;
+        assert!(get_array_len(&mut response, false).unwrap() == 3);
+        let mut names = Vec::new();
+        for _ in 0..3 {
+            names.push(get_string_owned(&mut response).unwrap());
+            let partition_count = get_array_len(&mut response, false).unwrap();
+            for _ in 0..partition_count {
+                get_i32(&mut response).unwrap();
+                let error_code = get_i16(&mut response).unwrap();
+                let offset_count = get_array_len(&mut response, false).unwrap();
+                for _ in 0..offset_count {
+                    get_i64(&mut response).unwrap();
+                }
+                if names.last().map(String::as_str) == Some("denied") {
+                    assert!(error_code == codes::TOPIC_AUTHORIZATION_FAILED);
+                }
+            }
+        }
+        assert!(names == vec!["a", "c", "denied"], "{names:?}");
 
         broker_handle.shutdown().await;
     }
