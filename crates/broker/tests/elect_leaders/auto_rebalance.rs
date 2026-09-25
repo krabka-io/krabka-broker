@@ -6,7 +6,10 @@
 //! `support::start_n_node`, because the rebalance settings have to be applied
 //! to each `BrokerConfig` before the broker starts.
 
+use std::net::SocketAddr;
+
 use krabka_broker::Broker;
+use tokio::net::TcpSocket;
 
 use crate::{
     cluster_lock, support,
@@ -125,6 +128,10 @@ async fn auto_rebalance_restores_preferred_leader() {
 
     // ── Phase 3: kill broker 1 (preferred leader). ────────────────────────
     h0.shutdown().await;
+    // Take broker 1's ports back the moment it lets go of them, so that
+    // nothing else on the host can bind them before it rejoins.
+    let client_reservation = reserve_vacated_port(cfg0.listen_addr);
+    let controller_reservation = reserve_vacated_port(cfg0.controller_listen_addr);
     eprintln!("broker 1 shut down; waiting for failover");
 
     // Wait for broker 2 or 3 to report a new leader (not broker 1).
@@ -138,7 +145,21 @@ async fn auto_rebalance_restores_preferred_leader() {
     // ── Phase 4: revive broker 1 (Rejoin). ───────────────────────────────
     let mut rejoin_cfg = cfg0.clone();
     rejoin_cfg.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
-    let h0_new = Broker::start(rejoin_cfg).await.expect("rejoin broker 1");
+    let h0_new = Broker::start_with_listeners(
+        rejoin_cfg,
+        Some(
+            controller_reservation
+                .listen(1024)
+                .expect("listen on broker 1's controller port"),
+        ),
+        Some(
+            client_reservation
+                .listen(1024)
+                .expect("listen on broker 1's client port"),
+        ),
+    )
+    .await
+    .expect("rejoin broker 1");
     eprintln!("broker 1 rejoined; waiting for ISR expansion");
 
     // Wait for broker 1 to be back in the ISR (visible from broker 2's image).
@@ -158,4 +179,32 @@ async fn auto_rebalance_restores_preferred_leader() {
     drop(dir0);
     drop(dir1);
     drop(dir2);
+}
+
+/// Binds `addr` again, without listening on it, as soon as the broker that
+/// listened there has shut down.
+///
+/// Broker 1's ports come from `bind_and_hold_ports`, so they are ephemeral
+/// ports, and `BrokerHandle::shutdown` gives them back to the OS. The client
+/// port then usually has no socket in `TIME_WAIT` left to pin it, so for the
+/// whole failover wait it is an ordinary free ephemeral port: any
+/// `bind("127.0.0.1:0")` elsewhere on the host -- another test binary booting
+/// its own cluster, say -- can be handed it and still be listening there when
+/// broker 1 rejoins, which then fails with `AddrInUse`. `SO_REUSEADDR` does not
+/// help against a socket that is live.
+///
+/// A socket that is bound but not listening keeps the port out of both
+/// `bind(0)` and `connect()`'s ephemeral pick, and refuses connections just as
+/// a closed port does, so brokers 2 and 3 still see broker 1 as down.
+/// `SO_REUSEADDR`, which mio sets on every listener it binds, lets it share the
+/// port with the connections broker 1 closed that are still in `TIME_WAIT`.
+fn reserve_vacated_port(addr: SocketAddr) -> TcpSocket {
+    let socket = TcpSocket::new_v4().expect("reservation socket");
+    socket
+        .set_reuseaddr(true)
+        .expect("SO_REUSEADDR on the reservation socket");
+    socket
+        .bind(addr)
+        .unwrap_or_else(|e| panic!("re-bind vacated port {addr}: {e:?}"));
+    socket
 }
