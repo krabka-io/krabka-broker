@@ -221,6 +221,155 @@ fn simple_acl_authorizer_is_configured() {
     assert2::assert!(auth.is_configured());
 }
 
+/// `authorize_by_resource_type` answers "does this principal have an
+/// ALLOW-not-covered-by-DENY grant for `operation` on any resource of
+/// `resource_type`", without naming one resource up front.
+mod authorize_by_resource_type {
+    use krabka_metadata::{AclOperation, MetadataRecord, PatternType, ResourceType};
+
+    use super::*;
+
+    #[test]
+    fn no_acls_at_all_denies() {
+        let img = img();
+        let a = alice();
+        let h = addr();
+        let auth = SimpleAclAuthorizer::new(no_super());
+        assert2::assert!(
+            auth.authorize_by_resource_type(&img, &a, &h, ResourceType::Topic, AclOperation::Write)
+                == AuthorizationResult::Deny
+        );
+    }
+
+    #[test]
+    fn literal_allow_on_one_resource_allows() {
+        let mut img = img();
+        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+            PermissionType::Allow,
+            AclOperation::Write,
+            "User:alice",
+            "*",
+            PatternType::Literal,
+            "orders",
+        )));
+        let a = alice();
+        let h = addr();
+        let auth = SimpleAclAuthorizer::new(no_super());
+        assert2::assert!(
+            auth.authorize_by_resource_type(&img, &a, &h, ResourceType::Topic, AclOperation::Write)
+                == AuthorizationResult::Allow
+        );
+    }
+
+    #[test]
+    fn prefixed_allow_allows() {
+        let mut img = img();
+        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+            PermissionType::Allow,
+            AclOperation::Write,
+            "User:alice",
+            "*",
+            PatternType::Prefixed,
+            "ord",
+        )));
+        let a = alice();
+        let h = addr();
+        let auth = SimpleAclAuthorizer::new(no_super());
+        assert2::assert!(
+            auth.authorize_by_resource_type(&img, &a, &h, ResourceType::Topic, AclOperation::Write)
+                == AuthorizationResult::Allow
+        );
+    }
+
+    #[test]
+    fn allow_fully_covered_by_a_broader_deny_denies() {
+        let mut img = img();
+        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+            PermissionType::Allow,
+            AclOperation::Write,
+            "User:alice",
+            "*",
+            PatternType::Literal,
+            "orders",
+        )));
+        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+            PermissionType::Deny,
+            AclOperation::Write,
+            "User:alice",
+            "*",
+            PatternType::Literal,
+            "*",
+        )));
+        let a = alice();
+        let h = addr();
+        let auth = SimpleAclAuthorizer::new(no_super());
+        assert2::assert!(
+            auth.authorize_by_resource_type(&img, &a, &h, ResourceType::Topic, AclOperation::Write)
+                == AuthorizationResult::Deny
+        );
+    }
+
+    #[test]
+    fn allow_on_one_resource_with_deny_on_a_different_resource_still_allows() {
+        let mut img = img();
+        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+            PermissionType::Allow,
+            AclOperation::Write,
+            "User:alice",
+            "*",
+            PatternType::Literal,
+            "orders",
+        )));
+        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+            PermissionType::Deny,
+            AclOperation::Write,
+            "User:alice",
+            "*",
+            PatternType::Literal,
+            "payments",
+        )));
+        let a = alice();
+        let h = addr();
+        let auth = SimpleAclAuthorizer::new(no_super());
+        assert2::assert!(
+            auth.authorize_by_resource_type(&img, &a, &h, ResourceType::Topic, AclOperation::Write)
+                == AuthorizationResult::Allow
+        );
+    }
+
+    /// A literal DENY on the bare prefix string must not shadow a prefixed
+    /// ALLOW grant: "orders", "order-events", and every other resource
+    /// strictly under the "ord" prefix are still allowed, even though the
+    /// prefix string itself, taken as a literal resource name, is denied.
+    #[test]
+    fn literal_deny_on_the_bare_prefix_string_does_not_shadow_the_prefixed_allow() {
+        let mut img = img();
+        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+            PermissionType::Allow,
+            AclOperation::Write,
+            "User:alice",
+            "*",
+            PatternType::Prefixed,
+            "ord",
+        )));
+        img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+            PermissionType::Deny,
+            AclOperation::Write,
+            "User:alice",
+            "*",
+            PatternType::Literal,
+            "ord",
+        )));
+        let a = alice();
+        let h = addr();
+        let auth = SimpleAclAuthorizer::new(no_super());
+        assert2::assert!(
+            auth.authorize_by_resource_type(&img, &a, &h, ResourceType::Topic, AclOperation::Write)
+                == AuthorizationResult::Allow
+        );
+    }
+}
+
 /// #650: `allow.everyone.if.no.acl.found` (default `false`) allows a
 /// request only when NO ACL at all applies to the resource -- by resource
 /// type, name, and LITERAL/PREFIXED/wildcard pattern, regardless of

@@ -133,6 +133,32 @@ pub trait Authorizer: Send + Sync + std::fmt::Debug {
     fn decision_ttl(&self) -> Option<std::time::Duration> {
         None
     }
+
+    /// Whether `principal` holds `operation` on at least one resource pattern
+    /// of `resource_type` -- Kafka's `AuthorizerUtils.authorizeByResourceType`,
+    /// used where a request is not itself scoped to one resource name. KIP-599
+    /// motivates the check: `InitProducerId` with no transactional id accepts
+    /// either cluster-wide `IdempotentWrite` or `Write` on any topic, so a
+    /// principal that can produce need not also hold a cluster-wide grant.
+    ///
+    /// The default answers [`AuthorizationResult::Deny`]: an implementation
+    /// that cannot enumerate its ACL space (an HTTP-backed policy engine, for
+    /// example) has no cheap way to answer this honestly, and understating a
+    /// grant is the safe direction. [`AllowAllAuthorizer`] overrides this to
+    /// always answer `Allow`, since it never denies anything.
+    /// [`SimpleAclAuthorizer`] overrides it with a real scan. A decorator MUST
+    /// forward the wrapped authorizer's answer, as it does for `is_configured`
+    /// and `decision_ttl`.
+    fn authorize_by_resource_type(
+        &self,
+        _source: &dyn AclSource,
+        _principal: &Principal,
+        _host: &SocketAddr,
+        _resource_type: ResourceType,
+        _operation: AclOperation,
+    ) -> AuthorizationResult {
+        AuthorizationResult::Deny
+    }
 }
 
 /// Batch-authorize a set of topic names against the same principal, host, and
