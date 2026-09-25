@@ -103,7 +103,12 @@ pub(crate) async fn handle(
         // ── ACL preamble ────────────────────────────────────────────
         // Per-topic `Describe` on `Topic(name)`. A denied topic gets
         // `TOPIC_AUTHORIZATION_FAILED (29)` on every partition row it
-        // requested; authorized topics proceed unchanged.
+        // requested. Kafka's `handleListOffsetRequest` splits topics into
+        // authorized and unauthorized up front (`AuthHelper.
+        // partitionMapToAuthorizedPartitionsAndErrors`), processes only the
+        // authorized ones, and appends the unauthorized rows after them
+        // (`mergedResponses.addAll(unauthorizedResponseStatus)`) rather than
+        // interleaving them in request order.
         let acl_image = controller.current_image();
 
         let timeout = remote_timeout(
@@ -114,39 +119,47 @@ pub(crate) async fn handle(
                 broker.config.node_id,
             ),
         );
-        let topics_out = concurrently(req.topics.into_iter().map(|topic| {
-            let acl_image = acl_image.clone();
-            async move {
-                let name = topic.name;
-                let partitions = if crate::handlers::acl_denied(
+
+        let (authorized_topics, denied_topics): (Vec<_>, Vec<_>) =
+            req.topics.into_iter().partition(|topic| {
+                !crate::handlers::acl_denied(
                     broker.config.authorizer.as_ref(),
                     &acl_image,
                     ctx,
                     ResourceType::Topic,
-                    &name,
+                    &topic.name,
                     AclOperation::Describe,
-                ) {
-                    topic
-                        .partitions
-                        .into_iter()
-                        .map(|part| {
-                            error_response(part.partition_index, codes::TOPIC_AUTHORIZATION_FAILED)
-                        })
-                        .collect()
-                } else {
+                )
+            });
+
+        let mut topics_out =
+            concurrently(authorized_topics.into_iter().map(|topic| async move {
+                let name = topic.name;
+                let partitions =
                     concurrently(topic.partitions.into_iter().map(|part| {
                         resolve_partition(broker, &name, part, version, timeout, bound)
                     }))
-                    .await
-                };
+                    .await;
                 ListOffsetsTopicResponse {
                     name,
                     partitions,
                     ..Default::default()
                 }
+            }))
+            .await;
+
+        topics_out.extend(denied_topics.into_iter().map(|topic| {
+            let partitions = topic
+                .partitions
+                .into_iter()
+                .map(|part| error_response(part.partition_index, codes::TOPIC_AUTHORIZATION_FAILED))
+                .collect();
+            ListOffsetsTopicResponse {
+                name: topic.name,
+                partitions,
+                ..Default::default()
             }
-        }))
-        .await;
+        }));
 
         let resp = ListOffsetsResponse {
             throttle_time_ms: 0,
