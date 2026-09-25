@@ -123,9 +123,12 @@ pull_image = use_repo_rule("@rules_img//img:pull.bzl", "pull")
         # The 1.x half of librdkafka_conformance. The 2.x half is
         # //bazel/images:kcat_librdkafka_2x, built here from an apko lock,
         # because no published image carries a CLI on that line.
-        # jvm_acceptance_tiered's cases back the remote tier with MinIO.
-        ("minio", "quay.io", "minio/minio", "RELEASE.2025-09-07T16-13-09Z", "sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2"),
-        ("minio_mc", "quay.io", "minio/mc", "RELEASE.2025-08-13T08-35-41Z", "sha256:eb4ea9884b77704230e2423e9004d2fa738dc272876b9cc41a297d29443b8780"),
+        #
+        # jvm_acceptance_tiered's cases back the remote tier with MinIO --
+        # //bazel/images:minio and :minio_mc, also built from an apko lock.
+        # Both used to be pulled from here, from quay.io/minio/minio and
+        # quay.io/minio/mc; MinIO discontinued every channel that published
+        # them, quay.io included, so there is no digest left to pin.
     ]
 ]
 
@@ -164,7 +167,15 @@ apk.translate_lock(
     name = "kdc_base_lock",
     lock = "//crates/broker/tests/fixtures/security/kdc:image.apko.lock.json",
 )
-use_repo(apk, "bench_driver_base_lock", "broker_base_arm64_lock", "broker_base_lock", "creusot_base_lock", "kaf_sarama_lock", "kcat_librdkafka_2x_lock", "kdc_base_lock")
+apk.translate_lock(
+    name = "minio_lock",
+    lock = "//bazel/images:minio.apko.lock.json",
+)
+apk.translate_lock(
+    name = "minio_mc_lock",
+    lock = "//bazel/images:minio_mc.apko.lock.json",
+)
+use_repo(apk, "bench_driver_base_lock", "broker_base_arm64_lock", "broker_base_lock", "creusot_base_lock", "kaf_sarama_lock", "kcat_librdkafka_2x_lock", "kdc_base_lock", "minio_lock", "minio_mc_lock")
 
 # ---------------------------------------------------------------------------
 # Format and lint. See //tools/format and //tools/lint.
