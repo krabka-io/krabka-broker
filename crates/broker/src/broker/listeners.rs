@@ -6,10 +6,7 @@ use std::{net::SocketAddr, sync::Arc};
 
 use dashmap::DashMap;
 use krabka_ids::PartitionIndex;
-use tokio::{
-    net::{TcpListener, TcpSocket},
-    task::JoinHandle,
-};
+use tokio::{net::TcpListener, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -19,23 +16,6 @@ use crate::{
     log_dir,
     partition_registry::PartitionRegistry,
 };
-
-/// Binds a listening socket with `SO_REUSEADDR`, matching Kafka's own
-/// `SocketServer` (`socket.setReuseAddress(true)` before `bind`). Without it,
-/// rebinding the same port right after a previous listener on it closes can
-/// fail with `EADDRINUSE` while the OS still holds sockets that used that
-/// port in `TIME_WAIT` -- exactly the case a broker restart on its
-/// previously-bound port hits.
-pub(super) fn bind_reuseaddr(addr: SocketAddr) -> std::io::Result<TcpListener> {
-    let socket = if addr.is_ipv4() {
-        TcpSocket::new_v4()?
-    } else {
-        TcpSocket::new_v6()?
-    };
-    socket.set_reuseaddr(true)?;
-    socket.bind(addr)?;
-    socket.listen(1024)
-}
 
 pub(super) struct ListenerStartup {
     pub(super) bound: Vec<(crate::config::ListenerSpec, TcpListener, SocketAddr)>,
@@ -62,7 +42,7 @@ pub(super) struct ListenerStartup {
 /// A caller-supplied data-plane listener, a concrete port, and a
 /// `config.listeners` (KIP-113 multi-listener) setup all keep their config as
 /// it is.
-pub(super) fn bind_ephemeral_data_plane_listener(
+pub(super) async fn bind_ephemeral_data_plane_listener(
     config: &mut BrokerConfig,
     data_plane_listeners: &mut Vec<TcpListener>,
 ) -> Result<(), BrokerError> {
@@ -72,7 +52,7 @@ pub(super) fn bind_ephemeral_data_plane_listener(
     {
         return Ok(());
     }
-    let listener = bind_reuseaddr(config.listen_addr)?;
+    let listener = TcpListener::bind(config.listen_addr).await?;
     let bound = listener.local_addr()?;
     config.listen_addr = bound;
     if let Some((host, _)) = config.advertised_listener.rsplit_once(':') {
@@ -98,7 +78,7 @@ pub(super) async fn bind_listeners_and_recover_moves(
         }) {
             supplied_listeners.swap_remove(index)
         } else {
-            bind_reuseaddr(spec.bind_addr)?
+            TcpListener::bind(spec.bind_addr).await?
         };
         let address = listener.local_addr()?;
         bound.push((spec, listener, address));
