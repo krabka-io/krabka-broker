@@ -30,6 +30,8 @@ use krabka_protocol::{
 };
 
 mod broker_configs;
+mod client_metrics_configs;
+mod group_configs;
 mod resource;
 mod topic_configs;
 
@@ -43,6 +45,8 @@ use crate::{broker::Broker, error::BrokerError};
 
 const RESOURCE_TYPE_TOPIC: i8 = 2;
 const RESOURCE_TYPE_BROKER: i8 = 4;
+const RESOURCE_TYPE_CLIENT_METRICS: i8 = 16;
+const RESOURCE_TYPE_GROUP: i8 = 32;
 
 #[tracing::instrument(
     name = "handle_alter_configs",
@@ -65,10 +69,12 @@ pub(crate) async fn handle(
     let mut responses: Vec<AlterConfigsResourceResponse> = Vec::with_capacity(req.resources.len());
     let validate_only = req.validate_only;
     let mut audited: Vec<krabka_audit::AuditResource> = Vec::new();
+    let duplicate_flags = duplicate_resource_flags(&req.resources);
 
-    for resource in req.resources {
+    for (resource, is_duplicate) in req.resources.into_iter().zip(duplicate_flags) {
         let named = audit_resources_for(&resource, &image);
-        let response = process_resource(broker, &image, ctx, resource, validate_only).await;
+        let response =
+            process_resource(broker, &image, ctx, resource, validate_only, is_duplicate).await;
         // A `--dry-run` request stores nothing, so it changed no resource.
         if response.error_code == crate::codes::NONE && !validate_only {
             audited.extend(named);
@@ -97,14 +103,27 @@ fn audit_resources_for(
         config_resource_type(resource.resource_type),
         resource.resource_name.clone(),
     )];
-    let keys = if resource.resource_type == RESOURCE_TYPE_TOPIC {
-        changed_topic_config_keys(resource, image)
-    } else {
-        resource
+    let keys = match resource.resource_type {
+        RESOURCE_TYPE_TOPIC => changed_config_keys(
+            resource,
+            image.topic_config(&resource.resource_name),
+            crate::config_keys::is_controller_managed_topic_config,
+        ),
+        RESOURCE_TYPE_GROUP => changed_config_keys(
+            resource,
+            image.group_config(&resource.resource_name),
+            |_| false,
+        ),
+        RESOURCE_TYPE_CLIENT_METRICS => changed_config_keys(
+            resource,
+            image.client_metrics_config(&resource.resource_name),
+            |_| false,
+        ),
+        _ => resource
             .configs
             .iter()
             .map(|config| config.name.clone())
-            .collect()
+            .collect(),
     };
     out.extend(
         keys.into_iter()
@@ -113,24 +132,27 @@ fn audit_resources_for(
     out
 }
 
-/// The topic config keys this replacement changes.
+/// The config keys a full-map-replacement resource's request changes.
 ///
-/// `AlterConfigs` replaces the whole override map, so a stored key the request
-/// omits is deleted by the request as surely as one it restates with a new
-/// value. Naming only the request's own keys would leave those deletions out
-/// of the audit trail: replacing `{retention.ms, cleanup.policy}` with
-/// `{retention.ms}` removes the compaction policy and would record nothing.
-/// A key whose stored value the request restates unchanged changed nothing and
-/// is left out.
+/// `AlterConfigs` replaces the whole override map for a Topic, Group, or
+/// `ClientMetrics` resource, so a stored key the request omits is deleted by
+/// the request as surely as one it restates with a new value. Naming only
+/// the request's own keys would leave those deletions out of the audit
+/// trail: replacing `{retention.ms, cleanup.policy}` with `{retention.ms}`
+/// removes the compaction policy and would record nothing. A key whose
+/// stored value the request restates unchanged changed nothing and is left
+/// out.
 ///
-/// Controller-managed keys stand outside the replacement: no client can name
-/// one and the record builder carries the stored value forward, so their
-/// absence from the request is not a deletion.
-fn changed_topic_config_keys(
+/// `is_controller_managed` excludes keys that stand outside the
+/// replacement: no client can name one and the record builder carries the
+/// stored value forward, so their absence from the request is not a
+/// deletion. Only Topic resources have such keys; Group and `ClientMetrics`
+/// pass a predicate that always returns `false`.
+fn changed_config_keys(
     resource: &krabka_protocol::owned::alter_configs_request::AlterConfigsResource,
-    image: &krabka_metadata::MetadataImage,
+    stored: Option<&std::collections::BTreeMap<String, String>>,
+    is_controller_managed: impl Fn(&str) -> bool,
 ) -> Vec<String> {
-    let stored = image.topic_config(&resource.resource_name);
     let replacement: std::collections::BTreeMap<&str, &str> = resource
         .configs
         .iter()
@@ -151,12 +173,31 @@ fn changed_topic_config_keys(
             .into_iter()
             .flatten()
             .filter(|(key, _)| {
-                !crate::config_keys::is_controller_managed_topic_config(key)
-                    && !replacement.contains_key(key.as_str())
+                !is_controller_managed(key) && !replacement.contains_key(key.as_str())
             })
             .map(|(key, _)| key.clone()),
     );
     changed.into_iter().collect()
+}
+
+/// Kafka's `ConfigAdminManager.preprocess` rejects a request that names the
+/// same `(resource_type, resource_name)` pair more than once, on every row
+/// that names it. This computes that flag for each resource in request order
+/// before any of them is authorized or processed, since the duplicate check
+/// has to see the whole request at once.
+fn duplicate_resource_flags(
+    resources: &[krabka_protocol::owned::alter_configs_request::AlterConfigsResource],
+) -> Vec<bool> {
+    let mut counts: std::collections::HashMap<(i8, &str), usize> = std::collections::HashMap::new();
+    for resource in resources {
+        *counts
+            .entry((resource.resource_type, resource.resource_name.as_str()))
+            .or_insert(0) += 1;
+    }
+    resources
+        .iter()
+        .map(|resource| counts[&(resource.resource_type, resource.resource_name.as_str())] > 1)
+        .collect()
 }
 
 /// The audit `resource_type` for a KIP-133 config resource-type discriminant.
