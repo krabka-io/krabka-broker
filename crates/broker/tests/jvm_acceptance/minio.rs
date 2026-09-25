@@ -12,7 +12,7 @@ use super::ports::minio_port;
 // ---------------------------------------------------------------------------
 // MinIO-backed tiered-storage acceptance test (KIP-405 S3 backend).
 //
-// Spins up a real `mirror.gcr.io/minio/minio` container, points the broker at it via the
+// Spins up a real `MinIO` container, points the broker at it via the
 // S3-compatible `S3RemoteStorage` backend, then drives a JVM producer +
 // consumer against a topic with `remote.storage.enable=true` and an
 // aggressive `local.retention.bytes` override, on a broker whose default
@@ -23,9 +23,12 @@ use super::ports::minio_port;
 // from the remote tier through `RemoteReader`.
 // ---------------------------------------------------------------------------
 
-pub(crate) const MINIO_IMAGE: &str = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z";
+// MinIO discontinued distribution of its own images, quay.io included;
+// `//bazel/images:minio`/`:minio_mc` now build both from a Wolfi apko lock and
+// load them under these tags rather than pull them from quay.io.
+pub(crate) const MINIO_IMAGE: &str = "docker.io/krabka-io/minio:RELEASE.2025-09-07T16-13-09Z";
 
-pub(crate) const MINIO_CLIENT_IMAGE: &str = "quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z";
+pub(crate) const MINIO_CLIENT_IMAGE: &str = "docker.io/krabka-io/minio-mc:RELEASE.2025-08-13T08-35-41Z";
 
 pub(crate) const MINIO_ACCESS_KEY: &str = "minioadmin";
 
