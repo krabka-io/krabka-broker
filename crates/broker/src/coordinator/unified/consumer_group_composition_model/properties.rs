@@ -125,6 +125,7 @@ impl Model for CgcModel {
                     &req,
                     ClientIdentity { id: "", host: "" },
                     Instant::now(),
+                    &HashSet::new(),
                 );
                 assert_epoch_monotonic(last, &g);
                 owned.entry(id.clone()).or_default();
@@ -142,6 +143,7 @@ impl Model for CgcModel {
                     &req,
                     ClientIdentity { id: "", host: "" },
                     Instant::now(),
+                    &HashSet::new(),
                 );
                 assert_epoch_monotonic(last, &g);
                 owned.remove(&id);
@@ -160,6 +162,7 @@ impl Model for CgcModel {
                     &req,
                     ClientIdentity { id: "", host: "" },
                     Instant::now(),
+                    &HashSet::new(),
                 );
                 assert_epoch_monotonic(last, &g);
                 adv.insert(id, advertised_of(&step));
