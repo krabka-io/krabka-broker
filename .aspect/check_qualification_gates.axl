@@ -294,8 +294,13 @@ broker_source=$(source_repo krabka-broker)
 (cd "$broker_source" && bazel test //crates/restore:dr_roundtrip_test --test_output=all --nocache_test_results) \
   2>&1 | tee "$evidence/hermetic-dr.log"
 check hermetic-dr grep -F 'test a_captured_cluster_restores_with_its_configuration_and_its_group_positions ... ok' "$evidence/hermetic-dr.log"
-minio_image=quay.io/minio/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
-mc_image=quay.io/minio/mc@sha256:eb4ea9884b77704230e2423e9004d2fa738dc272876b9cc41a297d29443b8780
+# MinIO discontinued distribution of its own images, quay.io included, so
+# //bazel/images:minio and :minio_mc build both from a Wolfi apko lock instead
+# of pulling a digest. `bazel run` loads them into this runner's local daemon
+# under the tags below, the same way the broker's own container suites do.
+(cd "$broker_source" && bazel run //bazel/images:minio && bazel run //bazel/images:minio_mc)
+minio_image=docker.io/krabka-io/minio:RELEASE.2025-09-07T16-13-09Z
+mc_image=docker.io/krabka-io/minio-mc:RELEASE.2025-08-13T08-35-41Z
 network=$scope-dr
 bucket=dr-archive
 data_prefix=candidate/data
