@@ -252,15 +252,14 @@ pub(crate) mod tests {
         principal: &'a Principal,
         peer: &'a std::net::SocketAddr,
     ) -> RequestContext<'a> {
-        RequestContext {
+        RequestContext::new(
             principal,
             peer,
-            client_id: "krabka-guard",
-            connection_id: "test-connection",
-            sendfile_capable: false,
-            connection_listener_name: "PLAINTEXT",
-            throttle: crate::quota::ThrottleSlot::default(),
-        }
+            "krabka-guard",
+            "test-connection",
+            false,
+            "PLAINTEXT",
+        )
     }
 
     pub(crate) fn audit_channel() -> (std::sync::Arc<AuditLog>, krabka_audit::AuditReceiver) {

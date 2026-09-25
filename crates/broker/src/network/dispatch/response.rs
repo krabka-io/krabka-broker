@@ -27,6 +27,11 @@ pub(super) struct ThrottledResponse {
     /// together with the request quota. See
     /// [`crate::quota::ThrottleSlot::defer`].
     pub(super) deferred_charge: Option<crate::metrics::QuotaCharge>,
+    /// Set for an `acks=0` `Produce` whose response carried an error on any
+    /// partition. The response body is suppressed either way, but this tells
+    /// `send_registry_response` to close the connection instead of muting it,
+    /// which is the only signal such a producer gets.
+    pub(super) close_after_response: bool,
 }
 
 impl ThrottledResponse {
@@ -36,6 +41,7 @@ impl ThrottledResponse {
             bytes,
             throttle: <Time as TimeExt>::ZERO,
             deferred_charge: None,
+            close_after_response: false,
         }
     }
 }
@@ -149,6 +155,7 @@ pub(super) fn apply_request_quota(
         bytes: response_bytes,
         throttle,
         deferred_charge: None,
+        close_after_response: false,
     }
 }
 

@@ -28,7 +28,8 @@ use self::{
     response::build_topic_error_response,
     throttle::{finish_produce_response, produce_bytes_by_qos_tier},
     topic_settings::{
-        resolve_compacted_topic, resolve_timestamp_policy, resolve_topic_compression,
+        broker_default_timestamp_policy, resolve_compacted_topic, resolve_timestamp_policy,
+        resolve_topic_compression,
     },
 };
 use crate::{
@@ -79,6 +80,60 @@ const ACKS_ALL: i16 = -1;
 fn durability_frontier(base_offset: i64, last_offset_delta: i32) -> Option<krabka_log::Offset> {
     krabka_verified::produce_durability_frontier(base_offset, last_offset_delta)
         .map(krabka_log::Offset)
+}
+
+/// Kafka's `ReplicaManager.isValidRequiredAcks` admits only 0, 1 and -1.
+/// `sendInvalidRequiredAcksResponse` answers every partition of the request
+/// with `INVALID_REQUIRED_ACKS`, with every offset field at its -1 sentinel,
+/// and appends nothing -- there is no partial credit for an otherwise-valid
+/// batch on an invalid `acks`.
+///
+/// `None` when `acks` is one of the three valid values, so the caller
+/// continues the ordinary path. `Some` is the response `handle` returns
+/// as-is.
+/// The request-specific fields [`invalid_required_acks_response`] needs
+/// beside the response-building context every early-return branch of
+/// `handle` shares (`broker`, `image`, `ctx`, `produce_bytes_by_qos_tier`).
+/// Bundled into one parameter so the function stays under Clippy's
+/// argument-count lint. Every field is a reference or itself `Copy`, so this
+/// is too, and passes by value like they would have.
+#[derive(Clone, Copy)]
+struct AcksRequest<'a> {
+    topic_data: &'a [framing::FramedTopic],
+    acks: i16,
+    version: i16,
+    handler_start: std::time::Instant,
+}
+
+fn invalid_required_acks_response(
+    broker: &Broker,
+    image: &krabka_metadata::MetadataImage,
+    ctx: &crate::handlers::RequestContext<'_>,
+    produce_bytes_by_qos_tier: &std::collections::BTreeMap<String, u64>,
+    request: AcksRequest<'_>,
+) -> Option<Result<Bytes, BrokerError>> {
+    let AcksRequest {
+        topic_data,
+        acks,
+        version,
+        handler_start,
+    } = request;
+    if matches!(acks, 0 | 1 | ACKS_ALL) {
+        return None;
+    }
+    let topic_results: Vec<TopicProduceResponse> = topic_data
+        .iter()
+        .map(|topic| build_topic_error_response(topic, codes::INVALID_REQUIRED_ACKS))
+        .collect();
+    Some(finish_produce_response(
+        broker,
+        image,
+        ctx,
+        (acks != 0).then_some(handler_start),
+        produce_bytes_by_qos_tier,
+        topic_results,
+        version,
+    ))
 }
 
 /// This handler's own wire api key, for the `api_key` label the request-phase
@@ -143,6 +198,15 @@ pub(crate) async fn handle(
         default_min_insync_replicas: broker.config.default_min_insync_replicas,
         is_witness: broker.config.is_witness(),
     };
+    // Kafka's three `log.message.timestamp.*` broker configs, resolved once
+    // per request: the topic key's own broker-wide default, the same as
+    // `LogConfig`'s topic keys take their matching broker key as their
+    // default. A topic that names none of the three inherits this.
+    let broker_timestamp_default = broker_default_timestamp_policy(
+        broker.config.log_config.message_timestamp_type,
+        broker.config.default_message_timestamp_before_max_ms,
+        broker.config.default_message_timestamp_after_max_ms,
+    );
     // ── request decode (header-only on the verbatim-eligible path) ──
     // For v≥3 (native v2 payloads) we decode only the request FRAMING —
     // `transactional_id`, `acks`, `timeout_ms`, and per-topic / per-partition
@@ -212,6 +276,9 @@ pub(crate) async fn handle(
                 build_topic_error_response(topic, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED)
             })
             .collect();
+        if acks == 0 {
+            ctx.mark_close_after_response();
+        }
         return finish_produce_response(
             broker,
             &image,
@@ -221,6 +288,26 @@ pub(crate) async fn handle(
             topic_results,
             version,
         );
+    }
+
+    // ── acks validity ──────────────────────────────────────────────────
+    // This runs after the transactional check above, matching Kafka's own
+    // order in `KafkaApis.handleProduceRequest`: `hasTransactionalRecords` is
+    // checked directly, while `isValidRequiredAcks` is checked later, inside
+    // `ReplicaManager.appendRecords`.
+    if let Some(result) = invalid_required_acks_response(
+        broker,
+        &image,
+        ctx,
+        &produce_bytes_by_qos_tier,
+        AcksRequest {
+            topic_data: &req.topic_data,
+            acks,
+            version,
+            handler_start,
+        },
+    ) {
+        return result;
     }
 
     // ── ACL preamble, part 2: per-topic `Write` ────────────────────────
@@ -272,34 +359,11 @@ pub(crate) async fn handle(
                 }
             };
 
-        // Account for the topic in Prometheus before
-        // consuming `partition_data`. Sum the per-partition records-field
-        // wire length so the bytes-in counter matches the actual bytes
-        // received (the producer's compressed bytes on the verbatim path —
-        // the true on-the-wire payload, no decompression needed). We count
-        // even for authorize-denied / unknown-topic paths since the produce
-        // *request* arrived; that mirrors Kafka's BrokerTopicMetrics semantics.
-        if !topic_name.is_empty() {
-            let mut topic_bytes: u64 = 0;
-            // Also tally records-per-batch for
-            // `messages_in_total`. V2 payloads expose
-            // `records.len()` directly; legacy MessageSet payloads
-            // remain opaque here and the upconversion-time
-            // accounting already counts those arrivals.
-            let mut topic_messages: u64 = 0;
-            for p in &topic.partition_data {
-                let partition_bytes = p.payload.payload_len() as u64;
-                broker
-                    .metrics
-                    .record_partition_produce(&topic_name, p.index, partition_bytes);
-                topic_bytes += partition_bytes;
-                topic_messages += p.payload.message_count();
-            }
-            broker.metrics.record_produce(&topic_name, topic_bytes);
-            broker
-                .metrics
-                .record_produce_messages(&topic_name, topic_messages);
-        }
+        // Account for the topic in Prometheus before consuming
+        // `partition_data`. We count even for authorize-denied / unknown-topic
+        // paths since the produce *request* arrived; that mirrors Kafka's
+        // `BrokerTopicMetrics` semantics.
+        record_topic_produce_metrics(broker, &topic_name, &topic);
 
         let mut partition_results: Vec<PartitionProduceResponse> =
             Vec::with_capacity(topic.partition_data.len());
@@ -341,7 +405,7 @@ pub(crate) async fn handle(
         // broker's, are properties of the topic. The default is `CreateTime`
         // with both windows open, so a topic that configured neither costs
         // every partition one boolean test and reads no clock.
-        let timestamps = resolve_timestamp_policy(&image, &topic_name);
+        let timestamps = resolve_timestamp_policy(&image, &topic_name, broker_timestamp_default);
 
         // Kafka's `LogConfig.compact`, resolved once per topic: a compacted
         // topic refuses a record with no key.
@@ -455,6 +519,13 @@ pub(crate) async fn handle(
     // ── the one acks=-1 high-watermark wait ─────────────────────────
     await_durability(broker, awaiting, &mut topic_results, timeout, &phases).await;
 
+    // The suppressed response is the only signal an acks=0 producer gets, so
+    // Kafka closes the connection on it rather than mute it. `acks != 0`
+    // requests always answer, so the flag is never set for them.
+    if acks == 0 && any_partition_failed(&topic_results) {
+        ctx.mark_close_after_response();
+    }
+
     // The local and remote phases are complete once the partition loop and the
     // wait above are. The throttle below is the third phase, and
     // `finish_produce_response` observes that one itself.
@@ -551,6 +622,48 @@ fn record_partition_failure(broker: &Broker, topic_name: &Arc<str>, error_code: 
     if !topic_name.is_empty() && error_code != 0 {
         broker.metrics.record_failed_produce(topic_name);
     }
+}
+
+/// Sum one topic's per-partition records-field wire length into the bytes-in
+/// counter and the per-batch record count into `messages_in_total`.
+///
+/// The wire length is the producer's compressed bytes on the verbatim path —
+/// the true on-the-wire payload, no decompression needed. V2 payloads expose
+/// `records.len()` directly for the message count; legacy `MessageSet`
+/// payloads remain opaque here and the upconversion-time accounting already
+/// counts those arrivals. A topic name resolved to empty (an unresolved id at
+/// v13+) is not accounted, because there is no topic to label the metric
+/// with.
+fn record_topic_produce_metrics(
+    broker: &Broker,
+    topic_name: &Arc<str>,
+    topic: &framing::FramedTopic,
+) {
+    if topic_name.is_empty() {
+        return;
+    }
+    let mut topic_bytes: u64 = 0;
+    let mut topic_messages: u64 = 0;
+    for p in &topic.partition_data {
+        let partition_bytes = p.payload.payload_len() as u64;
+        broker
+            .metrics
+            .record_partition_produce(topic_name, p.index, partition_bytes);
+        topic_bytes += partition_bytes;
+        topic_messages += p.payload.message_count();
+    }
+    broker.metrics.record_produce(topic_name, topic_bytes);
+    broker
+        .metrics
+        .record_produce_messages(topic_name, topic_messages);
+}
+
+/// Whether any partition row of this response carries a non-zero error code.
+fn any_partition_failed(topic_results: &[TopicProduceResponse]) -> bool {
+    topic_results
+        .iter()
+        .flat_map(|topic| &topic.partition_responses)
+        .any(|partition| partition.error_code != 0)
 }
 
 /// Whether Kafka requires a response for this Produce request. `acks=0`

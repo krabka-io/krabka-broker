@@ -250,15 +250,14 @@ pub(crate) fn request_context<'a>(
     peer: &'a SocketAddr,
     client_id: &'a str,
 ) -> RequestContext<'a> {
-    RequestContext {
+    RequestContext::new(
         principal,
         peer,
         client_id,
-        connection_id: "test-connection",
-        sendfile_capable: false,
-        connection_listener_name: "PLAINTEXT",
-        throttle: crate::quota::ThrottleSlot::default(),
-    }
+        "test-connection",
+        false,
+        "PLAINTEXT",
+    )
 }
 
 /// Encode a request to wire bytes at `version`.

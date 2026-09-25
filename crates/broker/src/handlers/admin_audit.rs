@@ -112,15 +112,14 @@ mod tests {
             groups: Vec::new(),
         };
         let peer: SocketAddr = "192.0.2.10:9092".parse().unwrap();
-        let ctx = RequestContext {
-            principal: &principal,
-            peer: &peer,
-            client_id: "admin-client",
-            connection_id: "connection-a",
-            sendfile_capable: false,
-            connection_listener_name: "PLAINTEXT",
-            throttle: crate::quota::ThrottleSlot::default(),
-        };
+        let ctx = RequestContext::new(
+            &principal,
+            &peer,
+            "admin-client",
+            "connection-a",
+            false,
+            "PLAINTEXT",
+        );
 
         audit_admin(
             log.as_ref(),
@@ -179,15 +178,14 @@ mod tests {
             groups: Vec::new(),
         };
         let peer: SocketAddr = "192.0.2.10:9092".parse().unwrap();
-        let ctx = RequestContext {
-            principal: &principal,
-            peer: &peer,
-            client_id: "admin-client",
-            connection_id: "connection-a",
-            sendfile_capable: false,
-            connection_listener_name: "PLAINTEXT",
-            throttle: crate::quota::ThrottleSlot::default(),
-        };
+        let ctx = RequestContext::new(
+            &principal,
+            &peer,
+            "admin-client",
+            "connection-a",
+            false,
+            "PLAINTEXT",
+        );
 
         audit_admin_success(log.as_ref(), &ctx, "AlterConfigs", Vec::new());
         assert!(rx.try_recv().is_err(), "no resource changed, no record");

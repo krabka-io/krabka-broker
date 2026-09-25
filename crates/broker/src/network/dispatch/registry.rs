@@ -50,8 +50,16 @@ where
     if response.bytes.is_empty()
         && matches!(entry.kind(), crate::handlers::DispatchKind::Produce(_))
     {
-        // `acks=0`: there is no response frame to write, but the handler may
-        // still have charged a quota, so the mute window stands.
+        // `acks=0`: there is no response frame to write. Kafka's
+        // `KafkaApis.handleProduceRequest` closes the connection instead of
+        // answering when any partition of such a request carried an error --
+        // the close is the only signal an acks=0 producer gets, so it is what
+        // makes such a producer refresh metadata after, say, a leader move.
+        if response.close_after_response {
+            return AfterResponse::Close;
+        }
+        // Otherwise the handler may still have charged a quota, so the mute
+        // window stands.
         return AfterResponse::Mute(response.throttle);
     }
     if entry.quota_policy() == crate::handlers::RequestQuotaPolicy::ApplyFallbackAccounting {
@@ -232,10 +240,12 @@ fn with_recorded_throttle(
 ) -> Result<ThrottledResponse, BrokerError> {
     let throttle = ctx.take_throttle();
     let deferred_charge = ctx.throttle.deferred();
+    let close_after_response = ctx.take_close_after_response();
     encoded.map(|bytes| ThrottledResponse {
         bytes,
         throttle,
         deferred_charge,
+        close_after_response,
     })
 }
 

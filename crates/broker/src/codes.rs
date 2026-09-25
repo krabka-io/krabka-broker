@@ -334,6 +334,12 @@ kafka_codes! {
     /// ISR follower.
     NOT_ENOUGH_REPLICAS_AFTER_APPEND = 20;
 
+    /// `INVALID_REQUIRED_ACKS` (21): a Produce request's `acks` field held a
+    /// value other than 0, 1 or -1. `ReplicaManager.isValidRequiredAcks`
+    /// admits only those three; every other value refuses every partition of
+    /// the request with this code, and appends nothing.
+    INVALID_REQUIRED_ACKS = 21;
+
     /// `FENCED_LEADER_EPOCH` (74, KIP-101): caller's `current_leader_epoch` is
     /// older than the partition's current `leader_epoch`. The caller should
     /// re-fetch metadata, or call `OffsetForLeaderEpoch` to learn the
@@ -425,7 +431,10 @@ kafka_codes! {
     INCONSISTENT_TOPIC_ID = 103;
 
     /// `UNSUPPORTED_COMPRESSION_TYPE` (76): a KIP-714 `PushTelemetry` carried
-    /// a `compression_type` that the broker cannot decompress.
+    /// a `compression_type` that the broker cannot decompress, or a `Produce`
+    /// batch below v7 used zstd, which `ProduceRequest.validateRecords`
+    /// refuses because a client that old is not assumed to be able to decode
+    /// zstd back out of a fetch.
     UNSUPPORTED_COMPRESSION_TYPE = 76;
 
     /// `THROTTLING_QUOTA_EXCEEDED` (89): a KIP-714 client pushed or fetched
