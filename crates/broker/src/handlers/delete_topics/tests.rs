@@ -4,8 +4,13 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use assert2::{assert, check};
+use krabka_metadata::{
+    AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
+};
 use krabka_protocol::{
     owned::{
+        create_topics_request::{CreatableTopic, CreateTopicsRequest},
+        create_topics_response::CreateTopicsResponse,
         delete_topics_request::DeleteTopicsRequest,
         delete_topics_response::{DeletableTopicResult, DeleteTopicsResponse},
     },
@@ -25,6 +30,10 @@ use crate::{
         DenyAll, peer, principal, start_broker_with_authorizer_no_audit as start_broker,
     },
 };
+
+/// Wire version the cluster-`Delete` shortcut test drives both `CreateTopics`
+/// (to seed the fixture topics) and `DeleteTopics` at.
+const CREATE_VERSION: i16 = 7;
 
 const VERSION: i16 = 6;
 
@@ -287,4 +296,200 @@ async fn invalid_topic_rows_answer_invalid_request_and_delete_nothing() {
     }
     assert!(actual == expected);
     broker_handle.shutdown().await;
+}
+
+// ── #699: the cluster `Delete` shortcut ─────────────────────────────
+
+/// Creates `name` with `principal`, under whatever authorizer `broker`
+/// carries, and asserts the create itself was not refused. Setup for the
+/// cluster-`Delete` shortcut test below, which needs topics that already
+/// exist before it authorizes their deletion.
+async fn seed_topic(broker: &Broker, principal: &Principal, peer: &SocketAddr, name: &str) {
+    let req = CreateTopicsRequest {
+        topics: vec![CreatableTopic {
+            name: name.to_owned(),
+            num_partitions: 1,
+            replication_factor: 1,
+            ..Default::default()
+        }],
+        timeout_ms: 5_000,
+        ..Default::default()
+    };
+    let ctx = test_context(principal, peer);
+    let req_bytes = crate::test_support::encode_request(&req, CREATE_VERSION);
+    let bytes = crate::handlers::create_topics::handle(broker, CREATE_VERSION, 1, &req_bytes, &ctx)
+        .await
+        .expect("handle CreateTopics");
+    let resp: CreateTopicsResponse = crate::test_support::decode_response(&bytes, CREATE_VERSION);
+    assert!(
+        resp.topics[0].error_code == codes::NONE,
+        "seed create of {name}: {resp:?}"
+    );
+}
+
+/// #699: Kafka's `Delete` decision for a `DeleteTopics` request, table-driven
+/// over which ACL `alice` holds. `ControllerApis.handleDeleteTopics`/
+/// `deleteTopics` checks `Delete` on the `Cluster` resource once as a
+/// shortcut -- an Allow there authorizes every candidate topic name without a
+/// further lookup -- and falls back to `Delete` on each surviving
+/// `Topic(name)` individually only when that shortcut is denied. This mirrors
+/// the `Create` shortcut #698 fixed for `CreateTopics`.
+#[tokio::test]
+async fn handle_authorizes_delete_per_topic_when_cluster_delete_is_denied() {
+    struct Case {
+        acls: Vec<AclEntry>,
+        // Which of "a" and "app-x" this ACL shape lets `alice` delete.
+        deleted: &'static [&'static str],
+    }
+
+    fn acl(
+        resource_type: ResourceType,
+        resource_name: &str,
+        pattern_type: PatternType,
+        operation: AclOperation,
+    ) -> AclEntry {
+        AclEntry {
+            resource_type,
+            resource_name: resource_name.into(),
+            pattern_type,
+            principal: "User:alice".into(),
+            host: "*".into(),
+            operation,
+            permission_type: PermissionType::Allow,
+        }
+    }
+
+    let cluster_create = acl(
+        ResourceType::Cluster,
+        crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+        PatternType::Literal,
+        AclOperation::Create,
+    );
+    let cluster_delete = acl(
+        ResourceType::Cluster,
+        crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+        PatternType::Literal,
+        AclOperation::Delete,
+    );
+    let literal_a_delete = acl(
+        ResourceType::Topic,
+        "a",
+        PatternType::Literal,
+        AclOperation::Delete,
+    );
+    let prefixed_app_delete = acl(
+        ResourceType::Topic,
+        "app-",
+        PatternType::Prefixed,
+        AclOperation::Delete,
+    );
+
+    let cases = [
+        (
+            "cluster Delete authorizes every survivor",
+            Case {
+                acls: vec![cluster_delete.clone()],
+                deleted: &["a", "app-x"],
+            },
+        ),
+        (
+            "a literal ACL authorizes only its exact name",
+            Case {
+                acls: vec![literal_a_delete.clone()],
+                deleted: &["a"],
+            },
+        ),
+        (
+            "an app- prefixed ACL authorizes only its prefix",
+            Case {
+                acls: vec![prefixed_app_delete.clone()],
+                deleted: &["app-x"],
+            },
+        ),
+        (
+            "no Delete ACL authorizes nothing",
+            Case {
+                acls: vec![],
+                deleted: &[],
+            },
+        ),
+    ];
+
+    for (label, case) in cases {
+        let (broker_handle, _dir) = start_broker(Arc::new(
+            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
+        ))
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("alice");
+        let peer = peer();
+
+        // Setup: grant alice cluster-wide Create so the fixture topics can
+        // be seeded, then create them. The Create ACL plays no part in the
+        // Delete decision under test.
+        broker
+            .controller
+            .submit_change(vec![MetadataRecord::V1AccessControlEntry(
+                cluster_create.clone(),
+            )])
+            .await
+            .expect("seed create acl");
+        seed_topic(&broker, &p, &peer, "a").await;
+        seed_topic(&broker, &p, &peer, "app-x").await;
+
+        // Grant this case's Delete ACL shape, if any.
+        if !case.acls.is_empty() {
+            broker
+                .controller
+                .submit_change(
+                    case.acls
+                        .into_iter()
+                        .map(MetadataRecord::V1AccessControlEntry)
+                        .collect(),
+                )
+                .await
+                .expect("seed delete acls");
+        }
+
+        let req = request(vec![named_state("a"), named_state("app-x")]);
+        let resp = drive(&broker, &req, &p, &peer).await;
+
+        let row = |name: &str| -> DeletableTopicResult {
+            if case.deleted.contains(&name) {
+                DeletableTopicResult {
+                    name: Some(name.into()),
+                    topic_id: WireUuid::ZERO,
+                    error_code: codes::NONE,
+                    error_message: None,
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+                }
+            } else {
+                DeletableTopicResult {
+                    name: Some(name.into()),
+                    topic_id: WireUuid::ZERO,
+                    error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+                    error_message: None,
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+                }
+            }
+        };
+        let expected = DeleteTopicsResponse {
+            throttle_time_ms: 0,
+            responses: vec![row("a"), row("app-x")],
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+        };
+        check!(resp == expected, "case: {label}");
+
+        let image = broker_handle.controller_image_for_test();
+        check!(
+            image.topic("a").is_none() == case.deleted.contains(&"a"),
+            "case: {label}, topic a"
+        );
+        check!(
+            image.topic("app-x").is_none() == case.deleted.contains(&"app-x"),
+            "case: {label}, topic app-x"
+        );
+
+        broker_handle.shutdown().await;
+    }
 }
