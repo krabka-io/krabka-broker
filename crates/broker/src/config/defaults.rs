@@ -130,6 +130,8 @@ impl Default for BrokerConfig {
             max_produce_group: 1_024,
             partition_writer_queue_depth: 64,
             default_min_insync_replicas: 1,
+            default_message_timestamp_before_max_ms: None,
+            default_message_timestamp_after_max_ms: Some(3_600_000),
             num_partitions: 1,
             default_replication_factor: 1,
             max_request_partition_size_limit: 2000,

@@ -328,6 +328,7 @@ mod tests {
             producer_epoch,
             base_sequence: 0,
             keyless_records: Vec::new(),
+            invalid_timestamp_records: Vec::new(),
             source: crate::handlers::produce::prepare::PreparedSource::Owned(RecordBatch::default()),
         }
     }

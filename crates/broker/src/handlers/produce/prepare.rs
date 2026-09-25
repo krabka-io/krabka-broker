@@ -7,8 +7,12 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use krabka_compression::RecordDecompressionPolicy;
-use krabka_protocol::records::{
-    Attributes, RecordBatch, RecordsPayload, TimestampType, ValidatedBatch, validate_one_v2_batch,
+use krabka_protocol::{
+    owned::produce_response::BatchIndexAndErrorMessage,
+    records::{
+        Attributes, RecordBatch, RecordsPayload, TimestampType, ValidatedBatch,
+        validate_one_v2_batch,
+    },
 };
 use krabka_verified::produce::{ProduceBatchAdmission, produce_batch_admission};
 
@@ -16,6 +20,19 @@ use super::{
     framing::PartitionPayload, owned_decode::decode_owned_batch, topic_settings::TimestampPolicy,
 };
 use crate::codes;
+
+/// The topic-and-metrics context [`prepare_batch`] and [`owned_fallback`]
+/// need beside the batch's own bytes: what to label the decode-time metrics
+/// with, and how hard [`decode_owned_batch`] may let decompression work.
+/// Bundled into one parameter so the two functions stay under Clippy's
+/// argument-count lint. Every field is a reference or itself `Copy`, so this
+/// is too, and passes by value like they would have.
+#[derive(Clone, Copy)]
+pub(super) struct DecodeEnv<'a> {
+    pub(super) topic_name: &'a Arc<str>,
+    pub(super) metrics: &'a crate::metrics::BrokerMetrics,
+    pub(super) policy: RecordDecompressionPolicy,
+}
 
 /// All the per-batch HEADER fields that the broker's produce gates need.
 ///
@@ -39,6 +56,15 @@ pub(super) struct PreparedBatch {
     /// once the leadership gate has passed. Empty on a topic that is not
     /// compacted, because the walk does not look at keys there.
     pub(super) keyless_records: Vec<i32>,
+    /// One `record_errors` row per record whose timestamp Kafka's
+    /// `LogValidator.validateTimestamp` refuses: the topic's
+    /// `message.timestamp.{before,after}.max.ms` window, checked only on the
+    /// records the compacted-key walk above did not already refuse (Kafka
+    /// checks a record's key first and its timestamp only when the key
+    /// passed). Empty on a topic whose window bounds nothing. The pipeline
+    /// answers the batch with these once the leadership gate has passed, the
+    /// same as [`Self::keyless_records`].
+    pub(super) invalid_timestamp_records: Vec<BatchIndexAndErrorMessage>,
     /// The append source. It is either the producer's verbatim bytes on the
     /// passthrough path, or the decoded owned batch on the fallback path. On
     /// the verbatim path the writer stamps the leader epoch at append time. On
@@ -58,9 +84,15 @@ pub(super) enum PreparedSource {
 }
 
 impl PreparedBatch {
-    fn from_header(header: ValidatedHeader, bytes: Bytes, keyless_records: Vec<i32>) -> Self {
+    fn from_header(
+        header: ValidatedHeader,
+        bytes: Bytes,
+        keyless_records: Vec<i32>,
+        invalid_timestamp_records: Vec<BatchIndexAndErrorMessage>,
+    ) -> Self {
         Self {
             keyless_records,
+            invalid_timestamp_records,
             attributes: header.attributes,
             last_offset_delta: header.last_offset_delta,
             max_timestamp: header.max_timestamp,
@@ -71,20 +103,41 @@ impl PreparedBatch {
         }
     }
 
-    fn from_owned(batch: RecordBatch, compacted_topic: bool) -> Self {
-        let keyless_records = if compacted_topic {
-            batch
-                .records
-                .iter()
-                .enumerate()
-                .filter(|(_, record)| record.key.is_none())
-                .map(|(index, _)| i32::try_from(index).unwrap_or(i32::MAX))
-                .collect()
-        } else {
-            Vec::new()
-        };
+    /// Walks `batch.records` once, in index order, and sorts each one into
+    /// [`Self::keyless_records`] or [`Self::invalid_timestamp_records`] the
+    /// way Kafka's `LogValidator.validateRecord` does: the key first, on a
+    /// compacted topic, and the timestamp window only for a record whose key
+    /// passed that check (or every record, off a compacted topic).
+    fn from_owned(batch: RecordBatch, compacted_topic: bool, timestamps: TimestampPolicy) -> Self {
+        let now_ms = timestamps.bounds_records().then(crate::time_util::now_ms);
+        let mut keyless_records = Vec::new();
+        let mut invalid_timestamp_records = Vec::new();
+        for (index, record) in batch.records.iter().enumerate() {
+            let index = i32::try_from(index).unwrap_or(i32::MAX);
+            if compacted_topic && record.key.is_none() {
+                keyless_records.push(index);
+                continue;
+            }
+            let Some(now_ms) = now_ms else { continue };
+            let timestamp = batch.base_timestamp.saturating_add(record.timestamp_delta);
+            if timestamps.rejects_record(timestamp, now_ms) {
+                let offset = batch
+                    .base_offset
+                    .saturating_add(i64::from(record.offset_delta));
+                invalid_timestamp_records.push(BatchIndexAndErrorMessage {
+                    batch_index: index,
+                    batch_index_error_message: Some(invalid_timestamp_message(
+                        offset,
+                        timestamp,
+                        timestamps.window(now_ms),
+                    )),
+                    ..Default::default()
+                });
+            }
+        }
         Self {
             keyless_records,
+            invalid_timestamp_records,
             attributes: batch.attributes,
             last_offset_delta: batch.last_offset_delta,
             max_timestamp: batch.max_timestamp,
@@ -174,17 +227,24 @@ pub(super) fn prepare_batch(
     topic_compression: Option<krabka_compression::CompressionType>,
     timestamps: TimestampPolicy,
     compacted_topic: bool,
-    topic_name: &Arc<str>,
-    metrics: &crate::metrics::BrokerMetrics,
-    policy: RecordDecompressionPolicy,
+    env: DecodeEnv<'_>,
+    version: i16,
 ) -> Result<PreparedBatch, i16> {
+    let DecodeEnv {
+        topic_name,
+        metrics,
+        policy,
+    } = env;
     let bytes = match payload {
         // Legacy / pre-decoded payload: always owned.
         PartitionPayload::Owned(rp) => {
             let batch = decode_owned_batch(rp, topic_name, metrics, policy)?;
-            validate_owned_client_batch(&batch)?;
-            validate_owned_record_timestamps(&batch, timestamps, compacted_topic)?;
-            return Ok(PreparedBatch::from_owned(batch, compacted_topic));
+            validate_owned_client_batch(&batch, version)?;
+            return Ok(PreparedBatch::from_owned(
+                batch,
+                compacted_topic,
+                timestamps,
+            ));
         }
         PartitionPayload::Null => return Err(codes::INVALID_REQUEST),
         PartitionPayload::Slice(b) => b,
@@ -200,15 +260,18 @@ pub(super) fn prepare_batch(
                 bytes,
                 timestamps,
                 compacted_topic,
-                topic_name,
-                metrics,
-                policy,
+                DecodeEnv {
+                    topic_name,
+                    metrics,
+                    policy,
+                },
+                version,
             );
         }
     };
     let header = ValidatedHeader::from(&validated);
     let attributes = header.attributes;
-    validate_client_batch_header(header)?;
+    validate_client_batch_header(header, version)?;
 
     // (4) No recompression: producer pass-through, or target == current codec.
     if let Some(target) = topic_compression
@@ -218,15 +281,18 @@ pub(super) fn prepare_batch(
             bytes,
             timestamps,
             compacted_topic,
-            topic_name,
-            metrics,
-            policy,
+            DecodeEnv {
+                topic_name,
+                metrics,
+                policy,
+            },
+            version,
         );
     }
     let mut keyless_records = Vec::new();
+    let mut invalid_timestamp_records = Vec::new();
     if timestamps.bounds_records() || compacted_topic {
         let now_ms = crate::time_util::now_ms();
-        let mut invalid_timestamp = false;
         let mut index = 0_i32;
         validated
             .validate_records_with(policy, |record| {
@@ -235,61 +301,47 @@ pub(super) fn prepare_batch(
                 if compacted_topic && record.key.is_none() {
                     keyless_records.push(index);
                 } else {
-                    invalid_timestamp |= timestamps.rejects_record(
-                        header.base_timestamp.saturating_add(record.timestamp_delta),
-                        now_ms,
-                    );
+                    let timestamp = header.base_timestamp.saturating_add(record.timestamp_delta);
+                    if timestamps.rejects_record(timestamp, now_ms) {
+                        let offset = header
+                            .base_offset
+                            .saturating_add(i64::from(record.offset_delta));
+                        invalid_timestamp_records.push(BatchIndexAndErrorMessage {
+                            batch_index: index,
+                            batch_index_error_message: Some(invalid_timestamp_message(
+                                offset,
+                                timestamp,
+                                timestamps.window(now_ms),
+                            )),
+                            ..Default::default()
+                        });
+                    }
                 }
                 index = index.saturating_add(1);
             })
             .map_err(|_| codes::INVALID_RECORD)?;
-        if invalid_timestamp {
-            return Err(codes::INVALID_TIMESTAMP);
-        }
     } else {
         validated
             .validate_records(policy)
             .map_err(|_| codes::INVALID_RECORD)?;
     }
-    Ok(PreparedBatch::from_header(header, bytes, keyless_records))
+    Ok(PreparedBatch::from_header(
+        header,
+        bytes,
+        keyless_records,
+        invalid_timestamp_records,
+    ))
 }
 
-/// Apply the topic's `message.timestamp.before.max.ms` and
-/// `message.timestamp.after.max.ms` window to every record in the batch.
-///
-/// This is Kafka's `LogValidator.validateTimestamp`, which walks the records of
-/// each batch and fails the whole batch with `INVALID_TIMESTAMP` (32) as soon
-/// as one record's timestamp falls outside the window around the broker's
-/// clock. A record's timestamp is the batch's `base_timestamp` plus that
-/// record's own delta, which is how the v2 format stores it, so the walk is
-/// over deltas and not over absolute values.
-///
-/// A topic that does not bound timestamps asks nothing of this function. The
-/// verbatim path performs the same check while validating borrowed records;
-/// this helper covers only batches that already require owned decoding.
-fn validate_owned_record_timestamps(
-    batch: &RecordBatch,
-    timestamps: TimestampPolicy,
-    compacted_topic: bool,
-) -> Result<(), i16> {
-    if !timestamps.bounds_records() {
-        return Ok(());
-    }
-    let now_ms = crate::time_util::now_ms();
-    batch
-        .records
-        .iter()
-        // A keyless record on a compacted topic fails its key check, and
-        // Kafka then does not check its timestamp.
-        .filter(|record| !compacted_topic || record.key.is_some())
-        .try_for_each(|record| {
-            let timestamp_ms = batch.base_timestamp.saturating_add(record.timestamp_delta);
-            if timestamps.rejects_record(timestamp_ms, now_ms) {
-                Err(codes::INVALID_TIMESTAMP)
-            } else {
-                Ok(())
-            }
-        })
+/// The per-record message of Kafka's `LogValidator.validateTimestamp`, for one
+/// `record_errors` row: `"Timestamp {ts} of message with offset {offset} is
+/// out of range. The timestamp should be within [{low}, {high}]"`.
+fn invalid_timestamp_message(offset: i64, timestamp: i64, window: (i64, i64)) -> String {
+    format!(
+        "Timestamp {timestamp} of message with offset {offset} is out of range. The timestamp \
+         should be within [{}, {}]",
+        window.0, window.1
+    )
 }
 
 /// The owned-decode fallback for a v≥3 records slice that the verbatim
@@ -305,15 +357,22 @@ pub(super) fn owned_fallback(
     bytes: Bytes,
     timestamps: TimestampPolicy,
     compacted_topic: bool,
-    topic_name: &Arc<str>,
-    metrics: &crate::metrics::BrokerMetrics,
-    policy: RecordDecompressionPolicy,
+    env: DecodeEnv<'_>,
+    version: i16,
 ) -> Result<PreparedBatch, i16> {
+    let DecodeEnv {
+        topic_name,
+        metrics,
+        policy,
+    } = env;
     match RecordsPayload::from_bytes_with_policy(bytes, policy) {
         Ok(rp) => decode_owned_batch(rp, topic_name, metrics, policy).and_then(|batch| {
-            validate_owned_client_batch(&batch)?;
-            validate_owned_record_timestamps(&batch, timestamps, compacted_topic)?;
-            Ok(PreparedBatch::from_owned(batch, compacted_topic))
+            validate_owned_client_batch(&batch, version)?;
+            Ok(PreparedBatch::from_owned(
+                batch,
+                compacted_topic,
+                timestamps,
+            ))
         }),
         Err(_) => Err(codes::INVALID_RECORD),
     }
@@ -351,42 +410,53 @@ impl From<&ValidatedBatch<'_>> for ValidatedHeader {
     }
 }
 
+/// Kafka's `ProduceRequest.MIN_VERSION_FOR_ZSTD_COMPRESSION`: the first
+/// `Produce` version whose consumers are assumed to understand zstd. Below
+/// it, `ProduceRequest.validateRecords` refuses a zstd batch with
+/// `UNSUPPORTED_COMPRESSION_TYPE` before the batch reaches any other check --
+/// old clients otherwise cannot decode what they fetch back.
+const FIRST_ZSTD_PRODUCE_VERSION: i16 = 7;
+
 /// Apply Kafka's client-origin v2 batch-header invariants without decoding
 /// the record body. Every field is covered by the batch CRC that
 /// [`validate_one_v2_batch`] checked before this function runs.
-fn validate_client_batch_header(batch: ValidatedHeader) -> Result<(), i16> {
+fn validate_client_batch_header(batch: ValidatedHeader, version: i16) -> Result<(), i16> {
     validate_client_batch_fields(
         batch.attributes,
-        batch.base_offset,
         batch.last_offset_delta,
         batch.records_count,
         batch.producer_id,
         batch.base_sequence,
+        version,
     )
 }
 
-fn validate_owned_client_batch(batch: &RecordBatch) -> Result<(), i16> {
+fn validate_owned_client_batch(batch: &RecordBatch, version: i16) -> Result<(), i16> {
     let records_count = i32::try_from(batch.records.len()).map_err(|_| codes::INVALID_RECORD)?;
     validate_client_batch_fields(
         batch.attributes,
-        batch.base_offset,
         batch.last_offset_delta,
         records_count,
         batch.producer_id,
         batch.base_sequence,
+        version,
     )
 }
 
 fn validate_client_batch_fields(
     attributes: Attributes,
-    base_offset: i64,
     last_offset_delta: i32,
     records_count: i32,
     producer_id: i64,
     base_sequence: i32,
+    version: i16,
 ) -> Result<(), i16> {
+    if attributes.compression() == krabka_compression::CompressionType::Zstd
+        && version < FIRST_ZSTD_PRODUCE_VERSION
+    {
+        return Err(codes::UNSUPPORTED_COMPRESSION_TYPE);
+    }
     match produce_batch_admission(
-        base_offset,
         last_offset_delta,
         records_count,
         attributes.is_control_batch(),

@@ -189,6 +189,17 @@ macro_rules! tuning_fields {
             pub partition_writer_queue_depth: usize,
             /// Default minimum in-sync replica count.
             pub default_min_insync_replicas: i32,
+            /// `log.message.timestamp.before.max.ms` broker default: how far
+            /// behind this broker's clock a `CreateTime` record may sit on a
+            /// topic that names no `message.timestamp.before.max.ms`
+            /// override. `None` is Kafka's unbounded `Long.MAX_VALUE`
+            /// default.
+            pub default_message_timestamp_before_max_ms: Option<i64>,
+            /// `log.message.timestamp.after.max.ms` broker default: how far
+            /// ahead of this broker's clock a `CreateTime` record may sit on
+            /// a topic that names no `message.timestamp.after.max.ms`
+            /// override. Kafka's default is one hour.
+            pub default_message_timestamp_after_max_ms: Option<i64>,
             /// KIP-464: the partition count of a topic that `CreateTopics`
             /// creates with `num_partitions = -1`. Kafka's `num.partitions`,
             /// default 1.

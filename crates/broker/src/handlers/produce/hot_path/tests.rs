@@ -51,6 +51,7 @@ fn settings(
         decompression_policy: RecordDecompressionPolicy::default(),
         metrics,
         leader_epoch: 7,
+        version: 13,
     }
 }
 

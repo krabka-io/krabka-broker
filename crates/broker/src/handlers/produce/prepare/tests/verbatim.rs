@@ -10,7 +10,7 @@ use krabka_protocol::records::{
     Attributes, CRC_COVERAGE_START, HEADER_LEN, Record, RecordBatch, RecordsPayload, TimestampType,
 };
 
-use super::super::{PartitionPayload, PreparedSource, prepare_batch};
+use super::super::{DecodeEnv, PartitionPayload, PreparedSource, prepare_batch};
 use crate::{
     handlers::produce::{append::build_produce_data, topic_settings::TimestampPolicy},
     partition::ProduceData,
@@ -99,9 +99,12 @@ fn dispatch_slice(
         topic_compression,
         TimestampPolicy::default(),
         false,
-        &topic(),
-        &m,
-        RecordDecompressionPolicy::default(),
+        DecodeEnv {
+            topic_name: &topic(),
+            metrics: &m,
+            policy: RecordDecompressionPolicy::default(),
+        },
+        13,
     )
     .unwrap();
     build_produce_data(prepared, leader_epoch)
@@ -145,9 +148,12 @@ fn fallback_when_null_field() {
         None,
         TimestampPolicy::default(),
         false,
-        &topic(),
-        &m,
-        RecordDecompressionPolicy::default(),
+        DecodeEnv {
+            topic_name: &topic(),
+            metrics: &m,
+            policy: RecordDecompressionPolicy::default(),
+        },
+        13,
     )
     .unwrap_err();
     assert!(err == crate::codes::INVALID_REQUEST);
@@ -174,9 +180,12 @@ fn rejects_client_log_append_time() {
         None,
         TimestampPolicy::default(),
         false,
-        &topic(),
-        &crate::metrics::BrokerMetrics::new(),
-        RecordDecompressionPolicy::default(),
+        DecodeEnv {
+            topic_name: &topic(),
+            metrics: &crate::metrics::BrokerMetrics::new(),
+            policy: RecordDecompressionPolicy::default(),
+        },
+        13,
     )
     .unwrap_err();
     assert!(err == crate::codes::INVALID_TIMESTAMP);
@@ -192,19 +201,90 @@ fn rejects_client_control_batch() {
         None,
         TimestampPolicy::default(),
         false,
-        &topic(),
-        &crate::metrics::BrokerMetrics::new(),
-        RecordDecompressionPolicy::default(),
+        DecodeEnv {
+            topic_name: &topic(),
+            metrics: &crate::metrics::BrokerMetrics::new(),
+            policy: RecordDecompressionPolicy::default(),
+        },
+        13,
     )
     .unwrap_err();
     assert!(err == crate::codes::INVALID_RECORD);
 }
 
+/// `ProduceRequest.validateRecords` refuses a zstd batch below `Produce` v7
+/// with `UNSUPPORTED_COMPRESSION_TYPE`, on both append shapes and whatever the
+/// topic's own `compression.type` asks for, because the refusal is about
+/// whether the REQUESTING client's version can decode zstd, not about what
+/// the broker stores it as.
+#[test]
+fn rejects_zstd_below_v7_and_admits_it_from_v7_on_both_paths() {
+    let mut b = plain_batch();
+    b.attributes = b.attributes.with_compression(CompressionType::Zstd);
+    let wire = encode(&b);
+
+    for (version, admitted) in [(0, false), (6, false), (7, true), (13, true)] {
+        let payloads = [
+            PartitionPayload::Slice(wire.clone()),
+            PartitionPayload::Owned(RecordsPayload::V2(vec![b.clone()])),
+        ];
+        for payload in payloads {
+            let result = prepare_batch(
+                payload,
+                None,
+                TimestampPolicy::default(),
+                false,
+                DecodeEnv {
+                    topic_name: &topic(),
+                    metrics: &crate::metrics::BrokerMetrics::new(),
+                    policy: RecordDecompressionPolicy::default(),
+                },
+                version,
+            );
+            if admitted {
+                assert!(result.is_ok(), "version {version}: {result:?}");
+            } else {
+                assert!(
+                    result.err() == Some(crate::codes::UNSUPPORTED_COMPRESSION_TYPE),
+                    "version {version}: {result:?}"
+                );
+            }
+        }
+    }
+}
+
+/// Kafka does not inspect `baseOffset` at all: `LogValidator.validateBatch`
+/// checks only that the record count is positive and agrees with the offset
+/// range. A nonzero `base_offset` is therefore admitted, on both append
+/// shapes, exactly like every other batch this file drives through
+/// `prepare_batch`.
+#[test]
+fn admits_a_nonzero_base_offset_on_both_paths() {
+    let mut b = plain_batch();
+    b.base_offset = 1;
+    let payloads = [
+        PartitionPayload::Slice(encode(&b)),
+        PartitionPayload::Owned(RecordsPayload::V2(vec![b])),
+    ];
+    for payload in payloads {
+        let prepared = prepare_batch(
+            payload,
+            None,
+            TimestampPolicy::default(),
+            false,
+            DecodeEnv {
+                topic_name: &topic(),
+                metrics: &crate::metrics::BrokerMetrics::new(),
+                policy: RecordDecompressionPolicy::default(),
+            },
+            13,
+        );
+        assert!(prepared.is_ok());
+    }
+}
+
 #[test]
 fn rejects_invalid_client_batch_metadata_on_header_and_owned_paths() {
-    let mut invalid_base_offset = plain_batch();
-    invalid_base_offset.base_offset = 1;
-
     let mut invalid_offset_range = plain_batch();
     invalid_offset_range.last_offset_delta = -1;
 
@@ -224,7 +304,6 @@ fn rejects_invalid_client_batch_metadata_on_header_and_owned_paths() {
     invalid_sequence.base_sequence = -1;
 
     for (name, batch) in [
-        ("invalid base offset", invalid_base_offset),
         ("invalid offset range", invalid_offset_range),
         ("inconsistent count", inconsistent_count),
         ("overflowing offset count", overflowing_offset_count),
@@ -241,9 +320,12 @@ fn rejects_invalid_client_batch_metadata_on_header_and_owned_paths() {
                 None,
                 TimestampPolicy::default(),
                 false,
-                &topic(),
-                &crate::metrics::BrokerMetrics::new(),
-                RecordDecompressionPolicy::default(),
+                DecodeEnv {
+                    topic_name: &topic(),
+                    metrics: &crate::metrics::BrokerMetrics::new(),
+                    policy: RecordDecompressionPolicy::default(),
+                },
+                13,
             )
             .unwrap_err();
             assert!(err == crate::codes::INVALID_RECORD, "case: {name}");
@@ -266,9 +348,12 @@ fn fallback_on_corrupt_crc_slice() {
         None,
         TimestampPolicy::default(),
         false,
-        &topic(),
-        &m,
-        RecordDecompressionPolicy::default(),
+        DecodeEnv {
+            topic_name: &topic(),
+            metrics: &m,
+            policy: RecordDecompressionPolicy::default(),
+        },
+        13,
     )
     .unwrap_err();
     assert!(err == crate::codes::INVALID_RECORD);
@@ -285,9 +370,12 @@ fn rejects_crc_valid_malformed_record_body() {
         None,
         TimestampPolicy::default(),
         false,
-        &topic(),
-        &crate::metrics::BrokerMetrics::new(),
-        RecordDecompressionPolicy::default(),
+        DecodeEnv {
+            topic_name: &topic(),
+            metrics: &crate::metrics::BrokerMetrics::new(),
+            policy: RecordDecompressionPolicy::default(),
+        },
+        13,
     )
     .unwrap_err();
     assert!(error == crate::codes::INVALID_RECORD);
@@ -306,9 +394,12 @@ fn fallback_on_multiple_batches_in_slice() {
         None,
         TimestampPolicy::default(),
         false,
-        &topic(),
-        &crate::metrics::BrokerMetrics::new(),
-        RecordDecompressionPolicy::default(),
+        DecodeEnv {
+            topic_name: &topic(),
+            metrics: &crate::metrics::BrokerMetrics::new(),
+            policy: RecordDecompressionPolicy::default(),
+        },
+        13,
     )
     .unwrap_err();
     assert!(err == crate::codes::INVALID_RECORD);
@@ -425,9 +516,12 @@ fn header_fields_drive_dedup_on_verbatim_path() {
         None,
         TimestampPolicy::default(),
         false,
-        &topic(),
-        &m,
-        RecordDecompressionPolicy::default(),
+        DecodeEnv {
+            topic_name: &topic(),
+            metrics: &m,
+            policy: RecordDecompressionPolicy::default(),
+        },
+        13,
     )
     .unwrap();
     assert!(matches!(prepared.source, PreparedSource::Verbatim(_)));

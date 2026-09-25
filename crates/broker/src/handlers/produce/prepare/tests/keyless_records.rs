@@ -9,14 +9,11 @@ use bytes::Bytes;
 use krabka_compression::{CompressionType, RecordDecompressionPolicy};
 use krabka_protocol::records::{Record, RecordBatch};
 
-use crate::{
-    codes,
-    handlers::produce::{
-        framing::PartitionPayload,
-        prepare::prepare_batch,
-        test_support::{encode_batch, image_with_topic},
-        topic_settings::resolve_timestamp_policy,
-    },
+use crate::handlers::produce::{
+    framing::PartitionPayload,
+    prepare::{DecodeEnv, prepare_batch},
+    test_support::{encode_batch, image_with_topic},
+    topic_settings::{kafka_stock_broker_default, resolve_timestamp_policy},
 };
 
 /// A batch with one record per `(key, timestamp_ms)` pair.
@@ -44,7 +41,11 @@ fn batch(records: &[(Option<&'static [u8]>, i64)]) -> RecordBatch {
 #[test]
 fn a_compacted_topic_names_every_keyless_record_on_both_paths() {
     // A stock topic bounds the future window at one hour.
-    let timestamps = resolve_timestamp_policy(&image_with_topic("t", &[1]), "t");
+    let timestamps = resolve_timestamp_policy(
+        &image_with_topic("t", &[1]),
+        "t",
+        kafka_stock_broker_default(),
+    );
     let now = crate::time_util::now_ms();
     let far_future = now + 7_200_000;
     let mixed = batch(&[(None, now), (Some(b"k"), now), (None, now)]);
@@ -54,34 +55,55 @@ fn a_compacted_topic_names_every_keyless_record_on_both_paths() {
     let keyed_future = batch(&[(None, now), (Some(b"k"), far_future)]);
 
     for topic_compression in [None, Some(CompressionType::Zstd)] {
-        for (label, input, compacted, expected) in [
-            ("mixed, compacted", &mixed, true, Ok(vec![0, 2])),
-            ("mixed, not compacted", &mixed, false, Ok(vec![])),
+        for (label, input, compacted, expected_keyless, expected_invalid_timestamp) in [
+            ("mixed, compacted", &mixed, true, vec![0, 2], vec![]),
+            ("mixed, not compacted", &mixed, false, vec![], vec![]),
             (
                 "keyless record in the future",
                 &keyless_future,
                 true,
-                Ok(vec![0]),
+                vec![0],
+                vec![],
             ),
             (
+                // The only record with a bad timestamp has a key, so Kafka
+                // reports the timestamp error rather than a key error, and the
+                // batch is no longer refused outright: `prepare_batch` defers
+                // to the pipeline, the same as a keyless record.
                 "keyed record in the future",
                 &keyed_future,
                 true,
-                Err(codes::INVALID_TIMESTAMP),
+                vec![],
+                vec![1],
             ),
         ] {
             let metrics = crate::metrics::BrokerMetrics::new();
-            let actual = prepare_batch(
+            let prepared = prepare_batch(
                 PartitionPayload::Slice(encode_batch(input)),
                 topic_compression,
                 timestamps,
                 compacted,
-                &Arc::from("t"),
-                &metrics,
-                RecordDecompressionPolicy::default(),
+                DecodeEnv {
+                    topic_name: &Arc::from("t"),
+                    metrics: &metrics,
+                    policy: RecordDecompressionPolicy::default(),
+                },
+                13,
             )
-            .map(|prepared| prepared.keyless_records);
-            check!(actual == expected, "{label} {topic_compression:?}");
+            .unwrap_or_else(|code| panic!("{label} {topic_compression:?}: {code}"));
+            check!(
+                prepared.keyless_records == expected_keyless,
+                "{label} {topic_compression:?}"
+            );
+            let invalid_timestamp_indices: Vec<i32> = prepared
+                .invalid_timestamp_records
+                .iter()
+                .map(|error| error.batch_index)
+                .collect();
+            check!(
+                invalid_timestamp_indices == expected_invalid_timestamp,
+                "{label} {topic_compression:?}"
+            );
         }
     }
 }
