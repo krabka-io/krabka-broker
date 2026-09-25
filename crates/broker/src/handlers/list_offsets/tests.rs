@@ -268,3 +268,100 @@ async fn denied_topic_rows_are_appended_after_authorized_rows_regardless_of_requ
         broker_handle.shutdown().await;
     }
 }
+
+#[tokio::test]
+async fn duplicate_partitions_get_invalid_request_on_every_row() {
+    use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
+
+    use super::test_support::client_for;
+
+    const TOPIC: &str = "list-offsets-duplicate";
+
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let client = client_for(&broker_handle).await;
+    client
+        .send(CreateTopicsRequest {
+            topics: vec![CreatableTopic {
+                name: TOPIC.to_string(),
+                num_partitions: 2,
+                replication_factor: 1,
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .expect("CreateTopics");
+    broker_handle.wait_until_partition_present(TOPIC, 0).await;
+    broker_handle.wait_until_partition_present(TOPIC, 1).await;
+
+    let request = |partition_indexes: &[i32]| ListOffsetsRequest {
+        replica_id: -1,
+        topics: vec![ListOffsetsTopic {
+            name: TOPIC.to_string(),
+            partitions: partition_indexes
+                .iter()
+                .map(|&partition_index| ListOffsetsPartition {
+                    partition_index,
+                    current_leader_epoch: -1,
+                    timestamp: LATEST_TIMESTAMP,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }],
+        timeout_ms: 5_000,
+        ..Default::default()
+    };
+
+    // Kafka's duplicate check runs regardless of the answer a partition would
+    // otherwise resolve to, so a "no duplicates" request first measures what
+    // resolving partitions 0 and 1 actually returns; later cases reuse those
+    // rows exactly for the partition that stays unduplicated, and only assert
+    // `INVALID_REQUEST` for the ones the request names twice.
+    let baseline = client
+        .send(request(&[0, 1]))
+        .await
+        .expect("ListOffsets baseline");
+    let resolved0 = baseline.topics[0].partitions[0].clone();
+    let resolved1 = baseline.topics[0].partitions[1].clone();
+    assert!(resolved0.error_code == codes::NONE, "{resolved0:?}");
+    assert!(resolved1.error_code == codes::NONE, "{resolved1:?}");
+
+    let invalid = |partition_index: i32| ListOffsetsPartitionResponse {
+        partition_index,
+        error_code: codes::INVALID_REQUEST,
+        timestamp: -1,
+        offset: -1,
+        ..Default::default()
+    };
+
+    let cases: Vec<(&str, Vec<i32>, Vec<ListOffsetsPartitionResponse>)> = vec![
+        (
+            "no duplicates",
+            vec![0, 1],
+            vec![resolved0.clone(), resolved1.clone()],
+        ),
+        (
+            "one partition duplicated",
+            vec![0, 0],
+            vec![invalid(0), invalid(0)],
+        ),
+        (
+            "mixed: one partition duplicated, one resolved normally",
+            vec![0, 0, 1],
+            vec![invalid(0), invalid(0), resolved1.clone()],
+        ),
+    ];
+
+    for (name, partition_indexes, expected) in cases {
+        let response = client
+            .send(request(&partition_indexes))
+            .await
+            .expect("ListOffsets");
+        assert!(response.topics[0].partitions == expected, "{name}");
+    }
+
+    drop(client);
+    broker_handle.shutdown().await;
+}

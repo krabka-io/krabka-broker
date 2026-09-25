@@ -41,6 +41,8 @@
 //! [`fetch_bound`](self::bound::fetch_bound) and
 //! [`last_fetchable_offset`](self::bound::last_fetchable_offset).
 
+use std::collections::HashSet;
+
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
@@ -74,6 +76,39 @@ use self::{
     response::error_response,
 };
 use crate::{broker::Broker, codes, error::BrokerError};
+
+/// The `(topic_index, partition)` rows whose `(name, partition)` key appears
+/// more than once in `topics`.
+///
+/// Kafka collects these once over the whole request, before authorization or
+/// resolution runs, so a topic-partition named twice -- whether within one
+/// topic entry or across two entries for the same topic -- is answered
+/// `INVALID_REQUEST` on every row that names it. The result is keyed by
+/// `topic_index` rather than a cloned topic name so a request with a large
+/// name and many partition rows can't multiply that name into an
+/// unbounded amount of retained memory.
+fn duplicate_partitions(
+    topics: &[krabka_protocol::owned::list_offsets_request::ListOffsetsTopic],
+) -> HashSet<(usize, i32)> {
+    let mut counts: std::collections::HashMap<(&str, i32), usize> =
+        std::collections::HashMap::new();
+    for topic in topics {
+        for part in &topic.partitions {
+            *counts
+                .entry((topic.name.as_str(), part.partition_index))
+                .or_insert(0) += 1;
+        }
+    }
+    let mut duplicates = HashSet::new();
+    for (topic_index, topic) in topics.iter().enumerate() {
+        for part in &topic.partitions {
+            if counts[&(topic.name.as_str(), part.partition_index)] > 1 {
+                duplicates.insert((topic_index, part.partition_index));
+            }
+        }
+    }
+    duplicates
+}
 
 #[tracing::instrument(
     name = "handle_list_offsets",
@@ -119,9 +154,15 @@ pub(crate) async fn handle(
                 broker.config.node_id,
             ),
         );
+        // Kafka's `ListOffsetRequest.duplicatePartitions()` is computed once
+        // over the whole request, ahead of authorization and resolution, and
+        // every row of a topic-partition it names more than once is answered
+        // `INVALID_REQUEST` instead of being resolved. See
+        // `ReplicaManager.scala:1473-1478`.
+        let duplicates = duplicate_partitions(&req.topics);
 
         let (authorized_topics, denied_topics): (Vec<_>, Vec<_>) =
-            req.topics.into_iter().partition(|topic| {
+            req.topics.into_iter().enumerate().partition(|(_, topic)| {
                 !crate::handlers::acl_denied(
                     broker.config.authorizer.as_ref(),
                     &acl_image,
@@ -133,22 +174,34 @@ pub(crate) async fn handle(
             });
 
         let mut topics_out =
-            concurrently(authorized_topics.into_iter().map(|topic| async move {
-                let name = topic.name;
-                let partitions =
-                    concurrently(topic.partitions.into_iter().map(|part| {
-                        resolve_partition(broker, &name, part, version, timeout, bound)
+            concurrently(authorized_topics.into_iter().map(|(topic_index, topic)| {
+                let duplicates = &duplicates;
+                async move {
+                    let name = topic.name;
+                    let partitions = concurrently(topic.partitions.into_iter().map(|part| {
+                        let is_duplicate =
+                            duplicates.contains(&(topic_index, part.partition_index));
+                        let name = name.clone();
+                        async move {
+                            if is_duplicate {
+                                error_response(part.partition_index, codes::INVALID_REQUEST)
+                            } else {
+                                resolve_partition(broker, &name, part, version, timeout, bound)
+                                    .await
+                            }
+                        }
                     }))
                     .await;
-                ListOffsetsTopicResponse {
-                    name,
-                    partitions,
-                    ..Default::default()
+                    ListOffsetsTopicResponse {
+                        name,
+                        partitions,
+                        ..Default::default()
+                    }
                 }
             }))
             .await;
 
-        topics_out.extend(denied_topics.into_iter().map(|topic| {
+        topics_out.extend(denied_topics.into_iter().map(|(_, topic)| {
             let partitions = topic
                 .partitions
                 .into_iter()

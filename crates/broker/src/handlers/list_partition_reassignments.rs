@@ -44,11 +44,32 @@ pub(crate) fn handle(
         },
     );
     if matches!(allow, AuthorizationResult::Deny) {
+        let topics = match &req.topics {
+            None => vec![],
+            Some(filter) => filter
+                .iter()
+                .map(|t| OngoingTopicReassignment {
+                    name: t.name.clone(),
+                    partitions: t
+                        .partition_indexes
+                        .iter()
+                        .map(|&partition_index| OngoingPartitionReassignment {
+                            partition_index,
+                            replicas: vec![],
+                            adding_replicas: vec![],
+                            removing_replicas: vec![],
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                })
+                .collect(),
+        };
         let resp = ListPartitionReassignmentsResponse {
             throttle_time_ms: 0,
             error_code: CLUSTER_AUTHORIZATION_FAILED,
             error_message: Some("list-reassignment denied".into()),
-            topics: vec![],
+            topics,
             ..Default::default()
         };
         return encode_response(&resp, api_version);
@@ -178,31 +199,130 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn denied_response_preserves_error_fields() {
-        let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        let p = principal("alice");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
+    async fn denied_response_echoes_requested_topics() {
+        struct Case {
+            name: &'static str,
+            topics: Option<Vec<ListPartitionReassignmentsTopics>>,
+            expected_topics: Vec<OngoingTopicReassignment>,
+        }
 
-        let bytes = handle(
-            &broker,
-            ListPartitionReassignmentsRequest::default(),
-            &ctx,
-            VERSION,
-        )
-        .expect("handle");
-        let resp = decode_response(&bytes);
+        let cases = vec![
+            Case {
+                name: "null topics filter yields no echoed topics",
+                topics: None,
+                expected_topics: vec![],
+            },
+            Case {
+                name: "requested topic with no partition indexes is echoed with none",
+                topics: Some(vec![ListPartitionReassignmentsTopics {
+                    name: "orders-add".into(),
+                    partition_indexes: vec![],
+                    ..Default::default()
+                }]),
+                expected_topics: vec![OngoingTopicReassignment {
+                    name: "orders-add".to_string(),
+                    partitions: vec![],
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+                }],
+            },
+            Case {
+                name: "requested topic and partition indexes are echoed with empty replicas",
+                topics: Some(vec![ListPartitionReassignmentsTopics {
+                    name: "orders-add".into(),
+                    partition_indexes: vec![0, 1],
+                    ..Default::default()
+                }]),
+                expected_topics: vec![OngoingTopicReassignment {
+                    name: "orders-add".to_string(),
+                    partitions: vec![
+                        OngoingPartitionReassignment {
+                            partition_index: 0,
+                            replicas: vec![],
+                            adding_replicas: vec![],
+                            removing_replicas: vec![],
+                            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+                        },
+                        OngoingPartitionReassignment {
+                            partition_index: 1,
+                            replicas: vec![],
+                            adding_replicas: vec![],
+                            removing_replicas: vec![],
+                            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+                        },
+                    ],
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+                }],
+            },
+            Case {
+                name: "multiple requested topics are all echoed",
+                topics: Some(vec![
+                    ListPartitionReassignmentsTopics {
+                        name: "orders-add".into(),
+                        partition_indexes: vec![0],
+                        ..Default::default()
+                    },
+                    ListPartitionReassignmentsTopics {
+                        name: "orders-remove".into(),
+                        partition_indexes: vec![2],
+                        ..Default::default()
+                    },
+                ]),
+                expected_topics: vec![
+                    OngoingTopicReassignment {
+                        name: "orders-add".to_string(),
+                        partitions: vec![OngoingPartitionReassignment {
+                            partition_index: 0,
+                            replicas: vec![],
+                            adding_replicas: vec![],
+                            removing_replicas: vec![],
+                            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+                        }],
+                        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+                    },
+                    OngoingTopicReassignment {
+                        name: "orders-remove".to_string(),
+                        partitions: vec![OngoingPartitionReassignment {
+                            partition_index: 2,
+                            replicas: vec![],
+                            adding_replicas: vec![],
+                            removing_replicas: vec![],
+                            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+                        }],
+                        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+                    },
+                ],
+            },
+        ];
 
-        let expected = ListPartitionReassignmentsResponse {
-            throttle_time_ms: 0,
-            error_code: CLUSTER_AUTHORIZATION_FAILED,
-            error_message: Some("list-reassignment denied".to_string()),
-            topics: vec![],
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        };
-        assert!(resp == expected);
-        broker_handle.shutdown().await;
+        for case in cases {
+            let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
+            let broker = broker_handle.broker_arc_for_test();
+            let p = principal("alice");
+            let peer = peer();
+            let ctx = test_context(&p, &peer);
+
+            let bytes = handle(
+                &broker,
+                ListPartitionReassignmentsRequest {
+                    topics: case.topics,
+                    ..Default::default()
+                },
+                &ctx,
+                VERSION,
+            )
+            .expect("handle");
+            let resp = decode_response(&bytes);
+
+            let expected = ListPartitionReassignmentsResponse {
+                throttle_time_ms: 0,
+                error_code: CLUSTER_AUTHORIZATION_FAILED,
+                error_message: Some("list-reassignment denied".to_string()),
+                topics: case.expected_topics,
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+            };
+            assert!(resp == expected, "case `{}`: {resp:?}", case.name);
+            broker_handle.shutdown().await;
+        }
     }
 
     #[tokio::test]

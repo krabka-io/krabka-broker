@@ -91,6 +91,30 @@ fn encode(topics: &[TopicResponse]) -> Bytes {
     buf.freeze()
 }
 
+/// The `(topic_index, partition)` rows whose `(name, partition)` key appears
+/// more than once in `topics`. Mirrors `super::duplicate_partitions`: keyed
+/// by `topic_index` rather than a cloned topic name so a request with a
+/// large name and many partition rows can't multiply that name into an
+/// unbounded amount of retained memory.
+fn duplicate_partitions(topics: &[TopicRequest]) -> std::collections::HashSet<(usize, i32)> {
+    let mut counts: std::collections::HashMap<(&str, i32), usize> =
+        std::collections::HashMap::new();
+    for topic in topics {
+        for part in &topic.partitions {
+            *counts.entry((topic.name.as_str(), part.index)).or_insert(0) += 1;
+        }
+    }
+    let mut duplicates = std::collections::HashSet::new();
+    for (topic_index, topic) in topics.iter().enumerate() {
+        for part in &topic.partitions {
+            if counts[&(topic.name.as_str(), part.index)] > 1 {
+                duplicates.insert((topic_index, part.index));
+            }
+        }
+    }
+    duplicates
+}
+
 async fn resolve_partition(
     broker: &Broker,
     topic: &str,
@@ -160,9 +184,13 @@ pub(super) async fn handle(
 ) -> Result<Bytes, BrokerError> {
     let request = decode(req_bytes)?;
     let acl_image = broker.controller.current_image();
+    let duplicates = duplicate_partitions(&request.topics);
 
-    let (authorized_topics, denied_topics): (Vec<_>, Vec<_>) =
-        request.topics.into_iter().partition(|topic| {
+    let (authorized_topics, denied_topics): (Vec<_>, Vec<_>) = request
+        .topics
+        .into_iter()
+        .enumerate()
+        .partition(|(_, topic)| {
             !crate::handlers::acl_denied(
                 broker.config.authorizer.as_ref(),
                 &acl_image,
@@ -173,19 +201,28 @@ pub(super) async fn handle(
             )
         });
 
-    let mut topics =
-        concurrently(authorized_topics.into_iter().map(|topic| async move {
+    let mut topics = concurrently(authorized_topics.into_iter().map(|(topic_index, topic)| {
+        let duplicates = &duplicates;
+        async move {
             let name = topic.name;
-            let partitions =
-                concurrently(topic.partitions.into_iter().map(|partition| {
-                    resolve_partition(broker, &name, partition, request.replica_id)
-                }))
-                .await;
+            let partitions = concurrently(topic.partitions.into_iter().map(|partition| {
+                let is_duplicate = duplicates.contains(&(topic_index, partition.index));
+                let name = name.clone();
+                async move {
+                    if is_duplicate {
+                        error_response(partition.index, codes::INVALID_REQUEST)
+                    } else {
+                        resolve_partition(broker, &name, partition, request.replica_id).await
+                    }
+                }
+            }))
+            .await;
             TopicResponse { name, partitions }
-        }))
-        .await;
+        }
+    }))
+    .await;
 
-    topics.extend(denied_topics.into_iter().map(|topic| {
+    topics.extend(denied_topics.into_iter().map(|(_, topic)| {
         let partitions = topic
             .partitions
             .into_iter()
@@ -351,6 +388,50 @@ mod tests {
             }
         }
         assert!(names == vec!["a", "c", "denied"], "{names:?}");
+
+        broker_handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn duplicate_partition_gets_invalid_request_on_every_row() {
+        const TOPIC: &str = "list-offsets-v0-duplicate";
+        let (broker_handle, _dir) =
+            start_broker_with_authorizer_no_audit(Arc::new(crate::authorizer::AllowAllAuthorizer))
+                .await;
+        let client = client_for(&broker_handle).await;
+        create_topic(&client, TOPIC, vec![]).await;
+        broker_handle.wait_until_partition_present(TOPIC, 0).await;
+
+        let mut request = BytesMut::new();
+        put_i32(&mut request, -1);
+        put_array_len(&mut request, 1, false);
+        put_string(&mut request, TOPIC);
+        put_array_len(&mut request, 2, false);
+        // The same partition index named twice: every row of it must come
+        // back INVALID_REQUEST, matching Kafka's duplicatePartitions check.
+        put_i32(&mut request, 0);
+        put_i64(&mut request, LATEST_TIMESTAMP);
+        put_i32(&mut request, 1);
+        put_i32(&mut request, 0);
+        put_i64(&mut request, LATEST_TIMESTAMP);
+        put_i32(&mut request, 1);
+
+        let broker = broker_handle.broker_arc_for_test();
+        let admin = principal("admin");
+        let socket = peer();
+        let response = handle(&broker, &request, &test_context(&admin, &socket))
+            .await
+            .expect("ListOffsets v0");
+        let mut response: &[u8] = &response;
+        assert!(get_array_len(&mut response, false).unwrap() == 1);
+        assert!(get_string_owned(&mut response).unwrap() == TOPIC);
+        assert!(get_array_len(&mut response, false).unwrap() == 2);
+        for _ in 0..2 {
+            assert!(get_i32(&mut response).unwrap() == 0);
+            assert!(get_i16(&mut response).unwrap() == codes::INVALID_REQUEST);
+            assert!(get_array_len(&mut response, false).unwrap() == 0);
+        }
+        assert!(response.is_empty());
 
         broker_handle.shutdown().await;
     }

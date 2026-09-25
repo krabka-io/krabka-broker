@@ -9,6 +9,11 @@
 //! `error_code = TRANSACTIONAL_ID_AUTHORIZATION_FAILED (53)` and clears every
 //! other field. An unknown tid gives that row `TRANSACTIONAL_ID_NOT_FOUND
 //! (105)`. This matches the JVM `KafkaApis` shape.
+//!
+//! Once a tid is authorized, each entry in its `topics` list still needs its
+//! own `Describe` on `Topic(name)`: `KafkaApis.handleDescribeTransactionsRequest`
+//! drops every topic the principal may not describe from the row, rather than
+//! failing the whole request, and krabka matches that per-topic filter.
 
 use std::collections::BTreeMap;
 
@@ -25,7 +30,7 @@ use krabka_protocol::{
 };
 
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
+    authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
     broker::Broker,
     codes,
     error::BrokerError,
@@ -173,13 +178,32 @@ pub(crate) async fn handle(
         }
 
         // Look up the coordinator's local entry. Unknown → 105.
-        let row = match broker.txn_coordinator.get(tid.as_str()) {
+        let mut row = match broker.txn_coordinator.get(tid.as_str()) {
             None => transaction_state_row(tid, None),
             Some(handle) => {
                 let entry = handle.lock().await;
                 transaction_state_row(tid, Some(&entry))
             }
         };
+
+        // Kafka's `handleDescribeTransactionsRequest` removes every topic the
+        // principal may not `Describe`, even though the tid itself is
+        // authorized. Batch-check the row's topics in one pass.
+        let topic_decisions: std::collections::HashMap<String, AuthorizationResult> =
+            authorize_topics(
+                broker.config.authorizer.as_ref(),
+                &*image,
+                ctx.principal,
+                ctx.peer,
+                AclOperation::Describe,
+                row.topics.iter().map(|t| t.topic.as_str()),
+            )
+            .into_iter()
+            .map(|(topic, decision)| (topic.to_owned(), decision))
+            .collect();
+        row.topics
+            .retain(|t| topic_decisions.get(&t.topic).copied() == Some(AuthorizationResult::Allow));
+
         rows.push(row);
     }
 
@@ -370,6 +394,176 @@ mod tests {
                     },
                 ]
         );
+        broker_handle.shutdown().await;
+    }
+
+    /// One case of [`topics_are_filtered_by_per_topic_describe`]: the topic
+    /// grant `user` gets (`None` means no topic ACL at all) and the topics
+    /// the response row should keep.
+    struct TopicFilterCase {
+        user: &'static str,
+        topic_grant: Option<(&'static str, AclOperation)>,
+        expected_topics: Vec<TopicData>,
+    }
+
+    /// Kafka's `handleDescribeTransactionsRequest` removes every topic the
+    /// principal may not `Describe` from the row, even though `Describe` on
+    /// the transactional id itself is already granted. Table-driven over the
+    /// topic grant, for one transaction holding `a-0` and `b-1`.
+    #[tokio::test]
+    async fn topics_are_filtered_by_per_topic_describe() {
+        use krabka_log::ProducerId;
+
+        let version = krabka_protocol::owned::describe_transactions_response::MAX_VERSION;
+        let (broker_handle, dir) = start_broker(Arc::new(
+            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
+        ))
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        let coordinator = &broker.txn_coordinator;
+        let peer = peer();
+        let tid = "tx";
+
+        let partition = coordinator.partition_for(tid);
+        let partition_dir = crate::log_dir::partition_dir(
+            dir.path(),
+            crate::txn::bootstrap::TOPIC,
+            partition.get(),
+        );
+        std::fs::create_dir_all(&partition_dir).expect("create the state directory");
+        let log = krabka_log::Log::open(&partition_dir, krabka_log::LogConfig::default())
+            .expect("open the state log");
+        broker.partitions.insert(
+            crate::txn::bootstrap::TOPIC.into(),
+            partition,
+            crate::broker::spawn_partition(
+                crate::txn::bootstrap::TOPIC.to_string(),
+                partition,
+                dir.path().to_path_buf(),
+                log,
+                crate::log_dir_status::LogDirRegistry::default(),
+                Arc::new(crate::producer_state::ProducerState::new()),
+                false,
+            ),
+        );
+        coordinator.lead_state_partition_for_test(partition).await;
+
+        let mut entry = TxnEntry::new_empty(tid.to_string(), ProducerId(100), 3, 60_000, 0);
+        entry.state = TxnState::Ongoing;
+        entry.start_ms = 7;
+        entry.partitions.insert(TopicPartition {
+            topic: "a".into(),
+            partition: krabka_ids::PartitionIndex(0),
+        });
+        entry.partitions.insert(TopicPartition {
+            topic: "b".into(),
+            partition: krabka_ids::PartitionIndex(1),
+        });
+        coordinator
+            .put(entry, crate::txn::version::TxnVersion::Classic)
+            .await
+            .expect("seed the transaction");
+
+        let topic_a = TopicData {
+            topic: "a".to_string(),
+            partitions: vec![0],
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+        };
+        let topic_b = TopicData {
+            topic: "b".to_string(),
+            partitions: vec![1],
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+        };
+
+        let cases = [
+            TopicFilterCase {
+                user: "star",
+                topic_grant: Some(("*", AclOperation::Describe)),
+                expected_topics: vec![topic_a.clone(), topic_b.clone()],
+            },
+            TopicFilterCase {
+                user: "topic-a",
+                topic_grant: Some(("a", AclOperation::Describe)),
+                expected_topics: vec![topic_a.clone()],
+            },
+            TopicFilterCase {
+                // Read implies Describe (see issue #649 for the separate
+                // DENY-vs-ALLOW-implication bug; this relies only on the
+                // already-correct ALLOW side of the implication table).
+                user: "read-b",
+                topic_grant: Some(("b", AclOperation::Read)),
+                expected_topics: vec![topic_b.clone()],
+            },
+            TopicFilterCase {
+                user: "none",
+                topic_grant: None,
+                expected_topics: vec![],
+            },
+        ];
+
+        for TopicFilterCase {
+            user,
+            topic_grant,
+            expected_topics,
+        } in cases
+        {
+            if let Some((grant_topic, operation)) = topic_grant {
+                crate::test_support::grant_topic_operation(
+                    &broker_handle,
+                    user,
+                    grant_topic,
+                    operation,
+                )
+                .await;
+            }
+            // `grant_topic_operation` grants on the `Topic` resource; grant
+            // `Describe` on `TransactionalId(tid)` too, since that gate runs
+            // first.
+            broker
+                .controller
+                .submit_change(vec![krabka_metadata::MetadataRecord::V1AccessControlEntry(
+                    krabka_metadata::AclEntry {
+                        resource_type: krabka_metadata::ResourceType::TransactionalId,
+                        resource_name: tid.to_string(),
+                        pattern_type: krabka_metadata::PatternType::Literal,
+                        principal: format!("User:{user}"),
+                        host: "*".to_string(),
+                        operation: AclOperation::Describe,
+                        permission_type: krabka_metadata::PermissionType::Allow,
+                    },
+                )])
+                .await
+                .expect("commit transactional id acl");
+
+            let principal = principal(user);
+            let context = test_context(&principal, &peer);
+            let request = encode_request(
+                &DescribeTransactionsRequest {
+                    transactional_ids: vec![tid.to_string()],
+                    ..Default::default()
+                },
+                version,
+            );
+            let response: DescribeTransactionsResponse = decode_response(
+                &handle(&broker, version, 1, &request, &context)
+                    .await
+                    .expect("describe"),
+                version,
+            );
+
+            let expected = TransactionState {
+                error_code: codes::NONE,
+                transactional_id: tid.to_owned(),
+                transaction_state: "Ongoing".to_owned(),
+                transaction_timeout_ms: 60_000,
+                transaction_start_time_ms: 7,
+                producer_id: 100,
+                producer_epoch: 3,
+                topics: expected_topics,
+                ..Default::default()
+            };
+            assert!(response.transaction_states == vec![expected], "user={user}");
+        }
         broker_handle.shutdown().await;
     }
 }

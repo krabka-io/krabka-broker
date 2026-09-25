@@ -6,15 +6,20 @@
 
 use std::sync::Arc;
 
-use assert2::assert;
+use assert2::{assert, check};
 use krabka_protocol::{
     UnknownTaggedFields,
-    owned::alter_configs_response::{AlterConfigsResourceResponse, AlterConfigsResponse},
+    owned::{
+        alter_configs_request::AlterableConfig,
+        alter_configs_response::{AlterConfigsResourceResponse, AlterConfigsResponse},
+    },
 };
 
 use super::{
-    RESOURCE_TYPE_BROKER, RESOURCE_TYPE_TOPIC,
-    test_support::{broker_resource, drive_one, resource},
+    RESOURCE_TYPE_BROKER, RESOURCE_TYPE_CLIENT_METRICS, RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
+    test_support::{
+        broker_resource, client_metrics_resource, drive_many, drive_one, group_resource, resource,
+    },
 };
 use crate::{codes, test_support::DenyAll};
 
@@ -52,7 +57,7 @@ async fn topic_resource_denial_uses_topic_authorization_error() {
         throttle_time_ms: 0,
         responses: vec![AlterConfigsResourceResponse {
             error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-            error_message: None,
+            error_message: Some("Topic authorization failed.".to_string()),
             resource_type: RESOURCE_TYPE_TOPIC,
             resource_name: "orders".to_string(),
             unknown_tagged_fields: UnknownTaggedFields::default(),
@@ -60,6 +65,196 @@ async fn topic_resource_denial_uses_topic_authorization_error() {
         unknown_tagged_fields: UnknownTaggedFields::default(),
     };
     assert!(resp == expected);
+}
+
+/// Legacy `AlterConfigs` authorizes GROUP resources against `AlterConfigs`
+/// on `Group(name)`, the same target `IncrementalAlterConfigs` uses.
+#[tokio::test]
+async fn group_resource_denial_uses_group_authorization_error() {
+    let resp = Box::pin(drive_one(
+        Arc::new(DenyAll),
+        group_resource("streams-app", &[]),
+    ))
+    .await;
+
+    let expected = AlterConfigsResponse {
+        throttle_time_ms: 0,
+        responses: vec![AlterConfigsResourceResponse {
+            error_code: codes::GROUP_AUTHORIZATION_FAILED,
+            error_message: Some("Group authorization failed.".to_string()),
+            resource_type: RESOURCE_TYPE_GROUP,
+            resource_name: "streams-app".to_string(),
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        }],
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+    assert!(resp == expected);
+}
+
+/// `CLIENT_METRICS` is authorized against the cluster, like `BROKER`, but goes
+/// through the controller path that carries `Errors.message()`.
+#[tokio::test]
+async fn client_metrics_resource_denial_uses_cluster_authorization_error_with_message() {
+    let resp = Box::pin(drive_one(
+        Arc::new(DenyAll),
+        client_metrics_resource("sub-a", &[]),
+    ))
+    .await;
+
+    let expected = AlterConfigsResponse {
+        throttle_time_ms: 0,
+        responses: vec![AlterConfigsResourceResponse {
+            error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
+            error_message: Some("Cluster authorization failed.".to_string()),
+            resource_type: RESOURCE_TYPE_CLIENT_METRICS,
+            resource_name: "sub-a".to_string(),
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        }],
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+    assert!(resp == expected);
+}
+
+#[tokio::test]
+async fn authorized_group_resource_is_applied() {
+    let resp = Box::pin(drive_one(
+        Arc::new(crate::authorizer::AllowAllAuthorizer),
+        group_resource(
+            "streams-app",
+            &[(
+                crate::coordinator::unified::streams::config::KEY_NUM_STANDBY_REPLICAS,
+                "1",
+            )],
+        ),
+    ))
+    .await;
+
+    let expected = AlterConfigsResponse {
+        throttle_time_ms: 0,
+        responses: vec![AlterConfigsResourceResponse {
+            error_code: codes::NONE,
+            error_message: None,
+            resource_type: RESOURCE_TYPE_GROUP,
+            resource_name: "streams-app".to_string(),
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        }],
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+    assert!(resp == expected);
+}
+
+#[tokio::test]
+async fn authorized_client_metrics_resource_is_applied() {
+    let resp = Box::pin(drive_one(
+        Arc::new(crate::authorizer::AllowAllAuthorizer),
+        client_metrics_resource("sub-a", &[("interval.ms", "60000")]),
+    ))
+    .await;
+
+    let expected = AlterConfigsResponse {
+        throttle_time_ms: 0,
+        responses: vec![AlterConfigsResourceResponse {
+            error_code: codes::NONE,
+            error_message: None,
+            resource_type: RESOURCE_TYPE_CLIENT_METRICS,
+            resource_name: "sub-a".to_string(),
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        }],
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+    assert!(resp == expected);
+}
+
+/// A resource that appears twice in the request is a Kafka `preprocess`
+/// shape error, so it earns `INVALID_REQUEST` on both rows -- even for a
+/// principal `DenyAll` would otherwise refuse for a different reason. This is
+/// the validate-before-authorize ordering the legacy handler now matches.
+#[tokio::test]
+async fn duplicate_resource_reference_is_a_validation_error_even_when_unauthorized() {
+    let resp = Box::pin(drive_many(
+        Arc::new(DenyAll),
+        vec![
+            resource(RESOURCE_TYPE_TOPIC, "orders"),
+            resource(RESOURCE_TYPE_TOPIC, "orders"),
+        ],
+    ))
+    .await;
+
+    assert!(resp.responses.len() == 2);
+    for row in &resp.responses {
+        check!(row.error_code == codes::INVALID_REQUEST);
+        check!(row.error_message.as_deref() == Some("Each resource must appear at most once."));
+        check!(row.resource_type == RESOURCE_TYPE_TOPIC);
+        check!(row.resource_name == "orders");
+    }
+}
+
+/// Duplicate config keys within one resource are a shape error, checked
+/// before authorization runs.
+#[tokio::test]
+async fn duplicate_config_key_is_a_validation_error_even_when_unauthorized() {
+    let mut duplicated = resource(RESOURCE_TYPE_TOPIC, "orders");
+    duplicated.configs.push(duplicated.configs[0].clone());
+
+    let resp = Box::pin(drive_one(Arc::new(DenyAll), duplicated)).await;
+
+    assert!(resp.responses.len() == 1);
+    let row = &resp.responses[0];
+    assert!(row.error_code == codes::INVALID_REQUEST);
+    assert!(row.error_message.as_deref() == Some("Error due to duplicate config keys"));
+}
+
+/// A null config value is a shape error for legacy `AlterConfigs`: unlike
+/// `IncrementalAlterConfigs`, there is no DELETE operation that a null value
+/// could mean, so it is simply malformed. Checked before authorization.
+#[tokio::test]
+async fn null_config_value_is_a_validation_error_even_when_unauthorized() {
+    let mut resource = resource(RESOURCE_TYPE_TOPIC, "orders");
+    resource.configs = vec![AlterableConfig {
+        name: "retention.ms".into(),
+        value: None,
+        ..Default::default()
+    }];
+
+    let resp = Box::pin(drive_one(Arc::new(DenyAll), resource)).await;
+
+    assert!(resp.responses.len() == 1);
+    let row = &resp.responses[0];
+    assert!(row.error_code == codes::INVALID_REQUEST);
+    assert!(row.error_message.as_deref() == Some("Null value not supported for : retention.ms"));
+}
+
+/// A valid, uniquely-named resource with well-formed configs still gets an
+/// authorization check: the validate-first ordering does not skip
+/// authorization for a resource that passes validation.
+#[tokio::test]
+async fn valid_resource_still_gets_an_authorization_check() {
+    for (label, req_resource, want_code) in [
+        (
+            "topic",
+            resource(RESOURCE_TYPE_TOPIC, "orders"),
+            codes::TOPIC_AUTHORIZATION_FAILED,
+        ),
+        (
+            "group",
+            group_resource("streams-app", &[]),
+            codes::GROUP_AUTHORIZATION_FAILED,
+        ),
+        (
+            "client-metrics",
+            client_metrics_resource("sub-a", &[]),
+            codes::CLUSTER_AUTHORIZATION_FAILED,
+        ),
+        (
+            "broker",
+            resource(RESOURCE_TYPE_BROKER, "1"),
+            codes::CLUSTER_AUTHORIZATION_FAILED,
+        ),
+    ] {
+        let resp = Box::pin(drive_one(Arc::new(DenyAll), req_resource)).await;
+        assert!(resp.responses.len() == 1);
+        check!(resp.responses[0].error_code == want_code, "{label}");
+    }
 }
 
 #[tokio::test]
@@ -173,4 +368,67 @@ fn a_topic_replacement_audits_every_key_whose_value_moves() {
 
         assert!(audited == expected, "{label}");
     }
+}
+
+/// A GROUP or `CLIENT_METRICS` `AlterConfigs` also replaces the whole override
+/// map, so a replacement that omits a stored key must audit that key as
+/// changed -- the same rule topic resources already get, extended to the
+/// full-map-replacement types #1122 added authorization for.
+#[test]
+fn a_group_or_client_metrics_replacement_audits_a_key_it_drops_by_omission() {
+    use crate::handlers::audit_resource;
+
+    let group_image = crate::handlers::alter_configs::test_support::image_with_group_config(
+        "streams-app",
+        &[
+            (
+                crate::coordinator::unified::streams::config::KEY_NUM_STANDBY_REPLICAS,
+                "1",
+            ),
+            (
+                crate::coordinator::unified::streams::config::KEY_TASK_OFFSET_INTERVAL_MS,
+                "5000",
+            ),
+        ],
+    );
+    let group_audited = super::audit_resources_for(
+        &crate::handlers::alter_configs::test_support::group_resource(
+            "streams-app",
+            &[(
+                crate::coordinator::unified::streams::config::KEY_NUM_STANDBY_REPLICAS,
+                "1",
+            )],
+        ),
+        &group_image,
+    );
+    assert!(
+        group_audited
+            == vec![
+                audit_resource("Group", "streams-app"),
+                audit_resource(
+                    "ConfigKey",
+                    crate::coordinator::unified::streams::config::KEY_TASK_OFFSET_INTERVAL_MS
+                ),
+            ]
+    );
+
+    let client_metrics_image =
+        crate::handlers::alter_configs::test_support::image_with_client_metrics_config(
+            "sub1",
+            &[("interval.ms", "30000"), ("metrics", "*")],
+        );
+    let client_metrics_audited = super::audit_resources_for(
+        &crate::handlers::alter_configs::test_support::client_metrics_resource(
+            "sub1",
+            &[("interval.ms", "30000")],
+        ),
+        &client_metrics_image,
+    );
+    assert!(
+        client_metrics_audited
+            == vec![
+                audit_resource("ClientMetrics", "sub1"),
+                audit_resource("ConfigKey", "metrics"),
+            ]
+    );
 }
