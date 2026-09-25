@@ -25,12 +25,16 @@ use krabka_protocol::{
 };
 
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
+    authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
     broker::Broker,
     codes,
     coordinator::unified::share::actor::{DeleteTopic, ShareGroupActorMessage},
     error::BrokerError,
 };
+
+/// Kafka's message for `TOPIC_AUTHORIZATION_FAILED`, which
+/// `handleDeleteShareGroupOffsetsRequest` puts on every denied topic row.
+const TOPIC_AUTHORIZATION_FAILED_MESSAGE: &str = "Topic authorization failed.";
 
 #[tracing::instrument(
     name = "handle_delete_share_group_offsets",
@@ -78,12 +82,41 @@ pub(crate) async fn handle(
         .as_ref()
         .and_then(|ng| ng.share_state_partition_metadata(&gid));
 
+    // Per-topic `Read` ACL. Kafka's `handleDeleteShareGroupOffsetsRequest`
+    // authorizes `READ` on each requested topic after the group `Delete`
+    // check; a denied topic gets `TOPIC_AUTHORIZATION_FAILED` and never
+    // reaches the coordinator. Denied rows are appended to the response
+    // before the coordinator-returned rows, matching Kafka's row order.
+    let topic_names: Vec<String> = req.topics.iter().map(|rt| rt.topic_name.clone()).collect();
+    let topic_decisions = authorize_topics(
+        broker.config.authorizer.as_ref(),
+        &*image,
+        ctx.principal,
+        ctx.peer,
+        AclOperation::Read,
+        topic_names.iter().map(String::as_str),
+    );
+    let (denied_topics, allowed_topics): (Vec<_>, Vec<_>) =
+        req.topics.into_iter().partition(|rt| {
+            topic_decisions.get(rt.topic_name.as_str()) == Some(&AuthorizationResult::Deny)
+        });
+
     let mut responses: Vec<DeleteShareGroupOffsetsResponseTopic> =
-        Vec::with_capacity(req.topics.len());
+        Vec::with_capacity(denied_topics.len() + allowed_topics.len());
+    for rt in denied_topics {
+        responses.push(DeleteShareGroupOffsetsResponseTopic {
+            topic_name: rt.topic_name,
+            topic_id: Uuid::default(),
+            error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+            error_message: Some(TOPIC_AUTHORIZATION_FAILED_MESSAGE.to_string()),
+            ..Default::default()
+        });
+    }
+
     let mut actor_requests = Vec::new();
     let mut actor_response_slots = Vec::new();
 
-    for rt in req.topics {
+    for rt in allowed_topics {
         let topic_name = rt.topic_name;
 
         let Some(topic_id) = image.topic(&topic_name).map(|t| t.topic_id) else {
@@ -178,9 +211,10 @@ fn encode_top_level(version: i16, error_code: i16) -> Result<Bytes, BrokerError>
 
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, sync::Arc};
+    use std::{collections::HashSet, net::SocketAddr, sync::Arc};
 
     use assert2::assert;
+    use krabka_metadata::{AclOperation, ResourceType};
     use krabka_protocol::{
         UnknownTaggedFields,
         owned::{
@@ -197,9 +231,9 @@ mod tests {
     };
     use krabka_security::Principal;
 
-    use super::{encode_top_level, handle};
+    use super::{TOPIC_AUTHORIZATION_FAILED_MESSAGE, encode_top_level, handle};
     use crate::{
-        authorizer::Authorizer,
+        authorizer::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer},
         codes,
         coordinator::unified::{
             ShareGroupSeed,
@@ -210,6 +244,29 @@ mod tests {
         },
         test_support::DenyAll,
     };
+
+    /// Denies `Read` on the named topics and allows everything else, so group
+    /// `Delete` and topic creation still succeed and only the per-topic gate
+    /// refuses.
+    #[derive(Debug)]
+    struct DenyReadOnTopics(HashSet<&'static str>);
+
+    impl Authorizer for DenyReadOnTopics {
+        fn authorize(
+            &self,
+            _source: &dyn AclSource,
+            request: &AuthorizationRequest<'_>,
+        ) -> AuthorizationResult {
+            if request.resource_type == ResourceType::Topic
+                && request.operation == AclOperation::Read
+                && self.0.contains(request.resource_name)
+            {
+                AuthorizationResult::Deny
+            } else {
+                AuthorizationResult::Allow
+            }
+        }
+    }
 
     fn request(group_id: &str, topics: &[&str]) -> DeleteShareGroupOffsetsRequest {
         DeleteShareGroupOffsetsRequest {
@@ -483,5 +540,166 @@ mod tests {
         assert!(kept_state_epoch == 6);
         assert!(kept_start_offset == krabka_log::Offset(20));
         broker_handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn handle_denies_unauthorized_topics_and_orders_denied_rows_first() {
+        // Each case denies `Read` on the listed topics and requests both
+        // fixture topics in `["allow-topic", "deny-topic"]` order. Kafka's
+        // `handleDeleteShareGroupOffsetsRequest` puts every denied-topic row
+        // ahead of the coordinator-returned rows, regardless of request
+        // order, and never routes a denied topic to the coordinator.
+        type Case<'a> = (&'a str, &'a [&'a str]);
+        let cases: Vec<Case<'_>> = vec![
+            (
+                "one allowed, one denied: denied row comes first",
+                &["deny-topic"],
+            ),
+            ("all topics denied", &["allow-topic", "deny-topic"]),
+            ("all topics allowed", &[]),
+        ];
+
+        for (case, denied_names) in cases {
+            let denied: HashSet<&'static str> = denied_names.iter().copied().collect();
+            let (broker_handle, _dir) =
+                start_broker(Arc::new(DenyReadOnTopics(denied.clone())), true).await;
+            let broker = broker_handle.broker_arc_for_test();
+            let principal = principal();
+            let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+            let ctx = test_context(&principal, &peer);
+            create_topics(
+                &broker_handle,
+                &broker,
+                &["allow-topic", "deny-topic"],
+                &ctx,
+            )
+            .await;
+            crate::share_coordinator::handlers::test_support::lead_share_state_partitions(&broker)
+                .await;
+
+            let persister = broker
+                .group_coordinator
+                .share_persister()
+                .cloned()
+                .expect("share persister");
+            let image = broker.controller.current_image();
+            let allow_id = image.topic("allow-topic").expect("allow topic").topic_id;
+            let deny_id = image.topic("deny-topic").expect("deny topic").topic_id;
+            drop(image);
+
+            persister
+                .initialize("g-authz", allow_id, 0, 4, krabka_log::Offset(10))
+                .await
+                .expect("seed allow-topic state");
+            persister
+                .initialize("g-authz", deny_id, 0, 4, krabka_log::Offset(10))
+                .await
+                .expect("seed deny-topic state");
+
+            let actor = broker.group_coordinator.get_or_create_share("g-authz");
+            actor
+                .tx
+                .send(ShareGroupActorMessage::Seed(ShareGroupSeed {
+                    state_partition_metadata: ShareGroupStatePartitionMetadataValue {
+                        initialized: vec![
+                            InitializedTopic {
+                                topic_id: allow_id,
+                                topic_name: "allow-topic".into(),
+                                partitions: vec![0],
+                            },
+                            InitializedTopic {
+                                topic_id: deny_id,
+                                topic_name: "deny-topic".into(),
+                                partitions: vec![0],
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }))
+                .await
+                .expect("seed share actor");
+
+            let response = handle(
+                &broker,
+                delete_share_group_offsets_response::MAX_VERSION,
+                1,
+                &encode_request(&request("g-authz", &["allow-topic", "deny-topic"])),
+                &ctx,
+            )
+            .await
+            .expect("handle delete");
+            let response = decode_response(&response);
+
+            let denied_row = |name: &str| DeleteShareGroupOffsetsResponseTopic {
+                topic_name: name.into(),
+                topic_id: Uuid::default(),
+                error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+                error_message: Some(TOPIC_AUTHORIZATION_FAILED_MESSAGE.to_string()),
+                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+            };
+            let allowed_row =
+                |name: &str, topic_id: uuid::Uuid| DeleteShareGroupOffsetsResponseTopic {
+                    topic_name: name.into(),
+                    topic_id: Uuid(*topic_id.as_bytes()),
+                    error_code: codes::NONE,
+                    error_message: None,
+                    unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+                };
+
+            // Denied rows come first, in request order; allowed rows follow,
+            // also in request order.
+            let mut expected_responses = Vec::new();
+            for name in ["allow-topic", "deny-topic"] {
+                if denied.contains(name) {
+                    expected_responses.push(denied_row(name));
+                }
+            }
+            for name in ["allow-topic", "deny-topic"] {
+                if !denied.contains(name) {
+                    let topic_id = if name == "allow-topic" {
+                        allow_id
+                    } else {
+                        deny_id
+                    };
+                    expected_responses.push(allowed_row(name, topic_id));
+                }
+            }
+
+            let expected = DeleteShareGroupOffsetsResponse {
+                throttle_time_ms: 0,
+                error_code: codes::NONE,
+                error_message: None,
+                responses: expected_responses,
+                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+            };
+            assert!(response == expected, "case: {case}");
+
+            // A denied topic's durable state must be untouched; an allowed
+            // topic's must be fenced (deleted).
+            for (name, topic_id) in [("allow-topic", allow_id), ("deny-topic", deny_id)] {
+                let (state_epoch, _, start_offset, _) = persister
+                    .read_summary("g-authz", topic_id, 0)
+                    .await
+                    .expect("read state")
+                    .expect("state row");
+                if denied.contains(name) {
+                    assert!(state_epoch == 4, "case: {case}, topic: {name}");
+                    assert!(
+                        start_offset == krabka_log::Offset(10),
+                        "case: {case}, topic: {name}"
+                    );
+                } else {
+                    assert!(state_epoch == 5, "case: {case}, topic: {name}");
+                    assert!(
+                        start_offset
+                            == crate::share_coordinator::coordinator::UNINITIALIZED_START_OFFSET,
+                        "case: {case}, topic: {name}"
+                    );
+                }
+            }
+
+            broker_handle.shutdown().await;
+        }
     }
 }
