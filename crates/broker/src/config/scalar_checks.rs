@@ -438,6 +438,10 @@ impl BrokerConfig {
             ),
             ("num_partitions", self.num_partitions),
             (
+                "max_request_partition_size_limit",
+                self.max_request_partition_size_limit,
+            ),
+            (
                 "share_state_num_partitions",
                 self.share_coordinator.state_topic_num_partitions,
             ),

@@ -7,7 +7,7 @@
 //! finalizing `streams.version`, and driving one describe round trip over the
 //! wire encoding -- live here for the same reason.
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
 use krabka_protocol::{
@@ -23,13 +23,18 @@ use krabka_protocol::{
         },
     },
 };
+use krabka_security::Principal;
 
 use super::handle;
 use crate::{
+    authorizer::Authorizer,
     broker::Broker,
-    coordinator::unified::streams::{
-        actor::StreamsDescribeMember,
-        persistence::{StoredSubtopology, StoredTopicInfo, StreamsGroupTopologyValue},
+    coordinator::unified::{
+        StreamsGroupSeed,
+        streams::{
+            actor::{StreamsDescribeMember, StreamsGroupActorMessage},
+            persistence::{StoredSubtopology, StoredTopicInfo, StreamsGroupTopologyValue},
+        },
     },
 };
 
@@ -53,6 +58,58 @@ pub(super) async fn start_broker(
         cfg.streams_group.enable = streams_enabled;
     })
     .await
+}
+
+/// A broker with streams enabled and `authorizer` installed, for the tests
+/// that drive a specific ACL gate (group `Describe` or topic `Describe`)
+/// rather than allow everything.
+pub(super) async fn start_broker_with_authorizer(
+    authorizer: Arc<dyn Authorizer>,
+) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
+    crate::test_support::start_broker_with(|cfg| {
+        cfg.streams_group.enable = true;
+        cfg.authorizer = authorizer;
+    })
+    .await
+}
+
+/// Seed a live streams-group actor with `topology` and no members, the way
+/// the bootstrap replayer hydrates one from `__consumer_offsets` records.
+/// This is enough for `StreamsGroupDescribe` to render a topology without
+/// driving a real `StreamsGroupHeartbeat` join (which would need real source
+/// topics with real partitions).
+pub(super) async fn seed_streams_group_topology(
+    broker: &Broker,
+    group_id: &str,
+    topology: StreamsGroupTopologyValue,
+) {
+    broker.group_coordinator.mark_streams(group_id);
+    let handle = broker.group_coordinator.get_or_create_streams(group_id);
+    handle
+        .tx
+        .send(StreamsGroupActorMessage::Seed(StreamsGroupSeed {
+            topology: Some(topology),
+            ..Default::default()
+        }))
+        .await
+        .expect("seed streams group topology");
+}
+
+/// A minimal topology naming exactly the one given source topic, for the
+/// topic-Describe-authorization tests.
+pub(super) fn topology_with_source_topic(topic: &str) -> StreamsGroupTopologyValue {
+    StreamsGroupTopologyValue {
+        epoch: 1,
+        subtopologies: vec![StoredSubtopology {
+            subtopology_id: "0".into(),
+            source_topics: vec![topic.into()],
+            source_topic_regex: Vec::new(),
+            repartition_sink_topics: Vec::new(),
+            state_changelog_topics: Vec::new(),
+            repartition_source_topics: Vec::new(),
+            copartition_groups: Vec::new(),
+        }],
+    }
 }
 
 pub(super) async fn finalize_streams_version(broker: &Broker) {
@@ -83,11 +140,27 @@ pub(super) async fn finalize_streams_version(broker: &Broker) {
 }
 
 pub(super) async fn describe(broker: &Broker, group_ids: &[&str]) -> StreamsGroupDescribeResponse {
-    let version = response_mod::MAX_VERSION;
-    let req_bytes = encode_request(&request(group_ids));
     let principal = crate::test_support::principal("admin");
+    describe_as(broker, &principal, group_ids, false).await
+}
+
+/// Like [`describe`], but with an explicit principal and
+/// `include_authorized_operations` flag, for the ACL-gate and KIP-430
+/// bitfield tests.
+pub(super) async fn describe_as(
+    broker: &Broker,
+    principal: &Principal,
+    group_ids: &[&str],
+    include_authorized_operations: bool,
+) -> StreamsGroupDescribeResponse {
+    let version = response_mod::MAX_VERSION;
+    let req = StreamsGroupDescribeRequest {
+        include_authorized_operations,
+        ..request(group_ids)
+    };
+    let req_bytes = encode_request(&req);
     let peer = crate::test_support::peer();
-    let ctx = crate::test_support::request_context(&principal, &peer, "admin-client");
+    let ctx = crate::test_support::request_context(principal, &peer, "admin-client");
     let resp = handle(broker, version, 1, &req_bytes, &ctx)
         .await
         .expect("handle describe");

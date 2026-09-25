@@ -27,8 +27,6 @@ pub(super) fn alter_replica_log_dirs_adapter<'a>(
     peer: &'a std::net::SocketAddr,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
     Box::pin(async move {
-        use std::collections::BTreeMap;
-
         use krabka_protocol::{
             Decode,
             owned::{
@@ -67,26 +65,26 @@ pub(super) fn alter_replica_log_dirs_adapter<'a>(
         if !authorized {
             let mut cur = body;
             let req = AlterReplicaLogDirsRequest::decode(&mut cur, version)?;
-            let mut by_topic: BTreeMap<String, Vec<AlterReplicaLogDirPartitionResult>> =
-                BTreeMap::new();
-            for dir in req.dirs {
-                for topic in dir.topics {
-                    for partition_index in topic.partitions {
-                        by_topic.entry(topic.name.clone()).or_default().push(
-                            AlterReplicaLogDirPartitionResult {
-                                partition_index,
-                                error_code: crate::codes::CLUSTER_AUTHORIZATION_FAILED,
-                                ..Default::default()
-                            },
-                        );
-                    }
-                }
-            }
-            let results = by_topic
+            // Kafka's `AlterReplicaLogDirsRequest.getErrorResponse` walks the
+            // request as sent: one topic result per (directory, topic) pair,
+            // in request order, with every listed partition set to the same
+            // error code. It never merges or sorts entries, so a topic named
+            // under two directories gets two results here too.
+            let results = req
+                .dirs
                 .into_iter()
-                .map(|(topic_name, partitions)| AlterReplicaLogDirTopicResult {
-                    topic_name,
-                    partitions,
+                .flat_map(|dir| dir.topics)
+                .map(|topic| AlterReplicaLogDirTopicResult {
+                    topic_name: topic.name,
+                    partitions: topic
+                        .partitions
+                        .into_iter()
+                        .map(|partition_index| AlterReplicaLogDirPartitionResult {
+                            partition_index,
+                            error_code: crate::codes::CLUSTER_AUTHORIZATION_FAILED,
+                            ..Default::default()
+                        })
+                        .collect(),
                     ..Default::default()
                 })
                 .collect();
@@ -276,5 +274,150 @@ fn audit_token_operation(
             krabka_audit::AuditOutcome::Success,
             vec![crate::handlers::audit_resource("DelegationToken", token_id)],
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{net::SocketAddr, sync::Arc};
+
+    use krabka_protocol::owned::{
+        alter_replica_log_dirs_request::{
+            AlterReplicaLogDir, AlterReplicaLogDirTopic, AlterReplicaLogDirsRequest,
+        },
+        alter_replica_log_dirs_response::{
+            AlterReplicaLogDirPartitionResult, AlterReplicaLogDirTopicResult,
+            AlterReplicaLogDirsResponse,
+        },
+    };
+    use krabka_security::{AuthMethod, Principal, SaslMechanism};
+
+    use super::*;
+    use crate::{
+        codes::CLUSTER_AUTHORIZATION_FAILED,
+        network::auth::ConnectionAuth,
+        test_support::{DenyAll, codec_helpers, start_broker_with_authorizer},
+    };
+
+    codec_helpers!(AlterReplicaLogDirsRequest, AlterReplicaLogDirsResponse);
+
+    fn authed(name: &str) -> ConnectionAuth {
+        ConnectionAuth::Authenticated {
+            principal: Principal {
+                name: name.into(),
+                auth_method: AuthMethod::Anonymous,
+                groups: vec![],
+            },
+            mechanism: SaslMechanism::Plain,
+            expires_at_ms: None,
+            authenticated_via_token: false,
+        }
+    }
+
+    fn topic_result(name: &str, partitions: &[i32]) -> AlterReplicaLogDirTopicResult {
+        AlterReplicaLogDirTopicResult {
+            topic_name: name.to_string(),
+            partitions: partitions
+                .iter()
+                .map(|&partition_index| AlterReplicaLogDirPartitionResult {
+                    partition_index,
+                    error_code: CLUSTER_AUTHORIZATION_FAILED,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    /// Kafka's `AlterReplicaLogDirsRequest.getErrorResponse` produces one
+    /// topic result per (directory, topic) pair, in request order, never
+    /// merging or sorting them by topic name. A denied `Cluster.Alter` must
+    /// match that shape exactly, including when the same topic is named
+    /// under two directories or when topics are listed out of name order.
+    #[tokio::test]
+    async fn denial_emits_one_row_per_dir_and_topic_in_request_order() {
+        let version = 2;
+        for (case, dirs, expected_results) in [
+            (
+                "one dir, one topic",
+                vec![AlterReplicaLogDir {
+                    path: "/var/lib/krabka/data0".into(),
+                    topics: vec![AlterReplicaLogDirTopic {
+                        name: "orders".into(),
+                        partitions: vec![0, 1],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                vec![topic_result("orders", &[0, 1])],
+            ),
+            (
+                "same topic under two dirs stays two rows",
+                vec![
+                    AlterReplicaLogDir {
+                        path: "/var/lib/krabka/data0".into(),
+                        topics: vec![AlterReplicaLogDirTopic {
+                            name: "orders".into(),
+                            partitions: vec![0],
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    },
+                    AlterReplicaLogDir {
+                        path: "/var/lib/krabka/data1".into(),
+                        topics: vec![AlterReplicaLogDirTopic {
+                            name: "orders".into(),
+                            partitions: vec![1],
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    },
+                ],
+                vec![topic_result("orders", &[0]), topic_result("orders", &[1])],
+            ),
+            (
+                "topics in reverse name order are not sorted",
+                vec![AlterReplicaLogDir {
+                    path: "/var/lib/krabka/data0".into(),
+                    topics: vec![
+                        AlterReplicaLogDirTopic {
+                            name: "widgets".into(),
+                            partitions: vec![0],
+                            ..Default::default()
+                        },
+                        AlterReplicaLogDirTopic {
+                            name: "orders".into(),
+                            partitions: vec![0],
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                }],
+                vec![topic_result("widgets", &[0]), topic_result("orders", &[0])],
+            ),
+        ] {
+            let (broker_handle, _dir) = start_broker_with_authorizer(Arc::new(DenyAll)).await;
+            let broker = broker_handle.broker_arc_for_test();
+            let auth = authed("alice");
+            let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+            let req = AlterReplicaLogDirsRequest {
+                dirs,
+                ..Default::default()
+            };
+            let body = encode_request(&req, version);
+
+            let bytes = alter_replica_log_dirs_adapter(&broker, version, 0, &body, &auth, &peer)
+                .await
+                .expect("adapter");
+            let resp = decode_response(&bytes, version);
+
+            let expected = AlterReplicaLogDirsResponse {
+                throttle_time_ms: 0,
+                results: expected_results,
+                ..Default::default()
+            };
+            assert2::check!(resp == expected, "case {case}");
+            broker_handle.shutdown().await;
+        }
     }
 }
