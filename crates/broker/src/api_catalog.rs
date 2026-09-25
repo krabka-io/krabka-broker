@@ -1077,31 +1077,52 @@ macro_rules! v {
     };
 }
 
-/// Which of the broker's listeners an `ApiVersions` response goes out on.
+/// Which of the broker's listeners an `ApiVersions` response goes out on, and
+/// where [`INTER_BROKER_ONLY_APIS`] may dispatch.
 ///
 /// Apache Kafka tags every request schema with the listener types that accept
 /// it, and `ApiVersionsResponse.filterApis` drops every row whose tag does not
 /// hold for the listener the request arrived on. A Kafka broker answers with
-/// `ListenerType.BROKER`, so a key tagged `controller` only -- `AlterPartition`,
-/// `BrokerRegistration`, and the rest of [`INTER_BROKER_ONLY_APIS`] -- never
-/// reaches a client. krabka's controller listener does the same through
-/// `krabka_raft`'s own `CONTROLLER_LISTENER_APIS`; this enum is the broker
-/// side of it.
+/// `ListenerType.BROKER` on every listener it binds, client-facing or
+/// inter-broker alike, so a key tagged `controller` only --
+/// `AlterPartition`, `BrokerRegistration`, and the rest of
+/// [`INTER_BROKER_ONLY_APIS`] -- reaches no broker listener at all, and the
+/// socket layer closes a connection that sends one. krabka's controller
+/// listener does the same through `krabka_raft`'s own
+/// `CONTROLLER_LISTENER_APIS`; this enum is the broker side of it.
+///
+/// krabka still has to accept and answer [`INTER_BROKER_ONLY_APIS`]
+/// somewhere, because it reaches a peer over the peer's *inter-broker*
+/// endpoint for those RPCs rather than over a separate controller listener.
+/// That is [`InterBroker`][Self::InterBroker] and
+/// [`ClientAndInterBroker`][Self::ClientAndInterBroker] alike; only
+/// [`Client`][Self::Client] closes the connection instead of dispatching.
+/// Advertising is narrower: only the listener no client can reach --
+/// [`InterBroker`][Self::InterBroker] -- keeps them in `ApiVersions`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ListenerKind {
-    /// A listener a Kafka client reaches. It advertises what a Kafka broker
-    /// advertises, which is every key except [`INTER_BROKER_ONLY_APIS`].
+    /// A listener a Kafka client reaches and that is not
+    /// `inter.broker.listener.name`. It advertises what a Kafka broker
+    /// advertises, every key except [`INTER_BROKER_ONLY_APIS`], and it closes
+    /// the connection rather than dispatch one of them.
     Client,
-    /// The listener `inter.broker.listener.name` names, which
-    /// [`crate::config::BrokerConfig::listener_kind`] recognises by name. On
-    /// the default single-listener broker that is the same listener clients
-    /// reach.
-    ///
-    /// It adds [`INTER_BROKER_ONLY_APIS`], because a krabka broker reaches a
-    /// peer over the peer's inter-broker endpoint rather than over a
-    /// controller listener, and the peer has to say which versions of those
-    /// RPCs it speaks before the caller can send one.
+    /// The listener `inter.broker.listener.name` names, when the broker also
+    /// binds at least one other, purely client-facing listener -- a Kafka
+    /// deployment's `BROKER` listener, reached only by peers. It dispatches
+    /// and advertises [`INTER_BROKER_ONLY_APIS`], because a krabka broker
+    /// negotiates those RPCs against the table this listener advertises
+    /// before it can send one.
     InterBroker,
+    /// The listener `inter.broker.listener.name` names, when it is the
+    /// broker's only listener -- the default single-listener configuration --
+    /// and so also serves ordinary clients.
+    ///
+    /// It still dispatches [`INTER_BROKER_ONLY_APIS`], the same as
+    /// [`InterBroker`][Self::InterBroker]: krabka's peers reach it there
+    /// because there is nowhere else. It withholds them from `ApiVersions`
+    /// the same as [`Client`][Self::Client]: no Kafka broker listener ever
+    /// advertises a controller-scoped key, and a client can reach this one.
+    ClientAndInterBroker,
 }
 
 /// Whether the broker has somewhere to send KIP-714 client metrics.
@@ -1123,19 +1144,26 @@ pub enum ClientMetricsReceiver {
     Absent,
 }
 
-/// The api keys a listener a Kafka client reaches does not advertise.
+/// The api keys scoped to the listener `inter.broker.listener.name` names:
+/// withheld from `ApiVersions` on every other listener (#843), and refused --
+/// connection closed, no response -- when dispatched there (#683).
 ///
 /// Eight of them are tagged `controller` only by their request schema in
-/// `krabka-protocol`, so no Kafka broker listener has ever advertised them:
-/// `AlterPartition` (56), `FetchSnapshot` (59), `BrokerRegistration` (62),
-/// `BrokerHeartbeat` (63), `AllocateProducerIds` (67),
-/// `ControllerRegistration` (70), `AssignReplicasToDirs` (73) and
-/// `UpdateRaftVoter` (82). krabka serves all eight from the broker's dispatch
-/// registry, because its controller listener routes several of them back into
-/// broker handlers, and every one of those handlers gates on `ClusterAction`.
-/// Serving them is not a reason to advertise them: a tool or an audit that
-/// reads the advertised set to infer a node's role would read a krabka broker
-/// as a controller.
+/// `krabka-protocol`, so no Kafka broker listener has ever advertised or
+/// dispatched them: `AlterPartition` (56), `FetchSnapshot` (59),
+/// `BrokerRegistration` (62), `BrokerHeartbeat` (63), `AllocateProducerIds`
+/// (67), `ControllerRegistration` (70), `AssignReplicasToDirs` (73) and
+/// `UpdateRaftVoter` (82). krabka has no separate controller listener for
+/// them -- its controller listener routes several of them back into these
+/// same broker handlers, through `krabka_raft`'s own
+/// `CONTROLLER_LISTENER_APIS` -- so it accepts them on
+/// [`ListenerKind::InterBroker`] and
+/// [`ListenerKind::ClientAndInterBroker`] instead, where every handler still
+/// gates on `ClusterAction`. That is not a reason to advertise or dispatch
+/// them on a listener a client reaches too: a tool or an audit that reads the
+/// advertised set to infer a node's role would read a krabka broker as a
+/// controller, and a client that skips version negotiation would otherwise
+/// still reach the handlers.
 ///
 /// `GetReplicaLogInfo` (93) is the ninth. Its schema is tagged `broker`, but no
 /// released Kafka advertises it -- `mirror.gcr.io/apache/kafka:4.3.1` stops at
@@ -1143,15 +1171,11 @@ pub enum ClientMetricsReceiver {
 /// recovery manager, which dials a replica's inter-broker endpoint. It
 /// therefore belongs on the same side of the split as the other eight.
 ///
-/// Dispatch is unaffected. [`dispatched_apis`] still carries every key here at
-/// its full version range, so a peer that sends one is answered whichever
-/// listener it arrived on. Withholding a key is not free, though: krabka's own
-/// intra-cluster senders go through `krabka_client_core`, which negotiates
-/// against the advertised table, so an endpoint peers dial has to advertise
-/// what they send it. That is why the widened side of the split is the
-/// listener `inter.broker.listener.name` names rather than a listener that
-/// happens to be separate -- see
-/// [`crate::config::BrokerConfig::listener_kind`].
+/// [`dispatched_apis`] still carries every key here at its full version
+/// range, because the version bounds a listener serves at do not change; only
+/// whether the listener accepts the key at all does, and that is enforced in
+/// `crate::network::dispatch` by reading
+/// [`crate::config::BrokerConfig::listener_kind`], not by trimming this table.
 pub const INTER_BROKER_ONLY_APIS: &[i16] = {
     use krabka_protocol::owned;
     &[
@@ -1192,8 +1216,13 @@ pub fn dispatched_apis() -> Vec<ApiVersion> {
 
 /// The API set `listener` advertises, in [`dispatched_apis`] order.
 ///
-/// `client_metrics` gates the two KIP-714 keys on both listener kinds, the way
-/// Kafka gates them on a configured `ClientTelemetry` reporter.
+/// `client_metrics` gates the two KIP-714 keys on every listener kind, the way
+/// Kafka gates them on a configured `ClientTelemetry` reporter. The
+/// control-plane keys in [`INTER_BROKER_ONLY_APIS`] are withheld on every
+/// listener a client can reach -- [`ListenerKind::Client`] and
+/// [`ListenerKind::ClientAndInterBroker`] alike -- and kept only on
+/// [`ListenerKind::InterBroker`], the dedicated listener no client dials
+/// (#843). Dispatch is a separate, wider gate: see [`INTER_BROKER_ONLY_APIS`].
 #[must_use]
 pub fn supported_apis(
     listener: ListenerKind,
@@ -1202,8 +1231,8 @@ pub fn supported_apis(
     dispatched_apis()
         .into_iter()
         .filter(|api| {
-            let withheld_control_plane =
-                listener == ListenerKind::Client && INTER_BROKER_ONLY_APIS.contains(&api.api_key);
+            let withheld_control_plane = listener != ListenerKind::InterBroker
+                && INTER_BROKER_ONLY_APIS.contains(&api.api_key);
             let withheld_telemetry = client_metrics == ClientMetricsReceiver::Absent
                 && CLIENT_METRICS_APIS.contains(&api.api_key);
             !withheld_control_plane && !withheld_telemetry
@@ -1448,8 +1477,10 @@ mod tests {
         assert!(keys_of(&client_apis()) == dispatched.difference(&withheld).copied().collect());
     }
 
-    /// The inter-broker listener keeps the control-plane keys, because a
-    /// krabka broker negotiates them against a peer's inter-broker endpoint.
+    /// The dedicated inter-broker listener keeps the control-plane keys,
+    /// because a krabka broker negotiates them against a peer's inter-broker
+    /// endpoint. This is the split-listener configuration: a client cannot
+    /// reach this listener.
     #[test]
     fn the_inter_broker_listener_keeps_the_control_plane_keys() {
         let apis = supported_apis(ListenerKind::InterBroker, ClientMetricsReceiver::Absent);
@@ -1462,11 +1493,35 @@ mod tests {
         }
     }
 
+    /// #843: no listener a client can reach advertises a control-plane key,
+    /// including the default single-listener broker where the sole listener
+    /// carries client and inter-broker traffic together. Table-driven over
+    /// every listener configuration from the issue: the default single
+    /// listener, a split client/inter-broker configuration, and a listener
+    /// that is neither (`Client`, e.g. a would-be controller-named listener
+    /// that `inter.broker.listener.name` does not point at).
+    #[test]
+    fn no_client_reachable_listener_advertises_a_control_plane_key() {
+        for listener in [ListenerKind::Client, ListenerKind::ClientAndInterBroker] {
+            let keys = keys_of(&supported_apis(listener, ClientMetricsReceiver::Absent));
+            for api_key in INTER_BROKER_ONLY_APIS {
+                assert!(
+                    !keys.contains(api_key),
+                    "listener {listener:?} must not advertise api_key {api_key}"
+                );
+            }
+        }
+    }
+
     /// A configured receiver adds the KIP-714 pair, and nothing else, to
-    /// either listener.
+    /// every listener kind.
     #[test]
     fn a_configured_client_metrics_receiver_adds_only_the_two_telemetry_keys() {
-        for listener in [ListenerKind::Client, ListenerKind::InterBroker] {
+        for listener in [
+            ListenerKind::Client,
+            ListenerKind::InterBroker,
+            ListenerKind::ClientAndInterBroker,
+        ] {
             let absent = keys_of(&supported_apis(listener, ClientMetricsReceiver::Absent));
             let configured = keys_of(&supported_apis(listener, ClientMetricsReceiver::Configured));
             assert!(
@@ -1484,7 +1539,11 @@ mod tests {
     #[test]
     fn filtering_by_listener_does_not_move_a_version_range() {
         let dispatched = dispatched_apis();
-        for listener in [ListenerKind::Client, ListenerKind::InterBroker] {
+        for listener in [
+            ListenerKind::Client,
+            ListenerKind::InterBroker,
+            ListenerKind::ClientAndInterBroker,
+        ] {
             for metrics in [
                 ClientMetricsReceiver::Absent,
                 ClientMetricsReceiver::Configured,

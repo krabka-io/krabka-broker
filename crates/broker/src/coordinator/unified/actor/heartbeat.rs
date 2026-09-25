@@ -6,7 +6,7 @@
 //! async wrappers around it flush the records it produces and drive the
 //! in-place upgrade a heartbeat against a classic group triggers.
 
-use std::time::Instant;
+use std::{collections::HashSet, time::Instant};
 
 use krabka_protocol::owned::{
     consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
@@ -36,13 +36,12 @@ use super::{
 use crate::{
     codes,
     coordinator::unified::{
-        ClientIdentity, GroupCoordinator,
+        ClientIdentity,
         config::NextGenConfig,
         consumer_state::GroupState,
         first_join_member_id,
         group::{CoordinatorGroup, GroupKind},
         migration,
-        offsets_log::OffsetsLog,
     },
 };
 
@@ -55,6 +54,7 @@ pub(super) async fn handle_actor_heartbeat(
     services: ActorServices<'_>,
     request: ConsumerGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
+    regex_authorized_topics: &HashSet<String>,
     reply: oneshot::Sender<ConsumerGroupHeartbeatResponse>,
 ) -> bool {
     if group.is_classic() {
@@ -97,17 +97,7 @@ pub(super) async fn handle_actor_heartbeat(
         });
         return true;
     };
-    match handle_heartbeat(
-        state,
-        services.config,
-        services.metadata,
-        services.offsets_log,
-        services.coordinator,
-        &request,
-        client,
-    )
-    .await
-    {
+    match handle_heartbeat(state, services, &request, client, regex_authorized_topics).await {
         Ok(response) => {
             let _ = reply.send(response);
         }
@@ -158,6 +148,7 @@ pub(crate) fn step_heartbeat(
     req: &ConsumerGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
     now: Instant,
+    regex_authorized_topics: &HashSet<String>,
 ) -> HeartbeatStep {
     // ─── Leave path ──────────────────────────────────────────────
     // Kafka's `consumerGroupHeartbeat`: -1 leaves the group, and -2 is a
@@ -209,7 +200,7 @@ pub(crate) fn step_heartbeat(
 
     // ─── First-join path ─────────────────────────────────────────
     if resolved == Resolved::New {
-        let m = match try_build_member(&member_id, req, client, now) {
+        let m = match try_build_member(&member_id, req, client, now, regex_authorized_topics) {
             Ok(m) => m,
             Err(message) => {
                 return HeartbeatStep {
@@ -252,10 +243,6 @@ pub(crate) fn step_heartbeat(
         }
         Resolved::New | Resolved::Existing => None,
     };
-    let cur_epoch = state
-        .members
-        .get(&member_id)
-        .map_or(0, |member| member.member_epoch);
 
     // ─── Steady-state: update last_seen / subscription / owned ───
     let request_for_member;
@@ -269,8 +256,15 @@ pub(crate) fn step_heartbeat(
         &request_for_member
     };
     let previous_target_epoch = state.target.epoch;
-    let any_change = match update_member_state(state, config, metadata, req, client, now, cur_epoch)
-    {
+    let any_change = match update_member_state(
+        state,
+        config,
+        metadata,
+        req,
+        client,
+        now,
+        regex_authorized_topics,
+    ) {
         Ok(changed) => changed,
         Err(message) => {
             return HeartbeatStep {
@@ -400,17 +394,30 @@ fn rejected(error: HeartbeatError, config: &NextGenConfig) -> HeartbeatStep {
 
 async fn handle_heartbeat(
     state: &mut GroupState,
-    config: &NextGenConfig,
-    metadata: &dyn MetadataProvider,
-    offsets_log: &dyn OffsetsLog,
-    coordinator: &GroupCoordinator,
+    services: ActorServices<'_>,
     req: &ConsumerGroupHeartbeatRequest,
     client: ClientIdentity<'_>,
+    regex_authorized_topics: &HashSet<String>,
 ) -> Result<ConsumerGroupHeartbeatResponse, crate::error::BrokerError> {
     let now = Instant::now();
     let now_ms = chrono_now_ms();
-    let step = step_heartbeat(state, config, metadata, req, client, now);
-    flush_pending(state, step.pending, offsets_log, coordinator, now_ms).await?;
+    let step = step_heartbeat(
+        state,
+        services.config,
+        services.metadata,
+        req,
+        client,
+        now,
+        regex_authorized_topics,
+    );
+    flush_pending(
+        state,
+        step.pending,
+        services.offsets_log,
+        services.coordinator,
+        now_ms,
+    )
+    .await?;
     Ok(step.response)
 }
 

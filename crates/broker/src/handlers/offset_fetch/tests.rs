@@ -774,6 +774,7 @@ async fn join_consumer_group(broker: &Broker, group: &str, member_id: &str) -> i
             client_id: "client".into(),
             client_host: "host".into(),
             reply,
+            regex_authorized_topics: std::collections::HashSet::new(),
         })
         .await
         .expect("send Heartbeat");

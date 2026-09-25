@@ -268,8 +268,82 @@ pub(super) async fn register_broker(
     if !config.is_broker() {
         return Ok(());
     }
-    let records = broker_restart_batch(config, &controller.current_image());
-    submit_startup_records(config, controller, records, "broker self-registration").await
+    let image = controller.current_image();
+    // Captured before the submit, not after: a restart's `broker_restart_batch`
+    // republishes this node's registration even when nothing about it changed,
+    // and `wait_for_self_registration_published` must recognize that fresh
+    // commit rather than the pre-existing record already sitting in `image`.
+    let previous = image.broker(config.node_id).cloned();
+    let records = broker_restart_batch(config, &image);
+    submit_startup_records(config, controller, records, "broker self-registration").await?;
+    wait_for_self_registration_published(config, controller, previous.as_ref()).await
+}
+
+/// Waits until `current_image()` actually carries this broker's own,
+/// just-submitted registration, rather than trusting that
+/// [`submit_startup_records`]'s `Ok` already implies it.
+///
+/// `submit_change` returns once the record is committed AND applied on the
+/// leader, but publishing the resulting `Arc<MetadataImage>` to
+/// `current_image()`/`watch_image()` is a separate step that can trail that
+/// reply by a scheduler tick -- `spawn_deferred_controller_registration`
+/// below waits out the exact same gap for the controller-registration
+/// record, with the comment that explains it. Left unclosed here, a handler
+/// that reads `current_image()` immediately after `Broker::start` returns --
+/// the first `CreateTopics` on a freshly booted broker, most commonly --
+/// can still observe an image with no registered brokers at all. On a
+/// single-node cluster this outraces `site_broker_views`'s own "no
+/// registrations yet" fallback (see `crate::handlers::create_topics`): under
+/// CPU-starved CI parallelism, this broker's very first `CreateTopics` at its
+/// cluster default replication factor can see a live broker count of zero and
+/// misreport `INVALID_REPLICATION_FACTOR`, even though it just finished
+/// registering.
+///
+/// `previous` is this node's registration as `image` held it *before* the
+/// submit, or `None` on a first boot. A restart resubmits the batch even when
+/// nothing about it changed (`broker_restart_batch` always includes it), so a
+/// bare "is a registration present" check would return the instant it read
+/// the pre-existing record -- before the controller had republished anything
+/// -- and every reader downstream of `Broker::start` (the heartbeat sender
+/// among them) could keep running against the stale epoch, incarnation,
+/// endpoints, or witness-role config the new commit was meant to replace.
+/// Every commit assigns a fresh `broker_epoch`, so comparing against
+/// `previous` by value reliably distinguishes the new record from the old
+/// one even when every other field is identical.
+///
+/// The wait is bounded by `startup_leader_wait_timeout`, the same budget
+/// `wait_for_metadata_leader` uses elsewhere in startup: a broker-only node
+/// whose connection to the controller drops right after a forwarded submit
+/// succeeded would otherwise never see its own registration published, and
+/// `Broker::start` would hang forever waiting for it.
+async fn wait_for_self_registration_published(
+    config: &BrokerConfig,
+    controller: &dyn crate::metadata_source::MetadataSource,
+    previous: Option<&krabka_metadata::BrokerRegistrationRecord>,
+) -> Result<(), BrokerError> {
+    let mut images = controller.watch_image();
+    let wait_for_publish = async {
+        loop {
+            if images.borrow().broker(config.node_id) != previous {
+                return;
+            }
+            if images.changed().await.is_err() {
+                // The sender is gone; nothing more will ever publish.
+                return;
+            }
+        }
+    };
+    tokio::time::timeout(
+        config.startup_leader_wait_timeout.to_std(),
+        wait_for_publish,
+    )
+    .await
+    .map_err(|_| {
+        BrokerError::Startup(format!(
+            "broker self-registration did not become visible in current_image() within {:?}",
+            config.startup_leader_wait_timeout.to_std()
+        ))
+    })
 }
 
 pub(super) async fn submit_bootstrap_records(

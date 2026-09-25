@@ -10,6 +10,7 @@ use krabka_protocol::primitives::{
 
 use super::{
     bound::{fetch_bound, last_fetchable_offset},
+    leadership::resolve_leadership,
     local::latest_offset,
     remote::concurrently,
 };
@@ -104,11 +105,21 @@ async fn resolve_partition(
     let Ok(max_num_offsets) = usize::try_from(request.max_num_offsets) else {
         return error_response(request.index, codes::INVALID_REQUEST);
     };
-    let Some(partition) = broker
-        .partitions
-        .get(topic, krabka_ids::PartitionIndex(request.index))
-    else {
-        return error_response(request.index, codes::UNKNOWN_TOPIC_OR_PARTITION);
+    let partition = match resolve_leadership(
+        topic,
+        request.index,
+        replica_id,
+        // v0 predates KIP-320 and carries no leader-epoch field to assert.
+        -1,
+        super::leadership::LeadershipContext {
+            partitions: &broker.partitions,
+            log_dir_status: &broker.log_dir_status,
+            image: &broker.controller.current_image(),
+            node_id: broker.config.node_id,
+        },
+    ) {
+        Ok(partition) => partition,
+        Err(error_code) => return error_response(request.index, error_code),
     };
 
     let (local_end, policy, offsets) = {
