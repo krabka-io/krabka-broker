@@ -11,6 +11,7 @@ use tokio::net::TcpListener;
 use crate::{
     broker::{
         endpoints::static_controller_voter_set,
+        listeners::bind_reuseaddr,
         registration::{
             register_broker, register_controller, spawn_deferred_controller_registration,
             submit_bootstrap_records,
@@ -303,14 +304,14 @@ async fn wait_for_metadata_leader(
 ///
 /// A caller-supplied listener, a concrete port, and a node without the
 /// controller role keep their config as it is.
-async fn bind_ephemeral_controller_listener(
+fn bind_ephemeral_controller_listener(
     config: &mut BrokerConfig,
     prebound: Option<TcpListener>,
 ) -> Result<Option<TcpListener>, BrokerError> {
     if prebound.is_some() || !config.is_controller() || config.controller_listen_addr.port() != 0 {
         return Ok(prebound);
     }
-    let listener = TcpListener::bind(config.controller_listen_addr).await?;
+    let listener = bind_reuseaddr(config.controller_listen_addr)?;
     publish_bound_controller_addr(config, listener.local_addr()?);
     Ok(Some(listener))
 }
@@ -345,8 +346,7 @@ pub(super) async fn start_metadata_phase(
     ),
     BrokerError,
 > {
-    let controller_listener =
-        bind_ephemeral_controller_listener(config, controller_listener).await?;
+    let controller_listener = bind_ephemeral_controller_listener(config, controller_listener)?;
     let transport = prepare_raft_transport(config, tls_dynamic, inter_broker_client);
     let audit_cell = Arc::clone(&transport.audit_cell);
     let mut bootstrap_records = crate::bootstrap::load_bootstrap_records(&config.log_dir)?;

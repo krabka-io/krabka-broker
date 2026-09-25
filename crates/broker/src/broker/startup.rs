@@ -138,8 +138,7 @@ impl Broker {
         crate::broker::listeners::bind_ephemeral_data_plane_listener(
             &mut config,
             &mut data_plane_listeners,
-        )
-        .await?;
+        )?;
         let StartupTransport {
             tls_dynamic,
             ktls_enabled,

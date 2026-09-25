@@ -3,9 +3,9 @@
 //! recovers the engine, binds the controller listener, and the on-disk state
 //! probe the broker binary shares with that validation.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 
-use tokio::sync::Mutex;
+use tokio::{net::TcpSocket, sync::Mutex};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use uuid::Uuid;
@@ -146,8 +146,7 @@ impl Controller {
         // Controller listener.
         let listener = match prebound {
             Some(l) => l,
-            None => tokio::net::TcpListener::bind(config.controller_listen_addr)
-                .await
+            None => bind_reuseaddr(config.controller_listen_addr)
                 .map_err(|e| RaftError::Storage(krabka_log::LogError::Io(e)))?,
         };
         let actual_addr = listener
@@ -185,6 +184,23 @@ impl Controller {
             controller_bound_addr: actual_addr,
         })
     }
+}
+
+/// Binds a listening socket with `SO_REUSEADDR`, matching Kafka's own
+/// `SocketServer` (`socket.setReuseAddress(true)` before `bind`). Without it,
+/// rebinding the same port right after a previous listener on it closes can
+/// fail with `EADDRINUSE` while the OS still holds sockets that used that
+/// port in `TIME_WAIT` -- exactly the case a controller restart on its
+/// previously-bound port hits.
+fn bind_reuseaddr(addr: SocketAddr) -> std::io::Result<tokio::net::TcpListener> {
+    let socket = if addr.is_ipv4() {
+        TcpSocket::new_v4()?
+    } else {
+        TcpSocket::new_v6()?
+    };
+    socket.set_reuseaddr(true)?;
+    socket.bind(addr)?;
+    socket.listen(1024)
 }
 
 /// True when the metadata log under `dir` already holds durable raft state (a
