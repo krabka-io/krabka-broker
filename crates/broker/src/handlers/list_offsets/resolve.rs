@@ -17,7 +17,7 @@
 //! whereas Fetch reads every negative epoch that way. See
 //! `Partition::list_offsets_leader_epoch_fence`.
 
-use std::time::Duration;
+use std::{sync::atomic::Ordering, time::Duration};
 
 use krabka_protocol::owned::list_offsets_response::ListOffsetsPartitionResponse;
 use krabka_verified::{
@@ -39,6 +39,178 @@ use crate::{broker::Broker, codes};
 
 fn earliest_pending_upload_offset(tiered_offset: i64) -> Option<i64> {
     tiered_offset.checked_add(1)
+}
+
+/// KIP-207. Right after a leader election the new leader's high watermark
+/// can still sit below the start offset of its own epoch: replication has
+/// not yet caught the watermark up to what was already appended in the
+/// outgoing epoch's tail plus this leader's own log-prepare work. Kafka
+/// refuses a client's LATEST or a data-resolved lookup in that window
+/// instead of answering an offset the watermark could later step past going
+/// backwards -- which would let a consumer observe a non-monotonic end of
+/// partition. `Partition.maybeOffsetsError` raises it for LATEST and for any
+/// lookup whose answer would land at or above the bound;
+/// `ReplicaManager.scala:1546-1554` answers `OFFSET_NOT_AVAILABLE` from v5
+/// and `LEADER_NOT_AVAILABLE` for v1-v4, where the dedicated code did not
+/// exist yet. A follower or the offline-debugging replica id is never
+/// bounded by the high watermark to begin with, so only a client request
+/// (`replica_id == -1`) is subject to the fence.
+/// The values [`resolve_earliest`] needs, gathered so `resolve_partition`
+/// passes them as one handle rather than one parameter each.
+struct EarliestContext<'a> {
+    broker: &'a Broker,
+    topic_name: &'a str,
+    index: i32,
+    partition: &'a crate::partition::Partition,
+    remote_timeout: Duration,
+    remote_topic_id: Option<uuid::Uuid>,
+    topic_id: Option<uuid::Uuid>,
+    local_start: i64,
+    deleted_below: Option<krabka_log::Offset>,
+    local_log_start: i64,
+}
+
+/// Resolve the EARLIEST sentinel's offset across the local log, the remote
+/// tier and the diskless index, and the leader epoch that goes with it.
+///
+/// Split out of [`resolve_partition`] purely to keep that function's line
+/// count down.
+async fn resolve_earliest(ctx: EarliestContext<'_>) -> Result<(i64, i32), i16> {
+    let mut remote_candidate = None;
+    if let (Some(reader), Some(id)) = (ctx.broker.remote_reader.as_ref(), ctx.remote_topic_id) {
+        let topic_partition =
+            krabka_remote_storage::TopicIdPartition::new(id, ctx.topic_name.to_string(), ctx.index);
+        match await_remote(ctx.remote_timeout, reader.earliest_offset(&topic_partition)).await {
+            None => return Err(codes::REQUEST_TIMED_OUT),
+            // KIP-405: the global log start bounds the archive too. A
+            // `DeleteRecords` moves the floor at once and the expiration
+            // pass removes the breached segments on its own tick, so in
+            // between the RLMM still lists a segment that starts below the
+            // floor. Reporting its start as EARLIEST would name an offset
+            // the fetch path refuses.
+            //
+            // Only a floor someone deleted up to bounds it. The one
+            // `Log::open` infers from the segments left on disk sits above
+            // the whole archive on a partition whose local segments were
+            // evicted, and clamping to that would report an EARLIEST past
+            // every record the tier still holds -- a `--from-beginning`
+            // consumer would skip them all.
+            Some(Ok(Some(remote_start))) => {
+                remote_candidate = Some(match ctx.deleted_below {
+                    Some(floor) => remote_start.max(floor.0),
+                    None => remote_start,
+                });
+            }
+            Some(Ok(None)) => {}
+            Some(Err(error)) => tracing::warn!(topic = ctx.topic_name, partition = ctx.index,
+                error = %error, "list_offsets: remote earliest_offset failed"),
+        }
+    }
+    let diskless_candidate =
+        diskless_earliest_candidate(ctx.broker.diskless_read.as_deref(), ctx.topic_id, ctx.index)
+            .await;
+    let facts = ListOffsetsEarliestFacts {
+        local: ctx.local_start,
+        has_remote: remote_candidate.is_some(),
+        remote: remote_candidate.unwrap_or(0),
+        has_diskless: diskless_candidate.is_some(),
+        diskless: diskless_candidate.unwrap_or(0),
+    };
+    let Some(earliest) = list_offsets_earliest(facts) else {
+        return Err(codes::KAFKA_STORAGE_ERROR);
+    };
+    // Kafka fills the epoch for EARLIEST when its start offset sits at or
+    // below the log start, which is always true of the offset just
+    // selected: it is by definition the earliest one this broker can name.
+    // `UnifiedLog.java:1690-1700`.
+    Ok((earliest, leader_epoch_for_offset(ctx.partition, earliest)))
+}
+
+/// Resolve the KIP-1023 `EARLIEST_PENDING_UPLOAD` sentinel: the first offset
+/// this leader has not yet copied to the remote tier, or `None` when there
+/// is no remote reader configured for this topic.
+///
+/// Split out of [`resolve_partition`] purely to keep that function's line
+/// count down.
+async fn resolve_earliest_pending_upload(
+    ctx: EarliestContext<'_>,
+) -> Result<Option<(i64, i32)>, i16> {
+    let Some((reader, id)) = ctx.broker.remote_reader.as_ref().zip(ctx.remote_topic_id) else {
+        return Ok(None);
+    };
+    let topic_partition =
+        krabka_remote_storage::TopicIdPartition::new(id, ctx.topic_name.to_string(), ctx.index);
+    match await_remote(
+        ctx.remote_timeout,
+        reader.latest_tiered_offset(&topic_partition),
+    )
+    .await
+    {
+        None => Err(codes::REQUEST_TIMED_OUT),
+        Some(Ok(Some(tiered))) => {
+            // `UnifiedLog.fetchEarliestPendingUploadOffset` clamps the raw
+            // remote frontier with the log start offset:
+            // `Math.max(curHighestRemoteOffset + 1, logStartOffset())`.
+            // Without the clamp, a `DeleteRecords` call that moves the log
+            // start past the last finished upload would report an offset
+            // the fetch path refuses, the same failure mode EARLIEST guards
+            // against above.
+            let Some(raw_offset) = earliest_pending_upload_offset(tiered.offset) else {
+                return Err(codes::KAFKA_STORAGE_ERROR);
+            };
+            let offset = raw_offset.max(ctx.local_start);
+            let local_epoch = leader_epoch_for_offset(ctx.partition, offset);
+            let leader_epoch = if local_epoch < 0 {
+                tiered.leader_epoch.0
+            } else {
+                local_epoch
+            };
+            Ok(Some((offset, leader_epoch)))
+        }
+        // The RLMM lists no segment. When the local log still holds
+        // everything from the log start, nothing has ever been tiered and
+        // Kafka falls back to the EARLIEST answer. When the local log start
+        // has moved ahead of it, segments were evicted on the strength of a
+        // tier upload this leader cannot currently confirm, and Kafka
+        // reports -1 rather than naming an offset it cannot stand behind.
+        Some(Ok(None)) if ctx.local_log_start == ctx.local_start => Ok(Some((
+            ctx.local_start,
+            leader_epoch_for_offset(ctx.partition, ctx.local_start),
+        ))),
+        Some(Ok(None)) => Ok(None),
+        Some(Err(error)) => {
+            tracing::warn!(topic = ctx.topic_name, partition = ctx.index,
+                error = %error, "list_offsets: remote earliest_pending_upload failed");
+            Ok(None)
+        }
+    }
+}
+
+fn epoch_not_caught_up_to_bound(
+    partition: &crate::partition::Partition,
+    kind: ListOffsetsKind,
+    bound: FetchBound,
+    last_fetchable: Option<i64>,
+    version: i16,
+) -> Option<i16> {
+    let last_fetchable = last_fetchable?;
+    if bound.replica_id() != -1
+        || !matches!(
+            kind,
+            ListOffsetsKind::Latest | ListOffsetsKind::MaxTimestamp | ListOffsetsKind::Timestamp
+        )
+    {
+        return None;
+    }
+    let epoch_start = super::local::epoch_start_offset(partition)?;
+    if last_fetchable >= epoch_start {
+        return None;
+    }
+    Some(if version >= 5 {
+        codes::OFFSET_NOT_AVAILABLE
+    } else {
+        codes::LEADER_NOT_AVAILABLE
+    })
 }
 
 fn apply_selection(
@@ -161,56 +333,46 @@ pub(super) async fn resolve_partition(
             None => return error_response(index, codes::KAFKA_STORAGE_ERROR),
         }
     };
+    if let Some(error_code) =
+        epoch_not_caught_up_to_bound(&partition, kind, bound, last_fetchable, version)
+    {
+        return error_response(index, error_code);
+    }
     let (offset, timestamp) = match kind {
         ListOffsetsKind::Earliest => {
-            let mut remote_candidate = None;
-            if let (Some(reader), Some(id)) = (broker.remote_reader.as_ref(), remote_topic_id) {
-                let topic_partition =
-                    krabka_remote_storage::TopicIdPartition::new(id, topic_name.to_string(), index);
-                match await_remote(remote_timeout, reader.earliest_offset(&topic_partition)).await {
-                    None => return error_response(index, codes::REQUEST_TIMED_OUT),
-                    // KIP-405: the global log start bounds the archive too. A
-                    // `DeleteRecords` moves the floor at once and the
-                    // expiration pass removes the breached segments on its own
-                    // tick, so in between the RLMM still lists a segment that
-                    // starts below the floor. Reporting its start as EARLIEST
-                    // would name an offset the fetch path refuses.
-                    //
-                    // Only a floor someone deleted up to bounds it. The one
-                    // `Log::open` infers from the segments left on disk sits
-                    // above the whole archive on a partition whose local
-                    // segments were evicted, and clamping to that would report
-                    // an EARLIEST past every record the tier still holds -- a
-                    // `--from-beginning` consumer would skip them all.
-                    Some(Ok(Some(remote_start))) => {
-                        remote_candidate = Some(match deleted_below {
-                            Some(floor) => remote_start.max(floor.0),
-                            None => remote_start,
-                        });
-                    }
-                    Some(Ok(None)) => {}
-                    Some(Err(error)) => tracing::warn!(topic = topic_name, partition = index,
-                        error = %error, "list_offsets: remote earliest_offset failed"),
+            match resolve_earliest(EarliestContext {
+                broker,
+                topic_name,
+                index,
+                partition: &partition,
+                remote_timeout,
+                remote_topic_id,
+                topic_id,
+                local_start,
+                deleted_below,
+                local_log_start,
+            })
+            .await
+            {
+                Ok((earliest, leader_epoch)) => {
+                    response.leader_epoch = leader_epoch;
+                    (earliest, UNKNOWN_TIMESTAMP)
                 }
+                Err(error_code) => return error_response(index, error_code),
             }
-            let diskless_candidate =
-                diskless_earliest_candidate(broker.diskless_read.as_deref(), topic_id, index).await;
-            let facts = ListOffsetsEarliestFacts {
-                local: local_start,
-                has_remote: remote_candidate.is_some(),
-                remote: remote_candidate.unwrap_or(0),
-                has_diskless: diskless_candidate.is_some(),
-                diskless: diskless_candidate.unwrap_or(0),
-            };
-            let Some(earliest) = list_offsets_earliest(facts) else {
-                return error_response(index, codes::KAFKA_STORAGE_ERROR);
-            };
-            (earliest, UNKNOWN_TIMESTAMP)
         }
-        ListOffsetsKind::Latest => (
-            latest_offset(&partition, log_config.delivery_policy, local_end),
-            UNKNOWN_TIMESTAMP,
-        ),
+        ListOffsetsKind::Latest => {
+            // Kafka answers LATEST with the partition's live leader epoch,
+            // not the epoch recorded for whatever offset the log end
+            // happens to sit at -- the two agree once a record lands in the
+            // new epoch, but LATEST must not wait for that.
+            // `Partition.scala:1473-1475`.
+            response.leader_epoch = partition.current_leader_epoch.load(Ordering::Acquire);
+            (
+                latest_offset(&partition, log_config.delivery_policy, local_end),
+                UNKNOWN_TIMESTAMP,
+            )
+        }
         ListOffsetsKind::EarliestLocal => {
             let offset = if remote_enabled {
                 local_log_start
@@ -247,52 +409,45 @@ pub(super) async fn resolve_partition(
             }
         }
         ListOffsetsKind::EarliestPendingUpload => {
-            if let Some((reader, id)) = broker.remote_reader.as_ref().zip(remote_topic_id) {
-                let topic_partition =
-                    krabka_remote_storage::TopicIdPartition::new(id, topic_name.to_string(), index);
-                match await_remote(
-                    remote_timeout,
-                    reader.latest_tiered_offset(&topic_partition),
-                )
-                .await
-                {
-                    None => return error_response(index, codes::REQUEST_TIMED_OUT),
-                    Some(Ok(Some(tiered))) => {
-                        // KIP-1023 deliberately allows this to be below the
-                        // leader's log-start offset. That tells an empty
-                        // follower the remote tier currently has no valid
-                        // segment and it must rebuild from local storage.
-                        let Some(offset) = earliest_pending_upload_offset(tiered.offset) else {
-                            return error_response(index, codes::KAFKA_STORAGE_ERROR);
-                        };
-                        let local_epoch = leader_epoch_for_offset(&partition, offset);
-                        response.leader_epoch = if local_epoch < 0 {
-                            tiered.leader_epoch.0
-                        } else {
-                            local_epoch
-                        };
-                        (offset, UNKNOWN_TIMESTAMP)
-                    }
-                    Some(Ok(None)) => (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP),
-                    Some(Err(error)) => {
-                        tracing::warn!(topic = topic_name, partition = index,
-                            error = %error, "list_offsets: remote earliest_pending_upload failed");
-                        (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP)
-                    }
+            match resolve_earliest_pending_upload(EarliestContext {
+                broker,
+                topic_name,
+                index,
+                partition: &partition,
+                remote_timeout,
+                remote_topic_id,
+                topic_id,
+                local_start,
+                deleted_below,
+                local_log_start,
+            })
+            .await
+            {
+                Ok(None) => (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP),
+                Ok(Some((offset, leader_epoch))) => {
+                    response.leader_epoch = leader_epoch;
+                    (offset, UNKNOWN_TIMESTAMP)
                 }
-            } else {
-                (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP)
+                Err(error_code) => return error_response(index, error_code),
             }
         }
         ListOffsetsKind::MaxTimestamp => {
-            let log = partition.log.lock().expect("log mutex poisoned");
-            log.max_timestamp_offset_and_ts().map_or_else(
-                || (log.offset_of_max_timestamp().0, UNKNOWN_TIMESTAMP),
-                |(offset, timestamp)| (offset.0, timestamp),
-            )
+            let (offset, timestamp) = {
+                let log = partition.log.lock().expect("log mutex poisoned");
+                log.max_timestamp_offset_and_ts().map_or_else(
+                    || (log.offset_of_max_timestamp().0, UNKNOWN_TIMESTAMP),
+                    |(offset, timestamp)| (offset.0, timestamp),
+                )
+            };
+            // Kafka fills the epoch with the resolved batch's own
+            // `partitionLeaderEpoch`. `UnifiedLog.java:1742-1749`.
+            if offset != UNKNOWN_OFFSET {
+                response.leader_epoch = leader_epoch_for_offset(&partition, offset);
+            }
+            (offset, timestamp)
         }
         ListOffsetsKind::Timestamp => {
-            match resolve_timestamp_offset(
+            let Some((offset, timestamp)) = resolve_timestamp_offset(
                 broker,
                 &partition,
                 topic_name,
@@ -302,10 +457,15 @@ pub(super) async fn resolve_partition(
                 remote_timeout,
             )
             .await
-            {
-                Some(result) => result,
-                None => return error_response(index, codes::REQUEST_TIMED_OUT),
+            else {
+                return error_response(index, codes::REQUEST_TIMED_OUT);
+            };
+            // Kafka fills the epoch with the matched batch's own epoch.
+            // `FileRecords.java:364-381`.
+            if offset != UNKNOWN_OFFSET {
+                response.leader_epoch = leader_epoch_for_offset(&partition, offset);
             }
+            (offset, timestamp)
         }
         ListOffsetsKind::Unsupported => unreachable!("unsupported timestamp returned above"),
     };
@@ -326,12 +486,19 @@ mod tests {
     use krabka_protocol::owned::create_topics_request::CreatableTopicConfig;
 
     use super::*;
-    use crate::handlers::list_offsets::{
-        sentinels::{
-            EARLIEST_LOCAL_TIMESTAMP, EARLIEST_PENDING_UPLOAD_TIMESTAMP, LATEST_TIERED_TIMESTAMP,
-            LATEST_TIMESTAMP,
+    use crate::{
+        handlers::list_offsets::{
+            handle,
+            sentinels::{
+                EARLIEST_LOCAL_TIMESTAMP, EARLIEST_PENDING_UPLOAD_TIMESTAMP,
+                LATEST_TIERED_TIMESTAMP, LATEST_TIMESTAMP, MAX_TIMESTAMP,
+            },
+            test_support::{
+                client_for, create_topic, decode_response, encode_request, list_one,
+                list_one_at_epoch, test_context,
+            },
         },
-        test_support::{client_for, create_topic, list_one, list_one_at_epoch},
+        test_support::{peer, principal},
     };
 
     #[test]
@@ -364,7 +531,9 @@ mod tests {
             error_code: codes::NONE,
             timestamp: UNKNOWN_TIMESTAMP,
             offset: i64::try_from(RECORDS).expect("record count fits an offset"),
-            leader_epoch: UNKNOWN_EPOCH,
+            // LATEST reports the partition's live leader epoch, which the
+            // `test_set_leader_epoch` call above bumped to `CURRENT_EPOCH`.
+            leader_epoch: CURRENT_EPOCH,
             ..Default::default()
         };
         let fenced = |error_code| ListOffsetsPartitionResponse {
@@ -592,10 +761,10 @@ mod tests {
                 }
         );
 
-        // KIP-1023 requires returning the raw remote frontier even when it is
-        // now below the leader log-start offset. The follower interprets that
-        // relation as "no currently valid remote segments" and rebuilds from
-        // the leader's local log.
+        // `UnifiedLog.fetchEarliestPendingUploadOffset` clamps the raw remote
+        // frontier (5) with the log start offset, so once `DeleteRecords`
+        // moves the log start past it, the log start wins: naming the raw
+        // frontier here would report an offset the fetch path refuses.
         broker
             .test_advance_log_start(TOPIC, 0, 7)
             .await
@@ -606,10 +775,278 @@ mod tests {
                     partition_index: 0,
                     error_code: codes::NONE,
                     timestamp: UNKNOWN_TIMESTAMP,
-                    offset: 5,
+                    offset: 7,
                     leader_epoch: 0,
                     ..Default::default()
                 }
+        );
+
+        drop(client);
+        broker.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn earliest_pending_upload_falls_back_to_earliest_when_nothing_is_tiered() {
+        const TOPIC: &str = "list-offsets-pending-upload-empty-tier";
+
+        let remote_dir = tempfile::tempdir().expect("remote tempdir");
+        let remote_path = remote_dir.path().to_path_buf();
+        let (broker, _dir) = crate::test_support::start_broker_with(move |config| {
+            config.audit_enabled = false;
+            config.remote_storage_backend =
+                Some(crate::config::RemoteStorageBackend::Local { dir: remote_path });
+        })
+        .await;
+        let client = client_for(&broker).await;
+        create_topic(
+            &client,
+            TOPIC,
+            vec![CreatableTopicConfig {
+                name: "remote.storage.enable".into(),
+                value: Some("true".into()),
+                ..Default::default()
+            }],
+        )
+        .await;
+        broker.wait_until_partition_present(TOPIC, 0).await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if broker
+                    .partition_log_config_for_test(TOPIC, 0)
+                    .is_some_and(|config| config.remote_storage_enable)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("remote topic config propagated");
+        broker
+            .produce_records_for_test(TOPIC, 0, 4)
+            .await
+            .expect("produce");
+
+        // The RLMM has no segment for this partition at all, and the local
+        // log still holds everything from its own start: nothing has ever
+        // reached the remote tier. Kafka answers EARLIEST rather than -1 in
+        // this state.
+        assert!(
+            list_one(&client, TOPIC, EARLIEST_PENDING_UPLOAD_TIMESTAMP).await
+                == ListOffsetsPartitionResponse {
+                    partition_index: 0,
+                    error_code: codes::NONE,
+                    timestamp: UNKNOWN_TIMESTAMP,
+                    offset: 0,
+                    leader_epoch: 0,
+                    ..Default::default()
+                }
+        );
+
+        drop(client);
+        broker.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn earliest_pending_upload_stays_unknown_when_local_segments_outrun_the_rlmm() {
+        const TOPIC: &str = "list-offsets-pending-upload-unconfirmed";
+
+        let remote_dir = tempfile::tempdir().expect("remote tempdir");
+        let remote_path = remote_dir.path().to_path_buf();
+        let (broker, _dir) = crate::test_support::start_broker_with(move |config| {
+            config.audit_enabled = false;
+            config.remote_storage_backend =
+                Some(crate::config::RemoteStorageBackend::Local { dir: remote_path });
+        })
+        .await;
+        let client = client_for(&broker).await;
+        create_topic(
+            &client,
+            TOPIC,
+            vec![
+                CreatableTopicConfig {
+                    name: "remote.storage.enable".into(),
+                    value: Some("true".into()),
+                    ..Default::default()
+                },
+                // A tiny segment size seals a fresh segment on almost every
+                // produced record, so a handful of records leave several
+                // sealed segments behind the active one to evict.
+                CreatableTopicConfig {
+                    name: "internal.segment.bytes".into(),
+                    value: Some("1".into()),
+                    ..Default::default()
+                },
+            ],
+        )
+        .await;
+        broker.wait_until_partition_present(TOPIC, 0).await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if broker
+                    .partition_log_config_for_test(TOPIC, 0)
+                    .is_some_and(|config| config.remote_storage_enable)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("remote topic config propagated");
+        broker
+            .produce_records_for_test(TOPIC, 0, 6)
+            .await
+            .expect("produce");
+
+        // Drop the local copies of the sealed segments directly, without
+        // going through the RLMM upload path and without moving the global
+        // log start. This is the state a leader that lost its RLMM cache
+        // memory would observe: files gone from disk, but no record of
+        // what -- if anything -- ever reached the tier. Kafka reports -1
+        // here rather than guessing.
+        let broker_arc = broker.broker_arc_for_test();
+        let partition = broker_arc
+            .partitions
+            .get(TOPIC, krabka_ids::PartitionIndex(0))
+            .expect("partition");
+        {
+            let mut log = partition.log.lock().expect("log mutex poisoned");
+            let removed = log
+                .delete_local_segments_through(krabka_log::Offset(3))
+                .expect("evict sealed segments");
+            assert!(removed > 0, "the tiny segment size must have sealed some");
+        }
+
+        assert!(
+            list_one(&client, TOPIC, EARLIEST_PENDING_UPLOAD_TIMESTAMP).await
+                == ListOffsetsPartitionResponse {
+                    partition_index: 0,
+                    error_code: codes::NONE,
+                    timestamp: UNKNOWN_TIMESTAMP,
+                    offset: UNKNOWN_OFFSET,
+                    leader_epoch: UNKNOWN_EPOCH,
+                    ..Default::default()
+                }
+        );
+
+        drop(client);
+        broker.shutdown().await;
+    }
+
+    /// One `ListOffsets` for partition 0 of `topic`, at a chosen wire
+    /// `version`, bypassing the client's own version negotiation. KIP-207's
+    /// error code depends on the version (`OFFSET_NOT_AVAILABLE` from v5,
+    /// `LEADER_NOT_AVAILABLE` below it), so this suite needs to pick the
+    /// version a case tests rather than always sending the client's max.
+    async fn list_one_at_version(
+        broker: &crate::broker::BrokerHandle,
+        topic: &str,
+        timestamp: i64,
+        version: i16,
+    ) -> ListOffsetsPartitionResponse {
+        let broker_arc = broker.broker_arc_for_test();
+        let admin = principal("admin");
+        let peer = peer();
+        let ctx = test_context(&admin, &peer);
+        let req = encode_request(
+            &krabka_protocol::owned::list_offsets_request::ListOffsetsRequest {
+                replica_id: -1,
+                topics: vec![
+                    krabka_protocol::owned::list_offsets_request::ListOffsetsTopic {
+                        name: topic.to_string(),
+                        partitions: vec![
+                            krabka_protocol::owned::list_offsets_request::ListOffsetsPartition {
+                                partition_index: 0,
+                                current_leader_epoch: -1,
+                                timestamp,
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                ],
+                timeout_ms: 5_000,
+                ..Default::default()
+            },
+            version,
+        );
+        let bytes = handle(&broker_arc, version, 123, &req, &ctx)
+            .await
+            .expect("handle");
+        let mut response = decode_response(&bytes, version);
+        response.topics.remove(0).partitions.remove(0)
+    }
+
+    /// KIP-207: a client LATEST or data-resolved lookup is refused while the
+    /// high watermark has not yet caught up to the start offset of the live
+    /// leader epoch, because the bound LATEST would answer with -- and the
+    /// ceiling every other sentinel here is measured against -- could later
+    /// move backwards as the watermark advances past it.
+    #[tokio::test]
+    async fn offset_not_available_is_reported_below_the_epoch_start_and_versioned_correctly() {
+        const TOPIC: &str = "list-offsets-kip-207";
+        const A_TIMESTAMP: i64 = 1_000;
+
+        let (broker, _dir) = crate::test_support::start_broker_with(|config| {
+            config.audit_enabled = false;
+        })
+        .await;
+        let client = client_for(&broker).await;
+        create_topic(&client, TOPIC, Vec::new()).await;
+        broker.wait_until_partition_present(TOPIC, 0).await;
+        broker
+            .produce_records_for_test(TOPIC, 0, 4)
+            .await
+            .expect("produce epoch 0");
+        broker.test_set_leader_epoch(TOPIC, 0, 1);
+        broker
+            .produce_records_for_test(TOPIC, 0, 2)
+            .await
+            .expect("produce epoch 1");
+
+        // Epoch 1 starts at offset 4. Force the high watermark back below
+        // it, the way a fresh leader's would sit before replication (and
+        // this broker's own single-replica ack) catches it up.
+        let broker_arc = broker.broker_arc_for_test();
+        let partition = broker_arc
+            .partitions
+            .get(TOPIC, krabka_ids::PartitionIndex(0))
+            .expect("partition");
+        partition.replica_state.lock().await.hw = krabka_log::Offset(3);
+
+        // MAX_TIMESTAMP (KIP-734) only decodes from v7, which already sits
+        // above the v5 floor `OFFSET_NOT_AVAILABLE` needs, so there is no
+        // version at which it can see the older `LEADER_NOT_AVAILABLE` code.
+        // LATEST and a timestamp lookup decode from v1 and see both.
+        let cases: &[(&str, i64, &[i16])] = &[
+            ("LATEST", LATEST_TIMESTAMP, &[4, 5, 11]),
+            ("a timestamp lookup", A_TIMESTAMP, &[4, 5, 11]),
+            ("MAX_TIMESTAMP", MAX_TIMESTAMP, &[7, 11]),
+        ];
+        for &(label, timestamp, versions) in cases {
+            for &version in versions {
+                let want_error = if version >= 5 {
+                    codes::OFFSET_NOT_AVAILABLE
+                } else {
+                    codes::LEADER_NOT_AVAILABLE
+                };
+                assert!(
+                    list_one_at_version(&broker, TOPIC, timestamp, version).await
+                        == error_response(0, want_error),
+                    "{label} at v{version}"
+                );
+            }
+        }
+
+        // Let the watermark catch up to the epoch start and confirm the
+        // fence lifts.
+        partition.replica_state.lock().await.hw = krabka_log::Offset(6);
+        assert!(
+            list_one_at_version(&broker, TOPIC, LATEST_TIMESTAMP, 11)
+                .await
+                .error_code
+                == codes::NONE
         );
 
         drop(client);

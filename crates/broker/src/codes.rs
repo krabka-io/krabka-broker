@@ -351,6 +351,17 @@ kafka_codes! {
     /// caller retries after a brief wait.
     UNKNOWN_LEADER_EPOCH = 75;
 
+    /// `OFFSET_NOT_AVAILABLE` (78, KIP-207): a `ListOffsets` v5-and-up request
+    /// asked for `LATEST`, or resolved a sentinel to an offset at or above the
+    /// bound, while the new leader's high watermark has not yet caught up to
+    /// the start offset of its own epoch. Answering with a real offset here
+    /// could later move backwards once the watermark advances, which would
+    /// let a client observe a non-monotonic end of partition.
+    /// `Partition.maybeOffsetsError` raises it; a v1-v4 request gets
+    /// `LEADER_NOT_AVAILABLE` (5) for the same condition instead, because the
+    /// dedicated code did not exist yet.
+    OFFSET_NOT_AVAILABLE = 78;
+
     /// `TRANSACTIONAL_ID_NOT_FOUND` (105, KIP-664): `DescribeTransactions`
     /// named a transactional id this broker's coordinator holds no entry
     /// for, or one whose entry is `Dead`.
