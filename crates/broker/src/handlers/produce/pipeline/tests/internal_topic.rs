@@ -29,15 +29,15 @@ use crate::{
     internal_topics::{is_internal_topic, produce_internal_topics_allowed},
 };
 
-/// The same resolve the produce handler runs once per topic, spelled out for
-/// the table below rather than copied by hand into every case.
+// The same resolve the produce handler runs once per topic, spelled out for
+// the table below rather than copied by hand into every case.
 fn internal_topic_denied(config: &BrokerConfig, topic: &str, client_id: &str) -> bool {
     is_internal_topic(config, topic) && !produce_internal_topics_allowed(client_id)
 }
 
-/// Kafka's three coordinator topics plus krabka's own broker-owned topics are
-/// denied for every `client_id` but the admin-tooling exception; an ordinary
-/// topic is never denied, whatever the `client_id`.
+// Kafka's three coordinator topics plus krabka's own broker-owned topics are
+// denied for every `client_id` but the admin-tooling exception; an ordinary
+// topic is never denied, whatever the `client_id`.
 #[test]
 fn only_the_admin_client_may_produce_to_an_internal_topic() {
     let config = BrokerConfig::for_tests(PathBuf::from("/nonexistent"));
@@ -93,14 +93,14 @@ fn only_the_admin_client_may_produce_to_an_internal_topic() {
     }
 }
 
-/// A client Produce to `__consumer_offsets` is refused with
-/// `INVALID_TOPIC_EXCEPTION` (17) and appends nothing; the admin client's
-/// Produce to the same topic, and an ordinary topic in the same request,
-/// both append normally.
-///
-/// The log-end-offset assertions are the load-bearing ones, the same way
-/// they are for the freeze gate: the gate sits ahead of `prepare_batch`, so a
-/// refused row must leave the partition exactly as it found it.
+// A client Produce to `__consumer_offsets` is refused with
+// `INVALID_TOPIC_EXCEPTION` (17) and appends nothing; the admin client's
+// Produce to the same topic, and an ordinary topic in the same request,
+// both append normally.
+//
+// The log-end-offset assertions are the load-bearing ones, the same way
+// they are for the freeze gate: the gate sits ahead of `prepare_batch`, so a
+// refused row must leave the partition exactly as it found it.
 #[tokio::test]
 async fn a_denied_internal_topic_is_refused_and_its_log_end_offset_does_not_move() {
     let dir = tempfile::tempdir().expect("log root");

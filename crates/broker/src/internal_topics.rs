@@ -85,14 +85,14 @@ pub(crate) fn is_internal_topic(config: &BrokerConfig, name: &str) -> bool {
 /// to decide `internalTopicsAllowed`:
 /// `internalTopicsAllowed = request.header.clientId == "__admin_client"`.
 ///
-/// Krabka's own coordinators — the group coordinator, the transaction
-/// coordinator, the share coordinator — never reach the Produce handler at
+/// Krabka's own coordinators (the group coordinator, the transaction
+/// coordinator, the share coordinator) never reach the Produce handler at
 /// all: they append to `__consumer_offsets`, `__transaction_state` and
 /// `__share_group_state` through the partition writer directly, the same way
 /// `ReplicaManager.appendRecords`'s other internal callers do. This name is
 /// therefore not a bypass any of those subsystems take; it exists only so a
-/// client Produce request with this exact `client_id` — Kafka's own admin
-/// tooling — is not refused by [`produce_internal_topics_allowed`].
+/// client Produce request with this exact `client_id` (Kafka's own admin
+/// tooling) is not refused by [`produce_internal_topics_allowed`].
 pub(crate) const PRODUCE_ADMIN_CLIENT_ID: &str = "__admin_client";
 
 /// Whether a Produce request naming `client_id` may append directly to an
@@ -221,9 +221,9 @@ mod tests {
         check!(seen.len() == INTERNAL_TOPICS.len());
     }
 
-    /// Only the exact admin client id Kafka's `KafkaApis` compares against
-    /// is let through; nothing else, including a name that merely contains
-    /// it, is.
+    // Only the exact admin client id Kafka's `KafkaApis` compares against
+    // is let through; nothing else, including a name that merely contains
+    // it, is.
     #[test]
     fn only_the_admin_client_id_may_produce_to_an_internal_topic() {
         for (label, client_id, expected) in [

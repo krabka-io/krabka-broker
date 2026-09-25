@@ -278,7 +278,7 @@ pub(super) async fn process_partition(
     // and `__share_group_state` are replayed by this broker's own
     // coordinators to rebuild group and transaction state, so an ordinary
     // client append to one of them is a forged coordinator record, not a
-    // message. On a cluster with no authorizer configured — the default —
+    // message. On a cluster with no authorizer configured, the default,
     // nothing else stands between an unauthenticated client and that record,
     // which is what makes this gate an authority gate rather than a content
     // one: it ranks beside the freeze and ACL checks above, and ahead of
