@@ -52,12 +52,6 @@ mod test_support;
 // Only the #[cfg(test)] stateright models in txn/ reach this variant.
 #[cfg(test)]
 pub(crate) use self::producer_identity::prepare_completion_identities_with_fresh;
-use self::{
-    markers::dispatch_transaction_markers,
-    prepare::prepare_transaction,
-    response::{encode_err, encode_ok},
-    validation::{EndTxnValidation, validate_end_txn},
-};
 pub(crate) use self::{
     markers::{MarkerDispatchContext, dispatch_markers},
     producer_identity::{
@@ -65,6 +59,12 @@ pub(crate) use self::{
         next_recovery_producer_identity, prepare_completion_identities,
     },
     reacquire::{ReacquireDecision, validate_complete_reacquire},
+};
+use self::{
+    markers::{MarkerFanOutOutcome, dispatch_transaction_markers},
+    prepare::prepare_transaction,
+    response::{encode_err, encode_ok},
+    validation::{EndTxnValidation, validate_end_txn},
 };
 
 #[tracing::instrument(
@@ -130,13 +130,27 @@ pub(crate) async fn handle(
 
     // ── Phase 2: Fan out WriteTxnMarkers ──────────────────────────────
 
-    if !dispatch_transaction_markers(broker, &prepare_snap, marker_type, tid).await {
-        coord.request_completion(tid);
-        return encode_ok(
-            version,
-            prepared_completion_pid.get(),
-            prepared_completion_epoch,
-        );
+    match dispatch_transaction_markers(broker, &prepare_snap, marker_type, tid).await {
+        MarkerFanOutOutcome::Complete => {}
+        MarkerFanOutOutcome::Retry => {
+            coord.request_completion(tid);
+            return encode_ok(
+                version,
+                prepared_completion_pid.get(),
+                prepared_completion_epoch,
+            );
+        }
+        // A fenced generation has already superseded this fan-out attempt
+        // (#882): retrying cannot succeed, so the transaction is left in
+        // Prepare* for whatever superseded it to resolve, rather than queued
+        // for a completion retry that would never converge.
+        MarkerFanOutOutcome::GivenUp => {
+            return encode_ok(
+                version,
+                prepared_completion_pid.get(),
+                prepared_completion_epoch,
+            );
+        }
     }
 
     // ── Phase 3: Prepare{Commit,Abort} → Complete{Commit,Abort} ───────

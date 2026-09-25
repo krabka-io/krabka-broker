@@ -26,6 +26,14 @@ use crate::{
     },
 };
 
+/// The `AddPartitionsToTxn` request version to use for a registration that
+/// does not come from a client's own `AddPartitionsToTxn` request: the
+/// `Produce`-path partition check below, and the KIP-890 server-side
+/// `TxnOffsetCommit` partition enrollment. Both apply only once the cluster
+/// has moved to `transaction.version` 2 or later, so no request ever needs
+/// the legacy `INVALID_PRODUCER_EPOCH` downgrade below that version.
+pub(crate) const INTERNAL_REGISTRATION_VERSION: i16 = 2;
+
 /// One partition check for one transactional producer.
 #[derive(Debug, Clone)]
 pub(crate) struct PartitionCheck<'a> {
@@ -51,9 +59,10 @@ impl TxnCoordinator {
         self: &std::sync::Arc<Self>,
         check: PartitionCheck<'_>,
         txnv: TxnVersion,
+        version: i16,
     ) -> i16 {
         let Some(transport) = &self.marker_transport else {
-            return self.add_or_verify_locally(check, txnv).await;
+            return self.add_or_verify_locally(check, txnv, version).await;
         };
         let image = transport.controller.current_image();
         drop(self.refresh_leader_partitions(&image).await);
@@ -65,7 +74,7 @@ impl TxnCoordinator {
             return codes::COORDINATOR_NOT_AVAILABLE;
         };
         if leader == self.node_id {
-            return self.add_or_verify_locally(check, txnv).await;
+            return self.add_or_verify_locally(check, txnv, version).await;
         }
         let Some(broker) = image.broker(leader) else {
             return codes::COORDINATOR_NOT_AVAILABLE;
@@ -152,7 +161,12 @@ impl TxnCoordinator {
             })
     }
 
-    async fn add_or_verify_locally(&self, check: PartitionCheck<'_>, txnv: TxnVersion) -> i16 {
+    async fn add_or_verify_locally(
+        &self,
+        check: PartitionCheck<'_>,
+        txnv: TxnVersion,
+        version: i16,
+    ) -> i16 {
         if check.verify_only {
             self.verify_partition_in_transaction(&check).await
         } else {
@@ -162,6 +176,7 @@ impl TxnCoordinator {
                 check.producer_epoch,
                 vec![check.partition],
                 txnv,
+                version,
             )
             .await
         }

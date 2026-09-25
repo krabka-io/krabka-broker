@@ -147,7 +147,11 @@ pub(super) async fn verify_transactional_produce(
     let retry_until = std::time::Instant::now() + CONCURRENT_TRANSACTIONS_RETRY;
     let code = loop {
         let code = coordinator
-            .add_or_verify_partition(check.clone(), txnv)
+            .add_or_verify_partition(
+                check.clone(),
+                txnv,
+                crate::txn::coordinator::produce_verification::INTERNAL_REGISTRATION_VERSION,
+            )
             .await;
         if code == codes::CONCURRENT_TRANSACTIONS
             && supports_epoch_bump

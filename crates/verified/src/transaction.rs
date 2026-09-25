@@ -261,13 +261,22 @@ pub fn transaction_pid_install_decision(
 }
 
 /// Whether one transaction generation may persist a partition registration.
+///
+/// The ordering mirrors Kafka's `TransactionCoordinator.handleAddPartitionsToTransaction`:
+/// a pending transition (`pendingTransitionInProgress`) is checked first so it
+/// can complete before any identity check runs, then the producer id, then the
+/// producer epoch, then the `PrepareCommit`/`PrepareAbort` state check. Every
+/// one of those four rejections is retriable on Kafka's wire
+/// (`CONCURRENT_TRANSACTIONS`, `INVALID_PRODUCER_ID_MAPPING`, or
+/// `PRODUCER_FENCED`), which the host maps; this module only orders the facts.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
 pub enum TransactionRegistrationDecision {
     RejectNotCoordinator,
     RejectUnknownProducer,
-    RejectStagedIdentity,
-    RejectStaleIdentity,
+    RejectPendingTransition,
+    RejectProducerId,
+    RejectProducerEpoch,
     RejectState,
     PersistRetry,
     PersistRegistration,
@@ -293,15 +302,28 @@ pub struct TransactionRegistrationOwnershipFacts {
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
 pub struct TransactionRegistrationIdentityFacts {
+    /// Kafka's `txnMetadata.pendingTransitionInProgress`: a staged producer
+    /// identity is waiting on an older transaction to complete first.
+    pub pending_transition: bool,
+    pub matching: TransactionRegistrationIdentityMatchFacts,
+}
+
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct TransactionRegistrationIdentityMatchFacts {
     pub transactional_id_matches: bool,
-    pub staged_identity: bool,
-    pub producer_identity_matches: bool,
+    pub producer_id_matches: bool,
+    pub producer_epoch_matches: bool,
 }
 
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
 pub struct TransactionRegistrationStateFacts {
     pub state_allows_registration: bool,
+    /// Kafka's `txnMetadata.state == ONGOING`. The retry optimization below
+    /// applies only in that exact state, never against a stale partition set
+    /// left over from a completed or not-yet-started transaction.
+    pub state_is_ongoing: bool,
     pub exact_partitions_registered: bool,
 }
 
@@ -313,46 +335,58 @@ pub struct TransactionRegistrationStateFacts {
     == (facts.ownership.is_coordinator
         && (!facts.ownership.producer_id_valid
             || !facts.ownership.entry_exists
-            || !facts.identity.transactional_id_matches)))]
-#[ensures((result == TransactionRegistrationDecision::RejectStagedIdentity)
+            || !facts.identity.matching.transactional_id_matches)))]
+#[ensures((result == TransactionRegistrationDecision::RejectPendingTransition)
     == (facts.ownership.is_coordinator
         && facts.ownership.producer_id_valid
         && facts.ownership.entry_exists
-        && facts.identity.transactional_id_matches
-        && facts.identity.staged_identity))]
-#[ensures((result == TransactionRegistrationDecision::RejectStaleIdentity)
+        && facts.identity.matching.transactional_id_matches
+        && facts.identity.pending_transition))]
+#[ensures((result == TransactionRegistrationDecision::RejectProducerId)
     == (facts.ownership.is_coordinator
         && facts.ownership.producer_id_valid
         && facts.ownership.entry_exists
-        && facts.identity.transactional_id_matches
-        && !facts.identity.staged_identity
-        && !facts.identity.producer_identity_matches))]
+        && facts.identity.matching.transactional_id_matches
+        && !facts.identity.pending_transition
+        && !facts.identity.matching.producer_id_matches))]
+#[ensures((result == TransactionRegistrationDecision::RejectProducerEpoch)
+    == (facts.ownership.is_coordinator
+        && facts.ownership.producer_id_valid
+        && facts.ownership.entry_exists
+        && facts.identity.matching.transactional_id_matches
+        && !facts.identity.pending_transition
+        && facts.identity.matching.producer_id_matches
+        && !facts.identity.matching.producer_epoch_matches))]
 #[ensures((result == TransactionRegistrationDecision::RejectState)
     == (facts.ownership.is_coordinator
         && facts.ownership.producer_id_valid
         && facts.ownership.entry_exists
-        && facts.identity.transactional_id_matches
-        && !facts.identity.staged_identity
-        && facts.identity.producer_identity_matches
+        && facts.identity.matching.transactional_id_matches
+        && !facts.identity.pending_transition
+        && facts.identity.matching.producer_id_matches
+        && facts.identity.matching.producer_epoch_matches
         && !facts.state.state_allows_registration))]
 #[ensures((result == TransactionRegistrationDecision::PersistRetry)
     == (facts.ownership.is_coordinator
         && facts.ownership.producer_id_valid
         && facts.ownership.entry_exists
-        && facts.identity.transactional_id_matches
-        && !facts.identity.staged_identity
-        && facts.identity.producer_identity_matches
+        && facts.identity.matching.transactional_id_matches
+        && !facts.identity.pending_transition
+        && facts.identity.matching.producer_id_matches
+        && facts.identity.matching.producer_epoch_matches
         && facts.state.state_allows_registration
+        && facts.state.state_is_ongoing
         && facts.state.exact_partitions_registered))]
 #[ensures((result == TransactionRegistrationDecision::PersistRegistration)
     == (facts.ownership.is_coordinator
         && facts.ownership.producer_id_valid
         && facts.ownership.entry_exists
-        && facts.identity.transactional_id_matches
-        && !facts.identity.staged_identity
-        && facts.identity.producer_identity_matches
+        && facts.identity.matching.transactional_id_matches
+        && !facts.identity.pending_transition
+        && facts.identity.matching.producer_id_matches
+        && facts.identity.matching.producer_epoch_matches
         && facts.state.state_allows_registration
-        && !facts.state.exact_partitions_registered))]
+        && !(facts.state.state_is_ongoing && facts.state.exact_partitions_registered)))]
 #[must_use]
 pub fn transaction_partition_registration(
     facts: TransactionRegistrationFacts,
@@ -361,16 +395,18 @@ pub fn transaction_partition_registration(
         TransactionRegistrationDecision::RejectNotCoordinator
     } else if !facts.ownership.producer_id_valid
         || !facts.ownership.entry_exists
-        || !facts.identity.transactional_id_matches
+        || !facts.identity.matching.transactional_id_matches
     {
         TransactionRegistrationDecision::RejectUnknownProducer
-    } else if facts.identity.staged_identity {
-        TransactionRegistrationDecision::RejectStagedIdentity
-    } else if !facts.identity.producer_identity_matches {
-        TransactionRegistrationDecision::RejectStaleIdentity
+    } else if facts.identity.pending_transition {
+        TransactionRegistrationDecision::RejectPendingTransition
+    } else if !facts.identity.matching.producer_id_matches {
+        TransactionRegistrationDecision::RejectProducerId
+    } else if !facts.identity.matching.producer_epoch_matches {
+        TransactionRegistrationDecision::RejectProducerEpoch
     } else if !facts.state.state_allows_registration {
         TransactionRegistrationDecision::RejectState
-    } else if facts.state.exact_partitions_registered {
+    } else if facts.state.state_is_ongoing && facts.state.exact_partitions_registered {
         TransactionRegistrationDecision::PersistRetry
     } else {
         TransactionRegistrationDecision::PersistRegistration
@@ -952,8 +988,8 @@ mod tests {
     #[test]
     fn partition_registration_fences_generation_and_retries_exactly() {
         use TransactionRegistrationDecision::{
-            PersistRegistration, PersistRetry, RejectNotCoordinator, RejectStagedIdentity,
-            RejectStaleIdentity, RejectState, RejectUnknownProducer,
+            PersistRegistration, PersistRetry, RejectNotCoordinator, RejectPendingTransition,
+            RejectProducerEpoch, RejectProducerId, RejectState, RejectUnknownProducer,
         };
 
         let admitted = TransactionRegistrationFacts {
@@ -963,12 +999,16 @@ mod tests {
                 entry_exists: true,
             },
             identity: TransactionRegistrationIdentityFacts {
-                transactional_id_matches: true,
-                staged_identity: false,
-                producer_identity_matches: true,
+                pending_transition: false,
+                matching: TransactionRegistrationIdentityMatchFacts {
+                    transactional_id_matches: true,
+                    producer_id_matches: true,
+                    producer_epoch_matches: true,
+                },
             },
             state: TransactionRegistrationStateFacts {
                 state_allows_registration: true,
+                state_is_ongoing: true,
                 exact_partitions_registered: false,
             },
         };
@@ -984,17 +1024,25 @@ mod tests {
             let mut facts = admitted;
             facts.ownership.producer_id_valid = malformed.0;
             facts.ownership.entry_exists = malformed.1;
-            facts.identity.transactional_id_matches = malformed.2;
+            facts.identity.matching.transactional_id_matches = malformed.2;
             assert!(transaction_partition_registration(facts) == RejectUnknownProducer);
         }
 
+        // The pending-transition check runs ahead of the producer id and
+        // epoch checks, so it wins even when both of those also mismatch.
         let mut facts = admitted;
-        facts.identity.staged_identity = true;
-        assert!(transaction_partition_registration(facts) == RejectStagedIdentity);
+        facts.identity.pending_transition = true;
+        facts.identity.matching.producer_id_matches = false;
+        facts.identity.matching.producer_epoch_matches = false;
+        assert!(transaction_partition_registration(facts) == RejectPendingTransition);
 
         let mut facts = admitted;
-        facts.identity.producer_identity_matches = false;
-        assert!(transaction_partition_registration(facts) == RejectStaleIdentity);
+        facts.identity.matching.producer_id_matches = false;
+        assert!(transaction_partition_registration(facts) == RejectProducerId);
+
+        let mut facts = admitted;
+        facts.identity.matching.producer_epoch_matches = false;
+        assert!(transaction_partition_registration(facts) == RejectProducerEpoch);
 
         let mut facts = admitted;
         facts.state.state_allows_registration = false;
@@ -1003,6 +1051,14 @@ mod tests {
         let mut facts = admitted;
         facts.state.exact_partitions_registered = true;
         assert!(transaction_partition_registration(facts) == PersistRetry);
+
+        // The retry optimization requires the current state to be exactly
+        // Ongoing; a stale exact match left over from a completed or
+        // not-yet-started transaction must still persist.
+        let mut facts = admitted;
+        facts.state.exact_partitions_registered = true;
+        facts.state.state_is_ongoing = false;
+        assert!(transaction_partition_registration(facts) == PersistRegistration);
 
         assert!(transaction_partition_registration(admitted) == PersistRegistration);
     }

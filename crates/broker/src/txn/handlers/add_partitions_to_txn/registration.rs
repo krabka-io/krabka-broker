@@ -30,6 +30,10 @@ pub(super) struct TransactionRequest<'a> {
     pub(super) frozen: &'a std::collections::HashSet<String>,
     pub(super) txnv: crate::txn::version::TxnVersion,
     pub(super) verify_only: bool,
+    /// The `AddPartitionsToTxn` request version, which selects between
+    /// `PRODUCER_FENCED` and the legacy `INVALID_PRODUCER_EPOCH` on a
+    /// producer-epoch mismatch.
+    pub(super) version: i16,
 }
 
 // cargo-mutants: orchestration over live coordinator state. Every branch is a
@@ -51,7 +55,16 @@ pub(super) async fn process_one_txn(
         frozen,
         txnv,
         verify_only,
+        version,
     } = request;
+    // Kafka's `TransactionCoordinator` checks this before anything else: a
+    // null or empty transactional id is `INVALID_REQUEST`, whole-transaction
+    // on the add path and per-partition on the verify path (this code lands
+    // on every row either way).
+    if tid.is_empty() {
+        let unread = std::collections::HashSet::new();
+        return per_topic_with_refusals(topics, denied, &unread, codes::INVALID_REQUEST);
+    }
     // Topics allowed to proceed past the per-topic Write ACL gate and the
     // write-freeze gate. A frozen topic never joins the partition set, which
     // is what keeps the transaction from ever reaching its log.
@@ -100,7 +113,7 @@ pub(super) async fn process_one_txn(
         })
         .collect();
     let code = coord
-        .register_partitions(tid, producer_id, producer_epoch, partitions, txnv)
+        .register_partitions(tid, producer_id, producer_epoch, partitions, txnv, version)
         .await;
     per_topic_with_refusals(topics, denied, frozen, code)
 }

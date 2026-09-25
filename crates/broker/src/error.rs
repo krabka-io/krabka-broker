@@ -135,6 +135,19 @@ pub enum BrokerError {
     #[error("transaction: {0}")]
     Txn(String),
 
+    /// A remote `WriteTxnMarkers` call answered one (topic, partition) with a
+    /// non-`NONE` per-partition error code. The transaction marker fan-out
+    /// classifies `code` as retriable or fatal (KIP-98's
+    /// `TransactionMarkerRequestCompletionHandler`) rather than treating
+    /// every non-`NONE` answer the same way.
+    #[error("WriteTxnMarkers refused (code {code}): {message}")]
+    MarkerWriteRefused {
+        /// The per-partition error code the remote leader answered.
+        code: i16,
+        /// A human-readable description naming the partition and code.
+        message: String,
+    },
+
     /// A KIP-932 share-coordinator (persister) operation failed. It maps to
     /// `UNKNOWN_SERVER_ERROR` on the wire. Handlers choose the specific wire
     /// codes.

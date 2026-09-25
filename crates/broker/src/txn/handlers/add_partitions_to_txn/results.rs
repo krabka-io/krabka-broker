@@ -20,6 +20,50 @@ use krabka_protocol::owned::common::{
 use super::write_freeze::topic_refusal;
 use crate::txn::state::TopicPartition;
 
+/// Collapses a requested topic list to one row per topic and one row per
+/// partition within it, in first-occurrence order.
+///
+/// The response schema declares `TransactionalId`, the topic `Name`, and
+/// `PartitionIndex` as `mapKey: true` fields (KIP: `AddPartitionsToTxnResponse.json`),
+/// and Kafka's `TransactionCoordinator` collects its per-partition results
+/// into a `HashMap<TopicPartition, Errors>` before encoding. A caller that
+/// names the same topic twice, or the same partition twice within a topic,
+/// therefore gets exactly one response row for it, not one per request
+/// entry (#883).
+pub(super) fn dedup_topics(topics: &[AddPartitionsToTxnTopic]) -> Vec<AddPartitionsToTxnTopic> {
+    let mut order: Vec<String> = Vec::new();
+    let mut partitions_by_topic: std::collections::HashMap<
+        String,
+        (Vec<i32>, std::collections::HashSet<i32>),
+    > = std::collections::HashMap::new();
+    for topic in topics {
+        let (partitions, seen) = partitions_by_topic
+            .entry(topic.name.clone())
+            .or_insert_with(|| {
+                order.push(topic.name.clone());
+                (Vec::new(), std::collections::HashSet::new())
+            });
+        for &partition in &topic.partitions {
+            if seen.insert(partition) {
+                partitions.push(partition);
+            }
+        }
+    }
+    order
+        .into_iter()
+        .map(|name| {
+            let (partitions, _) = partitions_by_topic
+                .remove(&name)
+                .expect("every ordered name was inserted into the map above");
+            AddPartitionsToTxnTopic {
+                name,
+                partitions,
+                ..Default::default()
+            }
+        })
+        .collect()
+}
+
 /// KIP-890 verify-only per-partition decision. See
 /// [`verification_code`](crate::txn::coordinator::produce_verification::verification_code).
 fn verify_partition_code(
@@ -234,5 +278,47 @@ mod tests {
             ],
         )];
         assert!(rows == expected);
+    }
+
+    /// #883: `TransactionalId`, the topic `Name`, and `PartitionIndex` are
+    /// all `mapKey: true` fields of `AddPartitionsToTxnResponse`, so a
+    /// duplicated request entry must collapse to one response row.
+    #[test]
+    fn dedup_topics_collapses_duplicate_topics_and_partitions() {
+        type Case<'a> = (
+            &'a str,
+            Vec<AddPartitionsToTxnTopic>,
+            Vec<(&'a str, Vec<i32>)>,
+        );
+        let cases: Vec<Case> = vec![
+            (
+                "duplicate partition index within one topic",
+                vec![topic("a", &[0, 0])],
+                vec![("a", vec![0])],
+            ),
+            (
+                "the same topic named twice",
+                vec![topic("a", &[0]), topic("a", &[1])],
+                vec![("a", vec![0, 1])],
+            ),
+            (
+                "the same topic and partition named twice",
+                vec![topic("a", &[0]), topic("a", &[0])],
+                vec![("a", vec![0])],
+            ),
+            (
+                "distinct topics are unaffected, in first-occurrence order",
+                vec![topic("b", &[0]), topic("a", &[0])],
+                vec![("b", vec![0]), ("a", vec![0])],
+            ),
+        ];
+        for (label, topics, expected) in cases {
+            let deduped = dedup_topics(&topics);
+            let names_and_partitions: Vec<(&str, Vec<i32>)> = deduped
+                .iter()
+                .map(|t| (t.name.as_str(), t.partitions.clone()))
+                .collect();
+            assert!(names_and_partitions == expected, "{label}");
+        }
     }
 }

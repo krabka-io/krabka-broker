@@ -609,6 +609,7 @@ pub fn from_broker_error(err: &crate::error::BrokerError) -> i16 {
         | BrokerError::Protocol(_)
         | BrokerError::Startup(_)
         | BrokerError::Txn(_)
+        | BrokerError::MarkerWriteRefused { .. }
         | BrokerError::Share(_)
         | BrokerError::SharePartitionState { .. }
         | BrokerError::ListenerConflict { .. }
