@@ -75,36 +75,6 @@ jobs:
           # read only.
           upload: ${{ github.event_name != 'pull_request' }}
 
-      # Bazel's `//bazel/images:minio`/`minio_mc` pulls are anonymous GETs
-      # against quay.io, which has started answering them `401 UNAUTHORIZED`
-      # even for these public images -- not a transient outage, reproduced
-      # the same way with a fresh anonymous pull token. A robot account's
-      # credentials avoid it. This writes the credential into the Docker
-      # CLI's config, the same as the `ghcr.io` logins elsewhere in this
-      # file -- but unlike those, `rules_img`'s `pull` repository rule does
-      # not read that file on its own; the next step points it there.
-      # A fork's pull request sees no secrets: username/password would resolve
-      # to empty strings and this step would fail outright, before any
-      # bazel/aspect command runs -- worse than the anonymous 401 alone. Skip
-      # it there; that build still hits the same anonymous quay.io 401 this
-      # fix addresses everywhere else, which is the pre-existing state, not a
-      # regression.
-      - if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: quay.io
-          username: ${{ secrets.QUAY_ROBOT_ACCOUNT }}
-          password: ${{ secrets.QUAY_ROBOT_ACCOUNT_TOKEN }}
-
-      # `docker/login-action` writes the credential into the Docker CLI's own
-      # config, but rules_img's `pull` repository rule does not read that file
-      # on its own -- it only inherits one through `$REGISTRY_AUTH_FILE`, which
-      # nothing here has set until now. Every later step in this job inherits
-      # the variable through `GITHUB_ENV`.
-      - if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
-        name: point Bazel's registry auth at the Docker CLI's login config
-        run: echo "REGISTRY_AUTH_FILE=${HOME}/.docker/config.json" >> "${GITHUB_ENV}"
-
       # `--severity` defaults to `auto`, which the CLI resolves to `fail` on CI
       # and `info` off it -- so this gates here and only reports locally.
       - name: format
@@ -265,30 +235,6 @@ jobs:
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
           upload: ${{ github.event_name != 'pull_request' }}
-
-      # See the `ci` job's quay.io login: anonymous pulls of
-      # `//bazel/images:minio`/`minio_mc` get `401 UNAUTHORIZED` from quay.io.
-      # A fork's pull request sees no secrets: username/password would resolve
-      # to empty strings and this step would fail outright, before any
-      # bazel/aspect command runs -- worse than the anonymous 401 alone. Skip
-      # it there; that build still hits the same anonymous quay.io 401 this
-      # fix addresses everywhere else, which is the pre-existing state, not a
-      # regression.
-      - if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: quay.io
-          username: ${{ secrets.QUAY_ROBOT_ACCOUNT }}
-          password: ${{ secrets.QUAY_ROBOT_ACCOUNT_TOKEN }}
-
-      # `docker/login-action` writes the credential into the Docker CLI's own
-      # config, but rules_img's `pull` repository rule does not read that file
-      # on its own -- it only inherits one through `$REGISTRY_AUTH_FILE`, which
-      # nothing here has set until now. Every later step in this job inherits
-      # the variable through `GITHUB_ENV`.
-      - if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
-        name: point Bazel's registry auth at the Docker CLI's login config
-        run: echo "REGISTRY_AUTH_FILE=${HOME}/.docker/config.json" >> "${GITHUB_ENV}"
 
       - name: coverage
         run: bazel coverage //crates/...
@@ -750,30 +696,6 @@ jobs:
           # read only.
           upload: ${{ github.event_name != 'pull_request' }}
 
-      # See the `ci` job's quay.io login: anonymous pulls of
-      # `//bazel/images:minio`/`minio_mc` get `401 UNAUTHORIZED` from quay.io.
-      # A fork's pull request sees no secrets: username/password would resolve
-      # to empty strings and this step would fail outright, before any
-      # bazel/aspect command runs -- worse than the anonymous 401 alone. Skip
-      # it there; that build still hits the same anonymous quay.io 401 this
-      # fix addresses everywhere else, which is the pre-existing state, not a
-      # regression.
-      - if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: quay.io
-          username: ${{ secrets.QUAY_ROBOT_ACCOUNT }}
-          password: ${{ secrets.QUAY_ROBOT_ACCOUNT_TOKEN }}
-
-      # `docker/login-action` writes the credential into the Docker CLI's own
-      # config, but rules_img's `pull` repository rule does not read that file
-      # on its own -- it only inherits one through `$REGISTRY_AUTH_FILE`, which
-      # nothing here has set until now. Every later step in this job inherits
-      # the variable through `GITHUB_ENV`.
-      - if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
-        name: point Bazel's registry auth at the Docker CLI's login config
-        run: echo "REGISTRY_AUTH_FILE=${HOME}/.docker/config.json" >> "${GITHUB_ENV}"
-
       - id: select
         run: |
           set -euo pipefail
@@ -830,30 +752,6 @@ jobs:
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
           upload: ${{ github.event_name != 'pull_request' }}
-
-      # See the `ci` job's quay.io login: anonymous pulls of
-      # `//bazel/images:minio`/`minio_mc` get `401 UNAUTHORIZED` from quay.io.
-      # A fork's pull request sees no secrets: username/password would resolve
-      # to empty strings and this step would fail outright, before any
-      # bazel/aspect command runs -- worse than the anonymous 401 alone. Skip
-      # it there; that build still hits the same anonymous quay.io 401 this
-      # fix addresses everywhere else, which is the pre-existing state, not a
-      # regression.
-      - if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: quay.io
-          username: ${{ secrets.QUAY_ROBOT_ACCOUNT }}
-          password: ${{ secrets.QUAY_ROBOT_ACCOUNT_TOKEN }}
-
-      # `docker/login-action` writes the credential into the Docker CLI's own
-      # config, but rules_img's `pull` repository rule does not read that file
-      # on its own -- it only inherits one through `$REGISTRY_AUTH_FILE`, which
-      # nothing here has set until now. Every later step in this job inherits
-      # the variable through `GITHUB_ENV`.
-      - if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
-        name: point Bazel's registry auth at the Docker CLI's login config
-        run: echo "REGISTRY_AUTH_FILE=${HOME}/.docker/config.json" >> "${GITHUB_ENV}"
 
       # The host side of these suites reaches the broker over loopback, but a few
       # host-side Rust clients bootstrap through the advertised name, so it has to
@@ -933,30 +831,6 @@ jobs:
           client-cert: ${{ secrets.BUILDBUDDY_CLIENT_CERT }}
           client-key: ${{ secrets.BUILDBUDDY_CLIENT_KEY }}
           upload: ${{ github.event_name != 'pull_request' }}
-
-      # See the `ci` job's quay.io login: anonymous pulls of
-      # `//bazel/images:minio`/`minio_mc` get `401 UNAUTHORIZED` from quay.io.
-      # A fork's pull request sees no secrets: username/password would resolve
-      # to empty strings and this step would fail outright, before any
-      # bazel/aspect command runs -- worse than the anonymous 401 alone. Skip
-      # it there; that build still hits the same anonymous quay.io 401 this
-      # fix addresses everywhere else, which is the pre-existing state, not a
-      # regression.
-      - if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: quay.io
-          username: ${{ secrets.QUAY_ROBOT_ACCOUNT }}
-          password: ${{ secrets.QUAY_ROBOT_ACCOUNT_TOKEN }}
-
-      # `docker/login-action` writes the credential into the Docker CLI's own
-      # config, but rules_img's `pull` repository rule does not read that file
-      # on its own -- it only inherits one through `$REGISTRY_AUTH_FILE`, which
-      # nothing here has set until now. Every later step in this job inherits
-      # the variable through `GITHUB_ENV`.
-      - if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
-        name: point Bazel's registry auth at the Docker CLI's login config
-        run: echo "REGISTRY_AUTH_FILE=${HOME}/.docker/config.json" >> "${GITHUB_ENV}"
       - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
         with:
           cluster_name: krabka
@@ -986,29 +860,6 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # See the `ci` job's quay.io login: anonymous pulls of
-      # `//bazel/images:minio`/`minio_mc` get `401 UNAUTHORIZED` from quay.io.
-      # A fork's pull request sees no secrets: username/password would resolve
-      # to empty strings and this step would fail outright, before any
-      # bazel/aspect command runs -- worse than the anonymous 401 alone. Skip
-      # it there; that build still hits the same anonymous quay.io 401 this
-      # fix addresses everywhere else, which is the pre-existing state, not a
-      # regression.
-      - if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: quay.io
-          username: ${{ secrets.QUAY_ROBOT_ACCOUNT }}
-          password: ${{ secrets.QUAY_ROBOT_ACCOUNT_TOKEN }}
-
-      # `docker/login-action` writes the credential into the Docker CLI's own
-      # config, but rules_img's `pull` repository rule does not read that file
-      # on its own -- it only inherits one through `$REGISTRY_AUTH_FILE`, which
-      # nothing here has set until now. Every later step in this job inherits
-      # the variable through `GITHUB_ENV`.
-      - if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
-        name: point Bazel's registry auth at the Docker CLI's login config
-        run: echo "REGISTRY_AUTH_FILE=${HOME}/.docker/config.json" >> "${GITHUB_ENV}"
       - run: bash packaging/upgrade-smoke.sh
 
   # The KDC fixture writes fresh keytabs through a bind mount. Keep the two
@@ -1040,30 +891,6 @@ jobs:
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
           upload: ${{ github.event_name != 'pull_request' }}
-
-      # See the `ci` job's quay.io login: anonymous pulls of
-      # `//bazel/images:minio`/`minio_mc` get `401 UNAUTHORIZED` from quay.io.
-      # A fork's pull request sees no secrets: username/password would resolve
-      # to empty strings and this step would fail outright, before any
-      # bazel/aspect command runs -- worse than the anonymous 401 alone. Skip
-      # it there; that build still hits the same anonymous quay.io 401 this
-      # fix addresses everywhere else, which is the pre-existing state, not a
-      # regression.
-      - if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: quay.io
-          username: ${{ secrets.QUAY_ROBOT_ACCOUNT }}
-          password: ${{ secrets.QUAY_ROBOT_ACCOUNT_TOKEN }}
-
-      # `docker/login-action` writes the credential into the Docker CLI's own
-      # config, but rules_img's `pull` repository rule does not read that file
-      # on its own -- it only inherits one through `$REGISTRY_AUTH_FILE`, which
-      # nothing here has set until now. Every later step in this job inherits
-      # the variable through `GITHUB_ENV`.
-      - if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
-        name: point Bazel's registry auth at the Docker CLI's login config
-        run: echo "REGISTRY_AUTH_FILE=${HOME}/.docker/config.json" >> "${GITHUB_ENV}"
       - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
       - name: load KDC image
         run: bazel run //crates/broker/tests/fixtures/security/kdc:image_load
@@ -1127,30 +954,6 @@ jobs:
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
           upload: ${{ github.event_name != 'pull_request' }}
-
-      # See the `ci` job's quay.io login: anonymous pulls of
-      # `//bazel/images:minio`/`minio_mc` get `401 UNAUTHORIZED` from quay.io.
-      # A fork's pull request sees no secrets: username/password would resolve
-      # to empty strings and this step would fail outright, before any
-      # bazel/aspect command runs -- worse than the anonymous 401 alone. Skip
-      # it there; that build still hits the same anonymous quay.io 401 this
-      # fix addresses everywhere else, which is the pre-existing state, not a
-      # regression.
-      - if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: quay.io
-          username: ${{ secrets.QUAY_ROBOT_ACCOUNT }}
-          password: ${{ secrets.QUAY_ROBOT_ACCOUNT_TOKEN }}
-
-      # `docker/login-action` writes the credential into the Docker CLI's own
-      # config, but rules_img's `pull` repository rule does not read that file
-      # on its own -- it only inherits one through `$REGISTRY_AUTH_FILE`, which
-      # nothing here has set until now. Every later step in this job inherits
-      # the variable through `GITHUB_ENV`.
-      - if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
-        name: point Bazel's registry auth at the Docker CLI's login config
-        run: echo "REGISTRY_AUTH_FILE=${HOME}/.docker/config.json" >> "${GITHUB_ENV}"
 
       # Each broker advertises `host.docker.internal` so that its two peers and
       # the host-side clients reach it by one name. The containers resolve it
@@ -1384,29 +1187,6 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # See the `ci` job's quay.io login: anonymous pulls of
-      # `//bazel/images:minio`/`minio_mc` get `401 UNAUTHORIZED` from quay.io.
-      # A fork's pull request sees no secrets: username/password would resolve
-      # to empty strings and this step would fail outright, before any
-      # bazel/aspect command runs -- worse than the anonymous 401 alone. Skip
-      # it there; that build still hits the same anonymous quay.io 401 this
-      # fix addresses everywhere else, which is the pre-existing state, not a
-      # regression.
-      - if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: quay.io
-          username: ${{ secrets.QUAY_ROBOT_ACCOUNT }}
-          password: ${{ secrets.QUAY_ROBOT_ACCOUNT_TOKEN }}
-
-      # `docker/login-action` writes the credential into the Docker CLI's own
-      # config, but rules_img's `pull` repository rule does not read that file
-      # on its own -- it only inherits one through `$REGISTRY_AUTH_FILE`, which
-      # nothing here has set until now. Every later step in this job inherits
-      # the variable through `GITHUB_ENV`.
-      - if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
-        name: point Bazel's registry auth at the Docker CLI's login config
-        run: echo "REGISTRY_AUTH_FILE=${HOME}/.docker/config.json" >> "${GITHUB_ENV}"
       - name: test the delivery image
         run: bazel test -c opt --config=docker //packaging:image_docker_test
       - name: push
