@@ -79,14 +79,23 @@ jobs:
       # against quay.io, which has started answering them `401 UNAUTHORIZED`
       # even for these public images -- not a transient outage, reproduced
       # the same way with a fresh anonymous pull token. A robot account's
-      # credentials avoid it. This writes ~/.docker/config.json, which
-      # rules_img's `pull` repository rule reads by default -- the same
-      # mechanism the `ghcr.io` logins elsewhere in this file rely on.
+      # credentials avoid it. This writes the credential into the Docker
+      # CLI's config, the same as the `ghcr.io` logins elsewhere in this
+      # file -- but unlike those, `rules_img`'s `pull` repository rule does
+      # not read that file on its own; the next step points it there.
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: quay.io
           username: ${{ secrets.QUAY_ROBOT_ACCOUNT }}
           password: ${{ secrets.QUAY_ROBOT_ACCOUNT_TOKEN }}
+
+      # `docker/login-action` writes the credential into the Docker CLI's own
+      # config, but rules_img's `pull` repository rule does not read that file
+      # on its own -- it only inherits one through `$REGISTRY_AUTH_FILE`, which
+      # nothing here has set until now. Every later step in this job inherits
+      # the variable through `GITHUB_ENV`.
+      - name: point Bazel's registry auth at the Docker CLI's login config
+        run: echo "REGISTRY_AUTH_FILE=${HOME}/.docker/config.json" >> "${GITHUB_ENV}"
 
       # `--severity` defaults to `auto`, which the CLI resolves to `fail` on CI
       # and `info` off it -- so this gates here and only reports locally.
@@ -256,6 +265,14 @@ jobs:
           registry: quay.io
           username: ${{ secrets.QUAY_ROBOT_ACCOUNT }}
           password: ${{ secrets.QUAY_ROBOT_ACCOUNT_TOKEN }}
+
+      # `docker/login-action` writes the credential into the Docker CLI's own
+      # config, but rules_img's `pull` repository rule does not read that file
+      # on its own -- it only inherits one through `$REGISTRY_AUTH_FILE`, which
+      # nothing here has set until now. Every later step in this job inherits
+      # the variable through `GITHUB_ENV`.
+      - name: point Bazel's registry auth at the Docker CLI's login config
+        run: echo "REGISTRY_AUTH_FILE=${HOME}/.docker/config.json" >> "${GITHUB_ENV}"
 
       - name: coverage
         run: bazel coverage //crates/...
@@ -725,6 +742,14 @@ jobs:
           username: ${{ secrets.QUAY_ROBOT_ACCOUNT }}
           password: ${{ secrets.QUAY_ROBOT_ACCOUNT_TOKEN }}
 
+      # `docker/login-action` writes the credential into the Docker CLI's own
+      # config, but rules_img's `pull` repository rule does not read that file
+      # on its own -- it only inherits one through `$REGISTRY_AUTH_FILE`, which
+      # nothing here has set until now. Every later step in this job inherits
+      # the variable through `GITHUB_ENV`.
+      - name: point Bazel's registry auth at the Docker CLI's login config
+        run: echo "REGISTRY_AUTH_FILE=${HOME}/.docker/config.json" >> "${GITHUB_ENV}"
+
       - id: select
         run: |
           set -euo pipefail
@@ -789,6 +814,14 @@ jobs:
           registry: quay.io
           username: ${{ secrets.QUAY_ROBOT_ACCOUNT }}
           password: ${{ secrets.QUAY_ROBOT_ACCOUNT_TOKEN }}
+
+      # `docker/login-action` writes the credential into the Docker CLI's own
+      # config, but rules_img's `pull` repository rule does not read that file
+      # on its own -- it only inherits one through `$REGISTRY_AUTH_FILE`, which
+      # nothing here has set until now. Every later step in this job inherits
+      # the variable through `GITHUB_ENV`.
+      - name: point Bazel's registry auth at the Docker CLI's login config
+        run: echo "REGISTRY_AUTH_FILE=${HOME}/.docker/config.json" >> "${GITHUB_ENV}"
 
       # The host side of these suites reaches the broker over loopback, but a few
       # host-side Rust clients bootstrap through the advertised name, so it has to
@@ -876,6 +909,14 @@ jobs:
           registry: quay.io
           username: ${{ secrets.QUAY_ROBOT_ACCOUNT }}
           password: ${{ secrets.QUAY_ROBOT_ACCOUNT_TOKEN }}
+
+      # `docker/login-action` writes the credential into the Docker CLI's own
+      # config, but rules_img's `pull` repository rule does not read that file
+      # on its own -- it only inherits one through `$REGISTRY_AUTH_FILE`, which
+      # nothing here has set until now. Every later step in this job inherits
+      # the variable through `GITHUB_ENV`.
+      - name: point Bazel's registry auth at the Docker CLI's login config
+        run: echo "REGISTRY_AUTH_FILE=${HOME}/.docker/config.json" >> "${GITHUB_ENV}"
       - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
         with:
           cluster_name: krabka
@@ -912,6 +953,14 @@ jobs:
           registry: quay.io
           username: ${{ secrets.QUAY_ROBOT_ACCOUNT }}
           password: ${{ secrets.QUAY_ROBOT_ACCOUNT_TOKEN }}
+
+      # `docker/login-action` writes the credential into the Docker CLI's own
+      # config, but rules_img's `pull` repository rule does not read that file
+      # on its own -- it only inherits one through `$REGISTRY_AUTH_FILE`, which
+      # nothing here has set until now. Every later step in this job inherits
+      # the variable through `GITHUB_ENV`.
+      - name: point Bazel's registry auth at the Docker CLI's login config
+        run: echo "REGISTRY_AUTH_FILE=${HOME}/.docker/config.json" >> "${GITHUB_ENV}"
       - run: bash packaging/upgrade-smoke.sh
 
   # The KDC fixture writes fresh keytabs through a bind mount. Keep the two
@@ -951,6 +1000,14 @@ jobs:
           registry: quay.io
           username: ${{ secrets.QUAY_ROBOT_ACCOUNT }}
           password: ${{ secrets.QUAY_ROBOT_ACCOUNT_TOKEN }}
+
+      # `docker/login-action` writes the credential into the Docker CLI's own
+      # config, but rules_img's `pull` repository rule does not read that file
+      # on its own -- it only inherits one through `$REGISTRY_AUTH_FILE`, which
+      # nothing here has set until now. Every later step in this job inherits
+      # the variable through `GITHUB_ENV`.
+      - name: point Bazel's registry auth at the Docker CLI's login config
+        run: echo "REGISTRY_AUTH_FILE=${HOME}/.docker/config.json" >> "${GITHUB_ENV}"
       - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
       - name: load KDC image
         run: bazel run //crates/broker/tests/fixtures/security/kdc:image_load
@@ -1022,6 +1079,14 @@ jobs:
           registry: quay.io
           username: ${{ secrets.QUAY_ROBOT_ACCOUNT }}
           password: ${{ secrets.QUAY_ROBOT_ACCOUNT_TOKEN }}
+
+      # `docker/login-action` writes the credential into the Docker CLI's own
+      # config, but rules_img's `pull` repository rule does not read that file
+      # on its own -- it only inherits one through `$REGISTRY_AUTH_FILE`, which
+      # nothing here has set until now. Every later step in this job inherits
+      # the variable through `GITHUB_ENV`.
+      - name: point Bazel's registry auth at the Docker CLI's login config
+        run: echo "REGISTRY_AUTH_FILE=${HOME}/.docker/config.json" >> "${GITHUB_ENV}"
 
       # Each broker advertises `host.docker.internal` so that its two peers and
       # the host-side clients reach it by one name. The containers resolve it
@@ -1262,6 +1327,14 @@ jobs:
           registry: quay.io
           username: ${{ secrets.QUAY_ROBOT_ACCOUNT }}
           password: ${{ secrets.QUAY_ROBOT_ACCOUNT_TOKEN }}
+
+      # `docker/login-action` writes the credential into the Docker CLI's own
+      # config, but rules_img's `pull` repository rule does not read that file
+      # on its own -- it only inherits one through `$REGISTRY_AUTH_FILE`, which
+      # nothing here has set until now. Every later step in this job inherits
+      # the variable through `GITHUB_ENV`.
+      - name: point Bazel's registry auth at the Docker CLI's login config
+        run: echo "REGISTRY_AUTH_FILE=${HOME}/.docker/config.json" >> "${GITHUB_ENV}"
       - name: test the delivery image
         run: bazel test -c opt --config=docker //packaging:image_docker_test
       - name: push
