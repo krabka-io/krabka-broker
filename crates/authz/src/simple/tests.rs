@@ -220,3 +220,166 @@ fn simple_acl_authorizer_is_configured() {
     let auth = SimpleAclAuthorizer::new(no_super());
     assert2::assert!(auth.is_configured());
 }
+
+/// #650: `allow.everyone.if.no.acl.found` (default `false`) allows a
+/// request only when NO ACL at all applies to the resource -- by resource
+/// type, name, and LITERAL/PREFIXED/wildcard pattern, regardless of
+/// principal, host, operation, or permission type. If at least one ACL
+/// applies to the resource and none of them matches the request, the
+/// request is still denied.
+#[test]
+fn allow_everyone_if_no_acl_found_applies_only_when_no_acl_touches_the_resource() {
+    enum Case {
+        /// No ACL at all on the image.
+        NoAcls,
+        /// An ACL exists for the resource, but for a different principal
+        /// (so it "applies to the resource" without matching the request).
+        AclForResourceOtherPrincipal,
+        /// An ACL exists for a completely different resource.
+        AclForOtherResource,
+        /// A matching ALLOW ACL exists.
+        MatchingAllow,
+        /// A matching DENY ACL exists.
+        MatchingDeny,
+    }
+
+    let cases = [
+        (
+            "no acls at all + flag off",
+            Case::NoAcls,
+            false,
+            AuthorizationResult::Deny,
+        ),
+        (
+            "no acls at all + flag on",
+            Case::NoAcls,
+            true,
+            AuthorizationResult::Allow,
+        ),
+        (
+            "acl on resource, principal mismatch + flag off",
+            Case::AclForResourceOtherPrincipal,
+            false,
+            AuthorizationResult::Deny,
+        ),
+        (
+            "acl on resource, principal mismatch + flag on",
+            Case::AclForResourceOtherPrincipal,
+            true,
+            AuthorizationResult::Deny,
+        ),
+        (
+            "acl on a different resource + flag off",
+            Case::AclForOtherResource,
+            false,
+            AuthorizationResult::Deny,
+        ),
+        (
+            "acl on a different resource + flag on",
+            Case::AclForOtherResource,
+            true,
+            AuthorizationResult::Allow,
+        ),
+        (
+            "matching allow acl + flag off",
+            Case::MatchingAllow,
+            false,
+            AuthorizationResult::Allow,
+        ),
+        (
+            "matching allow acl + flag on",
+            Case::MatchingAllow,
+            true,
+            AuthorizationResult::Allow,
+        ),
+        (
+            "matching deny acl + flag off",
+            Case::MatchingDeny,
+            false,
+            AuthorizationResult::Deny,
+        ),
+        (
+            "matching deny acl + flag on",
+            Case::MatchingDeny,
+            true,
+            AuthorizationResult::Deny,
+        ),
+    ];
+
+    for (name, case, flag, expected) in cases {
+        let mut img = img();
+        match case {
+            Case::NoAcls => {}
+            Case::AclForResourceOtherPrincipal => {
+                img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+                    PermissionType::Allow,
+                    AclOperation::Read,
+                    "User:bob",
+                    "*",
+                    PatternType::Literal,
+                    "foo",
+                )));
+            }
+            Case::AclForOtherResource => {
+                img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+                    PermissionType::Allow,
+                    AclOperation::Read,
+                    "User:alice",
+                    "*",
+                    PatternType::Literal,
+                    "other",
+                )));
+            }
+            Case::MatchingAllow => {
+                img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+                    PermissionType::Allow,
+                    AclOperation::Read,
+                    "User:alice",
+                    "*",
+                    PatternType::Literal,
+                    "foo",
+                )));
+            }
+            Case::MatchingDeny => {
+                img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+                    PermissionType::Deny,
+                    AclOperation::Read,
+                    "User:alice",
+                    "*",
+                    PatternType::Literal,
+                    "foo",
+                )));
+            }
+        }
+        let a = alice();
+        let h = addr();
+        let auth = SimpleAclAuthorizer::new(no_super()).with_allow_everyone_if_no_acl_found(flag);
+        assert2::assert!(
+            auth.authorize(&img, &req(&a, &h, "foo", AclOperation::Read)) == expected,
+            "{name}"
+        );
+    }
+}
+
+/// The super-user bypass still wins even with
+/// `allow.everyone.if.no.acl.found` set, and it does not need the flag to
+/// grant access.
+#[test]
+fn allow_everyone_if_no_acl_found_does_not_change_super_user_bypass() {
+    let mut img = img();
+    img.apply(&MetadataRecord::V1AccessControlEntry(topic_acl(
+        PermissionType::Deny,
+        AclOperation::Read,
+        "User:alice",
+        "*",
+        PatternType::Literal,
+        "foo",
+    )));
+    let a = alice();
+    let h = addr();
+    let auth =
+        SimpleAclAuthorizer::new(one_super("alice")).with_allow_everyone_if_no_acl_found(false);
+    assert2::assert!(
+        auth.authorize(&img, &req(&a, &h, "foo", AclOperation::Read)) == AuthorizationResult::Allow
+    );
+}

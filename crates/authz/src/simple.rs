@@ -3,11 +3,15 @@
 //! The authorizer applies the super-user bypass, deny-wins-over-allow, LITERAL
 //! and PREFIXED matching, and principal, host, and operation wildcards.
 //!
-//! There is no "empty source + no super-users ⇒ Allow" compatibility shim. That
-//! case lives in [`crate::AllowAllAuthorizer`]. [`SimpleAclAuthorizer`] with an
-//! empty source and empty super-users denies everything. This default-deny
-//! behavior matches Kafka's `StandardAuthorizer` once an operator explicitly
-//! configures an authorizer.
+//! [`SimpleAclAuthorizer`] with an empty source and empty super-users denies
+//! everything by default. This default-deny behavior matches Kafka's
+//! `StandardAuthorizer` once an operator explicitly configures an authorizer.
+//! Kafka's `allow.everyone.if.no.acl.found` (default `false`) flips that
+//! default: when enabled and NO ACL at all applies to the resource --
+//! regardless of principal, host, operation, or permission type -- the
+//! request is allowed. If at least one ACL applies to the resource and none
+//! of them matches, the request is still denied. Set it with
+//! [`SimpleAclAuthorizer::with_allow_everyone_if_no_acl_found`].
 
 use std::collections::HashSet;
 
@@ -33,12 +37,24 @@ use crate::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer, jd
 #[derive(Debug)]
 pub struct SimpleAclAuthorizer {
     super_users: HashSet<String>,
+    allow_everyone_if_no_acl_found: bool,
 }
 
 impl SimpleAclAuthorizer {
     #[must_use]
     pub fn new(super_users: HashSet<String>) -> Self {
-        Self { super_users }
+        Self {
+            super_users,
+            allow_everyone_if_no_acl_found: false,
+        }
+    }
+
+    /// Sets Kafka's `allow.everyone.if.no.acl.found` (default `false`). See
+    /// the module doc for the exact semantics.
+    #[must_use]
+    pub fn with_allow_everyone_if_no_acl_found(mut self, allow: bool) -> Self {
+        self.allow_everyone_if_no_acl_found = allow;
+        self
     }
 }
 
@@ -69,14 +85,18 @@ impl Authorizer for SimpleAclAuthorizer {
         let super_user = self.super_users.contains(&req.principal.name);
         let mut saw_allow = false;
         let mut saw_deny = false;
+        let mut has_resource_acls = false;
         if !super_user {
             let user_pattern = format!("User:{}", req.principal.name);
             let host_str = jdk_host_address(req.host.ip());
             for entry in source.matching_acls(req.resource_type, req.resource_name) {
-                if !matches_resource(entry, req.resource_type, req.resource_name)
-                    || !matches_principal(entry, &user_pattern)
+                if !matches_resource(entry, req.resource_type, req.resource_name) {
+                    continue;
+                }
+                has_resource_acls = true;
+                if !matches_principal(entry, &user_pattern)
                     || !matches_host(entry, &host_str, req.host.ip())
-                    || !matches_operation(entry.operation, req.operation)
+                    || !matches_operation(entry.operation, req.operation, entry.permission_type)
                 {
                     continue;
                 }
@@ -89,11 +109,13 @@ impl Authorizer for SimpleAclAuthorizer {
                 }
             }
         }
-        let decision = acl_decision(super_user, saw_allow, saw_deny);
+        let default_allow = self.allow_everyone_if_no_acl_found && !has_resource_acls;
+        let decision = acl_decision((super_user, saw_allow, saw_deny, default_allow));
 
         let (label, result) = match decision {
             AclDecision::AllowSuperuser => ("allow-superuser", AuthorizationResult::Allow),
             AclDecision::AllowAcl => ("allow-acl", AuthorizationResult::Allow),
+            AclDecision::AllowNoAcl => ("allow-no-acl", AuthorizationResult::Allow),
             AclDecision::DenyExplicit => ("deny-explicit", AuthorizationResult::Deny),
             AclDecision::DenyDefault => ("deny-default", AuthorizationResult::Deny),
         };
