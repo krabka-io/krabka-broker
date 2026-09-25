@@ -74,7 +74,8 @@ pub(super) fn encode_whole_request_error(
         })
         .collect();
     let resp = AlterPartitionReassignmentsResponse {
-        allow_replication_factor_change: req.allow_replication_factor_change,
+        error_code: code,
+        error_message: Some(msg.to_string()),
         responses,
         ..Default::default()
     };
@@ -136,9 +137,9 @@ mod tests {
 
         let expected = AlterPartitionReassignmentsResponse {
             throttle_time_ms: 0,
-            allow_replication_factor_change: false,
-            error_code: 0,
-            error_message: None,
+            allow_replication_factor_change: true,
+            error_code: CLUSTER_AUTHORIZATION_FAILED,
+            error_message: Some("denied".into()),
             responses: vec![ReassignableTopicResponse {
                 name: "payments".into(),
                 partitions: vec![ReassignablePartitionResponse {

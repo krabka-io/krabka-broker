@@ -11,6 +11,9 @@ use creusot_std::prelude::*;
 pub enum AclDecision {
     AllowSuperuser,
     AllowAcl,
+    /// `allow.everyone.if.no.acl.found` allowed the request because no ACL
+    /// at all applies to the resource.
+    AllowNoAcl,
     DenyExplicit,
     DenyDefault,
 }
@@ -64,44 +67,54 @@ pub fn acl_resource_match(pattern: AclPatternKind, facts: (bool, bool, bool, boo
 }
 
 /// Match exact operations, `All`, and Kafka's one-way implication arrows.
+///
+/// The implication arrows (`Read`/`Write`/`Delete`/`Alter` → `Describe`, and
+/// `AlterConfigs` → `DescribeConfigs`) apply only when the stored ACL is an
+/// ALLOW entry: Kafka's operation-implication table never widens what a DENY
+/// ACL blocks.
 #[ensures(result == (stored == requested
     || stored == AclOperationKind::All
-    || (stored == AclOperationKind::Read && requested == AclOperationKind::Describe)
-    || (stored == AclOperationKind::Write && requested == AclOperationKind::Describe)
-    || (stored == AclOperationKind::Delete && requested == AclOperationKind::Describe)
-    || (stored == AclOperationKind::Alter && requested == AclOperationKind::Describe)
-    || (stored == AclOperationKind::AlterConfigs
+    || (is_allow && stored == AclOperationKind::Read && requested == AclOperationKind::Describe)
+    || (is_allow && stored == AclOperationKind::Write && requested == AclOperationKind::Describe)
+    || (is_allow && stored == AclOperationKind::Delete && requested == AclOperationKind::Describe)
+    || (is_allow && stored == AclOperationKind::Alter && requested == AclOperationKind::Describe)
+    || (is_allow
+        && stored == AclOperationKind::AlterConfigs
         && requested == AclOperationKind::DescribeConfigs)))]
 #[must_use]
-pub fn acl_operation_match(stored: AclOperationKind, requested: AclOperationKind) -> bool {
+pub fn acl_operation_match(
+    stored: AclOperationKind,
+    requested: AclOperationKind,
+    is_allow: bool,
+) -> bool {
     match stored {
         AclOperationKind::All => true,
-        AclOperationKind::Read => matches!(
-            requested,
-            AclOperationKind::Read | AclOperationKind::Describe
-        ),
-        AclOperationKind::Write => matches!(
-            requested,
-            AclOperationKind::Write | AclOperationKind::Describe
-        ),
+        AclOperationKind::Read => {
+            matches!(requested, AclOperationKind::Read)
+                || (is_allow && matches!(requested, AclOperationKind::Describe))
+        }
+        AclOperationKind::Write => {
+            matches!(requested, AclOperationKind::Write)
+                || (is_allow && matches!(requested, AclOperationKind::Describe))
+        }
+        AclOperationKind::Delete => {
+            matches!(requested, AclOperationKind::Delete)
+                || (is_allow && matches!(requested, AclOperationKind::Describe))
+        }
+        AclOperationKind::Alter => {
+            matches!(requested, AclOperationKind::Alter)
+                || (is_allow && matches!(requested, AclOperationKind::Describe))
+        }
+        AclOperationKind::AlterConfigs => {
+            matches!(requested, AclOperationKind::AlterConfigs)
+                || (is_allow && matches!(requested, AclOperationKind::DescribeConfigs))
+        }
         AclOperationKind::Create => matches!(requested, AclOperationKind::Create),
-        AclOperationKind::Delete => matches!(
-            requested,
-            AclOperationKind::Delete | AclOperationKind::Describe
-        ),
-        AclOperationKind::Alter => matches!(
-            requested,
-            AclOperationKind::Alter | AclOperationKind::Describe
-        ),
         AclOperationKind::Describe => matches!(requested, AclOperationKind::Describe),
         AclOperationKind::ClusterAction => matches!(requested, AclOperationKind::ClusterAction),
         AclOperationKind::DescribeConfigs => {
             matches!(requested, AclOperationKind::DescribeConfigs)
         }
-        AclOperationKind::AlterConfigs => matches!(
-            requested,
-            AclOperationKind::AlterConfigs | AclOperationKind::DescribeConfigs
-        ),
         AclOperationKind::IdempotentWrite => {
             matches!(requested, AclOperationKind::IdempotentWrite)
         }
@@ -136,18 +149,30 @@ pub fn request_auth_admission(state: RequestAuthState, api_key: i16) -> bool {
 }
 
 /// Decide a request from whether any matching ACL allowed or denied it.
-#[ensures(super_user ==> result == AclDecision::AllowSuperuser)]
-#[ensures(!super_user && saw_deny ==> result == AclDecision::DenyExplicit)]
-#[ensures(!super_user && !saw_deny && saw_allow ==> result == AclDecision::AllowAcl)]
-#[ensures(!super_user && !saw_deny && !saw_allow ==> result == AclDecision::DenyDefault)]
+///
+/// `default_allow` selects the outcome when nothing matched: Kafka's
+/// `allow.everyone.if.no.acl.found` (default `false`) allows a request when
+/// no ACL at all applies to the resource, rather than denying it. It only
+/// changes the "nothing matched" case -- an explicit DENY still wins, and an
+/// explicit ALLOW still allows, regardless of `default_allow`.
+#[ensures(facts.0 ==> result == AclDecision::AllowSuperuser)]
+#[ensures(!facts.0 && facts.2 ==> result == AclDecision::DenyExplicit)]
+#[ensures(!facts.0 && !facts.2 && facts.1 ==> result == AclDecision::AllowAcl)]
+#[ensures(!facts.0 && !facts.2 && !facts.1 && facts.3 ==>
+    result == AclDecision::AllowNoAcl)]
+#[ensures(!facts.0 && !facts.2 && !facts.1 && !facts.3 ==>
+    result == AclDecision::DenyDefault)]
 #[must_use]
-pub fn acl_decision(super_user: bool, saw_allow: bool, saw_deny: bool) -> AclDecision {
+pub fn acl_decision(facts: (bool, bool, bool, bool)) -> AclDecision {
+    let (super_user, saw_allow, saw_deny, default_allow) = facts;
     if super_user {
         AclDecision::AllowSuperuser
     } else if saw_deny {
         AclDecision::DenyExplicit
     } else if saw_allow {
         AclDecision::AllowAcl
+    } else if default_allow {
+        AclDecision::AllowNoAcl
     } else {
         AclDecision::DenyDefault
     }
@@ -162,11 +187,25 @@ mod tests {
     #[test]
     fn acl_precedence_is_default_deny_and_order_independent() {
         use AclDecision::{AllowAcl, AllowSuperuser, DenyDefault, DenyExplicit};
-        check!(acl_decision(false, false, false) == DenyDefault);
-        check!(acl_decision(false, true, false) == AllowAcl);
-        check!(acl_decision(false, false, true) == DenyExplicit);
-        check!(acl_decision(false, true, true) == DenyExplicit);
-        check!(acl_decision(true, false, true) == AllowSuperuser);
+        check!(acl_decision((false, false, false, false)) == DenyDefault);
+        check!(acl_decision((false, true, false, false)) == AllowAcl);
+        check!(acl_decision((false, false, true, false)) == DenyExplicit);
+        check!(acl_decision((false, true, true, false)) == DenyExplicit);
+        check!(acl_decision((true, false, true, false)) == AllowSuperuser);
+    }
+
+    #[test]
+    fn acl_precedence_default_allow_only_applies_when_nothing_else_matched() {
+        use AclDecision::{AllowAcl, AllowNoAcl, AllowSuperuser, DenyExplicit};
+        // `default_allow` (allow.everyone.if.no.acl.found) only takes effect
+        // when neither an ALLOW nor a DENY ACL matched.
+        check!(acl_decision((false, false, false, true)) == AllowNoAcl);
+        // An explicit DENY still wins over default_allow.
+        check!(acl_decision((false, false, true, true)) == DenyExplicit);
+        // An explicit ALLOW still wins over default_allow.
+        check!(acl_decision((false, true, false, true)) == AllowAcl);
+        // Super-user bypass still wins over everything.
+        check!(acl_decision((true, false, false, true)) == AllowSuperuser);
     }
 
     #[test]
@@ -228,9 +267,12 @@ mod tests {
         ];
         for stored in operations {
             for requested in operations {
-                let expected =
-                    stored == requested || stored == All || arrows.contains(&(stored, requested));
-                check!(acl_operation_match(stored, requested) == expected);
+                for is_allow in [false, true] {
+                    let expected = stored == requested
+                        || stored == All
+                        || (is_allow && arrows.contains(&(stored, requested)));
+                    check!(acl_operation_match(stored, requested, is_allow) == expected);
+                }
             }
         }
     }

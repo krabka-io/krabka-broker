@@ -235,48 +235,61 @@ async fn handle_preserves_unknown_partition_response_shape() {
     broker_handle.shutdown().await;
 }
 
+/// KIP-455's cluster-`Alter` preamble is the only authorization
+/// `AlterPartitionReassignments` applies; Kafka's
+/// `AlterPartitionReassignmentsRequest.getErrorResponse` sets the top-level
+/// `error_code`/`error_message` to the denial and leaves
+/// `allow_replication_factor_change` at the schema default (`true`), not the
+/// request's value. This holds across both wire versions and both settings of
+/// the request field.
 #[tokio::test]
-async fn handle_denies_cluster_alter_for_each_requested_partition() {
-    let version = 1;
-    let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let principal = Principal {
-        name: "admin".into(),
-        auth_method: AuthMethod::Anonymous,
-        groups: Vec::new(),
-    };
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-    let ctx = test_context(&principal, &peer);
+async fn handle_denies_cluster_alter_with_top_level_cluster_authorization_failed() {
+    for version in 0..=1 {
+        for allow_rf_change in [false, true] {
+            let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
+            let broker = broker_handle.broker_arc_for_test();
+            let principal = Principal {
+                name: "admin".into(),
+                auth_method: AuthMethod::Anonymous,
+                groups: Vec::new(),
+            };
+            let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+            let ctx = test_context(&principal, &peer);
 
-    let bytes = handle(
-        &broker,
-        request(false, "payments", 8, Some(vec![1, 2])),
-        &ctx,
-        version,
-    )
-    .await
-    .expect("handle");
-    let resp = decode_response(&bytes, version);
+            let bytes = handle(
+                &broker,
+                request(allow_rf_change, "payments", 8, Some(vec![1, 2])),
+                &ctx,
+                version,
+            )
+            .await
+            .expect("handle");
+            let resp = decode_response(&bytes, version);
 
-    let expected = AlterPartitionReassignmentsResponse {
-        throttle_time_ms: 0,
-        allow_replication_factor_change: false,
-        error_code: 0,
-        error_message: None,
-        responses: vec![ReassignableTopicResponse {
-            name: "payments".into(),
-            partitions: vec![ReassignablePartitionResponse {
-                partition_index: 8,
+            let expected = AlterPartitionReassignmentsResponse {
+                throttle_time_ms: 0,
+                allow_replication_factor_change: true,
                 error_code: CLUSTER_AUTHORIZATION_FAILED,
                 error_message: Some("alter-reassignment denied".into()),
+                responses: vec![ReassignableTopicResponse {
+                    name: "payments".into(),
+                    partitions: vec![ReassignablePartitionResponse {
+                        partition_index: 8,
+                        error_code: CLUSTER_AUTHORIZATION_FAILED,
+                        error_message: Some("alter-reassignment denied".into()),
+                        unknown_tagged_fields: UnknownTaggedFields::default(),
+                    }],
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                }],
                 unknown_tagged_fields: UnknownTaggedFields::default(),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }],
-        unknown_tagged_fields: UnknownTaggedFields::default(),
-    };
-    assert!(resp == expected);
-    broker_handle.shutdown().await;
+            };
+            assert!(
+                resp == expected,
+                "version={version} allow_rf_change={allow_rf_change}"
+            );
+            broker_handle.shutdown().await;
+        }
+    }
 }
 
 #[tokio::test]

@@ -23,6 +23,18 @@
 //!   `GROUP_AUTHORIZATION_FAILED (30)`.
 //! * `Read` on `Topic(name)` for each topic. A deny gives every partition row
 //!   of that topic `TOPIC_AUTHORIZATION_FAILED (29)`.
+//!
+//! ## Existence check
+//!
+//! After the topic `Read` gate, every partition of an authorized topic goes
+//! through the same existence check Kafka runs in
+//! `KafkaApis.handleTxnOffsetCommitRequest` (lines 2124-2150): a topic the
+//! metadata image does not hold, or a partition index outside that topic's
+//! range, answers `UNKNOWN_TOPIC_OR_PARTITION (3)` on that row and is left
+//! out of the transactional append. This code survives a later group-fencing
+//! failure too: the fenced-request response still carries
+//! `UNKNOWN_TOPIC_OR_PARTITION` on these rows rather than the fencing error.
+//! See [`existence::unknown_partitions`].
 
 use bytes::Bytes;
 use krabka_ids::PartitionIndex;
@@ -30,13 +42,17 @@ use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{Decode, owned::txn_offset_commit_request::TxnOffsetCommitRequest};
 
 mod batch;
+mod existence;
 mod response;
 
+#[cfg(test)]
+mod integration_tests;
 #[cfg(test)]
 mod test_support;
 
 use self::{
     batch::{AppendedTxnOffsets, append_txn_batch},
+    existence::unknown_partitions,
     response::{build_response, encode_err_all, encode_resp},
 };
 use crate::{
@@ -100,28 +116,31 @@ pub(crate) async fn handle(
     }
 
     // ── ACL preamble: per-topic Read ──────────────────────────
-    let topic_decisions = {
+    // ── Existence check: authorized topic/partition must be in the image ──
+    let (denied_topics, unknown_rows) = {
         let image = broker.controller.current_image();
         let topic_names: Vec<&str> = req.topics.iter().map(|t| t.name.as_str()).collect();
-        authorize_topics(
+        let topic_decisions = authorize_topics(
             broker.config.authorizer.as_ref(),
             &*image,
             ctx.principal,
             ctx.peer,
             AclOperation::Read,
             topic_names,
-        )
+        );
+        let denied_topics: std::collections::HashSet<String> = topic_decisions
+            .into_iter()
+            .filter_map(|(name, r)| {
+                if r == AuthorizationResult::Deny {
+                    Some(name.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let unknown_rows = unknown_partitions(&req.topics, &denied_topics, &image);
+        (denied_topics, unknown_rows)
     };
-    let denied_topics: std::collections::HashSet<String> = topic_decisions
-        .into_iter()
-        .filter_map(|(name, r)| {
-            if r == AuthorizationResult::Deny {
-                Some(name.to_string())
-            } else {
-                None
-            }
-        })
-        .collect();
 
     if let Some(entry) = broker.txn_coordinator.get(&req.transactional_id)
         && entry.lock().await.has_staged_producer_identity()
@@ -182,19 +201,28 @@ pub(crate) async fn handle(
             .await
         };
         if let Some(code) = code {
-            return encode_err_all(version, &req, code);
+            return encode_resp(
+                version,
+                &build_response(&req, code, &denied_topics, &unknown_rows),
+            );
         }
     }
 
     // KIP-890 transaction protocol v2 folds AddOffsetsToTxn into v5+
     // TxnOffsetCommit. Enroll the group's offsets partition with the
-    // transaction coordinator before appending the transactional records.
+    // transaction coordinator before appending the transactional records,
+    // but only when at least one row will actually reach the log — a topic
+    // that is entirely denied or entirely unknown never touches the
+    // transaction.
     if version >= 5
         && txnv.verified()
-        && req
-            .topics
-            .iter()
-            .any(|topic| !denied_topics.contains(&topic.name) && !topic.partitions.is_empty())
+        && req.topics.iter().any(|topic| {
+            !denied_topics.contains(&topic.name)
+                && topic
+                    .partitions
+                    .iter()
+                    .any(|part| !unknown_rows.contains(&(topic.name.clone(), part.partition_index)))
+        })
     {
         let code = broker
             .txn_coordinator
@@ -207,7 +235,10 @@ pub(crate) async fn handle(
             )
             .await;
         if code != codes::NONE {
-            return encode_resp(version, &build_response(&req, code, &denied_topics));
+            return encode_resp(
+                version,
+                &build_response(&req, code, &denied_topics, &unknown_rows),
+            );
         }
     }
 
@@ -215,13 +246,15 @@ pub(crate) async fn handle(
     //    We reuse the OffsetCommitKey/Value layout but stamp the batch with
     //    is_transactional=true + (producer_id, producer_epoch) so the log's
     //    LSO machinery holds the offsets until EndTxn commits/aborts.
-    //    Topics denied by the per-topic Read ACL are skipped from the
-    //    batch and surfaced as TOPIC_AUTHORIZATION_FAILED in the response.
+    //    Topics denied by the per-topic Read ACL, and rows the existence
+    //    check flagged, are skipped from the batch and surfaced as
+    //    TOPIC_AUTHORIZATION_FAILED / UNKNOWN_TOPIC_OR_PARTITION in the
+    //    response.
     // Reserve the keys on the group actor before the append, so that a
     // concurrent `DeleteGroups` either runs first (the actor stops and the
     // reservation fails before anything is durable) or tombstones these keys
     // after the records.
-    let reserved = reserved_keys(&req, &denied_topics);
+    let reserved = reserved_keys(&req, &denied_topics, &unknown_rows);
     if !reserved.is_empty()
         && reserve_offsets(&handle, req.producer_id, reserved.clone(), true)
             .await
@@ -229,7 +262,12 @@ pub(crate) async fn handle(
     {
         return encode_resp(
             version,
-            &build_response(&req, codes::COORDINATOR_NOT_AVAILABLE, &denied_topics),
+            &build_response(
+                &req,
+                codes::COORDINATOR_NOT_AVAILABLE,
+                &denied_topics,
+                &unknown_rows,
+            ),
         );
     }
     let now_ms = now_millis();
@@ -239,6 +277,7 @@ pub(crate) async fn handle(
         offsets_partition,
         now_ms,
         &denied_topics,
+        &unknown_rows,
     )
     .await
     {
@@ -249,7 +288,10 @@ pub(crate) async fn handle(
                 // stopped meanwhile took it with it.
                 let _ = reserve_offsets(&handle, req.producer_id, reserved, false).await;
             }
-            return encode_resp(version, &build_response(&req, code, &denied_topics));
+            return encode_resp(
+                version,
+                &build_response(&req, code, &denied_topics, &unknown_rows),
+            );
         }
     };
 
@@ -266,28 +308,37 @@ pub(crate) async fn handle(
         && let Err(code) =
             mark_offsets_pending(&handle, req.producer_id, appended, &req.group_id).await
     {
-        return encode_resp(version, &build_response(&req, code, &denied_topics));
+        return encode_resp(
+            version,
+            &build_response(&req, code, &denied_topics, &unknown_rows),
+        );
     }
 
     // 5. Success — per-(topic, partition) error_code = NONE for allowed,
-    //    TOPIC_AUTHORIZATION_FAILED for denied.
-    encode_resp(version, &build_response(&req, codes::NONE, &denied_topics))
+    //    TOPIC_AUTHORIZATION_FAILED for denied,
+    //    UNKNOWN_TOPIC_OR_PARTITION for a row the existence check flagged.
+    encode_resp(
+        version,
+        &build_response(&req, codes::NONE, &denied_topics, &unknown_rows),
+    )
 }
 
 /// The `(topic, partition)` keys the transactional append will write: every
-/// partition of every topic the principal may read.
+/// partition of every topic the principal may read, minus the rows the
+/// existence check flagged as unknown.
 fn reserved_keys(
     req: &TxnOffsetCommitRequest,
     denied_topics: &std::collections::HashSet<String>,
+    unknown_rows: &std::collections::HashSet<(String, i32)>,
 ) -> Vec<(String, i32)> {
     req.topics
         .iter()
         .filter(|topic| !denied_topics.contains(&topic.name))
         .flat_map(|topic| {
-            topic
-                .partitions
-                .iter()
-                .map(|partition| (topic.name.clone(), partition.partition_index))
+            topic.partitions.iter().filter_map(|partition| {
+                let key = (topic.name.clone(), partition.partition_index);
+                (!unknown_rows.contains(&key)).then_some(key)
+            })
         })
         .collect()
 }

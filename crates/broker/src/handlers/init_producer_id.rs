@@ -7,13 +7,18 @@
 //!
 //! ## ACL preamble
 //!
-//! Two distinct authorize gates branch off `req.transactional_id`:
+//! Two distinct authorize gates branch off `req.transactional_id`, matching
+//! Kafka's `KafkaApis.handleInitProducerIdRequest`: any non-null id, empty
+//! string included, is a transactional id, and only `None` is idempotent-only.
 //!
-//! * `Some(non-empty)` → `Write` on
+//! * `Some(_)` (empty or not) → `Write` on
 //!   `TransactionalId(transactional_id)`. Deny →
-//!   `error_code = TRANSACTIONAL_ID_AUTHORIZATION_FAILED (53)`.
-//! * `None | Some("")` (idempotent-only producer) →
-//!   `IdempotentWrite` on `Cluster("kafka-cluster")`. Deny →
+//!   `error_code = TRANSACTIONAL_ID_AUTHORIZATION_FAILED (53)`. An empty id
+//!   that passes this check still allocates no producer id: the transaction
+//!   coordinator rejects it with `error_code = INVALID_REQUEST (42)`.
+//! * `None` (idempotent-only producer) → `IdempotentWrite` on
+//!   `Cluster("kafka-cluster")`, OR `Write` on at least one `Topic` resource
+//!   pattern (`authorize_by_resource_type`). Deny of both →
 //!   `error_code = CLUSTER_AUTHORIZATION_FAILED (31)`.
 
 use bytes::Bytes;
@@ -78,36 +83,46 @@ pub(crate) async fn handle(
     {
         let image = controller.current_image();
         let authorizer = broker.config.authorizer.as_ref();
-        match req.transactional_id.as_deref() {
-            Some(tid) if !tid.is_empty() => {
-                let acl_req = AuthorizationRequest {
-                    principal: ctx.principal,
-                    host: ctx.peer,
-                    resource_type: ResourceType::TransactionalId,
-                    resource_name: tid,
-                    operation: AclOperation::Write,
-                };
-                if authorizer.authorize(&*image, &acl_req) == AuthorizationResult::Deny {
-                    return encode_err(version, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED);
-                }
+        if let Some(tid) = req.transactional_id.as_deref() {
+            // Any non-null id, empty string included, is transactional.
+            let acl_req = AuthorizationRequest {
+                principal: ctx.principal,
+                host: ctx.peer,
+                resource_type: ResourceType::TransactionalId,
+                resource_name: tid,
+                operation: AclOperation::Write,
+            };
+            if authorizer.authorize(&*image, &acl_req) == AuthorizationResult::Deny {
+                return encode_err(version, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED);
             }
-            _ => {
-                let acl_req = AuthorizationRequest {
-                    principal: ctx.principal,
-                    host: ctx.peer,
-                    resource_type: ResourceType::Cluster,
-                    resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-                    operation: AclOperation::IdempotentWrite,
-                };
-                if authorizer.authorize(&*image, &acl_req) == AuthorizationResult::Deny {
-                    return encode_err(version, codes::CLUSTER_AUTHORIZATION_FAILED);
-                }
+        } else {
+            // Idempotent-only producer: cluster-wide IdempotentWrite, or
+            // Write on at least one topic resource pattern (KIP-599).
+            let cluster_req = AuthorizationRequest {
+                principal: ctx.principal,
+                host: ctx.peer,
+                resource_type: ResourceType::Cluster,
+                resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+                operation: AclOperation::IdempotentWrite,
+            };
+            let cluster_allowed =
+                authorizer.authorize(&*image, &cluster_req) == AuthorizationResult::Allow;
+            let topic_write_allowed = cluster_allowed
+                || authorizer.authorize_by_resource_type(
+                    &*image,
+                    ctx.principal,
+                    ctx.peer,
+                    ResourceType::Topic,
+                    AclOperation::Write,
+                ) == AuthorizationResult::Allow;
+            if !topic_write_allowed {
+                return encode_err(version, codes::CLUSTER_AUTHORIZATION_FAILED);
             }
         }
     }
 
     let resp = match req.transactional_id.as_deref() {
-        None | Some("") => {
+        None => {
             // Non-transactional path (idempotence).
             let (pid, epoch) = producer_ids.allocate().await?;
             InitProducerIdResponse {
@@ -118,6 +133,13 @@ pub(crate) async fn handle(
                 producer_epoch: epoch,
                 ..Default::default()
             }
+        }
+        Some("") => {
+            // An empty transactional id passes the Write-on-TransactionalId("")
+            // ACL check above like any other transactional id, but the
+            // transaction coordinator itself rejects the empty id outright.
+            // No producer id is allocated either way.
+            return encode_err(version, codes::INVALID_REQUEST);
         }
         Some(tid) => {
             // Refresh the coordinator's leader-partition view from the
@@ -132,7 +154,7 @@ pub(crate) async fn handle(
             // Validated up-front (like Kafka's `handleInitProducerId`), before
             // the coordinator-ness check, so a client learns its request is
             // unauthorized / unsupported regardless of which broker it hit.
-            if req.enable2_pc || req.keep_prepared_txn {
+            if req.enable2_pc {
                 // (1) Cluster must have 2PC enabled. Kafka maps a disabled
                 //     cluster to TRANSACTIONAL_ID_AUTHORIZATION_FAILED (not an
                 //     UNSUPPORTED_*), so a client can't probe the feature flag.

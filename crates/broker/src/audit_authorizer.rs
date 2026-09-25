@@ -79,6 +79,22 @@ impl Authorizer for AuditingAuthorizer {
     fn decision_ttl(&self) -> Option<std::time::Duration> {
         self.inner.decision_ttl()
     }
+
+    /// Forward the wrapped authorizer's answer. This resource-type-wide check
+    /// is not per-resource, so `authorize` above (which audits Deny) never
+    /// sees it; a caller that wants a Deny from this path audited would need
+    /// its own event, which no handler asks for yet.
+    fn authorize_by_resource_type(
+        &self,
+        source: &dyn krabka_authz::AclSource,
+        principal: &krabka_security::Principal,
+        host: &std::net::SocketAddr,
+        resource_type: krabka_metadata::ResourceType,
+        operation: krabka_metadata::AclOperation,
+    ) -> AuthorizationResult {
+        self.inner
+            .authorize_by_resource_type(source, principal, host, resource_type, operation)
+    }
 }
 
 #[cfg(test)]

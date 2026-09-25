@@ -75,7 +75,6 @@ pub(super) struct PartitionInput<'a> {
     /// The topic's authorization-and-freeze result, resolved once per topic.
     /// Only `Frozen` carries registry detail, after authorization succeeded.
     pub(super) freeze: FreezeMutationResolution<'a>,
-    pub(super) txn_id_denied: bool,
     /// The request fields of the KIP-890 transaction check.
     pub(super) transaction: TransactionRequest<'a>,
     pub(super) acks: i16,
@@ -201,7 +200,6 @@ pub(super) async fn process_partition(
         schema,
         topic_name,
         freeze,
-        txn_id_denied,
         transaction,
         acks,
         timeout,
@@ -237,11 +235,6 @@ pub(super) async fn process_partition(
         base_offset: INVALID_OFFSET,
         ..Default::default()
     };
-
-    if txn_id_denied {
-        out.error_code = codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED;
-        return Ok(PartitionOutcome::Done(out));
-    }
 
     // ── KFC-9 write freeze ───────────────────────────────────────────
     // Beside the topic ACL denial, and ahead of `prepare_batch`, because a

@@ -16,6 +16,11 @@ pub(super) struct ShareState {
     pub(super) sm: AcquisitionState,
     pub(super) clock: u8,
     pub(super) hwm: Offset,
+    /// The log's own start offset (retention / `DeleteRecords`), tracked apart
+    /// from `sm.start_offset` (the SPSO). It only ever moves forward, and
+    /// `AdvanceLogStart` is the one action that moves it, calling
+    /// `sm.advance_past_log_start` with the new value.
+    pub(super) log_start: Offset,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -52,4 +57,9 @@ pub(super) enum ShareAction {
     /// Leader failover: persist and reload. Acquired drops to Available, and
     /// the locks are lost.
     Reload,
+    /// The log start offset (retention / `DeleteRecords`) moves to
+    /// `new_start`, past the current SPSO. Archives `Available`/`Deferred`
+    /// records below it and advances the SPSO, per
+    /// `AcquisitionState::advance_past_log_start`.
+    AdvanceLogStart { new_start: Offset },
 }

@@ -1,9 +1,19 @@
-//! The per-resource `AlterConfigs` work: the authorization preamble, the
-//! dispatch to the topic or broker record builder, and the metadata submit.
+//! The per-resource `AlterConfigs` work: the Kafka `preprocess` shape checks,
+//! the authorization preamble, the dispatch to the resource's record
+//! builder, and the metadata submit.
 //!
-//! One resource's outcome never depends on another's, so this module turns a
-//! single `AlterConfigsResource` into the one response row it earns and the
-//! request entry point only loops over it.
+//! One resource's outcome never depends on another's beyond whether it is a
+//! duplicate resource reference (computed for the whole request up front), so
+//! this module turns a single `AlterConfigsResource` into the one response
+//! row it earns and the request entry point only loops over it.
+//!
+//! Kafka's `ConfigAdminManager.preprocess` validates the request shape before
+//! `ControllerApis.authorizeAlterResource` runs, so a malformed row —
+//! a resource named twice, a config key named twice, or a config with no
+//! value — earns `INVALID_REQUEST` whether or not the principal may touch the
+//! resource. That check runs first here too.
+
+use std::collections::BTreeSet;
 
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
@@ -16,8 +26,9 @@ use krabka_protocol::{
 use krabka_raft::RaftError;
 
 use super::{
-    RESOURCE_TYPE_BROKER, RESOURCE_TYPE_TOPIC, broker_configs::broker_config_records,
-    topic_configs::topic_config_record,
+    RESOURCE_TYPE_BROKER, RESOURCE_TYPE_CLIENT_METRICS, RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
+    broker_configs::broker_config_records, client_metrics_configs::client_metrics_config_record,
+    group_configs::group_config_record, topic_configs::topic_config_record,
 };
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
@@ -25,12 +36,54 @@ use crate::{
     codes,
 };
 
+/// The Kafka `ConfigAdminManager.preprocess` shape checks, run before
+/// authorization: a resource named more than once in the request, a config
+/// key named more than once within a resource, and a config with no value
+/// (legacy `AlterConfigs` never deletes by omitting a value the way
+/// `IncrementalAlterConfigs`' DELETE operation does).
+fn validate_resource_shape(
+    resource: &AlterConfigsResource,
+    is_duplicate: bool,
+) -> Result<(), (i16, String)> {
+    if is_duplicate {
+        return Err((
+            codes::INVALID_REQUEST,
+            "Each resource must appear at most once.".into(),
+        ));
+    }
+    let mut seen_keys = BTreeSet::new();
+    if resource
+        .configs
+        .iter()
+        .any(|cfg| !seen_keys.insert(cfg.name.as_str()))
+    {
+        return Err((
+            codes::INVALID_REQUEST,
+            "Error due to duplicate config keys".into(),
+        ));
+    }
+    let null_names: Vec<&str> = resource
+        .configs
+        .iter()
+        .filter(|cfg| cfg.value.is_none())
+        .map(|cfg| cfg.name.as_str())
+        .collect();
+    if !null_names.is_empty() {
+        return Err((
+            codes::INVALID_REQUEST,
+            format!("Null value not supported for : {}", null_names.join(",")),
+        ));
+    }
+    Ok(())
+}
+
 pub(super) async fn process_resource(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     ctx: &crate::handlers::RequestContext<'_>,
     resource: AlterConfigsResource,
     validate_only: bool,
+    is_duplicate: bool,
 ) -> AlterConfigsResourceResponse {
     let mut out = AlterConfigsResourceResponse {
         resource_type: resource.resource_type,
@@ -40,12 +93,23 @@ pub(super) async fn process_resource(
         unknown_tagged_fields: UnknownTaggedFields::default(),
     };
 
+    // ── Kafka validates the request shape before it authorizes ──
+    if let Err((code, message)) = validate_resource_shape(&resource, is_duplicate) {
+        out.error_code = code;
+        out.error_message = Some(message);
+        return out;
+    }
+
     // ── ACL preamble ────────────────────────────────────────
-    // Per-resource authorization based on resource_type.
-    // Topic (2) → AlterConfigs on Topic(resource_name) → TOPIC_AUTHORIZATION_FAILED on Deny.
-    // Broker (4) → AlterConfigs on Cluster("kafka-cluster") → CLUSTER_AUTHORIZATION_FAILED on Deny.
+    // Per-resource authorization based on resource_type, matching
+    // `ControllerApis.authorizeAlterResource` for the types it handles
+    // (Topic, ClientMetrics, Group) and the legacy in-broker path for Broker.
+    // Topic (2)          → AlterConfigs on Topic(resource_name)     → TOPIC_AUTHORIZATION_FAILED, "Topic authorization failed."
+    // Broker (4)         → AlterConfigs on Cluster("kafka-cluster") → CLUSTER_AUTHORIZATION_FAILED, no message (legacy in-broker path).
+    // ClientMetrics (16) → AlterConfigs on Cluster("kafka-cluster") → CLUSTER_AUTHORIZATION_FAILED, "Cluster authorization failed."
+    // Group (32)         → AlterConfigs on Group(resource_name)     → GROUP_AUTHORIZATION_FAILED, "Group authorization failed."
     // Other resource types are unsupported; Kafka assigns no distinct code for
-    // that, so they get INVALID_REQUEST — checked after ACL.
+    // that, so they get INVALID_REQUEST.
     let acl_result = match resource.resource_type {
         RESOURCE_TYPE_TOPIC => broker.config.authorizer.authorize(
             image,
@@ -57,13 +121,23 @@ pub(super) async fn process_resource(
                 operation: AclOperation::AlterConfigs,
             },
         ),
-        RESOURCE_TYPE_BROKER => broker.config.authorizer.authorize(
+        RESOURCE_TYPE_BROKER | RESOURCE_TYPE_CLIENT_METRICS => broker.config.authorizer.authorize(
             image,
             &AuthorizationRequest {
                 principal: ctx.principal,
                 host: ctx.peer,
                 resource_type: ResourceType::Cluster,
                 resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+                operation: AclOperation::AlterConfigs,
+            },
+        ),
+        RESOURCE_TYPE_GROUP => broker.config.authorizer.authorize(
+            image,
+            &AuthorizationRequest {
+                principal: ctx.principal,
+                host: ctx.peer,
+                resource_type: ResourceType::Group,
+                resource_name: &resource.resource_name,
                 operation: AclOperation::AlterConfigs,
             },
         ),
@@ -79,7 +153,15 @@ pub(super) async fn process_resource(
     if acl_result == AuthorizationResult::Deny {
         out.error_code = match resource.resource_type {
             RESOURCE_TYPE_TOPIC => codes::TOPIC_AUTHORIZATION_FAILED,
+            RESOURCE_TYPE_GROUP => codes::GROUP_AUTHORIZATION_FAILED,
             _ => codes::CLUSTER_AUTHORIZATION_FAILED,
+        };
+        out.error_message = match resource.resource_type {
+            RESOURCE_TYPE_TOPIC => Some("Topic authorization failed.".into()),
+            RESOURCE_TYPE_GROUP => Some("Group authorization failed.".into()),
+            RESOURCE_TYPE_CLIENT_METRICS => Some("Cluster authorization failed.".into()),
+            RESOURCE_TYPE_BROKER => None,
+            _ => unreachable!("resource type passed ACL dispatch"),
         };
         return out;
     }
@@ -97,6 +179,22 @@ pub(super) async fn process_resource(
         }
         RESOURCE_TYPE_BROKER => match broker_config_records(&resource, image) {
             Ok(records) => records,
+            Err((code, message)) => {
+                out.error_code = code;
+                out.error_message = Some(message);
+                return out;
+            }
+        },
+        RESOURCE_TYPE_GROUP => match group_config_record(&resource, &broker.config.streams_group) {
+            Ok(record) => vec![record],
+            Err((code, message)) => {
+                out.error_code = code;
+                out.error_message = Some(message);
+                return out;
+            }
+        },
+        RESOURCE_TYPE_CLIENT_METRICS => match client_metrics_config_record(&resource) {
+            Ok(record) => vec![record],
             Err((code, message)) => {
                 out.error_code = code;
                 out.error_message = Some(message);

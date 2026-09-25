@@ -29,7 +29,7 @@ pub(super) struct AppendedTxnOffsets {
 
 /// Append the transactional offset records to `__consumer_offsets`, and
 /// report where they landed and which `(topic, partition)` keys they cover.
-/// `None` means every topic was denied and nothing was appended.
+/// `None` means every row was denied or unknown, and nothing was appended.
 ///
 /// The offsets partition's `WriteTxnMarkers` handler materializes these records
 /// into the owning group actor after the commit marker is durable. This keeps
@@ -47,6 +47,7 @@ pub(super) async fn append_txn_batch(
     offsets_partition: i32,
     now_ms: i64,
     denied_topics: &std::collections::HashSet<String>,
+    unknown_rows: &std::collections::HashSet<(String, i32)>,
 ) -> Result<Option<AppendedTxnOffsets>, i16> {
     let mut batch = RecordBatch {
         attributes: Attributes::default().with_transactional(true),
@@ -66,6 +67,9 @@ pub(super) async fn append_txn_batch(
             continue;
         }
         for part in &topic.partitions {
+            if unknown_rows.contains(&(topic.name.clone(), part.partition_index)) {
+                continue;
+            }
             let value = OffsetCommitValue {
                 offset: Offset(part.committed_offset),
                 leader_epoch: part.committed_leader_epoch,
@@ -92,7 +96,8 @@ pub(super) async fn append_txn_batch(
         }
     }
 
-    // If every topic was denied, there's nothing to append; succeed silently.
+    // If every row was denied or unknown, there's nothing to append; succeed
+    // silently.
     if batch.records.is_empty() {
         return Ok(None);
     }
@@ -165,11 +170,17 @@ mod tests {
         open_offsets_partition(&registry, dir.path());
         let req = request();
 
-        let appended =
-            append_txn_batch(&req, &registry, OFFSETS_PARTITION, 12_345, &HashSet::new())
-                .await
-                .expect("append batch")
-                .expect("records appended");
+        let appended = append_txn_batch(
+            &req,
+            &registry,
+            OFFSETS_PARTITION,
+            12_345,
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .await
+        .expect("append batch")
+        .expect("records appended");
         check!(appended.written_at == 0);
         check!(appended.keys == vec![("orders".to_string(), 2), ("orders".to_string(), 3)]);
 
@@ -212,9 +223,16 @@ mod tests {
         let req = request();
         let denied = maplit::hashset! {"orders".to_string()};
 
-        let appended = append_txn_batch(&req, &registry, OFFSETS_PARTITION, 12_345, &denied)
-            .await
-            .expect("all denied succeeds");
+        let appended = append_txn_batch(
+            &req,
+            &registry,
+            OFFSETS_PARTITION,
+            12_345,
+            &denied,
+            &HashSet::new(),
+        )
+        .await
+        .expect("all denied succeeds");
         check!(appended.is_none());
         let part = registry
             .get(OFFSETS_TOPIC, PartitionIndex(OFFSETS_PARTITION))
@@ -235,10 +253,43 @@ mod tests {
             OFFSETS_PARTITION,
             12_345,
             &HashSet::new(),
+            &HashSet::new(),
         )
         .await
         .expect_err("missing offsets partition");
 
         assert!(err == codes::NOT_COORDINATOR);
+    }
+
+    #[tokio::test]
+    async fn append_txn_batch_skips_unknown_rows_without_appending_them() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let registry = Arc::new(PartitionRegistry::new());
+        open_offsets_partition(&registry, dir.path());
+        let req = request();
+        let unknown = maplit::hashset! {("orders".to_string(), 3)};
+
+        let appended = append_txn_batch(
+            &req,
+            &registry,
+            OFFSETS_PARTITION,
+            12_345,
+            &HashSet::new(),
+            &unknown,
+        )
+        .await
+        .expect("append batch")
+        .expect("one row still appended");
+        check!(appended.keys == vec![("orders".to_string(), 2)]);
+
+        let part = registry
+            .get(OFFSETS_TOPIC, PartitionIndex(OFFSETS_PARTITION))
+            .expect("offsets partition");
+        let log = part.log.lock().expect("lock offsets log");
+        let read = log
+            .read(krabka_log::Offset(0), krabka_units::mebibytes(1))
+            .expect("read offsets log");
+        assert!(read.batches.len() == 1);
+        assert!(read.batches[0].records.len() == 1);
     }
 }

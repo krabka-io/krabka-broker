@@ -132,6 +132,7 @@ impl Default for BrokerConfig {
             default_min_insync_replicas: 1,
             num_partitions: 1,
             default_replication_factor: 1,
+            max_request_partition_size_limit: 2000,
             future_log_move_read_chunk: mebibytes(1),
             offsets_topic_num_partitions: 50,
             offsets_retention_override: None,

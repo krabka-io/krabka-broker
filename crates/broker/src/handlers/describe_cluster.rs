@@ -1,15 +1,21 @@
 //! `DescribeCluster` (`api_key=60`).
 //!
 //! This handler projects registrations from the metadata image and broker
-//! fencing from the controller's heartbeat registry. It authorizes `Describe`
-//! on `Cluster("kafka-cluster")`. On Deny it returns a
-//! whole-response `error_code = CLUSTER_AUTHORIZATION_FAILED` (31).
+//! fencing from the controller's heartbeat registry. Unlike most admin
+//! handlers, it never refuses the whole request for a missing ACL: any
+//! authenticated principal can read the cluster id, controller id and broker
+//! list. Kafka has no `Describe` gate in
+//! `KafkaApis.handleDescribeCluster`, and clients such as a Kafka Connect
+//! worker rely on `Admin.describeCluster()` succeeding under least-privilege
+//! ACLs (#704).
 //!
 //! KIP-430: when the request sets the
 //! `include_cluster_authorized_operations` flag, the response carries a
 //! bitfield of the cluster operations the principal is authorized for. If the
 //! flag is not set, the field stays at `i32::MIN`, which is Kafka's "not
-//! present" sentinel.
+//! present" sentinel. If the flag is set but the principal lacks `Describe`
+//! on `Cluster("kafka-cluster")`, the bitfield is `0` rather than absent --
+//! `Describe` gates only this field, not the rest of the response.
 
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
@@ -31,8 +37,10 @@ use crate::{
     },
 };
 
-/// `DescribeCluster` `endpoint_type` (KIP-919): `1` = BROKERS.
-const ENDPOINT_TYPE_BROKERS: i8 = 1;
+/// `DescribeCluster` `endpoint_type` (KIP-919): `1` = BROKER.
+const ENDPOINT_TYPE_BROKER: i8 = 1;
+/// `DescribeCluster` `endpoint_type` (KIP-919): `2` = CONTROLLER.
+const ENDPOINT_TYPE_CONTROLLER: i8 = 2;
 
 /// The `broker_id` a registration's [`NodeId`](krabka_metadata::NodeId) projects
 /// to on the wire.
@@ -70,33 +78,37 @@ pub(crate) async fn handle(
 
     let mut cur: &[u8] = req_bytes;
     let req = DescribeClusterRequest::decode(&mut cur, version)?;
-    if req.endpoint_type != ENDPOINT_TYPE_BROKERS {
+
+    // KIP-919 endpoint-type check, matching Kafka's `AuthHelper` exactly. A
+    // broker listener only ever serves `BROKER`; the requested type decides
+    // which error the whole response carries. Neither branch echoes the
+    // requested `endpoint_type` back -- the error response leaves it at the
+    // schema default (`1`), same as Kafka's `AuthHelper.computeDescribeClusterResponse`.
+    if req.endpoint_type == ENDPOINT_TYPE_CONTROLLER {
         let resp = DescribeClusterResponse {
             error_code: codes::MISMATCHED_ENDPOINT_TYPE,
-            error_message: Some("broker listener requires endpoint_type=BROKERS".into()),
-            endpoint_type: req.endpoint_type,
+            error_message: Some(
+                "The request was sent to an endpoint of type BROKER, but we wanted an endpoint \
+                 of type CONTROLLER"
+                    .into(),
+            ),
             ..Default::default()
         };
         return crate::handlers::encode_response(&resp, version);
     }
-
-    // ── ACL preamble ────────────────────────────────────────
-    // Whole-request Cluster Describe gate. On Deny, return
-    // CLUSTER_AUTHORIZATION_FAILED on the whole response.
-    let allow = broker.config.authorizer.authorize(
-        &*image,
-        &AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: krabka_metadata::ResourceType::Cluster,
-            resource_name: CLUSTER_RESOURCE_NAME,
-            operation: AclOperation::Describe,
-        },
-    );
-    if allow == AuthorizationResult::Deny {
+    if req.endpoint_type != ENDPOINT_TYPE_BROKER {
+        // Anything other than BROKER or CONTROLLER is EndpointType.UNKNOWN.
+        // Kafka's v0 schema predates KIP-919's endpoint_type field and has no
+        // `UNSUPPORTED_ENDPOINT_TYPE` in its error-code table, so v0 answers
+        // INVALID_REQUEST instead.
+        let error_code = if version == 0 {
+            codes::INVALID_REQUEST
+        } else {
+            codes::UNSUPPORTED_ENDPOINT_TYPE
+        };
         let resp = DescribeClusterResponse {
-            error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
-            error_message: Some("describe-cluster denied".into()),
+            error_code,
+            error_message: Some(format!("Unsupported endpoint type {}", req.endpoint_type)),
             ..Default::default()
         };
         return crate::handlers::encode_response(&resp, version);
@@ -135,15 +147,33 @@ pub(crate) async fn handle(
 
     // KIP-430: only populate the bitfield when the client asked for it;
     // otherwise leave the wire-default `i32::MIN` ("not present") sentinel.
+    // `Describe` gates only this field (matching Kafka's
+    // `AuthHelper.computeDescribeClusterResponse`), never the rest of the
+    // response: without `Describe` the bitfield reads `0` even though the
+    // principal may hold other Cluster operations.
     let cluster_authorized_operations = if req.include_cluster_authorized_operations {
-        authorized_operations_bits(
-            broker.config.authorizer.as_ref(),
-            &image,
-            ctx.principal,
-            ctx.peer,
-            ResourceType::Cluster,
-            CLUSTER_RESOURCE_NAME,
-        )
+        let can_describe = broker.config.authorizer.authorize(
+            &*image,
+            &AuthorizationRequest {
+                principal: ctx.principal,
+                host: ctx.peer,
+                resource_type: krabka_metadata::ResourceType::Cluster,
+                resource_name: CLUSTER_RESOURCE_NAME,
+                operation: AclOperation::Describe,
+            },
+        ) == AuthorizationResult::Allow;
+        if can_describe {
+            authorized_operations_bits(
+                broker.config.authorizer.as_ref(),
+                &image,
+                ctx.principal,
+                ctx.peer,
+                ResourceType::Cluster,
+                CLUSTER_RESOURCE_NAME,
+            )
+        } else {
+            0
+        }
     } else {
         i32::MIN
     };
@@ -225,9 +255,14 @@ mod tests {
             .expect("seed broker registration");
     }
 
+    /// #704: a principal without cluster `Describe` is never refused the
+    /// whole request. Kafka's `handleDescribeCluster` has no `authorize` call
+    /// at all; the missing grant only zeroes `cluster_authorized_operations`,
+    /// gated below by `the_authorized_operations_bitfield` table.
     #[tokio::test]
-    async fn denied_response_preserves_error_fields() {
+    async fn a_principal_without_describe_still_gets_full_cluster_data() {
         let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
+        seed_broker(&broker_handle).await;
         let broker = broker_handle.broker_arc_for_test();
         let p = principal("alice");
         let peer = peer();
@@ -239,18 +274,45 @@ mod tests {
             .expect("handle");
         let resp = decode_response(&bytes);
 
-        let expected = DescribeClusterResponse {
-            throttle_time_ms: 0,
-            error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
-            error_message: Some("describe-cluster denied".into()),
-            endpoint_type: 1,
-            cluster_id: String::new(),
-            controller_id: -1,
-            brokers: vec![],
-            cluster_authorized_operations: i32::MIN,
+        // `start_broker` self-registers as broker 1 with a dynamic
+        // 127.0.0.1 host/port, so the broker list is compared by content
+        // (as `broker_endpoint_response_preserves_non_default_fields` does)
+        // rather than as a whole struct against a literal.
+        assert!(
+            (
+                resp.error_code,
+                resp.error_message.clone(),
+                resp.endpoint_type,
+                resp.cluster_id.clone(),
+                // Not requested: stays at the "not present" sentinel even
+                // though Describe is denied (#704 gates only this field,
+                // never the rest of the response).
+                resp.cluster_authorized_operations,
+                resp.throttle_time_ms
+            ) == (
+                codes::NONE,
+                None,
+                1,
+                crate::cluster_id::encode(broker.controller.current_image().cluster_id()),
+                i32::MIN,
+                0
+            )
+        );
+        assert!(resp.brokers.len() == 2);
+        let seeded_row = resp
+            .brokers
+            .iter()
+            .find(|b| b.broker_id == 42)
+            .expect("seeded broker row");
+        let expected_seeded_row = DescribeClusterBroker {
+            broker_id: 42,
+            host: "broker-a".into(),
+            port: 29092,
+            rack: Some("rack-a".into()),
+            is_fenced: false,
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
-        assert!(resp == expected);
+        assert!(*seeded_row == expected_seeded_row);
         broker_handle.shutdown().await;
     }
 
@@ -304,39 +366,90 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    /// KIP-919: a broker listener serves only `endpoint_type=BROKERS`. Any
-    /// other value is refused before the authorizer is consulted, with the
-    /// requested type echoed back so the client can tell which one it asked
-    /// for.
+    /// KIP-919 endpoint-type table, matching Kafka's
+    /// `AuthHelper.computeDescribeClusterResponse` byte for byte: a
+    /// `CONTROLLER` request against a broker listener gets
+    /// `MISMATCHED_ENDPOINT_TYPE` with Kafka's own message; any other
+    /// non-`BROKER` value gets `UNSUPPORTED_ENDPOINT_TYPE`. Neither error
+    /// response echoes the requested `endpoint_type`; it stays at the schema
+    /// default (`1`). This all happens before the authorizer is consulted, so
+    /// `DenyAll` proves the endpoint-type check is not an authorization path.
+    ///
+    /// `endpoint_type` is a v1+ field (KIP-919 predates v0), so a v0 request
+    /// always decodes it at the schema default of `1` (BROKER) regardless of
+    /// what bytes follow -- there is no wire-reachable way to drive a v0
+    /// request into either error arm, and this table does not try to.
     #[tokio::test]
-    async fn a_non_broker_endpoint_type_is_refused_before_authorization() {
-        let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
-        let broker = broker_handle.broker_arc_for_test();
-        let p = principal("alice");
-        let peer = peer();
-        let ctx = test_context(&p, &peer);
-        let controllers = DescribeClusterRequest {
-            endpoint_type: 2,
-            ..Default::default()
-        };
+    async fn endpoint_type_errors_match_kafka() {
+        struct Case {
+            name: &'static str,
+            version: i16,
+            endpoint_type: i8,
+            error_code: i16,
+            error_message: &'static str,
+        }
+        let cases = [
+            Case {
+                name: "controller endpoint type on a broker listener",
+                version: VERSION,
+                endpoint_type: 2,
+                error_code: codes::MISMATCHED_ENDPOINT_TYPE,
+                error_message: "The request was sent to an endpoint of type BROKER, but we \
+                                 wanted an endpoint of type CONTROLLER",
+            },
+            Case {
+                name: "unknown endpoint type 0 at v2",
+                version: VERSION,
+                endpoint_type: 0,
+                error_code: codes::UNSUPPORTED_ENDPOINT_TYPE,
+                error_message: "Unsupported endpoint type 0",
+            },
+            Case {
+                name: "unknown endpoint type 3 at v1",
+                version: 1,
+                endpoint_type: 3,
+                error_code: codes::UNSUPPORTED_ENDPOINT_TYPE,
+                error_message: "Unsupported endpoint type 3",
+            },
+        ];
 
-        let bytes = handle(&broker, VERSION, 123, &encode_request(&controllers), &ctx)
+        for case in cases {
+            let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
+            let broker = broker_handle.broker_arc_for_test();
+            let p = principal("alice");
+            let peer = peer();
+            let ctx = test_context(&p, &peer);
+            let req = DescribeClusterRequest {
+                endpoint_type: case.endpoint_type,
+                ..Default::default()
+            };
+
+            let bytes = handle(
+                &broker,
+                case.version,
+                123,
+                &crate::test_support::encode_request(&req, case.version),
+                &ctx,
+            )
             .await
             .expect("handle");
 
-        let expected = DescribeClusterResponse {
-            throttle_time_ms: 0,
-            error_code: codes::MISMATCHED_ENDPOINT_TYPE,
-            error_message: Some("broker listener requires endpoint_type=BROKERS".into()),
-            endpoint_type: 2,
-            cluster_id: String::new(),
-            controller_id: -1,
-            brokers: vec![],
-            cluster_authorized_operations: i32::MIN,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        };
-        assert!(decode_response(&bytes) == expected);
-        broker_handle.shutdown().await;
+            let expected = DescribeClusterResponse {
+                throttle_time_ms: 0,
+                error_code: case.error_code,
+                error_message: Some(case.error_message.into()),
+                endpoint_type: 1,
+                cluster_id: String::new(),
+                controller_id: -1,
+                brokers: vec![],
+                cluster_authorized_operations: i32::MIN,
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+            };
+            let got: DescribeClusterResponse =
+                crate::test_support::decode_response(&bytes, case.version);
+            assert!(got == expected, "{}", case.name);
+            broker_handle.shutdown().await;
+        }
     }
 
     /// `DescribeClusterResponse.ClusterId` reports Kafka's base64 `Uuid` form,
@@ -394,6 +507,49 @@ mod tests {
         );
         assert!(expected != i32::MIN);
         assert!(resp.cluster_authorized_operations == expected);
+        broker_handle.shutdown().await;
+    }
+
+    /// #704: `Describe` gates `cluster_authorized_operations` only, and it
+    /// gates the *whole* bitfield, not per-operation. A principal that holds
+    /// some other Cluster ACL (here `AlterConfigs`) but not `Describe` still
+    /// reads `0`, exactly as `AuthHelper.computeDescribeClusterResponse`
+    /// does -- it never falls through to computing a partial mask.
+    #[tokio::test]
+    async fn cluster_authorized_operations_reads_zero_without_describe_even_with_other_acls() {
+        let authorizer = Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
+            std::collections::HashSet::new(),
+        ));
+        let (broker_handle, _dir) =
+            start_broker(Arc::clone(&authorizer) as Arc<dyn crate::authorizer::Authorizer>).await;
+        broker_handle
+            .broker_arc_for_test()
+            .controller
+            .submit_change(vec![MetadataRecord::V1AccessControlEntry(
+                krabka_metadata::AclEntry {
+                    resource_type: ResourceType::Cluster,
+                    resource_name: CLUSTER_RESOURCE_NAME.into(),
+                    pattern_type: krabka_metadata::PatternType::Literal,
+                    principal: "User:alice".into(),
+                    host: "*".into(),
+                    operation: AclOperation::AlterConfigs,
+                    permission_type: krabka_metadata::PermissionType::Allow,
+                },
+            )])
+            .await
+            .expect("seed ACL");
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("alice");
+        let peer = peer();
+        let ctx = test_context(&p, &peer);
+
+        let bytes = handle(&broker, VERSION, 123, &encode_request(&request(true)), &ctx)
+            .await
+            .expect("handle");
+        let resp = decode_response(&bytes);
+
+        assert!(resp.error_code == codes::NONE);
+        assert!(resp.cluster_authorized_operations == 0);
         broker_handle.shutdown().await;
     }
 

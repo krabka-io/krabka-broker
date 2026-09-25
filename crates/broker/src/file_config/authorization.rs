@@ -40,6 +40,15 @@ pub struct FileAuthorizationConfig {
     /// [`FileConfigError::MissingSection`][crate::file_config::FileConfigError::MissingSection]
     /// when omitted.
     pub opa: Option<FileOpaConfig>,
+    /// Kafka's `allow.everyone.if.no.acl.found`. Only consulted by
+    /// `type = "simple"`. When `true`, a request is allowed if NO ACL at all
+    /// applies to the resource -- by type, name, and LITERAL/PREFIXED/wildcard
+    /// pattern, regardless of principal, host, operation, or permission type.
+    /// If at least one ACL applies to the resource and none of them matches,
+    /// the request is still denied. Default `false`, matching Kafka's
+    /// `StandardAuthorizer`.
+    #[serde(default)]
+    pub allow_everyone_if_no_acl_found: bool,
 }
 
 /// The principal name that a `super_users` entry names.
@@ -225,6 +234,64 @@ super_users = ["admin"]
             cfg.authorizer.authorize(&img, &req_alice) == AuthorizationResult::Deny,
             "type=simple must default-deny non-super-users with no matching ACL"
         );
+    }
+
+    /// #650: `allow_everyone_if_no_acl_found` defaults to `false`
+    /// (Kafka's `allow.everyone.if.no.acl.found` default), and when set
+    /// `true` in the TOML it flows through to the built
+    /// `SimpleAclAuthorizer` and allows a non-super-user with no matching
+    /// ACL for the resource.
+    #[test]
+    fn allow_everyone_if_no_acl_found_toml_flows_to_simple_acl_authorizer() {
+        use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
+
+        use crate::authorizer::{AuthorizationRequest, AuthorizationResult};
+
+        let img = MetadataImage::new(uuid::Uuid::nil());
+        let alice = test_principal("alice");
+        let host: std::net::SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let req = AuthorizationRequest {
+            principal: &alice,
+            host: &host,
+            resource_type: ResourceType::Topic,
+            resource_name: "t",
+            operation: AclOperation::Read,
+        };
+
+        let cases = [
+            (
+                "omitted defaults to false",
+                r#"
+[authorization]
+type = "simple"
+"#,
+                AuthorizationResult::Deny,
+            ),
+            (
+                "explicit false",
+                r#"
+[authorization]
+type = "simple"
+allow_everyone_if_no_acl_found = false
+"#,
+                AuthorizationResult::Deny,
+            ),
+            (
+                "explicit true",
+                r#"
+[authorization]
+type = "simple"
+allow_everyone_if_no_acl_found = true
+"#,
+                AuthorizationResult::Allow,
+            ),
+        ];
+        for (case, toml, expected) in cases {
+            let file: FileConfig = toml::from_str(toml).unwrap();
+            let mut cfg = crate::config::BrokerConfig::default();
+            file.apply_to(&mut cfg).unwrap();
+            assert!(cfg.authorizer.authorize(&img, &req) == expected, "{case}");
+        }
     }
     #[test]
     fn authorization_section_opa_builds_opa_authorizer() {

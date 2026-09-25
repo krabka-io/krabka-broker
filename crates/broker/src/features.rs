@@ -26,6 +26,26 @@ pub(crate) use krabka_metadata::metadata_version::SHARE_VERSION_FEATURE as SHARE
 /// with `feature_enabled`.
 pub(crate) use krabka_metadata::metadata_version::STREAMS_VERSION_FEATURE as STREAMS_VERSION;
 
+/// The `metadata.version` level at which CIDR-based ACL host patterns
+/// (KIP-1276) are accepted: upstream Kafka's `4.4-IV1`,
+/// `MetadataVersion.isCidrAclSupported`.
+///
+/// `krabka_metadata::metadata_version`'s table -- the canonical
+/// level<->`X.Y-IVn` mapping this broker advertises and negotiates -- ends at
+/// `METADATA_VERSION_MAX` (`4.0-IV3`, level 25) and has no `4.4-IV1` entry
+/// yet, so this constant sits one level past that ceiling rather than naming
+/// a table entry that does not exist. `require_feature` only compares
+/// integers, so the gate below is already correct: no real cluster can
+/// finalize a level this high today (`UpdateFeatures` rejects any level
+/// outside `[METADATA_VERSION_MIN, METADATA_VERSION_MAX]`), so `CreateAcls`
+/// answers every CIDR host with the same `UNSUPPORTED_VERSION` Kafka gives
+/// below `4.4-IV1` -- correct present-day behavior, matching the "Kafka does
+/// not support this yet either, at this metadata version" reality. The day
+/// `krabka_metadata`'s table grows a real `4.4-IV1` entry, this constant
+/// should be redefined against it instead of `METADATA_VERSION_MAX + 1`.
+pub(crate) const CIDR_ACL_HOST_MIN_LEVEL: i16 =
+    krabka_metadata::metadata_version::METADATA_VERSION_MAX + 1;
+
 /// One row of the `ApiVersions.supported_features` advertisement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SupportedFeature {
@@ -69,6 +89,15 @@ pub(crate) fn lookup(name: &str) -> Option<SupportedFeature> {
 /// finalized below `required_level`. It is permissive when the feature is
 /// unfinalized, because there is no level to gate against. This matches how
 /// the range guard treats a missing level.
+///
+/// This permissiveness is correct only for a feature whose own presence in
+/// the registry is what changed -- a legacy image predates the feature
+/// entirely, so there is nothing to compare against and the RPC must still
+/// work. It is the wrong helper for [`CIDR_ACL_HOST_MIN_LEVEL`]: an
+/// unfinalized `metadata.version` there is a real (if legacy or
+/// pre-bootstrap) image whose effective level is at most
+/// [`krabka_metadata::metadata_version::METADATA_VERSION_MAX`], never a
+/// blank check. See [`cidr_hosts_supported`].
 pub(crate) fn require_feature(
     image: &MetadataImage,
     name: &str,
@@ -80,6 +109,24 @@ pub(crate) fn require_feature(
     } else {
         Ok(())
     }
+}
+
+/// KIP-1276 admission gate: whether `image` supports CIDR-range ACL hosts.
+///
+/// Unlike [`require_feature`], an unfinalized `metadata.version` is treated
+/// as at most [`krabka_metadata::metadata_version::METADATA_VERSION_MAX`]
+/// (today's real ceiling), not as an unconditional pass. A pre-bootstrap or
+/// legacy image that has never finalized `metadata.version` is still bound
+/// by whatever level the broker binary itself actually supports, and this
+/// binary supports at most `METADATA_VERSION_MAX`, below
+/// [`CIDR_ACL_HOST_MIN_LEVEL`].
+pub(crate) fn cidr_hosts_supported(image: &MetadataImage) -> bool {
+    image
+        .finalized_features()
+        .get(METADATA_VERSION)
+        .copied()
+        .unwrap_or(krabka_metadata::metadata_version::METADATA_VERSION_MAX)
+        >= CIDR_ACL_HOST_MIN_LEVEL
 }
 
 /// True when `name` is finalized at >= `level`. It treats an UNFINALIZED
