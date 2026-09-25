@@ -40,6 +40,16 @@ pub(super) const fn fetch_bound(replica_id: i32, isolation_level: i8) -> FetchBo
     }
 }
 
+impl FetchBound {
+    /// The request's `replica_id`, unpacked for the leadership gate. Kafka's
+    /// `ListOffsetsRequest.DEBUGGING_REPLICA_ID` (-2) is the one value the
+    /// gate lets read a follower's local log instead of redirecting to the
+    /// leader.
+    pub(super) const fn replica_id(self) -> i32 {
+        self.replica_id
+    }
+}
+
 /// Reads the offset a [`FetchBound`] names.
 ///
 /// The high watermark keeps a client's answer inside what the ISR has

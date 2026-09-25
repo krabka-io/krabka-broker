@@ -76,6 +76,25 @@ pub struct MemberState {
     /// through [`MemberState::set_regex`] and
     /// [`MemberState::sync_regex_cache`].
     pub compiled_regex: CompiledRegex,
+    /// Topic names that currently match `subscribed_topic_regex` and that
+    /// this member's principal is authorized to `Describe`. Kafka's
+    /// `TopicRegexResolver.filterTopicDescribeAuthorizedTopics` keeps only
+    /// these from the resolved regex before assignment; krabka's reconciler
+    /// does the same by requiring membership in this set, not merely a regex
+    /// match, against the cluster's topics.
+    ///
+    /// This is an allow-list, not a deny-list: a topic absent from this set
+    /// is treated as not (yet) authorized, whether it is a brand-new topic
+    /// the handler's snapshot predates or a member whose authorization was
+    /// never recomputed after a coordinator failover. Fail-closed by
+    /// omission, in other words, rather than fail-open.
+    ///
+    /// The handler recomputes this set on every heartbeat that carries a
+    /// `SubscribedTopicRegex`, from the authorizer decision at request time,
+    /// and it is empty whenever there is no regex subscription. It is not
+    /// persisted; a replayed member starts with an empty set (authorizing
+    /// nothing) and gets a fresh one on its next heartbeat.
+    pub regex_authorized_topics: HashSet<String>,
     pub server_assignor: Option<String>,
     pub rebalance_timeout: Duration,
     pub member_epoch: i32,

@@ -226,6 +226,7 @@ fn consumer_classic_leave_resolves_batch_and_static_identities() {
         &dynamic,
         crate::coordinator::unified::ClientIdentity { id: "c", host: "h" },
         Instant::now(),
+        &std::collections::HashSet::new(),
     ));
     let static_request = ConsumerGroupHeartbeatRequest {
         member_id: "m-static".into(),
@@ -237,6 +238,7 @@ fn consumer_classic_leave_resolves_batch_and_static_identities() {
         &static_request,
         crate::coordinator::unified::ClientIdentity { id: "c", host: "h" },
         Instant::now(),
+        &std::collections::HashSet::new(),
     ));
     let request = LeaveGroupRequest {
         members: vec![

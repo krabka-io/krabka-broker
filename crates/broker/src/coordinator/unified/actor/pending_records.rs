@@ -265,6 +265,7 @@ mod tests {
                 host: "h",
             },
             Instant::now(),
+            &std::collections::HashSet::new(),
         );
         m.member_epoch = 7;
         m.previous_member_epoch = 6;
