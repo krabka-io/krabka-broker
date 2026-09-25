@@ -146,3 +146,222 @@ async fn denied_handler_preserves_topic_and_partition_response_fields() {
     assert!(resp == expected, "{resp:?}");
     broker_handle.shutdown().await;
 }
+
+/// Authorizer that denies `Describe` on a fixed set of topic names and
+/// allows everything else. Drives the mixed authorized/denied scenarios
+/// below without needing real ACL records in the metadata image.
+#[derive(Debug)]
+struct DenyNamed(std::collections::HashSet<&'static str>);
+
+impl crate::authorizer::Authorizer for DenyNamed {
+    fn authorize(
+        &self,
+        _source: &dyn krabka_authz::AclSource,
+        req: &crate::authorizer::AuthorizationRequest<'_>,
+    ) -> crate::authorizer::AuthorizationResult {
+        if self.0.contains(req.resource_name) {
+            crate::authorizer::AuthorizationResult::Deny
+        } else {
+            crate::authorizer::AuthorizationResult::Allow
+        }
+    }
+}
+
+/// Kafka's `handleListOffsetRequest` splits topics into authorized and
+/// unauthorized up front, processes only the authorized ones, and appends
+/// the unauthorized rows after them -- it never interleaves them in request
+/// order. This runs the same three-topic request with the denied topic in
+/// each position and checks that the denied row always lands last,
+/// regardless of where it sat in the request.
+#[tokio::test]
+async fn denied_topic_rows_are_appended_after_authorized_rows_regardless_of_request_order() {
+    struct Case {
+        name: &'static str,
+        request_topics: [&'static str; 3],
+        denied: &'static str,
+    }
+
+    let version = krabka_protocol::owned::list_offsets_response::MAX_VERSION;
+
+    let cases = [
+        Case {
+            name: "denied first",
+            request_topics: ["denied", "b", "c"],
+            denied: "denied",
+        },
+        Case {
+            name: "denied middle",
+            request_topics: ["a", "denied", "c"],
+            denied: "denied",
+        },
+        Case {
+            name: "denied last",
+            request_topics: ["a", "b", "denied"],
+            denied: "denied",
+        },
+    ];
+
+    for case in cases {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(DenyNamed(std::collections::HashSet::from([
+                case.denied
+            ]))))
+            .await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("alice");
+        let peer = peer();
+        let ctx = test_context(&p, &peer);
+
+        let req = ListOffsetsRequest {
+            replica_id: -1,
+            isolation_level: 0,
+            topics: case
+                .request_topics
+                .iter()
+                .map(|name| ListOffsetsTopic {
+                    name: (*name).to_string(),
+                    partitions: vec![ListOffsetsPartition {
+                        partition_index: 0,
+                        current_leader_epoch: -1,
+                        timestamp: LATEST_TIMESTAMP,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                })
+                .collect(),
+            timeout_ms: 30_000,
+            ..Default::default()
+        };
+        let req = encode_request(&req, version);
+
+        let bytes = handle(&broker, version, 123, &req, &ctx)
+            .await
+            .expect("handle");
+        let resp = decode_response(&bytes, version);
+
+        let mut expected_order: Vec<&str> = case
+            .request_topics
+            .iter()
+            .copied()
+            .filter(|&name| name != case.denied)
+            .collect();
+        expected_order.push(case.denied);
+
+        let actual_order: Vec<&str> = resp.topics.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            actual_order == expected_order,
+            "{}: got {actual_order:?}, want {expected_order:?}",
+            case.name,
+        );
+
+        let denied_topic = resp
+            .topics
+            .iter()
+            .find(|t| t.name == case.denied)
+            .expect("denied topic row present");
+        assert!(
+            denied_topic.partitions[0].error_code == codes::TOPIC_AUTHORIZATION_FAILED,
+            "{}: {denied_topic:?}",
+            case.name,
+        );
+
+        broker_handle.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn duplicate_partitions_get_invalid_request_on_every_row() {
+    use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
+
+    use super::test_support::client_for;
+
+    const TOPIC: &str = "list-offsets-duplicate";
+
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let client = client_for(&broker_handle).await;
+    client
+        .send(CreateTopicsRequest {
+            topics: vec![CreatableTopic {
+                name: TOPIC.to_string(),
+                num_partitions: 2,
+                replication_factor: 1,
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        })
+        .await
+        .expect("CreateTopics");
+    broker_handle.wait_until_partition_present(TOPIC, 0).await;
+    broker_handle.wait_until_partition_present(TOPIC, 1).await;
+
+    let request = |partition_indexes: &[i32]| ListOffsetsRequest {
+        replica_id: -1,
+        topics: vec![ListOffsetsTopic {
+            name: TOPIC.to_string(),
+            partitions: partition_indexes
+                .iter()
+                .map(|&partition_index| ListOffsetsPartition {
+                    partition_index,
+                    current_leader_epoch: -1,
+                    timestamp: LATEST_TIMESTAMP,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }],
+        timeout_ms: 5_000,
+        ..Default::default()
+    };
+
+    // Kafka's duplicate check runs regardless of the answer a partition would
+    // otherwise resolve to, so a "no duplicates" request first measures what
+    // resolving partitions 0 and 1 actually returns; later cases reuse those
+    // rows exactly for the partition that stays unduplicated, and only assert
+    // `INVALID_REQUEST` for the ones the request names twice.
+    let baseline = client
+        .send(request(&[0, 1]))
+        .await
+        .expect("ListOffsets baseline");
+    let resolved0 = baseline.topics[0].partitions[0].clone();
+    let resolved1 = baseline.topics[0].partitions[1].clone();
+    assert!(resolved0.error_code == codes::NONE, "{resolved0:?}");
+    assert!(resolved1.error_code == codes::NONE, "{resolved1:?}");
+
+    let invalid = |partition_index: i32| ListOffsetsPartitionResponse {
+        partition_index,
+        error_code: codes::INVALID_REQUEST,
+        timestamp: -1,
+        offset: -1,
+        ..Default::default()
+    };
+
+    let cases: Vec<(&str, Vec<i32>, Vec<ListOffsetsPartitionResponse>)> = vec![
+        (
+            "no duplicates",
+            vec![0, 1],
+            vec![resolved0.clone(), resolved1.clone()],
+        ),
+        (
+            "one partition duplicated",
+            vec![0, 0],
+            vec![invalid(0), invalid(0)],
+        ),
+        (
+            "mixed: one partition duplicated, one resolved normally",
+            vec![0, 0, 1],
+            vec![invalid(0), invalid(0), resolved1.clone()],
+        ),
+    ];
+
+    for (name, partition_indexes, expected) in cases {
+        let response = client
+            .send(request(&partition_indexes))
+            .await
+            .expect("ListOffsets");
+        assert!(response.topics[0].partitions == expected, "{name}");
+    }
+
+    drop(client);
+    broker_handle.shutdown().await;
+}

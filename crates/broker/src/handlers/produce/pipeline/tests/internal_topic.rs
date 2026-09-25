@@ -188,7 +188,6 @@ async fn a_denied_internal_topic_is_refused_and_its_log_end_offset_does_not_move
                 schema: None,
                 topic_name: "__consumer_offsets".into(),
                 freeze: crate::freeze::resolve::FreezeMutationResolution::Admit,
-                txn_id_denied: false,
                 internal_topic_denied: internal_topic_denied(
                     &config,
                     "__consumer_offsets",

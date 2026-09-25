@@ -19,7 +19,7 @@ use krabka_verified::FreezeMutationKind;
 
 use self::{
     append::PendingAck,
-    authorization::authorize_produce,
+    authorization::{authorize_produce_topics, is_authorized_transactional},
     delivery::resolve_delivery_gate,
     framing::decode_produce_request,
     leadership::BrokerProducePolicy,
@@ -66,6 +66,8 @@ mod test_support;
 mod compacted_key_tests;
 #[cfg(test)]
 mod topic_resolution_tests;
+#[cfg(test)]
+mod transactional_authorization_tests;
 
 /// Kafka `acks` sentinel `-1`, which is producer `acks=all`. The leader must
 /// hold the response until the high watermark covers the append, that is,
@@ -163,24 +165,70 @@ pub(crate) async fn handle(
     let acks = req.acks;
     let timeout = Duration::from_millis(u64::try_from(req.timeout_ms.max(0)).unwrap_or(0));
 
-    // ── ACL preamble ────────────────────────────────────────
-    // For transactional Produce (request carries a non-empty
-    // `transactional_id`), authorize `Write` on
-    // `TransactionalId(transactional_id)` FIRST. On Deny, emit
-    // TRANSACTIONAL_ID_AUTHORIZATION_FAILED (53) per-partition on every
-    // row of the response (matches Kafka's per-partition error mapping).
+    // ── ACL preamble, part 1: the whole-request transactional check ───
+    // Kafka's `KafkaApis.handleProduceRequest`:
     //
-    // Then batch-authorize every topic in the request for `Write` (the
-    // operation Produce requires). Topics that come back `Deny` will
-    // short-circuit the per-partition append below and emit
-    // TOPIC_AUTHORIZATION_FAILED on every partition row of that topic.
-    // Topic name resolution for v ≥ 13 (topic_id only on the wire) is
-    // re-done inline below — but ACLs are keyed by topic
-    // *name*, so we resolve the names here too for the authorize call.
+    //   if (RequestUtils.hasTransactionalRecords(produceRequest)) {
+    //     val isAuthorizedTransactional = produceRequest.transactionalId != null &&
+    //       authHelper.authorize(request.context, WRITE, TRANSACTIONAL_ID, produceRequest.transactionalId)
+    //     if (!isAuthorizedTransactional) {
+    //       sendErrorResponseMaybeThrottle(request, TRANSACTIONAL_ID_AUTHORIZATION_FAILED)
+    //       return
+    //     }
+    //   }
+    //
+    // `hasTransactionalRecords` looks at the BATCHES, not at whether the
+    // request carries a `transactional_id` — a transactional batch (producer
+    // id + the KIP-98 transactional attribute) with no request-level
+    // `transactional_id` still trips this gate, and is refused here rather
+    // than reaching `verify_transactional_produce`, which would otherwise
+    // resolve *some* transactional id for the batch's producer id and let an
+    // unauthorized principal write into that transaction. A request that
+    // carries a `transactional_id` but only non-transactional batches never
+    // reaches this check at all, matching Kafka.
+    //
+    // Kafka answers every partition row of the request with 53 and returns
+    // before any topic is resolved — an id that would otherwise answer
+    // UNKNOWN_TOPIC_ID at v13+ still answers 53. So this runs ahead of the
+    // topic-resolution loop below, not inside it.
     let image = controller.current_image();
-    let authorization = authorize_produce(broker, &image, ctx, &req);
-    let txn_id_denied = authorization.transactional_id_denied;
-    let denied_topics = authorization.denied_topics;
+
+    // ── KIP-13: measure total request bytes before consuming the topic_data ──
+    // Computed here, ahead of every early-return below (including the
+    // transactional-authorization refusal), so a denied request is still
+    // charged to `producer_byte_rate` the same as an accepted one -- Kafka
+    // throttles on bytes received, not on whether the request was allowed to
+    // write. Computed once here so the iterator doesn't conflict with `for
+    // topic in req.topic_data` below (which moves the vector).
+    let produce_bytes_by_qos_tier = produce_bytes_by_qos_tier(&image, &req.topic_data);
+
+    if req.has_transactional_batch()
+        && !is_authorized_transactional(broker, &image, ctx, req.transactional_id.as_deref())
+    {
+        let topic_results: Vec<TopicProduceResponse> = req
+            .topic_data
+            .iter()
+            .map(|topic| {
+                build_topic_error_response(topic, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED)
+            })
+            .collect();
+        return finish_produce_response(
+            broker,
+            &image,
+            ctx,
+            (acks != 0).then_some(handler_start),
+            &produce_bytes_by_qos_tier,
+            topic_results,
+            version,
+        );
+    }
+
+    // ── ACL preamble, part 2: per-topic `Write` ────────────────────────
+    // Batch-authorize every topic in the request for `Write` (the operation
+    // Produce requires). Topics that come back `Deny` short-circuit the
+    // per-partition append below and emit TOPIC_AUTHORIZATION_FAILED on
+    // every partition row of that topic.
+    let denied_topics = authorize_produce_topics(broker, &image, ctx, &req);
 
     let mut topic_results: Vec<TopicProduceResponse> = Vec::with_capacity(req.topic_data.len());
     // The `acks=-1` partitions of this request that have appended and are
@@ -192,11 +240,6 @@ pub(crate) async fn handle(
     // topic while the waits are driven once, after every partition has
     // appended.
     let mut awaiting: Vec<PendingPartition> = Vec::new();
-
-    // ── KIP-13: measure total request bytes before consuming the topic_data ──
-    // Computed here so the iterator doesn't conflict with `for topic in req.topic_data`
-    // below (which moves the vector).
-    let produce_bytes_by_qos_tier = produce_bytes_by_qos_tier(&image, &req.topic_data);
 
     for topic in req.topic_data {
         // v ≤ 12 sends the topic name; v ≥ 13 sends only topic_id and
@@ -357,7 +400,6 @@ pub(crate) async fn handle(
                     schema,
                     topic_name: topic_name.clone(),
                     freeze,
-                    txn_id_denied,
                     internal_topic_denied,
                     transaction: TransactionRequest {
                         transactional_id: req.transactional_id.as_deref(),

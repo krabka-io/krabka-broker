@@ -50,6 +50,8 @@ mod byte_limit_tests;
 #[cfg(test)]
 mod group_authorization_tests;
 #[cfg(test)]
+mod log_start_lockout_tests;
+#[cfg(test)]
 mod persister_error_tests;
 #[cfg(test)]
 mod renew_tests;

@@ -10,30 +10,55 @@ use crate::{
     broker::Broker,
 };
 
-pub(super) struct ProduceAuthorization {
-    pub(super) transactional_id_denied: bool,
-    pub(super) denied_topics: std::collections::HashSet<String>,
+/// Kafka's `produceRequest.transactionalId != null && authorize(WRITE,
+/// TRANSACTIONAL_ID, transactionalId)`, from `KafkaApis.handleProduceRequest`.
+///
+/// This only decides whether the request's `transactional_id` is authorized
+/// for `Write`. The caller decides separately whether the check applies at
+/// all -- Kafka only consults this when
+/// `RequestUtils.hasTransactionalRecords` is true, that is, when some batch
+/// in the request carries the transactional attribute
+/// ([`ProduceFramed::has_transactional_batch`]).
+///
+/// Kafka's predicate is `transactionalId != null`: only a wire-null id is
+/// rejected outright here. A non-null empty id is passed to the configured
+/// authorizer like any other resource name, exactly as Kafka's own
+/// `authHelper.authorize` call does -- an `AllowAllAuthorizer` allows it, and
+/// a deny-capable one decides on the empty resource name itself.
+pub(super) fn is_authorized_transactional(
+    broker: &Broker,
+    image: &krabka_metadata::MetadataImage,
+    context: &crate::handlers::RequestContext<'_>,
+    transactional_id: Option<&str>,
+) -> bool {
+    let Some(id) = transactional_id else {
+        return false;
+    };
+    broker.config.authorizer.authorize(
+        image,
+        &AuthorizationRequest {
+            principal: context.principal,
+            host: context.peer,
+            resource_type: ResourceType::TransactionalId,
+            resource_name: id,
+            operation: AclOperation::Write,
+        },
+    ) == AuthorizationResult::Allow
 }
 
-pub(super) fn authorize_produce(
+/// The topic `Write` ACL preamble: every topic named in the request,
+/// authorized once, ahead of the per-partition append loop.
+///
+/// Topic name resolution for v ≥ 13 (`topic_id` only on the wire) is re-done
+/// here even though the handler resolves it again per topic below -- ACLs are
+/// keyed by topic *name*, and this batch-authorizes every name in the request
+/// in one call rather than one authorizer round trip per topic.
+pub(super) fn authorize_produce_topics(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     context: &crate::handlers::RequestContext<'_>,
     request: &ProduceFramed,
-) -> ProduceAuthorization {
-    let transactional_id_denied = request.transactional_id.as_deref().is_some_and(|id| {
-        !id.is_empty()
-            && broker.config.authorizer.authorize(
-                image,
-                &AuthorizationRequest {
-                    principal: context.principal,
-                    host: context.peer,
-                    resource_type: ResourceType::TransactionalId,
-                    resource_name: id,
-                    operation: AclOperation::Write,
-                },
-            ) == AuthorizationResult::Deny
-    });
+) -> std::collections::HashSet<String> {
     let topic_names: Vec<String> = request
         .topic_data
         .iter()
@@ -50,7 +75,7 @@ pub(super) fn authorize_produce(
             }
         })
         .collect();
-    let denied_topics = authorize_topics(
+    authorize_topics(
         broker.config.authorizer.as_ref(),
         image,
         context.principal,
@@ -61,9 +86,5 @@ pub(super) fn authorize_produce(
     .into_iter()
     .filter(|(_, result)| *result == AuthorizationResult::Deny)
     .map(|(name, _)| name.to_string())
-    .collect();
-    ProduceAuthorization {
-        transactional_id_denied,
-        denied_topics,
-    }
+    .collect()
 }

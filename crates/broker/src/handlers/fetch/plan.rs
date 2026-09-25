@@ -227,6 +227,14 @@ pub(super) struct ReadRole<'a> {
     /// `false` for a follower fetch whose replica id is not a follower in the
     /// partition's assignment. See [`is_assigned_follower`].
     pub(super) assigned_follower: bool,
+    /// Whether this partition's log directory is currently marked offline.
+    /// The below-log-start check in [`apply_epoch_checks`] defers to the
+    /// caller's own offline gate instead of racing to answer
+    /// `OFFSET_OUT_OF_RANGE` first: an offline directory can make
+    /// `Log::log_start_offset` unreadable or stale, and a client or follower
+    /// told to reset its offset in response to what is really a storage
+    /// failure would discard state it should have kept.
+    pub(super) log_dir_offline: bool,
 }
 
 /// Kafka's order in `Partition.fetchRecords`: the leader-epoch fence, the
@@ -244,6 +252,7 @@ pub(super) fn apply_epoch_checks(
         partition,
         required_leader,
         assigned_follower,
+        log_dir_offline,
     } = role;
     if let Some((error_code, current_epoch)) =
         partition.fetch_leader_epoch_fence(request.current_leader_epoch)
@@ -281,13 +290,67 @@ pub(super) fn apply_epoch_checks(
     if request.last_fetched_epoch < 0 {
         return false;
     }
-    let (found_epoch, end_offset) = {
-        let log = partition.log.lock().expect("log mutex poisoned");
-        log.epoch_checkpoint().epoch_and_offset_for(
-            LeaderEpoch(request.last_fetched_epoch),
-            log.log_end_offset(),
+    let (
+        log_start_offset,
+        established_log_start,
+        found_epoch,
+        end_offset,
+        high_watermark,
+        last_stable_offset,
+    ) = {
+        let mut log = partition.log.lock().expect("log mutex poisoned");
+        let log_start_offset = log.log_start_offset();
+        let established_log_start = log.established_log_start();
+        let log_end_offset = log.log_end_offset();
+        let (found_epoch, end_offset) = log
+            .epoch_checkpoint()
+            .epoch_and_offset_for(LeaderEpoch(request.last_fetched_epoch), log_end_offset);
+        // Kafka reports the partition's live bounds on an `OFFSET_OUT_OF_RANGE`
+        // row (`Partition.readRecords`'s `logReadInfo`), not the -1 sentinels
+        // `refused_read` uses for a row this handler refuses without ever
+        // touching the log. A follower fetch sees LEO as both HW and LSO (see
+        // the module doc); using it here for every fetch type is an
+        // approximation on a lagging acks=all topic, but still strictly more
+        // useful than -1 and exactly right for the follower fetch this branch
+        // exists to keep from hot-looping.
+        let last_stable_offset = log.last_stable_offset(log_end_offset);
+        (
+            log_start_offset,
+            established_log_start,
+            found_epoch,
+            end_offset,
+            log_end_offset,
+            last_stable_offset,
         )
     };
+    // Kafka's `Partition.readRecords` (roughly lines 1385-1412): a fetch
+    // offset below the log start is `OFFSET_OUT_OF_RANGE` whatever the epochs
+    // say, checked before any divergence row is built. Only an *established*
+    // floor counts: `Log::open` also infers a floor from whatever segments are
+    // left on disk, and on a tiered partition reopened with its local segments
+    // evicted that inferred floor sits above everything the remote tier still
+    // holds. Refusing on the strength of it would hide readable records
+    // instead of letting the request fall through to the remote-tier read
+    // still ahead of it -- so this only fires once something has actually
+    // moved the global floor. An offline log directory takes precedence: it
+    // can make the floor unreadable or stale, and resetting a client or
+    // follower in response to a storage failure would discard state it
+    // should have kept, so this defers to the caller's own offline gate
+    // instead of racing it.
+    if let Some(established) = established_log_start
+        && request.fetch_offset < established.0
+    {
+        if log_dir_offline {
+            return false;
+        }
+        *output = PartitionData {
+            log_start_offset: log_start_offset.0,
+            high_watermark: high_watermark.0,
+            last_stable_offset: last_stable_offset.0,
+            ..refused_read(partition_index, codes::OFFSET_OUT_OF_RANGE)
+        };
+        return true;
+    }
     if found_epoch >= request.last_fetched_epoch && end_offset.0 >= request.fetch_offset {
         return false;
     }
@@ -420,6 +483,10 @@ pub(super) async fn plan_partition_read(
                         context.follower_id,
                         node_id,
                     ),
+                log_dir_offline: context
+                    .broker
+                    .log_dir_status
+                    .is_offline(&partition.log_dir.load()),
             },
             &mut output,
         )
@@ -540,7 +607,7 @@ pub(super) async fn build_pending_reads(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, sync::Arc};
 
     use assert2::assert;
     use krabka_ids::PartitionIndex;
@@ -749,5 +816,228 @@ mod tests {
             assert!(got == want, "{name}");
         }
         assert!(super::leader_refusal(&image, ("orders", 0), &partition, None) == None);
+    }
+
+    /// Append one single-record batch at `epoch` and return the offset it
+    /// landed at.
+    fn append_at_epoch(log: &mut Log, epoch: i32) -> i64 {
+        use krabka_protocol::records::{Record, RecordBatch};
+
+        let mut batch = RecordBatch {
+            partition_leader_epoch: epoch,
+            records: vec![Record::default()],
+            ..Default::default()
+        };
+        log.append(&mut batch).expect("append").0.0
+    }
+
+    fn epoch_checks_partition(dir: &std::path::Path) -> Arc<crate::partition::Partition> {
+        crate::broker::spawn_partition(
+            "diverge".to_string(),
+            PartitionIndex(0),
+            dir.to_path_buf(),
+            Log::open(dir, LogConfig::default()).expect("open partition log"),
+            crate::log_dir_status::LogDirRegistry::default(),
+            std::sync::Arc::new(crate::producer_state::ProducerState::new()),
+            false,
+        )
+    }
+
+    fn read_role(partition: &crate::partition::Partition) -> super::ReadRole<'_> {
+        super::ReadRole {
+            partition,
+            required_leader: None,
+            assigned_follower: true,
+            log_dir_offline: false,
+        }
+    }
+
+    fn effective_partition(
+        last_fetched_epoch: i32,
+        fetch_offset: i64,
+    ) -> super::EffectivePartition {
+        super::EffectivePartition {
+            partition: 0,
+            // -1 skips the KIP-101 fence so the KIP-320 check below it runs.
+            current_leader_epoch: -1,
+            last_fetched_epoch,
+            fetch_offset,
+            log_start_offset: -1,
+            partition_max_bytes: 1024,
+        }
+    }
+
+    /// A fetch offset below an *established* log start answers
+    /// `OFFSET_OUT_OF_RANGE` with the partition's live bounds, checked before
+    /// the epoch lookup's divergence row is built, unless the log directory is
+    /// offline, in which case the caller's own offline gate takes it instead.
+    /// An unestablished (segment-inferred) floor never refuses here, since it
+    /// may sit above data the remote tier still holds. An epoch lookup that
+    /// cannot place `last_fetched_epoch` on this log -- an empty epoch
+    /// history, or a `last_fetched_epoch` above every recorded epoch -- still
+    /// gets an actionable `diverging_epoch` row (`Log::epoch_and_offset_for`
+    /// resolves it to the log end offset, never -1, so a follower truncates to
+    /// it instead of looping), same as a true divergence.
+    #[tokio::test]
+    async fn below_established_log_start_answers_offset_out_of_range() {
+        // No records at all: the epoch cache is empty, and nothing has ever
+        // moved the log start, so it is unestablished.
+        let empty_dir = tempfile::tempdir().expect("tempdir");
+        let empty = epoch_checks_partition(empty_dir.path());
+
+        // Two epochs of two records each: checkpoint `0 -> 0`, `1 -> 2`, LEO 4.
+        // Also never trimmed, so its log start is unestablished too.
+        let history_dir = tempfile::tempdir().expect("tempdir");
+        let with_history = epoch_checks_partition(history_dir.path());
+        {
+            let mut log = with_history.log.lock().expect("log mutex poisoned");
+            append_at_epoch(&mut log, 0);
+            append_at_epoch(&mut log, 0);
+            append_at_epoch(&mut log, 1);
+            append_at_epoch(&mut log, 1);
+        }
+
+        // Three epochs of two records each: checkpoint `0 -> 0`, `1 -> 2`,
+        // `2 -> 4`, LEO 6. The log start then moves to 5 and becomes
+        // established, above the epoch-0 boundary (2) that a
+        // `last_fetched_epoch = 0` fetch would otherwise diverge to.
+        let trimmed_dir = tempfile::tempdir().expect("tempdir");
+        let trimmed = epoch_checks_partition(trimmed_dir.path());
+        {
+            let mut log = trimmed.log.lock().expect("log mutex poisoned");
+            append_at_epoch(&mut log, 0);
+            append_at_epoch(&mut log, 0);
+            append_at_epoch(&mut log, 1);
+            append_at_epoch(&mut log, 1);
+            append_at_epoch(&mut log, 2);
+            append_at_epoch(&mut log, 2);
+            log.set_log_start_offset(super::Offset(5))
+                .expect("move log start");
+        }
+
+        for (name, partition, last_fetched_epoch, fetch_offset, want_final, want_out) in [
+            (
+                "empty epoch history, unestablished floor: an actionable \
+                 divergence, not a refusal",
+                Arc::clone(&empty),
+                0,
+                0,
+                true,
+                super::PartitionData {
+                    partition_index: 0,
+                    error_code: crate::codes::NONE,
+                    diverging_epoch: super::EpochEndOffset {
+                        epoch: -1,
+                        end_offset: 0,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ),
+            (
+                "last_fetched_epoch above every recorded epoch, unestablished \
+                 floor: an actionable divergence, not a refusal",
+                Arc::clone(&with_history),
+                5,
+                4,
+                true,
+                super::PartitionData {
+                    partition_index: 0,
+                    error_code: crate::codes::NONE,
+                    diverging_epoch: super::EpochEndOffset {
+                        epoch: -1,
+                        end_offset: 4,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ),
+            (
+                "fetch offset below an established log start, even though the \
+                 epoch history alone would diverge",
+                Arc::clone(&trimmed),
+                0,
+                4,
+                true,
+                super::PartitionData {
+                    log_start_offset: 5,
+                    high_watermark: 6,
+                    last_stable_offset: 6,
+                    ..super::refused_read(0, crate::codes::OFFSET_OUT_OF_RANGE)
+                },
+            ),
+            (
+                "a true divergence still answers a diverging_epoch with epoch >= 0",
+                Arc::clone(&with_history),
+                0,
+                4,
+                true,
+                super::PartitionData {
+                    partition_index: 0,
+                    error_code: crate::codes::NONE,
+                    diverging_epoch: super::EpochEndOffset {
+                        epoch: 0,
+                        end_offset: 2,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let request = effective_partition(last_fetched_epoch, fetch_offset);
+            let mut output = super::PartitionData {
+                partition_index: 0,
+                ..Default::default()
+            };
+            let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+            let final_ = super::apply_epoch_checks(
+                &image,
+                "diverge",
+                0,
+                &request,
+                read_role(&partition),
+                &mut output,
+            );
+            assert!(final_ == want_final, "{name}: final");
+            assert!(output == want_out, "{name}: got {output:?}");
+        }
+    }
+
+    /// An offline log directory takes precedence over the below-established-
+    /// log-start refusal: the caller's own offline gate answers
+    /// `KAFKA_STORAGE_ERROR` instead, since a storage failure should never
+    /// look like a client or follower reset.
+    #[tokio::test]
+    async fn below_established_log_start_defers_to_an_offline_log_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let partition = epoch_checks_partition(dir.path());
+        {
+            let mut log = partition.log.lock().expect("log mutex poisoned");
+            append_at_epoch(&mut log, 0);
+            append_at_epoch(&mut log, 0);
+            log.set_log_start_offset(super::Offset(1))
+                .expect("move log start");
+        }
+
+        let request = effective_partition(0, 0);
+        let mut output = super::PartitionData {
+            partition_index: 0,
+            ..Default::default()
+        };
+        let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        let final_ = super::apply_epoch_checks(
+            &image,
+            "diverge",
+            0,
+            &request,
+            super::ReadRole {
+                partition: &partition,
+                required_leader: None,
+                assigned_follower: true,
+                log_dir_offline: true,
+            },
+            &mut output,
+        );
+        assert!(!final_, "defers to the caller's own offline check");
     }
 }

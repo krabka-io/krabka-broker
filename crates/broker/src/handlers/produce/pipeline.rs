@@ -75,7 +75,6 @@ pub(super) struct PartitionInput<'a> {
     /// The topic's authorization-and-freeze result, resolved once per topic.
     /// Only `Frozen` carries registry detail, after authorization succeeded.
     pub(super) freeze: FreezeMutationResolution<'a>,
-    pub(super) txn_id_denied: bool,
     /// Whether this partition's topic is one of [`crate::internal_topics::
     /// INTERNAL_TOPICS`] (or the configured audit topic) and the request's
     /// `client_id` is not Kafka's admin-tooling exception. Resolved once per
@@ -207,7 +206,6 @@ pub(super) async fn process_partition(
         schema,
         topic_name,
         freeze,
-        txn_id_denied,
         internal_topic_denied,
         transaction,
         acks,
@@ -244,11 +242,6 @@ pub(super) async fn process_partition(
         base_offset: INVALID_OFFSET,
         ..Default::default()
     };
-
-    if txn_id_denied {
-        out.error_code = codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED;
-        return Ok(PartitionOutcome::Done(out));
-    }
 
     // ── KFC-9 write freeze ───────────────────────────────────────────
     // Beside the topic ACL denial, and ahead of `prepare_batch`, because a

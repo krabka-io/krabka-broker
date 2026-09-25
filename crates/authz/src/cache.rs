@@ -44,6 +44,10 @@ impl AclSource for AclCache {
                 }
         }))
     }
+
+    fn acls_of_type<'a>(&'a self, rt: ResourceType) -> Box<dyn Iterator<Item = &'a AclEntry> + 'a> {
+        Box::new(self.entries.iter().filter(move |e| e.resource_type == rt))
+    }
 }
 
 #[cfg(test)]

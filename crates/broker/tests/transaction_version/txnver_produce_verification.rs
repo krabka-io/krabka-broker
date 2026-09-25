@@ -37,6 +37,7 @@ const CONCURRENT_TRANSACTIONS: i16 = 51;
 const INVALID_PRODUCER_EPOCH: i16 = 47;
 const INVALID_TXN_STATE: i16 = 48;
 const TRANSACTION_ABORTABLE: i16 = 120;
+const TRANSACTIONAL_ID_AUTHORIZATION_FAILED: i16 = 53;
 
 /// A `Produce` request sent at exactly version `V`.
 #[derive(Clone, Debug)]
@@ -344,6 +345,11 @@ async fn a_transactional_produce_needs_a_verified_transaction() {
             expected_message: None,
             appends: true,
         },
+        // This is the #694 hijack path: a transactional batch with no
+        // request-level transactional_id must be refused by the
+        // TransactionalId Write gate itself, before it can reach
+        // verify_transactional_produce and resolve *some* transaction from
+        // the batch's producer id.
         Case {
             name: "v11-no-transactional-id",
             setup: Setup::Added,
@@ -351,7 +357,7 @@ async fn a_transactional_produce_needs_a_verified_transaction() {
                 with_transactional_id: false,
                 ..at(11, true, 0)
             },
-            expected_code: INVALID_TXN_STATE,
+            expected_code: TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
             expected_message: None,
             appends: false,
         },

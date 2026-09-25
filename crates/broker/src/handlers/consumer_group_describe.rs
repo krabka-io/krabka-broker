@@ -2,6 +2,21 @@
 //!
 //! This handler returns one `DescribedGroup` per requested `group_id`. It
 //! renders each group from the actor's `Describe` view.
+//!
+//! Ordering and gating follow Kafka's `KafkaApis.handleConsumerGroupDescribe`:
+//!
+//! - The `group.version` protocol gate is checked once, before any
+//!   authorization. When the next-gen consumer-group RPCs are not finalized,
+//!   every requested group gets `UNSUPPORTED_VERSION` and no ACL is
+//!   consulted.
+//! - Past the gate, a group `Describe` denial is a per-row
+//!   `GROUP_AUTHORIZATION_FAILED`, and those denied rows are placed first in
+//!   the response, ahead of the coordinator results (which keep request
+//!   order among themselves).
+//! - KIP-430: when the request sets `include_authorized_operations`, every
+//!   row with `error_code == NONE` carries the bitfield of group operations
+//!   the principal holds. Every other row keeps the wire-default `i32::MIN`
+//!   "not present" sentinel.
 
 use bytes::Bytes;
 use krabka_protocol::{
@@ -15,6 +30,7 @@ use tokio::sync::oneshot;
 
 use crate::{
     broker::Broker, codes, coordinator::unified::actor::GroupActorMessage, error::BrokerError,
+    handlers::authorized_operations::authorized_operations_bits,
 };
 
 /// KIP-848/KIP-584: minimum finalized `group.version` feature level that
@@ -38,8 +54,31 @@ pub(crate) async fn handle(
     let mut cur: &[u8] = req_bytes;
     let req = ConsumerGroupDescribeRequest::decode(&mut cur, version)?;
 
-    let mut described: Vec<DescribedGroup> = Vec::with_capacity(req.group_ids.len());
+    // KIP-848 / KIP-584 protocol gate, checked before any authorization —
+    // Kafka's handleConsumerGroupDescribe answers UNSUPPORTED_VERSION for
+    // every requested group up front and never touches ACLs when the
+    // next-gen consumer-group RPCs are not finalized (group.version >= 1;
+    // below that, including UNFINALIZED which means disabled, is rejected,
+    // consistent with the heartbeat fallback).
+    if group_version_disabled(&image) {
+        let described = req
+            .group_ids
+            .iter()
+            .map(|group_id| {
+                let mut row = ok_row(group_id);
+                row.error_code = codes::UNSUPPORTED_VERSION;
+                row
+            })
+            .collect();
+        let resp = response(described);
+        return crate::handlers::encode_response(&resp, version);
+    }
+
     let next_gen_enabled = coordinator.config.next_gen_enabled();
+    // Kafka places every GROUP_AUTHORIZATION_FAILED row first, ahead of the
+    // coordinator results, which keep request order among themselves.
+    let mut denied: Vec<DescribedGroup> = Vec::new();
+    let mut described: Vec<DescribedGroup> = Vec::with_capacity(req.group_ids.len());
     for group_id in &req.group_ids {
         let mut row = ok_row(group_id);
         if crate::handlers::acl_denied(
@@ -51,19 +90,11 @@ pub(crate) async fn handle(
             krabka_metadata::AclOperation::Describe,
         ) {
             row.error_code = codes::GROUP_AUTHORIZATION_FAILED;
-            described.push(row);
+            denied.push(row);
             continue;
         }
         if let Some(error_code) = crate::handlers::group_coordinator_error(broker, group_id) {
             row.error_code = error_code;
-            described.push(row);
-            continue;
-        }
-        // KIP-848 / KIP-584: next-gen describe requires finalized
-        // group.version >= 1; below that — including UNFINALIZED, which
-        // means disabled — reject (consistent with the heartbeat fallback).
-        if group_version_disabled(&image) {
-            row.error_code = codes::UNSUPPORTED_VERSION;
             described.push(row);
             continue;
         }
@@ -107,7 +138,27 @@ pub(crate) async fn handle(
             described.push(row);
         }
     }
-    let resp = response(described);
+
+    // KIP-430: bitfield of group operations the principal is authorized for,
+    // filled only on opt-in and only for rows that came back clean. Denied
+    // and errored rows keep the wire-default `i32::MIN` sentinel.
+    if req.include_authorized_operations {
+        for row in &mut described {
+            if row.error_code == codes::NONE {
+                row.authorized_operations = authorized_operations_bits(
+                    broker.config.authorizer.as_ref(),
+                    &image,
+                    ctx.principal,
+                    ctx.peer,
+                    krabka_metadata::ResourceType::Group,
+                    row.group_id.as_str(),
+                );
+            }
+        }
+    }
+
+    denied.extend(described);
+    let resp = response(denied);
     crate::handlers::encode_response(&resp, version)
 }
 
@@ -296,6 +347,203 @@ mod tests {
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected, "{resp:?}");
+
+        broker_handle.shutdown().await;
+    }
+
+    /// Request `include_authorized_operations` on a request built with
+    /// [`request`], which does not set it — [`request_with_ops`] below sets
+    /// it explicitly.
+    fn request_with_ops(group_ids: Vec<&str>, include_authorized_operations: bool) -> Bytes {
+        let req = ConsumerGroupDescribeRequest {
+            group_ids: group_ids.into_iter().map(Into::into).collect(),
+            include_authorized_operations,
+            ..Default::default()
+        };
+        let mut buf = BytesMut::with_capacity(req.encoded_len(VERSION));
+        req.encode(&mut buf, VERSION)
+            .expect("encode ConsumerGroupDescribeRequest");
+        buf.freeze()
+    }
+
+    /// Lowers `group.version` back to 0 (unfinalized/disabled) on an
+    /// already-started test broker, whose bootstrap otherwise finalizes it
+    /// at the modern release default.
+    async fn disable_group_version(broker: &crate::broker::Broker) {
+        broker
+            .controller
+            .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+                name: krabka_metadata::group_version::GROUP_VERSION_FEATURE.into(),
+                level: 0,
+            })])
+            .await
+            .expect("disable group.version");
+    }
+
+    /// The `group.version` protocol gate — `UNSUPPORTED_VERSION` when the
+    /// next-gen consumer-group RPCs are not finalized — runs BEFORE the
+    /// group ACL check, matching Kafka's `handleConsumerGroupDescribe`. A
+    /// principal denied `Describe` on the group still gets
+    /// `UNSUPPORTED_VERSION`, not `GROUP_AUTHORIZATION_FAILED`, when the
+    /// protocol itself is unavailable, and every requested group gets it —
+    /// none are individually authorization-checked.
+    #[tokio::test]
+    async fn handle_protocol_gate_precedes_group_acl_for_every_row() {
+        let authorizer =
+            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
+        let (broker_handle, _dir) = crate::test_support::start_broker_with_authorizer_no_audit(
+            std::sync::Arc::new(authorizer),
+        )
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        disable_group_version(&broker).await;
+        let principal = crate::test_support::principal("nobody");
+        let peer = crate::test_support::peer();
+        let ctx = crate::test_support::request_context(&principal, &peer, "consumer-client");
+        let req = request(vec!["denied-group", "also-denied"]);
+
+        let bytes = handle(&broker, VERSION, 5, &req, &ctx)
+            .await
+            .expect("ConsumerGroupDescribe handler");
+        let resp = decode_response(&bytes);
+
+        assert!(
+            resp.groups
+                .iter()
+                .map(|g| (g.group_id.as_str(), g.error_code))
+                .collect::<Vec<_>>()
+                == vec![
+                    ("denied-group", codes::UNSUPPORTED_VERSION),
+                    ("also-denied", codes::UNSUPPORTED_VERSION),
+                ],
+            "{resp:?}"
+        );
+
+        broker_handle.shutdown().await;
+    }
+
+    /// Kafka puts every `GROUP_AUTHORIZATION_FAILED` row first, ahead of the
+    /// coordinator results, regardless of the order the client requested the
+    /// groups in.
+    #[tokio::test]
+    async fn handle_orders_denied_rows_before_allowed_rows() {
+        let authorizer =
+            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
+        let (broker_handle, _dir) = crate::test_support::start_broker_with_authorizer_no_audit(
+            std::sync::Arc::new(authorizer),
+        )
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        // Grant "alice" Describe on "allowed" only; "denied" has no matching
+        // ACL and stays denied under SimpleAclAuthorizer's default-deny.
+        broker
+            .controller
+            .submit_change(vec![MetadataRecord::V1AccessControlEntry(
+                krabka_metadata::AclEntry {
+                    resource_type: krabka_metadata::ResourceType::Group,
+                    resource_name: "allowed".into(),
+                    pattern_type: krabka_metadata::PatternType::Literal,
+                    principal: "User:alice".into(),
+                    host: "*".into(),
+                    operation: krabka_metadata::AclOperation::Describe,
+                    permission_type: krabka_metadata::PermissionType::Allow,
+                },
+            )])
+            .await
+            .expect("grant alice Describe on allowed");
+        let principal = crate::test_support::principal("alice");
+        let peer = crate::test_support::peer();
+        let ctx = crate::test_support::request_context(&principal, &peer, "alice-client");
+        let req = request(vec!["allowed", "denied"]);
+
+        let bytes = handle(&broker, VERSION, 7, &req, &ctx)
+            .await
+            .expect("ConsumerGroupDescribe handler");
+        let resp = decode_response(&bytes);
+
+        // Requested in order [allowed, denied]; the denied row comes first
+        // in the response, ahead of the (unknown, hence GROUP_ID_NOT_FOUND)
+        // allowed row.
+        assert!(
+            resp.groups
+                .iter()
+                .map(|g| (g.group_id.as_str(), g.error_code))
+                .collect::<Vec<_>>()
+                == vec![
+                    ("denied", codes::GROUP_AUTHORIZATION_FAILED),
+                    ("allowed", codes::GROUP_ID_NOT_FOUND),
+                ],
+            "{resp:?}"
+        );
+
+        broker_handle.shutdown().await;
+    }
+
+    /// KIP-430: with the flag set, a row that comes back clean carries the
+    /// bitfield of group operations the principal holds; the flag unset (or
+    /// an errored row) keeps the wire-default `i32::MIN` sentinel.
+    #[tokio::test]
+    async fn handle_fills_authorized_operations_only_on_opt_in_for_clean_rows() {
+        let authorizer = std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer);
+        let (broker_handle, _dir) = crate::test_support::start_broker_with_authorizer_no_audit(
+            std::sync::Arc::clone(&authorizer) as _,
+        )
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        let _ = broker
+            .group_coordinator
+            .get_or_create_consumer("live-group");
+        let principal = crate::test_support::principal("admin");
+        let peer = crate::test_support::peer();
+        let ctx = crate::test_support::request_context(&principal, &peer, "admin-client");
+
+        // Flag unset: sentinel preserved even for a clean row.
+        let req_off = request_with_ops(vec!["live-group"], false);
+        let resp_off = decode_response(
+            &handle(&broker, VERSION, 9, &req_off, &ctx)
+                .await
+                .expect("ConsumerGroupDescribe handler"),
+        );
+        assert!(
+            resp_off.groups
+                == vec![DescribedGroup {
+                    group_id: "live-group".into(),
+                    group_state: GROUP_STATE_EMPTY.into(),
+                    authorized_operations: i32::MIN,
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+                    ..Default::default()
+                }],
+            "{resp_off:?}"
+        );
+
+        // Flag set: bitfield filled from the group's supported operations
+        // (Read, Describe, Delete) under AllowAll.
+        let req_on = request_with_ops(vec!["live-group"], true);
+        let resp_on = decode_response(
+            &handle(&broker, VERSION, 11, &req_on, &ctx)
+                .await
+                .expect("ConsumerGroupDescribe handler"),
+        );
+        let expected_bits = authorized_operations_bits(
+            authorizer.as_ref(),
+            &broker.controller.current_image(),
+            &principal,
+            &peer,
+            krabka_metadata::ResourceType::Group,
+            "live-group",
+        );
+        assert!(expected_bits != i32::MIN);
+        assert!(
+            resp_on.groups
+                == vec![DescribedGroup {
+                    group_id: "live-group".into(),
+                    group_state: GROUP_STATE_EMPTY.into(),
+                    authorized_operations: expected_bits,
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+                    ..Default::default()
+                }],
+            "{resp_on:?}"
+        );
 
         broker_handle.shutdown().await;
     }

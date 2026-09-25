@@ -148,20 +148,43 @@ pub(super) async fn handle_produce(
             .await;
     }
 
-    let mut any_ok = false;
+    let any_ok = results.iter().any(Result::is_ok);
+    for err in results.iter().filter_map(|result| result.as_ref().err()) {
+        flag_storage_failure(err, log_dir, log_dir_status);
+    }
+
+    // An in-process (non-diskless) leader recompute takes no I/O, only the
+    // uncontended `replica_state` lock, so it runs here, before any job's ack
+    // fires. Doing it after the ack (as a diskless append still does, below)
+    // leaves a window where a caller that only awaits the ack -- such as
+    // `EndTxn`'s synchronous marker append, which never calls
+    // `await_hw_at_least` the way an `acks=-1` client produce does -- can
+    // observe success before this partition's own high watermark reflects
+    // the append. A concurrent `ListOffsets`/`Fetch` against the same broker
+    // then reads a high watermark that is briefly behind what the caller was
+    // just told is committed. Recomputing first closes that gap: by the time
+    // any ack is visible, `replica_state.hw` already covers it.
+    let leader_hw_advanced = if any_ok && wal.is_none() {
+        let mut state = replica_state.lock().await;
+        let previous = state.hw;
+        Some(state.recompute_hw_for_leader_append(leo) > previous)
+    } else {
+        None
+    };
+
     for (ack, result) in acks.into_iter().zip(results) {
-        match &result {
-            Ok(_) => any_ok = true,
-            Err(err) => {
-                flag_storage_failure(err, log_dir, log_dir_status);
-            }
-        }
         let _ = ack.send(result);
     }
 
     if any_ok {
         append_notify.notify_waiters();
-        let advanced = if let Some(wal) = wal {
+        // The diskless path keeps its ack ahead of durability on purpose: the
+        // ack only promises an assigned offset, and a caller that needs the
+        // write durable awaits a separate `SyncDurable` command explicitly.
+        let advanced = if let Some(advanced) = leader_hw_advanced {
+            advanced
+        } else {
+            let wal = wal.expect("any_ok && wal.is_none() is false, so wal is Some");
             match wal.sync_durable(leo).await {
                 Ok(durable) => {
                     let mut state = replica_state.lock().await;
@@ -173,10 +196,6 @@ pub(super) async fn handle_produce(
                     false
                 }
             }
-        } else {
-            let mut state = replica_state.lock().await;
-            let previous = state.hw;
-            state.recompute_hw_for_leader_append(leo) > previous
         };
         if advanced {
             hw_advance_notify.notify_waiters();
