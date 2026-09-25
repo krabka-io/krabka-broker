@@ -49,7 +49,7 @@ fn oracle_decision(
         if oracle_resource_match(e, req.resource_type, req.resource_name)
             && oracle_principal_match(e, &req.principal.name)
             && oracle_host_match(e, req.host)
-            && oracle_op_match(e.operation, req.operation)
+            && oracle_op_match(e.operation, req.operation, e.permission_type)
         {
             match e.permission_type {
                 PermissionType::Deny => saw_deny = true,
@@ -89,8 +89,13 @@ fn oracle_host_match(e: &AclEntry, host: &SocketAddr) -> bool {
 ///
 /// The table holds an exact match, `All` implies everything, and the explicit
 /// arrows `{Read,Write,Delete,Alter}` -> `Describe` and `AlterConfigs` ->
-/// `DescribeConfigs`.
-fn oracle_op_match(stored: AclOperation, requested: AclOperation) -> bool {
+/// `DescribeConfigs`. The arrows apply only when `permission` is ALLOW: a
+/// DENY ACL never gains the implied operations (#649).
+fn oracle_op_match(
+    stored: AclOperation,
+    requested: AclOperation,
+    permission: PermissionType,
+) -> bool {
     use AclOperation::{All, Alter, AlterConfigs, Delete, Describe, DescribeConfigs, Read, Write};
     // Implication arrows as an explicit data table — deliberately a different
     // structure from production's `matches!`-based `implies`, so the cross-check
@@ -105,7 +110,7 @@ fn oracle_op_match(stored: AclOperation, requested: AclOperation) -> bool {
     if stored == requested || stored == All {
         return true;
     }
-    ARROWS.contains(&(stored, requested))
+    permission == PermissionType::Allow && ARROWS.contains(&(stored, requested))
 }
 
 // ----- builders -----

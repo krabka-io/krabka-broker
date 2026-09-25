@@ -33,38 +33,50 @@ pub(super) struct FileConfigTail {
     pub(super) audit: Option<FileAuditConfig>,
 }
 
+/// Apply the `[authorization]` section: super users and the authorizer impl.
+fn apply_authorization_tail(
+    authorization: &FileAuthorizationConfig,
+    cfg: &mut crate::config::BrokerConfig,
+) -> Result<(), FileConfigError> {
+    let super_users = authorization
+        .super_users
+        .iter()
+        .map(|entry| super::authorization::super_user_name(entry))
+        .collect();
+    cfg.super_users.clone_from(&super_users);
+    cfg.authorizer = match authorization.authz_type {
+        AuthzType::AllowAll => Arc::new(crate::authorizer::AllowAllAuthorizer),
+        AuthzType::Simple => Arc::new(
+            crate::authorizer::SimpleAclAuthorizer::new(super_users)
+                .with_allow_everyone_if_no_acl_found(authorization.allow_everyone_if_no_acl_found),
+        ),
+        AuthzType::Opa => {
+            let opa = authorization
+                .opa
+                .as_ref()
+                .ok_or_else(|| FileConfigError::MissingSection("[authorization.opa]".into()))?;
+            Arc::new(
+                crate::authorizer::opa::OpaAuthorizer::new(
+                    super_users,
+                    opa.url.clone(),
+                    opa.allow_on_error,
+                    opa.maximum_cache_size,
+                    Time::from_millis(opa.expire_after_ms),
+                    cfg.opa_http_timeout,
+                )
+                .map_err(|error| FileConfigError::OpaConfig(format!("{error:?}")))?,
+            )
+        }
+    };
+    Ok(())
+}
+
 pub(super) fn apply_config_tail(
     tail: FileConfigTail,
     cfg: &mut crate::config::BrokerConfig,
 ) -> Result<(), FileConfigError> {
     if let Some(authorization) = tail.authorization.as_ref() {
-        let super_users = authorization
-            .super_users
-            .iter()
-            .map(|entry| super::authorization::super_user_name(entry))
-            .collect();
-        cfg.super_users.clone_from(&super_users);
-        cfg.authorizer = match authorization.authz_type {
-            AuthzType::AllowAll => Arc::new(crate::authorizer::AllowAllAuthorizer),
-            AuthzType::Simple => Arc::new(crate::authorizer::SimpleAclAuthorizer::new(super_users)),
-            AuthzType::Opa => {
-                let opa = authorization
-                    .opa
-                    .as_ref()
-                    .ok_or_else(|| FileConfigError::MissingSection("[authorization.opa]".into()))?;
-                Arc::new(
-                    crate::authorizer::opa::OpaAuthorizer::new(
-                        super_users,
-                        opa.url.clone(),
-                        opa.allow_on_error,
-                        opa.maximum_cache_size,
-                        Time::from_millis(opa.expire_after_ms),
-                        cfg.opa_http_timeout,
-                    )
-                    .map_err(|error| FileConfigError::OpaConfig(format!("{error:?}")))?,
-                )
-            }
-        };
+        apply_authorization_tail(authorization, cfg)?;
     }
     if let Some(sr) = tail.schema_registry.as_ref() {
         let basic_auth = match (
