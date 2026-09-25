@@ -1256,6 +1256,22 @@ fn client_facing_apis() -> Vec<ApiVersion> {
     use krabka_protocol::owned;
     vec![
         v!(api_versions_request),
+        // Kafka 4.0 removed `Produce` v0-2 (KAFKA-18659,
+        // `ProduceRequest.json`'s `validVersions` moved to "3-13"), but
+        // `ApiKeys.PRODUCE_API_VERSIONS_RESPONSE_MIN_VERSION` stays 0, so a
+        // 4.x broker's own `ApiVersions` answer still advertises the same
+        // 0-13 krabka does here -- this entry already matches Kafka on the
+        // one thing `ApiVersions` reports.
+        //
+        // What Kafka does differently is SERVE: a real v0-2 request gets an
+        // invalid-request error and the connection closes, where krabka's
+        // handler still up-converts the legacy `MessageSet` and appends it --
+        // the same choice this repo already made for `Fetch` and
+        // `ListOffsets` below, whose own pre-4.0 version floors are kept on
+        // purpose (see their notes in `docs/KIP_MATRIX.md`) because the wider
+        // range costs a modern client nothing and keeps an old one working.
+        // #863 is the record of that same choice for `Produce`: intentional,
+        // not yet caught up with those two rows' matrix documentation.
         ApiVersion {
             api_key: owned::produce_request::API_KEY,
             min_version: krabka_protocol::kafka_3_6_2::owned::produce_request::MIN_VERSION,
