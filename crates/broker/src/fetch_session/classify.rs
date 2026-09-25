@@ -1,10 +1,12 @@
-//! Request classification: the four-way decision that the fetch handler
+//! Request classification: the three-way decision that the fetch handler
 //! dispatches on, and the epoch check and cached-set update behind it.
 //!
-//! `classify` reads the `session_id` and `session_epoch` pair off the request,
-//! rejects a stale epoch or an unknown id with the KIP-227 error code, and on
-//! a valid incremental fetch applies the partition-set diff and returns the
-//! full effective partition set under one lock.
+//! `classify` reads the `session_id` and `session_epoch` pair off the request.
+//! It decides full vs. incremental from `session_epoch` alone (Kafka's
+//! `FetchMetadata.isFull()`), rejects a stale epoch or an unknown id on the
+//! incremental path with the KIP-227 error code, and on a valid incremental
+//! fetch applies the partition-set diff and returns the full effective
+//! partition set under one lock.
 
 use std::sync::atomic::Ordering;
 
@@ -47,9 +49,6 @@ pub enum SessionDecision {
         new_epoch: FetchSessionEpoch,
         partitions: Vec<(FetchSessionKey, CachedPartitionState)>,
     },
-    /// `(session_id!=0, epoch=-1)`: serve from `req.topics` like a sessionless
-    /// fetch, then drop the cached session.
-    Close { session_id: FetchSessionId },
     /// Protocol violation. Emit an empty response with this top-level
     /// `error_code` and `session_id = 0`.
     Error { code: i16 },
@@ -69,32 +68,40 @@ impl FetchSessionCache {
     /// The handler must call `finalize_incremental` after it assembles the
     /// response, so that the `last_*` comparison fields stay in step with what
     /// the broker sent.
+    ///
+    /// The branch taken is decided from `epoch` alone, matching Kafka's
+    /// `FetchMetadata.isFull()`. The session id carried alongside a full-fetch
+    /// epoch (`INITIAL_EPOCH` or `FINAL_EPOCH`) is not looked up for a match;
+    /// it names a session to close before the full read runs, if one exists.
+    /// This is the ordinary reconnect path of the Java consumer
+    /// (`nextCloseExistingAttemptNew`): it closes its old session by sending
+    /// `INITIAL_EPOCH` with the old id, and expects a fresh session back, not
+    /// an error.
     /// # Panics
     /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn classify(&self, req: &FetchRequest) -> SessionDecision {
         let sid = req.session_id;
         let epoch = req.session_epoch;
 
-        if sid == INVALID_SESSION_ID {
-            return match epoch {
-                FINAL_EPOCH => SessionDecision::Sessionless,
-                INITIAL_EPOCH => SessionDecision::NewSession,
-                _ => SessionDecision::Error {
-                    code: codes::INVALID_FETCH_SESSION_EPOCH,
-                },
+        if epoch == INITIAL_EPOCH || epoch == FINAL_EPOCH {
+            if sid != INVALID_SESSION_ID {
+                // Best-effort close: a session that does not exist (already
+                // evicted, or named by a client that never had one) is not an
+                // error here, exactly as Kafka's `newContext` ignores a
+                // `cache.remove` that finds nothing.
+                self.close(sid);
+            }
+            return if epoch == FINAL_EPOCH {
+                SessionDecision::Sessionless
+            } else {
+                SessionDecision::NewSession
             };
         }
 
+        // Not a full fetch: a genuine incremental epoch. Kafka looks the id
+        // up unconditionally, `session_id == 0` included — id 0 is never
+        // allocated, so an incremental naming it always misses.
         let mut guard = self.inner.lock().expect("poisoned");
-
-        if epoch == FINAL_EPOCH {
-            if !guard.sessions.contains_key(&sid) {
-                return SessionDecision::Error {
-                    code: codes::FETCH_SESSION_ID_NOT_FOUND,
-                };
-            }
-            return SessionDecision::Close { session_id: sid };
-        }
 
         let Some(session) = guard.sessions.get_mut(&sid) else {
             return SessionDecision::Error {
@@ -130,6 +137,24 @@ impl FetchSessionCache {
         } else {
             self.num_partitions
                 .fetch_sub(partitions_before - partitions_after, Ordering::Relaxed);
+        }
+
+        if partitions_after == 0 {
+            // Kafka's `IncrementalFetchContext.updateAndGenerateResponseData`:
+            // an incremental that forgets its last partitions and adds none
+            // leaves nothing worth caching. The session is dropped and the
+            // response reports no session, so the client falls back to a
+            // sessionless fetch next time rather than keep re-polling an
+            // empty one.
+            let privileged = session.privileged;
+            guard.sessions.remove(&sid);
+            guard.order.remove(sid, privileged);
+            self.num_sessions.fetch_sub(1, Ordering::Relaxed);
+            return SessionDecision::Incremental {
+                session_id: INVALID_SESSION_ID,
+                new_epoch: next_epoch(epoch),
+                partitions: Vec::new(),
+            };
         }
 
         let new_epoch = next_epoch(session.next_epoch);
@@ -211,15 +236,12 @@ mod tests {
     }
 
     #[test]
-    fn close_request_returns_close_then_handler_drops() {
+    fn close_request_closes_the_session_inline() {
         let cache = FetchSessionCache::new(10);
         let id = cache.try_allocate(false, "alice".into(), vec![]);
         let r = req(id, FINAL_EPOCH, vec![], vec![]);
-        match cache.classify(&r) {
-            SessionDecision::Close { session_id } => assert!(session_id == id),
-            other => panic!("expected Close, got {other:?}"),
-        }
-        cache.close(id);
+        assert!(matches!(cache.classify(&r), SessionDecision::Sessionless));
+        // classify() already dropped the session; nothing left to close.
         assert!(cache.len() == 0);
         // Subsequent classify with the same id is now NOT_FOUND.
         let r2 = req(id, 1, vec![], vec![]);
@@ -231,15 +253,85 @@ mod tests {
         }
     }
 
+    /// Table over `(session_id, session_epoch, session exists?)` to
+    /// `(top-level error code or decision, whether the cache still holds the
+    /// id)`. Matches Kafka's `FetchMetadata.isFull()` classification (#871):
+    /// full/final is decided by `session_epoch` alone, and a full fetch's
+    /// session id (if any) is closed rather than epoch-checked.
     #[test]
-    fn invalid_session_id_zero_with_stray_epoch_is_error() {
-        let cache = FetchSessionCache::new(10);
-        let r = req(0, 5, vec![], vec![]);
-        match cache.classify(&r) {
-            SessionDecision::Error { code } => {
-                assert!(code == codes::INVALID_FETCH_SESSION_EPOCH);
+    fn classification_matches_kafkas_epoch_only_rule() {
+        enum Want {
+            Sessionless,
+            NewSession,
+            Error(i16),
+        }
+
+        /// `Existing` allocates a session first and requests classify against
+        /// its own id. `Fixed` requests classify against a literal id, which
+        /// names no session in a fresh cache.
+        enum RequestId {
+            Existing,
+            Fixed(i32),
+        }
+
+        struct Case {
+            name: &'static str,
+            request_id: RequestId,
+            epoch: i32,
+            want: Want,
+        }
+
+        let cases = [
+            Case {
+                name: "id=N>0, epoch=0 (reconnect): closes old, opens new",
+                request_id: RequestId::Existing,
+                epoch: INITIAL_EPOCH,
+                want: Want::NewSession,
+            },
+            Case {
+                name: "id=0, epoch>0: incremental lookup of id 0 misses",
+                request_id: RequestId::Fixed(0),
+                epoch: 5,
+                want: Want::Error(codes::FETCH_SESSION_ID_NOT_FOUND),
+            },
+            Case {
+                name: "id=N unknown, epoch=-1: full and final, no error",
+                request_id: RequestId::Fixed(12345),
+                epoch: FINAL_EPOCH,
+                want: Want::Sessionless,
+            },
+            Case {
+                name: "id=N known, epoch=-1: closes and answers sessionless",
+                request_id: RequestId::Existing,
+                epoch: FINAL_EPOCH,
+                want: Want::Sessionless,
+            },
+            Case {
+                name: "id=0, epoch=0: ordinary new-session open",
+                request_id: RequestId::Fixed(0),
+                epoch: INITIAL_EPOCH,
+                want: Want::NewSession,
+            },
+        ];
+
+        for case in cases {
+            let cache = FetchSessionCache::new(10);
+            let requested_id = match case.request_id {
+                RequestId::Existing => cache.try_allocate(false, "alice".into(), vec![]),
+                RequestId::Fixed(id) => id,
+            };
+            let r = req(requested_id, case.epoch, vec![], vec![]);
+            match (cache.classify(&r), case.want) {
+                (SessionDecision::Sessionless, Want::Sessionless) => {}
+                (SessionDecision::NewSession, Want::NewSession) => {}
+                (SessionDecision::Error { code }, Want::Error(want_code)) => {
+                    check!(code == want_code, "{}", case.name);
+                }
+                (other, _) => panic!("{}: unexpected decision {other:?}", case.name),
             }
-            other => panic!("expected Error, got {other:?}"),
+            // Every branch above closes or never opens a session, so the
+            // cache holds nothing afterward in any case.
+            check!(cache.len() == 0, "{}", case.name);
         }
     }
 
@@ -470,5 +562,45 @@ mod tests {
             }
             other => panic!("expected Incremental, got {other:?}"),
         }
+    }
+
+    /// An incremental that forgets every cached partition and adds none
+    /// leaves the session with nothing. Kafka's
+    /// `IncrementalFetchContext.updateAndGenerateResponseData` drops such a
+    /// session and answers `session_id = 0` (#871).
+    #[test]
+    fn incremental_that_empties_the_session_drops_it_and_reports_no_session() {
+        let cache = FetchSessionCache::new(10);
+        let key = FetchSessionKey {
+            topic_name: "t".into(),
+            topic_id: WireUuid::ZERO,
+            partition: 0,
+        };
+        let id = cache.try_allocate(
+            false,
+            "alice".into(),
+            vec![(key, CachedPartitionState::default())],
+        );
+
+        let forgotten = vec![ForgottenTopic {
+            topic: "t".into(),
+            topic_id: WireUuid::ZERO,
+            partitions: vec![0],
+            ..Default::default()
+        }];
+        let r = req(id, 1, vec![], forgotten);
+        match cache.classify(&r) {
+            SessionDecision::Incremental {
+                session_id,
+                partitions,
+                ..
+            } => {
+                check!(session_id == 0);
+                check!(partitions.is_empty());
+            }
+            other => panic!("expected Incremental, got {other:?}"),
+        }
+        assert!(cache.len() == 0);
+        assert!(cache.total_partitions_cached() == 0);
     }
 }

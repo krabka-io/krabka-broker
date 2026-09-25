@@ -14,17 +14,26 @@
 //! ## Wire-level state machine
 //!
 //! Every `FetchRequest` carries `session_id: i32` and `session_epoch: i32`.
-//! Four classes of request fall out:
+//! Which class a request falls into is decided by `session_epoch` alone,
+//! matching Kafka's `FetchMetadata.isFull()`; `session_id` is looked up only
+//! on the incremental path:
 //!
-//! | `session_id` | `session_epoch` | Meaning                                |
-//! |--------------|-----------------|----------------------------------------|
-//! | 0            | -1 (FINAL)      | Sessionless full fetch (no caching).   |
-//! | 0            | 0 (INITIAL)     | Open a new session.                    |
-//! | N>0          | E (== expected) | Incremental fetch on existing session. |
-//! | N>0          | -1 (FINAL)      | Close the existing session.            |
+//! | `session_epoch`      | `session_id`  | Meaning                                                |
+//! |-----------------------|---------------|---------------------------------------------------------|
+//! | -1 (FINAL)             | any           | Full fetch. Closes the named session first, if any, and caches nothing. |
+//! | 0 (INITIAL)            | any           | Full fetch. Closes the named session first, if any, then may open a new one. |
+//! | E (positive)           | N (existing, `E == expected`) | Incremental fetch on session `N`.       |
 //!
-//! A mismatched epoch returns `INVALID_FETCH_SESSION_EPOCH` at the top level
-//! of the response. An unknown id returns `FETCH_SESSION_ID_NOT_FOUND`.
+//! A full fetch (`session_epoch` of `-1` or `0`) never epoch-checks the
+//! session id it carries: this is the Java consumer's ordinary reconnect
+//! path (`nextCloseExistingAttemptNew`), which sends `INITIAL_EPOCH` with its
+//! old id and expects a fresh session, not an error. An incremental fetch
+//! (any other epoch) with an unknown id -- id `0` included, which is never
+//! allocated -- returns `FETCH_SESSION_ID_NOT_FOUND`; one with a known id but
+//! a mismatched epoch returns `INVALID_FETCH_SESSION_EPOCH`. Both are
+//! top-level response codes. An incremental fetch that forgets its last
+//! cached partitions and adds none is dropped, and the response reports
+//! `session_id = 0`.
 //!
 //! ## Cache & eviction
 //!
