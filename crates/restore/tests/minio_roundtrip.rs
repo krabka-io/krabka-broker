@@ -35,7 +35,7 @@ use uuid::Uuid;
 use crate::batches::{text_batch, tiny_segment_config};
 
 /// The `MinIO` server image, built by the same `//bazel/images` targets the
-/// broker's container suites load from. MinIO discontinued distribution of
+/// broker's container suites load from. `MinIO` discontinued distribution of
 /// its own images, quay.io included, so this is a Wolfi apko build rather
 /// than a pulled digest.
 const MINIO_IMAGE: &str = "docker.io/krabka-io/minio:RELEASE.2025-09-07T16-13-09Z";

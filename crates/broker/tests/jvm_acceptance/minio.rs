@@ -28,7 +28,8 @@ use super::ports::minio_port;
 // load them under these tags rather than pull them from quay.io.
 pub(crate) const MINIO_IMAGE: &str = "docker.io/krabka-io/minio:RELEASE.2025-09-07T16-13-09Z";
 
-pub(crate) const MINIO_CLIENT_IMAGE: &str = "docker.io/krabka-io/minio-mc:RELEASE.2025-08-13T08-35-41Z";
+pub(crate) const MINIO_CLIENT_IMAGE: &str =
+    "docker.io/krabka-io/minio-mc:RELEASE.2025-08-13T08-35-41Z";
 
 pub(crate) const MINIO_ACCESS_KEY: &str = "minioadmin";
 
