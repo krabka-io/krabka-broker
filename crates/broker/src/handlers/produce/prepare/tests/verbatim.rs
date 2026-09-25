@@ -245,7 +245,7 @@ fn rejects_zstd_below_v7_and_admits_it_from_v7_on_both_paths() {
                 assert!(result.is_ok(), "version {version}: {result:?}");
             } else {
                 assert!(
-                    result.err() == Some(crate::codes::UNSUPPORTED_COMPRESSION_TYPE),
+                    result.as_ref().err() == Some(&crate::codes::UNSUPPORTED_COMPRESSION_TYPE),
                     "version {version}: {result:?}"
                 );
             }

@@ -303,13 +303,12 @@ fn read_records(
                 chosen = Some(RecordsPayload::FileRegions(desc.regions));
             }
         }
-        match chosen {
-            Some(p) => p,
-            None => {
-                let raw = log.read_raw(fetch_offset, limit_offset, read_max)?;
-                served_upper_bound = raw.last_offset.map(|o| o + 1);
-                RecordsPayload::Raw(raw.bytes)
-            }
+        if let Some(p) = chosen {
+            p
+        } else {
+            let raw = log.read_raw(fetch_offset, limit_offset, read_max)?;
+            served_upper_bound = raw.last_offset.map(|o| o + 1);
+            RecordsPayload::Raw(raw.bytes)
         }
     };
     // Windows fallback: no safe `sendfile`/`TransmitFile`, so always
@@ -506,7 +505,7 @@ mod tests {
         owned::fetch_response::{AbortedTransaction, PartitionData},
         records::{Attributes, Record, RecordBatch, RecordsPayload},
     };
-    use krabka_units::prelude::mebibytes;
+    use krabka_units::prelude::{ByteSizeExt as _, mebibytes};
 
     /// The read budget for the hand-off test: larger than the log it reads, so
     /// the served bytes are the whole batch under either runtime flavor.
