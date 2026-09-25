@@ -113,17 +113,19 @@ pub(crate) async fn tick_all(
     let mut swept: BTreeSet<(String, i32)> = BTreeSet::new();
     let mut failed = false;
     for partition in snapshot {
-        // Kafka bounds a pass at the last stable offset, and krabka bounds it
-        // at the high watermark: below it a record is committed, so no leader
-        // election can take away the newer record that a pass drops an older
-        // one in favour of. A follower learns this watermark from the
-        // leader's Fetch response, so the bound is one every replica knows.
+        // Kafka bounds a pass at the last stable offset, not the high
+        // watermark: the records between the LSO and the high watermark
+        // belong to transactions with no marker yet, and rewriting them
+        // early would leave the output segment's aborted-transaction index
+        // unable to learn about a marker that arrives later. A follower
+        // learns the high watermark from the leader's Fetch response, so the
+        // LSO computed from it is one every replica can derive.
         let high_watermark = partition.high_watermark().await;
         let (compacted, due) = {
             // Recover the guard if the mutex was poisoned by a panic
             // elsewhere rather than killing the (discarded-JoinHandle)
             // cleaner task. The config snapshot stays readable.
-            let log = partition
+            let mut log = partition
                 .log
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -133,12 +135,13 @@ pub(crate) async fn tick_all(
             // `crate::log_retention`, which runs on its own interval and over
             // every hosted log rather than only the led ones.
             let compacted = log.config_snapshot().cleanup_policy.contains_compact();
+            let last_stable_offset = log.last_stable_offset(high_watermark);
             (
                 compacted,
                 // Kafka's `min.cleanable.dirty.ratio`, `min.compaction.lag.ms`
                 // and `max.compaction.lag.ms`, which say whether this
                 // partition has earned a pass yet.
-                compacted && log.compaction_due(std::time::SystemTime::now(), high_watermark),
+                compacted && log.compaction_due(std::time::SystemTime::now(), last_stable_offset),
             )
         };
         if !compacted {

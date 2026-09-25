@@ -7,6 +7,7 @@
 
 use krabka_ids::{LeaderEpoch, Offset, ProducerId};
 use krabka_protocol::records::{RecordBatch, TimestampType};
+use krabka_units::prelude::{ByteSize, ByteSizeExt as _, Time, TimeExt as _};
 use tracing::instrument;
 
 use super::{
@@ -291,16 +292,23 @@ impl Log {
             batch.last_offset_delta,
             Offset(batch.base_offset),
         )?;
-        let (segment_size, index_interval, flush_on_append) = {
+        let (segment_size, segment_roll_interval, index_interval, flush_on_append) = {
             let cfg = self.config.read().unwrap();
-            (cfg.segment_size, cfg.index_interval, cfg.flush_on_append)
+            (
+                cfg.segment_size,
+                cfg.segment_roll_interval,
+                cfg.index_interval,
+                cfg.flush_on_append,
+            )
         };
-
-        let should_roll = match &self.active {
-            Some(seg) => seg.size() >= segment_size,
-            None => false,
-        };
-        if should_roll {
+        let incoming_size =
+            ByteSize::from_bytes(u64::try_from(batch.encoded_len()).unwrap_or(u64::MAX));
+        if self.should_roll_for_incoming(
+            incoming_size,
+            batch.max_timestamp,
+            segment_size,
+            segment_roll_interval,
+        ) {
             self.roll_active_segment()?;
         }
 
@@ -370,6 +378,45 @@ impl Log {
             return Err(error);
         }
         Ok(())
+    }
+
+    /// Kafka's `LogSegment.shouldRoll`, checked against an incoming batch
+    /// rather than the wall clock: this is what makes rolling an append-time
+    /// decision.
+    ///
+    /// True when appending `incoming_size` bytes would push the active
+    /// segment past `segment_size`, or when the active segment already holds
+    /// a record and the gap between `incoming_max_timestamp` and that
+    /// record's timestamp exceeds `segment_roll_interval`. An empty active
+    /// segment never rolls on age alone, the same as Kafka's `size > 0`
+    /// guard on `timeWaitedForRoll` -- there is no first record yet to
+    /// measure the gap from, and nothing (not even the wall clock) rolls an
+    /// idle partition.
+    pub(super) fn should_roll_for_incoming(
+        &self,
+        incoming_size: ByteSize,
+        incoming_max_timestamp: i64,
+        segment_size: ByteSize,
+        segment_roll_interval: Time,
+    ) -> bool {
+        let Some(seg) = self.active.as_ref() else {
+            return false;
+        };
+        // An empty active segment never rolls, on size or on age: there is
+        // nothing in it worth sealing, and rolling it would try to open a
+        // second segment at the same base offset. A batch bigger than
+        // `segment.bytes` still lands whole in an empty segment and makes
+        // its own oversized one, the same as Kafka never splitting a batch.
+        let non_empty = seg.size() > ByteSize::ZERO;
+        let size_roll = non_empty && seg.size() + incoming_size > segment_size;
+        let time_roll = non_empty
+            && seg
+                .offset_for_timestamp(i64::MIN)
+                .is_some_and(|(_, first_timestamp)| {
+                    incoming_max_timestamp - first_timestamp
+                        > segment_roll_interval.millis_i64_trunc()
+                });
+        size_roll || time_roll
     }
 
     #[instrument(

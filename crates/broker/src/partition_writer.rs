@@ -238,7 +238,7 @@ pub async fn run_with_sequencer(
                 let _ = ack.send(());
             }
             WriterMessage::Retain { ack } => {
-                handle_retention((&log, &log_dir, &log_dir_status), ack).await;
+                handle_retention((&log, &log_dir, &log_dir_status), &replica_state, ack).await;
             }
             WriterMessage::Compact { ack } => {
                 handle_compact(

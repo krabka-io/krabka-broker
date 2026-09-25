@@ -379,7 +379,7 @@ fn a_failed_segment_deletion_keeps_the_bytes_accounted_for_and_the_next_tick_ret
         );
         log.test_set_io(fault);
         let error = log
-            .tick(SystemTime::now())
+            .tick(SystemTime::now(), krabka_ids::Offset(i64::MAX))
             .expect_err("a failed unlink must be reported, not discarded");
         check!(
             matches!(&error, LogError::Io(io) if io.kind() == std::io::ErrorKind::PermissionDenied),
@@ -392,7 +392,7 @@ fn a_failed_segment_deletion_keeps_the_bytes_accounted_for_and_the_next_tick_ret
 
         // The fault fires once, so the retry is what a healthy disk gives.
         log.test_set_io(crate::io::file_io());
-        log.tick(SystemTime::now())
+        log.tick(SystemTime::now(), krabka_ids::Offset(i64::MAX))
             .expect("the retry finishes the deletion");
         check!(
             log.size().bytes_u64() == on_disk_log_bytes(dir.path()),
