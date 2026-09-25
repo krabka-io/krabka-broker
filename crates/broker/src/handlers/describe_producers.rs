@@ -274,13 +274,15 @@ mod tests {
     /// authorizer, since an invalid name never reaches either.
     #[tokio::test]
     async fn handle_validates_topic_name_before_authorizing() {
-        let too_long = "a".repeat(krabka_log::topic_name::MAX_TOPIC_NAME_LENGTH + 1);
-        let cases: Vec<(
-            &str,
+        type Case<'a> = (
+            &'a str,
             Arc<dyn crate::authorizer::Authorizer>,
             i16,
             Option<String>,
-        )> = vec![
+        );
+
+        let too_long = "a".repeat(krabka_log::topic_name::MAX_TOPIC_NAME_LENGTH + 1);
+        let cases: Vec<Case<'_>> = vec![
             (
                 "",
                 Arc::new(AllowAllAuthorizer),
