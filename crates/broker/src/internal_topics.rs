@@ -81,6 +81,43 @@ pub(crate) fn is_internal_topic(config: &BrokerConfig, name: &str) -> bool {
     INTERNAL_TOPICS.contains(&name) || name == config.audit_topic
 }
 
+/// The `client_id` Kafka's `KafkaApis.handleProduceRequest` compares against
+/// to decide `internalTopicsAllowed`:
+/// `internalTopicsAllowed = request.header.clientId == "__admin_client"`.
+///
+/// The group coordinator, the transaction coordinator and the share
+/// coordinator never reach the Produce handler at all: they append to
+/// `__consumer_offsets`, `__transaction_state` and `__share_group_state`
+/// through the partition writer directly, the same way
+/// `ReplicaManager.appendRecords`'s other internal callers do, and so does
+/// the barrier coordinator for [`crate::barrier::STATE_TOPIC`]. This name is
+/// therefore not a bypass any of those subsystems take; it exists only so a
+/// client Produce request with this exact `client_id` (Kafka's own admin
+/// tooling) is not refused by [`produce_internal_topics_allowed`].
+pub(crate) const PRODUCE_ADMIN_CLIENT_ID: &str = "__admin_client";
+
+/// The `client_id` prefix the broker's own diskless WAL index writer
+/// connects with, one connection per broker
+/// (`{DISKLESS_INDEX_WRITER_CLIENT_ID_PREFIX}{broker_id}-producer`; see
+/// `broker::diskless_index::index_log_config`).
+///
+/// Unlike the coordinators above, the diskless WAL index flusher has no
+/// direct-partition-writer path: it publishes its own compacted records to
+/// [`INTERNAL_TOPICS`]'s `__diskless_wal_index` through a real
+/// `krabka_client_producer::Producer` connection, the same way an ordinary
+/// client's Produce reaches this broker. Without this exception the
+/// flusher's own writes are refused by the gate meant for everyone *else*,
+/// and the diskless flush loop can never advance.
+pub(crate) const DISKLESS_INDEX_WRITER_CLIENT_ID_PREFIX: &str = "krabka-diskless-index-broker-";
+
+/// Whether a Produce request naming `client_id` may append directly to an
+/// internal topic. See [`PRODUCE_ADMIN_CLIENT_ID`] and
+/// [`DISKLESS_INDEX_WRITER_CLIENT_ID_PREFIX`].
+pub(crate) fn produce_internal_topics_allowed(client_id: &str) -> bool {
+    client_id == PRODUCE_ADMIN_CLIENT_ID
+        || client_id.starts_with(DISKLESS_INDEX_WRITER_CLIENT_ID_PREFIX)
+}
+
 /// Rejects a `krabka.audit.topic` that the `__` convention does not cover.
 ///
 /// [`crate::freeze::scope_covers_internal_topic`] refuses a freeze by the
@@ -199,6 +236,43 @@ mod tests {
         seen.sort_unstable();
         seen.dedup();
         check!(seen.len() == INTERNAL_TOPICS.len());
+    }
+
+    // Only the exact admin client id Kafka's `KafkaApis` compares against,
+    // or the broker's own diskless index writer, is let through; nothing
+    // else, including a name that merely contains one of them, is.
+    #[test]
+    fn only_the_admin_client_or_the_diskless_index_writer_may_produce_to_an_internal_topic() {
+        for (label, client_id, expected) in [
+            ("the admin client itself", "__admin_client", true),
+            ("an ordinary application", "my-app", false),
+            ("the empty client id", "", false),
+            (
+                "a name that only contains the admin client id",
+                "__admin_client-2",
+                false,
+            ),
+            (
+                "the diskless index writer, broker 1",
+                "krabka-diskless-index-broker-1-producer",
+                true,
+            ),
+            (
+                "the diskless index writer, broker 42",
+                "krabka-diskless-index-broker-42-producer",
+                true,
+            ),
+            (
+                "a name that only contains the diskless index writer prefix",
+                "not-krabka-diskless-index-broker-1-producer",
+                false,
+            ),
+        ] {
+            check!(
+                produce_internal_topics_allowed(client_id) == expected,
+                "{label}"
+            );
+        }
     }
 
     /// The audit topic is the one internal name the prefix rule cannot take on

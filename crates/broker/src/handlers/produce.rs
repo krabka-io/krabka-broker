@@ -178,7 +178,7 @@ pub(crate) async fn handle(
     //   }
     //
     // `hasTransactionalRecords` looks at the BATCHES, not at whether the
-    // request carries a `transactional_id` — a transactional batch (producer
+    // request carries a `transactional_id`. A transactional batch (producer
     // id + the KIP-98 transactional attribute) with no request-level
     // `transactional_id` still trips this gate, and is refused here rather
     // than reaching `verify_transactional_produce`, which would otherwise
@@ -188,7 +188,7 @@ pub(crate) async fn handle(
     // reaches this check at all, matching Kafka.
     //
     // Kafka answers every partition row of the request with 53 and returns
-    // before any topic is resolved — an id that would otherwise answer
+    // before any topic is resolved. An id that would otherwise answer
     // UNKNOWN_TOPIC_ID at v13+ still answers 53. So this runs ahead of the
     // topic-resolution loop below, not inside it.
     let image = controller.current_image();
@@ -366,6 +366,19 @@ pub(crate) async fn handle(
             FreezeMutationKind::Produce,
         );
 
+        // Kafka's internal-topic gate, resolved here for the same reason as
+        // the freeze above: it is a property of the topic and of the request
+        // (its `client_id`), not of a partition or a batch. The group,
+        // transaction and share coordinators never reach this handler at all.
+        // They append to their own topics through the partition writer
+        // directly, so this is the only path an ordinary client Produce can
+        // take to `__consumer_offsets`, `__transaction_state` or
+        // `__share_group_state`, and the one Kafka refuses unless `client_id`
+        // is its own admin tooling's `"__admin_client"`.
+        let internal_topic_denied =
+            crate::internal_topics::is_internal_topic(&broker.config, &topic_name)
+                && !crate::internal_topics::produce_internal_topics_allowed(ctx.client_id);
+
         for part_data in topic.partition_data {
             let idx = part_data.index;
             // Time the per-partition handler work for the rebalancer's
@@ -387,6 +400,7 @@ pub(crate) async fn handle(
                     schema,
                     topic_name: topic_name.clone(),
                     freeze,
+                    internal_topic_denied,
                     transaction: TransactionRequest {
                         transactional_id: req.transactional_id.as_deref(),
                         version,
