@@ -97,6 +97,62 @@ impl AcquisitionState {
         }
     }
 
+    /// Kafka's `SharePartition.updateCacheAndOffsets`, called when the log
+    /// start offset has moved past the SPSO: by retention, `DeleteRecords`, or
+    /// a `share.auto.offset.reset=earliest` initialization that is old.
+    ///
+    /// Archives every `Available` or `Deferred` run below `log_start`, exactly
+    /// as `archiveAvailableRecordsOnLsoMovement` does, and then advances the
+    /// SPSO. An `Acquired` run below `log_start` is not force-archived: it
+    /// stays locked until its lock naturally expires, so the walk stops there
+    /// instead of jumping past it. When nothing in the window blocks the
+    /// advance, the SPSO (and the SPEO, if the window had not grown that far)
+    /// jump straight to `log_start`, matching Kafka's unconditional
+    /// `startOffset = newLogStartOffset` assignment for the un-cached region.
+    ///
+    /// Does nothing when `log_start` is at or below the current SPSO.
+    pub fn advance_past_log_start(&mut self, log_start: Offset) {
+        if log_start <= self.start_offset {
+            return;
+        }
+        self.split_at_offset(log_start);
+        let mut changed = false;
+        for batch in &mut self.batches {
+            if batch.first_offset >= log_start {
+                break;
+            }
+            if matches!(batch.state, RecordState::Available | RecordState::Deferred) {
+                self.delivery_complete_count = self
+                    .delivery_complete_count
+                    .saturating_add(clamp_i32(batch.len()));
+                batch.state = RecordState::Archived;
+                batch.acquired_by = None;
+                batch.lock_deadline = None;
+                changed = true;
+            }
+        }
+        if changed {
+            self.dirty = true;
+        }
+        self.advance_spso();
+        // Nothing left in the window blocks the rest of the advance (either no
+        // batch ever tracked that region, or every batch there was archived
+        // above and `advance_spso` already dropped it): jump the SPSO the rest
+        // of the way to `log_start`, and the SPEO with it if it had not
+        // reached there yet.
+        let blocked = self
+            .batches
+            .first()
+            .is_some_and(|b| b.first_offset < log_start);
+        if !blocked && self.start_offset < log_start {
+            self.start_offset = log_start;
+            self.dirty = true;
+        }
+        if self.end_offset < self.start_offset {
+            self.end_offset = self.start_offset;
+        }
+    }
+
     /// Archives every `Available` run that has reached `max_attempts`
     /// deliveries, and advances the SPSO past a terminal prefix.
     ///
@@ -309,6 +365,114 @@ mod tests {
                     )
             );
         }
+    }
+
+    /// (name, window setup, what's below the new log start, new log start,
+    /// expected SPSO, expected SPEO, expected offsets still `Available`).
+    #[test]
+    fn advance_past_log_start_archives_available_and_keeps_acquired_locked() {
+        type Setup = fn(&mut AcquisitionState);
+        // (name, setup, materialize the window first, new log start,
+        // expected SPSO, expected SPEO, expected `Available` offsets).
+        type Case = (&'static str, Setup, bool, i64, i64, i64, Vec<i64>);
+        let no_window: Setup = |_s| {};
+        let acquire_below: Setup = |s| {
+            let _ = s.acquire("m1", 3, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
+        };
+        let cases: [Case; 4] = [
+            (
+                "nothing in flight, window never materialized",
+                no_window,
+                false,
+                3,
+                3,
+                3,
+                vec![],
+            ),
+            (
+                "available records below the new start are archived",
+                no_window,
+                true,
+                3,
+                3,
+                10,
+                vec![3, 4, 5, 6, 7, 8, 9],
+            ),
+            (
+                "acquired records below the new start stay locked",
+                acquire_below,
+                true,
+                3,
+                0,
+                10,
+                vec![3, 4, 5, 6, 7, 8, 9],
+            ),
+            (
+                "log start equal to the SPSO changes nothing",
+                no_window,
+                true,
+                0,
+                0,
+                10,
+                vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+            ),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (name, setup, materialize_window, log_start, exp_start, exp_end, exp_available) in cases
+        {
+            let mut s = AcquisitionState::new(Offset(0));
+            if materialize_window {
+                s.materialize(Offset(10), 100);
+            }
+            setup(&mut s);
+
+            s.advance_past_log_start(Offset(log_start));
+
+            let available: Vec<i64> = s
+                .record_states()
+                .into_iter()
+                .filter(|(_, state)| *state == RecordState::Available)
+                .map(|(offset, _)| offset)
+                .collect();
+            actual.push((name, s.start_offset.0, s.end_offset.0, available));
+            expected.push((name, exp_start, exp_end, exp_available));
+        }
+        assert!(actual == expected);
+    }
+
+    /// A second, healthy member's acquired records below the new log start are
+    /// untouched, and a fresh acquire above the SPSO still hands out records.
+    #[test]
+    fn advance_past_log_start_leaves_other_members_acquired_records_alone() {
+        let mut s = AcquisitionState::new(Offset(0));
+        s.materialize(Offset(10), 100);
+        let acquired = s.acquire("m1", 3, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
+        assert!(
+            acquired
+                == vec![AcquiredRange {
+                    first: Offset(0),
+                    last: Offset(2),
+                    delivery_count: 1,
+                }]
+        );
+
+        s.advance_past_log_start(Offset(3));
+
+        // The Acquired run is untouched and still owned by m1: the SPSO stops
+        // at it instead of jumping past it or force-archiving it.
+        assert!(s.start_offset == Offset(0));
+        assert!(s.range_acquired_by("m1", Offset(0), Offset(2)));
+        // Records past the lock are still there for a fresh acquire.
+        let acquired2 = s.acquire("m2", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
+        assert!(
+            acquired2
+                == vec![AcquiredRange {
+                    first: Offset(3),
+                    last: Offset(9),
+                    delivery_count: 1,
+                }]
+        );
     }
 
     #[test]
