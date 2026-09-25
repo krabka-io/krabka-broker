@@ -530,8 +530,11 @@ async fn a_forwarded_request_authorizes_against_the_embedded_client_host() {
             == vec![
                 // Allowed from the address the envelope names.
                 ("envelope-host-acl-alice", 0),
-                // Allowed only from the forwarding hop's address, so refused.
-                ("envelope-host-acl-bob", 31),
+                // Allowed only from the forwarding hop's address, so the
+                // cluster-wide Create is refused; the per-topic Create
+                // fallback (#698) has no ACL for this topic either, so the
+                // per-topic error, TOPIC_AUTHORIZATION_FAILED, wins.
+                ("envelope-host-acl-bob", 29),
             ]
     );
 }

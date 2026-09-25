@@ -2,14 +2,21 @@
 //! The handler charges the quota before it runs any topic logic, so a
 //! malformed or rejected request still consumes the budget it asked for.
 
-use krabka_protocol::owned::create_topics_request::CreateTopicsRequest;
+use krabka_protocol::owned::create_topics_request::CreatableTopic;
 
 use super::resolve_default;
 
-pub(super) fn mutation_count(request: &CreateTopicsRequest, default_num_partitions: i32) -> u64 {
-    request
-        .topics
-        .iter()
+/// Sums the mutation cost of `topics` -- the caller passes only the topics
+/// that will actually attempt creation, since a topic this request will
+/// answer without ever reaching the controller (a duplicate name, the
+/// protected raft metadata topic, or one denied `Create`) never mutates
+/// anything and so must not be charged.
+pub(super) fn mutation_count<'a>(
+    topics: impl IntoIterator<Item = &'a CreatableTopic>,
+    default_num_partitions: i32,
+) -> u64 {
+    topics
+        .into_iter()
         .map(|topic| {
             if topic.assignments.is_empty() {
                 // KIP-464: -1 creates `num.partitions` partitions, and Kafka's

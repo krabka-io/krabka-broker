@@ -211,21 +211,24 @@ async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
     check!(resp.error_code == codes::NONE, "{resp:?}");
     // `request_context` arrives on `PLAINTEXT`, and a test broker leaves
     // `inter_broker_listener_name` at its `PLAINTEXT` default, so this is the
-    // single-listener shape: the one listener is the inter-broker listener and
-    // advertises the control-plane keys peers negotiate against.
+    // single-listener shape: the one listener carries client and inter-broker
+    // traffic together (`ListenerKind::ClientAndInterBroker`) and, per #843,
+    // withholds the control-plane keys the same as a pure client listener --
+    // a client can reach it too.
     check!(
         resp.api_keys
             == crate::api_catalog::supported_apis(
-                crate::api_catalog::ListenerKind::InterBroker,
+                crate::api_catalog::ListenerKind::ClientAndInterBroker,
                 crate::api_catalog::ClientMetricsReceiver::Absent,
             ),
         "{resp:?}"
     );
     check!(
-        resp.api_keys
+        !resp
+            .api_keys
             .iter()
             .any(|api| api.api_key == krabka_protocol::owned::alter_partition_request::API_KEY),
-        "isr_maintenance negotiates AlterPartition against this table: {resp:?}"
+        "a client-reachable listener must not advertise AlterPartition: {resp:?}"
     );
     check!(!resp.supported_features.is_empty(), "{resp:?}");
     let mv = resp
