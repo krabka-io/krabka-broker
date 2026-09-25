@@ -116,6 +116,22 @@ pub trait Authorizer: Send + Sync + std::fmt::Debug {
     fn is_configured(&self) -> bool {
         true
     }
+
+    /// Upper bound on how long a caller-side cache may reuse a decision from
+    /// this authorizer without asking again, or `None` if a decision is
+    /// exactly as fresh as whatever `source` snapshot it was computed
+    /// against -- true of the ACL-backed implementations, whose grants live
+    /// in the metadata log a caller can already key a cache on.
+    ///
+    /// An authorizer whose decisions can go stale independently of `source`
+    /// -- an HTTP-backed policy engine such as OPA is the motivating case --
+    /// overrides this to its own decision-cache TTL, so a caller-side cache
+    /// keyed on metadata alone cannot outlive it and silently miss a policy
+    /// change the metadata log never saw. A decorator MUST forward the
+    /// wrapped authorizer's answer, as `is_configured` does.
+    fn decision_ttl(&self) -> Option<std::time::Duration> {
+        None
+    }
 }
 
 /// Batch-authorize a set of topic names against the same principal, host, and
