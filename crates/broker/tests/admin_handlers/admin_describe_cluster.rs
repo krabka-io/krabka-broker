@@ -44,9 +44,12 @@ async fn describe_cluster_endpoint_type_controllers_is_rejected() {
         resp.error_code == krabka_broker::codes::MISMATCHED_ENDPOINT_TYPE,
         "describe_cluster error_code"
     );
+    // Kafka's error response does not echo the requested endpoint_type back;
+    // it stays at the schema default (1 = BROKER), matching real Kafka's
+    // `AuthHelper.computeDescribeClusterResponse`.
     check!(
-        resp.endpoint_type == ENDPOINT_TYPE_CONTROLLERS,
-        "response echoes endpoint_type=2; got {}",
+        resp.endpoint_type == 1,
+        "error response leaves endpoint_type at the schema default; got {}",
         resp.endpoint_type
     );
     check!(resp.brokers.is_empty());

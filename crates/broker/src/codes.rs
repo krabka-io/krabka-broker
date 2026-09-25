@@ -202,6 +202,10 @@ kafka_codes! {
     /// `MISMATCHED_ENDPOINT_TYPE` (114, KIP-919): the request reached a broker
     /// endpoint while asking for controllers, or vice versa.
     MISMATCHED_ENDPOINT_TYPE = 114;
+    /// `UNSUPPORTED_ENDPOINT_TYPE` (115, KIP-919): the request named an
+    /// `endpoint_type` this broker does not recognize (neither `BROKER` nor
+    /// `CONTROLLER`).
+    UNSUPPORTED_ENDPOINT_TYPE = 115;
     /// `UNKNOWN_SUBSCRIPTION_ID` (117, KIP-848): the coordinator did not find
     /// the consumer's persisted subscription identifier.
     UNKNOWN_SUBSCRIPTION_ID = 117;
