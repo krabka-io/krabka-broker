@@ -144,7 +144,7 @@ impl Authorizer for SimpleAclAuthorizer {
         for entry in source.acls_of_type(resource_type) {
             if entry.permission_type != PermissionType::Allow
                 || !matches_principal(entry, &user_pattern)
-                || !matches_host(entry, &host_str)
+                || !matches_host(entry, &host_str, host.ip())
                 || !matches_operation(entry.operation, operation)
             {
                 continue;
