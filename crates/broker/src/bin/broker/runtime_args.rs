@@ -217,6 +217,8 @@ pub struct RuntimeArgs {
     pub acl_max_principal: Option<ByteSize>,
     #[arg(long, env = "KRABKA_ACL_MAX_RESOURCE_NAME", value_parser = krabka_units::parse::positive_byte_size)]
     pub acl_max_resource_name: Option<ByteSize>,
+    #[arg(long, env = "KRABKA_MAX_REQUEST_PARTITION_SIZE_LIMIT", value_parser = parse_positive_i32)]
+    pub max_request_partition_size_limit: Option<PositiveI32>,
     #[arg(long, env = "KRABKA_TELEMETRY_MAX_DECOMPRESSION_RATIO", value_parser = krabka_units::parse::ratio)]
     pub telemetry_max_decompression_ratio: Option<Ratio>,
     #[arg(long, env = "KRABKA_TELEMETRY_DECOMPRESSED_OUTPUT_FLOOR", value_parser = krabka_units::parse::positive_byte_size)]

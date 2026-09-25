@@ -376,6 +376,9 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
     pub acl_max_resource_name: Option<ByteSize>,
+    /// Upper clamp on `DescribeTopicPartitions`' `response_partition_limit`,
+    /// Kafka's `max.request.partition.size.limit`.
+    pub max_request_partition_size_limit: Option<i32>,
     /// Maximum accepted decompression ratio for a KIP-714 telemetry payload.
     #[serde(default, with = "krabka_units::serde_units::human::option_ratio")]
     #[schemars(with = "Option<crate::file_config::schema_units::Ratio>")]
