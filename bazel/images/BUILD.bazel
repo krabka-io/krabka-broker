@@ -29,8 +29,6 @@ IMAGES = {
     "cp_kafka_7_8_8": "mirror.gcr.io/confluentinc/cp-kafka:7.8.8",
     "fake_gcs_server": "mirror.gcr.io/fsouza/fake-gcs-server:1.56.1",
     "kcat_1_7_1": "mirror.gcr.io/edenhill/kcat:1.7.1",
-    "minio": "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z",
-    "minio_mc": "quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z",
 }
 
 [
@@ -54,10 +52,10 @@ IMAGES = {
     for name in IMAGES
 ]
 
-# The client images built here rather than pulled, as `name: tag` the way
-# `IMAGES` above is, and consumed by the suites the same way.
+# The images built here rather than pulled, as `name: tag` the way `IMAGES`
+# above is, and consumed by the suites the same way.
 #
-# Nothing published carries either client. `kcat` has had no release since
+# Nothing published carries `kcat` or `kaf`. `kcat` has had no release since
 # 1.7.1 and every published build of it -- Confluent's 2026 `cp-kcat` included
 # -- links the librdkafka 1.8.2 that release's bootstrap pins, so a client on
 # the 2.x line that the whole confluent-kafka-{python,go,dotnet} family sits on
@@ -66,13 +64,29 @@ IMAGES = {
 # reason and a different one: it is a Kafka client that is neither librdkafka
 # nor the JVM -- Go and sarama, an independent decoder of the protocol.
 #
+# `minio` and `minio_mc` moved here from `IMAGES` because MinIO discontinued
+# every channel that published them: `quay.io/minio/minio` and
+# `quay.io/minio/mc` now answer `401 UNAUTHORIZED` to every request regardless
+# of authentication (verified against quay.io's own API, both anonymously and
+# with a fresh robot-account token -- the repositories themselves are gone,
+# not merely rate-limited), and `dl.min.io`'s raw binary downloads answer `410
+# Gone`: "The open-source MinIO Server, MinIO Client (mc) and MinIO KES
+# projects are archived and no longer maintained." Wolfi still packages both
+# from source independently of MinIO's own distribution, at the same pinned
+# releases `IMAGES` used to carry (`RELEASE.2025-09-07T16-13-09Z` for the
+# server, `RELEASE.2025-08-13T08-35-41Z` for the client) -- same AGPLv3
+# software, same `docker-entrypoint.sh`, same Object Lock/WORM behavior,
+# verified directly against a `COMPLIANCE`-mode bucket.
+#
 # The bytes are pinned by the apko lock beside each config rather than by a
-# registry digest, which is why these are not in `IMAGES`: there is no
-# //MODULE.bazel pull tuple for `aspect check-images` to hold them against, and
-# the lock pins every package by version and checksum instead.
+# registry digest, which is why none of these four are in `IMAGES`: there is
+# no //MODULE.bazel pull tuple for `aspect check-images` to hold them against,
+# and the lock pins every package by version and checksum instead.
 BUILT_IMAGES = {
     "kaf_sarama": "docker.io/krabka-io/kaf:0.2.14",
     "kcat_librdkafka_2x": "docker.io/krabka-io/kcat:librdkafka-2.15.0",
+    "minio": "docker.io/krabka-io/minio:RELEASE.2025-09-07T16-13-09Z",
+    "minio_mc": "docker.io/krabka-io/minio-mc:RELEASE.2025-08-13T08-35-41Z",
 }
 
 [
