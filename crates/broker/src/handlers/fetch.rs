@@ -181,10 +181,20 @@ pub(crate) async fn handle(
     };
     let pending = build_pending_reads(&plan_context, &effective_topics).await;
 
+    // Kafka's `KafkaApis.handleFetchRequest`:
+    // `fetchMaxBytes = min(request.maxBytes, config.fetchMaxBytes)`. The
+    // request field defaults to `i32::MAX` when the client sets nothing, so
+    // an unbounded fetch keeps behaving exactly as before.
+    //
+    // TODO(#869): there is no broker-side `fetch.max.bytes` floor yet, so a
+    // client that sets a very large `max_bytes` is capped only by its own
+    // request.
+    let response_max_bytes = usize::try_from(req.max_bytes.max(0)).unwrap_or(usize::MAX);
     let read = execute_pending_reads(
         broker,
         pending,
         req.min_bytes,
+        response_max_bytes,
         req.max_wait_ms,
         ctx.sendfile_capable,
         &phases,

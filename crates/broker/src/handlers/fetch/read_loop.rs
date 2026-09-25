@@ -45,11 +45,39 @@ struct LongPollState {
     bytes: Vec<usize>,
     /// `true` where the cold tier, and not the local log, answered the entry.
     cold_served: Vec<bool>,
+    /// What is left of the whole response's byte budget: `min(request
+    /// max_bytes, fetch.max.bytes)`, run down as partitions are read.
+    ///
+    /// Kafka's `ReplicaManager.readFromLog` carries this down the partition
+    /// loop as `limitBytes`; this field is the same running total, updated
+    /// after every partition read in both the first pass and a long-poll
+    /// re-read. A partition whose own budget is already spent still gets a
+    /// real read at `max_bytes = 0` rather than being skipped -- its offsets
+    /// and watermarks are still live -- and this broker's log layer
+    /// guarantees that read at least one batch, so only that guarantee, and
+    /// not the per-partition cap itself, can still push the response over
+    /// the whole budget.
+    remaining_response_bytes: usize,
 }
 
 impl LongPollState {
     fn total(&self) -> usize {
         self.bytes.iter().sum()
+    }
+
+    /// The `max_bytes` to give this partition's read: whatever
+    /// `partition_max_bytes` asked for, capped at what the response has left.
+    fn partition_read_budget(&self, requested_max_bytes: i32) -> i32 {
+        let requested = usize::try_from(requested_max_bytes.max(0)).unwrap_or(usize::MAX);
+        i32::try_from(requested.min(self.remaining_response_bytes)).unwrap_or(i32::MAX)
+    }
+
+    /// Charges `served` bytes against the response budget. Saturates at
+    /// zero: the anti-stall guarantee below this call can still hand back
+    /// more than was asked for, and that overrun must not wrap the budget
+    /// back up.
+    fn charge(&mut self, served: usize) {
+        self.remaining_response_bytes = self.remaining_response_bytes.saturating_sub(served);
     }
 }
 
@@ -128,16 +156,22 @@ pub(super) async fn execute_pending_reads(
     broker: &Broker,
     mut pending: Vec<PendingRead>,
     min_bytes: i32,
+    response_max_bytes: usize,
     max_wait_ms: i32,
     sendfile_capable: bool,
     phases: &crate::metrics::RequestPhases,
 ) -> Result<(Vec<FetchableTopicResponse>, Vec<Vec<u64>>), BrokerError> {
     let mut state = LongPollState {
-        min_bytes: usize::try_from(min_bytes.max(0)).unwrap_or(0),
+        // Kafka's `fetchMinBytes = min(minBytes, fetchMaxBytes)`: a floor the
+        // response's own cap could never clear is not a floor at all.
+        min_bytes: usize::try_from(min_bytes.max(0))
+            .unwrap_or(0)
+            .min(response_max_bytes),
         max_wait_ms,
         sendfile_capable,
         bytes: vec![0; pending.len()],
         cold_served: vec![false; pending.len()],
+        remaining_response_bytes: response_max_bytes,
     };
     // Arm the long poll's waiters before the first read pass, so that an
     // append landing between a partition's read and the park cannot be lost.
@@ -171,7 +205,7 @@ pub(super) async fn execute_pending_reads(
                 topic_id: Some(uuid::Uuid::from_bytes(read.topic_id.0)),
                 hot_tail: Some(broker.hot_tail.clone()),
                 fetch_offset: Offset(read.fetch_offset),
-                max_bytes: read.max_bytes,
+                max_bytes: state.partition_read_budget(read.max_bytes),
                 read_committed: read.read_committed,
                 is_follower_fetch: read.is_follower_fetch,
                 sendfile_capable,
@@ -191,8 +225,18 @@ pub(super) async fn execute_pending_reads(
         let cold = serve_from_cold_tier(broker, read, &partition, phases).await;
         state.cold_served[index] = cold > 0;
         state.bytes[index] += cold;
+        state.charge(state.bytes[index]);
     }
-    if state.total() < state.min_bytes && max_wait_ms > 0 {
+    // KIP-392: a partition that named a preferred read replica was never
+    // read locally and never will be while it keeps naming one, so parking
+    // on it cannot help. Kafka's `ReplicaManager.fetchMessages` folds
+    // `hasPreferredReadReplica` into its own completion check for exactly
+    // this reason and answers the whole fetch at once rather than waiting
+    // out `max_wait_ms` for bytes this broker cannot supply.
+    let has_preferred_read_replica = pending
+        .iter()
+        .any(|read| read.out.preferred_read_replica >= 0);
+    if state.total() < state.min_bytes && max_wait_ms > 0 && !has_preferred_read_replica {
         long_poll_then_reread(broker, &mut pending, waits, &mut state, phases).await?;
     }
     Ok(group_into_topic_responses(pending))
@@ -353,6 +397,12 @@ async fn reread_woken(
         partition_index: read.partition_index,
         ..Default::default()
     };
+    // A re-read replaces this entry's bytes rather than adding to them, so
+    // its old contribution is first given back to the response budget: the
+    // budget tracks what the response currently holds, not a cumulative
+    // total of every read this partition has ever produced.
+    state.remaining_response_bytes += state.bytes[index];
+    let read_budget = state.partition_read_budget(read.max_bytes);
     // Time the re-read so its duration accumulates into the same
     // per-partition CPU counter as the first pass (wall-clock delta;
     // see the first-pass comment for why this replaces TaskMonitor).
@@ -364,7 +414,7 @@ async fn reread_woken(
             hot_tail: Some(broker.hot_tail.clone()),
             // Wrap the decoded-request wire offset into `Offset` for the read.
             fetch_offset: Offset(read.fetch_offset),
-            max_bytes: read.max_bytes,
+            max_bytes: read_budget,
             read_committed: read.read_committed,
             is_follower_fetch: read.is_follower_fetch,
             sendfile_capable: state.sendfile_capable,
@@ -384,6 +434,7 @@ async fn reread_woken(
     let cold = serve_from_cold_tier(broker, read, &part, phases).await;
     state.cold_served[index] = cold > 0;
     state.bytes[index] = bytes + cold;
+    state.charge(state.bytes[index]);
     Ok(())
 }
 
@@ -439,6 +490,124 @@ mod tests {
     use object_store::{ObjectStoreExt as _, PutPayload, path::Path};
 
     use crate::{broker::Broker, metrics::RequestPhases};
+
+    /// Table over a run of per-partition reads (each partition's own
+    /// `partition_max_bytes` and the bytes its read actually served) against
+    /// the response budget, to the `max_bytes` each successive partition's
+    /// read is given and what is left of the budget afterward (#869). The
+    /// first partition may still exceed the budget -- this broker's log layer
+    /// guarantees at least one batch -- but every later partition's own cap
+    /// is bounded by what the response has left, however large its own
+    /// `partition_max_bytes` asked for.
+    #[test]
+    fn partition_read_budget_runs_down_across_a_response() {
+        struct Step {
+            partition_max_bytes: i32,
+            /// What this partition's read is given, computed before it runs.
+            want_given: i32,
+            /// Bytes the read actually serves, which charges the budget.
+            served: usize,
+        }
+        struct Case {
+            name: &'static str,
+            response_budget: usize,
+            steps: Vec<Step>,
+            want_remaining: usize,
+        }
+
+        let cases = [
+            Case {
+                name: "each partition's own cap already fits under the budget",
+                response_budget: 10_000,
+                steps: vec![
+                    Step {
+                        partition_max_bytes: 1_000,
+                        want_given: 1_000,
+                        served: 900,
+                    },
+                    Step {
+                        partition_max_bytes: 1_000,
+                        want_given: 1_000,
+                        served: 800,
+                    },
+                ],
+                want_remaining: 10_000 - 900 - 800,
+            },
+            Case {
+                name: "the first partition alone is over the whole budget",
+                response_budget: 100,
+                steps: vec![Step {
+                    partition_max_bytes: 10_000,
+                    want_given: 100,
+                    served: 4_096,
+                }],
+                want_remaining: 0,
+            },
+            Case {
+                name: "a later partition's own cap is capped by what is left, \
+                       however large it asked for",
+                response_budget: 1_000,
+                steps: vec![
+                    Step {
+                        partition_max_bytes: 10_000,
+                        want_given: 1_000,
+                        served: 700,
+                    },
+                    Step {
+                        partition_max_bytes: 10_000,
+                        want_given: 300,
+                        served: 300,
+                    },
+                ],
+                want_remaining: 0,
+            },
+            Case {
+                name: "a partition whose budget is already spent still reads, at zero",
+                response_budget: 500,
+                steps: vec![
+                    Step {
+                        partition_max_bytes: 10_000,
+                        want_given: 500,
+                        served: 500,
+                    },
+                    Step {
+                        partition_max_bytes: 10_000,
+                        want_given: 0,
+                        served: 0,
+                    },
+                ],
+                want_remaining: 0,
+            },
+        ];
+
+        for case in cases {
+            let mut state = super::LongPollState {
+                min_bytes: 0,
+                max_wait_ms: 0,
+                sendfile_capable: false,
+                bytes: Vec::new(),
+                cold_served: Vec::new(),
+                remaining_response_bytes: case.response_budget,
+            };
+            for (i, step) in case.steps.iter().enumerate() {
+                let given = state.partition_read_budget(step.partition_max_bytes);
+                assert!(
+                    given == step.want_given,
+                    "{}: step {i}: given {given}, want {}",
+                    case.name,
+                    step.want_given
+                );
+                state.charge(step.served);
+            }
+            assert!(
+                state.remaining_response_bytes == case.want_remaining,
+                "{}: remaining {}, want {}",
+                case.name,
+                state.remaining_response_bytes,
+                case.want_remaining
+            );
+        }
+    }
 
     /// A cold read is a round trip to an object store, so it belongs to the
     /// remote phase. Before this was charged, a tiered or diskless fetch could
@@ -774,6 +943,7 @@ mod tests {
             sendfile_capable: false,
             bytes: vec![0; pending.len()],
             cold_served: vec![false; pending.len()],
+            remaining_response_bytes: usize::MAX,
         }
     }
 
@@ -871,10 +1041,17 @@ mod tests {
             },
         )];
         let phases = RequestPhases::default();
-        let (topics, _cpu) =
-            super::execute_pending_reads(&broker, pending, min_bytes, 30_000, false, &phases)
-                .await
-                .expect("fetch");
+        let (topics, _cpu) = super::execute_pending_reads(
+            &broker,
+            pending,
+            min_bytes,
+            usize::MAX,
+            30_000,
+            false,
+            &phases,
+        )
+        .await
+        .expect("fetch");
 
         appends.await.expect("producer task");
         let served = &topics[0].partitions[0];
