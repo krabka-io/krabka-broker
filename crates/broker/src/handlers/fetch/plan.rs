@@ -419,8 +419,11 @@ pub(super) fn apply_epoch_checks(
 ///
 /// `KafkaApis.handleFetchRequest` uses it for a row that it refuses before the
 /// read: `UNKNOWN_TOPIC_ID`, `TOPIC_AUTHORIZATION_FAILED` and
-/// `UNKNOWN_TOPIC_OR_PARTITION`. Every offset is -1, and the aborted
-/// transactions are null (length -1 on the wire), not an empty list.
+/// `UNKNOWN_TOPIC_OR_PARTITION`. Every offset is -1. `partitionResponse` never
+/// sets the aborted transactions, so they keep the generated default: the
+/// schema gives `AbortedTransactions` no `"default": "null"`, which makes it
+/// an empty list, not a null one. A row refused by the read itself
+/// ([`refused_read`]) is the one that carries null.
 pub(super) fn refused_partition(partition_index: i32, error_code: i16) -> PartitionData {
     PartitionData {
         partition_index,
@@ -428,7 +431,7 @@ pub(super) fn refused_partition(partition_index: i32, error_code: i16) -> Partit
         high_watermark: -1,
         last_stable_offset: -1,
         log_start_offset: -1,
-        aborted_transactions: None,
+        aborted_transactions: Some(Vec::new()),
         preferred_read_replica: -1,
         ..Default::default()
     }

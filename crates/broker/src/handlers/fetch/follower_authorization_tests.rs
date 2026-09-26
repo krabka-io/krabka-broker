@@ -340,7 +340,7 @@ fn refused(error_code: i16) -> PartitionData {
         high_watermark: -1,
         last_stable_offset: -1,
         log_start_offset: -1,
-        aborted_transactions: None,
+        aborted_transactions: Some(Vec::new()),
         preferred_read_replica: -1,
         records: Some(no_records()),
         ..Default::default()
