@@ -7,9 +7,8 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use assert2::assert;
-use krabka_protocol::owned::{
-    alter_client_quotas_request::EntityData,
-    alter_client_quotas_response::{EntityData as RespEntity, EntryData as RespEntry},
+use krabka_protocol::owned::alter_client_quotas_response::{
+    EntityData as RespEntity, EntryData as RespEntry,
 };
 use krabka_security::{AuthMethod, Principal};
 
@@ -19,7 +18,7 @@ use super::{
 };
 use crate::{
     broker::BrokerHandle,
-    codes::{INVALID_CONFIG, INVALID_REQUEST},
+    codes::INVALID_REQUEST,
     test_support::{DenyAll, start_broker_with_authorizer as start_broker},
 };
 
@@ -84,11 +83,7 @@ fn encode_response_writes_decodable_body() {
     let resp = AlterClientQuotasResponse {
         throttle_time_ms: 123,
         entries: vec![err_entry(
-            &[EntityData {
-                entity_type: "user".into(),
-                entity_name: Some("alice".into()),
-                ..Default::default()
-            }],
+            &[("user".into(), Some("alice".into()))],
             INVALID_REQUEST,
             "bad request".into(),
         )],
@@ -276,8 +271,8 @@ async fn handle_returns_entry_results_and_submits_valid_changes() {
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             },
             RespEntry {
-                error_code: INVALID_CONFIG,
-                error_message: Some("unknown quota key \"unknown_quota_key\"".into()),
+                error_code: INVALID_REQUEST,
+                error_message: Some("Invalid configuration key unknown_quota_key".into()),
                 entity: vec![RespEntity {
                     entity_type: "user".into(),
                     entity_name: Some("bob".into()),
@@ -341,4 +336,81 @@ async fn handle_validate_only_reports_success_without_submitting() {
     assert!(resp == expected);
     assert!(quota_value(&broker_handle, "carol", "producer_byte_rate") == None);
     broker_handle.shutdown().await;
+}
+
+/// Kafka keys the response by entity (#675): a repeated entity answers one
+/// row with "Ignoring duplicate entity", and the first entry's change is
+/// still written. `validate_only` gives the same rows and writes nothing.
+#[tokio::test]
+async fn repeated_entity_answers_one_row_with_and_without_validate_only() {
+    let version = 1;
+    let principal = Principal {
+        name: "admin".into(),
+        auth_method: AuthMethod::Anonymous,
+        groups: Vec::new(),
+    };
+    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+    let ctx = test_context(&principal, &peer);
+    let row = |name: &str, code: i16, message: Option<&str>| RespEntry {
+        error_code: code,
+        error_message: message.map(Into::into),
+        entity: vec![RespEntity {
+            entity_type: "user".into(),
+            entity_name: Some(name.into()),
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        }],
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+    let expected = AlterClientQuotasResponse {
+        throttle_time_ms: 0,
+        entries: vec![
+            row(
+                "dave",
+                INVALID_REQUEST,
+                Some("Ignoring duplicate entity ClientQuotaEntity(entries={user=dave})"),
+            ),
+            row("erin", 0, None),
+        ],
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+
+    for (validate_only, stored) in [(true, [None, None]), (false, [Some(1024.0), Some(4.0)])] {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let req = request(
+            vec![
+                entry(
+                    vec![("user", Some("dave"))],
+                    vec![("producer_byte_rate", 1024.0, false)],
+                ),
+                entry(
+                    vec![("user", Some("erin"))],
+                    vec![("request_percentage", 4.0, false)],
+                ),
+                entry(
+                    vec![("user", Some("dave"))],
+                    vec![("consumer_byte_rate", 2048.0, false)],
+                ),
+            ],
+            validate_only,
+        );
+
+        let resp = handle(&broker, req, &ctx, version).await.expect("handle");
+        let resp = decode_response(&resp, version);
+
+        assert2::check!(resp == expected, "validate_only {validate_only}");
+        assert2::check!(
+            [
+                quota_value(&broker_handle, "dave", "producer_byte_rate"),
+                quota_value(&broker_handle, "erin", "request_percentage"),
+            ] == stored,
+            "validate_only {validate_only}"
+        );
+        assert2::check!(
+            quota_value(&broker_handle, "dave", "consumer_byte_rate") == None,
+            "validate_only {validate_only}"
+        );
+        broker_handle.shutdown().await;
+    }
 }

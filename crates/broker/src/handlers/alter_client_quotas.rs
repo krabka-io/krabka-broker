@@ -5,6 +5,8 @@
 //! submit that carries every accepted entry. Entry validation and the records
 //! it produces live in `entries`; the response rows live in `response`.
 
+use std::collections::HashSet;
+
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, MetadataRecord, ResourceType};
 use krabka_protocol::{
@@ -23,8 +25,10 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::entries::process_one_entry;
-use self::response::{apply_submit_error, encode_whole_request_error, err_entry, ok_entry};
+use self::{
+    entries::{Alteration, alter_client_quotas},
+    response::{apply_submit_error, encode_whole_request_error, err_entry, ok_entry},
+};
 use super::acl_wire::CLUSTER_RESOURCE_NAME;
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
@@ -69,19 +73,25 @@ pub(crate) async fn handle(
         );
     }
 
-    let mut entry_results = Vec::with_capacity(req.entries.len());
-    let mut to_submit: Vec<MetadataRecord> = Vec::new();
-    for entry in &req.entries {
-        match process_one_entry(entry) {
-            Ok(records) => {
-                if !req.validate_only {
-                    to_submit.extend(records);
-                }
-                entry_results.push(ok_entry(&entry.entity));
-            }
-            Err((code, msg)) => entry_results.push(err_entry(&entry.entity, code, msg)),
-        }
-    }
+    let resolvable = resolve_ip_names(&req).await;
+    let ip_is_valid =
+        |name: &str| name.parse::<std::net::IpAddr>().is_ok() || resolvable.contains(name);
+    let Alteration { results, records } =
+        alter_client_quotas(&req.entries, image.client_quotas(), &ip_is_valid);
+    let mut entry_results: Vec<_> = results
+        .iter()
+        .map(|(entity, outcome)| match outcome {
+            Ok(()) => ok_entry(entity),
+            Err((code, msg)) => err_entry(entity, *code, msg.clone()),
+        })
+        .collect();
+    // Kafka's `QuorumController.alterClientQuotas` drops the records of a
+    // `validate_only` request and keeps its results.
+    let to_submit: Vec<MetadataRecord> = if req.validate_only {
+        Vec::new()
+    } else {
+        records
+    };
 
     if !to_submit.is_empty()
         && let Err(e) = broker.controller.submit_change(to_submit).await
@@ -111,6 +121,37 @@ pub(crate) async fn handle(
         unknown_tagged_fields: UnknownTaggedFields::default(),
     };
     encode_response(&resp, api_version)
+}
+
+/// Resolves every named `ip` entity that is not an IP literal.
+///
+/// Kafka's `isValidIpEntity` accepts any name `InetAddress.getByName`
+/// resolves, which covers host names as well as IPv4 and IPv6 literals. The
+/// lookup runs here, before the synchronous validation, so that validation
+/// stays a pure function of the request and the quota state.
+async fn resolve_ip_names(req: &AlterClientQuotasRequest) -> HashSet<String> {
+    let mut resolvable = HashSet::new();
+    for entry in &req.entries {
+        for component in &entry.entity {
+            let Some(name) = component.entity_name.as_deref() else {
+                continue;
+            };
+            if component.entity_type != "ip"
+                || name.is_empty()
+                || name.parse::<std::net::IpAddr>().is_ok()
+                || resolvable.contains(name)
+            {
+                continue;
+            }
+            if tokio::net::lookup_host((name, 0))
+                .await
+                .is_ok_and(|mut addrs| addrs.next().is_some())
+            {
+                resolvable.insert(name.to_owned());
+            }
+        }
+    }
+    resolvable
 }
 
 /// Renders a quota entity as the audit record's resource name.
