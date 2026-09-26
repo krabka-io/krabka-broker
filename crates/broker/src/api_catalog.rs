@@ -361,6 +361,16 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "The rules are per listener, under `[listeners.tls_config]`. Kafka's broker-wide `ssl.principal.mapping.rules` and its `listener.name.<name>.` prefixed form are not read from `server_properties`.",
     },
     KipAnnotation {
+        key: "KIP-373",
+        claim: "Delegation tokens for other users: the `USER` resource type and the `CREATE_TOKENS` and `DESCRIBE_TOKENS` operations",
+        status: KipStatus::Partial,
+        module: "crates/broker/src/handlers/acl_wire/binding_filter.rs",
+        tests: &[
+            "crates/broker/src/handlers/acl_wire/binding_filter/tests.rs::unstorable_and_unknown_axes_match_nothing",
+        ],
+        note: "DescribeAcls and DeleteAcls accept the KIP-373 wire values in a filter, but they match nothing: the ACL metadata model has no `USER` resource type and no token operations, so no such ACL can be stored (#769). CreateDelegationToken for another owner is granted only to super users, not to a holder of `CREATE_TOKENS` on `User:<owner>` (#765).",
+    },
+    KipAnnotation {
         key: "KIP-382",
         claim: "MirrorMaker 2 replicates a Kafka cluster onto krabka",
         status: KipStatus::Implemented,
