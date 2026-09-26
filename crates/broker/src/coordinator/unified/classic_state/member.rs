@@ -36,6 +36,11 @@ pub struct Member {
     /// Encoded `ConsumerProtocolAssignment` bytes. The leader fills them in
     /// `SyncGroup`. The value is `None` until then.
     pub assignment: Option<Bytes>,
+    /// Kafka's `ClassicGroupMember.isNew`: the member joined in the current
+    /// rebalance round and has not had a `JoinGroup` response yet. Such a
+    /// member expires on the new-member join timeout while it waits, where an
+    /// existing member that waits in `JoinGroup` does not expire at all.
+    pub is_new: bool,
 }
 
 impl Member {
@@ -63,6 +68,7 @@ impl Member {
             protocol_metadata,
             protocols,
             assignment: None,
+            is_new: false,
         }
     }
 

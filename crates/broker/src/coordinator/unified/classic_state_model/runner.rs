@@ -14,7 +14,7 @@ use super::config::ClassicModel;
 // watchdog is the other runaway guard — `[[feedback_bound_model_checkers]]`);
 // `state_count() < TARGET` then certifies the run was exhaustive.
 const TARGET_STATE_COUNT: usize = 8_000_000;
-const MAX_UNIQUE_STATES: usize = 500_000; // wide ~106k unique; margin for determinism
+const MAX_UNIQUE_STATES: usize = 600_000; // wide ~483k unique; margin for determinism
 const MAX_DEPTH: usize = 80;
 
 // The exact unique-state count of the exhaustive BFS over each config below.
@@ -24,8 +24,8 @@ const MAX_DEPTH: usize = 80;
 // considering a field -- into a failure instead of a silently smaller search
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
-pub(super) const PINNED_UNIQUE_STATES_BASIC: usize = 1_957;
-pub(super) const PINNED_UNIQUE_STATES_WIDE: usize = 106_470;
+pub(super) const PINNED_UNIQUE_STATES_BASIC: usize = 3_853;
+pub(super) const PINNED_UNIQUE_STATES_WIDE: usize = 482_874;
 
 pub(super) fn run(model: ClassicModel, label: &str, pinned_unique_states: usize) {
     let checker = model

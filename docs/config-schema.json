@@ -1562,6 +1562,33 @@
             "null"
           ]
         },
+        "classic_group_max_session_timeout": {
+          "default": null,
+          "description": "Upper bound on a classic `JoinGroup` session timeout, Kafka's\n`group.max.session.timeout.ms`.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "classic_group_max_size": {
+          "description": "Maximum number of members in one classic group, Kafka's\n`group.max.size`.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "classic_group_min_session_timeout": {
+          "default": null,
+          "description": "Lower bound on a classic `JoinGroup` session timeout, Kafka's\n`group.min.session.timeout.ms`.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "cleaner_interval": {
           "default": null,
           "description": "Cadence of log cleaner maintenance.",

@@ -311,13 +311,26 @@ async fn run_actor(
                 handle_actor_tick(&mut group, &mut parked, services).await
             }
             () = opt_sleep(deadline) => {
-                // Classic rebalance deadline fired: complete with whoever is here.
-                if let Some(state) = group.as_classic_mut() {
-                    complete_classic_rebalance(
+                // Classic rebalance deadline fired: extend Kafka's initial
+                // delay, or complete with whoever is here.
+                if let Some(state) = group.as_classic_mut()
+                    && state.rebalance_deadline_fired(
+                        config.classic_initial_rebalance_delay,
+                        Instant::now(),
+                    )
+                    && complete_classic_rebalance(
                         state,
                         &mut parked.joiners,
                         &mut parked.followers,
-                    );
+                    )
+                    && let Err(error) =
+                        persistence::flush_classic_metadata(state, &*offsets_log).await
+                {
+                    // Kafka only warns here too: an empty generation that
+                    // did not persist leaves the previous one, whose members
+                    // expire.
+                    tracing::warn!(group_id = %state.group_id, %error,
+                        "classic empty-generation log write failed");
                 }
                 true
             }

@@ -140,6 +140,9 @@ kafka_codes! {
     /// group lookup.
     INVALID_GROUP_ID = 24;
     UNKNOWN_MEMBER_ID = 25;
+    /// `INVALID_SESSION_TIMEOUT` (26): a `JoinGroup` session timeout outside
+    /// `group.min.session.timeout.ms` and `group.max.session.timeout.ms`.
+    INVALID_SESSION_TIMEOUT = 26;
     REBALANCE_IN_PROGRESS = 27;
     /// `INVALID_TIMESTAMP` (32): a producer supplied a timestamp type or value
     /// that the broker cannot accept for the target topic.

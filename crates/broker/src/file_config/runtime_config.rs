@@ -227,6 +227,19 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub classic_group_initial_rebalance_delay: Option<Time>,
+    /// Lower bound on a classic `JoinGroup` session timeout, Kafka's
+    /// `group.min.session.timeout.ms`.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub classic_group_min_session_timeout: Option<Time>,
+    /// Upper bound on a classic `JoinGroup` session timeout, Kafka's
+    /// `group.max.session.timeout.ms`.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub classic_group_max_session_timeout: Option<Time>,
+    /// Maximum number of members in one classic group, Kafka's
+    /// `group.max.size`.
+    pub classic_group_max_size: Option<usize>,
     /// Maximum time a classic-protocol follower waits for its `SyncGroup`
     /// assignment.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]

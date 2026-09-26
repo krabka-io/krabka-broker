@@ -380,6 +380,9 @@ Validated operational policy loaded from `[runtime]`.
 | `barrier_state_num_partitions` | integer (int32) | broker default |  | Partition count of the `__barrier_state` internal topic. |
 | `barrier_state_replication_factor` | integer (int16) | broker default |  | Replication factor of the `__barrier_state` internal topic. |
 | `classic_group_initial_rebalance_delay` | string | broker default | duration | Initial delay before a classic group begins rebalancing, Kafka's `group.initial.rebalance.delay.ms`. |
+| `classic_group_max_session_timeout` | string | broker default | duration | Upper bound on a classic `JoinGroup` session timeout, Kafka's `group.max.session.timeout.ms`. |
+| `classic_group_max_size` | integer (uint) | broker default |  | Maximum number of members in one classic group, Kafka's `group.max.size`. |
+| `classic_group_min_session_timeout` | string | broker default | duration | Lower bound on a classic `JoinGroup` session timeout, Kafka's `group.min.session.timeout.ms`. |
 | `cleaner_interval` | string | broker default | duration | Cadence of log cleaner maintenance. |
 | `client_metrics_default_interval` | string | broker default | duration | Default KIP-714 client telemetry subscription push interval. |
 | `client_metrics_enable` | boolean | broker default |  | Whether the broker advertises the KIP-714 client-metrics RPCs, `GetTelemetrySubscriptions` (71) and `PushTelemetry` (72). Kafka advertises them only when `metric.reporters` holds a `ClientTelemetry` implementation, so the default here is `false` as well and a client starts no telemetry handshake the broker has nowhere to forward. A configured `[telemetry]` OTLP endpoint turns them on without this key. |

@@ -136,9 +136,9 @@ async fn full_join(
 }
 
 /// Members A and B propose disjoint protocol lists: `range` only against
-/// `cooperative-sticky` only. The intersection is empty, so the broker must
-/// return `INCONSISTENT_GROUP_PROTOCOL (23)` to at least one of the two
-/// concurrent members. This implementation returns it to both.
+/// `cooperative-sticky` only. Kafka's `supportsProtocols` gate turns away
+/// the member that joins second with `INCONSISTENT_GROUP_PROTOCOL (23)`, and
+/// the group rebalances without it, so the other member completes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn empty_intersection_returns_inconsistent_group_protocol() {
     let (handle, bootstrap, _tempdir) = start_broker().await;
@@ -160,10 +160,8 @@ async fn empty_intersection_returns_inconsistent_group_protocol() {
     )
     .await;
 
-    // Race the two second-round joins. Both enter PreparingRebalance,
-    // both wake after the 3-s initial-rebalance-delay, both compute
-    // `select_protocol` over the union of members and find None, both
-    // return INCONSISTENT_GROUP_PROTOCOL.
+    // Race the two second-round joins. Whichever joins second is turned
+    // away at once; the first completes after the initial rebalance delay.
     let group_a = group_id.to_string();
     let group_b = group_id.to_string();
     let join_a = tokio::spawn(async move {
@@ -199,14 +197,11 @@ async fn empty_intersection_returns_inconsistent_group_protocol() {
     let resp_b = join_b.await.expect("member B task panic");
     handle.shutdown().await;
 
-    // At least one (here: both) must surface INCONSISTENT_GROUP_PROTOCOL.
-    // We accept either both-error or one-error-one-empty (the post-error
-    // notify could in theory let the other proceed in a future refactor),
-    // but assert the contract loud enough that any regression is obvious.
+    let mut codes = [resp_a.error_code, resp_b.error_code];
+    codes.sort_unstable();
     assert!(
-        resp_a.error_code == ERR_INCONSISTENT_GROUP_PROTOCOL
-            || resp_b.error_code == ERR_INCONSISTENT_GROUP_PROTOCOL,
-        "at least one of (A, B) must return INCONSISTENT_GROUP_PROTOCOL (23); got A={resp_a:?} B={resp_b:?}"
+        codes == [ERR_NONE, ERR_INCONSISTENT_GROUP_PROTOCOL],
+        "exactly one of (A, B) must return INCONSISTENT_GROUP_PROTOCOL (23); got A={resp_a:?} B={resp_b:?}"
     );
 }
 
@@ -428,15 +423,26 @@ async fn protocol_type_mismatch_rejected() {
     );
     assert!(resp_a.protocol_name.as_deref() == Some("range"));
 
-    // Member B: bootstrap a member id, then join with `protocol_type =
-    // "stream"`. The handler checks the existing group's protocol_type
-    // before any rebalance work, so this returns immediately.
-    let member_b = bootstrap_member_id(&client_b, group_id, "stream", &[("range", b"")]).await;
-    let resp_b = second_join(&client_b, group_id, &member_b, "stream", &[("range", b"")]).await;
+    // Member B joins with `protocol_type = "stream"`. Kafka's
+    // `supportsProtocols` gate runs before a member id is handed out, so
+    // the first join already fails, under the unknown member id.
+    let resp_b = client_b
+        .send(join_group_request(
+            group_id,
+            "",
+            "stream",
+            &[("range", b"")],
+        ))
+        .await
+        .expect("JoinGroup must round-trip");
     handle.shutdown().await;
 
     assert!(
-        resp_b.error_code == ERR_INCONSISTENT_GROUP_PROTOCOL,
+        resp_b
+            == JoinGroupResponse {
+                error_code: ERR_INCONSISTENT_GROUP_PROTOCOL,
+                ..JoinGroupResponse::default()
+            },
         "member B with protocol_type=stream must hit INCONSISTENT_GROUP_PROTOCOL on a consumer group, got {resp_b:?}"
     );
 }

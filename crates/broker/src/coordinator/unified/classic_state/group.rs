@@ -4,7 +4,10 @@
 //! change membership or drive a rebalance round. The transitions live in the
 //! `membership` and `rebalance` siblings.
 
-use std::{collections::HashMap, time::Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use super::member::Member;
 
@@ -70,6 +73,27 @@ pub struct ClassicGroup {
     /// `PreparingRebalance`. Such a round completes as soon as every still-live
     /// member rejoins.
     pub rebalance_from_empty: bool,
+    /// Kafka's `pendingJoinMembers`: the member ids a `JoinGroup` v4+ handed
+    /// out with `MEMBER_ID_REQUIRED` and that have not joined with them yet,
+    /// each with the instant its session timeout removes it. A `JoinGroup`
+    /// with one of these ids joins as a new member. Any other unknown id gets
+    /// `UNKNOWN_MEMBER_ID`.
+    pub pending_members: HashMap<String, Instant>,
+    /// Kafka's `InitialDelayedJoin`, while a round that opened from `Empty`
+    /// waits out `group.initial.rebalance.delay.ms`. `None` in every other
+    /// round.
+    pub initial_join: Option<InitialDelayedJoin>,
+    /// Kafka's `newMemberAdded`: a new member joined during the current
+    /// initial delay, so the delay extends once more when it fires.
+    pub new_member_added: bool,
+}
+
+/// The state of Kafka's `InitialDelayedJoin` timer: the delay that is running
+/// now and the part of the group rebalance timeout still left to extend into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InitialDelayedJoin {
+    pub delay: Duration,
+    pub remaining: Duration,
 }
 
 impl ClassicGroup {
@@ -87,6 +111,9 @@ impl ClassicGroup {
             rebalance_deadline: None,
             joined_this_round: std::collections::HashSet::new(),
             rebalance_from_empty: false,
+            pending_members: HashMap::new(),
+            initial_join: None,
+            new_member_added: false,
         }
     }
 

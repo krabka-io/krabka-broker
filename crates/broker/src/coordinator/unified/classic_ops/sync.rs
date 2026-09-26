@@ -46,8 +46,12 @@ pub(crate) fn handle_sync(state: &mut ClassicState, req: &SyncGroupRequest) -> S
         ));
     }
 
+    // Kafka's `classicGroupSyncToClassicGroup`: only the leader's
+    // `SyncGroup` in `CompletingRebalance` installs assignments. In
+    // `Stable` every member, the leader included, reads its current one; a
+    // KIP-814 leader that skipped the assignment sends none.
     let is_leader = state.leader_id.as_deref() == Some(&req.member_id);
-    if is_leader {
+    if is_leader && state.state == GroupState::CompletingRebalance {
         let supplied: std::collections::HashMap<&str, &Bytes> = req
             .assignments
             .iter()
@@ -75,7 +79,11 @@ pub(crate) fn handle_sync(state: &mut ClassicState, req: &SyncGroupRequest) -> S
             protocol_type,
             protocol_name,
         ))
-    } else if matches!(state.state, GroupState::Stable) {
+    } else if matches!(
+        state.state,
+        GroupState::Stable | GroupState::PreparingRebalance
+    ) {
+        // `PreparingRebalance` answers `REBALANCE_IN_PROGRESS`.
         SyncAction::Immediate(read_sync_result(
             state,
             &req.member_id,
@@ -247,5 +255,25 @@ mod tests {
         let _ = handle_sync(&mut g, &req);
         let r = read_sync_result(&g, &leader, None, None);
         assert!(r.error_code == codes::NONE);
+    }
+
+    /// KIP-814: a leader that rejoined a `Stable` group with
+    /// `skip_assignment` sends `SyncGroup` with no assignments, and reads
+    /// its current one back instead of clearing every member's.
+    #[test]
+    fn leader_sync_in_stable_reads_current_assignment() {
+        let mut g = stable_two_member_group();
+        g.install_assignments(std::collections::HashMap::from([
+            ("m1".to_string(), Bytes::from_static(b"L")),
+            ("m2".to_string(), Bytes::from_static(b"F")),
+        ]));
+        let generation = g.generation_id;
+        match handle_sync(&mut g, &sync_req("m1", generation)) {
+            SyncAction::Immediate(r) => {
+                check!(r.assignment == Bytes::from_static(b"L"));
+            }
+            _ => panic!("expected the leader's current assignment"),
+        }
+        check!(g.members["m2"].assignment.as_deref() == Some(&b"F"[..]));
     }
 }

@@ -4,8 +4,9 @@
 //! where the rejoin uses the same `group.instance.id`, through the in-process
 //! broker harness. They check the three KIP-345 invariants:
 //!
-//! 1. A static rejoin into a `Stable` group keeps the prior assignment
-//!    and does NOT advance `generation_id`.
+//! 1. A static rejoin into a `Stable` group gets a new member id, fences
+//!    the old one, keeps the prior assignment and does NOT advance
+//!    `generation_id`.
 //! 2. The broker rejects a second client that uses the same
 //!    `group.instance.id` while the first is still live, with
 //!    `FENCED_INSTANCE_ID`.
@@ -18,6 +19,7 @@ use bytes::Bytes;
 use krabka_protocol::owned::{
     heartbeat_request::HeartbeatRequest,
     join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
+    join_group_response::{JoinGroupResponse, JoinGroupResponseMember},
     leave_group_request::{LeaveGroupRequest, MemberIdentity},
     sync_group_request::{SyncGroupRequest, SyncGroupRequestAssignment},
 };
@@ -26,8 +28,6 @@ mod support;
 
 /// `FENCED_INSTANCE_ID` (82, KIP-345).
 const FENCED_INSTANCE_ID: i16 = 82;
-/// `MEMBER_ID_REQUIRED` (79, the KIP-394 bootstrap exchange).
-const MEMBER_ID_REQUIRED: i16 = 79;
 
 fn join_request(group_id: &str, member_id: &str, instance_id: Option<&str>) -> JoinGroupRequest {
     JoinGroupRequest {
@@ -54,23 +54,18 @@ async fn bootstrap_static_member(
     instance_id: &str,
     assignment: Bytes,
 ) -> (String, i32, Bytes) {
-    // 1. Empty member_id → MEMBER_ID_REQUIRED + assigned id.
+    // 1. Empty member_id → a static member joins at once with a generated
+    //    `<instance id>-<uuid>` member id and becomes the leader. Kafka's
+    //    `MEMBER_ID_REQUIRED` round trip is for dynamic members only.
     let r1 = client
         .send(join_request(group_id, "", Some(instance_id)))
         .await
-        .expect("JoinGroup #1");
-    assert!(r1.error_code == MEMBER_ID_REQUIRED);
+        .expect("JoinGroup");
+    assert!(r1.error_code == 0);
     let mid = r1.member_id.clone();
-    assert!(!mid.is_empty());
-
-    // 2. Rejoin with assigned member_id → become leader.
-    let r2 = client
-        .send(join_request(group_id, &mid, Some(instance_id)))
-        .await
-        .expect("JoinGroup #2");
-    assert!(r2.error_code == 0);
-    assert!(r2.leader == mid);
-    let generation = r2.generation_id;
+    assert!(mid.starts_with(&format!("{instance_id}-")));
+    assert!(r1.leader == mid);
+    let generation = r1.generation_id;
 
     // 3. Leader SyncGroup installs an assignment for itself.
     let r3 = client
@@ -122,34 +117,68 @@ async fn static_rejoin_preserves_assignment_and_generation() {
         .expect("Heartbeat");
     assert!(hb.error_code == 0);
 
-    // A "restart" — same instance id, but the client picks up via the
-    // KIP-394 bootstrap dance and gets back the same member_id (since
-    // the static slot is preserved).
-    let boot = p
+    // A restart: the same instance id with an empty member id. Kafka's
+    // `updateStaticMemberThenRebalanceOrCompleteJoin` gives it a new member
+    // id in place of the old one. The group is Stable and the selected
+    // protocol does not change, so the generation stays; at v9 the leader
+    // gets the member list with `skip_assignment` (KIP-814).
+    let rejoin = p
         .client
         .send(join_request("g-static-1", "", Some("instance-A")))
         .await
-        .expect("rebootstrap JoinGroup");
-    assert!(boot.error_code == MEMBER_ID_REQUIRED);
-    assert!(
-        boot.member_id == mid1,
-        "static bootstrap returns the existing slot's member_id"
+        .expect("static rejoin");
+    let mid2 = rejoin.member_id.clone();
+    check!(mid2 != mid1);
+    check!(mid2.starts_with("instance-A-"));
+    check!(
+        rejoin
+            == JoinGroupResponse {
+                generation_id: gen1,
+                protocol_type: Some("consumer".into()),
+                protocol_name: Some("range".into()),
+                leader: mid2.clone(),
+                skip_assignment: true,
+                member_id: mid2.clone(),
+                members: vec![JoinGroupResponseMember {
+                    member_id: mid2.clone(),
+                    group_instance_id: Some("instance-A".into()),
+                    metadata: Bytes::new(),
+                    ..Default::default()
+                }],
+                ..JoinGroupResponse::default()
+            },
+        "static rejoin must keep generation_id and replace the member id"
     );
 
-    // Rejoin with the recovered id. Group is Stable → no rebalance →
-    // generation_id unchanged and the cached assignment is reachable.
-    let rejoin = p
+    // The old instance is fenced, and the new member id keeps the
+    // assignment.
+    let old = p
         .client
-        .send(join_request("g-static-1", &mid1, Some("instance-A")))
+        .send(HeartbeatRequest {
+            group_id: "g-static-1".into(),
+            generation_id: gen1,
+            member_id: mid1,
+            group_instance_id: Some("instance-A".into()),
+            ..Default::default()
+        })
         .await
-        .expect("static rejoin");
-    check!(rejoin.error_code == 0);
-    check!(
-        rejoin.generation_id == gen1,
-        "static rejoin must NOT advance generation_id"
-    );
-    check!(rejoin.member_id == mid1);
-    drop(assignment);
+        .expect("Heartbeat (old member id)");
+    check!(old.error_code == FENCED_INSTANCE_ID);
+    let sync = p
+        .client
+        .send(SyncGroupRequest {
+            group_id: "g-static-1".into(),
+            generation_id: gen1,
+            member_id: mid2,
+            group_instance_id: Some("instance-A".into()),
+            protocol_type: Some("consumer".into()),
+            protocol_name: Some("range".into()),
+            ..Default::default()
+        })
+        .await
+        .expect("SyncGroup (new member id)");
+    check!(sync.error_code == 0);
+    check!(sync.assignment == assignment);
 
     p.broker.shutdown().await;
 }

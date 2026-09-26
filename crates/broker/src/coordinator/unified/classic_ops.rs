@@ -22,7 +22,10 @@ mod test_support;
 
 pub(super) use self::{
     heartbeat::handle_heartbeat,
-    join::{CompleteError, JoinAction, build_join_result, handle_join, try_complete},
+    join::{
+        CompleteError, Completion, JoinAction, JoinContext, build_join_result, handle_join,
+        try_complete,
+    },
     leave::handle_leave,
     offset_validation::{refresh_committer_session, validate_commit, validate_offset_commit},
     sync::{SyncAction, handle_sync, read_sync_result},

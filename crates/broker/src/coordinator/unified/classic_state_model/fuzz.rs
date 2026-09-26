@@ -110,12 +110,18 @@ proptest! {
                     let expired: std::collections::HashSet<String> = g
                         .members
                         .iter()
-                        .filter(|(_, m)| now.duration_since(m.last_heartbeat) > m.session_timeout)
+                        .filter(|(id, m)| {
+                            !(g.state == GroupState::PreparingRebalance
+                                && g.joined_this_round.contains(*id))
+                                && now.duration_since(m.last_heartbeat) > m.session_timeout
+                        })
                         .map(|(id, _)| id.clone())
                         .collect();
                     let dropped = g.expire_dead_members(now, Duration::from_secs(3));
                     // KIP-345 gives a static member no exception: every member
-                    // past its session timeout goes, and only those.
+                    // past its session timeout goes, and only those. A member
+                    // that waits in `JoinGroup` cannot heartbeat and stays, as
+                    // Kafka's `hasSatisfiedHeartbeat` keeps it.
                     prop_assert_eq!(
                         dropped.into_iter().collect::<std::collections::HashSet<_>>(),
                         expired,

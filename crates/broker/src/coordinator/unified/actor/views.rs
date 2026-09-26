@@ -234,6 +234,12 @@ mod tests {
                     group_id: "g".into(),
                     member_id: String::new(),
                     protocol_type: "consumer".into(),
+                    protocols: vec![
+                        krabka_protocol::owned::join_group_request::JoinGroupRequestProtocol {
+                            name: "range".into(),
+                            ..Default::default()
+                        },
+                    ],
                     ..Default::default()
                 },
                 version: 4,

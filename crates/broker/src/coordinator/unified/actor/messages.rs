@@ -261,18 +261,38 @@ impl TxnOffsetReservation {
 
 /// Structured `JoinGroup` result for the handler, which encodes it for the
 /// wire version. It mirrors the fields of `JoinGroupResponse`.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JoinResult {
     pub error_code: ErrorCode,
     pub generation_id: i32,
     pub protocol_type: Option<String>,
     pub protocol_name: Option<String>,
     pub leader: String,
+    /// KIP-814: the leader must not run the assignor. Kafka sets it only for
+    /// a static leader that rejoins a `Stable` group at `JoinGroup` v9+.
+    pub skip_assignment: bool,
     pub member_id: String,
     pub members: Vec<JoinResultMember>,
 }
 
-#[derive(Debug, Clone)]
+/// The defaults of Kafka's `JoinGroupResponseData`, generation `-1` included,
+/// so an error reply carries the same fields Kafka's does.
+impl Default for JoinResult {
+    fn default() -> Self {
+        Self {
+            error_code: 0,
+            generation_id: -1,
+            protocol_type: None,
+            protocol_name: None,
+            leader: String::new(),
+            skip_assignment: false,
+            member_id: String::new(),
+            members: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JoinResultMember {
     pub member_id: String,
     pub group_instance_id: Option<String>,
