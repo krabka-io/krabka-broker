@@ -105,16 +105,19 @@ pub struct StreamsDescribeView {
     pub assignment_epoch: i32,
     pub topology_epoch: i32,
     pub group_state: String,
-    /// The group's resolved topology: the subtopologies and their topics.
-    ///
-    /// The real JVM `DescribeStreamsGroupsHandler` rejects a describe response
-    /// with no topology, so this field must hold a value once a member has
-    /// supplied one. It is `None` only before any topology is initialized.
+    /// The topology that the members sent: the subtopologies and their
+    /// topics. It is `None` only before any topology is initialized.
     pub topology: Option<StreamsGroupTopologyValue>,
+    /// The topology as the last configuration sized it, when it is ready:
+    /// Kafka describes this one, with the decided partition count of every
+    /// internal topic.
+    pub configured_topology: Option<super::topology::ConfiguredTopology>,
+    /// The members, by member id.
     pub members: Vec<StreamsDescribeMember>,
 }
 
-#[derive(Debug, Clone)]
+/// One member of a [`StreamsDescribeView`].
+#[derive(Debug, Clone, Default)]
 pub struct StreamsDescribeMember {
     pub member_id: String,
     pub member_epoch: i32,
@@ -122,10 +125,22 @@ pub struct StreamsDescribeMember {
     pub rack_id: Option<String>,
     pub client_id: String,
     pub client_host: String,
+    pub topology_epoch: i32,
     pub process_id: String,
+    pub user_endpoint: Option<(String, u16)>,
+    pub client_tags: Vec<(String, String)>,
+    /// The task offsets that the member last reported, by
+    /// `(subtopology, partition)`.
+    pub task_offsets: BTreeMap<(String, i32), i64>,
+    /// The task end offsets that the member last reported.
+    pub task_end_offsets: BTreeMap<(String, i32), i64>,
     pub active: BTreeMap<String, Vec<i32>>,
     pub standby: BTreeMap<String, Vec<i32>>,
     pub warmup: BTreeMap<String, Vec<i32>>,
+    /// The member's target assignment.
+    pub target_active: BTreeMap<String, Vec<i32>>,
+    pub target_standby: BTreeMap<String, Vec<i32>>,
+    pub target_warmup: BTreeMap<String, Vec<i32>>,
 }
 
 #[derive(Debug)]
@@ -227,6 +242,10 @@ struct ActorState {
     /// configures the topology again, as Kafka does when the configured
     /// topology of a loaded group is empty.
     configured: bool,
+    /// Kafka's `StreamsGroup.configuredTopology`: the topology as the most
+    /// recent configuration against the metadata image sized it. It is
+    /// `None` until a configuration succeeds.
+    configured_topology: Option<super::topology::ConfiguredTopology>,
 }
 
 impl ActorState {
@@ -239,6 +258,7 @@ impl ActorState {
             creatable_topics: Vec::new(),
             target_changed: false,
             configured: false,
+            configured_topology: None,
         }
     }
 }
@@ -459,7 +479,15 @@ async fn handle_message(
             }
         }
         StreamsGroupActorMessage::Describe { reply } => {
-            let _ = reply.send(build_describe(&actor.state, actor.topology.as_ref()));
+            let configured = actor
+                .configured_topology
+                .as_ref()
+                .filter(|configured| configured.is_ready());
+            let _ = reply.send(build_describe(
+                &actor.state,
+                actor.topology.as_ref(),
+                configured,
+            ));
         }
         StreamsGroupActorMessage::ValidateCommit {
             member_id,

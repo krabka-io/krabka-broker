@@ -8,8 +8,9 @@
 //! render the in-memory `subtopology -> partitions` task maps back into the
 //! wire `TaskIds` shape.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+use krabka_log::Offset;
 use krabka_metadata::MetadataImage;
 use krabka_protocol::owned::{
     common::streams_group_heartbeat_response::{
@@ -26,7 +27,7 @@ use crate::{
         config::StreamsGroupConfig,
         persistence::StreamsGroupTopologyValue,
         state::{StreamsGroupState, StreamsMemberState},
-        topology::{ConfiguredSubtopology, status as topo_status},
+        topology::{ConfiguredSubtopology, ConfiguredTopology, status as topo_status},
     },
 };
 
@@ -228,7 +229,42 @@ fn topic_partitions(
 pub(super) fn build_describe(
     state: &StreamsGroupState,
     topology: Option<&StreamsGroupTopologyValue>,
+    configured_topology: Option<&ConfiguredTopology>,
 ) -> StreamsDescribeView {
+    let target = |role: &HashMap<String, BTreeMap<String, Vec<i32>>>, member_id: &str| {
+        role.get(member_id).cloned().unwrap_or_default()
+    };
+    let offsets = |offsets: &BTreeMap<(String, i32), Offset>| {
+        offsets
+            .iter()
+            .map(|(task, offset)| (task.clone(), offset.0))
+            .collect()
+    };
+    let mut members: Vec<StreamsDescribeMember> = state
+        .members
+        .values()
+        .map(|m| StreamsDescribeMember {
+            member_id: m.member_id.clone(),
+            member_epoch: m.member_epoch,
+            instance_id: m.instance_id.clone(),
+            rack_id: m.rack_id.clone(),
+            client_id: m.client_id.clone(),
+            client_host: m.client_host.clone(),
+            topology_epoch: m.topology_epoch,
+            process_id: m.process_id.clone(),
+            user_endpoint: m.user_endpoint.clone(),
+            client_tags: m.client_tags.clone(),
+            task_offsets: offsets(&m.task_offsets),
+            task_end_offsets: offsets(&m.task_end_offsets),
+            active: m.active.clone(),
+            standby: m.standby.clone(),
+            warmup: m.warmup.clone(),
+            target_active: target(&state.target.active, &m.member_id),
+            target_standby: target(&state.target.standby, &m.member_id),
+            target_warmup: target(&state.target.warmup, &m.member_id),
+        })
+        .collect();
+    members.sort_by(|a, b| a.member_id.cmp(&b.member_id));
     StreamsDescribeView {
         group_id: state.group_id.clone(),
         group_epoch: state.group_epoch,
@@ -236,22 +272,8 @@ pub(super) fn build_describe(
         topology_epoch: state.topology_epoch,
         group_state: state.phase.as_str().to_string(),
         topology: topology.cloned(),
-        members: state
-            .members
-            .values()
-            .map(|m| StreamsDescribeMember {
-                member_id: m.member_id.clone(),
-                member_epoch: m.member_epoch,
-                instance_id: m.instance_id.clone(),
-                rack_id: m.rack_id.clone(),
-                client_id: m.client_id.clone(),
-                client_host: m.client_host.clone(),
-                process_id: m.process_id.clone(),
-                active: m.active.clone(),
-                standby: m.standby.clone(),
-                warmup: m.warmup.clone(),
-            })
-            .collect(),
+        configured_topology: configured_topology.cloned(),
+        members,
     }
 }
 

@@ -72,7 +72,8 @@ pub(super) fn configure_after_load(actor: &mut ActorState, source: &Arc<dyn Meta
         return;
     };
     actor.creatable_topics = topology::internal_topic_specs(&configured);
-    actor.state.status = configured.status;
+    actor.state.status.clone_from(&configured.status);
+    actor.configured_topology = Some(configured);
 }
 
 fn reconcile_dirty(
@@ -103,6 +104,7 @@ fn reconcile_dirty(
                 "streams topology cannot be configured",
             );
             actor.state.status = None;
+            actor.configured_topology = None;
             install_empty_target(&mut actor.state, StreamsGroupStatePhase::NotReady);
             return;
         }
@@ -112,14 +114,17 @@ fn reconcile_dirty(
     // `CreateTopics`, as Kafka's `KafkaApis` does.
     actor.creatable_topics = topology::internal_topic_specs(&configured);
     actor.state.status.clone_from(&configured.status);
+    let ready = configured.is_ready();
+    let number_of_tasks = configured.number_of_tasks();
+    actor.configured_topology = Some(configured);
 
-    if !configured.is_ready() {
+    if !ready {
         install_empty_target(&mut actor.state, StreamsGroupStatePhase::NotReady);
         return;
     }
 
     // Build assignor inputs, compute the target, and install it.
-    compute_and_install_target(actor, config, &topology, &configured.number_of_tasks());
+    compute_and_install_target(actor, config, &topology, &number_of_tasks);
 }
 
 /// Runs the assignor over the resolved topology and installs its output as the
@@ -184,13 +189,18 @@ pub(super) fn compute_and_install_target(
 }
 
 /// Bumps the group epoch, installs an empty target assignment, and moves the
-/// group to `phase`. Members still advance to the new, empty assignment epoch
+/// group to `phase`, or to `Empty` when it has no members, as Kafka's
+/// `maybeUpdateGroupState` does. Members still advance to the new, empty assignment epoch
 /// on their next `advance_member_epoch`. The function clears `dirty`.
 fn install_empty_target(state: &mut StreamsGroupState, phase: StreamsGroupStatePhase) {
     if !state.bump_epoch() {
         return;
     }
     state.install_target(StreamsTargetAssignment::default());
-    state.phase = phase;
+    state.phase = if state.members.is_empty() {
+        StreamsGroupStatePhase::Empty
+    } else {
+        phase
+    };
     state.dirty = false;
 }

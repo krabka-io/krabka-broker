@@ -208,9 +208,17 @@ pub(super) fn describe_member() -> StreamsDescribeMember {
         client_id: "client-a".into(),
         client_host: "/127.0.0.1".into(),
         process_id: "process-a".into(),
+        topology_epoch: 9,
+        user_endpoint: Some(("host-a".into(), 8080)),
+        client_tags: vec![("zone".into(), "z1".into())],
+        task_offsets: [(("sub-a".to_string(), 0), 5)].into(),
+        task_end_offsets: [(("sub-a".to_string(), 0), 10)].into(),
         active: task_map(&[("sub-a", vec![0, 2])]),
         standby: task_map(&[("sub-a", vec![1])]),
         warmup: task_map(&[("sub-b", vec![3, 4])]),
+        target_active: task_map(&[("sub-a", vec![0])]),
+        target_standby: task_map(&[("sub-a", vec![1, 2])]),
+        target_warmup: task_map(&[]),
     }
 }
 
@@ -230,12 +238,14 @@ fn expected_key_value(key: &str, value: &str) -> KeyValue {
     }
 }
 
-/// A fully-pinned error row as the handler renders it. Only `group_id` and
-/// `error_code` are set, and every other field holds its wire default.
+/// A fully-pinned error row as the handler renders it. Only `group_id`,
+/// `error_code` and, for `GROUP_ID_NOT_FOUND`, Kafka's message are set, and
+/// every other field holds its wire default.
 pub(super) fn error_group(group_id: &str, error_code: i16) -> DescribedGroup {
     DescribedGroup {
         error_code,
-        error_message: None,
+        error_message: (error_code == crate::codes::GROUP_ID_NOT_FOUND)
+            .then(|| format!("Streams group {group_id} not found.")),
         group_id: group_id.into(),
         group_state: String::new(),
         group_epoch: 0,
@@ -246,6 +256,62 @@ pub(super) fn error_group(group_id: &str, error_code: i16) -> DescribedGroup {
         authorized_operations: i32::MIN,
         unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
     }
+}
+
+/// Creates a topic with `partitions` partitions on the one-broker test
+/// cluster.
+pub(super) async fn create_topic(broker: &Broker, name: &str, partitions: i32) {
+    use krabka_metadata::{LeaderEpoch, PartitionRecord, TopicRecord};
+
+    let node_id = krabka_audit::NodeId(broker.config.node_id.0);
+    let mut records = vec![MetadataRecord::V1Topic(TopicRecord {
+        name: name.into(),
+        topic_id: uuid::Uuid::new_v4(),
+        partitions,
+        replication_factor: 1,
+    })];
+    records.extend((0..partitions).map(|partition| {
+        MetadataRecord::V1Partition(PartitionRecord {
+            topic: name.into(),
+            partition,
+            leader: node_id,
+            replicas: vec![node_id],
+            isr: vec![node_id],
+            leader_epoch: LeaderEpoch(0),
+            adding_replicas: vec![],
+            removing_replicas: vec![],
+            directories: vec![],
+            partition_epoch: 0,
+        })
+    }));
+    broker
+        .controller
+        .submit_change(records)
+        .await
+        .expect("create the topic");
+}
+
+/// Sends one `StreamsGroupHeartbeat` through its handler and returns the
+/// decoded response.
+pub(super) async fn heartbeat(
+    broker: &Broker,
+    req: &krabka_protocol::owned::streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
+) -> krabka_protocol::owned::streams_group_heartbeat_response::StreamsGroupHeartbeatResponse {
+    use krabka_protocol::owned::streams_group_heartbeat_response::MAX_VERSION;
+
+    let principal = crate::test_support::principal("admin");
+    let peer = crate::test_support::peer();
+    let ctx = crate::test_support::request_context(&principal, &peer, "streams-client");
+    let bytes = crate::handlers::streams_group_heartbeat::handle(
+        broker,
+        MAX_VERSION,
+        1,
+        &crate::test_support::encode_request(req, MAX_VERSION),
+        &ctx,
+    )
+    .await
+    .expect("handle heartbeat");
+    crate::test_support::decode_response(&bytes, MAX_VERSION)
 }
 
 /// The wire `Topology` that [`render_topology`] must produce from

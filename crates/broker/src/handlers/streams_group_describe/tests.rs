@@ -325,3 +325,243 @@ async fn include_authorized_operations_fills_the_bitfield_only_on_opt_in() {
     }
     broker_handle.shutdown().await;
 }
+
+/// Kafka's `StreamsGroup.asDescribedGroup` for a group whose topology is
+/// ready: the configured topology with the decided partition count of the
+/// changelog topic, and every member field, including the offsets the member
+/// reported, its endpoint, its tags and its target assignment.
+#[tokio::test]
+async fn ready_group_describes_the_configured_topology_and_every_member_field() {
+    use krabka_protocol::owned::{
+        common::{
+            streams_group_describe_response::{
+                assignment::Assignment, endpoint::Endpoint, key_value::KeyValue,
+                task_offset::TaskOffset, topic_info::TopicInfo,
+            },
+            streams_group_heartbeat_request as hb,
+        },
+        streams_group_describe_response::{Member, Subtopology, Topology},
+        streams_group_heartbeat_request::{self as hb_req, StreamsGroupHeartbeatRequest},
+    };
+
+    use super::test_support::{create_topic, expected_task_ids, heartbeat};
+
+    let (broker_handle, _dir) = start_broker(true).await;
+    let broker = broker_handle.broker_arc_for_test();
+    finalize_streams_version(&broker).await;
+    create_topic(&broker, "in", 2).await;
+    create_topic(&broker, "app-store-changelog", 2).await;
+    let join = StreamsGroupHeartbeatRequest {
+        group_id: "app".into(),
+        member_id: "m1".into(),
+        member_epoch: 0,
+        rebalance_timeout_ms: 1_000,
+        process_id: Some("process-1".into()),
+        user_endpoint: Some(hb::endpoint::Endpoint {
+            host: "localhost".into(),
+            port: 8080,
+            ..Default::default()
+        }),
+        client_tags: Some(vec![hb::key_value::KeyValue {
+            key: "zone".into(),
+            value: "z1".into(),
+            ..Default::default()
+        }]),
+        active_tasks: Some(vec![]),
+        standby_tasks: Some(vec![]),
+        warmup_tasks: Some(vec![]),
+        topology: Some(hb_req::Topology {
+            epoch: 1,
+            subtopologies: vec![hb_req::Subtopology {
+                subtopology_id: "0".into(),
+                source_topics: vec!["in".into()],
+                state_changelog_topics: vec![hb::topic_info::TopicInfo {
+                    name: "app-store-changelog".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let joined = heartbeat(&broker, &join).await;
+    check!(joined.error_code == codes::NONE, "{joined:?}");
+    let task_offset = |offset| hb::task_offset::TaskOffset {
+        subtopology_id: "0".into(),
+        partition: 1,
+        offset,
+        ..Default::default()
+    };
+    let steady = heartbeat(
+        &broker,
+        &StreamsGroupHeartbeatRequest {
+            group_id: "app".into(),
+            member_id: "m1".into(),
+            member_epoch: joined.member_epoch,
+            rebalance_timeout_ms: -1,
+            task_offsets: Some(vec![task_offset(5)]),
+            task_end_offsets: Some(vec![task_offset(10)]),
+            ..Default::default()
+        },
+    )
+    .await;
+    check!(steady.error_code == codes::NONE, "{steady:?}");
+
+    let resp = describe(&broker, &["app"]).await;
+
+    let none = || UnknownTaggedFields(Vec::new());
+    let offsets = |offset| {
+        vec![TaskOffset {
+            subtopology_id: "0".into(),
+            partition: 1,
+            offset,
+            unknown_tagged_fields: none(),
+        }]
+    };
+    let tasks = Assignment {
+        active_tasks: vec![expected_task_ids("0", vec![0, 1])],
+        standby_tasks: Vec::new(),
+        warmup_tasks: Vec::new(),
+        unknown_tagged_fields: none(),
+    };
+    let expected = StreamsGroupDescribeResponse {
+        throttle_time_ms: 0,
+        groups: vec![DescribedGroup {
+            error_code: codes::NONE,
+            error_message: None,
+            group_id: "app".into(),
+            group_state: "Stable".into(),
+            group_epoch: 1,
+            assignment_epoch: 1,
+            topology: Some(Topology {
+                epoch: 1,
+                subtopologies: Some(vec![Subtopology {
+                    subtopology_id: "0".into(),
+                    source_topics: vec!["in".into()],
+                    repartition_sink_topics: Vec::new(),
+                    state_changelog_topics: vec![TopicInfo {
+                        name: "app-store-changelog".into(),
+                        partitions: 2,
+                        replication_factor: 0,
+                        topic_configs: Vec::new(),
+                        unknown_tagged_fields: none(),
+                    }],
+                    repartition_source_topics: Vec::new(),
+                    unknown_tagged_fields: none(),
+                }]),
+                unknown_tagged_fields: none(),
+            }),
+            members: vec![Member {
+                member_id: "m1".into(),
+                member_epoch: 1,
+                instance_id: None,
+                rack_id: None,
+                client_id: "streams-client".into(),
+                client_host: "/127.0.0.1".into(),
+                topology_epoch: 1,
+                process_id: "process-1".into(),
+                user_endpoint: Some(Endpoint {
+                    host: "localhost".into(),
+                    port: 8080,
+                    unknown_tagged_fields: none(),
+                }),
+                client_tags: vec![KeyValue {
+                    key: "zone".into(),
+                    value: "z1".into(),
+                    unknown_tagged_fields: none(),
+                }],
+                task_offsets: offsets(5),
+                task_end_offsets: offsets(10),
+                assignment: tasks.clone(),
+                target_assignment: tasks,
+                is_classic: false,
+                unknown_tagged_fields: none(),
+            }],
+            authorized_operations: i32::MIN,
+            unknown_tagged_fields: none(),
+        }],
+        unknown_tagged_fields: none(),
+    };
+    assert!(resp == expected);
+    broker_handle.shutdown().await;
+}
+
+/// Kafka's `maybeUpdateGroupState`: a group with no members is `Empty`, also
+/// when its topology never became ready; and a group id of another type is
+/// `GROUP_ID_NOT_FOUND` with Kafka's `castToStreamsGroup` message.
+#[tokio::test]
+async fn empty_group_is_empty_and_another_group_type_is_not_found() {
+    use krabka_protocol::owned::{
+        common::streams_group_heartbeat_request as hb,
+        streams_group_heartbeat_request::{self as hb_req, StreamsGroupHeartbeatRequest},
+    };
+
+    use super::test_support::heartbeat;
+
+    let (broker_handle, _dir) = start_broker(true).await;
+    let broker = broker_handle.broker_arc_for_test();
+    finalize_streams_version(&broker).await;
+    broker.group_coordinator.mark_share("share");
+    let join = StreamsGroupHeartbeatRequest {
+        group_id: "left".into(),
+        member_id: "m1".into(),
+        member_epoch: 0,
+        rebalance_timeout_ms: 1_000,
+        active_tasks: Some(vec![]),
+        standby_tasks: Some(vec![]),
+        warmup_tasks: Some(vec![]),
+        topology: Some(hb_req::Topology {
+            epoch: 1,
+            subtopologies: vec![hb_req::Subtopology {
+                subtopology_id: "0".into(),
+                source_topics: vec!["absent".into()],
+                state_changelog_topics: vec![hb::topic_info::TopicInfo {
+                    name: "left-changelog".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    check!(heartbeat(&broker, &join).await.error_code == codes::NONE);
+    let leave = StreamsGroupHeartbeatRequest {
+        group_id: "left".into(),
+        member_id: "m1".into(),
+        member_epoch: -1,
+        ..Default::default()
+    };
+    check!(heartbeat(&broker, &leave).await.error_code == codes::NONE);
+
+    let resp = describe(&broker, &["left", "share"]).await;
+
+    let groups: Vec<(String, i16, Option<String>, String, usize)> = resp
+        .groups
+        .into_iter()
+        .map(|g| {
+            (
+                g.group_id,
+                g.error_code,
+                g.error_message,
+                g.group_state,
+                g.members.len(),
+            )
+        })
+        .collect();
+    assert!(
+        groups
+            == vec![
+                ("left".into(), codes::NONE, None, "Empty".into(), 0),
+                (
+                    "share".into(),
+                    codes::GROUP_ID_NOT_FOUND,
+                    Some("Group share is not a streams group.".into()),
+                    String::new(),
+                    0,
+                ),
+            ]
+    );
+    broker_handle.shutdown().await;
+}
