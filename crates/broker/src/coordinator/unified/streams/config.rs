@@ -21,16 +21,16 @@ pub const GROUP_CONFIG_KEYS: [&str; 8] = [
     KEY_SHARE_AUTO_OFFSET_RESET,
 ];
 
-/// Server-side task-assignor selection for a streams group. `Auto` (the Kafka
-/// default) picks `HighlyAvailable` when the topology has any stateful
-/// subtopology (a state-changelog topic) and `Sticky` otherwise.
+/// The `streams.assignor.name` value of a streams group.
+///
+/// Every value runs the same assignor, a port of Kafka's `StickyTaskAssignor`,
+/// the only built-in streams assignor in Kafka. The value is kept only for
+/// the configuration surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StreamsAssignorKind {
     #[default]
     Auto,
-    /// Minimise task movement; active-only, no standby/warmup.
     Sticky,
-    /// Place standby replicas + warm up state migrations for fault tolerance.
     HighlyAvailable,
 }
 

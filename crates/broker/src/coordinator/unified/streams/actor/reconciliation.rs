@@ -3,12 +3,12 @@
 //! Reconciliation is the one place that bumps the group epoch. It resolves the
 //! stored topology against the current [`MetadataImage`], creates the internal
 //! topics the topology needs, records any blocking topology status, and then
-//! runs the assignor to produce the new active, standby, and warmup target.
+//! runs the assignor to produce the new active and standby target.
 //!
 //! [`MetadataImage`]: krabka_metadata::MetadataImage
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::Arc,
 };
 
@@ -18,9 +18,7 @@ use crate::{
         assignor::{self, AssignorInput, AssignorMember},
         config::StreamsGroupConfig,
         persistence::StreamsGroupTopologyValue,
-        state::{
-            StreamsGroupState, StreamsGroupStatePhase, StreamsMemberState, StreamsTargetAssignment,
-        },
+        state::{StreamsGroupState, StreamsGroupStatePhase, StreamsTargetAssignment},
         topology,
     },
     metadata_source::MetadataSource,
@@ -143,11 +141,14 @@ pub(super) fn compute_and_install_target(
         .map(|m| AssignorMember {
             member_id: m.member_id.clone(),
             process_id: m.process_id.clone(),
-            rack_id: m.rack_id.clone(),
             current_active: m.active.clone(),
             current_standby: m.standby.clone(),
             current_warmup: m.warmup.clone(),
-            task_lag: task_lag(m),
+            task_offsets: m
+                .task_offsets
+                .iter()
+                .map(|(task, offset)| (task.clone(), offset.0))
+                .collect(),
         })
         .collect();
 
@@ -162,17 +163,15 @@ pub(super) fn compute_and_install_target(
         tasks: topology::task_set(num_tasks),
         stateful,
         num_standby_replicas: config.num_standby_replicas,
-        num_warmup_replicas: config.num_warmup_replicas,
-        acceptable_recovery_lag: config.acceptable_recovery_lag,
-        kind: config.assignor,
     };
     let assignment = assignor::assign(&members, &input);
 
+    // Kafka's default assignment refiner hands out no warmup tasks.
     let target = StreamsTargetAssignment {
         epoch: 0,
         active: assignment.active,
         standby: assignment.standby,
-        warmup: assignment.warmup,
+        warmup: HashMap::new(),
     };
     if !actor.state.bump_epoch() {
         return;
@@ -194,50 +193,4 @@ fn install_empty_target(state: &mut StreamsGroupState, phase: StreamsGroupStateP
     state.install_target(StreamsTargetAssignment::default());
     state.phase = phase;
     state.dirty = false;
-}
-
-/// Per-task changelog lag for the assignor: `end_offset - offset`, keyed by
-/// `(subtopology, partition)`. The map holds an entry only where the member
-/// reported both endpoints.
-fn task_lag(m: &StreamsMemberState) -> BTreeMap<(String, i32), i64> {
-    let mut lag = BTreeMap::new();
-    for (key, &end) in &m.task_end_offsets {
-        if let Some(&pos) = m.task_offsets.get(key) {
-            // Lag is the delta between two offsets — a record count (i64),
-            // compared against `acceptable_recovery_lag`, not an offset.
-            lag.insert(key.clone(), end.0 - pos.0);
-        }
-    }
-    lag
-}
-
-#[cfg(test)]
-mod tests {
-    use assert2::check;
-    use krabka_log::Offset;
-
-    use super::*;
-
-    #[test]
-    fn task_lag_is_end_minus_offset_only_when_both_reported() {
-        let mut m = StreamsMemberState::joining("m1", "client", "/127.0.0.1");
-        // Two tasks with both endpoints reported → lag = end - offset.
-        m.task_end_offsets = maplit::btreemap! {
-        ("sub-a".to_string(), 0) => Offset(10),
-        ("sub-a".to_string(), 1) => Offset(5),
-        // A task with an end offset but NO reported position is dropped.
-        ("sub-b".to_string(), 0) => Offset(99)};
-        m.task_offsets = maplit::btreemap! {
-        ("sub-a".to_string(), 0) => Offset(3),
-        ("sub-a".to_string(), 1) => Offset(5)};
-        let lag = task_lag(&m);
-        // 10 - 3 = 7 (kills `-`→`+` which is 13, and `-`→`/` which is 3).
-        check!(lag[&("sub-a".to_string(), 0)] == 7);
-        // 5 - 5 = 0 (kills `-`→`/` which would be 1).
-        check!(lag[&("sub-a".to_string(), 1)] == 0);
-        // sub-b has no reported position, so it is absent (pins the filter and
-        // kills the fixed-map replacements that inject sub-b / xyzzy keys).
-        check!(!lag.contains_key(&("sub-b".to_string(), 0)));
-        check!(lag.len() == 2);
-    }
 }
