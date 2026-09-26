@@ -12,6 +12,7 @@ use krabka_protocol::{
     Encode,
     owned::create_acls_response::{AclCreationResult, CreateAclsResponse},
 };
+use krabka_raft::RaftError;
 
 use crate::codes;
 
@@ -30,14 +31,28 @@ pub(super) fn create_acls_response(results: Vec<AclCreationResult>) -> CreateAcl
     }
 }
 
-pub(super) fn apply_submit_error<E: std::fmt::Display>(
+/// Stamps every submitted creation with the error a failed controller write
+/// maps to.
+///
+/// Kafka's controller fails the `createAcls` write with
+/// `NotControllerException` when it is not (or is no longer) the active
+/// controller, and wraps anything else as an `UnknownServerException`, whose
+/// text `ApiError.fromThrowable` drops so no internal detail reaches the
+/// client. Neither carries a coordinator error.
+pub(super) fn apply_submit_error(
     results: &mut [AclCreationResult],
     to_submit: &[(usize, MetadataRecord)],
-    err: E,
+    err: &RaftError,
 ) {
-    let msg = format!("submit failed: {err}");
+    let code = match err {
+        RaftError::NotLeader { .. } | RaftError::LeaderUnknown => codes::NOT_CONTROLLER,
+        other => crate::handlers::submit_failure_code(other, codes::UNKNOWN_SERVER_ERROR),
+    };
     for (idx, _) in to_submit {
-        results[*idx] = acl_error_result(codes::COORDINATOR_NOT_AVAILABLE, msg.clone());
+        results[*idx] = AclCreationResult {
+            error_code: code,
+            ..Default::default()
+        };
     }
 }
 
@@ -59,15 +74,7 @@ mod tests {
     };
 
     #[test]
-    fn error_and_submit_helpers_preserve_non_default_result_fields() {
-        let err = acl_error_result(codes::INVALID_REQUEST, "bad acl");
-        assert!(err.error_code == codes::INVALID_REQUEST);
-        assert!(err.error_message.as_deref() == Some("bad acl"));
-
-        let mut results = vec![
-            AclCreationResult::default(),
-            acl_error_result(codes::INVALID_REQUEST, "already invalid"),
-        ];
+    fn submit_error_maps_controller_failures_and_leaves_rejected_rows() {
         let submitted = vec![(
             0usize,
             MetadataRecord::V1AccessControlEntry(
@@ -75,22 +82,41 @@ mod tests {
                     .expect("valid creation"),
             ),
         )];
-
-        apply_submit_error(&mut results, &submitted, "not controller");
-
-        let expected = vec![
-            AclCreationResult {
-                error_code: codes::COORDINATOR_NOT_AVAILABLE,
-                error_message: Some("submit failed: not controller".into()),
-                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-            },
-            AclCreationResult {
-                error_code: codes::INVALID_REQUEST,
-                error_message: Some("already invalid".into()),
-                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-            },
+        let cases = [
+            (
+                RaftError::NotLeader {
+                    current_leader: None,
+                },
+                codes::NOT_CONTROLLER,
+            ),
+            (RaftError::LeaderUnknown, codes::NOT_CONTROLLER),
+            (RaftError::UncommittedTail, codes::NOT_CONTROLLER),
+            (RaftError::Shutdown, codes::UNKNOWN_SERVER_ERROR),
+            (
+                RaftError::ChangeRejected("internal detail".into()),
+                codes::UNKNOWN_SERVER_ERROR,
+            ),
         ];
-        assert!(results == expected);
+        for (error, code) in cases {
+            let mut results = vec![
+                AclCreationResult::default(),
+                acl_error_result(codes::INVALID_REQUEST, "already invalid"),
+            ];
+            apply_submit_error(&mut results, &submitted, &error);
+            let expected = vec![
+                AclCreationResult {
+                    error_code: code,
+                    error_message: None,
+                    unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+                },
+                AclCreationResult {
+                    error_code: codes::INVALID_REQUEST,
+                    error_message: Some("already invalid".into()),
+                    unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+                },
+            ];
+            assert!(results == expected, "{error}");
+        }
     }
 
     #[test]

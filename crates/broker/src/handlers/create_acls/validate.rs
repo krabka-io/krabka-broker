@@ -1,24 +1,33 @@
 //! Validation of a single `CreateAcls` binding, and the `AclEntry` a valid one
 //! becomes.
 //!
-//! Every rejection here is a per-binding `INVALID_REQUEST` with a fixed message,
-//! and the accepted shape is the rule the authorizer will later evaluate, so
-//! this decision is the whole security-relevant core of the handler and sits in
-//! a file of its own.
+//! Kafka validates a binding in two places, and this module keeps its order:
+//! `AclApis.handleCreateAcls` refuses a `CLUSTER` binding not named
+//! `kafka-cluster` and an empty resource name, then the controller's
+//! `AclControlManager.validateNewAcl` refuses a non-concrete resource type,
+//! pattern type, operation or permission type, a principal with no `:`, and a
+//! malformed host. Every refusal is a per-binding `INVALID_REQUEST` (or
+//! `UNSUPPORTED_VERSION` for a CIDR host below its metadata version) carrying
+//! Kafka's message text, which `kafka-acls` prints.
+//!
+//! Two whole-request refusals sit in front of this, in the handler. A wire
+//! `UNKNOWN` (0) element fails Kafka's `CreateAclsRequest.validate` while the
+//! request is parsed, which closes the connection ([`has_unknown_element`]).
+//! An `ANY` or `MATCH` element makes the `ResourcePattern` or
+//! `AccessControlEntry` constructor throw, which fails every creation
+//! ([`has_filter_only_element`]).
 
 use krabka_authz::cidr::Cidr;
 use krabka_metadata::AclEntry;
+use krabka_protocol::owned::create_acls_request::AclCreation;
 
 use crate::{
     codes,
     handlers::acl_wire::{
-        operation_concrete, pattern_type_concrete, permission_concrete, resource_type_concrete,
+        CLUSTER_RESOURCE_NAME, operation_concrete, pattern_type_concrete, permission_concrete,
+        resource_type_concrete,
     },
 };
-
-/// Kafka principal-type prefix. It is the only principal type that Krabka
-/// accepts.
-pub(super) const USER_PRINCIPAL_PREFIX: &str = "User:";
 
 /// The message `CreateAcls` answers with when a host containing `/` is
 /// submitted below [`crate::features::CIDR_ACL_HOST_MIN_LEVEL`]. Verbatim
@@ -26,43 +35,169 @@ pub(super) const USER_PRINCIPAL_PREFIX: &str = "User:";
 const CIDR_UNSUPPORTED_VERSION_MESSAGE: &str =
     "CIDR-based ACL host patterns require metadata version 4.4-IV1 or higher.";
 
+/// Wire `resource_type` of Kafka's `ResourceType.CLUSTER`.
+const RESOURCE_TYPE_CLUSTER: i8 = 4;
+/// Wire `UNKNOWN` (0), shared by every ACL enum axis.
+const WIRE_UNKNOWN: i8 = 0;
+/// Wire `ANY` (1), shared by every ACL enum axis.
+const WIRE_ANY: i8 = 1;
+/// Wire `PatternType.MATCH` (2).
+const WIRE_PATTERN_MATCH: i8 = 2;
+
+/// True when any creation carries a wire `UNKNOWN` (0) resource type, pattern
+/// type, operation or permission type.
+///
+/// Kafka's `CreateAclsRequest.validate` throws for such a request while it is
+/// parsed, so the broker sends no response and closes the connection.
+pub(super) fn has_unknown_element(creations: &[AclCreation]) -> bool {
+    creations.iter().any(|c| {
+        c.resource_type == WIRE_UNKNOWN
+            || c.resource_pattern_type == WIRE_UNKNOWN
+            || c.operation == WIRE_UNKNOWN
+            || c.permission_type == WIRE_UNKNOWN
+    })
+}
+
+/// True when any creation carries a filter-only value: `ANY` for the resource
+/// type, operation or permission type, or `ANY` or `MATCH` for the pattern
+/// type.
+///
+/// Kafka's `AclApis.handleCreateAcls` builds every binding before it
+/// validates any of them, and the `ResourcePattern` and `AccessControlEntry`
+/// constructors throw `IllegalArgumentException` for these values. The
+/// request's error path then answers every creation with
+/// `UNKNOWN_SERVER_ERROR` and no message, because `ApiError.fromThrowable`
+/// drops the text of an unknown server error.
+pub(super) fn has_filter_only_element(creations: &[AclCreation]) -> bool {
+    creations.iter().any(|c| {
+        c.resource_type == WIRE_ANY
+            || matches!(c.resource_pattern_type, WIRE_ANY | WIRE_PATTERN_MATCH)
+            || c.operation == WIRE_ANY
+            || c.permission_type == WIRE_ANY
+    })
+}
+
+/// Kafka's `ResourceType` constant name for a wire code, as
+/// `ResourceType.fromCode` resolves it: an unrecognized code is `UNKNOWN`.
+fn resource_type_name(code: i8) -> &'static str {
+    match code {
+        1 => "ANY",
+        2 => "TOPIC",
+        3 => "GROUP",
+        4 => "CLUSTER",
+        5 => "TRANSACTIONAL_ID",
+        6 => "DELEGATION_TOKEN",
+        7 => "USER",
+        _ => "UNKNOWN",
+    }
+}
+
+/// Kafka's `PatternType` constant name for a wire code.
+fn pattern_type_name(code: i8) -> &'static str {
+    match code {
+        1 => "ANY",
+        2 => "MATCH",
+        3 => "LITERAL",
+        4 => "PREFIXED",
+        _ => "UNKNOWN",
+    }
+}
+
+/// Kafka's `AclOperation` constant name for a wire code.
+fn operation_name(code: i8) -> &'static str {
+    match code {
+        1 => "ANY",
+        2 => "ALL",
+        3 => "READ",
+        4 => "WRITE",
+        5 => "CREATE",
+        6 => "DELETE",
+        7 => "ALTER",
+        8 => "DESCRIBE",
+        9 => "CLUSTER_ACTION",
+        10 => "DESCRIBE_CONFIGS",
+        11 => "ALTER_CONFIGS",
+        12 => "IDEMPOTENT_WRITE",
+        13 => "CREATE_TOKENS",
+        14 => "DESCRIBE_TOKENS",
+        15 => "TWO_PHASE_COMMIT",
+        _ => "UNKNOWN",
+    }
+}
+
+/// Kafka's `AclPermissionType` constant name for a wire code.
+fn permission_type_name(code: i8) -> &'static str {
+    match code {
+        1 => "ANY",
+        2 => "DENY",
+        3 => "ALLOW",
+        _ => "UNKNOWN",
+    }
+}
+
+fn invalid(message: String) -> (i16, String) {
+    (codes::INVALID_REQUEST, message)
+}
+
 pub(super) fn validate(
-    c: &krabka_protocol::owned::create_acls_request::AclCreation,
+    c: &AclCreation,
     max_principal_bytes: usize,
     max_resource_name_bytes: usize,
     cidr_hosts_supported: bool,
 ) -> Result<AclEntry, (i16, String)> {
-    let resource_type = resource_type_concrete(c.resource_type)
-        .map_err(|_| (codes::INVALID_REQUEST, "bad resource_type".to_owned()))?;
-    let pattern_type = pattern_type_concrete(c.resource_pattern_type)
-        .map_err(|_| (codes::INVALID_REQUEST, "bad pattern_type".to_owned()))?;
-    let operation = operation_concrete(c.operation)
-        .map_err(|_| (codes::INVALID_REQUEST, "bad operation".to_owned()))?;
-    let permission_type = permission_concrete(c.permission_type)
-        .map_err(|_| (codes::INVALID_REQUEST, "bad permission_type".to_owned()))?;
-
+    // `AclApis.handleCreateAcls`, before the binding reaches the controller.
+    // The authorizer only ever asks about `kafka-cluster`, so a CLUSTER ACL
+    // under any other name would be stored and never match.
+    if c.resource_type == RESOURCE_TYPE_CLUSTER && c.resource_name != CLUSTER_RESOURCE_NAME {
+        return Err(invalid(format!(
+            "The only valid name for the CLUSTER resource is {CLUSTER_RESOURCE_NAME}"
+        )));
+    }
     if c.resource_name.is_empty() {
-        return Err((codes::INVALID_REQUEST, "empty resource_name".to_owned()));
+        return Err(invalid("Invalid empty resource name".to_owned()));
     }
-    if c.resource_name.len() > max_resource_name_bytes {
-        return Err((codes::INVALID_REQUEST, "resource_name too long".to_owned()));
-    }
-    if c.resource_name.contains('\0') {
-        return Err((
-            codes::INVALID_REQUEST,
-            "resource_name contains NUL".to_owned(),
-        ));
-    }
-    if !c.principal.starts_with(USER_PRINCIPAL_PREFIX) {
-        return Err((
-            codes::INVALID_REQUEST,
-            "principal must start with User:".to_owned(),
-        ));
-    }
-    if c.principal.len() > max_principal_bytes {
-        return Err((codes::INVALID_REQUEST, "principal too long".to_owned()));
+
+    // `AclControlManager.validateNewAcl`. A code Kafka knows but krabka's
+    // metadata cannot store (`USER`, `CREATE_TOKENS`, `DESCRIBE_TOKENS`) is
+    // refused here under its Kafka name.
+    let resource_type = resource_type_concrete(c.resource_type).map_err(|_| {
+        invalid(format!(
+            "Invalid resourceType {}",
+            resource_type_name(c.resource_type)
+        ))
+    })?;
+    let pattern_type = pattern_type_concrete(c.resource_pattern_type).map_err(|_| {
+        invalid(format!(
+            "Invalid patternType {}",
+            pattern_type_name(c.resource_pattern_type)
+        ))
+    })?;
+    let operation = operation_concrete(c.operation)
+        .map_err(|_| invalid(format!("Invalid operation {}", operation_name(c.operation))))?;
+    let permission_type = permission_concrete(c.permission_type).map_err(|_| {
+        invalid(format!(
+            "Invalid permissionType {}",
+            permission_type_name(c.permission_type)
+        ))
+    })?;
+    // Kafka accepts any `<type>:<name>` principal and refuses only one with
+    // no colon at all.
+    if !c.principal.contains(':') {
+        return Err(invalid(format!(
+            "Could not parse principal from `{}` (no colon is present separating the principal \
+             type from the principal name)",
+            c.principal
+        )));
     }
     validate_host(&c.host, cidr_hosts_supported)?;
+
+    // krabka's operator-configured size ceilings. Kafka has none.
+    if c.resource_name.len() > max_resource_name_bytes {
+        return Err(invalid("resource_name too long".to_owned()));
+    }
+    if c.principal.len() > max_principal_bytes {
+        return Err(invalid("principal too long".to_owned()));
+    }
     Ok(AclEntry {
         resource_type,
         resource_name: c.resource_name.clone(),
@@ -83,10 +218,7 @@ pub(super) fn validate(
 /// normalize the text that gets stored.
 fn validate_host(host: &str, cidr_hosts_supported: bool) -> Result<(), (i16, String)> {
     if host.is_empty() {
-        return Err((
-            codes::INVALID_REQUEST,
-            "Host pattern cannot be null or empty".to_owned(),
-        ));
+        return Err(invalid("Host pattern cannot be null or empty".to_owned()));
     }
     if !host.contains('/') {
         return Ok(());
@@ -97,12 +229,9 @@ fn validate_host(host: &str, cidr_hosts_supported: bool) -> Result<(), (i16, Str
             CIDR_UNSUPPORTED_VERSION_MESSAGE.to_owned(),
         ));
     }
-    Cidr::parse(host).map(|_| ()).map_err(|reason| {
-        (
-            codes::INVALID_REQUEST,
-            format!("Invalid CIDR notation '{host}': {reason}"),
-        )
-    })
+    Cidr::parse(host)
+        .map(|_| ())
+        .map_err(|reason| invalid(format!("Invalid CIDR notation '{host}': {reason}")))
 }
 
 #[cfg(test)]
@@ -111,41 +240,146 @@ mod tests {
     use krabka_metadata::{AclEntry, AclOperation, PatternType, PermissionType, ResourceType};
     use krabka_protocol::owned::create_acls_request::AclCreation;
 
-    use crate::handlers::create_acls::test_support::{OPERATION_READ, creation, validate};
+    use super::{has_filter_only_element, has_unknown_element};
+    use crate::{
+        codes,
+        handlers::create_acls::test_support::{OPERATION_READ, creation, validate},
+    };
 
     #[test]
-    fn validate_rejects_malformed_resource_principal_and_host() {
-        type CorruptCreation = fn(&mut AclCreation);
-
-        let valid = creation("topic-a", "User:alice", OPERATION_READ);
-        let entry = validate(&valid).expect("valid ACL creation");
-        let expected = AclEntry {
-            resource_type: ResourceType::Topic,
-            resource_name: "topic-a".into(),
-            pattern_type: PatternType::Literal,
-            principal: "User:alice".into(),
-            host: "*".into(),
-            operation: AclOperation::Read,
-            permission_type: PermissionType::Allow,
-        };
-        assert!(entry == expected);
-
-        let cases: [(CorruptCreation, &str); 4] = [
-            (|c| c.resource_name.clear(), "empty resource_name"),
+    fn validate_accepts_any_principal_type_and_the_kafka_cluster_name() {
+        type Shape = fn(&mut AclCreation);
+        let cases: [(Shape, AclEntry); 3] = [
             (
-                |c| c.resource_name = "bad\0name".into(),
-                "resource_name contains NUL",
+                |_| {},
+                AclEntry {
+                    resource_type: ResourceType::Topic,
+                    resource_name: "topic-a".into(),
+                    pattern_type: PatternType::Literal,
+                    principal: "User:alice".into(),
+                    host: "*".into(),
+                    operation: AclOperation::Read,
+                    permission_type: PermissionType::Allow,
+                },
             ),
             (
+                |c| c.principal = "Group:ops".into(),
+                AclEntry {
+                    resource_type: ResourceType::Topic,
+                    resource_name: "topic-a".into(),
+                    pattern_type: PatternType::Literal,
+                    principal: "Group:ops".into(),
+                    host: "*".into(),
+                    operation: AclOperation::Read,
+                    permission_type: PermissionType::Allow,
+                },
+            ),
+            (
+                |c| {
+                    c.resource_type = 4;
+                    c.resource_name = "kafka-cluster".into();
+                    c.operation = 7;
+                    c.permission_type = 2;
+                },
+                AclEntry {
+                    resource_type: ResourceType::Cluster,
+                    resource_name: "kafka-cluster".into(),
+                    pattern_type: PatternType::Literal,
+                    principal: "User:alice".into(),
+                    host: "*".into(),
+                    operation: AclOperation::Alter,
+                    permission_type: PermissionType::Deny,
+                },
+            ),
+        ];
+        for (shape, expected) in cases {
+            let mut c = creation("topic-a", "User:alice", OPERATION_READ);
+            shape(&mut c);
+            assert!(validate(&c) == Ok(expected));
+        }
+    }
+
+    /// Every per-binding refusal, with Kafka's code and message from
+    /// `AclApis.handleCreateAcls` and `AclControlManager.validateNewAcl`.
+    #[test]
+    fn validate_refuses_with_kafka_messages() {
+        type Corrupt = fn(&mut AclCreation);
+        let cases: [(Corrupt, &str); 11] = [
+            (
+                |c| {
+                    c.resource_type = 4;
+                    c.resource_name = "my-cluster".into();
+                },
+                "The only valid name for the CLUSTER resource is kafka-cluster",
+            ),
+            (
+                |c| {
+                    c.resource_type = 4;
+                    c.resource_name.clear();
+                },
+                "The only valid name for the CLUSTER resource is kafka-cluster",
+            ),
+            (|c| c.resource_name.clear(), "Invalid empty resource name"),
+            (|c| c.resource_type = 7, "Invalid resourceType USER"),
+            (|c| c.resource_type = 99, "Invalid resourceType UNKNOWN"),
+            (
+                |c| c.resource_pattern_type = 9,
+                "Invalid patternType UNKNOWN",
+            ),
+            (|c| c.operation = 13, "Invalid operation CREATE_TOKENS"),
+            (|c| c.operation = 42, "Invalid operation UNKNOWN"),
+            (|c| c.permission_type = 5, "Invalid permissionType UNKNOWN"),
+            (
                 |c| c.principal = "alice".into(),
-                "principal must start with User:",
+                "Could not parse principal from `alice` (no colon is present separating the \
+                 principal type from the principal name)",
             ),
             (|c| c.host.clear(), "Host pattern cannot be null or empty"),
         ];
         for (corrupt, want) in cases {
-            let mut c = valid.clone();
+            let mut c = creation("topic-a", "User:alice", OPERATION_READ);
             corrupt(&mut c);
-            assert!(validate(&c).unwrap_err().1 == want, "expected {want:?}");
+            assert!(
+                validate(&c) == Err((codes::INVALID_REQUEST, want.to_owned())),
+                "expected {want:?}"
+            );
+        }
+    }
+
+    /// A resource name with a NUL byte is a valid Kafka resource name.
+    #[test]
+    fn validate_accepts_a_nul_in_the_resource_name() {
+        let c = creation("bad\0name", "User:alice", OPERATION_READ);
+        assert!(validate(&c).map(|entry| entry.resource_name) == Ok("bad\0name".to_owned()));
+    }
+
+    #[test]
+    fn whole_request_element_checks_match_kafka_parse_and_binding_construction() {
+        type Shape = fn(&mut AclCreation);
+        // (shape, has an UNKNOWN element, has a filter-only element)
+        let cases: [(Shape, bool, bool); 10] = [
+            (|_| {}, false, false),
+            (|c| c.resource_type = 0, true, false),
+            (|c| c.resource_pattern_type = 0, true, false),
+            (|c| c.operation = 0, true, false),
+            (|c| c.permission_type = 0, true, false),
+            (|c| c.resource_type = 1, false, true),
+            (|c| c.resource_pattern_type = 1, false, true),
+            (|c| c.resource_pattern_type = 2, false, true),
+            (|c| c.operation = 1, false, true),
+            (|c| c.permission_type = 1, false, true),
+        ];
+        for (shape, unknown, filter_only) in cases {
+            let valid = creation("topic-a", "User:alice", OPERATION_READ);
+            let mut c = valid.clone();
+            shape(&mut c);
+            let creations = [valid, c];
+            assert!(
+                (
+                    has_unknown_element(&creations),
+                    has_filter_only_element(&creations)
+                ) == (unknown, filter_only)
+            );
         }
     }
 
