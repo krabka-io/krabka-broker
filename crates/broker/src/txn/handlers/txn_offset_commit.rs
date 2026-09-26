@@ -35,6 +35,18 @@
 //! failure too: the fenced-request response still carries
 //! `UNKNOWN_TOPIC_OR_PARTITION` on these rows rather than the fencing error.
 //! See [`existence::unknown_partitions`].
+//!
+//! ## After the topic sweep
+//!
+//! The denied and unknown rows keep their own codes on every later exit, as
+//! Kafka merges the group coordinator's answer into a response builder that
+//! already holds them (`KafkaApis.scala:2185`). When no row survives the
+//! sweep, the handler answers those rows and stops, as Kafka does not call
+//! `commitTransactionalOffsets` then (`KafkaApis.scala:2163-2165`): no routing
+//! check, no fencing code, no transaction registration. Otherwise the group
+//! routing check runs first, so a client on the wrong broker gets the
+//! retriable `NOT_COORDINATOR`, then the staged producer identity gate, then
+//! the KIP-447 fencing checks.
 
 use bytes::Bytes;
 use krabka_ids::PartitionIndex;
@@ -47,6 +59,8 @@ mod response;
 
 #[cfg(test)]
 mod integration_tests;
+#[cfg(test)]
+mod ordering_tests;
 #[cfg(test)]
 mod test_support;
 
@@ -142,26 +156,48 @@ pub(crate) async fn handle(
         (denied_topics, unknown_rows)
     };
 
-    if let Some(entry) = broker.txn_coordinator.get(&req.transactional_id)
-        && entry.lock().await.has_staged_producer_identity()
-    {
-        return encode_err_all(version, &req, codes::INVALID_TXN_STATE);
+    // Every response from here on carries the per-row codes the sweep above
+    // settled, and the given code only on the rows that survived it, the way
+    // Kafka merges the coordinator's answer into `responseBuilder`
+    // (`KafkaApis.scala:2185`).
+    let respond = |code: i16| {
+        encode_resp(
+            version,
+            &build_response(&req, code, &denied_topics, &unknown_rows),
+        )
+    };
+
+    // Kafka calls the group coordinator only when at least one row survives
+    // the topic sweep (`KafkaApis.scala:2163-2165`). A request whose every row
+    // is denied or unknown answers those rows and nothing else: no routing
+    // check, no fencing, no transaction registration.
+    let reserved = reserved_keys(&req, &denied_topics, &unknown_rows);
+    if reserved.is_empty() {
+        return respond(codes::NONE);
     }
 
     // 1. Verify that this broker leads the group's offsets partition before
-    //    creating or accessing its actor.
+    //    creating or accessing its actor. This runs ahead of the staged
+    //    producer identity gate below, so a client that reached the wrong
+    //    broker gets the retriable `NOT_COORDINATOR` and re-finds the
+    //    coordinator instead of a fatal `INVALID_TXN_STATE`.
     let (offsets_partition, txnv) = {
         let image = broker.controller.current_image();
         match local_partition_for_group(&image, broker.config.node_id, &req.group_id) {
             Ok(partition) => (partition, crate::txn::version::resolve_txn_version(&image)),
             Err(GroupRoutingError::Unavailable) => {
-                return encode_err_all(version, &req, codes::COORDINATOR_NOT_AVAILABLE);
+                return respond(codes::COORDINATOR_NOT_AVAILABLE);
             }
-            Err(GroupRoutingError::NotCoordinator) => {
-                return encode_err_all(version, &req, codes::NOT_COORDINATOR);
-            }
+            Err(GroupRoutingError::NotCoordinator) => return respond(codes::NOT_COORDINATOR),
         }
     };
+
+    if let Some(entry) = broker.txn_coordinator.get(&req.transactional_id)
+        && entry.lock().await.has_staged_producer_identity()
+    {
+        return respond(codes::INVALID_TXN_STATE);
+    }
+
     let handle = broker
         .group_coordinator
         .find(&req.group_id)
@@ -201,29 +237,16 @@ pub(crate) async fn handle(
             .await
         };
         if let Some(code) = code {
-            return encode_resp(
-                version,
-                &build_response(&req, code, &denied_topics, &unknown_rows),
-            );
+            return respond(code);
         }
     }
 
     // KIP-890 transaction protocol v2 folds AddOffsetsToTxn into v5+
     // TxnOffsetCommit. Enroll the group's offsets partition with the
-    // transaction coordinator before appending the transactional records,
-    // but only when at least one row will actually reach the log — a topic
-    // that is entirely denied or entirely unknown never touches the
-    // transaction.
-    if version >= 5
-        && txnv.verified()
-        && req.topics.iter().any(|topic| {
-            !denied_topics.contains(&topic.name)
-                && topic
-                    .partitions
-                    .iter()
-                    .any(|part| !unknown_rows.contains(&(topic.name.clone(), part.partition_index)))
-        })
-    {
+    // transaction coordinator before appending the transactional records.
+    // At least one row reaches the log here: a request whose every row is
+    // denied or unknown returned above and never touches the transaction.
+    if version >= 5 && txnv.verified() {
         let code = broker
             .txn_coordinator
             .register_offsets_partition(
@@ -235,10 +258,7 @@ pub(crate) async fn handle(
             )
             .await;
         if code != codes::NONE {
-            return encode_resp(
-                version,
-                &build_response(&req, code, &denied_topics, &unknown_rows),
-            );
+            return respond(code);
         }
     }
 
@@ -254,21 +274,11 @@ pub(crate) async fn handle(
     // concurrent `DeleteGroups` either runs first (the actor stops and the
     // reservation fails before anything is durable) or tombstones these keys
     // after the records.
-    let reserved = reserved_keys(&req, &denied_topics, &unknown_rows);
-    if !reserved.is_empty()
-        && reserve_offsets(&handle, req.producer_id, reserved.clone(), true)
-            .await
-            .is_err()
+    if reserve_offsets(&handle, req.producer_id, reserved.clone(), true)
+        .await
+        .is_err()
     {
-        return encode_resp(
-            version,
-            &build_response(
-                &req,
-                codes::COORDINATOR_NOT_AVAILABLE,
-                &denied_topics,
-                &unknown_rows,
-            ),
-        );
+        return respond(codes::COORDINATOR_NOT_AVAILABLE);
     }
     let now_ms = now_millis();
     let appended = match append_txn_batch(
@@ -283,15 +293,10 @@ pub(crate) async fn handle(
     {
         Ok(appended) => appended,
         Err(code) => {
-            if !reserved.is_empty() {
-                // Nothing is durable, so the reservation goes. An actor that
-                // stopped meanwhile took it with it.
-                let _ = reserve_offsets(&handle, req.producer_id, reserved, false).await;
-            }
-            return encode_resp(
-                version,
-                &build_response(&req, code, &denied_topics, &unknown_rows),
-            );
+            // Nothing is durable, so the reservation goes. An actor that
+            // stopped meanwhile took it with it.
+            let _ = reserve_offsets(&handle, req.producer_id, reserved, false).await;
+            return respond(code);
         }
     };
 
@@ -308,19 +313,13 @@ pub(crate) async fn handle(
         && let Err(code) =
             mark_offsets_pending(&handle, req.producer_id, appended, &req.group_id).await
     {
-        return encode_resp(
-            version,
-            &build_response(&req, code, &denied_topics, &unknown_rows),
-        );
+        return respond(code);
     }
 
     // 5. Success — per-(topic, partition) error_code = NONE for allowed,
     //    TOPIC_AUTHORIZATION_FAILED for denied,
     //    UNKNOWN_TOPIC_OR_PARTITION for a row the existence check flagged.
-    encode_resp(
-        version,
-        &build_response(&req, codes::NONE, &denied_topics, &unknown_rows),
-    )
+    respond(codes::NONE)
 }
 
 /// The `(topic, partition)` keys the transactional append will write: every
