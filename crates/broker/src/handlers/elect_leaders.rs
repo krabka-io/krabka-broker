@@ -5,8 +5,8 @@
 //! elects outside the ISR when every ISR member is dead.
 //!
 //! Authorization: `Alter` on `Cluster("kafka-cluster")`. On Deny the
-//! whole request returns `CLUSTER_AUTHORIZATION_FAILED (31)` on every
-//! per-partition row.
+//! whole request answers `CLUSTER_AUTHORIZATION_FAILED (31)` at the top level
+//! (v1+) and on every partition row it named.
 //!
 //! # KFC-9: an unclean election needs two people
 //!
@@ -26,19 +26,17 @@
 //! `[break_glass]` names an approver set, so a stock cluster elects exactly as
 //! it does today.
 
-use std::collections::HashMap;
-
 use bytes::Bytes;
 use krabka_protocol::owned::{
     elect_leaders_request::ElectLeadersRequest,
-    elect_leaders_response::{ElectLeadersResponse, PartitionResult, ReplicaElectionResult},
+    elect_leaders_response::{ElectLeadersResponse, ReplicaElectionResult},
 };
 
 use self::{
     batch::ElectionBatch,
     env::ElectionEnv,
     partition::elect_one,
-    response::{encode_response, encode_whole_request_error},
+    response::{encode_response, whole_request_error},
     targets::resolve_targets,
 };
 use crate::{
@@ -63,6 +61,11 @@ mod tests;
 const WIRE_ELECTION_PREFERRED: i8 = 0;
 const WIRE_ELECTION_UNCLEAN: i8 = 1;
 
+/// The row message of an authorization refusal. Kafka's `AuthHelper` writes
+/// "Request <request> needs ALTER permission.", where `<request>` is the JVM
+/// `toString` of the channel request; krabka names the API in its place.
+const CLUSTER_ALTER_DENIED_MESSAGE: &str = "Request ElectLeaders needs ALTER permission.";
+
 #[tracing::instrument(
     name = "handle_elect_leaders",
     level = "info",
@@ -76,34 +79,16 @@ pub(crate) async fn handle(
     ctx: &RequestContext<'_>,
     api_version: i16,
 ) -> Result<Bytes, crate::error::BrokerError> {
-    // Authorize Cluster Alter — whole-request gate.
     let image = broker.controller.current_image();
-    if cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx) {
-        return encode_whole_request_error(
-            &req,
-            codes::CLUSTER_AUTHORIZATION_FAILED,
-            "elect-leaders denied",
-            api_version,
-        );
-    }
-
-    // Decode election_type discriminant.
-    let election = match req.election_type {
-        WIRE_ELECTION_PREFERRED => ElectionType::Preferred,
-        WIRE_ELECTION_UNCLEAN => ElectionType::Unclean,
-        _ => {
-            return encode_whole_request_error(
-                &req,
-                codes::INVALID_REQUEST,
-                "unknown election_type",
-                api_version,
-            );
-        }
+    let denied = cluster_alter_denied(broker.config.authorizer.as_ref(), &image, ctx);
+    let election = match admit(&req, denied) {
+        Ok(election) => election,
+        Err(refusal) => return encode_response(&refusal, api_version),
     };
 
     // Resolve target partition set:
     //   topic_partitions = None      → every partition in the image
-    //   Some([{topic, []}])          → every partition of that topic
+    //   Some([{topic, []}])          → no partition of that topic
     //   Some([{topic, [p, q, ...]}]) → exact set
     let targets = resolve_targets(&image, &req);
 
@@ -128,25 +113,29 @@ pub(crate) async fn handle(
     // Kafka answers such a request only with the partitions it acted on --
     // `ReplicationControlManager.electLeaders` drops every
     // `ELECTION_NOT_NEEDED` row when `topicPartitions` is null, because "we do
-    // not return partitions which already have the desired leader". Without
-    // this, `kafka-leader-election --all-topic-partitions` prints a
-    // "valid replica already elected" line for every partition in the cluster,
-    // internal topics included, where Kafka prints nothing.
+    // not return partitions which already have the desired leader". It still
+    // answers a row for every topic, with an empty partition list when nothing
+    // in it moved. Without the drop, `kafka-leader-election
+    // --all-topic-partitions` prints a "valid replica already elected" line for
+    // every partition in the cluster, internal topics included, where Kafka
+    // prints nothing.
     let elect_all_partitions = req.topic_partitions.is_none();
-    let mut by_topic: HashMap<String, Vec<PartitionResult>> = HashMap::new();
+    let mut by_topic: Vec<ReplicaElectionResult> = Vec::with_capacity(targets.len());
     let mut batch = ElectionBatch::default();
-    for (topic, partitions) in &targets {
-        let mut rows = Vec::with_capacity(partitions.len());
-        for &p in partitions {
-            let row = elect_one(&env, &mut batch, topic, p).await;
+    for (topic, partitions) in targets {
+        let mut partition_result = Vec::with_capacity(partitions.len());
+        for p in partitions {
+            let row = elect_one(&env, &mut batch, &topic, p).await;
             if elect_all_partitions && row.error_code == codes::ELECTION_NOT_NEEDED {
                 continue;
             }
-            rows.push(row);
+            partition_result.push(row);
         }
-        if !elect_all_partitions || !rows.is_empty() {
-            by_topic.insert(topic.clone(), rows);
-        }
+        by_topic.push(ReplicaElectionResult {
+            topic,
+            partition_result,
+            ..Default::default()
+        });
     }
 
     // KIP-966: an election decides which replicas are still known to hold
@@ -180,8 +169,8 @@ pub(crate) async fn handle(
         };
         if let Some((code, failure)) = failure {
             tracing::warn!(error = %failure, "elect-leaders submit refused or failed");
-            for rows in by_topic.values_mut() {
-                for r in rows.iter_mut() {
+            for topic in &mut by_topic {
+                for r in &mut topic.partition_result {
                     if r.error_code == 0 {
                         r.error_code = code;
                         r.error_message = Some(failure.clone());
@@ -205,34 +194,53 @@ pub(crate) async fn handle(
         "ElectLeaders",
         by_topic
             .iter()
-            .flat_map(|(topic, rows)| {
-                rows.iter()
+            .flat_map(|topic| {
+                topic
+                    .partition_result
+                    .iter()
                     .filter(|row| row.error_code == codes::NONE)
                     .map(move |row| {
                         crate::handlers::audit_resource(
                             "Partition",
-                            format!("{topic}-{}", row.partition_id),
+                            format!("{}-{}", topic.topic, row.partition_id),
                         )
                     })
             })
             .collect(),
     );
 
-    // Build response.
-    let replica_election_results: Vec<ReplicaElectionResult> = by_topic
-        .into_iter()
-        .map(|(topic, partition_result)| ReplicaElectionResult {
-            topic,
-            partition_result,
-            ..Default::default()
-        })
-        .collect();
-
     let resp = ElectLeadersResponse {
         throttle_time_ms: 0,
-        error_code: 0,
-        replica_election_results,
+        error_code: codes::NONE,
+        replica_election_results: by_topic,
         ..Default::default()
     };
     encode_response(&resp, api_version)
+}
+
+/// Admit a request, or answer the refusal of the whole of it.
+///
+/// Kafka's `ControllerApis.handleElectLeaders` authorizes `Alter` on the
+/// cluster first and throws `ClusterAuthorizationException`; the controller
+/// then reads the election type and throws `InvalidRequestException` for one
+/// it does not know. Either exception becomes
+/// `ElectLeadersRequest.getErrorResponse`, which [`whole_request_error`]
+/// mirrors.
+fn admit(req: &ElectLeadersRequest, denied: bool) -> Result<ElectionType, ElectLeadersResponse> {
+    if denied {
+        return Err(whole_request_error(
+            req,
+            codes::CLUSTER_AUTHORIZATION_FAILED,
+            CLUSTER_ALTER_DENIED_MESSAGE,
+        ));
+    }
+    match req.election_type {
+        WIRE_ELECTION_PREFERRED => Ok(ElectionType::Preferred),
+        WIRE_ELECTION_UNCLEAN => Ok(ElectionType::Unclean),
+        unknown => Err(whole_request_error(
+            req,
+            codes::INVALID_REQUEST,
+            &format!("Unknown election type {unknown}"),
+        )),
+    }
 }

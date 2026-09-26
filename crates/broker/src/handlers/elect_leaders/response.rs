@@ -2,11 +2,14 @@
 //! election failure carries, and the encoder both the whole-request refusals
 //! and the successful path share.
 //!
-//! Kafka reports an `ElectLeaders` failure on the partition row rather than at
-//! the top level, so even a request the broker refuses outright answers with
-//! `error_code` 0 and stamps the real code on every row the client asked for.
+//! A refusal of the whole request (authorization, an unknown election type)
+//! answers the way Kafka's `ElectLeadersRequest.getErrorResponse` does: the
+//! top-level `error_code` (v1+) carries the refusal, and so does every
+//! partition row the client named. A request with `topic_partitions = null`
+//! named no row, so its refusal carries none.
 
 use bytes::Bytes;
+use krabka_metadata::MetadataImage;
 use krabka_protocol::{
     Encode,
     owned::{
@@ -17,78 +20,94 @@ use krabka_protocol::{
 
 use crate::{codes, leader_election::ElectError};
 
-pub(super) fn elect_error_to_wire(err: ElectError) -> (i16, &'static str) {
+/// Kafka's default `Errors.ELECTION_NOT_NEEDED` message, which
+/// `new ApiError(Errors.ELECTION_NOT_NEEDED)` puts on the row.
+const ELECTION_NOT_NEEDED_MESSAGE: &str = "Leader election not needed for topic partition.";
+
+/// Kafka's default `Errors.PREFERRED_LEADER_NOT_AVAILABLE` message.
+const PREFERRED_LEADER_NOT_AVAILABLE_MESSAGE: &str = "The preferred leader was not available.";
+
+/// Kafka's default `Errors.ELIGIBLE_LEADERS_NOT_AVAILABLE` message.
+const ELIGIBLE_LEADERS_NOT_AVAILABLE_MESSAGE: &str =
+    "Eligible topic partition leaders are not available.";
+
+/// The code and message of the row for one partition whose election failed.
+///
+/// The messages follow `ReplicationControlManager.electLeader`: a missing
+/// topic and a missing partition read differently, and every other refusal
+/// carries the default text of its `Errors` constant.
+pub(super) fn elect_error_to_wire(
+    err: ElectError,
+    image: &MetadataImage,
+    topic: &str,
+    partition: i32,
+) -> (i16, String) {
     match err {
-        ElectError::UnknownTopicOrPartition => (
-            codes::UNKNOWN_TOPIC_OR_PARTITION,
-            "unknown topic or partition",
-        ),
-        ElectError::PreferredAlreadyLeader => (
-            codes::ELECTION_NOT_NEEDED,
-            "preferred replica is already leader",
-        ),
-        ElectError::ElectionNotNeeded => (
-            codes::ELECTION_NOT_NEEDED,
-            "isr still has a live member; unclean election not needed",
-        ),
-        ElectError::PreferredNotInIsr => (
-            codes::PREFERRED_LEADER_NOT_AVAILABLE,
-            "preferred replica not in ISR",
-        ),
-        ElectError::PreferredNotAlive => (
-            codes::PREFERRED_LEADER_NOT_AVAILABLE,
-            "preferred replica not alive",
-        ),
-        ElectError::PreferredIsWitness => (
-            codes::PREFERRED_LEADER_NOT_AVAILABLE,
-            "preferred replica is a witness and cannot lead",
-        ),
-        ElectError::NoEligibleReplica => {
-            (codes::ELIGIBLE_LEADERS_NOT_AVAILABLE, "no alive replica")
+        ElectError::UnknownTopicOrPartition => {
+            let message = if image.topic(topic).is_none() {
+                format!("No such topic as {topic}")
+            } else {
+                format!("No such partition as {topic}-{partition}")
+            };
+            (codes::UNKNOWN_TOPIC_OR_PARTITION, message)
         }
+        ElectError::PreferredAlreadyLeader | ElectError::ElectionNotNeeded => (
+            codes::ELECTION_NOT_NEEDED,
+            ELECTION_NOT_NEEDED_MESSAGE.to_owned(),
+        ),
+        ElectError::PreferredNotInIsr
+        | ElectError::PreferredNotAlive
+        | ElectError::PreferredIsWitness => (
+            codes::PREFERRED_LEADER_NOT_AVAILABLE,
+            PREFERRED_LEADER_NOT_AVAILABLE_MESSAGE.to_owned(),
+        ),
+        ElectError::NoEligibleReplica => (
+            codes::ELIGIBLE_LEADERS_NOT_AVAILABLE,
+            ELIGIBLE_LEADERS_NOT_AVAILABLE_MESSAGE.to_owned(),
+        ),
         ElectError::EpochExhausted => (
             codes::INVALID_REQUEST,
-            "partition metadata epoch is exhausted",
+            "partition metadata epoch is exhausted".to_owned(),
         ),
     }
 }
 
-pub(super) fn encode_whole_request_error(
+/// The response to a request refused as a whole.
+///
+/// Mirrors `ElectLeadersRequest.getErrorResponse`: the top-level code is the
+/// refusal, and every named partition row carries the same code and message.
+/// v0 has no top-level field, so the encoder drops it and the rows alone carry
+/// the refusal.
+pub(super) fn whole_request_error(
     req: &ElectLeadersRequest,
     code: i16,
     msg: &str,
-    api_version: i16,
-) -> Result<Bytes, crate::error::BrokerError> {
-    // Build a response where every requested (topic, partition) row
-    // carries the whole-request error code. Top-level error_code = 0
-    // since the per-row codes carry the failure (matches Kafka).
-    let results: Vec<ReplicaElectionResult> = match &req.topic_partitions {
-        None => vec![],
-        Some(list) => list
-            .iter()
-            .map(|tp| ReplicaElectionResult {
-                topic: tp.topic.clone(),
-                partition_result: tp
-                    .partitions
-                    .iter()
-                    .map(|&p| PartitionResult {
-                        partition_id: p,
-                        error_code: code,
-                        error_message: Some(msg.into()),
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            })
-            .collect(),
-    };
-    let resp = ElectLeadersResponse {
+) -> ElectLeadersResponse {
+    let results: Vec<ReplicaElectionResult> = req
+        .topic_partitions
+        .iter()
+        .flatten()
+        .map(|tp| ReplicaElectionResult {
+            topic: tp.topic.clone(),
+            partition_result: tp
+                .partitions
+                .iter()
+                .map(|&p| PartitionResult {
+                    partition_id: p,
+                    error_code: code,
+                    error_message: Some(msg.into()),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        })
+        .collect();
+    ElectLeadersResponse {
         throttle_time_ms: 0,
-        error_code: 0,
+        error_code: code,
         replica_election_results: results,
         ..Default::default()
-    };
-    encode_response(&resp, api_version)
+    }
 }
 
 pub(super) fn encode_response<R: Encode>(
