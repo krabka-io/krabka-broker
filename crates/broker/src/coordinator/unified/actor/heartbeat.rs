@@ -57,17 +57,59 @@ pub(super) async fn handle_actor_heartbeat(
     regex_authorized_topics: &HashSet<String>,
     reply: oneshot::Sender<ConsumerGroupHeartbeatResponse>,
 ) -> bool {
-    if group.is_classic() {
-        let convertible = group
-            .as_classic()
-            .is_some_and(migration::classic_is_convertible);
-        if !services.config.migration_policy.allows_upgrade() || !convertible {
+    if let Some(classic) = group.as_classic() {
+        // Kafka's `getOrMaybeCreateConsumerGroup`: only a joining heartbeat
+        // (epoch 0) may create a consumer group over a classic one.
+        let refusal = if request.member_epoch != 0 {
+            Some(format!("Group {} is not a consumer group.", group.group_id))
+        } else if classic.members.is_empty() {
+            None
+        } else {
+            migration::validate_online_upgrade(
+                classic,
+                services.config.migration_policy.allows_upgrade(),
+                services.config.max_size,
+            )
+            .err()
+        };
+        if let Some(message) = refusal {
             let _ = reply.send(ConsumerGroupHeartbeatResponse {
                 error_code: codes::GROUP_ID_NOT_FOUND,
+                error_message: Some(message),
                 ..Default::default()
             });
             return true;
         }
+    }
+    if group
+        .as_classic()
+        .is_some_and(|classic| classic.members.is_empty())
+    {
+        // `maybeDeleteEmptyClassicGroup`: an empty classic group, such as one
+        // that only holds committed offsets, is deleted whatever the policy
+        // and protocol type, and a new consumer group takes its id. The
+        // committed offsets stay with the group id.
+        let batch = super::retention::tombstone_batch(
+            &group.group_id,
+            &[],
+            Some(&group.kind),
+            chrono_now_ms(),
+        );
+        if services
+            .offsets_log
+            .append(&group.group_id, batch)
+            .await
+            .is_err()
+        {
+            let _ = reply.send(ConsumerGroupHeartbeatResponse {
+                error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
+                ..Default::default()
+            });
+            return true;
+        }
+        *group.kind_mut() = GroupKind::Consumer(GroupState::new(group.group_id.clone()));
+    }
+    if group.is_classic() {
         let classic = group.as_classic().expect("classic kind");
         let new_state = migration::convert_classic_to_consumer(classic);
         let pending = migration::upgrade_pending_records(&new_state);
@@ -166,7 +208,7 @@ pub(crate) fn step_heartbeat(
         .is_some_and(|name| !config.assignor_enabled(name))
     {
         return HeartbeatStep {
-            response: error_resp(codes::UNSUPPORTED_ASSIGNOR, config),
+            response: error_resp(codes::UNSUPPORTED_ASSIGNOR),
             pending: PendingRecords::default(),
         };
     }
@@ -176,16 +218,13 @@ pub(crate) fn step_heartbeat(
     if state.members.len() >= config.max_size
         && (req.member_id.is_empty() || !state.members.contains_key(&req.member_id))
     {
-        return rejected(
-            HeartbeatError {
-                code: codes::GROUP_MAX_SIZE_REACHED,
-                message: format!(
-                    "The consumer group has reached its maximum capacity of {} members.",
-                    config.max_size
-                ),
-            },
-            config,
-        );
+        return rejected(HeartbeatError {
+            code: codes::GROUP_MAX_SIZE_REACHED,
+            message: format!(
+                "The consumer group has reached its maximum capacity of {} members.",
+                config.max_size
+            ),
+        });
     }
 
     // KIP-848 (finalized): the consumer generates its own member UUID and
@@ -195,7 +234,7 @@ pub(crate) fn step_heartbeat(
     let member_id = first_join_member_id(&req.member_id);
     let resolved = match resolve_member(state, req, &member_id) {
         Ok(resolved) => resolved,
-        Err(error) => return rejected(error, config),
+        Err(error) => return rejected(error),
     };
 
     // ─── First-join path ─────────────────────────────────────────
@@ -204,7 +243,7 @@ pub(crate) fn step_heartbeat(
             Ok(m) => m,
             Err(message) => {
                 return HeartbeatStep {
-                    response: invalid_regex_resp(message, config),
+                    response: invalid_regex_resp(message),
                     pending: PendingRecords::default(),
                 };
             }
@@ -218,7 +257,7 @@ pub(crate) fn step_heartbeat(
         state.reconcile_member(&member_id, &owned);
         state.track_rebalance_timeout(&member_id, now);
         let pending = snapshot_pending_after_change(state, std::slice::from_ref(&member_id), true);
-        let response = build_assignment_resp(state, &member_id, config);
+        let response = build_assignment_resp(state, &member_id, config, true);
         return HeartbeatStep { response, pending };
     }
 
@@ -226,6 +265,10 @@ pub(crate) fn step_heartbeat(
     // Kafka's `getOrMaybeSubscribeStaticConsumerGroupMember`: the new member
     // takes the released member's subscription, target and assignment under
     // its own id, at epoch 0, and the released member goes.
+    let assigned_before = state
+        .members
+        .get(&member_id)
+        .map(|member| member.assigned_partitions.clone());
     let replaced = match &resolved {
         Resolved::Replaces { previous } => {
             if let Some(check) = req
@@ -234,7 +277,7 @@ pub(crate) fn step_heartbeat(
                 .and_then(|pattern| check_subscribed_topic_regex(pattern).err())
             {
                 return HeartbeatStep {
-                    response: invalid_regex_resp(check, config),
+                    response: invalid_regex_resp(check),
                     pending: PendingRecords::default(),
                 };
             }
@@ -268,7 +311,7 @@ pub(crate) fn step_heartbeat(
         Ok(changed) => changed,
         Err(message) => {
             return HeartbeatStep {
-                response: invalid_regex_resp(message, config),
+                response: invalid_regex_resp(message),
                 pending: PendingRecords::default(),
             };
         }
@@ -286,8 +329,24 @@ pub(crate) fn step_heartbeat(
     if let Some(previous) = replaced {
         replacement_records(state, &mut pending, &previous, &member_id);
     }
-    let response = build_assignment_resp(state, &member_id, config);
+    // Kafka sends the assignment only on a join (epoch 0), on a full request,
+    // or when the member's assigned partitions changed.
+    let assignment_changed = assigned_before.as_ref()
+        != state
+            .members
+            .get(&member_id)
+            .map(|member| &member.assigned_partitions);
+    let include_assignment = req.member_epoch == 0 || is_full_request(req) || assignment_changed;
+    let response = build_assignment_resp(state, &member_id, config, include_assignment);
     HeartbeatStep { response, pending }
+}
+
+/// Kafka's `isFullRequest`: a member sends every non-optional field when it
+/// joins, rejoins, or recovers from an error.
+fn is_full_request(req: &ConsumerGroupHeartbeatRequest) -> bool {
+    req.rebalance_timeout_ms != -1
+        && (req.subscribed_topic_names.is_some() || req.subscribed_topic_regex.is_some())
+        && req.topic_partitions.is_some()
 }
 
 /// Adds the records of a static replacement that the snapshot does not hold:
@@ -345,7 +404,7 @@ fn leave_step(
 ) -> HeartbeatStep {
     let member_id = match resolve_leaving_member(state, req) {
         Ok(member) => member.member_id.clone(),
-        Err(error) => return rejected(error, config),
+        Err(error) => return rejected(error),
     };
     if req.instance_id.is_some() && req.member_epoch == LEAVE_GROUP_STATIC_MEMBER_EPOCH {
         state.release_static_member(&member_id);
@@ -361,7 +420,7 @@ fn leave_step(
         return HeartbeatStep {
             response: ConsumerGroupHeartbeatResponse {
                 member_id: Some(member_id),
-                ..base_resp(codes::NONE, LEAVE_GROUP_STATIC_MEMBER_EPOCH, config)
+                ..base_resp(codes::NONE, LEAVE_GROUP_STATIC_MEMBER_EPOCH)
             },
             pending,
         };
@@ -375,18 +434,18 @@ fn leave_step(
     HeartbeatStep {
         response: ConsumerGroupHeartbeatResponse {
             member_id: Some(req.member_id.clone()),
-            ..base_resp(codes::NONE, req.member_epoch, config)
+            ..base_resp(codes::NONE, req.member_epoch)
         },
         pending,
     }
 }
 
 /// The error response of a refused heartbeat, with Kafka's message.
-fn rejected(error: HeartbeatError, config: &NextGenConfig) -> HeartbeatStep {
+fn rejected(error: HeartbeatError) -> HeartbeatStep {
     HeartbeatStep {
         response: ConsumerGroupHeartbeatResponse {
             error_message: Some(error.message),
-            ..error_resp(error.code, config)
+            ..error_resp(error.code)
         },
         pending: PendingRecords::default(),
     }
@@ -421,38 +480,38 @@ async fn handle_heartbeat(
     Ok(step.response)
 }
 
-fn base_resp(
-    error_code: ErrorCode,
-    member_epoch: i32,
-    config: &NextGenConfig,
-) -> ConsumerGroupHeartbeatResponse {
+/// A response with no heartbeat interval and no assignment: Kafka's error
+/// responses carry only the error code and message, and its leave responses
+/// only the member id and epoch.
+fn base_resp(error_code: ErrorCode, member_epoch: i32) -> ConsumerGroupHeartbeatResponse {
     ConsumerGroupHeartbeatResponse {
         error_code,
         member_epoch,
-        heartbeat_interval_ms: i32::try_from(config.heartbeat_interval.as_millis())
-            .unwrap_or(FALLBACK_HEARTBEAT_INTERVAL_MS),
         ..Default::default()
     }
 }
 
-fn error_resp(error_code: ErrorCode, config: &NextGenConfig) -> ConsumerGroupHeartbeatResponse {
-    base_resp(error_code, 0, config)
+fn error_resp(error_code: ErrorCode) -> ConsumerGroupHeartbeatResponse {
+    base_resp(error_code, 0)
 }
 
 /// The `INVALID_REGULAR_EXPRESSION` (128) rejection Kafka answers to a
 /// heartbeat whose `SubscribedTopicRegex` does not compile. Kafka carries the
 /// exception's message in `error_message`, so do the same.
-fn invalid_regex_resp(message: String, config: &NextGenConfig) -> ConsumerGroupHeartbeatResponse {
+fn invalid_regex_resp(message: String) -> ConsumerGroupHeartbeatResponse {
     ConsumerGroupHeartbeatResponse {
         error_message: Some(message),
-        ..error_resp(codes::INVALID_REGULAR_EXPRESSION, config)
+        ..error_resp(codes::INVALID_REGULAR_EXPRESSION)
     }
 }
 
+/// The success response of `member_id`, carrying its assignment only when
+/// `include_assignment` is set.
 fn build_assignment_resp(
     state: &GroupState,
     member_id: &str,
     config: &NextGenConfig,
+    include_assignment: bool,
 ) -> ConsumerGroupHeartbeatResponse {
     let m = state
         .members
@@ -464,9 +523,9 @@ fn build_assignment_resp(
     // another member until that member revokes it. Returning the current
     // assignment (`assigned_partitions`) rather than the target is what prevents
     // two members from owning the same partition during a handoff.
-    let target_partitions = m.assigned_partitions.clone();
-    let assignment = Some(RespAssignment {
-        topic_partitions: target_partitions
+    let assignment = include_assignment.then(|| RespAssignment {
+        topic_partitions: m
+            .assigned_partitions
             .iter()
             .map(
                 |(tid, parts)| krabka_protocol::owned::common::consumer_group_heartbeat_response::topic_partitions::TopicPartitions {
@@ -483,7 +542,7 @@ fn build_assignment_resp(
         member_id: Some(member_id.into()),
         member_epoch: m.member_epoch,
         heartbeat_interval_ms: i32::try_from(config.heartbeat_interval.as_millis())
-            .unwrap_or(5_000),
+            .unwrap_or(FALLBACK_HEARTBEAT_INTERVAL_MS),
         assignment,
         ..Default::default()
     }

@@ -49,6 +49,11 @@ pub(super) async fn maybe_downgrade(
         // A native consumer member is still present: the group stays next-gen.
         return Ok(false);
     }
+    if state.members.len() > config.classic_max_size {
+        // Kafka's `validateOnlineDowngradeWithFencedMembers`: a group larger
+        // than `group.max.size` stays a consumer group.
+        return Ok(false);
+    }
 
     let image = metadata.snapshot();
 

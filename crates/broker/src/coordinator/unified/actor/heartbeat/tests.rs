@@ -15,8 +15,8 @@ use crate::coordinator::unified::{
         GroupActorMessage,
         member_state::build_member,
         test_support::{
-            StaticMetadata, empty_metadata, make_coordinator, make_coordinator_with_topic, rpc,
-            seed_classic_member, subscription_blob,
+            StaticMetadata, empty_metadata, make_coordinator, make_coordinator_with_topic,
+            make_coordinator_with_topic_policy, rpc, seed_classic_member, subscription_blob,
         },
     },
     offsets_log::fake::InMemoryOffsetsLog,
@@ -169,7 +169,12 @@ fn identity_ok(
     ConsumerGroupHeartbeatResponse {
         member_id: Some(member_id.into()),
         member_epoch,
-        heartbeat_interval_ms: heartbeat_interval_ms(),
+        // Kafka's leave responses carry only the member id and epoch.
+        heartbeat_interval_ms: if member_epoch < 0 {
+            0
+        } else {
+            heartbeat_interval_ms()
+        },
         assignment: partitions.map(|partitions| RespAssignment {
             topic_partitions: vec![TopicPartitions {
                 topic_id: IDENTITY_TOPIC,
@@ -186,7 +191,6 @@ fn identity_error(error_code: i16, message: &str) -> ConsumerGroupHeartbeatRespo
     ConsumerGroupHeartbeatResponse {
         error_code,
         error_message: Some(message.into()),
-        heartbeat_interval_ms: heartbeat_interval_ms(),
         ..Default::default()
     }
 }
@@ -834,4 +838,121 @@ fn step_heartbeat_first_join_targets_all_partitions() {
     check!(step.response.member_epoch == 1);
     check!(group.target.per_member["m1"][&topic_id].clone() == vec![0, 1]);
     check!(!step.pending.is_empty());
+}
+
+/// Kafka's `getOrMaybeCreateConsumerGroup` for a heartbeat that meets a
+/// classic group: (label, policy, classic group members, protocol type,
+/// heartbeat epoch) to (error code, error message, classic k2 tombstone
+/// written). An empty classic group, such as one that only holds committed
+/// offsets, is replaced whatever the policy and protocol type; a non-empty
+/// one goes through `validateOnlineUpgrade`; only a joining heartbeat may
+/// create a consumer group.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_heartbeat_replaces_or_upgrades_a_classic_group_as_kafka_does() {
+    use crate::coordinator::unified::{
+        classic_state::{ClassicGroup as ClassicState, Member},
+        config::ConsumerGroupMigrationPolicy as Policy,
+        group::{CoordinatorGroup, GroupKind},
+    };
+
+    let disabled = "Cannot upgrade classic group g to consumer group because online upgrade is \
+                    disabled.";
+    let rows = [
+        (
+            "offset-only group, policy disabled",
+            Policy::Disabled,
+            0,
+            None,
+            0,
+            (codes::NONE, None, true),
+        ),
+        (
+            "empty connect group",
+            Policy::Bidirectional,
+            0,
+            Some("connect"),
+            0,
+            (codes::NONE, None, true),
+        ),
+        (
+            "live group, policy disabled",
+            Policy::Disabled,
+            1,
+            Some("consumer"),
+            0,
+            (codes::GROUP_ID_NOT_FOUND, Some(disabled), false),
+        ),
+        (
+            "live group, upgrade allowed",
+            Policy::Upgrade,
+            1,
+            Some("consumer"),
+            0,
+            (codes::NONE, None, true),
+        ),
+        (
+            "offset-only group, steady heartbeat",
+            Policy::Bidirectional,
+            0,
+            None,
+            3,
+            (
+                codes::GROUP_ID_NOT_FOUND,
+                Some("Group g is not a consumer group."),
+                false,
+            ),
+        ),
+    ];
+    for (label, policy, members, protocol_type, epoch, want) in rows {
+        let (coord, log) = make_coordinator_with_topic_policy("t", 1, policy);
+        let mut classic = ClassicState::new("g");
+        classic.protocol_type = protocol_type.map(String::from);
+        for index in 0..members {
+            classic.add_member(Member::new(
+                format!("classic-{index}"),
+                "client",
+                "127.0.0.1",
+                std::time::Duration::from_secs(30),
+                std::time::Duration::from_mins(1),
+                vec![("range".into(), subscription_blob(&["t"]))],
+            ));
+        }
+        classic.generation_id = 1;
+        coord.seed_classic(
+            "g",
+            Box::new(CoordinatorGroup::seeded(
+                "g",
+                GroupKind::Classic(classic),
+                HashMap::new(),
+            )),
+        );
+        let handle = coord.find("g").expect("seeded classic actor");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        handle
+            .tx
+            .send(GroupActorMessage::Heartbeat {
+                request: ConsumerGroupHeartbeatRequest {
+                    group_id: "g".into(),
+                    member_id: "native".into(),
+                    member_epoch: epoch,
+                    subscribed_topic_names: Some(vec!["t".into()]),
+                    rebalance_timeout_ms: 60_000,
+                    topic_partitions: Some(vec![]),
+                    ..Default::default()
+                },
+                client_id: "client-a".into(),
+                client_host: String::new(),
+                regex_authorized_topics: HashSet::new(),
+                reply: tx,
+            })
+            .await
+            .unwrap();
+        let response = rx.await.unwrap();
+        let got = (
+            response.error_code,
+            response.error_message.as_deref(),
+            log.has_classic_group_metadata_tombstone("g").await,
+        );
+        check!(got == want, "{label}");
+    }
 }

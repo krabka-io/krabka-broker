@@ -17,13 +17,15 @@ use krabka_protocol::owned::{
 const UNSUPPORTED_VERSION: i16 = 35;
 
 fn heartbeat(group: &str) -> ConsumerGroupHeartbeatRequest {
-    // A well-formed first (join) heartbeat: empty member_id, member_epoch 0,
+    // A well-formed first (join) heartbeat: a client-generated member_id, member_epoch 0,
     // a rebalance timeout, and a subscription. Mirrors the field set used in
     // consumer_group_next_gen.rs. The feature gate is the first check after
     // decode, so this reaches it regardless of whether the topic exists.
     ConsumerGroupHeartbeatRequest {
         group_id: group.into(),
+        member_id: uuid::Uuid::new_v4().to_string(),
         member_epoch: 0,
+        topic_partitions: Some(vec![]),
         rebalance_timeout_ms: 30_000,
         subscribed_topic_names: Some(vec!["t".into()]),
         ..Default::default()

@@ -42,12 +42,21 @@ async fn create_topic(client: &Client, topic: &str, partitions: i32) {
     );
 }
 
+/// A heartbeat Kafka accepts at v1: an empty `member_id` becomes a
+/// client-generated id, as a KIP-848 consumer sends it, and a join (epoch 0)
+/// reports its empty owned partitions.
 fn heartbeat(group: &str, member_id: &str, epoch: i32) -> ConsumerGroupHeartbeatRequest {
+    let member_id = if member_id.is_empty() {
+        uuid::Uuid::new_v4().to_string()
+    } else {
+        member_id.into()
+    };
     ConsumerGroupHeartbeatRequest {
         group_id: group.into(),
-        member_id: member_id.into(),
+        member_id,
         member_epoch: epoch,
         rebalance_timeout_ms: 60_000,
+        topic_partitions: (epoch == 0).then(Vec::new),
         ..Default::default()
     }
 }
@@ -107,23 +116,47 @@ async fn two_members_split_partitions() {
     a.subscribed_topic_names = Some(vec!["t2".into()]);
     let ra = client.send(a).await.unwrap();
     assert!(ra.error_code == 0, "A join failed: {:?}", ra.error_code);
-    let mid_a = ra.member_id.unwrap();
+    let mid_a = ra.member_id.clone().unwrap();
 
     let mut b = heartbeat("g2", "", 0);
     b.subscribed_topic_names = Some(vec!["t2".into()]);
     let rb = client.send(b).await.unwrap();
     assert!(rb.error_code == 0, "B join failed: {:?}", rb.error_code);
-    let mid_b = rb.member_id.unwrap();
+    let mid_b = rb.member_id.clone().unwrap();
     let b_epoch = rb.member_epoch;
 
     // A re-heartbeats at its own epoch (1) to learn the rebalanced assignment
     // and revoke the partitions B's target needs. B's join bumped the group
     // epoch to 2 and updated A's target, but A's stored member_epoch is still
     // 1 — we must heartbeat at that epoch.
+    // Each re-heartbeat reports what the member owns, so it is Kafka's full
+    // request and the response carries the assignment.
+    let owned = |resp: &krabka_protocol::owned::consumer_group_heartbeat_response::ConsumerGroupHeartbeatResponse| {
+        resp.assignment.as_ref().map(|assignment| {
+            assignment
+                .topic_partitions
+                .iter()
+                .map(|topic| {
+                    krabka_protocol::owned::consumer_group_heartbeat_request::TopicPartitions {
+                        topic_id: topic.topic_id,
+                        partitions: topic.partitions.clone(),
+                        ..Default::default()
+                    }
+                })
+                .collect()
+        })
+    };
     let mut a3 = heartbeat("g2", &mid_a, ra.member_epoch);
     a3.subscribed_topic_names = Some(vec!["t2".into()]);
+    a3.topic_partitions = owned(&ra);
     let ra3 = client.send(a3).await.unwrap();
     assert!(ra3.error_code == 0, "A re-hb failed: {:?}", ra3.error_code);
+    // A acknowledges the revocation by reporting only what it now owns.
+    let mut a4 = heartbeat("g2", &mid_a, ra3.member_epoch);
+    a4.subscribed_topic_names = Some(vec!["t2".into()]);
+    a4.topic_partitions = owned(&ra3);
+    let ra4 = client.send(a4).await.unwrap();
+    assert!(ra4.error_code == 0, "A ack failed: {:?}", ra4.error_code);
 
     // B re-heartbeats to acquire the partitions A just released. Per KIP-848 the
     // coordinator withholds a partition from its new owner until the previous
@@ -132,6 +165,7 @@ async fn two_members_split_partitions() {
     // that A's re-heartbeat above revoked them.
     let mut b3 = heartbeat("g2", &mid_b, b_epoch);
     b3.subscribed_topic_names = Some(vec!["t2".into()]);
+    b3.topic_partitions = owned(&rb);
     let rb3 = client.send(b3).await.unwrap();
     assert!(rb3.error_code == 0, "B re-hb failed: {:?}", rb3.error_code);
 
@@ -166,24 +200,44 @@ async fn classic_group_locked_against_next_gen() {
     );
     create_topic(&client, "t3", 2).await;
 
-    let join = JoinGroupRequest {
+    // A live classic group that does not use the consumer embedded protocol.
+    // Kafka's `validateOnlineUpgrade` refuses to upgrade it; an empty classic
+    // group would be replaced instead.
+    let join = |member_id: String| JoinGroupRequest {
         group_id: "g3".into(),
         session_timeout_ms: 30_000,
         rebalance_timeout_ms: 60_000,
-        member_id: String::new(),
-        protocol_type: "consumer".into(),
+        member_id,
+        protocol_type: "connect".into(),
+        protocols: vec![
+            krabka_protocol::owned::join_group_request::JoinGroupRequestProtocol {
+                name: "default".into(),
+                ..Default::default()
+            },
+        ],
         ..Default::default()
     };
-    let _ = client.send(join).await.unwrap();
+    let required = client.send(join(String::new())).await.unwrap();
+    let joined = client.send(join(required.member_id)).await.unwrap();
+    assert!(joined.error_code == 0, "{joined:?}");
 
     let mut req = heartbeat("g3", "", 0);
     req.subscribed_topic_names = Some(vec!["t3".into()]);
     let resp = client.send(req).await.unwrap();
-    assert!(resp.error_code == krabka_broker::codes::GROUP_ID_NOT_FOUND);
+    assert!(
+        (resp.error_code, resp.error_message.as_deref())
+            == (
+                krabka_broker::codes::GROUP_ID_NOT_FOUND,
+                Some(
+                    "Cannot upgrade classic group g3 to consumer group because the group does \
+                     not use the consumer embedded protocol."
+                )
+            )
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn kill_switch_returns_group_id_not_found() {
+async fn kill_switch_returns_unsupported_version() {
     let dir = tempfile::TempDir::new().unwrap();
     let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
     config.next_gen_consumer_group.rebalance_protocols =
@@ -202,7 +256,7 @@ async fn kill_switch_returns_group_id_not_found() {
     let mut req = heartbeat("g4", "", 0);
     req.subscribed_topic_names = Some(vec!["t".into()]);
     let resp = client.send(req).await.unwrap();
-    assert!(resp.error_code == krabka_broker::codes::GROUP_ID_NOT_FOUND);
+    assert!(resp.error_code == krabka_broker::codes::UNSUPPORTED_VERSION);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

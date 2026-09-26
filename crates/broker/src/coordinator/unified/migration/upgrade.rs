@@ -73,6 +73,40 @@ pub(crate) fn classic_is_convertible(state: &ClassicState) -> bool {
     .is_some()
 }
 
+/// Kafka's `GroupMetadataManager.validateOnlineUpgrade` for a non-empty
+/// classic group that a `ConsumerGroupHeartbeat` joins, followed by the
+/// subscription check of [`classic_is_convertible`].
+///
+/// An empty classic group never reaches this: Kafka's
+/// `maybeDeleteEmptyClassicGroup` replaces it whatever the policy and the
+/// protocol type. The error is the `GROUP_ID_NOT_FOUND` message Kafka sends.
+pub(crate) fn validate_online_upgrade(
+    state: &ClassicState,
+    upgrade_enabled: bool,
+    consumer_max_size: usize,
+) -> Result<(), String> {
+    let group_id = &state.group_id;
+    if !upgrade_enabled {
+        return Err(format!(
+            "Cannot upgrade classic group {group_id} to consumer group because online upgrade is \
+             disabled."
+        ));
+    }
+    if state.protocol_type.as_deref() != Some("consumer") || !classic_is_convertible(state) {
+        return Err(format!(
+            "Cannot upgrade classic group {group_id} to consumer group because the group does \
+             not use the consumer embedded protocol."
+        ));
+    }
+    if state.members.len() > consumer_max_size {
+        return Err(format!(
+            "Cannot upgrade classic group {group_id} to consumer group because the group size \
+             exceeds the consumer group maximum size."
+        ));
+    }
+    Ok(())
+}
+
 /// Converts a classic group into a consumer group that **hosts its classic
 /// members** during a KIP-848 upgrade.
 ///
@@ -289,5 +323,35 @@ mod tests {
 
         g.generation_id = i32::MAX;
         assert!(convert_classic_to_consumer(&g).group_epoch == i32::MAX);
+    }
+
+    /// Kafka's `validateOnlineUpgrade`, row by row: (label, protocol type,
+    /// member count, upgrade enabled, consumer max size, expected result).
+    #[test]
+    fn validate_online_upgrade_follows_kafka() {
+        let disabled = "Cannot upgrade classic group g to consumer group because online upgrade \
+                        is disabled.";
+        let protocol = "Cannot upgrade classic group g to consumer group because the group does \
+                        not use the consumer embedded protocol.";
+        let size = "Cannot upgrade classic group g to consumer group because the group size \
+                    exceeds the consumer group maximum size.";
+        let rows = [
+            ("upgradable", Some("consumer"), 2, true, 2, Ok(())),
+            ("policy off", Some("consumer"), 2, false, 2, Err(disabled)),
+            ("connect group", Some("connect"), 2, true, 2, Err(protocol)),
+            ("too many members", Some("consumer"), 3, true, 2, Err(size)),
+        ];
+        for (label, protocol_type, members, enabled, max_size, want) in rows {
+            let mut g = ClassicGroup::new("g");
+            g.protocol_type = protocol_type.map(String::from);
+            for index in 0..members {
+                g.add_member(consumer_member(
+                    &format!("m{index}"),
+                    subscription_blob(&["t"]),
+                ));
+            }
+            let got = validate_online_upgrade(&g, enabled, max_size);
+            check!(got == want.map_err(String::from), "{label}");
+        }
     }
 }

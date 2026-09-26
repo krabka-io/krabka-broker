@@ -318,8 +318,9 @@ async fn txn_offset_commit_fences_next_gen_member_epoch() {
     // is at epoch 1.
     let mut hb = ConsumerGroupHeartbeatRequest {
         group_id: "ng-g".into(),
-        member_id: String::new(),
+        member_id: uuid::Uuid::new_v4().to_string(),
         member_epoch: 0,
+        topic_partitions: Some(vec![]),
         rebalance_timeout_ms: 60_000,
         ..Default::default()
     };
