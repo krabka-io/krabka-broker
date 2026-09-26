@@ -1,9 +1,27 @@
 //! `Metadata` (`api_key=3`). It returns registered broker endpoints and the
 //! partitions of the requested topics, or of all topics when `topics` is
-//! `None`.
+//! `None` (or, at version 0, empty).
 //!
 //! The metadata comes from `controller.current_image()`, the
 //! quorum-replicated snapshot, and not from a local in-memory struct.
+//!
+//! The topic rows follow Kafka's `KafkaApis.handleTopicMetadataRequest`:
+//!
+//! 1. The request's topics become a set: the distinct names, or the names of
+//!    the distinct ids that resolve. An id that does not resolve answers
+//!    `UNKNOWN_TOPIC_ID` without authorization.
+//! 2. `Describe` on each topic splits the set into described and denied
+//!    topics.
+//! 3. When the request allows auto-creation and
+//!    [`AUTO_CREATE_TOPICS_ENABLE`] holds, a described topic that does not
+//!    exist needs `Create` on the cluster or, failing that, on the topic. A
+//!    topic denied both leaves the described set.
+//! 4. The described set answers full metadata for the topics that exist and a
+//!    partitionless row for the rest; see [`missing_topics`].
+//!
+//! The response lists the unknown ids, then the described set, then the
+//! topics denied `Create`, then the topics denied `Describe`. An all-topics
+//! request lists no denied topic, so that it does not disclose one.
 //!
 //! `MetadataResponsePartition` carries no KIP-966 eligible-leader-replica
 //! field in any version of Kafka's schema, `0-13` included, so a partition row
@@ -30,13 +48,20 @@ use krabka_protocol::{
 };
 
 use crate::{
-    authorizer::{AuthorizationResult, authorize_topics},
+    authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
     broker::Broker,
     codes,
     error::BrokerError,
-    handlers::{authorized_operations::authorized_operations_bits, offline_replicas::NO_LEADER_ID},
+    handlers::{
+        acl_wire::CLUSTER_RESOURCE_NAME, authorized_operations::authorized_operations_bits,
+        offline_replicas::NO_LEADER_ID,
+    },
 };
 
+mod missing_topics;
+
+#[cfg(test)]
+mod authorization_tests;
 #[cfg(test)]
 mod topic_resolution_tests;
 
@@ -45,7 +70,19 @@ mod topic_resolution_tests;
 /// Kafka refuses a request that uses them.
 const FIRST_TOPIC_ID_VERSION: i16 = 12;
 
-// ACL preamble + asymmetric loop.
+/// The versions that carry `cluster_authorized_operations` (KIP-430).
+const CLUSTER_AUTHORIZED_OPERATIONS_VERSIONS: std::ops::RangeInclusive<i16> = 8..=10;
+
+/// The first version that carries `topic_authorized_operations` (KIP-430).
+const FIRST_TOPIC_AUTHORIZED_OPERATIONS_VERSION: i16 = 8;
+
+/// Kafka's `auto.create.topics.enable`, at Kafka's default.
+///
+/// The broker has no `auto.create.topics.enable` key yet, so auto-creation
+/// runs whenever the request allows it, as it does on a Kafka broker that
+/// leaves the key unset.
+const AUTO_CREATE_TOPICS_ENABLE: bool = true;
+
 #[tracing::instrument(
     name = "handle_metadata",
     level = "info",
@@ -75,42 +112,6 @@ pub(crate) async fn handle(
         }
     };
 
-    // ── ACL preamble ────────────────────────────────────────
-    // Metadata has asymmetric authorization semantics for `Describe`:
-    //   • Named-topic request (`req.topics = Some([...])`): every
-    //     requested topic appears in the response — Allow rows carry
-    //     `error_code = 0`, Deny rows carry
-    //     `error_code = TOPIC_AUTHORIZATION_FAILED (29)`.
-    //   • Fetch-all (`req.topics = None`): only `Allow` topics appear
-    //     in the response. Deny topics are silently omitted so the
-    //     broker doesn't leak their existence to unauthorized clients.
-    //
-    // The names to authorize are the real names of the topics that resolved,
-    // plus the requested name of a name-only miss, so that the
-    // UNKNOWN_TOPIC_OR_PARTITION row still respects a Deny. An id that does
-    // not resolve has no name and is answered without authorization.
-    let candidate_topics: Vec<String> = match &requested {
-        Some(requested) => requested
-            .iter()
-            .filter_map(|topic| match topic {
-                RequestedTopic::Id(_, Some(record)) | RequestedTopic::Name(_, Some(record)) => {
-                    Some(record.name.clone())
-                }
-                RequestedTopic::Name(name, None) => Some(name.clone()).filter(|n| !n.is_empty()),
-                RequestedTopic::Id(_, None) => None,
-            })
-            .collect(),
-        None => image.topics().map(|t| t.name.clone()).collect(),
-    };
-    let acl_by_name = authorize_topics(
-        broker.config.authorizer.as_ref(),
-        &*image,
-        ctx.principal,
-        ctx.peer,
-        AclOperation::Describe,
-        candidate_topics.iter().map(String::as_str),
-    );
-
     // Brokers: enumerate registered nodes from the metadata image. Keep
     // endpoint discovery separate from replica-placement eligibility: a
     // partition can still name a fenced/dead broker as leader until failover
@@ -135,31 +136,37 @@ pub(crate) async fn handle(
         ctx,
         &TopicRowInputs {
             request: &req,
-            requested: requested.as_deref(),
-            candidates: &candidate_topics,
-            authorization: &acl_by_name,
+            version,
+            requested: &requested,
             unavailable: &unavailable,
         },
-    );
+    )
+    .await;
 
     // controller_id: an unfenced registered broker, not the quorum leader.
     // See `handlers::controller_id`.
     let controller_id =
         crate::handlers::controller_id::advertised_controller_id(&image, &unavailable);
 
-    // KIP-430: the cluster-level field only exists on the wire for v8-10;
-    // the codegen drops it on other versions. Compute when the opt-in
-    // flag is set so the response carries the value on the in-range
-    // versions, leaving the default `i32::MIN` otherwise.
-    let cluster_authorized_operations = if req.include_cluster_authorized_operations {
-        authorized_operations_bits(
-            broker.config.authorizer.as_ref(),
-            &image,
-            ctx.principal,
-            ctx.peer,
-            ResourceType::Cluster,
-            "kafka-cluster",
-        )
+    // KIP-430: the cluster-level field only exists on the wire for v8-10.
+    // Kafka answers 0 rather than the bit field when `Describe` on the
+    // cluster is denied, and leaves the default `i32::MIN` when the request
+    // does not ask.
+    let cluster_authorized_operations = if CLUSTER_AUTHORIZED_OPERATIONS_VERSIONS.contains(&version)
+        && req.include_cluster_authorized_operations
+    {
+        if cluster_allows(broker, &image, ctx, AclOperation::Describe) {
+            authorized_operations_bits(
+                broker.config.authorizer.as_ref(),
+                &image,
+                ctx.principal,
+                ctx.peer,
+                ResourceType::Cluster,
+                CLUSTER_RESOURCE_NAME,
+            )
+        } else {
+            0
+        }
     } else {
         i32::MIN
     };
@@ -187,19 +194,45 @@ pub(crate) async fn handle(
     crate::handlers::encode_response(&resp, version)
 }
 
-/// One topic that a named-topic request asks for, with the record it
-/// resolved to.
-enum RequestedTopic<'a> {
-    /// A topic that the request names by a non-zero id.
-    Id(WireUuid, Option<&'a krabka_metadata::TopicRecord>),
-    /// A topic that the request names by name.
-    Name(String, Option<&'a krabka_metadata::TopicRecord>),
+/// Whether the principal of `ctx` holds `operation` on the cluster.
+fn cluster_allows(
+    broker: &Broker,
+    image: &krabka_metadata::MetadataImage,
+    ctx: &crate::handlers::RequestContext<'_>,
+    operation: AclOperation,
+) -> bool {
+    broker.config.authorizer.authorize(
+        image,
+        &AuthorizationRequest {
+            principal: ctx.principal,
+            host: ctx.peer,
+            resource_type: ResourceType::Cluster,
+            resource_name: CLUSTER_RESOURCE_NAME,
+            operation,
+        },
+    ) == AuthorizationResult::Allow
 }
 
-/// Applies Kafka's version rules for topic ids to a named-topic request.
+/// The topics a request asks for, as Kafka's handler sees them before
+/// authorization.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct RequestedTopics {
+    /// The request asks for every topic: `topics` is null, or empty at
+    /// version 0 (`MetadataRequest.isAllTopics`).
+    all: bool,
+    /// The request names its topics by id.
+    by_id: bool,
+    /// The distinct requested ids that name no topic.
+    unknown_ids: Vec<WireUuid>,
+    /// The distinct topic names to describe: every topic for an all-topics
+    /// request, the names of the resolved ids for an id request, and the
+    /// requested names otherwise. First occurrence decides the order.
+    names: Vec<String>,
+}
+
+/// Applies Kafka's version rules for topic ids to a request.
 ///
-/// It gives `Ok(None)` for an all-topics request. The rules come from
-/// `KafkaApis.handleTopicMetadataRequest`:
+/// The rules come from `KafkaApis.handleTopicMetadataRequest`:
 ///
 /// - Versions 10 and 11: a null name or a non-zero id throws
 ///   `InvalidRequestException`, so the whole request fails with
@@ -210,13 +243,20 @@ enum RequestedTopic<'a> {
 ///   A null name among them makes Kafka throw a `NullPointerException`, so the
 ///   whole request fails with `UNKNOWN_SERVER_ERROR`. A `cp-kafka` 8.3.1 broker
 ///   answers that way.
-fn lookup_requested_topics<'a>(
-    image: &'a krabka_metadata::MetadataImage,
+fn lookup_requested_topics(
+    image: &krabka_metadata::MetadataImage,
     request: &MetadataRequest,
     version: i16,
-) -> Result<Option<Vec<RequestedTopic<'a>>>, i16> {
-    let Some(topics) = &request.topics else {
-        return Ok(None);
+) -> Result<RequestedTopics, i16> {
+    let topics = match &request.topics {
+        Some(topics) if !(version == 0 && topics.is_empty()) => topics,
+        _ => {
+            return Ok(RequestedTopics {
+                all: true,
+                names: image.topics().map(|topic| topic.name.clone()).collect(),
+                ..Default::default()
+            });
+        }
     };
     let uses_ids = topics
         .iter()
@@ -230,22 +270,31 @@ fn lookup_requested_topics<'a>(
             ids.push(topic.topic_id);
         }
     }
-    if !ids.is_empty() {
-        return Ok(Some(
-            ids.into_iter()
-                .map(|id| RequestedTopic::Id(id, image.topic_by_id(&uuid::Uuid::from_bytes(id.0))))
-                .collect(),
-        ));
+    let mut requested = RequestedTopics {
+        by_id: !ids.is_empty(),
+        ..Default::default()
+    };
+    if requested.by_id {
+        for id in ids {
+            match image.topic_by_id(&uuid::Uuid::from_bytes(id.0)) {
+                Some(record) => push_distinct(&mut requested.names, &record.name),
+                None => requested.unknown_ids.push(id),
+            }
+        }
+        return Ok(requested);
     }
-    topics
-        .iter()
-        .map(|topic| {
-            let name = topic.name.clone().ok_or(codes::UNKNOWN_SERVER_ERROR)?;
-            let record = image.topic(&name);
-            Ok(RequestedTopic::Name(name, record))
-        })
-        .collect::<Result<Vec<_>, i16>>()
-        .map(Some)
+    for topic in topics {
+        let name = topic.name.as_deref().ok_or(codes::UNKNOWN_SERVER_ERROR)?;
+        push_distinct(&mut requested.names, name);
+    }
+    Ok(requested)
+}
+
+/// Appends `name` to `names` unless it is already there.
+fn push_distinct(names: &mut Vec<String>, name: &str) {
+    if !names.iter().any(|known| known == name) {
+        names.push(name.to_owned());
+    }
 }
 
 /// The response that Kafka's `MetadataRequest.getErrorResponse` builds when
@@ -277,93 +326,156 @@ fn error_response(request: &MetadataRequest, error_code: i16) -> MetadataRespons
 /// the row builders keep a readable arity as the response gains fields.
 struct TopicRowInputs<'a> {
     request: &'a MetadataRequest,
-    /// The resolved rows of a named-topic request, or `None` for all topics.
-    requested: Option<&'a [RequestedTopic<'a>]>,
-    candidates: &'a [String],
-    authorization: &'a std::collections::HashMap<&'a str, AuthorizationResult>,
+    version: i16,
+    requested: &'a RequestedTopics,
     /// Brokers the controller currently treats as fenced or dead, from
     /// [`crate::handlers::offline_replicas::unavailable_brokers`].
     unavailable: &'a std::collections::HashSet<u64>,
 }
 
-fn build_topic_rows(
+/// The topic rows, in Kafka's order: unknown ids, the described topics, the
+/// topics denied `Create`, and the topics denied `Describe`.
+async fn build_topic_rows(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
-    context: &crate::handlers::RequestContext<'_>,
+    ctx: &crate::handlers::RequestContext<'_>,
     inputs: &TopicRowInputs<'_>,
 ) -> Vec<MetadataResponseTopic> {
-    let allowed = |name: &str| {
-        inputs
-            .authorization
-            .get(name)
-            .copied()
-            .unwrap_or(AuthorizationResult::Deny)
-            == AuthorizationResult::Allow
+    let requested = inputs.requested;
+    let authorizer = broker.config.authorizer.as_ref();
+    let allowed = |results: &std::collections::HashMap<&str, AuthorizationResult>, name: &str| {
+        results.get(name).copied() == Some(AuthorizationResult::Allow)
     };
-    let Some(requested) = inputs.requested else {
-        return inputs
-            .candidates
-            .iter()
-            .filter(|name| allowed(name))
-            .filter_map(|name| {
-                image
-                    .topic(name)
-                    .map(|record| success_topic_row(broker, image, context, inputs, name, record))
-            })
-            .collect();
-    };
-    requested
+
+    let describe = authorize_topics(
+        authorizer,
+        image,
+        ctx.principal,
+        ctx.peer,
+        AclOperation::Describe,
+        requested.names.iter().map(String::as_str),
+    );
+    let (mut described, denied_describe): (Vec<&str>, Vec<&str>) = requested
+        .names
         .iter()
-        .map(|topic| match topic {
-            RequestedTopic::Id(_, Some(record)) | RequestedTopic::Name(_, Some(record))
-                if allowed(&record.name) =>
-            {
-                success_topic_row(broker, image, context, inputs, &record.name, record)
-            }
+        .map(String::as_str)
+        .partition(|name| allowed(&describe, name));
+
+    let auto_create =
+        AUTO_CREATE_TOPICS_ENABLE && inputs.request.allow_auto_topic_creation && !requested.all;
+    let mut denied_create: Vec<&str> = Vec::new();
+    if auto_create {
+        let missing: Vec<&str> = described
+            .iter()
+            .copied()
+            .filter(|name| image.topic(name).is_none())
+            .collect();
+        if !missing.is_empty() && !cluster_allows(broker, image, ctx, AclOperation::Create) {
+            let create = authorize_topics(
+                authorizer,
+                image,
+                ctx.principal,
+                ctx.peer,
+                AclOperation::Create,
+                missing.iter().copied(),
+            );
+            denied_create = missing
+                .into_iter()
+                .filter(|name| !allowed(&create, name))
+                .collect();
+            described.retain(|name| !denied_create.contains(name));
+        }
+    }
+
+    let mut described_rows: Vec<MetadataResponseTopic> = described
+        .iter()
+        .filter_map(|name| image.topic(name))
+        .map(|record| success_topic_row(broker, image, inputs, record))
+        .collect();
+    if !requested.all {
+        let missing: Vec<&str> = described
+            .iter()
+            .copied()
+            .filter(|name| image.topic(name).is_none())
+            .collect();
+        if !missing.is_empty() {
+            described_rows.extend(
+                missing_topics::missing_topic_rows(broker, ctx, &missing, auto_create).await,
+            );
+        }
+    }
+    if inputs.version >= FIRST_TOPIC_AUTHORIZED_OPERATIONS_VERSION
+        && inputs.request.include_topic_authorized_operations
+    {
+        for row in &mut described_rows {
+            row.topic_authorized_operations = authorized_operations_bits(
+                authorizer,
+                image,
+                ctx.principal,
+                ctx.peer,
+                ResourceType::Topic,
+                row.name.as_deref().unwrap_or_default(),
+            );
+        }
+    }
+
+    let unknown_id_rows = requested
+        .unknown_ids
+        .iter()
+        .map(|id| MetadataResponseTopic {
+            error_code: codes::UNKNOWN_TOPIC_ID,
+            name: None,
+            topic_id: *id,
+            ..Default::default()
+        });
+    // Kafka never creates a topic it denies `Create` on, so the row carries
+    // the zero id.
+    let denied_create_rows = denied_create.iter().map(|name| MetadataResponseTopic {
+        error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+        name: Some((*name).to_owned()),
+        topic_id: WireUuid::ZERO,
+        is_internal: crate::internal_topics::is_internal_topic(&broker.config, name),
+        ..Default::default()
+    });
+    // An all-topics request does not disclose a topic denied `Describe`.
+    let denied_describe: &[&str] = if requested.all { &[] } else { &denied_describe };
+    let denied_describe_rows = denied_describe.iter().map(|name| {
+        if requested.by_id {
             // Kafka does not treat a topic id as secret, so a denied id row
             // carries the real id and a null name.
-            RequestedTopic::Id(_, Some(record)) => MetadataResponseTopic {
+            MetadataResponseTopic {
                 error_code: codes::TOPIC_AUTHORIZATION_FAILED,
                 name: None,
-                topic_id: WireUuid(record.topic_id.into_bytes()),
+                topic_id: image.topic(name).map_or(WireUuid::ZERO, |record| {
+                    WireUuid(record.topic_id.into_bytes())
+                }),
                 ..Default::default()
-            },
+            }
+        } else {
             // A denied name row carries the zero id, so it does not disclose
-            // the id.
-            RequestedTopic::Name(_, Some(record)) => MetadataResponseTopic {
+            // the id, or whether the topic exists.
+            MetadataResponseTopic {
                 error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                name: Some(record.name.clone()),
+                name: Some((*name).to_owned()),
                 topic_id: WireUuid::ZERO,
                 ..Default::default()
-            },
-            RequestedTopic::Id(id, None) => MetadataResponseTopic {
-                error_code: codes::UNKNOWN_TOPIC_ID,
-                name: None,
-                topic_id: *id,
-                ..Default::default()
-            },
-            RequestedTopic::Name(name, None) => MetadataResponseTopic {
-                error_code: if !name.is_empty() && !allowed(name) {
-                    codes::TOPIC_AUTHORIZATION_FAILED
-                } else {
-                    codes::UNKNOWN_TOPIC_OR_PARTITION
-                },
-                name: Some(name.clone()),
-                topic_id: WireUuid::ZERO,
-                ..Default::default()
-            },
-        })
+            }
+        }
+    });
+    unknown_id_rows
+        .chain(described_rows)
+        .chain(denied_create_rows)
+        .chain(denied_describe_rows)
         .collect()
 }
 
 fn success_topic_row(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
-    context: &crate::handlers::RequestContext<'_>,
     inputs: &TopicRowInputs<'_>,
-    name: &str,
     record: &krabka_metadata::TopicRecord,
 ) -> MetadataResponseTopic {
+    let name = record.name.as_str();
     let partitions = image
         .partitions_of(name)
         .map(|partition| {
@@ -399,25 +511,12 @@ fn success_topic_row(
             }
         })
         .collect();
-    let topic_authorized_operations = if inputs.request.include_topic_authorized_operations {
-        authorized_operations_bits(
-            broker.config.authorizer.as_ref(),
-            image,
-            context.principal,
-            context.peer,
-            ResourceType::Topic,
-            name,
-        )
-    } else {
-        i32::MIN
-    };
     MetadataResponseTopic {
         error_code: codes::NONE,
         name: Some(record.name.clone()),
         topic_id: WireUuid(record.topic_id.into_bytes()),
         partitions,
         is_internal: crate::internal_topics::is_internal_topic(&broker.config, name),
-        topic_authorized_operations,
         ..Default::default()
     }
 }
