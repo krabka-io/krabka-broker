@@ -126,7 +126,7 @@ pub struct TokenDeadlines {
     pub initial_expiry_ms: i64,
 }
 
-/// Whether a create request has safe, valid deadline arithmetic.
+/// Whether the host configuration admits a create and, if so, its deadlines.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
 pub enum TokenCreateDecision {
@@ -147,7 +147,6 @@ pub enum TokenRenewDecision {
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
 pub enum TokenExpireDecision {
-    Invalid,
     Expired,
     Delete,
     Update(i64),
@@ -197,9 +196,11 @@ pub struct TokenMutationFacts {
 /// Fence a token mutation against its exact committed generation.
 ///
 /// A retained log tail wins over retry classification. Exact already-applied
-/// updates and already-missing deletes are idempotent. A renewal must preserve
-/// or extend the expiry, and no update may revive an expired token or cross its
-/// immutable maximum timestamp.
+/// updates and already-missing deletes are idempotent. No update may revive a
+/// token that has expired, which Kafka's `DelegationTokenControlManager`
+/// defines as a deadline strictly before `now`, or cross the token's immutable
+/// maximum timestamp. A renewal lands at or after `now` but, as in Kafka's
+/// `renewDelegationToken`, may shorten the current expiry.
 #[ensures(result == TokenMutationDecision::Append ==>
     !facts.uncommitted_tail
         && facts.state == TokenMutationState::Expected
@@ -207,15 +208,16 @@ pub struct TokenMutationFacts {
             TokenMutationKind::Delete => true,
             TokenMutationKind::Renew =>
                 facts.now_ms@ >= 0
-                    && facts.expected_expiry_ms@ > facts.now_ms@
-                    && facts.max_timestamp_ms@ > facts.now_ms@
+                    && facts.expected_expiry_ms@ >= facts.now_ms@
+                    && facts.max_timestamp_ms@ >= facts.now_ms@
                     && facts.expected_expiry_ms@ <= facts.max_timestamp_ms@
-                    && facts.incoming_expiry_ms@ > facts.expected_expiry_ms@
+                    && facts.incoming_expiry_ms@ != facts.expected_expiry_ms@
+                    && facts.incoming_expiry_ms@ >= facts.now_ms@
                     && facts.incoming_expiry_ms@ <= facts.max_timestamp_ms@,
             TokenMutationKind::Expire =>
                 facts.now_ms@ >= 0
-                    && facts.expected_expiry_ms@ > facts.now_ms@
-                    && facts.max_timestamp_ms@ > facts.now_ms@
+                    && facts.expected_expiry_ms@ >= facts.now_ms@
+                    && facts.max_timestamp_ms@ >= facts.now_ms@
                     && facts.expected_expiry_ms@ <= facts.max_timestamp_ms@
                     && facts.incoming_expiry_ms@ >= 0
                     && facts.incoming_expiry_ms@ <= facts.max_timestamp_ms@,
@@ -251,15 +253,15 @@ pub fn token_mutation_decision(facts: TokenMutationFacts) -> TokenMutationDecisi
         TokenMutationKind::Delete => TokenMutationDecision::Append,
         TokenMutationKind::Renew => {
             if facts.now_ms < 0
-                || facts.expected_expiry_ms <= facts.now_ms
-                || facts.max_timestamp_ms <= facts.now_ms
+                || facts.expected_expiry_ms < facts.now_ms
+                || facts.max_timestamp_ms < facts.now_ms
                 || facts.expected_expiry_ms > facts.max_timestamp_ms
             {
                 return TokenMutationDecision::Reject;
             }
             if facts.incoming_expiry_ms == facts.expected_expiry_ms {
                 TokenMutationDecision::Retry
-            } else if facts.incoming_expiry_ms > facts.expected_expiry_ms
+            } else if facts.incoming_expiry_ms >= facts.now_ms
                 && facts.incoming_expiry_ms <= facts.max_timestamp_ms
             {
                 TokenMutationDecision::Append
@@ -269,8 +271,8 @@ pub fn token_mutation_decision(facts: TokenMutationFacts) -> TokenMutationDecisi
         }
         TokenMutationKind::Expire => {
             if facts.now_ms >= 0
-                && facts.expected_expiry_ms > facts.now_ms
-                && facts.max_timestamp_ms > facts.now_ms
+                && facts.expected_expiry_ms >= facts.now_ms
+                && facts.max_timestamp_ms >= facts.now_ms
                 && facts.expected_expiry_ms <= facts.max_timestamp_ms
                 && facts.incoming_expiry_ms >= 0
                 && facts.incoming_expiry_ms <= facts.max_timestamp_ms
@@ -287,15 +289,9 @@ pub fn token_mutation_decision(facts: TokenMutationFacts) -> TokenMutationDecisi
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
 #[logic]
-fn chosen_lifetime_model(requested_ms: i64, ceiling_ms: i64) -> Int {
+fn deadline_model(now_ms: i64, duration_ms: i64) -> Int {
     pearlite! {
-        if requested_ms@ == -1 {
-            ceiling_ms@
-        } else if requested_ms@ < ceiling_ms@ {
-            requested_ms@
-        } else {
-            ceiling_ms@
-        }
+        if now_ms@ + duration_ms@ > i64::MAX@ { i64::MAX@ } else { now_ms@ + duration_ms@ }
     }
 }
 
@@ -303,40 +299,67 @@ fn chosen_lifetime_model(requested_ms: i64, ceiling_ms: i64) -> Int {
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
 #[logic]
-fn renew_period_model(requested_ms: i64, default_renew_period_ms: i64) -> Int {
+fn bounded_period_model(requested_ms: i64, default_ms: i64) -> Int {
     pearlite! {
-        if requested_ms@ == -1 { default_renew_period_ms@ } else { requested_ms@ }
+        if requested_ms@ > 0 && requested_ms@ < default_ms@ { requested_ms@ } else { default_ms@ }
     }
 }
 
-/// Validate a create request and derive both stored deadlines without wrap.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+fn min_model(left: Int, right: Int) -> Int {
+    pearlite! {
+        if left < right { left } else { right }
+    }
+}
+
+/// Kafka's `DelegationTokenControlManager.sum`: `now + duration`, saturated
+/// at `i64::MAX` instead of wrapping.
+#[requires(duration_ms@ >= 0)]
+#[ensures(result@ == deadline_model(now_ms, duration_ms))]
+fn token_deadline(now_ms: i64, duration_ms: i64) -> i64 {
+    now_ms.checked_add(duration_ms).unwrap_or(i64::MAX)
+}
+
+/// A requested period, bounded by the configured one.
 ///
-/// `requested_ms == -1` selects the configured ceiling. Other requests must
-/// be positive and are clamped to that ceiling. Invalid host configuration and
-/// any sum outside the `i64` timestamp domain fail closed.
-#[ensures((result == TokenCreateDecision::Invalid) == (
-    now_ms@ < 0
-        || ceiling_ms@ <= 0
-        || default_renew_period_ms@ <= 0
-        || (requested_ms@ != -1 && requested_ms@ <= 0)
-        || chosen_lifetime_model(requested_ms, ceiling_ms) > i64::MAX@ - now_ms@
-))]
+/// Kafka's `createDelegationToken` and `renewDelegationToken` both use the
+/// configured value for a request of 0 or less, and the smaller of the two
+/// for a positive request.
+#[requires(default_ms@ > 0)]
+#[ensures(result@ == bounded_period_model(requested_ms, default_ms))]
+#[ensures(result@ > 0)]
+fn bounded_period(requested_ms: i64, default_ms: i64) -> i64 {
+    if requested_ms > 0 {
+        requested_ms.min(default_ms)
+    } else {
+        default_ms
+    }
+}
+
+/// Derive both stored deadlines of a new token.
+///
+/// Matches `DelegationTokenControlManager.createDelegationToken` in Kafka
+/// trunk: the lifetime is `delegation.token.max.lifetime.ms` (`ceiling_ms`)
+/// for a request of 0 or less and the smaller of the two otherwise, the
+/// maximum timestamp is `now` plus that lifetime, and the first expiry is
+/// `now` plus `delegation.token.expiry.time.ms` (`default_renew_period_ms`),
+/// capped at the maximum timestamp. Both sums saturate at `i64::MAX`. Kafka's
+/// configuration validation rejects a period below 1, so a non-positive host
+/// setting is `Invalid` here.
+#[ensures((result == TokenCreateDecision::Invalid) ==
+    (ceiling_ms@ <= 0 || default_renew_period_ms@ <= 0))]
 #[ensures(match result {
     TokenCreateDecision::Invalid => true,
     TokenCreateDecision::Create(deadlines) =>
-        now_ms@ >= 0
-            && deadlines.max_timestamp_ms@ ==
-                now_ms@ + chosen_lifetime_model(requested_ms, ceiling_ms)
-            && deadlines.initial_expiry_ms@ == now_ms@
-                + (if default_renew_period_ms@ < chosen_lifetime_model(requested_ms, ceiling_ms) {
-                    default_renew_period_ms@
-                } else {
-                    chosen_lifetime_model(requested_ms, ceiling_ms)
-                })
-            && deadlines.initial_expiry_ms@ > now_ms@
-            && deadlines.initial_expiry_ms@ <= deadlines.max_timestamp_ms@
-            && deadlines.max_timestamp_ms@ <= i64::MAX@
-            && deadlines.max_timestamp_ms@ > now_ms@,
+        deadlines.max_timestamp_ms@ ==
+            deadline_model(now_ms, bounded_period_model(requested_ms, ceiling_ms))
+            && deadlines.initial_expiry_ms@ == min_model(
+                deadlines.max_timestamp_ms@,
+                deadline_model(now_ms, default_renew_period_ms),
+            ),
 })]
 #[must_use]
 pub fn create_token_deadlines(
@@ -345,64 +368,41 @@ pub fn create_token_deadlines(
     ceiling_ms: i64,
     default_renew_period_ms: i64,
 ) -> TokenCreateDecision {
-    if now_ms < 0 || ceiling_ms <= 0 || default_renew_period_ms <= 0 {
+    if ceiling_ms <= 0 || default_renew_period_ms <= 0 {
         return TokenCreateDecision::Invalid;
     }
 
-    let chosen_lifetime = if requested_ms == -1 {
-        ceiling_ms
-    } else if requested_ms > 0 {
-        requested_ms.min(ceiling_ms)
-    } else {
-        return TokenCreateDecision::Invalid;
-    };
-
-    if chosen_lifetime > i64::MAX - now_ms {
-        return TokenCreateDecision::Invalid;
-    }
-    let initial_period = default_renew_period_ms.min(chosen_lifetime);
+    let max_timestamp_ms = token_deadline(now_ms, bounded_period(requested_ms, ceiling_ms));
+    let renew_deadline_ms = token_deadline(now_ms, default_renew_period_ms);
     TokenCreateDecision::Create(TokenDeadlines {
-        max_timestamp_ms: now_ms + chosen_lifetime,
-        initial_expiry_ms: now_ms + initial_period,
+        max_timestamp_ms,
+        initial_expiry_ms: renew_deadline_ms.min(max_timestamp_ms),
     })
 }
 
-/// Derive a renewed expiry without reviving an expired token or wrapping.
+/// Derive a renewed expiry.
 ///
-/// `requested_ms == -1` selects the configured default. Every other accepted
-/// period is positive. The resulting expiry is strictly in the future and no
-/// later than the token's immutable maximum timestamp.
+/// Matches `DelegationTokenControlManager.renewDelegationToken` in Kafka
+/// trunk: a token whose expiry or maximum timestamp is strictly before `now`
+/// is `Expired`. Otherwise the renew period is the configured
+/// `delegation.token.expiry.time.ms` for a request of 0 or less and the
+/// smaller of the two for a positive request, and the new expiry is `now`
+/// plus that period, capped at the maximum timestamp. The new expiry replaces
+/// the current one even when it is earlier. A non-positive configured period
+/// is `Invalid`.
 #[ensures((result == TokenRenewDecision::Expired) ==
-    (current_expiry_ms@ <= now_ms@ || max_timestamp_ms@ <= now_ms@))]
+    (current_expiry_ms@ < now_ms@ || max_timestamp_ms@ < now_ms@))]
 #[ensures((result == TokenRenewDecision::Invalid) == (
-    current_expiry_ms@ > now_ms@
-        && max_timestamp_ms@ > now_ms@
-        && (now_ms@ < 0
-            || current_expiry_ms@ > max_timestamp_ms@
-            || default_renew_period_ms@ <= 0
-            || (requested_ms@ != -1 && requested_ms@ <= 0)
-            || renew_period_model(requested_ms, default_renew_period_ms) > i64::MAX@ - now_ms@)
+    current_expiry_ms@ >= now_ms@
+        && max_timestamp_ms@ >= now_ms@
+        && default_renew_period_ms@ <= 0
 ))]
 #[ensures(match result {
     TokenRenewDecision::Renew(expiry) =>
-        expiry@ > now_ms@
-            && expiry@ <= max_timestamp_ms@
-            && expiry@ == if current_expiry_ms@ >
-                    (if now_ms@ + renew_period_model(requested_ms, default_renew_period_ms)
-                            < max_timestamp_ms@ {
-                        now_ms@ + renew_period_model(requested_ms, default_renew_period_ms)
-                    } else {
-                        max_timestamp_ms@
-                    }) {
-                current_expiry_ms@
-            } else {
-                if now_ms@ + renew_period_model(requested_ms, default_renew_period_ms)
-                        < max_timestamp_ms@ {
-                    now_ms@ + renew_period_model(requested_ms, default_renew_period_ms)
-                } else {
-                    max_timestamp_ms@
-                }
-            },
+        expiry@ == min_model(
+            max_timestamp_ms@,
+            deadline_model(now_ms, bounded_period_model(requested_ms, default_renew_period_ms)),
+        ),
     _ => true,
 })]
 #[must_use]
@@ -413,29 +413,15 @@ pub fn renew_token_expiry(
     current_expiry_ms: i64,
     max_timestamp_ms: i64,
 ) -> TokenRenewDecision {
-    if current_expiry_ms <= now_ms || max_timestamp_ms <= now_ms {
+    if current_expiry_ms < now_ms || max_timestamp_ms < now_ms {
         return TokenRenewDecision::Expired;
     }
-    if now_ms < 0 || current_expiry_ms > max_timestamp_ms || default_renew_period_ms <= 0 {
+    if default_renew_period_ms <= 0 {
         return TokenRenewDecision::Invalid;
     }
 
-    let period = if requested_ms == -1 {
-        default_renew_period_ms
-    } else if requested_ms > 0 {
-        requested_ms
-    } else {
-        return TokenRenewDecision::Invalid;
-    };
-    if period > i64::MAX - now_ms {
-        return TokenRenewDecision::Invalid;
-    }
-
-    TokenRenewDecision::Renew(
-        (now_ms + period)
-            .min(max_timestamp_ms)
-            .max(current_expiry_ms),
-    )
+    let period = bounded_period(requested_ms, default_renew_period_ms);
+    TokenRenewDecision::Renew(token_deadline(now_ms, period).min(max_timestamp_ms))
 }
 
 /// Whether a stored delegation token may authenticate at `now_ms`.
@@ -453,30 +439,20 @@ pub fn token_is_active(now_ms: i64, expiry_timestamp_ms: i64, max_timestamp_ms: 
         && expiry_timestamp_ms <= max_timestamp_ms
 }
 
-/// Select deletion or a bounded expiry update without wrapping.
+/// Select deletion or a bounded expiry update.
 ///
-/// Kafka assigns deletion semantics to every negative period. Zero means
-/// `now`; a positive period is added only when the sum fits in `i64`.
+/// Matches `DelegationTokenControlManager.expireDelegationToken` in Kafka
+/// trunk: every negative period deletes the token, whatever its deadlines.
+/// Otherwise a token whose expiry or maximum timestamp is strictly before
+/// `now` is `Expired`, and a live token gets `now + period`, saturated at
+/// `i64::MAX` and capped at its maximum timestamp.
 #[ensures((result == TokenExpireDecision::Delete) == (period_ms@ < 0))]
 #[ensures((result == TokenExpireDecision::Expired) ==
     (period_ms@ >= 0
-        && (current_expiry_ms@ <= now_ms@ || max_timestamp_ms@ <= now_ms@)))]
-#[ensures((result == TokenExpireDecision::Invalid) == (
-    period_ms@ >= 0
-        && current_expiry_ms@ > now_ms@
-        && max_timestamp_ms@ > now_ms@
-        && (now_ms@ < 0
-            || current_expiry_ms@ > max_timestamp_ms@
-            || period_ms@ > i64::MAX@ - now_ms@)
-))]
+        && (current_expiry_ms@ < now_ms@ || max_timestamp_ms@ < now_ms@)))]
 #[ensures(match result {
     TokenExpireDecision::Update(expiry) =>
-        expiry@ <= max_timestamp_ms@
-            && expiry@ == if now_ms@ + period_ms@ < max_timestamp_ms@ {
-                now_ms@ + period_ms@
-            } else {
-                max_timestamp_ms@
-            },
+        expiry@ == min_model(max_timestamp_ms@, deadline_model(now_ms, period_ms)),
     _ => true,
 })]
 #[must_use]
@@ -489,17 +465,11 @@ pub fn expire_token_deadline(
     if period_ms < 0 {
         return TokenExpireDecision::Delete;
     }
-    if current_expiry_ms <= now_ms || max_timestamp_ms <= now_ms {
+    if current_expiry_ms < now_ms || max_timestamp_ms < now_ms {
         return TokenExpireDecision::Expired;
     }
-    if now_ms < 0 || current_expiry_ms > max_timestamp_ms {
-        return TokenExpireDecision::Invalid;
-    }
-    if period_ms > i64::MAX - now_ms {
-        return TokenExpireDecision::Invalid;
-    }
 
-    TokenExpireDecision::Update((now_ms + period_ms).min(max_timestamp_ms))
+    TokenExpireDecision::Update(token_deadline(now_ms, period_ms).min(max_timestamp_ms))
 }
 
 #[cfg(test)]
@@ -553,78 +523,80 @@ mod tests {
         }
     }
 
+    fn created(max_timestamp_ms: i64, initial_expiry_ms: i64) -> TokenCreateDecision {
+        TokenCreateDecision::Create(TokenDeadlines {
+            max_timestamp_ms,
+            initial_expiry_ms,
+        })
+    }
+
+    /// `DelegationTokenControlManager.createDelegationToken`: a request of 0
+    /// or less takes the configured lifetime, a positive one the smaller of
+    /// the two, and both sums saturate at `i64::MAX`.
     #[test]
-    fn create_clamps_and_rejects_invalid_or_overflowing_deadlines() {
-        check!(
-            create_token_deadlines(0, -1, 1_000, 100)
-                == TokenCreateDecision::Create(TokenDeadlines {
-                    max_timestamp_ms: 1_000,
-                    initial_expiry_ms: 100,
-                })
-        );
-        check!(
-            create_token_deadlines(100, -1, 1_000, 100)
-                == TokenCreateDecision::Create(TokenDeadlines {
-                    max_timestamp_ms: 1_100,
-                    initial_expiry_ms: 200,
-                })
-        );
-        check!(
-            create_token_deadlines(100, 50, 1_000, 100)
-                == TokenCreateDecision::Create(TokenDeadlines {
-                    max_timestamp_ms: 150,
-                    initial_expiry_ms: 150,
-                })
-        );
-        check!(
-            create_token_deadlines(100, -1, 100, 101)
-                == TokenCreateDecision::Create(TokenDeadlines {
-                    max_timestamp_ms: 200,
-                    initial_expiry_ms: 200,
-                })
-        );
-        check!(
-            create_token_deadlines(100, -1, i64::MAX - 100, 100)
-                == TokenCreateDecision::Create(TokenDeadlines {
-                    max_timestamp_ms: i64::MAX,
-                    initial_expiry_ms: 200,
-                })
-        );
-        for decision in [
-            create_token_deadlines(-1, -1, 1_000, 100),
-            create_token_deadlines(100, 0, 1_000, 100),
-            create_token_deadlines(100, -2, 1_000, 100),
-            create_token_deadlines(100, -1, 0, 100),
-            create_token_deadlines(100, -1, 1_000, 0),
-            create_token_deadlines(i64::MAX, -1, 1, 1),
-            create_token_deadlines(1, -1, i64::MAX, 1),
+    fn create_matches_kafka_lifetime_and_saturation() {
+        for (now, requested, ceiling, renew, expected) in [
+            (0, -1, 1_000, 100, created(1_000, 100)),
+            (100, -1, 1_000, 100, created(1_100, 200)),
+            (100, 0, 1_000, 100, created(1_100, 200)),
+            (100, -2, 1_000, 100, created(1_100, 200)),
+            (100, i64::MIN, 1_000, 100, created(1_100, 200)),
+            (100, 50, 1_000, 100, created(150, 150)),
+            (100, 5_000, 1_000, 100, created(1_100, 200)),
+            (100, -1, 100, 101, created(200, 200)),
+            (100, -1, i64::MAX - 100, 100, created(i64::MAX, 200)),
+            (i64::MAX, -1, 1, 1, created(i64::MAX, i64::MAX)),
+            (1, -1, i64::MAX, 1, created(i64::MAX, 2)),
+            (1, -1, i64::MAX, i64::MAX, created(i64::MAX, i64::MAX)),
+            (100, -1, 0, 100, TokenCreateDecision::Invalid),
+            (100, -1, 1_000, 0, TokenCreateDecision::Invalid),
+            (100, -1, -1, 100, TokenCreateDecision::Invalid),
         ] {
-            check!(decision == TokenCreateDecision::Invalid);
+            check!(
+                create_token_deadlines(now, requested, ceiling, renew) == expected,
+                "now={now} requested={requested} ceiling={ceiling} renew={renew}"
+            );
+        }
+    }
+
+    /// `DelegationTokenControlManager.renewDelegationToken`: `Expired` only
+    /// for a deadline strictly before `now`; the expiry is
+    /// `min(max, now + min(default, period))` for a positive period and
+    /// `min(max, now + default)` otherwise, even when that shortens it.
+    #[test]
+    fn renew_matches_kafka_period_cap_and_expiry() {
+        use TokenRenewDecision::{Expired, Invalid, Renew};
+
+        // (now, requested, default, current expiry, max, expected)
+        for (now, requested, default, current, max, expected) in [
+            (100, 25, 50, 150, 1_000, Renew(125)),
+            (100, 75, 50, 150, 1_000, Renew(150)),
+            (100, 500, 50, 150, 1_000, Renew(150)),
+            (100, -1, 50, 150, 1_000, Renew(150)),
+            (100, 0, 50, 150, 1_000, Renew(150)),
+            (100, -5, 50, 150, 1_000, Renew(150)),
+            // A shorter period than the remaining lifetime shortens the expiry.
+            (100, 10, 50, 900, 1_000, Renew(110)),
+            (100, 500, 1_000, 150, 200, Renew(200)),
+            (100, i64::MAX, i64::MAX, 150, 200, Renew(200)),
+            (1, i64::MAX, i64::MAX, 150, i64::MAX, Renew(i64::MAX)),
+            // A deadline equal to `now` is still live in Kafka.
+            (100, 25, 50, 100, 1_000, Renew(125)),
+            (100, 25, 50, 100, 100, Renew(100)),
+            (100, 25, 50, 99, 1_000, Expired),
+            (100, 25, 50, 150, 99, Expired),
+            (100, 25, 0, 99, 1_000, Expired),
+            (100, 25, 0, 150, 1_000, Invalid),
+        ] {
+            check!(
+                renew_token_expiry(now, requested, default, current, max) == expected,
+                "now={now} requested={requested} default={default} current={current} max={max}"
+            );
         }
     }
 
     #[test]
-    fn renew_never_resurrects_or_wraps() {
-        check!(renew_token_expiry(0, 25, 10, 50, 100) == TokenRenewDecision::Renew(50));
-        check!(renew_token_expiry(100, 25, 10, 150, 200) == TokenRenewDecision::Renew(150));
-        check!(renew_token_expiry(100, 75, 10, 150, 200) == TokenRenewDecision::Renew(175));
-        check!(renew_token_expiry(100, 500, 10, 150, 200) == TokenRenewDecision::Renew(200));
-        check!(renew_token_expiry(100, -1, 25, 150, 200) == TokenRenewDecision::Renew(150));
-        check!(
-            renew_token_expiry(100, i64::MAX - 100, 10, 150, 200) == TokenRenewDecision::Renew(200)
-        );
-        check!(renew_token_expiry(100, 1, 10, 100, 200) == TokenRenewDecision::Expired);
-        check!(renew_token_expiry(100, 1, 10, 150, 100) == TokenRenewDecision::Expired);
-        check!(renew_token_expiry(-1, 25, 10, 50, 100) == TokenRenewDecision::Invalid);
-        check!(renew_token_expiry(100, 0, 10, 150, 200) == TokenRenewDecision::Invalid);
-        check!(renew_token_expiry(100, -1, 0, 150, 200) == TokenRenewDecision::Invalid);
-        check!(renew_token_expiry(100, 25, 10, 250, 200) == TokenRenewDecision::Invalid);
-        check!(renew_token_expiry(100, -2, 10, 150, 200) == TokenRenewDecision::Invalid);
-        check!(renew_token_expiry(100, i64::MAX, 10, 150, 200) == TokenRenewDecision::Invalid);
-    }
-
-    #[test]
-    fn token_mutations_are_generation_bound_monotonic_and_idempotent() {
+    fn token_mutations_are_generation_bound_live_and_idempotent() {
         let expected = TokenMutationFacts {
             kind: TokenMutationKind::Renew,
             state: TokenMutationState::Expected,
@@ -634,22 +606,58 @@ mod tests {
             max_timestamp_ms: 200,
             uncommitted_tail: false,
         };
-        check!(token_mutation_decision(expected) == TokenMutationDecision::Append);
-        check!(
-            token_mutation_decision(TokenMutationFacts {
+        for facts in [
+            expected,
+            TokenMutationFacts {
                 now_ms: 0,
                 expected_expiry_ms: 50,
                 incoming_expiry_ms: 75,
                 max_timestamp_ms: 100,
                 ..expected
-            }) == TokenMutationDecision::Append
-        );
-        check!(
-            token_mutation_decision(TokenMutationFacts {
+            },
+            // Kafka's renew may shorten the expiry, down to `now`.
+            TokenMutationFacts {
+                incoming_expiry_ms: 149,
+                ..expected
+            },
+            TokenMutationFacts {
+                incoming_expiry_ms: 100,
+                ..expected
+            },
+            // A deadline equal to `now` is still live.
+            TokenMutationFacts {
+                expected_expiry_ms: 100,
+                ..expected
+            },
+            TokenMutationFacts {
+                expected_expiry_ms: 100,
+                incoming_expiry_ms: 110,
+                max_timestamp_ms: 110,
+                ..expected
+            },
+        ] {
+            check!(
+                token_mutation_decision(facts) == TokenMutationDecision::Append,
+                "{facts:?}"
+            );
+        }
+        for facts in [
+            TokenMutationFacts {
                 incoming_expiry_ms: 150,
                 ..expected
-            }) == TokenMutationDecision::Retry
-        );
+            },
+            TokenMutationFacts {
+                expected_expiry_ms: 100,
+                incoming_expiry_ms: 100,
+                max_timestamp_ms: 100,
+                ..expected
+            },
+        ] {
+            check!(
+                token_mutation_decision(facts) == TokenMutationDecision::Retry,
+                "{facts:?}"
+            );
+        }
         for facts in [
             TokenMutationFacts {
                 now_ms: -1,
@@ -660,7 +668,7 @@ mod tests {
                 ..expected
             },
             TokenMutationFacts {
-                incoming_expiry_ms: 149,
+                incoming_expiry_ms: 99,
                 ..expected
             },
             TokenMutationFacts {
@@ -668,7 +676,13 @@ mod tests {
                 ..expected
             },
             TokenMutationFacts {
-                expected_expiry_ms: 100,
+                expected_expiry_ms: 99,
+                ..expected
+            },
+            TokenMutationFacts {
+                max_timestamp_ms: 99,
+                expected_expiry_ms: 99,
+                incoming_expiry_ms: 99,
                 ..expected
             },
             TokenMutationFacts {
@@ -707,31 +721,39 @@ mod tests {
             max_timestamp_ms: 200,
             uncommitted_tail: false,
         };
-        check!(token_mutation_decision(expire_expected) == TokenMutationDecision::Append);
-        check!(
-            token_mutation_decision(TokenMutationFacts {
+        for facts in [
+            expire_expected,
+            TokenMutationFacts {
                 now_ms: 0,
                 expected_expiry_ms: 50,
                 incoming_expiry_ms: 0,
                 max_timestamp_ms: 100,
                 ..expire_expected
-            }) == TokenMutationDecision::Append
-        );
+            },
+            // A deadline equal to `now` is still live.
+            TokenMutationFacts {
+                expected_expiry_ms: 100,
+                ..expire_expected
+            },
+            TokenMutationFacts {
+                expected_expiry_ms: 100,
+                incoming_expiry_ms: 100,
+                max_timestamp_ms: 100,
+                ..expire_expected
+            },
+        ] {
+            check!(
+                token_mutation_decision(facts) == TokenMutationDecision::Append,
+                "{facts:?}"
+            );
+        }
         for facts in [
             TokenMutationFacts {
                 now_ms: -1,
                 ..expire_expected
             },
             TokenMutationFacts {
-                expected_expiry_ms: 100,
-                ..expire_expected
-            },
-            TokenMutationFacts {
                 expected_expiry_ms: 99,
-                ..expire_expected
-            },
-            TokenMutationFacts {
-                max_timestamp_ms: 100,
                 ..expire_expected
             },
             TokenMutationFacts {
@@ -757,21 +779,34 @@ mod tests {
         }
     }
 
+    /// `DelegationTokenControlManager.expireDelegationToken`: a negative period
+    /// deletes before the expiry check, and a live token gets
+    /// `min(max, now + period)` with a saturating sum.
     #[test]
-    fn expire_deletes_negative_and_rejects_overflow() {
-        check!(expire_token_deadline(0, 0, 150, 200) == TokenExpireDecision::Update(0));
-        check!(expire_token_deadline(100, -1, 100, 100) == TokenExpireDecision::Delete);
-        check!(expire_token_deadline(100, 0, 150, 200) == TokenExpireDecision::Update(100));
-        check!(expire_token_deadline(100, 500, 150, 200) == TokenExpireDecision::Update(200));
-        check!(
-            expire_token_deadline(100, i64::MAX - 100, 150, 200)
-                == TokenExpireDecision::Update(200)
-        );
-        check!(expire_token_deadline(100, 0, 100, 200) == TokenExpireDecision::Expired);
-        check!(expire_token_deadline(100, 0, 150, 100) == TokenExpireDecision::Expired);
-        check!(expire_token_deadline(-1, 0, 150, 200) == TokenExpireDecision::Invalid);
-        check!(expire_token_deadline(100, 0, 250, 200) == TokenExpireDecision::Invalid);
-        check!(expire_token_deadline(100, i64::MAX, 150, i64::MAX) == TokenExpireDecision::Invalid);
+    fn expire_matches_kafka_delete_expiry_and_saturation() {
+        use TokenExpireDecision::{Delete, Expired, Update};
+
+        // (now, period, current expiry, max, expected)
+        for (now, period, current, max, expected) in [
+            (0, 0, 150, 200, Update(0)),
+            (100, 0, 150, 200, Update(100)),
+            (100, 25, 150, 200, Update(125)),
+            (100, 500, 150, 200, Update(200)),
+            (100, i64::MAX - 100, 150, 200, Update(200)),
+            (100, i64::MAX, 150, i64::MAX, Update(i64::MAX)),
+            (100, 0, 100, 200, Update(100)),
+            (100, 0, 100, 100, Update(100)),
+            (100, -1, 150, 200, Delete),
+            (100, -1, 50, 60, Delete),
+            (100, i64::MIN, 150, 200, Delete),
+            (100, 0, 99, 200, Expired),
+            (100, 0, 150, 99, Expired),
+        ] {
+            check!(
+                expire_token_deadline(now, period, current, max) == expected,
+                "now={now} period={period} current={current} max={max}"
+            );
+        }
     }
 
     #[test]
@@ -782,7 +817,7 @@ mod tests {
         check!(!token_is_active(100, 100, 200));
         check!(!token_is_active(100, 150, 100));
         check!(expire_token_deadline(100, 50, 200, 200) == TokenExpireDecision::Update(150));
-        check!(renew_token_expiry(100, 50, 50, 200, 200) == TokenRenewDecision::Renew(200));
+        check!(renew_token_expiry(100, 50, 50, 200, 200) == TokenRenewDecision::Renew(150));
         let renew_at_max = TokenMutationFacts {
             state: TokenMutationState::Expected,
             kind: TokenMutationKind::Renew,
