@@ -95,6 +95,17 @@ pub(crate) async fn handle(
             if authorizer.authorize(&*image, &acl_req) == AuthorizationResult::Deny {
                 return encode_err(version, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED);
             }
+            // KIP-939: `enable_2pc` also needs `TwoPhaseCommit` on the id.
+            // Kafka checks it here, before the identity and 2PC-config checks.
+            if req.enable2_pc {
+                let two_pc_req = AuthorizationRequest {
+                    operation: AclOperation::TwoPhaseCommit,
+                    ..acl_req
+                };
+                if authorizer.authorize(&*image, &two_pc_req) == AuthorizationResult::Deny {
+                    return encode_err(version, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED);
+                }
+            }
         } else {
             // Idempotent-only producer: cluster-wide IdempotentWrite, or
             // Write on at least one topic resource pattern (KIP-599).
@@ -119,6 +130,13 @@ pub(crate) async fn handle(
                 return encode_err(version, codes::CLUSTER_AUTHORIZATION_FAILED);
             }
         }
+    }
+
+    // Kafka `KafkaApis.handleInitProducerIdRequest`: a request carries both
+    // halves of the producer identity or neither, whatever the transactional
+    // id, and the check runs before the coordinator sees the request.
+    if half_identity(req.producer_id, req.producer_epoch) {
+        return encode_err(version, codes::INVALID_REQUEST);
     }
 
     let resp = match req.transactional_id.as_deref() {
@@ -150,38 +168,16 @@ pub(crate) async fn handle(
             let image = controller.current_image();
             let txnv = crate::txn::version::resolve_txn_version(&image);
 
-            // ── KIP-939 two-phase-commit gates ───────────────────────────
-            // Validated up-front (like Kafka's `handleInitProducerId`), before
-            // the coordinator-ness check, so a client learns its request is
-            // unauthorized / unsupported regardless of which broker it hit.
-            if req.enable2_pc {
-                // (1) Cluster must have 2PC enabled. Kafka maps a disabled
-                //     cluster to TRANSACTIONAL_ID_AUTHORIZATION_FAILED (not an
-                //     UNSUPPORTED_*), so a client can't probe the feature flag.
-                if !broker.config.features.transaction_two_phase_commit_enable {
-                    return encode_err(version, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED);
-                }
-                // (2) Principal must hold the TWO_PHASE_COMMIT ACL on the tid,
-                //     in addition to the Write checked in the preamble.
-                let two_pc_req = AuthorizationRequest {
-                    principal: ctx.principal,
-                    host: ctx.peer,
-                    resource_type: ResourceType::TransactionalId,
-                    resource_name: tid,
-                    operation: AclOperation::TwoPhaseCommit,
-                };
-                if broker.config.authorizer.authorize(&*image, &two_pc_req)
-                    == AuthorizationResult::Deny
-                {
-                    return encode_err(version, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED);
-                }
+            // ── KIP-939 two-phase-commit gate ───────────────────────────
+            // Validated before the coordinator-ness check, like Kafka's
+            // `handleInitProducerId`. A cluster with 2PC disabled answers
+            // TRANSACTIONAL_ID_AUTHORIZATION_FAILED (not an UNSUPPORTED_*), so a
+            // client can't probe the feature flag. The `TwoPhaseCommit` ACL is
+            // checked in the preamble above.
+            if req.enable2_pc && !broker.config.features.transaction_two_phase_commit_enable {
+                return encode_err(version, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED);
             }
             if req.keep_prepared_txn && (req.producer_id != -1 || req.producer_epoch != -1) {
-                return encode_err(version, codes::INVALID_REQUEST);
-            }
-            // Kafka `KafkaApis.handleInitProducerIdRequest`: a request carries
-            // both halves of the producer identity or neither.
-            if (req.producer_id == -1) != (req.producer_epoch == -1) {
                 return encode_err(version, codes::INVALID_REQUEST);
             }
             // Kafka validates the timeout before the coordinator lookup, so a
@@ -266,6 +262,12 @@ pub(crate) async fn handle(
     };
 
     crate::handlers::encode_response(&downgrade_producer_fenced(resp, version), version)
+}
+
+/// Whether exactly one half of the `(producer_id, producer_epoch)` pair is
+/// its `-1` sentinel, which Kafka answers with `INVALID_REQUEST`.
+fn half_identity(producer_id: i64, producer_epoch: i16) -> bool {
+    (producer_id == -1) != (producer_epoch == -1)
 }
 
 /// Kafka `KafkaApis.handleInitProducerIdRequest`: a client below version 4

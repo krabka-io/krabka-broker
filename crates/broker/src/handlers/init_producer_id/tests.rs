@@ -550,38 +550,63 @@ async fn half_an_identity_is_invalid_and_an_old_client_gets_invalid_producer_epo
     assert!(created.error_code == codes::NONE, "{created:?}");
     let zombie = (created.producer_id + 1_000, created.producer_epoch);
 
-    // (name, version, request identity, expected code)
+    // (name, version, transactional id, request identity, expected code)
     let cases = [
         (
             "a producer id with no epoch",
             max,
+            Some(tid),
             (7, -1),
             codes::INVALID_REQUEST,
         ),
         (
             "an epoch with no producer id",
             max,
+            Some(tid),
             (-1, 3),
+            codes::INVALID_REQUEST,
+        ),
+        (
+            "an idempotent producer with an epoch and no producer id",
+            max,
+            None,
+            (-1, 5),
+            codes::INVALID_REQUEST,
+        ),
+        (
+            "an idempotent producer with a producer id and no epoch",
+            max,
+            None,
+            (42, -1),
+            codes::INVALID_REQUEST,
+        ),
+        (
+            "an empty transactional id with half an identity",
+            max,
+            Some(""),
+            (42, -1),
             codes::INVALID_REQUEST,
         ),
         (
             "a fenced identity at the newest version",
             max,
+            Some(tid),
             zombie,
             codes::PRODUCER_FENCED,
         ),
         (
             "a fenced identity below version 4",
             3,
+            Some(tid),
             zombie,
             codes::INVALID_PRODUCER_EPOCH,
         ),
     ];
     let mut expected = Vec::new();
     let mut actual = Vec::new();
-    for (name, version, (producer_id, producer_epoch), code) in cases {
+    for (name, version, transactional_id, (producer_id, producer_epoch), code) in cases {
         let request = InitProducerIdRequest {
-            transactional_id: Some(tid.to_string()),
+            transactional_id: transactional_id.map(str::to_string),
             transaction_timeout_ms: 60_000,
             producer_id,
             producer_epoch,
@@ -598,8 +623,17 @@ async fn half_an_identity_is_invalid_and_an_old_client_gets_invalid_producer_epo
         .expect("initialize transactional producer");
         let response: InitProducerIdResponse =
             crate::test_support::decode_response(&response, version);
-        expected.push((name, code));
-        actual.push((name, response.error_code));
+        expected.push((
+            name,
+            InitProducerIdResponse {
+                throttle_time_ms: 0,
+                error_code: code,
+                producer_id: -1,
+                producer_epoch: -1,
+                ..Default::default()
+            },
+        ));
+        actual.push((name, response));
     }
     assert!(actual == expected);
     broker_handle.shutdown().await;
