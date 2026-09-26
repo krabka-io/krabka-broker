@@ -153,7 +153,7 @@ tonic = "0.14"
 tower = "0.5"
 tracing = "0.1"
 tracing-core = "0.1"
-tracing-opentelemetry = { version = "0.33", default-features = false }
+tracing-opentelemetry = { version = "0.34", default-features = false }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 twox-hash = { version = "2.1", default-features = false, features = ["xxhash3_64"] }
 uuid = { version = "1", features = ["v4", "serde"] }
