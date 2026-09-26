@@ -77,11 +77,19 @@ pub(crate) async fn handle(
         );
     }
 
-    let (results, records) = validate_updates(&req, &image, version);
+    let (results, mut records) = validate_updates(&req, &image, version);
 
     // validate_only: never persist.
     if req.validate_only {
         return finalize(results, version);
+    }
+    // KIP-966: turning ELR on writes its safety config records in the same
+    // batch, ahead of the feature record, as Kafka's controller does.
+    if validate::enables_elr(&req, &results) {
+        let mut batch =
+            validate::elr_safety_records(&image, broker.config.default_min_insync_replicas);
+        batch.append(&mut records);
+        records = batch;
     }
 
     // Activation must be derived from the validated row. Looking at the raw
