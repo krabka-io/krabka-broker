@@ -294,9 +294,9 @@ pub fn token_mutation_decision(facts: TokenMutationFacts) -> TokenMutationDecisi
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
 #[logic]
-fn deadline_model(now_ms: i64, duration_ms: i64) -> Int {
+fn deadline_model(now_ms: i64, duration_ms: Int) -> Int {
     pearlite! {
-        if now_ms@ + duration_ms@ > i64::MAX@ { i64::MAX@ } else { now_ms@ + duration_ms@ }
+        if now_ms@ + duration_ms > i64::MAX@ { i64::MAX@ } else { now_ms@ + duration_ms }
     }
 }
 
@@ -323,7 +323,7 @@ fn min_model(left: Int, right: Int) -> Int {
 /// Kafka's `DelegationTokenControlManager.sum`: `now + duration`, saturated
 /// at `i64::MAX` instead of wrapping.
 #[requires(duration_ms@ >= 0)]
-#[ensures(result@ == deadline_model(now_ms, duration_ms))]
+#[ensures(result@ == deadline_model(now_ms, duration_ms@))]
 fn token_deadline(now_ms: i64, duration_ms: i64) -> i64 {
     now_ms.checked_add(duration_ms).unwrap_or(i64::MAX)
 }
@@ -363,7 +363,7 @@ fn bounded_period(requested_ms: i64, default_ms: i64) -> i64 {
             deadline_model(now_ms, bounded_period_model(requested_ms, ceiling_ms))
             && deadlines.initial_expiry_ms@ == min_model(
                 deadlines.max_timestamp_ms@,
-                deadline_model(now_ms, default_renew_period_ms),
+                deadline_model(now_ms, default_renew_period_ms@),
             ),
 })]
 #[must_use]
@@ -457,7 +457,7 @@ pub fn token_is_active(now_ms: i64, expiry_timestamp_ms: i64, max_timestamp_ms: 
         && (current_expiry_ms@ < now_ms@ || max_timestamp_ms@ < now_ms@)))]
 #[ensures(match result {
     TokenExpireDecision::Update(expiry) =>
-        expiry@ == min_model(max_timestamp_ms@, deadline_model(now_ms, period_ms)),
+        expiry@ == min_model(max_timestamp_ms@, deadline_model(now_ms, period_ms@)),
     _ => true,
 })]
 #[must_use]
