@@ -6,6 +6,7 @@
 use std::{sync::Arc, time::Duration};
 
 use assert2::assert;
+use krabka_metadata::ResourceType;
 use krabka_protocol::owned::{
     create_topics_request::{self, CreatableTopic, CreateTopicsRequest},
     offset_commit_request::{
@@ -18,7 +19,7 @@ use krabka_protocol::owned::{
 
 use super::handle;
 use crate::{
-    authorizer::AllowAllAuthorizer,
+    authorizer::{AllowAllAuthorizer, AuthorizationRequest, AuthorizationResult, Authorizer},
     broker::{Broker, BrokerHandle},
     codes,
     coordinator::unified::{
@@ -239,6 +240,108 @@ async fn commit_is_fenced_by_kafka_group_rule() {
                 ..Default::default()
             },
             case.group != Group::Missing || case.error_code == codes::NONE,
+        ));
+    }
+    assert!(actual == expected);
+    broker.shutdown().await;
+}
+
+/// Allows everything but `Read` on the topic `DENIED_TOPIC`.
+#[derive(Debug)]
+struct DenyOneTopic;
+
+const DENIED_TOPIC: &str = "denied-topic";
+
+impl Authorizer for DenyOneTopic {
+    fn authorize(
+        &self,
+        _source: &dyn krabka_authz::AclSource,
+        req: &AuthorizationRequest<'_>,
+    ) -> AuthorizationResult {
+        if req.resource_type == ResourceType::Topic && req.resource_name == DENIED_TOPIC {
+            AuthorizationResult::Deny
+        } else {
+            AuthorizationResult::Allow
+        }
+    }
+}
+
+/// Kafka checks topic `Read` in `KafkaApis` before it calls the coordinator,
+/// so the coordinator's error goes on the allowed topics only, and a request
+/// with no allowed topic never reaches the coordinator.
+#[tokio::test]
+async fn topic_read_is_checked_before_the_group() {
+    let (broker, _dir) = start_broker_with_authorizer_no_audit(Arc::new(DenyOneTopic)).await;
+    let shared = broker.broker_arc_for_test();
+    create_topic(&shared).await;
+    broker.wait_until_partition_present(TOPIC, 0).await;
+    seed(&shared, "authz-mixed", Group::ClassicWithMember);
+
+    let row = |name: &str| OffsetCommitRequestTopic {
+        name: name.to_string(),
+        partitions: vec![OffsetCommitRequestPartition {
+            partition_index: 0,
+            committed_offset: 42,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let answer = |name: &str, error_code| OffsetCommitResponseTopic {
+        name: name.to_string(),
+        partitions: vec![OffsetCommitResponsePartition {
+            partition_index: 0,
+            error_code,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let cases = [
+        // One denied topic and one allowed topic with a wrong generation.
+        (
+            "authz-mixed",
+            vec![row(DENIED_TOPIC), row(TOPIC)],
+            vec![
+                answer(DENIED_TOPIC, codes::TOPIC_AUTHORIZATION_FAILED),
+                answer(TOPIC, codes::ILLEGAL_GENERATION),
+            ],
+        ),
+        // Every topic denied on a group that does not exist: the coordinator
+        // is not called, so neither GROUP_ID_NOT_FOUND nor a new group.
+        (
+            "authz-all-denied",
+            vec![row(DENIED_TOPIC)],
+            vec![answer(DENIED_TOPIC, codes::TOPIC_AUTHORIZATION_FAILED)],
+        ),
+    ];
+    let user = principal("consumer");
+    let address = peer();
+    let ctx = request_context(&user, &address, "consumer-client");
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (group_id, topics, answers) in cases {
+        let request = OffsetCommitRequest {
+            group_id: group_id.to_string(),
+            generation_id_or_member_epoch: GENERATION + 1,
+            member_id: MEMBER.to_string(),
+            topics,
+            ..Default::default()
+        };
+        let bytes = handle(&shared, 9, 7, &encode_request(&request, 9), &ctx)
+            .await
+            .expect("handle offset commit");
+        let response: OffsetCommitResponse = decode_response(&bytes, 9);
+        actual.push((
+            group_id,
+            response,
+            shared.group_coordinator.find(group_id).is_some(),
+        ));
+        expected.push((
+            group_id,
+            OffsetCommitResponse {
+                topics: answers,
+                ..Default::default()
+            },
+            group_id == "authz-mixed",
         ));
     }
     assert!(actual == expected);
