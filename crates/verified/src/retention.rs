@@ -143,8 +143,8 @@ pub fn local_retention_model(
 /// budget. Otherwise it is the log size minus the budget. The walk never
 /// passes a blocked segment.
 ///
-/// The result equals [`local_retention_model`] from the oldest segment,
-/// limited by [`local_retention_limit`]. That fold states the Kafka rule.
+/// The result equals `local_retention_model` from the oldest segment,
+/// limited by `local_retention_limit`. That fold states the Kafka rule.
 #[ensures(result@ == match size_debt {
     None => local_retention_model(
         segments@, local_retention_limit(segments@), 0, 0, false),
@@ -228,7 +228,7 @@ pub fn remote_retention_model(segments: Seq<RemoteRetentionSegment>, i: Int, deb
 /// `retention.bytes` is unset or not exceeded. A tier that accepts no delete
 /// (`deletes_allowed` false) selects nothing.
 ///
-/// The result equals [`remote_retention_model`] from the oldest segment.
+/// The result equals `remote_retention_model` from the oldest segment.
 /// That fold states the Kafka rule.
 #[ensures(result@ == if deletes_allowed {
     remote_retention_model(segments@, 0, size_debt@)

@@ -91,7 +91,7 @@ pub fn kafka_end_offset_for(
 
 /// Resolve a requested leader epoch to `(found_epoch, end_offset)`, exactly as
 /// Kafka's `LeaderEpochFileCache.endOffsetFor` does (see
-/// [`kafka_end_offset_for`] for the case table).
+/// `kafka_end_offset_for` for the case table).
 ///
 /// `(UNDEFINED_EPOCH, UNDEFINED_EPOCH_OFFSET)` = `(-1, -1)` is the "cannot
 /// place this epoch" answer: `UnifiedLog.endOffsetForEpoch` turns it into

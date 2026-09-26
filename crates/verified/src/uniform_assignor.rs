@@ -127,7 +127,7 @@ pub fn member_target(minimum_quota: Int, quota: HomogeneousMemberQuota) -> Int {
 ///   extra partition is left unclaimed after the last member.
 /// - Stickiness: each member keeps as much of its current ownership as its
 ///   target allows, and receives only the difference.
-/// - The extra slots go by [`keeps_extra_quota`], in member order.
+/// - The extra slots go by `keeps_extra_quota`, in member order.
 #[requires(extra_quotas@ <= owned@.len())]
 #[requires(minimum_quota@ < usize::MAX@)]
 #[ensures(result@.len() == owned@.len())]

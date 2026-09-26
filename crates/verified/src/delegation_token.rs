@@ -303,7 +303,7 @@ pub fn renew_is_noop(facts: TokenMutationFacts) -> bool {
 /// retries. On the expected generation, a delete always appends — Kafka's
 /// `expireDelegationToken` removes a token with a negative period whether or
 /// not it has expired — and a renew or expire appends only when
-/// [`update_admissible`] holds: the committed token is still live by Kafka's
+/// `update_admissible` holds: the committed token is still live by Kafka's
 /// `maxTimestamp < now || expiryTimestamp < now` test, and the new expiry does
 /// not cross the immutable maximum. A renewal may shorten the expiry, because
 /// Kafka's `renewDelegationToken` sets `min(maxTimestamp, now + renewPeriod)`

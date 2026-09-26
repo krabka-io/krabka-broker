@@ -91,7 +91,7 @@ pub fn jwks_on_demand_refresh_allowed(
 }
 
 /// Keep the limiter monotonic and fail closed across wall-clock rollback:
-/// refresh exactly when [`jwks_on_demand_refresh_allowed`] holds, stamping
+/// refresh exactly when `jwks_on_demand_refresh_allowed` holds, stamping
 /// `now_ms` as the new last-refresh time.
 #[ensures(match result {
     JwksOnDemandDecision::RateLimited => !jwks_on_demand_refresh_allowed(

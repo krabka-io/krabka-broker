@@ -298,7 +298,7 @@ pub fn snapshot_entry_valid_model(snapshot_offset: Int, entry: ProducerSnapshotE
 }
 
 /// Validate one decoded producer entry against its snapshot's exclusive
-/// offset boundary: the result is [`snapshot_entry_valid_model`].
+/// offset boundary: the result is `snapshot_entry_valid_model`.
 #[ensures(result == snapshot_entry_valid_model(snapshot_offset@, entry))]
 #[must_use]
 pub fn producer_snapshot_entry_valid(
@@ -328,7 +328,7 @@ pub fn producer_snapshot_entry_valid(
 ///
 /// Kafka's `UnifiedLog.rebuildProducerState` replays each local segment from
 /// `max(segment.baseOffset, mapEndOffset, logStartOffset)` (see
-/// [`kafka_replay_start`]). The range must be nonnegative and ordered, with
+/// `kafka_replay_start`). The range must be nonnegative and ordered, with
 /// the local start at or below the log end, and a loaded snapshot must be one
 /// the reload keeps; anything else is rejected as corrupt.
 ///
