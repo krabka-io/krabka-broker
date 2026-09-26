@@ -380,6 +380,9 @@ Validated operational policy loaded from `[runtime]`.
 | `barrier_state_num_partitions` | integer (int32) | broker default |  | Partition count of the `__barrier_state` internal topic. |
 | `barrier_state_replication_factor` | integer (int16) | broker default |  | Replication factor of the `__barrier_state` internal topic. |
 | `classic_group_initial_rebalance_delay` | string | broker default | duration | Initial delay before a classic group begins rebalancing, Kafka's `group.initial.rebalance.delay.ms`. |
+| `classic_group_max_session_timeout` | string | broker default | duration | Upper bound on a classic `JoinGroup` session timeout, Kafka's `group.max.session.timeout.ms`. |
+| `classic_group_max_size` | integer (uint) | broker default |  | Maximum number of members in one classic group, Kafka's `group.max.size`. |
+| `classic_group_min_session_timeout` | string | broker default | duration | Lower bound on a classic `JoinGroup` session timeout, Kafka's `group.min.session.timeout.ms`. |
 | `cleaner_interval` | string | broker default | duration | Cadence of log cleaner maintenance. |
 | `client_metrics_default_interval` | string | broker default | duration | Default KIP-714 client telemetry subscription push interval. |
 | `client_metrics_enable` | boolean | broker default |  | Whether the broker advertises the KIP-714 client-metrics RPCs, `GetTelemetrySubscriptions` (71) and `PushTelemetry` (72). Kafka advertises them only when `metric.reporters` holds a `ClientTelemetry` implementation, so the default here is `false` as well and a client starts no telemetry handshake the broker has nowhere to forward. A configured `[telemetry]` OTLP endpoint turns them on without this key. |
@@ -401,7 +404,7 @@ Validated operational policy loaded from `[runtime]`.
 | `controller_election_timeout` | string | broker default | duration | Controller election timeout, Kafka's `controller.quorum.fetch.timeout.ms`. It is the follower fetch watchdog, and 1.5x of it is the leader's check-quorum window: a leader that a majority of the voters has not fetched from within that window resigns its epoch. |
 | `controller_fetch_miss_limit` | integer (uint32) | broker default |  | Consecutive follower fetch misses tolerated before a new election. |
 | `controller_heartbeat_interval` | string | broker default | duration | Raft heartbeat interval on the controller quorum. It should stay at or below `controller_election_timeout / 3`. |
-| `controller_mutation_quota_window` | string | broker default | duration | Time window whose throughput defines the KIP-599 controller-mutation quota burst capacity. |
+| `controller_mutation_quota_window` | string | broker default | duration | Time window whose throughput defines the KIP-599 controller-mutation quota burst capacity (default 11 s), Kafka's `controller.quota.window.num` x `controller.quota.window.size.seconds`. |
 | `coordinator_actor_mailbox_capacity` | integer (uint) | broker default |  | Mailbox capacity of each coordinator actor. |
 | `coordinator_session_expiry_tick` | string | broker default | duration | Cadence of the consumer-group session expiry scan. |
 | `coordinator_shutdown_ack_timeout` | string | broker default | duration | Maximum wait for coordinator shutdown acknowledgements. |
@@ -461,7 +464,7 @@ Validated operational policy loaded from `[runtime]`.
 | `producer_id_expiration_scan_interval` | string | broker default | duration | Cadence of the producer-state expiry scan, Kafka's `producer.id.expiration.check.interval.ms`. |
 | `queued_max_request_bytes` | string | broker default | byte size | Maximum byte size across all queued requests before accepting additional requests is paused, Kafka's `queued.max.request.bytes`. |
 | `queued_max_requests` | integer (uint) | broker default |  | Maximum number of queued requests allowed in the broker dispatch queue, Kafka's `queued.max.requests`. |
-| `quota_throttle_max` | string | broker default | duration | Maximum client quota throttle delay, which bounds how long one response mutes a client. Equivalent to Kafka's `quota.window.size.seconds * (quota.window.num - 1)`. |
+| `quota_throttle_max` | string | broker default | duration | Maximum request-quota throttle delay, which bounds how long one response over `request_percentage` mutes a client. Equivalent to Kafka's `quota.window.size.seconds`; byte-rate and controller-mutation throttles are not bounded. |
 | `quota_window` | string | broker default | duration | Time window that sizes the client byte-rate quota token bucket's burst capacity. Equivalent to Kafka's sampling window `quota.window.num * quota.window.size.seconds`. |
 | `record_decompression_max_ratio` | string | broker default | ratio | Maximum accepted decompression ratio for a produced record batch. |
 | `record_decompression_output_ceiling` | string | broker default | byte size | Maximum decompressed-output allowance granted to a record batch. |
@@ -517,9 +520,6 @@ Validated operational policy loaded from `[runtime]`.
 | `streams_group_task_offset_interval` | string | broker default | duration | Cadence at which members report task offsets, the group's `streams.task.offset.interval.ms`. |
 | `streams_internal_topic_replication_factor` | integer (int16) | broker default |  | Replication factor of the internal topics a streams group creates, such as its repartition and changelog topics. |
 | `sync_group_follower_wait` | string | broker default | duration | Maximum time a classic-protocol follower waits for its `SyncGroup` assignment. |
-| `telemetry_decompressed_output_ceiling` | string | broker default | byte size | Maximum decompressed-output allowance granted to a telemetry payload. |
-| `telemetry_decompressed_output_floor` | string | broker default | byte size | Minimum decompressed-output allowance granted to a telemetry payload, whatever the ratio bound computes. |
-| `telemetry_max_decompression_ratio` | string | broker default | ratio | Maximum accepted decompression ratio for a KIP-714 telemetry payload. |
 | `tls_reload_interval` | string | broker default | duration | Cadence at which the TLS watcher polls the certificate, key, and client-CA files and rebuilds the server configuration if any changed. Zero disables the periodic watcher. |
 | `transaction_max_timeout` | string | broker default | duration | Maximum transaction timeout a producer may request, Kafka's `transaction.max.timeout.ms`. |
 | `transaction_recovery_read_max` | string | broker default | byte size | Maximum bytes requested by one `__transaction_state` recovery read. |

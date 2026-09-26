@@ -389,10 +389,11 @@ async fn acks_zero_produce_writes_no_response_and_still_mutes() {
     use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
 
     let mute_window = millis(1000);
-    // 128 bytes/sec against an 8 KiB produce is about a minute of debt, so the
-    // window saturates at the configured maximum.
+    // A byte-rate throttle is not bounded (#709): 2800 bytes/sec against an
+    // 8 KiB produce, after the one-second burst, is about two seconds of debt,
+    // longer than `mute_window` and well inside `MUTE_LIFT_TIMEOUT`.
     let (handle, _dir) =
-        broker_with_anonymous_quotas(mute_window, &[("producer_byte_rate", 128.0)]).await;
+        broker_with_anonymous_quotas(mute_window, &[("producer_byte_rate", 2800.0)]).await;
     let (server, mut framed) = connect_to_serve_loop(&handle).await;
 
     let create_topics_body = encoded(
@@ -445,9 +446,10 @@ async fn acks_zero_produce_writes_no_response_and_still_mutes() {
 /// A request that trips two quotas is muted once, for the longer window, not
 /// once per quota and not for their sum.
 ///
-/// A produce charges both `producer_byte_rate` and `request_percentage`. Both
-/// are seeded far below what this request needs, so both saturate at
-/// `quota_throttle_max` and the two windows are equal — which makes summing
+/// A produce charges both `producer_byte_rate` and `request_percentage`. The
+/// request quota is seeded far below what this request needs, so it saturates
+/// at `quota_throttle_max`. The byte rate leaves about three quarters of a
+/// window of debt, which Kafka does not bound — so summing the two is
 /// observably different from taking the longest. Kafka reports one
 /// `throttle_time_ms` and mutes the channel once, so the response must carry a
 /// single window and the connection must be readable again after one.
@@ -457,7 +459,7 @@ async fn a_request_tripping_two_quotas_is_muted_once_for_the_longest_window() {
     let (handle, _dir) = broker_with_anonymous_quotas(
         mute_window,
         &[
-            ("producer_byte_rate", 128.0),
+            ("producer_byte_rate", 4800.0),
             ("request_percentage", 0.0001),
         ],
     )
@@ -492,6 +494,39 @@ async fn a_request_tripping_two_quotas_is_muted_once_for_the_longest_window() {
     check!(
         muted_for < ONE_WINDOW_CEILING,
         "two quotas must mute for one window, not for their sum"
+    );
+
+    drop(framed);
+    server.await.expect("serve loop joins on client EOF");
+    handle.shutdown().await;
+}
+
+/// KIP-13: a `Produce` is charged its whole request, header and body, once
+/// (#748), as Kafka's `KafkaApis.handleProduceRequest` charges
+/// `request.sizeInBytes` -- not only the record payloads. At 1000 bytes/sec
+/// with a one-second burst, the reported throttle is the frame size less the
+/// burst, in milliseconds.
+#[tokio::test]
+async fn produce_charges_the_whole_request_frame_once() {
+    let (handle, _dir) =
+        broker_with_anonymous_quotas(millis(1000), &[("producer_byte_rate", 1000.0)]).await;
+    let (server, mut framed) = connect_to_serve_loop(&handle).await;
+
+    let body = produce_body("frame-charge", 1, 256, 8);
+    let frame_len = request_frame(PRODUCE_KEY, PRODUCE_VERSION, 1, None, Some(0), &body).len();
+    send_request(&mut framed, PRODUCE_KEY, PRODUCE_VERSION, 1, &body).await;
+    let response = tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
+        .await
+        .expect("the response must beat the client timeout")
+        .expect("a response frame")
+        .expect("response decode");
+    let produce: ProduceResponse = decode_response_body(&response, PRODUCE_VERSION);
+
+    let expected = i32::try_from(frame_len).expect("frame length") - 1000;
+    check!(
+        (expected - 5..=expected).contains(&produce.throttle_time_ms),
+        "frame of {frame_len} bytes, throttle {}",
+        produce.throttle_time_ms
     );
 
     drop(framed);

@@ -489,7 +489,7 @@ const DEV_CLIENT_KEY: &str = include_str!("fixtures/security/dev_client_key.pem"
 
 /// The Subject DN of the fixture client certificate, which Kafka's `DEFAULT`
 /// mapping rule keeps as the principal name.
-const CLIENT_PRINCIPAL: &str = "CN=test-client,OU=integration,O=crabka";
+const CLIENT_PRINCIPAL: &str = r"CN=test-client\,OU\=integration\,O\=crabka";
 
 /// Accepts exactly the broker's fixture certificate. The fixture is a
 /// self-issued CA certificate, which rustls refuses as an end entity.

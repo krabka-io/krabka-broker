@@ -286,6 +286,19 @@ fn diskless_index<'a>(
         .zip(env.image.topic(topic).map(|topic| topic.topic_id))
 }
 
+/// Whether the partition's `cleanup.policy` forbids a `DeleteRecords` trim:
+/// Kafka's `!config.delete && config.compact`, which is `compact` alone.
+/// `compact,delete` trims like `delete`.
+fn trim_forbidden_by_policy(part: &crate::partition::Partition) -> bool {
+    let policy = part
+        .log
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .config_snapshot()
+        .cleanup_policy;
+    policy.contains_compact() && !policy.contains_delete()
+}
+
 /// Everything one partition's trim reads, and nothing it writes.
 pub(super) struct TrimEnv<'a> {
     pub(super) broker: &'a Broker,
@@ -330,9 +343,16 @@ async fn trim_one(
             codes::UNKNOWN_TOPIC_OR_PARTITION
         });
     }
-    let part_opt = env.partitions.get(topic, krabka_ids::PartitionIndex(index));
-    let Some(part) = part_opt else {
+    // `KafkaApis.handleDeleteRecordsRequest` answers a partition the metadata
+    // does not hold with `UNKNOWN_TOPIC_OR_PARTITION`. One the metadata holds
+    // and this broker does not host is `NOT_LEADER_OR_FOLLOWER`
+    // (`ReplicaManager.getPartitionOrError`), which sends the client to
+    // refresh its metadata and find the leader rather than give up.
+    if env.image.partition(topic, index).is_none() {
         return refused(codes::UNKNOWN_TOPIC_OR_PARTITION);
+    }
+    let Some(part) = env.partitions.get(topic, krabka_ids::PartitionIndex(index)) else {
+        return refused(codes::NOT_LEADER_OR_FOLLOWER);
     };
 
     let cur_leader = part
@@ -340,6 +360,19 @@ async fn trim_one(
         .load(std::sync::atomic::Ordering::Acquire);
     if cur_leader != env.broker.config.node_id {
         return refused(codes::NOT_LEADER_OR_FOLLOWER);
+    }
+
+    // Kafka's `Partition.deleteRecordsOnLeader` refuses a trim on a log whose
+    // `cleanup.policy` compacts and does not delete. A compacted topic holds
+    // the latest value of each key, and a trim would lose keys. The leader's
+    // own log config is the one Kafka reads.
+    if trim_forbidden_by_policy(&part) {
+        tracing::warn!(
+            %topic,
+            partition = index,
+            "DeleteRecords refused: cleanup.policy=compact does not allow deletion"
+        );
+        return refused(codes::POLICY_VIOLATION);
     }
 
     // KFC-9: a write freeze refuses every operation that removes data from the

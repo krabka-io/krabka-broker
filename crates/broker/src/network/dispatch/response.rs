@@ -49,14 +49,11 @@ impl ThrottledResponse {
 /// The schema version and header flexibility of the response that was
 /// actually encoded.
 ///
-/// It is not always the request's. `send_unsupported_version` replies at the
-/// nearest supported version, which for a request below an API's minimum is
-/// higher than the one the client asked for and can be flexible where the
-/// request header was not. `patch_leading_throttle` derives the body offset
-/// from the flexibility, and `throttle_is_leading_field` from the version, so
-/// both must read the response's values: patching a flexible v0 body from the
-/// request's non-flexible header offset overwrites the tagged-fields byte and
-/// three quarters of `ThrottleTimeMs`.
+/// It is not always the request's. `reject_unsupported_version` replies to
+/// an `ApiVersions` request at any unsupported version with a v0 body.
+/// `patch_leading_throttle` derives the body offset from the flexibility, and
+/// `throttle_is_leading_field` from the version, so both must read the
+/// response's values.
 #[derive(Clone, Copy)]
 pub(super) struct ResponseShape {
     pub(super) version: ApiVersion,

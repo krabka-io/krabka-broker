@@ -27,10 +27,10 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use krabka_metadata::MetadataImage;
+use krabka_metadata::{BrokerRegistrationRecord, MetadataImage};
 
 /// `MetadataResponse.NO_CONTROLLER_ID`, which `DescribeCluster` shares.
-const NO_CONTROLLER_ID: i32 = -1;
+pub(crate) const NO_CONTROLLER_ID: i32 = -1;
 
 /// The rotation cursor behind [`advertised_controller_id`].
 static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -41,9 +41,25 @@ static NEXT: AtomicUsize = AtomicUsize::new(0);
 /// [`NO_CONTROLLER_ID`] when no registered broker is unfenced, which is what a
 /// caller sees while a cluster is wholly fenced.
 pub(crate) fn advertised_controller_id(image: &MetadataImage, unavailable: &HashSet<u64>) -> i32 {
+    advertised_controller_id_among(image, unavailable, |_| true)
+}
+
+/// [`advertised_controller_id`] drawn only from the unfenced brokers that
+/// `eligible` accepts.
+///
+/// `DescribeCluster` lists only the brokers with an endpoint on the request's
+/// listener, and Kafka's `AuthHelper.computeDescribeClusterResponse` answers
+/// [`NO_CONTROLLER_ID`] for a drawn id that the list does not hold. Drawing
+/// from the listed brokers alone gives one of the answers Kafka's draw can
+/// give, and never a needless `-1`.
+pub(crate) fn advertised_controller_id_among(
+    image: &MetadataImage,
+    unavailable: &HashSet<u64>,
+    eligible: impl Fn(&BrokerRegistrationRecord) -> bool,
+) -> i32 {
     let mut alive: Vec<i32> = image
         .brokers()
-        .filter(|broker| !unavailable.contains(&broker.node_id.0))
+        .filter(|broker| !unavailable.contains(&broker.node_id.0) && eligible(broker))
         .filter_map(|broker| i32::try_from(broker.node_id.0).ok())
         .collect();
     // The image's iteration order is not part of its contract, and the

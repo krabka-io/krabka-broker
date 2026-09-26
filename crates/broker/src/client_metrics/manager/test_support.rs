@@ -27,7 +27,7 @@ pub(super) fn img_with(name: &str, kvs: &[(&str, &str)]) -> MetadataImage {
 
 pub(super) fn attrs() -> ClientAttributes {
     ClientAttributes {
-        client_instance_id: Uuid::from_u128(1),
+        client_instance_id: Uuid::from_u128(7),
         client_id: "svc-1".into(),
         software_name: "apache-kafka-java".into(),
         software_version: "3.9.0".into(),

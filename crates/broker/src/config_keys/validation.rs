@@ -12,7 +12,6 @@ use super::{
     REMOTE_STORAGE_ENABLE,
     delivery::{DELIVERY_MODE, DELIVERY_MODE_SCHEDULED},
     diskless::validate_diskless_combination,
-    qos::{QOS_TIER, validate_qos_tier},
     registry::{
         self, BOOLEAN_VALUES, CLEANUP_POLICY_VALUES, ConfigScope, GZIP_DEFAULT_LEVEL,
         GZIP_MAX_LEVEL, GZIP_MIN_LEVEL, ValueCheck,
@@ -51,7 +50,6 @@ pub(crate) fn validate_topic_config(key: &str, value: &str) -> Result<(), String
             COMPRESSION_TYPE => parse_compression_type(value).map(|_| ()),
             COMPRESSION_GZIP_LEVEL => parse_gzip_level(value).map(|_| ()),
             MIN_CLEANABLE_DIRTY_RATIO => parse_dirty_ratio(value).map(|_| ()),
-            QOS_TIER => validate_qos_tier(value),
             crate::throttle::LEADER_THROTTLED_REPLICAS_KEY
             | crate::throttle::FOLLOWER_THROTTLED_REPLICAS_KEY => {
                 crate::throttle::ThrottledReplicas::parse(value).map(|_| ())

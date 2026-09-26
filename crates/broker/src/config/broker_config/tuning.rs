@@ -91,11 +91,11 @@ macro_rules! tuning_fields {
             pub unclean_recovery_balanced_deadline: Time,
             /// Operator-triggered recovery deadline.
             pub operator_recovery_deadline: Time,
-            /// Maximum client quota throttle delay (default 10 s), bounding per-response client muting. Equivalent to Kafka's `quotaWindowSizeSeconds * (numQuotaSamples - 1)` under `quota.window.num` and `quota.window.size.seconds`.
+            /// Maximum request-quota throttle delay (default 1 s), bounding how long one response over `request_percentage` mutes a client. Equivalent to Kafka's `ClientRequestQuotaManager.maxThrottleTimeMs`, one `quota.window.size.seconds`. Byte-rate and controller-mutation throttles are not bounded.
             pub quota_throttle_max: Time,
             /// Time window sizing the byte-rate quota token bucket burst capacity (default 11 s). Equivalent to Kafka's sampling window `quota.window.num * quota.window.size.seconds`.
             pub quota_window: Time,
-            /// Window whose throughput defines the controller-mutation burst capacity.
+            /// Time window sizing the KIP-599 controller-mutation token bucket burst capacity (default 11 s): the bucket holds `window x controller_mutation_rate` tokens. Equivalent to Kafka's `controller.quota.window.num * controller.quota.window.size.seconds`.
             pub controller_mutation_quota_window: Time,
             /// Maximum self-registration attempts before startup fails.
             pub self_registration_max_attempts: u32,
@@ -165,12 +165,6 @@ macro_rules! tuning_fields {
             pub acl_max_principal: ByteSize,
             /// Maximum encoded ACL resource-name length.
             pub acl_max_resource_name: ByteSize,
-            /// Maximum accepted telemetry decompression ratio.
-            pub telemetry_max_decompression_ratio: Ratio,
-            /// Minimum telemetry decompression output allowance.
-            pub telemetry_decompressed_output_floor: ByteSize,
-            /// Maximum telemetry decompression output allowance.
-            pub telemetry_decompressed_output_ceiling: ByteSize,
             /// Maximum accepted Kafka record decompression ratio.
             pub record_decompression_max_ratio: Ratio,
             /// Minimum Kafka record decompression output allowance.
@@ -208,12 +202,23 @@ macro_rules! tuning_fields {
             /// creates with `replication_factor = -1`. Kafka's
             /// `default.replication.factor`, default 1.
             pub default_replication_factor: i16,
+            /// Whether `DeleteTopics` may delete a topic. Kafka's
+            /// `delete.topic.enable`, default `true`.
+            pub delete_topic_enable: bool,
+            /// Whether `Metadata` may create a topic it is asked about and
+            /// that does not exist, when the request allows it. Kafka's
+            /// `auto.create.topics.enable`, default `true`.
+            pub auto_create_topics_enable: bool,
             /// Upper clamp on `DescribeTopicPartitions`'
             /// `response_partition_limit`. Kafka's
             /// `max.request.partition.size.limit`
             /// (`ServerConfigs.MAX_REQUEST_PARTITION_SIZE_LIMIT_DEFAULT`),
             /// default 2000.
             pub max_request_partition_size_limit: i32,
+            /// Longest committed metadata an `OffsetCommit` partition may
+            /// carry, in UTF-16 code units. Kafka's
+            /// `offset.metadata.max.bytes`, default 4096.
+            pub offset_metadata_max_bytes: i32,
             /// Bytes copied per future-log move read.
             pub future_log_move_read_chunk: ByteSize,
             /// Partition count for the consumer-offsets internal topic.

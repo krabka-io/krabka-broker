@@ -7,12 +7,95 @@
 
 use std::time::{Duration, Instant};
 
+use bytes::Bytes;
+
 use super::{
     group::{ClassicGroup, GroupState},
     member::{AddMemberOutcome, Member},
 };
 
+/// Kafka's `CLASSIC_GROUP_NEW_MEMBER_JOIN_TIMEOUT_MS`: how long a member that
+/// joined in the current round may wait in `JoinGroup` before it expires. An
+/// existing member that waits in `JoinGroup` does not expire.
+pub const NEW_MEMBER_JOIN_TIMEOUT: Duration = Duration::from_mins(5);
+
 impl ClassicGroup {
+    /// Kafka's `ClassicGroup.addPendingMember`: remember a member id that a
+    /// `JoinGroup` v4+ answered with `MEMBER_ID_REQUIRED`, until `expires_at`.
+    pub fn add_pending_member(&mut self, member_id: String, expires_at: Instant) {
+        self.pending_members.insert(member_id, expires_at);
+    }
+
+    /// Kafka's `ClassicGroup.add`, without the rebalance. It pins the
+    /// member's instance id, takes the member's protocol type when the group
+    /// has no members, makes the member the leader when the group has none,
+    /// and clears its pending id. The member does not count as joined until
+    /// [`Self::mark_awaiting_join`].
+    pub fn insert_joining_member(&mut self, member: Member, protocol_type: &str) {
+        if let Some(instance_id) = &member.group_instance_id {
+            self.static_members
+                .insert(instance_id.clone(), member.id.clone());
+        }
+        if self.members.is_empty() {
+            self.protocol_type = Some(protocol_type.to_string());
+        }
+        if self.leader_id.is_none() {
+            self.leader_id = Some(member.id.clone());
+        }
+        self.pending_members.remove(&member.id);
+        self.members.insert(member.id.clone(), member);
+    }
+
+    /// Kafka's `ClassicGroup.updateMember`, without the join future: the
+    /// member's protocols and timeouts become the ones of its `JoinGroup`.
+    pub fn update_joining_member(
+        &mut self,
+        member_id: &str,
+        protocols: Vec<(String, Bytes)>,
+        rebalance_timeout: Duration,
+        session_timeout: Duration,
+    ) {
+        if let Some(member) = self.members.get_mut(member_id) {
+            member.protocol_metadata = protocols
+                .first()
+                .map(|(_, b)| b.clone())
+                .unwrap_or_default();
+            member.protocols = protocols;
+            member.rebalance_timeout = rebalance_timeout;
+            member.session_timeout = session_timeout;
+        }
+    }
+
+    /// Records that `member_id` waits in `JoinGroup` for this round, Kafka's
+    /// `isAwaitingJoin`.
+    pub fn mark_awaiting_join(&mut self, member_id: &str) {
+        self.joined_this_round.insert(member_id.to_string());
+    }
+
+    /// Kafka's `ClassicGroup.replaceStaticMember`. The member of `instance_id`
+    /// moves from `old_member_id` to `new_member_id` with everything else
+    /// kept, the assignment included. The leader follows it, and the old id
+    /// is gone, so a request that still carries it is fenced.
+    pub fn replace_static_member(
+        &mut self,
+        instance_id: &str,
+        old_member_id: &str,
+        new_member_id: &str,
+    ) {
+        let Some(mut member) = self.members.remove(old_member_id) else {
+            return;
+        };
+        self.joined_this_round.remove(old_member_id);
+        member.id = new_member_id.to_string();
+        member.is_new = false;
+        self.members.insert(new_member_id.to_string(), member);
+        if self.leader_id.as_deref() == Some(old_member_id) {
+            self.leader_id = Some(new_member_id.to_string());
+        }
+        self.static_members
+            .insert(instance_id.to_string(), new_member_id.to_string());
+    }
+
     /// Add or refresh a member.
     ///
     /// **Dynamic** (no `group_instance_id`): the group inserts the member and
@@ -109,6 +192,7 @@ impl ClassicGroup {
             }
         }
         self.joined_this_round.remove(member_id);
+        self.pending_members.remove(member_id);
         if self.members.is_empty() {
             self.state = GroupState::Empty;
             self.leader_id = None;
@@ -146,13 +230,18 @@ impl ClassicGroup {
         // equal to the initial rebalance delay). With the default session timeout
         // 45s and a 3s rebalance delay this race is impossible in practice, and
         // real Kafka expires members regardless of group state.
+        // Kafka's `expireClassicGroupMemberHeartbeat` on a pending member:
+        // a `MEMBER_ID_REQUIRED` id that never joined goes away after the
+        // session timeout of the request that got it.
+        self.pending_members
+            .retain(|_, expires_at| now <= *expires_at);
         if self.state == GroupState::Empty {
             return Vec::new();
         }
         let dropped: Vec<String> = self
             .members
             .iter()
-            .filter(|(_, m)| now.duration_since(m.last_heartbeat) > m.session_timeout)
+            .filter(|(id, m)| !self.has_satisfied_heartbeat(id, m, now))
             .map(|(id, _)| id.clone())
             .collect();
         for id in &dropped {
@@ -186,6 +275,24 @@ impl ClassicGroup {
             }
         }
         dropped
+    }
+
+    /// Kafka's `ClassicGroupMember.hasSatisfiedHeartbeat` combined with its
+    /// heartbeat deadline. A member that joined in this round has the
+    /// new-member join timeout. An existing member that waits in `JoinGroup`
+    /// cannot heartbeat and does not expire while it waits. Any other member
+    /// has its session timeout.
+    fn has_satisfied_heartbeat(&self, member_id: &str, member: &Member, now: Instant) -> bool {
+        let since = now.saturating_duration_since(member.last_heartbeat);
+        if member.is_new {
+            since <= NEW_MEMBER_JOIN_TIMEOUT
+        } else if self.state == GroupState::PreparingRebalance
+            && self.joined_this_round.contains(member_id)
+        {
+            true
+        } else {
+            since <= member.session_timeout
+        }
     }
 }
 
@@ -415,9 +522,13 @@ mod tests {
     #[test]
     fn expire_last_dead_member_clears_rebalance_bookkeeping() {
         let mut g = ClassicGroup::new("g");
+        // A new member that waits in `JoinGroup` past the new-member join
+        // timeout.
         let mut m = sample_member("m1");
-        m.session_timeout = Duration::from_millis(1);
-        m.last_heartbeat = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+        m.is_new = true;
+        m.last_heartbeat = Instant::now()
+            .checked_sub(NEW_MEMBER_JOIN_TIMEOUT + Duration::from_secs(1))
+            .unwrap();
         g.add_member(m);
         g.rebalance_deadline = Some(Instant::now() + Duration::from_secs(3));
         g.rebalance_from_empty = true;
@@ -432,5 +543,79 @@ mod tests {
         check!(g.rebalance_deadline.is_none());
         check!(g.joined_this_round.is_empty());
         check!(!g.rebalance_from_empty);
+    }
+
+    /// #797: Kafka's `hasSatisfiedHeartbeat`. A member that waits in
+    /// `JoinGroup` cannot heartbeat: an existing one does not expire while it
+    /// waits, and a new one has the new-member join timeout.
+    #[test]
+    fn members_waiting_in_join_group_expire_as_kafka_does() {
+        let session = Duration::from_secs(10);
+        for (name, is_new, awaiting, elapsed, dropped) in [
+            (
+                "existing, waiting, past session",
+                false,
+                true,
+                Duration::from_secs(60),
+                false,
+            ),
+            (
+                "existing, not waiting, past session",
+                false,
+                false,
+                Duration::from_secs(60),
+                true,
+            ),
+            (
+                "existing, not waiting, in session",
+                false,
+                false,
+                Duration::from_secs(5),
+                false,
+            ),
+            (
+                "new, waiting, past session",
+                true,
+                true,
+                Duration::from_secs(60),
+                false,
+            ),
+            (
+                "new, waiting, past new-member timeout",
+                true,
+                true,
+                NEW_MEMBER_JOIN_TIMEOUT + Duration::from_secs(1),
+                true,
+            ),
+        ] {
+            let mut g = ClassicGroup::new("g");
+            g.add_member(sample_member("keeper"));
+            let mut m = sample_member("m1");
+            m.is_new = is_new;
+            m.session_timeout = session;
+            let now = Instant::now();
+            m.last_heartbeat = now.checked_sub(elapsed).unwrap();
+            g.add_member(m);
+            if !awaiting {
+                g.joined_this_round.remove("m1");
+            }
+            let want: Vec<String> = if dropped { vec!["m1".into()] } else { vec![] };
+            check!(
+                g.expire_dead_members(now, Duration::from_secs(3)) == want,
+                "{name}"
+            );
+        }
+    }
+
+    /// A `MEMBER_ID_REQUIRED` id that never joins goes away after its
+    /// session timeout.
+    #[test]
+    fn pending_member_expires() {
+        let mut g = ClassicGroup::new("g");
+        let now = Instant::now();
+        g.add_pending_member("late".into(), now);
+        g.add_pending_member("waiting".into(), now + Duration::from_secs(10));
+        let _ = g.expire_dead_members(now + Duration::from_secs(1), Duration::from_secs(3));
+        check!(g.pending_members.keys().collect::<Vec<_>>() == vec!["waiting"]);
     }
 }

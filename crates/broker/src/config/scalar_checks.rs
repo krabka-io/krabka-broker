@@ -3,8 +3,8 @@
 //! inside its bounds before the broker starts.
 
 use krabka_units::{
-    ByteSize, Ratio, Time,
-    convert::{ByteSizeExt, RatioExt, TimeExt},
+    ByteSize, Time,
+    convert::{ByteSizeExt, TimeExt},
     millis,
 };
 
@@ -391,14 +391,6 @@ impl BrokerConfig {
             ("acl_max_principal", self.acl_max_principal),
             ("acl_max_resource_name", self.acl_max_resource_name),
             (
-                "telemetry_decompressed_output_floor",
-                self.telemetry_decompressed_output_floor,
-            ),
-            (
-                "telemetry_decompressed_output_ceiling",
-                self.telemetry_decompressed_output_ceiling,
-            ),
-            (
                 "future_log_move_read_chunk",
                 self.future_log_move_read_chunk,
             ),
@@ -408,11 +400,6 @@ impl BrokerConfig {
             ),
         ] {
             require_positive_size(name, value)?;
-        }
-        if self.telemetry_max_decompression_ratio <= <Ratio as RatioExt>::ZERO {
-            return Err(BrokerError::InvalidRuntimeConfig(
-                "telemetry_max_decompression_ratio must be positive".into(),
-            ));
         }
         require_positive_time("producer_id_expiration", self.producer_id_expiration)?;
         if self.audit_tail_window_offsets <= 0 {

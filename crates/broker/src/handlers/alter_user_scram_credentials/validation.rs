@@ -21,6 +21,16 @@ use crate::{broker::Broker, codes};
 
 const EMPTY_USERNAME_MESSAGE: &str = "Username must not be empty";
 
+/// The row message of a cluster `Alter` refusal. Kafka's `AuthHelper` writes
+/// "Request <request> needs ALTER permission.", where `<request>` is the JVM
+/// `toString` of the channel request; krabka names the API in its place.
+pub(super) const CLUSTER_ALTER_DENIED_MESSAGE: &str =
+    "Request AlterUserScramCredentials needs ALTER permission.";
+
+/// `ScramControlManager`'s refusal when `metadata.version` predates SCRAM.
+pub(super) const SCRAM_UNSUPPORTED_MESSAGE: &str =
+    "The current metadata.version does not support SCRAM";
+
 /// KIP-554 wire byte that identifies a SCRAM mechanism. See
 /// [`wire_to_mech`].
 type MechanismWireByte = i8;
@@ -115,7 +125,7 @@ pub(super) fn decision_error(decision: ScramAlterationDecision) -> Option<Altera
         },
         ScramAlterationDecision::Unauthorized => AlterationError {
             code: codes::CLUSTER_AUTHORIZATION_FAILED,
-            message: "not super-user",
+            message: CLUSTER_ALTER_DENIED_MESSAGE,
         },
         ScramAlterationDecision::EmptyName => AlterationError {
             code: codes::UNACCEPTABLE_CREDENTIAL,
@@ -123,19 +133,19 @@ pub(super) fn decision_error(decision: ScramAlterationDecision) -> Option<Altera
         },
         ScramAlterationDecision::UnsupportedMechanism => AlterationError {
             code: codes::UNSUPPORTED_SASL_MECHANISM,
-            message: "unknown mechanism",
+            message: "Unknown SCRAM mechanism",
         },
         ScramAlterationDecision::TooFewIterations => AlterationError {
             code: codes::UNACCEPTABLE_CREDENTIAL,
-            message: "iterations < 4096",
+            message: "Too few iterations",
         },
         ScramAlterationDecision::TooManyIterations => AlterationError {
             code: codes::UNACCEPTABLE_CREDENTIAL,
-            message: "iterations > 16384",
+            message: "Too many iterations",
         },
         ScramAlterationDecision::MissingCredential => AlterationError {
             code: codes::RESOURCE_NOT_FOUND,
-            message: "credential not found",
+            message: "Attempt to delete a user credential that does not exist",
         },
     };
     Some(error)
@@ -205,7 +215,7 @@ mod tests {
             r == expected_result(
                 "alice",
                 KAFKA_UNSUPPORTED_SASL_MECHANISM,
-                Some("unknown mechanism"),
+                Some("Unknown SCRAM mechanism"),
             )
         );
         assert!(records.is_empty());
@@ -223,7 +233,7 @@ mod tests {
             r == expected_result(
                 "alice",
                 KAFKA_UNACCEPTABLE_CREDENTIAL,
-                Some("iterations > 16384"),
+                Some("Too many iterations"),
             )
         );
         assert!(records.is_empty());
@@ -251,7 +261,7 @@ mod tests {
                 u.iterations = MIN_SCRAM_ITERATIONS - 1;
                 u
             },
-            "iterations < 4096",
+            "Too few iterations",
         )];
         for (upsertion, msg) in rejections {
             let user = upsertion.name.clone();
@@ -288,7 +298,7 @@ mod tests {
         let expected = expected_result(
             "bob",
             codes::CLUSTER_AUTHORIZATION_FAILED,
-            Some("not super-user"),
+            Some("Request AlterUserScramCredentials needs ALTER permission."),
         );
         assert!(r == expected);
         assert!(records.is_empty());
@@ -310,7 +320,7 @@ mod tests {
         let expected = expected_result(
             "alice",
             codes::RESOURCE_NOT_FOUND,
-            Some("credential not found"),
+            Some("Attempt to delete a user credential that does not exist"),
         );
         assert!(r == expected);
         assert!(records.is_empty());
@@ -328,7 +338,7 @@ mod tests {
         let expected = expected_result(
             "alice",
             codes::CLUSTER_AUTHORIZATION_FAILED,
-            Some("not super-user"),
+            Some("Request AlterUserScramCredentials needs ALTER permission."),
         );
         assert!(r == expected);
         assert!(records.is_empty());
@@ -350,7 +360,7 @@ mod tests {
             r == expected_result(
                 "alice",
                 KAFKA_UNSUPPORTED_SASL_MECHANISM,
-                Some("unknown mechanism"),
+                Some("Unknown SCRAM mechanism"),
             )
         );
         assert!(records.is_empty());

@@ -656,8 +656,8 @@ fn a_broker_that_overrides_nothing_still_reports_its_static_configuration() {
     // the node's own configuration, read-only, and the KIP-98 expiry pair and
     // the KIP-211 retention pair at `DEFAULT_CONFIG` because this node never
     // moved them off Kafka's built-in defaults. The KIP-464 topic-creation
-    // pair reports the same way. So does the idle window, which sorts to the
-    // head of the response.
+    // pair reports the same way, as do `auto.create.topics.enable`, which sorts
+    // to the head of the response, and the idle window after it.
     let result = describe(
         &MetadataImage::new(Uuid::nil()),
         RESOURCE_TYPE_BROKER,
@@ -669,6 +669,17 @@ fn a_broker_that_overrides_nothing_still_reports_its_static_configuration() {
     assert!(
         result.configs
             == vec![
+                DescribeConfigsResourceResult {
+                    name: config_keys::AUTO_CREATE_TOPICS_ENABLE.to_owned(),
+                    value: Some("true".to_owned()),
+                    read_only: true,
+                    config_source: CONFIG_SOURCE_DEFAULT,
+                    is_sensitive: false,
+                    synonyms: Vec::new(),
+                    config_type: ConfigType::Boolean.wire(),
+                    documentation: None,
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                },
                 DescribeConfigsResourceResult {
                     name: config_keys::CONNECTIONS_MAX_IDLE_MS.to_owned(),
                     value: Some("600000".to_owned()),
@@ -688,6 +699,17 @@ fn a_broker_that_overrides_nothing_still_reports_its_static_configuration() {
                     is_sensitive: false,
                     synonyms: Vec::new(),
                     config_type: ConfigType::Int.wire(),
+                    documentation: None,
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                },
+                DescribeConfigsResourceResult {
+                    name: config_keys::DELETE_TOPIC_ENABLE.to_owned(),
+                    value: Some("true".to_owned()),
+                    read_only: true,
+                    config_source: CONFIG_SOURCE_DEFAULT,
+                    is_sensitive: false,
+                    synonyms: Vec::new(),
+                    config_type: ConfigType::Boolean.wire(),
                     documentation: None,
                     unknown_tagged_fields: UnknownTaggedFields::default(),
                 },
@@ -819,8 +841,10 @@ fn the_key_filter_decides_what_a_broker_resource_reports() {
             "no filter reports every stored key beside the static ones",
             None,
             vec![
+                config_keys::AUTO_CREATE_TOPICS_ENABLE,
                 config_keys::CONNECTIONS_MAX_IDLE_MS,
                 config_keys::DEFAULT_REPLICATION_FACTOR,
+                config_keys::DELETE_TOPIC_ENABLE,
                 crate::throttle::FOLLOWER_THROTTLED_RATE_KEY,
                 crate::throttle::LEADER_THROTTLED_RATE_KEY,
                 NODE_ID,
@@ -1398,8 +1422,10 @@ fn a_broker_reports_its_idle_window_beside_the_static_node_id() {
     assert!(
         names
             == vec![
+                config_keys::AUTO_CREATE_TOPICS_ENABLE,
                 config_keys::CONNECTIONS_MAX_IDLE_MS,
                 config_keys::DEFAULT_REPLICATION_FACTOR,
+                config_keys::DELETE_TOPIC_ENABLE,
                 NODE_ID,
                 config_keys::NUM_PARTITIONS,
                 config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS,

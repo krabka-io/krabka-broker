@@ -638,7 +638,7 @@ async fn scram_in_band_reauth_with_different_principal_closes() {
 /// that is not part of a re-authentication.
 ///
 /// The window here is short and the test sleeps past it before every round, so
-/// each of the five rounds starts expired. A broker that closed on the deadline
+/// each of the three rounds starts expired. A broker that closed on the deadline
 /// itself fails on the first one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn scram_reauth_after_the_window_elapsed_keeps_serving_round_after_round() {
@@ -659,10 +659,12 @@ async fn scram_reauth_after_the_window_elapsed_keeps_serving_round_after_round()
     .expect("initial SCRAM authenticate");
     check!(initial.error_code == 0);
 
-    for round in 1..=5 {
+    for round in 1..=3 {
         // Past the deadline the previous round armed, the way a client that
         // only re-authenticates when it has something to send arrives.
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        // Past the deadline, and a second or more after the previous
+        // re-authentication started (Kafka's `MIN_REAUTH_INTERVAL_ONE_SECOND`).
+        tokio::time::sleep(std::time::Duration::from_millis(1_050)).await;
 
         let reauth = scram_authenticate(
             &mut stream,

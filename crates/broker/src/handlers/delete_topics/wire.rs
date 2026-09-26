@@ -9,7 +9,37 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 
+/// Kafka's `Errors.TOPIC_AUTHORIZATION_FAILED.message()`.
+pub(super) const TOPIC_AUTHORIZATION_FAILED_MESSAGE: &str = "Topic authorization failed.";
+
+/// Kafka's `Errors.UNKNOWN_TOPIC_OR_PARTITION.message()`.
+pub(super) const UNKNOWN_TOPIC_OR_PARTITION_MESSAGE: &str =
+    "This server does not host this topic-partition.";
+
+/// Kafka's `Errors.UNKNOWN_TOPIC_ID.message()`.
+pub(super) const UNKNOWN_TOPIC_ID_MESSAGE: &str = "This server does not host this topic ID.";
+
+/// Kafka's `Errors.THROTTLING_QUOTA_EXCEEDED.message()`.
+pub(super) const THROTTLING_QUOTA_EXCEEDED_MESSAGE: &str =
+    "The throttling quota has been exceeded.";
+
+/// The message Kafka's `new ApiError(error)` carries for the codes this
+/// handler answers without a message of its own.
+fn default_message(error_code: i16) -> Option<String> {
+    let message = match error_code {
+        crate::codes::TOPIC_AUTHORIZATION_FAILED => TOPIC_AUTHORIZATION_FAILED_MESSAGE,
+        crate::codes::UNKNOWN_TOPIC_OR_PARTITION => UNKNOWN_TOPIC_OR_PARTITION_MESSAGE,
+        crate::codes::UNKNOWN_TOPIC_ID => UNKNOWN_TOPIC_ID_MESSAGE,
+        crate::codes::THROTTLING_QUOTA_EXCEEDED => THROTTLING_QUOTA_EXCEEDED_MESSAGE,
+        _ => return None,
+    };
+    Some(message.to_string())
+}
+
 /// Builds one response row for a requested topic.
+///
+/// A row with an error carries the message Kafka's `new ApiError(error)` puts
+/// on it, which v5 and later send. A success row carries none.
 pub(super) fn delete_topic_result(
     name: Option<String>,
     topic_id: WireUuid,
@@ -19,8 +49,36 @@ pub(super) fn delete_topic_result(
         name,
         topic_id,
         error_code,
+        error_message: default_message(error_code),
         ..Default::default()
     }
+}
+
+/// The rows of a request that fails as a whole, as Kafka's
+/// `DeleteTopicsRequest.getErrorResponse` builds them: one per requested
+/// topic, in request order, with the name and the id the client sent, the
+/// code, and no message.
+pub(super) fn request_error_results(
+    request: &krabka_protocol::owned::delete_topics_request::DeleteTopicsRequest,
+    error_code: i16,
+) -> Vec<DeletableTopicResult> {
+    let row = |name, topic_id| DeletableTopicResult {
+        name,
+        topic_id,
+        error_code,
+        ..Default::default()
+    };
+    request
+        .topic_names
+        .iter()
+        .map(|name| row(Some(name.clone()), WireUuid::ZERO))
+        .chain(
+            request
+                .topics
+                .iter()
+                .map(|topic| row(topic.name.clone(), topic.topic_id)),
+        )
+        .collect()
 }
 
 /// A refused row that also carries the text of the refusal.
@@ -30,12 +88,13 @@ pub(super) fn delete_topic_result(
 /// refused, and the message says which proposal nearly authorized the deletion.
 pub(super) fn refused_topic_result(
     name: String,
+    topic_id: WireUuid,
     error_code: i16,
     message: String,
 ) -> DeletableTopicResult {
     DeletableTopicResult {
         name: Some(name),
-        topic_id: WireUuid::ZERO,
+        topic_id,
         error_code,
         error_message: Some(message),
         ..Default::default()
@@ -58,6 +117,37 @@ pub(super) fn invalid_topic_result(
         error_message: Some(message.to_string()),
         ..Default::default()
     }
+}
+
+/// Shuffles the rows of a response in place, as Kafka's
+/// `ControllerApis.deleteTopics` does with `Collections.shuffle(responses)`,
+/// so that a client cannot use row positions to tell an absent topic from a
+/// topic it may not see.
+///
+/// The permutation is a Fisher-Yates shuffle driven by a `SplitMix64` stream
+/// from `seed`, so a test that passes a fixed seed sees a fixed order.
+pub(super) fn shuffle_rows<T>(rows: &mut [T], seed: u64) {
+    let mut state = seed;
+    for upper in (1..rows.len()).rev() {
+        let bound = u64::try_from(upper + 1).unwrap_or(u64::MAX);
+        let pick = usize::try_from(split_mix_64(&mut state) % bound).unwrap_or(upper);
+        rows.swap(upper, pick);
+    }
+}
+
+/// A fresh seed for [`shuffle_rows`] from the process's hash randomness.
+pub(super) fn random_seed() -> u64 {
+    use std::hash::BuildHasher;
+    std::collections::hash_map::RandomState::new().hash_one(0_u8)
+}
+
+/// One step of the `SplitMix64` generator.
+fn split_mix_64(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
 /// Builds the response envelope over the per-topic rows.
@@ -87,7 +177,7 @@ mod tests {
             name: None,
             topic_id: id,
             error_code: codes::UNKNOWN_TOPIC_ID,
-            error_message: None,
+            error_message: Some(UNKNOWN_TOPIC_ID_MESSAGE.into()),
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         };
         assert!(unknown_id == expected_unknown);
@@ -101,7 +191,7 @@ mod tests {
             name: Some("secret".into()),
             topic_id: WireUuid::ZERO,
             error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-            error_message: None,
+            error_message: Some(TOPIC_AUTHORIZATION_FAILED_MESSAGE.into()),
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         };
         assert!(denied == expected_denied);
@@ -113,5 +203,70 @@ mod tests {
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         };
         assert!(resp == expected_resp);
+    }
+
+    /// Each code answers with Kafka's `new ApiError(error)` message, and a
+    /// success row or a whole-request error row carries none.
+    #[test]
+    fn rows_carry_kafkas_default_messages() {
+        let id = WireUuid([3; 16]);
+        let row = |code, message: Option<&str>| DeletableTopicResult {
+            name: Some("t".into()),
+            topic_id: id,
+            error_code: code,
+            error_message: message.map(str::to_string),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+        };
+        let actual: Vec<DeletableTopicResult> = [
+            codes::NONE,
+            codes::TOPIC_AUTHORIZATION_FAILED,
+            codes::UNKNOWN_TOPIC_OR_PARTITION,
+            codes::UNKNOWN_TOPIC_ID,
+            codes::THROTTLING_QUOTA_EXCEEDED,
+            codes::NOT_CONTROLLER,
+        ]
+        .into_iter()
+        .map(|code| delete_topic_result(Some("t".into()), id, code))
+        .collect();
+        let expected = vec![
+            row(codes::NONE, None),
+            row(
+                codes::TOPIC_AUTHORIZATION_FAILED,
+                Some("Topic authorization failed."),
+            ),
+            row(
+                codes::UNKNOWN_TOPIC_OR_PARTITION,
+                Some("This server does not host this topic-partition."),
+            ),
+            row(
+                codes::UNKNOWN_TOPIC_ID,
+                Some("This server does not host this topic ID."),
+            ),
+            row(
+                codes::THROTTLING_QUOTA_EXCEEDED,
+                Some("The throttling quota has been exceeded."),
+            ),
+            row(codes::NOT_CONTROLLER, None),
+        ];
+        assert!(actual == expected);
+    }
+
+    /// A shuffle keeps every row, a fixed seed gives a fixed order, and
+    /// different seeds reach different orders.
+    #[test]
+    fn shuffle_rows_permutes_deterministically_per_seed() {
+        let rows: Vec<u32> = (0..16).collect();
+        let shuffled = |seed| {
+            let mut out = rows.clone();
+            shuffle_rows(&mut out, seed);
+            out
+        };
+        let mut sorted = shuffled(7);
+        sorted.sort_unstable();
+        let orders: std::collections::HashSet<Vec<u32>> = (0..8).map(shuffled).collect();
+
+        assert!(sorted == rows);
+        assert!(shuffled(7) == shuffled(7));
+        assert!(orders.len() > 1);
     }
 }

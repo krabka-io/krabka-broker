@@ -51,7 +51,7 @@
 //! The child modules split the suite by the token surface each one covers.
 //! `wire` and `rpc` hold the framing, the SASL drivers, and one helper per
 //! delegation-token RPC. `cluster` boots the fixtures and waits on the
-//! metadata image. `lifecycle`, `act_as`, and `super_user_bypass` hold the
+//! metadata image. `lifecycle`, `act_as`, and `renewer_gate` hold the
 //! tests themselves.
 
 /// Canonical Kafka error code that mirrors `krabka_broker::codes::
@@ -62,6 +62,9 @@ pub(crate) const DELEGATION_TOKEN_REQUEST_NOT_ALLOWED: i16 = 64;
 /// Canonical Kafka error code that mirrors `krabka_broker::codes::
 /// DELEGATION_TOKEN_AUTHORIZATION_FAILED`. The same sync rule applies.
 pub(crate) const DELEGATION_TOKEN_AUTHORIZATION_FAILED: i16 = 65;
+/// Canonical Kafka error code that mirrors `krabka_broker::codes::
+/// DELEGATION_TOKEN_OWNER_MISMATCH`. The same sync rule applies.
+pub(crate) const DELEGATION_TOKEN_OWNER_MISMATCH: i16 = 63;
 
 #[path = "delegation_tokens/wire.rs"]
 mod wire;
@@ -78,8 +81,8 @@ mod act_as;
 #[path = "delegation_tokens/lifecycle.rs"]
 mod lifecycle;
 
-#[path = "delegation_tokens/super_user_bypass.rs"]
-mod super_user_bypass;
+#[path = "delegation_tokens/renewer_gate.rs"]
+mod renewer_gate;
 
 #[path = "delegation_tokens/unauthenticated.rs"]
 mod unauthenticated;

@@ -6,7 +6,7 @@
 //! upserting it into the next-gen state and reconciling, so both flavours of
 //! `JoinGroup` live together here.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use krabka_protocol::owned::join_group_request::JoinGroupRequest;
@@ -17,15 +17,28 @@ use super::{
     MetadataProvider, ParkedWaiters, chrono_now_ms,
     member_state::run_reconcile,
     persistence::{flush_classic_metadata, flush_pending, snapshot_pending_after_change},
-    waiters::complete_classic_rebalance,
+    waiters::{complete_classic_rebalance, drain_followers_with, fence_replaced_classic_member},
 };
 use crate::{
     codes,
     coordinator::unified::{
-        GroupCoordinator, classic_ops, config::NextGenConfig, group::CoordinatorGroup, migration,
-        offsets_log::OffsetsLog,
+        GroupCoordinator, classic_ops, classic_state::GroupState as ClassicGroupState,
+        config::NextGenConfig, group::CoordinatorGroup, migration, offsets_log::OffsetsLog,
     },
 };
+
+/// Kafka's `appendGroupMetadataErrorToResponseError`: the `JoinGroup` error
+/// for a group metadata write that failed.
+fn append_error_code(error: &crate::error::BrokerError) -> i16 {
+    match codes::from_broker_error(error) {
+        codes::UNKNOWN_TOPIC_OR_PARTITION
+        | codes::NOT_ENOUGH_REPLICAS
+        | codes::REQUEST_TIMED_OUT => codes::COORDINATOR_NOT_AVAILABLE,
+        codes::NOT_LEADER_OR_FOLLOWER | codes::KAFKA_STORAGE_ERROR => codes::NOT_COORDINATOR,
+        codes::MESSAGE_TOO_LARGE => codes::UNKNOWN_SERVER_ERROR,
+        other => other,
+    }
+}
 
 #[allow(clippy::too_many_arguments)] // Keeps the actor message boundary explicit.
 pub(super) async fn handle_classic_join_message(
@@ -40,26 +53,47 @@ pub(super) async fn handle_classic_join_message(
 ) -> bool {
     if let Some(state) = group.as_classic_mut() {
         let previous = state.clone();
-        match classic_ops::handle_join(
+        let outcome = classic_ops::handle_join(
             state,
             &mut request,
-            client_id,
-            client_host,
-            version >= 4,
-            services.config.classic_initial_rebalance_delay,
-        ) {
+            &classic_ops::JoinContext {
+                client_id,
+                client_host,
+                version,
+                initial_rebalance_delay: services.config.classic_initial_rebalance_delay,
+                max_size: services.config.classic_max_size,
+                now: Instant::now(),
+            },
+        );
+        if let Some(fenced) = outcome.fenced_member.as_deref() {
+            fence_replaced_classic_member(fenced, &mut parked.joiners, &mut parked.followers);
+        }
+        // Kafka's `prepareRebalance` from `CompletingRebalance` answers every
+        // member that waits in `SyncGroup` with `REBALANCE_IN_PROGRESS`.
+        if previous.state == ClassicGroupState::CompletingRebalance
+            && state.state == ClassicGroupState::PreparingRebalance
+        {
+            drain_followers_with(&mut parked.followers, codes::REBALANCE_IN_PROGRESS);
+        }
+        match outcome.action {
             classic_ops::JoinAction::Immediate(result) => {
-                if result.error_code == codes::NONE
-                    && let Err(error) = flush_classic_metadata(state, services.offsets_log).await
-                {
+                let _ = reply.send(result);
+            }
+            classic_ops::JoinAction::PersistThenReply(result) => {
+                if let Err(error) = flush_classic_metadata(state, services.offsets_log).await {
+                    // Kafka reverts the replacement and answers with the
+                    // append error, under the unknown member id and the
+                    // leader from before the join.
+                    let leader = previous.leader_id.clone().unwrap_or_default();
                     *state = previous;
                     tracing::warn!(group_id = %state.group_id, %error,
                         "classic static rejoin log write failed");
                     let _ = reply.send(JoinResult {
-                        error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
-                        member_id: request.member_id,
+                        error_code: append_error_code(&error),
+                        generation_id: state.generation_id,
                         protocol_type: state.protocol_type.clone(),
                         protocol_name: state.protocol_name.clone(),
+                        leader,
                         ..JoinResult::default()
                     });
                     return true;
@@ -71,7 +105,10 @@ pub(super) async fn handle_classic_join_message(
             }
             classic_ops::JoinAction::CompleteNow => {
                 parked.joiners.insert(request.member_id, reply);
-                complete_classic_rebalance(state, &mut parked.joiners, &mut parked.followers);
+                // Every member joined, so none is removed and the group stays
+                // non-empty: there is nothing to persist.
+                let _ =
+                    complete_classic_rebalance(state, &mut parked.joiners, &mut parked.followers);
             }
         }
         return true;
@@ -219,11 +256,11 @@ mod tests {
         classic_state::GroupState as ClassicGroupState,
     };
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn classic_stable_static_rejoin_persists_refreshed_member() {
+    /// A `Stable` group whose one member, `m1`, is the static member
+    /// `instance-1`, and a `JoinGroup` v4 from a restarted `instance-1`.
+    fn stable_static_group_and_rejoin() -> (CoordinatorGroup, JoinGroupRequest) {
         use krabka_protocol::owned::join_group_request::JoinGroupRequestProtocol;
 
-        let (coord, log) = make_coordinator();
         let mut group = completing_classic_group(&["m1"]);
         let state = group.as_classic_mut().unwrap();
         let member = state.members.get_mut("m1").unwrap();
@@ -233,27 +270,32 @@ mod tests {
             .static_members
             .insert("instance-1".into(), "m1".into());
         state.state = ClassicGroupState::Stable;
-        let generation = state.generation_id;
-        coord.seed_classic("g", Box::new(group));
-        let handle = coord.find("g").unwrap();
+        let request = JoinGroupRequest {
+            group_id: "g".into(),
+            session_timeout_ms: 30_000,
+            rebalance_timeout_ms: 60_000,
+            member_id: String::new(),
+            group_instance_id: Some("instance-1".into()),
+            protocol_type: "consumer".into(),
+            protocols: vec![JoinGroupRequestProtocol {
+                name: "range".into(),
+                metadata: Bytes::from_static(b"new-subscription"),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        (group, request)
+    }
+
+    async fn send_join(
+        handle: &crate::coordinator::unified::actor::GroupActorHandle,
+        req: JoinGroupRequest,
+    ) -> JoinResult {
         let (tx, rx) = tokio::sync::oneshot::channel();
         handle
             .tx
             .send(GroupActorMessage::ClassicJoin {
-                req: JoinGroupRequest {
-                    group_id: "g".into(),
-                    session_timeout_ms: 30_000,
-                    rebalance_timeout_ms: 60_000,
-                    member_id: "m1".into(),
-                    group_instance_id: Some("instance-1".into()),
-                    protocol_type: "consumer".into(),
-                    protocols: vec![JoinGroupRequestProtocol {
-                        name: "range".into(),
-                        metadata: Bytes::from_static(b"new-subscription"),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                },
+                req,
                 version: 4,
                 client_id: "new-client".into(),
                 client_host: "new-host".into(),
@@ -261,73 +303,75 @@ mod tests {
             })
             .await
             .unwrap();
+        rx.await.unwrap()
+    }
 
-        let response = rx.await.unwrap();
-        check!(response.error_code == codes::NONE);
-        check!(response.generation_id == generation);
+    /// #789: Kafka's `updateStaticMemberThenRebalanceOrCompleteJoin` in
+    /// `Stable`: a new member id replaces the old one, keeps the client and
+    /// the assignment, and is persisted before the reply.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn classic_stable_static_rejoin_persists_replaced_member() {
+        let (coord, log) = make_coordinator();
+        let (group, request) = stable_static_group_and_rejoin();
+        let generation = group.as_classic().unwrap().generation_id;
+        coord.seed_classic("g", Box::new(group));
+        let handle = coord.find("g").unwrap();
+
+        let response = send_join(&handle, request).await;
+
+        check!(response.member_id.starts_with("instance-1-"));
+        check!(
+            response
+                == JoinResult {
+                    error_code: codes::NONE,
+                    generation_id: generation,
+                    protocol_type: Some("consumer".into()),
+                    protocol_name: Some("range".into()),
+                    leader: "m1".into(),
+                    skip_assignment: false,
+                    member_id: response.member_id.clone(),
+                    members: Vec::new(),
+                }
+        );
         let persisted = last_classic_metadata(&log).await;
         check!(persisted.generation == generation);
         check!(persisted.members.len() == 1);
-        check!(persisted.members[0].client_id == "new-client");
-        check!(persisted.members[0].client_host == "new-host");
+        check!(persisted.members[0].member_id == response.member_id);
+        check!(persisted.members[0].client_id == "client");
+        check!(persisted.members[0].client_host == "host");
         check!(persisted.members[0].subscription == Bytes::from_static(b"new-subscription"));
         check!(persisted.members[0].assignment == Bytes::from_static(b"assignment"));
     }
 
+    /// Kafka reverts the replacement when the write fails and answers with
+    /// the append error under the unknown member id.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn classic_static_rejoin_append_failure_rolls_back_and_reports_error() {
-        use krabka_protocol::owned::join_group_request::JoinGroupRequestProtocol;
-
         let (coord, log) = make_coordinator();
-        let mut group = completing_classic_group(&["m1"]);
-        let state = group.as_classic_mut().unwrap();
-        let member = state.members.get_mut("m1").unwrap();
-        member.group_instance_id = Some("instance-1".into());
-        member.assignment = Some(Bytes::from_static(b"assignment"));
-        state
-            .static_members
-            .insert("instance-1".into(), "m1".into());
-        state.state = ClassicGroupState::Stable;
+        let (group, request) = stable_static_group_and_rejoin();
+        let generation = group.as_classic().unwrap().generation_id;
         coord.seed_classic("g", Box::new(group));
         let handle = coord.find("g").unwrap();
         log.fail_next
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle
-            .tx
-            .send(GroupActorMessage::ClassicJoin {
-                req: JoinGroupRequest {
-                    group_id: "g".into(),
-                    session_timeout_ms: 30_000,
-                    rebalance_timeout_ms: 60_000,
-                    member_id: "m1".into(),
-                    group_instance_id: Some("instance-1".into()),
-                    protocol_type: "consumer".into(),
-                    protocols: vec![JoinGroupRequestProtocol {
-                        name: "range".into(),
-                        metadata: Bytes::from_static(b"new-subscription"),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                },
-                version: 4,
-                client_id: "new-client".into(),
-                client_host: "new-host".into(),
-                reply: tx,
-            })
-            .await
-            .unwrap();
 
-        let response = rx.await.unwrap();
-        check!(response.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
-        check!(response.member_id == "m1");
-        check!(response.protocol_type.as_deref() == Some("consumer"));
-        check!(response.protocol_name.as_deref() == Some("range"));
+        let response = send_join(&handle, request).await;
+
+        check!(
+            response
+                == JoinResult {
+                    error_code: codes::NOT_COORDINATOR,
+                    generation_id: generation,
+                    protocol_type: Some("consumer".into()),
+                    protocol_name: Some("range".into()),
+                    leader: "m1".into(),
+                    ..JoinResult::default()
+                }
+        );
         let view = rpc::classic_inspect(&handle).await;
         check!(view.state == ClassicGroupState::Stable);
         check!(view.members.len() == 1);
-        check!(view.members[0].client_id == "client");
-        check!(view.members[0].host == "host");
+        check!(view.members[0].member_id == "m1");
         check!(view.members[0].protocol_metadata == Bytes::from_static(b"subscription"));
         check!(view.members[0].assignment.as_deref() == Some(&b"assignment"[..]));
         check!(log.batches().await.is_empty());

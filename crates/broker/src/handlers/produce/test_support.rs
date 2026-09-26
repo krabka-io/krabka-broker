@@ -1,6 +1,6 @@
 //! Fixture builders that more than one of the produce handler's unit-test
 //! modules needs, kept in one place so each of them builds the same image,
-//! topic override, and record batch.
+//! `min.insync.replicas` override, and record batch.
 
 use std::collections::BTreeMap;
 
@@ -11,7 +11,6 @@ use krabka_metadata::{
 use krabka_protocol::records::RecordBatch;
 use uuid::Uuid;
 
-use super::framing::{FramedPartition, FramedTopic, PartitionPayload};
 use crate::config_keys::MIN_INSYNC_REPLICAS;
 
 pub(super) fn image_with_topic(topic: &str, isr: &[u64]) -> MetadataImage {
@@ -44,30 +43,6 @@ pub(super) fn set_min_isr(img: &mut MetadataImage, topic: &str, n: i32) {
         topic: topic.into(),
         overrides: o,
     }));
-}
-
-pub(super) fn set_qos_tier(img: &mut MetadataImage, topic: &str, tier: &str) {
-    let mut o = BTreeMap::new();
-    o.insert(crate::config_keys::QOS_TIER.into(), tier.into());
-    img.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
-        topic: topic.into(),
-        overrides: o,
-    }));
-}
-
-pub(super) fn framed_topic(name: &str, payload_lens: &[usize]) -> FramedTopic {
-    FramedTopic {
-        name: name.into(),
-        topic_id: krabka_protocol::primitives::uuid::Uuid::ZERO,
-        partition_data: payload_lens
-            .iter()
-            .enumerate()
-            .map(|(idx, len)| FramedPartition {
-                index: i32::try_from(idx).unwrap(),
-                payload: PartitionPayload::Slice(Bytes::from(vec![0; *len])),
-            })
-            .collect(),
-    }
 }
 
 pub(super) fn encode_batch(batch: &RecordBatch) -> Bytes {

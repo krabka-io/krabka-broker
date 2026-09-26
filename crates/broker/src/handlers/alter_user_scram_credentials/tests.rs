@@ -84,12 +84,12 @@ async fn handle_denies_invalid_rows_before_scram_validation() {
             expected_result(
                 "alice",
                 codes::CLUSTER_AUTHORIZATION_FAILED,
-                Some("not super-user"),
+                Some("Request AlterUserScramCredentials needs ALTER permission."),
             ),
             expected_result(
                 "bob",
                 codes::CLUSTER_AUTHORIZATION_FAILED,
-                Some("not super-user"),
+                Some("Request AlterUserScramCredentials needs ALTER permission."),
             ),
         ],
         unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
@@ -155,7 +155,7 @@ async fn handle_denies_valid_upsertion_without_cluster_alter() {
         results: vec![expected_result(
             "alice",
             codes::CLUSTER_AUTHORIZATION_FAILED,
-            Some("not super-user"),
+            Some("Request AlterUserScramCredentials needs ALTER permission."),
         )],
         unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
     };
@@ -197,7 +197,7 @@ async fn handle_unsupported_metadata_version_reports_every_requested_user() {
 
     let resp = handle(&broker, req, &ctx).await;
 
-    let msg = "SCRAM is not enabled at the cluster's metadata.version.";
+    let msg = "The current metadata.version does not support SCRAM";
     let expected = AlterUserScramCredentialsResponse {
         throttle_time_ms: 0,
         results: vec![
@@ -250,12 +250,12 @@ async fn handle_low_metadata_version_denied_request_reports_authorization_per_di
             expected_result(
                 "alice",
                 codes::CLUSTER_AUTHORIZATION_FAILED,
-                Some("not super-user"),
+                Some("Request AlterUserScramCredentials needs ALTER permission."),
             ),
             expected_result(
                 "bob",
                 codes::CLUSTER_AUTHORIZATION_FAILED,
-                Some("not super-user"),
+                Some("Request AlterUserScramCredentials needs ALTER permission."),
             ),
         ],
         unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
@@ -296,7 +296,7 @@ async fn handle_low_metadata_version_authorized_request_deduplicates_unsupported
 
     let resp = handle(&broker, req, &ctx).await;
 
-    let msg = "SCRAM is not enabled at the cluster's metadata.version.";
+    let msg = "The current metadata.version does not support SCRAM";
     let expected = AlterUserScramCredentialsResponse {
         throttle_time_ms: 0,
         results: vec![

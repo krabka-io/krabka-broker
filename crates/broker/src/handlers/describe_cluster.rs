@@ -18,7 +18,7 @@
 //! `Describe` gates only this field, not the rest of the response.
 
 use bytes::Bytes;
-use krabka_metadata::{AclOperation, ResourceType};
+use krabka_metadata::{AclOperation, BrokerEndpoint, BrokerRegistrationRecord, ResourceType};
 use krabka_protocol::{
     Decode,
     owned::{
@@ -58,6 +58,19 @@ const ENDPOINT_TYPE_CONTROLLER: i8 = 2;
 #[cfg_attr(test, mutants::skip)]
 fn wire_broker_id(node_id: u64) -> i32 {
     i32::try_from(node_id).unwrap_or(-1)
+}
+
+/// The endpoint of `broker` named `listener`, as Kafka's
+/// `BrokerRegistration.node(listenerName)` finds it, or `None` when the broker
+/// has no endpoint on that listener.
+fn listener_endpoint<'a>(
+    broker: &'a BrokerRegistrationRecord,
+    listener: &str,
+) -> Option<&'a BrokerEndpoint> {
+    broker
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.name == listener)
 }
 
 #[tracing::instrument(
@@ -120,30 +133,40 @@ pub(crate) async fn handle(
     // while a newly elected controller seeds its heartbeat registry.
     let unavailable = crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
 
-    // controller_id: an unfenced registered broker, not the quorum leader.
-    // `Metadata` answers from the same helper. See `handlers::controller_id`.
-    let controller_id =
-        crate::handlers::controller_id::advertised_controller_id(&image, &unavailable);
-    let inter_broker_name = broker.config.inter_broker_listener_name.as_str();
+    // Kafka lists only the brokers with an endpoint on the request's listener
+    // (`KRaftMetadataCache.getBrokerNodes(listenerName)`); a broker without
+    // one is left out rather than advertised at another listener's address.
+    let listener = ctx.connection_listener_name;
     let brokers: Vec<DescribeClusterBroker> = image
         .brokers()
         .filter(|b| req.include_fenced_brokers || !unavailable.contains(&b.node_id.0))
-        .map(|b| {
-            let (host, port) = crate::handlers::metadata::pick_endpoint_host_port(
-                b,
-                ctx.connection_listener_name,
-                inter_broker_name,
-            );
-            DescribeClusterBroker {
+        .filter_map(|b| {
+            let endpoint = listener_endpoint(b, listener)?;
+            Some(DescribeClusterBroker {
                 broker_id: wire_broker_id(b.node_id.0),
-                host,
-                port,
+                host: endpoint.host.clone(),
+                port: i32::from(endpoint.port),
                 rack: b.rack.clone(),
                 is_fenced: unavailable.contains(&b.node_id.0),
                 ..Default::default()
-            }
+            })
         })
         .collect();
+
+    // controller_id: an unfenced registered broker, not the quorum leader.
+    // `Metadata` answers from the same helper. See `handlers::controller_id`.
+    // `AuthHelper.computeDescribeClusterResponse` answers -1 for an id that
+    // the broker list does not hold, so the id is drawn from the brokers with
+    // an endpoint on this listener, and checked against the list.
+    let controller_id =
+        crate::handlers::controller_id::advertised_controller_id_among(&image, &unavailable, |b| {
+            listener_endpoint(b, listener).is_some()
+        });
+    let controller_id = if brokers.iter().any(|b| b.broker_id == controller_id) {
+        controller_id
+    } else {
+        crate::handlers::controller_id::NO_CONTROLLER_ID
+    };
 
     // KIP-430: only populate the bitfield when the client asked for it;
     // otherwise leave the wire-default `i32::MIN` ("not present") sentinel.
@@ -603,6 +626,107 @@ mod tests {
             .expect("fenced broker row");
         assert!(fenced.is_fenced);
 
+        broker_handle.shutdown().await;
+    }
+
+    fn registration(node_id: u64, listeners: &[&str]) -> BrokerRegistrationRecord {
+        BrokerRegistrationRecord {
+            node_id: NodeId(node_id),
+            broker_epoch: 7,
+            incarnation_id: uuid::Uuid::nil(),
+            host: "legacy-host".into(),
+            port: 19092,
+            rack: None,
+            log_dirs: vec![],
+            endpoints: listeners
+                .iter()
+                .enumerate()
+                .map(|(index, name)| BrokerEndpoint {
+                    name: (*name).into(),
+                    host: format!("{}-{node_id}", name.to_lowercase()),
+                    port: 30_000 + u16::try_from(index).expect("port"),
+                    protocol: ListenerProtocol::Plaintext,
+                })
+                .collect(),
+            features: std::collections::BTreeMap::new(),
+        }
+    }
+
+    /// #778: Kafka lists only the brokers with an endpoint on the request's
+    /// listener (`KRaftMetadataCache.getBrokerNodes(listenerName)`), and
+    /// `AuthHelper.computeDescribeClusterResponse` answers -1 for a
+    /// `controller_id` the list does not hold. Broker 1 is the test broker
+    /// itself, which serves `PLAINTEXT` only.
+    #[tokio::test]
+    async fn brokers_without_an_endpoint_on_the_request_listener_are_left_out() {
+        let broker_row = |node_id: i32, listener: &str, port: i32| DescribeClusterBroker {
+            broker_id: node_id,
+            host: format!("{}-{node_id}", listener.to_lowercase()),
+            port,
+            rack: None,
+            is_fenced: false,
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+        };
+        let cases: [(&str, Vec<DescribeClusterBroker>, &[i32]); 3] = [
+            ("EXTERNAL", vec![broker_row(43, "EXTERNAL", 30_001)], &[43]),
+            ("INTERNAL", vec![], &[-1]),
+            (
+                "PLAINTEXT",
+                vec![
+                    broker_row(42, "PLAINTEXT", 30_000),
+                    broker_row(43, "PLAINTEXT", 30_000),
+                ],
+                &[1, 42, 43],
+            ),
+        ];
+
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        broker_handle
+            .broker_arc_for_test()
+            .controller
+            .submit_change(vec![
+                MetadataRecord::V1BrokerRegistration(registration(42, &["PLAINTEXT"])),
+                MetadataRecord::V1BrokerRegistration(registration(43, &["PLAINTEXT", "EXTERNAL"])),
+            ])
+            .await
+            .expect("seed broker registrations");
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("admin");
+        let peer = peer();
+
+        for (listener, expected_brokers, controllers) in cases {
+            let ctx = crate::handlers::RequestContext::new(
+                &p,
+                &peer,
+                "admin-client",
+                "test-connection",
+                false,
+                listener,
+            );
+            let bytes = handle(
+                &broker,
+                VERSION,
+                123,
+                &encode_request(&request(false)),
+                &ctx,
+            )
+            .await
+            .expect("handle");
+            let mut response = decode_response(&bytes);
+            // The test broker's own row carries an ephemeral port; the seeded
+            // rows are compared whole.
+            let lists_self = response.brokers.iter().any(|row| row.broker_id == 1);
+            assert!(lists_self == (listener == "PLAINTEXT"), "{listener}");
+            response.brokers.retain(|row| row.broker_id != 1);
+            response.brokers.sort_by_key(|row| row.broker_id);
+            assert!(response.brokers == expected_brokers, "{listener}");
+            assert!(
+                controllers.contains(&response.controller_id),
+                "{listener}: {}",
+                response.controller_id
+            );
+        }
         broker_handle.shutdown().await;
     }
 }

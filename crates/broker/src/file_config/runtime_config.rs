@@ -227,6 +227,19 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub classic_group_initial_rebalance_delay: Option<Time>,
+    /// Lower bound on a classic `JoinGroup` session timeout, Kafka's
+    /// `group.min.session.timeout.ms`.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub classic_group_min_session_timeout: Option<Time>,
+    /// Upper bound on a classic `JoinGroup` session timeout, Kafka's
+    /// `group.max.session.timeout.ms`.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub classic_group_max_session_timeout: Option<Time>,
+    /// Maximum number of members in one classic group, Kafka's
+    /// `group.max.size`.
+    pub classic_group_max_size: Option<usize>,
     /// Maximum time a classic-protocol follower waits for its `SyncGroup`
     /// assignment.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
@@ -246,9 +259,10 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub operator_recovery_deadline: Option<Time>,
-    /// Maximum client quota throttle delay, which bounds how long one response
-    /// mutes a client. Equivalent to Kafka's `quota.window.size.seconds *
-    /// (quota.window.num - 1)`.
+    /// Maximum request-quota throttle delay, which bounds how long one
+    /// response over `request_percentage` mutes a client. Equivalent to
+    /// Kafka's `quota.window.size.seconds`; byte-rate and controller-mutation
+    /// throttles are not bounded.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub quota_throttle_max: Option<Time>,
@@ -259,7 +273,8 @@ pub struct RuntimeFileConfig {
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub quota_window: Option<Time>,
     /// Time window whose throughput defines the KIP-599 controller-mutation
-    /// quota burst capacity.
+    /// quota burst capacity (default 11 s), Kafka's
+    /// `controller.quota.window.num` x `controller.quota.window.size.seconds`.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub controller_mutation_quota_window: Option<Time>,
@@ -379,19 +394,6 @@ pub struct RuntimeFileConfig {
     /// Upper clamp on `DescribeTopicPartitions`' `response_partition_limit`,
     /// Kafka's `max.request.partition.size.limit`.
     pub max_request_partition_size_limit: Option<i32>,
-    /// Maximum accepted decompression ratio for a KIP-714 telemetry payload.
-    #[serde(default, with = "krabka_units::serde_units::human::option_ratio")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Ratio>")]
-    pub telemetry_max_decompression_ratio: Option<krabka_units::Ratio>,
-    /// Minimum decompressed-output allowance granted to a telemetry payload,
-    /// whatever the ratio bound computes.
-    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
-    #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
-    pub telemetry_decompressed_output_floor: Option<ByteSize>,
-    /// Maximum decompressed-output allowance granted to a telemetry payload.
-    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
-    #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
-    pub telemetry_decompressed_output_ceiling: Option<ByteSize>,
     /// Maximum accepted decompression ratio for a produced record batch.
     #[serde(default, with = "krabka_units::serde_units::human::option_ratio")]
     #[schemars(with = "Option<crate::file_config::schema_units::Ratio>")]

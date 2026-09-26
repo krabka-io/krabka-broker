@@ -182,24 +182,4 @@ mod tests {
             assert!(b.byte_rate() == bucket_rate(expected), "{case}");
         }
     }
-
-    #[test]
-    fn refresh_updates_qos_tier_bucket_from_base_quota_entity() {
-        let buckets = Arc::new(QuotaBuckets::new());
-        let tiered_key: EntityKey = vec![
-            ("client-id".into(), Some("app".into())),
-            ("user".into(), Some("alice".into())),
-            ("qos-tier".into(), Some("gold".into())),
-        ];
-        let b = buckets.get_or_create("producer_byte_rate", &tiered_key, "alice", "app", 128);
-        assert!(b.byte_rate() == bucket_rate(128));
-
-        let img = img_with_quota(
-            vec![("user", Some("alice")), ("client-id", Some("app"))],
-            "producer_byte_rate",
-            2048.0,
-        );
-        refresh_buckets(&img, &buckets);
-        assert!(b.byte_rate() == bucket_rate(2048));
-    }
 }

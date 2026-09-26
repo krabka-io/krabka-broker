@@ -23,10 +23,15 @@ pub(super) fn assert_success_authenticate_response(
     assert!(*resp == expected);
 }
 
-pub(super) fn assert_failed_authenticate_response(resp: &SaslAuthenticateResponse) {
+/// `expected_message` is `None` for a failure that goes out with Kafka's
+/// generic text, which the dispatcher fills in.
+pub(super) fn assert_failed_authenticate_response(
+    resp: &SaslAuthenticateResponse,
+    expected_message: Option<&str>,
+) {
     let expected = SaslAuthenticateResponse {
         error_code: SASL_AUTHENTICATION_FAILED,
-        error_message: Some("authentication failed".to_string()),
+        error_message: expected_message.map(str::to_owned),
         auth_bytes: bytes::Bytes::new(),
         session_lifetime_ms: 0,
         unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),

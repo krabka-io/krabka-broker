@@ -143,6 +143,12 @@ pub struct RuntimeArgs {
     pub consumer_group_max_size: Option<PositiveCount>,
     #[arg(long, env = "KRABKA_CLASSIC_GROUP_INITIAL_REBALANCE_DELAY", value_parser = krabka_units::parse::positive_time)]
     pub classic_group_initial_rebalance_delay: Option<Time>,
+    #[arg(long, env = "KRABKA_CLASSIC_GROUP_MIN_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
+    pub classic_group_min_session_timeout: Option<Time>,
+    #[arg(long, env = "KRABKA_CLASSIC_GROUP_MAX_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
+    pub classic_group_max_session_timeout: Option<Time>,
+    #[arg(long, env = "KRABKA_CLASSIC_GROUP_MAX_SIZE", value_parser = parse_positive_count)]
+    pub classic_group_max_size: Option<PositiveCount>,
     #[arg(long, env = "KRABKA_SYNC_GROUP_FOLLOWER_WAIT", value_parser = krabka_units::parse::positive_time)]
     pub sync_group_follower_wait: Option<Time>,
     #[arg(long, env = "KRABKA_UNCLEAN_RECOVERY_AGGRESSIVE_DEADLINE", value_parser = krabka_units::parse::positive_time)]
@@ -219,12 +225,6 @@ pub struct RuntimeArgs {
     pub acl_max_resource_name: Option<ByteSize>,
     #[arg(long, env = "KRABKA_MAX_REQUEST_PARTITION_SIZE_LIMIT", value_parser = parse_positive_i32)]
     pub max_request_partition_size_limit: Option<PositiveI32>,
-    #[arg(long, env = "KRABKA_TELEMETRY_MAX_DECOMPRESSION_RATIO", value_parser = krabka_units::parse::ratio)]
-    pub telemetry_max_decompression_ratio: Option<Ratio>,
-    #[arg(long, env = "KRABKA_TELEMETRY_DECOMPRESSED_OUTPUT_FLOOR", value_parser = krabka_units::parse::positive_byte_size)]
-    pub telemetry_decompressed_output_floor: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_TELEMETRY_DECOMPRESSED_OUTPUT_CEILING", value_parser = krabka_units::parse::positive_byte_size)]
-    pub telemetry_decompressed_output_ceiling: Option<ByteSize>,
     #[arg(long, env = "KRABKA_RECORD_DECOMPRESSION_MAX_RATIO", value_parser = krabka_units::parse::positive_ratio)]
     pub record_decompression_max_ratio: Option<Ratio>,
     #[arg(long, env = "KRABKA_RECORD_DECOMPRESSION_OUTPUT_FLOOR", value_parser = krabka_units::parse::positive_byte_size)]

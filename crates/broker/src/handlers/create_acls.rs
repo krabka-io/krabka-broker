@@ -31,7 +31,7 @@ mod tests;
 use self::{
     audit::{audit_created_acls, created_acl_resources},
     response::{acl_error_result, apply_submit_error, create_acls_response, encode_response},
-    validate::validate,
+    validate::{has_filter_only_element, has_unknown_element, validate},
 };
 use super::acl_wire::{CLUSTER_RESOURCE_NAME, NO_AUTHORIZER_MESSAGE};
 use crate::{
@@ -53,6 +53,16 @@ pub(crate) async fn handle(
     ctx: &crate::handlers::RequestContext<'_>,
     api_version: i16,
 ) -> Result<Bytes, crate::error::BrokerError> {
+    // Kafka's `CreateAclsRequest.validate` refuses a wire `UNKNOWN` element
+    // while it parses the request, before authorization, and the socket
+    // server closes the connection with no response. A handler error closes
+    // the connection the same way.
+    if has_unknown_element(&req.creations) {
+        return Err(crate::error::BrokerError::Protocol(
+            krabka_protocol::ProtocolError::InvalidValue("CreatableAcls contain unknown elements"),
+        ));
+    }
+
     let image = broker.controller.current_image();
 
     // Whole-request cluster-alter gate.
@@ -85,6 +95,20 @@ pub(crate) async fn handle(
             .creations
             .iter()
             .map(|_| acl_error_result(codes::SECURITY_DISABLED, NO_AUTHORIZER_MESSAGE))
+            .collect();
+        return encode_response(&create_acls_response(results), api_version);
+    }
+
+    // An `ANY` or `MATCH` element fails Kafka's binding construction for the
+    // whole request; see `has_filter_only_element`.
+    if has_filter_only_element(&req.creations) {
+        let results = req
+            .creations
+            .iter()
+            .map(|_| AclCreationResult {
+                error_code: codes::UNKNOWN_SERVER_ERROR,
+                ..Default::default()
+            })
             .collect();
         return encode_response(&create_acls_response(results), api_version);
     }

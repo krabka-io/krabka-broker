@@ -13,6 +13,7 @@ mod support;
 
 use krabka_protocol::owned::{
     join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
+    join_group_response::JoinGroupResponse,
     sync_group_request::{SyncGroupRequest, SyncGroupRequestAssignment},
 };
 
@@ -124,21 +125,21 @@ async fn sync_group_response_carries_protocol_type_and_name_on_success() {
 }
 
 #[tokio::test]
-async fn join_group_response_carries_protocol_type_on_inconsistent_protocol_error() {
+async fn join_group_inconsistent_protocol_error_carries_no_protocol_fields() {
     let p = support::start().await;
     // Bootstrap the group as `consumer/range`.
     let (_mid, _gen) = bootstrap_member(&p).await;
 
-    // Second member tries to join with a different protocol_type — must
-    // be rejected with INCONSISTENT_GROUP_PROTOCOL (23). KIP-559: the
-    // recorded group protocol_type must still ride along on the error
-    // response so the L7 proxy sees what dialog this belongs to.
+    // A second member with a different protocol_type is turned away with
+    // INCONSISTENT_GROUP_PROTOCOL (23). Kafka's `classicGroupJoinNewMember`
+    // answers it with the member id and the error alone: the protocol
+    // fields stay null, as in every `JoinGroup` error Kafka sends.
     let r = p
         .client
         .send(JoinGroupRequest {
             group_id: GROUP.into(),
             protocol_type: "stream".into(),
-            member_id: "some-member-2".into(),
+            member_id: String::new(),
             session_timeout_ms: 30_000,
             rebalance_timeout_ms: 1_500,
             protocols: vec![JoinGroupRequestProtocol {
@@ -151,12 +152,11 @@ async fn join_group_response_carries_protocol_type_on_inconsistent_protocol_erro
         .await
         .expect("JoinGroup");
     assert!(
-        r.error_code == 23,
-        "expected INCONSISTENT_GROUP_PROTOCOL (23), got {r:?}"
-    );
-    assert!(
-        r.protocol_type.as_deref() == Some(PROTOCOL_TYPE),
-        "INCONSISTENT_GROUP_PROTOCOL response must echo the recorded protocol_type: {r:?}"
+        r == JoinGroupResponse {
+            error_code: 23,
+            ..JoinGroupResponse::default()
+        },
+        "expected a bare INCONSISTENT_GROUP_PROTOCOL (23), got {r:?}"
     );
     p.broker.shutdown().await;
 }

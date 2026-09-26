@@ -86,6 +86,7 @@ pub(crate) fn handle(
                     .await
                     {
                         Ok(()) => codes::NONE,
+                        Err(MoveError::TopicNameTooLong) => codes::INVALID_TOPIC_EXCEPTION,
                         Err(MoveError::LogDirNotFound) => codes::LOG_DIR_NOT_FOUND,
                         Err(MoveError::ReplicaNotAvailable) => codes::REPLICA_NOT_AVAILABLE,
                         Err(MoveError::Storage(error)) => {
@@ -189,6 +190,129 @@ mod tests {
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected);
+        broker_handle.shutdown().await;
+    }
+
+    /// Kafka matches the destination against the configured absolute paths by
+    /// string equality (`LogManager.isLogDirOnline`) and refuses a partition
+    /// whose future directory name passes 255 characters before it reads the
+    /// destination (`ReplicaManager.alterReplicaLogDirs`). A destination that
+    /// names a configured directory reaches the hosted-replica check, which
+    /// answers `REPLICA_NOT_AVAILABLE` for a partition this broker does not
+    /// host.
+    #[tokio::test]
+    async fn destination_and_topic_name_validation_matches_kafka() {
+        let version = 2;
+        let extra = tempfile::tempdir().expect("extra log dir");
+        let extra_dir = std::fs::canonicalize(extra.path()).expect("canonical extra dir");
+        let links = tempfile::tempdir().expect("link dir");
+        let link = links.path().join("link");
+        std::os::unix::fs::symlink(&extra_dir, &link).expect("symlink to the extra dir");
+        let extra_str = extra_dir.display().to_string();
+        let name = extra_dir
+            .file_name()
+            .expect("tempdir has a name")
+            .to_string_lossy()
+            .to_string();
+        let (broker_handle, _dir) = crate::test_support::start_broker_with({
+            let extra_dir = extra_dir.clone();
+            move |cfg| cfg.extra_log_dirs = vec![extra_dir]
+        })
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+
+        // A topic of 213 characters gives Kafka's future directory name,
+        // `<topic>-0.<32 hex>-future`, exactly 255 characters.
+        let longest = "t".repeat(213);
+        let too_long = "t".repeat(214);
+        let cases = [
+            (
+                "the configured path",
+                extra_str.clone(),
+                "orders",
+                codes::REPLICA_NOT_AVAILABLE,
+            ),
+            (
+                "a trailing slash",
+                format!("{extra_str}/"),
+                "orders",
+                codes::LOG_DIR_NOT_FOUND,
+            ),
+            (
+                "a trailing dot",
+                format!("{extra_str}/."),
+                "orders",
+                codes::LOG_DIR_NOT_FOUND,
+            ),
+            (
+                "a parent hop",
+                format!("{extra_str}/../{name}"),
+                "orders",
+                codes::LOG_DIR_NOT_FOUND,
+            ),
+            (
+                "a relative path",
+                extra_str.trim_start_matches('/').to_string(),
+                "orders",
+                codes::LOG_DIR_NOT_FOUND,
+            ),
+            (
+                "a symbolic link",
+                link.display().to_string(),
+                "orders",
+                codes::LOG_DIR_NOT_FOUND,
+            ),
+            (
+                "the longest topic name",
+                extra_str.clone(),
+                longest.as_str(),
+                codes::REPLICA_NOT_AVAILABLE,
+            ),
+            (
+                "a topic name one too long",
+                extra_str.clone(),
+                too_long.as_str(),
+                codes::INVALID_TOPIC_EXCEPTION,
+            ),
+            (
+                "a too-long name before an unknown path",
+                format!("{extra_str}/"),
+                too_long.as_str(),
+                codes::INVALID_TOPIC_EXCEPTION,
+            ),
+        ];
+        for (label, path, topic, error_code) in cases {
+            let req = AlterReplicaLogDirsRequest {
+                dirs: vec![AlterReplicaLogDir {
+                    path,
+                    topics: vec![AlterReplicaLogDirTopic {
+                        name: topic.into(),
+                        partitions: vec![0],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            let bytes = handle(&broker, version, 1, &encode_request(&req, version))
+                .await
+                .expect("handle");
+
+            let expected = AlterReplicaLogDirsResponse {
+                throttle_time_ms: 0,
+                results: vec![AlterReplicaLogDirTopicResult {
+                    topic_name: topic.to_string(),
+                    partitions: vec![AlterReplicaLogDirPartitionResult {
+                        partition_index: 0,
+                        error_code,
+                        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+                    }],
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+                }],
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+            };
+            assert!(decode_response(&bytes, version) == expected, "case {label}");
+        }
         broker_handle.shutdown().await;
     }
 }

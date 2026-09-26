@@ -7,6 +7,8 @@
 //! echoes the id back on the response. The legacy single-group shape lives in
 //! `legacy`.
 
+use std::collections::BTreeMap;
+
 use bytes::Bytes;
 use krabka_metadata::AclOperation;
 use krabka_protocol::{
@@ -41,7 +43,6 @@ use crate::{
 /// `require_stable` is a top-level request field, not a per-group one, so one
 /// request either asks every group it names for stable offsets or none of
 /// them.
-// per-group loop: ACL + id→name resolve + named/fetch-all branches
 // cargo-mutants: coordinator-backed response projection; integration-tested.
 #[cfg_attr(test, mutants::skip)]
 pub(super) async fn handle_groups(
@@ -116,78 +117,7 @@ pub(super) async fn handle_groups(
                     req.require_stable,
                 )
             } else {
-                // fetch-all: every committed offset for the group, grouped by
-                // topic name. Echo each topic's id (required at v10, where the
-                // name is dropped from the wire) and authorize Read per topic.
-                let mut by_topic: std::collections::HashMap<
-                    String,
-                    Vec<OffsetFetchResponsePartitions>,
-                > = std::collections::HashMap::new();
-                for (key, entry) in &offsets.committed {
-                    let (topic, pid) = key;
-                    let row = if req.require_stable && offsets.pending_txn.contains(key) {
-                        unstable::group_row(*pid)
-                    } else {
-                        OffsetFetchResponsePartitions {
-                            partition_index: *pid,
-                            committed_offset: entry.offset.0,
-                            committed_leader_epoch: entry.leader_epoch,
-                            metadata: Some(entry.metadata.clone()),
-                            error_code: codes::NONE,
-                            ..Default::default()
-                        }
-                    };
-                    by_topic.entry(topic.clone()).or_default().push(row);
-                }
-
-                let discovered: Vec<String> = by_topic.keys().cloned().collect();
-                let decisions = authorize_topics(
-                    broker.config.authorizer.as_ref(),
-                    &*image,
-                    ctx.principal,
-                    ctx.peer,
-                    AclOperation::Read,
-                    discovered.iter().map(String::as_str),
-                );
-
-                by_topic
-                    .into_iter()
-                    .map(|(name, partitions)| {
-                        let topic_id = image
-                            .topic(&name)
-                            .map_or(WireUuid::ZERO, |t| WireUuid(t.topic_id.into_bytes()));
-                        let denied = decisions
-                            .get(name.as_str())
-                            .copied()
-                            .unwrap_or(AuthorizationResult::Deny)
-                            == AuthorizationResult::Deny;
-                        if denied {
-                            OffsetFetchResponseTopics {
-                                name,
-                                topic_id,
-                                partitions: partitions
-                                    .into_iter()
-                                    .map(|p| OffsetFetchResponsePartitions {
-                                        partition_index: p.partition_index,
-                                        committed_offset: -1,
-                                        committed_leader_epoch: -1,
-                                        metadata: None,
-                                        error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                                        ..Default::default()
-                                    })
-                                    .collect(),
-                                ..Default::default()
-                            }
-                        } else {
-                            OffsetFetchResponseTopics {
-                                name,
-                                topic_id,
-                                partitions,
-                                ..Default::default()
-                            }
-                        }
-                    })
-                    .collect()
+                group_fetch_all(broker, ctx, version, &image, &offsets, req.require_stable)
             };
 
         groups_out.push(OffsetFetchResponseGroup {
@@ -218,7 +148,8 @@ const FIRST_TOPIC_ID_VERSION: i16 = 10;
 /// The precedence is the one in Kafka's `KafkaApis.fetchOffsetsForGroup`. At
 /// v10 each `topic_id` resolves to a name, and a row whose name stays empty
 /// answers `UNKNOWN_TOPIC_ID` on every partition. The zero id is such a row.
-/// A topic without a `Read` grant then answers `TOPIC_AUTHORIZATION_FAILED`.
+/// A topic without a `Describe` grant then answers
+/// `TOPIC_AUTHORIZATION_FAILED`.
 /// Within an allowed topic, a partition that an unresolved transaction has
 /// written reports `UNSTABLE_OFFSET_COMMIT` under `require_stable` before any
 /// offset is read.
@@ -256,7 +187,7 @@ fn group_named_topics(
         image,
         context.principal,
         context.peer,
-        AclOperation::Read,
+        AclOperation::Describe,
         resolved
             .iter()
             .filter(|(_, name)| !(use_topic_ids && name.is_empty()))
@@ -294,6 +225,60 @@ fn group_named_topics(
     }
     allowed.extend(refused);
     allowed
+}
+
+/// Builds one group's rows for the fetch-all sentinel (a null topic list) on
+/// the KIP-516 shape.
+///
+/// Kafka's `KafkaApis.fetchAllOffsetsForGroup` keeps only the topics that the
+/// principal may `Describe`, and leaves every other topic out of the response
+/// rather than answering it with an error. The coordinator sends no topic id,
+/// so the id comes from the metadata image, and at v10, where the wire carries
+/// only the id, a topic that the image does not hold is left out too because
+/// it cannot be written without one. The topics come in name order.
+fn group_fetch_all(
+    broker: &Broker,
+    context: &crate::handlers::RequestContext<'_>,
+    version: i16,
+    image: &krabka_metadata::MetadataImage,
+    offsets: &GroupOffsets,
+    require_stable: bool,
+) -> Vec<OffsetFetchResponseTopics> {
+    let use_topic_ids = version >= FIRST_TOPIC_ID_VERSION;
+    let mut by_topic: BTreeMap<&str, Vec<OffsetFetchResponsePartitions>> = BTreeMap::new();
+    for (topic, partition) in offsets.committed.keys() {
+        by_topic
+            .entry(topic.as_str())
+            .or_default()
+            .push(committed_row(topic, *partition, offsets, require_stable));
+    }
+    let decisions = authorize_topics(
+        broker.config.authorizer.as_ref(),
+        image,
+        context.principal,
+        context.peer,
+        AclOperation::Describe,
+        by_topic.keys().copied(),
+    );
+    by_topic
+        .into_iter()
+        .filter(|(name, _)| decisions.get(name).copied() == Some(AuthorizationResult::Allow))
+        .filter_map(|(name, mut partitions)| {
+            let topic_id = image
+                .topic(name)
+                .map_or(WireUuid::ZERO, |t| WireUuid(t.topic_id.into_bytes()));
+            if use_topic_ids && topic_id == WireUuid::ZERO {
+                return None;
+            }
+            partitions.sort_by_key(|p| p.partition_index);
+            Some(OffsetFetchResponseTopics {
+                name: name.to_string(),
+                topic_id,
+                partitions,
+                ..Default::default()
+            })
+        })
+        .collect()
 }
 
 /// The row of one partition of an allowed topic.

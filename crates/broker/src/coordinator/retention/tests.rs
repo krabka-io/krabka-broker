@@ -10,6 +10,7 @@ use std::{sync::Arc, time::Duration};
 use assert2::{assert, check};
 use krabka_ids::PartitionIndex;
 use krabka_protocol::owned::{
+    create_topics_request::{self, CreatableTopic, CreateTopicsRequest},
     leave_group_request::LeaveGroupRequest,
     offset_commit_request::{
         OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
@@ -37,7 +38,7 @@ use crate::{
         },
     },
     test_support::{
-        decode_response, encode_request, peer, principal, request_context,
+        decode_response, dispatch_context, encode_request, peer, principal, request_context,
         start_broker_with_authorizer_no_audit,
     },
 };
@@ -57,8 +58,35 @@ const RETENTION_MS: i64 = 60_000;
 /// gets before the pass may delete it for holding no offsets.
 const CHECK_INTERVAL_MS: i64 = 600_000;
 
+/// Start a broker that holds `TOPIC`, since `OffsetCommit` answers
+/// `UNKNOWN_TOPIC_OR_PARTITION` for a topic the image does not hold.
 async fn start() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-    start_broker_with_authorizer_no_audit(Arc::new(crate::authorizer::AllowAllAuthorizer)).await
+    let (broker, dir) =
+        start_broker_with_authorizer_no_audit(Arc::new(crate::authorizer::AllowAllAuthorizer))
+            .await;
+    let admin = principal("admin");
+    let address = peer();
+    let ctx = request_context(&admin, &address, "retention-admin");
+    let request = CreateTopicsRequest {
+        topics: vec![CreatableTopic {
+            name: TOPIC.to_string(),
+            num_partitions: 1,
+            replication_factor: 1,
+            ..Default::default()
+        }],
+        timeout_ms: 5_000,
+        ..Default::default()
+    };
+    dispatch_context(
+        &broker.broker_arc_for_test(),
+        create_topics_request::API_KEY,
+        create_topics_request::MAX_VERSION,
+        &encode_request(&request, create_topics_request::MAX_VERSION),
+        &ctx,
+    )
+    .await;
+    broker.wait_until_partition_present(TOPIC, 0).await;
+    (broker, dir)
 }
 
 /// Install a `Stable` classic group holding one member, so a commit fences

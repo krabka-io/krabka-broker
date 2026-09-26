@@ -1,6 +1,6 @@
 //! KIP-13 + KIP-124 + KIP-257 client quotas.
 
-use krabka_metadata::{EntityKey, MetadataImage};
+use krabka_metadata::MetadataImage;
 use krabka_units::{
     ByteRate, Time,
     convert::{ByteRateExt as _, TimeExt},
@@ -16,8 +16,8 @@ mod request;
 mod throttle_slot;
 
 pub use buckets::QuotaBuckets;
-pub(crate) use controller_mutation::apply_controller_mutation_quota_mode;
 pub use controller_mutation::consume_controller_mutation_quota;
+pub(crate) use controller_mutation::{ControllerMutationQuota, QuotaRequest};
 pub use lookup::{lookup_ip_quota, lookup_ip_quota_with_key, lookup_quota, lookup_quota_with_key};
 pub use producer::consume_producer_quota;
 pub use request::consume_request_quota;
@@ -102,15 +102,13 @@ struct QuotaConsumption<'a> {
 
 fn consume_configured_quota(
     request: QuotaConsumption<'_>,
-    bucket_entity_key: impl FnOnce(&mut EntityKey),
     initial_rate: impl FnOnce(f64) -> Option<u64>,
     delay_for_overage: impl FnOnce(u64, f64, u64) -> Time,
-    maximum_delay: Time,
 ) -> QuotaDelay {
     if request.amount == 0 {
         return QuotaDelay::zero();
     }
-    let Some((mut entity_key, rate)) = lookup::lookup_quota_with_key(
+    let Some((entity_key, rate)) = lookup::lookup_quota_with_key(
         request.image,
         request.principal,
         request.client_id,
@@ -133,7 +131,6 @@ fn consume_configured_quota(
         .find(|(k, _)| k == "client-id")
         .and_then(|(_, v)| v.clone());
 
-    bucket_entity_key(&mut entity_key);
     let bucket = request.buckets.get_or_create(
         request.quota_key,
         &entity_key,
@@ -145,7 +142,10 @@ fn consume_configured_quota(
     if granted >= request.amount {
         return QuotaDelay::zero();
     }
-    let delay = delay_for_overage(request.amount - granted, rate, initial_rate).min(maximum_delay);
+    // Kafka bounds only the request quota's throttle (`ClientRequestQuotaManager`
+    // takes `boundedThrottleTime`), so the bound, where there is one, is the
+    // caller's.
+    let delay = delay_for_overage(request.amount - granted, rate, initial_rate);
     QuotaDelay::new(delay, user, client_id)
 }
 
@@ -306,7 +306,6 @@ mod tests {
     fn consume_configured_quota_returns_zero_without_mutating_bucket_for_zero_amount() {
         let image = image_with_quota(vec![("user", Some("alice"))], "request_percentage", 100.0);
         let buckets = QuotaBuckets::new();
-        let bucket_entity_key_called = Arc::new(AtomicBool::new(false));
         let initial_rate_called = Arc::new(AtomicBool::new(false));
         let delay_for_overage_called = Arc::new(AtomicBool::new(false));
 
@@ -318,10 +317,6 @@ mod tests {
                 client_id: "",
                 quota_key: "request_percentage",
                 amount: 0,
-            },
-            {
-                let called = Arc::clone(&bucket_entity_key_called);
-                move |_| called.store(true, Ordering::Relaxed)
             },
             {
                 let called = Arc::clone(&initial_rate_called);
@@ -337,12 +332,10 @@ mod tests {
                     secs(1)
                 }
             },
-            secs(1),
         );
 
         check!(delay == <Time as TimeExt>::ZERO);
         check!(buckets.is_empty());
-        check!(!bucket_entity_key_called.load(Ordering::Relaxed));
         check!(!initial_rate_called.load(Ordering::Relaxed));
         assert!(!delay_for_overage_called.load(Ordering::Relaxed));
     }
@@ -363,7 +356,6 @@ mod tests {
                     quota_key: "producer_byte_rate",
                     amount: 1,
                 },
-                |_| {},
                 {
                     let called = Arc::clone(&initial_rate_called);
                     move |_| {
@@ -372,7 +364,6 @@ mod tests {
                     }
                 },
                 |_, _, _| secs(1),
-                secs(1),
             );
 
             check!(delay == <Time as TimeExt>::ZERO);
@@ -399,10 +390,8 @@ mod tests {
                 quota_key: "controller_mutation_rate",
                 amount: 1,
             },
-            |_| {},
             |_| None,
             |_, _, _| secs(1),
-            secs(1),
         );
 
         check!(delay == <Time as TimeExt>::ZERO);
@@ -410,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn consume_configured_quota_caps_overage_delay() {
+    fn consume_configured_quota_leaves_the_overage_delay_uncapped() {
         let image = image_with_quota(vec![("user", Some("alice"))], "producer_byte_rate", 1.0);
         // A one-second window: at 1 B/s the burst is one byte, so 10 bytes
         // leaves the 9-byte overage the closure below checks.
@@ -425,7 +414,6 @@ mod tests {
                 quota_key: "producer_byte_rate",
                 amount: 10,
             },
-            |entity_key| entity_key.push(("qos-tier".into(), Some("bulk".into()))),
             |_| Some(1),
             |overage, rate, initial_rate| {
                 check!(overage == 9);
@@ -433,10 +421,9 @@ mod tests {
                 check!(initial_rate == 1);
                 secs(10)
             },
-            secs(1),
         );
 
-        check!(delay == secs(1));
+        check!(delay == secs(10));
         assert!(buckets.len() == 1);
     }
 }

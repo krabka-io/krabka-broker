@@ -1,59 +1,131 @@
 //! Offset-commit fencing.
 //!
-//! `OffsetCommit` and `TxnOffsetCommit` fence identically, and both dispatch
-//! on the group's LIVE protocol inside the actor, so the decision and the
-//! request/reply wrapper that carries it live in one module.
+//! `OffsetCommit` and `TxnOffsetCommit` both dispatch on the group's LIVE
+//! protocol inside the actor, so the decisions and the request/reply wrappers
+//! that carry them live in one module. The two requests fence by different
+//! rules, as Kafka's `validateOffsetCommit` does with its `isTransactional`
+//! flag, and [`CommitFence`] says which rule a `ValidateCommit` runs.
 
 use tokio::sync::oneshot;
 
 use super::{ErrorCode, GroupActorHandle, GroupActorMessage};
 use crate::{
     codes,
-    coordinator::unified::{classic_ops, group::CoordinatorGroup},
+    coordinator::unified::{classic_ops, consumer_state::GroupState, group::CoordinatorGroup},
 };
 
+/// The first `OffsetCommit` version that a member of the consumer protocol
+/// (KIP-848) may use. Kafka's `ConsumerGroup.validateOffsetCommit` answers
+/// `UNSUPPORTED_VERSION` below it.
+const FIRST_CONSUMER_PROTOCOL_COMMIT_VERSION: i16 = 9;
+
+/// The request whose rule a `ValidateCommit` runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitFence {
+    /// `OffsetCommit` at this api version: Kafka's `validateOffsetCommit`
+    /// with `isTransactional = false`.
+    Offset { api_version: i16 },
+    /// `TxnOffsetCommit`.
+    Transactional,
+}
+
 pub(super) fn validate_commit_message(
-    group: &CoordinatorGroup,
+    group: &mut CoordinatorGroup,
     member_id: &str,
     group_instance_id: Option<&str>,
     generation_or_epoch: i32,
+    fence: CommitFence,
 ) -> Result<(), ErrorCode> {
-    if let Some(state) = group.as_consumer() {
-        return state.validate_commit_decision(member_id, generation_or_epoch);
+    match fence {
+        CommitFence::Offset { api_version } => {
+            if let Some(state) = group.as_consumer() {
+                return validate_consumer_offset_commit(
+                    state,
+                    member_id,
+                    generation_or_epoch,
+                    api_version,
+                );
+            }
+            if let Some(state) = group.as_classic_mut() {
+                classic_ops::validate_offset_commit(
+                    state,
+                    member_id,
+                    group_instance_id,
+                    generation_or_epoch,
+                )?;
+                classic_ops::refresh_committer_session(state, member_id);
+            }
+            Ok(())
+        }
+        CommitFence::Transactional => {
+            if let Some(state) = group.as_consumer() {
+                return state.validate_commit_decision(member_id, generation_or_epoch);
+            }
+            if let Some(state) = group.as_classic() {
+                return classic_ops::validate_commit(
+                    state,
+                    member_id,
+                    group_instance_id,
+                    generation_or_epoch,
+                )
+                .map_or(Ok(()), Err);
+            }
+            Ok(())
+        }
     }
-    if let Some(state) = group.as_classic() {
-        return classic_ops::validate_commit(
-            state,
-            member_id,
-            group_instance_id,
-            generation_or_epoch,
-        )
-        .map_or(Ok(()), Err);
-    }
-    Ok(())
 }
 
-/// Validates an offset commit, regular or transactional, against the group's
-/// membership and generation (classic) or member epoch (KIP-848 next-gen).
+/// Kafka's `ConsumerGroup.validateOffsetCommit` for an `OffsetCommit`.
 ///
-/// It returns `Some(error_code)` when the commit must be rejected, and `None`
-/// when the commit may proceed.
+/// A negative epoch commits on a group with no members: that is the admin
+/// client or a consumer that does not use group management. Otherwise the
+/// member must exist, a member of the consumer protocol must use `OffsetCommit`
+/// v9 or later, and the epoch must be the member's epoch. A newer epoch
+/// answers `STALE_MEMBER_EPOCH`, or `ILLEGAL_GENERATION` for a member of the
+/// classic protocol.
 ///
-/// `OffsetCommit` and `TxnOffsetCommit` share this function so that the two
-/// paths fence identically. KIP-447 requires transactional offset fencing to
-/// be "consistent with normal offset fencing". For a simple consumer (empty
-/// `member_id`, no `group_instance_id`) the classic path does nothing, so the
-/// broker never fences a producer that supplies no group metadata.
+/// An older epoch answers the same codes. Kafka (KIP-1251) accepts an older
+/// epoch for a partition assigned to the member at or before that epoch; the
+/// group does not track the epoch at which each partition was assigned, so it
+/// cannot tell those partitions apart and refuses them all, as Kafka did
+/// before KIP-1251.
+fn validate_consumer_offset_commit(
+    state: &GroupState,
+    member_id: &str,
+    member_epoch: i32,
+    api_version: i16,
+) -> Result<(), ErrorCode> {
+    if member_epoch < 0 && state.members.is_empty() {
+        return Ok(());
+    }
+    let member = state
+        .members
+        .get(member_id)
+        .ok_or(codes::UNKNOWN_MEMBER_ID)?;
+    let classic = member.is_classic();
+    if !classic && api_version < FIRST_CONSUMER_PROTOCOL_COMMIT_VERSION {
+        return Err(codes::UNSUPPORTED_VERSION);
+    }
+    if member_epoch == member.member_epoch {
+        Ok(())
+    } else if classic {
+        Err(codes::ILLEGAL_GENERATION)
+    } else {
+        Err(codes::STALE_MEMBER_EPOCH)
+    }
+}
+
+/// Sends one `ValidateCommit` to the group's actor and waits for the answer.
 ///
-/// Dispatch happens inside the actor on the LIVE `group.kind`, through the
-/// single `ValidateCommit` message. It does not use the spawn-time
-/// `handle.kind` hint, because a KIP-848 migration may have flipped the
-/// protocol in place after spawn.
-pub(crate) async fn validate_group_commit(
+/// Dispatch happens inside the actor on the LIVE `group.kind`. It does not use
+/// the spawn-time `handle.kind` hint, because a KIP-848 migration may have
+/// flipped the protocol in place after spawn.
+async fn send_validate_commit(
     handle: &GroupActorHandle,
     member_id: &str,
     generation_or_epoch: i32,
     group_instance_id: Option<&str>,
+    fence: CommitFence,
 ) -> Option<ErrorCode> {
     let (tx, rx) = oneshot::channel();
     if handle
@@ -62,6 +134,7 @@ pub(crate) async fn validate_group_commit(
             member_id: member_id.to_string(),
             group_instance_id: group_instance_id.map(str::to_string),
             generation_or_epoch,
+            fence,
             reply: tx,
         })
         .await
@@ -74,6 +147,53 @@ pub(crate) async fn validate_group_commit(
         Ok(Err(code)) => Some(code),
         Err(_) => Some(codes::UNKNOWN_SERVER_ERROR),
     }
+}
+
+/// Validates a `TxnOffsetCommit` against the group's membership and
+/// generation (classic) or member epoch (KIP-848 next-gen).
+///
+/// It returns `Some(error_code)` when the commit must be rejected, and `None`
+/// when the commit may proceed. For a simple consumer (empty `member_id`, no
+/// `group_instance_id`) the classic path does nothing, so the broker never
+/// fences a producer that supplies no group metadata.
+pub(crate) async fn validate_group_commit(
+    handle: &GroupActorHandle,
+    member_id: &str,
+    generation_or_epoch: i32,
+    group_instance_id: Option<&str>,
+) -> Option<ErrorCode> {
+    send_validate_commit(
+        handle,
+        member_id,
+        generation_or_epoch,
+        group_instance_id,
+        CommitFence::Transactional,
+    )
+    .await
+}
+
+/// Validates an `OffsetCommit` at `api_version` against the group's live
+/// protocol, by Kafka's `ClassicGroup.validateOffsetCommit` or
+/// `ConsumerGroup.validateOffsetCommit`.
+///
+/// It returns `Some(error_code)` when the commit must be rejected, and `None`
+/// when the commit may proceed. A commit that passes refreshes the session of
+/// a classic member while the group is `Stable` or `PreparingRebalance`.
+pub(crate) async fn validate_offset_commit(
+    handle: &GroupActorHandle,
+    member_id: &str,
+    generation_or_epoch: i32,
+    group_instance_id: Option<&str>,
+    api_version: i16,
+) -> Option<ErrorCode> {
+    send_validate_commit(
+        handle,
+        member_id,
+        generation_or_epoch,
+        group_instance_id,
+        CommitFence::Offset { api_version },
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -90,6 +210,7 @@ mod tests {
             },
         },
         classic_state::OffsetEntry,
+        consumer_state::{ClassicMemberFacade, test_support::member as consumer_member},
     };
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -138,6 +259,7 @@ mod tests {
                 member_id: String::new(),
                 group_instance_id: None,
                 generation_or_epoch: -1,
+                fence: CommitFence::Offset { api_version: 9 },
                 reply: tx,
             })
             .await
@@ -258,6 +380,7 @@ mod tests {
                 member_id: "m-classic".into(),
                 group_instance_id: None,
                 generation_or_epoch: generation,
+                fence: CommitFence::Offset { api_version: 9 },
                 reply: tx,
             })
             .await
@@ -274,11 +397,13 @@ mod tests {
     /// fence on a native consumer member's commit. A classic group upgrades
     /// when a native consumer heartbeats in, so the handle's spawn-time `kind`
     /// is a stale `Classic`. `ValidateCommit` for that native member must
-    /// dispatch on the LIVE consumer kind and apply the epoch fence. A STALE
-    /// epoch, below the current one, gives `STALE_MEMBER_EPOCH`. A FENCED
-    /// epoch, above the current one, gives `FENCED_MEMBER_EPOCH`. Before the
+    /// dispatch on the LIVE consumer kind and apply the epoch fence. Before the
     /// refactor, a spawned-Classic upgraded group took the classic validate
     /// path and SKIPPED the epoch check.
+    ///
+    /// `OffsetCommit` answers `STALE_MEMBER_EPOCH` on either side of the
+    /// member epoch, as Kafka's `ConsumerGroup.validateOffsetCommit` does.
+    /// `TxnOffsetCommit` keeps its own rule.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn upgraded_group_fences_stale_native_consumer_commit() {
         use crate::coordinator::unified::config::ConsumerGroupMigrationPolicy;
@@ -299,20 +424,90 @@ mod tests {
         // not consult it — it must run the consumer epoch fence.
         assert!(handle.kind == GroupKindTag::Classic);
 
+        let offset = CommitFence::Offset { api_version: 9 };
         let cases = [
-            // STALE epoch (< current) → STALE_MEMBER_EPOCH.
-            (current_epoch - 1, Err(codes::STALE_MEMBER_EPOCH), "stale"),
-            // FENCED epoch (> current) → FENCED_MEMBER_EPOCH.
-            (current_epoch + 1, Err(codes::FENCED_MEMBER_EPOCH), "fenced"),
-            // The current epoch is accepted.
-            (current_epoch, Ok(()), "current"),
+            (offset, current_epoch - 1, Err(codes::STALE_MEMBER_EPOCH)),
+            (offset, current_epoch + 1, Err(codes::STALE_MEMBER_EPOCH)),
+            (offset, current_epoch, Ok(())),
+            (
+                CommitFence::Offset { api_version: 8 },
+                current_epoch,
+                Err(codes::UNSUPPORTED_VERSION),
+            ),
+            (
+                CommitFence::Transactional,
+                current_epoch - 1,
+                Err(codes::STALE_MEMBER_EPOCH),
+            ),
+            (
+                CommitFence::Transactional,
+                current_epoch + 1,
+                Err(codes::FENCED_MEMBER_EPOCH),
+            ),
+            (CommitFence::Transactional, current_epoch, Ok(())),
         ];
-        for (epoch, want, label) in cases {
-            let got = rpc::validate_commit(&handle, &native, epoch).await;
-            assert!(
-                got == want,
-                "an upgraded group must run the consumer epoch fence ({label}, epoch {epoch}); got {got:?}"
-            );
+        let mut actual = Vec::new();
+        for (fence, epoch, _) in cases {
+            let got = rpc::validate_commit(&handle, &native, epoch, fence).await;
+            actual.push((fence, epoch, got));
         }
+        assert!(actual == cases);
+    }
+
+    /// One row of the consumer-group `OffsetCommit` table: the group's members
+    /// as `(member id, member epoch, classic protocol)`, then the request's
+    /// member id, epoch and api version, and the result.
+    type ConsumerCase = (
+        &'static [(&'static str, i32, bool)],
+        &'static str,
+        i32,
+        i16,
+        Result<(), i16>,
+    );
+
+    /// Kafka's `ConsumerGroup.validateOffsetCommit` for `OffsetCommit`, row by
+    /// row.
+    #[test]
+    fn consumer_group_offset_commit_follows_kafka_rule() {
+        const NATIVE: &[(&str, i32, bool)] = &[("native", 5, false)];
+        const CLASSIC: &[(&str, i32, bool)] = &[("classic", 5, true)];
+        let cases: [ConsumerCase; 12] = [
+            // The admin client commits on a group with no members.
+            (&[], "", -1, 9, Ok(())),
+            (&[], "", -1, 2, Ok(())),
+            // ... and not on a group with members.
+            (NATIVE, "", -1, 9, Err(codes::UNKNOWN_MEMBER_ID)),
+            // A member id the group does not hold.
+            (&[], "ghost", 1, 9, Err(codes::UNKNOWN_MEMBER_ID)),
+            (NATIVE, "ghost", 5, 9, Err(codes::UNKNOWN_MEMBER_ID)),
+            // A member of the consumer protocol.
+            (NATIVE, "native", 5, 9, Ok(())),
+            (NATIVE, "native", 6, 9, Err(codes::STALE_MEMBER_EPOCH)),
+            (NATIVE, "native", 4, 9, Err(codes::STALE_MEMBER_EPOCH)),
+            (NATIVE, "native", 5, 8, Err(codes::UNSUPPORTED_VERSION)),
+            // A member of the classic protocol.
+            (CLASSIC, "classic", 5, 2, Ok(())),
+            (CLASSIC, "classic", 6, 9, Err(codes::ILLEGAL_GENERATION)),
+            (CLASSIC, "classic", 4, 9, Err(codes::ILLEGAL_GENERATION)),
+        ];
+        let mut actual = Vec::new();
+        for (members, member_id, epoch, api_version, _) in cases {
+            let mut state = GroupState::new("g");
+            for &(id, member_epoch, classic) in members {
+                let mut member = consumer_member(id);
+                member.member_epoch = member_epoch;
+                member.classic = classic.then(|| ClassicMemberFacade {
+                    generation_id: member_epoch,
+                    supported_protocols: Vec::new(),
+                    session_timeout: std::time::Duration::from_secs(45),
+                    last_synced_assignment: bytes::Bytes::new(),
+                    awaiting_sync: false,
+                });
+                state.members.insert(id.to_string(), member);
+            }
+            let got = validate_consumer_offset_commit(&state, member_id, epoch, api_version);
+            actual.push((members, member_id, epoch, api_version, got));
+        }
+        assert!(actual == cases);
     }
 }

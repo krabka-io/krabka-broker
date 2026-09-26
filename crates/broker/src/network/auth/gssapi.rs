@@ -314,7 +314,7 @@ mod tests {
             None,
         );
 
-        assert_failed_authenticate_response(&resp);
+        assert_failed_authenticate_response(&resp, None);
         assert!(matches!(auth, ConnectionAuth::Negotiating { .. }));
     }
 
@@ -340,7 +340,7 @@ mod tests {
 
         let resp = handle_authenticate_gssapi(&req, &mut auth, &config, None);
 
-        assert_failed_authenticate_response(&resp);
+        assert_failed_authenticate_response(&resp, None);
         assert!(matches!(
             auth,
             ConnectionAuth::Negotiating {

@@ -361,6 +361,16 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "The rules are per listener, under `[listeners.tls_config]`. Kafka's broker-wide `ssl.principal.mapping.rules` and its `listener.name.<name>.` prefixed form are not read from `server_properties`.",
     },
     KipAnnotation {
+        key: "KIP-373",
+        claim: "Delegation tokens for other users: the `USER` resource type and the `CREATE_TOKENS` and `DESCRIBE_TOKENS` operations",
+        status: KipStatus::Partial,
+        module: "crates/broker/src/handlers/acl_wire/binding_filter.rs",
+        tests: &[
+            "crates/broker/src/handlers/acl_wire/binding_filter/tests.rs::unstorable_and_unknown_axes_match_nothing",
+        ],
+        note: "DescribeAcls and DeleteAcls accept the KIP-373 wire values in a filter, but they match nothing: the ACL metadata model has no `USER` resource type and no token operations, so no such ACL can be stored (#769). CreateDelegationToken for another owner is granted only to super users, not to a holder of `CREATE_TOKENS` on `User:<owner>` (#765).",
+    },
+    KipAnnotation {
         key: "KIP-382",
         claim: "MirrorMaker 2 replicates a Kafka cluster onto krabka",
         status: KipStatus::Implemented,
@@ -743,6 +753,16 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "",
     },
     KipAnnotation {
+        key: "KIP-814",
+        claim: "A static leader that rejoins a stable group gets `skip_assignment` and keeps the current assignment",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/coordinator/unified/classic_ops/join.rs",
+        tests: &[
+            "crates/broker/tests/static_membership.rs::static_rejoin_preserves_assignment_and_generation",
+        ],
+        note: "",
+    },
+    KipAnnotation {
         key: "KIP-827",
         claim: "DescribeLogDirs v4 reports total and usable bytes per directory",
         status: KipStatus::Implemented,
@@ -795,6 +815,16 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         tests: &[
             "crates/broker/tests/jbod_disk_failure.rs",
             "crates/broker/tests/offline_replicas.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-860",
+        claim: "AlterPartitionReassignments refuses a replication-factor change unless the request allows it",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/alter_partition_reassignments/plan.rs",
+        tests: &[
+            "crates/broker/src/handlers/alter_partition_reassignments/plan.rs::the_replication_factor_check_counts_the_set_the_partition_is_headed_for",
         ],
         note: "",
     },
@@ -1024,6 +1054,16 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         module: "crates/broker/src/handlers/api_versions.rs",
         tests: &["crates/broker/src/handlers/api_versions/tests.rs"],
         note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1251",
+        claim: "OffsetCommit accepts an older member epoch for a partition assigned at or before that epoch",
+        status: KipStatus::Partial,
+        module: "crates/broker/src/coordinator/unified/actor/commit_validation.rs",
+        tests: &[
+            "crates/broker/src/handlers/offset_commit/group_validation_tests.rs::commit_is_fenced_by_kafka_group_rule",
+        ],
+        note: "Commits are fenced by Kafka's validateOffsetCommit, but every older epoch is still refused: krabka does not record the epoch at which each partition was assigned, so the per-partition acceptance is open (#800).",
     },
     KipAnnotation {
         key: "KIP-1263",

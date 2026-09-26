@@ -114,6 +114,10 @@ pub(in crate::handlers::describe_configs) struct StaticBrokerConfigs<'a> {
     pub(in crate::handlers::describe_configs) num_partitions: Option<i32>,
     /// KIP-464 `default.replication.factor`, as the operator named it.
     pub(in crate::handlers::describe_configs) default_replication_factor: Option<i16>,
+    /// `delete.topic.enable`, as the operator named it.
+    pub(in crate::handlers::describe_configs) delete_topic_enable: Option<bool>,
+    /// `auto.create.topics.enable`, as the operator named it.
+    pub(in crate::handlers::describe_configs) auto_create_topics_enable: Option<bool>,
     /// `connections.max.idle.ms`, as the operator named it. `None` is a key
     /// the process never saw, which reports the registry default alone.
     pub(in crate::handlers::describe_configs) connections_max_idle: Option<Time>,
@@ -240,6 +244,18 @@ pub(super) fn static_broker_entries(
                     .default_replication_factor
                     .map(|factor| factor.to_string()),
             ),
+            (
+                config_keys::DELETE_TOPIC_ENABLE,
+                configs
+                    .delete_topic_enable
+                    .map(|enabled| enabled.to_string()),
+            ),
+            (
+                config_keys::AUTO_CREATE_TOPICS_ENABLE,
+                configs
+                    .auto_create_topics_enable
+                    .map(|enabled| enabled.to_string()),
+            ),
         ]
         .into_iter()
         .filter(|(key, _)| wanted(key))
@@ -267,6 +283,8 @@ pub(in crate::handlers::describe_configs) fn kafka_default_static_broker()
         offsets_retention_check_interval: None,
         num_partitions: None,
         default_replication_factor: None,
+        delete_topic_enable: None,
+        auto_create_topics_enable: None,
         connections_max_idle: None,
         connections_max_idle_overrides: NO_IDLE_OVERRIDES.get_or_init(Default::default),
     }

@@ -55,19 +55,25 @@ impl ResponseBuilder {
         }
     }
 
+    /// The index of the response row for `(topic_id, name)`, which this call
+    /// adds when no row has that key yet.
+    fn slot(&mut self, topic_id: WireUuid, name: &str) -> usize {
+        let key = self.key(topic_id, name);
+        *self.slots.entry(key).or_insert_with(|| {
+            self.topics.push(OffsetCommitResponseTopic {
+                name: name.to_string(),
+                topic_id,
+                ..Default::default()
+            });
+            self.topics.len() - 1
+        })
+    }
+
     /// Adds a row for every partition of `topic`, each with `error_code`.
     ///
     /// This is Kafka's `Builder.addPartitions`.
     pub fn add_topic(&mut self, topic: &OffsetCommitRequestTopic, error_code: i16) {
-        let key = self.key(topic.topic_id, &topic.name);
-        let slot = *self.slots.entry(key).or_insert_with(|| {
-            self.topics.push(OffsetCommitResponseTopic {
-                name: topic.name.clone(),
-                topic_id: topic.topic_id,
-                ..Default::default()
-            });
-            self.topics.len() - 1
-        });
+        let slot = self.slot(topic.topic_id, &topic.name);
         self.topics[slot]
             .partitions
             .extend(
@@ -80,6 +86,26 @@ impl ResponseBuilder {
                         ..Default::default()
                     }),
             );
+    }
+
+    /// Adds one partition row with `error_code`.
+    ///
+    /// This is Kafka's `Builder.addPartition`.
+    pub fn add_partition(
+        &mut self,
+        topic_id: WireUuid,
+        name: &str,
+        partition_index: i32,
+        error_code: i16,
+    ) {
+        let slot = self.slot(topic_id, name);
+        self.topics[slot]
+            .partitions
+            .push(OffsetCommitResponsePartition {
+                partition_index,
+                error_code,
+                ..Default::default()
+            });
     }
 
     /// Merges the coordinator's topic rows into the response.

@@ -197,7 +197,7 @@ async fn oauthbearer_invalid_token_returns_error_json_then_fails_on_dummy() {
         ..Default::default()
     };
     let resp2 = handle_authenticate_oauthbearer(&dummy, &mut auth, &validator, now_ms, None).await;
-    assert_failed_authenticate_response(&resp2);
+    assert_failed_authenticate_response(&resp2, Some(r#"{"status":"invalid_token"}"#));
     assert!(!auth.is_authenticated());
 }
 
@@ -334,19 +334,53 @@ async fn authenticate_during_reauth_different_principal_rejected_with_sasl_auth_
         None,
     )
     .await;
-    // SASL_AUTHENTICATION_FAILED = 58 per Apache Kafka protocol; the
-    // error message must name the principal mismatch.
-    check!(resp.error_code == SASL_AUTHENTICATION_FAILED);
-    check!(
-        resp.error_message
-            .as_deref()
-            .unwrap_or("")
-            .contains("principal")
+    // Kafka's `ensurePrincipalUnchanged` message.
+    assert_failed_authenticate_response(
+        &resp,
+        Some("Cannot change principals during re-authentication from User.alice: User.bob"),
     );
-    check!(resp.auth_bytes.as_ref() == b"".as_slice());
-    check!(resp.session_lifetime_ms == 0);
     // Connection remained in Reauthenticating (dispatch will close).
     assert!(matches!(auth, ConnectionAuth::Reauthenticating { .. }));
+}
+
+/// A rejected re-authentication token gets the same RFC 7628 error challenge
+/// as an initial one, and the client's `\x01` then fails the exchange with
+/// that JSON as the message, leaving the previous session in place while the
+/// dispatcher closes the connection.
+#[tokio::test]
+async fn a_rejected_reauth_token_gets_the_error_challenge_then_fails_with_its_json() {
+    let validator = krabka_security::OAuthBearerValidator::default();
+    let now_ms = 1_000_000_000_000;
+    let mut auth = ConnectionAuth::Reauthenticating {
+        previous: AuthenticatedSnapshot {
+            principal: Principal {
+                name: "alice".to_string(),
+                auth_method: krabka_security::AuthMethod::SaslOAuthBearer,
+                groups: vec![],
+            },
+            mechanism: SaslMechanism::OAuthBearer,
+            expires_at_ms: Some(now_ms + 1_000),
+            authenticated_via_token: false,
+        },
+        exchange: SaslExchange::OAuthBearer,
+        pending_token_expiry_ms: None,
+    };
+    let garbage = SaslAuthenticateRequest {
+        auth_bytes: bytes::Bytes::from_static(b"not a client response"),
+        ..Default::default()
+    };
+    let challenge =
+        handle_authenticate_oauthbearer(&garbage, &mut auth, &validator, now_ms, None).await;
+    assert_success_authenticate_response(&challenge, br#"{"status":"invalid_token"}"#, 0);
+
+    let dummy = SaslAuthenticateRequest {
+        auth_bytes: bytes::Bytes::from_static(&[1u8]),
+        ..Default::default()
+    };
+    let failure =
+        handle_authenticate_oauthbearer(&dummy, &mut auth, &validator, now_ms, None).await;
+    assert_failed_authenticate_response(&failure, Some(r#"{"status":"invalid_token"}"#));
+    assert!(auth.principal().map(|p| p.name.as_str()) == Some("alice"));
 }
 
 // KIP-368 ceiling: the server-side

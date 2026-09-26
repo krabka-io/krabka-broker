@@ -24,8 +24,9 @@ use super::{
     frame::{read_kafka_request, write_response, write_response_body},
 };
 use crate::network::auth::{
-    ConnectionAuth, SaslExchange, handle_authenticate_gssapi, handle_authenticate_oauthbearer,
-    handle_authenticate_plain, handle_authenticate_scram, handle_handshake, is_pre_auth_allowed,
+    ConnectionAuth, ReauthClock, SaslExchange, generic_failure_message, handle_authenticate_gssapi,
+    handle_authenticate_oauthbearer, handle_authenticate_plain, handle_authenticate_scram,
+    handle_handshake,
 };
 
 /// Initial per-connection auth state for an unauthenticated SASL peer.
@@ -113,7 +114,7 @@ pub(super) async fn run_inbound_sasl(
     loop {
         let (api_key, api_version, corr_id, body) =
             read_kafka_request(stream, cfg.max_frame_bytes).await?;
-        if !is_pre_auth_allowed(api_key) && !auth.is_authenticated() {
+        if !auth.allows_request(api_key) {
             return Err(RaftHandshakeError::Sasl(format!(
                 "pre-auth request api_key={api_key} rejected"
             )));
@@ -129,7 +130,18 @@ pub(super) async fn run_inbound_sasl(
                 let mut cur = body.as_slice();
                 let req = SaslHandshakeRequest::decode(&mut cur, api_version)
                     .map_err(|e| RaftHandshakeError::Protocol(e.to_string()))?;
-                let resp = handle_handshake(&req, &mut auth, &cfg.enabled_sasl_mechanisms);
+                // The loop returns once authenticated, so this handshake is
+                // never a re-authentication and the clock is never read.
+                let outcome = handle_handshake(
+                    &req,
+                    &mut auth,
+                    &cfg.enabled_sasl_mechanisms,
+                    &mut ReauthClock {
+                        now_ms: 0,
+                        last_start_ms: &mut None,
+                    },
+                );
+                let resp = outcome.response;
                 let error_code = resp.error_code;
                 write_response(stream, api_key, api_version, corr_id, &resp).await?;
                 if error_code != 0 {
@@ -150,7 +162,7 @@ pub(super) async fn run_inbound_sasl(
                         ));
                     }
                 };
-                let resp = match mech {
+                let mut resp = match mech {
                     SaslMechanism::Plain => handle_authenticate_plain(
                         &req,
                         &mut auth,
@@ -195,6 +207,11 @@ pub(super) async fn run_inbound_sasl(
                         handle_authenticate_gssapi(&req, &mut auth, config, CONTROLLER_MAX_REAUTH)
                     }
                 };
+                if resp.error_code == crate::codes::SASL_AUTHENTICATION_FAILED
+                    && resp.error_message.is_none()
+                {
+                    resp.error_message = Some(generic_failure_message(mech, false));
+                }
                 let error_code = resp.error_code;
                 write_response(stream, api_key, api_version, corr_id, &resp).await?;
                 if error_code != 0 {

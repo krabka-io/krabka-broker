@@ -25,10 +25,8 @@ pub(crate) struct ClientMetrics {
 
 impl ClientMetrics {
     /// `otlp_endpoint` is `None` when OTLP forwarding is disabled.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         telemetry_max: ByteSize,
-        default_interval: Time,
         otlp_endpoint: Option<String>,
         otlp_protocol: krabka_telemetry::OtlpProtocol,
         otlp_queue_capacity: usize,
@@ -43,7 +41,7 @@ impl ClientMetrics {
             None => OtlpForwarder::disabled(),
         };
         Self {
-            manager: ClientMetricsManager::new(telemetry_max, default_interval),
+            manager: ClientMetricsManager::new(telemetry_max),
             prometheus: Arc::new(ClientMetricsCollector::new(
                 prometheus_snapshot_ttl.to_std(),
             )),

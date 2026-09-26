@@ -1562,6 +1562,33 @@
             "null"
           ]
         },
+        "classic_group_max_session_timeout": {
+          "default": null,
+          "description": "Upper bound on a classic `JoinGroup` session timeout, Kafka's\n`group.max.session.timeout.ms`.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "classic_group_max_size": {
+          "description": "Maximum number of members in one classic group, Kafka's\n`group.max.size`.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "classic_group_min_session_timeout": {
+          "default": null,
+          "description": "Lower bound on a classic `JoinGroup` session timeout, Kafka's\n`group.min.session.timeout.ms`.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "cleaner_interval": {
           "default": null,
           "description": "Cadence of log cleaner maintenance.",
@@ -1751,7 +1778,7 @@
         },
         "controller_mutation_quota_window": {
           "default": null,
-          "description": "Time window whose throughput defines the KIP-599 controller-mutation\nquota burst capacity.",
+          "description": "Time window whose throughput defines the KIP-599 controller-mutation\nquota burst capacity (default 11 s), Kafka's\n`controller.quota.window.num` x `controller.quota.window.size.seconds`.",
           "format": "duration",
           "type": [
             "string",
@@ -2286,7 +2313,7 @@
         },
         "quota_throttle_max": {
           "default": null,
-          "description": "Maximum client quota throttle delay, which bounds how long one response\nmutes a client. Equivalent to Kafka's `quota.window.size.seconds *\n(quota.window.num - 1)`.",
+          "description": "Maximum request-quota throttle delay, which bounds how long one\nresponse over `request_percentage` mutes a client. Equivalent to\nKafka's `quota.window.size.seconds`; byte-rate and controller-mutation\nthrottles are not bounded.",
           "format": "duration",
           "type": [
             "string",
@@ -2772,33 +2799,6 @@
           "default": null,
           "description": "Maximum time a classic-protocol follower waits for its `SyncGroup`\nassignment.",
           "format": "duration",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "telemetry_decompressed_output_ceiling": {
-          "default": null,
-          "description": "Maximum decompressed-output allowance granted to a telemetry payload.",
-          "format": "byte-size",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "telemetry_decompressed_output_floor": {
-          "default": null,
-          "description": "Minimum decompressed-output allowance granted to a telemetry payload,\nwhatever the ratio bound computes.",
-          "format": "byte-size",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "telemetry_max_decompression_ratio": {
-          "default": null,
-          "description": "Maximum accepted decompression ratio for a KIP-714 telemetry payload.",
-          "format": "ratio",
           "type": [
             "string",
             "null"

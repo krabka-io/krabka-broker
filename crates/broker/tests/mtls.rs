@@ -50,10 +50,12 @@ const DEV_CLIENT_CA: &str = include_str!("fixtures/security/dev_client_ca.pem");
 const DEV_CLIENT_CERT: &str = include_str!("fixtures/security/dev_client_cert.pem");
 const DEV_CLIENT_KEY: &str = include_str!("fixtures/security/dev_client_key.pem");
 
-/// Subject DN of the fixture client cert as rendered by `x509-parser`.
-/// It must match `extract_principal_from_cert` exactly, because operators pin
-/// this string in ACLs and `super_users`.
-const CLIENT_PRINCIPAL: &str = "CN=test-client,OU=integration,O=crabka";
+/// Subject DN of the fixture client cert in RFC 2253 form, as Kafka's
+/// `X500Principal.getName()` gives it. The fixture's Subject is one CN whose
+/// value holds the commas and equals signs, which the JDK escapes (openssl's
+/// RFC 2253 output leaves `=` bare). Operators pin this string in
+/// ACLs and `super_users`.
+const CLIENT_PRINCIPAL: &str = r"CN=test-client\,OU\=integration\,O\=crabka";
 
 fn write_fixture(dir: &std::path::Path, name: &str, contents: &str) -> std::path::PathBuf {
     let p = dir.join(name);

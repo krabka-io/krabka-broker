@@ -271,7 +271,8 @@ async fn oauthbearer_in_band_reauth_with_different_principal_closes() {
 /// Test #5: the broker rejects an in-band `SaslHandshake` whose `mechanism`
 /// differs from the mechanism it first negotiated.
 ///
-/// The response carries `error_code = ILLEGAL_SASL_STATE (34)`. KIP-368 needs
+/// The response carries `NONE`, and the next frame closes the connection
+/// (Kafka's `REAUTH_BAD_MECHANISM`). KIP-368 needs
 /// the same mechanism across an in-band re-auth, even when the broker would
 /// otherwise accept SCRAM on a fresh connection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -301,8 +302,9 @@ async fn oauthbearer_in_band_reauth_with_different_mechanism_closes() {
         .await
         .expect("initial OAUTHBEARER must succeed");
 
-    // In-band SaslHandshake with SCRAM-SHA-512 — must come back with
-    // ILLEGAL_SASL_STATE (34) on the handshake response itself.
+    // In-band SaslHandshake with SCRAM-SHA-512. Kafka answers it with NONE
+    // and the enabled list (the mechanism is enabled), moves to
+    // REAUTH_BAD_MECHANISM, and fails the connection on the next frame.
     let sh_req = SaslHandshakeRequest {
         mechanism: "SCRAM-SHA-512".to_string(),
         ..Default::default()
@@ -318,8 +320,19 @@ async fn oauthbearer_in_band_reauth_with_different_mechanism_closes() {
     let sh_resp =
         SaslHandshakeResponse::decode(&mut cur, 1).expect("SaslHandshake decode must succeed");
     assert!(
-        sh_resp.error_code == 34,
-        "expected ILLEGAL_SASL_STATE for mechanism switch"
+        sh_resp
+            == SaslHandshakeResponse {
+                error_code: 0,
+                mechanisms: vec!["OAUTHBEARER".to_string(), "SCRAM-SHA-512".to_string()],
+                ..Default::default()
+            }
+    );
+    // The next frame, whatever it is, gets no answer: the connection closes.
+    assert!(
+        round_trip(&mut stream, 17, 1, 201, false, &sh_body)
+            .await
+            .is_err(),
+        "the connection must close on the frame after a mechanism switch"
     );
 
     handle.shutdown().await;

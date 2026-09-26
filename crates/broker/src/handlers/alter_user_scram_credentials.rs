@@ -12,7 +12,8 @@
 //! - An unknown mechanism wire value gives `UNSUPPORTED_SASL_MECHANISM` (33).
 //!
 //! Authorization needs `Alter` on `Cluster("kafka-cluster")`. On Deny, every
-//! per-user result is `CLUSTER_AUTHORIZATION_FAILED` (31). When `super_users`
+//! per-user result is `CLUSTER_AUTHORIZATION_FAILED` (31), one row per
+//! distinct user sorted by name, as Kafka's `getErrorResponse` builds it. When `super_users`
 //! is configured, the authorizer's super-user bypass returns ALLOW from inside
 //! `authorize`.
 //!
@@ -51,6 +52,7 @@ mod tests;
 use self::{
     plan::{AlterationPlan, distinct_requested_users, plan_alterations},
     response::{apply_submit_error, err_result},
+    validation::{CLUSTER_ALTER_DENIED_MESSAGE, SCRAM_UNSUPPORTED_MESSAGE},
 };
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
@@ -90,11 +92,21 @@ pub(crate) async fn handle(
     ) == AuthorizationResult::Allow;
 
     if !authorized {
+        // Kafka's `AlterUserScramCredentialsRequest.getErrorResponse` gives
+        // one row per distinct user, sorted by name.
+        let mut users = distinct_requested_users(&req);
+        users.sort();
         return AlterUserScramCredentialsResponse {
             throttle_time_ms: 0,
-            results: distinct_requested_users(&req)
+            results: users
                 .into_iter()
-                .map(|user| err_result(user, codes::CLUSTER_AUTHORIZATION_FAILED, "not super-user"))
+                .map(|user| {
+                    err_result(
+                        user,
+                        codes::CLUSTER_AUTHORIZATION_FAILED,
+                        CLUSTER_ALTER_DENIED_MESSAGE,
+                    )
+                })
                 .collect(),
             ..Default::default()
         };
@@ -108,12 +120,11 @@ pub(crate) async fn handle(
     )
     .is_err()
     {
-        let msg = "SCRAM is not enabled at the cluster's metadata.version.";
         return AlterUserScramCredentialsResponse {
             throttle_time_ms: 0,
             results: distinct_requested_users(&req)
                 .into_iter()
-                .map(|user| err_result(user, codes::UNSUPPORTED_VERSION, msg))
+                .map(|user| err_result(user, codes::UNSUPPORTED_VERSION, SCRAM_UNSUPPORTED_MESSAGE))
                 .collect(),
             ..Default::default()
         };

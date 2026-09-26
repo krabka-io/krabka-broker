@@ -15,6 +15,7 @@ use krabka_protocol::owned::{
 pub(super) const VERSION: i16 = 3;
 pub(super) const RESOURCE_TYPE_TOPIC: i8 = 2;
 pub(super) const PATTERN_TYPE_ANY: i8 = 1;
+pub(super) const PATTERN_TYPE_MATCH: i8 = 2;
 pub(super) const PATTERN_TYPE_LITERAL: i8 = 3;
 pub(super) const PATTERN_TYPE_PREFIXED: i8 = 4;
 pub(super) const OPERATION_ANY: i8 = 1;

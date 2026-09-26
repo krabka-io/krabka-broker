@@ -16,7 +16,7 @@ use super::acl_wire::CLUSTER_RESOURCE_NAME;
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
-    codes::{CLUSTER_AUTHORIZATION_FAILED, NONE},
+    codes::{CLUSTER_AUTHORIZATION_FAILED, INVALID_REQUEST, NONE, UNSUPPORTED_VERSION},
 };
 
 /// Wire `match_type`: entity name must equal `match_` exactly (KIP-546 `EXACT`).
@@ -25,6 +25,80 @@ const MATCH_TYPE_EXACT: i8 = 0;
 const MATCH_TYPE_DEFAULT: i8 = 1;
 /// Wire `match_type`: any entity of the given type matches (KIP-546 `ANY`).
 const MATCH_TYPE_ANY: i8 = 2;
+
+/// The entity types a filter component may name.
+const USER: &str = "user";
+const CLIENT_ID: &str = "client-id";
+const IP: &str = "ip";
+
+/// A filter rejection: the top-level error code and message Kafka sends.
+#[derive(Debug, PartialEq, Eq)]
+struct FilterError {
+    code: i16,
+    message: String,
+}
+
+fn invalid(message: impl Into<String>) -> FilterError {
+    FilterError {
+        code: INVALID_REQUEST,
+        message: message.into(),
+    }
+}
+
+/// Checks the filter components as Kafka's `ClientQuotasImage.describe`
+/// does, in the same order, before any match runs.
+///
+/// # Errors
+///
+/// Returns the first rule the filter breaks, with Kafka's error code and
+/// message.
+fn validate_filter(components: &[ComponentData]) -> Result<(), FilterError> {
+    let mut seen: Vec<&str> = Vec::with_capacity(components.len());
+    for comp in components {
+        let entity_type = comp.entity_type.as_str();
+        if entity_type.is_empty() {
+            return Err(invalid("Invalid empty entity type."));
+        }
+        if seen.contains(&entity_type) {
+            return Err(invalid(format!(
+                "Entity type {entity_type} cannot appear more than once in the filter."
+            )));
+        }
+        if ![IP, USER, CLIENT_ID].contains(&entity_type) {
+            return Err(FilterError {
+                code: UNSUPPORTED_VERSION,
+                message: format!("Unsupported entity type {entity_type}"),
+            });
+        }
+        match (comp.match_type, comp.match_.is_some()) {
+            (MATCH_TYPE_EXACT, false) => {
+                return Err(invalid(
+                    "Request specified MATCH_TYPE_EXACT, but set match string to null.",
+                ));
+            }
+            (MATCH_TYPE_DEFAULT, true) => {
+                return Err(invalid(
+                    "Request specified MATCH_TYPE_DEFAULT, but also specified a match string.",
+                ));
+            }
+            (MATCH_TYPE_ANY, true) => {
+                return Err(invalid(
+                    "Request specified MATCH_TYPE_SPECIFIED, but also specified a match string.",
+                ));
+            }
+            (MATCH_TYPE_EXACT | MATCH_TYPE_DEFAULT | MATCH_TYPE_ANY, _) => {}
+            (other, _) => return Err(invalid(format!("Unknown match type {other}"))),
+        }
+        seen.push(entity_type);
+    }
+    if seen.contains(&IP) && (seen.contains(&USER) || seen.contains(&CLIENT_ID)) {
+        return Err(invalid(
+            "Invalid entity filter component combination. IP filter component should not be \
+             used with user or clientId filter component.",
+        ));
+    }
+    Ok(())
+}
 
 #[tracing::instrument(
     name = "handle_describe_client_quotas",
@@ -59,6 +133,19 @@ pub(crate) fn handle(
             throttle_time_ms: 0,
             error_code: CLUSTER_AUTHORIZATION_FAILED,
             error_message: None,
+            entries: None,
+            ..Default::default()
+        };
+        return encode_response(&resp, api_version);
+    }
+
+    // Kafka's `ClientQuotasImage.describe` throws on a bad filter, and
+    // `KafkaApis.handleError` answers with `entries = null`.
+    if let Err(err) = validate_filter(&req.components) {
+        let resp = DescribeClientQuotasResponse {
+            throttle_time_ms: 0,
+            error_code: err.code,
+            error_message: Some(err.message),
             entries: None,
             ..Default::default()
         };
@@ -411,6 +498,170 @@ mod tests {
             (entry.values[0].value - 2048.0).abs() < f64::EPSILON,
             "{entry:?}"
         );
+        broker_handle.shutdown().await;
+    }
+
+    /// Kafka's `ClientQuotasImage.describe` rejects a bad filter before any
+    /// match, with `entries = null` (#674). Valid filters still match.
+    #[tokio::test]
+    async fn invalid_filters_answer_kafkas_top_level_error() {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        seed_quota(
+            &broker_handle,
+            vec![("user", Some("alice"))],
+            "producer_byte_rate",
+            1024.0,
+        )
+        .await;
+        seed_quota(
+            &broker_handle,
+            vec![("user", None)],
+            "producer_byte_rate",
+            2048.0,
+        )
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("admin");
+        let peer = peer();
+        let ctx = test_context(&p, &peer);
+
+        let error = |code: i16, message: &str| DescribeClientQuotasResponse {
+            throttle_time_ms: 0,
+            error_code: code,
+            error_message: Some(message.into()),
+            entries: None,
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+        };
+        let found = |name: Option<&str>, value: f64| DescribeClientQuotasResponse {
+            throttle_time_ms: 0,
+            error_code: NONE,
+            error_message: None,
+            entries: Some(vec![EntryData {
+                entity: vec![EntityData {
+                    entity_type: "user".into(),
+                    entity_name: name.map(Into::into),
+                    ..Default::default()
+                }],
+                values: vec![ValueData {
+                    key: "producer_byte_rate".into(),
+                    value,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }]),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+        };
+
+        let rows: Vec<(&str, Vec<ComponentData>, DescribeClientQuotasResponse)> = vec![
+            (
+                "empty entity type",
+                vec![comp("", MATCH_TYPE_ANY, None)],
+                error(INVALID_REQUEST, "Invalid empty entity type."),
+            ),
+            (
+                "repeated entity type",
+                vec![
+                    comp("user", MATCH_TYPE_EXACT, Some("alice")),
+                    comp("user", MATCH_TYPE_ANY, None),
+                ],
+                error(
+                    INVALID_REQUEST,
+                    "Entity type user cannot appear more than once in the filter.",
+                ),
+            ),
+            (
+                "unknown entity type",
+                vec![comp("group", MATCH_TYPE_ANY, None)],
+                error(UNSUPPORTED_VERSION, "Unsupported entity type group"),
+            ),
+            (
+                "exact with null match",
+                vec![comp("user", MATCH_TYPE_EXACT, None)],
+                error(
+                    INVALID_REQUEST,
+                    "Request specified MATCH_TYPE_EXACT, but set match string to null.",
+                ),
+            ),
+            (
+                "default with a match string",
+                vec![comp("user", MATCH_TYPE_DEFAULT, Some("alice"))],
+                error(
+                    INVALID_REQUEST,
+                    "Request specified MATCH_TYPE_DEFAULT, but also specified a match string.",
+                ),
+            ),
+            (
+                "specified with a match string",
+                vec![comp("user", MATCH_TYPE_ANY, Some("alice"))],
+                error(
+                    INVALID_REQUEST,
+                    "Request specified MATCH_TYPE_SPECIFIED, but also specified a match string.",
+                ),
+            ),
+            (
+                "unknown match type",
+                vec![comp("user", 7, None)],
+                error(INVALID_REQUEST, "Unknown match type 7"),
+            ),
+            (
+                "ip with user",
+                vec![
+                    comp("ip", MATCH_TYPE_ANY, None),
+                    comp("user", MATCH_TYPE_ANY, None),
+                ],
+                error(
+                    INVALID_REQUEST,
+                    "Invalid entity filter component combination. IP filter component should \
+                     not be used with user or clientId filter component.",
+                ),
+            ),
+            (
+                "client-id with ip",
+                vec![
+                    comp("client-id", MATCH_TYPE_DEFAULT, None),
+                    comp("ip", MATCH_TYPE_EXACT, Some("1.2.3.4")),
+                ],
+                error(
+                    INVALID_REQUEST,
+                    "Invalid entity filter component combination. IP filter component should \
+                     not be used with user or clientId filter component.",
+                ),
+            ),
+            (
+                "valid exact",
+                vec![comp("user", MATCH_TYPE_EXACT, Some("alice"))],
+                found(Some("alice"), 1024.0),
+            ),
+            (
+                "valid default",
+                vec![comp("user", MATCH_TYPE_DEFAULT, None)],
+                found(None, 2048.0),
+            ),
+        ];
+        for (name, components, expected) in rows {
+            let bytes = handle(&broker, request(components, true), &ctx, VERSION).expect("handle");
+            let resp = decode_response(&bytes);
+            check!(resp == expected, "row {name}");
+        }
+
+        // A valid SPECIFIED filter matches every user entity, named or default.
+        let bytes = handle(
+            &broker,
+            request(vec![comp("user", MATCH_TYPE_ANY, None)], true),
+            &ctx,
+            VERSION,
+        )
+        .expect("handle");
+        let resp = decode_response(&bytes);
+        let mut names: Vec<Option<String>> = resp
+            .entries
+            .expect("entries")
+            .into_iter()
+            .flat_map(|e| e.entity.into_iter().map(|d| d.entity_name))
+            .collect();
+        names.sort();
+        check!(names == vec![None, Some("alice".to_owned())]);
         broker_handle.shutdown().await;
     }
 

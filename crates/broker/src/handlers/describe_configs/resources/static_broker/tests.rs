@@ -367,3 +367,86 @@ fn topic_creation_defaults_report_their_provenance() {
         check!(entries == expected, "{label}");
     }
 }
+
+/// #743 `delete.topic.enable` and `auto.create.topics.enable`: each reports
+/// Kafka's default of `true` at `DEFAULT_CONFIG` on a node that never named
+/// it, and a named value at `STATIC_BROKER_CONFIG` with the default beneath
+/// it.
+#[test]
+fn static_boolean_keys_report_their_provenance() {
+    let synonym = |key: &str, value: &str, source| DescribeConfigsSynonym {
+        name: key.to_owned(),
+        value: Some(value.to_owned()),
+        source,
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+    let entry = |key: &str, value: &str, source, synonyms| DescribeConfigsResourceResult {
+        name: key.to_owned(),
+        value: Some(value.to_owned()),
+        read_only: true,
+        config_source: source,
+        is_sensitive: false,
+        synonyms,
+        config_type: registry::ConfigType::Boolean.wire(),
+        documentation: Some(doc_for(key)),
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+    let not_named = |key: &'static str| {
+        vec![entry(
+            key,
+            "true",
+            CONFIG_SOURCE_DEFAULT,
+            vec![synonym(key, "true", CONFIG_SOURCE_DEFAULT)],
+        )]
+    };
+    let named_false = |key: &'static str| {
+        vec![entry(
+            key,
+            "false",
+            CONFIG_SOURCE_STATIC_BROKER,
+            vec![
+                synonym(key, "false", CONFIG_SOURCE_STATIC_BROKER),
+                synonym(key, "true", CONFIG_SOURCE_DEFAULT),
+            ],
+        )]
+    };
+    let delete = config_keys::DELETE_TOPIC_ENABLE;
+    let auto_create = config_keys::AUTO_CREATE_TOPICS_ENABLE;
+    let defaults = kafka_default_static_broker;
+    let cases = [
+        ("delete not named", delete, defaults(), not_named(delete)),
+        (
+            "delete named false",
+            delete,
+            StaticBrokerConfigs {
+                delete_topic_enable: Some(false),
+                ..defaults()
+            },
+            named_false(delete),
+        ),
+        (
+            "auto-create not named",
+            auto_create,
+            defaults(),
+            not_named(auto_create),
+        ),
+        (
+            "auto-create named false",
+            auto_create,
+            StaticBrokerConfigs {
+                auto_create_topics_enable: Some(false),
+                ..defaults()
+            },
+            named_false(auto_create),
+        ),
+    ];
+
+    let mut actual = Vec::with_capacity(cases.len());
+    let mut expected = Vec::with_capacity(cases.len());
+    for (label, key, configs, entries) in cases {
+        let wanted = |candidate: &str| candidate == key;
+        actual.push((label, static_broker_entries(configs, &wanted, BOTH)));
+        expected.push((label, entries));
+    }
+    assert!(actual == expected);
+}

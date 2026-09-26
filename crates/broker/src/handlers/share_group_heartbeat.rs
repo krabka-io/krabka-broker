@@ -19,10 +19,13 @@ use crate::{
     authorizer::{AuthorizationResult, authorize_topics},
     broker::Broker,
     codes,
-    coordinator::unified::share::actor::ShareGroupActorMessage,
+    coordinator::unified::{GroupCoordinator, GroupType, share::actor::ShareGroupActorMessage},
     error::BrokerError,
     handlers::group_read_denied,
 };
+
+/// Kafka's `ShareGroupHeartbeatRequest.LEAVE_GROUP_MEMBER_EPOCH`.
+const LEAVE_GROUP_MEMBER_EPOCH: i32 = -1;
 
 #[tracing::instrument(
     name = "handle_share_group_heartbeat",
@@ -103,6 +106,20 @@ pub(crate) async fn handle(
             return crate::handlers::encode_response(&error(error_code), version);
         }
 
+        // Kafka creates a share group only on a join, and answers
+        // GROUP_ID_NOT_FOUND for a missing group on any other epoch and for a
+        // group of another type, without touching any group.
+        if let Some(message) = share_group_lookup_error(&ng, &req.group_id, req.member_epoch) {
+            return crate::handlers::encode_response(
+                &ShareGroupHeartbeatResponse {
+                    error_code: codes::GROUP_ID_NOT_FOUND,
+                    error_message: Some(message),
+                    ..Default::default()
+                },
+                version,
+            );
+        }
+
         ng.mark_share(&req.group_id);
         let handle = ng.get_or_create_share(&req.group_id);
         let (tx, rx) = oneshot::channel();
@@ -160,6 +177,41 @@ fn subscribed_names_describe_denied(
     )
     .into_values()
     .any(|result| result == AuthorizationResult::Deny)
+}
+
+/// The `GROUP_ID_NOT_FOUND` message for a heartbeat that must not reach a
+/// share group, or `None` when the heartbeat may go to the share actor.
+///
+/// It follows Kafka's `GroupMetadataManager`: `getOrMaybeCreateShareGroup`
+/// creates a missing group only when `member_epoch == 0` and refuses a group of
+/// another type, and `shareGroupLeave` looks the group up through
+/// `shareGroup`, which refuses a missing group with the generic message.
+///
+/// A classic or consumer group lives in the `groups` registry with no type
+/// lock, and a streams group keeps its offset home there too, so a hit in
+/// either registry is a group of another type.
+fn share_group_lookup_error(
+    coordinator: &GroupCoordinator,
+    group_id: &str,
+    member_epoch: i32,
+) -> Option<String> {
+    let not_share = || Some(format!("Group {group_id} is not a share group."));
+    match coordinator.group_type(group_id) {
+        Some(GroupType::Share) => return None,
+        Some(_) => return not_share(),
+        None => {}
+    }
+    if coordinator.find(group_id).is_some() || coordinator.find_streams(group_id).is_some() {
+        return not_share();
+    }
+    if member_epoch == 0 || coordinator.find_share(group_id).is_some() {
+        return None;
+    }
+    Some(if member_epoch == LEAVE_GROUP_MEMBER_EPOCH {
+        format!("Group {group_id} not found.")
+    } else {
+        format!("Share group {group_id} not found.")
+    })
 }
 
 fn error(code: i16) -> ShareGroupHeartbeatResponse {
@@ -707,6 +759,87 @@ mod tests {
         assert!(view.members[0].client_id == "client-b");
         assert!(view.members[0].client_host == "/127.0.0.2");
 
+        broker_handle.shutdown().await;
+    }
+
+    /// Kafka's `getOrMaybeCreateShareGroup` and `shareGroupLeave`: only a join
+    /// creates a share group, and a group of another type is refused. Each row
+    /// sends one heartbeat for its own group id and compares the whole
+    /// response; `None` expects an accepted join.
+    #[tokio::test]
+    async fn handle_creates_share_group_only_on_join_as_kafka_does() {
+        use crate::coordinator::unified::actor::GroupKindTag;
+
+        let version = share_group_heartbeat_response::MAX_VERSION;
+        let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+            cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+            cfg.share_group.enable = true;
+        })
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        let coordinator = &broker.group_coordinator;
+        let _classic = coordinator.get_or_create_classic("classic");
+        let _consumer = coordinator.get_or_create_group("consumer", GroupKindTag::Consumer);
+        coordinator.mark_streams("streams");
+        let principal = anonymous_principal();
+        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let ctx = test_context(&principal, &peer);
+        let not_found = |message: &str| {
+            Some(ShareGroupHeartbeatResponse {
+                error_code: codes::GROUP_ID_NOT_FOUND,
+                error_message: Some(message.into()),
+                ..Default::default()
+            })
+        };
+        // (group id, member epoch, expected response)
+        let rows = [
+            (
+                "absent-heartbeat",
+                3,
+                not_found("Share group absent-heartbeat not found."),
+            ),
+            (
+                "absent-leave",
+                -1,
+                not_found("Group absent-leave not found."),
+            ),
+            (
+                "classic",
+                0,
+                not_found("Group classic is not a share group."),
+            ),
+            (
+                "consumer",
+                3,
+                not_found("Group consumer is not a share group."),
+            ),
+            (
+                "streams",
+                -1,
+                not_found("Group streams is not a share group."),
+            ),
+            ("joined", 0, None),
+        ];
+
+        for (group_id, member_epoch, expected) in rows {
+            let req = ShareGroupHeartbeatRequest {
+                group_id: group_id.into(),
+                member_id: "m1".into(),
+                member_epoch,
+                subscribed_topic_names: Some(Vec::new()),
+                ..Default::default()
+            };
+            let bytes = handle(&broker, version, 1, &encode_request(&req), &ctx)
+                .await
+                .expect("ShareGroupHeartbeat handler");
+            let resp = decode_response(&bytes);
+            match expected {
+                Some(expected) => assert!(resp == expected, "{group_id}"),
+                None => assert!(resp.error_code == codes::NONE, "{group_id}: {resp:?}"),
+            }
+        }
+
+        assert!(coordinator.share_group_ids() == vec!["joined".to_string()]);
         broker_handle.shutdown().await;
     }
 }

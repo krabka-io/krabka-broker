@@ -71,6 +71,9 @@ kafka_codes! {
     /// `message.max.bytes`. The JVM maps it to `RecordTooLargeException`,
     /// which no producer retries.
     MESSAGE_TOO_LARGE = 10;
+    /// `OFFSET_METADATA_TOO_LARGE` (12): an `OffsetCommit` partition row
+    /// carries committed metadata longer than `offset.metadata.max.bytes`.
+    OFFSET_METADATA_TOO_LARGE = 12;
     /// `KAFKA_STORAGE_ERROR` (56, KIP-113): a log-dir-level I/O failure on
     /// open, rename, or remove, or a concurrent move with a conflicting
     /// target.
@@ -109,6 +112,9 @@ kafka_codes! {
     INVALID_PARTITIONS = 37;
     INVALID_REPLICATION_FACTOR = 38;
     NOT_CONTROLLER = 41;
+    /// `TOPIC_DELETION_DISABLED` (73): `delete.topic.enable` is `false`, so
+    /// `DeleteTopics` v3 and later refuse every topic.
+    TOPIC_DELETION_DISABLED = 73;
     /// `INVALID_REQUEST` (42): the request is structurally or semantically
     /// unacceptable. It is also the code Kafka returns for a resource type
     /// that an `AlterConfigs` or `IncrementalAlterConfigs` broker does not
@@ -134,6 +140,9 @@ kafka_codes! {
     /// group lookup.
     INVALID_GROUP_ID = 24;
     UNKNOWN_MEMBER_ID = 25;
+    /// `INVALID_SESSION_TIMEOUT` (26): a `JoinGroup` session timeout outside
+    /// `group.min.session.timeout.ms` and `group.max.session.timeout.ms`.
+    INVALID_SESSION_TIMEOUT = 26;
     REBALANCE_IN_PROGRESS = 27;
     /// `INVALID_TIMESTAMP` (32): a producer supplied a timestamp type or value
     /// that the broker cannot accept for the target topic.
@@ -417,6 +426,9 @@ kafka_codes! {
     DELEGATION_TOKEN_REQUEST_NOT_ALLOWED = 64;
     DELEGATION_TOKEN_AUTHORIZATION_FAILED = 65;
     DELEGATION_TOKEN_EXPIRED = 66;
+    /// `INVALID_PRINCIPAL_TYPE` (67): a `CreateDelegationToken` renewer whose
+    /// principal type is not `User`.
+    INVALID_PRINCIPAL_TYPE = 67;
 
     // KIP-630 FetchSnapshot (api_key 59) codes.
     /// `SNAPSHOT_NOT_FOUND` (98): the requested `__cluster_metadata` snapshot
