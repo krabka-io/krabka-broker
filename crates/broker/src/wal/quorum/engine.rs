@@ -350,6 +350,15 @@ impl WalShardEngine {
         }
 
         if self.distributed_required.load(Ordering::Acquire) {
+            // The local fsync comes first, placement or not: the leader votes
+            // with the offset it has fsynced, and `configure_distributed`
+            // records that offset when a placement arrives after this call
+            // has already returned.
+            if let Err(error) = sync_replica(source.clone(), &[]).await {
+                self.record_quorum_loss(target, &error);
+                return Err(error);
+            }
+            self.local_durable.fetch_max(target.0, Ordering::AcqRel);
             let configured = self
                 .distributed
                 .lock()
@@ -362,11 +371,6 @@ impl WalShardEngine {
                 self.record_quorum_loss(target, &error);
                 return Err(error);
             }
-            if let Err(error) = sync_replica(source.clone(), &[]).await {
-                self.record_quorum_loss(target, &error);
-                return Err(error);
-            }
-            self.local_durable.fetch_max(target.0, Ordering::AcqRel);
             let Some(me) = self
                 .distributed
                 .lock()

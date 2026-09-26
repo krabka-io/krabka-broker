@@ -275,4 +275,25 @@ mod tests {
         assert!(engine.record_follower_ack(NodeId(3), Offset(3)));
         assert!(engine.durable_watermark() == Offset(3));
     }
+
+    /// An append that arrives before the metadata placement is refused, but
+    /// its local fsync still counts: the placement that arrives next records
+    /// the leader's durable offset and commits the append without another
+    /// replication call.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_placement_that_arrives_after_the_append_commits_its_fsync() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = Arc::new(Mutex::new(
+            Log::open(dir.path().join("source"), LogConfig::default()).unwrap(),
+        ));
+        let engine = WalShardEngine::new_distributed(Arc::clone(&source), 1).unwrap();
+        engine.configure_distributed(NodeId(1), &[]);
+        source.lock().unwrap().append(&mut batch(3)).unwrap();
+
+        let refused = engine.replicate_and_sync(&source, Offset(3)).await;
+        engine.configure_distributed(NodeId(1), &[NodeId(1)]);
+
+        assert!(refused.is_err());
+        assert!(engine.durable_watermark() == Offset(3));
+    }
 }
