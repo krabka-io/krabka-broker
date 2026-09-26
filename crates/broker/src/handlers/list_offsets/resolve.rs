@@ -45,16 +45,21 @@ fn earliest_pending_upload_offset(tiered_offset: i64) -> Option<i64> {
 /// can still sit below the start offset of its own epoch: replication has
 /// not yet caught the watermark up to what was already appended in the
 /// outgoing epoch's tail plus this leader's own log-prepare work. Kafka
-/// refuses a client's LATEST or a data-resolved lookup in that window
-/// instead of answering an offset the watermark could later step past going
-/// backwards -- which would let a consumer observe a non-monotonic end of
-/// partition. `Partition.maybeOffsetsError` raises it for LATEST and for any
-/// lookup whose answer would land at or above the bound;
-/// `ReplicaManager.scala:1546-1554` answers `OFFSET_NOT_AVAILABLE` from v5
-/// and `LEADER_NOT_AVAILABLE` for v1-v4, where the dedicated code did not
-/// exist yet. A follower or the offline-debugging replica id is never
-/// bounded by the high watermark to begin with, so only a client request
-/// (`replica_id == -1`) is subject to the fence.
+/// refuses to answer with an offset the watermark could later step past
+/// going backwards -- which would let a consumer observe a non-monotonic
+/// end of partition. LATEST always targets that live, still-moving end, so
+/// it is fenced immediately, before anything is resolved. A timestamp or
+/// `MAX_TIMESTAMP` lookup, though, can legitimately resolve to an old,
+/// already-stable offset below the current epoch's start even while this
+/// window is open, and that answer carries none of the risk; only a
+/// resolved candidate that lands at or above the epoch's start is fenced.
+/// `Partition.maybeOffsetsError` raises it for LATEST and for any lookup
+/// whose answer would land at or above the bound; `ReplicaManager.scala:1546-1554`
+/// answers `OFFSET_NOT_AVAILABLE` from v5 and `LEADER_NOT_AVAILABLE` for
+/// v1-v4, where the dedicated code did not exist yet. A follower or the
+/// offline-debugging replica id is never bounded by the high watermark to
+/// begin with, so only a client request (`replica_id == -1`) is subject to
+/// the fence.
 /// The values [`resolve_earliest`] needs, gathered so `resolve_partition`
 /// passes them as one handle rather than one parameter each.
 struct EarliestContext<'a> {
@@ -186,6 +191,10 @@ async fn resolve_earliest_pending_upload(
     }
 }
 
+/// LATEST needs no resolution step -- it always targets the live end of the
+/// log, which is exactly what the high watermark not having caught up to
+/// the epoch start puts at risk -- so it is fenced immediately, ahead of the
+/// match that resolves every other sentinel.
 fn epoch_not_caught_up_to_bound(
     partition: &crate::partition::Partition,
     kind: ListOffsetsKind,
@@ -194,16 +203,48 @@ fn epoch_not_caught_up_to_bound(
     version: i16,
 ) -> Option<i16> {
     let last_fetchable = last_fetchable?;
-    if bound.replica_id() != -1
-        || !matches!(
-            kind,
-            ListOffsetsKind::Latest | ListOffsetsKind::MaxTimestamp | ListOffsetsKind::Timestamp
-        )
-    {
+    if bound.replica_id() != -1 || kind != ListOffsetsKind::Latest {
         return None;
     }
     let epoch_start = super::local::epoch_start_offset(partition)?;
     if last_fetchable >= epoch_start {
+        return None;
+    }
+    Some(if version >= 5 {
+        codes::OFFSET_NOT_AVAILABLE
+    } else {
+        codes::LEADER_NOT_AVAILABLE
+    })
+}
+
+/// The same fence as [`epoch_not_caught_up_to_bound`], applied after a
+/// timestamp or `MAX_TIMESTAMP` lookup has resolved to a candidate offset,
+/// and only when that candidate actually lands in the risky range: at or
+/// above the current epoch's start, while the high watermark has not yet
+/// caught up to it. An old timestamp that resolves below the epoch start
+/// names an offset that was already stable before this leader's election
+/// and never risks going non-monotonic, so it is answered rather than
+/// refused.
+fn epoch_not_caught_up_to_offset(
+    partition: &crate::partition::Partition,
+    kind: ListOffsetsKind,
+    bound: FetchBound,
+    last_fetchable: Option<i64>,
+    candidate_offset: i64,
+    version: i16,
+) -> Option<i16> {
+    let last_fetchable = last_fetchable?;
+    if bound.replica_id() != -1
+        || !matches!(
+            kind,
+            ListOffsetsKind::MaxTimestamp | ListOffsetsKind::Timestamp
+        )
+        || candidate_offset == UNKNOWN_OFFSET
+    {
+        return None;
+    }
+    let epoch_start = super::local::epoch_start_offset(partition)?;
+    if last_fetchable >= epoch_start || candidate_offset < epoch_start {
         return None;
     }
     Some(if version >= 5 {
@@ -469,6 +510,13 @@ pub(super) async fn resolve_partition(
         }
         ListOffsetsKind::Unsupported => unreachable!("unsupported timestamp returned above"),
     };
+    // KIP-207 for a data-resolved lookup: fenced only once its candidate is
+    // known to land in the new epoch's still-unstable range.
+    if let Some(error_code) =
+        epoch_not_caught_up_to_offset(&partition, kind, bound, last_fetchable, offset, version)
+    {
+        return error_response(index, error_code);
+    }
     // One bound, applied the two ways `Partition.fetchOffsetForTimestamp`
     // applies it. EARLIEST and `EARLIEST_LOCAL` are absent from both arms
     // because they resolve from the start of the log, which is never above the
@@ -978,15 +1026,42 @@ mod tests {
         response.topics.remove(0).partitions.remove(0)
     }
 
-    /// KIP-207: a client LATEST or data-resolved lookup is refused while the
+    /// One record, appended straight through the partition's writer with a
+    /// chosen create timestamp and leader epoch, bypassing the ordinary
+    /// Produce validation path (which would otherwise stamp its own
+    /// timestamp). Returns the offset it landed at.
+    async fn produce_one_at_timestamp(
+        partition: &crate::partition::Partition,
+        leader_epoch: i32,
+        timestamp: i64,
+    ) -> i64 {
+        let batch = krabka_protocol::records::RecordBatch {
+            partition_leader_epoch: leader_epoch,
+            base_timestamp: timestamp,
+            max_timestamp: timestamp,
+            records: vec![krabka_protocol::records::Record {
+                offset_delta: 0,
+                value: Some(bytes::Bytes::from_static(b"v")),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        partition.produce_batch(batch).await.expect("produce").0
+    }
+
+    /// KIP-207: a client LATEST lookup is refused unconditionally while the
     /// high watermark has not yet caught up to the start offset of the live
-    /// leader epoch, because the bound LATEST would answer with -- and the
-    /// ceiling every other sentinel here is measured against -- could later
-    /// move backwards as the watermark advances past it.
+    /// leader epoch, because LATEST always targets the live end of the log
+    /// that this window puts at risk. A timestamp or `MAX_TIMESTAMP` lookup
+    /// is refused only when it actually resolves to a candidate in that same
+    /// unstable range; one that resolves to an older, already-stable offset
+    /// below the epoch start answers normally even while the window is
+    /// open.
     #[tokio::test]
     async fn offset_not_available_is_reported_below_the_epoch_start_and_versioned_correctly() {
         const TOPIC: &str = "list-offsets-kip-207";
-        const A_TIMESTAMP: i64 = 1_000;
+        const OLD_TIMESTAMP: i64 = 1_000;
+        const NEW_TIMESTAMP: i64 = 5_000;
 
         let (broker, _dir) = crate::test_support::start_broker_with(|config| {
             config.audit_enabled = false;
@@ -995,36 +1070,43 @@ mod tests {
         let client = client_for(&broker).await;
         create_topic(&client, TOPIC, Vec::new()).await;
         broker.wait_until_partition_present(TOPIC, 0).await;
-        broker
-            .produce_records_for_test(TOPIC, 0, 4)
-            .await
-            .expect("produce epoch 0");
-        broker.test_set_leader_epoch(TOPIC, 0, 1);
-        broker
-            .produce_records_for_test(TOPIC, 0, 2)
-            .await
-            .expect("produce epoch 1");
-
-        // Epoch 1 starts at offset 4. Force the high watermark back below
-        // it, the way a fresh leader's would sit before replication (and
-        // this broker's own single-replica ack) catches it up.
         let broker_arc = broker.broker_arc_for_test();
         let partition = broker_arc
             .partitions
             .get(TOPIC, krabka_ids::PartitionIndex(0))
             .expect("partition");
+
+        // Epoch 0: four records at ascending, old timestamps (offsets 0-3).
+        for delta in 0..4 {
+            produce_one_at_timestamp(&partition, 0, OLD_TIMESTAMP + delta).await;
+        }
+        broker.test_set_leader_epoch(TOPIC, 0, 1);
+        // Epoch 1 starts at offset 4, with new, later timestamps (offsets
+        // 4-5). `NEW_TIMESTAMP` resolves into this range, `OLD_TIMESTAMP`
+        // resolves below it.
+        for delta in 0..2 {
+            produce_one_at_timestamp(&partition, 1, NEW_TIMESTAMP + delta).await;
+        }
+
+        // Force the high watermark back below the epoch-1 start, the way a
+        // fresh leader's would sit before replication (and this broker's
+        // own single-replica ack) catches it up.
         partition.replica_state.lock().await.hw = krabka_log::Offset(3);
 
         // MAX_TIMESTAMP (KIP-734) only decodes from v7, which already sits
         // above the v5 floor `OFFSET_NOT_AVAILABLE` needs, so there is no
         // version at which it can see the older `LEADER_NOT_AVAILABLE` code.
         // LATEST and a timestamp lookup decode from v1 and see both.
-        let cases: &[(&str, i64, &[i16])] = &[
+        let fenced_cases: &[(&str, i64, &[i16])] = &[
             ("LATEST", LATEST_TIMESTAMP, &[4, 5, 11]),
-            ("a timestamp lookup", A_TIMESTAMP, &[4, 5, 11]),
+            (
+                "a timestamp lookup resolving into the new epoch",
+                NEW_TIMESTAMP,
+                &[4, 5, 11],
+            ),
             ("MAX_TIMESTAMP", MAX_TIMESTAMP, &[7, 11]),
         ];
-        for &(label, timestamp, versions) in cases {
+        for &(label, timestamp, versions) in fenced_cases {
             for &version in versions {
                 let want_error = if version >= 5 {
                     codes::OFFSET_NOT_AVAILABLE
@@ -1039,8 +1121,24 @@ mod tests {
             }
         }
 
+        // A timestamp that resolves to an old, already-stable offset below
+        // the epoch start is answered rather than refused, even in the same
+        // window that fences LATEST above.
+        assert!(
+            list_one_at_version(&broker, TOPIC, OLD_TIMESTAMP, 11).await
+                == ListOffsetsPartitionResponse {
+                    partition_index: 0,
+                    error_code: codes::NONE,
+                    timestamp: OLD_TIMESTAMP,
+                    offset: 0,
+                    leader_epoch: 0,
+                    ..Default::default()
+                },
+            "an old timestamp lookup below the epoch start"
+        );
+
         // Let the watermark catch up to the epoch start and confirm the
-        // fence lifts.
+        // fence lifts for LATEST too.
         partition.replica_state.lock().await.hw = krabka_log::Offset(6);
         assert!(
             list_one_at_version(&broker, TOPIC, LATEST_TIMESTAMP, 11)
