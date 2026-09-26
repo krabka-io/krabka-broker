@@ -6,7 +6,7 @@
 
 use stateright::{Checker, Model};
 
-use super::state::CompactModel;
+use super::state::{Cleaner, CompactModel};
 
 // The `Compact` action converges many append/tick paths onto shared logs, so the
 // BFS's *generated* count (`state_count()`) runs ~2-2.5x the *unique* count. We
@@ -19,10 +19,11 @@ use super::state::CompactModel;
 //     watchdog (see `[[feedback_bound_model_checkers]]`) is the other runaway
 //     guard — never run this unguarded.
 //   * `MAX_UNIQUE_STATES` — the memory-proportional bound (resident memory ∝
-//     distinct states). At the bounds below the unique space is ~67k (basic) /
-//     ~460k (wide), generated ~191k / ~1.34M, and resident memory ~0.07 GB.
-const TARGET_STATE_COUNT: usize = 4_000_000;
-const MAX_UNIQUE_STATES: usize = 600_000;
+//     distinct states). At the bounds below the unique space is ~129k (basic) /
+//     ~899k (wide), generated ~0.6M / ~4.5M, and resident memory stays well
+//     under 1 GB.
+const TARGET_STATE_COUNT: usize = 12_000_000;
+const MAX_UNIQUE_STATES: usize = 1_500_000;
 const MAX_DEPTH: usize = 40;
 
 // The exact unique-state count of the exhaustive BFS over each config below.
@@ -32,8 +33,13 @@ const MAX_DEPTH: usize = 40;
 // considering a field -- into a failure instead of a silently smaller search
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
-const PINNED_UNIQUE_STATES_BASIC: usize = 66_831;
-const PINNED_UNIQUE_STATES_WIDE: usize = 459_869;
+//
+// The state carries `last_pass`, the log the most recent `Compact` consumed, so
+// that the pass rules are `always` properties with counterexample paths. Every
+// `(log, clock)` a `Compact` leaves behind is therefore reached once per
+// distinct input, which roughly doubled the counts (66,831 and 459,869 before).
+const PINNED_UNIQUE_STATES_BASIC: usize = 128_796;
+const PINNED_UNIQUE_STATES_WIDE: usize = 898_738;
 
 fn run(model: CompactModel, label: &str, pinned_unique_states: usize) {
     let checker = model
@@ -68,6 +74,7 @@ fn compaction_basic() {
         CompactModel {
             max_len: 4,
             max_clock: 4,
+            cleaner: Cleaner::PRODUCTION,
         },
         "compaction_basic",
         PINNED_UNIQUE_STATES_BASIC,
@@ -80,6 +87,7 @@ fn compaction_wide() {
         CompactModel {
             max_len: 5,
             max_clock: 4,
+            cleaner: Cleaner::PRODUCTION,
         },
         "compaction_wide",
         PINNED_UNIQUE_STATES_WIDE,

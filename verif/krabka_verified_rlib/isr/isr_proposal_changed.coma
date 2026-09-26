@@ -1,10 +1,10 @@
-(* #"/proof-work-218b/crates/verified/src/isr.rs" 72 0 72 65 *)
+(* #"/workspace/crates/verified/src/isr.rs" 403 0 403 65 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sisr = "/proof-work-218b/crates/verified/src/isr.rs" 73 14 73 15
-let%span sisr'0 = "/proof-work-218b/crates/verified/src/isr.rs" 73 4 73 28
-let%span sisr'1 = "/proof-work-218b/crates/verified/src/isr.rs" 73 27 73 28
-let%span sisr'2 = "/proof-work-218b/crates/verified/src/isr.rs" 70 10 70 48
+let%span sisr = "/workspace/crates/verified/src/isr.rs" 404 14 404 15
+let%span sisr'0 = "/workspace/crates/verified/src/isr.rs" 404 4 404 28
+let%span sisr'1 = "/workspace/crates/verified/src/isr.rs" 404 27 404 28
+let%span sisr'2 = "/workspace/crates/verified/src/isr.rs" 401 10 401 48
 
 use creusot.int.UInt64
 use creusot.prelude.Any
@@ -18,8 +18,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let isr_proposal_changed [#"/proof-work-218b/crates/verified/src/isr.rs" 72 0 72 65] (removed: UInt64.t)
-  (added: UInt64.t) (return (x: bool)) = (! bb0
+let isr_proposal_changed [#"/workspace/crates/verified/src/isr.rs" 403 0 403 65] (removed: UInt64.t) (added: UInt64.t)
+  (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_6 <- UInt64.gt removed ([%#sisr] (0: UInt64.t)) ] s1
     | s1 = any [ br0 -> {_6 = false} (! bb2) | br1 -> {_6} (! bb1) ] ]

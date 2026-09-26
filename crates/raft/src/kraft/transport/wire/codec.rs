@@ -25,8 +25,6 @@ pub const VOTE_VERSION: i16 = 2;
 pub const QUORUM_EPOCH_VERSION: i16 = 1;
 pub const FETCH_VERSION: i16 = 17;
 pub const FETCH_SNAPSHOT_VERSION: i16 = 1;
-/// Kafka `NOT_LEADER_OR_FOLLOWER`.
-pub(crate) const NOT_LEADER_OR_FOLLOWER: i16 = 6;
 
 pub fn records_payload_to_bytes(payload: &RecordsPayload) -> Bytes {
     match payload {

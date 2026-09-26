@@ -97,14 +97,13 @@ pub use compaction::{
     BatchMeta, RecordMeta, RetainDecision, TxnDataState, compute_horizon, retain_decision,
 };
 pub use consensus::{
-    election_has_quorum, election_jitter_ms, handoff_high_watermark, log_is_up_to_date,
-    majority_size, recompute_high_watermark,
+    election_has_quorum, election_jitter_ms, log_is_up_to_date, majority_size,
+    recompute_high_watermark,
 };
 pub use delegation_token::{
-    TokenCreateDecision, TokenDeadlines, TokenExpireDecision, TokenMutationDecision,
-    TokenMutationFacts, TokenMutationKind, TokenMutationState, TokenRenewDecision,
-    create_token_deadlines, expire_token_deadline, renew_token_expiry, token_is_active,
-    token_mutation_decision,
+    TokenDeadlines, TokenExpireDecision, TokenMutationDecision, TokenMutationFacts,
+    TokenMutationKind, TokenMutationState, TokenRenewDecision, create_token_deadlines,
+    expire_token_deadline, renew_token_expiry, token_is_active, token_mutation_decision,
 };
 pub use delivery::{
     coalesce_delivery_range, delivery_watermark_advance, scheduled_delivery_visible,
@@ -114,10 +113,9 @@ pub use directory::{
     directory_response_decision,
 };
 pub use diskless::{
-    DisklessBatchStep, DisklessTrimDecision, DisklessWalReplayAction, DisklessWalReplayDecision,
-    diskless_batch_step, diskless_logical_range, diskless_object_reclaimable,
-    diskless_retention_prefix, diskless_span_extension, diskless_trim_decision,
-    diskless_wal_replay_decision,
+    DisklessBatchStep, DisklessTrimDecision, diskless_batch_step, diskless_logical_range,
+    diskless_object_reclaimable, diskless_retention_prefix, diskless_span_extension,
+    diskless_trim_decision,
 };
 pub use epoch::exact_epoch_successor;
 pub use features::{FeatureUpdateDecision, feature_update_decision};
@@ -163,14 +161,16 @@ pub use opa::{
 };
 pub use produce::{ProduceBatchAdmission, produce_batch_admission, produce_durability_frontier};
 pub use producer::{
-    ProducerBatch, ProducerDecision, decrement_sequence, increment_sequence, producer_decision,
+    ProducerDecision, ProducerEntryFacts, RetainedSequenceRange, decrement_sequence,
+    increment_sequence, producer_decision,
 };
 pub use producer_id::{
     ProducerIdBlockAllocationDecision, ProducerIdBlockPlan, producer_id_block_allocation,
 };
 pub use producer_snapshot::{
-    producer_snapshot_entry_valid, producer_snapshot_latest_index, producer_snapshot_replay_start,
-    producer_snapshot_retained,
+    ProducerReloadRange, producer_snapshot_entry_valid, producer_snapshot_latest_index,
+    producer_snapshot_reload_keeps, producer_snapshot_reload_log_start,
+    producer_snapshot_replay_start, producer_snapshot_stray,
 };
 pub use quorum_state::{
     QuorumStateLoadDecision, QuorumStateWriteDecision, quorum_state_load_decision,
@@ -180,7 +180,7 @@ pub use quota::{
     IpQuotaPrecedence, QuotaCandidatePresence, UserClientQuotaFacts, UserClientQuotaPrecedence,
     ip_quota_precedence, user_client_quota_precedence,
 };
-pub use raft::{FetchResponseMutation, fetch_response_mutation, metadata_record_coordinates};
+pub use raft::{FetchResponseMutation, fetch_response_mutation, metadata_record_offset_deltas};
 pub use reassignment::{
     ReassignmentAction, ReassignmentSetMembership, reassignment_action,
     reassignment_plan_admission, reassignment_set_membership,
@@ -195,31 +195,27 @@ pub use recovery::{
     barrier_recovery_fold_action, replay_batch_cursor_decision, replay_cursor_decision,
     replay_record_decision, should_capture_first_downgrade,
 };
-pub use registration::{
-    BrokerHeartbeatDecision, BrokerHeartbeatRegistration, broker_heartbeat_decision,
-};
+pub use registration::{BrokerHeartbeatDecision, broker_heartbeat_decision};
 pub use remote_metadata::{remote_metadata_partition, remote_metadata_resume_cursor};
 pub use remote_read::{
-    remote_read_relative_offset, remote_time_index_candidate_count,
-    remote_time_index_offset_usable, tiered_earliest_finished_index, tiered_latest_finished_index,
-    tiered_owning_epoch_index,
+    remote_read_relative_offset, remote_time_index_candidate_count, tiered_earliest_finished_index,
+    tiered_latest_finished_index, tiered_owning_epoch_index,
 };
 pub use remote_txn::{RemoteTxnOverlapDecision, remote_txn_overlap_decision};
 pub use restore::{
-    RESTORE_SNAPSHOT_DELETE_FINISHED, RESTORE_SNAPSHOT_DELETE_STARTED, RESTORE_SNAPSHOT_LIVE,
-    RESTORE_SNAPSHOT_MISSING, RestoreFilterDecision, restore_archive_reconcile,
+    RestoreBatchFrame, RestoreContentExclusions, RestoreExclusions, RestoreFilterDecision,
+    RestoreLayout, RestoreProducer, RestoreReconcileDecision, RestoreRecordDeltas,
+    RestoreSnapshotState, RestoreTimestampType, restore_archive_reconcile,
     restore_batch_filter_decision, restore_batch_past_offset_bound, restore_batch_step,
     restore_record_coordinates, restore_record_selected, restore_rewritten_batch_header,
     restore_rewritten_record,
 };
 pub use restore_sidecar::{
-    restore_index_frontier, restore_leader_epoch_entry_valid, restore_offset_index_entry_valid,
+    RestoreAbortedTxn, RestoreSegmentExtent, restore_index_frontier,
+    restore_leader_epoch_entry_valid, restore_offset_index_entry_valid,
     restore_producer_ids_strict, restore_time_index_entry_valid, restore_txn_index_entry_valid,
 };
-pub use retention::{
-    RetentionPrefix, barrier_cut_expired, local_retention_prefix, retention_delete_target,
-    retention_prefix,
-};
+pub use retention::{barrier_cut_expired, local_retention_prefix, retention_delete_target};
 pub use schema::{
     SchemaBatchAdmission, SchemaFailureDecision, SchemaFailureKind, SchemaFieldAction,
     SchemaFieldRole, schema_batch_admission, schema_failure_decision, schema_field_action,
@@ -262,7 +258,6 @@ pub use transaction::{
     transaction_completion_decision, transaction_marker_closes,
     transaction_marker_materialization_decision, transaction_reaper_completion_decision,
 };
-pub use uniform_assignor::select_uniform_member;
 pub use vote::{
     VoteAdmissionDecision, VoteEncodeDecision, VoteWireDecision, vote_admission_decision,
     vote_encode_decision, vote_wire_decision,

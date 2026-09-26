@@ -10,7 +10,9 @@ use std::{
 
 use krabka_ids::{LeaderEpoch, PartitionIndex};
 use krabka_log::Offset;
-use krabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord, TopicRecord};
+use krabka_metadata::{
+    BrokerRegistrationRecord, MetadataImage, MetadataRecord, PartitionRecord, TopicRecord,
+};
 use krabka_raft::NodeId;
 
 use crate::{partition::Partition, test_support::FakeMetadataSource};
@@ -53,32 +55,59 @@ pub(super) fn fixture_partition(log_dir: &Path, topic: &str, partition: i32) -> 
     )
 }
 
+/// Install `isr` and `replicas` with `leader` at `leader_epoch` on `part`.
+/// Each `(follower, age)` in `stale_followers` has not fetched from this
+/// leader and last caught up `age` ago.
 pub(super) async fn set_replica_state(
     part: &Partition,
     isr: &[NodeId],
     replicas: &[NodeId],
     leader: NodeId,
     leader_epoch: i32,
-    follower_ages: &[(NodeId, Duration, Duration)],
+    stale_followers: &[(NodeId, Duration)],
 ) {
     let now = Instant::now();
     let mut st = part.replica_state.lock().await;
     st.install_isr(isr, replicas, leader, now);
     st.current_leader_epoch = LeaderEpoch(leader_epoch);
-    for &(follower, last_fetch_age, last_caught_up_age) in follower_ages {
+    for &(follower, last_caught_up_age) in stale_followers {
         st.per_follower.insert(
             follower,
             crate::replica_state::FollowerStats {
                 leo: Offset(0),
-                last_fetch: now
-                    .checked_sub(last_fetch_age)
-                    .expect("test fetch age is representable"),
-                last_caught_up: now
-                    .checked_sub(last_caught_up_age)
-                    .expect("test caught-up age is representable"),
+                last_fetch: None,
+                last_fetch_leader_leo: Offset(-1),
+                last_caught_up: Some(
+                    now.checked_sub(last_caught_up_age)
+                        .expect("test caught-up age is representable"),
+                ),
+                broker_epoch: None,
             },
         );
     }
+}
+
+/// Partition 0 of `topic` as the metadata image holds it.
+pub(super) fn partition(
+    topic: &str,
+    isr: &[NodeId],
+    replicas: &[NodeId],
+    leader: NodeId,
+    leader_epoch: i32,
+    partition_epoch: i32,
+) -> MetadataRecord {
+    MetadataRecord::V1Partition(PartitionRecord {
+        topic: topic.to_string(),
+        partition: 0,
+        leader,
+        replicas: replicas.to_vec(),
+        isr: isr.to_vec(),
+        leader_epoch: krabka_metadata::LeaderEpoch(leader_epoch),
+        adding_replicas: vec![],
+        removing_replicas: vec![],
+        directories: vec![],
+        partition_epoch,
+    })
 }
 
 /// A metadata source over `image`, with `leader` as the controller leader.

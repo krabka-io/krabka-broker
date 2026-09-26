@@ -1,0 +1,40 @@
+(* #"/workspace/crates/verified/src/features.rs" 67 27 67 32 *)
+
+(* <features::FeatureUpdateFacts as std::clone::Clone> *)
+
+use creusot.int.Int16
+use creusot.prelude.Any
+
+type t_FeatureUpdateType = Upgrade | SafeDowngrade | UnsafeDowngrade
+
+type t_Option_FeatureUpdateType = None | Some t_FeatureUpdateType
+
+type t_Option_i16 = None'0 | Some'0 Int16.t
+
+type t_FeatureLevels = { requested: Int16.t; finalized: t_Option_i16; max_supported: Int16.t; floor: Int16.t }
+
+type t_FeatureClusterFacts = { all_nodes_support: bool; dependencies_met: bool }
+
+type t_MetadataVersionFacts = {
+  online_downgrade_min_level: Int16.t;
+  all_controllers_registered: bool;
+  all_nodes_downgrade_capable: bool;
+  cleanup_required: bool }
+
+type t_Option_MetadataVersionFacts = None'1 | Some'1 t_MetadataVersionFacts
+
+type t_FeatureUpdateFacts = {
+  update_type: t_Option_FeatureUpdateType;
+  levels: t_FeatureLevels;
+  cluster: t_FeatureClusterFacts;
+  metadata_version: t_Option_MetadataVersionFacts }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_FeatureUpdateFacts [#"/workspace/crates/verified/src/features.rs" 67 27 67 32] (self: t_FeatureUpdateFacts)
+  (return (x: t_FeatureUpdateFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FeatureUpdateFacts = Any.any_l () | & self: t_FeatureUpdateFacts = self ])
+  [ return (result: t_FeatureUpdateFacts) -> (! return {result}) ]

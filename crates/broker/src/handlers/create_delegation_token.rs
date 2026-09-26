@@ -46,7 +46,7 @@ mod test_support;
 mod tests;
 
 use self::{
-    lifetime::{TokenCreateDecision, create_token_deadlines},
+    lifetime::create_token_deadlines,
     owner::resolve_owner,
     wire::{err_response, minted_response},
 };
@@ -70,13 +70,15 @@ pub(crate) async fn handle<S: BuildHasher>(
     controller: &dyn crate::metadata_source::MetadataSource,
     super_users: &HashSet<String, S>,
 ) -> CreateDelegationTokenResponse {
-    let Some(secret_key) = secret_key else {
-        return err_response(crate::codes::DELEGATION_TOKEN_AUTH_DISABLED);
-    };
-
+    // Kafka's broker runs `allowTokenRequests` before it forwards the
+    // request, and the controller reports a disabled token manager only after.
     if auth.token_api_admission(TokenApi::Create) == TokenApiAdmission::Reject {
         return err_response(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
     }
+
+    let Some(secret_key) = secret_key else {
+        return err_response(crate::codes::DELEGATION_TOKEN_AUTH_DISABLED);
+    };
 
     let ConnectionAuth::Authenticated { principal, .. } = auth else {
         return err_response(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
@@ -101,15 +103,14 @@ pub(crate) async fn handle<S: BuildHasher>(
     };
 
     let now = now_ms();
-    let deadlines = match create_token_deadlines(
+    // Both configured periods are positive: config validation enforces it,
+    // as Kafka's `atLeast(1)` validators do.
+    let deadlines = create_token_deadlines(
         now,
         req.max_lifetime_ms,
         max_lifetime_ms,
         default_renew_period_ms,
-    ) {
-        TokenCreateDecision::Create(deadlines) => deadlines,
-        TokenCreateDecision::Invalid => return err_response(crate::codes::INVALID_REQUEST),
-    };
+    );
     let token_id = uuid::Uuid::new_v4().to_string();
     let hmac = krabka_security::compute_token_hmac(secret_key.as_bytes(), &token_id);
 

@@ -1,34 +1,33 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 41 0 41 73 *)
+(* #"/workspace/crates/verified/src/chain.rs" 39 0 39 73 *)
 
-let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span schain = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 43 16 43 22
-let%span schain'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 58 14 58 36
-let%span schain'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 59 14 59 30
-let%span schain'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 45 16 57 5
-let%span schain'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 44 16 44 39
-let%span schain'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 60 11 60 24
-let%span schain'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 60 11 60 26
-let%span schain'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 64 32 64 45
-let%span schain'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 64 32 64 47
-let%span schain'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 64 50 64 69
-let%span schain'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 64 50 64 71
-let%span schain'10 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 64 32 66 71
-let%span schain'11 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 65 28 65 41
-let%span schain'12 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 65 28 65 43
-let%span schain'13 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 65 47 65 66
-let%span schain'14 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 65 47 65 68
-let%span schain'15 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 66 31 66 44
-let%span schain'16 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 66 31 66 46
-let%span schain'17 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 66 49 66 68
-let%span schain'18 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 66 49 66 70
-let%span schain'19 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 65 27 66 71
-let%span schain'20 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 73 13 73 14
-let%span schain'21 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 73 8 73 14
-let%span schain'22 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 25 10 26 72
-let%span schain'23 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 27 10 39 1
-let%span swell_founded = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sslice = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span schain = "/workspace/crates/verified/src/chain.rs" 41 16 41 22
+let%span schain'0 = "/workspace/crates/verified/src/chain.rs" 56 14 56 36
+let%span schain'1 = "/workspace/crates/verified/src/chain.rs" 57 14 57 30
+let%span schain'2 = "/workspace/crates/verified/src/chain.rs" 43 16 55 5
+let%span schain'3 = "/workspace/crates/verified/src/chain.rs" 42 16 42 39
+let%span schain'4 = "/workspace/crates/verified/src/chain.rs" 58 11 58 24
+let%span schain'5 = "/workspace/crates/verified/src/chain.rs" 58 11 58 26
+let%span schain'6 = "/workspace/crates/verified/src/chain.rs" 62 32 62 45
+let%span schain'7 = "/workspace/crates/verified/src/chain.rs" 62 32 62 47
+let%span schain'8 = "/workspace/crates/verified/src/chain.rs" 62 50 62 69
+let%span schain'9 = "/workspace/crates/verified/src/chain.rs" 62 50 62 71
+let%span schain'10 = "/workspace/crates/verified/src/chain.rs" 62 32 64 71
+let%span schain'11 = "/workspace/crates/verified/src/chain.rs" 63 28 63 41
+let%span schain'12 = "/workspace/crates/verified/src/chain.rs" 63 28 63 43
+let%span schain'13 = "/workspace/crates/verified/src/chain.rs" 63 47 63 66
+let%span schain'14 = "/workspace/crates/verified/src/chain.rs" 63 47 63 68
+let%span schain'15 = "/workspace/crates/verified/src/chain.rs" 64 31 64 44
+let%span schain'16 = "/workspace/crates/verified/src/chain.rs" 64 31 64 46
+let%span schain'17 = "/workspace/crates/verified/src/chain.rs" 64 49 64 68
+let%span schain'18 = "/workspace/crates/verified/src/chain.rs" 64 49 64 70
+let%span schain'19 = "/workspace/crates/verified/src/chain.rs" 63 27 64 71
+let%span schain'20 = "/workspace/crates/verified/src/chain.rs" 71 13 71 14
+let%span schain'21 = "/workspace/crates/verified/src/chain.rs" 71 8 71 14
+let%span schain'22 = "/workspace/crates/verified/src/chain.rs" 25 10 37 1
 
 use creusot.int.UInt64
 use seq.Seq
@@ -71,7 +70,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let select_chain_tip [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/chain.rs" 41 0 41 73]
+let select_chain_tip [#"/workspace/crates/verified/src/chain.rs" 39 0 39 73]
   (candidates: Slice64.slice tup3_i64_u64_bool) (return (x: t_Option_usize)) = (! bb0
   [ bb0 = s0 [ s0 = [ &best <- None ] s1 | s1 = [ &i <- [%#schain] (0: UInt64.t) ] s2 | s2 = bb1 ]
   | bb1 = bb1invariant
@@ -100,69 +99,69 @@ let select_chain_tip [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/ve
           < UInt64.t'int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f1)
         end}
       (! [ &variant_old_bb1 <- [%#schain'0] Seq.length (Slice64.view candidates) - UInt64.t'int i ] s0)
-      [ s0 = len_tup3_i64_u64_bool [%#schain'1] {candidates} (fun (_x: UInt64.t) -> [ &_23 <- _x ] s1)
-      | s1 = [ &_21 <- UInt64.lt i _23 ] s2
-      | s2 = any [ br0 -> {_21 = false} (! bb28) | br1 -> {_21} (! bb4) ] ]
+      [ s0 = len_tup3_i64_u64_bool [%#schain'1] {candidates} (fun (_x: UInt64.t) -> [ &_21 <- _x ] s1)
+      | s1 = [ &_19 <- UInt64.lt i _21 ] s2
+      | s2 = any [ br0 -> {_19 = false} (! bb28) | br1 -> {_19} (! bb4) ] ]
       [ bb4 = s0
-        [ s0 = [ &_27 <- i ] s1
-        | s1 = [ &_28 <- Slice64.length candidates ] s2
-        | s2 = [ &_29 <- UInt64.lt _27 _28 ] s3
-        | s3 = {[@expl:index in bounds] [%#schain'4] _29} s4
-        | s4 = Slice64.get [%#schain'5] <tup3_i64_u64_bool> {candidates} {_27}
-            (fun (r: tup3_i64_u64_bool) -> [ &_26 <- r.f2 ] s5)
-        | s5 = any [ br0 -> {_26 = false} (! bb27) | br1 -> {_26} (! bb6) ] ]
+        [ s0 = [ &_25 <- i ] s1
+        | s1 = [ &_26 <- Slice64.length candidates ] s2
+        | s2 = [ &_27 <- UInt64.lt _25 _26 ] s3
+        | s3 = {[@expl:index in bounds] [%#schain'4] _27} s4
+        | s4 = Slice64.get [%#schain'5] <tup3_i64_u64_bool> {candidates} {_25}
+            (fun (r: tup3_i64_u64_bool) -> [ &_24 <- r.f2 ] s5)
+        | s5 = any [ br0 -> {_24 = false} (! bb27) | br1 -> {_24} (! bb6) ] ]
       | bb6 = any [ br0 -> {best = None} (! bb10) | br1 (x0: UInt64.t) -> {best = Some x0} (! bb9) ]
       | bb9 = s0
         [ s0 = elim_Some {best} (fun (r0: UInt64.t) -> [ &current' <- r0 ] s1)
-        | s1 = [ &_37 <- i ] s2
-        | s2 = [ &_38 <- Slice64.length candidates ] s3
-        | s3 = [ &_39 <- UInt64.lt _37 _38 ] s4
-        | s4 = {[@expl:index in bounds] [%#schain'6] _39} s5
-        | s5 = Slice64.get [%#schain'7] <tup3_i64_u64_bool> {candidates} {_37}
-            (fun (r: tup3_i64_u64_bool) -> [ &_36 <- r.f0 ] s6)
-        | s6 = [ &_41 <- current' ] s7
-        | s7 = [ &_42 <- Slice64.length candidates ] s8
-        | s8 = [ &_43 <- UInt64.lt _41 _42 ] s9
-        | s9 = {[@expl:index in bounds] [%#schain'8] _43} s10
-        | s10 = Slice64.get [%#schain'9] <tup3_i64_u64_bool> {candidates} {_41}
-            (fun (r: tup3_i64_u64_bool) -> [ &_40 <- r.f0 ] s11)
-        | s11 = [ &_35 <- Int64.gt _36 _40 ] s12
-        | s12 = any [ br0 -> {_35 = false} (! bb14) | br1 -> {_35} (! bb13) ] ]
+        | s1 = [ &_35 <- i ] s2
+        | s2 = [ &_36 <- Slice64.length candidates ] s3
+        | s3 = [ &_37 <- UInt64.lt _35 _36 ] s4
+        | s4 = {[@expl:index in bounds] [%#schain'6] _37} s5
+        | s5 = Slice64.get [%#schain'7] <tup3_i64_u64_bool> {candidates} {_35}
+            (fun (r: tup3_i64_u64_bool) -> [ &_34 <- r.f0 ] s6)
+        | s6 = [ &_39 <- current' ] s7
+        | s7 = [ &_40 <- Slice64.length candidates ] s8
+        | s8 = [ &_41 <- UInt64.lt _39 _40 ] s9
+        | s9 = {[@expl:index in bounds] [%#schain'8] _41} s10
+        | s10 = Slice64.get [%#schain'9] <tup3_i64_u64_bool> {candidates} {_39}
+            (fun (r: tup3_i64_u64_bool) -> [ &_38 <- r.f0 ] s11)
+        | s11 = [ &_33 <- Int64.gt _34 _38 ] s12
+        | s12 = any [ br0 -> {_33 = false} (! bb14) | br1 -> {_33} (! bb13) ] ]
       | bb13 = s0 [ s0 = [ &newer <- [%#schain'10] true ] s1 | s1 = bb22 ]
       | bb14 = s0
-        [ s0 = [ &_46 <- i ] s1
-        | s1 = [ &_47 <- Slice64.length candidates ] s2
-        | s2 = [ &_48 <- UInt64.lt _46 _47 ] s3
-        | s3 = {[@expl:index in bounds] [%#schain'11] _48} s4
-        | s4 = Slice64.get [%#schain'12] <tup3_i64_u64_bool> {candidates} {_46}
-            (fun (r: tup3_i64_u64_bool) -> [ &_45 <- r.f0 ] s5)
-        | s5 = [ &_50 <- current' ] s6
-        | s6 = [ &_51 <- Slice64.length candidates ] s7
-        | s7 = [ &_52 <- UInt64.lt _50 _51 ] s8
-        | s8 = {[@expl:index in bounds] [%#schain'13] _52} s9
-        | s9 = Slice64.get [%#schain'14] <tup3_i64_u64_bool> {candidates} {_50}
-            (fun (r: tup3_i64_u64_bool) -> [ &_49 <- r.f0 ] s10)
-        | s10 = [ &_44 <- _45 = _49 ] s11
-        | s11 = any [ br0 -> {_44 = false} (! bb18) | br1 -> {_44} (! bb17) ] ]
+        [ s0 = [ &_44 <- i ] s1
+        | s1 = [ &_45 <- Slice64.length candidates ] s2
+        | s2 = [ &_46 <- UInt64.lt _44 _45 ] s3
+        | s3 = {[@expl:index in bounds] [%#schain'11] _46} s4
+        | s4 = Slice64.get [%#schain'12] <tup3_i64_u64_bool> {candidates} {_44}
+            (fun (r: tup3_i64_u64_bool) -> [ &_43 <- r.f0 ] s5)
+        | s5 = [ &_48 <- current' ] s6
+        | s6 = [ &_49 <- Slice64.length candidates ] s7
+        | s7 = [ &_50 <- UInt64.lt _48 _49 ] s8
+        | s8 = {[@expl:index in bounds] [%#schain'13] _50} s9
+        | s9 = Slice64.get [%#schain'14] <tup3_i64_u64_bool> {candidates} {_48}
+            (fun (r: tup3_i64_u64_bool) -> [ &_47 <- r.f0 ] s10)
+        | s10 = [ &_42 <- _43 = _47 ] s11
+        | s11 = any [ br0 -> {_42 = false} (! bb18) | br1 -> {_42} (! bb17) ] ]
       | bb17 = s0
-        [ s0 = [ &_54 <- i ] s1
-        | s1 = [ &_55 <- Slice64.length candidates ] s2
-        | s2 = [ &_56 <- UInt64.lt _54 _55 ] s3
-        | s3 = {[@expl:index in bounds] [%#schain'15] _56} s4
-        | s4 = Slice64.get [%#schain'16] <tup3_i64_u64_bool> {candidates} {_54}
-            (fun (r: tup3_i64_u64_bool) -> [ &_53 <- r.f1 ] s5)
-        | s5 = [ &_58 <- current' ] s6
-        | s6 = [ &_59 <- Slice64.length candidates ] s7
-        | s7 = [ &_60 <- UInt64.lt _58 _59 ] s8
-        | s8 = {[@expl:index in bounds] [%#schain'17] _60} s9
-        | s9 = Slice64.get [%#schain'18] <tup3_i64_u64_bool> {candidates} {_58}
-            (fun (r: tup3_i64_u64_bool) -> [ &_57 <- r.f1 ] s10)
-        | s10 = [ &newer <- UInt64.gt _53 _57 ] s11
+        [ s0 = [ &_52 <- i ] s1
+        | s1 = [ &_53 <- Slice64.length candidates ] s2
+        | s2 = [ &_54 <- UInt64.lt _52 _53 ] s3
+        | s3 = {[@expl:index in bounds] [%#schain'15] _54} s4
+        | s4 = Slice64.get [%#schain'16] <tup3_i64_u64_bool> {candidates} {_52}
+            (fun (r: tup3_i64_u64_bool) -> [ &_51 <- r.f1 ] s5)
+        | s5 = [ &_56 <- current' ] s6
+        | s6 = [ &_57 <- Slice64.length candidates ] s7
+        | s7 = [ &_58 <- UInt64.lt _56 _57 ] s8
+        | s8 = {[@expl:index in bounds] [%#schain'17] _58} s9
+        | s9 = Slice64.get [%#schain'18] <tup3_i64_u64_bool> {candidates} {_56}
+            (fun (r: tup3_i64_u64_bool) -> [ &_55 <- r.f1 ] s10)
+        | s10 = [ &newer <- UInt64.gt _51 _55 ] s11
         | s11 = bb22 ]
       | bb18 = s0 [ s0 = [ &newer <- [%#schain'19] false ] s1 | s1 = bb22 ]
       | bb22 = any [ br0 -> {newer = false} (! bb27) | br1 -> {newer} (! bb23) ]
-      | bb23 = s0 [ s0 = [ &_62 <- Some i ] s1 | s1 = [ &best <- _62 ] s2 | s2 = bb27 ]
-      | bb10 = s0 [ s0 = [ &_31 <- Some i ] s1 | s1 = [ &best <- _31 ] s2 | s2 = bb27 ]
+      | bb23 = s0 [ s0 = [ &_60 <- Some i ] s1 | s1 = [ &best <- _60 ] s2 | s2 = bb27 ]
+      | bb10 = s0 [ s0 = [ &_29 <- Some i ] s1 | s1 = [ &best <- _29 ] s2 | s2 = bb27 ]
       | bb27 = s0
         [ s0 = UInt64.add [%#schain'21] {i} {[%#schain'20] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
         | s1 = bb1 ] ] ]
@@ -171,50 +170,46 @@ let select_chain_tip [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/ve
   | & candidates: Slice64.slice tup3_i64_u64_bool = candidates
   | & best: t_Option_usize = Any.any_l ()
   | & i: UInt64.t = Any.any_l ()
-  | & _21: bool = Any.any_l ()
-  | & _23: UInt64.t = Any.any_l ()
-  | & _26: bool = Any.any_l ()
-  | & _27: UInt64.t = Any.any_l ()
-  | & _28: UInt64.t = Any.any_l ()
-  | & _29: bool = Any.any_l ()
-  | & _31: t_Option_usize = Any.any_l ()
+  | & _19: bool = Any.any_l ()
+  | & _21: UInt64.t = Any.any_l ()
+  | & _24: bool = Any.any_l ()
+  | & _25: UInt64.t = Any.any_l ()
+  | & _26: UInt64.t = Any.any_l ()
+  | & _27: bool = Any.any_l ()
+  | & _29: t_Option_usize = Any.any_l ()
   | & current': UInt64.t = Any.any_l ()
   | & newer: bool = Any.any_l ()
-  | & _35: bool = Any.any_l ()
-  | & _36: Int64.t = Any.any_l ()
-  | & _37: UInt64.t = Any.any_l ()
-  | & _38: UInt64.t = Any.any_l ()
-  | & _39: bool = Any.any_l ()
-  | & _40: Int64.t = Any.any_l ()
-  | & _41: UInt64.t = Any.any_l ()
-  | & _42: UInt64.t = Any.any_l ()
-  | & _43: bool = Any.any_l ()
-  | & _44: bool = Any.any_l ()
-  | & _45: Int64.t = Any.any_l ()
-  | & _46: UInt64.t = Any.any_l ()
-  | & _47: UInt64.t = Any.any_l ()
-  | & _48: bool = Any.any_l ()
-  | & _49: Int64.t = Any.any_l ()
-  | & _50: UInt64.t = Any.any_l ()
+  | & _33: bool = Any.any_l ()
+  | & _34: Int64.t = Any.any_l ()
+  | & _35: UInt64.t = Any.any_l ()
+  | & _36: UInt64.t = Any.any_l ()
+  | & _37: bool = Any.any_l ()
+  | & _38: Int64.t = Any.any_l ()
+  | & _39: UInt64.t = Any.any_l ()
+  | & _40: UInt64.t = Any.any_l ()
+  | & _41: bool = Any.any_l ()
+  | & _42: bool = Any.any_l ()
+  | & _43: Int64.t = Any.any_l ()
+  | & _44: UInt64.t = Any.any_l ()
+  | & _45: UInt64.t = Any.any_l ()
+  | & _46: bool = Any.any_l ()
+  | & _47: Int64.t = Any.any_l ()
+  | & _48: UInt64.t = Any.any_l ()
+  | & _49: UInt64.t = Any.any_l ()
+  | & _50: bool = Any.any_l ()
   | & _51: UInt64.t = Any.any_l ()
-  | & _52: bool = Any.any_l ()
+  | & _52: UInt64.t = Any.any_l ()
   | & _53: UInt64.t = Any.any_l ()
-  | & _54: UInt64.t = Any.any_l ()
+  | & _54: bool = Any.any_l ()
   | & _55: UInt64.t = Any.any_l ()
-  | & _56: bool = Any.any_l ()
+  | & _56: UInt64.t = Any.any_l ()
   | & _57: UInt64.t = Any.any_l ()
-  | & _58: UInt64.t = Any.any_l ()
-  | & _59: UInt64.t = Any.any_l ()
-  | & _60: bool = Any.any_l ()
-  | & _62: t_Option_usize = Any.any_l ()
+  | & _58: bool = Any.any_l ()
+  | & _60: t_Option_usize = Any.any_l ()
   | & variant_old_bb1: int = Any.any_l () ])
-  [ return (result: t_Option_usize) ->
-  {[@stop_split] [@expl:select_chain_tip ensures] ([@stop_split] [@expl:select_chain_tip ensures #0] [%#schain'22] result
-        = None
-      -> (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view candidates)
-        -> not (Seq.get (Slice64.view candidates) i).f2))
-    /\ ([@stop_split] [@expl:select_chain_tip ensures #1] [%#schain'23] match result with
-      | None -> true
+  [ return (result: t_Option_usize) -> {[@stop_split] [@expl:select_chain_tip ensures] [%#schain'22] match result with
+      | None -> forall i: int. 0 <= i /\ i < Seq.length (Slice64.view candidates)
+        -> not (Seq.get (Slice64.view candidates) i).f2
       | Some index -> UInt64.t'int index < Seq.length (Slice64.view candidates)
       /\ (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f2
       /\ (forall i: int. 0 <= i /\ i < Seq.length (Slice64.view candidates) /\ (Seq.get (Slice64.view candidates) i).f2
@@ -231,5 +226,5 @@ let select_chain_tip [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/ve
           = Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
         /\ UInt64.t'int (Seq.get (Slice64.view candidates) i).f1
         < UInt64.t'int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f1)
-      end)}
+      end}
     (! return {result}) ]

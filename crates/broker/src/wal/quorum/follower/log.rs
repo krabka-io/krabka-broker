@@ -10,6 +10,7 @@ use std::{
 
 use bytes::{Bytes, BytesMut};
 use krabka_ids::Offset;
+use krabka_kraft_core::{LogOffsetMetadata, LogView as _};
 use krabka_log::{Log, LogConfig};
 use krabka_protocol::records::RecordsPayload;
 use krabka_raft::NodeId;
@@ -162,36 +163,42 @@ impl FollowerLog {
         .await
     }
 
+    /// Truncate this log after the leader answered a Fetch with the diverging
+    /// epoch `diverging`, as KIP-595's `KafkaMetadataLog.truncateToEndOffset`
+    /// does.
+    ///
+    /// The leader's end offset for the epoch is only an upper bound: this
+    /// log's own copy of that epoch can end earlier, and whatever follows it
+    /// here belongs to an epoch the leader does not hold. The follower
+    /// truncates to the end of its own copy, capped at the leader's, or to
+    /// where its own copy of an older epoch ends when it never held that epoch.
+    /// Kafka's `KRaft` log treats epoch 0 as "no epoch" and skips the local
+    /// lookup for it; a diskless partition's first leader epoch is 0, so the
+    /// WAL looks it up like every other epoch.
+    ///
+    /// A leader that cannot place this follower's last epoch, because it is
+    /// newer than every epoch in the leader's log, answers its log end and its
+    /// latest, older epoch; this rule then truncates back to where this log's
+    /// copy of that older epoch ends.
+    /// A truncation point below the retained range, or one that would not
+    /// shorten the log, resets it to the leader's log start instead, so a
+    /// divergence always makes progress.
     pub(super) async fn resolve_divergence(
         &self,
-        mut offset: Offset,
+        diverging: LogOffsetMetadata,
         leader_start: Offset,
         requested: Offset,
     ) -> Result<(), crate::BrokerError> {
-        if offset > requested {
-            return Err(crate::BrokerError::Replication(
-                "leader returned invalid WAL divergence offset".into(),
-            ));
-        }
-        if offset == requested {
-            let previous_epoch_start = self
-                .log
-                .lock()
-                .epoch_checkpoint()
-                .entries()
-                .last()
-                .map(|entry| entry.start_offset);
-            let Some(previous_epoch_start) =
-                previous_epoch_start.filter(|start| *start < requested)
-            else {
-                return self.reset_to(leader_start).await;
-            };
-            offset = previous_epoch_start;
-        }
-        if offset < self.start_offset() {
+        let local = self.log.end_offset_for_epoch(diverging.epoch);
+        let truncation = Offset(if local.epoch == diverging.epoch {
+            local.offset.min(diverging.offset)
+        } else {
+            local.offset
+        });
+        if truncation < self.start_offset() || truncation >= requested {
             self.reset_to(leader_start).await
         } else {
-            self.truncate_to(offset).await
+            self.truncate_to(truncation).await
         }
     }
 
@@ -399,8 +406,11 @@ mod tests {
         assert2::assert!((reopened.log_end_offset()) == (Offset(2)));
     }
 
+    /// The leader could not place epoch 7, newer than its whole log, and
+    /// answered its log end with its latest epoch, 5. This log never held
+    /// epoch 5, so its copy of that epoch ends where epoch 7 starts.
     #[tokio::test]
-    async fn equal_offset_divergence_steps_back_to_the_local_epoch_start() {
+    async fn unplaceable_epoch_divergence_truncates_to_the_local_end_of_the_leader_epoch() {
         let dir = tempfile::tempdir().unwrap();
         let follower = FollowerLog::for_log(Log::open(dir.path(), LogConfig::default()).unwrap());
         follower
@@ -418,7 +428,14 @@ mod tests {
             .unwrap();
 
         follower
-            .resolve_divergence(Offset(1), Offset(0), Offset(1))
+            .resolve_divergence(
+                LogOffsetMetadata {
+                    offset: 1,
+                    epoch: 5,
+                },
+                Offset(0),
+                Offset(1),
+            )
             .await
             .unwrap();
 
@@ -449,7 +466,14 @@ mod tests {
         follower.trim_to(Offset(1)).await.unwrap();
 
         follower
-            .resolve_divergence(Offset(0), Offset(0), Offset(2))
+            .resolve_divergence(
+                LogOffsetMetadata {
+                    offset: 0,
+                    epoch: 0,
+                },
+                Offset(0),
+                Offset(2),
+            )
             .await
             .unwrap();
 

@@ -2,7 +2,8 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_restore_record_selected": { "prover": "alt-ergo", "time": 0.013 }
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.029 },
+      "vc_restore_record_selected": { "prover": "alt-ergo", "time": 0.05 }
     }
   }
 }

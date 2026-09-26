@@ -21,8 +21,8 @@ pub(crate) use self::promotion::hydrate_on_promotion;
 use self::{
     connection::{connect_with_backoff, sleep_or_cancel},
     fetch::{
-        FetchProgress, fetch_progress, response_partition, validate_fetch_frontiers,
-        validate_reset_offset,
+        FetchProgress, fetch_progress, response_partition, validate_diverging_epoch,
+        validate_fetch_frontiers, validate_reset_offset,
     },
     log::FollowerLog,
 };
@@ -131,8 +131,7 @@ async fn run_inner(config: &Config, follower: &FollowerLog) -> Result<(), String
         match partition.error_code {
             codes::NONE => {
                 let frontiers = validate_fetch_frontiers(&partition)?;
-                if partition.diverging_epoch.end_offset >= 0 {
-                    let divergence = krabka_ids::Offset(partition.diverging_epoch.end_offset);
+                if let Some(divergence) = validate_diverging_epoch(&partition)? {
                     follower
                         .resolve_divergence(divergence, frontiers.start, requested)
                         .await
@@ -411,7 +410,7 @@ mod tests {
 
         follower
             .resolve_divergence(
-                Offset(partition.diverging_epoch.end_offset),
+                validate_diverging_epoch(&partition).unwrap().unwrap(),
                 Offset(partition.log_start_offset),
                 Offset(2),
             )
@@ -454,6 +453,117 @@ mod tests {
                     .lock()
                     .unwrap()
                     .read_raw(Offset(0), Offset(2), krabka_units::mebibytes(1))
+                    .unwrap()
+                    .bytes
+        );
+    }
+
+    /// A follower holds an epoch-1 record from a leader that lost its
+    /// election; the current leader's log never held epoch 1 and ends in
+    /// epoch 0. The leader cannot place epoch 1, so it answers its log end with
+    /// its latest epoch, and the follower truncates to where its own copy of
+    /// epoch 0 ends and then replicates the leader's tail. A `(-1, -1)`
+    /// answer would read as "no divergence" and leave the follower fetching
+    /// at its own log end forever.
+    #[tokio::test]
+    async fn follower_with_an_epoch_the_leader_cannot_place_recovers() {
+        let leader_dir = tempfile::tempdir().unwrap();
+        let follower_dir = tempfile::tempdir().unwrap();
+        let leader = Arc::new(Mutex::new(
+            Log::open(leader_dir.path(), LogConfig::default()).unwrap(),
+        ));
+        for (offset, value) in [(0, b"shared".as_slice()), (1, b"one"), (2, b"two")] {
+            let mut record_batch = batch(0, value);
+            leader
+                .lock()
+                .unwrap()
+                .append_at(&mut record_batch, Offset(offset))
+                .unwrap();
+        }
+        leader.lock().unwrap().sync().unwrap();
+
+        let mut follower_log = Log::open(follower_dir.path(), LogConfig::default()).unwrap();
+        follower_log
+            .append_at(&mut batch(0, b"shared"), Offset(0))
+            .unwrap();
+        follower_log
+            .append_at(&mut batch(1, b"lost election"), Offset(1))
+            .unwrap();
+        follower_log.sync().unwrap();
+        let follower = FollowerLog::for_log(follower_log);
+
+        let shard = ShardId {
+            topic_id: uuid::Uuid::from_u128(101),
+            partition: PartitionIndex(0),
+        };
+        let registry = WalShardRegistry::new(NodeId(1));
+        let engine = Arc::new(WalShardEngine::new_distributed(Arc::clone(&leader), 3).unwrap());
+        registry.insert(shard, Arc::clone(&engine));
+        registry.replace_placements(&maplit::hashmap! {shard => WalPlacement {
+            voters: vec![NodeId(1), NodeId(2), NodeId(3)],
+            leader_epoch: 2,
+        }});
+        let fetch = |follower: &FollowerLog| {
+            let response = registry
+                .route_fetch_request(
+                    &fetch_request(
+                        QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
+                        NodeId(2),
+                        2,
+                        follower.last_epoch(),
+                        follower.end_offset().0,
+                        krabka_units::mebibytes(1),
+                    ),
+                    NodeId(2),
+                )
+                .unwrap()
+                .unwrap();
+            response_partition(response, shard).unwrap()
+        };
+
+        let diverged = fetch(&follower);
+        assert!(diverged.error_code == codes::NONE);
+        assert!(
+            validate_diverging_epoch(&diverged)
+                == Ok(Some(krabka_kraft_core::LogOffsetMetadata {
+                    offset: 3,
+                    epoch: 0,
+                }))
+        );
+        follower
+            .resolve_divergence(
+                validate_diverging_epoch(&diverged).unwrap().unwrap(),
+                Offset(diverged.log_start_offset),
+                Offset(2),
+            )
+            .await
+            .unwrap();
+        assert!(follower.end_offset() == Offset(1));
+        assert!(follower.last_epoch() == 0);
+
+        let caught_up = fetch(&follower);
+        assert!(validate_diverging_epoch(&caught_up) == Ok(None));
+        follower
+            .append(
+                Offset(1),
+                Offset(caught_up.last_stable_offset),
+                caught_up.records,
+            )
+            .await
+            .unwrap();
+
+        assert!(follower.end_offset() == Offset(3));
+        assert!(
+            follower
+                .log
+                .lock()
+                .read_raw(Offset(0), Offset(3), krabka_units::mebibytes(1))
+                .unwrap()
+                .bytes
+                == leader
+                    .lock()
+                    .unwrap()
+                    .read_raw(Offset(0), Offset(3), krabka_units::mebibytes(1))
                     .unwrap()
                     .bytes
         );

@@ -28,6 +28,7 @@ pub(super) fn reconcile(state: &mut ShareGroupState, metadata: &dyn MetadataProv
             member_id: m.member_id.clone(),
             rack_id: m.rack_id.clone(),
             subscribed_topic_ids: resolve_subscribed_topic_ids(m, &input),
+            assigned_partitions: std::collections::HashMap::new(),
         })
         .collect();
     let topics = TopicMetadata {

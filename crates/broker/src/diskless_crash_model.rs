@@ -8,6 +8,30 @@
 //! before the index commit. An fsync can tear the active tail. Any WAL member
 //! can start a reservation. A trim must stop at the committed index frontier.
 //!
+//! DRIVEN: three production kernels decide the steps that carry the
+//! properties. `krabka_verified::consensus::majority_watermark` computes the
+//! quorum-durable frontier (`wal_acked`) from the live WAL members, as
+//! `WalShardEngine::record_durable_offset` does over voter-reported durable
+//! offsets. `krabka_verified::offset_allocator::wal_reservation_frontier`
+//! folds the pending reservation chain and
+//! `krabka_verified::offset_allocator::reserve_offsets` places the next one,
+//! as the controller's `V1PartitionOffsetAdvance` submit path does, so
+//! `reservations_gap_free_and_unique` checks what those kernels produce under
+//! every interleaving of two appenders and the crash windows.
+//! `krabka_verified::diskless::diskless_trim_decision` places every trim, as
+//! the flusher does, so `trim_at_committed_index_frontier` checks its output
+//! against the index and quorum frontiers.
+//!
+//! MODELED: the WAL members, the fsync, the object PUT, and the index commit
+//! are counters, not logs or objects. Every reservation the model makes stays
+//! pending in the controller (the image frontier is 0), so the reservation
+//! frontier is the fold over all of them. The flusher's trim runs with no
+//! safety lag against `wal_acked` as the high watermark. At most one WAL
+//! member is lost. The idempotent-producer dedup rebuild is not modelled:
+//! the model has no producer sequences to rebuild, so any property about it
+//! would hold by construction; `diskless::recovery`'s unit tests rebuild the
+//! dedup state from a real recovered log instead.
+//!
 //! [Slice 5]: ../docs/diskless-wal-design.md#slice-5-crash-windows-and-recovery
 //! [Slice 6]: ../docs/diskless-wal-design.md#slice-6-the-diskless-wal-quorum-and-stateless-appenders
 //! [diskless WAL design]: ../docs/diskless-wal-design.md
@@ -26,7 +50,7 @@ const TARGET_STATE_COUNT: usize = 100_000;
 // considering a field -- into a failure instead of a silently smaller search
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
-const PINNED_UNIQUE_STATES: usize = 17_701;
+const PINNED_UNIQUE_STATES: usize = 6_341;
 
 const WITNESS_KRAFT_FSYNC_GAP: u8 = 1 << 0;
 const WITNESS_PUT_BEFORE_INDEX: u8 = 1 << 1;
@@ -56,8 +80,8 @@ struct CrashState {
     object_frontier: i64,
     index_frontier: i64,
     trimmed: i64,
+    /// The log end the last fsync acknowledged to the producer.
     producer_committed: i64,
-    producer_rebuilt: i64,
     reservations: Vec<(i64, i64)>,
     appenders_seen: u8,
     witnesses: u8,
@@ -69,7 +93,6 @@ enum Act {
     FsyncAppend,
     CrashBeforeFsync,
     CrashMidFsync,
-    RebuildProducerState,
     PutObject,
     CommitIndex,
     Trim,
@@ -98,7 +121,6 @@ impl Model for CrashModel {
             index_frontier: 0,
             trimmed: 0,
             producer_committed: 0,
-            producer_rebuilt: 0,
             reservations: Vec::new(),
             appenders_seen: 0,
             witnesses: 0,
@@ -117,9 +139,6 @@ impl Model for CrashModel {
             acts.push(Act::FsyncAppend);
             acts.push(Act::CrashBeforeFsync);
             acts.push(Act::CrashMidFsync);
-        }
-        if s.producer_rebuilt < s.producer_committed {
-            acts.push(Act::RebuildProducerState);
         }
         if s.object_frontier < s.wal_acked {
             acts.push(Act::PutObject);
@@ -144,9 +163,9 @@ impl Model for CrashModel {
         let mut s = last.clone();
         match action {
             Act::ReserveVia(node) => {
-                let base = s.kraft_next;
-                s.kraft_next += 1;
-                s.reservations.push((base, s.kraft_next));
+                let (base, next) = reserve_via_controller(&s);
+                s.kraft_next = next;
+                s.reservations.push((base, next));
                 s.appenders_seen |= 1 << node;
                 if s.appenders_seen.count_ones() >= 2 {
                     s.witnesses |= WITNESS_STATELESS_APPEND;
@@ -161,15 +180,10 @@ impl Model for CrashModel {
                 if s.kraft_next > s.log_end {
                     s.witnesses |= WITNESS_KRAFT_FSYNC_GAP;
                 }
-                s.producer_rebuilt = s.log_end;
             }
             Act::CrashMidFsync => {
                 s.witnesses |= WITNESS_MID_FSYNC;
                 s.kraft_next = s.kraft_next.max(s.log_end);
-                s.producer_rebuilt = s.log_end;
-            }
-            Act::RebuildProducerState => {
-                s.producer_rebuilt = s.producer_committed;
             }
             Act::PutObject => {
                 s.object_frontier = s.wal_acked;
@@ -181,7 +195,15 @@ impl Model for CrashModel {
                 s.index_frontier = s.object_frontier;
             }
             Act::Trim => {
-                s.trimmed = s.index_frontier.min(s.wal_acked);
+                let decision = krabka_verified::diskless::diskless_trim_decision(
+                    s.index_frontier,
+                    s.wal_acked,
+                    0,
+                    s.trimmed,
+                );
+                if decision.should_trim {
+                    s.trimmed = decision.target;
+                }
                 if s.trimmed > 0 && s.trimmed == s.index_frontier {
                     s.witnesses |= WITNESS_TRIM_AT_INDEX;
                 }
@@ -216,9 +238,6 @@ impl Model for CrashModel {
                 "sequencer_handoff_never_regresses_wal_acked",
                 |_, s: &CrashState| s.wal_acked >= s.handoff_wal_acked,
             ),
-            Property::always("producer_dedup_no_regress", |_, s: &CrashState| {
-                s.producer_rebuilt <= s.producer_committed && s.producer_committed <= s.log_end
-            }),
             Property::always("trim_at_committed_index_frontier", |_, s: &CrashState| {
                 s.trimmed <= s.index_frontier && s.trimmed <= s.wal_acked
             }),
@@ -290,7 +309,23 @@ fn quorum_frontier(s: &CrashState) -> i64 {
     live.sort_unstable();
     let leader_end = live.pop().unwrap_or(0);
     let followers = live;
-    krabka_verified::recompute_high_watermark(leader_end, &followers, WAL_MAJORITY, -1, 0, true)
+    krabka_verified::consensus::majority_watermark(leader_end, &followers, WAL_MAJORITY, 0)
+}
+
+/// The controller's reservation for one appender's one-record batch: the
+/// pending chain folded from the image frontier with
+/// `wal_reservation_frontier`, then `reserve_offsets` from its end. Either
+/// kernel refusing is a failure of the run, not a pruned step.
+fn reserve_via_controller(s: &CrashState) -> (i64, i64) {
+    let pending_frontier = s
+        .reservations
+        .iter()
+        .try_fold(0, |frontier, &(base, end)| {
+            krabka_verified::offset_allocator::wal_reservation_frontier(frontier, base, end - base)
+        })
+        .expect("the controller's pending reservation chain stays exact");
+    krabka_verified::offset_allocator::reserve_offsets(pending_frontier, 1)
+        .expect("a bounded reservation is representable")
 }
 
 fn surviving_wal_frontier(s: &CrashState) -> i64 {

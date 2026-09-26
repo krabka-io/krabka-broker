@@ -3,7 +3,7 @@
 
 use assert2::check;
 use bytes::Bytes;
-use krabka_protocol::records::{Record, RecordsError};
+use krabka_protocol::records::{Record, RecordsError, TimestampType};
 
 use super::{
     test_support::{
@@ -349,6 +349,54 @@ fn to_timestamp_straddling_the_bound_filters_the_right_split() {
                 RecordDecision::Drop,
             ]
     );
+}
+
+/// Under `LogAppendTime` Kafka reports every record at the batch
+/// `max_timestamp` (the broker's append clock) and never reads the producer's
+/// `base_timestamp + timestamp_delta`. Here the producer clock ran 10 s ahead
+/// of the broker, so `CreateTime` arithmetic would put every record past the
+/// bound while Kafka puts every record before it.
+#[test]
+fn to_timestamp_judges_log_append_time_records_by_the_batch_max_timestamp() {
+    let orders_0 = partition("orders", 0);
+    let mut owned = batch(
+        1,
+        vec![
+            Record {
+                timestamp_delta: 0,
+                ..record(0)
+            },
+            Record {
+                timestamp_delta: 50,
+                ..record(1)
+            },
+        ],
+    );
+    owned.attributes = owned
+        .attributes
+        .with_timestamp_type(TimestampType::LogAppendTime);
+    owned.base_timestamp = BASE_TIMESTAMP + 10_000;
+    owned.max_timestamp = BASE_TIMESTAMP;
+
+    for (name, bound, expected_batch, expected_record) in [
+        (
+            "append time before the bound",
+            BASE_TIMESTAMP + 1,
+            BatchDecision::Keep,
+            RecordDecision::Keep,
+        ),
+        (
+            "append time at the bound",
+            BASE_TIMESTAMP,
+            BatchDecision::Empty,
+            RecordDecision::Drop,
+        ),
+    ] {
+        let predicates = predicates(&["--to-timestamp", &bound.to_string()]);
+        let (batch_decision, records) = decide(&predicates, &orders_0, &owned);
+        check!(batch_decision == expected_batch, "{name}");
+        check!(records == [expected_record, expected_record], "{name}");
+    }
 }
 
 #[test]

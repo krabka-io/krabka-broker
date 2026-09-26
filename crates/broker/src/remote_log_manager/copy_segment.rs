@@ -530,6 +530,7 @@ mod tests {
             base_offset: Offset(0),
             last_offset: Offset(9),
             max_timestamp: 42,
+            last_modified_ms: 42,
             size: bytes(10),
             log_path: write("00.log", b"0123456789"),
             offset_index_path: write("00.index", b"i"),

@@ -1,7 +1,7 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/recovery.rs" 79 0 79 93 *)
+(* #"/workspace/crates/verified/src/recovery.rs" 321 0 321 93 *)
 
-let%span srecovery = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/recovery.rs" 80 4 80 35
-let%span srecovery'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/recovery.rs" 77 10 77 53
+let%span srecovery = "/workspace/crates/verified/src/recovery.rs" 322 4 322 35
+let%span srecovery'0 = "/workspace/crates/verified/src/recovery.rs" 319 10 319 53
 
 use creusot.prelude.Any
 
@@ -9,8 +9,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let should_capture_first_downgrade [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/recovery.rs" 79 0 79 93]
-  (pending_exists: bool) (is_downgrade: bool) (return (x: bool)) = (! bb0
+let should_capture_first_downgrade [#"/workspace/crates/verified/src/recovery.rs" 321 0 321 93] (pending_exists: bool)
+  (is_downgrade: bool) (return (x: bool)) = (! bb0
   [ bb0 = any [ br0 -> {pending_exists = false} (! bb1) | br1 -> {pending_exists} (! bb2) ]
   | bb2 = s0 [ s0 = [ &_ret <- [%#srecovery] false ] s1 | s1 = return {_ret} ]
   | bb1 = s0 [ s0 = [ &_ret <- is_downgrade ] s1 | s1 = return {_ret} ] ]

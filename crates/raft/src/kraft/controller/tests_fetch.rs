@@ -52,6 +52,68 @@ fn become_follower(engine: &mut Engine, leader_id: NodeId, leader_epoch: Epoch) 
     ));
 }
 
+/// A successful Fetch answer from `leader_id` in `leader_epoch`.
+fn leader_answer(leader_id: NodeId, leader_epoch: Epoch) -> wire::FetchAnswer {
+    wire::FetchAnswer {
+        error_code: 0,
+        leader: wire::QuorumLeader {
+            leader_id: Some(leader_id),
+            epoch: leader_epoch,
+            endpoint: None,
+        },
+        diverging: None,
+        snapshot_id: None,
+        hwm: 0,
+        log_start_offset: 0,
+        records: bytes::Bytes::new(),
+    }
+}
+
+/// The endpoint every test voter announces (`test_support::voter_set`).
+fn test_endpoint() -> (String, u16) {
+    ("127.0.0.1".to_string(), 9_093)
+}
+
+/// A Fetch request from `from` in `current_leader_epoch`, at offset 0.
+fn fetch_request(from: NodeId, current_leader_epoch: i32) -> bytes::Bytes {
+    wire::PeerRequest::Fetch {
+        from,
+        current_leader_epoch,
+        fetch_epoch: 0,
+        fetch_offset: 0,
+        replica_directory_id: uuid::Uuid::nil(),
+    }
+    .encode()
+}
+
+/// A transport that reaches no one and records the leader endpoints the
+/// engine learns from responses.
+#[derive(Default)]
+struct EndpointRecorder {
+    endpoints: std::sync::Mutex<Vec<(NodeId, String)>>,
+}
+
+#[async_trait::async_trait]
+impl crate::kraft::transport::PeerSender for EndpointRecorder {
+    async fn send(
+        &self,
+        peer: NodeId,
+        _api_key: i16,
+        _body: bytes::Bytes,
+    ) -> Result<bytes::Bytes, crate::error::RaftError> {
+        Err(crate::error::RaftError::NotLeader {
+            current_leader: Some(peer),
+        })
+    }
+
+    fn remember_leader_endpoint(&self, leader: NodeId, address: String) {
+        self.endpoints
+            .lock()
+            .expect("endpoint lock")
+            .push((leader, address));
+    }
+}
+
 #[test]
 fn fetch_records_are_served_only_by_clean_leader_fetches() {
     for (_case, has_snapshot, has_divergence, is_leader, want) in [
@@ -156,14 +218,13 @@ async fn a_fetch_response_from_a_newer_epoch_moves_the_node_to_that_leader() {
 
         engine.on_fetch_response(
             NodeId(1),
-            &wire::PeerResponse::Fetch {
-                leader_id: NodeId(3),
-                leader_epoch: 7,
+            &wire::PeerResponse::Fetch(wire::FetchAnswer {
                 diverging: None,
                 snapshot_id: None,
                 hwm: 0,
                 records: bytes::Bytes::new(),
-            }
+                ..leader_answer(NodeId(3), 7)
+            })
             .encode(),
         );
 
@@ -188,68 +249,112 @@ async fn a_fetch_response_from_a_newer_epoch_moves_the_node_to_that_leader() {
     }
 }
 
+/// A replica answers a Fetch as Kafka's `tryCompleteFetchRequest` does:
+/// `validateLeaderOnlyRequest` refuses another epoch, and a replica that is
+/// not the leader, with `buildEmptyFetchResponse`, which names the leader
+/// this replica knows, its epoch, and the leader's endpoint.
 #[tokio::test]
-async fn follower_fetch_redirects_to_current_leader() {
-    let (mut follower, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-    follower.on_event(Event::ReceiveBeginQuorumEpoch {
-        leader_id: NodeId(2),
-        leader_epoch: 1,
-    });
-    let (reply, mut response) = oneshot::channel();
-
-    follower.on_inbound(Inbound::Fetch {
-        req: wire::PeerRequest::Fetch {
-            from: NodeId(3),
-            fetch_epoch: 1,
-            fetch_offset: 0,
-            replica_directory_id: uuid::Uuid::nil(),
+async fn a_replica_that_cannot_serve_a_fetch_names_the_leader_it_knows() {
+    const NOT_LEADER_OR_FOLLOWER: i16 = 6;
+    const FENCED_LEADER_EPOCH: i16 = 74;
+    const UNKNOWN_LEADER_EPOCH: i16 = 75;
+    let refusal = |error_code, leader_id: Option<NodeId>, epoch| wire::FetchAnswer {
+        error_code,
+        leader: wire::QuorumLeader {
+            leader_id,
+            epoch,
+            endpoint: leader_id.map(|_| test_endpoint()),
+        },
+        hwm: -1,
+        ..leader_answer(NodeId(0), epoch)
+    };
+    for (case, leader, request_epoch, expected) in [
+        // KafkaRaftClient: "non-leaders do not expect to receive requests
+        // matching their own epoch, but it is possible when observers are
+        // using the Fetch API to find the result of an election."
+        (
+            "follower of leader 2",
+            Some(NodeId(2)),
+            1,
+            refusal(NOT_LEADER_OR_FOLLOWER, Some(NodeId(2)), 1),
+        ),
+        (
+            "fetcher in an older epoch",
+            Some(NodeId(2)),
+            0,
+            refusal(FENCED_LEADER_EPOCH, Some(NodeId(2)), 1),
+        ),
+        (
+            "fetcher in a newer epoch",
+            Some(NodeId(2)),
+            2,
+            refusal(UNKNOWN_LEADER_EPOCH, Some(NodeId(2)), 1),
+        ),
+        (
+            "no known leader",
+            None,
+            0,
+            refusal(NOT_LEADER_OR_FOLLOWER, None, 0),
+        ),
+    ] {
+        let (mut replica, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+        if let Some(leader_id) = leader {
+            become_follower(&mut replica, leader_id, 1);
         }
-        .encode(),
-        reply,
-    });
+        let (reply, mut response) = oneshot::channel();
 
-    let body = response
-        .try_recv()
-        .expect("follower returned Fetch redirect");
-    let decoded = wire::PeerResponse::decode_fetch(&body).expect("decode Fetch redirect");
-    assert2::assert!(matches!(
-        decoded,
-        wire::PeerResponse::Fetch {
-            leader_id: NodeId(2),
-            leader_epoch: 1,
-            records,
-            ..
-        } if records.is_empty()
-    ));
+        replica.on_inbound(Inbound::Fetch {
+            req: fetch_request(NodeId(3), request_epoch),
+            reply,
+        });
+
+        let body = response.try_recv().expect("the replica answered the Fetch");
+        assert!(
+            wire::PeerResponse::decode_fetch(&body) == Some(wire::PeerResponse::Fetch(expected)),
+            "{case}"
+        );
+    }
 }
 
+/// The leader refuses a fetcher from another epoch too, naming itself, so
+/// the fetcher moves to its epoch (`maybeHandleCommonResponse`).
 #[tokio::test]
-async fn fetch_without_leader_returns_error_instead_of_dropping_reply() {
-    let (mut follower, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
-    let leader_epoch = follower.core.quorum_state().leader_epoch;
+async fn a_leader_refuses_a_fetch_from_another_epoch_and_names_itself() {
+    let (mut leader, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2)]);
+    leader.on_event(Event::ElectionTimeout);
+    for epoch in [0, 1] {
+        leader.on_event(Event::ReceiveVoteResponse {
+            from: NodeId(2),
+            epoch,
+            vote_granted: true,
+        });
+    }
+    assert!(leader.core.role().is_leader());
+    let epoch = leader.core.quorum_state().leader_epoch;
     let (reply, mut response) = oneshot::channel();
 
-    follower.on_inbound(Inbound::Fetch {
-        req: wire::PeerRequest::Fetch {
-            from: NodeId(2),
-            fetch_epoch: leader_epoch,
-            fetch_offset: 0,
-            replica_directory_id: uuid::Uuid::nil(),
-        }
-        .encode(),
+    leader.on_inbound(Inbound::Fetch {
+        req: fetch_request(NodeId(2), i32::try_from(epoch).unwrap() - 1),
         reply,
     });
 
-    let body = response
-        .try_recv()
-        .expect("leaderless Fetch returned an error");
-    assert2::assert!(matches!(
-        wire::PeerResponse::decode_fetch(&body),
-        Some(wire::PeerResponse::FetchError {
-            leader_epoch: response_epoch,
-            error_code: wire::NOT_LEADER_OR_FOLLOWER,
-        }) if response_epoch == leader_epoch
-    ));
+    let body = response.try_recv().expect("the leader answered the Fetch");
+    assert!(
+        wire::PeerResponse::decode_fetch(&body)
+            == Some(wire::PeerResponse::Fetch(wire::FetchAnswer {
+                error_code: 74,
+                leader: wire::QuorumLeader {
+                    leader_id: Some(NodeId(1)),
+                    epoch,
+                    endpoint: Some(test_endpoint()),
+                },
+                hwm: -1,
+                log_start_offset: leader.log.log_start_offset().0,
+                ..leader_answer(NodeId(1), epoch)
+            }))
+    );
+    // A refused fetch is no replica progress.
+    assert!(!leader.replica_fetch_offsets.contains_key(&NodeId(2)));
 }
 
 #[tokio::test]
@@ -295,14 +400,13 @@ async fn send_fetch_uses_snapshot_epoch_only_until_log_extends_past_boundary() {
         .install_snapshot(Offset(10))
         .expect("install snapshot");
     engine.installed_snapshot_epoch = Some(7);
-    let fetch_response = wire::PeerResponse::Fetch {
-        leader_id: NodeId(2),
-        leader_epoch: 7,
+    let fetch_response = wire::PeerResponse::Fetch(wire::FetchAnswer {
         diverging: None,
         snapshot_id: None,
         hwm: 10,
         records: bytes::Bytes::new(),
-    }
+        ..leader_answer(NodeId(2), 7)
+    })
     .encode();
     let mut sends = record_peer_sends(&mut engine, fetch_response.clone());
 
@@ -386,14 +490,13 @@ async fn fetch_response_snapshot_hint_starts_once_and_ignores_stale_hint() {
     let mut sends = record_peer_sends(&mut engine, fetch_snapshot_response);
     become_follower(&mut engine, NodeId(2), 3);
 
-    let body = wire::PeerResponse::Fetch {
-        leader_id: NodeId(2),
-        leader_epoch: 3,
+    let body = wire::PeerResponse::Fetch(wire::FetchAnswer {
         diverging: None,
         snapshot_id: Some((11, 3)),
         hwm: 11,
         records: bytes::Bytes::new(),
-    }
+        ..leader_answer(NodeId(2), 3)
+    })
     .encode();
     engine.on_fetch_response(NodeId(2), &body);
     let send = recv_peer_send_with_api(&mut sends, api_key::FETCH_SNAPSHOT).await;
@@ -440,9 +543,16 @@ async fn fetch_response_snapshot_hint_starts_once_and_ignores_stale_hint() {
     assert2::assert!(engine.snapshot_fetch.is_none());
 }
 
+/// A leaderless observer that asks a follower is redirected: the follower
+/// answers `NOT_LEADER_OR_FOLLOWER` naming leader 2 and its `NodeEndpoints`
+/// entry. The observer attaches to node 2 at that endpoint, as Kafka's
+/// `maybeHandleCommonResponse` transitions to follower with the response's
+/// leader endpoints, and applies content only once node 2 itself answers.
 #[tokio::test]
-async fn leaderless_observer_discovers_before_applying_fetch_content() {
+async fn leaderless_observer_discovers_the_leader_through_a_follower_redirect() {
     let (mut observer, _dir) = build_engine_only(NodeId(3), &[NodeId(1), NodeId(2)]);
+    let transport = Arc::new(EndpointRecorder::default());
+    observer.peers = transport.clone();
     assert2::assert!(matches!(
         observer.core.role(),
         Role::Observer {
@@ -450,20 +560,21 @@ async fn leaderless_observer_discovers_before_applying_fetch_content() {
             ..
         }
     ));
+    let epoch = observer.core.quorum_state().leader_epoch;
+    let leader_endpoint = wire::QuorumLeader {
+        leader_id: Some(NodeId(2)),
+        epoch,
+        endpoint: Some(("controller-2".to_string(), 9_093)),
+    };
 
-    let body = wire::PeerResponse::Fetch {
-        leader_id: NodeId(2),
-        leader_epoch: 1,
-        diverging: None,
-        snapshot_id: None,
-        hwm: 1,
-        records: encode_batches(&[one_offset_batch(0, 1, b"replicated")]),
-    }
+    let redirect = wire::PeerResponse::Fetch(wire::FetchAnswer {
+        error_code: 6,
+        leader: leader_endpoint.clone(),
+        hwm: -1,
+        ..leader_answer(NodeId(2), epoch)
+    })
     .encode();
-
-    // The bootstrap peer redirects us to node 2. Content on this discovery
-    // response is ignored until node 2 answers under the attached fence.
-    observer.on_fetch_response(NodeId(1), &body);
+    observer.on_fetch_response(NodeId(1), &redirect);
     assert2::assert!(matches!(
         observer.core.role(),
         Role::Observer {
@@ -471,24 +582,40 @@ async fn leaderless_observer_discovers_before_applying_fetch_content() {
             ..
         }
     ));
-    assert2::assert!(observer.log.log_end_offset() == Offset(0));
-    assert2::assert!(observer.log.hwm() == Offset(0));
+    assert2::assert!(
+        *transport.endpoints.lock().expect("endpoint lock")
+            == vec![(NodeId(2), "controller-2:9093".to_string())]
+    );
 
-    observer.on_fetch_response(NodeId(2), &body);
+    let served = wire::PeerResponse::Fetch(wire::FetchAnswer {
+        leader: leader_endpoint,
+        hwm: 1,
+        records: encode_batches(&[one_offset_batch(
+            0,
+            i32::try_from(epoch).unwrap(),
+            b"replicated",
+        )]),
+        ..leader_answer(NodeId(2), epoch)
+    })
+    .encode();
+    // The follower's answer carried no content, and one from it would not be
+    // applied: only the attached leader's answers pass the fence.
+    observer.on_fetch_response(NodeId(1), &served);
+    assert2::assert!(observer.log.log_end_offset() == Offset(0));
+    observer.on_fetch_response(NodeId(2), &served);
     assert2::assert!(observer.log.log_end_offset() == Offset(1));
     assert2::assert!(observer.log.hwm() == Offset(1));
 }
 
 #[tokio::test]
 async fn rejected_fetch_responses_leave_log_watermark_and_snapshot_unchanged() {
-    let body = wire::PeerResponse::Fetch {
-        leader_id: NodeId(2),
-        leader_epoch: 3,
+    let body = wire::PeerResponse::Fetch(wire::FetchAnswer {
         diverging: None,
         snapshot_id: Some((11, 3)),
         hwm: 11,
         records: encode_batches(&[one_offset_batch(0, 3, b"foreign")]),
-    }
+        ..leader_answer(NodeId(2), 3)
+    })
     .encode();
 
     for (case, setup, from) in [
@@ -527,9 +654,7 @@ async fn admitted_fetch_selects_truncate_append_or_high_watermark_path() {
             .expect("append local batch");
     }
     become_follower(&mut truncating, NodeId(2), 3);
-    let truncate = wire::PeerResponse::Fetch {
-        leader_id: NodeId(2),
-        leader_epoch: 3,
+    let truncate = wire::PeerResponse::Fetch(wire::FetchAnswer {
         diverging: Some(LogOffsetMetadata {
             offset: 1,
             epoch: 2,
@@ -537,7 +662,8 @@ async fn admitted_fetch_selects_truncate_append_or_high_watermark_path() {
         snapshot_id: None,
         hwm: 2,
         records: encode_batches(&[one_offset_batch(2, 3, b"must-not-append")]),
-    }
+        ..leader_answer(NodeId(2), 3)
+    })
     .encode();
     truncating.on_fetch_response(NodeId(2), &truncate);
     assert2::assert!(truncating.log.log_end_offset() == Offset(1));
@@ -546,14 +672,13 @@ async fn admitted_fetch_selects_truncate_append_or_high_watermark_path() {
     // Append advances the HWM only after the carried batch reaches the log.
     let (mut appending, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2)]);
     become_follower(&mut appending, NodeId(2), 3);
-    let append = wire::PeerResponse::Fetch {
-        leader_id: NodeId(2),
-        leader_epoch: 3,
+    let append = wire::PeerResponse::Fetch(wire::FetchAnswer {
         diverging: None,
         snapshot_id: None,
         hwm: 1,
         records: encode_batches(&[one_offset_batch(0, 3, b"replicated")]),
-    }
+        ..leader_answer(NodeId(2), 3)
+    })
     .encode();
     appending.on_fetch_response(NodeId(2), &append);
     assert2::assert!(appending.log.log_end_offset() == Offset(1));
@@ -567,14 +692,13 @@ async fn admitted_fetch_selects_truncate_append_or_high_watermark_path() {
         .append(&mut local, 0)
         .expect("append local batch");
     become_follower(&mut advancing, NodeId(2), 3);
-    let watermark = wire::PeerResponse::Fetch {
-        leader_id: NodeId(2),
-        leader_epoch: 3,
+    let watermark = wire::PeerResponse::Fetch(wire::FetchAnswer {
         diverging: None,
         snapshot_id: None,
         hwm: 1,
         records: bytes::Bytes::new(),
-    }
+        ..leader_answer(NodeId(2), 3)
+    })
     .encode();
     advancing.on_fetch_response(NodeId(2), &watermark);
     assert2::assert!(advancing.log.log_end_offset() == Offset(1));
@@ -584,14 +708,13 @@ async fn admitted_fetch_selects_truncate_append_or_high_watermark_path() {
 #[tokio::test]
 async fn fetch_snapshot_response_error_or_wrong_leader_aborts_transfer() {
     let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2)]);
-    let fetch_response = wire::PeerResponse::Fetch {
-        leader_id: NodeId(2),
-        leader_epoch: 3,
+    let fetch_response = wire::PeerResponse::Fetch(wire::FetchAnswer {
         diverging: None,
         snapshot_id: None,
         hwm: 0,
         records: bytes::Bytes::new(),
-    }
+        ..leader_answer(NodeId(2), 3)
+    })
     .encode();
     let mut sends = record_peer_sends(&mut engine, fetch_response);
 
@@ -640,14 +763,13 @@ async fn quorum_high_watermark_keeps_the_leader_s_watermark_past_the_local_clamp
     become_follower(&mut engine, NodeId(2), 3);
 
     let response = |hwm: i64| {
-        wire::PeerResponse::Fetch {
-            leader_id: NodeId(2),
-            leader_epoch: 3,
+        wire::PeerResponse::Fetch(wire::FetchAnswer {
             diverging: None,
             snapshot_id: None,
             hwm,
             records: bytes::Bytes::new(),
-        }
+            ..leader_answer(NodeId(2), 3)
+        })
         .encode()
     };
 
@@ -675,14 +797,13 @@ async fn quorum_high_watermark_is_recorded_from_a_snapshot_redirect_too() {
     // the node behind node 2 at the epoch the responses below carry.
     become_follower(&mut engine, NodeId(2), 3);
 
-    let redirect = wire::PeerResponse::Fetch {
-        leader_id: NodeId(2),
-        leader_epoch: 3,
+    let redirect = wire::PeerResponse::Fetch(wire::FetchAnswer {
         diverging: None,
         snapshot_id: Some((20_000, 3)),
         hwm: 20_000,
         records: bytes::Bytes::new(),
-    }
+        ..leader_answer(NodeId(2), 3)
+    })
     .encode();
 
     engine.on_fetch_response(NodeId(2), &redirect);
@@ -705,14 +826,13 @@ async fn a_lagging_follower_serves_the_quorums_committed_offset() {
 
     engine.on_fetch_response(
         NodeId(2),
-        &wire::PeerResponse::Fetch {
-            leader_id: NodeId(2),
-            leader_epoch: 3,
+        &wire::PeerResponse::Fetch(wire::FetchAnswer {
             diverging: None,
             snapshot_id: None,
             hwm: 10_000,
             records: bytes::Bytes::new(),
-        }
+            ..leader_answer(NodeId(2), 3)
+        })
         .encode(),
     );
 
@@ -815,6 +935,7 @@ async fn a_leader_answers_a_diverging_fetch_without_truncating_its_own_log() {
     engine.on_inbound(Inbound::Fetch {
         req: wire::PeerRequest::Fetch {
             from: NodeId(2),
+            current_leader_epoch: i32::try_from(leader_epoch).unwrap(),
             fetch_epoch: 1,
             fetch_offset: 8,
             replica_directory_id: uuid::Uuid::nil(),
@@ -825,7 +946,7 @@ async fn a_leader_answers_a_diverging_fetch_without_truncating_its_own_log() {
 
     let body = response.try_recv().expect("the leader answered the Fetch");
     let diverging = match wire::PeerResponse::decode_fetch(&body) {
-        Some(wire::PeerResponse::Fetch { diverging, .. }) => diverging,
+        Some(wire::PeerResponse::Fetch(wire::FetchAnswer { diverging, .. })) => diverging,
         other => panic!("expected a Fetch response, got {other:?}"),
     };
     assert2::check!(
@@ -880,6 +1001,7 @@ async fn quorum_state_snapshot_tracks_fetch_timestamps_and_observers() {
     engine.on_inbound(Inbound::Fetch {
         req: wire::PeerRequest::Fetch {
             from: NodeId(2),
+            current_leader_epoch: i32::try_from(engine.core.quorum_state().leader_epoch).unwrap(),
             fetch_epoch: 1,
             fetch_offset: engine.log.log_end_offset().0,
             replica_directory_id: uuid::Uuid::nil(),
@@ -907,6 +1029,7 @@ async fn quorum_state_snapshot_tracks_fetch_timestamps_and_observers() {
     engine.on_inbound(Inbound::Fetch {
         req: wire::PeerRequest::Fetch {
             from: NodeId(99),
+            current_leader_epoch: i32::try_from(engine.core.quorum_state().leader_epoch).unwrap(),
             fetch_epoch: 1,
             fetch_offset: 0,
             replica_directory_id: uuid::Uuid::from_u128(99),
@@ -966,6 +1089,7 @@ async fn quorum_state_snapshot_negative_timestamp_fallback() {
     engine.on_inbound(Inbound::Fetch {
         req: wire::PeerRequest::Fetch {
             from: NodeId(2),
+            current_leader_epoch: i32::try_from(engine.core.quorum_state().leader_epoch).unwrap(),
             fetch_epoch: 1,
             fetch_offset: engine.log.log_end_offset().0,
             replica_directory_id: uuid::Uuid::nil(),

@@ -28,8 +28,7 @@ mod response;
 pub use self::codec::FETCH_SNAPSHOT_VERSION;
 pub(crate) use self::{
     codec::{
-        FETCH_VERSION, METADATA_PARTITION, METADATA_TOPIC, NOT_LEADER_OR_FOLLOWER,
-        QUORUM_EPOCH_VERSION, VOTE_VERSION,
+        FETCH_VERSION, METADATA_PARTITION, METADATA_TOPIC, QUORUM_EPOCH_VERSION, VOTE_VERSION,
     },
     request::parse_cluster_id,
 };
@@ -40,8 +39,9 @@ pub use self::{
         decode_fetch_snapshot_request, decode_vote, decode_vote_request,
     },
     response::{
-        FetchSnapshotPartition, PeerResponse, QuorumLeader, encode_begin_quorum_epoch_response,
-        encode_end_quorum_epoch_response, encode_fetch_snapshot_answer, encode_vote_response,
+        FetchAnswer, FetchSnapshotPartition, PeerResponse, QuorumLeader,
+        encode_begin_quorum_epoch_response, encode_end_quorum_epoch_response,
+        encode_fetch_snapshot_answer, encode_vote_response,
     },
 };
 
@@ -64,6 +64,7 @@ mod tests {
         };
         let req = PeerRequest::Fetch {
             from: NodeId(2),
+            current_leader_epoch: 1,
             fetch_epoch: 1,
             fetch_offset: 5,
             replica_directory_id: uuid::Uuid::nil(),
@@ -72,14 +73,19 @@ mod tests {
         let dreq = FetchRequest::decode(&mut c, FETCH_VERSION).unwrap();
         assert2::assert!(dreq.topics[0].topic_id == METADATA_TOPIC_ID);
 
-        let resp = PeerResponse::Fetch {
-            leader_id: NodeId(1),
-            leader_epoch: 4,
+        let resp = PeerResponse::Fetch(super::FetchAnswer {
+            error_code: 0,
+            leader: super::QuorumLeader {
+                leader_id: Some(NodeId(1)),
+                epoch: 4,
+                endpoint: None,
+            },
             diverging: None,
             snapshot_id: None,
             hwm: 0,
+            log_start_offset: 0,
             records: Bytes::new(),
-        };
+        });
         let mut c2 = &resp.encode()[..];
         let dresp = FetchResponse::decode(&mut c2, FETCH_VERSION).unwrap();
         assert2::assert!(dresp.responses[0].topic_id == METADATA_TOPIC_ID);

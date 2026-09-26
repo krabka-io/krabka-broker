@@ -10,23 +10,22 @@ pub(crate) enum GroupRoutingError {
     NotCoordinator,
 }
 
-/// Java's `String.hashCode`, including its UTF-16 code-unit semantics.
-/// Kafka uses this hash for group coordinator partitioning.
-#[must_use]
-pub(crate) fn java_string_hash(value: &str) -> i32 {
-    value.encode_utf16().fold(0_i32, |hash, unit| {
-        hash.wrapping_mul(31).wrapping_add(i32::from(unit))
-    })
-}
-
 /// Select a group-id's `__consumer_offsets` partition with Kafka's
 /// `Utils.abs(groupId.hashCode()) % partitionCount` rule.
+///
+/// The verified kernel does the Java UTF-16 `String.hashCode`, the
+/// `Utils.abs(Integer.MIN_VALUE) == 0` corner and the modulo; the
+/// transaction and SHARE coordinators route through the same kernel.
+///
+/// # Panics
+///
+/// Panics when `partition_count` is not positive. The offsets topic always
+/// has at least one partition, and the bootstrap default is positive.
 #[must_use]
 pub(crate) fn partition_for_group_with_count(group_id: &str, partition_count: i32) -> i32 {
-    assert2::assert!(partition_count > 0);
-    let hash = java_string_hash(group_id);
-    let positive = if hash == i32::MIN { 0 } else { hash.abs() };
-    positive % partition_count.max(1)
+    let utf16: Vec<u16> = group_id.encode_utf16().collect();
+    krabka_verified::broker::java_string_hash_partition(&utf16, partition_count)
+        .expect("offsets topic partition count must be positive")
 }
 
 /// Select from the live offsets-topic partition count, falling back to the
@@ -67,21 +66,29 @@ mod tests {
 
     use super::*;
 
+    /// Goldens from the JVM: `Utils.abs(groupId.hashCode()) % partitionCount`.
     #[test]
-    fn java_hash_matches_known_jdk_values_including_utf16_surrogates() {
-        check!(java_string_hash("") == 0);
-        check!(java_string_hash("abc") == 96_354);
-        check!(java_string_hash("consumer-group") == -1_738_392_088);
-        // Java hashes the two UTF-16 surrogate code units for this character.
-        check!(java_string_hash("🦀") == 1_772_802);
-    }
-
-    #[test]
-    fn group_partition_uses_java_hash_and_requested_count() {
-        check!(partition_for_group_with_count("consumer-group", 50) == 38);
-        check!(partition_for_group_with_count("abc", 7) == 6);
-        check!(partition_for_group_with_count("abc", 1) == 0);
-        check!(partition_for_group_with_count("polygenelubricants", 50) == 0);
+    fn group_partition_matches_jvm_goldens() {
+        for (group_id, partition_count, expected) in [
+            // "".hashCode() == 0.
+            ("", 50, 0),
+            // "abc".hashCode() == 96_354.
+            ("abc", 7, 6),
+            ("abc", 1, 0),
+            // "consumer-group".hashCode() == -1_738_392_088.
+            ("consumer-group", 50, 38),
+            // Java hashes the two UTF-16 surrogate code units of this
+            // character: "🦀".hashCode() == 1_772_802.
+            ("🦀", 50, 2),
+            // "polygenelubricants".hashCode() == Integer.MIN_VALUE, which
+            // `Utils.abs` maps to zero.
+            ("polygenelubricants", 50, 0),
+        ] {
+            check!(
+                partition_for_group_with_count(group_id, partition_count) == expected,
+                "{group_id:?} over {partition_count} partitions"
+            );
+        }
     }
 
     #[test]

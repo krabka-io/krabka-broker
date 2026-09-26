@@ -126,7 +126,10 @@ fn time_index_bytes(entries: &[(i64, u32)]) -> Bytes {
     buf.freeze()
 }
 
-fn txn_index_bytes(entries: &[(i64, i64, i64)]) -> Bytes {
+/// `(start_offset, last_offset, producer_id)` of one `.txnindex` entry.
+type TxnEntry = (i64, i64, i64);
+
+fn txn_index_bytes(entries: &[TxnEntry]) -> Bytes {
     let mut buf = BytesMut::new();
     for &(start, last, producer_id) in entries {
         buf.put_i16(0); // version
@@ -494,9 +497,14 @@ async fn sparse_indexes_require_complete_strict_bounded_entries() {
         Sidecar::Offset(Bytes::from_static(&[0; 7])),
         Sidecar::Time(time_index_bytes(&[(1_000, 0), (1_010, 0)])),
         Sidecar::Time(Bytes::from_static(&[0; 11])),
-        Sidecar::Transaction(txn_index_bytes(&[(100, 102, 7), (100, 104, 8)])),
-        Sidecar::Transaction(txn_index_bytes(&[(99, 102, 7)])),
+        // Abort markers out of order, then repeated.
+        Sidecar::Transaction(txn_index_bytes(&[(100, 104, 7), (101, 103, 8)])),
+        Sidecar::Transaction(txn_index_bytes(&[(100, 103, 7), (101, 103, 8)])),
+        // A marker before or past the segment that indexes it.
+        Sidecar::Transaction(txn_index_bytes(&[(90, 99, 7)])),
         Sidecar::Transaction(txn_index_bytes(&[(100, 105, 7)])),
+        // A transaction without a producer. (One that starts after its
+        // marker is already rejected by `parse_txn_index`.)
         Sidecar::Transaction(txn_index_bytes(&[(100, 102, -1)])),
         Sidecar::Transaction(Bytes::from_static(&[0; 33])),
     ];
@@ -516,7 +524,39 @@ async fn sparse_indexes_require_complete_strict_bounded_entries() {
         let error = verify_segment(&store, &partition, &segment)
             .await
             .expect_err("invalid sparse index");
-        check!(matches!(error, RestoreError::TruncatedSegment { .. }));
+        check!(
+            matches!(error, RestoreError::TruncatedSegment { .. }),
+            "{error:?}"
+        );
+    }
+}
+
+/// Kafka indexes an aborted transaction in the segment holding its abort
+/// marker, in marker order (`TransactionIndex.append` requires `lastOffset` to
+/// strictly increase). The transaction's first offset is not constrained by
+/// the segment base or by the previous entry.
+#[tokio::test]
+async fn transaction_index_accepts_kafka_marker_order() {
+    let cases: [(&str, &[TxnEntry]); 3] = [
+        ("sequential aborts", &[(100, 101, 7), (102, 103, 8)]),
+        // Producer 2 opens at 102 and aborts at 103; producer 1 opened
+        // earlier at 100 and aborts later at 104.
+        ("interleaved aborts", &[(102, 103, 2), (100, 104, 1)]),
+        // The transaction's data sits in an earlier segment; its abort marker
+        // at 100 is the first offset of this one.
+        ("transaction spanning a segment roll", &[(40, 100, 1_000)]),
+    ];
+
+    for (name, entries) in cases {
+        let dir = TempDir::new().expect("tempdir");
+        let store = archive_at(dir.path());
+        let partition = test_partition();
+        let mut fixture = valid_segment_bytes();
+        fixture.transaction_index = Some(txn_index_bytes(entries));
+
+        let segment = write_segment(dir.path(), &fixture, &[]);
+        let verified = verify_segment(&store, &partition, &segment).await;
+        check!(verified.is_ok(), "{name}: {:?}", verified.as_ref().err());
     }
 }
 

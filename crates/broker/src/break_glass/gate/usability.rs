@@ -6,7 +6,10 @@
 //! because the rule the feature promises is a rule about people.
 
 use krabka_metadata::BreakGlassProposalRecord;
-use krabka_verified::break_glass::{BreakGlassAdmission, break_glass_admission};
+use krabka_verified::break_glass::{
+    BreakGlassAdmission, BreakGlassApprovalSigning, BreakGlassProposalFacts,
+    BreakGlassSignaturePolicy, break_glass_admission,
+};
 
 use super::DenialReason;
 use crate::break_glass::config::BreakGlassPolicy;
@@ -20,15 +23,24 @@ pub(super) fn unusable_because(
     let proposal_id = proposal.proposal_id;
     let held = distinct_approvers(proposal);
     let required = policy.required_approvals();
-    match break_glass_admission(
-        proposal.withdrawn,
-        proposal.consumed_at_ms != 0,
-        now_ms >= proposal.expires_at_ms,
-        held,
-        required,
-        policy.needs_signature(proposal.action),
-        every_approval_is_signed(proposal),
-    ) {
+    let facts = BreakGlassProposalFacts {
+        withdrawn: proposal.withdrawn,
+        consumed: proposal.consumed_at_ms != 0,
+        expired: now_ms >= proposal.expires_at_ms,
+        held_approvals: held,
+        required_approvals: required,
+        signature_policy: if policy.needs_signature(proposal.action) {
+            BreakGlassSignaturePolicy::Required
+        } else {
+            BreakGlassSignaturePolicy::Optional
+        },
+        signing: if every_approval_is_signed(proposal) {
+            BreakGlassApprovalSigning::AllSigned
+        } else {
+            BreakGlassApprovalSigning::NotAllSigned
+        },
+    };
+    match break_glass_admission(facts) {
         BreakGlassAdmission::Withdrawn => Some(DenialReason::Withdrawn { proposal_id }),
         BreakGlassAdmission::Consumed => Some(DenialReason::Consumed {
             proposal_id,

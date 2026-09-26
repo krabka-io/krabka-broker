@@ -1,0 +1,25 @@
+(* #"/workspace/crates/verified/src/broker.rs" 142 27 142 32 *)
+
+(* <broker::PreferredLeaderChange as std::clone::Clone> *)
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+
+type t_Option_u64 = None | Some UInt64.t
+
+type t_PreferredLeaderChange = {
+  new_leader: UInt64.t;
+  preferred_replica: t_Option_u64;
+  leader_in_isr: bool;
+  leader_alive: bool;
+  leader_is_witness: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_PreferredLeaderChange [#"/workspace/crates/verified/src/broker.rs" 142 27 142 32]
+  (self: t_PreferredLeaderChange) (return (x: t_PreferredLeaderChange)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_PreferredLeaderChange = Any.any_l () | & self: t_PreferredLeaderChange = self ])
+  [ return (result: t_PreferredLeaderChange) -> (! return {result}) ]

@@ -1,4 +1,12 @@
-//! Contiguous retention-prefix selection.
+//! Retention-prefix selection for the local log and the remote tier.
+//!
+//! Kafka deletes retained-away segments oldest first and stops at the first
+//! segment it keeps, so every selection here is a contiguous prefix. The local
+//! walk and the remote walk combine their predicates differently, because
+//! Kafka does: `UnifiedLog.deleteOldSegments` runs separate passes over the
+//! local log, while `RemoteLogManager`'s `RemoteLogRetentionHandler` checks
+//! every predicate per remote segment. Each walk is proved equal to a
+//! reference fold that states the Kafka rule.
 
 #[cfg(creusot)]
 use std::clone::Clone;
@@ -25,168 +33,248 @@ pub fn barrier_cut_expired(published_epoch: i64, retained_cuts: i32, held_epoch:
     held_epoch <= published_epoch - retained_cuts
 }
 
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+/// What the local retention walk knows about one local segment.
+#[cfg_attr(creusot, derive(Clone, Copy))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct RetentionPrefix {
-    pub len: usize,
-    pub remaining_size_debt: u64,
+pub struct LocalRetentionSegment {
+    /// No pass may delete this segment, and every pass stops at it. The host
+    /// sets it for a segment that holds a record whose delivery time has not
+    /// arrived, or for a tiered segment that the remote tier does not cover
+    /// whole. It plays the part of Kafka's high-watermark bound and its
+    /// `isSegmentEligibleForDeletion` check.
+    pub blocked: bool,
+    /// The segment breaches `retention.ms`, or it lies wholly below the log
+    /// start offset.
+    pub expired: bool,
+    /// The segment's exact size in bytes.
+    pub size: u64,
 }
 
-/// Select the oldest contiguous local-log prefix allowed by age or size
-/// retention while preserving scheduled data and at least one segment.
+/// What the remote retention walk knows about one finished remote segment.
+#[cfg_attr(creusot, derive(Clone, Copy))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct RemoteRetentionSegment {
+    /// The segment's whole offset range lies below the log start offset.
+    pub log_start_breached: bool,
+    /// The segment breaches `retention.ms`.
+    pub time_expired: bool,
+    /// The segment's exact size in bytes.
+    pub size: u64,
+}
+
+/// How many segments the local walk may consider: every one of them, except
+/// a newest segment that is empty. That is Kafka's `deletableSegments`, which
+/// never returns a last segment of size zero (`isLastSegmentAndEmpty`), so a
+/// log never loses the segment it appends to without a record having left
+/// with it.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub fn local_retention_limit(segments: Seq<LocalRetentionSegment>) -> Int {
+    pearlite! {
+        if segments.len() > 0 && segments[segments.len() - 1].size@ == 0 {
+            segments.len() - 1
+        } else {
+            segments.len()
+        }
+    }
+}
+
+/// The reference rule for local retention, from segment `i` onwards.
 ///
-/// A segment is size-evictable only while the remaining excess covers the
-/// whole segment (`remaining_size_debt >= sizes[i]`), matching Kafka's
-/// `deleteRetentionSizeBreachedSegments` predicate `diff - segment.size() >=
-/// 0`. A segment larger than the remaining excess stops the size pass, even
-/// though it is heavier than the log is allowed to be over budget by. With
-/// no excess left there is no size pass at all, so a zero-byte segment is
-/// never size-evicted on a log that is within its budget.
-#[requires(time_expired@.len() == scheduled@.len())]
-#[requires(time_expired@.len() == sizes@.len())]
-#[ensures(result.len@ <= time_expired@.len())]
-#[ensures(!has_active && time_expired@.len() > 0 ==>
-    result.len@ < time_expired@.len())]
-#[ensures(result.remaining_size_debt@ <= initial_size_debt@)]
-#[ensures(forall<i: Int> 0 <= i && i < result.len@ ==> !scheduled@[i])]
-#[ensures(initial_size_debt@ == 0 ==>
-    forall<i: Int> 0 <= i && i < result.len@ ==> time_expired@[i])]
-#[ensures(time_expired@.len() > 0
-    && (has_active || time_expired@.len() > 1)
-    && !scheduled@[0]
-    && (time_expired@[0] || (initial_size_debt@ > 0 && initial_size_debt@ >= sizes@[0]@))
-    ==> result.len@ > 0)]
-#[must_use]
-pub fn local_retention_prefix(
-    time_expired: &[bool],
-    scheduled: &[bool],
-    sizes: &[u64],
-    initial_size_debt: u64,
-    has_active: bool,
-) -> RetentionPrefix {
-    if matches!(time_expired.len(), 0) {
-        return RetentionPrefix {
-            len: 0,
-            remaining_size_debt: initial_size_debt,
-        };
+/// Kafka's `UnifiedLog.deleteOldSegments` runs three passes over the local
+/// log in this order: the log-start-offset breach, then `retention.bytes`,
+/// then `retention.ms`. Each pass deletes an oldest prefix and stops at the
+/// first segment its predicate rejects. The size pass
+/// (`deleteRetentionSizeBreachedSegments`) deletes a segment only while
+/// `diff - segment.size() >= 0`, and it runs only when the log is at least
+/// its budget.
+///
+/// While `sizing` holds, the fold is in the size pass with `debt` bytes left
+/// to reclaim. A segment that does not fit ends the size pass, and the
+/// fold continues through the time pass. The time flag also carries the
+/// log-start breach. That breach covers an oldest prefix, so handling it
+/// inside the time pass deletes the same segments as Kafka's separate first
+/// pass. A breached segment that fits the size debt is charged against it,
+/// exactly as Kafka's size pass sees the log after the breach pass. A
+/// breached segment that does not fit leaves Kafka's recomputed debt
+/// negative, and then Kafka runs no size pass either.
+///
+/// The fold stops at a blocked segment and at `limit`.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+#[variant(limit - i)]
+pub fn local_retention_model(
+    segments: Seq<LocalRetentionSegment>,
+    limit: Int,
+    i: Int,
+    debt: Int,
+    sizing: bool,
+) -> Int {
+    pearlite! {
+        if i >= limit || i >= segments.len() || segments[i].blocked {
+            i
+        } else if sizing && segments[i].size@ <= debt {
+            local_retention_model(segments, limit, i + 1, debt - segments[i].size@, true)
+        } else if segments[i].expired {
+            local_retention_model(segments, limit, i + 1, debt, false)
+        } else {
+            i
+        }
     }
-    let max_delete = if has_active {
-        time_expired.len()
-    } else {
-        time_expired.len() - 1
+}
+
+/// Count the oldest local segments that Kafka's local retention passes
+/// delete.
+///
+/// `segments` is every local segment, oldest first, and the newest one is
+/// the segment the log appends to: Kafka's `deletableSegments` walks the
+/// active segment too. A result that covers every segment tells the host to
+/// roll first and then delete them all, the way Kafka's `deleteSegments`
+/// does (`if (numberOfSegments == numToDelete) roll()`); the walk never
+/// takes a newest segment that is empty, so the roll always leaves a fresh
+/// empty segment behind and never has to recreate the one it deletes.
+///
+/// `size_debt` is `None` when Kafka skips the size pass: `retention.bytes`
+/// is unset, the policy does not delete, or the log is smaller than the
+/// budget. Otherwise it is the log size minus the budget. The walk never
+/// passes a blocked segment.
+///
+/// The result equals [`local_retention_model`] from the oldest segment,
+/// limited by [`local_retention_limit`]. That fold states the Kafka rule.
+#[ensures(result@ == match size_debt {
+    None => local_retention_model(
+        segments@, local_retention_limit(segments@), 0, 0, false),
+    Some(debt) => local_retention_model(
+        segments@, local_retention_limit(segments@), 0, debt@, true),
+})]
+#[must_use]
+pub fn local_retention_prefix(segments: &[LocalRetentionSegment], size_debt: Option<u64>) -> usize {
+    let limit = match segments.len().checked_sub(1) {
+        Some(newest) if segments[newest].size == 0 => newest,
+        _ => segments.len(),
     };
-    // Segment 0 is peeled out of the loop below rather than folded into its
-    // first iteration. The `ensures` above ties `result.len@ > 0` to concrete
-    // facts about index 0 (`time_expired@[0]`, `sizes@[0]@`), and a generic
-    // loop invariant -- which must hold uniformly at every iteration,
-    // including before any of them run -- cannot also assert "the first
-    // iteration always makes progress" without this explicit case split.
-    // Kafka's size predicate (see the doc comment above) applies identically
-    // here: segment 0 is size-evictable only while there is excess and
-    // `initial_size_debt >= sizes[0]`.
-    let size_evict_first = initial_size_debt > 0 && initial_size_debt >= sizes[0];
-    if max_delete == 0 || scheduled[0] || (!time_expired[0] && !size_evict_first) {
-        return RetentionPrefix {
-            len: 0,
-            remaining_size_debt: initial_size_debt,
-        };
-    }
-    let mut len = 1usize;
-    let mut remaining_size_debt = initial_size_debt;
-    if remaining_size_debt > 0 {
-        remaining_size_debt = remaining_size_debt.saturating_sub(sizes[0]);
-    }
-    #[invariant(0 < len@ && len@ <= max_delete@)]
-    #[invariant(max_delete@ <= time_expired@.len())]
-    #[invariant(remaining_size_debt@ <= initial_size_debt@)]
-    #[invariant(forall<i: Int> 0 <= i && i < len@ ==> !scheduled@[i])]
-    #[invariant(initial_size_debt@ == 0 ==>
-        forall<i: Int> 0 <= i && i < len@ ==> time_expired@[i])]
-    #[variant(max_delete@ - len@)]
-    while len < max_delete {
-        if scheduled[len] {
-            break;
-        }
-        // Kafka's size predicate: this segment is size-evictable only while
-        // the remaining excess is at least its whole size. Falling one byte
-        // short of a segment's size stops the size pass at that segment,
-        // the same as running out of excess entirely.
-        let size_evict = remaining_size_debt > 0 && remaining_size_debt >= sizes[len];
-        if !time_expired[len] && !size_evict {
-            break;
-        }
-        if remaining_size_debt > 0 {
-            remaining_size_debt = remaining_size_debt.saturating_sub(sizes[len]);
-        }
-        len += 1;
-    }
-    RetentionPrefix {
-        len,
-        remaining_size_debt,
-    }
-}
-
-#[requires(finished@.len() == time_expired@.len())]
-#[requires(finished@.len() == sizes@.len())]
-#[ensures(result.len@ <= finished@.len())]
-#[ensures(result.remaining_size_debt@ <= initial_size_debt@)]
-#[ensures(!mutable ==> result.len@ == 0
-    && result.remaining_size_debt@ == initial_size_debt@)]
-#[ensures(forall<i: Int> 0 <= i && i < result.len@ ==> finished@[i])]
-#[ensures(initial_size_debt@ == 0 ==>
-    forall<i: Int> 0 <= i && i < result.len@ ==> time_expired@[i])]
-#[ensures(mutable && result.len@ < finished@.len() ==>
-    !finished@[result.len@]
-        || (!time_expired@[result.len@] && result.remaining_size_debt@ == 0))]
-#[must_use]
-pub fn retention_prefix(
-    mutable: bool,
-    finished: &[bool],
-    time_expired: &[bool],
-    sizes: &[u64],
-    initial_size_debt: u64,
-) -> RetentionPrefix {
-    if !mutable {
-        return RetentionPrefix {
-            len: 0,
-            remaining_size_debt: initial_size_debt,
-        };
-    }
+    let (mut debt, mut sizing) = match size_debt {
+        Some(debt) => (debt, true),
+        None => (0, false),
+    };
     let mut len = 0usize;
-    let mut remaining_size_debt = initial_size_debt;
-    #[invariant(len@ <= finished@.len())]
-    #[invariant(remaining_size_debt@ <= initial_size_debt@)]
-    #[invariant(forall<i: Int> 0 <= i && i < len@ ==> finished@[i])]
-    #[invariant(initial_size_debt@ == 0 ==>
-        forall<i: Int> 0 <= i && i < len@ ==> time_expired@[i])]
-    #[variant(finished@.len() - len@)]
-    while len < finished.len() {
-        if !finished[len] || (!time_expired[len] && remaining_size_debt == 0) {
+    #[invariant(len@ <= limit@)]
+    #[invariant(limit@ == local_retention_limit(segments@))]
+    #[invariant(local_retention_model(segments@, limit@, len@, debt@, sizing) == match size_debt {
+        None => local_retention_model(segments@, limit@, 0, 0, false),
+        Some(initial) => local_retention_model(segments@, limit@, 0, initial@, true),
+    })]
+    #[variant(limit@ - len@)]
+    while len < limit {
+        let segment = segments[len];
+        if segment.blocked {
             break;
         }
-        if remaining_size_debt > 0 {
-            remaining_size_debt = remaining_size_debt.saturating_sub(sizes[len]);
+        if sizing && segment.size <= debt {
+            debt -= segment.size;
+        } else if segment.expired {
+            sizing = false;
+        } else {
+            break;
         }
         len += 1;
     }
-    RetentionPrefix {
-        len,
-        remaining_size_debt,
+    len
+}
+
+/// The reference rule for remote retention, from segment `i` onwards, with
+/// `debt` bytes of `retention.bytes` breach left to reclaim.
+///
+/// This is Kafka's `RemoteLogManager.cleanupExpiredRemoteLogSegments`, which
+/// asks `RemoteLogRetentionHandler` about each segment in turn and stops at
+/// the first one it keeps. A log-start breach deletes the segment and leaves
+/// the debt alone. A `retention.ms` breach deletes it and lowers the debt by
+/// its size, but not below zero. Otherwise the segment goes only when the
+/// debt is positive and still covers the whole segment
+/// (`isSegmentBreachedByRetentionSize`).
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+#[variant(segments.len() - i)]
+pub fn remote_retention_model(segments: Seq<RemoteRetentionSegment>, i: Int, debt: Int) -> Int {
+    pearlite! {
+        if i >= segments.len() {
+            i
+        } else if segments[i].log_start_breached {
+            remote_retention_model(segments, i + 1, debt)
+        } else if segments[i].time_expired {
+            remote_retention_model(
+                segments,
+                i + 1,
+                if segments[i].size@ <= debt { debt - segments[i].size@ } else { 0 },
+            )
+        } else if debt > 0 && segments[i].size@ <= debt {
+            remote_retention_model(segments, i + 1, debt - segments[i].size@)
+        } else {
+            i
+        }
     }
 }
 
-#[ensures(last_offset == None ==> result == None)]
-#[ensures(match last_offset {
-    None => true,
-    Some(last) => last@ == i64::MAX@ ==> result == None,
+/// Count the oldest finished remote segments that Kafka's remote retention
+/// deletes.
+///
+/// `size_debt` is the total size minus `retention.bytes`, or zero when
+/// `retention.bytes` is unset or not exceeded. A tier that accepts no delete
+/// (`deletes_allowed` false) selects nothing.
+///
+/// The result equals [`remote_retention_model`] from the oldest segment.
+/// That fold states the Kafka rule.
+#[ensures(result@ == if deletes_allowed {
+    remote_retention_model(segments@, 0, size_debt@)
+} else {
+    0
 })]
-#[ensures(match last_offset {
-    None => true,
-    Some(last) => last@ < i64::MAX@ ==> result != None,
-})]
+#[must_use]
+pub fn remote_retention_prefix(
+    deletes_allowed: bool,
+    segments: &[RemoteRetentionSegment],
+    size_debt: u64,
+) -> usize {
+    if !deletes_allowed {
+        return 0;
+    }
+    let mut debt = size_debt;
+    let mut len = 0usize;
+    #[invariant(len@ <= segments@.len())]
+    #[invariant(remote_retention_model(segments@, len@, debt@)
+        == remote_retention_model(segments@, 0, size_debt@))]
+    #[variant(segments@.len() - len@)]
+    while len < segments.len() {
+        let segment = segments[len];
+        if segment.log_start_breached {
+            // Deleted below the floor; the size debt is untouched.
+        } else if segment.time_expired {
+            debt = debt.saturating_sub(segment.size);
+        } else if debt > 0 && segment.size <= debt {
+            debt -= segment.size;
+        } else {
+            break;
+        }
+        len += 1;
+    }
+    len
+}
+
+/// The exclusive delete-through target after an inclusive last offset.
+///
+/// No selected segment gives no target. An inclusive last offset of
+/// `i64::MAX` has no representable successor, so it fails closed with no
+/// target too.
 #[ensures(match (last_offset, result) {
-    (Some(last), Some(target)) => target@ == last@ + 1,
-    _ => true,
+    (None, result) => result == None,
+    (Some(last), None) => last@ == i64::MAX@,
+    (Some(last), Some(target)) => last@ < i64::MAX@ && target@ == last@ + 1,
 })]
 #[must_use]
 pub fn retention_delete_target(last_offset: Option<i64>) -> Option<i64> {
@@ -198,6 +286,8 @@ pub fn retention_delete_target(last_offset: Option<i64>) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
+    use assert2::check;
+
     use super::*;
 
     #[test]
@@ -212,140 +302,282 @@ mod tests {
             (i64::MIN + 1, 1, i64::MIN, true),
             (i64::MAX, i32::MAX, i64::MAX, false),
         ] {
-            assert2::check!(barrier_cut_expired(published, retained, held) == expected);
+            check!(barrier_cut_expired(published, retained, held) == expected);
         }
     }
 
-    #[test]
-    fn retention_selection_is_a_safe_contiguous_prefix() {
-        assert2::assert!(
-            retention_prefix(
-                true,
-                &[true, true, true],
-                &[true, false, true],
-                &[10, 10, 10],
-                0
-            ) == RetentionPrefix {
-                len: 1,
-                remaining_size_debt: 0,
-            }
-        );
-        assert2::assert!(
-            retention_prefix(true, &[true, true, true], &[false; 3], &[10, 10, 10], 15)
-                == RetentionPrefix {
-                    len: 2,
-                    remaining_size_debt: 0,
-                }
-        );
-        assert2::assert!(retention_prefix(false, &[true], &[true], &[1], 1).len == 0);
-        assert2::assert!(
-            retention_prefix(true, &[true, false, true], &[true; 3], &[1; 3], 0).len == 1
-        );
-        assert2::assert!(
-            retention_prefix(true, &[true, true], &[true, true], &[10, 10], 0).len == 2
-        );
+    /// A local segment that is neither blocked nor expired.
+    const fn fresh(size: u64) -> LocalRetentionSegment {
+        LocalRetentionSegment {
+            blocked: false,
+            expired: false,
+            size,
+        }
     }
 
-    #[test]
-    fn local_selection_preserves_scheduled_data_and_the_final_segment() {
-        assert2::assert!(
-            local_retention_prefix(&[true, true], &[false, false], &[10, 10], 0, true,).len == 2
-        );
-        // Segment 0 is time-expired and evicted outright, which knocks its
-        // size off the remaining excess (15 - 10 = 5). Segment 1 is not
-        // time-expired, and 5 does not cover its whole 10-byte size, so the
-        // size pass stops there rather than deleting past the budget.
-        assert2::assert!(
-            local_retention_prefix(
-                &[true, false, true, true],
-                &[false, false, true, false],
-                &[10, 10, 10, 10],
-                15,
-                true,
-            ) == RetentionPrefix {
-                len: 1,
-                remaining_size_debt: 5,
-            }
-        );
-        assert2::assert!(local_retention_prefix(&[true], &[false], &[1], 1, false).len == 0);
-        assert2::assert!(
-            local_retention_prefix(
-                &[false, false],
-                &[false, false],
-                &[u64::MAX, 1],
-                u64::MAX,
-                true
-            ) == RetentionPrefix {
-                len: 1,
-                remaining_size_debt: 0,
-            }
-        );
-        assert2::assert!(
-            local_retention_prefix(&[true, true], &[true, false], &[1, 1], 2, true).len == 0
-        );
+    /// A local segment past `retention.ms` or below the log start.
+    const fn expired(size: u64) -> LocalRetentionSegment {
+        LocalRetentionSegment {
+            blocked: false,
+            expired: true,
+            size,
+        }
     }
 
-    /// A zero-byte segment is not size-evictable on a log with no excess:
-    /// with no debt there is no size pass, so only time expiry removes it.
+    /// A local segment no pass may delete.
+    const fn blocked(expired: bool, size: u64) -> LocalRetentionSegment {
+        LocalRetentionSegment {
+            blocked: true,
+            expired,
+            size,
+        }
+    }
+
+    /// Kafka scenarios for `UnifiedLog.deleteOldSegments`: the log-start
+    /// breach, `retention.bytes` and `retention.ms` passes, in that order,
+    /// over every local segment with the active one last. Every expected
+    /// count is worked from Kafka's passes by hand.
     #[test]
-    fn zero_byte_segments_are_not_size_evicted_without_excess() {
-        for (name, time_expired, sizes, debt, expected) in [
+    fn local_prefix_matches_kafkas_delete_old_segments_passes() {
+        /// A name, the segments (the active one last), the size debt, and how
+        /// many Kafka deletes.
+        type Case<'a> = (&'a str, &'a [LocalRetentionSegment], Option<u64>, usize);
+
+        let cases: [Case<'_>; 21] = [
+            ("no segments", &[], Some(100), 0),
             (
-                "no debt, first empty",
-                [false, false, false],
-                [0u64, 10, 10],
-                0u64,
-                0usize,
-            ),
-            (
-                "no debt, second empty",
-                [true, false, false],
-                [10, 0, 10],
+                "no pressure keeps everything",
+                &[fresh(10), fresh(10)],
+                None,
                 0,
+            ),
+            (
+                "a debt of 15 over three 10-byte segments deletes one, not two",
+                &[fresh(10), fresh(10), fresh(10)],
+                Some(15),
                 1,
             ),
             (
-                "debt spent, next empty",
-                [false, false, false],
-                [10, 0, 10],
-                10,
+                "a debt of exactly two segments deletes two",
+                &[fresh(10), fresh(10), fresh(10)],
+                Some(20),
+                2,
+            ),
+            (
+                "a debt below the oldest segment deletes nothing",
+                &[fresh(10), fresh(1)],
+                Some(5),
+                0,
+            ),
+            (
+                "a zero debt still deletes leading empty segments",
+                &[fresh(0), fresh(0), fresh(10)],
+                Some(0),
+                2,
+            ),
+            (
+                "no size pass keeps empty segments",
+                &[fresh(0), fresh(10)],
+                None,
+                0,
+            ),
+            (
+                "time pass deletes the expired prefix",
+                &[expired(10), expired(10), fresh(10), expired(10)],
+                None,
+                2,
+            ),
+            (
+                "the size pass ends at the first misfit and never resumes",
+                &[expired(10), fresh(1)],
+                Some(5),
                 1,
             ),
-            ("time-expired empty", [true, true, false], [0, 0, 10], 0, 2),
-        ] {
-            let prefix = local_retention_prefix(&time_expired, &[false; 3], &sizes, debt, true);
-            assert2::check!(prefix.len == expected, "{name}: got {prefix:?}");
+            (
+                "the size pass runs first and the time pass continues after it",
+                &[fresh(10), expired(10), fresh(1)],
+                Some(12),
+                2,
+            ),
+            (
+                "an expired segment that fits is charged to the debt",
+                &[expired(3), fresh(10)],
+                Some(10),
+                1,
+            ),
+            (
+                "the size pass reaches past an expired prefix",
+                &[expired(3), fresh(3), fresh(10)],
+                Some(6),
+                2,
+            ),
+            (
+                "a blocked segment stops every pass",
+                &[expired(10), blocked(true, 10), expired(10)],
+                Some(100),
+                1,
+            ),
+            (
+                "a blocked oldest segment deletes nothing",
+                &[blocked(true, 10), expired(10)],
+                Some(100),
+                0,
+            ),
+            (
+                "an expired log goes whole, the active segment included",
+                &[expired(10), expired(10)],
+                None,
+                2,
+            ),
+            (
+                "a debt that covers the whole log takes the active segment too",
+                &[fresh(10), fresh(10)],
+                Some(20),
+                2,
+            ),
+            (
+                "an empty active segment is never deleted",
+                &[expired(10), expired(0)],
+                None,
+                1,
+            ),
+            (
+                "an empty active segment stays under any debt",
+                &[fresh(10), fresh(0)],
+                Some(u64::MAX),
+                1,
+            ),
+            ("a lone empty segment stays", &[expired(0)], Some(0), 0),
+            (
+                "a lone active segment that breaches goes",
+                &[expired(1)],
+                None,
+                1,
+            ),
+            (
+                "the full u64 range fits without overflow",
+                &[fresh(u64::MAX), fresh(1)],
+                Some(u64::MAX),
+                1,
+            ),
+        ];
+        for (name, segments, size_debt, expected) in cases {
+            check!(
+                local_retention_prefix(segments, size_debt) == expected,
+                "{name}"
+            );
         }
     }
 
-    /// Kafka's `deleteRetentionSizeBreachedSegments` predicate is
-    /// `diff - segment.size() >= 0`: a segment is deleted only while the
-    /// remaining excess covers it whole. Three 60-byte segments over a
-    /// budget that leaves an excess of exactly one segment, one byte short,
-    /// and one byte over.
-    #[test]
-    fn size_retention_deletes_only_what_the_remaining_excess_covers() {
-        let sizes = [60u64, 60, 60];
-        let scheduled = [false, false, false];
-        let not_time_expired = [false, false, false];
+    /// A finished remote segment with the given axes.
+    const fn remote(
+        log_start_breached: bool,
+        time_expired: bool,
+        size: u64,
+    ) -> RemoteRetentionSegment {
+        RemoteRetentionSegment {
+            log_start_breached,
+            time_expired,
+            size,
+        }
+    }
 
-        // (excess, expected evicted count).
-        let cases: [(u64, usize); 3] = [
-            (60, 1), // excess is exactly one segment: delete it, keep 120.
-            (59, 0), // one byte short: the first segment does not fit.
-            (61, 1), // one byte over: still only the first segment fits.
+    /// Kafka scenarios for `RemoteLogRetentionHandler`: per segment, the
+    /// log-start breach, then `retention.ms`, then `retention.bytes`. Every
+    /// expected count is worked from Kafka's handler by hand.
+    #[test]
+    fn remote_prefix_matches_kafkas_remote_log_retention_handler() {
+        /// A name, the segments, the size debt, and how many Kafka deletes.
+        type Case<'a> = (&'a str, &'a [RemoteRetentionSegment], u64, usize);
+
+        let kept = remote(false, false, 10);
+        let old = remote(false, true, 10);
+        let breached = remote(true, false, 10);
+        let cases: [Case<'_>; 12] = [
+            ("no segments", &[], 100, 0),
+            ("no pressure keeps everything", &[kept, kept], 0, 0),
+            (
+                "a debt of 15 over three 10-byte segments deletes one, not two",
+                &[kept, kept, kept],
+                15,
+                1,
+            ),
+            (
+                "a debt of exactly two segments deletes two",
+                &[kept, kept, kept],
+                20,
+                2,
+            ),
+            (
+                "a zero debt never deletes an empty segment",
+                &[remote(false, false, 0)],
+                0,
+                0,
+            ),
+            (
+                "a positive debt deletes an empty segment",
+                &[remote(false, false, 0), kept],
+                5,
+                1,
+            ),
+            (
+                "the time axis stops at the first segment in the window",
+                &[old, old, kept, old],
+                0,
+                2,
+            ),
+            (
+                "a time deletion lowers the debt, never below zero",
+                &[remote(false, true, 30), remote(false, false, 1)],
+                20,
+                1,
+            ),
+            (
+                "size resumes after a time deletion charged against the debt",
+                &[old, remote(false, false, 5), kept],
+                20,
+                2,
+            ),
+            (
+                "a log-start breach leaves the debt alone",
+                &[breached, kept, kept],
+                10,
+                2,
+            ),
+            (
+                "the breach covers what the time axis would stop at",
+                &[breached, old, kept],
+                0,
+                2,
+            ),
+            (
+                "the breach alone takes every breached segment",
+                &[breached; 3],
+                0,
+                3,
+            ),
         ];
-        for (excess, expected) in cases {
-            let prefix =
-                local_retention_prefix(&not_time_expired, &scheduled, &sizes, excess, true);
-            assert2::check!(prefix.len == expected, "excess={excess}: got {prefix:?}");
+        for (name, segments, size_debt, expected) in cases {
+            check!(
+                remote_retention_prefix(true, segments, size_debt) == expected,
+                "{name}"
+            );
+            check!(
+                remote_retention_prefix(false, segments, size_debt) == 0,
+                "{name}: a tier that accepts no delete keeps everything"
+            );
         }
     }
 
     #[test]
     fn delete_target_rejects_offset_exhaustion() {
-        assert2::assert!(retention_delete_target(None) == None);
-        assert2::assert!(retention_delete_target(Some(9)) == Some(10));
-        assert2::assert!(retention_delete_target(Some(i64::MAX)) == None);
+        for (last_offset, expected) in [
+            (None, None),
+            (Some(9), Some(10)),
+            (Some(i64::MAX - 1), Some(i64::MAX)),
+            (Some(i64::MAX), None),
+        ] {
+            check!(retention_delete_target(last_offset) == expected);
+        }
     }
 }

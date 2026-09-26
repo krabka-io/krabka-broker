@@ -1,10 +1,10 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/authz.rs" 34 0 34 76 *)
+(* #"/workspace/crates/verified/src/authz.rs" 170 0 170 76 *)
 
-let%span sauthz = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/authz.rs" 36 43 36 47
-let%span sauthz'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/authz.rs" 37 57 37 59
-let%span sauthz'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/authz.rs" 28 10 28 61
-let%span sauthz'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/authz.rs" 29 10 30 30
-let%span sauthz'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/authz.rs" 31 10 32 66
+let%span sauthz = "/workspace/crates/verified/src/authz.rs" 172 43 172 47
+let%span sauthz'0 = "/workspace/crates/verified/src/authz.rs" 173 57 173 59
+let%span sauthz'1 = "/workspace/crates/verified/src/authz.rs" 164 10 164 61
+let%span sauthz'2 = "/workspace/crates/verified/src/authz.rs" 165 10 166 30
+let%span sauthz'3 = "/workspace/crates/verified/src/authz.rs" 167 10 168 66
 
 use creusot.int.Int16
 use creusot.prelude.Any
@@ -15,8 +15,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let request_auth_admission [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/authz.rs" 34 0 34 76]
-  (state: t_RequestAuthState) (api_key: Int16.t) (return (x: bool)) = (! bb0
+let request_auth_admission [#"/workspace/crates/verified/src/authz.rs" 170 0 170 76] (state: t_RequestAuthState)
+  (api_key: Int16.t) (return (x: bool)) = (! bb0
   [ bb0 = any
     [ br0 -> {state = PreAuth} (! bb4)
     | br1 -> {state = Reauthenticating} (! bb5)

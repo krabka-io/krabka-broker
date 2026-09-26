@@ -1,11 +1,16 @@
 //! The full KIP-48 lifecycle walk in one test: mint a token, authenticate
-//! with it over SASL/SCRAM-SHA-256, renew it as a listed renewer, describe
-//! it, expire it, and prove that the expired credentials no longer
-//! authenticate.
+//! with it over SASL/SCRAM-SHA-256 and SASL/SCRAM-SHA-512, renew it as a
+//! listed renewer, describe it, expire it, and prove that the expired
+//! credentials no longer authenticate.
 //!
 //! This is the file that covers spec §8.2 step by step. The steps are
 //! lettered (a) to (h) in the test body and in the suite-level documentation
 //! on the crate root.
+
+use std::{
+    net::SocketAddr,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use assert2::{assert, check};
 use base64::Engine;
@@ -17,6 +22,8 @@ use krabka_protocol::owned::{
     expire_delegation_token_request::ExpireDelegationTokenRequest,
     renew_delegation_token_request::RenewDelegationTokenRequest,
 };
+use krabka_security::SaslMechanism;
+use tokio::net::TcpStream;
 
 use crate::{
     DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
@@ -25,8 +32,48 @@ use crate::{
         send_create_delegation_token, send_describe_delegation_token, send_expire_delegation_token,
         send_renew_delegation_token,
     },
-    wire::{sasl_plain_authenticate, sasl_scram_sha256_authenticate},
+    wire::{sasl_plain_authenticate, sasl_scram_authenticate, sasl_scram_token_authenticate},
 };
+
+/// The broker's `delegation_token_default_renew_period` in `cluster.rs`.
+const DEFAULT_RENEW_PERIOD_MS: i64 = 24 * 60 * 60 * 1_000;
+
+/// Step (c): the token logs in under both SCRAM mechanisms with
+/// `tokenauth=true`, and not at all without it. Returns the SCRAM-SHA-256
+/// session.
+async fn token_logins(
+    addr: SocketAddr,
+    token_id: &str,
+    token_password: &str,
+) -> Result<TcpStream, String> {
+    let without_tokenauth = sasl_scram_authenticate(
+        addr,
+        SaslMechanism::ScramSha256,
+        token_id,
+        token_password,
+        false,
+    )
+    .await;
+    assert!(
+        without_tokenauth.is_err(),
+        "token credentials without tokenauth=true must not authenticate"
+    );
+    let sha512 =
+        sasl_scram_token_authenticate(addr, SaslMechanism::ScramSha512, token_id, token_password)
+            .await
+            .map_err(|e| format!("token SCRAM-SHA-512 auth: {e}"))?;
+    drop(sha512);
+    sasl_scram_token_authenticate(addr, SaslMechanism::ScramSha256, token_id, token_password)
+        .await
+        .map_err(|e| format!("token SCRAM-SHA-256 auth: {e}"))
+}
+
+fn wall_clock_ms() -> i64 {
+    let since_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("wall clock is after the epoch");
+    i64::try_from(since_epoch.as_millis()).expect("epoch millis fit in i64")
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The lifecycle test.
@@ -77,9 +124,8 @@ async fn delegation_token_lifecycle_end_to_end() {
 
         let token_id = create_resp.token_id.clone();
         let hmac_bytes = create_resp.hmac.clone();
-        // Capture both timestamps: with the KIP-48 fix, Renew must extend
-        // `expiry_timestamp_ms` strictly past `create_resp.expiry_timestamp_ms`
-        // but never push it past `create_resp.max_timestamp_ms`.
+        // Capture both timestamps: create sets the expiry one default renew
+        // period out and the max at the lifetime ceiling, as separate values.
         let initial_expiry_ms = create_resp.expiry_timestamp_ms;
         let max_timestamp_ms = create_resp.max_timestamp_ms;
         assert!(
@@ -101,15 +147,14 @@ async fn delegation_token_lifecycle_end_to_end() {
         check!(img_token.renewers[0].principal_type == "User");
         check!(img_token.renewers[0].name == "bob");
 
-        // ── (c) Open a second connection and SASL/SCRAM-SHA-256 authenticate
-        //         with username=token_id, password=base64(hmac). KIP-48
-        //         token-fallback in `handle_authenticate_scram` is what makes
-        //         this succeed; without it the broker would respond
-        //         "unknown user" at round 1.
+        // ── (c) Open a second connection and SASL/SCRAM authenticate with
+        //         username=token_id, password=base64(hmac) and the
+        //         `tokenauth=true` extension. Kafka prepares a token
+        //         credential for every SCRAM mechanism, so SHA-512 works as
+        //         well as SHA-256. Without the extension the token id is an
+        //         ordinary username the credential store does not hold.
         let token_password = base64::engine::general_purpose::STANDARD.encode(&hmac_bytes);
-        let mut tokenuser = sasl_scram_sha256_authenticate(addr, &token_id, &token_password)
-            .await
-            .map_err(|e| format!("token SCRAM auth: {e}"))?;
+        let mut tokenuser = token_logins(addr, &token_id, &token_password).await?;
 
         // ── (d) From the token-authed connection, Create must fail with
         //         DELEGATION_TOKEN_REQUEST_NOT_ALLOWED (64). This is the
@@ -139,17 +184,17 @@ async fn delegation_token_lifecycle_end_to_end() {
         );
 
         // ── (e) Third connection: bob (a listed renewer) calls Renew.
-        //         Renew authorization (owner OR renewer) is what's load-bearing
-        //         here. With the KIP-48 fix, Create sets
-        //         `expiry_timestamp_ms = issue + 24h` and
-        //         `max_timestamp_ms = issue + 7d` as SEPARATE values, so
-        //         `min(now + renew_period_ms, max_timestamp_ms)` actually
-        //         advances the expiry — bounded above by `max_timestamp_ms`.
+        //         Renew authorization (owner OR renewer) is load-bearing
+        //         here. Kafka's `renewDelegationToken` sets the expiry to
+        //         `min(max, now + min(default renew period, requested))`,
+        //         so a 30-day request under the 24-hour default lands at
+        //         `now + 24h`, not at the 7-day max.
         let mut bob = sasl_plain_authenticate(addr, "bob", b"builder")
             .await
             .map_err(|e| format!("bob PLAIN auth: {e}"))?;
-        // Use a huge renew period so the clamp lands at `max_timestamp_ms`
-        // regardless of wall-clock drift between Create and Renew.
+        // The broker reads its clock while the request is in flight, so its
+        // `now` lies between these two readings.
+        let before_renew_ms = wall_clock_ms();
         let renew_resp = send_renew_delegation_token(
             &mut bob,
             300,
@@ -161,26 +206,28 @@ async fn delegation_token_lifecycle_end_to_end() {
         )
         .await
         .map_err(|e| format!("RenewDelegationToken(bob): {e}"))?;
+        let after_renew_ms = wall_clock_ms();
         check!(
             renew_resp.error_code == 0,
             "Renew by listed renewer must succeed; got {}",
             renew_resp.error_code
         );
-        // KIP-48: with the fix, Renew strictly extends the expiry past
-        // its initial value, capped at `max_timestamp_ms`.
+        let renewed_ms = renew_resp.expiry_timestamp_ms;
         check!(
-            renew_resp.expiry_timestamp_ms > initial_expiry_ms,
-            "Renew must strictly extend expiry past initial value: \
-             renewed={} initial={}",
-            renew_resp.expiry_timestamp_ms,
-            initial_expiry_ms,
+            (before_renew_ms + DEFAULT_RENEW_PERIOD_MS..=after_renew_ms + DEFAULT_RENEW_PERIOD_MS)
+                .contains(&renewed_ms),
+            "Renew must land one default renew period after the broker's now: \
+             renewed={renewed_ms} window=[{before_renew_ms}, {after_renew_ms}] + 24h",
         );
         check!(
-            renew_resp.expiry_timestamp_ms <= max_timestamp_ms,
-            "Renew must never push expiry past max_timestamp_ms: \
-             renewed={} max={}",
-            renew_resp.expiry_timestamp_ms,
-            max_timestamp_ms,
+            renewed_ms >= initial_expiry_ms,
+            "renew happens after create, so it cannot move the expiry earlier: \
+             renewed={renewed_ms} initial={initial_expiry_ms}",
+        );
+        check!(
+            renewed_ms < max_timestamp_ms,
+            "a 30-day request is capped by the 24h default, not by the 7-day max: \
+             renewed={renewed_ms} max={max_timestamp_ms}",
         );
 
         // ── (f) alice describes with an explicit owner filter — should see
@@ -242,11 +289,17 @@ async fn delegation_token_lifecycle_end_to_end() {
         wait_for_token_gone(&handle, &token_id).await;
 
         // ── (h) Fourth connection: SCRAM auth with the same token creds
-        //         must now fail (the token is gone). `sasl_scram_sha256_authenticate`
-        //         surfaces the failure either as a non-zero error_code on
-        //         round 1 (the credential lookup misses → "unknown user")
-        //         or as an EOF / connection close.
-        let fresh_attempt = sasl_scram_sha256_authenticate(addr, &token_id, &token_password).await;
+        //         must now fail (the token is gone). The driver surfaces
+        //         the failure either as a non-zero error_code on round 1
+        //         (the token-store lookup misses) or as an EOF / connection
+        //         close.
+        let fresh_attempt = sasl_scram_token_authenticate(
+            addr,
+            SaslMechanism::ScramSha256,
+            &token_id,
+            &token_password,
+        )
+        .await;
         assert!(
             fresh_attempt.is_err(),
             "SCRAM with the expired token's creds must fail; got Ok"

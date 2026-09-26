@@ -1,13 +1,13 @@
-(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_metadata.rs" 205 0 205 73 *)
+(* #"/workspace/crates/verified/src/remote_metadata.rs" 221 0 221 73 *)
 
-let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span snum = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
-let%span snum'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
-let%span sremote_metadata = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_metadata.rs" 206 19 206 21
-let%span sremote_metadata'0 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_metadata.rs" 209 26 209 27
-let%span sremote_metadata'1 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_metadata.rs" 209 4 209 28
-let%span sremote_metadata'2 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_metadata.rs" 198 12 201 5
-let%span sremote_metadata'3 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_metadata.rs" 203 10 203 69
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span sremote_metadata = "/workspace/crates/verified/src/remote_metadata.rs" 222 19 222 21
+let%span sremote_metadata'0 = "/workspace/crates/verified/src/remote_metadata.rs" 225 26 225 27
+let%span sremote_metadata'1 = "/workspace/crates/verified/src/remote_metadata.rs" 225 4 225 28
+let%span sremote_metadata'2 = "/workspace/crates/verified/src/remote_metadata.rs" 214 12 217 5
+let%span sremote_metadata'3 = "/workspace/crates/verified/src/remote_metadata.rs" 219 10 219 69
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -36,7 +36,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let remote_metadata_resume_cursor [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/remote_metadata.rs" 205 0 205 73]
+let remote_metadata_resume_cursor [#"/workspace/crates/verified/src/remote_metadata.rs" 221 0 221 73]
   (committed: Int64.t) (return (x: t_Option_i64)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_6 <- Int64.lt committed ([%#sremote_metadata] (-1: Int64.t)) ] s1

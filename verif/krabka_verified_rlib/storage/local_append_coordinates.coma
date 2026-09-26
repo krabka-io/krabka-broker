@@ -1,22 +1,22 @@
-(* #"/proof-work-236/crates/verified/src/storage.rs" 33 0 37 23 *)
+(* #"/workspace/crates/verified/src/storage.rs" 33 0 37 23 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
 let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
 let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
-let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
 let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
 let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
 let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
-let%span sstorage = "/proof-work-236/crates/verified/src/storage.rs" 38 23 38 24
-let%span sstorage'0 = "/proof-work-236/crates/verified/src/storage.rs" 38 82 38 83
-let%span sstorage'1 = "/proof-work-236/crates/verified/src/storage.rs" 41 41 41 69
-let%span sstorage'2 = "/proof-work-236/crates/verified/src/storage.rs" 41 15 41 70
-let%span sstorage'3 = "/proof-work-236/crates/verified/src/storage.rs" 41 15 41 71
-let%span sstorage'4 = "/proof-work-236/crates/verified/src/storage.rs" 42 32 42 33
-let%span sstorage'5 = "/proof-work-236/crates/verified/src/storage.rs" 42 15 42 34
-let%span sstorage'6 = "/proof-work-236/crates/verified/src/storage.rs" 42 15 42 35
-let%span sstorage'7 = "/proof-work-236/crates/verified/src/storage.rs" 18 10 31 1
+let%span sstorage = "/workspace/crates/verified/src/storage.rs" 38 23 38 24
+let%span sstorage'0 = "/workspace/crates/verified/src/storage.rs" 38 82 38 83
+let%span sstorage'1 = "/workspace/crates/verified/src/storage.rs" 41 41 41 69
+let%span sstorage'2 = "/workspace/crates/verified/src/storage.rs" 41 15 41 70
+let%span sstorage'3 = "/workspace/crates/verified/src/storage.rs" 41 15 41 71
+let%span sstorage'4 = "/workspace/crates/verified/src/storage.rs" 42 32 42 33
+let%span sstorage'5 = "/workspace/crates/verified/src/storage.rs" 42 15 42 34
+let%span sstorage'6 = "/workspace/crates/verified/src/storage.rs" 42 15 42 35
+let%span sstorage'7 = "/workspace/crates/verified/src/storage.rs" 18 10 31 1
 
 use creusot.int.Int64
 use creusot.int.Int32
@@ -115,7 +115,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let local_append_coordinates [#"/proof-work-236/crates/verified/src/storage.rs" 33 0 37 23] (expected_base: Int64.t)
+let local_append_coordinates [#"/workspace/crates/verified/src/storage.rs" 33 0 37 23] (expected_base: Int64.t)
   (supplied_base: Int64.t) (last_offset_delta: Int32.t) (return (x: t_Option_tup2_i64_i64)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_9 <- Int64.lt expected_base ([%#sstorage] (0: Int64.t)) ] s1

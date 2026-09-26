@@ -22,10 +22,8 @@ pub enum ChainStep {
 /// The host keeps opaque chain heads and decoded metadata outside Creusot. It
 /// supplies only each receipt's ordering keys and whether that receipt is
 /// eligible to continue the chain.
-#[ensures(result == None ==>
-    forall<i: Int> 0 <= i && i < candidates@.len() ==> !candidates@[i].2)]
 #[ensures(match result {
-    None => true,
+    None => forall<i: Int> 0 <= i && i < candidates@.len() ==> !candidates@[i].2,
     Some(index) => index@ < candidates@.len()
         && candidates@[index@].2
         && (forall<i: Int> 0 <= i && i < candidates@.len() && candidates@[i].2 ==>

@@ -1,40 +1,28 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 81 0 81 84 *)
+(* #"/workspace/crates/verified/src/break_glass.rs" 124 0 124 84 *)
 
-let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sbreak_glass = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 82 7 82 23
-let%span sbreak_glass'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 82 27 82 28
-let%span sbreak_glass'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 85 19 85 25
-let%span sbreak_glass'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 86 16 86 22
-let%span sbreak_glass'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 98 14 98 36
-let%span sbreak_glass'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 99 14 99 30
-let%span sbreak_glass'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 94 16 97 50
-let%span sbreak_glass'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 91 16 93 50
-let%span sbreak_glass'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 89 16 90 50
-let%span sbreak_glass'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 88 16 88 26
-let%span sbreak_glass'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 87 16 87 50
-let%span sbreak_glass'10 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 100 24 100 37
-let%span sbreak_glass'11 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 101 22 101 38
-let%span sbreak_glass'12 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 108 13 108 14
-let%span sbreak_glass'13 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 108 8 108 14
-let%span sbreak_glass'14 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 62 10 62 54
-let%span sbreak_glass'15 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 63 10 75 1
-let%span sslice = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span swell_founded = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sbreak_glass = "/workspace/crates/verified/src/break_glass.rs" 126 16 126 22
+let%span sbreak_glass'0 = "/workspace/crates/verified/src/break_glass.rs" 132 14 132 36
+let%span sbreak_glass'1 = "/workspace/crates/verified/src/break_glass.rs" 133 14 133 30
+let%span sbreak_glass'2 = "/workspace/crates/verified/src/break_glass.rs" 128 16 131 5
+let%span sbreak_glass'3 = "/workspace/crates/verified/src/break_glass.rs" 127 16 127 39
+let%span sbreak_glass'4 = "/workspace/crates/verified/src/break_glass.rs" 134 24 134 37
+let%span sbreak_glass'5 = "/workspace/crates/verified/src/break_glass.rs" 138 30 138 43
+let%span sbreak_glass'6 = "/workspace/crates/verified/src/break_glass.rs" 151 13 151 14
+let%span sbreak_glass'7 = "/workspace/crates/verified/src/break_glass.rs" 151 8 151 14
+let%span sbreak_glass'8 = "/workspace/crates/verified/src/break_glass.rs" 119 10 122 1
+let%span sbreak_glass'9 = "/workspace/crates/verified/src/break_glass.rs" 111 8 113 83
+let%span sbreak_glass'10 = "/workspace/crates/verified/src/break_glass.rs" 97 8 98 80
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
 
-use creusot.slice.Slice64
-use creusot.int.Int64
 use creusot.int.UInt64
 use seq.Seq
+use creusot.slice.Slice64
+use creusot.int.Int64
 use creusot.prelude.Any
 use int.Int
-
-type tup3_i64_u64_u64 = { f0: Int64.t; f1: UInt64.t; f2: UInt64.t }
-
-let len_tup3_i64_u64_u64 (self_: Slice64.slice tup3_i64_u64_u64) (return (x: UInt64.t)) = any
-  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
-    = UInt64.t'int result}
-    (! return {result}) ]
 
 type t_Option_usize = None | Some UInt64.t
 
@@ -51,132 +39,124 @@ predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
 
 meta "rewrite_def" predicate well_founded_relation_Int
 
+type tup3_i64_u64_u64 = { f0: Int64.t; f1: UInt64.t; f2: UInt64.t }
+
+let len_tup3_i64_u64_u64 (self_: Slice64.slice tup3_i64_u64_u64) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+predicate lex_le [#"/workspace/crates/verified/src/break_glass.rs" 95 0 95 61] (a: tup3_i64_u64_u64) (b: tup3_i64_u64_u64) =
+  [%#sbreak_glass'10] Int64.to_int a.f0 < Int64.to_int b.f0
+  \/ Int64.to_int a.f0 = Int64.to_int b.f0
+  /\ (UInt64.t'int a.f1 < UInt64.t'int b.f1
+  \/ UInt64.t'int a.f1 = UInt64.t'int b.f1 /\ UInt64.t'int a.f2 <= UInt64.t'int b.f2)
+
+predicate is_min_by [#"/workspace/crates/verified/src/break_glass.rs" 109 0 109 73] (keys: Seq.seq tup3_i64_u64_u64) (best: int) (len: int) =
+  [%#sbreak_glass'9] 0 <= best
+  /\ best < len
+  /\ len <= Seq.length keys
+  /\ (forall j: int. 0 <= j /\ j < len -> lex_le (Seq.get keys best) (Seq.get keys j))
+  /\ (forall j: int. 0 <= j /\ j < best -> not lex_le (Seq.get keys j) (Seq.get keys best))
+
+let elim_Some (_x: t_Option_usize) (return (f0'0: UInt64.t)) = any
+  [ _k (f0'0: UInt64.t) -> {Some f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let select_break_glass_candidate [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 81 0 81 84]
+let select_break_glass_candidate [#"/workspace/crates/verified/src/break_glass.rs" 124 0 124 84]
   (candidates: Slice64.slice tup3_i64_u64_u64) (return (x: t_Option_usize)) = (! bb0
-  [ bb0 = s0
-    [ s0 = len_tup3_i64_u64_u64 [%#sbreak_glass] {candidates} (fun (_x: UInt64.t) -> [ &_8 <- _x ] s1)
-    | s1 = [ &_7 <- _8 = ([%#sbreak_glass'0] (0: UInt64.t)) ] s2
-    | s2 = any [ br0 -> {_7 = false} (! bb3) | br1 -> {_7} (! bb2) ] ]
-  | bb2 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
-  | bb3 = s0
-    [ s0 = [ &best <- [%#sbreak_glass'1] (0: UInt64.t) ] s1
-    | s1 = [ &i <- [%#sbreak_glass'2] (1: UInt64.t) ] s2
-    | s2 = bb4 ]
-  | bb4 = bb4invariant
-    [ bb4 =
-      {[@expl:loop variant] well_founded_relation_Int variant_old_bb4 ([%#sbreak_glass'3] Seq.length (Slice64.view candidates)
+  [ bb0 = s0 [ s0 = [ &best <- None ] s1 | s1 = [ &i <- [%#sbreak_glass] (0: UInt64.t) ] s2 | s2 = bb1 ]
+  | bb1 = bb1invariant
+    [ bb1 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb1 ([%#sbreak_glass'0] Seq.length (Slice64.view candidates)
       - UInt64.t'int i)}
-      bb4invariant
-    | bb4invariant = {[@expl:loop invariant #0] [%#sbreak_glass'9] 1 <= UInt64.t'int i
-      /\ UInt64.t'int i <= Seq.length (Slice64.view candidates)}
-      {[@expl:loop invariant #1] [%#sbreak_glass'8] UInt64.t'int best < UInt64.t'int i}
-      {[@expl:loop invariant #2] [%#sbreak_glass'7] forall j: int. 0 <= j /\ j < UInt64.t'int i
-        -> Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int best)).f0
-        <= Int64.to_int (Seq.get (Slice64.view candidates) j).f0}
-      {[@expl:loop invariant #3] [%#sbreak_glass'6] forall j: int. 0 <= j
-          /\ j < UInt64.t'int i
-          /\ Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int best)).f0
-          = Int64.to_int (Seq.get (Slice64.view candidates) j).f0
-        -> UInt64.t'int (Seq.get (Slice64.view candidates) (UInt64.t'int best)).f1
-        <= UInt64.t'int (Seq.get (Slice64.view candidates) j).f1}
-      {[@expl:loop invariant #4] [%#sbreak_glass'5] forall j: int. 0 <= j
-          /\ j < UInt64.t'int i
-          /\ Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int best)).f0
-            = Int64.to_int (Seq.get (Slice64.view candidates) j).f0
-          /\ UInt64.t'int (Seq.get (Slice64.view candidates) (UInt64.t'int best)).f1
-          = UInt64.t'int (Seq.get (Slice64.view candidates) j).f1
-        -> UInt64.t'int (Seq.get (Slice64.view candidates) (UInt64.t'int best)).f2
-        <= UInt64.t'int (Seq.get (Slice64.view candidates) j).f2}
-      (! [ &variant_old_bb4 <- [%#sbreak_glass'3] Seq.length (Slice64.view candidates) - UInt64.t'int i ] s0)
-      [ s0 = len_tup3_i64_u64_u64 [%#sbreak_glass'4] {candidates} (fun (_x: UInt64.t) -> [ &_39 <- _x ] s1)
-      | s1 = [ &_37 <- UInt64.lt i _39 ] s2
-      | s2 = any [ br0 -> {_37 = false} (! bb26) | br1 -> {_37} (! bb7) ] ]
-      [ bb7 = s0
-        [ s0 = [ &_42 <- i ] s1
-        | s1 = [ &_43 <- Slice64.length candidates ] s2
-        | s2 = [ &_44 <- UInt64.lt _42 _43 ] s3
-        | s3 = {[@expl:index in bounds] [%#sbreak_glass'10] _44} s4
-        | s4 = Slice64.get [%#sbreak_glass'10] <tup3_i64_u64_u64> {candidates} {_42}
+      bb1invariant
+    | bb1invariant = {[@expl:loop invariant #0] [%#sbreak_glass'3] UInt64.t'int i
+      <= Seq.length (Slice64.view candidates)}
+      {[@expl:loop invariant #1] [%#sbreak_glass'2] match best with
+        | None -> UInt64.t'int i = 0
+        | Some b'0 -> is_min_by (Slice64.view candidates) (UInt64.t'int b'0) (UInt64.t'int i)
+        end}
+      (! [ &variant_old_bb1 <- [%#sbreak_glass'0] Seq.length (Slice64.view candidates) - UInt64.t'int i ] s0)
+      [ s0 = len_tup3_i64_u64_u64 [%#sbreak_glass'1] {candidates} (fun (_x: UInt64.t) -> [ &_21 <- _x ] s1)
+      | s1 = [ &_19 <- UInt64.lt i _21 ] s2
+      | s2 = any [ br0 -> {_19 = false} (! bb28) | br1 -> {_19} (! bb4) ] ]
+      [ bb4 = s0
+        [ s0 = [ &_24 <- i ] s1
+        | s1 = [ &_25 <- Slice64.length candidates ] s2
+        | s2 = [ &_26 <- UInt64.lt _24 _25 ] s3
+        | s3 = {[@expl:index in bounds] [%#sbreak_glass'4] _26} s4
+        | s4 = Slice64.get [%#sbreak_glass'4] <tup3_i64_u64_u64> {candidates} {_24}
             (fun (r: tup3_i64_u64_u64) -> [ &candidate <- r ] s5)
-        | s5 = [ &_46 <- best ] s6
-        | s6 = [ &_47 <- Slice64.length candidates ] s7
-        | s7 = [ &_48 <- UInt64.lt _46 _47 ] s8
-        | s8 = {[@expl:index in bounds] [%#sbreak_glass'11] _48} s9
-        | s9 = Slice64.get [%#sbreak_glass'11] <tup3_i64_u64_u64> {candidates} {_46}
-            (fun (r: tup3_i64_u64_u64) -> [ &current' <- r ] s10)
-        | s10 = [ &_50 <- Int64.lt candidate.f0 current'.f0 ] s11
-        | s11 = any [ br0 -> {_50 = false} (! bb11) | br1 -> {_50} (! bb20) ] ]
-      | bb11 = s0
-        [ s0 = [ &_53 <- candidate.f0 = current'.f0 ] s1
-        | s1 = any [ br0 -> {_53 = false} (! bb16) | br1 -> {_53} (! bb12) ] ]
+        | s5 = any [ br0 -> {best = None} (! bb9) | br1 (x0: UInt64.t) -> {best = Some x0} (! bb8) ] ]
+      | bb8 = s0
+        [ s0 = elim_Some {best} (fun (r0: UInt64.t) -> [ &b <- r0 ] s1)
+        | s1 = [ &_32 <- b ] s2
+        | s2 = [ &_33 <- Slice64.length candidates ] s3
+        | s3 = [ &_34 <- UInt64.lt _32 _33 ] s4
+        | s4 = {[@expl:index in bounds] [%#sbreak_glass'5] _34} s5
+        | s5 = Slice64.get [%#sbreak_glass'5] <tup3_i64_u64_u64> {candidates} {_32}
+            (fun (r: tup3_i64_u64_u64) -> [ &current' <- r ] s6)
+        | s6 = [ &_35 <- Int64.lt candidate.f0 current'.f0 ] s7
+        | s7 = any [ br0 -> {_35 = false} (! bb12) | br1 -> {_35} (! bb21) ] ]
       | bb12 = s0
-        [ s0 = [ &_56 <- UInt64.lt candidate.f1 current'.f1 ] s1
-        | s1 = any [ br0 -> {_56 = false} (! bb16) | br1 -> {_56} (! bb20) ] ]
-      | bb16 = s0
-        [ s0 = [ &_59 <- candidate.f0 = current'.f0 ] s1
-        | s1 = any [ br0 -> {_59 = false} (! bb25) | br1 -> {_59} (! bb17) ] ]
+        [ s0 = [ &_38 <- candidate.f0 = current'.f0 ] s1
+        | s1 = any [ br0 -> {_38 = false} (! bb17) | br1 -> {_38} (! bb13) ] ]
+      | bb13 = s0
+        [ s0 = [ &_41 <- UInt64.lt candidate.f1 current'.f1 ] s1
+        | s1 = any [ br0 -> {_41 = false} (! bb17) | br1 -> {_41} (! bb21) ] ]
       | bb17 = s0
-        [ s0 = [ &_62 <- candidate.f1 = current'.f1 ] s1
-        | s1 = any [ br0 -> {_62 = false} (! bb25) | br1 -> {_62} (! bb18) ] ]
+        [ s0 = [ &_44 <- candidate.f0 = current'.f0 ] s1
+        | s1 = any [ br0 -> {_44 = false} (! bb25) | br1 -> {_44} (! bb18) ] ]
       | bb18 = s0
-        [ s0 = [ &_65 <- UInt64.lt candidate.f2 current'.f2 ] s1
-        | s1 = any [ br0 -> {_65 = false} (! bb25) | br1 -> {_65} (! bb20) ] ]
-      | bb20 = s0 [ s0 = [ &best <- i ] s1 | s1 = bb25 ]
-      | bb25 = s0
-        [ s0 = UInt64.add [%#sbreak_glass'13] {i} {[%#sbreak_glass'12] (1: UInt64.t)}
-            (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
-        | s1 = bb4 ] ] ]
-  | bb26 = s0 [ s0 = [ &_ret <- Some best ] s1 | s1 = return {_ret} ] ]
+        [ s0 = [ &_47 <- candidate.f1 = current'.f1 ] s1
+        | s1 = any [ br0 -> {_47 = false} (! bb25) | br1 -> {_47} (! bb19) ] ]
+      | bb19 = s0
+        [ s0 = [ &_50 <- UInt64.lt candidate.f2 current'.f2 ] s1
+        | s1 = any [ br0 -> {_50 = false} (! bb25) | br1 -> {_50} (! bb21) ] ]
+      | bb21 = s0 [ s0 = [ &_27 <- Some i ] s1 | s1 = bb27 ]
+      | bb25 = s0 [ s0 = [ &_27 <- Some b ] s1 | s1 = bb27 ]
+      | bb9 = s0 [ s0 = [ &_27 <- Some i ] s1 | s1 = bb27 ]
+      | bb27 = s0
+        [ s0 = [ &best <- _27 ] s1
+        | s1 = UInt64.add [%#sbreak_glass'7] {i} {[%#sbreak_glass'6] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s2)
+        | s2 = bb1 ] ] ]
+  | bb28 = s0 [ s0 = [ &_ret <- best ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_Option_usize = Any.any_l ()
   | & candidates: Slice64.slice tup3_i64_u64_u64 = candidates
-  | & _7: bool = Any.any_l ()
-  | & _8: UInt64.t = Any.any_l ()
-  | & best: UInt64.t = Any.any_l ()
+  | & best: t_Option_usize = Any.any_l ()
   | & i: UInt64.t = Any.any_l ()
-  | & _37: bool = Any.any_l ()
-  | & _39: UInt64.t = Any.any_l ()
+  | & _19: bool = Any.any_l ()
+  | & _21: UInt64.t = Any.any_l ()
   | & candidate: tup3_i64_u64_u64 = Any.any_l ()
-  | & _42: UInt64.t = Any.any_l ()
-  | & _43: UInt64.t = Any.any_l ()
-  | & _44: bool = Any.any_l ()
+  | & _24: UInt64.t = Any.any_l ()
+  | & _25: UInt64.t = Any.any_l ()
+  | & _26: bool = Any.any_l ()
+  | & _27: t_Option_usize = Any.any_l ()
+  | & b: UInt64.t = Any.any_l ()
   | & current': tup3_i64_u64_u64 = Any.any_l ()
-  | & _46: UInt64.t = Any.any_l ()
-  | & _47: UInt64.t = Any.any_l ()
-  | & _48: bool = Any.any_l ()
+  | & _32: UInt64.t = Any.any_l ()
+  | & _33: UInt64.t = Any.any_l ()
+  | & _34: bool = Any.any_l ()
+  | & _35: bool = Any.any_l ()
+  | & _38: bool = Any.any_l ()
+  | & _41: bool = Any.any_l ()
+  | & _44: bool = Any.any_l ()
+  | & _47: bool = Any.any_l ()
   | & _50: bool = Any.any_l ()
-  | & _53: bool = Any.any_l ()
-  | & _56: bool = Any.any_l ()
-  | & _59: bool = Any.any_l ()
-  | & _62: bool = Any.any_l ()
-  | & _65: bool = Any.any_l ()
-  | & variant_old_bb4: int = Any.any_l () ])
+  | & variant_old_bb1: int = Any.any_l () ])
   [ return (result: t_Option_usize) ->
-  {[@stop_split] [@expl:select_break_glass_candidate ensures] ([@stop_split] [@expl:select_break_glass_candidate ensures #0] [%#sbreak_glass'14] (result
-        = None)
-      = (Seq.length (Slice64.view candidates) = 0))
-    /\ ([@stop_split] [@expl:select_break_glass_candidate ensures #1] [%#sbreak_glass'15] match result with
-      | None -> true
-      | Some index -> UInt64.t'int index < Seq.length (Slice64.view candidates)
-      /\ (forall j: int. 0 <= j /\ j < Seq.length (Slice64.view candidates)
-          -> Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
-          <= Int64.to_int (Seq.get (Slice64.view candidates) j).f0)
-      /\ (forall j: int. 0 <= j
-            /\ j < Seq.length (Slice64.view candidates)
-            /\ Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
-            = Int64.to_int (Seq.get (Slice64.view candidates) j).f0
-          -> UInt64.t'int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f1
-          <= UInt64.t'int (Seq.get (Slice64.view candidates) j).f1)
-      /\ (forall j: int. 0 <= j
-          /\ j < Seq.length (Slice64.view candidates)
-          /\ Int64.to_int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f0
-            = Int64.to_int (Seq.get (Slice64.view candidates) j).f0
-          /\ UInt64.t'int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f1
-          = UInt64.t'int (Seq.get (Slice64.view candidates) j).f1
-        -> UInt64.t'int (Seq.get (Slice64.view candidates) (UInt64.t'int index)).f2
-        <= UInt64.t'int (Seq.get (Slice64.view candidates) j).f2)
-      end)}
+  {[@stop_split] [@expl:select_break_glass_candidate ensures] [%#sbreak_glass'8] match result with
+      | None -> Seq.length (Slice64.view candidates) = 0
+      | Some index -> is_min_by (Slice64.view candidates) (UInt64.t'int index) (Seq.length (Slice64.view candidates))
+      end}
     (! return {result}) ]

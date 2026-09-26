@@ -2,8 +2,10 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_create_token_deadlines": { "prover": "alt-ergo", "time": 0.083 },
-      "vc_min_i64": { "prover": "alt-ergo", "time": 0.009 }
+      "vc_create_token_deadlines": { "prover": "alt-ergo", "time": 0.032 },
+      "vc_effective_period": { "prover": "alt-ergo", "time": 0.019 },
+      "vc_min_i64": { "prover": "alt-ergo", "time": 0.033 },
+      "vc_saturating_sum": { "prover": "alt-ergo", "time": 0.02 }
     }
   }
 }

@@ -55,105 +55,209 @@ pub enum ReplicaFetchMutation {
     Append,
 }
 
-/// Fence one follower Fetch response row against its topic, partition,
-/// in-flight request epoch, current metadata target, and any reported leader
-/// identity; then select one exclusive response action.
+/// What a follower knows about one row of a Fetch response when it decides
+/// what that row may change.
+///
+/// The row's topic and partition identity is not among them: the host looks
+/// the row up by that identity (`ResponseIndex::locate` in the broker's
+/// replicator) and never hands the kernel a row it could not attribute to
+/// exactly one followed partition.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct ReplicaFetchFacts {
+    /// The leader epoch this follower sent for the partition in the request
+    /// that the row answers.
+    pub request_leader_epoch: i32,
+    /// The leader epoch of the partition's current replication target.
+    pub current_leader_epoch: i32,
+    /// The replication target is the one the request was sent to.
+    pub target_matches: bool,
+    /// The row's `current_leader` is either absent or exactly the current
+    /// target's leader and epoch.
+    pub reported_target_matches: bool,
+    /// The row's Kafka error code; `0` is `NONE`.
+    pub error_code: i16,
+    /// The row's KIP-320 `DivergingEpoch.EndOffset`; `-1`, the schema default,
+    /// means the row carries no divergence.
+    pub diverging_end_offset: i64,
+}
+
+/// A row answers a request this follower no longer stands behind: the epoch
+/// moved while it was in flight, the replication target changed, or the leader
+/// names a different target than the one this follower fetched from.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub fn replica_fetch_fenced(facts: ReplicaFetchFacts) -> bool {
+    pearlite! {
+        facts.request_leader_epoch@ != facts.current_leader_epoch@
+            || !facts.target_matches
+            || !facts.reported_target_matches
+    }
+}
+
+/// Fence one follower Fetch response row against its in-flight request epoch,
+/// its current metadata target and any reported leader identity; then select
+/// one exclusive response action.
 ///
 /// A follower's request covers every partition it follows on one leader, so
 /// the caller applies this once per row of the answer, with that row's own
 /// partition configuration and the epoch it was asked under. The guarantee is
 /// therefore per partition and does not weaken as a response carries more of
-/// them: a row that fails any of the five facts mutates nothing, whatever the
-/// rows beside it say.
-#[ensures((result == ReplicaFetchMutation::Reject) == (
-    !identity.0
-        || !identity.1
-        || epochs.0@ != epochs.1@
-        || !target.0
-        || !target.1
-))]
-#[ensures((result == ReplicaFetchMutation::Retry) == (
-    identity.0
-        && identity.1
-        && epochs.0@ == epochs.1@
-        && target.0
-        && target.1
-        && !outcome.0
-))]
-#[ensures((result == ReplicaFetchMutation::Truncate) == (
-    identity.0
-        && identity.1
-        && epochs.0@ == epochs.1@
-        && target.0
-        && target.1
-        && outcome.0
-        && outcome.1
-))]
-#[ensures((result == ReplicaFetchMutation::Append) == (
-    identity.0
-        && identity.1
-        && epochs.0@ == epochs.1@
-        && target.0
-        && target.1
-        && outcome.0
-        && !outcome.1
-))]
+/// them: a fenced row mutates nothing, whatever the rows beside it say. An
+/// unfenced row is retried on an error, truncates on a KIP-320 divergence
+/// (which Kafka sends with no records), and appends otherwise.
+#[ensures(result == if replica_fetch_fenced(facts) {
+    ReplicaFetchMutation::Reject
+} else if facts.error_code@ != 0 {
+    ReplicaFetchMutation::Retry
+} else if facts.diverging_end_offset@ >= 0 {
+    ReplicaFetchMutation::Truncate
+} else {
+    ReplicaFetchMutation::Append
+})]
 #[must_use]
-pub fn replica_fetch_mutation(
-    identity: (bool, bool),
-    epochs: (i32, i32),
-    target: (bool, bool),
-    outcome: (bool, bool),
-) -> ReplicaFetchMutation {
-    let (topic_matches, partition_matches) = identity;
-    let (request_leader_epoch, current_leader_epoch) = epochs;
-    let (target_matches, reported_target_matches) = target;
-    let (response_success, has_divergence) = outcome;
-    if !topic_matches
-        || !partition_matches
-        || request_leader_epoch != current_leader_epoch
-        || !target_matches
-        || !reported_target_matches
+pub fn replica_fetch_mutation(facts: ReplicaFetchFacts) -> ReplicaFetchMutation {
+    if facts.request_leader_epoch != facts.current_leader_epoch
+        || !facts.target_matches
+        || !facts.reported_target_matches
     {
         ReplicaFetchMutation::Reject
-    } else if !response_success {
+    } else if facts.error_code != 0 {
         ReplicaFetchMutation::Retry
-    } else if has_divergence {
+    } else if facts.diverging_end_offset >= 0 {
         ReplicaFetchMutation::Truncate
     } else {
         ReplicaFetchMutation::Append
     }
 }
 
-/// Admit one preferred-leader rebalance batch only when the scan is
-/// nonempty, internally consistent, and contains eligible preferred replicas.
+/// What a preferred-leader rebalance scan observed about one change it wants
+/// to submit.
+///
+/// The host reads every fact off the change record itself and the scan's
+/// liveness and witness snapshots, not off the election that produced it, so
+/// the kernel checks the election's output rather than restating it.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct PreferredLeaderChange {
+    /// The leader the change installs.
+    pub new_leader: u64,
+    /// The partition's preferred replica, `replicas[0]`, or `None` for an
+    /// empty assignment.
+    pub preferred_replica: Option<u64>,
+    /// The new leader is in the change's ISR.
+    pub leader_in_isr: bool,
+    /// The new leader is alive in the scan's liveness snapshot.
+    pub leader_alive: bool,
+    /// The new leader carries the witness role, so it may never lead.
+    pub leader_is_witness: bool,
+}
+
+/// KIP-460's preferred election: leadership moves to the first assigned
+/// replica, and only when that replica is alive, in the ISR, and able to lead.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub fn preferred_change_eligible(change: PreferredLeaderChange) -> bool {
+    pearlite! {
+        change.preferred_replica == Some(change.new_leader)
+            && change.leader_in_isr
+            && change.leader_alive
+            && !change.leader_is_witness
+    }
+}
+
+/// Admit one preferred-leader rebalance batch only when it is nonempty, within
+/// the per-tick election cap, and every change in it is a KIP-460 preferred
+/// election.
 ///
 /// There is no imbalance-ratio threshold among the facts. That gate is the
 /// `ZooKeeper` controller's `leader.imbalance.per.broker.percentage`; the
 /// `KRaft` controller krabka follows restores every partition whose preferred
-/// replica is eligible, and bounds the work by a per-tick election count.
+/// replica is eligible, and bounds the work by a per-tick election count
+/// (`QuorumController.MAX_ELECTIONS_PER_IMBALANCE`), which is `max_changes`.
 #[ensures(result == (
-    total_partitions@ > 0
-        && selected_changes@ > 0
-        && selected_changes@ <= total_partitions@
-        && changes_unique
-        && all_preferred_eligible
+    0 < changes@.len()
+        && changes@.len() <= max_changes@
+        && forall<i: Int> 0 <= i && i < changes@.len()
+            ==> preferred_change_eligible(changes@[i])
 ))]
 #[must_use]
 pub fn preferred_rebalance_admission(
-    total_partitions: u64,
-    selected_changes: u64,
-    changes_unique: bool,
-    all_preferred_eligible: bool,
+    changes: &[PreferredLeaderChange],
+    max_changes: usize,
 ) -> bool {
-    total_partitions > 0
-        && selected_changes > 0
-        && selected_changes <= total_partitions
-        && changes_unique
-        && all_preferred_eligible
+    // `len` rather than `is_empty`: Creusot specifies `<[T]>::len` only.
+    let count = changes.len();
+    if count == 0 || count > max_changes {
+        return false;
+    }
+    let mut index = 0_usize;
+    #[invariant(index@ <= changes@.len())]
+    #[invariant(forall<k: Int> 0 <= k && k < index@ ==> preferred_change_eligible(changes@[k]))]
+    #[variant(changes@.len() - index@)]
+    while index < changes.len() {
+        let change = changes[index];
+        let installs_preferred = match change.preferred_replica {
+            Some(preferred) => preferred == change.new_leader,
+            None => false,
+        };
+        if !installs_preferred
+            || !change.leader_in_isr
+            || !change.leader_alive
+            || change.leader_is_witness
+        {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+/// The lower of two offsets.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub fn offset_min(a: Int, b: Int) -> Int {
+    pearlite! { if a <= b { a } else { b } }
+}
+
+/// The exclusive upper offset one fetch may read.
+///
+/// A follower reads to the leader's log end (Kafka's `FetchIsolation.LOG_END`).
+/// A consumer reads below the high watermark (`HIGH_WATERMARK`), below the
+/// last stable offset as well under `read_committed` (`TXN_COMMITTED`), and,
+/// on a scheduled topic, below KFC-1's delivery watermark too.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub fn fetch_limit_model(is_follower: bool, read_committed: bool, w: FetchWatermarks) -> Int {
+    pearlite! {
+        if is_follower {
+            w.log_end@
+        } else if read_committed {
+            offset_min(offset_min(w.hw@, w.deliverable@), w.lso@)
+        } else {
+            offset_min(w.hw@, w.deliverable@)
+        }
+    }
 }
 
 /// Compute Kafka's consumer/follower Fetch visibility window.
+///
+/// The reported watermarks are the partition's own, for every fetcher:
+/// `response_hw` is the high watermark and `response_lso` is the last stable
+/// offset, capped at the high watermark as Kafka's `UnifiedLog.lastStableOffset`
+/// caps it. Kafka's `Partition.readRecords` reads both before the fetch and
+/// puts them in the `LogReadInfo` whatever the isolation level and whoever is
+/// fetching, so a follower learns the leader's committed bound rather than its
+/// log end. That is what keeps a KIP-392 follower from exposing an offset the
+/// leader may still truncate.
 ///
 /// [`FetchWatermarks::deliverable`] is KFC-1's delivery watermark: the first
 /// offset a consumer may not see yet, because the batch that starts there has
@@ -163,32 +267,27 @@ pub fn preferred_rebalance_admission(
 /// - A follower is never gated. Replication carries a scheduled record to the
 ///   ISR, and it counts toward the high watermark, long before any consumer can
 ///   read it.
-/// - `response_hw` and `response_lso` do not move. The broker reports the true
-///   high watermark and last stable offset, so consumer lag stays honest and
-///   KIP-227 watermark monotonicity is untouched.
+/// - `response_hw` and `response_lso` do not move with it, so consumer lag
+///   stays honest and KIP-227 watermark monotonicity is untouched.
 ///
-/// The precondition bounds the delivery watermark inside `[log_start, hw]`,
-/// which is what the caller clamps it to. The body still takes the minimum
-/// against the bound it caps, so a caller that breaks the precondition gets a
-/// narrower window and never a dirty read.
-#[requires(0 <= w.log_start@ && w.log_start@ <= w.hw@ && w.hw@ <= w.log_end@)]
-#[requires(w.log_start@ <= w.deliverable@ && w.deliverable@ <= w.hw@)]
+/// There is no precondition. The consumer bound is proved outright: whatever
+/// the caller passes, a consumer never reads at or past the high watermark, the
+/// delivery watermark, or, under `read_committed`, the last stable offset.
 #[ensures(result.out_of_range == (fetch_offset@ < w.log_start@))]
-#[ensures(result.empty == (!(fetch_offset@ < w.log_start@)
-    && fetch_offset@ >= if is_follower { w.log_end@ } else { w.deliverable@ }))]
-#[ensures(result.effective_lso@ == if read_committed && !is_follower {
-    if w.lso@ < w.hw@ { w.lso@ } else { w.hw@ }
-} else { w.lso@ })]
+#[ensures(result.empty == (!result.out_of_range
+    && fetch_offset@ >= if is_follower { w.log_end@ } else { offset_min(w.hw@, w.deliverable@) }))]
+#[ensures(result.limit_offset@ == fetch_limit_model(is_follower, read_committed, w))]
+#[ensures(!is_follower ==> result.limit_offset@ <= w.hw@
+    && result.limit_offset@ <= w.deliverable@
+    && (read_committed ==> result.limit_offset@ <= w.lso@))]
 #[ensures(result.read_committed_aborts == (read_committed && !is_follower))]
-#[ensures(result.response_hw@ == if is_follower { w.log_end@ } else { w.hw@ })]
-#[ensures(result.response_lso@ == if read_committed && !is_follower {
-    if w.lso@ < w.hw@ { w.lso@ } else { w.hw@ }
-} else if is_follower { w.log_end@ } else { w.hw@ })]
-#[ensures(result.limit_offset@ == if is_follower { w.log_end@ } else if read_committed {
-    if w.lso@ < w.deliverable@ { w.lso@ } else { w.deliverable@ }
-} else { w.deliverable@ })]
-#[ensures(is_follower ==> result.limit_offset@ == w.log_end@)]
-#[ensures(!is_follower ==> result.limit_offset@ <= w.deliverable@)]
+#[ensures(result.effective_lso@ == if result.read_committed_aborts {
+    offset_min(w.lso@, w.hw@)
+} else {
+    w.lso@
+})]
+#[ensures(result.response_hw == w.hw)]
+#[ensures(result.response_lso@ == offset_min(w.lso@, w.hw@))]
 #[must_use]
 pub fn fetch_visibility(
     is_follower: bool,
@@ -202,40 +301,25 @@ pub fn fetch_visibility(
     } else {
         w.hw
     };
-    let upper_bound = if is_follower { w.log_end } else { visible };
-    let effective_lso = if read_committed && !is_follower {
-        if w.lso < w.hw { w.lso } else { w.hw }
-    } else {
-        w.lso
-    };
-    let response_hw = if is_follower { w.log_end } else { w.hw };
-    let response_lso = if read_committed && !is_follower {
-        effective_lso
-    } else if is_follower {
-        w.log_end
-    } else {
-        w.hw
-    };
+    let stable = if w.lso < w.hw { w.lso } else { w.hw };
+    let read_committed_aborts = read_committed && !is_follower;
     let limit_offset = if is_follower {
         w.log_end
-    } else if read_committed {
-        if effective_lso < visible {
-            effective_lso
-        } else {
-            visible
-        }
+    } else if read_committed && stable < visible {
+        stable
     } else {
         visible
     };
+    let upper_bound = if is_follower { w.log_end } else { visible };
     let out_of_range = fetch_offset < w.log_start;
     FetchVisibility {
         out_of_range,
         empty: !out_of_range && fetch_offset >= upper_bound,
         limit_offset,
-        effective_lso,
-        read_committed_aborts: read_committed && !is_follower,
-        response_hw,
-        response_lso,
+        effective_lso: if read_committed_aborts { stable } else { w.lso },
+        read_committed_aborts,
+        response_hw: w.hw,
+        response_lso: stable,
     }
 }
 
@@ -631,6 +715,7 @@ pub fn java_string_hash_partition(units: &[u16], partition_count: i32) -> Option
     let mut index = 0_usize;
     #[invariant(index@ <= units@.len())]
     #[cfg_attr(creusot, invariant(hash == java_string_hash_prefix_model(units@, index@)))]
+    #[variant(units@.len() - index@)]
     while index < units.len() {
         hash = hash.wrapping_mul(31).wrapping_add(i32::from(units[index]));
         index += 1;
@@ -651,230 +736,423 @@ mod tests {
 
     use super::*;
 
+    /// A follower's row that nothing has fenced: the epoch it asked under is
+    /// still the current one, and the leader named no other target.
+    const LIVE_ROW: ReplicaFetchFacts = ReplicaFetchFacts {
+        request_leader_epoch: 4,
+        current_leader_epoch: 4,
+        target_matches: true,
+        reported_target_matches: true,
+        error_code: 0,
+        diverging_end_offset: -1,
+    };
+
     #[test]
     fn replica_fetch_mutation_fences_every_input_and_selects_one_action() {
         use ReplicaFetchMutation::{Append, Reject, Retry, Truncate};
 
-        assert!(
-            replica_fetch_mutation(
-                (true, true),
-                (i32::MIN, i32::MIN),
-                (true, true),
-                (true, true),
-            ) == Truncate
-        );
-        assert!(
-            replica_fetch_mutation(
-                (true, true),
-                (i32::MAX, i32::MAX),
-                (true, true),
-                (true, false),
-            ) == Append
-        );
-        assert!(
-            replica_fetch_mutation((true, true), (4, 4), (true, true), (false, false)) == Retry
-        );
-
-        for rejected in [
-            replica_fetch_mutation((false, true), (4, 4), (true, true), (true, false)),
-            replica_fetch_mutation((true, false), (4, 4), (true, true), (true, false)),
-            replica_fetch_mutation(
-                (true, true),
-                (i32::MIN, i32::MAX),
-                (true, true),
-                (true, false),
+        for (scenario, facts, expected) in [
+            ("records for the live request", LIVE_ROW, Append),
+            (
+                "KIP-320 divergence at the widest epoch",
+                ReplicaFetchFacts {
+                    request_leader_epoch: i32::MAX,
+                    current_leader_epoch: i32::MAX,
+                    diverging_end_offset: 0,
+                    ..LIVE_ROW
+                },
+                Truncate,
             ),
-            replica_fetch_mutation((true, true), (4, 4), (false, true), (true, false)),
-            replica_fetch_mutation((true, true), (4, 4), (true, false), (true, false)),
+            (
+                "FENCED_LEADER_EPOCH goes to error handling",
+                ReplicaFetchFacts {
+                    error_code: 74,
+                    ..LIVE_ROW
+                },
+                Retry,
+            ),
+            (
+                "an error row with a divergence is still only an error",
+                ReplicaFetchFacts {
+                    error_code: 1,
+                    diverging_end_offset: 7,
+                    ..LIVE_ROW
+                },
+                Retry,
+            ),
+            (
+                "leader epoch bumped while the request was in flight",
+                ReplicaFetchFacts {
+                    current_leader_epoch: 5,
+                    ..LIVE_ROW
+                },
+                Reject,
+            ),
+            (
+                "the replication target moved to another leader",
+                ReplicaFetchFacts {
+                    target_matches: false,
+                    ..LIVE_ROW
+                },
+                Reject,
+            ),
+            (
+                "the leader reports a different current leader",
+                ReplicaFetchFacts {
+                    reported_target_matches: false,
+                    diverging_end_offset: 3,
+                    ..LIVE_ROW
+                },
+                Reject,
+            ),
+            (
+                "a fenced error row mutates nothing either",
+                ReplicaFetchFacts {
+                    request_leader_epoch: i32::MIN,
+                    error_code: 6,
+                    ..LIVE_ROW
+                },
+                Reject,
+            ),
         ] {
-            assert!(rejected == Reject);
+            assert!(replica_fetch_mutation(facts) == expected, "{scenario}");
         }
     }
 
+    /// Broker 1 takes its preferred partition back: it is `replicas[0]`,
+    /// alive, in the ISR and not a witness.
+    const PREFERRED_BACK: PreferredLeaderChange = PreferredLeaderChange {
+        new_leader: 1,
+        preferred_replica: Some(1),
+        leader_in_isr: true,
+        leader_alive: true,
+        leader_is_witness: false,
+    };
+
     #[test]
-    fn preferred_rebalance_admission_requires_every_batch_fact() {
-        assert!(preferred_rebalance_admission(10, 1, true, true));
-        for denied in [
-            preferred_rebalance_admission(0, 0, true, true),
-            preferred_rebalance_admission(10, 0, true, true),
-            preferred_rebalance_admission(10, 11, true, true),
-            preferred_rebalance_admission(10, 1, false, true),
-            preferred_rebalance_admission(10, 1, true, false),
+    fn preferred_rebalance_admits_only_capped_preferred_elections() {
+        for (scenario, changes, cap, expected) in [
+            (
+                "one preferred election",
+                std::vec![PREFERRED_BACK],
+                1000,
+                true,
+            ),
+            (
+                "a batch exactly at the cap",
+                std::vec![PREFERRED_BACK; 2],
+                2,
+                true,
+            ),
+            ("nothing to rebalance", std::vec![], 1000, false),
+            (
+                "a batch over the cap",
+                std::vec![PREFERRED_BACK; 3],
+                2,
+                false,
+            ),
+            (
+                "the change installs a non-preferred replica",
+                std::vec![PreferredLeaderChange {
+                    new_leader: 2,
+                    ..PREFERRED_BACK
+                }],
+                1000,
+                false,
+            ),
+            (
+                "the partition has no assignment",
+                std::vec![PreferredLeaderChange {
+                    preferred_replica: None,
+                    ..PREFERRED_BACK
+                }],
+                1000,
+                false,
+            ),
+            (
+                "the preferred replica fell out of the ISR",
+                std::vec![
+                    PREFERRED_BACK,
+                    PreferredLeaderChange {
+                        leader_in_isr: false,
+                        ..PREFERRED_BACK
+                    },
+                ],
+                1000,
+                false,
+            ),
+            (
+                "the preferred replica is not alive",
+                std::vec![PreferredLeaderChange {
+                    leader_alive: false,
+                    ..PREFERRED_BACK
+                }],
+                1000,
+                false,
+            ),
+            (
+                "the preferred replica is a witness",
+                std::vec![PreferredLeaderChange {
+                    leader_is_witness: true,
+                    ..PREFERRED_BACK
+                }],
+                1000,
+                false,
+            ),
         ] {
-            assert!(!denied);
+            assert!(
+                preferred_rebalance_admission(&changes, cap) == expected,
+                "{scenario}"
+            );
         }
     }
 
+    /// A partition with an open transaction at 6, a high watermark of 8 and
+    /// two uncommitted records beyond it. Nothing is scheduled, so the delivery
+    /// watermark sits at the high watermark.
+    const OPEN_TXN: FetchWatermarks = FetchWatermarks {
+        log_start: 2,
+        hw: 8,
+        lso: 6,
+        log_end: 10,
+        deliverable: 8,
+    };
+
     #[test]
-    fn fetch_visibility_covers_consumer_and_follower_bounds() {
-        // Nothing is held back: the delivery watermark sits at the high
-        // watermark, so every bound is the one Kafka computes today.
-        assert2::assert!(
-            fetch_visibility(
+    fn fetch_visibility_matches_kafka_fetch_scenarios() {
+        let open_txn = OPEN_TXN;
+        // Every row reports the partition's own HW (8) and LSO (6), follower
+        // or consumer: `Partition.readRecords` reads both whoever fetches.
+        for (scenario, is_follower, read_committed, w, fetch_offset, expected) in [
+            (
+                "read_uncommitted consumer reads to the high watermark",
                 false,
-                true,
-                FetchWatermarks {
-                    log_start: 2,
-                    hw: 8,
-                    lso: 6,
-                    log_end: 10,
-                    deliverable: 8,
+                false,
+                open_txn,
+                3,
+                FetchVisibility {
+                    out_of_range: false,
+                    empty: false,
+                    limit_offset: 8,
+                    effective_lso: 6,
+                    read_committed_aborts: false,
+                    response_hw: 8,
+                    response_lso: 6,
                 },
-                3
-            ) == FetchVisibility {
-                out_of_range: false,
-                empty: false,
-                limit_offset: 6,
-                effective_lso: 6,
-                read_committed_aborts: true,
-                response_hw: 8,
-                response_lso: 6,
-            }
-        );
-
-        assert2::assert!(
-            fetch_visibility(
+            ),
+            (
+                "read_committed consumer stops at the open transaction",
                 false,
                 true,
-                FetchWatermarks {
-                    log_start: 2,
-                    hw: 8,
-                    lso: 9,
-                    log_end: 10,
-                    deliverable: 8,
+                open_txn,
+                3,
+                FetchVisibility {
+                    out_of_range: false,
+                    empty: false,
+                    limit_offset: 6,
+                    effective_lso: 6,
+                    read_committed_aborts: true,
+                    response_hw: 8,
+                    response_lso: 6,
                 },
-                3
-            ) == FetchVisibility {
-                out_of_range: false,
-                empty: false,
-                limit_offset: 8,
-                effective_lso: 8,
-                read_committed_aborts: true,
-                response_hw: 8,
-                response_lso: 8,
-            }
-        );
+            ),
+            (
+                "follower reads to the log end but learns the committed bounds",
+                true,
+                false,
+                open_txn,
+                8,
+                FetchVisibility {
+                    out_of_range: false,
+                    empty: false,
+                    limit_offset: 10,
+                    effective_lso: 6,
+                    read_committed_aborts: false,
+                    response_hw: 8,
+                    response_lso: 6,
+                },
+            ),
+            (
+                "caught-up follower has nothing to read",
+                true,
+                false,
+                open_txn,
+                10,
+                FetchVisibility {
+                    out_of_range: false,
+                    empty: true,
+                    limit_offset: 10,
+                    effective_lso: 6,
+                    read_committed_aborts: false,
+                    response_hw: 8,
+                    response_lso: 6,
+                },
+            ),
+            (
+                "a fetch below the log start is OFFSET_OUT_OF_RANGE",
+                false,
+                false,
+                open_txn,
+                1,
+                FetchVisibility {
+                    out_of_range: true,
+                    empty: false,
+                    limit_offset: 8,
+                    effective_lso: 6,
+                    read_committed_aborts: false,
+                    response_hw: 8,
+                    response_lso: 6,
+                },
+            ),
+        ] {
+            assert!(
+                fetch_visibility(is_follower, read_committed, w, fetch_offset) == expected,
+                "{scenario}"
+            );
+        }
 
-        // A follower reads to the log end even where the whole log is waiting
-        // to be delivered.
-        assert2::assert!(
-            fetch_visibility(
+        // An LSO that has run ahead of the high watermark is capped at it, in
+        // the report as well as the read_committed bound, as
+        // `UnifiedLog.lastStableOffset` caps it.
+        assert!(
+            fetch_visibility(false, true, FetchWatermarks { lso: 9, ..open_txn }, 3)
+                == FetchVisibility {
+                    out_of_range: false,
+                    empty: false,
+                    limit_offset: 8,
+                    effective_lso: 8,
+                    read_committed_aborts: true,
+                    response_hw: 8,
+                    response_lso: 8,
+                }
+        );
+    }
+
+    #[test]
+    fn fetch_visibility_caps_only_a_consumer_at_the_delivery_watermark() {
+        let open_txn = OPEN_TXN;
+        // As above, every row reports the partition's own HW (8) and LSO (6).
+        for (scenario, is_follower, read_committed, w, fetch_offset, expected) in [
+            (
+                "a follower is not gated by a delivery watermark at the log start",
                 true,
                 false,
                 FetchWatermarks {
-                    log_start: 2,
-                    hw: 8,
-                    lso: 6,
-                    log_end: 10,
                     deliverable: 2,
+                    ..open_txn
                 },
-                10
-            ) == FetchVisibility {
-                out_of_range: false,
-                empty: true,
-                limit_offset: 10,
-                effective_lso: 6,
-                read_committed_aborts: false,
-                response_hw: 10,
-                response_lso: 10,
-            }
-        );
-    }
-
-    #[test]
-    fn fetch_visibility_caps_a_consumer_at_the_delivery_watermark() {
-        // read_uncommitted: the cap is the delivery watermark, not the high
-        // watermark, and the reported watermarks do not move with it.
-        assert2::assert!(
-            fetch_visibility(
+                3,
+                FetchVisibility {
+                    out_of_range: false,
+                    empty: false,
+                    limit_offset: 10,
+                    effective_lso: 6,
+                    read_committed_aborts: false,
+                    response_hw: 8,
+                    response_lso: 6,
+                },
+            ),
+            (
+                "a consumer is held below a batch that is not due yet",
                 false,
                 false,
                 FetchWatermarks {
-                    log_start: 0,
-                    hw: 8,
-                    lso: 8,
-                    log_end: 10,
                     deliverable: 5,
+                    ..open_txn
                 },
-                3
-            ) == FetchVisibility {
-                out_of_range: false,
-                empty: false,
-                limit_offset: 5,
-                effective_lso: 8,
-                read_committed_aborts: false,
-                response_hw: 8,
-                response_lso: 8,
-            }
-        );
-
-        // A consumer parked exactly at the watermark reads nothing, which is
-        // what parks it in a long poll until the batch there comes due.
-        assert2::assert!(
-            fetch_visibility(
+                3,
+                FetchVisibility {
+                    out_of_range: false,
+                    empty: false,
+                    limit_offset: 5,
+                    effective_lso: 6,
+                    read_committed_aborts: false,
+                    response_hw: 8,
+                    response_lso: 6,
+                },
+            ),
+            (
+                "a consumer parked at the delivery watermark reads nothing",
                 false,
                 false,
                 FetchWatermarks {
-                    log_start: 0,
-                    hw: 8,
-                    lso: 8,
-                    log_end: 10,
                     deliverable: 5,
+                    ..open_txn
                 },
-                5
-            ) == FetchVisibility {
-                out_of_range: false,
-                empty: true,
-                limit_offset: 5,
-                effective_lso: 8,
-                read_committed_aborts: false,
-                response_hw: 8,
-                response_lso: 8,
-            }
-        );
-
-        // read_committed takes the lowest of the three. The abort-scan ceiling
-        // stays `lso.min(hw)`, because a wider scan only lists aborts the
-        // consumer already knows how to drop.
-        assert2::assert!(
-            fetch_visibility(
+                5,
+                FetchVisibility {
+                    out_of_range: false,
+                    empty: true,
+                    limit_offset: 5,
+                    effective_lso: 6,
+                    read_committed_aborts: false,
+                    response_hw: 8,
+                    response_lso: 6,
+                },
+            ),
+            (
+                "read_committed takes the delivery watermark where it is lowest",
                 false,
                 true,
                 FetchWatermarks {
-                    log_start: 0,
-                    hw: 8,
-                    lso: 6,
-                    log_end: 10,
                     deliverable: 4,
+                    ..open_txn
                 },
-                0
-            ) == FetchVisibility {
-                out_of_range: false,
-                empty: false,
-                limit_offset: 4,
-                effective_lso: 6,
-                read_committed_aborts: true,
-                response_hw: 8,
-                response_lso: 6,
-            }
-        );
-        // The last stable offset still wins where it is the lowest of the three.
-        assert2::assert!(
-            fetch_visibility(
+                3,
+                FetchVisibility {
+                    out_of_range: false,
+                    empty: false,
+                    limit_offset: 4,
+                    effective_lso: 6,
+                    read_committed_aborts: true,
+                    response_hw: 8,
+                    response_lso: 6,
+                },
+            ),
+            (
+                "a delivery watermark above the high watermark exposes nothing uncommitted",
+                false,
+                false,
+                FetchWatermarks {
+                    deliverable: 10,
+                    ..open_txn
+                },
+                8,
+                FetchVisibility {
+                    out_of_range: false,
+                    empty: true,
+                    limit_offset: 8,
+                    effective_lso: 6,
+                    read_committed_aborts: false,
+                    response_hw: 8,
+                    response_lso: 6,
+                },
+            ),
+            (
+                "a delivery watermark below the log start leaves an empty window",
                 false,
                 true,
                 FetchWatermarks {
-                    log_start: 0,
-                    hw: 8,
-                    lso: 3,
-                    log_end: 10,
-                    deliverable: 4,
+                    deliverable: 0,
+                    ..open_txn
                 },
-                0
-            )
-            .limit_offset
-                == 3
-        );
+                2,
+                FetchVisibility {
+                    out_of_range: false,
+                    empty: true,
+                    limit_offset: 0,
+                    effective_lso: 6,
+                    read_committed_aborts: true,
+                    response_hw: 8,
+                    response_lso: 6,
+                },
+            ),
+        ] {
+            assert!(
+                fetch_visibility(is_follower, read_committed, w, fetch_offset) == expected,
+                "{scenario}"
+            );
+        }
     }
 
     #[test]
@@ -1049,79 +1327,6 @@ mod tests {
         }
         assert!(java_string_hash_partition(&[], 0) == None);
         assert!(java_string_hash_partition(&[], -1) == None);
-    }
-
-    #[test]
-    fn fetch_visibility_matches_the_complete_decision_table() {
-        for is_follower in [false, true] {
-            for read_committed in [false, true] {
-                for log_start in [0, 2] {
-                    for hw in [2, 5] {
-                        for lso in [1, 4, 7] {
-                            for log_end in [5, 9] {
-                                // The table walks `deliverable` past both ends
-                                // of the proved domain `[log_start, hw]` as
-                                // well as through it, because the precondition
-                                // is a proof obligation on the caller and does
-                                // not run. The oracle takes the same minimum
-                                // the body does.
-                                for deliverable in [0, 2, 3, 5, 9] {
-                                    for fetch_offset in [0, 2, 4, 5, 10] {
-                                        let got = fetch_visibility(
-                                            is_follower,
-                                            read_committed,
-                                            FetchWatermarks {
-                                                log_start,
-                                                hw,
-                                                lso,
-                                                log_end,
-                                                deliverable,
-                                            },
-                                            fetch_offset,
-                                        );
-                                        let visible = hw.min(deliverable);
-                                        let upper = if is_follower { log_end } else { visible };
-                                        let effective_lso = if read_committed && !is_follower {
-                                            lso.min(hw)
-                                        } else {
-                                            lso
-                                        };
-                                        let response_lso = if is_follower {
-                                            log_end
-                                        } else if read_committed {
-                                            lso.min(hw)
-                                        } else {
-                                            hw
-                                        };
-                                        let limit = if is_follower {
-                                            log_end
-                                        } else if read_committed {
-                                            effective_lso.min(visible)
-                                        } else {
-                                            visible
-                                        };
-                                        let out_of_range = fetch_offset < log_start;
-
-                                        assert2::assert!(
-                                            got == FetchVisibility {
-                                                out_of_range,
-                                                empty: !out_of_range && fetch_offset >= upper,
-                                                limit_offset: limit,
-                                                effective_lso,
-                                                read_committed_aborts: read_committed
-                                                    && !is_follower,
-                                                response_hw: if is_follower { log_end } else { hw },
-                                                response_lso,
-                                            }
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 
     #[test]

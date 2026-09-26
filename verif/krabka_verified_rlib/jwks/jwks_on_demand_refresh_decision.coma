@@ -1,11 +1,12 @@
-(* #"/workspace/crates/verified/src/jwks.rs" 84 0 88 25 *)
+(* #"/workspace/crates/verified/src/jwks.rs" 106 0 110 25 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sjwks = "/workspace/crates/verified/src/jwks.rs" 89 16 89 17
-let%span sjwks'0 = "/workspace/crates/verified/src/jwks.rs" 89 36 89 37
-let%span sjwks'1 = "/workspace/crates/verified/src/jwks.rs" 92 25 92 26
-let%span sjwks'2 = "/workspace/crates/verified/src/jwks.rs" 92 30 92 54
-let%span sjwks'3 = "/workspace/crates/verified/src/jwks.rs" 73 10 82 1
+let%span sjwks = "/workspace/crates/verified/src/jwks.rs" 111 16 111 17
+let%span sjwks'0 = "/workspace/crates/verified/src/jwks.rs" 111 36 111 37
+let%span sjwks'1 = "/workspace/crates/verified/src/jwks.rs" 114 25 114 26
+let%span sjwks'2 = "/workspace/crates/verified/src/jwks.rs" 114 30 114 54
+let%span sjwks'3 = "/workspace/crates/verified/src/jwks.rs" 96 10 104 1
+let%span sjwks'4 = "/workspace/crates/verified/src/jwks.rs" 86 8 89 85
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -17,11 +18,18 @@ predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate ge_log_Int
 
+predicate jwks_on_demand_refresh_allowed [#"/workspace/crates/verified/src/jwks.rs" 80 0 84 9] (now_ms: Int64.t) (last_refresh_ms: Int64.t) (min_pause_ms: Int64.t) =
+  [%#sjwks'4] ge_log_Int (Int64.to_int now_ms) 0
+  /\ ge_log_Int (Int64.to_int min_pause_ms) 0
+  /\ ge_log_Int (Int64.to_int now_ms) (Int64.to_int last_refresh_ms)
+  /\ (Int64.to_int last_refresh_ms <= 0
+  \/ ge_log_Int (Int64.to_int now_ms - Int64.to_int last_refresh_ms) (Int64.to_int min_pause_ms))
+
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let jwks_on_demand_refresh_decision [#"/workspace/crates/verified/src/jwks.rs" 84 0 88 25] (now_ms: Int64.t)
+let jwks_on_demand_refresh_decision [#"/workspace/crates/verified/src/jwks.rs" 106 0 110 25] (now_ms: Int64.t)
   (last_refresh_ms: Int64.t) (min_pause_ms: Int64.t) (return (x: t_JwksOnDemandDecision)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_9 <- Int64.lt now_ms ([%#sjwks] (0: Int64.t)) ] s1
@@ -54,12 +62,8 @@ let jwks_on_demand_refresh_decision [#"/workspace/crates/verified/src/jwks.rs" 8
   | & _21: Int64.t = Any.any_l () ])
   [ return (result: t_JwksOnDemandDecision) ->
   {[@stop_split] [@expl:jwks_on_demand_refresh_decision ensures] [%#sjwks'3] match result with
-      | RateLimited -> true
-      | Refresh next_refresh_ms -> Int64.to_int next_refresh_ms = Int64.to_int now_ms
-      /\ ge_log_Int (Int64.to_int now_ms) 0
-      /\ ge_log_Int (Int64.to_int min_pause_ms) 0
-      /\ ge_log_Int (Int64.to_int now_ms) (Int64.to_int last_refresh_ms)
-      /\ (Int64.to_int last_refresh_ms <= 0
-      \/ ge_log_Int (Int64.to_int now_ms - Int64.to_int last_refresh_ms) (Int64.to_int min_pause_ms))
+      | RateLimited -> not jwks_on_demand_refresh_allowed now_ms last_refresh_ms min_pause_ms
+      | Refresh next_refresh_ms -> next_refresh_ms = now_ms
+      /\ jwks_on_demand_refresh_allowed now_ms last_refresh_ms min_pause_ms
       end}
     (! return {result}) ]

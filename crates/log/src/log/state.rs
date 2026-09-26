@@ -88,18 +88,33 @@ impl Log {
     /// the start from the first surviving base offset and serves records that
     /// a `DeleteRecords` already deleted.
     ///
+    /// When the start does move up, the rest of the log follows it the way
+    /// Kafka's `maybeIncrementLogStartOffset` makes it follow:
+    ///
+    /// - the leader-epoch cache drops what lies below the new start
+    ///   (`leaderEpochCache.truncateFromStart`, see
+    ///   [`LeaderEpochCheckpoint::truncate_from_start`]);
+    /// - a complete transaction whose marker lies below the new start stops
+    ///   holding the last stable offset
+    ///   (`ProducerStateManager.onLogStartOffsetIncremented` →
+    ///   `removeUnreplicatedTransactions`), because nothing a leader change
+    ///   could truncate is left of it;
+    /// - the first unstable offset is recomputed (`maybeIncrementFirstUnstableOffset`).
+    ///
     /// `new_start` must be non-negative.
     ///
     /// # Errors
     ///
     /// Returns [`LogError::InvalidArgument`] if `new_start` is negative, and
-    /// [`LogError::Io`] if the checkpoint cannot be written.
+    /// [`LogError::Io`] if the log-start or leader-epoch checkpoint cannot be
+    /// written.
     pub fn set_log_start_offset(&mut self, new_start: Offset) -> Result<(), LogError> {
         if new_start < 0 {
             return Err(LogError::InvalidArgument(
                 "set_log_start_offset: new_start must be >= 0".into(),
             ));
         }
+        let incremented = new_start > self.start_offset;
         let new_start = self.start_offset.max(new_start);
         // The checkpoint is durable when this returns, directory sync
         // included: `DeleteRecords` is acknowledged as soon as the trim does,
@@ -111,6 +126,12 @@ impl Log {
         // floor now means something a reader may be refused against, and the
         // checkpoint carries that meaning across a reopen.
         self.start_offset_established = true;
+        if incremented {
+            self.epoch_checkpoint.truncate_from_start(new_start)?;
+            self.unreplicated
+                .retain(|_, marker_offset| *marker_offset >= new_start);
+            self.refresh_lso()?;
+        }
         Ok(())
     }
 
@@ -374,6 +395,24 @@ impl Log {
         &self.epoch_checkpoint
     }
 
+    /// Kafka's `UnifiedLog.assignEpochStartOffset`: record that `epoch`
+    /// starts at `start_offset` through
+    /// [`LeaderEpochCheckpoint::assign`]. `Partition.makeLeader` calls it with
+    /// the log end offset when a replica takes a new leader epoch, so the
+    /// leader can place a follower's `last_fetched_epoch` before it has
+    /// written anything in that epoch.
+    ///
+    /// # Errors
+    /// Returns an error for a negative epoch or offset, or when the
+    /// checkpoint cannot be persisted.
+    pub fn assign_epoch_start_offset(
+        &mut self,
+        epoch: krabka_ids::LeaderEpoch,
+        start_offset: Offset,
+    ) -> Result<(), LogError> {
+        self.epoch_checkpoint.assign(epoch, start_offset)
+    }
+
     /// Reconcile append-at offset assignment to an external next-offset frontier.
     ///
     /// Diskless partitions use the `KRaft` metadata log as the offset authority.
@@ -439,6 +478,71 @@ mod tests {
             log.set_log_start_offset(Offset(-1)).is_err(),
             "negative is not"
         );
+    }
+
+    /// Kafka's `maybeIncrementLogStartOffset` → `onLogStartOffsetIncremented`:
+    /// a complete transaction whose marker falls below the new log start
+    /// stops holding the last stable offset, and one whose marker the start
+    /// only reaches keeps holding it. Producer 42 writes a transaction at
+    /// offset 0 and commits it at offset 1, the high watermark never passes
+    /// the marker, and three plain records follow at offsets 2 to 4.
+    #[test]
+    fn raising_the_log_start_past_a_marker_releases_its_transaction() {
+        use crate::log::test_support::{commit_marker, transactional_batch};
+
+        for (name, new_start, released) in [
+            ("the start reaches the marker", 1, false),
+            ("the start passes the marker", 2, true),
+        ] {
+            let dir = tempdir().unwrap();
+            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+            log.append(&mut transactional_batch(42, 0, &["a"])).unwrap();
+            log.append(&mut commit_marker(42, 0)).unwrap();
+            log.append(&mut sample_batch(3)).unwrap();
+            check!(log.lso() == Offset(0), "{name}: held before the move");
+
+            log.set_log_start_offset(Offset(new_start)).unwrap();
+
+            check!(
+                (log.lso() == log.log_end_offset()) == released,
+                "{name}: lso {:?}",
+                log.lso()
+            );
+        }
+    }
+
+    /// Kafka's `maybeIncrementLogStartOffset` →
+    /// `leaderEpochCache.truncateFromStart`: raising the start drops the
+    /// epochs that end below it, the epoch that covers it starts there, and
+    /// the trimmed history is what a reopen reads back. A start that does not
+    /// move leaves the cache alone.
+    #[test]
+    fn raising_the_log_start_truncates_the_epoch_cache_from_the_start() {
+        use crate::leader_epoch_checkpoint::EpochEntry;
+
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        log.append(&mut sample_batch_with_epoch(3, 1)).unwrap(); // epoch 1 @ 0
+        log.append(&mut sample_batch_with_epoch(3, 2)).unwrap(); // epoch 2 @ 3
+        log.append(&mut sample_batch_with_epoch(3, 4)).unwrap(); // epoch 4 @ 6
+
+        log.set_log_start_offset(Offset(4)).unwrap();
+        log.set_log_start_offset(Offset(2)).unwrap();
+
+        let expected = [
+            EpochEntry {
+                epoch: LeaderEpoch(2),
+                start_offset: Offset(4),
+            },
+            EpochEntry {
+                epoch: LeaderEpoch(4),
+                start_offset: Offset(6),
+            },
+        ];
+        check!(log.epoch_checkpoint().entries() == &expected[..]);
+        drop(log);
+        let reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
+        check!(reopened.epoch_checkpoint().entries() == &expected[..]);
     }
 
     /// The log's size is every segment's size added up, the sealed ones as

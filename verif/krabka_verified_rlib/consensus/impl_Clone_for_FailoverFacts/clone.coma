@@ -1,0 +1,23 @@
+(* #"/workspace/crates/verified/src/consensus.rs" 78 27 78 32 *)
+
+(* <consensus::FailoverFacts as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_LiveIsr = Empty | WitnessesOnly | Electable
+
+type t_FailoverRecovery = None | Balanced | Aggressive
+
+type t_OutOfIsrFacts = { has_electable_elr: bool; recovery: t_FailoverRecovery; unclean_election_available: bool }
+
+type t_FailoverFacts = { leader_dead: bool; isr_shrunk: bool; live_isr: t_LiveIsr; out_of_isr: t_OutOfIsrFacts }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_FailoverFacts [#"/workspace/crates/verified/src/consensus.rs" 78 27 78 32] (self: t_FailoverFacts)
+  (return (x: t_FailoverFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FailoverFacts = Any.any_l () | & self: t_FailoverFacts = self ])
+  [ return (result: t_FailoverFacts) -> (! return {result}) ]

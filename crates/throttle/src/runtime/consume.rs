@@ -1,19 +1,18 @@
-//! [`TokenBucket::try_consume`]: the read side of the seqlock, which claims a
-//! refill for the elapsed window and commits the new balance with a compare
-//! and exchange.
+//! [`TokenBucket::try_consume`]: turn the time elapsed since the last refill
+//! into tokens, cap them at the burst, and grant from the result, all in one
+//! critical section.
 //!
-//! The loop re-reads the rate and the burst under a generation check, so a
-//! concurrent reset from [`TokenBucket::set_token_rate_with_burst`] can never
-//! apply non-atomically and a stale commit can never clobber it. The
-//! arithmetic itself is the verified [`plan_consume`] kernel.
-
-use std::sync::atomic::{Ordering, Ordering::Relaxed};
+//! The arithmetic that caps and grants is the verified [`plan_consume`]
+//! kernel. [`BucketState::consume`] is the whole step on the locked group, so
+//! it can be tested without threads.
 
 use krabka_verified::throttle::{
     AvailableTokens, BurstCapacity, RefillTokens, RequestedTokens, plan_consume,
 };
 
-use super::TokenBucket;
+use super::{BucketState, TokenBucket};
+
+const NANOS_PER_SEC: u128 = 1_000_000_000;
 
 impl TokenBucket {
     /// Tries to consume up to `requested` tokens.
@@ -21,88 +20,61 @@ impl TokenBucket {
     /// This method returns the amount actually granted. Rate-0 grants the full
     /// request.
     ///
-    /// The method re-reads `rate` and `burst` inside the CAS loop under a
-    /// seqlock generation check. A concurrent
-    /// [`Self::set_token_rate_with_burst`] reset that straddles this call's
-    /// refill-claim and CAS commit can thus never apply non-atomically. An odd
-    /// or mismatched generation forces a retry. On retry, the method claims the
-    /// refill gap again against the post-reset `last_refill`.
+    /// The refill, the grant, and the new balance are one critical section on
+    /// the bucket's group, so a concurrent
+    /// [`Self::set_token_rate_with_burst`] runs wholly before or wholly after
+    /// this call, and concurrent consumes never lose each other's refill. See
+    /// the module documentation of the runtime for the design.
+    ///
     /// # Panics
-    /// Panics if validated compression or rate-limit state contains an impossible size or time value.
+    /// Panics if the injected clock reads more than `u64::MAX` nanoseconds
+    /// since its origin, about 584 years.
     pub fn try_consume(&self, requested: u64) -> u64 {
-        if self.rate_per_sec.load(Relaxed) == 0 {
+        // Unthrottled fast path: a `0` here orders this consume before any
+        // reset still in flight, so it may grant without the lock.
+        if self.fast_path_rate() == 0 {
             return requested;
         }
+        let mut state = self.lock_state();
+        let now = self.now_nanos();
+        state.consume(now, requested)
+    }
+}
 
-        loop {
-            // Read the seqlock generation; an odd value means a reset is in
-            // flight, so spin until it is quiescent before sampling the group.
-            let gen_before = self.generation.load(Relaxed);
-            if gen_before & 1 != 0 {
-                continue;
-            }
-            std::sync::atomic::fence(Ordering::Acquire);
-
-            let rate = self.rate_per_sec.load(Relaxed);
-            if rate == 0 {
-                return requested;
-            }
-            let burst = self.burst.load(Relaxed);
-            if burst == 0 {
-                // Re-validate against a straddling reset before committing 0.
-                if self.generation.load(Relaxed) != gen_before {
-                    continue;
-                }
-                return 0;
-            }
-
-            let now = self.now_nanos();
-            let last = self.last_refill_nanos.load(Relaxed);
-            let elapsed = now.saturating_sub(last);
-            let refill = (u128::from(elapsed) * u128::from(rate)) / 1_000_000_000;
-            let refill = u64::try_from(refill.min(u128::from(u64::MAX)))
-                .expect("refill is capped at u64::MAX");
-            // Claim only the time the whole refilled tokens account for. The
-            // remainder stays unclaimed for the next call, so a caller that
-            // retries faster than one token per interval still sees the bucket
-            // refill at `rate`. Claiming the whole gap would drop that remainder
-            // on every call, and a bucket polled often enough would never
-            // refill at all.
-            let claimed = u64::try_from(
-                (u128::from(refill) * 1_000_000_000 / u128::from(rate)).min(u128::from(elapsed)),
-            )
-            .expect("the claimed time is at most the elapsed time");
-            if claimed > 0
-                && self
-                    .last_refill_nanos
-                    .compare_exchange(last, last.saturating_add(claimed), Relaxed, Relaxed)
-                    .is_err()
-            {
-                // A concurrent consumer claimed this gap first.
-                continue;
-            }
-
-            let cur = self.available.load(Relaxed);
-            let (grant, new_avail) = plan_consume(
-                AvailableTokens(cur),
-                RefillTokens(refill),
-                BurstCapacity(burst),
-                RequestedTokens(requested),
-            );
-
-            // Only commit if no reset straddled the read-compute window; the CAS
-            // itself guards against a concurrent consumer mutating `available`.
-            if self.generation.load(Relaxed) != gen_before {
-                continue;
-            }
-            if self
-                .available
-                .compare_exchange_weak(cur, new_avail.0, Relaxed, Relaxed)
-                .is_ok()
-            {
-                return grant.0;
-            }
+impl BucketState {
+    /// Refills the bucket for the time elapsed up to `now`, then grants up to
+    /// `requested` from it, and returns the grant.
+    ///
+    /// Only the time the whole refilled tokens account for is claimed. The
+    /// remainder stays unclaimed for the next call, so a caller that retries
+    /// faster than one token per interval still sees the bucket refill at
+    /// `rate`. Claiming the whole gap would drop that remainder on every call,
+    /// and a bucket polled often enough would never refill at all.
+    ///
+    /// Every value is computed before the first store, so a panic cannot leave
+    /// the group half updated.
+    fn consume(&mut self, now: u64, requested: u64) -> u64 {
+        let rate = self.rate_per_sec;
+        if rate == 0 {
+            return requested;
         }
+        let elapsed = now.saturating_sub(self.last_refill_nanos);
+        let refill = u128::from(elapsed) * u128::from(rate) / NANOS_PER_SEC;
+        let refill =
+            u64::try_from(refill.min(u128::from(u64::MAX))).expect("refill is capped at u64::MAX");
+        let claimed = u64::try_from(
+            (u128::from(refill) * NANOS_PER_SEC / u128::from(rate)).min(u128::from(elapsed)),
+        )
+        .expect("the claimed time is at most the elapsed time");
+        let (grant, new_available) = plan_consume(
+            AvailableTokens(self.available),
+            RefillTokens(refill),
+            BurstCapacity(self.burst),
+            RequestedTokens(requested),
+        );
+        self.last_refill_nanos += claimed;
+        self.available = new_available.0;
+        grant.0
     }
 }
 
@@ -118,7 +90,7 @@ mod tests {
     };
 
     use assert2::check;
-    use krabka_units::prelude::{ByteSize, ByteSizeExt as _, bytes, bytes_per_sec};
+    use krabka_units::prelude::{bytes, bytes_per_sec};
     use qubit_clock::ManualMonotonicClock;
 
     use super::*;
@@ -262,70 +234,223 @@ mod tests {
         assert2::assert!(try_consume_with_timeout(&b, 1) == 0);
     }
 
+    /// One whole consume step on the locked group, table-driven over the
+    /// cases that differ only in the group, the clock, and the request.
+    /// Each row pins the grant and the whole group after the step.
     #[test]
-    fn try_consume_waits_while_generation_is_odd() {
-        let b = Arc::new(TokenBucket::new());
-        b.set_byte_rate(bytes_per_sec(4));
-        b.generation.store(1, Relaxed);
+    fn consume_step_refills_caps_and_grants() {
+        const SEC: u64 = 1_000_000_000;
+        let group = |rate_per_sec, burst, available, last_refill_nanos| BucketState {
+            rate_per_sec,
+            burst,
+            available,
+            last_refill_nanos,
+        };
+        // (label, group before, now, requested, grant, group after)
+        let cases = [
+            (
+                "rate 0 grants the request and leaves the group alone",
+                group(0, 0, 0, 0),
+                5 * SEC,
+                7,
+                7,
+                group(0, 0, 0, 0),
+            ),
+            (
+                "the whole elapsed second becomes tokens",
+                group(10, 20, 0, 0),
+                SEC,
+                4,
+                4,
+                group(10, 20, 6, SEC),
+            ),
+            (
+                "the refill is capped at the burst, and the time is still claimed",
+                group(10, 20, 15, 0),
+                SEC,
+                0,
+                0,
+                group(10, 20, 20, SEC),
+            ),
+            (
+                "a part-token remainder of the gap stays unclaimed",
+                group(4, 10, 0, 0),
+                SEC / 2 + SEC / 8,
+                10,
+                2,
+                group(4, 10, 0, SEC / 2),
+            ),
+            (
+                "a positive rate with a zero burst grants nothing",
+                group(10, 0, 0, 0),
+                SEC,
+                3,
+                0,
+                group(10, 0, 0, SEC),
+            ),
+            (
+                "a clock reading behind last_refill refills nothing",
+                group(10, 20, 3, SEC),
+                0,
+                5,
+                3,
+                group(10, 20, 0, SEC),
+            ),
+        ];
+
+        for (label, before, now, requested, grant, after) in cases {
+            let mut state = before;
+            let granted = state.consume(now, requested);
+            check!((granted, state) == (grant, after), "{label}");
+        }
+    }
+
+    /// A consume that arrives while a reset holds the group waits for it and
+    /// then grants against the new configuration, never against a value it
+    /// read before the reset.
+    #[test]
+    fn try_consume_waits_for_an_in_flight_reset() {
+        let (b, clock) = manual_bucket();
+        b.set_token_rate_with_burst(10, 10);
+        clock
+            .advance(Duration::from_secs(1))
+            .expect("manual time moves forward");
+
+        // Stand in for a reset part-way through its critical section: the lock
+        // is held and the group is rewritten to a smaller burst.
+        let mut in_flight_reset = b.lock_state();
+        *in_flight_reset = BucketState {
+            rate_per_sec: 10,
+            burst: 3,
+            available: 3,
+            last_refill_nanos: 1_000_000_000,
+        };
 
         let (tx, rx) = std::sync::mpsc::channel();
         let worker_bucket = Arc::clone(&b);
         let handle = std::thread::spawn(move || {
-            let granted = worker_bucket.try_consume(1);
-            let _ = tx.send(granted);
+            let _ = tx.send(worker_bucket.try_consume(10));
         });
-
         match rx.recv_timeout(Duration::from_millis(50)) {
             Err(RecvTimeoutError::Timeout) => {}
-            Ok(granted) => panic!("try_consume granted {granted} while generation was odd"),
+            Ok(granted) => panic!("try_consume granted {granted} during a reset"),
             Err(RecvTimeoutError::Disconnected) => {
-                handle.join().expect("try_consume worker panicked");
-                panic!("try_consume worker exited while generation was odd");
+                panic!("try_consume worker exited during a reset")
             }
         }
 
-        b.generation.store(2, Relaxed);
+        drop(in_flight_reset);
         let granted = rx
             .recv_timeout(TRY_CONSUME_TIMEOUT)
-            .expect("try_consume should complete after generation becomes even");
+            .expect("try_consume completes once the reset releases the group");
         handle.join().expect("try_consume worker panicked");
-        assert2::assert!(granted == 1);
+        check!(granted == 3);
     }
 
-    // Stress the seqlock: many consumers racing a stream of set_rate resets must
-    // never leave `available` above `burst` (the rate-change race the stateright
-    // model in tests/bucket_model.rs proves bounded). A straddled reset that was
-    // clobbered by a stale CAS would let `available` exceed the new burst here.
+    /// Consumers racing each other never lose a refill one of them claimed.
+    ///
+    /// The bucket starts empty, and the manual clock advances by exactly one
+    /// token's worth of time per step while the consumers poll. The burst is
+    /// larger than the whole refill, so no token is capped away. Every refilled
+    /// token must therefore end up granted: a consume that claimed time and
+    /// then dropped its tokens would leave the total short.
+    #[test]
+    fn concurrent_consumers_never_lose_a_claimed_refill() {
+        const STEPS: u64 = 2_000;
+        const RATE: u64 = 1_000;
+        let (b, clock) = manual_bucket();
+        b.set_token_rate_with_burst(RATE, STEPS + 1);
+        check!(try_consume_with_timeout(&b, STEPS + 1) == STEPS + 1);
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let consumers: Vec<_> = (0..3)
+            .map(|_| {
+                let b = Arc::clone(&b);
+                let stop = Arc::clone(&stop);
+                std::thread::spawn(move || {
+                    let mut granted = 0;
+                    while !stop.load(Relaxed) {
+                        granted += b.try_consume(1);
+                    }
+                    granted
+                })
+            })
+            .collect();
+
+        for _ in 0..STEPS {
+            clock
+                .advance(Duration::from_millis(1))
+                .expect("manual time moves forward");
+            std::thread::yield_now();
+        }
+        stop.store(true, Relaxed);
+        let raced: u64 = consumers
+            .into_iter()
+            .map(|h| h.join().expect("consumer panicked"))
+            .sum();
+        let leftover = try_consume_with_timeout(&b, u64::MAX);
+
+        check!(raced + leftover == STEPS);
+    }
+
+    // Stress the reset path: consumers racing a stream of resets that shrink
+    // and grow the burst must never see `available` above the current burst.
+    // A reset straddled by a consume's read and commit would let that commit
+    // store a balance computed under the old, larger burst. The real clock
+    // runs, so consumes refill between resets, which the straddle needs.
     #[test]
     fn concurrent_set_rate_never_over_grants_past_burst() {
-        const BURST: ByteSize = bytes(4096);
+        // (rate, burst) pairs the resetter cycles through, largest burst first.
+        const CONFIGS: [(u64, u64); 4] = [
+            (1_000_000, 4_096),
+            (1_000_000, 1_024),
+            (3_000_000, 128),
+            (500_000, 3),
+        ];
+        const MAX_BURST: u64 = CONFIGS[0].1;
         let b = Arc::new(TokenBucket::new());
-        b.set_byte_rate_with_burst(bytes_per_sec(1024), BURST);
+        b.set_token_rate_with_burst(CONFIGS[0].0, CONFIGS[0].1);
         let stop = Arc::new(AtomicBool::new(false));
 
-        // Resetter: hammer set_rate_with_burst with the same burst cap.
         let resetter = {
             let b = Arc::clone(&b);
             let stop = Arc::clone(&stop);
             std::thread::spawn(move || {
-                while !stop.load(Relaxed) {
-                    b.set_byte_rate_with_burst(bytes_per_sec(1024), BURST);
+                for (rate, burst) in CONFIGS.iter().cycle() {
+                    if stop.load(Relaxed) {
+                        break;
+                    }
+                    b.set_token_rate_with_burst(*rate, *burst);
                     std::thread::yield_now();
                 }
             })
         };
 
-        // Consumers: drain small amounts and assert the grant never exceeds the
-        // burst cap (an over-grant would mean a clobbered reset).
+        // The group's own invariant, sampled under its lock throughout.
+        let observer = {
+            let b = Arc::clone(&b);
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                let mut over_burst = None;
+                while !stop.load(Relaxed) && over_burst.is_none() {
+                    let state = *b.lock_state();
+                    if state.available > state.burst {
+                        over_burst = Some(state);
+                    }
+                }
+                over_burst
+            })
+        };
+
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let mut consumer_handles = Vec::new();
-        for _ in 0..3 {
+        for requested in [0, 1, 128] {
             let b = Arc::clone(&b);
             let done_tx = done_tx.clone();
             consumer_handles.push(std::thread::spawn(move || {
                 for _ in 0..5_000 {
-                    let g = b.try_consume(128);
-                    if g > BURST.bytes_u64() {
+                    let g = b.try_consume(requested);
+                    if g > requested.min(MAX_BURST) {
                         let _ = done_tx.send(Err(g));
                         return;
                     }
@@ -353,17 +478,16 @@ mod tests {
         }
 
         stop.store(true, Relaxed);
-        resetter.join().unwrap();
-
-        if let Some(g) = over_grant {
-            panic!("over-grant past burst: {g}");
-        }
-        assert2::assert!(!timed_out);
+        resetter.join().expect("resetter panicked");
+        let over_burst = observer.join().expect("observer panicked");
         for h in consumer_handles {
-            h.join().unwrap();
+            h.join().expect("consumer panicked");
         }
 
-        // Invariant after the storm: available is within the burst cap.
-        assert2::assert!(try_consume_with_timeout(&b, 0) == 0);
+        check!(let None = over_grant, "a grant exceeded the request or the burst");
+        check!(let None = over_burst, "available exceeded the burst");
+        check!(!timed_out);
+        let state = *b.lock_state();
+        check!(state.available <= state.burst);
     }
 }

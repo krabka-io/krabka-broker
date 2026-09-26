@@ -1,0 +1,19 @@
+(* #"/workspace/crates/verified/src/delegation_token.rs" 46 27 46 32 *)
+
+(* <delegation_token::ScramCredentialFacts as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_TokenLookup = Missing | Expired | Live
+
+type t_ScramCredentialFacts = { token_auth_requested: bool; has_regular_credential: bool; token: t_TokenLookup }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_ScramCredentialFacts [#"/workspace/crates/verified/src/delegation_token.rs" 46 27 46 32]
+  (self: t_ScramCredentialFacts) (return (x: t_ScramCredentialFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ScramCredentialFacts = Any.any_l () | & self: t_ScramCredentialFacts = self ])
+  [ return (result: t_ScramCredentialFacts) -> (! return {result}) ]

@@ -13,6 +13,7 @@ use futures_util::TryStreamExt as _;
 use krabka_log::Offset;
 use krabka_metadata::{MetadataImage, NodeId};
 use krabka_units::convert::{ByteSizeExt, TimeExt};
+use krabka_verified::diskless::DisklessRetentionPolicy;
 use object_store::{ObjectStore, ObjectStoreExt as _};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -270,10 +271,12 @@ async fn expire_retention_breached_ranges(
             cache.retention_expired_keys(
                 partition.topic_id,
                 index,
-                retention_ms,
-                retention_bytes,
-                log_start_offset,
-                now_ms,
+                DisklessRetentionPolicy {
+                    retention_ms,
+                    retention_bytes,
+                    log_start_offset,
+                    now_ms,
+                },
             )
         };
         if keys.is_empty() {

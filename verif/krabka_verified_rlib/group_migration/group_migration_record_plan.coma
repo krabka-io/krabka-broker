@@ -1,9 +1,9 @@
-(* #"/workspace/crates/verified/src/group_migration.rs" 94 0 97 29 *)
+(* #"/workspace/crates/verified/src/group_migration.rs" 96 0 99 29 *)
 
-let%span sgroup_migration = "/workspace/crates/verified/src/group_migration.rs" 78 10 78 47
-let%span sgroup_migration'0 = "/workspace/crates/verified/src/group_migration.rs" 79 10 79 56
-let%span sgroup_migration'1 = "/workspace/crates/verified/src/group_migration.rs" 80 10 80 55
-let%span sgroup_migration'2 = "/workspace/crates/verified/src/group_migration.rs" 81 10 92 1
+let%span sgroup_migration = "/workspace/crates/verified/src/group_migration.rs" 80 10 80 47
+let%span sgroup_migration'0 = "/workspace/crates/verified/src/group_migration.rs" 81 10 81 56
+let%span sgroup_migration'1 = "/workspace/crates/verified/src/group_migration.rs" 82 10 82 55
+let%span sgroup_migration'2 = "/workspace/crates/verified/src/group_migration.rs" 83 10 94 1
 
 use creusot.int.UInt64
 use creusot.prelude.Any
@@ -25,7 +25,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let group_migration_record_plan [#"/workspace/crates/verified/src/group_migration.rs" 94 0 97 29]
+let group_migration_record_plan [#"/workspace/crates/verified/src/group_migration.rs" 96 0 99 29]
   (direction: t_GroupMigrationDirection) (member_count'0: UInt64.t) (return (x: t_GroupMigrationRecordPlan)) = (! bb0
   [ bb0 = any [ br0 -> {direction = Upgrade} (! bb4) | br1 -> {direction = Downgrade} (! bb3) ]
   | bb3 = s0

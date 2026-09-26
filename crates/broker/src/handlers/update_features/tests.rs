@@ -199,6 +199,9 @@ async fn handle_accepts_lossless_safe_metadata_downgrade() {
 }
 
 #[tokio::test]
+/// Kafka's `FeatureControlManager.updateFeature` checks node support before
+/// the downgrade rules, so a level no registered node supports is refused for
+/// that reason first.
 async fn handle_rejects_metadata_downgrade_below_online_floor() {
     let req = validate_only(vec![metadata_update(
         crate::features::METADATA_VERSION_MIN - 1,
@@ -214,7 +217,7 @@ async fn handle_rejects_metadata_downgrade_below_online_floor() {
     assert_row_error(
         &resp,
         crate::features::METADATA_VERSION,
-        "Online metadata.version downgrade",
+        "does not support metadata.version level",
     );
     broker_handle.shutdown().await;
 }
@@ -232,7 +235,7 @@ async fn handle_rejects_online_metadata_version_deletion() {
     assert_row_error(
         &resp,
         crate::features::METADATA_VERSION,
-        "Online metadata.version downgrade",
+        "does not support metadata.version level",
     );
     broker_handle.shutdown().await;
 }
@@ -264,6 +267,12 @@ async fn handle_rejects_delete_zero_without_downgrade_flag() {
     ))
     .await;
 
-    assert_row_error(&resp, crate::features::METADATA_VERSION, "downgrade flag");
+    // Level 0 is outside every node's supported range, which Kafka checks
+    // before the downgrade flag.
+    assert_row_error(
+        &resp,
+        crate::features::METADATA_VERSION,
+        "does not support metadata.version level",
+    );
     broker_handle.shutdown().await;
 }

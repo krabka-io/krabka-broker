@@ -1,0 +1,98 @@
+(* #"/workspace/crates/verified/src/remote_metadata.rs" 120 0 120 39 *)
+
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 338 26 338 48
+let%span sremote_metadata = "/workspace/crates/verified/src/remote_metadata.rs" 121 34 121 35
+let%span sremote_metadata'0 = "/workspace/crates/verified/src/remote_metadata.rs" 121 19 121 31
+let%span sremote_metadata'1 = "/workspace/crates/verified/src/remote_metadata.rs" 122 20 122 40
+let%span sremote_metadata'2 = "/workspace/crates/verified/src/remote_metadata.rs" 123 31 123 40
+let%span sremote_metadata'3 = "/workspace/crates/verified/src/remote_metadata.rs" 123 12 123 41
+let%span sremote_metadata'4 = "/workspace/crates/verified/src/remote_metadata.rs" 124 22 124 24
+let%span sremote_metadata'5 = "/workspace/crates/verified/src/remote_metadata.rs" 124 13 124 24
+let%span sremote_metadata'6 = "/workspace/crates/verified/src/remote_metadata.rs" 125 31 125 40
+let%span sremote_metadata'7 = "/workspace/crates/verified/src/remote_metadata.rs" 125 12 125 41
+let%span sremote_metadata'8 = "/workspace/crates/verified/src/remote_metadata.rs" 126 29 126 38
+let%span sremote_metadata'9 = "/workspace/crates/verified/src/remote_metadata.rs" 126 11 126 39
+let%span sremote_metadata'10 = "/workspace/crates/verified/src/remote_metadata.rs" 128 20 128 22
+let%span sremote_metadata'11 = "/workspace/crates/verified/src/remote_metadata.rs" 128 12 128 22
+let%span sremote_metadata'12 = "/workspace/crates/verified/src/remote_metadata.rs" 129 29 129 38
+let%span sremote_metadata'13 = "/workspace/crates/verified/src/remote_metadata.rs" 129 11 129 39
+let%span sremote_metadata'14 = "/workspace/crates/verified/src/remote_metadata.rs" 130 20 130 22
+let%span sremote_metadata'15 = "/workspace/crates/verified/src/remote_metadata.rs" 130 11 130 23
+let%span sremote_metadata'16 = "/workspace/crates/verified/src/remote_metadata.rs" 119 28 119 68
+let%span sremote_metadata'17 = "/workspace/crates/verified/src/remote_metadata.rs" 120 0 120 39
+let%span sremote_metadata'18 = "/workspace/crates/verified/src/remote_metadata.rs" 96 28 96 64
+let%span sremote_metadata'19 = "/workspace/crates/verified/src/remote_metadata.rs" 107 8 107 48
+let%span sremote_metadata'20 = "/workspace/crates/verified/src/remote_metadata.rs" 89 8 92 30
+
+use creusot.int.UInt32
+use creusot.int.Int32
+use creusot.prelude.Any
+
+constant const_MURMUR2_SEED: UInt32.t = [%#sremote_metadata'17] (2538058380: UInt32.t)
+
+function reverse_bytes_model [#"/workspace/crates/verified/src/remote_metadata.rs" 87 0 87 41] (value: UInt32.t) : UInt32.t
+ =
+  [%#sremote_metadata'20] UInt32.bw_or (UInt32.bw_or (UInt32.bw_or (UInt32.shr value (24: UInt32.t)) (UInt32.bw_and (UInt32.shr value (8: UInt32.t)) (65280: UInt32.t))) (UInt32.bw_and (UInt32.shl value (8: UInt32.t)) (16711680: UInt32.t))) (UInt32.shl value (24: UInt32.t))
+
+let reverse_bytes (value: UInt32.t) (return (x: UInt32.t)) = any
+  [ return (result: UInt32.t) -> {[@stop_split] [@expl:reverse_bytes ensures] [%#sremote_metadata'18] result
+    = reverse_bytes_model value}
+    (! return {result}) ]
+
+constant const_MURMUR2_M: UInt32.t = [%#sremote_metadata'17] (1540483477: UInt32.t)
+
+let wrapping_mul (self_: UInt32.t) (rhs: UInt32.t) (return (x: UInt32.t)) = any
+  [ return (result: UInt32.t) -> {[@stop_split] [@expl:wrapping_mul ensures] [%#snum] result = UInt32.mul self_ rhs}
+    (! return {result}) ]
+
+function kafka_murmur2_int_model [#"/workspace/crates/verified/src/remote_metadata.rs" 105 0 105 45] (value: UInt32.t) : UInt32.t
+ =
+  [%#sremote_metadata'19] let chunk0 = reverse_bytes_model value in let chunk1 = UInt32.mul chunk0 (1540483477: UInt32.t) in let chunk2 = UInt32.mul (UInt32.bw_xor chunk1 (UInt32.shr chunk1 (24: UInt32.t))) (1540483477: UInt32.t) in let hash0 = UInt32.mul (UInt32.bw_xor (2538058380: UInt32.t) (4: UInt32.t)) (1540483477: UInt32.t) in let hash1 = UInt32.bw_xor hash0 chunk2 in let hash2 = UInt32.mul (UInt32.bw_xor hash1 (UInt32.shr hash1 (13: UInt32.t))) (1540483477: UInt32.t) in UInt32.bw_xor hash2 (UInt32.shr hash2 (15: UInt32.t))
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let kafka_murmur2_int [#"/workspace/crates/verified/src/remote_metadata.rs" 120 0 120 39] (value: UInt32.t)
+  (return (x: UInt32.t)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &hash <- UInt32.bw_xor ([%#sremote_metadata'0] const_MURMUR2_SEED) ([%#sremote_metadata] (4: UInt32.t)) ]
+      s1
+    | s1 = reverse_bytes [%#sremote_metadata'1] {value} (fun (_x: UInt32.t) -> [ &chunk <- _x ] s2)
+    | s2 = wrapping_mul [%#sremote_metadata'3] {chunk} {[%#sremote_metadata'2] const_MURMUR2_M}
+        (fun (_x: UInt32.t) -> [ &_7 <- _x ] s3)
+    | s3 = [ &chunk <- _7 ] s4
+    | s4 = UInt32.shr [%#sremote_metadata'5] {chunk} {Int32.to_int ([%#sremote_metadata'4] (24: Int32.t))}
+        (fun (_x: UInt32.t) -> [ &_9 <- _x ] s5)
+    | s5 = [ &chunk <- UInt32.bw_xor chunk _9 ] s6
+    | s6 = wrapping_mul [%#sremote_metadata'7] {chunk} {[%#sremote_metadata'6] const_MURMUR2_M}
+        (fun (_x: UInt32.t) -> [ &_11 <- _x ] s7)
+    | s7 = [ &chunk <- _11 ] s8
+    | s8 = wrapping_mul [%#sremote_metadata'9] {hash} {[%#sremote_metadata'8] const_MURMUR2_M}
+        (fun (_x: UInt32.t) -> [ &_13 <- _x ] s9)
+    | s9 = [ &hash <- _13 ] s10
+    | s10 = [ &hash <- UInt32.bw_xor hash chunk ] s11
+    | s11 = UInt32.shr [%#sremote_metadata'11] {hash} {Int32.to_int ([%#sremote_metadata'10] (13: Int32.t))}
+        (fun (_x: UInt32.t) -> [ &_16 <- _x ] s12)
+    | s12 = [ &hash <- UInt32.bw_xor hash _16 ] s13
+    | s13 = wrapping_mul [%#sremote_metadata'13] {hash} {[%#sremote_metadata'12] const_MURMUR2_M}
+        (fun (_x: UInt32.t) -> [ &_18 <- _x ] s14)
+    | s14 = [ &hash <- _18 ] s15
+    | s15 = UInt32.shr [%#sremote_metadata'15] {hash} {Int32.to_int ([%#sremote_metadata'14] (15: Int32.t))}
+        (fun (_x: UInt32.t) -> [ &_21 <- _x ] s16)
+    | s16 = [ &_ret <- UInt32.bw_xor hash _21 ] s17
+    | s17 = return {_ret} ] ]
+  [ & _ret: UInt32.t = Any.any_l ()
+  | & value: UInt32.t = value
+  | & hash: UInt32.t = Any.any_l ()
+  | & chunk: UInt32.t = Any.any_l ()
+  | & _7: UInt32.t = Any.any_l ()
+  | & _9: UInt32.t = Any.any_l ()
+  | & _11: UInt32.t = Any.any_l ()
+  | & _13: UInt32.t = Any.any_l ()
+  | & _16: UInt32.t = Any.any_l ()
+  | & _18: UInt32.t = Any.any_l ()
+  | & _21: UInt32.t = Any.any_l () ])
+  [ return (result: UInt32.t) -> {[@stop_split] [@expl:kafka_murmur2_int ensures] [%#sremote_metadata'16] result
+    = kafka_murmur2_int_model value}
+    (! return {result}) ]

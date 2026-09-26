@@ -89,11 +89,15 @@ pub(crate) fn is_two_phase_commit(txn_timeout_ms: i32) -> bool {
 ///  - it is NOT a 2PC transaction (`!is_two_phase_commit`). This is **the
 ///    KIP-939 guarantee**: the reaper never unilaterally aborts a prepared 2PC
 ///    transaction.
-///  - it has been open at least `txn_timeout_ms`
-///    (`now_ms - start_ms >= txn_timeout_ms`).
+///  - it has been open longer than `txn_timeout_ms`
+///    (`start_ms + txn_timeout_ms < now_ms`), Kafka's strict comparison in
+///    `TransactionStateManager.timedOutTransactions`.
 ///
-/// Pure and total: clock skew (`now_ms < start_ms`) yields `false` through a
-/// saturating subtraction, so a backwards clock can never spuriously abort.
+/// Pure and total over every persisted timeout, as Kafka is: the transaction
+/// log accepts any `TransactionTimeoutMs`, and a zero or negative one is
+/// compared arithmetically. A backwards clock (`now_ms <= start_ms`) never
+/// aborts a transaction with a nonnegative timeout, which is every timeout
+/// [`resolve_txn_timeout`] persists.
 #[must_use]
 pub(crate) fn should_abort_idle_txn(
     state: TxnState,
@@ -162,14 +166,16 @@ mod tests {
 
     #[test]
     fn reaper_aborts_an_expired_ongoing_non_2pc_txn() {
-        // Opened at t=0 with a 60s timeout; at t=60s it is reapable.
-        assert!(should_abort_idle_txn(TxnState::Ongoing, 60_000, 0, 60_000));
+        // Opened at t=0 with a 60s timeout: Kafka's `start + timeout < now`
+        // makes it reapable once t passes 60s.
+        assert!(should_abort_idle_txn(TxnState::Ongoing, 60_000, 0, 60_001));
         assert!(should_abort_idle_txn(TxnState::Ongoing, 60_000, 0, 120_000));
     }
 
     #[test]
     fn reaper_spares_a_not_yet_expired_ongoing_txn() {
-        // One ms short of the timeout.
+        // Exactly at, and one ms short of, the timeout.
+        assert!(!should_abort_idle_txn(TxnState::Ongoing, 60_000, 0, 60_000));
         assert!(!should_abort_idle_txn(TxnState::Ongoing, 60_000, 0, 59_999));
         // Exactly opened "now".
         assert!(!should_abort_idle_txn(

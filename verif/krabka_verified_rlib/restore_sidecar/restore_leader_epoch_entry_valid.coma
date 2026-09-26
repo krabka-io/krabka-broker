@@ -1,12 +1,12 @@
-(* #"/proof-work-245/crates/verified/src/restore_sidecar.rs" 121 0 127 9 *)
+(* #"/workspace/crates/verified/src/restore_sidecar.rs" 167 0 173 9 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span srestore_sidecar = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 128 13 128 14
-let%span srestore_sidecar'0 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 129 27 129 28
-let%span srestore_sidecar'1 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 134 16 134 71
-let%span srestore_sidecar'2 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 136 20 136 24
-let%span srestore_sidecar'3 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 128 4 137 9
-let%span srestore_sidecar'4 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 111 10 119 6
+let%span srestore_sidecar = "/workspace/crates/verified/src/restore_sidecar.rs" 174 13 174 14
+let%span srestore_sidecar'0 = "/workspace/crates/verified/src/restore_sidecar.rs" 175 27 175 28
+let%span srestore_sidecar'1 = "/workspace/crates/verified/src/restore_sidecar.rs" 180 16 180 71
+let%span srestore_sidecar'2 = "/workspace/crates/verified/src/restore_sidecar.rs" 182 20 182 24
+let%span srestore_sidecar'3 = "/workspace/crates/verified/src/restore_sidecar.rs" 174 4 183 9
+let%span srestore_sidecar'4 = "/workspace/crates/verified/src/restore_sidecar.rs" 157 10 165 6
 
 use creusot.int.Int32
 use creusot.int.Int64
@@ -33,7 +33,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let restore_leader_epoch_entry_valid [#"/proof-work-245/crates/verified/src/restore_sidecar.rs" 121 0 127 9]
+let restore_leader_epoch_entry_valid [#"/workspace/crates/verified/src/restore_sidecar.rs" 167 0 173 9]
   (previous: t_Option_tup2_i32_i64) (epoch: Int32.t) (start_offset: Int64.t) (segment_base: Int64.t)
   (segment_end: Int64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0

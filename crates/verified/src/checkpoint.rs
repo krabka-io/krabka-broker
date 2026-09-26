@@ -49,16 +49,20 @@ pub fn latest_checkpoint_index(ids: &[(i64, i32)]) -> Option<usize> {
     Some(selected)
 }
 
-/// Retain a checkpoint whose full id equals either of the two newest ids: the
-/// selected one, or the one immediately before it.
+/// Retain a checkpoint whose full `(end offset, epoch)` id equals either of
+/// two given ids, and nothing else: no partial match of either survives.
+///
+/// That the two ids are the newest and the runner-up is a host fact, not part
+/// of this contract: `recent_checkpoint_ids` in the controller picks them with
+/// [`latest_checkpoint_index`], applied twice.
 ///
 /// Kafka keeps the previous checkpoint alive purely through retention
 /// (`KafkaMetadataLog.cleanSnapshots` never deletes the latest snapshot and
 /// expires older ones only under the metadata retention caps), which is what
 /// lets a follower whose `FetchSnapshot` is mid-flight finish the id it
 /// started on when the leader rolls to a newer one. There is no reference
-/// count: `previous` is simply the runner-up id, and a directory holding a
-/// single checkpoint passes the selected id as both.
+/// count: the host passes the runner-up id as `previous`, and for a directory
+/// holding a single checkpoint it passes the selected id as both.
 #[ensures(result == ((candidate_end@ == selected_end@
         && candidate_epoch@ == selected_epoch@)
     || (candidate_end@ == previous_end@ && candidate_epoch@ == previous_epoch@)))]
@@ -89,7 +93,7 @@ mod tests {
     }
 
     #[test]
-    fn retention_keeps_the_two_newest_full_ids_and_nothing_else() {
+    fn retention_keeps_exactly_the_two_given_full_ids() {
         // Latest (11, 3), previous (10, 3): both survive in full, and neither
         // a stale id nor a partial match of either does.
         assert2::check!(checkpoint_id_retained(11, 3, 11, 3, 10, 3));

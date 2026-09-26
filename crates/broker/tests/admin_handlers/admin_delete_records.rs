@@ -167,7 +167,7 @@ async fn a_trim_inside_the_active_segment_survives_a_restart() {
                 earliest_error_code: codes::NONE,
                 earliest_offset: RESTART_TRIM_TO,
                 fetch_error_code: codes::OFFSET_OUT_OF_RANGE,
-                fetch_log_start_offset: RESTART_TRIM_TO,
+                fetch_log_start_offset: -1,
                 fetched_records: 0,
             }
     );

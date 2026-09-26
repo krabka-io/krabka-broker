@@ -11,7 +11,7 @@ use krabka_raft::kraft::{
 
 use super::{
     config::ConsensusModel,
-    state::{Envelope, ModelState, node_high_watermark},
+    state::{Envelope, ModelState, StepWitness, node_high_watermark},
 };
 
 /// Constant logical time. Timeouts are modeled as nondeterministic actions, so
@@ -102,9 +102,12 @@ impl ConsensusModel {
             Action::AdvanceHighWatermark(hwm) => {
                 let node = state.nodes.get_mut(&id).expect("leader exists");
                 node.high_watermark = hwm;
+                let leader_log = node.log.clone();
                 // The HWM rides the leader's fetch responses to followers; mirror
                 // that by pushing the committed boundary to peers, clamped to
-                // what each has actually replicated.
+                // what each has actually replicated. A peer whose log disagrees
+                // with the leader's would be answered with a diverging epoch
+                // instead, which carries no high watermark.
                 let peers: Vec<NodeId> = self
                     .voter_ids
                     .iter()
@@ -112,19 +115,25 @@ impl ConsensusModel {
                     .filter(|&p| p != id)
                     .collect();
                 for peer in peers {
-                    if let Some(p) = state.nodes.get_mut(&peer) {
+                    if let Some(p) = state.nodes.get_mut(&peer)
+                        && p.log.is_prefix_of(&leader_log)
+                    {
                         p.high_watermark = hwm.min(p.log.end_offset());
                     }
                 }
             }
             Action::TruncateTo(point) => {
                 let node = state.nodes.get_mut(&id).expect("truncator exists");
+                let before = node.log.end_offset();
                 node.log.truncate_to(point.offset);
                 // A node cannot retain a committed-prefix marker past what it
                 // now physically holds: clamp its high-watermark to the new log
                 // end (the eager HWM propagation in `AdvanceHighWatermark` may
                 // have set it higher before this divergence-driven truncation).
                 node.high_watermark = node.high_watermark.min(node.log.end_offset());
+                if node.log.end_offset() < before {
+                    state.step_witness = Some(StepWitness::DivergentLogTruncated);
+                }
             }
             // Timer arming is modeled by the `Timeout` action set; durable-state
             // + role-transition signals have no cross-node effect in the model.
@@ -137,8 +146,13 @@ impl ConsensusModel {
     }
 
     fn apply_fetch_action(state: &mut ModelState, id: NodeId, leader_id: NodeId) {
-        // Replicate any missing entries from the leader, then fetch at
-        // the follower's (now-advanced) tip so the leader can advance HWM.
+        // Replication abstraction: the records a fetch would carry back are
+        // applied when the fetch is sent, and only when the leader's log
+        // extends the follower's. The follower then fetches at its advanced
+        // tip, so the leader can advance the HWM. A follower whose log
+        // disagrees with the leader's keeps it: its fetch below draws a
+        // diverging-epoch response from the production `handle_fetch`, and the
+        // production `handle_fetch_response` truncates it.
         if leader_id != id
             && state
                 .nodes
@@ -148,8 +162,9 @@ impl ConsensusModel {
             let leader_log = state.nodes[&leader_id].log.clone();
             let leader_hwm = node_high_watermark(&state.nodes[&leader_id]);
             let f = state.nodes.get_mut(&id).expect("fetcher exists");
-            f.log.replicate_from(&leader_log);
-            f.high_watermark = leader_hwm.min(f.log.end_offset());
+            if f.log.extend_from(&leader_log) {
+                f.high_watermark = leader_hwm.min(f.log.end_offset());
+            }
         }
         let (fetch_epoch, fetch_offset) = {
             let log = &state.nodes[&id].log;
@@ -177,6 +192,32 @@ impl ConsensusModel {
         });
     }
 
+    /// For a vote request, whether `dst` would grant it if only the
+    /// candidate's log were as up to date as its own. It runs a copy of the
+    /// real machine on the same request with `candidate_log_end` replaced by
+    /// the voter's own log end, which KIP-595's comparison always accepts. A
+    /// refusal of the real request that this copy grants is a refusal for log
+    /// recency alone: the epoch, the vote already cast and the known leader
+    /// were all the same.
+    fn recency_counterfactual(state: &ModelState, dst: NodeId, event: &Event) -> bool {
+        let Event::ReceiveVoteRequest { .. } = event else {
+            return false;
+        };
+        let node = &state.nodes[&dst];
+        let mut counterfactual = *event;
+        if let Event::ReceiveVoteRequest {
+            candidate_log_end, ..
+        } = &mut counterfactual
+        {
+            *candidate_log_end = node.log.log_end();
+        }
+        node.machine
+            .clone()
+            .on_event(counterfactual, &node.log, NOW)
+            .iter()
+            .any(|a| matches!(a, Action::ReplyVote { granted: true, .. }))
+    }
+
     /// Delivers `event` to `dst`. The method runs the real machine and
     /// translates the emitted actions. It also synthesizes the leader's fetch
     /// RESPONSE, because the core emits HWM and Truncate actions and not a
@@ -187,10 +228,22 @@ impl ConsensusModel {
         } else {
             None
         };
+        // Only the configs that require the `stale_candidate_refused` witness
+        // pay for it: elsewhere the flag would only add states.
+        let refusal_counterfactual = self.voter_ids.len() >= 3
+            && self.max_appends > 0
+            && Self::recency_counterfactual(state, dst, &event);
         let actions = {
             let node = state.nodes.get_mut(&dst).expect("dst exists");
             node.machine.on_event(event, &node.log, NOW)
         };
+        if refusal_counterfactual
+            && actions
+                .iter()
+                .any(|a| matches!(a, Action::ReplyVote { granted: false, .. }))
+        {
+            state.step_witness = Some(StepWitness::StaleCandidateRefused);
+        }
         if let Some(follower) = fetch_from {
             let diverging = actions.iter().find_map(|a| match a {
                 Action::ReplyDivergingEpoch(point) => Some(*point),

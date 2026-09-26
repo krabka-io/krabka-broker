@@ -5,35 +5,59 @@ use creusot_std::prelude::*;
 const MURMUR2_SEED: u32 = 0x9747_b28c;
 const MURMUR2_M: u32 = 0x5bd1_e995;
 
+// Java `int` arithmetic is arithmetic modulo 2^32, so every Java `int` below
+// is carried as its two's-complement bit image in a `u32`, with wrapping
+// `u32` operations standing in for Java's `int` ones.
+
+/// Java `Long.hashCode`, `(int) (value ^ (value >>> 32))`, as its `u32` image.
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
 #[logic]
-fn java_long_hash_model(bits: u64) -> i32 {
-    pearlite! { (bits ^ (bits >> 32u32)) as i32 }
+fn java_long_hash_model(bits: u64) -> u32 {
+    pearlite! { ((bits ^ (bits >> 32u32)) & 0xffff_ffffu64) as u32 }
 }
 
 #[cfg_attr(creusot, ensures(result == java_long_hash_model(bits)))]
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    reason = "Java Long.hashCode deliberately folds the two 32-bit halves"
-)]
-fn java_long_hash(bits: u64) -> i32 {
-    (bits ^ (bits >> 32)) as i32
+fn java_long_hash(bits: u64) -> u32 {
+    ((bits ^ (bits >> 32)) & 0xffff_ffff) as u32
 }
 
+/// The `u32` image of a Java `int`: the value itself, or the value plus 2^32
+/// (`u32::MAX - (-1 - value)`) when it is negative. Both casts stay in range.
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
 #[logic]
-fn java_objects_hash_model(topic_id: u128, user_partition: i32) -> i32 {
+fn java_int_image_model(value: i32) -> u32 {
+    pearlite! {
+        if value@ >= 0 { value as u32 } else { u32::MAX - (-1i32 - value) as u32 }
+    }
+}
+
+#[cfg_attr(creusot, ensures(result == java_int_image_model(value)))]
+fn java_int_image(value: i32) -> u32 {
+    if value < 0 {
+        // `2^32 + value`, as `u32::MAX - (-1 - value)`.
+        u32::MAX - value.abs_diff(-1)
+    } else {
+        value.abs_diff(0)
+    }
+}
+
+/// Java `Objects.hash(uuid.getLeastSignificantBits(),
+/// uuid.getMostSignificantBits(), partition)`, as its `u32` image.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+fn java_objects_hash_model(topic_id: u128, user_partition: i32) -> u32 {
     pearlite! {
         let most_significant_bits = (topic_id >> 64u32) as u64;
-        let least_significant_bits = topic_id as u64;
-        let first = 1i32 * 31i32 + java_long_hash_model(least_significant_bits);
-        let second = first * 31i32 + java_long_hash_model(most_significant_bits);
-        second * 31i32 + user_partition
+        let least_significant_bits = (topic_id & 0xffff_ffff_ffff_ffffu128) as u64;
+        let first = 1u32 * 31u32 + java_long_hash_model(least_significant_bits);
+        let second = first * 31u32 + java_long_hash_model(most_significant_bits);
+        second * 31u32 + java_int_image_model(user_partition)
     }
 }
 
@@ -41,22 +65,19 @@ fn java_objects_hash_model(topic_id: u128, user_partition: i32) -> i32 {
     creusot,
     ensures(result == java_objects_hash_model(topic_id, user_partition))
 )]
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "a UUID's two u64 halves are selected by the shifts before casting"
-)]
-fn java_objects_hash(topic_id: u128, user_partition: i32) -> i32 {
+fn java_objects_hash(topic_id: u128, user_partition: i32) -> u32 {
     let most_significant_bits = (topic_id >> 64) as u64;
-    let least_significant_bits = topic_id as u64;
+    let least_significant_bits = (topic_id & 0xffff_ffff_ffff_ffff) as u64;
 
-    let mut hash = 1_i32;
+    let mut hash = 1_u32;
     hash = hash
         .wrapping_mul(31)
         .wrapping_add(java_long_hash(least_significant_bits));
     hash = hash
         .wrapping_mul(31)
         .wrapping_add(java_long_hash(most_significant_bits));
-    hash.wrapping_mul(31).wrapping_add(user_partition)
+    hash.wrapping_mul(31)
+        .wrapping_add(java_int_image(user_partition))
 }
 
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
@@ -81,9 +102,9 @@ fn reverse_bytes(value: u32) -> u32 {
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
 #[logic]
-fn kafka_murmur2_i32_model(value: i32) -> u32 {
+fn kafka_murmur2_int_model(value: u32) -> u32 {
     pearlite! {
-        let chunk0 = reverse_bytes_model(value as u32);
+        let chunk0 = reverse_bytes_model(value);
         let chunk1 = chunk0 * 0x5bd1_e995u32;
         let chunk2 = (chunk1 ^ (chunk1 >> 24u32)) * 0x5bd1_e995u32;
         let hash0 = (0x9747_b28cu32 ^ 4u32) * 0x5bd1_e995u32;
@@ -93,15 +114,12 @@ fn kafka_murmur2_i32_model(value: i32) -> u32 {
     }
 }
 
-/// Kafka Murmur2 over the four big-endian bytes of a Java `int`.
-#[cfg_attr(creusot, ensures(result == kafka_murmur2_i32_model(value)))]
-#[allow(
-    clippy::cast_sign_loss,
-    reason = "Murmur2 consumes the Java int's unsigned bit image"
-)]
-fn kafka_murmur2_i32(value: i32) -> u32 {
+/// Kafka Murmur2 over the four big-endian bytes of a Java `int`, given as its
+/// `u32` image.
+#[cfg_attr(creusot, ensures(result == kafka_murmur2_int_model(value)))]
+fn kafka_murmur2_int(value: u32) -> u32 {
     let mut hash = MURMUR2_SEED ^ 4;
-    let mut chunk = reverse_bytes(value as u32);
+    let mut chunk = reverse_bytes(value);
     chunk = chunk.wrapping_mul(MURMUR2_M);
     chunk ^= chunk >> 24;
     chunk = chunk.wrapping_mul(MURMUR2_M);
@@ -120,15 +138,13 @@ fn kafka_to_positive_model(hash: u32) -> Int {
     pearlite! { hash@ % 2_147_483_648 }
 }
 
+/// Kafka `Utils.toPositive`, `number & 0x7fffffff`, which on the `u32` image
+/// is the remainder modulo 2^31.
 #[cfg_attr(creusot, ensures(result@ == kafka_to_positive_model(hash)))]
 #[ensures(0 <= result@)]
 #[ensures(result@ <= i32::MAX@)]
-#[allow(
-    clippy::cast_possible_wrap,
-    reason = "modulo 2^31 clears the sign bit before the Kafka int conversion"
-)]
 fn kafka_to_positive(hash: u32) -> i32 {
-    (hash % 0x8000_0000) as i32
+    (u64::from(hash) % 0x8000_0000) as i32
 }
 
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
@@ -144,7 +160,7 @@ fn remote_metadata_partition_model(
         if metadata_partition_count <= 0i32 {
             0
         } else {
-            kafka_to_positive_model(kafka_murmur2_i32_model(
+            kafka_to_positive_model(kafka_murmur2_int_model(
                 java_objects_hash_model(topic_id, user_partition)
             )) % metadata_partition_count@
         }
@@ -182,7 +198,7 @@ pub fn remote_metadata_partition(
     }
 
     let objects_hash = java_objects_hash(topic_id, user_partition);
-    let murmur2 = kafka_murmur2_i32(objects_hash);
+    let murmur2 = kafka_murmur2_int(objects_hash);
     Some(kafka_to_positive(murmur2) % metadata_partition_count)
 }
 

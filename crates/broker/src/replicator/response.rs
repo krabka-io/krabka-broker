@@ -23,7 +23,7 @@ use krabka_protocol::{
     records::{Attributes, RecordBatch, RecordsError, RecordsPayload, validate_one_v2_batch},
 };
 use krabka_units::Time;
-use krabka_verified::ReplicaFetchMutation;
+use krabka_verified::{ReplicaFetchMutation, broker::ReplicaFetchFacts};
 use tracing::{info, warn};
 
 use super::{
@@ -106,15 +106,17 @@ pub(super) async fn handle_partition_response(
         == Some(cfg.leader_node_id.0)
         && reported_leader.leader_epoch == cfg.leader_epoch.0;
     let reported_target_matches = reported_leader_absent || reported_leader_exact;
-    let mutation = krabka_verified::replica_fetch_mutation(
-        (true, true),
-        (request_leader_epoch, cfg.leader_epoch.0),
-        (target_matches, reported_target_matches),
-        (
-            part_resp.error_code == codes::NONE,
-            part_resp.diverging_epoch.end_offset >= 0,
-        ),
-    );
+    // The row's topic and partition identity is already fenced: the caller
+    // hands over only the one row `ResponseIndex::locate` attributes to this
+    // partition.
+    let mutation = krabka_verified::replica_fetch_mutation(ReplicaFetchFacts {
+        request_leader_epoch,
+        current_leader_epoch: cfg.leader_epoch.0,
+        target_matches,
+        reported_target_matches,
+        error_code: part_resp.error_code,
+        diverging_end_offset: part_resp.diverging_epoch.end_offset,
+    });
 
     if mutation == ReplicaFetchMutation::Reject {
         warn!(
@@ -261,7 +263,7 @@ pub(super) async fn handle_partition_response(
         }
 
         ReplicaFetchMutation::Retry => match part_resp.error_code {
-            codes::OFFSET_OUT_OF_RANGE => handle_offset_out_of_range(part_resp, cfg).await,
+            codes::OFFSET_OUT_OF_RANGE => handle_offset_out_of_range(cfg).await,
             // KIP-405: the leader still holds this offset, but only in the
             // remote tier, and it will not stream the archive down the
             // replication path. The follower starts again at the leader's

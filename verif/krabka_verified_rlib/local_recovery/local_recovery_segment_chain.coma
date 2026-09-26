@@ -1,26 +1,26 @@
-(* #"/proof-work-243/crates/verified/src/local_recovery.rs" 57 0 57 58 *)
+(* #"/workspace/crates/verified/src/local_recovery.rs" 117 0 117 58 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span slocal_recovery = "/proof-work-243/crates/verified/src/local_recovery.rs" 58 16 58 22
-let%span slocal_recovery'0 = "/proof-work-243/crates/verified/src/local_recovery.rs" 63 14 63 31
-let%span slocal_recovery'1 = "/proof-work-243/crates/verified/src/local_recovery.rs" 64 14 64 25
-let%span slocal_recovery'2 = "/proof-work-243/crates/verified/src/local_recovery.rs" 60 16 62 54
-let%span slocal_recovery'3 = "/proof-work-243/crates/verified/src/local_recovery.rs" 59 16 59 34
-let%span slocal_recovery'4 = "/proof-work-243/crates/verified/src/local_recovery.rs" 65 11 65 19
-let%span slocal_recovery'5 = "/proof-work-243/crates/verified/src/local_recovery.rs" 65 22 65 23
-let%span slocal_recovery'6 = "/proof-work-243/crates/verified/src/local_recovery.rs" 65 32 65 33
-let%span slocal_recovery'7 = "/proof-work-243/crates/verified/src/local_recovery.rs" 65 47 65 48
-let%span slocal_recovery'8 = "/proof-work-243/crates/verified/src/local_recovery.rs" 65 43 65 48
-let%span slocal_recovery'9 = "/proof-work-243/crates/verified/src/local_recovery.rs" 65 37 65 49
-let%span slocal_recovery'10 = "/proof-work-243/crates/verified/src/local_recovery.rs" 65 53 65 61
-let%span slocal_recovery'11 = "/proof-work-243/crates/verified/src/local_recovery.rs" 68 13 68 14
-let%span slocal_recovery'12 = "/proof-work-243/crates/verified/src/local_recovery.rs" 68 8 68 14
-let%span slocal_recovery'13 = "/proof-work-243/crates/verified/src/local_recovery.rs" 66 19 66 24
-let%span slocal_recovery'14 = "/proof-work-243/crates/verified/src/local_recovery.rs" 70 4 70 8
-let%span slocal_recovery'15 = "/proof-work-243/crates/verified/src/local_recovery.rs" 53 10 55 51
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span slocal_recovery = "/workspace/crates/verified/src/local_recovery.rs" 118 16 118 22
+let%span slocal_recovery'0 = "/workspace/crates/verified/src/local_recovery.rs" 123 14 123 31
+let%span slocal_recovery'1 = "/workspace/crates/verified/src/local_recovery.rs" 124 14 124 25
+let%span slocal_recovery'2 = "/workspace/crates/verified/src/local_recovery.rs" 120 16 122 54
+let%span slocal_recovery'3 = "/workspace/crates/verified/src/local_recovery.rs" 119 16 119 34
+let%span slocal_recovery'4 = "/workspace/crates/verified/src/local_recovery.rs" 125 11 125 19
+let%span slocal_recovery'5 = "/workspace/crates/verified/src/local_recovery.rs" 125 22 125 23
+let%span slocal_recovery'6 = "/workspace/crates/verified/src/local_recovery.rs" 125 32 125 33
+let%span slocal_recovery'7 = "/workspace/crates/verified/src/local_recovery.rs" 125 47 125 48
+let%span slocal_recovery'8 = "/workspace/crates/verified/src/local_recovery.rs" 125 43 125 48
+let%span slocal_recovery'9 = "/workspace/crates/verified/src/local_recovery.rs" 125 37 125 49
+let%span slocal_recovery'10 = "/workspace/crates/verified/src/local_recovery.rs" 125 53 125 61
+let%span slocal_recovery'11 = "/workspace/crates/verified/src/local_recovery.rs" 128 13 128 14
+let%span slocal_recovery'12 = "/workspace/crates/verified/src/local_recovery.rs" 128 8 128 14
+let%span slocal_recovery'13 = "/workspace/crates/verified/src/local_recovery.rs" 126 19 126 24
+let%span slocal_recovery'14 = "/workspace/crates/verified/src/local_recovery.rs" 130 4 130 8
+let%span slocal_recovery'15 = "/workspace/crates/verified/src/local_recovery.rs" 113 10 115 51
 
 use creusot.int.UInt64
 use seq.Seq
@@ -51,7 +51,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let local_recovery_segment_chain [#"/proof-work-243/crates/verified/src/local_recovery.rs" 57 0 57 58]
+let local_recovery_segment_chain [#"/workspace/crates/verified/src/local_recovery.rs" 117 0 117 58]
   (bases: Slice64.slice Int64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0 [ s0 = [ &i <- [%#slocal_recovery] (0: UInt64.t) ] s1 | s1 = bb1 ]
   | bb1 = bb1invariant

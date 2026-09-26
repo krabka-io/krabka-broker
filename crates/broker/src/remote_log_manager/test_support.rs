@@ -243,11 +243,14 @@ pub fn rolled_tiered_partition_at(
     partition
 }
 
+/// A sealed-segment export with no files behind it, whose file was last
+/// modified at its newest record's timestamp.
 pub fn synth_export(base: i64, last: i64, max_ts: i64, size: u32) -> SegmentExport {
     SegmentExport {
         base_offset: Offset(base),
         last_offset: Offset(last),
         max_timestamp: max_ts,
+        last_modified_ms: max_ts,
         size: bytes(size),
         log_path: std::path::PathBuf::new(),
         offset_index_path: std::path::PathBuf::new(),

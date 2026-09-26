@@ -1,12 +1,12 @@
-(* #"/workspace/crates/verified/src/audit.rs" 48 0 53 29 *)
+(* #"/workspace/crates/verified/src/audit.rs" 60 0 65 29 *)
 
-let%span saudit = "/workspace/crates/verified/src/audit.rs" 58 30 58 31
-let%span saudit'0 = "/workspace/crates/verified/src/audit.rs" 58 73 58 74
-let%span saudit'1 = "/workspace/crates/verified/src/audit.rs" 58 58 58 74
-let%span saudit'2 = "/workspace/crates/verified/src/audit.rs" 38 10 40 53
-let%span saudit'3 = "/workspace/crates/verified/src/audit.rs" 41 10 41 83
-let%span saudit'4 = "/workspace/crates/verified/src/audit.rs" 42 10 43 41
-let%span saudit'5 = "/workspace/crates/verified/src/audit.rs" 44 10 46 77
+let%span saudit = "/workspace/crates/verified/src/audit.rs" 70 30 70 31
+let%span saudit'0 = "/workspace/crates/verified/src/audit.rs" 70 73 70 74
+let%span saudit'1 = "/workspace/crates/verified/src/audit.rs" 70 58 70 74
+let%span saudit'2 = "/workspace/crates/verified/src/audit.rs" 50 10 52 53
+let%span saudit'3 = "/workspace/crates/verified/src/audit.rs" 53 10 53 83
+let%span saudit'4 = "/workspace/crates/verified/src/audit.rs" 54 10 55 41
+let%span saudit'5 = "/workspace/crates/verified/src/audit.rs" 56 10 58 77
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 
 use creusot.int.UInt64
@@ -23,7 +23,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let audit_checkpoint_admission [#"/workspace/crates/verified/src/audit.rs" 48 0 53 29] (signature_valid: bool)
+let audit_checkpoint_admission [#"/workspace/crates/verified/src/audit.rs" 60 0 65 29] (signature_valid: bool)
   (head_matches: bool) (expected_seq: UInt64.t) (checkpoint_seq_high: UInt64.t)
   (return (x: t_AuditCheckpointAdmission)) = (! bb0
   [ bb0 = any [ br0 -> {signature_valid = false} (! bb1) | br1 -> {signature_valid} (! bb2) ]

@@ -755,8 +755,8 @@ mod tests {
             ),
             (
                 "a rejected change",
-                Err(RaftError::ReconfigRejected("last voter".into())),
-                (INVALID_REQUEST, Some("last voter".into())),
+                Err(RaftError::ReconfigRejected("empty voter set".into())),
+                (INVALID_REQUEST, Some("empty voter set".into())),
             ),
         ];
         for (label, result, expected) in rows {

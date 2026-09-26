@@ -3,9 +3,9 @@
 #[cfg(creusot)]
 use std::clone::Clone;
 
-#[cfg(creusot)]
-use creusot_std::prelude::DeepModel;
 use creusot_std::prelude::ensures;
+#[cfg(creusot)]
+use creusot_std::prelude::{DeepModel, logic};
 
 /// Whether an in-memory quorum state can be represented exactly by Kafka's
 /// signed, versioned JSON fields.
@@ -16,21 +16,44 @@ pub enum QuorumStateWriteDecision {
     Accept,
 }
 
+/// The in-memory quorum state has an exact representation in Kafka's
+/// quorum-state JSON: a supported schema version (0 or 1), and a term, leader
+/// ID, and voted ID that fit their signed `int32` fields when present. Schema
+/// v0 also lists the voter IDs, so they must fit too; schema v1 does not
+/// carry them.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+pub fn fits_signed_json(
+    kraft_version: u16,
+    leader_epoch: u32,
+    has_leader: bool,
+    leader_id: u64,
+    has_vote: bool,
+    voted_id: u64,
+    all_voter_ids_fit: bool,
+) -> bool {
+    pearlite! {
+        kraft_version@ <= 1
+            && leader_epoch@ <= i32::MAX@
+            && (!has_leader || leader_id@ <= i32::MAX@)
+            && (!has_vote || voted_id@ <= i32::MAX@)
+            && (kraft_version@ == 1 || all_voter_ids_fit)
+    }
+}
+
 /// Reject states that would be clamped, lose an identity, or select an
-/// unsupported schema when persisted.
-#[ensures((result == QuorumStateWriteDecision::Accept) == (
-    kraft_version@ <= 1
-        && leader_epoch@ <= i32::MAX@
-        && (!has_leader || leader_id@ <= i32::MAX@)
-        && (!has_vote || voted_id@ <= i32::MAX@)
-        && (kraft_version@ == 1 || all_voter_ids_fit)
-))]
-#[ensures((result == QuorumStateWriteDecision::Reject) == !(
-    kraft_version@ <= 1
-        && leader_epoch@ <= i32::MAX@
-        && (!has_leader || leader_id@ <= i32::MAX@)
-        && (!has_vote || voted_id@ <= i32::MAX@)
-        && (kraft_version@ == 1 || all_voter_ids_fit)
+/// unsupported schema when persisted. The one ensures pins both variants:
+/// `Accept` exactly when `fits_signed_json` holds.
+#[ensures((result == QuorumStateWriteDecision::Accept) == fits_signed_json(
+    kraft_version,
+    leader_epoch,
+    has_leader,
+    leader_id,
+    has_vote,
+    voted_id,
+    all_voter_ids_fit,
 ))]
 #[must_use]
 pub fn quorum_state_write_decision(

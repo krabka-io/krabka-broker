@@ -3,10 +3,14 @@
   "proofs": {
     "Coma": {
       "vc_elim_Some": { "prover": "alt-ergo", "time": 0.008 },
-      "vc_max_i64": { "prover": "alt-ergo", "time": 0.01 },
-      "vc_producer_snapshot_replay_start": {
+      "vc_max_i64": { "prover": "alt-ergo", "time": 0.024 },
+      "vc_producer_snapshot_reload_keeps": {
         "prover": "alt-ergo",
         "time": 0.022
+      },
+      "vc_producer_snapshot_replay_start": {
+        "prover": "alt-ergo",
+        "time": 0.13
       }
     }
   }

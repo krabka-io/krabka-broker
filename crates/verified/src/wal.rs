@@ -101,15 +101,16 @@ fn wal_fetch_authorized(
     }
 }
 
+/// Whether `value` occurs in `values`; used for voter ids and rack ids alike.
 #[ensures(result == (exists<i: Int>
-    0 <= i && i < voters@.len() && voters@[i] == node))]
-fn contains_voter(voters: &[u64], node: u64) -> bool {
+    0 <= i && i < values@.len() && values@[i] == value))]
+fn contains(values: &[u64], value: u64) -> bool {
     let mut i = 0;
-    #[cfg_attr(creusot, invariant(i@ <= voters@.len()))]
-    #[cfg_attr(creusot, invariant(forall<k: Int> 0 <= k && k < i@ ==> voters@[k] != node))]
-    #[cfg_attr(creusot, variant(voters@.len() - i@))]
-    while i < voters.len() {
-        if voters[i] == node {
+    #[cfg_attr(creusot, invariant(i@ <= values@.len()))]
+    #[cfg_attr(creusot, invariant(forall<k: Int> 0 <= k && k < i@ ==> values@[k] != value))]
+    #[cfg_attr(creusot, variant(values@.len() - i@))]
+    while i < values.len() {
+        if values[i] == value {
             return true;
         }
         i += 1;
@@ -117,29 +118,37 @@ fn contains_voter(voters: &[u64], node: u64) -> bool {
     false
 }
 
-/// Select the first registered/racked broker whose node and rack are unused.
-/// When `require_local` is set, only the local broker is eligible.
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < candidates@.len()
-    ==> candidates@[i].0@ < candidates@[j].0@)]
+/// A `(node, rack)` candidate may not become a WAL voter when its node or its
+/// rack is already used, or when only the local broker is eligible and the
+/// candidate is another broker.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+fn voter_blocked(
+    candidate: (u64, u64),
+    used_nodes: Seq<u64>,
+    used_racks: Seq<u64>,
+    local_node: u64,
+    require_local: bool,
+) -> bool {
+    pearlite! {
+        (exists<j: Int> 0 <= j && j < used_nodes.len() && used_nodes[j] == candidate.0)
+            || (exists<j: Int> 0 <= j && j < used_racks.len() && used_racks[j] == candidate.1)
+            || (require_local && candidate.0 != local_node)
+    }
+}
+
+/// Select the first candidate, in the caller's order, whose node and rack are
+/// both unused. When `require_local` is set, only the local broker is
+/// eligible.
 #[ensures(match result {
     None => forall<i: Int> 0 <= i && i < candidates@.len() ==>
-        (exists<j: Int> 0 <= j && j < used_nodes@.len()
-            && used_nodes@[j] == candidates@[i].0)
-        || (exists<j: Int> 0 <= j && j < used_racks@.len()
-            && used_racks@[j] == candidates@[i].1)
-        || (require_local && candidates@[i].0 != local_node),
+        voter_blocked(candidates@[i], used_nodes@, used_racks@, local_node, require_local),
     Some(index) => index@ < candidates@.len()
-        && (forall<j: Int> 0 <= j && j < used_nodes@.len()
-            ==> used_nodes@[j] != candidates@[index@].0)
-        && (forall<j: Int> 0 <= j && j < used_racks@.len()
-            ==> used_racks@[j] != candidates@[index@].1)
-        && (!require_local || candidates@[index@].0 == local_node)
-        && (forall<i: Int> 0 <= i && i < index@ ==>
-            (exists<j: Int> 0 <= j && j < used_nodes@.len()
-                && used_nodes@[j] == candidates@[i].0)
-            || (exists<j: Int> 0 <= j && j < used_racks@.len()
-                && used_racks@[j] == candidates@[i].1)
-            || (require_local && candidates@[i].0 != local_node)),
+        && !voter_blocked(candidates@[index@], used_nodes@, used_racks@, local_node, require_local)
+        && forall<i: Int> 0 <= i && i < index@ ==>
+            voter_blocked(candidates@[i], used_nodes@, used_racks@, local_node, require_local),
 })]
 #[must_use]
 pub fn select_wal_voter_index(
@@ -152,16 +161,12 @@ pub fn select_wal_voter_index(
     let mut i = 0usize;
     #[invariant(i@ <= candidates@.len())]
     #[invariant(forall<k: Int> 0 <= k && k < i@ ==>
-        (exists<j: Int> 0 <= j && j < used_nodes@.len()
-            && used_nodes@[j] == candidates@[k].0)
-        || (exists<j: Int> 0 <= j && j < used_racks@.len()
-            && used_racks@[j] == candidates@[k].1)
-        || (require_local && candidates@[k].0 != local_node))]
+        voter_blocked(candidates@[k], used_nodes@, used_racks@, local_node, require_local))]
     #[variant(candidates@.len() - i@)]
     while i < candidates.len() {
         let candidate = candidates[i];
-        if !contains_voter(used_nodes, candidate.0)
-            && !contains_voter(used_racks, candidate.1)
+        if !contains(used_nodes, candidate.0)
+            && !contains(used_racks, candidate.1)
             && (!require_local || candidate.0 == local_node)
         {
             return Some(i);
@@ -197,7 +202,7 @@ pub fn wal_fetch_admission(
 ) -> WalFetchAdmission {
     if authenticated_node != Some(claimed_node)
         || voters.first() != Some(&local_node)
-        || !contains_voter(voters, claimed_node)
+        || !contains(voters, claimed_node)
     {
         return WalFetchAdmission::Denied;
     }

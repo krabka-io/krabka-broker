@@ -1,8 +1,10 @@
 //! KIP-584 `FeatureUpdate.UpgradeType` decoding.
 //!
 //! This module turns the request-version-dependent downgrade flags into a
-//! single [`UpdateType`], so the validation path does not repeat the v0
+//! single [`FeatureUpdateType`], so the validation path does not repeat the v0
 //! `allow_downgrade` boolean against the v1+ `upgrade_type` wire code.
+
+use krabka_verified::features::FeatureUpdateType;
 
 /// KIP-584 `FeatureUpdate.UpgradeType` wire code for a safe downgrade, which
 /// loses nothing.
@@ -12,29 +14,22 @@ pub(super) const UPGRADE_TYPE_SAFE_DOWNGRADE: i8 = 2;
 /// caller accepts the loss of metadata written at the higher feature level.
 pub(super) const UPGRADE_TYPE_UNSAFE_DOWNGRADE: i8 = 3;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum UpdateType {
-    Upgrade,
-    SafeDowngrade,
-    UnsafeDowngrade,
-}
-
 pub(super) fn update_type(
     version: i16,
     allow_downgrade: bool,
     upgrade_type: i8,
-) -> Option<UpdateType> {
+) -> Option<FeatureUpdateType> {
     if version == 0 {
         return Some(if allow_downgrade {
-            UpdateType::SafeDowngrade
+            FeatureUpdateType::SafeDowngrade
         } else {
-            UpdateType::Upgrade
+            FeatureUpdateType::Upgrade
         });
     }
     match upgrade_type {
-        1 => Some(UpdateType::Upgrade),
-        UPGRADE_TYPE_SAFE_DOWNGRADE => Some(UpdateType::SafeDowngrade),
-        UPGRADE_TYPE_UNSAFE_DOWNGRADE => Some(UpdateType::UnsafeDowngrade),
+        1 => Some(FeatureUpdateType::Upgrade),
+        UPGRADE_TYPE_SAFE_DOWNGRADE => Some(FeatureUpdateType::SafeDowngrade),
+        UPGRADE_TYPE_UNSAFE_DOWNGRADE => Some(FeatureUpdateType::UnsafeDowngrade),
         _ => None,
     }
 }
@@ -45,7 +40,7 @@ pub(super) fn update_type(
 #[cfg(test)]
 fn downgrade_allowed(version: i16, allow_downgrade: bool, upgrade_type: i8) -> bool {
     update_type(version, allow_downgrade, upgrade_type)
-        .is_some_and(|kind| kind != UpdateType::Upgrade)
+        .is_some_and(|kind| kind != FeatureUpdateType::Upgrade)
 }
 
 #[cfg(test)]

@@ -1,0 +1,19 @@
+(* #"/workspace/crates/verified/src/restore.rs" 322 27 322 32 *)
+
+(* <restore::RestoreLayout as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.int.Int32
+use creusot.prelude.Any
+
+type t_RestoreLayout = { base_offset: Int64.t; last_offset_delta: Int32.t; records_count: Int32.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_RestoreLayout [#"/workspace/crates/verified/src/restore.rs" 322 27 322 32] (self: t_RestoreLayout)
+  (return (x: t_RestoreLayout)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_RestoreLayout = Any.any_l () | & self: t_RestoreLayout = self ])
+  [ return (result: t_RestoreLayout) -> (! return {result}) ]

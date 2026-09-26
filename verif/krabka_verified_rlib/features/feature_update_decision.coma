@@ -1,63 +1,333 @@
-(* #"/proof-work-231/crates/verified/src/features.rs" 60 0 70 26 *)
+(* #"/workspace/crates/verified/src/features.rs" 287 0 287 82 *)
 
-let%span sfeatures = "/proof-work-231/crates/verified/src/features.rs" 23 10 32 1
-let%span sfeatures'0 = "/proof-work-231/crates/verified/src/features.rs" 33 10 42 1
-let%span sfeatures'1 = "/proof-work-231/crates/verified/src/features.rs" 43 10 53 1
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 148 18 148 22
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 149 18 149 22
+let%span soption'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 63 18 63 43
+let%span sfeatures = "/workspace/crates/verified/src/features.rs" 292 26 292 27
+let%span sfeatures'0 = "/workspace/crates/verified/src/features.rs" 298 47 298 48
+let%span sfeatures'1 = "/workspace/crates/verified/src/features.rs" 298 20 298 49
+let%span sfeatures'2 = "/workspace/crates/verified/src/features.rs" 307 31 307 36
+let%span sfeatures'3 = "/workspace/crates/verified/src/features.rs" 322 26 322 27
+let%span sfeatures'4 = "/workspace/crates/verified/src/features.rs" 328 27 328 28
+let%span sfeatures'5 = "/workspace/crates/verified/src/features.rs" 329 11 329 37
+let%span sfeatures'6 = "/workspace/crates/verified/src/features.rs" 282 28 282 65
+let%span sfeatures'7 = "/workspace/crates/verified/src/features.rs" 283 28 283 77
+let%span sfeatures'8 = "/workspace/crates/verified/src/features.rs" 284 28 285 68
+let%span sfeatures'9 = "/workspace/crates/verified/src/features.rs" 219 8 260 9
+let%span sfeatures'10 = "/workspace/crates/verified/src/features.rs" 271 8 272 72
+let%span sfeatures'11 = "/workspace/crates/verified/src/features.rs" 195 8 207 9
+let%span sfeatures'12 = "/workspace/crates/verified/src/features.rs" 181 8 184 9
+let%span sfeatures'13 = "/workspace/crates/verified/src/features.rs" 122 16 122 61
+let%span sfeatures'14 = "/workspace/crates/verified/src/features.rs" 133 8 139 9
+let%span sfeatures'15 = "/workspace/crates/verified/src/features.rs" 151 8 157 9
+let%span sfeatures'16 = "/workspace/crates/verified/src/features.rs" 169 8 170 86
+let%span sfeatures'17 = "/workspace/crates/verified/src/features.rs" 109 8 112 9
 
+use creusot.int.Int16
 use creusot.prelude.Any
+use int.Int
 
-type t_FeatureUpdateDecision = Reject | EmitFeature | EmitCleanupThenFeature
+type t_FeatureUpdateType = Upgrade | SafeDowngrade | UnsafeDowngrade
+
+type t_Option_FeatureUpdateType = None | Some t_FeatureUpdateType
+
+type t_Option_i16 = None'0 | Some'0 Int16.t
+
+type t_FeatureLevels = { requested: Int16.t; finalized: t_Option_i16; max_supported: Int16.t; floor: Int16.t }
+
+type t_FeatureClusterFacts = { all_nodes_support: bool; dependencies_met: bool }
+
+type t_MetadataVersionFacts = {
+  online_downgrade_min_level: Int16.t;
+  all_controllers_registered: bool;
+  all_nodes_downgrade_capable: bool;
+  cleanup_required: bool }
+
+type t_Option_MetadataVersionFacts = None'1 | Some'1 t_MetadataVersionFacts
+
+type t_FeatureUpdateFacts = {
+  update_type: t_Option_FeatureUpdateType;
+  levels: t_FeatureLevels;
+  cluster: t_FeatureClusterFacts;
+  metadata_version: t_Option_MetadataVersionFacts }
+
+type t_FeatureUpdateDecision =
+  | UnknownUpdateType
+  | OutOfSupportedRange
+  | UnsupportedByNode
+  | DowngradeWithoutFlag
+  | DowngradeToNewerLevel
+  | OnlineDowngradeUnsupported
+  | UnregisteredController
+  | NodeCannotDowngrade
+  | BelowFloor
+  | DependencyUnmet
+  | DeleteMissingFeature
+  | DeleteWithoutFlag
+  | LossyDowngradeNotUnsafe
+  | EmitFeature
+  | EmitCleanupThenFeature
+
+let elim_Some (_x: t_Option_FeatureUpdateType) (return (f0: t_FeatureUpdateType)) = any
+  [ _k (f0: t_FeatureUpdateType) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+predicate resolve_i16 [@inline:trivial] (_1: Int16.t) = true
+
+meta "rewrite_def" predicate resolve_i16
+
+let unwrap_or_i16 (self_: t_Option_i16) (default: Int16.t) (return (x: Int16.t)) = any
+  [ return (result: Int16.t) ->
+  {[@stop_split] [@expl:unwrap_or_i16 ensures] ([@stop_split] [@expl:unwrap_or ensures #0] [%#soption] self_ = None'0
+      -> result = default)
+    /\ ([@stop_split] [@expl:unwrap_or ensures #1] [%#soption'0] self_ = None'0
+    \/ self_ = Some'0 result /\ resolve_i16 default)}
+    (! return {result}) ]
+
+let elim_Some'0 (_x: t_Option_MetadataVersionFacts) (return (f0: t_MetadataVersionFacts)) = any
+  [ _k (f0: t_MetadataVersionFacts) -> {Some'1 f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some'1 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let is_none_i16 (self_: t_Option_i16) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:is_none ensures] [%#soption'1] result = (self_ = None'0)}
+    (! return {result}) ]
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+function finalized_or_zero [#"/workspace/crates/verified/src/features.rs" 107 0 107 54] (levels'0: t_FeatureLevels) : int
+ = [%#sfeatures'17] match levels'0.finalized with
+    | Some'0 level -> Int16.to_int level
+    | None'0 -> 0
+    end
+
+predicate is_downgrade [#"/workspace/crates/verified/src/features.rs" 121 0 121 50] (levels'0: t_FeatureLevels) =
+  [%#sfeatures'13] Int16.to_int levels'0.requested < finalized_or_zero levels'0
+
+predicate direction_valid [#"/workspace/crates/verified/src/features.rs" 131 0 131 85] (update_type'0: t_FeatureUpdateType) (levels'0: t_FeatureLevels) =
+  [%#sfeatures'14] if is_downgrade levels'0 then
+    update_type'0 <> Upgrade
+  else
+    if gt_log_Int (Int16.to_int levels'0.requested) (finalized_or_zero levels'0) then update_type'0 = Upgrade else true
+
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate metadata_downgrade_gates_hold [#"/workspace/crates/verified/src/features.rs" 149 0 149 71] (facts: t_FeatureUpdateFacts) =
+  [%#sfeatures'15] match facts.metadata_version with
+    | Some'1 mv -> not is_downgrade facts.levels
+    \/ ge_log_Int (Int16.to_int facts.levels.requested) (Int16.to_int mv.online_downgrade_min_level)
+    /\ mv.all_controllers_registered /\ mv.all_nodes_downgrade_capable
+    | None'1 -> true
+    end
+
+predicate cleanup_required'0 [#"/workspace/crates/verified/src/features.rs" 179 0 179 58] (facts: t_FeatureUpdateFacts) =
+  [%#sfeatures'12] match facts.metadata_version with
+    | Some'1 mv -> mv.cleanup_required
+    | None'1 -> false
+    end
+
+function feature_update_model [#"/workspace/crates/verified/src/features.rs" 217 0 217 79] (facts: t_FeatureUpdateFacts) : t_FeatureUpdateDecision
+ = [%#sfeatures'9] match facts.update_type with
+    | None -> UnknownUpdateType
+    | Some update_type'0 -> let levels'0 = facts.levels in if Int16.to_int levels'0.requested < 0
+    \/ gt_log_Int (Int16.to_int levels'0.requested) (Int16.to_int levels'0.max_supported) then
+      OutOfSupportedRange
+    else
+      if not facts.cluster.all_nodes_support then
+        UnsupportedByNode
+      else
+        if is_downgrade levels'0 /\ update_type'0 = Upgrade then
+          DowngradeWithoutFlag
+        else
+          if not direction_valid update_type'0 levels'0 then
+            DowngradeToNewerLevel
+          else
+            if not metadata_downgrade_gates_hold facts then
+              match facts.metadata_version with
+                | Some'1 mv -> if Int16.to_int levels'0.requested < Int16.to_int mv.online_downgrade_min_level then
+                  OnlineDowngradeUnsupported
+                else
+                  if not mv.all_controllers_registered then UnregisteredController else NodeCannotDowngrade
+                
+                | None'1 -> NodeCannotDowngrade
+                end
+            else
+              if gt_log_Int (Int16.to_int levels'0.requested) 0
+              /\ Int16.to_int levels'0.requested < Int16.to_int levels'0.floor then
+                BelowFloor
+              else
+                if not facts.cluster.dependencies_met then
+                  DependencyUnmet
+                else
+                  if Int16.to_int levels'0.requested = 0 /\ levels'0.finalized = None'0 then
+                    DeleteMissingFeature
+                  else
+                    if Int16.to_int levels'0.requested = 0 /\ update_type'0 = Upgrade then
+                      DeleteWithoutFlag
+                    else
+                      if cleanup_required'0 facts /\ update_type'0 <> UnsafeDowngrade then
+                        LossyDowngradeNotUnsafe
+                      else
+                        if cleanup_required'0 facts then EmitCleanupThenFeature else EmitFeature
+                    
+                  
+                
+              
+            
+          
+        
+      
+    
+    
+    end
+
+predicate emits [#"/workspace/crates/verified/src/features.rs" 269 0 269 53] (decision: t_FeatureUpdateDecision) =
+  [%#sfeatures'10] decision = EmitFeature \/ decision = EmitCleanupThenFeature
+
+predicate delete_valid [#"/workspace/crates/verified/src/features.rs" 167 0 167 82] (update_type'0: t_FeatureUpdateType) (levels'0: t_FeatureLevels) =
+  [%#sfeatures'16] Int16.to_int levels'0.requested <> 0 \/ levels'0.finalized <> None'0 /\ update_type'0 <> Upgrade
+
+predicate feature_update_admissible [#"/workspace/crates/verified/src/features.rs" 193 0 193 67] (facts: t_FeatureUpdateFacts) =
+  [%#sfeatures'11] match facts.update_type with
+    | None -> false
+    | Some update_type'0 -> 0 <= Int16.to_int facts.levels.requested
+    /\ Int16.to_int facts.levels.requested <= Int16.to_int facts.levels.max_supported
+    /\ facts.cluster.all_nodes_support
+    /\ direction_valid update_type'0 facts.levels
+    /\ metadata_downgrade_gates_hold facts
+    /\ (Int16.to_int facts.levels.requested = 0
+      \/ ge_log_Int (Int16.to_int facts.levels.requested) (Int16.to_int facts.levels.floor))
+    /\ facts.cluster.dependencies_met
+    /\ delete_valid update_type'0 facts.levels /\ (not cleanup_required'0 facts \/ update_type'0 = UnsafeDowngrade)
+    end
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let feature_update_decision [#"/proof-work-231/crates/verified/src/features.rs" 60 0 70 26] (update_type_valid: bool)
-  (target_supported: bool) (direction_valid: bool) (all_registered_nodes_support: bool) (state_representable: bool)
-  (dependencies_met: bool) (delete_semantics_valid: bool) (cleanup_required: bool) (unsafe_downgrade: bool)
+let feature_update_decision [#"/workspace/crates/verified/src/features.rs" 287 0 287 82] (facts: t_FeatureUpdateFacts)
   (return (x: t_FeatureUpdateDecision)) = (! bb0
-  [ bb0 = any [ br0 -> {update_type_valid = false} (! bb9) | br1 -> {update_type_valid} (! bb1) ]
-  | bb1 = any [ br0 -> {target_supported = false} (! bb9) | br1 -> {target_supported} (! bb2) ]
-  | bb2 = any [ br0 -> {direction_valid = false} (! bb9) | br1 -> {direction_valid} (! bb3) ]
-  | bb3 = any [ br0 -> {all_registered_nodes_support = false} (! bb9) | br1 -> {all_registered_nodes_support} (! bb4) ]
-  | bb4 = any [ br0 -> {state_representable = false} (! bb9) | br1 -> {state_representable} (! bb5) ]
-  | bb5 = any [ br0 -> {dependencies_met = false} (! bb9) | br1 -> {dependencies_met} (! bb6) ]
-  | bb6 = any [ br0 -> {delete_semantics_valid = false} (! bb9) | br1 -> {delete_semantics_valid} (! bb7) ]
-  | bb7 = any [ br0 -> {cleanup_required = false} (! bb10) | br1 -> {cleanup_required} (! bb8) ]
-  | bb8 = any [ br0 -> {unsafe_downgrade = false} (! bb9) | br1 -> {unsafe_downgrade} (! bb10) ]
-  | bb10 = any [ br0 -> {cleanup_required = false} (! bb12) | br1 -> {cleanup_required} (! bb11) ]
-  | bb11 = s0 [ s0 = [ &_ret <- EmitCleanupThenFeature ] s1 | s1 = return {_ret} ]
-  | bb12 = s0 [ s0 = [ &_ret <- EmitFeature ] s1 | s1 = return {_ret} ]
-  | bb9 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ] ]
+  [ bb0 = any
+    [ br0 -> {facts.update_type = None} (! bb1)
+    | br1 (x0: t_FeatureUpdateType) -> {facts.update_type = Some x0} (! bb3) ]
+  | bb1 = s0 [ s0 = [ &_ret <- UnknownUpdateType ] s1 | s1 = return {_ret} ]
+  | bb3 = s0
+    [ s0 = elim_Some {facts.update_type} (fun (r0: t_FeatureUpdateType) -> [ &update_type'0 <- r0 ] s1)
+    | s1 = [ &levels'0 <- facts.levels ] s2
+    | s2 = [ &_13 <- Int16.lt levels'0.requested ([%#sfeatures] (0: Int16.t)) ] s3
+    | s3 = any [ br0 -> {_13 = false} (! bb5) | br1 -> {_13} (! bb7) ] ]
+  | bb5 = s0
+    [ s0 = [ &_15 <- Int16.gt levels'0.requested levels'0.max_supported ] s1
+    | s1 = any [ br0 -> {_15 = false} (! bb8) | br1 -> {_15} (! bb7) ] ]
+  | bb7 = s0 [ s0 = [ &_ret <- OutOfSupportedRange ] s1 | s1 = return {_ret} ]
+  | bb8 = any
+    [ br0 -> {facts.cluster.all_nodes_support = false} (! bb10) | br1 -> {facts.cluster.all_nodes_support} (! bb9) ]
+  | bb9 = s0
+    [ s0 = unwrap_or_i16 [%#sfeatures'1] {levels'0.finalized} {[%#sfeatures'0] (0: Int16.t)}
+        (fun (_x: Int16.t) -> [ &finalized'0 <- _x ] s1)
+    | s1 = any
+      [ br0 -> {update_type'0 = Upgrade} (! bb14)
+      | br1 -> {update_type'0 = SafeDowngrade} (! bb12)
+      | br2 -> {update_type'0 = UnsafeDowngrade} (! bb12) ] ]
+  | bb12 = s0 [ s0 = [ &upgrade <- false ] s1 | s1 = bb15 ]
+  | bb14 = s0 [ s0 = [ &upgrade <- true ] s1 | s1 = bb15 ]
+  | bb15 = s0
+    [ s0 = [ &downgrade <- Int16.lt levels'0.requested finalized'0 ] s1
+    | s1 = any [ br0 -> {downgrade = false} (! bb18) | br1 -> {downgrade} (! bb16) ] ]
+  | bb16 = any [ br0 -> {upgrade = false} (! bb18) | br1 -> {upgrade} (! bb17) ]
+  | bb17 = s0 [ s0 = [ &_ret <- DowngradeWithoutFlag ] s1 | s1 = return {_ret} ]
+  | bb18 = s0
+    [ s0 = [ &_34 <- Int16.gt levels'0.requested finalized'0 ] s1
+    | s1 = any [ br0 -> {_34 = false} (! bb22) | br1 -> {_34} (! bb19) ] ]
+  | bb19 = any [ br0 -> {upgrade = false} (! bb21) | br1 -> {upgrade} (! bb22) ]
+  | bb21 = s0 [ s0 = [ &_ret <- DowngradeToNewerLevel ] s1 | s1 = return {_ret} ]
+  | bb22 = s0
+    [ s0 = [ &cleanup_required'1 <- [%#sfeatures'2] false ] s1
+    | s1 = any
+      [ br0 -> {facts.metadata_version = None'1} (! bb35)
+      | br1 (x0: t_MetadataVersionFacts) -> {facts.metadata_version = Some'1 x0} (! bb25) ] ]
+  | bb25 = s0
+    [ s0 = elim_Some'0 {facts.metadata_version} (fun (r0: t_MetadataVersionFacts) -> [ &mv <- r0 ] s1)
+    | s1 = any [ br0 -> {downgrade = false} (! bb34) | br1 -> {downgrade} (! bb26) ] ]
+  | bb26 = s0
+    [ s0 = [ &_46 <- Int16.lt levels'0.requested mv.online_downgrade_min_level ] s1
+    | s1 = any [ br0 -> {_46 = false} (! bb28) | br1 -> {_46} (! bb27) ] ]
+  | bb27 = s0 [ s0 = [ &_ret <- OnlineDowngradeUnsupported ] s1 | s1 = return {_ret} ]
+  | bb28 = any
+    [ br0 -> {mv.all_controllers_registered = false} (! bb30) | br1 -> {mv.all_controllers_registered} (! bb29) ]
+  | bb29 = any
+    [ br0 -> {mv.all_nodes_downgrade_capable = false} (! bb32) | br1 -> {mv.all_nodes_downgrade_capable} (! bb34) ]
+  | bb32 = s0 [ s0 = [ &_ret <- NodeCannotDowngrade ] s1 | s1 = return {_ret} ]
+  | bb30 = s0 [ s0 = [ &_ret <- UnregisteredController ] s1 | s1 = return {_ret} ]
+  | bb34 = s0 [ s0 = [ &cleanup_required'1 <- mv.cleanup_required ] s1 | s1 = bb35 ]
+  | bb35 = s0
+    [ s0 = [ &_57 <- Int16.gt levels'0.requested ([%#sfeatures'3] (0: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_57 = false} (! bb40) | br1 -> {_57} (! bb36) ] ]
+  | bb36 = s0
+    [ s0 = [ &_59 <- Int16.lt levels'0.requested levels'0.floor ] s1
+    | s1 = any [ br0 -> {_59 = false} (! bb40) | br1 -> {_59} (! bb37) ] ]
+  | bb37 = s0 [ s0 = [ &_ret <- BelowFloor ] s1 | s1 = return {_ret} ]
+  | bb40 = any
+    [ br0 -> {facts.cluster.dependencies_met = false} (! bb42) | br1 -> {facts.cluster.dependencies_met} (! bb41) ]
+  | bb41 = s0
+    [ s0 = [ &_67 <- levels'0.requested = ([%#sfeatures'4] (0: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_67 = false} (! bb50) | br1 -> {_67} (! bb43) ] ]
+  | bb43 = s0
+    [ s0 = is_none_i16 [%#sfeatures'5] {levels'0.finalized} (fun (_x: bool) -> [ &_70 <- _x ] s1)
+    | s1 = any [ br0 -> {_70 = false} (! bb47) | br1 -> {_70} (! bb46) ] ]
+  | bb46 = s0 [ s0 = [ &_ret <- DeleteMissingFeature ] s1 | s1 = return {_ret} ]
+  | bb47 = any [ br0 -> {upgrade = false} (! bb50) | br1 -> {upgrade} (! bb48) ]
+  | bb48 = s0 [ s0 = [ &_ret <- DeleteWithoutFlag ] s1 | s1 = return {_ret} ]
+  | bb50 = any [ br0 -> {cleanup_required'1 = false} (! bb51) | br1 -> {cleanup_required'1} (! bb52) ]
+  | bb52 = any
+    [ br0 -> {update_type'0 = Upgrade} (! bb53)
+    | br1 -> {update_type'0 = SafeDowngrade} (! bb53)
+    | br2 -> {update_type'0 = UnsafeDowngrade} (! bb55) ]
+  | bb53 = s0 [ s0 = [ &_76 <- false ] s1 | s1 = bb56 ]
+  | bb55 = s0 [ s0 = [ &_76 <- true ] s1 | s1 = bb56 ]
+  | bb56 = any [ br0 -> {_76 = false} (! bb58) | br1 -> {_76} (! bb57) ]
+  | bb57 = s0 [ s0 = [ &_ret <- EmitCleanupThenFeature ] s1 | s1 = return {_ret} ]
+  | bb58 = s0 [ s0 = [ &_ret <- LossyDowngradeNotUnsafe ] s1 | s1 = return {_ret} ]
+  | bb51 = s0 [ s0 = [ &_ret <- EmitFeature ] s1 | s1 = return {_ret} ]
+  | bb42 = s0 [ s0 = [ &_ret <- DependencyUnmet ] s1 | s1 = return {_ret} ]
+  | bb10 = s0 [ s0 = [ &_ret <- UnsupportedByNode ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_FeatureUpdateDecision = Any.any_l ()
-  | & update_type_valid: bool = update_type_valid
-  | & target_supported: bool = target_supported
-  | & direction_valid: bool = direction_valid
-  | & all_registered_nodes_support: bool = all_registered_nodes_support
-  | & state_representable: bool = state_representable
-  | & dependencies_met: bool = dependencies_met
-  | & delete_semantics_valid: bool = delete_semantics_valid
-  | & cleanup_required: bool = cleanup_required
-  | & unsafe_downgrade: bool = unsafe_downgrade ])
+  | & facts: t_FeatureUpdateFacts = facts
+  | & update_type'0: t_FeatureUpdateType = Any.any_l ()
+  | & levels'0: t_FeatureLevels = Any.any_l ()
+  | & _13: bool = Any.any_l ()
+  | & _15: bool = Any.any_l ()
+  | & finalized'0: Int16.t = Any.any_l ()
+  | & upgrade: bool = Any.any_l ()
+  | & downgrade: bool = Any.any_l ()
+  | & _34: bool = Any.any_l ()
+  | & cleanup_required'1: bool = Any.any_l ()
+  | & mv: t_MetadataVersionFacts = Any.any_l ()
+  | & _46: bool = Any.any_l ()
+  | & _57: bool = Any.any_l ()
+  | & _59: bool = Any.any_l ()
+  | & _67: bool = Any.any_l ()
+  | & _70: bool = Any.any_l ()
+  | & _76: bool = Any.any_l () ])
   [ return (result: t_FeatureUpdateDecision) ->
-  {[@stop_split] [@expl:feature_update_decision ensures] ([@stop_split] [@expl:feature_update_decision ensures #0] [%#sfeatures] (result
-        = Reject)
-      = (not update_type_valid
-      \/ not target_supported
-      \/ not direction_valid
-      \/ not all_registered_nodes_support
-      \/ not state_representable
-      \/ not dependencies_met \/ not delete_semantics_valid \/ cleanup_required /\ not unsafe_downgrade))
-    /\ ([@stop_split] [@expl:feature_update_decision ensures #1] [%#sfeatures'0] (result = EmitFeature)
-      = (update_type_valid
-      /\ target_supported
-      /\ direction_valid
-      /\ all_registered_nodes_support
-      /\ state_representable /\ dependencies_met /\ delete_semantics_valid /\ not cleanup_required))
-    /\ ([@stop_split] [@expl:feature_update_decision ensures #2] [%#sfeatures'1] (result = EmitCleanupThenFeature)
-    = (update_type_valid
-    /\ target_supported
-    /\ direction_valid
-    /\ all_registered_nodes_support
-    /\ state_representable /\ dependencies_met /\ delete_semantics_valid /\ cleanup_required /\ unsafe_downgrade))}
+  {[@stop_split] [@expl:feature_update_decision ensures] ([@stop_split] [@expl:feature_update_decision ensures #0] [%#sfeatures'6] result
+      = feature_update_model facts)
+    /\ ([@stop_split] [@expl:feature_update_decision ensures #1] [%#sfeatures'7] emits result
+      = feature_update_admissible facts)
+    /\ ([@stop_split] [@expl:feature_update_decision ensures #2] [%#sfeatures'8] (result = EmitCleanupThenFeature)
+    = (feature_update_admissible facts /\ cleanup_required'0 facts))}
     (! return {result}) ]

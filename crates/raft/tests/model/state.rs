@@ -106,6 +106,22 @@ pub struct ModelState {
     /// Set once some node has actually reached [`Role::Resigned`], which is the
     /// witness that the resignation path is reachable at all.
     pub leader_resigned: bool,
+    /// What the transition into this state showed a witness, if anything. It
+    /// is cleared by the next transition, so it adds states only where such a
+    /// transition happens.
+    pub step_witness: Option<StepWitness>,
+}
+
+/// A one-transition observation that a `sometimes` property looks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum StepWitness {
+    /// A vote request was refused for log recency alone: the same voter, in
+    /// the same state, grants it once the candidate's log end is replaced by
+    /// its own.
+    StaleCandidateRefused,
+    /// The production `TruncateTo` removed entries: the divergence path a
+    /// disagreeing follower takes, since the model never overwrites its log.
+    DivergentLogTruncated,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

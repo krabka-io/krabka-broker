@@ -1,18 +1,35 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 37 0 45 24 *)
+(* #"/workspace/crates/verified/src/break_glass.rs" 72 0 72 83 *)
 
-let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sbreak_glass = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 21 10 21 65
-let%span sbreak_glass'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 22 10 22 79
-let%span sbreak_glass'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 23 10 23 90
-let%span sbreak_glass'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 24 10 25 62
-let%span sbreak_glass'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 26 10 28 45
-let%span sbreak_glass'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 29 10 31 47
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sbreak_glass = "/workspace/crates/verified/src/break_glass.rs" 54 10 54 71
+let%span sbreak_glass'0 = "/workspace/crates/verified/src/break_glass.rs" 55 10 55 91
+let%span sbreak_glass'1 = "/workspace/crates/verified/src/break_glass.rs" 56 10 57 58
+let%span sbreak_glass'2 = "/workspace/crates/verified/src/break_glass.rs" 58 10 60 61
+let%span sbreak_glass'3 = "/workspace/crates/verified/src/break_glass.rs" 61 10 65 68
+let%span sbreak_glass'4 = "/workspace/crates/verified/src/break_glass.rs" 66 10 70 70
 
 use creusot.int.UInt64
 use creusot.prelude.Any
 use int.Int
 
+type t_BreakGlassSignaturePolicy = Optional | Required
+
+type t_BreakGlassApprovalSigning = AllSigned | NotAllSigned
+
+type t_BreakGlassProposalFacts = {
+  withdrawn: bool;
+  consumed: bool;
+  expired: bool;
+  held_approvals: UInt64.t;
+  required_approvals: UInt64.t;
+  signature_policy: t_BreakGlassSignaturePolicy;
+  signing: t_BreakGlassApprovalSigning }
+
 type t_BreakGlassAdmission = Withdrawn | Consumed | Expired | NotEnoughApprovals | Unsigned | Usable
+
+type tup2_BreakGlassSignaturePolicy_BreakGlassApprovalSigning = {
+  f0: t_BreakGlassSignaturePolicy;
+  f1: t_BreakGlassApprovalSigning }
 
 predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
 
@@ -22,48 +39,50 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let break_glass_admission [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/break_glass.rs" 37 0 45 24]
-  (withdrawn: bool) (consumed: bool) (expired: bool) (held: UInt64.t) (required: UInt64.t) (signature_required: bool)
-  (all_signed: bool) (return (x: t_BreakGlassAdmission)) = (! bb0
-  [ bb0 = any [ br0 -> {withdrawn = false} (! bb2) | br1 -> {withdrawn} (! bb1) ]
+let break_glass_admission [#"/workspace/crates/verified/src/break_glass.rs" 72 0 72 83]
+  (facts: t_BreakGlassProposalFacts) (return (x: t_BreakGlassAdmission)) = (! bb0
+  [ bb0 = any [ br0 -> {facts.withdrawn = false} (! bb2) | br1 -> {facts.withdrawn} (! bb1) ]
   | bb1 = s0 [ s0 = [ &_ret <- Withdrawn ] s1 | s1 = return {_ret} ]
-  | bb2 = any [ br0 -> {consumed = false} (! bb4) | br1 -> {consumed} (! bb3) ]
+  | bb2 = any [ br0 -> {facts.consumed = false} (! bb4) | br1 -> {facts.consumed} (! bb3) ]
   | bb3 = s0 [ s0 = [ &_ret <- Consumed ] s1 | s1 = return {_ret} ]
-  | bb4 = any [ br0 -> {expired = false} (! bb6) | br1 -> {expired} (! bb5) ]
+  | bb4 = any [ br0 -> {facts.expired = false} (! bb6) | br1 -> {facts.expired} (! bb5) ]
   | bb5 = s0 [ s0 = [ &_ret <- Expired ] s1 | s1 = return {_ret} ]
   | bb6 = s0
-    [ s0 = [ &_42 <- UInt64.lt held required ] s1 | s1 = any [ br0 -> {_42 = false} (! bb8) | br1 -> {_42} (! bb7) ] ]
+    [ s0 = [ &_36 <- UInt64.lt facts.held_approvals facts.required_approvals ] s1
+    | s1 = any [ br0 -> {_36 = false} (! bb8) | br1 -> {_36} (! bb7) ] ]
   | bb7 = s0 [ s0 = [ &_ret <- NotEnoughApprovals ] s1 | s1 = return {_ret} ]
-  | bb8 = any [ br0 -> {signature_required = false} (! bb11) | br1 -> {signature_required} (! bb9) ]
-  | bb9 = any [ br0 -> {all_signed = false} (! bb10) | br1 -> {all_signed} (! bb11) ]
-  | bb10 = s0 [ s0 = [ &_ret <- Unsigned ] s1 | s1 = return {_ret} ]
-  | bb11 = s0 [ s0 = [ &_ret <- Usable ] s1 | s1 = return {_ret} ] ]
+  | bb8 = s0
+    [ s0 = [ &_39 <- { f0 = facts.signature_policy; f1 = facts.signing } ] s1
+    | s1 = any [ br0 -> {_39.f0 = Optional} (! bb12) | br1 -> {_39.f0 = Required} (! bb9) ] ]
+  | bb9 = any [ br0 -> {_39.f1 = AllSigned} (! bb12) | br1 -> {_39.f1 = NotAllSigned} (! bb11) ]
+  | bb12 = s0 [ s0 = [ &_ret <- Usable ] s1 | s1 = return {_ret} ]
+  | bb11 = s0 [ s0 = [ &_ret <- Unsigned ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_BreakGlassAdmission = Any.any_l ()
-  | & withdrawn: bool = withdrawn
-  | & consumed: bool = consumed
-  | & expired: bool = expired
-  | & held: UInt64.t = held
-  | & required: UInt64.t = required
-  | & signature_required: bool = signature_required
-  | & all_signed: bool = all_signed
-  | & _42: bool = Any.any_l () ])
+  | & facts: t_BreakGlassProposalFacts = facts
+  | & _36: bool = Any.any_l ()
+  | & _39: tup2_BreakGlassSignaturePolicy_BreakGlassApprovalSigning = Any.any_l () ])
   [ return (result: t_BreakGlassAdmission) ->
   {[@stop_split] [@expl:break_glass_admission ensures] ([@stop_split] [@expl:break_glass_admission ensures #0] [%#sbreak_glass] (result
         = Withdrawn)
-      = withdrawn)
+      = facts.withdrawn)
     /\ ([@stop_split] [@expl:break_glass_admission ensures #1] [%#sbreak_glass'0] (result = Consumed)
-      = (not withdrawn /\ consumed))
+      = (not facts.withdrawn /\ facts.consumed))
     /\ ([@stop_split] [@expl:break_glass_admission ensures #2] [%#sbreak_glass'1] (result = Expired)
-      = (not withdrawn /\ not consumed /\ expired))
+      = (not facts.withdrawn /\ not facts.consumed /\ facts.expired))
     /\ ([@stop_split] [@expl:break_glass_admission ensures #3] [%#sbreak_glass'2] (result = NotEnoughApprovals)
-      = (not withdrawn /\ not consumed /\ not expired /\ UInt64.t'int held < UInt64.t'int required))
+      = (not facts.withdrawn
+      /\ not facts.consumed
+      /\ not facts.expired /\ UInt64.t'int facts.held_approvals < UInt64.t'int facts.required_approvals))
     /\ ([@stop_split] [@expl:break_glass_admission ensures #4] [%#sbreak_glass'3] (result = Unsigned)
-      = (not withdrawn
-      /\ not consumed
-      /\ not expired /\ ge_log_Int (UInt64.t'int held) (UInt64.t'int required) /\ signature_required /\ not all_signed))
+      = (not facts.withdrawn
+      /\ not facts.consumed
+      /\ not facts.expired
+      /\ ge_log_Int (UInt64.t'int facts.held_approvals) (UInt64.t'int facts.required_approvals)
+      /\ facts.signature_policy = Required /\ facts.signing = NotAllSigned))
     /\ ([@stop_split] [@expl:break_glass_admission ensures #5] [%#sbreak_glass'4] (result = Usable)
-    = (not withdrawn
-    /\ not consumed
-    /\ not expired
-    /\ ge_log_Int (UInt64.t'int held) (UInt64.t'int required) /\ (not signature_required \/ all_signed)))}
+    = (not facts.withdrawn
+    /\ not facts.consumed
+    /\ not facts.expired
+    /\ ge_log_Int (UInt64.t'int facts.held_approvals) (UInt64.t'int facts.required_approvals)
+    /\ (facts.signature_policy = Optional \/ facts.signing = AllSigned)))}
     (! return {result}) ]

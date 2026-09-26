@@ -458,17 +458,18 @@ impl Engine {
                     };
                     next_offset = frontier;
                 }
-                // `reserve_offsets` is proved only for positive counts whose
-                // sum fits in i64, so reject untrusted metadata first.
-                if r.count <= 0 || next_offset.checked_add(r.count).is_none() {
+                // The proved reservation admits exactly a nonnegative frontier,
+                // a positive count, and an end that fits i64; untrusted
+                // metadata outside that is rejected.
+                let Some((base_offset, _next_offset)) =
+                    krabka_verified::reserve_offsets(next_offset, r.count)
+                else {
                     let _ = reply.send(Err(RaftError::ChangeRejected(format!(
                         "partition offset advance count {} is out of range at next offset {next_offset}",
                         r.count
                     ))));
                     return;
-                }
-                let (base_offset, _next_offset) =
-                    krabka_verified::reserve_offsets(next_offset, r.count);
+                };
                 result.offset_reservations.push(OffsetReservation {
                     topic: r.topic.clone(),
                     partition: r.partition,

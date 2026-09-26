@@ -1,41 +1,41 @@
-(* #"/home/user/krabka-broker/crates/verified/src/stretch.rs" 177 0 177 76 *)
+(* #"/workspace/crates/verified/src/stretch.rs" 336 0 336 76 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span sstretch = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 178 12 178 33
-let%span sstretch'0 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 180 25 180 26
-let%span sstretch'1 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 181 16 181 17
-let%span sstretch'2 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 185 14 185 21
-let%span sstretch'3 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 184 16 184 50
-let%span sstretch'4 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 183 16 183 58
-let%span sstretch'5 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 182 16 182 24
-let%span sstretch'6 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 187 22 188 71
-let%span sstretch'7 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 189 17 189 35
-let%span sstretch'8 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 189 8 189 35
-let%span sstretch'9 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 190 13 190 14
-let%span sstretch'10 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 190 8 190 14
-let%span sstretch'11 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 193 16 193 17
-let%span sstretch'12 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 194 23 194 27
-let%span sstretch'13 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 200 14 200 21
-let%span sstretch'14 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 198 16 199 95
-let%span sstretch'15 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 197 16 197 51
-let%span sstretch'16 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 196 16 196 52
-let%span sstretch'17 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 195 16 195 24
-let%span sstretch'18 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 202 24 202 42
-let%span sstretch'19 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 202 15 202 43
-let%span sstretch'20 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 202 11 202 12
-let%span sstretch'21 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 202 11 202 43
-let%span sstretch'22 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 203 23 203 28
-let%span sstretch'23 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 205 13 205 14
-let%span sstretch'24 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 205 8 205 14
-let%span sstretch'25 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 171 11 171 41
-let%span sstretch'26 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 172 11 173 65
-let%span sstretch'27 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 174 10 175 91
-let%span sstretch'28 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 20 10 20 15
-let%span sstretch'29 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 23 8 27 9
-let%span sstretch'30 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 35 16 35 38
+let%span sstretch = "/workspace/crates/verified/src/stretch.rs" 337 12 337 33
+let%span sstretch'0 = "/workspace/crates/verified/src/stretch.rs" 339 25 339 26
+let%span sstretch'1 = "/workspace/crates/verified/src/stretch.rs" 340 16 340 17
+let%span sstretch'2 = "/workspace/crates/verified/src/stretch.rs" 344 14 344 21
+let%span sstretch'3 = "/workspace/crates/verified/src/stretch.rs" 343 16 343 50
+let%span sstretch'4 = "/workspace/crates/verified/src/stretch.rs" 342 16 342 58
+let%span sstretch'5 = "/workspace/crates/verified/src/stretch.rs" 341 16 341 24
+let%span sstretch'6 = "/workspace/crates/verified/src/stretch.rs" 346 22 347 71
+let%span sstretch'7 = "/workspace/crates/verified/src/stretch.rs" 348 17 348 35
+let%span sstretch'8 = "/workspace/crates/verified/src/stretch.rs" 348 8 348 35
+let%span sstretch'9 = "/workspace/crates/verified/src/stretch.rs" 349 13 349 14
+let%span sstretch'10 = "/workspace/crates/verified/src/stretch.rs" 349 8 349 14
+let%span sstretch'11 = "/workspace/crates/verified/src/stretch.rs" 352 16 352 17
+let%span sstretch'12 = "/workspace/crates/verified/src/stretch.rs" 353 23 353 27
+let%span sstretch'13 = "/workspace/crates/verified/src/stretch.rs" 359 14 359 21
+let%span sstretch'14 = "/workspace/crates/verified/src/stretch.rs" 357 16 358 95
+let%span sstretch'15 = "/workspace/crates/verified/src/stretch.rs" 356 16 356 51
+let%span sstretch'16 = "/workspace/crates/verified/src/stretch.rs" 355 16 355 52
+let%span sstretch'17 = "/workspace/crates/verified/src/stretch.rs" 354 16 354 24
+let%span sstretch'18 = "/workspace/crates/verified/src/stretch.rs" 361 24 361 42
+let%span sstretch'19 = "/workspace/crates/verified/src/stretch.rs" 361 15 361 43
+let%span sstretch'20 = "/workspace/crates/verified/src/stretch.rs" 361 11 361 12
+let%span sstretch'21 = "/workspace/crates/verified/src/stretch.rs" 361 11 361 43
+let%span sstretch'22 = "/workspace/crates/verified/src/stretch.rs" 362 23 362 28
+let%span sstretch'23 = "/workspace/crates/verified/src/stretch.rs" 364 13 364 14
+let%span sstretch'24 = "/workspace/crates/verified/src/stretch.rs" 364 8 364 14
+let%span sstretch'25 = "/workspace/crates/verified/src/stretch.rs" 330 11 330 41
+let%span sstretch'26 = "/workspace/crates/verified/src/stretch.rs" 331 11 332 65
+let%span sstretch'27 = "/workspace/crates/verified/src/stretch.rs" 333 10 334 91
+let%span sstretch'28 = "/workspace/crates/verified/src/stretch.rs" 29 10 29 15
+let%span sstretch'29 = "/workspace/crates/verified/src/stretch.rs" 32 8 36 9
+let%span sstretch'30 = "/workspace/crates/verified/src/stretch.rs" 46 16 46 38
 
 use creusot.slice.Slice64
 use creusot.int.Int64
@@ -62,19 +62,19 @@ predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
 
 meta "rewrite_def" predicate well_founded_relation_Int
 
-function sum_prefix [#"/home/user/krabka-broker/crates/verified/src/stretch.rs" 21 0 21 49] (s: Seq.seq Int64.t) (limit: int) : int
+function sum_prefix [#"/workspace/crates/verified/src/stretch.rs" 30 0 30 49] (s: Seq.seq Int64.t) (limit: int) : int
 
 axiom sum_prefix_def: forall s: Seq.seq Int64.t, limit: int [sum_prefix s limit]. sum_prefix s limit
     = ([%#sstretch'29] if limit <= 0 then 0 else sum_prefix s (limit - 1) + Int64.to_int (Seq.get s (limit - 1)))
 
-function sum_all [#"/home/user/krabka-broker/crates/verified/src/stretch.rs" 34 0 34 34] (s: Seq.seq Int64.t) : int =
+function sum_all [#"/workspace/crates/verified/src/stretch.rs" 45 0 45 34] (s: Seq.seq Int64.t) : int =
   [%#sstretch'30] sum_prefix s (Seq.length s)
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let quorum_survives_any_single_site_loss [#"/home/user/krabka-broker/crates/verified/src/stretch.rs" 177 0 177 76]
+let quorum_survives_any_single_site_loss [#"/workspace/crates/verified/src/stretch.rs" 336 0 336 76]
   (voters_per_site: Slice64.slice Int64.t) (return (x: bool)) =
 {[@stop_split] [@expl:quorum_survives_any_single_site_loss requires] ([@stop_split] [@expl:quorum_survives_any_single_site_loss requires #0] [%#sstretch'25] Seq.length (Slice64.view voters_per_site)
     <= 1024)

@@ -45,6 +45,7 @@ mod leader_read_tests;
 mod topic_resolution_tests;
 
 pub(crate) use self::plan::PendingRead;
+pub(crate) use self::read::LiveOffsets;
 use self::{
     node_endpoints::fetch_node_endpoints,
     plan::{PendingPlanContext, build_pending_reads},
@@ -178,6 +179,7 @@ pub(crate) async fn handle(
         version,
         mode: (read_committed, is_follower_fetch),
         follower_id: effective_replica_id,
+        follower_broker_epoch: req.replica_state.replica_epoch,
     };
     let pending = build_pending_reads(&plan_context, &effective_topics).await;
 
@@ -317,16 +319,21 @@ pub(crate) struct VisibilityWindow {
     /// Whether to fill `aborted_transactions`, which happens for a
     /// `read_committed` consumer.
     pub read_committed_aborts: bool,
-    /// `out.high_watermark` to report.
+    /// `out.high_watermark` to report: the partition's high watermark, for a
+    /// follower as for a consumer, as Kafka's `Partition.readRecords` reports
+    /// it.
     pub response_hw: Offset,
-    /// `out.last_stable_offset` to report.
+    /// `out.last_stable_offset` to report: `lso.min(hw)`, Kafka's
+    /// `UnifiedLog.lastStableOffset`, for every fetcher and isolation level.
     pub response_lso: Offset,
 }
 
 /// The partition offsets a fetch reads to decide what it may expose.
 ///
-/// Kafka invariants that the caller upholds: `0 <= log_start <= hw <= log_end`
-/// and `lso <= hw`. KFC-1 adds `log_start <= deliverable <= hw`.
+/// Kafka keeps `0 <= log_start <= hw <= log_end` and `lso <= hw`, and KFC-1
+/// keeps `deliverable <= hw`. The verified decision needs none of them: a
+/// consumer never reads at or past `hw`, `deliverable`, or (under
+/// `read_committed`) `lso`, whatever the caller passes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct FetchWatermarks {
     /// The floor below which this read is out of range. On a tiered partition

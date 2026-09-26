@@ -1,0 +1,26 @@
+(* #"/workspace/crates/verified/src/isr.rs" 409 27 409 32 *)
+
+(* <isr::HwmReplica as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_Option_i64 = None | Some Int64.t
+
+type t_IsrEligibilityFacts = {
+  fenced: bool;
+  shutting_down: bool;
+  fetch_broker_epoch: t_Option_i64;
+  alive_broker_epoch: t_Option_i64 }
+
+type t_HwmReplica = { log_end: Int64.t; in_isr: bool; caught_up_within_lag: bool; eligibility: t_IsrEligibilityFacts }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_HwmReplica [#"/workspace/crates/verified/src/isr.rs" 409 27 409 32] (self: t_HwmReplica)
+  (return (x: t_HwmReplica)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_HwmReplica = Any.any_l () | & self: t_HwmReplica = self ])
+  [ return (result: t_HwmReplica) -> (! return {result}) ]

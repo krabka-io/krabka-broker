@@ -15,7 +15,10 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use krabka_ids::LeaderEpoch;
-use krabka_verified::{RemoteCacheAction, remote_cache_action, remote_read_relative_offset};
+use krabka_verified::{
+    remote_read_relative_offset,
+    storage::{RemoteCacheAction, remote_cache_action},
+};
 use uuid::Uuid;
 
 use crate::{
@@ -69,7 +72,7 @@ impl RemoteLogMetadataCache {
     ) -> Result<(), RemoteStorageError> {
         let id = update.remote_log_segment_id.clone();
         let Some(existing) = self.id_to_metadata.get(&id.id).cloned() else {
-            return match remote_cache_action(0, cache_state_tag(update.state), false) {
+            return match remote_cache_action(None, update.state.lifecycle(), false) {
                 RemoteCacheAction::Noop => Ok(()),
                 _ => Err(RemoteStorageError::SegmentNotFound(id)),
             };
@@ -83,8 +86,8 @@ impl RemoteLogMetadataCache {
                 .is_none_or(|custom| existing.custom_metadata() == Some(custom));
 
         match remote_cache_action(
-            cache_state_tag(existing.state()),
-            cache_state_tag(update.state),
+            Some(existing.state().lifecycle()),
+            update.state.lifecycle(),
             exact_retry,
         ) {
             RemoteCacheAction::Reject => Err(RemoteStorageError::InvalidSegmentTransition {
@@ -234,7 +237,7 @@ impl RemoteLogMetadataCache {
                         entry.insert(md);
                     }
                     std::collections::hash_map::Entry::Occupied(mut entry) => {
-                        if cache_state_tag(md.state()) > cache_state_tag(entry.get().state()) {
+                        if md.state().lifecycle() > entry.get().state().lifecycle() {
                             entry.insert(md);
                         }
                     }
@@ -251,15 +254,6 @@ impl RemoteLogMetadataCache {
 
     pub(crate) fn set_delete_state(&mut self, state: RemotePartitionDeleteState) {
         self.delete_state = Some(state);
-    }
-}
-
-const fn cache_state_tag(state: RemoteLogSegmentState) -> u8 {
-    match state {
-        RemoteLogSegmentState::CopySegmentStarted => 1,
-        RemoteLogSegmentState::CopySegmentFinished => 2,
-        RemoteLogSegmentState::DeleteSegmentStarted => 3,
-        RemoteLogSegmentState::DeleteSegmentFinished => 4,
     }
 }
 

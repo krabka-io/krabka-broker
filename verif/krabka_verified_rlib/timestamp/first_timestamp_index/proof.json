@@ -2,8 +2,8 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_first_timestamp_index": { "prover": "alt-ergo", "time": 0.014 },
-      "vc_len_i64": { "prover": "alt-ergo", "time": 0.004 }
+      "vc_first_timestamp_index": { "prover": "alt-ergo", "time": 0.064 },
+      "vc_len_i64": { "prover": "alt-ergo", "time": 0.022 }
     }
   }
 }

@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_ip_quota_precedence": { "prover": "alt-ergo", "time": 0.004 }
+      "vc_ip_quota_precedence": { "prover": "alt-ergo", "time": 0.028 }
     }
   }
 }

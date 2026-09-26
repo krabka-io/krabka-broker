@@ -176,6 +176,8 @@ pub(crate) fn decode_value(
 
     let producer_id = get_i64(&mut buf)?;
     let producer_epoch = get_i16(&mut buf)?;
+    // Kafka's `TransactionLog.read` accepts any timeout, and so does this
+    // decoder: the idle reaper's decision is total over it.
     let txn_timeout_ms = get_i32(&mut buf)?;
     let status = get_i8(&mut buf)?;
     let state = TxnState::from_kafka_status(status).ok_or(BrokerError::Protocol(

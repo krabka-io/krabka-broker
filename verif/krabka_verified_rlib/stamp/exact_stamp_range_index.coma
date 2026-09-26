@@ -1,21 +1,21 @@
-(* #"/proof-work-239/crates/verified/src/stamp.rs" 84 0 89 18 *)
+(* #"/workspace/crates/verified/src/stamp.rs" 94 0 99 18 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sstamp = "/proof-work-239/crates/verified/src/stamp.rs" 90 20 90 26
-let%span sstamp'0 = "/proof-work-239/crates/verified/src/stamp.rs" 95 14 95 35
-let%span sstamp'1 = "/proof-work-239/crates/verified/src/stamp.rs" 96 18 96 29
-let%span sstamp'2 = "/proof-work-239/crates/verified/src/stamp.rs" 93 16 94 64
-let%span sstamp'3 = "/proof-work-239/crates/verified/src/stamp.rs" 92 16 92 44
-let%span sstamp'4 = "/proof-work-239/crates/verified/src/stamp.rs" 91 16 91 38
-let%span sstamp'5 = "/proof-work-239/crates/verified/src/stamp.rs" 97 11 97 23
-let%span sstamp'6 = "/proof-work-239/crates/verified/src/stamp.rs" 97 42 97 54
-let%span sstamp'7 = "/proof-work-239/crates/verified/src/stamp.rs" 100 17 100 18
-let%span sstamp'8 = "/proof-work-239/crates/verified/src/stamp.rs" 100 8 100 18
-let%span sstamp'9 = "/proof-work-239/crates/verified/src/stamp.rs" 73 11 73 39
-let%span sstamp'10 = "/proof-work-239/crates/verified/src/stamp.rs" 74 10 82 1
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sstamp = "/workspace/crates/verified/src/stamp.rs" 100 20 100 26
+let%span sstamp'0 = "/workspace/crates/verified/src/stamp.rs" 105 14 105 35
+let%span sstamp'1 = "/workspace/crates/verified/src/stamp.rs" 106 18 106 29
+let%span sstamp'2 = "/workspace/crates/verified/src/stamp.rs" 103 16 104 64
+let%span sstamp'3 = "/workspace/crates/verified/src/stamp.rs" 102 16 102 44
+let%span sstamp'4 = "/workspace/crates/verified/src/stamp.rs" 101 16 101 38
+let%span sstamp'5 = "/workspace/crates/verified/src/stamp.rs" 107 11 107 23
+let%span sstamp'6 = "/workspace/crates/verified/src/stamp.rs" 107 42 107 54
+let%span sstamp'7 = "/workspace/crates/verified/src/stamp.rs" 110 17 110 18
+let%span sstamp'8 = "/workspace/crates/verified/src/stamp.rs" 110 8 110 18
+let%span sstamp'9 = "/workspace/crates/verified/src/stamp.rs" 83 11 83 39
+let%span sstamp'10 = "/workspace/crates/verified/src/stamp.rs" 84 10 92 1
 
 use creusot.int.UInt64
 use seq.Seq
@@ -48,7 +48,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let exact_stamp_range_index [#"/proof-work-239/crates/verified/src/stamp.rs" 84 0 89 18] (bases: Slice64.slice Int64.t)
+let exact_stamp_range_index [#"/workspace/crates/verified/src/stamp.rs" 94 0 99 18] (bases: Slice64.slice Int64.t)
   (lasts: Slice64.slice Int64.t) (target_base: Int64.t) (target_last: Int64.t) (return (x: t_Option_usize)) =
 {[@stop_split] [@expl:exact_stamp_range_index requires] [%#sstamp'9] Seq.length (Slice64.view bases)
   = Seq.length (Slice64.view lasts)}

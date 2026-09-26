@@ -87,6 +87,7 @@ impl PendingRead {
 async fn update_follower_progress(
     partition: &Partition,
     follower_id: i32,
+    follower_broker_epoch: i64,
     request: &EffectivePartition,
 ) {
     let leader_leo = partition.log_end_offset();
@@ -97,6 +98,9 @@ async fn update_follower_progress(
         // Kafka's `Replica.updateFetchStateOrThrow` records the follower's log
         // start offset with its fetch offset. A `DeleteRecords` waits for it.
         state.record_follower_log_start(follower, Offset(request.log_start_offset));
+        // KIP-841: the ISR-expansion eligibility check compares this with the
+        // broker's registered epoch before `update_follower_leo` reads it.
+        state.record_follower_broker_epoch(follower, follower_broker_epoch);
         state.update_follower_leo(
             follower,
             Offset(request.fetch_offset),
@@ -273,7 +277,7 @@ pub(super) struct ReadRole<'a> {
 /// Kafka's order in `Partition.fetchRecords`: the leader-epoch fence, the
 /// leader check, the follower replica check, and then the diverging epoch of
 /// the read. Returns `true` when `output` is final.
-pub(super) fn apply_epoch_checks(
+pub(super) async fn apply_epoch_checks(
     image: &krabka_metadata::MetadataImage,
     topic: &str,
     partition_index: i32,
@@ -335,42 +339,41 @@ pub(super) fn apply_epoch_checks(
     if request.last_fetched_epoch < 0 {
         return false;
     }
-    let (
-        log_start_offset,
-        established_log_start,
-        found_epoch,
-        end_offset,
-        high_watermark,
-        last_stable_offset,
-    ) = {
+    // The live bounds a diverging-epoch row reports: the partition's real
+    // high watermark, `min(LSO, HW)` and log start, as every Fetch row does.
+    let high_watermark = partition.high_watermark().await;
+    let (log_start_offset, established_log_start, found_epoch, end_offset, last_stable_offset) = {
         let mut log = partition.log.lock().expect("log mutex poisoned");
-        let log_start_offset = log.log_start_offset();
-        let established_log_start = log.established_log_start();
-        let log_end_offset = log.log_end_offset();
-        let (found_epoch, end_offset) = log
-            .epoch_checkpoint()
-            .epoch_and_offset_for(LeaderEpoch(request.last_fetched_epoch), log_end_offset);
-        // Kafka reports the partition's live bounds on an `OFFSET_OUT_OF_RANGE`
-        // row (`Partition.readRecords`'s `logReadInfo`), not the -1 sentinels
-        // `refused_read` uses for a row this handler refuses without ever
-        // touching the log. A follower fetch sees LEO as both HW and LSO (see
-        // the module doc); using it here for every fetch type is an
-        // approximation on a lagging acks=all topic, but still strictly more
-        // useful than -1 and exactly right for the follower fetch this branch
-        // exists to keep from hot-looping.
-        let last_stable_offset = log.last_stable_offset(log_end_offset);
+        let (found_epoch, end_offset) = log.epoch_checkpoint().epoch_and_offset_for(
+            LeaderEpoch(request.last_fetched_epoch),
+            log.log_end_offset(),
+        );
+        let last_stable_offset = log.last_stable_offset(high_watermark).min(high_watermark);
         (
-            log_start_offset,
-            established_log_start,
+            log.log_start_offset(),
+            log.established_log_start(),
             found_epoch,
             end_offset,
-            log_end_offset,
             last_stable_offset,
         )
     };
-    // Kafka's `Partition.readRecords` (roughly lines 1385-1412): a fetch
-    // offset below the log start is `OFFSET_OUT_OF_RANGE` whatever the epochs
-    // say, checked before any divergence row is built. Only an *established*
+    // Kafka's `Partition.readRecords`: an epoch this log cannot place --
+    // `LeaderEpochFileCache.endOffsetFor` answered `(UNDEFINED_EPOCH,
+    // UNDEFINED_EPOCH_OFFSET)` for an empty history or a `last_fetched_epoch`
+    // above every recorded epoch -- is `OFFSET_OUT_OF_RANGE`, ahead of the
+    // log-start check. `ReplicaManager.readFromLog` answers that exception
+    // with `LogReadResult(Errors)`, whose offsets are all -1: exactly
+    // `refused_read`. The offline-directory deferral below applies here too.
+    if found_epoch == LeaderEpoch::UNKNOWN || end_offset == Offset(-1) {
+        if log_dir_offline {
+            return false;
+        }
+        *output = refused_read(partition_index, codes::OFFSET_OUT_OF_RANGE);
+        return true;
+    }
+    // Kafka's `Partition.readRecords`: a fetch offset below the log start is
+    // `OFFSET_OUT_OF_RANGE` whatever the epochs say, checked before any
+    // divergence row is built. Only an *established*
     // floor counts: `Log::open` also infers a floor from whatever segments are
     // left on disk, and on a tiered partition reopened with its local segments
     // evicted that inferred floor sits above everything the remote tier still
@@ -381,22 +384,25 @@ pub(super) fn apply_epoch_checks(
     // can make the floor unreadable or stale, and resetting a client or
     // follower in response to a storage failure would discard state it
     // should have kept, so this defers to the caller's own offline gate
-    // instead of racing it.
+    // instead of racing it. `Partition.readRecords` throws
+    // `OffsetOutOfRangeException` here, and the non-tiered branch of
+    // `ReplicaManager.handleOffsetOutOfRangeError` answers it with
+    // `LogReadResult(Errors)`, whose offsets are all -1: `refused_read`. A
+    // follower learns the leader's bounds from `ListOffsets` instead
+    // (`AbstractFetcherThread.fetchOffsetAndTruncate`).
     if let Some(established) = established_log_start
         && request.fetch_offset < established.0
     {
         if log_dir_offline {
             return false;
         }
-        *output = PartitionData {
-            log_start_offset: log_start_offset.0,
-            high_watermark: high_watermark.0,
-            last_stable_offset: last_stable_offset.0,
-            ..refused_read(partition_index, codes::OFFSET_OUT_OF_RANGE)
-        };
+        *output = refused_read(partition_index, codes::OFFSET_OUT_OF_RANGE);
         return true;
     }
-    if found_epoch >= request.last_fetched_epoch && end_offset.0 >= request.fetch_offset {
+    // Kafka's divergence test: the leader's epoch for the follower's range is
+    // older than `last_fetched_epoch`, or that epoch ends before the fetch
+    // offset. The row carries the lookup's pair verbatim.
+    if found_epoch.0 >= request.last_fetched_epoch && end_offset.0 >= request.fetch_offset {
         return false;
     }
     // Kafka's `Partition.readRecords` fills a diverging-epoch row with the
@@ -447,6 +453,10 @@ pub(super) struct PendingPlanContext<'a> {
     pub(super) version: i16,
     pub(super) mode: (bool, bool),
     pub(super) follower_id: i32,
+    /// The broker epoch the follower's Fetch carried in
+    /// `ReplicaState.ReplicaEpoch` (-1 when absent), Kafka's
+    /// `FetchParams.replicaEpoch`.
+    pub(super) follower_broker_epoch: i64,
 }
 
 pub(super) async fn plan_partition_read(
@@ -547,6 +557,7 @@ pub(super) async fn plan_partition_read(
             },
             &mut output,
         )
+        .await
     {
         return PendingRead::planned(topic_name, topic_id, request, context.mode, None, output);
     }
@@ -572,7 +583,13 @@ pub(super) async fn plan_partition_read(
     if context.mode.1
         && let Some(partition) = partition.as_ref()
     {
-        update_follower_progress(partition, context.follower_id, request).await;
+        update_follower_progress(
+            partition,
+            context.follower_id,
+            context.follower_broker_epoch,
+            request,
+        )
+        .await;
     }
     if partition.is_none() || topic_name.is_empty() {
         let output = refused_partition(request.partition, codes::UNKNOWN_TOPIC_OR_PARTITION);
@@ -841,6 +858,7 @@ mod tests {
                 version: super::super::FIRST_TOPIC_ID_VERSION,
                 mode: (false, is_follower_fetch),
                 follower_id,
+                follower_broker_epoch: -1,
             };
             let read =
                 super::plan_partition_read(&context, TOPIC, super::WireUuid::ZERO, None, &request)
@@ -1003,6 +1021,7 @@ mod tests {
             version: super::super::FIRST_TOPIC_ID_VERSION,
             mode: (false, false),
             follower_id: -1,
+            follower_broker_epoch: -1,
         };
         let request = super::EffectivePartition {
             partition: 0,
@@ -1129,17 +1148,16 @@ mod tests {
         }
     }
 
-    /// A fetch offset below an *established* log start answers
-    /// `OFFSET_OUT_OF_RANGE` with the partition's live bounds, checked before
-    /// the epoch lookup's divergence row is built, unless the log directory is
-    /// offline, in which case the caller's own offline gate takes it instead.
-    /// An unestablished (segment-inferred) floor never refuses here, since it
-    /// may sit above data the remote tier still holds. An epoch lookup that
-    /// cannot place `last_fetched_epoch` on this log -- an empty epoch
-    /// history, or a `last_fetched_epoch` above every recorded epoch -- still
-    /// gets an actionable `diverging_epoch` row (`Log::epoch_and_offset_for`
-    /// resolves it to the log end offset, never -1, so a follower truncates to
-    /// it instead of looping), same as a true divergence.
+    /// Kafka's `Partition.readRecords` order. An epoch lookup that cannot
+    /// place `last_fetched_epoch` on this log -- an empty epoch history, or a
+    /// `last_fetched_epoch` above every recorded epoch -- answers
+    /// `OFFSET_OUT_OF_RANGE` with Kafka's all -1 offsets, never a
+    /// `diverging_epoch`. A fetch offset below an *established* log start
+    /// answers `OFFSET_OUT_OF_RANGE` with the same all -1 offsets, checked
+    /// before the epoch lookup's divergence row is built. An unestablished
+    /// (segment-inferred) floor never refuses here, since it may sit above
+    /// data the remote tier still holds. A gap epoch diverges to the floor
+    /// epoch and the start of the next recorded epoch.
     #[tokio::test]
     async fn below_established_log_start_answers_offset_out_of_range() {
         // No records at all: the epoch cache is empty, and nothing has ever
@@ -1158,6 +1176,23 @@ mod tests {
             append_at_epoch(&mut log, 1);
             append_at_epoch(&mut log, 1);
         }
+        // Every record is committed: a diverging row reports this live HW.
+        with_history.replica_state.lock().await.hw = super::Offset(4);
+
+        // A gap: epoch 0 then epoch 3, two records each. Checkpoint `0 -> 0`,
+        // `3 -> 2`, LEO 4. A follower that last fetched epoch 2 is placed on
+        // the floor epoch 0, which ends where epoch 3 begins.
+        let gap_dir = tempfile::tempdir().expect("tempdir");
+        let with_gap = epoch_checks_partition(gap_dir.path());
+        {
+            let mut log = with_gap.log.lock().expect("log mutex poisoned");
+            append_at_epoch(&mut log, 0);
+            append_at_epoch(&mut log, 0);
+            append_at_epoch(&mut log, 3);
+            append_at_epoch(&mut log, 3);
+        }
+        // Every record is committed: a diverging row reports this live HW.
+        with_gap.replica_state.lock().await.hw = super::Offset(4);
 
         // Three epochs of two records each: checkpoint `0 -> 0`, `1 -> 2`,
         // `2 -> 4`, LEO 6. The log start then moves to 5 and becomes
@@ -1179,35 +1214,26 @@ mod tests {
 
         for (name, partition, last_fetched_epoch, fetch_offset, want_final, want_out) in [
             (
-                "empty epoch history, unestablished floor: an actionable \
-                 divergence, not a refusal",
+                "empty epoch history: Kafka cannot place the epoch",
                 Arc::clone(&empty),
                 0,
                 0,
                 true,
-                super::PartitionData {
-                    partition_index: 0,
-                    error_code: crate::codes::NONE,
-                    // A brand-new empty log's live bounds are all 0, and
-                    // `apply_epoch_checks` now fills them on this row rather
-                    // than leaving the wire defaults (-1) `PartitionData`
-                    // starts from (#872/#873).
-                    high_watermark: 0,
-                    last_stable_offset: 0,
-                    log_start_offset: 0,
-                    diverging_epoch: super::EpochEndOffset {
-                        epoch: -1,
-                        end_offset: 0,
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
+                super::refused_read(0, crate::codes::OFFSET_OUT_OF_RANGE),
             ),
             (
-                "last_fetched_epoch above every recorded epoch, unestablished \
-                 floor: an actionable divergence, not a refusal",
+                "last_fetched_epoch above every recorded epoch: Kafka cannot \
+                 place the epoch",
                 Arc::clone(&with_history),
                 5,
+                4,
+                true,
+                super::refused_read(0, crate::codes::OFFSET_OUT_OF_RANGE),
+            ),
+            (
+                "gap epoch diverges to the floor epoch and the next start",
+                Arc::clone(&with_gap),
+                2,
                 4,
                 true,
                 super::PartitionData {
@@ -1220,10 +1246,22 @@ mod tests {
                     // `apply_epoch_checks` now fills over on this row.
                     log_start_offset: 0,
                     diverging_epoch: super::EpochEndOffset {
-                        epoch: -1,
-                        end_offset: 4,
+                        epoch: 0,
+                        end_offset: 2,
                         ..Default::default()
                     },
+                    ..Default::default()
+                },
+            ),
+            (
+                "last_fetched_epoch is the latest and the fetch offset is \
+                 inside the log: no divergence, the read goes ahead",
+                Arc::clone(&with_history),
+                1,
+                3,
+                false,
+                super::PartitionData {
+                    partition_index: 0,
                     ..Default::default()
                 },
             ),
@@ -1234,12 +1272,7 @@ mod tests {
                 0,
                 4,
                 true,
-                super::PartitionData {
-                    log_start_offset: 5,
-                    high_watermark: 6,
-                    last_stable_offset: 6,
-                    ..super::refused_read(0, crate::codes::OFFSET_OUT_OF_RANGE)
-                },
+                super::refused_read(0, crate::codes::OFFSET_OUT_OF_RANGE),
             ),
             (
                 "a true divergence still answers a diverging_epoch with epoch >= 0",
@@ -1278,7 +1311,116 @@ mod tests {
                 &request,
                 read_role(&partition),
                 &mut output,
-            );
+            )
+            .await;
+            assert!(final_ == want_final, "{name}: final");
+            assert!(output == want_out, "{name}: got {output:?}");
+        }
+    }
+
+    /// Kafka's `Partition.makeLeader` records the new leader epoch at the log
+    /// end before anything is written in it, so a leader promoted a moment
+    /// ago still places every follower. Before promotion the same log has
+    /// only epochs 0 and 1 (LEO 4), and a follower that last fetched epoch 2
+    /// or 3 cannot be placed at all.
+    #[tokio::test]
+    async fn a_freshly_promoted_leader_places_followers_before_its_first_write() {
+        // A diverging row carries the partition's live bounds; nothing is
+        // committed here, so the high watermark, LSO and log start are all 0.
+        let diverge_to = |epoch, end_offset| super::PartitionData {
+            partition_index: 0,
+            error_code: crate::codes::NONE,
+            high_watermark: 0,
+            last_stable_offset: 0,
+            log_start_offset: 0,
+            diverging_epoch: super::EpochEndOffset {
+                epoch,
+                end_offset,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let proceed = super::PartitionData {
+            partition_index: 0,
+            ..Default::default()
+        };
+        let out_of_range = super::refused_read(0, crate::codes::OFFSET_OUT_OF_RANGE);
+        // (name, promoted to epoch 3, last_fetched_epoch, fetch_offset,
+        //  final, output)
+        let cases = [
+            (
+                "not yet promoted: the new epoch cannot be placed",
+                false,
+                3,
+                4,
+                true,
+                out_of_range.clone(),
+            ),
+            (
+                "promoted: a follower already on the new epoch reads on",
+                true,
+                3,
+                4,
+                false,
+                proceed.clone(),
+            ),
+            (
+                "promoted: a follower on the previous epoch reads on",
+                true,
+                1,
+                4,
+                false,
+                proceed,
+            ),
+            (
+                "not yet promoted: an epoch this leader never saw cannot be \
+                 placed",
+                false,
+                2,
+                6,
+                true,
+                out_of_range,
+            ),
+            (
+                "promoted: an epoch this leader never saw ends where the new \
+                 epoch starts",
+                true,
+                2,
+                6,
+                true,
+                diverge_to(1, 4),
+            ),
+        ];
+        for (name, promoted, last_fetched_epoch, fetch_offset, want_final, want_out) in cases {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let partition = epoch_checks_partition(dir.path());
+            {
+                let mut log = partition.log.lock().expect("log mutex poisoned");
+                for epoch in [0, 0, 1, 1] {
+                    append_at_epoch(&mut log, epoch);
+                }
+            }
+            if promoted {
+                partition
+                    .install_local_leadership(None, 1, 3)
+                    .await
+                    .expect("promote");
+            }
+            let request = effective_partition(last_fetched_epoch, fetch_offset);
+            let mut output = super::PartitionData {
+                partition_index: 0,
+                ..Default::default()
+            };
+            let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+            let final_ = super::apply_epoch_checks(
+                &image,
+                "diverge",
+                0,
+                &request,
+                read_role(&partition),
+                &mut output,
+            )
+            .await;
             assert!(final_ == want_final, "{name}: final");
             assert!(output == want_out, "{name}: got {output:?}");
         }
@@ -1318,7 +1460,8 @@ mod tests {
                 log_dir_offline: true,
             },
             &mut output,
-        );
+        )
+        .await;
         assert!(!final_, "defers to the caller's own offline check");
     }
 }

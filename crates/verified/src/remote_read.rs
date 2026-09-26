@@ -162,46 +162,28 @@ pub fn tiered_owning_epoch_index(
     best
 }
 
-/// Decide whether one decoded time-index offset belongs to the usable prefix.
-///
-/// The first entry is usable. Every later entry must strictly advance the
-/// relative offset; otherwise it is the padding terminator.
-#[ensures(result == match previous_relative_offset {
-    Some(previous) => previous@ < relative_offset@,
-    None => true,
-})]
-#[must_use]
-pub const fn remote_time_index_offset_usable(
-    previous_relative_offset: Option<u32>,
-    relative_offset: u32,
-) -> bool {
-    match previous_relative_offset {
-        Some(previous) => previous < relative_offset,
-        None => true,
-    }
-}
-
 /// Return the length of the usable strict-predecessor prefix of a remote time
 /// index.
 ///
-/// Relative offsets must increase throughout the usable prefix. The first
-/// non-increasing offset is padding and terminates the search. Timestamps are
-/// nondecreasing within that prefix. The returned count therefore selects the
-/// last usable entry whose timestamp is strictly below `target_timestamp`.
-#[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < entries@.len()
-    && (forall<k: Int> 1 <= k && k <= j ==> entries@[k - 1].1@ < entries@[k].1@)
-    ==> entries@[i].0@ <= entries@[j].0@)]
+/// Kafka preallocates a time index, so its tail is padding. The usable prefix
+/// is where relative offsets strictly increase; the first non-increasing
+/// offset is padding and ends it. The count stops there or at the first entry
+/// whose timestamp is at or above `target_timestamp`, whichever comes first.
+///
+/// Every counted entry is strictly below the target. A time-index entry holds
+/// the largest timestamp at or before its offset, so no record up to that
+/// offset can match the target, and each counted entry, the last one included,
+/// is a safe place to start a scan. The bytes come from the remote tier, so
+/// nothing here assumes their timestamps are sorted: for a Kafka-written index
+/// they are, and the last counted entry is then the latest safe one.
 #[ensures(result@ <= entries@.len())]
 #[ensures(forall<i: Int> 0 <= i && i < result@
     ==> entries@[i].0@ < target_timestamp@)]
 #[ensures(forall<i: Int> 1 <= i && i < result@
     ==> entries@[i - 1].1@ < entries@[i].1@)]
-#[ensures(forall<j: Int> result@ <= j && j < entries@.len()
-    && (forall<k: Int> 1 <= k && k <= j ==> entries@[k - 1].1@ < entries@[k].1@)
-    ==> entries@[j].0@ >= target_timestamp@)]
-#[ensures(result@ < entries@.len() ==> result@ == 0
-    || entries@[result@].1@ <= entries@[result@ - 1].1@
-    || entries@[result@].0@ >= target_timestamp@)]
+#[ensures(result@ < entries@.len() ==>
+    (result@ > 0 && entries@[result@].1@ <= entries@[result@ - 1].1@)
+        || entries@[result@].0@ >= target_timestamp@)]
 #[must_use]
 pub fn remote_time_index_candidate_count(entries: &[(i64, u32)], target_timestamp: i64) -> usize {
     let mut count = 0usize;
@@ -226,8 +208,7 @@ pub fn remote_time_index_candidate_count(entries: &[(i64, u32)], target_timestam
 /// Compute the inclusive end of a capped remote-segment fetch.
 ///
 /// A zero cap means read to the segment end. A finite end exists only when the
-/// exclusive mathematical end stays strictly inside the segment; wider
-/// arithmetic prevents the admission check itself from wrapping.
+/// exclusive mathematical end stays strictly inside the segment.
 #[ensures(match result {
     Some(end) => max_bytes@ > 0
         && start_position@ + max_bytes@ < segment_size@
@@ -236,10 +217,6 @@ pub fn remote_time_index_candidate_count(entries: &[(i64, u32)], target_timestam
     None => max_bytes@ == 0 || start_position@ + max_bytes@ >= segment_size@,
 })]
 #[must_use]
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "the mathematical end is checked below segment_size before conversion"
-)]
 pub fn remote_fetch_end_position(
     start_position: u32,
     segment_size: u32,
@@ -248,11 +225,12 @@ pub fn remote_fetch_end_position(
     if max_bytes == 0 {
         return None;
     }
-    let exclusive_end = u64::from(start_position) + u64::from(max_bytes);
-    if exclusive_end >= u64::from(segment_size) {
+    // An end past `u32::MAX` is past every `u32` segment size too.
+    let exclusive_end = start_position.checked_add(max_bytes)?;
+    if exclusive_end >= segment_size {
         None
     } else {
-        Some((exclusive_end - 1) as u32)
+        Some(exclusive_end - 1)
     }
 }
 
@@ -296,16 +274,6 @@ pub fn remote_fetch_end_position(
     },
 })]
 #[must_use]
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "the mathematical delta is checked to fit u32 before conversion"
-)]
-#[allow(
-    clippy::manual_let_else,
-    clippy::question_mark,
-    reason = "explicit matching avoids unsupported Creusot v0.13 residual-control obligations"
-)]
 pub fn remote_read_relative_offset(
     start_offset: i64,
     end_offset: i64,
@@ -314,10 +282,7 @@ pub fn remote_read_relative_offset(
     epoch_start: Option<i64>,
     next_epoch_start: Option<i64>,
 ) -> Option<u32> {
-    let epoch_start = match epoch_start {
-        Some(epoch_start) => epoch_start,
-        None => return None,
-    };
+    let epoch_start = epoch_start?;
     if !copy_finished
         || epoch_start < start_offset
         || requested_offset < epoch_start
@@ -332,11 +297,15 @@ pub fn remote_read_relative_offset(
         _ => {}
     }
 
-    let delta = i128::from(requested_offset) - i128::from(start_offset);
-    if delta > i128::from(u32::MAX) {
+    // `start_offset <= epoch_start <= requested_offset`, so the distance is
+    // the delta and cannot overflow.
+    let delta = requested_offset.abs_diff(start_offset);
+    if delta > u64::from(u32::MAX) {
         None
     } else {
-        Some(delta as u32)
+        // The clamp is the identity here; it hands the cast a range the
+        // compiler can see.
+        Some(delta.min(0xffff_ffff) as u32)
     }
 }
 
@@ -384,14 +353,42 @@ mod tests {
     }
 
     #[test]
-    fn remote_time_index_stops_at_padding() {
-        let entries = [(1_000, 0), (2_000, 10), (0, 0), (9_000, 20)];
-        check!(remote_time_index_candidate_count(&entries, i64::MAX) == 2);
-        check!(remote_time_index_candidate_count(&[], i64::MAX) == 0);
-        check!(remote_time_index_offset_usable(None, 0));
-        check!(remote_time_index_offset_usable(Some(0), 10));
-        check!(!remote_time_index_offset_usable(Some(10), 10));
-        check!(!remote_time_index_offset_usable(Some(10), 0));
+    fn remote_time_index_stops_at_padding_or_the_target() {
+        // `(what, entries, target, count)`.
+        for (what, entries, target, expected) in [
+            (
+                "zeroed padding ends the index",
+                &[(1_000, 0), (2_000, 10), (0, 0), (9_000, 20)][..],
+                i64::MAX,
+                2,
+            ),
+            (
+                "a repeated offset is padding",
+                &[(1_000, 0), (2_000, 10), (3_000, 10)][..],
+                i64::MAX,
+                2,
+            ),
+            ("an empty index", &[][..], i64::MAX, 0),
+            (
+                "the first entry at the target",
+                &[(1_000, 0), (2_000, 10)][..],
+                1_000,
+                0,
+            ),
+            // Remote bytes need not be sorted; the count still stops at the
+            // first entry that is not strictly below the target.
+            (
+                "unsorted timestamps stop at the first one at the target",
+                &[(1_000, 0), (5_000, 10), (2_000, 20)][..],
+                3_000,
+                1,
+            ),
+        ] {
+            check!(
+                remote_time_index_candidate_count(entries, target) == expected,
+                "{what}"
+            );
+        }
     }
 
     #[test]

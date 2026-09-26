@@ -1,24 +1,46 @@
-//! `UniformAssignor`, the default of KIP-848. It distributes partitions as
-//! evenly as possible across the members that subscribe to each topic.
+//! `UniformAssignor`, the default of KIP-848. It ports Kafka's server-side
+//! `org.apache.kafka.coordinator.group.assignor.UniformAssignor`.
 //!
-//! The assignor is rack-aware. When the `TopicMetadata` of the coordinator
-//! carries a `partition_racks` entry for `(topic_id, partition_index)`, the
-//! assignor prefers subscribers whose `rack_id` matches one of the replica
-//! racks of the partition. If no subscriber matches, or the partition has no
-//! rack data, all subscribers are eligible. This is the original
-//! non-rack-aware behavior.
+//! The assignor ranks balance ahead of stickiness. Every member ends with a
+//! partition count within one of every other member's where the
+//! subscriptions allow it, and a member keeps as much of its current target
+//! assignment as that balance leaves room for. It does not consult replica
+//! racks, as in Kafka.
 //!
-//! In the eligible pool, the assignor selects the member with the lowest
-//! running partition count for this topic. It breaks ties by member-id lex
-//! order. Without rack data, the running minimum reduces exactly to the
-//! original `p % subscribers.len()` round-robin, so behavior does not change
-//! for clusters that do not expose broker racks.
+//! Two builders do the work, as in Kafka:
+//!
+//! - `homogeneous` ports `UniformHomogeneousAssignmentBuilder`. It runs when
+//!   the group's [`SubscriptionType`] is homogeneous and every member's
+//!   resolved topic IDs agree. Regex authorization is per member here, so a
+//!   group that Kafka's rule calls homogeneous can still resolve to different
+//!   topics, and then the heterogeneous builder keeps the result valid. The
+//!   group-wide quota split and each member's quota come from the proved
+//!   kernels [`uniform_quota_split`] and [`homogeneous_member_quotas`].
+//! - `heterogeneous` ports `UniformHeterogeneousAssignmentBuilder`. The
+//!   subscriber that receives each unassigned partition comes from the proved
+//!   kernel [`select_least_loaded`]. The final balancing pass ports
+//!   `MemberAssignmentBalancer` step for step.
+//!
+//! Kafka iterates members and homogeneous topics in hash order, so its tests
+//! pin them with sorted maps. This port fixes both orders: members in
+//! ascending member-ID order, and topics in ascending order of Kafka's
+//! `Uuid.compareTo`.
+//!
+//! Kafka rejects a subscription to a topic that is missing from the metadata.
+//! Here the reconciler resolves subscriptions from the same metadata
+//! snapshot, so a subscribed topic that is missing, or that has a negative
+//! partition count, is skipped instead. A current assignment entry outside a
+//! member's subscribed topics or outside the partition range is dropped, and
+//! a partition that two members claim stays with the first of them.
 
-use std::collections::HashMap;
+use std::{cmp::Ordering, collections::HashMap};
 
-use krabka_verified::select_uniform_member;
+use krabka_protocol::primitives::uuid::Uuid;
+use krabka_verified::uniform_assignor::{
+    SubscriberLoad, homogeneous_member_quotas, select_least_loaded, uniform_quota_split,
+};
 
-use super::{Assignment, Assignor, MemberSubscription, TopicMetadata};
+use super::{Assignment, Assignor, GroupSpec, SubscriptionType, TopicMetadata};
 
 #[derive(Debug)]
 pub struct UniformAssignor;
@@ -28,392 +50,475 @@ impl Assignor for UniformAssignor {
         "uniform"
     }
 
-    fn assign(&self, members: &[MemberSubscription], topics: &TopicMetadata) -> Assignment {
-        let mut out: Assignment = HashMap::new();
-        for m in members {
-            out.insert(m.member_id.clone(), HashMap::new());
+    fn assign(&self, group: &GroupSpec, topics: &TopicMetadata) -> Assignment {
+        let mut spec = Spec::new(group, topics);
+        let homogeneous_group = group.subscription_type == SubscriptionType::Homogeneous
+            && spec.subscriptions.windows(2).all(|pair| pair[0] == pair[1]);
+        if homogeneous_group {
+            homogeneous(&mut spec);
+        } else {
+            heterogeneous(&mut spec);
         }
-        for (topic_id, partition_count) in &topics.partitions_per_topic {
-            let mut subscribers: Vec<&MemberSubscription> = members
-                .iter()
-                .filter(|m| m.subscribed_topic_ids.contains(topic_id))
-                .collect();
-            subscribers.sort_unstable_by_key(|member| member.member_id.as_str());
-            if subscribers.is_empty() {
-                continue;
-            }
-            // Per-member partition count for THIS topic, used to choose
-            // the least-loaded member from the eligible pool. Reset per
-            // topic — KIP-848 balances within-topic, not across topics.
-            let mut count_by_member = vec![0usize; subscribers.len()];
+        spec.into_assignment()
+    }
+}
 
-            for p in 0..*partition_count {
-                let partition_racks = topics.partition_racks.get(&(*topic_id, p));
-                let candidates: Vec<(usize, bool)> = subscribers
+/// Kafka's `Uuid.compareTo`: the most significant 64 bits as a signed long,
+/// then the least significant 64 bits as a signed long.
+fn kafka_uuid_order(a: &Uuid, b: &Uuid) -> Ordering {
+    let halves = |uuid: &Uuid| {
+        let (most, least) = uuid.0.split_at(8);
+        (
+            i64::from_be_bytes(most.try_into().expect("8 bytes")),
+            i64::from_be_bytes(least.try_into().expect("8 bytes")),
+        )
+    };
+    halves(a).cmp(&halves(b))
+}
+
+/// The assignor's working state. Members and topics are numbered by their
+/// position in `member_ids` and `topics`.
+#[derive(Debug)]
+struct Spec<'a> {
+    /// Member IDs in ascending order.
+    member_ids: Vec<&'a str>,
+    /// Existing topics with their partition counts, in Kafka `Uuid` order.
+    topics: Vec<(Uuid, usize)>,
+    /// Each member's subscribed topics that exist, as ascending topic numbers.
+    subscriptions: Vec<Vec<usize>>,
+    /// The owner of each partition of each topic, or `None` while unassigned.
+    owners: Vec<Vec<Option<usize>>>,
+}
+
+impl<'a> Spec<'a> {
+    fn new(group: &'a GroupSpec, metadata: &TopicMetadata) -> Self {
+        let mut members: Vec<_> = group.members.iter().collect();
+        members.sort_unstable_by(|a, b| a.member_id.cmp(&b.member_id));
+
+        let mut topics: Vec<(Uuid, usize)> = metadata
+            .partitions_per_topic
+            .iter()
+            .filter_map(|(id, count)| Some((*id, usize::try_from(*count).ok()?)))
+            .collect();
+        topics.sort_unstable_by(|a, b| kafka_uuid_order(&a.0, &b.0));
+        let topic_numbers: HashMap<Uuid, usize> = topics
+            .iter()
+            .enumerate()
+            .map(|(number, (id, _))| (*id, number))
+            .collect();
+
+        let subscriptions: Vec<Vec<usize>> = members
+            .iter()
+            .map(|member| {
+                let mut subscribed: Vec<usize> = member
+                    .subscribed_topic_ids
                     .iter()
-                    .zip(&count_by_member)
-                    .map(|(member, &count)| {
-                        (
-                            count,
-                            partition_racks.is_some_and(|racks| {
-                                member
-                                    .rack_id
-                                    .as_ref()
-                                    .is_some_and(|rack| racks.iter().any(|r| r == rack))
-                            }),
-                        )
-                    })
+                    .filter_map(|id| topic_numbers.get(id).copied())
                     .collect();
-                let chosen = select_uniform_member(&candidates)
-                    .expect("subscribers are non-empty, so candidates are non-empty");
-                count_by_member[chosen] += 1;
-                let member_id = &subscribers[chosen].member_id;
-                out.get_mut(member_id)
-                    .expect("inserted above")
-                    .entry(*topic_id)
-                    .or_default()
-                    .push(p);
+                subscribed.sort_unstable();
+                subscribed.dedup();
+                subscribed
+            })
+            .collect();
+
+        let mut owners: Vec<Vec<Option<usize>>> =
+            topics.iter().map(|(_, count)| vec![None; *count]).collect();
+        for (member, (subscription, spec)) in subscriptions.iter().zip(&members).enumerate() {
+            for (topic_id, partitions) in &spec.assigned_partitions {
+                let Some(&topic) = topic_numbers.get(topic_id) else {
+                    continue;
+                };
+                if subscription.binary_search(&topic).is_err() {
+                    continue;
+                }
+                for &partition in partitions {
+                    let owner = usize::try_from(partition)
+                        .ok()
+                        .and_then(|index| owners[topic].get_mut(index));
+                    if let Some(owner @ None) = owner {
+                        *owner = Some(member);
+                    }
+                }
+            }
+        }
+
+        Spec {
+            member_ids: members
+                .iter()
+                .map(|member| member.member_id.as_str())
+                .collect(),
+            topics,
+            subscriptions,
+            owners,
+        }
+    }
+
+    /// The partitions `member` owns, in topic order and then partition order.
+    fn owned_by(&self, member: usize) -> Vec<(usize, usize)> {
+        self.subscriptions[member]
+            .iter()
+            .flat_map(|&topic| {
+                self.owners[topic]
+                    .iter()
+                    .enumerate()
+                    .filter(move |(_, owner)| **owner == Some(member))
+                    .map(move |(partition, _)| (topic, partition))
+            })
+            .collect()
+    }
+
+    fn into_assignment(self) -> Assignment {
+        let mut out: Assignment = self
+            .member_ids
+            .iter()
+            .map(|id| ((*id).to_owned(), HashMap::new()))
+            .collect();
+        for ((topic_id, _), owners) in self.topics.iter().zip(&self.owners) {
+            for (partition, owner) in owners.iter().enumerate() {
+                if let Some(member) = owner {
+                    out.get_mut(self.member_ids[*member])
+                        .expect("every member has an entry")
+                        .entry(*topic_id)
+                        .or_default()
+                        .push(i32::try_from(partition).expect("partition counts are i32"));
+                }
             }
         }
         out
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use assert2::assert;
-    use krabka_protocol::primitives::uuid::Uuid;
+/// `UniformHomogeneousAssignmentBuilder.build`: every member subscribes to
+/// the same topics.
+///
+/// Each member's quota is the floor or the ceiling of the partition total
+/// over the members. A member keeps its current partitions up to its quota
+/// and gives the rest back. The unassigned partitions, in topic order and
+/// then partition order, followed by the given-back ones, go to the members
+/// with room, in member order.
+fn homogeneous(spec: &mut Spec<'_>) {
+    let Some(subscribed) = spec.subscriptions.first().cloned() else {
+        return;
+    };
+    let total: usize = subscribed.iter().map(|&topic| spec.topics[topic].1).sum();
+    let split = uniform_quota_split(total, spec.member_ids.len());
 
-    use super::{Assignor, MemberSubscription, TopicMetadata, UniformAssignor};
+    let mut unassigned: Vec<(usize, usize)> = subscribed
+        .iter()
+        .flat_map(|&topic| {
+            spec.owners[topic]
+                .iter()
+                .enumerate()
+                .filter(|(_, owner)| owner.is_none())
+                .map(move |(partition, _)| (topic, partition))
+        })
+        .collect();
+    let owned: Vec<Vec<(usize, usize)>> = (0..spec.member_ids.len())
+        .map(|member| spec.owned_by(member))
+        .collect();
+    let counts: Vec<usize> = owned.iter().map(Vec::len).collect();
+    let quotas = homogeneous_member_quotas(split.minimum_quota, split.extra_quotas, &counts);
 
-    fn tid(b: u8) -> Uuid {
-        Uuid([b; 16])
-    }
-
-    fn member(id: &str, topics: &[Uuid]) -> MemberSubscription {
-        MemberSubscription {
-            member_id: id.into(),
-            rack_id: None,
-            subscribed_topic_ids: topics.to_vec(),
+    for (partitions, quota) in owned.iter().zip(&quotas) {
+        for &(topic, partition) in &partitions[quota.retain..] {
+            spec.owners[topic][partition] = None;
+            unassigned.push((topic, partition));
         }
     }
-
-    fn member_in_rack(id: &str, rack: &str, topics: &[Uuid]) -> MemberSubscription {
-        MemberSubscription {
-            member_id: id.into(),
-            rack_id: Some(rack.into()),
-            subscribed_topic_ids: topics.to_vec(),
+    // The proved quotas add up to the partition total, and every partition
+    // is either retained or unassigned here, so the fills use up the list.
+    let mut next = unassigned.into_iter();
+    for (member, quota) in quotas.iter().enumerate() {
+        for (topic, partition) in next.by_ref().take(quota.fill) {
+            spec.owners[topic][partition] = Some(member);
         }
-    }
-
-    #[test]
-    fn single_member_gets_all_partitions() {
-        let t = tid(1);
-        let topics = TopicMetadata {
-            partitions_per_topic: [(t, 4)].into(),
-            ..Default::default()
-        };
-        let a = UniformAssignor.assign(&[member("m1", &[t])], &topics);
-        assert!(a["m1"][&t] == vec![0, 1, 2, 3]);
-    }
-
-    #[test]
-    fn two_members_split_round_robin() {
-        let t = tid(1);
-        let topics = TopicMetadata {
-            partitions_per_topic: [(t, 4)].into(),
-            ..Default::default()
-        };
-        let a = UniformAssignor.assign(&[member("m1", &[t]), member("m2", &[t])], &topics);
-        assert!(a["m1"][&t] == vec![0, 2]);
-        assert!(a["m2"][&t] == vec![1, 3]);
-    }
-
-    #[test]
-    fn unsubscribed_member_gets_empty_for_topic() {
-        let t = tid(1);
-        let topics = TopicMetadata {
-            partitions_per_topic: [(t, 2)].into(),
-            ..Default::default()
-        };
-        let a = UniformAssignor.assign(&[member("m1", &[t]), member("m2", &[])], &topics);
-        assert!(a["m1"][&t] == vec![0, 1]);
-        assert!(!a["m2"].contains_key(&t) || a["m2"][&t].is_empty());
-    }
-
-    #[test]
-    fn zero_partitions_no_assignment() {
-        let t = tid(1);
-        let topics = TopicMetadata {
-            partitions_per_topic: [(t, 0)].into(),
-            ..Default::default()
-        };
-        let a = UniformAssignor.assign(&[member("m1", &[t])], &topics);
-        assert!(!a["m1"].contains_key(&t) || a["m1"][&t].is_empty());
-    }
-
-    #[test]
-    fn deterministic_under_member_input_order() {
-        let t = tid(1);
-        let topics = TopicMetadata {
-            partitions_per_topic: [(t, 6)].into(),
-            ..Default::default()
-        };
-        let a1 = UniformAssignor.assign(
-            &[member("m1", &[t]), member("m2", &[t]), member("m3", &[t])],
-            &topics,
-        );
-        let a2 = UniformAssignor.assign(
-            &[member("m3", &[t]), member("m1", &[t]), member("m2", &[t])],
-            &topics,
-        );
-        assert!(a1 == a2);
-    }
-
-    #[test]
-    fn deterministic_retry_is_complete_unique_and_balanced() {
-        let t = tid(1);
-        let members = [member("m3", &[t]), member("m1", &[t]), member("m2", &[t])];
-        let topics = TopicMetadata {
-            partitions_per_topic: [(t, 7)].into(),
-            ..Default::default()
-        };
-
-        let first = UniformAssignor.assign(&members, &topics);
-        let retry = UniformAssignor.assign(&members, &topics);
-        assert!(first == retry, "an exact retry must be deterministic");
-
-        let mut partitions: Vec<i32> = first
-            .values()
-            .flat_map(|topics| topics.get(&t).into_iter().flatten().copied())
-            .collect();
-        partitions.sort_unstable();
-        assert!(partitions == (0..7).collect::<Vec<_>>());
-
-        let mut loads: Vec<usize> = first
-            .values()
-            .map(|topics| topics.get(&t).map_or(0, Vec::len))
-            .collect();
-        loads.sort_unstable();
-        assert!(loads == vec![2, 2, 3]);
-    }
-
-    #[test]
-    fn negative_partition_count_is_fail_closed() {
-        let t = tid(1);
-        let topics = TopicMetadata {
-            partitions_per_topic: [(t, -1)].into(),
-            ..Default::default()
-        };
-        let assignment = UniformAssignor.assign(&[member("m1", &[t])], &topics);
-        assert!(assignment["m1"].is_empty());
-    }
-
-    #[test]
-    fn empty_members_no_panic() {
-        let t = tid(1);
-        let topics = TopicMetadata {
-            partitions_per_topic: [(t, 4)].into(),
-            ..Default::default()
-        };
-        let a = UniformAssignor.assign(&[], &topics);
-        assert!(a.is_empty());
-    }
-
-    // ── rack-aware ────────────────────────────────────────────────
-
-    /// Builds a `TopicMetadata` with rack info on every partition of `t`.
-    fn topics_with_racks(
-        t: Uuid,
-        partitions: i32,
-        racks_per_partition: Vec<Vec<&str>>,
-    ) -> TopicMetadata {
-        let mut partition_racks = std::collections::HashMap::new();
-        for (i, racks) in racks_per_partition.into_iter().enumerate() {
-            partition_racks.insert(
-                (t, i32::try_from(i).unwrap()),
-                racks.into_iter().map(String::from).collect(),
-            );
-        }
-        TopicMetadata {
-            partitions_per_topic: [(t, partitions)].into(),
-            partition_racks,
-        }
-    }
-
-    #[test]
-    fn rack_aware_prefers_collocated_member() {
-        // Two members, two racks, two partitions each pinned to one rack.
-        // Each member must own exactly the partition for its own rack.
-        let t = tid(1);
-        let topics = topics_with_racks(t, 2, vec![vec!["us-east-1a"], vec!["us-east-1b"]]);
-        let a = UniformAssignor.assign(
-            &[
-                member_in_rack("m1", "us-east-1a", &[t]),
-                member_in_rack("m2", "us-east-1b", &[t]),
-            ],
-            &topics,
-        );
-        assert!(a["m1"][&t] == vec![0], "m1 in us-east-1a takes partition 0");
-        assert!(a["m2"][&t] == vec![1], "m2 in us-east-1b takes partition 1");
-    }
-
-    #[test]
-    fn rack_match_wins_even_when_an_unmatched_member_has_less_load() {
-        let t = tid(1);
-        let topics = topics_with_racks(t, 2, vec![vec![], vec!["rack-a"]]);
-        let assignment = UniformAssignor.assign(
-            &[
-                member_in_rack("m1", "rack-a", &[t]),
-                member_in_rack("m2", "rack-b", &[t]),
-            ],
-            &topics,
-        );
-
-        assert!(assignment["m1"][&t] == vec![0, 1]);
-        assert!(!assignment["m2"].contains_key(&t));
-    }
-
-    #[test]
-    fn mixed_topics_assign_only_subscribed_rack_eligible_members() {
-        let t1 = tid(1);
-        let t2 = tid(2);
-        let members = [
-            member_in_rack("m1", "rack-a", &[t1, t2]),
-            member_in_rack("m2", "rack-b", &[t1]),
-            member_in_rack("m3", "rack-c", &[t2]),
-            member_in_rack("m4", "rack-a", &[]),
-        ];
-        let topics = TopicMetadata {
-            partitions_per_topic: [(t1, 2), (t2, 2)].into(),
-            partition_racks: [
-                ((t1, 0), vec!["rack-a".into()]),
-                ((t1, 1), vec!["rack-b".into()]),
-                ((t2, 0), vec!["rack-c".into()]),
-                ((t2, 1), vec!["rack-a".into()]),
-            ]
-            .into(),
-        };
-
-        let assignment = UniformAssignor.assign(&members, &topics);
-        assert!(assignment["m1"][&t1] == vec![0]);
-        assert!(assignment["m2"][&t1] == vec![1]);
-        assert!(assignment["m3"][&t2] == vec![0]);
-        assert!(assignment["m1"][&t2] == vec![1]);
-        assert!(assignment["m4"].is_empty());
-    }
-
-    #[test]
-    fn rack_aware_falls_back_to_round_robin_when_no_rack_match() {
-        // Both partitions are in us-east-1a; members are in us-east-1b
-        // and us-east-1c. No subscriber matches → fall back to balanced
-        // round-robin over all subscribers.
-        let t = tid(1);
-        let topics = topics_with_racks(t, 4, vec![vec!["us-east-1a"]; 4]);
-        let a = UniformAssignor.assign(
-            &[
-                member_in_rack("m1", "us-east-1b", &[t]),
-                member_in_rack("m2", "us-east-1c", &[t]),
-            ],
-            &topics,
-        );
-        // 4 partitions / 2 members → 2 each, distributed evenly.
-        assert!(a["m1"][&t].len() == 2);
-        assert!(a["m2"][&t].len() == 2);
-        // Union covers all 4 partitions exactly once.
-        let mut all: Vec<i32> = a["m1"][&t]
-            .iter()
-            .chain(a["m2"][&t].iter())
-            .copied()
-            .collect();
-        all.sort_unstable();
-        assert!(all == vec![0, 1, 2, 3]);
-    }
-
-    #[test]
-    fn rack_aware_balances_within_rack_pool() {
-        // Three partitions all in us-east-1a, two members both in
-        // us-east-1a. Same rack → both eligible for every partition,
-        // balanced 2/1 (3/2 rounded).
-        let t = tid(1);
-        let topics = topics_with_racks(t, 3, vec![vec!["us-east-1a"]; 3]);
-        let a = UniformAssignor.assign(
-            &[
-                member_in_rack("m1", "us-east-1a", &[t]),
-                member_in_rack("m2", "us-east-1a", &[t]),
-            ],
-            &topics,
-        );
-        assert!(
-            a["m1"][&t].len() + a["m2"][&t].len() == 3,
-            "all partitions assigned"
-        );
-        assert!(
-            a["m1"][&t].len().abs_diff(a["m2"][&t].len()) <= 1,
-            "balanced within ±1: {:?} vs {:?}",
-            a["m1"][&t],
-            a["m2"][&t],
-        );
-    }
-
-    #[test]
-    fn rack_aware_handles_partition_with_no_rack_data() {
-        // Partition 0 has rack info, partition 1 does NOT (omitted).
-        // Partition 0 goes to rack-matched m1; partition 1 falls back
-        // to all-subscribers and load-balances to whoever has fewer.
-        let t = tid(1);
-        let mut partition_racks = std::collections::HashMap::new();
-        partition_racks.insert((t, 0), vec!["rack-a".into()]);
-        let topics = TopicMetadata {
-            partitions_per_topic: [(t, 2)].into(),
-            partition_racks,
-        };
-        let a = UniformAssignor.assign(
-            &[
-                member_in_rack("m1", "rack-a", &[t]),
-                member_in_rack("m2", "rack-b", &[t]),
-            ],
-            &topics,
-        );
-        assert!(
-            a["m1"][&t] == vec![0],
-            "m1 wins rack-collocated partition 0"
-        );
-        assert!(
-            a["m2"][&t] == vec![1],
-            "partition 1 has no rack data → load-balanced to m2 (m1 already has 1)"
-        );
-    }
-
-    #[test]
-    fn rack_aware_empty_partition_racks_acts_like_non_rack_aware() {
-        // partition_racks is empty → behavior must match the original
-        // non-rack-aware path for backwards-compat with old test cases.
-        let t = tid(1);
-        let topics = TopicMetadata {
-            partitions_per_topic: [(t, 4)].into(),
-            partition_racks: std::collections::HashMap::new(),
-        };
-        let a = UniformAssignor.assign(
-            &[
-                member_in_rack("m1", "rack-a", &[t]),
-                member_in_rack("m2", "rack-b", &[t]),
-            ],
-            &topics,
-        );
-        // Same as `two_members_split_round_robin` above.
-        assert!(a["m1"][&t] == vec![0, 2]);
-        assert!(a["m2"][&t] == vec![1, 3]);
-    }
-
-    #[test]
-    fn rack_aware_no_subscriber_has_rack_id_acts_like_non_rack_aware() {
-        // Partitions have rack info, but neither subscriber declares
-        // rack_id. Eligible pool falls back to all subscribers.
-        let t = tid(1);
-        let topics = topics_with_racks(t, 4, vec![vec!["rack-a"]; 4]);
-        let a = UniformAssignor.assign(&[member("m1", &[t]), member("m2", &[t])], &topics);
-        assert!(a["m1"][&t] == vec![0, 2]);
-        assert!(a["m2"][&t] == vec![1, 3]);
     }
 }
+
+/// The maximum number of passes of the final balancing phase, as in Kafka.
+const MAX_ITERATION_COUNT: usize = 16;
+
+/// `UniformHeterogeneousAssignmentBuilder.build`: members subscribe to
+/// different topics.
+///
+/// Members keep every current partition of the topics they still subscribe
+/// to. The unassigned partitions go, topic by topic, to the least-loaded
+/// subscriber. A final pass then moves partitions from the most-loaded to the
+/// least-loaded subscribers of each topic until no move improves balance.
+fn heterogeneous(spec: &mut Spec<'_>) {
+    let mut builder = Heterogeneous::new(spec);
+    builder.assign_remaining_partitions();
+    builder.balance();
+}
+
+#[derive(Debug)]
+struct Heterogeneous<'s, 'a> {
+    spec: &'s mut Spec<'a>,
+    /// The subscribers of each topic, in ascending member order.
+    topic_subscribers: Vec<Vec<usize>>,
+    /// Each member's partition count across every topic.
+    sizes: Vec<usize>,
+}
+
+impl<'s, 'a> Heterogeneous<'s, 'a> {
+    fn new(spec: &'s mut Spec<'a>) -> Self {
+        let mut topic_subscribers = vec![Vec::new(); spec.topics.len()];
+        for (member, subscription) in spec.subscriptions.iter().enumerate() {
+            for &topic in subscription {
+                topic_subscribers[topic].push(member);
+            }
+        }
+        let mut sizes = vec![0; spec.member_ids.len()];
+        for owner in spec.owners.iter().flatten().flatten() {
+            sizes[*owner] += 1;
+        }
+        Heterogeneous {
+            spec,
+            topic_subscribers,
+            sizes,
+        }
+    }
+
+    /// `sortTopicIds`: partitions per subscriber descending, then subscriber
+    /// count ascending, then topic ID ascending.
+    fn sort_topics(&self, topics: &mut [usize]) {
+        let per_subscriber = |topic: usize| {
+            let partitions = u32::try_from(self.spec.topics[topic].1).expect("i32 count");
+            let subscribers =
+                u32::try_from(self.topic_subscribers[topic].len()).expect("member count fits u32");
+            f64::from(partitions) / f64::from(subscribers)
+        };
+        topics.sort_by(|&a, &b| {
+            per_subscriber(b)
+                .total_cmp(&per_subscriber(a))
+                .then_with(|| {
+                    self.topic_subscribers[a]
+                        .len()
+                        .cmp(&self.topic_subscribers[b].len())
+                })
+                .then_with(|| kafka_uuid_order(&self.spec.topics[a].0, &self.spec.topics[b].0))
+        });
+    }
+
+    fn assign_partition(&mut self, topic: usize, partition: usize, member: usize) {
+        if let Some(previous) = self.spec.owners[topic][partition] {
+            self.sizes[previous] -= 1;
+        }
+        self.spec.owners[topic][partition] = Some(member);
+        self.sizes[member] += 1;
+    }
+
+    /// `assignRemainingPartitions`.
+    fn assign_remaining_partitions(&mut self) {
+        let mut topics: Vec<usize> = (0..self.spec.topics.len())
+            .filter(|&topic| {
+                !self.topic_subscribers[topic].is_empty()
+                    && self.spec.owners[topic].iter().any(Option::is_none)
+            })
+            .collect();
+        self.sort_topics(&mut topics);
+        let mut loads = Vec::new();
+        for topic in topics {
+            let subscribers = self.topic_subscribers[topic].clone();
+            let start: Vec<usize> = subscribers.iter().map(|&m| self.sizes[m]).collect();
+            for partition in 0..self.spec.owners[topic].len() {
+                if self.spec.owners[topic][partition].is_some() {
+                    continue;
+                }
+                loads.clear();
+                loads.extend(subscribers.iter().zip(&start).map(|(&member, &at_start)| {
+                    SubscriberLoad {
+                        assigned: self.sizes[member],
+                        assigned_at_topic_start: at_start,
+                    }
+                }));
+                let chosen = select_least_loaded(&loads).expect("the topic has subscribers");
+                self.assign_partition(topic, partition, subscribers[chosen]);
+            }
+        }
+    }
+
+    /// `balance` and `balanceTopics`: pass over the topics with two or more
+    /// subscribers until a full pass moves nothing, or the pass limit.
+    fn balance(&mut self) {
+        let mut topics: Vec<usize> = (0..self.spec.topics.len())
+            .filter(|&topic| self.topic_subscribers[topic].len() >= 2)
+            .collect();
+        if topics.is_empty() {
+            return;
+        }
+        self.sort_topics(&mut topics);
+        let mut last_rebalanced: Option<usize> = None;
+        for _ in 0..MAX_ITERATION_COUNT {
+            for (index, &topic) in topics.iter().enumerate() {
+                if last_rebalanced == Some(index) {
+                    return;
+                }
+                if self.balance_topic(topic) > 0 || last_rebalanced.is_none() {
+                    last_rebalanced = Some(index);
+                }
+            }
+        }
+    }
+
+    /// `balanceTopic`: move the topic's partitions from its most-loaded
+    /// subscribers to its least-loaded ones. Returns how many moved.
+    fn balance_topic(&mut self, topic: usize) -> usize {
+        let mut balancer = Balancer::new(&self.topic_subscribers[topic], &self.sizes);
+        if balancer.imbalance(&self.sizes) <= 1 {
+            return 0;
+        }
+
+        // The topic's partitions grouped by owner, and each owner's range.
+        let owners = &self.spec.owners[topic];
+        let mut partitions: Vec<usize> = (0..owners.len()).collect();
+        partitions.sort_by_key(|&partition| (owners[partition], partition));
+        let mut start: HashMap<usize, usize> = HashMap::new();
+        let mut end: HashMap<usize, usize> = HashMap::new();
+        for (index, &partition) in partitions.iter().enumerate() {
+            if let Some(owner) = owners[partition] {
+                start.entry(owner).or_insert(index);
+                end.insert(owner, index + 1);
+            }
+        }
+
+        let mut moved = 0;
+        while !balancer.is_balanced() {
+            let most_loaded = loop {
+                let Some(member) = balancer.next_most_loaded(&self.sizes) else {
+                    break None;
+                };
+                match (start.get(&member), end.get(&member)) {
+                    (Some(first), Some(last)) if last > first => break Some(member),
+                    _ => balancer.exclude_most_loaded(),
+                }
+            };
+            let Some(most_loaded) = most_loaded else {
+                break;
+            };
+            let last = end.get_mut(&most_loaded).expect("checked above");
+            *last -= 1;
+            let partition = partitions[*last];
+            let least_loaded = balancer.next_least_loaded(&self.sizes);
+            if balancer.is_balanced() {
+                break;
+            }
+            self.assign_partition(topic, partition, least_loaded);
+            moved += 1;
+        }
+        moved
+    }
+}
+
+/// Kafka's `MemberAssignmentBalancer`, over one topic's subscribers.
+///
+/// It keeps two ranges of the subscribers sorted by load: the least-loaded
+/// range grows to the right one level at a time, and the most-loaded range
+/// grows to the left. Balancing ends when the two levels are within one.
+#[derive(Debug)]
+struct Balancer {
+    sorted_members: Vec<usize>,
+    /// `[0, least_loaded_range_end)` is the least-loaded range.
+    least_loaded_range_end: usize,
+    least_loaded_range_partition_count: i64,
+    next_least_loaded_member: usize,
+    /// `[most_loaded_range_start, most_loaded_range_end)` is the most-loaded
+    /// range.
+    most_loaded_range_start: usize,
+    most_loaded_range_end: usize,
+    most_loaded_range_partition_count: i64,
+    /// The next position to take from, counting down. `None` is Kafka's -1.
+    next_most_loaded_member: Option<usize>,
+}
+
+fn level(size: usize) -> i64 {
+    i64::try_from(size).expect("partition counts fit i64")
+}
+
+impl Balancer {
+    /// `MemberAssignmentBalancer.initialize`.
+    fn new(members: &[usize], sizes: &[usize]) -> Self {
+        let mut sorted_members = members.to_vec();
+        sorted_members.sort_by_key(|&member| (sizes[member], member));
+        let len = sorted_members.len();
+        Balancer {
+            least_loaded_range_end: 0,
+            least_loaded_range_partition_count: level(sizes[sorted_members[0]]) - 1,
+            next_least_loaded_member: 0,
+            most_loaded_range_start: len,
+            most_loaded_range_end: len,
+            most_loaded_range_partition_count: level(sizes[sorted_members[len - 1]]) + 1,
+            next_most_loaded_member: Some(len - 1),
+            sorted_members,
+        }
+    }
+
+    /// The load gap between the most and the least loaded member, which
+    /// `initialize` returns.
+    fn imbalance(&self, sizes: &[usize]) -> usize {
+        let first = self.sorted_members[0];
+        let last = self.sorted_members[self.sorted_members.len() - 1];
+        sizes[last] - sizes[first]
+    }
+
+    /// `nextLeastLoadedMember`.
+    fn next_least_loaded(&mut self, sizes: &[usize]) -> usize {
+        if self.next_least_loaded_member >= self.least_loaded_range_end {
+            self.least_loaded_range_partition_count += 1;
+            while self.least_loaded_range_end < self.sorted_members.len()
+                && level(sizes[self.sorted_members[self.least_loaded_range_end]])
+                    == self.least_loaded_range_partition_count
+            {
+                self.least_loaded_range_end += 1;
+            }
+            self.next_least_loaded_member = 0;
+        }
+        let member = self.sorted_members[self.next_least_loaded_member];
+        self.next_least_loaded_member += 1;
+        member
+    }
+
+    /// `nextMostLoadedMember`.
+    fn next_most_loaded(&mut self, sizes: &[usize]) -> Option<usize> {
+        if self
+            .next_most_loaded_member
+            .is_none_or(|next| next < self.most_loaded_range_start)
+        {
+            if self.most_loaded_range_end <= self.most_loaded_range_start
+                && self.most_loaded_range_start > 0
+            {
+                self.most_loaded_range_partition_count =
+                    level(sizes[self.sorted_members[self.most_loaded_range_start - 1]]);
+            } else {
+                self.most_loaded_range_partition_count -= 1;
+            }
+            while self.most_loaded_range_start > 0
+                && level(sizes[self.sorted_members[self.most_loaded_range_start - 1]])
+                    == self.most_loaded_range_partition_count
+            {
+                self.most_loaded_range_start -= 1;
+            }
+            self.next_most_loaded_member = self.most_loaded_range_end.checked_sub(1);
+        }
+        let next = self.next_most_loaded_member?;
+        self.next_most_loaded_member = next.checked_sub(1);
+        Some(self.sorted_members[next])
+    }
+
+    /// `excludeMostLoadedMember`: swap the member last returned by
+    /// `next_most_loaded` to the end of the most-loaded range, and shrink it.
+    fn exclude_most_loaded(&mut self) {
+        let returned = self.next_most_loaded_member.map_or(0, |next| next + 1);
+        self.sorted_members
+            .swap(returned, self.most_loaded_range_end - 1);
+        self.most_loaded_range_end -= 1;
+    }
+
+    /// `isBalanced`.
+    fn is_balanced(&self) -> bool {
+        self.most_loaded_range_partition_count - self.least_loaded_range_partition_count <= 1
+    }
+}
+
+#[cfg(test)]
+mod tests;

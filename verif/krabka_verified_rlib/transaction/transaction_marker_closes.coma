@@ -1,7 +1,7 @@
-(* #"/proof-work-240/crates/verified/src/transaction.rs" 59 0 59 92 *)
+(* #"/workspace/crates/verified/src/transaction.rs" 569 0 569 92 *)
 
-let%span stransaction = "/proof-work-240/crates/verified/src/transaction.rs" 60 4 60 70
-let%span stransaction'0 = "/proof-work-240/crates/verified/src/transaction.rs" 57 10 57 88
+let%span stransaction = "/workspace/crates/verified/src/transaction.rs" 570 4 570 70
+let%span stransaction'0 = "/workspace/crates/verified/src/transaction.rs" 567 10 567 88
 
 use creusot.prelude.Any
 
@@ -9,7 +9,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let transaction_marker_closes [#"/proof-work-240/crates/verified/src/transaction.rs" 59 0 59 92] (is_abort: bool)
+let transaction_marker_closes [#"/workspace/crates/verified/src/transaction.rs" 569 0 569 92] (is_abort: bool)
   (is_commit: bool) (has_pending: bool) (return (x: bool)) = (! bb0
   [ bb0 = any [ br0 -> {is_abort = false} (! bb1) | br1 -> {is_abort} (! bb2) ]
   | bb1 = any [ br0 -> {is_commit = false} (! bb5) | br1 -> {is_commit} (! bb2) ]

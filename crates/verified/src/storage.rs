@@ -95,16 +95,13 @@ pub fn truncation_relative_offset(segment_base: i64, cut: i64) -> Option<u32> {
     if segment_base < 0 || cut < segment_base {
         return None;
     }
-    let relative = cut - segment_base;
-    if relative > i64::from(u32::MAX) {
+    let relative = cut.abs_diff(segment_base);
+    if relative > u64::from(u32::MAX) {
         None
     } else {
-        #[cfg(creusot)]
-        {
-            Some(relative as u32)
-        }
-        #[cfg(not(creusot))]
-        u32::try_from(relative).ok()
+        // The clamp is the identity here; it hands the cast a range the
+        // compiler can see.
+        Some(relative.min(0xffff_ffff) as u32)
     }
 }
 
@@ -136,32 +133,124 @@ pub const fn future_log_swap_admission(current_leo: i64, future_leo: i64) -> boo
     current_leo == future_leo
 }
 
-/// Admit exactly the legal remote-segment lifecycle edges.
-///
-/// The host maps `CopySegmentStarted`, `CopySegmentFinished`,
-/// `DeleteSegmentStarted`, and `DeleteSegmentFinished` to `0..=3`.
-#[ensures(result == (
-    (from@ == 0 && (to@ == 1 || to@ == 2))
-        || (from@ == 1 && to@ == 2)
-        || (from@ == 2 && to@ == 3)
-))]
-#[must_use]
-pub const fn remote_segment_transition(from: u8, to: u8) -> bool {
-    (from == 0 && (to == 1 || to == 2)) || (from == 1 && to == 2) || (from == 2 && to == 3)
+/// KIP-405 `RemoteLogSegmentState`, shared by every remote-segment kernel so
+/// the host maps its state onto one type.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(
+    not(creusot),
+    derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)
+)]
+pub enum RemoteSegmentLifecycle {
+    CopyStarted,
+    CopyFinished,
+    DeleteStarted,
+    DeleteFinished,
 }
 
-/// Admit exactly the legal remote-partition deletion lifecycle edges.
-///
-/// The host maps no prior state to `0`, then `DeletePartitionMarked`,
-/// `DeletePartitionStarted`, and `DeletePartitionFinished` to `1..=3`.
-#[ensures(result == (
-    (from@ == 0 && to@ == 1)
-        || (from@ == 1 && to@ == 2)
-        || (from@ == 2 && to@ == 3)
-))]
+/// KIP-405 `RemotePartitionDeleteState`.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum RemotePartitionDeleteLifecycle {
+    Marked,
+    Started,
+    Finished,
+}
+
+/// The forward edges of Kafka's segment lifecycle:
+/// `COPY_SEGMENT_STARTED -> COPY_SEGMENT_FINISHED | DELETE_SEGMENT_STARTED`,
+/// `COPY_SEGMENT_FINISHED -> DELETE_SEGMENT_STARTED`, and
+/// `DELETE_SEGMENT_STARTED -> DELETE_SEGMENT_FINISHED`.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+fn segment_forward_edge(from: RemoteSegmentLifecycle, to: RemoteSegmentLifecycle) -> bool {
+    match (from, to) {
+        (RemoteSegmentLifecycle::CopyStarted, RemoteSegmentLifecycle::CopyFinished)
+        | (RemoteSegmentLifecycle::CopyStarted, RemoteSegmentLifecycle::DeleteStarted)
+        | (RemoteSegmentLifecycle::CopyFinished, RemoteSegmentLifecycle::DeleteStarted)
+        | (RemoteSegmentLifecycle::DeleteStarted, RemoteSegmentLifecycle::DeleteFinished) => true,
+        _ => false,
+    }
+}
+
+/// The forward edges of Kafka's partition-delete lifecycle:
+/// `DELETE_PARTITION_MARKED -> DELETE_PARTITION_STARTED -> DELETE_PARTITION_FINISHED`.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+fn partition_delete_forward_edge(
+    from: RemotePartitionDeleteLifecycle,
+    to: RemotePartitionDeleteLifecycle,
+) -> bool {
+    match (from, to) {
+        (RemotePartitionDeleteLifecycle::Marked, RemotePartitionDeleteLifecycle::Started)
+        | (RemotePartitionDeleteLifecycle::Started, RemotePartitionDeleteLifecycle::Finished) => {
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Kafka's `RemoteLogSegmentState.isValidTransition` for a known source
+/// state: a forward lifecycle edge, or a self transition, which Kafka admits
+/// so retries and failover stay idempotent. A segment with no source state is
+/// the host's add path, which admits only `CopyStarted`.
+#[ensures(result == (from == to || segment_forward_edge(from, to)))]
 #[must_use]
-pub const fn remote_partition_delete_transition(from: u8, to: u8) -> bool {
-    (from == 0 && to == 1) || (from == 1 && to == 2) || (from == 2 && to == 3)
+pub const fn remote_segment_transition(
+    from: RemoteSegmentLifecycle,
+    to: RemoteSegmentLifecycle,
+) -> bool {
+    matches!(
+        (from, to),
+        (
+            RemoteSegmentLifecycle::CopyStarted,
+            RemoteSegmentLifecycle::CopyStarted
+                | RemoteSegmentLifecycle::CopyFinished
+                | RemoteSegmentLifecycle::DeleteStarted
+        ) | (
+            RemoteSegmentLifecycle::CopyFinished,
+            RemoteSegmentLifecycle::CopyFinished | RemoteSegmentLifecycle::DeleteStarted
+        ) | (
+            RemoteSegmentLifecycle::DeleteStarted,
+            RemoteSegmentLifecycle::DeleteStarted | RemoteSegmentLifecycle::DeleteFinished
+        ) | (
+            RemoteSegmentLifecycle::DeleteFinished,
+            RemoteSegmentLifecycle::DeleteFinished
+        )
+    )
+}
+
+/// Kafka's `RemotePartitionDeleteState.isValidTransition`: with no prior
+/// state only `DELETE_PARTITION_MARKED` is admitted; otherwise a forward edge
+/// or an idempotent self transition.
+#[ensures(result == match from {
+    None => to == RemotePartitionDeleteLifecycle::Marked,
+    Some(from) => from == to || partition_delete_forward_edge(from, to),
+})]
+#[must_use]
+pub const fn remote_partition_delete_transition(
+    from: Option<RemotePartitionDeleteLifecycle>,
+    to: RemotePartitionDeleteLifecycle,
+) -> bool {
+    matches!(
+        (from, to),
+        (None, RemotePartitionDeleteLifecycle::Marked)
+            | (
+                Some(RemotePartitionDeleteLifecycle::Marked),
+                RemotePartitionDeleteLifecycle::Marked | RemotePartitionDeleteLifecycle::Started
+            )
+            | (
+                Some(RemotePartitionDeleteLifecycle::Started),
+                RemotePartitionDeleteLifecycle::Started | RemotePartitionDeleteLifecycle::Finished
+            )
+            | (
+                Some(RemotePartitionDeleteLifecycle::Finished),
+                RemotePartitionDeleteLifecycle::Finished
+            )
+    )
 }
 
 /// Mutation of the primary remote-metadata cache and its derived epoch index.
@@ -180,52 +269,65 @@ pub enum RemoteCacheAction {
     Remove,
 }
 
-/// Classify one remote-segment cache update.
+/// Classify one remote-segment cache update against the cached state, `None`
+/// when the cache holds no such segment.
 ///
-/// Tags are `0 = missing`, `1 = copy-started`, `2 = copy-finished`,
-/// `3 = delete-started`, and `4 = delete-finished`. A missing
-/// delete-finished event is an idempotent tombstone; every other missing-state
-/// update is rejected so an update can never resurrect a segment.
-#[ensures(result == if current@ == 0 {
-    if target@ == 4 { RemoteCacheAction::Noop } else { RemoteCacheAction::Reject }
-} else if current@ == target@ {
-    if exact_retry { RemoteCacheAction::Noop } else { RemoteCacheAction::Reject }
-} else if current@ == 1 && target@ == 2 {
-    RemoteCacheAction::StoreFinished
-} else if (current@ == 1 || current@ == 2) && target@ == 3 {
-    RemoteCacheAction::StoreHidden
-} else if current@ == 3 && target@ == 4 {
-    RemoteCacheAction::Remove
-} else {
-    RemoteCacheAction::Reject
-})]
-#[ensures(result == RemoteCacheAction::StoreFinished ==> target@ == 2)]
-#[ensures(current@ == 0 ==> result == RemoteCacheAction::Reject
-    || (target@ == 4 && result == RemoteCacheAction::Noop))]
-#[must_use]
-pub const fn remote_cache_action(current: u8, target: u8, exact_retry: bool) -> RemoteCacheAction {
-    if current == 0 {
-        return if target == 4 {
-            RemoteCacheAction::Noop
-        } else {
-            RemoteCacheAction::Reject
-        };
-    }
-    if current == target {
-        return if exact_retry {
-            RemoteCacheAction::Noop
-        } else {
-            RemoteCacheAction::Reject
-        };
-    }
-    if current == 1 && target == 2 {
-        RemoteCacheAction::StoreFinished
-    } else if (current == 1 || current == 2) && target == 3 {
-        RemoteCacheAction::StoreHidden
-    } else if current == 3 && target == 4 {
-        RemoteCacheAction::Remove
+/// A forward lifecycle edge stores its target: readable at `CopyFinished`,
+/// hidden at `DeleteStarted`, removed at `DeleteFinished`. An update for a
+/// missing segment is an idempotent tombstone when it is `DeleteFinished` and
+/// rejected otherwise, so an update can never resurrect a segment.
+///
+/// Kafka's `RemoteLogMetadataCache` admits every self transition. This cache
+/// is stricter: a self transition is a no-op only for an exact retry (the host
+/// compares timestamp, broker and custom metadata) and is rejected as a
+/// conflict otherwise.
+#[ensures(result == match current {
+    None => if target == RemoteSegmentLifecycle::DeleteFinished {
+        RemoteCacheAction::Noop
     } else {
         RemoteCacheAction::Reject
+    },
+    Some(current) => if current == target {
+        if exact_retry { RemoteCacheAction::Noop } else { RemoteCacheAction::Reject }
+    } else if segment_forward_edge(current, target) {
+        match target {
+            RemoteSegmentLifecycle::CopyFinished => RemoteCacheAction::StoreFinished,
+            RemoteSegmentLifecycle::DeleteFinished => RemoteCacheAction::Remove,
+            _ => RemoteCacheAction::StoreHidden,
+        }
+    } else {
+        RemoteCacheAction::Reject
+    },
+})]
+#[must_use]
+pub const fn remote_cache_action(
+    current: Option<RemoteSegmentLifecycle>,
+    target: RemoteSegmentLifecycle,
+    exact_retry: bool,
+) -> RemoteCacheAction {
+    match (current, target) {
+        (None, RemoteSegmentLifecycle::DeleteFinished) => RemoteCacheAction::Noop,
+        (Some(RemoteSegmentLifecycle::CopyStarted), RemoteSegmentLifecycle::CopyStarted)
+        | (Some(RemoteSegmentLifecycle::CopyFinished), RemoteSegmentLifecycle::CopyFinished)
+        | (Some(RemoteSegmentLifecycle::DeleteStarted), RemoteSegmentLifecycle::DeleteStarted)
+        | (Some(RemoteSegmentLifecycle::DeleteFinished), RemoteSegmentLifecycle::DeleteFinished) => {
+            if exact_retry {
+                RemoteCacheAction::Noop
+            } else {
+                RemoteCacheAction::Reject
+            }
+        }
+        (Some(RemoteSegmentLifecycle::CopyStarted), RemoteSegmentLifecycle::CopyFinished) => {
+            RemoteCacheAction::StoreFinished
+        }
+        (
+            Some(RemoteSegmentLifecycle::CopyStarted | RemoteSegmentLifecycle::CopyFinished),
+            RemoteSegmentLifecycle::DeleteStarted,
+        ) => RemoteCacheAction::StoreHidden,
+        (Some(RemoteSegmentLifecycle::DeleteStarted), RemoteSegmentLifecycle::DeleteFinished) => {
+            RemoteCacheAction::Remove
+        }
+        _ => RemoteCacheAction::Reject,
     }
 }
 
@@ -292,31 +394,45 @@ mod tests {
     }
 
     #[test]
-    fn remote_segment_transition_matrix_is_exhaustive() {
+    fn remote_segment_transition_matrix_matches_kafka() {
+        use RemoteSegmentLifecycle::{CopyFinished, CopyStarted, DeleteFinished, DeleteStarted};
+
+        let states = [CopyStarted, CopyFinished, DeleteStarted, DeleteFinished];
+        // Kafka's `RemoteLogSegmentState.isValidTransition`, row = source.
         let expected = [
+            [true, true, true, false],
             [false, true, true, false],
-            [false, false, true, false],
+            [false, false, true, true],
             [false, false, false, true],
-            [false, false, false, false],
         ];
-        for (from, row) in [0_u8, 1, 2, 3].into_iter().zip(expected) {
-            for (to, want) in [0_u8, 1, 2, 3].into_iter().zip(row) {
-                assert2::check!(remote_segment_transition(from, to) == want);
+        for (from, row) in states.into_iter().zip(expected) {
+            for (to, want) in states.into_iter().zip(row) {
+                assert2::check!(
+                    remote_segment_transition(from, to) == want,
+                    "{from:?} -> {to:?}"
+                );
             }
         }
     }
 
     #[test]
-    fn remote_partition_delete_transition_matrix_is_exhaustive() {
+    fn remote_partition_delete_transition_matrix_matches_kafka() {
+        use RemotePartitionDeleteLifecycle::{Finished, Marked, Started};
+
+        // Kafka's `RemotePartitionDeleteState.isValidTransition`, row =
+        // source, the first row being no prior state.
         let expected = [
-            [true, false, false],
-            [false, true, false],
-            [false, false, true],
-            [false, false, false],
+            (None, [true, false, false]),
+            (Some(Marked), [true, true, false]),
+            (Some(Started), [false, true, true]),
+            (Some(Finished), [false, false, true]),
         ];
-        for (from, row) in [0_u8, 1, 2, 3].into_iter().zip(expected) {
-            for (to, want) in [1_u8, 2, 3].into_iter().zip(row) {
-                assert2::check!(remote_partition_delete_transition(from, to) == want);
+        for (from, row) in expected {
+            for (to, want) in [Marked, Started, Finished].into_iter().zip(row) {
+                assert2::check!(
+                    remote_partition_delete_transition(from, to) == want,
+                    "{from:?} -> {to:?}"
+                );
             }
         }
     }
@@ -324,21 +440,85 @@ mod tests {
     #[test]
     fn remote_cache_actions_are_idempotent_and_never_resurrect() {
         use RemoteCacheAction::{Noop, Reject, Remove, StoreFinished, StoreHidden};
+        use RemoteSegmentLifecycle::{CopyFinished, CopyStarted, DeleteFinished, DeleteStarted};
 
-        for (current, target, retry, expected) in [
-            (0, 2, false, Reject),
-            (0, 4, false, Noop),
-            (1, 1, true, Noop),
-            (1, 1, false, Reject),
-            (1, 2, false, StoreFinished),
-            (1, 3, false, StoreHidden),
-            (2, 3, false, StoreHidden),
-            (2, 4, false, Reject),
-            (3, 4, false, Remove),
-            (3, 2, false, Reject),
-            (4, 1, false, Reject),
+        for (what, current, target, retry, expected) in [
+            (
+                "an update cannot resurrect",
+                None,
+                CopyFinished,
+                false,
+                Reject,
+            ),
+            (
+                "a missing tombstone is idempotent",
+                None,
+                DeleteFinished,
+                false,
+                Noop,
+            ),
+            ("an exact retry", Some(CopyStarted), CopyStarted, true, Noop),
+            (
+                "a conflicting duplicate",
+                Some(CopyStarted),
+                CopyStarted,
+                false,
+                Reject,
+            ),
+            (
+                "the copy finishes",
+                Some(CopyStarted),
+                CopyFinished,
+                false,
+                StoreFinished,
+            ),
+            (
+                "an unfinished copy is deleted",
+                Some(CopyStarted),
+                DeleteStarted,
+                false,
+                StoreHidden,
+            ),
+            (
+                "a finished copy is deleted",
+                Some(CopyFinished),
+                DeleteStarted,
+                false,
+                StoreHidden,
+            ),
+            (
+                "a delete cannot skip its start",
+                Some(CopyFinished),
+                DeleteFinished,
+                false,
+                Reject,
+            ),
+            (
+                "the delete finishes",
+                Some(DeleteStarted),
+                DeleteFinished,
+                false,
+                Remove,
+            ),
+            (
+                "the lifecycle never moves back",
+                Some(DeleteStarted),
+                CopyFinished,
+                false,
+                Reject,
+            ),
+            (
+                "a finished delete stays finished",
+                Some(DeleteFinished),
+                CopyStarted,
+                false,
+                Reject,
+            ),
         ] {
-            assert2::check!(remote_cache_action(current, target, retry) == expected);
+            assert2::check!(
+                remote_cache_action(current, target, retry) == expected,
+                "{what}"
+            );
         }
     }
 }

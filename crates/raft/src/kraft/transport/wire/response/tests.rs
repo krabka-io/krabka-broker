@@ -1,8 +1,9 @@
 use assert2::{assert, check};
-use bytes::BytesMut;
 
 use super::*;
-use crate::kraft::transport::wire::NOT_LEADER_OR_FOLLOWER;
+
+/// Kafka's `NOT_LEADER_OR_FOLLOWER`.
+const NOT_LEADER_OR_FOLLOWER: i16 = 6;
 
 #[test]
 fn vote_response_round_trips() {
@@ -95,19 +96,6 @@ fn encoded_ack_response_carries_success_error_codes() {
 }
 
 #[test]
-fn fetch_response_carries_snapshot_id() {
-    let resp = PeerResponse::Fetch {
-        leader_id: NodeId(1),
-        leader_epoch: 4,
-        diverging: None,
-        snapshot_id: Some((42, 3)),
-        hwm: 0,
-        records: Bytes::new(),
-    };
-    assert2::assert!(PeerResponse::decode_fetch(&resp.encode()) == Some(resp));
-}
-
-#[test]
 fn fetch_snapshot_response_round_trips() {
     let resp = PeerResponse::FetchSnapshot {
         snapshot_id: (42, 3),
@@ -131,110 +119,180 @@ fn fetch_snapshot_response_round_trips_error_code() {
     assert2::assert!(PeerResponse::decode_fetch_snapshot(&resp.encode()) == Some(resp));
 }
 
-#[test]
-fn fetch_response_round_trips() {
-    let with_records = PeerResponse::Fetch {
-        leader_id: NodeId(2),
-        leader_epoch: 5,
+fn leader(leader_id: Option<u64>, epoch: Epoch, endpoint: Option<(&str, u16)>) -> QuorumLeader {
+    QuorumLeader {
+        leader_id: leader_id.map(NodeId),
+        epoch,
+        endpoint: endpoint.map(|(host, port)| (host.to_string(), port)),
+    }
+}
+
+fn fetch_answer(error_code: i16, leader: QuorumLeader) -> FetchAnswer {
+    FetchAnswer {
+        error_code,
+        leader,
         diverging: None,
         snapshot_id: None,
         hwm: 7,
-        records: Bytes::from_static(b"\x01\x02\x03"),
-    };
-    assert2::assert!(PeerResponse::decode_fetch(&with_records.encode()) == Some(with_records));
-
-    let diverged = PeerResponse::Fetch {
-        leader_id: NodeId(2),
-        leader_epoch: 5,
-        diverging: Some(LogOffsetMetadata {
-            offset: 5,
-            epoch: 1,
-        }),
-        snapshot_id: None,
-        hwm: 0,
-        records: Bytes::new(),
-    };
-    assert2::assert!(PeerResponse::decode_fetch(&diverged.encode()) == Some(diverged));
-}
-
-#[test]
-fn fetch_error_round_trips_with_unknown_leader() {
-    use krabka_protocol::{Decode, owned::fetch_response::FetchResponse};
-
-    let resp = PeerResponse::FetchError {
-        leader_epoch: 5,
-        error_code: NOT_LEADER_OR_FOLLOWER,
-    };
-    let encoded = resp.encode();
-    assert2::assert!(PeerResponse::decode_fetch(&encoded) == Some(resp));
-
-    let mut cur = &encoded[..];
-    let raw = FetchResponse::decode(&mut cur, FETCH_VERSION).expect("decode Fetch error");
-    let partition = &raw.responses[0].partitions[0];
-    check!(
-        (
-            raw.error_code,
-            partition.error_code,
-            partition.high_watermark,
-            partition.current_leader.leader_id,
-            partition.current_leader.leader_epoch,
-        ) == (0, NOT_LEADER_OR_FOLLOWER, -1, -1, 5)
-    );
-}
-
-#[test]
-fn fetch_error_with_zero_leader_preserves_redirect() {
-    use krabka_protocol::{Decode, Encode, owned::fetch_response::FetchResponse};
-
-    let success = PeerResponse::Fetch {
-        leader_id: NodeId(0),
-        leader_epoch: 5,
-        diverging: None,
-        snapshot_id: None,
-        hwm: -1,
+        log_start_offset: 3,
         records: Bytes::new(),
     }
-    .encode();
-    let mut cur = &success[..];
-    let mut raw = FetchResponse::decode(&mut cur, FETCH_VERSION).expect("decode Fetch");
-    raw.responses[0].partitions[0].error_code = NOT_LEADER_OR_FOLLOWER;
-    let mut encoded = BytesMut::new();
-    raw.encode(&mut encoded, FETCH_VERSION)
-        .expect("encode Fetch error");
-
-    assert2::assert!(matches!(
-        PeerResponse::decode_fetch(&encoded),
-        Some(PeerResponse::Fetch {
-            leader_id: NodeId(0),
-            leader_epoch: 5,
-            ..
-        })
-    ));
 }
 
 #[test]
-fn encoded_fetch_response_carries_partition_success_fields() {
-    use krabka_protocol::{Decode, owned::fetch_response::FetchResponse};
-
-    let resp = PeerResponse::Fetch {
-        leader_id: NodeId(2),
-        leader_epoch: 5,
-        diverging: None,
-        snapshot_id: None,
-        hwm: 7,
-        records: Bytes::new(),
-    };
-    let mut cur = &resp.encode()[..];
-    let raw = FetchResponse::decode(&mut cur, FETCH_VERSION).expect("decode fetch response");
-    let partition = &raw.responses[0].partitions[0];
-    check!(
+fn fetch_response_round_trips() {
+    let served = fetch_answer(0, leader(Some(2), 5, Some(("controller-2", 9093))));
+    for (case, answer) in [
+        ("served", served.clone()),
         (
-            partition.partition_index,
-            partition.error_code,
-            partition.high_watermark,
-            partition.current_leader.leader_id,
-            partition.current_leader.leader_epoch,
-        ) == (METADATA_PARTITION, 0, 7, 2, 5)
+            "records",
+            FetchAnswer {
+                records: Bytes::from_static(b"\x01\x02\x03"),
+                ..served.clone()
+            },
+        ),
+        (
+            "diverged",
+            FetchAnswer {
+                diverging: Some(LogOffsetMetadata {
+                    offset: 5,
+                    epoch: 1,
+                }),
+                ..served.clone()
+            },
+        ),
+        (
+            "snapshot",
+            FetchAnswer {
+                snapshot_id: Some((42, 3)),
+                ..served.clone()
+            },
+        ),
+        (
+            "leader without an endpoint",
+            fetch_answer(0, leader(Some(2), 5, None)),
+        ),
+        (
+            "follower redirect to leader 0",
+            fetch_answer(
+                NOT_LEADER_OR_FOLLOWER,
+                leader(Some(0), 5, Some(("controller-0", 9093))),
+            ),
+        ),
+        (
+            "unknown leader",
+            fetch_answer(NOT_LEADER_OR_FOLLOWER, leader(None, 5, None)),
+        ),
+    ] {
+        let response = PeerResponse::Fetch(answer);
+        check!(
+            PeerResponse::decode_fetch(&response.encode()) == Some(response),
+            "{case}"
+        );
+    }
+}
+
+/// The bytes are those of Kafka's `KafkaRaftClient.buildEmptyFetchResponse`
+/// on a follower of leader 2: the error, the leader and epoch, no high
+/// watermark, the log start, empty non-null records and aborted
+/// transactions, and the leader's `NodeEndpoints` entry.
+#[test]
+fn a_refused_fetch_is_kafkas_empty_fetch_response() {
+    let kafka = |leader_id: i32, node_endpoints: Vec<fetch_resp::NodeEndpoint>| FetchResponse {
+        responses: vec![fetch_resp::FetchableTopicResponse {
+            topic: METADATA_TOPIC.to_string(),
+            topic_id: METADATA_TOPIC_ID,
+            partitions: vec![fetch_resp::PartitionData {
+                partition_index: METADATA_PARTITION,
+                error_code: NOT_LEADER_OR_FOLLOWER,
+                high_watermark: -1,
+                log_start_offset: 3,
+                aborted_transactions: Some(Vec::new()),
+                records: Some(RecordsPayload::Raw(Bytes::new())),
+                current_leader: fetch_resp::LeaderIdAndEpoch {
+                    leader_id,
+                    leader_epoch: 5,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        node_endpoints,
+        ..Default::default()
+    };
+    let refused = |leader| {
+        PeerResponse::Fetch(FetchAnswer {
+            hwm: -1,
+            ..fetch_answer(NOT_LEADER_OR_FOLLOWER, leader)
+        })
+    };
+    for (case, answer, expected) in [
+        (
+            "known leader",
+            refused(leader(Some(2), 5, Some(("controller-2", 9093)))),
+            kafka(
+                2,
+                vec![fetch_resp::NodeEndpoint {
+                    node_id: 2,
+                    host: "controller-2".into(),
+                    port: 9093,
+                    ..Default::default()
+                }],
+            ),
+        ),
+        // `singletonFetchResponse` adds no entry without a leader id.
+        (
+            "unknown leader",
+            refused(leader(None, 5, Some(("controller-2", 9093)))),
+            kafka(-1, Vec::new()),
+        ),
+    ] {
+        check!(
+            answer.encode() == encode_body(&expected, FETCH_VERSION),
+            "{case}"
+        );
+    }
+}
+
+/// Kafka's `Endpoints.fromFetchResponse` keeps only the entry for
+/// `CurrentLeader.LeaderId`.
+#[test]
+fn a_node_endpoint_for_another_node_is_not_the_leaders() {
+    let response = FetchResponse {
+        responses: vec![fetch_resp::FetchableTopicResponse {
+            topic: METADATA_TOPIC.to_string(),
+            topic_id: METADATA_TOPIC_ID,
+            partitions: vec![fetch_resp::PartitionData {
+                error_code: NOT_LEADER_OR_FOLLOWER,
+                current_leader: fetch_resp::LeaderIdAndEpoch {
+                    leader_id: 2,
+                    leader_epoch: 5,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        node_endpoints: vec![fetch_resp::NodeEndpoint {
+            node_id: 9,
+            host: "controller-9".into(),
+            port: 9093,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    check!(
+        PeerResponse::decode_fetch(&encode_body(&response, FETCH_VERSION))
+            == Some(PeerResponse::Fetch(FetchAnswer {
+                error_code: NOT_LEADER_OR_FOLLOWER,
+                leader: leader(Some(2), 5, None),
+                diverging: None,
+                snapshot_id: None,
+                hwm: 0,
+                log_start_offset: -1,
+                records: Bytes::new(),
+            }))
     );
 }
 

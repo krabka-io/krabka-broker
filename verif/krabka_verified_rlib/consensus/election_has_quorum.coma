@@ -1,9 +1,9 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 19 0 19 83 *)
+(* #"/workspace/crates/verified/src/consensus.rs" 22 0 22 83 *)
 
-let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sconsensus = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 20 22 20 48
-let%span sconsensus'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 17 10 17 61
-let%span sconsensus'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 10 10 10 41
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sconsensus = "/workspace/crates/verified/src/consensus.rs" 23 22 23 48
+let%span sconsensus'0 = "/workspace/crates/verified/src/consensus.rs" 20 10 20 61
+let%span sconsensus'1 = "/workspace/crates/verified/src/consensus.rs" 13 10 13 41
 
 use creusot.int.UInt64
 use int.ComputerDivision
@@ -23,8 +23,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let election_has_quorum [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 19 0 19 83]
-  (voter_count: UInt64.t) (current_grants: UInt64.t) (return (x: bool)) = (! bb0
+let election_has_quorum [#"/workspace/crates/verified/src/consensus.rs" 22 0 22 83] (voter_count: UInt64.t)
+  (current_grants: UInt64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = majority_size [%#sconsensus] {voter_count} (fun (_x: UInt64.t) -> [ &_7 <- _x ] s1)
     | s1 = [ &_ret <- UInt64.ge current_grants _7 ] s2

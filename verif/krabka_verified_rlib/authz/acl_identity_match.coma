@@ -1,7 +1,7 @@
-(* #"/proof-work-216d/crates/verified/src/authz.rs" 47 0 47 62 *)
+(* #"/workspace/crates/verified/src/authz.rs" 50 0 50 62 *)
 
-let%span sauthz = "/proof-work-216d/crates/verified/src/authz.rs" 48 4 48 21
-let%span sauthz'0 = "/proof-work-216d/crates/verified/src/authz.rs" 45 10 45 39
+let%span sauthz = "/workspace/crates/verified/src/authz.rs" 51 4 51 21
+let%span sauthz'0 = "/workspace/crates/verified/src/authz.rs" 48 10 48 39
 
 use creusot.prelude.Any
 
@@ -9,7 +9,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let acl_identity_match [#"/proof-work-216d/crates/verified/src/authz.rs" 47 0 47 62] (wildcard: bool) (exact: bool)
+let acl_identity_match [#"/workspace/crates/verified/src/authz.rs" 50 0 50 62] (wildcard: bool) (exact: bool)
   (return (x: bool)) = (! bb0
   [ bb0 = any [ br0 -> {wildcard = false} (! bb2) | br1 -> {wildcard} (! bb1) ]
   | bb1 = s0 [ s0 = [ &_ret <- [%#sauthz] true ] s1 | s1 = return {_ret} ]

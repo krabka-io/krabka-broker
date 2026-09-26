@@ -97,13 +97,16 @@ async fn super_user_can_renew_other_owners_token() {
         // (3) admin Renews — this is the operator's renewal
         // path. Without the super-user bypass, this returned err 63
         // (DELEGATION_TOKEN_OWNER_MISMATCH); with the super-user bypass,
-        // it must succeed and strictly extend the expiry.
+        // it must succeed. Kafka caps the requested 30 days at the 24h
+        // default renew period, so the expiry lands at the broker's
+        // `now + 24h`: no earlier than the initial `issue + 24h`, and short
+        // of the 7-day max.
         let renew_resp = send_renew_delegation_token(
             &mut admin,
             200,
             &RenewDelegationTokenRequest {
                 hmac: hmac_bytes.clone(),
-                renew_period_ms: 30 * 24 * 60 * 60 * 1_000, // 30d (> 7d ceiling → clamps to max)
+                renew_period_ms: 30 * 24 * 60 * 60 * 1_000,
                 ..Default::default()
             },
         )
@@ -116,14 +119,14 @@ async fn super_user_can_renew_other_owners_token() {
             renew_resp.error_code
         );
         check!(
-            renew_resp.expiry_timestamp_ms > initial_expiry_ms,
-            "Renew must strictly extend expiry: renewed={} initial={}",
+            renew_resp.expiry_timestamp_ms >= initial_expiry_ms,
+            "Renew after create cannot move the expiry earlier: renewed={} initial={}",
             renew_resp.expiry_timestamp_ms,
             initial_expiry_ms,
         );
         check!(
-            renew_resp.expiry_timestamp_ms <= max_timestamp_ms,
-            "Renew must never push expiry past max_timestamp_ms",
+            renew_resp.expiry_timestamp_ms < max_timestamp_ms,
+            "the 24h default caps a 30-day request short of max_timestamp_ms",
         );
 
         // (4) admin Expires (tombstone path) — this is the

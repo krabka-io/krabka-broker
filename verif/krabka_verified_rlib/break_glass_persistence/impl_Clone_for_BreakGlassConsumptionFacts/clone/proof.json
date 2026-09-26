@@ -4,7 +4,7 @@
     "Coma": {
       "vc_clone_BreakGlassConsumptionFacts": {
         "prover": "alt-ergo",
-        "time": 0.0
+        "time": 0.037
       }
     }
   }

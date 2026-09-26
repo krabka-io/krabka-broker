@@ -34,10 +34,6 @@ pub fn produce_durability_frontier(base_offset: i64, last_offset_delta: i32) -> 
         .checked_add(1)
 }
 
-#[allow(
-    clippy::fn_params_excessive_bools,
-    reason = "the proof classifies independent CRC-covered header facts"
-)]
 #[ensures((result == ProduceBatchAdmission::InvalidRecord) ==
     (last_offset_delta@ < 0
         || last_offset_delta@ >= i32::MAX@

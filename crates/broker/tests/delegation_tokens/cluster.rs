@@ -36,7 +36,13 @@ pub(crate) async fn start_broker() -> (BrokerHandle, TempDir, SocketAddr) {
         principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
-    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain, SaslMechanism::ScramSha256];
+    // Both SCRAM mechanisms: Kafka prepares a token credential for each, and
+    // the lifecycle test logs a token in under both.
+    cfg.enabled_sasl_mechanisms = vec![
+        SaslMechanism::Plain,
+        SaslMechanism::ScramSha256,
+        SaslMechanism::ScramSha512,
+    ];
     cfg.plain_credentials
         .insert("alice".to_string(), "wonderland".to_string());
     cfg.plain_credentials
@@ -53,9 +59,8 @@ pub(crate) async fn start_broker() -> (BrokerHandle, TempDir, SocketAddr) {
     // `max_timestamp_ms`) from the initial renew window (`default_renew_period`
     // → `expiry_timestamp_ms`). With 7d ceiling + 24h renew period (both
     // the Kafka defaults), the create handler emits expiry = issue + 24h
-    // and max = issue + 7d as separate values, so Renew can extend the
-    // expiry well past its initial value (and the lifecycle test asserts
-    // strict-monotonic extension below).
+    // and max = issue + 7d as separate values. A renew then lands at
+    // `min(max, now + min(24h, requested))`, which the lifecycle test pins.
     cfg.delegation_token_max_lifetime = krabka_units::days(7);
     cfg.delegation_token_default_renew_period = krabka_units::hours(24);
 

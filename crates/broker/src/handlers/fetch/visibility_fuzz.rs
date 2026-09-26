@@ -49,6 +49,12 @@ proptest! {
         );
         prop_assert!(limit_offset >= 0 && response_hw >= 0 && response_lso >= 0);
         prop_assert_eq!(w.out_of_range, fo < log_start);
+        // Every fetcher is told the partition's own high watermark and last
+        // stable offset (Kafka's `Partition.readRecords`), and neither moves
+        // with the delivery watermark, so consumer lag stays honest and a
+        // KIP-392 follower never adopts an uncommitted offset.
+        prop_assert_eq!(response_hw, hw);
+        prop_assert_eq!(response_lso, lso.min(hw));
         let upper = if is_follower { log_end } else { deliverable };
         if !w.out_of_range {
             prop_assert_eq!(w.empty, fo >= upper);
@@ -57,23 +63,51 @@ proptest! {
             // Replication is not gated by the delivery watermark.
             prop_assert_eq!(limit_offset, log_end);
             prop_assert!(limit_offset >= hw);
-            prop_assert_eq!(response_hw, log_end);
         } else {
             prop_assert!(limit_offset <= hw, "consumer fetch must not expose beyond HW");
             prop_assert!(
                 limit_offset <= deliverable,
                 "consumer fetch must not expose a record before it is due"
             );
-            // The reported watermarks do not move with the delivery
-            // watermark, so consumer lag stays honest.
-            prop_assert_eq!(response_hw, hw);
-            prop_assert!(response_lso <= response_hw);
             if read_committed {
                 prop_assert_eq!(effective_lso, lso.min(hw));
                 prop_assert!(limit_offset <= lso.min(hw));
-                prop_assert_eq!(response_lso, lso.min(hw));
             }
         }
+    }
+
+    /// The consumer bound needs no precondition: whatever offsets the caller
+    /// passes, in whatever order, a consumer never reads at or past the high
+    /// watermark, the delivery watermark, or, under `read_committed`, the
+    /// last stable offset.
+    #[test]
+    fn consumer_bound_holds_for_any_offsets(
+        log_start in -1_000i64..1_000_000,
+        hw in -1_000i64..1_000_000,
+        lso in -1_000i64..1_000_000,
+        log_end in -1_000i64..1_000_000,
+        deliverable in -1_000i64..1_000_000,
+        fo in -1_000i64..1_000_000,
+        read_committed in any::<bool>(),
+    ) {
+        let w = compute_visibility_window(
+            false,
+            read_committed,
+            FetchWatermarks {
+                log_start: Offset(log_start),
+                hw: Offset(hw),
+                lso: Offset(lso),
+                log_end: Offset(log_end),
+                deliverable: Offset(deliverable),
+            },
+            Offset(fo),
+        );
+        let limit_offset = w.limit_offset.0;
+        prop_assert!(limit_offset <= hw && limit_offset <= deliverable);
+        if read_committed {
+            prop_assert!(limit_offset <= lso);
+        }
+        prop_assert!(w.response_hw.0 == hw && w.response_lso.0 == lso.min(hw));
     }
 
     /// KIP-227 monotonicity: an advance of hw, lso, or log_end never

@@ -5,7 +5,7 @@
       "vc_elim_Some": { "prover": "alt-ergo", "time": 0.007 },
       "vc_restore_leader_epoch_entry_valid": {
         "prover": "alt-ergo",
-        "time": 0.021
+        "time": 0.048
       }
     }
   }

@@ -15,7 +15,7 @@ use uuid::Uuid;
 use super::*;
 use crate::remote_log_manager::{
     copy_eligible, now_ms,
-    test_support::{FakeWormArchive, rolled_log, seed_finished_segments, tier, tp},
+    test_support::{FakeWormArchive, rolled_log, seed_finished_segments, synth_export, tier, tp},
 };
 
 /// A partition whose `DeleteRecords` floor has never moved: offset 0, so no
@@ -111,37 +111,104 @@ fn remote_retention_eviction_set_returns_empty_when_no_segments() {
         Some(bytes(1)),
         None,
         10_000,
+        NO_BYTES,
     );
     assert!(out.is_empty());
 }
 
+/// Kafka's `isSegmentBreachedByRetentionTime`: a segment goes when its
+/// `maxTimestampMs` is strictly below `cleanupUntilMs = now - retention.ms`,
+/// whatever that timestamp is, and there is no time axis at all while
+/// `cleanupUntilMs` is negative. `now` is 10 000 ms throughout.
 #[test]
-fn unknown_timestamp_needs_size_pressure_for_remote_eviction() {
-    let segments = vec![synth_remote_md(10, 0, 9, -1, 100)];
+fn remote_time_retention_follows_kafkas_cleanup_until() {
+    for (name, max_ts, retention_ms, deleted) in [
+        ("an unknown timestamp is older than any cutoff", -1, 1, true),
+        ("one below the cutoff goes", 8_999, 1_000, true),
+        ("one on the cutoff stays", 9_000, 1_000, false),
+        (
+            "a window longer than the clock reading deletes nothing",
+            -1,
+            10_001,
+            false,
+        ),
+        (
+            "a window the clock reading just covers still applies",
+            -1,
+            10_000,
+            true,
+        ),
+    ] {
+        let segments = vec![synth_remote_md(10, 0, 9, max_ts, 100)];
+        let out = remote_retention_eviction_set(
+            ArchiveMode::Mutable,
+            &segments,
+            Some(millis(retention_ms)),
+            None,
+            None,
+            10_000,
+            NO_BYTES,
+        );
+        check!(out.len() == usize::from(deleted), "{name}");
+    }
+}
 
-    check!(
-        remote_retention_eviction_set(
+/// Kafka's `buildRetentionSizeData` counts the local bytes the remote tier
+/// does not hold yet (`onlyLocalLogSegmentsSize`) toward `retention.bytes`,
+/// so they push the oldest remote segment out. Two 100-byte remote segments
+/// under a 200-byte budget.
+#[test]
+fn local_bytes_not_yet_copied_count_toward_the_remote_size_budget() {
+    let segments = vec![
+        synth_remote_md(10, 0, 9, 0, 100),
+        synth_remote_md(11, 10, 19, 0, 100),
+    ];
+    for (name, only_local, deleted) in [
+        ("nothing local keeps both", 0, 0),
+        ("less than a segment of local bytes keeps both", 99, 0),
+        (
+            "a segment's worth of local bytes pushes the oldest out",
+            100,
+            1,
+        ),
+    ] {
+        let out = remote_retention_eviction_set(
             ArchiveMode::Mutable,
             &segments,
-            Some(millis(1)),
             None,
-            None,
-            10_000,
-        )
-        .is_empty()
-    );
-    check!(
-        remote_retention_eviction_set(
-            ArchiveMode::Mutable,
-            &segments,
-            Some(millis(1)),
-            Some(bytes(0)),
+            Some(bytes(200)),
             None,
             10_000,
-        )
-        .len()
-            == 1
-    );
+            bytes(only_local),
+        );
+        check!(out.len() == deleted, "{name}");
+    }
+}
+
+/// Kafka's `onlyLocalLogSegmentsSize`: a local segment counts when its base
+/// offset is above `highestOffsetInRemoteStorage`, and the active segment,
+/// never copied, always counts. Sealed segments at 0 and 10 of 30 bytes each,
+/// and a 40-byte active segment, so a 100-byte local log.
+#[test]
+fn only_local_size_counts_the_segments_above_the_highest_remote_offset() {
+    let sealed = [synth_export(0, 9, 0, 30), synth_export(10, 19, 0, 30)];
+    let local = LocalLogFootprint {
+        sealed: &sealed,
+        size: bytes(100),
+    };
+    for (name, highest, expected) in [
+        ("an empty tier leaves everything local", None, 100),
+        ("a copy through 9 covers the first segment", Some(9), 70),
+        (
+            "a copy that ends inside a segment covers the one it starts in",
+            Some(12),
+            40,
+        ),
+        ("a copy through 19 leaves the active segment", Some(19), 40),
+        ("a copy below the first base covers nothing", Some(-1), 100),
+    ] {
+        check!(local.only_local_size(highest) == bytes(expected), "{name}");
+    }
 }
 
 #[test]
@@ -156,6 +223,7 @@ fn maximum_retention_window_keeps_the_host_time_comparison() {
             None,
             None,
             i64::MAX,
+            NO_BYTES,
         )
         .is_empty()
     );
@@ -177,31 +245,42 @@ fn remote_retention_eviction_set_time_based_picks_oldest_until_first_in_window()
         None,
         None,
         10_000,
+        NO_BYTES,
     );
     assert!(out.len() == 2);
     check!(out[0].start_offset() == 0);
     check!(out[1].start_offset() == 10);
 }
 
+/// Kafka's `isSegmentBreachedByRetentionSize` deletes a segment only while
+/// the bytes over `retention.bytes` still cover the whole segment. Three
+/// 100-byte segments make 300 bytes in total.
 #[test]
-fn remote_retention_eviction_set_size_based_evicts_oldest_first() {
+fn remote_retention_eviction_set_size_based_deletes_only_what_the_debt_covers() {
     let segs = vec![
         synth_remote_md(10, 0, 9, 100, 100),
         synth_remote_md(11, 10, 19, 200, 100),
         synth_remote_md(12, 20, 29, 300, 100),
     ];
     let cases = [
-        // Total=300, budget=150 → reclaim 150 → oldest two go.
-        (Some(bytes(150)), 2),
-        // Budget tighter than one segment → all three.
-        (Some(bytes(50)), 3),
-        // Budget larger than total → none.
-        (Some(bytes(10_000)), 0),
+        ("150 over deletes one, not two", Some(bytes(150)), 1),
+        ("200 over deletes two", Some(bytes(100)), 2),
+        ("250 over deletes two, not three", Some(bytes(50)), 2),
+        ("50 over deletes nothing", Some(bytes(250)), 0),
+        ("300 over deletes all three", Some(bytes(0)), 3),
+        ("under budget deletes nothing", Some(bytes(10_000)), 0),
     ];
-    for (budget, expected_len) in cases {
-        let out =
-            remote_retention_eviction_set(ArchiveMode::Mutable, &segs, None, budget, None, 1_000);
-        assert!(out.len() == expected_len, "budget: {budget:?}");
+    for (name, budget, expected_len) in cases {
+        let out = remote_retention_eviction_set(
+            ArchiveMode::Mutable,
+            &segs,
+            None,
+            budget,
+            None,
+            1_000,
+            NO_BYTES,
+        );
+        check!(out.len() == expected_len, "{name}");
     }
 }
 
@@ -215,6 +294,7 @@ fn remote_retention_eviction_set_equal_size_budget_keeps_all_segments() {
         Some(bytes(100)),
         None,
         1_000,
+        NO_BYTES,
     );
     assert!(out.is_empty());
 }
@@ -235,8 +315,39 @@ fn remote_retention_eviction_set_time_and_size_take_union_of_either() {
         Some(bytes(10_000)),
         None,
         1_000,
+        NO_BYTES,
     );
     assert!(out.len() == 2);
+}
+
+/// Kafka's `isSegmentBreachedByRetentionTime` charges a time-expired segment
+/// against the size debt, so the size axis sees the bytes the time axis
+/// already reclaimed. The oldest segment is past a 500 ms window and the two
+/// after it are inside it. Three 100-byte segments make 300 bytes in total.
+#[test]
+fn a_time_deletion_is_charged_against_the_size_debt() {
+    let segs = vec![
+        synth_remote_md(10, 0, 9, 100, 100),
+        synth_remote_md(11, 10, 19, 9_900, 100),
+        synth_remote_md(12, 20, 29, 9_900, 100),
+    ];
+    let cases = [
+        ("150 over: time takes 100, 50 cannot cover the next", 150, 1),
+        ("200 over: time takes 100, size takes the next", 100, 2),
+        ("50 over: time alone, the debt floors at zero", 250, 1),
+    ];
+    for (name, budget, expected_len) in cases {
+        let out = remote_retention_eviction_set(
+            ArchiveMode::Mutable,
+            &segs,
+            Some(millis(500)),
+            Some(bytes(budget)),
+            None,
+            10_000,
+            NO_BYTES,
+        );
+        check!(out.len() == expected_len, "{name}");
+    }
 }
 
 #[test]
@@ -244,8 +355,16 @@ fn remote_retention_eviction_set_none_settings_disable_axis() {
     let segs = vec![synth_remote_md(10, 0, 9, 100, 100)];
     // No time or size → no eviction.
     assert!(
-        remote_retention_eviction_set(ArchiveMode::Mutable, &segs, None, None, None, 10_000)
-            .is_empty()
+        remote_retention_eviction_set(
+            ArchiveMode::Mutable,
+            &segs,
+            None,
+            None,
+            None,
+            10_000,
+            NO_BYTES
+        )
+        .is_empty()
     );
 }
 
@@ -264,6 +383,7 @@ fn remote_retention_eviction_set_walk_stops_at_first_non_deletable() {
         None,
         None,
         10_000,
+        NO_BYTES,
     );
     assert!(out.len() == 1);
     assert!(out[0].start_offset() == 0);
@@ -302,6 +422,7 @@ async fn remote_retention_pass_evicts_old_segments_through_lifecycle() {
             log_start_offset: NO_FLOOR,
             deleted_below: None,
             now_ms: now_ms() + 1_000_000,
+            local: LocalLogFootprint::EMPTY,
         },
         &tier(ArchiveMode::Mutable, &rsm, &rlmm),
     )
@@ -368,6 +489,7 @@ async fn remote_retention_pass_noop_when_nothing_qualifies() {
             log_start_offset: NO_FLOOR,
             deleted_below: None,
             now_ms: 1,
+            local: LocalLogFootprint::EMPTY,
         },
         &tier(ArchiveMode::Mutable, &rsm, &rlmm),
     )
@@ -399,6 +521,7 @@ async fn remote_retention_pass_no_settings_and_an_unmoved_floor_evict_nothing() 
             log_start_offset: NO_FLOOR,
             deleted_below: None,
             now_ms: now_ms(),
+            local: LocalLogFootprint::EMPTY,
         },
         &tier(ArchiveMode::Mutable, &rsm, &rlmm),
     )
@@ -431,14 +554,14 @@ fn remote_retention_eviction_set_is_empty_for_a_write_once_archive() {
             None,
             Some(bytes(50)),
             1_000,
-            3,
+            2,
         ),
         (
             "size budget of half the total",
             None,
             Some(bytes(150)),
             1_000,
-            2,
+            1,
         ),
         (
             "time and size together",
@@ -456,7 +579,8 @@ fn remote_retention_eviction_set_is_empty_for_a_write_once_archive() {
                 retention,
                 retention_size,
                 None,
-                now
+                now,
+                NO_BYTES,
             )
             .len()
                 == mutable_len,
@@ -469,7 +593,8 @@ fn remote_retention_eviction_set_is_empty_for_a_write_once_archive() {
                 retention,
                 retention_size,
                 None,
-                now
+                now,
+                NO_BYTES,
             )
             .is_empty(),
             "case {name}"
@@ -497,6 +622,7 @@ async fn remote_retention_pass_never_reaches_the_rsm_for_a_write_once_archive() 
             log_start_offset: NO_FLOOR,
             deleted_below: None,
             now_ms: now_ms() + 1_000_000,
+            local: LocalLogFootprint::EMPTY,
         },
         &tier(ArchiveMode::WriteOnce, &rsm, &rlmm),
     )
@@ -539,6 +665,7 @@ async fn remote_retention_pass_reaches_a_refusing_rsm_only_on_a_mutable_tier() {
                 log_start_offset: NO_FLOOR,
                 deleted_below: None,
                 now_ms: now_ms() + 1_000_000,
+                local: LocalLogFootprint::EMPTY,
             },
             &tier(archive, &rsm, &rlmm),
         )
@@ -636,6 +763,7 @@ fn a_segment_below_the_log_start_is_evicted_whatever_retention_says() {
                 retention_size,
                 floor,
                 10_000,
+                NO_BYTES,
             )
             .len()
                 == expected,
@@ -649,6 +777,7 @@ fn a_segment_below_the_log_start_is_evicted_whatever_retention_says() {
                 retention_size,
                 floor,
                 10_000,
+                NO_BYTES,
             )
             .is_empty(),
             "case {name}: a write-once archive has no delete to give"
@@ -673,6 +802,7 @@ fn the_breach_and_the_time_window_take_the_union_of_either() {
         None,
         Some(Offset(10)),
         10_000,
+        NO_BYTES,
     );
     assert!(out.len() == 2);
     check!(out[0].start_offset() == 0, "breached");
@@ -723,6 +853,7 @@ async fn a_breach_eviction_frees_the_archive_without_moving_the_floor() {
             log_start_offset: floor,
             deleted_below: Some(floor),
             now_ms: 1,
+            local: LocalLogFootprint::EMPTY,
         },
         &tier(ArchiveMode::Mutable, &rsm, &rlmm),
     )
@@ -783,6 +914,7 @@ async fn the_reported_floor_stops_at_a_gap_in_the_finished_segments() {
             log_start_offset: NO_FLOOR,
             deleted_below: None,
             now_ms: now_ms() + 1_000_000,
+            local: LocalLogFootprint::EMPTY,
         },
         &tier(ArchiveMode::Mutable, &rsm, &rlmm),
     )
@@ -839,6 +971,7 @@ async fn a_floor_nobody_moved_leaves_the_archive_alone() {
             log_start_offset: inferred,
             deleted_below: None,
             now_ms: 1,
+            local: LocalLogFootprint::EMPTY,
         },
         &tier(ArchiveMode::Mutable, &rsm, &rlmm),
     )
@@ -885,6 +1018,7 @@ async fn a_retention_pass_records_its_delete_requests_errors_and_lag() {
             log_start_offset: NO_FLOOR,
             deleted_below: None,
             now_ms: now_ms() + 1_000_000,
+            local: LocalLogFootprint::EMPTY,
         },
         &tier,
     )

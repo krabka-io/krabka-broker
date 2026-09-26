@@ -1,32 +1,32 @@
-(* #"/proof-work-215/crates/verified/src/diskless.rs" 43 0 43 86 *)
+(* #"/workspace/crates/verified/src/diskless.rs" 229 0 229 86 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sdiskless = "/proof-work-215/crates/verified/src/diskless.rs" 44 17 44 23
-let%span sdiskless'0 = "/proof-work-215/crates/verified/src/diskless.rs" 45 17 45 30
-let%span sdiskless'1 = "/proof-work-215/crates/verified/src/diskless.rs" 50 14 50 23
-let%span sdiskless'2 = "/proof-work-215/crates/verified/src/diskless.rs" 48 16 49 39
-let%span sdiskless'3 = "/proof-work-215/crates/verified/src/diskless.rs" 47 16 47 81
-let%span sdiskless'4 = "/proof-work-215/crates/verified/src/diskless.rs" 46 16 46 51
-let%span sdiskless'5 = "/proof-work-215/crates/verified/src/diskless.rs" 52 23 52 32
-let%span sdiskless'6 = "/proof-work-215/crates/verified/src/diskless.rs" 52 35 52 36
-let%span sdiskless'7 = "/proof-work-215/crates/verified/src/diskless.rs" 52 23 52 36
-let%span sdiskless'8 = "/proof-work-215/crates/verified/src/diskless.rs" 52 18 52 36
-let%span sdiskless'9 = "/proof-work-215/crates/verified/src/diskless.rs" 53 11 53 23
-let%span sdiskless'10 = "/proof-work-215/crates/verified/src/diskless.rs" 53 11 53 25
-let%span sdiskless'11 = "/proof-work-215/crates/verified/src/diskless.rs" 54 23 54 24
-let%span sdiskless'12 = "/proof-work-215/crates/verified/src/diskless.rs" 54 12 54 24
-let%span sdiskless'13 = "/proof-work-215/crates/verified/src/diskless.rs" 59 13 59 14
-let%span sdiskless'14 = "/proof-work-215/crates/verified/src/diskless.rs" 62 21 62 22
-let%span sdiskless'15 = "/proof-work-215/crates/verified/src/diskless.rs" 62 16 62 22
-let%span sdiskless'16 = "/proof-work-215/crates/verified/src/diskless.rs" 63 20 63 34
-let%span sdiskless'17 = "/proof-work-215/crates/verified/src/diskless.rs" 63 20 63 36
-let%span sdiskless'18 = "/proof-work-215/crates/verified/src/diskless.rs" 65 19 65 32
-let%span sdiskless'19 = "/proof-work-215/crates/verified/src/diskless.rs" 28 11 29 40
-let%span sdiskless'20 = "/proof-work-215/crates/verified/src/diskless.rs" 30 11 31 39
-let%span sdiskless'21 = "/proof-work-215/crates/verified/src/diskless.rs" 32 10 41 1
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sdiskless = "/workspace/crates/verified/src/diskless.rs" 230 17 230 23
+let%span sdiskless'0 = "/workspace/crates/verified/src/diskless.rs" 231 17 231 30
+let%span sdiskless'1 = "/workspace/crates/verified/src/diskless.rs" 236 14 236 23
+let%span sdiskless'2 = "/workspace/crates/verified/src/diskless.rs" 234 16 235 39
+let%span sdiskless'3 = "/workspace/crates/verified/src/diskless.rs" 233 16 233 81
+let%span sdiskless'4 = "/workspace/crates/verified/src/diskless.rs" 232 16 232 51
+let%span sdiskless'5 = "/workspace/crates/verified/src/diskless.rs" 238 23 238 32
+let%span sdiskless'6 = "/workspace/crates/verified/src/diskless.rs" 238 35 238 36
+let%span sdiskless'7 = "/workspace/crates/verified/src/diskless.rs" 238 23 238 36
+let%span sdiskless'8 = "/workspace/crates/verified/src/diskless.rs" 238 18 238 36
+let%span sdiskless'9 = "/workspace/crates/verified/src/diskless.rs" 239 11 239 23
+let%span sdiskless'10 = "/workspace/crates/verified/src/diskless.rs" 239 11 239 25
+let%span sdiskless'11 = "/workspace/crates/verified/src/diskless.rs" 240 23 240 24
+let%span sdiskless'12 = "/workspace/crates/verified/src/diskless.rs" 240 12 240 24
+let%span sdiskless'13 = "/workspace/crates/verified/src/diskless.rs" 245 13 245 14
+let%span sdiskless'14 = "/workspace/crates/verified/src/diskless.rs" 248 21 248 22
+let%span sdiskless'15 = "/workspace/crates/verified/src/diskless.rs" 248 16 248 22
+let%span sdiskless'16 = "/workspace/crates/verified/src/diskless.rs" 249 20 249 34
+let%span sdiskless'17 = "/workspace/crates/verified/src/diskless.rs" 249 20 249 36
+let%span sdiskless'18 = "/workspace/crates/verified/src/diskless.rs" 251 19 251 32
+let%span sdiskless'19 = "/workspace/crates/verified/src/diskless.rs" 214 11 215 40
+let%span sdiskless'20 = "/workspace/crates/verified/src/diskless.rs" 216 11 217 39
+let%span sdiskless'21 = "/workspace/crates/verified/src/diskless.rs" 218 10 227 1
 
 use creusot.int.UInt64
 use creusot.slice.Slice64
@@ -61,7 +61,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let diskless_logical_range [#"/proof-work-215/crates/verified/src/diskless.rs" 43 0 43 86]
+let diskless_logical_range [#"/workspace/crates/verified/src/diskless.rs" 229 0 229 86]
   (entries: Slice64.slice tup2_i64_i64) (requested: Int64.t) (return (x: t_Option_usize)) =
 {[@stop_split] [@expl:diskless_logical_range requires] ([@stop_split] [@expl:diskless_logical_range requires #0] [%#sdiskless'19] forall i: int. 0
           <= i

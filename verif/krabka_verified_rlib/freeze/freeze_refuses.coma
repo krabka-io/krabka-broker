@@ -1,9 +1,9 @@
-(* #"/workspace/crates/verified/src/freeze.rs" 229 0 229 61 *)
+(* #"/workspace/crates/verified/src/freeze.rs" 231 0 231 61 *)
 
-let%span sfreeze = "/workspace/crates/verified/src/freeze.rs" 243 45 243 50
-let%span sfreeze'0 = "/workspace/crates/verified/src/freeze.rs" 237 43 237 47
-let%span sfreeze'1 = "/workspace/crates/verified/src/freeze.rs" 227 10 227 46
-let%span sfreeze'2 = "/workspace/crates/verified/src/freeze.rs" 251 4 265 5
+let%span sfreeze = "/workspace/crates/verified/src/freeze.rs" 245 45 245 50
+let%span sfreeze'0 = "/workspace/crates/verified/src/freeze.rs" 239 43 239 47
+let%span sfreeze'1 = "/workspace/crates/verified/src/freeze.rs" 229 10 229 46
+let%span sfreeze'2 = "/workspace/crates/verified/src/freeze.rs" 255 4 269 5
 
 use creusot.prelude.Any
 
@@ -22,7 +22,7 @@ type t_FreezeMutationKind =
   | BarrierMarker
   | TieringCopy
 
-predicate freeze_refusal_model [#"/workspace/crates/verified/src/freeze.rs" 250 0 250 57] (kind: t_FreezeMutationKind) =
+predicate freeze_refusal_model [#"/workspace/crates/verified/src/freeze.rs" 254 0 254 57] (kind: t_FreezeMutationKind) =
   [%#sfreeze'2] match kind with
     | Produce | TransactionEnlistment | DeleteRecords | DeleteTopic | ReassignmentAlter | Compaction | Retention -> true
     | TransactionCompletion | ReassignmentCompletion | OffsetCommit | Replication | BarrierMarker | TieringCopy -> false
@@ -32,7 +32,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let freeze_refuses [#"/workspace/crates/verified/src/freeze.rs" 229 0 229 61] (kind: t_FreezeMutationKind)
+let freeze_refuses [#"/workspace/crates/verified/src/freeze.rs" 231 0 231 61] (kind: t_FreezeMutationKind)
   (return (x: bool)) = (! bb0
   [ bb0 = any
     [ br0 -> {kind = Produce} (! bb4)

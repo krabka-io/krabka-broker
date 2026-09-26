@@ -1,6 +1,6 @@
-(* #"/workspace/crates/verified/src/barrier.rs" 125 0 125 80 *)
+(* #"/workspace/crates/verified/src/barrier.rs" 149 0 149 80 *)
 
-let%span sbarrier = "/workspace/crates/verified/src/barrier.rs" 123 10 123 72
+let%span sbarrier = "/workspace/crates/verified/src/barrier.rs" 147 10 147 72
 
 use creusot.prelude.Any
 
@@ -10,7 +10,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let barrier_cut_classification [#"/workspace/crates/verified/src/barrier.rs" 125 0 125 80] (has_missing: bool)
+let barrier_cut_classification [#"/workspace/crates/verified/src/barrier.rs" 149 0 149 80] (has_missing: bool)
   (return (x: t_BarrierCutClassification)) = (! bb0
   [ bb0 = any [ br0 -> {has_missing = false} (! bb2) | br1 -> {has_missing} (! bb1) ]
   | bb1 = s0 [ s0 = [ &_ret <- Partial ] s1 | s1 = return {_ret} ]

@@ -1,10 +1,10 @@
-(* #"/workspace/crates/verified/src/list_offsets.rs" 174 0 174 82 *)
+(* #"/workspace/crates/verified/src/list_offsets.rs" 177 0 177 82 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span slist_offsets = "/workspace/crates/verified/src/list_offsets.rs" 175 21 175 22
-let%span slist_offsets'0 = "/workspace/crates/verified/src/list_offsets.rs" 176 47 176 48
-let%span slist_offsets'1 = "/workspace/crates/verified/src/list_offsets.rs" 177 51 177 52
-let%span slist_offsets'2 = "/workspace/crates/verified/src/list_offsets.rs" 160 10 173 1
+let%span slist_offsets = "/workspace/crates/verified/src/list_offsets.rs" 178 21 178 22
+let%span slist_offsets'0 = "/workspace/crates/verified/src/list_offsets.rs" 179 47 179 48
+let%span slist_offsets'1 = "/workspace/crates/verified/src/list_offsets.rs" 180 51 180 52
+let%span slist_offsets'2 = "/workspace/crates/verified/src/list_offsets.rs" 163 10 176 1
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -27,7 +27,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let list_offsets_earliest [#"/workspace/crates/verified/src/list_offsets.rs" 174 0 174 82]
+let list_offsets_earliest [#"/workspace/crates/verified/src/list_offsets.rs" 177 0 177 82]
   (facts: t_ListOffsetsEarliestFacts) (return (x: t_Option_i64)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_9 <- Int64.lt facts.local ([%#slist_offsets] (0: Int64.t)) ] s1

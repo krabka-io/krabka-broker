@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_compaction_decode_step": { "prover": "alt-ergo", "time": 0.012 }
+      "vc_compaction_decode_step": { "prover": "alt-ergo", "time": 0.017 }
     }
   }
 }

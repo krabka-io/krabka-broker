@@ -1,0 +1,22 @@
+(* #"/workspace/crates/verified/src/features.rs" 52 27 52 32 *)
+
+(* <features::MetadataVersionFacts as std::clone::Clone> *)
+
+use creusot.int.Int16
+use creusot.prelude.Any
+
+type t_MetadataVersionFacts = {
+  online_downgrade_min_level: Int16.t;
+  all_controllers_registered: bool;
+  all_nodes_downgrade_capable: bool;
+  cleanup_required: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_MetadataVersionFacts [#"/workspace/crates/verified/src/features.rs" 52 27 52 32]
+  (self: t_MetadataVersionFacts) (return (x: t_MetadataVersionFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_MetadataVersionFacts = Any.any_l () | & self: t_MetadataVersionFacts = self ])
+  [ return (result: t_MetadataVersionFacts) -> (! return {result}) ]

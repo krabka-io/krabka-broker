@@ -241,6 +241,14 @@ mod tests {
         assert2::check!(
             scram_alteration_decision(deletion) == ScramAlterationDecision::AcceptSha256
         );
-        assert2::check!(scram_alteration_decision(deletion) == scram_alteration_decision(deletion));
+        // A deletion carries no iteration count, so neither bound applies.
+        let sha512_deletion = ScramAlterationFacts {
+            mechanism: 2,
+            iterations: 0,
+            ..deletion
+        };
+        assert2::check!(
+            scram_alteration_decision(sha512_deletion) == ScramAlterationDecision::AcceptSha512
+        );
     }
 }

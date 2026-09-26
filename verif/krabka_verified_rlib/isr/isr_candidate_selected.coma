@@ -1,0 +1,127 @@
+(* #"/workspace/crates/verified/src/isr.rs" 382 0 382 63 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sisr = "/workspace/crates/verified/src/isr.rs" 393 28 393 33
+let%span sisr'0 = "/workspace/crates/verified/src/isr.rs" 390 26 394 17
+let%span sisr'1 = "/workspace/crates/verified/src/isr.rs" 395 23 395 62
+let%span sisr'2 = "/workspace/crates/verified/src/isr.rs" 395 12 395 62
+let%span sisr'3 = "/workspace/crates/verified/src/isr.rs" 387 12 387 88
+let%span sisr'4 = "/workspace/crates/verified/src/isr.rs" 385 33 385 37
+let%span sisr'5 = "/workspace/crates/verified/src/isr.rs" 384 37 384 42
+let%span sisr'6 = "/workspace/crates/verified/src/isr.rs" 373 10 380 1
+let%span sisr'7 = "/workspace/crates/verified/src/isr.rs" 311 10 311 56
+let%span sisr'8 = "/workspace/crates/verified/src/isr.rs" 306 16 306 74
+let%span sisr'9 = "/workspace/crates/verified/src/isr.rs" 282 8 289 13
+let%span sisr'10 = "/workspace/crates/verified/src/isr.rs" 356 8 360 13
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_IsrMemberRole = Unassigned | Leader | InSyncFollower | OutOfSyncFollower
+
+type t_Option_i64 = None | Some Int64.t
+
+type t_IsrEligibilityFacts = {
+  fenced: bool;
+  shutting_down: bool;
+  fetch_broker_epoch: t_Option_i64;
+  alive_broker_epoch: t_Option_i64 }
+
+type t_IsrCandidateFacts = {
+  role: t_IsrMemberRole;
+  follower_log_end: Int64.t;
+  leader_log_end: Int64.t;
+  leader_high_watermark: Int64.t;
+  leader_epoch_start: t_Option_i64;
+  caught_up_within_lag: bool;
+  eligibility: t_IsrEligibilityFacts }
+
+let elim_Some (_x: t_Option_i64) (return (f0: Int64.t)) = any
+  [ _k (f0: Int64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+predicate kafka_is_replica_isr_eligible [#"/workspace/crates/verified/src/isr.rs" 280 0 280 68] (facts: t_IsrEligibilityFacts) =
+  [%#sisr'9] not facts.fenced
+  /\ not facts.shutting_down
+  /\ match facts.fetch_broker_epoch with
+    | Some stored -> match facts.alive_broker_epoch with
+      | Some alive -> Int64.to_int stored = - 1 \/ Int64.to_int stored = Int64.to_int alive
+      | None -> false
+      end
+    | None -> false
+    end
+
+let replica_isr_eligible (facts: t_IsrEligibilityFacts) (return (x: bool)) = any
+  [ return (result: bool) -> {[@stop_split] [@expl:replica_isr_eligible ensures] [%#sisr'7] result
+    = kafka_is_replica_isr_eligible facts}
+    (! return {result}) ]
+
+predicate kafka_replica_is_caught_up [#"/workspace/crates/verified/src/isr.rs" 301 0 305 9] (follower_log_end'0: int) (leader_log_end'0: int) (caught_up_within_lag'0: bool) =
+  [%#sisr'8] follower_log_end'0 = leader_log_end'0 \/ caught_up_within_lag'0
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate kafka_is_follower_in_sync [#"/workspace/crates/verified/src/isr.rs" 354 0 354 62] (facts: t_IsrCandidateFacts) =
+  [%#sisr'10] ge_log_Int (Int64.to_int facts.follower_log_end) (Int64.to_int facts.leader_high_watermark)
+  /\ match facts.leader_epoch_start with
+    | Some start -> ge_log_Int (Int64.to_int facts.follower_log_end) (Int64.to_int start)
+    | None -> false
+    end
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let isr_candidate_selected [#"/workspace/crates/verified/src/isr.rs" 382 0 382 63] (facts: t_IsrCandidateFacts)
+  (return (x: bool)) = (! bb0
+  [ bb0 = any
+    [ br0 -> {facts.role = Unassigned} (! bb8)
+    | br1 -> {facts.role = Leader} (! bb7)
+    | br2 -> {facts.role = InSyncFollower} (! bb6)
+    | br3 -> {facts.role = OutOfSyncFollower} (! bb5) ]
+  | bb5 = s0
+    [ s0 = [ &_9 <- Int64.ge facts.follower_log_end facts.leader_high_watermark ] s1
+    | s1 = any [ br0 -> {_9 = false} (! bb13) | br1 -> {_9} (! bb12) ] ]
+  | bb12 = any
+    [ br0 -> {facts.leader_epoch_start = None} (! bb16)
+    | br1 (x0: Int64.t) -> {facts.leader_epoch_start = Some x0} (! bb17) ]
+  | bb17 = s0
+    [ s0 = elim_Some {facts.leader_epoch_start} (fun (r0: Int64.t) -> [ &start <- r0 ] s1)
+    | s1 = [ &in_sync <- Int64.ge facts.follower_log_end start ] s2
+    | s2 = bb18 ]
+  | bb16 = s0 [ s0 = [ &in_sync <- [%#sisr] false ] s1 | s1 = bb18 ]
+  | bb13 = s0 [ s0 = [ &in_sync <- [%#sisr'0] false ] s1 | s1 = bb18 ]
+  | bb18 = any [ br0 -> {in_sync = false} (! bb20) | br1 -> {in_sync} (! bb19) ]
+  | bb19 = s0
+    [ s0 = replica_isr_eligible [%#sisr'1] {facts.eligibility} (fun (_x: bool) -> [ &_ret <- _x ] s1)
+    | s1 = return {_ret} ]
+  | bb20 = s0 [ s0 = [ &_ret <- [%#sisr'2] false ] s1 | s1 = return {_ret} ]
+  | bb6 = s0
+    [ s0 = [ &_5 <- facts.follower_log_end = facts.leader_log_end ] s1
+    | s1 = any [ br0 -> {_5 = false} (! bb10) | br1 -> {_5} (! bb9) ] ]
+  | bb9 = s0 [ s0 = [ &_ret <- [%#sisr'3] true ] s1 | s1 = return {_ret} ]
+  | bb10 = s0 [ s0 = [ &_ret <- facts.caught_up_within_lag ] s1 | s1 = return {_ret} ]
+  | bb7 = s0 [ s0 = [ &_ret <- [%#sisr'4] true ] s1 | s1 = return {_ret} ]
+  | bb8 = s0 [ s0 = [ &_ret <- [%#sisr'5] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & facts: t_IsrCandidateFacts = facts
+  | & _5: bool = Any.any_l ()
+  | & in_sync: bool = Any.any_l ()
+  | & _9: bool = Any.any_l ()
+  | & start: Int64.t = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:isr_candidate_selected ensures] [%#sisr'6] match facts.role with
+      | Unassigned -> not result
+      | Leader -> result
+      | InSyncFollower -> result
+      = kafka_replica_is_caught_up (Int64.to_int facts.follower_log_end) (Int64.to_int facts.leader_log_end) facts.caught_up_within_lag
+      | OutOfSyncFollower -> result
+      = (kafka_is_replica_isr_eligible facts.eligibility /\ kafka_is_follower_in_sync facts)
+      end}
+    (! return {result}) ]

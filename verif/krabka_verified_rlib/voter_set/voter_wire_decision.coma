@@ -1,16 +1,16 @@
-(* #"/proof-work-226/crates/verified/src/voter_set.rs" 40 0 47 22 *)
+(* #"/workspace/crates/verified/src/voter_set.rs" 42 0 49 22 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span svoter_set = "/proof-work-226/crates/verified/src/voter_set.rs" 48 18 48 19
-let%span svoter_set'0 = "/proof-work-226/crates/verified/src/voter_set.rs" 52 32 52 33
-let%span svoter_set'1 = "/proof-work-226/crates/verified/src/voter_set.rs" 54 38 54 39
-let%span svoter_set'2 = "/proof-work-226/crates/verified/src/voter_set.rs" 55 35 55 36
-let%span svoter_set'3 = "/proof-work-226/crates/verified/src/voter_set.rs" 21 10 21 70
-let%span svoter_set'4 = "/proof-work-226/crates/verified/src/voter_set.rs" 22 10 24 1
-let%span svoter_set'5 = "/proof-work-226/crates/verified/src/voter_set.rs" 25 10 27 1
-let%span svoter_set'6 = "/proof-work-226/crates/verified/src/voter_set.rs" 28 10 33 1
-let%span svoter_set'7 = "/proof-work-226/crates/verified/src/voter_set.rs" 34 10 38 1
+let%span svoter_set = "/workspace/crates/verified/src/voter_set.rs" 50 18 50 19
+let%span svoter_set'0 = "/workspace/crates/verified/src/voter_set.rs" 54 32 54 33
+let%span svoter_set'1 = "/workspace/crates/verified/src/voter_set.rs" 56 38 56 39
+let%span svoter_set'2 = "/workspace/crates/verified/src/voter_set.rs" 57 35 57 36
+let%span svoter_set'3 = "/workspace/crates/verified/src/voter_set.rs" 23 10 23 70
+let%span svoter_set'4 = "/workspace/crates/verified/src/voter_set.rs" 24 10 26 1
+let%span svoter_set'5 = "/workspace/crates/verified/src/voter_set.rs" 27 10 29 1
+let%span svoter_set'6 = "/workspace/crates/verified/src/voter_set.rs" 30 10 35 1
+let%span svoter_set'7 = "/workspace/crates/verified/src/voter_set.rs" 36 10 40 1
 
 use creusot.int.Int32
 use creusot.int.UInt64
@@ -32,7 +32,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let voter_wire_decision [#"/proof-work-226/crates/verified/src/voter_set.rs" 40 0 47 22] (voter_id: Int32.t)
+let voter_wire_decision [#"/workspace/crates/verified/src/voter_set.rs" 42 0 49 22] (voter_id: Int32.t)
   (directory_id_exact: bool) (endpoint_count: UInt64.t) (endpoints_valid: bool) (min_supported_version: Int16.t)
   (max_supported_version: Int16.t) (return (x: t_VoterWireDecision)) = (! bb0
   [ bb0 = s0

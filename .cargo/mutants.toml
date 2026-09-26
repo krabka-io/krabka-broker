@@ -65,14 +65,14 @@ exclude_re = [
     # created file and parent directory. `sync_all` and `sync_parent` are pure
     # I/O barriers with no in-process effect, so calling them on new vs existing
     # spool file cannot be observed by in-process tests.
-    "spool\\.rs:330:.*delete ! in Spool::open_with_sync_every",
+    "spool\\.rs:343:.*delete ! in Spool::open_with_sync_every",
     #
     # `s.count.0 == 0 && s.replay_offset > 0` truncates the spool when all records
     # have been replayed. Relaxing `>` to `>=` calls `truncate()` on a freshly
     # opened empty spool (`count == 0` and `replay_offset == 0`). Truncating an
     # already-empty spool sets length to 0 and replay_offset to 0, which is identical
     # to the untruncated state. An equivalent mutant at the boundary 0.
-    "spool\\.rs:371:.*replace > with >= in Spool::open_with_sync_every",
+    "spool\\.rs:384:.*replace > with >= in Spool::open_with_sync_every",
     # ---- crates/kraft-core ---------------------------------------------
     #
     # `LogOffsetMetadata::end_of_epoch_in`'s early return for `epoch > last_epoch`
@@ -82,11 +82,6 @@ exclude_re = [
     "types\\.rs:70:.*replace LogOffsetMetadata::end_of_epoch_in with [=>]=",
     # ---- crates/log ----------------------------------------------------
     #
-    # The epoch guard in each append path is `epoch.is_known() && latest is none
-    # or epoch > it`. Relaxing `>` to `>=` only admits an epoch already
-    # recorded, and `append_to` refuses one it has seen -- so the checkpoint is
-    # unchanged either way. The `&&` half is real and is tested.
-    "replace > with >= in Log::append(_verbatim)?(_at)?$",
     # `read_raw`'s early return for "past the segment, or at the limit" is an
     # optimisation: the walk reaches the same empty result on its own, one
     # skipping every batch and the other breaking on `base >= limit_offset`.
@@ -173,7 +168,7 @@ exclude_re = [
     # Min/max comparisons: at equality both arms yield the same value or assigning
     # assigns the existing value.
     "replace < with <= in (list_offsets_(bound|selection)_decision|list_offsets_earliest)",
-    "replace < with <= in (first_unstable_offset|isr_high_watermark|share_prune_frontier|truncation_frontier)",
+    "replace < with <= in (first_unstable_offset|share_prune_frontier|truncation_frontier)",
     "replace > with >= in (coalesce_delivery_range|delete_records_trim_application)",
     "replace < with <= in delete_records_trim_decision",
     # Clamping boundaries: at equality both branches produce the identical bound.
@@ -184,12 +179,7 @@ exclude_re = [
     "replace < with <= in java_string_hash_partition",
     # `incoming == expected` or `requested == current` already handled on earlier branch.
     "replace < with <= in list_offsets_epoch_decision",
-    "replace > with >= in token_mutation_decision",
     "replace < with <= in wal_fetch_admission",
-    # Expiry bounds and selection implication:
-    "replace > with >= in (token_is_active|preferred_rebalance_admission)",
-    # At `now == start`, `0 >= timeout` is false since `timeout > 0`.
-    "replace < with <= in should_abort_idle_transaction",
     # At `safety_lag == hw`, target is 0 <= current_start; at 0 target <= current_start.
     "replace [<>] with [<>=]= in diskless_trim_decision",
     "replace \\|\\| with && in diskless_trim_decision",
@@ -199,8 +189,6 @@ exclude_re = [
     "producer_id\\.rs:74:.*replace \\|\\| with && in producer_id_block_allocation",
     # In `snapshot_chunk_admission`, `declared_size < 0` is caught by line 140's `else { Restart }`.
     "snapshot\\.rs:122:.*replace \\|\\| with && in snapshot_chunk_admission",
-    # `0.saturating_sub(x) == 0`.
-    "replace > with >= in (local_)?retention_prefix",
     # At `batch_base == i64::MAX - delta`, offset is i64::MAX >= end returning Skip.
     "replace > with (>=|==) in replay_record_decision",
     # `first <= last < snapshot` implies `first < snapshot`.
@@ -213,15 +201,13 @@ exclude_re = [
     "read\\.rs:288:.*replace Log::read_raw with ",
     "read\\.rs:289:.*replace Log::read_raw with ",
     # `Log::close(self)` consumes `self`; dropping on return produces identical destructor effects as `drop(self)`.
-    "state\\.rs:295:.*replace Log::close with \\(\\)",
+    "state\\.rs:316:.*replace Log::close with \\(\\)",
     # `recovered.valid_end < self.log_size`: at equality, set_len(valid_end) is an identical no-op.
     "open\\.rs:118:.*replace Segment::recover_active_tail with <=",
-    # `total_size > budget`: at equality, `total_size - budget` is 0, matching the else branch.
-    "tick\\.rs:80:.*replace Log::tick with >=",
     # `reclaimed` in `deleted_orphan_recover` only records to a tracing::Span with no semantic impact.
-    "recovery\\.rs:180:.*replace deleted_orphan_recover with \\*=",
+    "recovery\\.rs:72:.*replace deleted_orphan_recover with \\*=",
     # `NotFound` in `deleted_orphan_recover` handles concurrent deletion; skipping it does not affect return.
-    "recovery\\.rs:181:.*replace deleted_orphan_recover with (false|true|!=)",
+    "recovery\\.rs:73:.*replace deleted_orphan_recover with (false|true|!=)",
     # ---- crates/raft ---------------------------------------------------
     #
     # In `advance_and_apply`:

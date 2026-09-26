@@ -5,9 +5,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 pub(crate) use krabka_remote_storage::diskless::{
     WalDeleteFloorKey, WalDeleteFloorRecord, WalFlushRecord, WalIndexEntry, WalIndexKey,
 };
-use krabka_verified::{
-    DisklessWalReplayAction, diskless_logical_range, diskless_retention_prefix,
-    diskless_span_extension, diskless_wal_replay_decision,
+use krabka_verified::diskless::{
+    DisklessRetentionPolicy, diskless_logical_range, diskless_retention_prefix,
+    diskless_span_extension,
 };
 use uuid::Uuid;
 
@@ -15,9 +15,6 @@ use uuid::Uuid;
 #[derive(Default)]
 pub struct WalIndexCache {
     by_topic_partition: HashMap<(Uuid, i32), BTreeMap<i64, (String, WalIndexEntry)>>,
-    keyed_ranges: HashSet<WalIndexKey>,
-    replay_tombstones: HashSet<WalIndexKey>,
-    legacy_replay_finished: bool,
     /// `DeleteRecords` floors, by partition. Records below one of these are
     /// deleted as far as every client is concerned, so the object tier stops
     /// answering for them the moment the trim lands rather than one flush tick
@@ -32,55 +29,25 @@ pub struct WalIndexCache {
 }
 
 impl WalIndexCache {
-    /// Apply one legacy, unkeyed flush record to the projection.
-    pub fn apply(&mut self, record: &WalFlushRecord) {
+    /// Apply one committed flush record: each of its ranges, as the keyed
+    /// record the flusher publishes for it (`IndexLog::publish_flush`).
+    #[cfg(test)]
+    pub(crate) fn apply(&mut self, record: &WalFlushRecord) {
         for entry in &record.entries {
-            let key = WalIndexKey::from(entry);
-            let decision = diskless_wal_replay_decision(
-                0,
-                self.keyed_ranges.contains(&key),
-                self.replay_tombstones.contains(&key),
-                self.legacy_replay_finished,
-            );
-            if decision.action == DisklessWalReplayAction::Store {
+            self.apply_keyed(WalIndexKey::from(entry), record);
+        }
+    }
+
+    /// Apply a committed keyed record, the latest value for its range key.
+    pub(crate) fn apply_keyed(&mut self, key: WalIndexKey, record: &WalFlushRecord) {
+        // A decoded keyed record replaces its range even when its payload is
+        // malformed and does not contain the key: the older value is removed
+        // first, so malformed input fails closed instead of exposing it.
+        self.remove_projected(key);
+        for entry in &record.entries {
+            if WalIndexKey::from(entry) == key {
                 self.insert(record, entry);
             }
-        }
-    }
-
-    /// Apply a keyed record, which remains authoritative over legacy replay
-    /// regardless of cross-partition delivery order during upgrades.
-    pub(crate) fn apply_keyed(&mut self, key: WalIndexKey, record: &WalFlushRecord) {
-        let decision = diskless_wal_replay_decision(
-            1,
-            self.keyed_ranges.contains(&key),
-            self.replay_tombstones.contains(&key),
-            self.legacy_replay_finished,
-        );
-        self.set_replay_markers(key, decision.keyed_range, decision.replay_tombstone);
-        if decision.action == DisklessWalReplayAction::Store {
-            // A decoded keyed event is authoritative even when its payload is
-            // malformed and does not contain the key. Remove any legacy value
-            // first so malformed input fails closed instead of exposing it.
-            self.remove_projected(key);
-            for entry in &record.entries {
-                if WalIndexKey::from(entry) == key {
-                    self.insert(record, entry);
-                }
-            }
-        }
-    }
-
-    fn set_replay_markers(&mut self, key: WalIndexKey, keyed: bool, tombstone: bool) {
-        if keyed {
-            self.keyed_ranges.insert(key);
-        } else {
-            self.keyed_ranges.remove(&key);
-        }
-        if tombstone {
-            self.replay_tombstones.insert(key);
-        } else {
-            self.replay_tombstones.remove(&key);
         }
     }
 
@@ -96,16 +63,7 @@ impl WalIndexCache {
 
     /// Remove one compacted range after its Kafka tombstone is committed.
     pub(crate) fn remove(&mut self, key: WalIndexKey) {
-        let decision = diskless_wal_replay_decision(
-            2,
-            self.keyed_ranges.contains(&key),
-            self.replay_tombstones.contains(&key),
-            self.legacy_replay_finished,
-        );
-        self.set_replay_markers(key, decision.keyed_range, decision.replay_tombstone);
-        if decision.action == DisklessWalReplayAction::Remove {
-            self.remove_projected(key);
-        }
+        self.remove_projected(key);
     }
 
     fn remove_projected(&mut self, key: WalIndexKey) {
@@ -120,13 +78,6 @@ impl WalIndexCache {
         if empty {
             self.by_topic_partition.remove(&partition);
         }
-    }
-
-    /// Cross-partition legacy records cannot arrive before the replay fences
-    /// anymore, so tombstone migration guards no longer need heap space.
-    pub(crate) fn finish_legacy_replay(&mut self) {
-        self.replay_tombstones.clear();
-        self.legacy_replay_finished = true;
     }
 
     /// Keys currently held for a topic, used to publish compaction tombstones
@@ -182,18 +133,15 @@ impl WalIndexCache {
     /// Keys of the oldest ranges this partition's retention allows to expire,
     /// oldest first.
     ///
-    /// `retention_ms` and `retention_bytes` are `None` for Kafka's unlimited
-    /// sentinel; `log_start_offset` is the `DeleteRecords` floor. The newest
-    /// range is never returned, so the partition keeps a `flushed_frontier`.
+    /// The policy's `log_start_offset` is the `DeleteRecords` floor. The
+    /// newest range is never returned, so the partition keeps a
+    /// `flushed_frontier`.
     #[must_use]
     pub(crate) fn retention_expired_keys(
         &self,
         topic_id: Uuid,
         partition: i32,
-        retention_ms: Option<i64>,
-        retention_bytes: Option<u64>,
-        log_start_offset: i64,
-        now_ms: i64,
+        policy: DisklessRetentionPolicy,
     ) -> Vec<WalIndexKey> {
         let Some(entries) = self.by_topic_partition.get(&(topic_id, partition)) else {
             return Vec::new();
@@ -207,15 +155,7 @@ impl WalIndexCache {
             .map(|entry| u64::from(entry.byte_len))
             .collect();
         let last_offsets: Vec<i64> = ranges.iter().map(|entry| entry.last_offset).collect();
-        let expired = diskless_retention_prefix(
-            &max_timestamps,
-            &byte_lens,
-            &last_offsets,
-            retention_ms,
-            retention_bytes,
-            log_start_offset,
-            now_ms,
-        );
+        let expired = diskless_retention_prefix(&max_timestamps, &byte_lens, &last_offsets, policy);
         ranges
             .into_iter()
             .take(expired)
@@ -622,32 +562,61 @@ mod tests {
         let cache = retention_cache();
         let topic = Uuid::from_u128(1);
 
-        // Nothing configured expires nothing.
-        assert!(
-            cache
-                .retention_expired_keys(topic, 0, None, None, 0, 1_000)
-                .is_empty()
-        );
-        // `retention.ms` leaves everything newer than now - 500.
-        assert!(
-            first_offsets(&cache.retention_expired_keys(topic, 0, Some(500), None, 0, 1_000))
-                == [0, 5]
-        );
-        // `retention.bytes` pays a 150-byte debt down with the oldest range.
-        assert!(
-            first_offsets(&cache.retention_expired_keys(topic, 0, None, Some(150), 0, 1_000))
-                == [0]
-        );
-        // The `DeleteRecords` floor clears every range that ends below it.
-        assert!(
-            first_offsets(&cache.retention_expired_keys(topic, 0, None, None, 10, 1_000)) == [0, 5]
-        );
-        // A partition the projection has never seen has nothing to expire.
-        assert!(
-            cache
-                .retention_expired_keys(topic, 1, Some(1), Some(0), 99, 1_000)
-                .is_empty()
-        );
+        // `(what, partition, retention.ms, retention.bytes, DeleteRecords
+        // floor, expired first offsets)`, all read at `now_ms = 1_000`.
+        for (what, partition, retention_ms, retention_bytes, floor, expired) in [
+            (
+                "nothing configured expires nothing",
+                0,
+                None,
+                None,
+                0,
+                &[][..],
+            ),
+            (
+                "retention.ms leaves everything newer than now - 500",
+                0,
+                Some(500),
+                None,
+                0,
+                &[0, 5][..],
+            ),
+            (
+                "retention.bytes pays a 150-byte debt down with the oldest range",
+                0,
+                None,
+                Some(150),
+                0,
+                &[0][..],
+            ),
+            (
+                "the DeleteRecords floor clears every range that ends below it",
+                0,
+                None,
+                None,
+                10,
+                &[0, 5][..],
+            ),
+            (
+                "a partition the projection has never seen has nothing to expire",
+                1,
+                Some(1),
+                Some(0),
+                99,
+                &[][..],
+            ),
+        ] {
+            let policy = DisklessRetentionPolicy {
+                retention_ms,
+                retention_bytes,
+                log_start_offset: floor,
+                now_ms: 1_000,
+            };
+            assert!(
+                first_offsets(&cache.retention_expired_keys(topic, partition, policy)) == expired,
+                "{what}"
+            );
+        }
     }
 
     #[test]
@@ -712,94 +681,88 @@ mod tests {
         assert!(cache.referenced_objects() == ["new".into()].into());
     }
 
-    #[test]
-    fn keyed_value_wins_over_late_legacy_replay() {
-        let mut cache = WalIndexCache::default();
-        let entry = entry(0, 0, 4);
-        let key = WalIndexKey::from(&entry);
-        cache.apply_keyed(
-            key,
-            &WalFlushRecord {
-                object_key: "new".into(),
-                format_version: WalFlushRecord::FORMAT_VERSION,
-                entries: vec![entry.clone()],
-            },
-        );
-        cache.apply(&WalFlushRecord {
-            object_key: "legacy".into(),
-            format_version: WalFlushRecord::FORMAT_VERSION,
-            entries: vec![entry],
-        });
-
-        assert!(cache.lookup(Uuid::from_u128(1), 0, 0).unwrap().0 == "new");
+    /// One keyed index event for the range `entry(0, 0, 4)`.
+    enum Event {
+        Value(&'static str),
+        /// A value whose payload does not contain its key's range.
+        Malformed,
+        Tombstone,
     }
 
     #[test]
-    fn keyed_tombstone_prevents_legacy_resurrection() {
-        let mut cache = WalIndexCache::default();
-        let entry = entry(0, 0, 4);
-        let key = WalIndexKey::from(&entry);
-        cache.remove(key);
-        cache.apply(&WalFlushRecord {
-            object_key: "legacy".into(),
-            format_version: WalFlushRecord::FORMAT_VERSION,
-            entries: vec![entry],
-        });
+    fn keyed_events_replay_as_latest_value_per_range() {
+        use Event::{Malformed, Tombstone, Value};
 
-        assert!(cache.lookup(Uuid::from_u128(1), 0, 0).is_none());
-    }
-
-    #[test]
-    fn keyed_tombstone_dominates_legacy_in_both_replay_orders_and_on_retry() {
-        let entry = entry(0, 0, 4);
-        let key = WalIndexKey::from(&entry);
-        let legacy = WalFlushRecord {
-            object_key: "legacy".into(),
+        let expected = entry(0, 0, 4);
+        let key = WalIndexKey::from(&expected);
+        let record = |object_key: &str, entry: WalIndexEntry| WalFlushRecord {
+            object_key: object_key.into(),
             format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![entry],
         };
-
-        let mut legacy_first = WalIndexCache::default();
-        legacy_first.apply(&legacy);
-        legacy_first.remove(key);
-        legacy_first.remove(key);
-        assert!(legacy_first.lookup(Uuid::from_u128(1), 0, 0).is_none());
-
-        let mut tombstone_first = WalIndexCache::default();
-        tombstone_first.remove(key);
-        tombstone_first.apply(&legacy);
-        tombstone_first.remove(key);
-        assert!(tombstone_first.lookup(Uuid::from_u128(1), 0, 0).is_none());
+        // `(what, events in partition order, object the range resolves to)`.
+        let rows: [(&str, &[Event], Option<&str>); 6] = [
+            ("a value is stored", &[Value("a")], Some("a")),
+            (
+                "a later value replaces it",
+                &[Value("a"), Value("b")],
+                Some("b"),
+            ),
+            ("a tombstone removes it", &[Value("a"), Tombstone], None),
+            (
+                "a retried tombstone stays removed",
+                &[Value("a"), Tombstone, Tombstone],
+                None,
+            ),
+            (
+                "a value may follow its range's tombstone",
+                &[Value("a"), Tombstone, Value("b")],
+                Some("b"),
+            ),
+            (
+                "a malformed value removes the old one and exposes nothing",
+                &[Value("a"), Malformed],
+                None,
+            ),
+        ];
+        for (what, events, resolves_to) in rows {
+            let mut cache = WalIndexCache::default();
+            for event in events {
+                match event {
+                    Value(object_key) => {
+                        cache.apply_keyed(key, &record(object_key, expected.clone()));
+                    }
+                    Malformed => cache.apply_keyed(key, &record("wrong", entry(0, 1, 4))),
+                    Tombstone => cache.remove(key),
+                }
+            }
+            assert!(
+                cache
+                    .lookup(Uuid::from_u128(1), 0, 0)
+                    .map(|(object_key, _, _)| object_key)
+                    == resolves_to.map(str::to_owned),
+                "{what}"
+            );
+        }
     }
 
     #[test]
-    fn malformed_keyed_value_fails_closed_against_legacy_replay() {
-        let expected = entry(0, 0, 4);
-        let key = WalIndexKey::from(&expected);
-        let wrong = entry(0, 1, 4);
+    fn a_flush_record_applies_each_range_under_its_own_key() {
         let mut cache = WalIndexCache::default();
-
         cache.apply(&WalFlushRecord {
-            object_key: "legacy".into(),
+            object_key: "obj".into(),
             format_version: WalFlushRecord::FORMAT_VERSION,
-            entries: vec![expected.clone()],
+            entries: vec![entry(0, 0, 4), entry(0, 5, 9)],
         });
-
-        cache.apply_keyed(
-            key,
-            &WalFlushRecord {
-                object_key: "wrong".into(),
-                format_version: WalFlushRecord::FORMAT_VERSION,
-                entries: vec![wrong],
-            },
-        );
-        cache.apply(&WalFlushRecord {
-            object_key: "late-legacy".into(),
-            format_version: WalFlushRecord::FORMAT_VERSION,
-            entries: vec![expected],
-        });
+        cache.remove(WalIndexKey::from(&entry(0, 0, 4)));
 
         assert!(cache.lookup(Uuid::from_u128(1), 0, 0).is_none());
+        assert!(
+            cache
+                .lookup(Uuid::from_u128(1), 0, 5)
+                .map(|(object_key, _, _)| object_key)
+                == Some("obj".to_owned())
+        );
     }
 
     #[test]

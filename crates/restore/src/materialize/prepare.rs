@@ -18,7 +18,7 @@ use krabka_protocol::records::{
 
 use crate::{
     args::PartitionRef,
-    bound::{BatchDecision, Predicates, RecordDecision, record_coordinates},
+    bound::{BatchDecision, Predicates, RecordDecision, record_coordinates, timestamp_type},
     error::RestoreError,
 };
 
@@ -169,27 +169,37 @@ fn prepare_owned_batch(batch: RecordBatch) -> Result<PreparedBatch, RestoreError
     let records_count = i32::try_from(batch.records.len())
         .map_err(|_| invalid_rewrite("retained record count exceeds i32"))?;
     krabka_verified::restore_rewritten_batch_header(
-        (batch.base_offset, batch.last_offset_delta, records_count),
-        (
-            batch.attributes.is_control_batch(),
-            batch.attributes.is_transactional(),
-            batch.producer_id,
-            batch.producer_epoch,
-            batch.base_sequence,
-        ),
+        krabka_verified::RestoreLayout {
+            base_offset: batch.base_offset,
+            last_offset_delta: batch.last_offset_delta,
+            records_count,
+        },
+        krabka_verified::RestoreProducer {
+            control: batch.attributes.is_control_batch(),
+            transactional: batch.attributes.is_transactional(),
+            producer_id: batch.producer_id,
+            producer_epoch: batch.producer_epoch,
+            base_sequence: batch.base_sequence,
+        },
     )
     .ok_or_else(|| invalid_rewrite("header or producer fields are inconsistent"))?;
 
+    let frame = krabka_verified::RestoreBatchFrame {
+        base_offset: batch.base_offset,
+        last_offset_delta: batch.last_offset_delta,
+        timestamp_type: timestamp_type(batch.attributes),
+        base_timestamp: batch.base_timestamp,
+        max_timestamp: batch.max_timestamp,
+    };
     let mut previous_offset_delta = None;
     for record in &batch.records {
         krabka_verified::restore_rewritten_record(
             previous_offset_delta,
-            batch.base_offset,
-            batch.last_offset_delta,
-            batch.base_timestamp,
-            batch.max_timestamp,
-            record.offset_delta,
-            record.timestamp_delta,
+            frame,
+            krabka_verified::RestoreRecordDeltas {
+                offset_delta: record.offset_delta,
+                timestamp_delta: record.timestamp_delta,
+            },
         )
         .ok_or_else(|| invalid_rewrite("record delta or timestamp contradicts the header"))?;
         previous_offset_delta = Some(record.offset_delta);
@@ -264,7 +274,7 @@ mod tests {
     use assert2::check;
     use krabka_ids::{Offset, ProducerId};
     use krabka_log::{Log, LogConfig};
-    use krabka_protocol::records::{Attributes, Record};
+    use krabka_protocol::records::{Attributes, Record, TimestampType};
 
     use super::{
         BatchTally, Bytes, BytesMut, PartitionRef, Predicates, PreparedBatch, RecordBatch,
@@ -326,6 +336,24 @@ mod tests {
         overflow.base_offset = i64::MAX;
         overflow.last_offset_delta = 0;
         check!(prepare_owned_batch(overflow).is_err());
+    }
+
+    /// Kafka reads a `LogAppendTime` record's timestamp as the batch
+    /// `max_timestamp` and leaves the producer's deltas untouched, so a
+    /// producer clock ahead of the broker is legal there and a contradiction
+    /// under `CreateTime`.
+    #[test]
+    fn owned_rewrite_checks_timestamps_by_kafka_timestamp_type() {
+        for (name, timestamp_type, admitted) in [
+            ("log append time", TimestampType::LogAppendTime, true),
+            ("create time", TimestampType::CreateTime, false),
+        ] {
+            let mut batch = rewrite(vec![record(0, 0), record(3, 50)]);
+            batch.attributes = batch.attributes.with_timestamp_type(timestamp_type);
+            batch.base_timestamp = 2_000;
+            batch.max_timestamp = 1_000;
+            check!(prepare_owned_batch(batch).is_ok() == admitted, "{name}");
+        }
     }
 
     #[test]

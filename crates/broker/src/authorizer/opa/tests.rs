@@ -8,7 +8,7 @@
 use std::{
     collections::HashSet,
     net::SocketAddr,
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 
 use assert2::assert;
@@ -171,12 +171,9 @@ async fn cache_entry_expires_after_ttl() {
         .mount(&mock)
         .await;
 
-    // 10ms decision-cache TTL, driven by an injected manual clock so the entry
-    // expires on a controlled timeline — deterministic, no wall-clock sleep.
-    // `timeline` is the advance handle; the wall clock it hands out is anchored
-    // to it, so advancing one moves the other by the same amount.
+    // 10ms decision-cache TTL, driven by an injected manual monotonic clock so
+    // the entry expires on a controlled timeline — deterministic, no sleep.
     let timeline = ManualMonotonicClock::new_shared();
-    let clock = timeline.new_wall_clock(SystemTime::now());
     let auth = OpaAuthorizer::with_clock(
         HashSet::new(),
         opa_url(&mock),
@@ -184,7 +181,7 @@ async fn cache_entry_expires_after_ttl() {
         100,
         millis(10),
         secs(5),
-        clock,
+        timeline.clone(),
     )
     .unwrap();
     let image = img();
@@ -210,7 +207,7 @@ async fn nonpositive_cache_ttl_is_rejected() {
             1,
             ttl,
             secs(1),
-            ManualMonotonicClock::new_shared().new_wall_clock(SystemTime::now()),
+            ManualMonotonicClock::new_shared(),
         );
         assert!(matches!(result, Err(OpaConfigError::InvalidCacheTtl)));
     }

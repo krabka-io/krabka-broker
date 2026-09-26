@@ -223,15 +223,18 @@ fn a_disk_full_producer_snapshot_fails_the_roll_and_the_log_reopens_without_it()
             .expect_err("the snapshot write must fail the roll");
         check!(is_storage_full(&error), "{label}: {error:?}");
         drop(log);
+        check!(
+            !name::producer_snapshot_path(dir.path(), durable.0).exists(),
+            "{label}: a torn snapshot must not be published"
+        );
 
+        // Kafka's `loadProducerState` snapshots the rebuilt state at the log
+        // end, so the reopen publishes a whole snapshot where the torn one
+        // would have been.
         let reopened = Log::open(dir.path(), config).unwrap();
         check!(
             reopened.log_end_offset() == durable,
             "{label}: the rolled-away batch must not survive the reopen"
-        );
-        check!(
-            !name::producer_snapshot_path(dir.path(), durable.0).exists(),
-            "{label}: a torn snapshot must not be published"
         );
     }
 }

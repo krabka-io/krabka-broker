@@ -50,13 +50,7 @@ pub(crate) async fn run(
 }
 
 pub(crate) async fn sweep(controller: &dyn DelegationTokenController) {
-    let now = crate::time_util::now_ms();
-    let expired: Vec<DelegationTokenRecord> = controller
-        .current_image()
-        .all_delegation_tokens()
-        .filter(|t| t.expiry_timestamp_ms <= now)
-        .map(token_to_record)
-        .collect();
+    let expired = expired_tokens(&controller.current_image(), crate::time_util::now_ms());
     if expired.is_empty() {
         return;
     }
@@ -77,6 +71,21 @@ pub(crate) async fn sweep(controller: &dyn DelegationTokenController) {
             debug!(token_id = %token.token_id, "delegation token expired and tombstoned");
         }
     }
+}
+
+/// The tokens the sweep tombstones at `now_ms`: those that
+/// [`krabka_verified::token_is_active`] calls expired. Kafka's
+/// `DelegationTokenControlManager.sweepExpiredDelegationTokens` removes a
+/// token when `maxTimestamp < now || expiryTimestamp < now`, so a token
+/// whose expiry equals `now_ms` survives this sweep.
+fn expired_tokens(image: &MetadataImage, now_ms: i64) -> Vec<DelegationTokenRecord> {
+    image
+        .all_delegation_tokens()
+        .filter(|t| {
+            !krabka_verified::token_is_active(now_ms, t.expiry_timestamp_ms, t.max_timestamp_ms)
+        })
+        .map(token_to_record)
+        .collect()
 }
 
 fn token_to_record(token: &DelegationToken) -> DelegationTokenRecord {
@@ -143,15 +152,53 @@ mod tests {
     }
 
     fn dt_record(token_id: &str, expiry_ms: i64) -> MetadataRecord {
+        dt_record_with_max(token_id, expiry_ms, i64::MAX)
+    }
+
+    fn dt_record_with_max(token_id: &str, expiry_ms: i64, max_ms: i64) -> MetadataRecord {
         MetadataRecord::V1DelegationToken(DelegationTokenRecord {
             token_id: token_id.into(),
             owner: principal("User", "alice"),
             hmac: vec![0xAB; 32],
             issue_timestamp_ms: 0,
             expiry_timestamp_ms: expiry_ms,
-            max_timestamp_ms: i64::MAX,
+            max_timestamp_ms: max_ms,
             renewers: vec![],
         })
+    }
+
+    /// Kafka's `DelegationTokenControlManager.sweepExpiredDelegationTokens`
+    /// removes a token when `maxTimestamp < now || expiryTimestamp < now`.
+    #[test]
+    fn expired_tokens_matches_kafka_sweep_rule() {
+        const NOW: i64 = 10_000;
+        // (token id, expiry, max, swept)
+        let cases = [
+            ("expiry-before-now", NOW - 1, NOW + 100, true),
+            ("max-before-now", NOW + 100, NOW - 1, true),
+            ("both-before-now", NOW - 5, NOW - 1, true),
+            ("expiry-equals-now", NOW, NOW + 100, false),
+            ("max-equals-now", NOW, NOW, false),
+            ("both-after-now", NOW + 1, NOW + 100, false),
+        ];
+        for (token_id, expiry_ms, max_ms, swept) in cases {
+            let mut img = MetadataImage::new(Uuid::nil());
+            img.apply(&dt_record_with_max(token_id, expiry_ms, max_ms));
+            let expected: Vec<DelegationTokenRecord> = if swept {
+                vec![DelegationTokenRecord {
+                    token_id: token_id.into(),
+                    owner: principal("User", "alice"),
+                    hmac: vec![0xAB; 32],
+                    issue_timestamp_ms: 0,
+                    expiry_timestamp_ms: expiry_ms,
+                    max_timestamp_ms: max_ms,
+                    renewers: vec![],
+                }]
+            } else {
+                vec![]
+            };
+            assert!(expired_tokens(&img, NOW) == expected, "case: {token_id}");
+        }
     }
 
     #[tokio::test]

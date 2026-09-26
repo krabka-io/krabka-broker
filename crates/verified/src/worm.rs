@@ -1,8 +1,8 @@
 //! Admission decisions for signed WORM manifests and their object sets.
 
-#[cfg(creusot)]
-use creusot_std::prelude::DeepModel;
 use creusot_std::prelude::ensures;
+#[cfg(creusot)]
+use creusot_std::prelude::{DeepModel, logic};
 
 /// Why a manifest signature is not an accepted attestation.
 #[cfg_attr(creusot, derive(DeepModel))]
@@ -85,33 +85,40 @@ pub struct WormObjectSetFacts {
     pub digests: WormDigestFacts,
 }
 
+/// The object-set rule, as the first failed check in diagnostic order: an
+/// empty set, a repeated key, a key at the wrong coordinates, an object the
+/// store does not hold, a listing with another object count, an object of
+/// another size, and, when digests are required, a digest mismatch. A set
+/// that passes every check is `Admit`.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+fn worm_object_set_model(facts: WormObjectSetFacts) -> WormObjectSetDecision {
+    pearlite! {
+        if facts.object_count@ == 0 {
+            WormObjectSetDecision::Empty
+        } else if !facts.identity.unique_keys {
+            WormObjectSetDecision::DuplicateKey
+        } else if !facts.identity.coordinates_match {
+            WormObjectSetDecision::CoordinateMismatch
+        } else if !facts.availability.all_present {
+            WormObjectSetDecision::MissingObject
+        } else if facts.object_count@ != facts.listed_count@ {
+            WormObjectSetDecision::CountMismatch
+        } else if !facts.availability.sizes_match {
+            WormObjectSetDecision::SizeMismatch
+        } else if facts.digests.require_digests && !facts.digests.digests_match {
+            WormObjectSetDecision::DigestMismatch
+        } else {
+            WormObjectSetDecision::Admit
+        }
+    }
+}
+
 /// Requires a nonempty, one-to-one object set with exact coordinates, sizes,
-/// and, when requested, digests.
-#[ensures(facts.object_count@ == 0 ==> result == WormObjectSetDecision::Empty)]
-#[ensures(facts.object_count@ > 0 && !facts.identity.unique_keys
-    ==> result == WormObjectSetDecision::DuplicateKey)]
-#[ensures(facts.object_count@ > 0 && facts.identity.unique_keys && !facts.identity.coordinates_match
-    ==> result == WormObjectSetDecision::CoordinateMismatch)]
-#[ensures(facts.object_count@ > 0 && facts.identity.unique_keys
-    && facts.identity.coordinates_match && !facts.availability.all_present
-    ==> result == WormObjectSetDecision::MissingObject)]
-#[ensures(facts.object_count@ > 0 && facts.identity.unique_keys
-    && facts.identity.coordinates_match && facts.availability.all_present
-    && facts.object_count@ != facts.listed_count@ ==> result == WormObjectSetDecision::CountMismatch)]
-#[ensures(facts.object_count@ > 0 && facts.identity.unique_keys
-    && facts.identity.coordinates_match && facts.availability.all_present
-    && facts.object_count@ == facts.listed_count@ && !facts.availability.sizes_match
-    ==> result == WormObjectSetDecision::SizeMismatch)]
-#[ensures(facts.object_count@ > 0 && facts.identity.unique_keys
-    && facts.identity.coordinates_match && facts.availability.all_present
-    && facts.object_count@ == facts.listed_count@ && facts.availability.sizes_match
-    && facts.digests.require_digests && !facts.digests.digests_match
-    ==> result == WormObjectSetDecision::DigestMismatch)]
-#[ensures(result == WormObjectSetDecision::Admit ==> facts.object_count@ > 0
-    && facts.identity.unique_keys && facts.identity.coordinates_match
-    && facts.availability.all_present
-    && facts.object_count@ == facts.listed_count@ && facts.availability.sizes_match
-    && (!facts.digests.require_digests || facts.digests.digests_match))]
+/// and, when requested, digests; see `worm_object_set_model`.
+#[ensures(result == worm_object_set_model(facts))]
 #[must_use]
 pub fn worm_object_set_decision(facts: WormObjectSetFacts) -> WormObjectSetDecision {
     if facts.object_count == 0 {
@@ -153,75 +160,122 @@ mod tests {
 
     #[test]
     fn object_sets_fail_closed_in_diagnostic_order() {
-        let cases = [
+        use WormObjectSetDecision::{
+            Admit, CoordinateMismatch, CountMismatch, DigestMismatch, DuplicateKey, Empty,
+            MissingObject, SizeMismatch,
+        };
+
+        let exact = WormObjectSetFacts {
+            object_count: 1,
+            listed_count: 1,
+            identity: WormObjectIdentityFacts {
+                unique_keys: true,
+                coordinates_match: true,
+            },
+            availability: WormObjectAvailabilityFacts {
+                all_present: true,
+                sizes_match: true,
+            },
+            digests: WormDigestFacts {
+                require_digests: true,
+                digests_match: true,
+            },
+        };
+        // Every refusal also fails the checks after it, so each row shows the
+        // earlier check outranking the later ones.
+        let broken = WormObjectSetFacts {
+            object_count: 1,
+            listed_count: 2,
+            identity: WormObjectIdentityFacts {
+                unique_keys: false,
+                coordinates_match: false,
+            },
+            availability: WormObjectAvailabilityFacts {
+                all_present: false,
+                sizes_match: false,
+            },
+            digests: WormDigestFacts {
+                require_digests: true,
+                digests_match: false,
+            },
+        };
+        for (what, facts, expected) in [
             (
-                (0, 0, true, true, true, true, true, true),
-                WormObjectSetDecision::Empty,
-            ),
-            (
-                (2, 2, false, true, true, true, true, true),
-                WormObjectSetDecision::DuplicateKey,
-            ),
-            (
-                (1, 1, true, false, true, true, true, true),
-                WormObjectSetDecision::CoordinateMismatch,
-            ),
-            (
-                (1, 1, true, true, false, true, true, true),
-                WormObjectSetDecision::MissingObject,
-            ),
-            (
-                (1, 2, true, true, true, true, true, true),
-                WormObjectSetDecision::CountMismatch,
-            ),
-            (
-                (1, 1, true, true, true, false, true, true),
-                WormObjectSetDecision::SizeMismatch,
-            ),
-            (
-                (1, 1, true, true, true, true, true, false),
-                WormObjectSetDecision::DigestMismatch,
-            ),
-            (
-                (1, 1, true, true, true, true, false, false),
-                WormObjectSetDecision::Admit,
-            ),
-            (
-                (1, 1, true, true, true, true, true, true),
-                WormObjectSetDecision::Admit,
-            ),
-        ];
-        for (
-            (
-                object_count,
-                listed_count,
-                unique_keys,
-                coordinates_match,
-                all_present,
-                sizes_match,
-                require_digests,
-                digests_match,
-            ),
-            expected,
-        ) in cases
-        {
-            let facts = WormObjectSetFacts {
-                object_count,
-                listed_count,
-                identity: WormObjectIdentityFacts {
-                    unique_keys,
-                    coordinates_match,
+                "an empty set",
+                WormObjectSetFacts {
+                    object_count: 0,
+                    listed_count: 0,
+                    ..broken
                 },
-                availability: WormObjectAvailabilityFacts {
-                    all_present,
-                    sizes_match,
+                Empty,
+            ),
+            ("a repeated key", broken, DuplicateKey),
+            (
+                "a key at the wrong coordinates",
+                WormObjectSetFacts {
+                    identity: WormObjectIdentityFacts {
+                        unique_keys: true,
+                        coordinates_match: false,
+                    },
+                    ..broken
                 },
-                digests: WormDigestFacts {
-                    require_digests,
-                    digests_match,
+                CoordinateMismatch,
+            ),
+            (
+                "a missing object",
+                WormObjectSetFacts {
+                    identity: exact.identity,
+                    ..broken
                 },
-            };
-            assert!(worm_object_set_decision(facts) == expected);
+                MissingObject,
+            ),
+            (
+                "another object count",
+                WormObjectSetFacts {
+                    identity: exact.identity,
+                    availability: WormObjectAvailabilityFacts {
+                        all_present: true,
+                        sizes_match: false,
+                    },
+                    ..broken
+                },
+                CountMismatch,
+            ),
+            (
+                "another object size",
+                WormObjectSetFacts {
+                    identity: exact.identity,
+                    availability: WormObjectAvailabilityFacts {
+                        all_present: true,
+                        sizes_match: false,
+                    },
+                    listed_count: 1,
+                    ..broken
+                },
+                SizeMismatch,
+            ),
+            (
+                "a required digest mismatch",
+                WormObjectSetFacts {
+                    digests: broken.digests,
+                    ..exact
+                },
+                DigestMismatch,
+            ),
+            (
+                "a digest mismatch nobody required",
+                WormObjectSetFacts {
+                    digests: WormDigestFacts {
+                        require_digests: false,
+                        digests_match: false,
+                    },
+                    ..exact
+                },
+                Admit,
+            ),
+            ("an exact set", exact, Admit),
+        ] {
+            assert!(worm_object_set_decision(facts) == expected, "{what}");
         }
     }
 }

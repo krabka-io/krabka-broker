@@ -1,23 +1,31 @@
-(* #"/workspace/crates/verified/src/transaction.rs" 375 0 377 36 *)
+(* #"/workspace/crates/verified/src/transaction.rs" 489 0 491 36 *)
 
-let%span stransaction = "/workspace/crates/verified/src/transaction.rs" 328 10 329 38
-let%span stransaction'0 = "/workspace/crates/verified/src/transaction.rs" 330 10 334 57
-let%span stransaction'1 = "/workspace/crates/verified/src/transaction.rs" 335 10 340 42
-let%span stransaction'2 = "/workspace/crates/verified/src/transaction.rs" 341 10 347 53
-let%span stransaction'3 = "/workspace/crates/verified/src/transaction.rs" 348 10 355 50
-let%span stransaction'4 = "/workspace/crates/verified/src/transaction.rs" 356 10 364 51
-let%span stransaction'5 = "/workspace/crates/verified/src/transaction.rs" 365 10 373 52
+let%span stransaction = "/workspace/crates/verified/src/transaction.rs" 430 10 431 38
+let%span stransaction'0 = "/workspace/crates/verified/src/transaction.rs" 432 10 436 66
+let%span stransaction'1 = "/workspace/crates/verified/src/transaction.rs" 437 10 442 45
+let%span stransaction'2 = "/workspace/crates/verified/src/transaction.rs" 443 10 449 56
+let%span stransaction'3 = "/workspace/crates/verified/src/transaction.rs" 450 10 457 59
+let%span stransaction'4 = "/workspace/crates/verified/src/transaction.rs" 458 10 466 50
+let%span stransaction'5 = "/workspace/crates/verified/src/transaction.rs" 467 10 477 51
+let%span stransaction'6 = "/workspace/crates/verified/src/transaction.rs" 478 10 487 86
 
 use creusot.prelude.Any
 
 type t_TransactionRegistrationOwnershipFacts = { is_coordinator: bool; producer_id_valid: bool; entry_exists: bool }
 
-type t_TransactionRegistrationIdentityFacts = {
+type t_TransactionRegistrationIdentityMatchFacts = {
   transactional_id_matches: bool;
-  staged_identity: bool;
-  producer_identity_matches: bool }
+  producer_id_matches: bool;
+  producer_epoch_matches: bool }
 
-type t_TransactionRegistrationStateFacts = { state_allows_registration: bool; exact_partitions_registered: bool }
+type t_TransactionRegistrationIdentityFacts = {
+  pending_transition: bool;
+  matching: t_TransactionRegistrationIdentityMatchFacts }
+
+type t_TransactionRegistrationStateFacts = {
+  state_allows_registration: bool;
+  state_is_ongoing: bool;
+  exact_partitions_registered: bool }
 
 type t_TransactionRegistrationFacts = {
   ownership: t_TransactionRegistrationOwnershipFacts;
@@ -27,8 +35,9 @@ type t_TransactionRegistrationFacts = {
 type t_TransactionRegistrationDecision =
   | RejectNotCoordinator
   | RejectUnknownProducer
-  | RejectStagedIdentity
-  | RejectStaleIdentity
+  | RejectPendingTransition
+  | RejectProducerId
+  | RejectProducerEpoch
   | RejectState
   | PersistRetry
   | PersistRegistration
@@ -37,7 +46,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let transaction_partition_registration [#"/workspace/crates/verified/src/transaction.rs" 375 0 377 36]
+let transaction_partition_registration [#"/workspace/crates/verified/src/transaction.rs" 489 0 491 36]
   (facts: t_TransactionRegistrationFacts) (return (x: t_TransactionRegistrationDecision)) = (! bb0
   [ bb0 = any
     [ br0 -> {facts.ownership.is_coordinator = false} (! bb1) | br1 -> {facts.ownership.is_coordinator} (! bb2) ]
@@ -45,24 +54,30 @@ let transaction_partition_registration [#"/workspace/crates/verified/src/transac
     [ br0 -> {facts.ownership.producer_id_valid = false} (! bb5) | br1 -> {facts.ownership.producer_id_valid} (! bb3) ]
   | bb3 = any [ br0 -> {facts.ownership.entry_exists = false} (! bb5) | br1 -> {facts.ownership.entry_exists} (! bb4) ]
   | bb4 = any
-    [ br0 -> {facts.identity.transactional_id_matches = false} (! bb5)
-    | br1 -> {facts.identity.transactional_id_matches} (! bb6) ]
+    [ br0 -> {facts.identity.matching.transactional_id_matches = false} (! bb5)
+    | br1 -> {facts.identity.matching.transactional_id_matches} (! bb6) ]
   | bb6 = any
-    [ br0 -> {facts.identity.staged_identity = false} (! bb8) | br1 -> {facts.identity.staged_identity} (! bb7) ]
-  | bb7 = s0 [ s0 = [ &_ret <- RejectStagedIdentity ] s1 | s1 = return {_ret} ]
+    [ br0 -> {facts.identity.pending_transition = false} (! bb8) | br1 -> {facts.identity.pending_transition} (! bb7) ]
+  | bb7 = s0 [ s0 = [ &_ret <- RejectPendingTransition ] s1 | s1 = return {_ret} ]
   | bb8 = any
-    [ br0 -> {facts.identity.producer_identity_matches = false} (! bb9)
-    | br1 -> {facts.identity.producer_identity_matches} (! bb10) ]
+    [ br0 -> {facts.identity.matching.producer_id_matches = false} (! bb9)
+    | br1 -> {facts.identity.matching.producer_id_matches} (! bb10) ]
   | bb10 = any
-    [ br0 -> {facts.state.state_allows_registration = false} (! bb11)
-    | br1 -> {facts.state.state_allows_registration} (! bb12) ]
+    [ br0 -> {facts.identity.matching.producer_epoch_matches = false} (! bb11)
+    | br1 -> {facts.identity.matching.producer_epoch_matches} (! bb12) ]
   | bb12 = any
-    [ br0 -> {facts.state.exact_partitions_registered = false} (! bb14)
-    | br1 -> {facts.state.exact_partitions_registered} (! bb13) ]
-  | bb13 = s0 [ s0 = [ &_ret <- PersistRetry ] s1 | s1 = return {_ret} ]
-  | bb14 = s0 [ s0 = [ &_ret <- PersistRegistration ] s1 | s1 = return {_ret} ]
-  | bb11 = s0 [ s0 = [ &_ret <- RejectState ] s1 | s1 = return {_ret} ]
-  | bb9 = s0 [ s0 = [ &_ret <- RejectStaleIdentity ] s1 | s1 = return {_ret} ]
+    [ br0 -> {facts.state.state_allows_registration = false} (! bb13)
+    | br1 -> {facts.state.state_allows_registration} (! bb14) ]
+  | bb14 = any
+    [ br0 -> {facts.state.state_is_ongoing = false} (! bb17) | br1 -> {facts.state.state_is_ongoing} (! bb15) ]
+  | bb15 = any
+    [ br0 -> {facts.state.exact_partitions_registered = false} (! bb17)
+    | br1 -> {facts.state.exact_partitions_registered} (! bb16) ]
+  | bb16 = s0 [ s0 = [ &_ret <- PersistRetry ] s1 | s1 = return {_ret} ]
+  | bb17 = s0 [ s0 = [ &_ret <- PersistRegistration ] s1 | s1 = return {_ret} ]
+  | bb13 = s0 [ s0 = [ &_ret <- RejectState ] s1 | s1 = return {_ret} ]
+  | bb11 = s0 [ s0 = [ &_ret <- RejectProducerEpoch ] s1 | s1 = return {_ret} ]
+  | bb9 = s0 [ s0 = [ &_ret <- RejectProducerId ] s1 | s1 = return {_ret} ]
   | bb5 = s0 [ s0 = [ &_ret <- RejectUnknownProducer ] s1 | s1 = return {_ret} ]
   | bb1 = s0 [ s0 = [ &_ret <- RejectNotCoordinator ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_TransactionRegistrationDecision = Any.any_l () | & facts: t_TransactionRegistrationFacts = facts ])
@@ -74,41 +89,55 @@ let transaction_partition_registration [#"/workspace/crates/verified/src/transac
         = RejectUnknownProducer)
       = (facts.ownership.is_coordinator
       /\ (not facts.ownership.producer_id_valid
-      \/ not facts.ownership.entry_exists \/ not facts.identity.transactional_id_matches)))
+      \/ not facts.ownership.entry_exists \/ not facts.identity.matching.transactional_id_matches)))
     /\ ([@stop_split] [@expl:transaction_partition_registration ensures #2] [%#stransaction'1] (result
-        = RejectStagedIdentity)
+        = RejectPendingTransition)
       = (facts.ownership.is_coordinator
       /\ facts.ownership.producer_id_valid
-      /\ facts.ownership.entry_exists /\ facts.identity.transactional_id_matches /\ facts.identity.staged_identity))
+      /\ facts.ownership.entry_exists
+      /\ facts.identity.matching.transactional_id_matches /\ facts.identity.pending_transition))
     /\ ([@stop_split] [@expl:transaction_partition_registration ensures #3] [%#stransaction'2] (result
-        = RejectStaleIdentity)
+        = RejectProducerId)
       = (facts.ownership.is_coordinator
       /\ facts.ownership.producer_id_valid
       /\ facts.ownership.entry_exists
-      /\ facts.identity.transactional_id_matches
-      /\ not facts.identity.staged_identity /\ not facts.identity.producer_identity_matches))
-    /\ ([@stop_split] [@expl:transaction_partition_registration ensures #4] [%#stransaction'3] (result = RejectState)
+      /\ facts.identity.matching.transactional_id_matches
+      /\ not facts.identity.pending_transition /\ not facts.identity.matching.producer_id_matches))
+    /\ ([@stop_split] [@expl:transaction_partition_registration ensures #4] [%#stransaction'3] (result
+        = RejectProducerEpoch)
       = (facts.ownership.is_coordinator
       /\ facts.ownership.producer_id_valid
       /\ facts.ownership.entry_exists
-      /\ facts.identity.transactional_id_matches
-      /\ not facts.identity.staged_identity
-      /\ facts.identity.producer_identity_matches /\ not facts.state.state_allows_registration))
-    /\ ([@stop_split] [@expl:transaction_partition_registration ensures #5] [%#stransaction'4] (result = PersistRetry)
+      /\ facts.identity.matching.transactional_id_matches
+      /\ not facts.identity.pending_transition
+      /\ facts.identity.matching.producer_id_matches /\ not facts.identity.matching.producer_epoch_matches))
+    /\ ([@stop_split] [@expl:transaction_partition_registration ensures #5] [%#stransaction'4] (result = RejectState)
       = (facts.ownership.is_coordinator
       /\ facts.ownership.producer_id_valid
       /\ facts.ownership.entry_exists
-      /\ facts.identity.transactional_id_matches
-      /\ not facts.identity.staged_identity
-      /\ facts.identity.producer_identity_matches
-      /\ facts.state.state_allows_registration /\ facts.state.exact_partitions_registered))
-    /\ ([@stop_split] [@expl:transaction_partition_registration ensures #6] [%#stransaction'5] (result
+      /\ facts.identity.matching.transactional_id_matches
+      /\ not facts.identity.pending_transition
+      /\ facts.identity.matching.producer_id_matches
+      /\ facts.identity.matching.producer_epoch_matches /\ not facts.state.state_allows_registration))
+    /\ ([@stop_split] [@expl:transaction_partition_registration ensures #6] [%#stransaction'5] (result = PersistRetry)
+      = (facts.ownership.is_coordinator
+      /\ facts.ownership.producer_id_valid
+      /\ facts.ownership.entry_exists
+      /\ facts.identity.matching.transactional_id_matches
+      /\ not facts.identity.pending_transition
+      /\ facts.identity.matching.producer_id_matches
+      /\ facts.identity.matching.producer_epoch_matches
+      /\ facts.state.state_allows_registration
+      /\ facts.state.state_is_ongoing /\ facts.state.exact_partitions_registered))
+    /\ ([@stop_split] [@expl:transaction_partition_registration ensures #7] [%#stransaction'6] (result
       = PersistRegistration)
     = (facts.ownership.is_coordinator
     /\ facts.ownership.producer_id_valid
     /\ facts.ownership.entry_exists
-    /\ facts.identity.transactional_id_matches
-    /\ not facts.identity.staged_identity
-    /\ facts.identity.producer_identity_matches
-    /\ facts.state.state_allows_registration /\ not facts.state.exact_partitions_registered))}
+    /\ facts.identity.matching.transactional_id_matches
+    /\ not facts.identity.pending_transition
+    /\ facts.identity.matching.producer_id_matches
+    /\ facts.identity.matching.producer_epoch_matches
+    /\ facts.state.state_allows_registration
+    /\ not (facts.state.state_is_ongoing /\ facts.state.exact_partitions_registered)))}
     (! return {result}) ]

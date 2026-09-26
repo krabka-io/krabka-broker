@@ -203,20 +203,13 @@ impl PeerSender for RealPeerSender {
         self.bootstrap.keys().copied().collect()
     }
 
-    fn remember_peer(&self, source: NodeId, actual: NodeId) {
-        if source == actual {
-            return;
-        }
-        let address = self.bootstrap.get(&source).cloned().or_else(|| {
-            self.aliases
-                .read()
-                .ok()
-                .and_then(|aliases| aliases.get(&source).cloned())
-        });
-        if let Some(address) = address
-            && let Ok(mut aliases) = self.aliases.write()
+    fn remember_leader_endpoint(&self, leader: NodeId, address: String) {
+        if let Ok(mut aliases) = self.aliases.write()
+            && aliases.get(&leader) != Some(&address)
         {
-            aliases.insert(actual, address);
+            aliases.insert(leader, address);
+            // A connection dialed to an earlier address must not outlive it.
+            self.connections.remove(&leader);
         }
     }
 }

@@ -1,35 +1,35 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 53 0 58 25 *)
+(* #"/workspace/crates/verified/src/diskless.rs" 420 0 425 25 *)
 
-let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span snum = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
-let%span scmp = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 66 26 66 66
-let%span scmp'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 67 26 67 63
-let%span scmp'1 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 68 36 68 40
-let%span scmp'2 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 69 26 69 30
-let%span scmp'3 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 70 75 70 79
-let%span scmp'4 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
-let%span scmp'5 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
-let%span scmp'6 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
-let%span scmp'7 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
-let%span scmp'8 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
-let%span sdiskless = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 59 18 59 19
-let%span sdiskless'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 59 40 59 41
-let%span sdiskless'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 59 61 59 62
-let%span sdiskless'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 61 25 61 30
-let%span sdiskless'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 66 36 66 37
-let%span sdiskless'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 66 21 66 38
-let%span sdiskless'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 69 25 69 30
-let%span sdiskless'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 74 30 74 57
-let%span sdiskless'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 74 17 74 58
-let%span sdiskless'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 77 25 77 30
-let%span sdiskless'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 82 25 82 29
-let%span sdiskless'10 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 36 10 42 1
-let%span sdiskless'11 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 43 10 47 1
-let%span sdiskless'12 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 48 10 48 42
-let%span sdiskless'13 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 49 10 49 60
-let%span sdiskless'14 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 50 10 51 70
-let%span sdiskless'15 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 19 16 19 61
-let%span sdiskless'16 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 26 8 26 84
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 66 26 66 66
+let%span scmp'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 67 26 67 63
+let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 68 36 68 40
+let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 69 26 69 30
+let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 70 75 70 79
+let%span scmp'4 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
+let%span scmp'5 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
+let%span scmp'6 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
+let%span scmp'7 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
+let%span scmp'8 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
+let%span sdiskless = "/workspace/crates/verified/src/diskless.rs" 426 18 426 19
+let%span sdiskless'0 = "/workspace/crates/verified/src/diskless.rs" 426 40 426 41
+let%span sdiskless'1 = "/workspace/crates/verified/src/diskless.rs" 426 61 426 62
+let%span sdiskless'2 = "/workspace/crates/verified/src/diskless.rs" 428 25 428 30
+let%span sdiskless'3 = "/workspace/crates/verified/src/diskless.rs" 433 36 433 37
+let%span sdiskless'4 = "/workspace/crates/verified/src/diskless.rs" 433 21 433 38
+let%span sdiskless'5 = "/workspace/crates/verified/src/diskless.rs" 436 25 436 30
+let%span sdiskless'6 = "/workspace/crates/verified/src/diskless.rs" 441 30 441 57
+let%span sdiskless'7 = "/workspace/crates/verified/src/diskless.rs" 441 17 441 58
+let%span sdiskless'8 = "/workspace/crates/verified/src/diskless.rs" 444 25 444 30
+let%span sdiskless'9 = "/workspace/crates/verified/src/diskless.rs" 449 25 449 29
+let%span sdiskless'10 = "/workspace/crates/verified/src/diskless.rs" 403 10 409 1
+let%span sdiskless'11 = "/workspace/crates/verified/src/diskless.rs" 410 10 414 1
+let%span sdiskless'12 = "/workspace/crates/verified/src/diskless.rs" 415 10 415 42
+let%span sdiskless'13 = "/workspace/crates/verified/src/diskless.rs" 416 10 416 60
+let%span sdiskless'14 = "/workspace/crates/verified/src/diskless.rs" 417 10 418 70
+let%span sdiskless'15 = "/workspace/crates/verified/src/diskless.rs" 384 16 384 61
+let%span sdiskless'16 = "/workspace/crates/verified/src/diskless.rs" 393 8 393 84
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -64,10 +64,10 @@ let min_i64 (self_: Int64.t) (o: Int64.t) (return (x: Int64.t)) = any
     /\ ([@stop_split] [@expl:min ensures #4] [%#scmp'8] deep_model_i64 o <= deep_model_i64 self_ -> result = o)}
     (! return {result}) ]
 
-function effective_trim_lag [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 18 0 18 45] (safety_lag: Int64.t) : int
- = [%#sdiskless'15] if Int64.to_int safety_lag < 0 then 0 else Int64.to_int safety_lag
+function effective_trim_lag [#"/workspace/crates/verified/src/diskless.rs" 383 0 383 45] (safety_lag: Int64.t) : int =
+  [%#sdiskless'15] if Int64.to_int safety_lag < 0 then 0 else Int64.to_int safety_lag
 
-function trim_target [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 24 0 24 74] (frontier: Int64.t) (high_watermark: Int64.t) (safety_lag: Int64.t) : int
+function trim_target [#"/workspace/crates/verified/src/diskless.rs" 391 0 391 74] (frontier: Int64.t) (high_watermark: Int64.t) (safety_lag: Int64.t) : int
  = [%#sdiskless'16] let high_watermark_floor = Int64.to_int high_watermark
   - effective_trim_lag safety_lag in if Int64.to_int frontier < high_watermark_floor then
     Int64.to_int frontier
@@ -79,9 +79,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let diskless_trim_decision [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 53 0 58 25]
-  (frontier: Int64.t) (high_watermark: Int64.t) (safety_lag: Int64.t) (current_start: Int64.t)
-  (return (x: t_DisklessTrimDecision)) = (! bb0
+let diskless_trim_decision [#"/workspace/crates/verified/src/diskless.rs" 420 0 425 25] (frontier: Int64.t)
+  (high_watermark: Int64.t) (safety_lag: Int64.t) (current_start: Int64.t) (return (x: t_DisklessTrimDecision)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_23 <- Int64.lt frontier ([%#sdiskless] (0: Int64.t)) ] s1
     | s1 = any [ br0 -> {_23 = false} (! bb2) | br1 -> {_23} (! bb6) ] ]

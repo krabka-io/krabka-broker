@@ -98,7 +98,7 @@ impl Engine {
 
     /// Kafka's `validateLeaderOnlyRequest`, without the shutdown check: the
     /// engine answers no request once it stops.
-    fn leader_only_request_error(&self, request_epoch: i32) -> Option<i16> {
+    pub(super) fn leader_only_request_error(&self, request_epoch: i32) -> Option<i16> {
         let local_epoch = i64::from(self.core.quorum_state().leader_epoch);
         if i64::from(request_epoch) < local_epoch {
             Some(FENCED_LEADER_EPOCH)

@@ -1,0 +1,18 @@
+(* #"/workspace/crates/verified/src/vote.rs" 118 27 118 32 *)
+
+(* <vote::VoteTarget as std::clone::Clone> *)
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+
+type t_VoteTarget = { voter_id: UInt64.t; local_id: UInt64.t; directory_matches: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_VoteTarget [#"/workspace/crates/verified/src/vote.rs" 118 27 118 32] (self: t_VoteTarget)
+  (return (x: t_VoteTarget)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_VoteTarget = Any.any_l () | & self: t_VoteTarget = self ])
+  [ return (result: t_VoteTarget) -> (! return {result}) ]

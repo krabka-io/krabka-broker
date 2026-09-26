@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/raft.rs" 56 27 56 32 *)
+
+(* <raft::FetchContent as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_FetchContent = { has_snapshot: bool; has_divergence: bool; has_records: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_FetchContent [#"/workspace/crates/verified/src/raft.rs" 56 27 56 32] (self: t_FetchContent)
+  (return (x: t_FetchContent)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FetchContent = Any.any_l () | & self: t_FetchContent = self ])
+  [ return (result: t_FetchContent) -> (! return {result}) ]

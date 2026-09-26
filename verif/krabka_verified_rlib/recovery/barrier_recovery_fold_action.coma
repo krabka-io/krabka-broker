@@ -1,12 +1,12 @@
-(* #"/workspace/crates/verified/src/recovery.rs" 131 0 137 30 *)
+(* #"/workspace/crates/verified/src/recovery.rs" 159 0 165 30 *)
 
 let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
 let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 14 26 14 75
 let%span smodel = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/model.rs" 37 8 37 28
 let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 15 8 18 9
-let%span srecovery = "/workspace/crates/verified/src/recovery.rs" 162 36 162 71
-let%span srecovery'0 = "/workspace/crates/verified/src/recovery.rs" 153 22 153 57
-let%span srecovery'1 = "/workspace/crates/verified/src/recovery.rs" 99 10 129 1
+let%span srecovery = "/workspace/crates/verified/src/recovery.rs" 190 36 190 71
+let%span srecovery'0 = "/workspace/crates/verified/src/recovery.rs" 181 22 181 57
+let%span srecovery'1 = "/workspace/crates/verified/src/recovery.rs" 127 10 157 1
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -51,7 +51,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let barrier_recovery_fold_action [#"/workspace/crates/verified/src/recovery.rs" 131 0 137 30]
+let barrier_recovery_fold_action [#"/workspace/crates/verified/src/recovery.rs" 159 0 165 30]
   (kind: t_BarrierRecoveryRecordKind) (value_present: bool) (record_epoch: Int64.t) (pending_epoch: t_Option_i64)
   (epoch_already_consumed: bool) (return (x: t_BarrierRecoveryFoldAction)) = (! bb0
   [ bb0 = any [ br0 -> {kind = Group} (! bb6) | br1 -> {kind = InjectionStart} (! bb5) | br2 -> {kind = Cut} (! bb4) ]

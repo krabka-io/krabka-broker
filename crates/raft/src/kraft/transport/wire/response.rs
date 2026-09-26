@@ -41,25 +41,7 @@ pub enum PeerResponse {
     Ack {
         epoch: Epoch,
     },
-    Fetch {
-        leader_id: NodeId,
-        leader_epoch: Epoch,
-        diverging: Option<LogOffsetMetadata>,
-        /// When set, the follower's fetch offset is below the leader's
-        /// pruned log-start, and the follower must `FetchSnapshot` this
-        /// snapshot instead. The tuple is `(end_offset, epoch)`.
-        snapshot_id: Option<(i64, i32)>,
-        /// Leader's high watermark at serve time.
-        hwm: i64,
-        /// Verbatim concatenated `RecordBatch` bytes for `[fetch_offset, log_end)`.
-        records: Bytes,
-    },
-    /// Fetch could not identify a leader. The requester keeps its fetch
-    /// watchdog armed instead of treating this as a successful heartbeat.
-    FetchError {
-        leader_epoch: Epoch,
-        error_code: i16,
-    },
+    Fetch(FetchAnswer),
     FetchSnapshot {
         snapshot_id: (i64, i32),
         size: i64,
@@ -67,6 +49,30 @@ pub enum PeerResponse {
         bytes: Bytes,
         error_code: i16,
     },
+}
+
+/// A Fetch answer, in the one shape Kafka's
+/// `KafkaRaftClient.buildFetchResponse` gives both a served fetch and a
+/// refused one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchAnswer {
+    /// The partition `ErrorCode`: `NONE` from the leader, or
+    /// `validateLeaderOnlyRequest`'s `FENCED_LEADER_EPOCH`,
+    /// `UNKNOWN_LEADER_EPOCH` or `NOT_LEADER_OR_FOLLOWER`.
+    pub error_code: i16,
+    /// `CurrentLeader`, and the leader's `NodeEndpoints` entry.
+    pub leader: QuorumLeader,
+    pub diverging: Option<LogOffsetMetadata>,
+    /// When set, the follower's fetch offset is below the leader's pruned
+    /// log-start, and the follower must `FetchSnapshot` this snapshot
+    /// instead. The tuple is `(end_offset, epoch)`.
+    pub snapshot_id: Option<(i64, i32)>,
+    /// Leader's high watermark at serve time, -1 in a refusal.
+    pub hwm: i64,
+    /// The responder's log start offset.
+    pub log_start_offset: i64,
+    /// Verbatim concatenated `RecordBatch` bytes for `[fetch_offset, log_end)`.
+    pub records: Bytes,
 }
 
 /// What a quorum RPC response says about the responder's view of the leader,
@@ -381,21 +387,31 @@ impl PeerResponse {
                 };
                 encode_body(&resp, QUORUM_EPOCH_VERSION)
             }
-            PeerResponse::Fetch {
-                leader_id,
-                leader_epoch,
+            PeerResponse::Fetch(FetchAnswer {
+                error_code,
+                leader,
                 diverging,
                 snapshot_id,
                 hwm,
+                log_start_offset,
                 records,
-            } => {
+            }) => {
+                // Kafka always sets `Records`, to `MemoryRecords.EMPTY` when
+                // there are none, and leaves `AbortedTransactions` at its
+                // generated default, an empty list: neither is null on the
+                // wire.
                 let mut partition = fetch_resp::PartitionData {
+                    partition_index: METADATA_PARTITION,
+                    error_code: *error_code,
                     high_watermark: *hwm,
+                    log_start_offset: *log_start_offset,
+                    aborted_transactions: Some(Vec::new()),
                     current_leader: fetch_resp::LeaderIdAndEpoch {
-                        leader_id: node_to_wire(*leader_id),
-                        leader_epoch: epoch_to_wire(*leader_epoch),
+                        leader_id: leader.leader_id_to_wire(),
+                        leader_epoch: epoch_to_wire(leader.epoch),
                         ..Default::default()
                     },
+                    records: Some(RecordsPayload::Raw(records.clone())),
                     ..Default::default()
                 };
                 if let Some(point) = diverging {
@@ -412,9 +428,8 @@ impl PeerResponse {
                         ..Default::default()
                     };
                 }
-                if !records.is_empty() {
-                    partition.records = Some(RecordsPayload::Raw(records.clone()));
-                }
+                // `RaftUtil.singletonFetchResponse`: at v17 `NodeEndpoints`
+                // names the leader when its id and endpoint are known.
                 let resp = FetchResponse {
                     responses: vec![fetch_resp::FetchableTopicResponse {
                         topic: METADATA_TOPIC.to_string(),
@@ -422,31 +437,16 @@ impl PeerResponse {
                         partitions: vec![partition],
                         ..Default::default()
                     }],
-                    ..Default::default()
-                };
-                encode_body(&resp, FETCH_VERSION)
-            }
-            PeerResponse::FetchError {
-                leader_epoch,
-                error_code,
-            } => {
-                let resp = FetchResponse {
-                    responses: vec![fetch_resp::FetchableTopicResponse {
-                        topic: METADATA_TOPIC.to_string(),
-                        topic_id: METADATA_TOPIC_ID,
-                        partitions: vec![fetch_resp::PartitionData {
-                            partition_index: METADATA_PARTITION,
-                            error_code: *error_code,
-                            high_watermark: -1,
-                            current_leader: fetch_resp::LeaderIdAndEpoch {
-                                leader_id: -1,
-                                leader_epoch: epoch_to_wire(*leader_epoch),
-                                ..Default::default()
-                            },
+                    node_endpoints: leader
+                        .node_endpoint()
+                        .map(|(node_id, host, port)| fetch_resp::NodeEndpoint {
+                            node_id,
+                            host,
+                            port: i32::from(port),
                             ..Default::default()
-                        }],
-                        ..Default::default()
-                    }],
+                        })
+                        .into_iter()
+                        .collect(),
                     ..Default::default()
                 };
                 encode_body(&resp, FETCH_VERSION)
@@ -488,19 +488,32 @@ impl PeerResponse {
     }
 
     /// Decodes a Fetch response body (api 1).
+    ///
+    /// The leader's endpoint is the `NodeEndpoints` entry whose node id is
+    /// `CurrentLeader.LeaderId`, as Kafka's `Endpoints.fromFetchResponse`
+    /// selects it; an entry for any other node is ignored.
     #[must_use]
     pub fn decode_fetch(buf: &[u8]) -> Option<Self> {
         let mut cur = buf;
         let resp = FetchResponse::decode(&mut cur, FETCH_VERSION).ok()?;
         let p = resp.responses.first()?.partitions.first()?;
-        let leader_epoch = epoch_from_wire(p.current_leader.leader_epoch);
-        if p.error_code != 0 && p.current_leader.leader_id < 0 {
-            return Some(PeerResponse::FetchError {
-                leader_epoch,
-                error_code: p.error_code,
-            });
-        }
-        let leader_id = node_from_wire(p.current_leader.leader_id);
+        let wire_leader = p.current_leader.leader_id;
+        let leader_id = (wire_leader >= 0).then(|| node_from_wire(wire_leader));
+        let endpoint = leader_id.and_then(|_| {
+            resp.node_endpoints
+                .iter()
+                .find(|endpoint| endpoint.node_id == wire_leader)
+                .and_then(|endpoint| {
+                    u16::try_from(endpoint.port)
+                        .ok()
+                        .map(|port| (endpoint.host.clone(), port))
+                })
+        });
+        let leader = QuorumLeader {
+            leader_id,
+            epoch: epoch_from_wire(p.current_leader.leader_epoch),
+            endpoint,
+        };
         // diverging_epoch defaults to (-1, -1); a real divergence carries a
         // non-negative end_offset.
         let diverging = if p.diverging_epoch.end_offset >= 0 {
@@ -520,14 +533,15 @@ impl PeerResponse {
             .records
             .as_ref()
             .map_or_else(Bytes::new, records_payload_to_bytes);
-        Some(PeerResponse::Fetch {
-            leader_id,
-            leader_epoch,
+        Some(PeerResponse::Fetch(FetchAnswer {
+            error_code: p.error_code,
+            leader,
             diverging,
             snapshot_id,
             hwm: p.high_watermark,
+            log_start_offset: p.log_start_offset,
             records,
-        })
+        }))
     }
 
     /// Decodes a `FetchSnapshot` response body (api 59).

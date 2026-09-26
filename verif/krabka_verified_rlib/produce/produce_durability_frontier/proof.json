@@ -3,14 +3,14 @@
   "proofs": {
     "Coma": {
       "vc_branch_Option_i64": { "prover": "alt-ergo", "time": 0.013 },
-      "vc_checked_add": { "prover": "alt-ergo", "time": 0.011 },
-      "vc_elim_Break": { "prover": "alt-ergo", "time": 0.006 },
-      "vc_elim_Continue": { "prover": "alt-ergo", "time": 0.005 },
-      "vc_from_i64": { "prover": "alt-ergo", "time": 0.008 },
-      "vc_from_residual_Option_i64": { "prover": "alt-ergo", "time": 0.007 },
+      "vc_checked_add": { "prover": "alt-ergo", "time": 0.023 },
+      "vc_elim_Break": { "prover": "alt-ergo", "time": 0.021 },
+      "vc_elim_Continue": { "prover": "alt-ergo", "time": 0.027 },
+      "vc_from_i64": { "prover": "alt-ergo", "time": 0.02 },
+      "vc_from_residual_Option_i64": { "prover": "alt-ergo", "time": 0.033 },
       "vc_produce_durability_frontier": {
         "prover": "alt-ergo",
-        "time": 0.022
+        "time": 0.068
       }
     }
   }

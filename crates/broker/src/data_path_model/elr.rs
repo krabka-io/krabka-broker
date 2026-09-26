@@ -3,12 +3,16 @@
 //!
 //! # Why the model has to maintain it rather than stipulate it
 //!
-//! [`select_leader`](crate::unclean_recovery::select_leader) elects a
-//! surviving ELR member ahead of a longer log and reports that election as
-//! losing nothing. That report is not an observation, it is a claim about how
+//! [`failover_one`](crate::leader_election::failover_one) elects a surviving
+//! ELR member once the live ISR has emptied, ahead of a longer log and of both
+//! the offset-aware recovery and the KIP-841 election, and reports that
+//! election as clean; [`select_leader`](crate::unclean_recovery::select_leader)
+//! makes the same ranking inside a recovery. That report is not an
+//! observation, it is a claim about how
 //! the set was built: an ELR member left the ISR while the partition still met
-//! `min.insync.replicas`, so every record the partition had acknowledged with
-//! `acks=all` was already on it. A model that let the search pick the ELR out
+//! `min.insync.replicas`, and the leader's high watermark does not move while
+//! the partition is below it, so every committed record was already on it. A
+//! model that let the search pick the ELR out
 //! of thin air would refute the claim on its first step, and would refute it
 //! for a partition no controller could ever produce. So the model runs the
 //! production rule instead: every transition that changes the leader or the
@@ -21,7 +25,7 @@
 //!
 //! [`DpState::elr`](super::state::DpState::elr) is the published
 //! eligible-leader set as a broker bitmask. The published *last-known* ELR is
-//! deliberately absent. `select_leader` never reads it, and
+//! deliberately absent. Neither election reads it, and
 //! `next_partition_elr` derives the eligible set from `old_isr ∪ elr` alone,
 //! so the last-known half feeds nothing but itself: passing it back as empty
 //! yields the same eligible set on every call, at a fraction of the reachable
@@ -47,15 +51,16 @@ use crate::{
 /// The one topic the modelled cluster holds.
 pub(super) const TOPIC: &str = "t";
 /// The one partition of it.
-const PARTITION: i32 = 0;
+pub(super) const PARTITION: i32 = 0;
 
 /// The metadata image the real rules resolve `min.insync.replicas` against.
 ///
 /// The model does not hard-code the threshold it then reasons about: it reads
 /// it back out with [`min_insync_replicas`], the same
-/// [`effective_min_insync_replicas`] the controller calls, so the number the
-/// ELR rule clears the set at and the number the model calls a record
-/// min-ISR-backed at cannot drift apart.
+/// [`effective_min_insync_replicas`] the controller calls, and hands the
+/// same number to the leader's high-watermark core, so the threshold the ELR
+/// rule clears the set at and the one the watermark stops at cannot drift
+/// apart.
 pub(super) fn image(min_isr: usize) -> MetadataImage {
     let mut image = MetadataImage::new(uuid::Uuid::nil());
     image.apply(&MetadataRecord::V1Topic(TopicRecord {
@@ -129,7 +134,7 @@ pub(super) fn maintain(image: &MetadataImage, s: &mut DpState, previous: &Partit
 }
 
 /// The wire ids of a broker bitmask.
-fn ids(mask: u8) -> Vec<i32> {
+pub(super) fn ids(mask: u8) -> Vec<i32> {
     (0..NB_U8)
         .filter(|&b| has(mask, b))
         .map(i32::from)

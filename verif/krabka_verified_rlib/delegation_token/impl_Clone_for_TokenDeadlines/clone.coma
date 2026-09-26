@@ -1,4 +1,4 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 9 27 9 32 *)
+(* #"/workspace/crates/verified/src/delegation_token.rs" 168 27 168 32 *)
 
 (* <delegation_token::TokenDeadlines as std::clone::Clone> *)
 
@@ -11,8 +11,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_TokenDeadlines [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 9 27 9 32]
-  (self: t_TokenDeadlines) (return (x: t_TokenDeadlines)) = (! bb0
+let clone_TokenDeadlines [#"/workspace/crates/verified/src/delegation_token.rs" 168 27 168 32] (self: t_TokenDeadlines)
+  (return (x: t_TokenDeadlines)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_TokenDeadlines = Any.any_l () | & self: t_TokenDeadlines = self ])
   [ return (result: t_TokenDeadlines) -> (! return {result}) ]

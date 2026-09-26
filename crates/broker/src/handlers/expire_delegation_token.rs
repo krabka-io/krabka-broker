@@ -1,21 +1,25 @@
 //! KIP-48: `ExpireDelegationToken` (`api_key` 40).
 //!
-//! Per spec §1.4, the caller must be SASL-authenticated. The request's `hmac`
-//! selects an existing token. Only the owner, a `renewers` entry, or a
-//! configured super-user may expire that token. Any other caller gets
-//! `DELEGATION_TOKEN_AUTHORIZATION_FAILED`.
+//! Matches Kafka trunk's `KafkaApis.handleExpireTokenRequest` and
+//! `DelegationTokenControlManager.expireDelegationToken`, in their error
+//! order: `allowTokenRequests` (`DELEGATION_TOKEN_REQUEST_NOT_ALLOWED`, with
+//! the `-1` error timestamp), token support
+//! (`DELEGATION_TOKEN_AUTH_DISABLED`), the metadata version
+//! (`UNSUPPORTED_VERSION`), the HMAC lookup (`DELEGATION_TOKEN_NOT_FOUND`),
+//! and the owner/renewer gate (`DELEGATION_TOKEN_OWNER_MISMATCH`).
 //!
-//! The super-user bypass matches Kafka's
-//! `DelegationTokenManager.isAuthorizedToOperateOnToken`, through
-//! `SecurityUtils.isAuthorized`. The operator depends on it to clean up the
-//! tokens that it created through act-as on behalf of `KafkaUser` principals.
+//! The handler then decides on `expiry_time_period_ms` (see
+//! [`expire_token_deadline`]):
+//!   - Below 0: it appends a `V1DeleteDelegationToken` tombstone, even for an
+//!     already expired token, and responds with `expiry_timestamp_ms = now`.
+//!   - Otherwise an expired token gets `DELEGATION_TOKEN_EXPIRED`, and a live
+//!     one gets `now + period` (saturating), clamped to its
+//!     `max_timestamp_ms`, in a replacement record. Zero expires it at `now`.
 //!
-//! The handler decides on `expiry_time_period_ms` as follows:
-//!   - Below 0: it appends a `V1DeleteDelegationToken` tombstone, and responds
-//!     with the past sentinel `expiry_timestamp_ms = now - 1`, per KIP-48.
-//!   - Equal to 0: it sets the expiry to `now`, and replaces the record.
-//!   - Above 0: it sets the expiry to `now + period`, clamped to the token's
-//!     `max_timestamp_ms`, and replaces the record.
+//! A configured super-user also passes the owner/renewer gate. Kafka's
+//! `KRaft` controller has no such bypass; krabka keeps it because the operator
+//! tombstones the tokens that it created through act-as on behalf of
+//! `KafkaUser` principals.
 
 use std::{collections::HashSet, hash::BuildHasher};
 
@@ -34,6 +38,10 @@ use krabka_verified::{
 
 use crate::{network::auth::ConnectionAuth, time_util::now_ms};
 
+/// Kafka's `DelegationTokenManager.ERROR_TIMESTAMP`, the expiry a refused
+/// `allowTokenRequests` response carries.
+const ERROR_TIMESTAMP: i64 = -1;
+
 #[tracing::instrument(
     name = "handle_expire_delegation_token",
     level = "info",
@@ -47,15 +55,15 @@ pub(crate) async fn handle<S: BuildHasher>(
     controller: &dyn crate::metadata_source::MetadataSource,
     super_users: &HashSet<String, S>,
 ) -> ExpireDelegationTokenResponse {
+    let ConnectionAuth::Authenticated { principal, .. } = auth else {
+        return not_allowed_response();
+    };
+    if auth.token_api_admission(TokenApi::Expire) == TokenApiAdmission::Reject {
+        return not_allowed_response();
+    }
     if secret_key.is_none() {
         return err_response(crate::codes::DELEGATION_TOKEN_AUTH_DISABLED);
     }
-    if auth.token_api_admission(TokenApi::Expire) == TokenApiAdmission::Reject {
-        return err_response(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
-    }
-    let ConnectionAuth::Authenticated { principal, .. } = auth else {
-        return err_response(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
-    };
     let caller = principal.to_kafka();
 
     let image = controller.current_image();
@@ -73,61 +81,50 @@ pub(crate) async fn handle<S: BuildHasher>(
         return err_response(crate::codes::DELEGATION_TOKEN_NOT_FOUND);
     };
 
-    // KIP-48: super-users bypass the owner/renewer gate. See the renew
-    // handler module docs for the operator-flow rationale.
+    // Kafka's `allowedToRenew`, plus the krabka super-user bypass described
+    // in the module docs.
     let is_super_user = super_users.contains(&principal.name);
     if !is_super_user && token.owner != caller && !token.renewers.contains(&caller) {
-        return err_response(crate::codes::DELEGATION_TOKEN_AUTHORIZATION_FAILED);
+        return err_response(crate::codes::DELEGATION_TOKEN_OWNER_MISMATCH);
     }
 
     let now = now_ms();
-    let new_expiry = match expire_token_deadline(
+    let expected = token_to_record(&token);
+    let (mutation, expiry_timestamp_ms) = match expire_token_deadline(
         now,
         req.expiry_time_period_ms,
         token.expiry_timestamp_ms,
         token.max_timestamp_ms,
     ) {
-        TokenExpireDecision::Invalid => return err_response(crate::codes::INVALID_REQUEST),
         TokenExpireDecision::Expired => {
             return err_response(crate::codes::DELEGATION_TOKEN_EXPIRED);
         }
-        TokenExpireDecision::Delete => {
-            // KIP-48: negative period deletes the token immediately. The
-            // response carries a past-sentinel timestamp.
-            if let Err(e) = controller
-                .submit_delegation_token_mutations(vec![DelegationTokenMutation::Delete {
-                    expected: token_to_record(&token),
-                }])
-                .await
-            {
-                tracing::warn!(error = %e, "ExpireDelegationToken: tombstone submit_change failed");
-                return err_response(crate::codes::INVALID_REQUEST);
-            }
-            now.saturating_sub(1)
-        }
+        TokenExpireDecision::Delete => (DelegationTokenMutation::Delete { expected }, now),
         TokenExpireDecision::Update(new_expiry) => {
-            let expected = token_to_record(&token);
-            let record = DelegationTokenRecord {
+            let replacement = DelegationTokenRecord {
                 expiry_timestamp_ms: new_expiry,
                 ..expected.clone()
             };
-            if let Err(e) = controller
-                .submit_delegation_token_mutations(vec![DelegationTokenMutation::Expire {
+            (
+                DelegationTokenMutation::Expire {
                     expected,
-                    replacement: record,
-                }])
-                .await
-            {
-                tracing::warn!(error = %e, "ExpireDelegationToken: update submit_change failed");
-                return err_response(crate::codes::INVALID_REQUEST);
-            }
-            new_expiry
+                    replacement,
+                },
+                new_expiry,
+            )
         }
     };
+    if let Err(e) = controller
+        .submit_delegation_token_mutations(vec![mutation])
+        .await
+    {
+        tracing::warn!(error = %e, "ExpireDelegationToken: submit_change failed");
+        return err_response(crate::codes::INVALID_REQUEST);
+    }
 
     ExpireDelegationTokenResponse {
         error_code: 0,
-        expiry_timestamp_ms: new_expiry,
+        expiry_timestamp_ms,
         ..Default::default()
     }
 }
@@ -136,6 +133,13 @@ fn err_response(code: i16) -> ExpireDelegationTokenResponse {
     ExpireDelegationTokenResponse {
         error_code: code,
         ..Default::default()
+    }
+}
+
+fn not_allowed_response() -> ExpireDelegationTokenResponse {
+    ExpireDelegationTokenResponse {
+        expiry_timestamp_ms: ERROR_TIMESTAMP,
+        ..err_response(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED)
     }
 }
 
@@ -158,7 +162,7 @@ fn token_to_record(t: &DelegationToken) -> DelegationTokenRecord {
 mod tests {
     use std::{collections::HashSet, sync::Arc, time::Duration};
 
-    use assert2::assert;
+    use assert2::{assert, check};
     use krabka_metadata::MetadataRecord;
     use krabka_raft::ControllerHandle;
     use krabka_security::{AuthMethod, KafkaPrincipal, Principal, SaslMechanism};
@@ -351,87 +355,121 @@ mod tests {
         controller.cancel().await;
     }
 
+    /// A negative period deletes the token, expired or not, and reports
+    /// `now` as the expiry, as `expireDelegationToken` does.
     #[tokio::test]
-    async fn negative_period_immediately_tombstones() {
+    async fn negative_period_tombstones_live_and_expired_tokens() {
         let dir = TempDir::new().unwrap();
         let controller = test_controller(dir.path().into()).await;
         let secret = SecretBytes::new(b"k".to_vec());
-        let hmac = vec![0xBB; 32];
         let now = now_ms();
-        seed_token(
-            (&controller, "tok-2"),
-            hmac.clone(),
-            kp("alice"),
-            vec![],
-            now - 1_000,
-            now + 60_000,
-            now + 7 * 24 * 60 * 60 * 1_000,
-        )
-        .await;
 
-        let req = ExpireDelegationTokenRequest {
-            hmac: hmac.into(),
-            expiry_time_period_ms: -1,
-            ..Default::default()
-        };
-        let resp = handle(
-            &req,
-            &authed("alice"),
-            Some(&secret),
-            &*controller,
-            &empty_super_users(),
-        )
-        .await;
-        assert!(resp.error_code == 0);
-        // Past sentinel: should be <= now.
-        assert!(resp.expiry_timestamp_ms <= now_ms());
-        // Token removed from image.
-        let img = controller.current_image();
-        assert!(img.delegation_token_by_id("tok-2").is_none());
+        for (token_id, hmac_byte, expiry, max) in [
+            ("live", 0xB0, now + 60_000, now + 120_000),
+            ("expired", 0xB1, now - 1, now + 120_000),
+        ] {
+            let hmac = vec![hmac_byte; 32];
+            seed_token(
+                (&controller, token_id),
+                hmac.clone(),
+                kp("alice"),
+                vec![],
+                now - 1_000,
+                expiry,
+                max,
+            )
+            .await;
+            let before = now_ms();
+            let resp = handle(
+                &ExpireDelegationTokenRequest {
+                    hmac: hmac.into(),
+                    expiry_time_period_ms: -1,
+                    ..Default::default()
+                },
+                &authed("alice"),
+                Some(&secret),
+                &*controller,
+                &empty_super_users(),
+            )
+            .await;
+            let after = now_ms();
+            check!(resp.error_code == 0, "{token_id}");
+            check!(
+                (before..=after).contains(&resp.expiry_timestamp_ms),
+                "{token_id}"
+            );
+            check!(
+                controller
+                    .current_image()
+                    .delegation_token_by_id(token_id)
+                    .is_none(),
+                "{token_id}"
+            );
+        }
         controller.cancel().await;
     }
 
+    /// A non-negative period sets `min(max, now + period)`, saturating the
+    /// sum as Kafka's `sum` does instead of failing.
     #[tokio::test]
-    async fn overflowing_positive_period_fails_closed_without_updating() {
+    async fn non_negative_period_is_clamped_to_max_timestamp() {
         let dir = TempDir::new().unwrap();
         let controller = test_controller(dir.path().into()).await;
         let secret = SecretBytes::new(b"k".to_vec());
-        let hmac = vec![0xBC; 32];
         let now = now_ms();
-        let expiry = now + 60_000;
-        seed_token(
-            (&controller, "overflow"),
-            hmac.clone(),
-            kp("alice"),
-            vec![],
-            now - 1_000,
-            expiry,
-            now + 120_000,
-        )
-        .await;
 
-        let resp = handle(
-            &ExpireDelegationTokenRequest {
-                hmac: hmac.into(),
-                expiry_time_period_ms: i64::MAX,
-                ..Default::default()
-            },
-            &authed("alice"),
-            Some(&secret),
-            &*controller,
-            &empty_super_users(),
-        )
-        .await;
-
-        assert!(resp.error_code == crate::codes::INVALID_REQUEST);
-        assert!(
-            controller
-                .current_image()
-                .delegation_token_by_id("overflow")
-                .expect("token remains")
-                .expiry_timestamp_ms
-                == expiry
-        );
+        // (token id, hmac byte, period, max offset, expected offset from now
+        //  or `None` for the max timestamp)
+        for (token_id, hmac_byte, period, max_offset, delta) in [
+            ("zero", 0xC0, 0, 120_000, Some(0)),
+            ("shorter", 0xC1, 1_000, 120_000, Some(1_000)),
+            ("past-max", 0xC2, 600_000, 120_000, None),
+            ("overflow", 0xC3, i64::MAX, 120_000, None),
+        ] {
+            let hmac = vec![hmac_byte; 32];
+            seed_token(
+                (&controller, token_id),
+                hmac.clone(),
+                kp("alice"),
+                vec![],
+                now - 1_000,
+                now + 60_000,
+                now + max_offset,
+            )
+            .await;
+            let before = now_ms();
+            let resp = handle(
+                &ExpireDelegationTokenRequest {
+                    hmac: hmac.into(),
+                    expiry_time_period_ms: period,
+                    ..Default::default()
+                },
+                &authed("alice"),
+                Some(&secret),
+                &*controller,
+                &empty_super_users(),
+            )
+            .await;
+            let after = now_ms();
+            check!(resp.error_code == 0, "{token_id}");
+            let (low, high) = delta.map_or((now + max_offset, now + max_offset), |delta| {
+                (before + delta, after + delta)
+            });
+            check!(
+                (low..=high).contains(&resp.expiry_timestamp_ms),
+                "{token_id}: {}",
+                resp.expiry_timestamp_ms
+            );
+            check!(
+                controller
+                    .current_image()
+                    .delegation_token_by_id(token_id)
+                    .expect("token remains")
+                    .expiry_timestamp_ms
+                    == resp.expiry_timestamp_ms,
+                "{token_id}"
+            );
+        }
         controller.cancel().await;
     }
 
@@ -466,7 +504,7 @@ mod tests {
         )
         .await;
 
-        assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_EXPIRED);
+        assert!(resp == err_response(crate::codes::DELEGATION_TOKEN_EXPIRED));
         assert!(
             controller
                 .current_image()
@@ -478,8 +516,34 @@ mod tests {
         controller.cancel().await;
     }
 
+    /// `allowTokenRequests` runs on the broker before the controller checks
+    /// token support, and its refusal carries Kafka's `-1` error timestamp.
     #[tokio::test]
-    async fn unauthorized_caller_returns_authorization_failed() {
+    async fn admission_is_checked_before_token_support() {
+        let dir = TempDir::new().unwrap();
+        let controller = test_controller(dir.path().into()).await;
+        for auth in [authed_with_token("alice", true), ConnectionAuth::Anonymous] {
+            let resp = handle(
+                &ExpireDelegationTokenRequest::default(),
+                &auth,
+                None,
+                &*controller,
+                &empty_super_users(),
+            )
+            .await;
+            check!(
+                resp == ExpireDelegationTokenResponse {
+                    error_code: crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
+                    expiry_timestamp_ms: -1,
+                    ..Default::default()
+                }
+            );
+        }
+        controller.cancel().await;
+    }
+
+    #[tokio::test]
+    async fn unauthorized_caller_returns_owner_mismatch() {
         let dir = TempDir::new().unwrap();
         let controller = test_controller(dir.path().into()).await;
         let secret = SecretBytes::new(b"k".to_vec());
@@ -509,7 +573,7 @@ mod tests {
             &empty_super_users(),
         )
         .await;
-        assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_AUTHORIZATION_FAILED);
+        assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_OWNER_MISMATCH);
         // Token unchanged.
         let img = controller.current_image();
         let stored = img.delegation_token_by_id("tok-3").expect("present");
@@ -518,9 +582,8 @@ mod tests {
     }
 
     /// A super-user caller can expire a token that it does not own and is not
-    /// a renewer on. This mirrors Kafka's
-    /// `DelegationTokenManager.isAuthorizedToOperateOnToken`, and it is the
-    /// gate that the operator's finalizer needs. On a `KafkaUser` delete, the
+    /// a renewer on. This is krabka's bypass (Kafka's `KRaft` controller has
+    /// none), and it is the gate that the operator's finalizer needs. On a `KafkaUser` delete, the
     /// operator tombstones the act-as token by a call to
     /// `ExpireDelegationToken` with period -1.
     #[tokio::test]
@@ -560,7 +623,7 @@ mod tests {
             resp.error_code == 0,
             "super-user must be able to expire any token regardless of owner/renewers"
         );
-        // Past-sentinel + tombstoned.
+        // Kafka reports `now` for a deletion; the token is tombstoned.
         assert!(resp.expiry_timestamp_ms <= now_ms());
         let img = controller.current_image();
         assert!(img.delegation_token_by_id("tok-super").is_none());
@@ -568,7 +631,7 @@ mod tests {
     }
 
     /// A caller that is not a super-user, not the owner, and not a listed
-    /// renewer must still get `DELEGATION_TOKEN_AUTHORIZATION_FAILED`. This
+    /// renewer must still get `DELEGATION_TOKEN_OWNER_MISMATCH`. This
     /// test guards against a bypass that reaches past `super_users`.
     #[tokio::test]
     async fn non_super_user_non_owner_non_renewer_still_rejected() {
@@ -594,7 +657,7 @@ mod tests {
             ..Default::default()
         };
         // `eve` is not in the super-users set (only `admin` is) and is
-        // neither owner nor renewer — must still get the authz error.
+        // neither owner nor renewer — must still get the owner mismatch.
         let resp = handle(
             &req,
             &authed("eve"),
@@ -603,7 +666,7 @@ mod tests {
             &super_users_with(&["admin"]),
         )
         .await;
-        assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_AUTHORIZATION_FAILED);
+        assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_OWNER_MISMATCH);
         // Token unchanged.
         let img = controller.current_image();
         let stored = img.delegation_token_by_id("tok-eve").expect("present");

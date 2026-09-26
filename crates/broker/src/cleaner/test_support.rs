@@ -72,7 +72,7 @@ pub(super) async fn compactable_partition_in_registry(
 
 /// Make every compaction pass on `partition`'s log fail with a real
 /// `io::Error`, by putting a directory where the rewrite has to create its
-/// `.swap` file. Opening a directory for writing fails with `EISDIR` for
+/// `.cleaned` file. Opening a directory for writing fails with `EISDIR` for
 /// every user including root, so this is a storage failure the filesystem
 /// raises rather than one a test hook fabricates.
 ///
@@ -84,8 +84,10 @@ pub(super) fn block_compaction_swap(root: &TempDir, topic: &str) -> Vec<std::pat
     for entry in std::fs::read_dir(&part_dir).expect("read partition dir") {
         let path = entry.expect("partition dir entry").path();
         if path.extension().is_some_and(|ext| ext == "log") {
-            let swap = path.with_extension("log.swap");
-            std::fs::create_dir(&swap).expect("block the swap path");
+            // The rewrite streams into `.cleaned` files, which `atomic_swap`
+            // promotes through `.swap`.
+            let swap = path.with_extension("log.cleaned");
+            std::fs::create_dir(&swap).expect("block the rewrite path");
             blocked.push(swap);
         }
     }

@@ -1,15 +1,26 @@
 //! Commit-stamp range-index decisions.
 
 #[cfg(creusot)]
-use creusot_std::prelude::{Int, invariant};
+use creusot_std::prelude::{Int, Seq, invariant, logic, pearlite};
 use creusot_std::prelude::{ensures, requires};
+
+/// Parallel inclusive ranges `[bases[i], lasts[i]]`, each ordered and each
+/// ending before the next begins.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+pub fn sorted_disjoint(bases: Seq<i64>, lasts: Seq<i64>) -> bool {
+    pearlite! {
+        bases.len() == lasts.len()
+            && (forall<i: Int> 0 <= i && i < bases.len() ==> bases[i]@ <= lasts[i]@)
+            && (forall<i: Int> 1 <= i && i < bases.len() ==> lasts[i - 1]@ < bases[i]@)
+    }
+}
 
 /// Validate sorted inclusive ranges as individually ordered and pairwise
 /// nonoverlapping.
-#[ensures(result == (bases@.len() == lasts@.len()
-    && (forall<i: Int> 0 <= i && i < bases@.len() ==> bases@[i]@ <= lasts@[i]@)
-    && (forall<i: Int> 1 <= i && i < bases@.len() ==>
-        lasts@[i - 1]@ < bases@[i]@)))]
+#[ensures(result == sorted_disjoint(bases@, lasts@))]
 #[must_use]
 pub fn stamp_ranges_valid(bases: &[i64], lasts: &[i64]) -> bool {
     if bases.len() != lasts.len() {
@@ -31,10 +42,7 @@ pub fn stamp_ranges_valid(bases: &[i64], lasts: &[i64]) -> bool {
 }
 
 /// Return the sorted insertion position for one nonoverlapping range.
-#[requires(bases@.len() == lasts@.len())]
-#[requires(forall<i: Int> 0 <= i && i < bases@.len() ==> bases@[i]@ <= lasts@[i]@)]
-#[requires(forall<i: Int> 1 <= i && i < bases@.len() ==>
-    lasts@[i - 1]@ < bases@[i]@)]
+#[requires(sorted_disjoint(bases@, lasts@))]
 #[ensures(match result {
     Some(index) => index@ <= bases@.len()
         && new_base@ <= new_last@

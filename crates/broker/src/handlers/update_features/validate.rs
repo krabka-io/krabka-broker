@@ -11,6 +11,10 @@ use krabka_protocol::owned::{
     update_features_request::UpdateFeaturesRequest,
     update_features_response::UpdatableFeatureResult,
 };
+use krabka_verified::features::{
+    FeatureClusterFacts, FeatureLevels, FeatureUpdateDecision, FeatureUpdateFacts,
+    FeatureUpdateType, MetadataVersionFacts, feature_update_decision,
+};
 
 use super::{
     preconditions::{
@@ -18,7 +22,7 @@ use super::{
         unregistered_controller, unsupported_registered_node,
     },
     response::row,
-    upgrade_type::{UpdateType, update_type},
+    upgrade_type::update_type,
 };
 use crate::codes;
 
@@ -69,154 +73,15 @@ pub(super) fn validate_updates(
             continue;
         }
         let current = image.finalized_features().get(&name).copied();
-        let Some(update_type) = update_type(version, upd.allow_downgrade, upd.upgrade_type) else {
-            results.push(row(
-                name,
-                codes::INVALID_UPDATE_VERSION,
-                "The controller does not support the given upgrade type.",
-            ));
-            continue;
-        };
-        let allow_dg = update_type != UpdateType::Upgrade;
-
-        let (_min, max) = feat.supported_range();
-        if level < 0 || level > max {
-            results.push(row(
-                name,
-                codes::INVALID_UPDATE_VERSION,
-                "Provided version level is not in the supported range.",
-            ));
-            continue;
-        }
-        if let Some(cur) = current {
-            if level < cur && !allow_dg {
-                results.push(row(
-                    name,
-                    codes::INVALID_UPDATE_VERSION,
-                    "Can not downgrade a finalized feature without setting the downgrade flag.",
-                ));
-                continue;
-            }
-            if level > cur && allow_dg {
-                results.push(row(
-                    name,
-                    codes::INVALID_UPDATE_VERSION,
-                    "Can not downgrade to a newer feature version.",
-                ));
-                continue;
-            }
-        }
-        let mut downgrade_records = Vec::new();
-        let mut projected_image = None;
-        if name == krabka_metadata::metadata_version::METADATA_VERSION_FEATURE
-            && current.is_some_and(|cur| level < cur)
-        {
-            if level < krabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL {
-                results.push(row(
-                    name,
-                    codes::INVALID_UPDATE_VERSION,
-                    "Online metadata.version downgrade requires 3.7-IV0 or newer.",
-                ));
-                continue;
-            }
-            if let Some(controller) = unregistered_controller(image) {
-                results.push(row(
-                    name,
-                    codes::INVALID_UPDATE_VERSION,
-                    &format!(
-                        "Controller {controller} has not registered, so its metadata.version support cannot be verified."
-                    ),
-                ));
-                continue;
-            }
-            if let Some(message) = registered_node_without_metadata_downgrade_capability(image) {
-                results.push(row(name, codes::INVALID_UPDATE_VERSION, &message));
-                continue;
-            }
-            downgrade_records = image.metadata_version_downgrade_records(level);
-            if !downgrade_records.is_empty() {
-                let mut projected = image.clone();
-                for record in &downgrade_records {
-                    projected.apply(record);
+        let update_type = update_type(version, upd.allow_downgrade, upd.upgrade_type);
+        let planned_cleanup =
+            match plan_feature_update(image, feat, &name, level, current, update_type) {
+                Ok(planned_cleanup) => planned_cleanup,
+                Err(message) => {
+                    results.push(row(name, codes::INVALID_UPDATE_VERSION, &message));
+                    continue;
                 }
-                projected_image = Some(projected);
-            }
-        }
-        if let Some(message) = unsupported_registered_node(image, &name, level) {
-            results.push(row(name, codes::INVALID_UPDATE_VERSION, &message));
-            continue;
-        }
-        // Per-feature downgrade-safety floor (KIP-584 unsafe downgrade): a
-        // finalize below the level the live image requires is rejected even
-        // with the downgrade flag set. `level == 0` (delete) is handled by the
-        // tombstone path below, not the floor.
-        // Unsafe metadata.version downgrades validate against the image that
-        // will exist after their explicit cleanup records apply. Computing the
-        // floor from the pre-cleanup image would reject the very state removal
-        // the caller authorized.
-        let target_image = projected_image.as_ref().unwrap_or(image);
-        let floor = feat.min_required_floor(target_image);
-        if level > 0 && level < floor {
-            results.push(row(
-                name,
-                codes::INVALID_UPDATE_VERSION,
-                "Can not downgrade the feature below the level required by existing cluster state.",
-            ));
-            continue;
-        }
-        // KIP-1022 dependencies: every dependency must already be finalized
-        // at >= its required level in the target image.
-        if !dependencies_met(target_image, feat.dependencies(level)) {
-            results.push(row(
-                name,
-                codes::INVALID_UPDATE_VERSION,
-                "Can not finalize feature: a required dependency feature is not finalized at a high enough level.",
-            ));
-            continue;
-        }
-        if level == DELETE_FINALIZED_LEVEL {
-            // Delete the finalized feature; only valid if it exists and a
-            // downgrade is permitted.
-            if current.is_none() {
-                results.push(row(
-                    name,
-                    codes::INVALID_UPDATE_VERSION,
-                    "Can not delete a finalized feature that does not exist.",
-                ));
-                continue;
-            }
-            if !allow_dg {
-                results.push(row(
-                    name,
-                    codes::INVALID_UPDATE_VERSION,
-                    "Can not delete a finalized feature without setting the downgrade flag.",
-                ));
-                continue;
-            }
-        }
-
-        let cleanup_required = !downgrade_records.is_empty();
-        let decision = krabka_verified::feature_update_decision(
-            (true, true, true),
-            (true, true, true),
-            (
-                true,
-                cleanup_required,
-                update_type == UpdateType::UnsafeDowngrade,
-            ),
-        );
-        let planned_cleanup = match decision {
-            krabka_verified::FeatureUpdateDecision::Reject => {
-                results.push(row(
-                    name,
-                    codes::INVALID_UPDATE_VERSION,
-                    "Refusing a lossy metadata.version downgrade; retry with UNSAFE_DOWNGRADE to discard incompatible metadata.",
-                ));
-                continue;
-            }
-            krabka_verified::FeatureUpdateDecision::EmitFeature => Vec::new(),
-            krabka_verified::FeatureUpdateDecision::EmitCleanupThenFeature => downgrade_records,
-        };
+            };
 
         // Accepted. The verified cleanup result is kept with the deferred
         // metadata.version record so no intervening append can reverse them.
@@ -250,6 +115,135 @@ pub(super) fn validate_updates(
         records.push(feature_record);
     }
     (results, records)
+}
+
+/// Why a registered node blocks a feature row, as the rejection names it.
+struct NodeBlockers {
+    unsupported_level: Option<String>,
+    unregistered_controller: Option<krabka_metadata::NodeId>,
+    no_downgrade_capability: Option<String>,
+}
+
+/// Establish every fact one feature row is decided on, let the verified
+/// kernel decide it, and return the cleanup records an admitted row emits
+/// before its feature-level record, or the rejection message.
+///
+/// A `metadata.version` downgrade's floor and dependencies are read from the
+/// image its cleanup records would leave, so an unsafe downgrade is judged
+/// on the state the caller authorized.
+fn plan_feature_update(
+    image: &krabka_metadata::MetadataImage,
+    feat: &dyn krabka_metadata::Feature,
+    name: &str,
+    level: i16,
+    current: Option<i16>,
+    update_type: Option<FeatureUpdateType>,
+) -> Result<Vec<MetadataRecord>, String> {
+    let is_metadata_version = name == krabka_metadata::metadata_version::METADATA_VERSION_FEATURE;
+    let metadata_downgrade = is_metadata_version && current.is_some_and(|cur| level < cur);
+    let cleanup_records = if metadata_downgrade {
+        image.metadata_version_downgrade_records(level)
+    } else {
+        Vec::new()
+    };
+    let projected_image = (!cleanup_records.is_empty()).then(|| {
+        let mut projected = image.clone();
+        for record in &cleanup_records {
+            projected.apply(record);
+        }
+        projected
+    });
+    let target_image = projected_image.as_ref().unwrap_or(image);
+    let blockers = NodeBlockers {
+        unsupported_level: unsupported_registered_node(image, name, level),
+        unregistered_controller: is_metadata_version
+            .then(|| unregistered_controller(image))
+            .flatten(),
+        no_downgrade_capability: is_metadata_version
+            .then(|| registered_node_without_metadata_downgrade_capability(image))
+            .flatten(),
+    };
+    let facts = FeatureUpdateFacts {
+        update_type,
+        levels: FeatureLevels {
+            requested: level,
+            finalized: current,
+            max_supported: feat.supported_range().1,
+            floor: feat.min_required_floor(target_image),
+        },
+        cluster: FeatureClusterFacts {
+            all_nodes_support: blockers.unsupported_level.is_none(),
+            dependencies_met: dependencies_met(target_image, feat.dependencies(level)),
+        },
+        metadata_version: is_metadata_version.then_some(MetadataVersionFacts {
+            online_downgrade_min_level:
+                krabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL,
+            all_controllers_registered: blockers.unregistered_controller.is_none(),
+            all_nodes_downgrade_capable: blockers.no_downgrade_capability.is_none(),
+            cleanup_required: !cleanup_records.is_empty(),
+        }),
+    };
+    row_outcome(feature_update_decision(facts), cleanup_records, blockers)
+}
+
+/// The records an admitted feature row emits before its feature-level
+/// record, or the `INVALID_UPDATE_VERSION` message of a rejected one.
+fn row_outcome(
+    decision: FeatureUpdateDecision,
+    cleanup_records: Vec<MetadataRecord>,
+    blockers: NodeBlockers,
+) -> Result<Vec<MetadataRecord>, String> {
+    Err(match decision {
+        FeatureUpdateDecision::EmitFeature => return Ok(Vec::new()),
+        FeatureUpdateDecision::EmitCleanupThenFeature => return Ok(cleanup_records),
+        FeatureUpdateDecision::UnknownUpdateType => {
+            "The controller does not support the given upgrade type.".into()
+        }
+        FeatureUpdateDecision::OutOfSupportedRange => {
+            "Provided version level is not in the supported range.".into()
+        }
+        FeatureUpdateDecision::UnsupportedByNode => blockers
+            .unsupported_level
+            .unwrap_or_else(|| "A registered node does not support the provided level.".into()),
+        FeatureUpdateDecision::DowngradeWithoutFlag => {
+            "Can not downgrade a finalized feature without setting the downgrade flag.".into()
+        }
+        FeatureUpdateDecision::DowngradeToNewerLevel => {
+            "Can not downgrade to a newer feature version.".into()
+        }
+        FeatureUpdateDecision::OnlineDowngradeUnsupported => {
+            "Online metadata.version downgrade requires 3.7-IV0 or newer.".into()
+        }
+        FeatureUpdateDecision::UnregisteredController => blockers.unregistered_controller.map_or_else(
+            || "A controller has not registered.".into(),
+            |controller| {
+                format!(
+                    "Controller {controller} has not registered, so its metadata.version support cannot be verified."
+                )
+            },
+        ),
+        FeatureUpdateDecision::NodeCannotDowngrade => blockers
+            .no_downgrade_capability
+            .unwrap_or_else(|| "A registered node does not support online metadata.version downgrade.".into()),
+        FeatureUpdateDecision::BelowFloor => {
+            "Can not downgrade the feature below the level required by existing cluster state."
+                .into()
+        }
+        FeatureUpdateDecision::DependencyUnmet => {
+            "Can not finalize feature: a required dependency feature is not finalized at a high enough level."
+                .into()
+        }
+        FeatureUpdateDecision::DeleteMissingFeature => {
+            "Can not delete a finalized feature that does not exist.".into()
+        }
+        FeatureUpdateDecision::DeleteWithoutFlag => {
+            "Can not delete a finalized feature without setting the downgrade flag.".into()
+        }
+        FeatureUpdateDecision::LossyDowngradeNotUnsafe => {
+            "Refusing a lossy metadata.version downgrade; retry with UNSAFE_DOWNGRADE to discard incompatible metadata."
+                .into()
+        }
+    })
 }
 
 #[cfg(test)]

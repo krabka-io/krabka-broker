@@ -1,5 +1,5 @@
 //! Raw-socket plumbing for the KIP-48 suite: the length-prefixed
-//! request/response framing and the two SASL handshake drivers that every
+//! request/response framing and the SASL handshake drivers that every
 //! delegation-token step runs over.
 //!
 //! The framing has the same shape as `auth_handlers/harness.rs`, and the
@@ -26,6 +26,8 @@ use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::TcpStream,
 };
+
+use crate::scram_client::ScramClient;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Wire framing (length-prefixed request/response). Same shape as
@@ -149,13 +151,30 @@ pub(crate) async fn sasl_plain_authenticate(
     Ok(stream)
 }
 
-/// SCRAM-SHA-256 driver. It has the same wire shape as
-/// `auth_handlers/scram.rs::drive_sasl_scram_session`, but it returns the open
-/// connection on success, which step (c) needs.
-pub(crate) async fn sasl_scram_sha256_authenticate(
+/// SCRAM driver for a delegation-token login under `mechanism`. The
+/// client-first message carries Kafka's `tokenauth=true` extension, which is
+/// what makes the broker look `token_id` up in the delegation-token store
+/// rather than in the SCRAM credential store. It returns the open connection
+/// on success, which the post-login steps need.
+pub(crate) async fn sasl_scram_token_authenticate(
     addr: SocketAddr,
+    mechanism: SaslMechanism,
+    token_id: &str,
+    password: &str,
+) -> Result<TcpStream, io::Error> {
+    sasl_scram_authenticate(addr, mechanism, token_id, password, true).await
+}
+
+/// SCRAM driver. It has the same wire shape as
+/// `auth_handlers/scram.rs::drive_sasl_scram_session`, sends the
+/// `tokenauth=true` extension when `token_auth` is set, and returns the open
+/// connection on success.
+pub(crate) async fn sasl_scram_authenticate(
+    addr: SocketAddr,
+    mechanism: SaslMechanism,
     username: &str,
     password: &str,
+    token_auth: bool,
 ) -> Result<TcpStream, io::Error> {
     let mut stream = TcpStream::connect(addr).await?;
 
@@ -169,9 +188,10 @@ pub(crate) async fn sasl_scram_sha256_authenticate(
     ApiVersionsResponse::decode(&mut cur, 0)
         .map_err(|e| io::Error::other(format!("ApiVersions decode: {e}")))?;
 
+    let wire_name = mechanism.wire_name();
     let mut sh_body = BytesMut::new();
     SaslHandshakeRequest {
-        mechanism: "SCRAM-SHA-256".to_string(),
+        mechanism: wire_name.to_string(),
         ..Default::default()
     }
     .encode(&mut sh_body, 1)
@@ -182,20 +202,13 @@ pub(crate) async fn sasl_scram_sha256_authenticate(
         .map_err(|e| io::Error::other(format!("SaslHandshake decode: {e}")))?;
     if sh_resp.error_code != 0 {
         return Err(io::Error::other(format!(
-            "SaslHandshake(SCRAM-SHA-256) failed: error_code={}",
+            "SaslHandshake({wire_name}) failed: error_code={}",
             sh_resp.error_code
         )));
     }
 
-    let client = krabka_security::ScramClientExchange::new(
-        username.to_string(),
-        password.as_bytes().to_vec(),
-        SaslMechanism::ScramSha256,
-    );
-    let (client_first, client) = client
-        .client_first()
-        .map_err(|e| io::Error::other(format!("scram client_first: {e:?}")))?;
-
+    let (client, client_first) =
+        ScramClient::first(mechanism, username, password.as_bytes(), token_auth);
     let mut body = BytesMut::new();
     SaslAuthenticateRequest {
         auth_bytes: bytes::Bytes::from(client_first),
@@ -215,8 +228,8 @@ pub(crate) async fn sasl_scram_sha256_authenticate(
     }
 
     let (client_final, client) = client
-        .step(&r1_resp.auth_bytes)
-        .map_err(|e| io::Error::other(format!("scram step: {e:?}")))?;
+        .last(&r1_resp.auth_bytes)
+        .map_err(|e| io::Error::other(format!("scram client-final: {e}")))?;
     let mut body = BytesMut::new();
     SaslAuthenticateRequest {
         auth_bytes: bytes::Bytes::from(client_final),
@@ -235,8 +248,8 @@ pub(crate) async fn sasl_scram_sha256_authenticate(
         )));
     }
     client
-        .verify_server_final(&r2_resp.auth_bytes)
-        .map_err(|e| io::Error::other(format!("server-final verify: {e:?}")))?;
+        .verify(&r2_resp.auth_bytes)
+        .map_err(|e| io::Error::other(format!("server-final verify: {e}")))?;
 
     Ok(stream)
 }

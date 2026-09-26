@@ -1,0 +1,18 @@
+(* #"/workspace/crates/verified/src/uniform_assignor.rs" 20 27 20 32 *)
+
+(* <uniform_assignor::UniformQuotaSplit as std::clone::Clone> *)
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+
+type t_UniformQuotaSplit = { minimum_quota: UInt64.t; extra_quotas: UInt64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_UniformQuotaSplit [#"/workspace/crates/verified/src/uniform_assignor.rs" 20 27 20 32]
+  (self: t_UniformQuotaSplit) (return (x: t_UniformQuotaSplit)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_UniformQuotaSplit = Any.any_l () | & self: t_UniformQuotaSplit = self ])
+  [ return (result: t_UniformQuotaSplit) -> (! return {result}) ]

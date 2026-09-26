@@ -23,7 +23,7 @@ use super::{
     log::ModelLog,
     spec::{APPENDER_COUNT, AppenderId, ClientId, KraftLogSpec, LogOp},
     state::{
-        CommitPoint, ModelAction, ModelState, NodeModel, is_leader, live_authority,
+        CommitPoint, ModelAction, ModelState, NodeModel, StepWitness, is_leader, live_authority,
         node_high_watermark,
     },
 };
@@ -63,6 +63,7 @@ impl Model for ConsensusModel {
             crashed: BTreeSet::new(),
             check_quorum_violation: false,
             leader_resigned: false,
+            step_witness: None,
         }]
     }
 
@@ -163,6 +164,7 @@ impl Model for ConsensusModel {
 
     fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
         let mut state = last.clone();
+        state.step_witness = None;
         match action {
             ModelAction::Deliver(env) => {
                 if !state.network.remove(&env) {
@@ -399,10 +401,11 @@ impl Model for ConsensusModel {
                 })
             }),
             // Anti-vacuity witness for the property above: a voter actually
-            // refuses a candidate whose log is behind its own, which is the
-            // only reason `leader_completeness` can hold under a majority that
-            // has fallen behind. A state count would not say this; the refusal
-            // envelope does.
+            // refuses a candidate for log recency alone, which is the only
+            // reason `leader_completeness` can hold under a majority that has
+            // fallen behind. The transition that delivers the request
+            // establishes the reason by running the voter's real machine on
+            // the same request with only the candidate's log end changed.
             Property::sometimes(
                 "stale_candidate_refused",
                 |m: &ConsensusModel, s: &ModelState| {
@@ -411,16 +414,20 @@ impl Model for ConsensusModel {
                     if m.voter_ids.len() < 3 || m.max_appends == 0 {
                         return true;
                     }
-                    s.network.iter().any(|env| {
-                        matches!(
-                            env.event,
-                            Event::ReceiveVoteResponse {
-                                vote_granted: false,
-                                ..
-                            }
-                        ) && s.nodes.get(&env.dst).map(|n| n.log.end_offset())
-                            < s.nodes.get(&env.src).map(|n| n.log.end_offset())
-                    })
+                    s.step_witness == Some(StepWitness::StaleCandidateRefused)
+                },
+            ),
+            // Anti-vacuity witness for `log_matching`: a follower whose log
+            // disagrees with the leader's is cut back by the production
+            // truncation path, since the model never overwrites a log.
+            Property::sometimes(
+                "divergent_log_truncated",
+                |m: &ConsensusModel, s: &ModelState| {
+                    // Required where a node can be cut off from a leader it
+                    // then outlives: the crash configs. Without a crash the
+                    // bounded configs never leave a follower holding an entry
+                    // the next leader lacks.
+                    m.max_crashes == 0 || s.step_witness == Some(StepWitness::DivergentLogTruncated)
                 },
             ),
             // Safety: no node's committed high-watermark exceeds its own log end

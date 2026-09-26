@@ -1,6 +1,7 @@
-//! The second compaction pass. It streams the sealed segments into `.swap`
+//! The second compaction pass. It streams the sealed segments into `.cleaned`
 //! files, applying the KIP-534 retain decision to every record, and owns the
-//! rewrite's input and output types together with the `.swap` path naming.
+//! rewrite's input and output types. [`atomic_swap`] later renames the
+//! `.cleaned` files to `.swap`, which is the commit point that recovery honours.
 
 use std::{
     collections::HashMap,
@@ -20,7 +21,6 @@ use super::{
 };
 use crate::{
     error::LogError,
-    name,
     segment::Segment,
     txn_index::{AbortedTxn, TxnIndex},
 };
@@ -28,8 +28,8 @@ use crate::{
 #[cfg(test)]
 mod tests;
 
-/// Result of [`rewrite_segments`]: paths to the three `.swap` files that
-/// [`atomic_swap`] should promote.
+/// Result of [`rewrite_segments`]: paths to the `.cleaned` files that
+/// [`atomic_swap`] should promote through `.swap` to their final names.
 pub struct RewriteOutput {
     pub log_swap: PathBuf,
     pub index_swap: PathBuf,
@@ -54,7 +54,7 @@ pub struct RewriteRetention {
     pub delete_retention: Time,
 }
 
-/// Stream `segments`, oldest to newest, into new `.swap` files and apply the
+/// Stream `segments`, oldest to newest, into new `.cleaned` files and apply the
 /// KIP-534 per-record [`retain_decision`].
 ///
 /// For each record the decision is:
@@ -74,7 +74,7 @@ pub struct RewriteRetention {
 /// output. The producer sequence, the producer epoch, and the log-end offset
 /// therefore survive. This is Kafka's `retainEmpty`.
 ///
-/// This function writes the `.swap` files to the segments' shared directory.
+/// This function writes the `.cleaned` files to the segments' shared directory.
 /// The caller must fsync them and promote them through [`atomic_swap`].
 #[instrument(
     level = "info",
@@ -112,7 +112,7 @@ pub fn rewrite_segments(
     let index_swap = swap_path(dir, new_base.0, "index");
     let timeindex_swap = swap_path(dir, new_base.0, "timeindex");
 
-    // Truncate (or create) all three swap files. We rewrite the .log
+    // Truncate (or create) all three .cleaned files. We rewrite the .log
     // file proper here; for the index sidecars we write empty files
     // and let Segment::open populate them via tail-scan in the recovery
     // promotion path. (Sparse indexes are derivable from the .log; an
@@ -288,7 +288,7 @@ pub fn rewrite_segments(
         None
     } else {
         let path = swap_path(dir, new_base.0, "txnindex");
-        // Truncate any stale swap, then append the retained entries.
+        // Truncate any stale .cleaned file, then append the retained entries.
         OpenOptions::new()
             .write(true)
             .create(true)
@@ -314,9 +314,5 @@ pub fn rewrite_segments(
 }
 
 fn swap_path(dir: &Path, base_offset: i64, ext: &str) -> PathBuf {
-    dir.join(format!(
-        "{}.{}.swap",
-        name::format_base_offset(base_offset),
-        ext
-    ))
+    crate::recovery::swap::cleaned_path(dir, base_offset, ext)
 }

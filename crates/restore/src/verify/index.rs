@@ -76,7 +76,7 @@ fn index_frontier(
     entry_len: usize,
     base_offset: Offset,
     end_offset: Offset,
-) -> Result<u32, RestoreError> {
+) -> Result<i64, RestoreError> {
     krabka_verified::restore_index_frontier(base_offset.0, end_offset.0).ok_or_else(|| {
         index_error(
             key,
@@ -120,7 +120,7 @@ pub(super) fn validate_offset_index(
                 key,
                 entry_index,
                 OFFSET_INDEX_ENTRY_LEN,
-                u64::from(max_relative),
+                offset_as_u64(max_relative),
                 u64::from(relative_offset),
             ));
         }
@@ -164,7 +164,7 @@ pub(super) fn validate_time_index(
                 key,
                 entry_index,
                 TIME_INDEX_ENTRY_LEN,
-                u64::from(max_relative),
+                offset_as_u64(max_relative),
                 u64::from(relative_offset),
             ));
         }
@@ -175,9 +175,12 @@ pub(super) fn validate_time_index(
 }
 
 /// Check that `bytes`, parsed as a Kafka `.txnindex`, is internally
-/// consistent: `start_offset` strictly increasing across entries, `start_offset <=
-/// last_offset` within each entry, and both ends of every entry inside
-/// `[base_offset, end_offset]`. Producer IDs must be nonnegative.
+/// consistent: `last_offset` (the abort marker) strictly increasing across
+/// entries and inside `[base_offset, end_offset]`, `0 <= start_offset <=
+/// last_offset` within each entry, and a nonnegative producer ID. An entry's
+/// `start_offset` may precede `base_offset` (the transaction began before a
+/// segment roll) and need not increase (transactions interleave), matching
+/// Kafka's `TransactionIndex`.
 pub(super) fn validate_txn_index(
     key: &Path,
     bytes: &[u8],
@@ -186,31 +189,30 @@ pub(super) fn validate_txn_index(
 ) -> Result<(), RestoreError> {
     require_complete_entries(key, bytes, TXN_INDEX_ENTRY_LEN)?;
     let entries = parse_txn_index(bytes)?;
-    let mut previous_start: Option<i64> = None;
+    let segment = krabka_verified::RestoreSegmentExtent {
+        base_offset: base_offset.0,
+        last_offset: end_offset.0,
+    };
+    let mut previous_last: Option<i64> = None;
 
     for (entry_index, entry) in entries.iter().enumerate() {
-        let start_offset = entry.start_offset.get();
-        let last_offset = entry.last_offset.get();
-        let producer_id = entry.producer_id.get();
+        let entry = krabka_verified::RestoreAbortedTxn {
+            producer_id: entry.producer_id.get(),
+            start_offset: entry.start_offset.get(),
+            last_offset: entry.last_offset.get(),
+        };
 
-        if !krabka_verified::restore_txn_index_entry_valid(
-            previous_start,
-            start_offset,
-            last_offset,
-            producer_id,
-            base_offset.0,
-            end_offset.0,
-        ) {
+        if !krabka_verified::restore_txn_index_entry_valid(previous_last, entry, segment) {
             return Err(index_error(
                 key,
                 entry_index,
                 TXN_INDEX_ENTRY_LEN,
                 offset_as_u64(end_offset.0),
-                offset_as_u64(last_offset.max(start_offset)),
+                offset_as_u64(entry.last_offset.max(entry.start_offset)),
             ));
         }
 
-        previous_start = Some(start_offset);
+        previous_last = Some(entry.last_offset);
     }
     Ok(())
 }

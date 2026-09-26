@@ -1,0 +1,10 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_kafka_murmur2_int": { "prover": "alt-ergo", "time": 0.054 },
+      "vc_reverse_bytes": { "prover": "alt-ergo", "time": 0.02 },
+      "vc_wrapping_mul": { "prover": "alt-ergo", "time": 0.021 }
+    }
+  }
+}

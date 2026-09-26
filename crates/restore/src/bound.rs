@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 
 use krabka_ids::{Offset, ProducerId};
 use krabka_protocol::records::{
-    RecordBatchBorrowed, RecordBatchHeader, RecordBorrowed, RecordsError,
+    Attributes, RecordBatchBorrowed, RecordBatchHeader, RecordBorrowed, RecordsError, TimestampType,
 };
 use regex::Regex;
 
@@ -111,10 +111,10 @@ impl Predicates {
     /// partition's inclusive offset bound.
     #[must_use]
     pub fn batch_past_offset_bound(&self, partition: &PartitionRef, batch_base: Offset) -> bool {
-        let (applies, bound) = self
-            .offset_bound(partition)
-            .map_or((false, 0), |bound| (true, bound.0));
-        krabka_verified::restore_batch_past_offset_bound(batch_base.0, applies, bound)
+        krabka_verified::restore_batch_past_offset_bound(
+            batch_base.0,
+            self.offset_bound(partition).map(|bound| bound.0),
+        )
     }
 
     /// Decide the fate of one archived batch.
@@ -218,41 +218,35 @@ impl Predicates {
         producer_id: ProducerId,
         record: &RecordBorrowed<'_>,
     ) -> RecordDecision {
-        let (offset_bound_applies, offset_bound) = self
-            .offset_bound(partition)
-            .map_or((false, 0), |bound| (true, bound.0));
-        let (timestamp_bound_applies, timestamp_bound) =
-            self.to_timestamp.map_or((false, 0), |bound| (true, bound));
-        let producer_excluded = self.exclude_producer_id.contains(&producer_id);
-        let offset_excluded = self.exclude_offset.get(partition).is_some_and(|ranges| {
-            ranges
-                .iter()
-                .any(|&(start, end_exclusive)| offset >= start && offset < end_exclusive)
-        });
-        let key_excluded = record.key.is_some_and(|key| {
-            self.exclude_key
-                .iter()
-                .any(|pattern| matches_utf8(pattern, key))
-        });
-        let header_excluded = record.headers.iter().any(|header| {
-            self.exclude_header.iter().any(|candidate| {
-                candidate.name == header.key
-                    && header
-                        .value
-                        .is_some_and(|value| matches_utf8(&candidate.pattern, value))
-            })
-        });
+        let exclusions = krabka_verified::RestoreExclusions {
+            producer: self.exclude_producer_id.contains(&producer_id),
+            offset: self.exclude_offset.get(partition).is_some_and(|ranges| {
+                ranges
+                    .iter()
+                    .any(|&(start, end_exclusive)| offset >= start && offset < end_exclusive)
+            }),
+            content: krabka_verified::RestoreContentExclusions {
+                key: record.key.is_some_and(|key| {
+                    self.exclude_key
+                        .iter()
+                        .any(|pattern| matches_utf8(pattern, key))
+                }),
+                header: record.headers.iter().any(|header| {
+                    self.exclude_header.iter().any(|candidate| {
+                        candidate.name == header.key
+                            && header
+                                .value
+                                .is_some_and(|value| matches_utf8(&candidate.pattern, value))
+                    })
+                }),
+            },
+        };
         if krabka_verified::restore_record_selected(
             offset.0,
-            offset_bound_applies.then_some(offset_bound),
+            self.offset_bound(partition).map(|bound| bound.0),
             timestamp_ms,
-            timestamp_bound_applies.then_some(timestamp_bound),
-            (
-                producer_excluded,
-                offset_excluded,
-                key_excluded,
-                header_excluded,
-            ),
+            self.to_timestamp,
+            exclusions,
         ) {
             RecordDecision::Keep
         } else {
@@ -269,29 +263,47 @@ fn batch_decision(saw_keep: bool, saw_drop: bool) -> BatchDecision {
     }
 }
 
-/// Validate and adapt one decoded record's primitive coordinates at the
-/// verified boundary.
+/// The kernel's view of a batch header's offset and timestamp placement.
+fn batch_frame(header: &RecordBatchHeader) -> krabka_verified::RestoreBatchFrame {
+    krabka_verified::RestoreBatchFrame {
+        base_offset: header.base_offset.get(),
+        last_offset_delta: header.last_offset_delta.get(),
+        timestamp_type: timestamp_type(Attributes(header.attributes.get())),
+        base_timestamp: header.base_timestamp.get(),
+        max_timestamp: header.max_timestamp.get(),
+    }
+}
+
+/// Map the attributes' timestamp-type bit onto the kernel's enum.
+pub(crate) fn timestamp_type(attributes: Attributes) -> krabka_verified::RestoreTimestampType {
+    match attributes.timestamp_type() {
+        TimestampType::CreateTime => krabka_verified::RestoreTimestampType::CreateTime,
+        TimestampType::LogAppendTime => krabka_verified::RestoreTimestampType::LogAppendTime,
+    }
+}
+
+/// Validate and adapt one decoded record's absolute offset and the timestamp
+/// Kafka reports for it at the verified boundary: `base_timestamp +
+/// timestamp_delta` under `CreateTime`, the batch `max_timestamp` under
+/// `LogAppendTime`.
 pub(crate) fn record_coordinates(
     header: &RecordBatchHeader,
     record: &RecordBorrowed<'_>,
 ) -> Result<(Offset, i64), RestoreError> {
+    let frame = batch_frame(header);
     krabka_verified::restore_record_coordinates(
-        header.base_offset.get(),
-        header.last_offset_delta.get(),
-        header.base_timestamp.get(),
-        record.offset_delta,
-        record.timestamp_delta,
+        frame,
+        krabka_verified::RestoreRecordDeltas {
+            offset_delta: record.offset_delta,
+            timestamp_delta: record.timestamp_delta,
+        },
     )
     .map(|(offset, timestamp)| (Offset(offset), timestamp))
     .ok_or_else(|| {
         RecordsError::RecordParse(format!(
-            "record coordinates are outside the batch: base offset {}, last offset delta {}, \
-             record offset delta {}, base timestamp {}, record timestamp delta {}",
-            header.base_offset.get(),
-            header.last_offset_delta.get(),
-            record.offset_delta,
-            header.base_timestamp.get(),
-            record.timestamp_delta,
+            "record coordinates are outside the batch: {frame:?}, record offset delta {}, \
+             record timestamp delta {}",
+            record.offset_delta, record.timestamp_delta,
         ))
         .into()
     })

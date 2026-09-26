@@ -1,24 +1,24 @@
-(* #"/proof-work-245/crates/verified/src/restore_sidecar.rs" 145 0 145 64 *)
+(* #"/workspace/crates/verified/src/restore_sidecar.rs" 191 0 191 64 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span srestore_sidecar = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 146 20 146 26
-let%span srestore_sidecar'0 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 150 14 150 42
-let%span srestore_sidecar'1 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 151 18 151 36
-let%span srestore_sidecar'2 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 148 16 149 53
-let%span srestore_sidecar'3 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 147 16 147 45
-let%span srestore_sidecar'4 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 152 19 152 20
-let%span srestore_sidecar'5 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 152 45 152 46
-let%span srestore_sidecar'6 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 152 37 152 46
-let%span srestore_sidecar'7 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 152 24 152 47
-let%span srestore_sidecar'8 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 152 51 152 70
-let%span srestore_sidecar'9 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 155 17 155 18
-let%span srestore_sidecar'10 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 155 8 155 18
-let%span srestore_sidecar'11 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 153 19 153 24
-let%span srestore_sidecar'12 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 157 4 157 8
-let%span srestore_sidecar'13 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 142 10 143 50
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span srestore_sidecar = "/workspace/crates/verified/src/restore_sidecar.rs" 192 20 192 26
+let%span srestore_sidecar'0 = "/workspace/crates/verified/src/restore_sidecar.rs" 196 14 196 42
+let%span srestore_sidecar'1 = "/workspace/crates/verified/src/restore_sidecar.rs" 197 18 197 36
+let%span srestore_sidecar'2 = "/workspace/crates/verified/src/restore_sidecar.rs" 194 16 195 53
+let%span srestore_sidecar'3 = "/workspace/crates/verified/src/restore_sidecar.rs" 193 16 193 45
+let%span srestore_sidecar'4 = "/workspace/crates/verified/src/restore_sidecar.rs" 198 19 198 20
+let%span srestore_sidecar'5 = "/workspace/crates/verified/src/restore_sidecar.rs" 198 45 198 46
+let%span srestore_sidecar'6 = "/workspace/crates/verified/src/restore_sidecar.rs" 198 37 198 46
+let%span srestore_sidecar'7 = "/workspace/crates/verified/src/restore_sidecar.rs" 198 24 198 47
+let%span srestore_sidecar'8 = "/workspace/crates/verified/src/restore_sidecar.rs" 198 51 198 70
+let%span srestore_sidecar'9 = "/workspace/crates/verified/src/restore_sidecar.rs" 201 17 201 18
+let%span srestore_sidecar'10 = "/workspace/crates/verified/src/restore_sidecar.rs" 201 8 201 18
+let%span srestore_sidecar'11 = "/workspace/crates/verified/src/restore_sidecar.rs" 199 19 199 24
+let%span srestore_sidecar'12 = "/workspace/crates/verified/src/restore_sidecar.rs" 203 4 203 8
+let%span srestore_sidecar'13 = "/workspace/crates/verified/src/restore_sidecar.rs" 188 10 189 50
 
 use creusot.int.UInt64
 use seq.Seq
@@ -49,7 +49,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let restore_producer_ids_strict [#"/proof-work-245/crates/verified/src/restore_sidecar.rs" 145 0 145 64]
+let restore_producer_ids_strict [#"/workspace/crates/verified/src/restore_sidecar.rs" 191 0 191 64]
   (producer_ids: Slice64.slice Int64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0 [ s0 = [ &index <- [%#srestore_sidecar] (0: UInt64.t) ] s1 | s1 = bb1 ]
   | bb1 = bb1invariant

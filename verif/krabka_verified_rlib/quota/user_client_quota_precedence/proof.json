@@ -2,10 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_user_client_quota_precedence": {
-        "prover": "alt-ergo",
-        "time": 0.013
-      }
+      "vc_user_client_quota_precedence": { "prover": "z3", "time": 0.008 }
     }
   }
 }

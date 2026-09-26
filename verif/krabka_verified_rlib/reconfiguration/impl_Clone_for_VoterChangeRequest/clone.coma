@@ -1,0 +1,20 @@
+(* #"/workspace/crates/verified/src/reconfiguration.rs" 54 27 54 32 *)
+
+(* <reconfiguration::VoterChangeRequest as std::clone::Clone> *)
+
+use creusot.int.UInt16
+use creusot.prelude.Any
+
+type t_VoterChangeKind = Add | Remove | Update | FinalizeKraftVersion
+
+type t_VoterChangeRequest = { kind: t_VoterChangeKind; requested_kraft_version: UInt16.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_VoterChangeRequest [#"/workspace/crates/verified/src/reconfiguration.rs" 54 27 54 32]
+  (self: t_VoterChangeRequest) (return (x: t_VoterChangeRequest)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_VoterChangeRequest = Any.any_l () | & self: t_VoterChangeRequest = self ])
+  [ return (result: t_VoterChangeRequest) -> (! return {result}) ]

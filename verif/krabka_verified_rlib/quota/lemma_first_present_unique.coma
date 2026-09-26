@@ -1,0 +1,78 @@
+(* #"/workspace/crates/verified/src/quota.rs" 164 0 168 1 *)
+
+let%span squota = "/workspace/crates/verified/src/quota.rs" 162 11 162 61
+let%span squota'0 = "/workspace/crates/verified/src/quota.rs" 163 10 163 16
+let%span squota'1 = "/workspace/crates/verified/src/quota.rs" 150 8 152 91
+let%span squota'2 = "/workspace/crates/verified/src/quota.rs" 119 8 137 9
+let%span squota'3 = "/workspace/crates/verified/src/quota.rs" 98 8 108 9
+
+use int.Int
+
+type t_QuotaCandidatePresence = Absent | Present
+
+type t_UserClientQuotaFacts = {
+  user_client: t_QuotaCandidatePresence;
+  user_default_client: t_QuotaCandidatePresence;
+  user: t_QuotaCandidatePresence;
+  default_user_client: t_QuotaCandidatePresence;
+  default_user_default_client: t_QuotaCandidatePresence;
+  default_user: t_QuotaCandidatePresence;
+  client: t_QuotaCandidatePresence;
+  default_client: t_QuotaCandidatePresence }
+
+type t_UserClientQuotaPrecedence =
+  | UserClient
+  | UserDefaultClient
+  | User
+  | DefaultUserClient
+  | DefaultUserDefaultClient
+  | DefaultUser
+  | Client
+  | DefaultClient
+  | None
+
+predicate is_present [#"/workspace/crates/verified/src/quota.rs" 117 0 117 92] (facts: t_UserClientQuotaFacts) (candidate: t_UserClientQuotaPrecedence) =
+  [%#squota'2] match candidate with
+    | UserClient -> facts.user_client = Present
+    | UserDefaultClient -> facts.user_default_client = Present
+    | User -> facts.user = Present
+    | DefaultUserClient -> facts.default_user_client = Present
+    | DefaultUserDefaultClient -> facts.default_user_default_client = Present
+    | DefaultUser -> facts.default_user = Present
+    | Client -> facts.client = Present
+    | DefaultClient -> facts.default_client = Present
+    | None -> false
+    end
+
+function kafka_rank [#"/workspace/crates/verified/src/quota.rs" 96 0 96 62] (candidate: t_UserClientQuotaPrecedence) : int
+ = [%#squota'3] match candidate with
+    | UserClient -> 0
+    | UserDefaultClient -> 1
+    | User -> 2
+    | DefaultUserClient -> 3
+    | DefaultUserDefaultClient -> 4
+    | DefaultUser -> 5
+    | Client -> 6
+    | DefaultClient -> 7
+    | None -> 8
+    end
+
+predicate first_present [#"/workspace/crates/verified/src/quota.rs" 148 0 148 95] (facts: t_UserClientQuotaFacts) (candidate: t_UserClientQuotaPrecedence) =
+  [%#squota'1] (is_present facts candidate \/ candidate = None)
+  /\ (forall earlier: t_UserClientQuotaPrecedence. kafka_rank earlier < kafka_rank candidate
+    -> not is_present facts earlier)
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant facts : t_UserClientQuotaFacts
+
+constant a : t_UserClientQuotaPrecedence
+
+constant b : t_UserClientQuotaPrecedence
+
+function lemma_first_present_unique [#"/workspace/crates/verified/src/quota.rs" 164 0 168 1] (facts: t_UserClientQuotaFacts) (a: t_UserClientQuotaPrecedence) (b: t_UserClientQuotaPrecedence) : ()
+
+goal vc_lemma_first_present_unique: ([%#squota] first_present facts a /\ first_present facts b)
+  -> ([@stop_split] [@expl:lemma_first_present_unique ensures] [%#squota'0] a = b)

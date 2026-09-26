@@ -1,18 +1,21 @@
-(* #"/proof-work-215/crates/verified/src/diskless.rs" 118 0 126 22 *)
+(* #"/workspace/crates/verified/src/diskless.rs" 345 0 353 22 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
 let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
 let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
 let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
 let%span snum'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
-let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span sdiskless = "/proof-work-215/crates/verified/src/diskless.rs" 127 22 127 23
-let%span sdiskless'0 = "/proof-work-215/crates/verified/src/diskless.rs" 127 47 127 48
-let%span sdiskless'1 = "/proof-work-215/crates/verified/src/diskless.rs" 130 21 130 57
-let%span sdiskless'2 = "/proof-work-215/crates/verified/src/diskless.rs" 133 52 133 80
-let%span sdiskless'3 = "/proof-work-215/crates/verified/src/diskless.rs" 133 28 133 81
-let%span sdiskless'4 = "/proof-work-215/crates/verified/src/diskless.rs" 140 11 140 23
-let%span sdiskless'5 = "/proof-work-215/crates/verified/src/diskless.rs" 97 10 116 1
+let%span sdiskless = "/workspace/crates/verified/src/diskless.rs" 354 22 354 23
+let%span sdiskless'0 = "/workspace/crates/verified/src/diskless.rs" 354 47 354 48
+let%span sdiskless'1 = "/workspace/crates/verified/src/diskless.rs" 357 21 357 57
+let%span sdiskless'2 = "/workspace/crates/verified/src/diskless.rs" 360 52 360 80
+let%span sdiskless'3 = "/workspace/crates/verified/src/diskless.rs" 360 28 360 81
+let%span sdiskless'4 = "/workspace/crates/verified/src/diskless.rs" 367 11 367 23
+let%span sdiskless'5 = "/workspace/crates/verified/src/diskless.rs" 316 10 322 1
+let%span sdiskless'6 = "/workspace/crates/verified/src/diskless.rs" 323 10 343 1
+let%span sdiskless'7 = "/workspace/crates/verified/src/diskless.rs" 299 8 306 13
 
 use creusot.int.UInt64
 use creusot.int.Int32
@@ -77,47 +80,61 @@ let elim_Some'0 (_x: t_Option_i64) (return (f0: Int64.t)) = any
       end}
     any) ]
 
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate batch_step_valid [#"/workspace/crates/verified/src/diskless.rs" 291 0 297 9] (selected_start: t_Option_usize) (batch_start: UInt64.t) (encoded_len: UInt64.t) (base_offset: Int64.t) (last_offset_delta: Int32.t) =
+  [%#sdiskless'7] gt_log_Int (UInt64.t'int encoded_len) 0
+  /\ ge_log_Int (Int32.to_int last_offset_delta) 0
+  /\ UInt64.t'int batch_start + UInt64.t'int encoded_len <= UInt64.t'int const_MAX
+  /\ Int64.to_int base_offset + Int32.to_int last_offset_delta <= Int64.to_int const_MAX'0
+  /\ match selected_start with
+    | Some start -> UInt64.t'int start <= UInt64.t'int batch_start
+    | None -> true
+    end
+
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let diskless_batch_step [#"/proof-work-215/crates/verified/src/diskless.rs" 118 0 126 22]
-  (selected_start: t_Option_usize) (batch_start: UInt64.t) (encoded_len: UInt64.t) (base_offset: Int64.t)
-  (last_offset_delta: Int32.t) (floor: Int64.t) (max_bytes: UInt64.t) (return (x: t_DisklessBatchStep)) = (! bb0
+let diskless_batch_step [#"/workspace/crates/verified/src/diskless.rs" 345 0 353 22] (selected_start: t_Option_usize)
+  (batch_start: UInt64.t) (encoded_len: UInt64.t) (base_offset: Int64.t) (last_offset_delta: Int32.t) (floor: Int64.t)
+  (max_bytes: UInt64.t) (return (x: t_DisklessBatchStep)) = (! bb0
   [ bb0 = s0
-    [ s0 = [ &_17 <- encoded_len = ([%#sdiskless] (0: UInt64.t)) ] s1
-    | s1 = any [ br0 -> {_17 = false} (! bb2) | br1 -> {_17} (! bb4) ] ]
+    [ s0 = [ &_23 <- encoded_len = ([%#sdiskless] (0: UInt64.t)) ] s1
+    | s1 = any [ br0 -> {_23 = false} (! bb2) | br1 -> {_23} (! bb4) ] ]
   | bb2 = s0
-    [ s0 = [ &_19 <- Int32.lt last_offset_delta ([%#sdiskless'0] (0: Int32.t)) ] s1
-    | s1 = any [ br0 -> {_19 = false} (! bb5) | br1 -> {_19} (! bb4) ] ]
+    [ s0 = [ &_25 <- Int32.lt last_offset_delta ([%#sdiskless'0] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_25 = false} (! bb5) | br1 -> {_25} (! bb4) ] ]
   | bb4 = s0 [ s0 = [ &_ret <- Invalid ] s1 | s1 = return {_ret} ]
   | bb5 = s0
-    [ s0 = checked_add [%#sdiskless'1] {batch_start} {encoded_len} (fun (_x: t_Option_usize) -> [ &_24 <- _x ] s1)
-    | s1 = any [ br0 -> {_24 = None} (! bb9) | br1 (x0: UInt64.t) -> {_24 = Some x0} (! bb8) ] ]
+    [ s0 = checked_add [%#sdiskless'1] {batch_start} {encoded_len} (fun (_x: t_Option_usize) -> [ &_30 <- _x ] s1)
+    | s1 = any [ br0 -> {_30 = None} (! bb9) | br1 (x0: UInt64.t) -> {_30 = Some x0} (! bb8) ] ]
   | bb9 = s0 [ s0 = [ &_ret <- Invalid ] s1 | s1 = return {_ret} ]
   | bb8 = s0
-    [ s0 = elim_Some {_24} (fun (r0: UInt64.t) -> [ &next <- r0 ] s1)
-    | s1 = from_i64 [%#sdiskless'2] {last_offset_delta} (fun (_x: Int64.t) -> [ &_32 <- _x ] s2)
-    | s2 = checked_add'0 [%#sdiskless'3] {base_offset} {_32} (fun (_x: t_Option_i64) -> [ &_30 <- _x ] s3)
-    | s3 = any [ br0 -> {_30 = None'0} (! bb14) | br1 (x0: Int64.t) -> {_30 = Some'0 x0} (! bb13) ] ]
+    [ s0 = elim_Some {_30} (fun (r0: UInt64.t) -> [ &next <- r0 ] s1)
+    | s1 = from_i64 [%#sdiskless'2] {last_offset_delta} (fun (_x: Int64.t) -> [ &_38 <- _x ] s2)
+    | s2 = checked_add'0 [%#sdiskless'3] {base_offset} {_38} (fun (_x: t_Option_i64) -> [ &_36 <- _x ] s3)
+    | s3 = any [ br0 -> {_36 = None'0} (! bb14) | br1 (x0: Int64.t) -> {_36 = Some'0 x0} (! bb13) ] ]
   | bb14 = s0 [ s0 = [ &_ret <- Invalid ] s1 | s1 = return {_ret} ]
   | bb13 = s0
-    [ s0 = elim_Some'0 {_30} (fun (r0: Int64.t) -> [ &last_offset <- r0 ] s1)
+    [ s0 = elim_Some'0 {_36} (fun (r0: Int64.t) -> [ &last_offset <- r0 ] s1)
     | s1 = any [ br0 -> {selected_start = None} (! bb22) | br1 (x0: UInt64.t) -> {selected_start = Some x0} (! bb16) ] ]
   | bb22 = s0
-    [ s0 = [ &_48 <- Int64.lt last_offset floor ] s1
-    | s1 = any [ br0 -> {_48 = false} (! bb24) | br1 -> {_48} (! bb23) ] ]
+    [ s0 = [ &_54 <- Int64.lt last_offset floor ] s1
+    | s1 = any [ br0 -> {_54 = false} (! bb24) | br1 -> {_54} (! bb23) ] ]
   | bb23 = s0 [ s0 = [ &_ret <- Skip next ] s1 | s1 = return {_ret} ]
   | bb24 = s0 [ s0 = [ &_ret <- Start next ] s1 | s1 = return {_ret} ]
   | bb16 = s0
     [ s0 = elim_Some {selected_start} (fun (r0: UInt64.t) -> [ &start <- r0 ] s1)
-    | s1 = [ &_38 <- UInt64.gt start batch_start ] s2
-    | s2 = any [ br0 -> {_38 = false} (! bb18) | br1 -> {_38} (! bb17) ] ]
+    | s1 = [ &_44 <- UInt64.gt start batch_start ] s2
+    | s2 = any [ br0 -> {_44 = false} (! bb18) | br1 -> {_44} (! bb17) ] ]
   | bb17 = s0 [ s0 = [ &_ret <- Invalid ] s1 | s1 = return {_ret} ]
   | bb18 = s0
-    [ s0 = UInt64.sub [%#sdiskless'4] {next} {start} (fun (_x: UInt64.t) -> [ &_43 <- _x ] s1)
-    | s1 = [ &_42 <- UInt64.gt _43 max_bytes ] s2
-    | s2 = any [ br0 -> {_42 = false} (! bb20) | br1 -> {_42} (! bb19) ] ]
+    [ s0 = UInt64.sub [%#sdiskless'4] {next} {start} (fun (_x: UInt64.t) -> [ &_49 <- _x ] s1)
+    | s1 = [ &_48 <- UInt64.gt _49 max_bytes ] s2
+    | s2 = any [ br0 -> {_48 = false} (! bb20) | br1 -> {_48} (! bb19) ] ]
   | bb19 = s0 [ s0 = [ &_ret <- Stop ] s1 | s1 = return {_ret} ]
   | bb20 = s0 [ s0 = [ &_ret <- Continue next ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_DisklessBatchStep = Any.any_l ()
@@ -128,20 +145,23 @@ let diskless_batch_step [#"/proof-work-215/crates/verified/src/diskless.rs" 118 
   | & last_offset_delta: Int32.t = last_offset_delta
   | & floor: Int64.t = floor
   | & max_bytes: UInt64.t = max_bytes
-  | & _17: bool = Any.any_l ()
-  | & _19: bool = Any.any_l ()
+  | & _23: bool = Any.any_l ()
+  | & _25: bool = Any.any_l ()
   | & next: UInt64.t = Any.any_l ()
-  | & _24: t_Option_usize = Any.any_l ()
+  | & _30: t_Option_usize = Any.any_l ()
   | & last_offset: Int64.t = Any.any_l ()
-  | & _30: t_Option_i64 = Any.any_l ()
-  | & _32: Int64.t = Any.any_l ()
+  | & _36: t_Option_i64 = Any.any_l ()
+  | & _38: Int64.t = Any.any_l ()
   | & start: UInt64.t = Any.any_l ()
-  | & _38: bool = Any.any_l ()
-  | & _42: bool = Any.any_l ()
-  | & _43: UInt64.t = Any.any_l ()
-  | & _48: bool = Any.any_l () ])
+  | & _44: bool = Any.any_l ()
+  | & _48: bool = Any.any_l ()
+  | & _49: UInt64.t = Any.any_l ()
+  | & _54: bool = Any.any_l () ])
   [ return (result: t_DisklessBatchStep) ->
-  {[@stop_split] [@expl:diskless_batch_step ensures] [%#sdiskless'5] match result with
+  {[@stop_split] [@expl:diskless_batch_step ensures] ([@stop_split] [@expl:diskless_batch_step ensures #0] [%#sdiskless'5] (result
+        = Invalid)
+      = (not batch_step_valid selected_start batch_start encoded_len base_offset last_offset_delta))
+    /\ ([@stop_split] [@expl:diskless_batch_step ensures #1] [%#sdiskless'6] match result with
       | Skip next -> selected_start = None
       /\ UInt64.t'int next = UInt64.t'int batch_start + UInt64.t'int encoded_len
       /\ Int64.to_int base_offset + Int32.to_int last_offset_delta < Int64.to_int floor
@@ -161,5 +181,5 @@ let diskless_batch_step [#"/proof-work-215/crates/verified/src/diskless.rs" 118 
         | None -> false
         end
       | Invalid -> true
-      end}
+      end)}
     (! return {result}) ]

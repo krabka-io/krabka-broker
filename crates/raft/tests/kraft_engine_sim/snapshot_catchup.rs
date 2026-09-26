@@ -156,14 +156,14 @@ async fn lagging_follower_catches_up_via_snapshot() {
 
 /// Every voter snapshots and prunes on its own (#364): a follower that never
 /// held leadership still checkpoints once the committed offset advances past
-/// `snapshot_interval_records`, and a lagging peer's `Fetch` below the
-/// follower's own log start points at that checkpoint. `FetchSnapshot` is
-/// leader-only, as Kafka's `validateLeaderOnlyRequest` makes it, so the
-/// follower refuses the transfer with `NOT_LEADER_OR_FOLLOWER` and names the
-/// leader. The leader stays up and reachable throughout, so this isolates the
-/// follower's own serve path from election/discovery timing.
+/// `snapshot_interval_records`. `Fetch` and `FetchSnapshot` are both
+/// leader-only, as Kafka's `validateLeaderOnlyRequest` makes them, so the
+/// follower refuses a lagging peer's `Fetch` below its own log start, and a
+/// transfer of its own checkpoint, with `NOT_LEADER_OR_FOLLOWER` and names
+/// the leader. The leader stays up and reachable throughout, so this isolates
+/// the follower's own serve path from election/discovery timing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn follower_that_pruned_independently_points_a_lagging_fetch_at_its_checkpoint() {
+async fn follower_that_pruned_independently_redirects_a_lagging_fetch_to_the_leader() {
     let net = SimNet::new();
     let ids = [NodeId(1), NodeId(2), NodeId(3)];
     let cid = uuid::Uuid::from_u128(501);
@@ -222,11 +222,12 @@ async fn follower_that_pruned_independently_points_a_lagging_fetch_at_its_checkp
 
     // A lagging peer (node 3, never registered — this exercises the wire
     // protocol directly rather than through election/discovery) asks the
-    // FOLLOWER, not the leader, for records from offset 0. Below the
-    // follower's own pruned log_start, so it must point back at its own
-    // checkpoint rather than serve records (only a leader serves records).
+    // FOLLOWER, not the leader, for records from offset 0, below the
+    // follower's own pruned log_start. Only a leader serves a Fetch, so the
+    // follower answers `buildEmptyFetchResponse(NOT_LEADER_OR_FOLLOWER)`.
     let fetch_req = wire::PeerRequest::Fetch {
         from: NodeId(3),
+        current_leader_epoch: i32::try_from(epoch).unwrap(),
         fetch_epoch: 0,
         fetch_offset: 0,
         replica_directory_id: uuid::Uuid::nil(),
@@ -236,19 +237,35 @@ async fn follower_that_pruned_independently_points_a_lagging_fetch_at_its_checkp
         .send(follower, api_key::FETCH, fetch_req)
         .await
         .expect("fetch to the follower succeeds");
-    let Some(wire::PeerResponse::Fetch {
-        snapshot_id,
-        records,
-        ..
-    }) = wire::PeerResponse::decode_fetch(&fetch_resp_body)
+    let Some(wire::PeerResponse::Fetch(answer)) =
+        wire::PeerResponse::decode_fetch(&fetch_resp_body)
     else {
         panic!("follower did not return a decodable Fetch response");
     };
-    let (end_offset, snapshot_epoch) =
-        snapshot_id.expect("fetch below the follower's own log_start returns a snapshot id");
-    assert2::assert!(records.is_empty());
-    // The id names the follower's own latest checkpoint.
-    assert2::assert!(latest == format!("{end_offset:020}-{snapshot_epoch:010}.checkpoint"));
+    let follower_log_start = follower_ctrl.quorum_snapshot().log_start_offset;
+    assert2::assert!(
+        answer
+            == wire::FetchAnswer {
+                error_code: 6,
+                leader: wire::QuorumLeader {
+                    leader_id: Some(leader),
+                    epoch,
+                    endpoint: None,
+                },
+                diverging: None,
+                snapshot_id: None,
+                hwm: -1,
+                log_start_offset: follower_log_start,
+                records: bytes::Bytes::new(),
+            }
+    );
+    // The follower's own latest checkpoint, named
+    // `{end_offset:020}-{epoch:010}.checkpoint`.
+    let (end_offset, snapshot_epoch) = latest
+        .trim_end_matches(".checkpoint")
+        .split_once('-')
+        .map(|(offset, epoch)| (offset.parse().unwrap(), epoch.parse().unwrap()))
+        .expect("a checkpoint name");
 
     let req = wire::PeerRequest::FetchSnapshot {
         cluster_id: Some(cid),
@@ -348,6 +365,7 @@ async fn a_snapshot_fetch_in_flight_survives_the_leader_rolling_to_a_new_checkpo
     // log start, and is pointed at that checkpoint.
     let fetch = wire::PeerRequest::Fetch {
         from: NodeId(3),
+        current_leader_epoch: i32::try_from(epoch).unwrap(),
         fetch_epoch: 0,
         fetch_offset: 0,
         replica_directory_id: uuid::Uuid::nil(),
@@ -357,7 +375,7 @@ async fn a_snapshot_fetch_in_flight_survives_the_leader_rolling_to_a_new_checkpo
         .send(leader, api_key::FETCH, fetch)
         .await
         .expect("fetch to the leader succeeds");
-    let Some(wire::PeerResponse::Fetch { snapshot_id, .. }) =
+    let Some(wire::PeerResponse::Fetch(wire::FetchAnswer { snapshot_id, .. })) =
         wire::PeerResponse::decode_fetch(&body)
     else {
         panic!("leader did not return a decodable Fetch response");

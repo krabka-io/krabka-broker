@@ -1,31 +1,31 @@
-(* #"/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 198 0 203 1 *)
+(* #"/workspace/crates/verified/src/consensus.rs" 395 0 400 1 *)
 
-let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sconsensus = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 204 18 208 97
-let%span sconsensus'0 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 193 11 193 54
-let%span sconsensus'1 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 194 10 197 93
-let%span sconsensus'2 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 36 10 36 17
-let%span sconsensus'3 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 38 16 38 74
-let%span sconsensus'4 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 86 10 86 15
-let%span sconsensus'5 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 80 11 80 44
-let%span sconsensus'6 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 81 11 81 68
-let%span sconsensus'7 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 82 10 82 39
-let%span sconsensus'8 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 83 10 83 48
-let%span sconsensus'9 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 84 10 85 59
-let%span sconsensus'10 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 94 4 189 5
-let%span sconsensus'11 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 15 8 15 48
-let%span sconsensus'12 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 21 10 21 15
-let%span sconsensus'13 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 24 8 30 9
-let%span sconsensus'14 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 47 10 47 15
-let%span sconsensus'15 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 43 11 43 45
-let%span sconsensus'16 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 44 11 44 22
-let%span sconsensus'17 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 45 10 46 62
-let%span sconsensus'18 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 56 4 58 5
-let%span sconsensus'19 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 65 10 65 15
-let%span sconsensus'20 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 63 11 63 45
-let%span sconsensus'21 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 64 10 64 67
-let%span sconsensus'22 = "/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 73 4 75 5
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sconsensus = "/workspace/crates/verified/src/consensus.rs" 401 18 405 97
+let%span sconsensus'0 = "/workspace/crates/verified/src/consensus.rs" 390 11 390 54
+let%span sconsensus'1 = "/workspace/crates/verified/src/consensus.rs" 391 10 394 93
+let%span sconsensus'2 = "/workspace/crates/verified/src/consensus.rs" 272 10 272 17
+let%span sconsensus'3 = "/workspace/crates/verified/src/consensus.rs" 274 16 274 74
+let%span sconsensus'4 = "/workspace/crates/verified/src/consensus.rs" 328 10 328 15
+let%span sconsensus'5 = "/workspace/crates/verified/src/consensus.rs" 322 11 322 44
+let%span sconsensus'6 = "/workspace/crates/verified/src/consensus.rs" 323 11 323 68
+let%span sconsensus'7 = "/workspace/crates/verified/src/consensus.rs" 324 10 324 39
+let%span sconsensus'8 = "/workspace/crates/verified/src/consensus.rs" 325 10 325 48
+let%span sconsensus'9 = "/workspace/crates/verified/src/consensus.rs" 326 10 327 59
+let%span sconsensus'10 = "/workspace/crates/verified/src/consensus.rs" 338 4 384 5
+let%span sconsensus'11 = "/workspace/crates/verified/src/consensus.rs" 247 8 247 48
+let%span sconsensus'12 = "/workspace/crates/verified/src/consensus.rs" 255 10 255 15
+let%span sconsensus'13 = "/workspace/crates/verified/src/consensus.rs" 258 8 264 9
+let%span sconsensus'14 = "/workspace/crates/verified/src/consensus.rs" 285 10 285 15
+let%span sconsensus'15 = "/workspace/crates/verified/src/consensus.rs" 281 11 281 45
+let%span sconsensus'16 = "/workspace/crates/verified/src/consensus.rs" 282 11 282 22
+let%span sconsensus'17 = "/workspace/crates/verified/src/consensus.rs" 283 10 284 62
+let%span sconsensus'18 = "/workspace/crates/verified/src/consensus.rs" 294 4 296 5
+let%span sconsensus'19 = "/workspace/crates/verified/src/consensus.rs" 305 10 305 15
+let%span sconsensus'20 = "/workspace/crates/verified/src/consensus.rs" 303 11 303 45
+let%span sconsensus'21 = "/workspace/crates/verified/src/consensus.rs" 304 10 304 67
+let%span sconsensus'22 = "/workspace/crates/verified/src/consensus.rs" 313 4 315 5
 
 use creusot.int.Int64
 use seq.Seq
@@ -42,10 +42,10 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] oth
 
 meta "rewrite_def" predicate gt_log_Int
 
-function hwm_member_at [#"/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 13 0 13 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
+function hwm_member_at [#"/workspace/crates/verified/src/consensus.rs" 245 0 245 62] (log_end: int) (s: Seq.seq Int64.t) (k: int) : int
  = [%#sconsensus'11] if k = 0 then log_end else Int64.to_int (Seq.get s (k - 1))
 
-function count_ge_prefix [#"/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 22 0 22 97] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
+function count_ge_prefix [#"/workspace/crates/verified/src/consensus.rs" 256 0 256 97] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
 
 axiom count_ge_prefix_def:
   forall log_end: int, s: Seq.seq Int64.t, v: int, limit: int, leader_counts: bool [count_ge_prefix log_end s v limit leader_counts]. count_ge_prefix log_end s v limit leader_counts
@@ -56,13 +56,13 @@ axiom count_ge_prefix_def:
       + (if (leader_counts \/ gt_log_Int limit 1) /\ ge_log_Int (hwm_member_at log_end s (limit - 1)) v then 1 else 0)
     )
 
-function count_ge [#"/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 37 0 37 78] (log_end: int) (s: Seq.seq Int64.t) (v: int) (leader_counts: bool) : int
+function count_ge [#"/workspace/crates/verified/src/consensus.rs" 273 0 273 78] (log_end: int) (s: Seq.seq Int64.t) (v: int) (leader_counts: bool) : int
 
 axiom count_ge_def:
   forall log_end: int, s: Seq.seq Int64.t, v: int, leader_counts: bool [count_ge log_end s v leader_counts]. count_ge log_end s v leader_counts
     = ([%#sconsensus'3] count_ge_prefix log_end s v (Seq.length s + 1) leader_counts)
 
-function lemma_count_ge_prefix_monotone [#"/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 48 0 55 1] (log_end: int) (s: Seq.seq Int64.t) (low: int) (high: int) (limit: int) (leader_counts: bool) : ()
+function lemma_count_ge_prefix_monotone [#"/workspace/crates/verified/src/consensus.rs" 286 0 293 1] (log_end: int) (s: Seq.seq Int64.t) (low: int) (high: int) (limit: int) (leader_counts: bool) : ()
 
 axiom lemma_count_ge_prefix_monotone_def:
   forall log_end: int, s: Seq.seq Int64.t, low: int, high: int, limit: int, leader_counts: bool [lemma_count_ge_prefix_monotone log_end s low high limit leader_counts]. ([%#sconsensus'15] 0
@@ -83,7 +83,7 @@ axiom lemma_count_ge_prefix_monotone_spec:
     -> ([%#sconsensus'16] low <= high)
     -> ([%#sconsensus'17] ge_log_Int (count_ge_prefix log_end s low limit leader_counts) (count_ge_prefix log_end s high limit leader_counts))
 
-function lemma_count_ge_prefix_nonnegative [#"/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 66 0 72 1] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : ()
+function lemma_count_ge_prefix_nonnegative [#"/workspace/crates/verified/src/consensus.rs" 306 0 312 1] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : ()
 
 axiom lemma_count_ge_prefix_nonnegative_def:
   forall log_end: int, s: Seq.seq Int64.t, v: int, limit: int, leader_counts: bool [lemma_count_ge_prefix_nonnegative log_end s v limit leader_counts]. ([%#sconsensus'20] 0
@@ -101,7 +101,7 @@ axiom lemma_count_ge_prefix_nonnegative_spec:
       /\ limit <= Seq.length s + 1)
     -> ([%#sconsensus'21] ge_log_Int (count_ge_prefix log_end s v limit leader_counts) 0)
 
-function least_hwm_member_ge_index [#"/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 87 0 93 8] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
+function least_hwm_member_ge_index [#"/workspace/crates/verified/src/consensus.rs" 329 0 335 8] (log_end: int) (s: Seq.seq Int64.t) (v: int) (limit: int) (leader_counts: bool) : int
 
 axiom least_hwm_member_ge_index_def:
   forall log_end: int, s: Seq.seq Int64.t, v: int, limit: int, leader_counts: bool [least_hwm_member_ge_index log_end s v limit leader_counts]. ([%#sconsensus'5] 0
@@ -155,8 +155,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let lemma_hwm_threshold_has_member [#"/home/matt/.codex/worktrees/6279/krabka-broker/crates/verified/src/consensus.rs" 198 0 203 1]
-  (log_end: Int64.t) (s: Slice64.slice Int64.t) (majority: UInt64.t) (leader_counts: bool) (return (x: ())) =
+let lemma_hwm_threshold_has_member [#"/workspace/crates/verified/src/consensus.rs" 395 0 400 1] (log_end: Int64.t)
+  (s: Slice64.slice Int64.t) (majority: UInt64.t) (leader_counts: bool) (return (x: ())) =
 {[@stop_split] [@expl:lemma_hwm_threshold_has_member requires] [%#sconsensus'0] 1 <= UInt64.t'int majority
   /\ UInt64.t'int majority <= Seq.length (Slice64.view s) + 1}
   (! bb0

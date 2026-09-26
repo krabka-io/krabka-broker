@@ -1,0 +1,12 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.017 },
+      "vc_producer_snapshot_reload_log_start": {
+        "prover": "alt-ergo",
+        "time": 0.019
+      }
+    }
+  }
+}

@@ -2,8 +2,9 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_decrement_sequence": { "prover": "alt-ergo", "time": 0.01 },
-      "vc_wrapping_sub": { "prover": "alt-ergo", "time": 0.008 }
+      "vc_checked_sub": { "prover": "alt-ergo", "time": 0.014 },
+      "vc_decrement_sequence": { "prover": "alt-ergo", "time": 0.09 },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.024 }
     }
   }
 }

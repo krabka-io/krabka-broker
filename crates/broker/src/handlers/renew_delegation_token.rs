@@ -1,18 +1,24 @@
 //! KIP-48: `RenewDelegationToken` (`api_key` 39).
 //!
-//! Per spec §1.3, the caller must be SASL-authenticated. The request's
-//! `hmac` selects an existing token by HMAC bytes. Only the owner, a
-//! `renewers` entry, or a configured super-user may extend it. The handler
-//! clamps the new expiry to the token's `max_timestamp_ms`. It then appends a
-//! fresh `V1DelegationToken` record with the same `token_id`. The image
-//! semantics are replace.
+//! Matches Kafka trunk's `KafkaApis.handleRenewTokenRequest` and
+//! `DelegationTokenControlManager.renewDelegationToken`, in their error
+//! order: `allowTokenRequests` (`DELEGATION_TOKEN_REQUEST_NOT_ALLOWED`, with
+//! the `-1` error timestamp), token support
+//! (`DELEGATION_TOKEN_AUTH_DISABLED`), the metadata version
+//! (`UNSUPPORTED_VERSION`), the HMAC lookup (`DELEGATION_TOKEN_NOT_FOUND`),
+//! expiry (`DELEGATION_TOKEN_EXPIRED`), and finally the owner/renewer gate
+//! (`DELEGATION_TOKEN_OWNER_MISMATCH`). The new expiry is
+//! `min(max_timestamp_ms, now + period)`, where a positive requested period
+//! is capped at the configured default and any other request selects it
+//! (see [`renew_token_expiry`]). It replaces the old expiry outright, so a
+//! short period shortens it. The handler appends a fresh `V1DelegationToken`
+//! record with the same `token_id`; the image semantics are replace.
 //!
-//! The super-user bypass matches Kafka's `DelegationTokenManager.
-//! isAuthorizedToOperateOnToken`, which goes through
-//! `SecurityUtils.isAuthorized`. The operator relies on this bypass. The
-//! operator is a super-user that mints tokens on behalf of `KafkaUser`
-//! principals with act-as, then must be able to renew or expire them even
-//! though it is neither the owner nor a listed renewer.
+//! A configured super-user also passes the owner/renewer gate. Kafka's
+//! `KRaft` controller has no such bypass; krabka keeps it because the operator
+//! is a super-user that mints tokens on behalf of `KafkaUser` principals with
+//! act-as, then must be able to renew them though it is neither the owner nor
+//! a listed renewer.
 
 use std::{collections::HashSet, hash::BuildHasher};
 
@@ -31,6 +37,10 @@ use krabka_verified::{
 
 use crate::{network::auth::ConnectionAuth, time_util::now_ms};
 
+/// Kafka's `DelegationTokenManager.ERROR_TIMESTAMP`, the expiry a refused
+/// `allowTokenRequests` response carries.
+const ERROR_TIMESTAMP: i64 = -1;
+
 #[tracing::instrument(
     name = "handle_renew_delegation_token",
     level = "info",
@@ -45,15 +55,15 @@ pub(crate) async fn handle<S: BuildHasher>(
     controller: &dyn crate::metadata_source::MetadataSource,
     super_users: &HashSet<String, S>,
 ) -> RenewDelegationTokenResponse {
+    let ConnectionAuth::Authenticated { principal, .. } = auth else {
+        return not_allowed_response();
+    };
+    if auth.token_api_admission(TokenApi::Renew) == TokenApiAdmission::Reject {
+        return not_allowed_response();
+    }
     if secret_key.is_none() {
         return err_response(crate::codes::DELEGATION_TOKEN_AUTH_DISABLED);
     }
-    if auth.token_api_admission(TokenApi::Renew) == TokenApiAdmission::Reject {
-        return err_response(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
-    }
-    let ConnectionAuth::Authenticated { principal, .. } = auth else {
-        return err_response(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
-    };
     let caller = principal.to_kafka();
 
     let image = controller.current_image();
@@ -71,19 +81,10 @@ pub(crate) async fn handle<S: BuildHasher>(
         return err_response(crate::codes::DELEGATION_TOKEN_NOT_FOUND);
     };
 
-    // KIP-48: super-users bypass the owner/renewer gate. The
-    // operator-driven issuance flow depends on this — the operator is
-    // a super-user that mints tokens via act-as for other principals,
-    // so it is neither the owner nor a listed renewer when it later
-    // needs to renew them ahead of expiry.
-    let is_super_user = super_users.contains(&principal.name);
-    if !is_super_user && token.owner != caller && !token.renewers.contains(&caller) {
-        return err_response(crate::codes::DELEGATION_TOKEN_OWNER_MISMATCH);
-    }
-
-    let now = now_ms();
+    // The configured default renew period is positive: config validation
+    // enforces it, as Kafka's `atLeast(1)` validator does.
     let new_expiry = match renew_token_expiry(
-        now,
+        now_ms(),
         req.renew_period_ms,
         default_renew_period_ms,
         token.expiry_timestamp_ms,
@@ -93,8 +94,14 @@ pub(crate) async fn handle<S: BuildHasher>(
         TokenRenewDecision::Expired => {
             return err_response(crate::codes::DELEGATION_TOKEN_EXPIRED);
         }
-        TokenRenewDecision::Invalid => return err_response(crate::codes::INVALID_REQUEST),
     };
+
+    // Kafka's `allowedToRenew`, plus the krabka super-user bypass described
+    // in the module docs.
+    let is_super_user = super_users.contains(&principal.name);
+    if !is_super_user && token.owner != caller && !token.renewers.contains(&caller) {
+        return err_response(crate::codes::DELEGATION_TOKEN_OWNER_MISMATCH);
+    }
 
     let expected = token_to_record(&token);
     let replacement = DelegationTokenRecord {
@@ -138,11 +145,18 @@ fn err_response(code: i16) -> RenewDelegationTokenResponse {
     }
 }
 
+fn not_allowed_response() -> RenewDelegationTokenResponse {
+    RenewDelegationTokenResponse {
+        expiry_timestamp_ms: ERROR_TIMESTAMP,
+        ..err_response(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::HashSet, sync::Arc, time::Duration};
 
-    use assert2::assert;
+    use assert2::{assert, check};
     use krabka_metadata::MetadataRecord;
     use krabka_raft::ControllerHandle;
     use krabka_security::{AuthMethod, KafkaPrincipal, Principal, SaslMechanism};
@@ -287,121 +301,92 @@ mod tests {
         controller.cancel().await;
     }
 
+    /// `DelegationTokenControlManager.renewDelegationToken`: a positive
+    /// period is capped at the configured default, any other period selects
+    /// the default, the token's max timestamp caps the sum, and the result
+    /// replaces the old expiry even when it is earlier.
     #[tokio::test]
-    async fn success_as_owner_extends_expiry() {
+    async fn renewal_follows_kafkas_period_rule() {
         let dir = TempDir::new().unwrap();
         let controller = test_controller(dir.path().into()).await;
         let secret = SecretBytes::new(b"k".to_vec());
-        let hmac = vec![0xAA; 32];
-        let now = now_ms();
-        seed_token(
-            (&controller, "tok-1"),
-            hmac.clone(),
-            kp("alice"),
-            vec![],
-            now - 1_000,
-            now + 60_000,
-            now + 7 * 24 * 60 * 60 * 1_000,
-        )
-        .await;
+        let hour = 60 * 60 * 1_000;
+        let day = 24 * hour;
 
-        let req = RenewDelegationTokenRequest {
-            hmac: hmac.into(),
-            renew_period_ms: 3_600_000, // +1h
-            ..Default::default()
-        };
-        let resp = handle(
-            &req,
-            &authed("alice"),
-            Some(&secret),
-            1_000,
-            &*controller,
-            &empty_super_users(),
-        )
-        .await;
-        assert!(resp.error_code == 0);
-        // expiry should be roughly now + 1h (within a small slop window).
-        let slop = 60_000;
-        let target = now_ms() + 3_600_000;
-        assert!(
-            (resp.expiry_timestamp_ms - target).abs() < slop,
-            "expiry {} far from {target}",
-            resp.expiry_timestamp_ms
-        );
-        // Persisted in image.
-        let img = controller.current_image();
-        let stored = img.delegation_token_by_id("tok-1").expect("present");
-        assert!(stored.expiry_timestamp_ms == resp.expiry_timestamp_ms);
-        controller.cancel().await;
-    }
-
-    #[tokio::test]
-    async fn minus_one_renew_period_uses_default_period() {
-        let dir = TempDir::new().unwrap();
-        let controller = test_controller(dir.path().into()).await;
-        let secret = SecretBytes::new(b"k".to_vec());
-        let hmac = vec![0xA1; 32];
-        let now = now_ms();
-        seed_token(
-            (&controller, "tok-default-renew"),
-            hmac.clone(),
-            kp("alice"),
-            vec![],
-            now - 1_000,
-            now + 60_000,
-            now + 7 * 24 * 60 * 60 * 1_000,
-        )
-        .await;
-
-        let default_period = 120_000;
-        let req = RenewDelegationTokenRequest {
-            hmac: hmac.into(),
-            renew_period_ms: -1,
-            ..Default::default()
-        };
-        let resp = handle(
-            &req,
-            &authed("alice"),
-            Some(&secret),
-            default_period,
-            &*controller,
-            &empty_super_users(),
-        )
-        .await;
-
-        assert!(resp.error_code == 0);
-        let target = now_ms() + default_period;
-        assert!(
-            (resp.expiry_timestamp_ms - target).abs() < 60_000,
-            "expiry {} far from {target}",
-            resp.expiry_timestamp_ms
-        );
-        controller.cancel().await;
-    }
-
-    #[tokio::test]
-    async fn expired_and_overflowing_renewals_fail_closed() {
-        let dir = TempDir::new().unwrap();
-        let controller = test_controller(dir.path().into()).await;
-        let secret = SecretBytes::new(b"k".to_vec());
-        let now = now_ms();
-
-        for (token_id, hmac, expiry, period, expected_code) in [
-            (
-                "expired",
-                vec![0xE1; 32],
-                now - 1,
-                1_000,
-                crate::codes::DELEGATION_TOKEN_EXPIRED,
-            ),
-            (
-                "overflow",
-                vec![0xE2; 32],
-                now + 60_000,
-                i64::MAX,
-                crate::codes::INVALID_REQUEST,
-            ),
+        // (token id, hmac byte, requested period, current expiry offset,
+        //  max offset, expected expiry offset from the handler's now)
+        for (token_id, hmac_byte, requested, current, max, delta) in [
+            ("hour", 0xA0, hour, 60_000, 7 * day, hour),
+            ("minus-one", 0xA1, -1, 60_000, 7 * day, day),
+            ("zero", 0xA2, 0, 60_000, 7 * day, day),
+            ("negative", 0xA3, -7, 60_000, 7 * day, day),
+            ("above-default", 0xA4, 30 * day, 60_000, 7 * day, day),
+            ("shortens", 0xA5, 1_000, 12 * hour, 7 * day, 1_000),
+            ("max-caps", 0xA6, -1, 60_000, 2 * hour, day),
         ] {
+            let hmac = vec![hmac_byte; 32];
+            let seeded_at = now_ms();
+            seed_token(
+                (&controller, token_id),
+                hmac.clone(),
+                kp("alice"),
+                vec![],
+                seeded_at - 1_000,
+                seeded_at + current,
+                seeded_at + max,
+            )
+            .await;
+            let before = now_ms();
+            let resp = handle(
+                &RenewDelegationTokenRequest {
+                    hmac: hmac.into(),
+                    renew_period_ms: requested,
+                    ..Default::default()
+                },
+                &authed("alice"),
+                Some(&secret),
+                day,
+                &*controller,
+                &empty_super_users(),
+            )
+            .await;
+            let after = now_ms();
+            check!(resp.error_code == 0, "{token_id}");
+            let expected_low = (before + delta).min(seeded_at + max);
+            let expected_high = (after + delta).min(seeded_at + max);
+            check!(
+                (expected_low..=expected_high).contains(&resp.expiry_timestamp_ms),
+                "{token_id}: expiry {} outside [{expected_low}, {expected_high}]",
+                resp.expiry_timestamp_ms
+            );
+            check!(
+                controller
+                    .current_image()
+                    .delegation_token_by_id(token_id)
+                    .expect("token remains")
+                    .expiry_timestamp_ms
+                    == resp.expiry_timestamp_ms,
+                "{token_id}"
+            );
+        }
+        controller.cancel().await;
+    }
+
+    /// Kafka checks expiry before the owner/renewer gate, and never mutates
+    /// an expired token.
+    #[tokio::test]
+    async fn expired_token_reports_expired_before_owner_mismatch() {
+        let dir = TempDir::new().unwrap();
+        let controller = test_controller(dir.path().into()).await;
+        let secret = SecretBytes::new(b"k".to_vec());
+        let now = now_ms();
+
+        for (token_id, hmac_byte, expiry, max, caller) in [
+            ("expired", 0xE1, now - 1, now + 120_000, "alice"),
+            ("past-max", 0xE2, now - 1, now - 1, "alice"),
+            ("expired-stranger", 0xE3, now - 1, now + 120_000, "eve"),
+        ] {
+            let hmac = vec![hmac_byte; 32];
             seed_token(
                 (&controller, token_id),
                 hmac.clone(),
@@ -409,24 +394,27 @@ mod tests {
                 vec![],
                 now - 1_000,
                 expiry,
-                now + 120_000,
+                max,
             )
             .await;
             let resp = handle(
                 &RenewDelegationTokenRequest {
                     hmac: hmac.into(),
-                    renew_period_ms: period,
+                    renew_period_ms: 1_000,
                     ..Default::default()
                 },
-                &authed("alice"),
+                &authed(caller),
                 Some(&secret),
                 1_000,
                 &*controller,
                 &empty_super_users(),
             )
             .await;
-            assert!(resp.error_code == expected_code, "{token_id}");
-            assert!(
+            check!(
+                resp == err_response(crate::codes::DELEGATION_TOKEN_EXPIRED),
+                "{token_id}"
+            );
+            check!(
                 controller
                     .current_image()
                     .delegation_token_by_id(token_id)
@@ -437,6 +425,33 @@ mod tests {
             );
         }
 
+        controller.cancel().await;
+    }
+
+    /// `allowTokenRequests` runs on the broker before the controller checks
+    /// token support, and its refusal carries Kafka's `-1` error timestamp.
+    #[tokio::test]
+    async fn admission_is_checked_before_token_support() {
+        let dir = TempDir::new().unwrap();
+        let controller = test_controller(dir.path().into()).await;
+        for auth in [authed_with_token("alice", true), ConnectionAuth::Anonymous] {
+            let resp = handle(
+                &RenewDelegationTokenRequest::default(),
+                &auth,
+                None,
+                1_000,
+                &*controller,
+                &empty_super_users(),
+            )
+            .await;
+            check!(
+                resp == RenewDelegationTokenResponse {
+                    error_code: crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
+                    expiry_timestamp_ms: -1,
+                    ..Default::default()
+                }
+            );
+        }
         controller.cancel().await;
     }
 
@@ -460,14 +475,14 @@ mod tests {
 
         let req = RenewDelegationTokenRequest {
             hmac: hmac.into(),
-            renew_period_ms: 60_000, // +1m
+            renew_period_ms: 60_000, // +1m, below the 24h default
             ..Default::default()
         };
         let resp = handle(
             &req,
             &authed("bob"),
             Some(&secret),
-            1_000,
+            24 * 60 * 60 * 1_000,
             &*controller,
             &empty_super_users(),
         )
@@ -537,8 +552,8 @@ mod tests {
     }
 
     /// A super-user caller may renew a token they
-    /// neither own nor are listed as a renewer on. This mirrors Kafka's
-    /// `DelegationTokenManager.isAuthorizedToOperateOnToken` and is the
+    /// neither own nor are listed as a renewer on. This is krabka's bypass
+    /// (Kafka's `KRaft` controller has none) and is the
     /// load-bearing gate for the operator flow. The operator
     /// is a super-user that act-as-mints tokens on behalf of `KafkaUser`
     /// principals, then must be able to renew them before expiry.

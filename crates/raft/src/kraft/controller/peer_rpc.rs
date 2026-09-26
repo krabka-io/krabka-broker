@@ -133,6 +133,10 @@ impl Engine {
             .map_or(uuid::Uuid::nil(), |v| v.directory_id);
         let body = wire::PeerRequest::Fetch {
             from: self.me,
+            // Kafka's `buildFetchRequest` sends `quorum.epoch()`, which the
+            // responder's `validateLeaderOnlyRequest` checks.
+            current_leader_epoch: i32::try_from(self.core.quorum_state().leader_epoch)
+                .unwrap_or(i32::MAX),
             fetch_epoch,
             fetch_offset,
             replica_directory_id,

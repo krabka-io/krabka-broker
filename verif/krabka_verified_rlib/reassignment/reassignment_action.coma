@@ -1,20 +1,20 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/reassignment.rs" 35 0 39 23 *)
+(* #"/workspace/crates/verified/src/reassignment.rs" 86 0 90 23 *)
 
-let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sslice = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span swell_founded = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
-let%span sreassignment = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/reassignment.rs" 46 16 46 22
-let%span sreassignment'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/reassignment.rs" 49 14 49 43
-let%span sreassignment'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/reassignment.rs" 50 14 50 37
-let%span sreassignment'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/reassignment.rs" 48 16 48 74
-let%span sreassignment'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/reassignment.rs" 47 16 47 46
-let%span sreassignment'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/reassignment.rs" 51 11 51 31
-let%span sreassignment'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/reassignment.rs" 54 13 54 14
-let%span sreassignment'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/reassignment.rs" 54 8 54 14
-let%span sreassignment'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/reassignment.rs" 20 10 20 83
-let%span sreassignment'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/reassignment.rs" 21 10 21 91
-let%span sreassignment'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/reassignment.rs" 22 10 33 1
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sreassignment = "/workspace/crates/verified/src/reassignment.rs" 97 16 97 22
+let%span sreassignment'0 = "/workspace/crates/verified/src/reassignment.rs" 100 14 100 43
+let%span sreassignment'1 = "/workspace/crates/verified/src/reassignment.rs" 101 14 101 37
+let%span sreassignment'2 = "/workspace/crates/verified/src/reassignment.rs" 99 16 99 74
+let%span sreassignment'3 = "/workspace/crates/verified/src/reassignment.rs" 98 16 98 46
+let%span sreassignment'4 = "/workspace/crates/verified/src/reassignment.rs" 102 11 102 31
+let%span sreassignment'5 = "/workspace/crates/verified/src/reassignment.rs" 105 13 105 14
+let%span sreassignment'6 = "/workspace/crates/verified/src/reassignment.rs" 105 8 105 14
+let%span sreassignment'7 = "/workspace/crates/verified/src/reassignment.rs" 71 10 71 83
+let%span sreassignment'8 = "/workspace/crates/verified/src/reassignment.rs" 72 10 72 91
+let%span sreassignment'9 = "/workspace/crates/verified/src/reassignment.rs" 73 10 84 1
 
 use creusot.int.UInt64
 use seq.Seq
@@ -46,9 +46,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let reassignment_action [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/reassignment.rs" 35 0 39 23]
-  (additions_caught_up: bool) (leader_removed: bool) (eligible_handoffs: Slice64.slice bool)
-  (return (x: t_ReassignmentAction)) = (! bb0
+let reassignment_action [#"/workspace/crates/verified/src/reassignment.rs" 86 0 90 23] (additions_caught_up: bool)
+  (leader_removed: bool) (eligible_handoffs: Slice64.slice bool) (return (x: t_ReassignmentAction)) = (! bb0
   [ bb0 = any [ br0 -> {additions_caught_up = false} (! bb1) | br1 -> {additions_caught_up} (! bb2) ]
   | bb2 = any [ br0 -> {leader_removed = false} (! bb4) | br1 -> {leader_removed} (! bb3) ]
   | bb3 = s0 [ s0 = [ &i <- [%#sreassignment] (0: UInt64.t) ] s1 | s1 = bb5 ]

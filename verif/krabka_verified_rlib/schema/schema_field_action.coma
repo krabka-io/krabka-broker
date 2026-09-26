@@ -1,8 +1,8 @@
-(* #"/workspace/crates/verified/src/schema.rs" 105 0 110 22 *)
+(* #"/workspace/crates/verified/src/schema.rs" 104 0 109 22 *)
 
-let%span sschema = "/workspace/crates/verified/src/schema.rs" 96 10 97 63
-let%span sschema'0 = "/workspace/crates/verified/src/schema.rs" 98 10 99 67
-let%span sschema'1 = "/workspace/crates/verified/src/schema.rs" 100 10 103 62
+let%span sschema = "/workspace/crates/verified/src/schema.rs" 95 10 96 63
+let%span sschema'0 = "/workspace/crates/verified/src/schema.rs" 97 10 98 67
+let%span sschema'1 = "/workspace/crates/verified/src/schema.rs" 99 10 102 62
 
 use creusot.prelude.Any
 
@@ -14,7 +14,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let schema_field_action [#"/workspace/crates/verified/src/schema.rs" 105 0 110 22] (key_enabled: bool)
+let schema_field_action [#"/workspace/crates/verified/src/schema.rs" 104 0 109 22] (key_enabled: bool)
   (value_enabled: bool) (role: t_SchemaFieldRole) (present: bool) (return (x: t_SchemaFieldAction)) = (! bb0
   [ bb0 = any [ br0 -> {present = false} (! bb12) | br1 -> {present} (! bb1) ]
   | bb1 = any [ br0 -> {role = Key} (! bb7) | br1 -> {role = Value} (! bb6) ]

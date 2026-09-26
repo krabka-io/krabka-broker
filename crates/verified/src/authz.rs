@@ -51,19 +51,46 @@ pub fn acl_identity_match(wildcard: bool, exact: bool) -> bool {
     wildcard || exact
 }
 
+/// Whether a stored ACL names the requested resource type.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum AclResourceTypeMatch {
+    Same,
+    Different,
+}
+
+/// How a stored ACL's resource name relates to the requested resource name.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct AclResourceFacts {
+    pub resource_type: AclResourceTypeMatch,
+    /// The stored name equals the requested name.
+    pub exact_name: bool,
+    /// The stored name is the literal wildcard `*`.
+    pub wildcard_name: bool,
+    /// The requested name starts with the stored name.
+    pub name_has_prefix: bool,
+}
+
 /// Match an ACL resource type and literal or prefixed name pattern.
-#[ensures(result == (facts.0 && match pattern {
-    AclPatternKind::Literal => facts.1 || facts.2,
-    AclPatternKind::Prefixed => facts.3,
+///
+/// Kafka's `AclAuthorizer.matchingAcls`: a LITERAL ACL applies to its exact
+/// name and, when that name is `*`, to every name; a PREFIXED ACL applies to
+/// every name that starts with its name. Neither applies across resource
+/// types.
+#[ensures(result == (facts.resource_type == AclResourceTypeMatch::Same && match pattern {
+    AclPatternKind::Literal => facts.exact_name || facts.wildcard_name,
+    AclPatternKind::Prefixed => facts.name_has_prefix,
 }))]
 #[must_use]
-pub fn acl_resource_match(pattern: AclPatternKind, facts: (bool, bool, bool, bool)) -> bool {
-    let (same_type, exact, wildcard, prefix) = facts;
-    same_type
-        && match pattern {
-            AclPatternKind::Literal => exact || wildcard,
-            AclPatternKind::Prefixed => prefix,
+pub fn acl_resource_match(pattern: AclPatternKind, facts: AclResourceFacts) -> bool {
+    match (facts.resource_type, pattern) {
+        (AclResourceTypeMatch::Different, _) => false,
+        (AclResourceTypeMatch::Same, AclPatternKind::Literal) => {
+            facts.exact_name || facts.wildcard_name
         }
+        (AclResourceTypeMatch::Same, AclPatternKind::Prefixed) => facts.name_has_prefix,
+    }
 }
 
 /// Match exact operations, `All`, and Kafka's one-way implication arrows.
@@ -148,33 +175,58 @@ pub fn request_auth_admission(state: RequestAuthState, api_key: i16) -> bool {
     }
 }
 
+/// The outcome when no ACL matched the request.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum AclDefault {
+    Deny,
+    /// `allow.everyone.if.no.acl.found` is set and no ACL at all applies to
+    /// the resource.
+    Allow,
+}
+
+/// What the precedence loop observed for one request.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct AclFacts {
+    pub super_user: bool,
+    /// Some applicable ALLOW ACL matched the principal, host, and operation.
+    pub saw_allow: bool,
+    /// Some applicable DENY ACL matched the principal, host, and operation.
+    pub saw_deny: bool,
+    pub default_decision: AclDefault,
+}
+
 /// Decide a request from whether any matching ACL allowed or denied it.
 ///
-/// `default_allow` selects the outcome when nothing matched: Kafka's
-/// `allow.everyone.if.no.acl.found` (default `false`) allows a request when
-/// no ACL at all applies to the resource, rather than denying it. It only
-/// changes the "nothing matched" case -- an explicit DENY still wins, and an
-/// explicit ALLOW still allows, regardless of `default_allow`.
-#[ensures(facts.0 ==> result == AclDecision::AllowSuperuser)]
-#[ensures(!facts.0 && facts.2 ==> result == AclDecision::DenyExplicit)]
-#[ensures(!facts.0 && !facts.2 && facts.1 ==> result == AclDecision::AllowAcl)]
-#[ensures(!facts.0 && !facts.2 && !facts.1 && facts.3 ==>
-    result == AclDecision::AllowNoAcl)]
-#[ensures(!facts.0 && !facts.2 && !facts.1 && !facts.3 ==>
-    result == AclDecision::DenyDefault)]
+/// Kafka's `AclAuthorizer.authorizeAction` order: a super user is always
+/// allowed; otherwise a matching DENY wins over any ALLOW; otherwise a
+/// matching ALLOW allows; otherwise `default_decision` decides. It reflects
+/// `allow.everyone.if.no.acl.found` (default `false`), which allows a request
+/// only when no ACL at all applies to the resource, so it never overrides an
+/// explicit ALLOW or DENY.
+#[ensures(match result {
+    AclDecision::AllowSuperuser => facts.super_user,
+    AclDecision::DenyExplicit => !facts.super_user && facts.saw_deny,
+    AclDecision::AllowAcl => !facts.super_user && !facts.saw_deny && facts.saw_allow,
+    AclDecision::AllowNoAcl => !facts.super_user && !facts.saw_deny && !facts.saw_allow
+        && facts.default_decision == AclDefault::Allow,
+    AclDecision::DenyDefault => !facts.super_user && !facts.saw_deny && !facts.saw_allow
+        && facts.default_decision == AclDefault::Deny,
+})]
 #[must_use]
-pub fn acl_decision(facts: (bool, bool, bool, bool)) -> AclDecision {
-    let (super_user, saw_allow, saw_deny, default_allow) = facts;
-    if super_user {
+pub fn acl_decision(facts: AclFacts) -> AclDecision {
+    if facts.super_user {
         AclDecision::AllowSuperuser
-    } else if saw_deny {
+    } else if facts.saw_deny {
         AclDecision::DenyExplicit
-    } else if saw_allow {
+    } else if facts.saw_allow {
         AclDecision::AllowAcl
-    } else if default_allow {
-        AclDecision::AllowNoAcl
     } else {
-        AclDecision::DenyDefault
+        match facts.default_decision {
+            AclDefault::Allow => AclDecision::AllowNoAcl,
+            AclDefault::Deny => AclDecision::DenyDefault,
+        }
     }
 }
 
@@ -184,96 +236,190 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn acl_precedence_is_default_deny_and_order_independent() {
-        use AclDecision::{AllowAcl, AllowSuperuser, DenyDefault, DenyExplicit};
-        check!(acl_decision((false, false, false, false)) == DenyDefault);
-        check!(acl_decision((false, true, false, false)) == AllowAcl);
-        check!(acl_decision((false, false, true, false)) == DenyExplicit);
-        check!(acl_decision((false, true, true, false)) == DenyExplicit);
-        check!(acl_decision((true, false, true, false)) == AllowSuperuser);
+    fn facts() -> AclFacts {
+        AclFacts {
+            super_user: false,
+            saw_allow: false,
+            saw_deny: false,
+            default_decision: AclDefault::Deny,
+        }
     }
 
+    /// Kafka `AclAuthorizer` precedence scenarios.
     #[test]
-    fn acl_precedence_default_allow_only_applies_when_nothing_else_matched() {
-        use AclDecision::{AllowAcl, AllowNoAcl, AllowSuperuser, DenyExplicit};
-        // `default_allow` (allow.everyone.if.no.acl.found) only takes effect
-        // when neither an ALLOW nor a DENY ACL matched.
-        check!(acl_decision((false, false, false, true)) == AllowNoAcl);
-        // An explicit DENY still wins over default_allow.
-        check!(acl_decision((false, false, true, true)) == DenyExplicit);
-        // An explicit ALLOW still wins over default_allow.
-        check!(acl_decision((false, true, false, true)) == AllowAcl);
-        // Super-user bypass still wins over everything.
-        check!(acl_decision((true, false, false, true)) == AllowSuperuser);
+    fn acl_precedence_matches_kafka_scenarios() {
+        use AclDecision::{AllowAcl, AllowNoAcl, AllowSuperuser, DenyDefault, DenyExplicit};
+
+        for (scenario, facts, expected) in [
+            ("no ACL and the default config denies", facts(), DenyDefault),
+            (
+                "a matching ALLOW allows",
+                AclFacts {
+                    saw_allow: true,
+                    ..facts()
+                },
+                AllowAcl,
+            ),
+            (
+                "a matching DENY denies",
+                AclFacts {
+                    saw_deny: true,
+                    ..facts()
+                },
+                DenyExplicit,
+            ),
+            (
+                "DENY takes precedence over a matching ALLOW",
+                AclFacts {
+                    saw_allow: true,
+                    saw_deny: true,
+                    ..facts()
+                },
+                DenyExplicit,
+            ),
+            (
+                "a super user bypasses a matching DENY",
+                AclFacts {
+                    super_user: true,
+                    saw_deny: true,
+                    ..facts()
+                },
+                AllowSuperuser,
+            ),
+            (
+                "allow.everyone.if.no.acl.found allows a resource with no ACL",
+                AclFacts {
+                    default_decision: AclDefault::Allow,
+                    ..facts()
+                },
+                AllowNoAcl,
+            ),
+            (
+                "allow.everyone.if.no.acl.found does not override a DENY",
+                AclFacts {
+                    saw_deny: true,
+                    default_decision: AclDefault::Allow,
+                    ..facts()
+                },
+                DenyExplicit,
+            ),
+            (
+                "an explicit ALLOW is reported as an ACL grant, not the default",
+                AclFacts {
+                    saw_allow: true,
+                    default_decision: AclDefault::Allow,
+                    ..facts()
+                },
+                AllowAcl,
+            ),
+        ] {
+            check!(acl_decision(facts) == expected, "{scenario}");
+        }
     }
 
+    /// Kafka principal and host matching: `User:*` and host `*` are wildcards.
     #[test]
-    fn acl_applicability_truth_tables_are_exact() {
+    fn identity_wildcards_match_kafka_scenarios() {
+        // (scenario, stored is the wildcard, stored equals the request, expected)
+        for (scenario, wildcard, exact, expected) in [
+            ("User:alice ACL, request from User:alice", false, true, true),
+            ("User:* ACL, request from User:alice", true, false, true),
+            ("User:bob ACL, request from User:alice", false, false, false),
+            ("host * ACL, request from any host", true, false, true),
+        ] {
+            check!(
+                acl_identity_match(wildcard, exact) == expected,
+                "{scenario}"
+            );
+        }
+    }
+
+    /// Kafka LITERAL, wildcard, and PREFIXED resource patterns against the
+    /// requested topic `orders`.
+    #[test]
+    fn resource_patterns_match_kafka_scenarios() {
+        use AclPatternKind::{Literal, Prefixed};
+        use AclResourceTypeMatch::{Different, Same};
+
+        let topic = |exact_name, wildcard_name, name_has_prefix| AclResourceFacts {
+            resource_type: Same,
+            exact_name,
+            wildcard_name,
+            name_has_prefix,
+        };
+        for (scenario, pattern, facts, expected) in [
+            ("LITERAL orders", Literal, topic(true, false, true), true),
+            ("LITERAL *", Literal, topic(false, true, false), true),
+            (
+                "LITERAL ord is not a prefix",
+                Literal,
+                topic(false, false, true),
+                false,
+            ),
+            ("PREFIXED ord", Prefixed, topic(false, false, true), true),
+            ("PREFIXED orders", Prefixed, topic(true, false, true), true),
+            ("PREFIXED pay", Prefixed, topic(false, false, false), false),
+            (
+                "PREFIXED * is not a wildcard",
+                Prefixed,
+                topic(false, true, false),
+                false,
+            ),
+            (
+                "LITERAL orders on a GROUP",
+                Literal,
+                AclResourceFacts {
+                    resource_type: Different,
+                    ..topic(true, false, true)
+                },
+                false,
+            ),
+            (
+                "PREFIXED ord on a GROUP",
+                Prefixed,
+                AclResourceFacts {
+                    resource_type: Different,
+                    ..topic(false, false, true)
+                },
+                false,
+            ),
+        ] {
+            check!(acl_resource_match(pattern, facts) == expected, "{scenario}");
+        }
+    }
+
+    /// Kafka's operation-implication table (`AclAuthorizer` /
+    /// `AclEntry.supportedOperations`) for stored ALLOW and DENY ACLs.
+    #[test]
+    fn operation_implications_match_kafka_scenarios() {
         use AclOperationKind::{
             All, Alter, AlterConfigs, ClusterAction, Create, Delete, Describe, DescribeConfigs,
-            IdempotentWrite, Read, TwoPhaseCommit, Write,
+            Read, Write,
         };
 
-        for (wildcard, exact, expected) in [
-            (false, false, false),
-            (false, true, true),
-            (true, false, true),
-            (true, true, true),
+        // (stored, requested, stored ACL is ALLOW, expected)
+        for (stored, requested, is_allow, expected) in [
+            (Read, Read, true, true),
+            (Read, Read, false, true),
+            (All, ClusterAction, true, true),
+            (All, Describe, false, true),
+            // ALLOW Read, Write, Delete, and Alter each imply Describe.
+            (Read, Describe, true, true),
+            (Write, Describe, true, true),
+            (Delete, Describe, true, true),
+            (Alter, Describe, true, true),
+            (AlterConfigs, DescribeConfigs, true, true),
+            // A DENY never gains the implied operations.
+            (Read, Describe, false, false),
+            (AlterConfigs, DescribeConfigs, false, false),
+            // The implications are one-way and do not chain further.
+            (Describe, Read, true, false),
+            (DescribeConfigs, AlterConfigs, true, false),
+            (Create, Describe, true, false),
+            (Write, Read, true, false),
+            (Alter, AlterConfigs, true, false),
         ] {
-            check!(acl_identity_match(wildcard, exact) == expected);
-        }
-
-        for same_type in [false, true] {
-            for pattern in [AclPatternKind::Literal, AclPatternKind::Prefixed] {
-                for exact in [false, true] {
-                    for wildcard in [false, true] {
-                        for prefix in [false, true] {
-                            let expected = same_type
-                                && match pattern {
-                                    AclPatternKind::Literal => exact || wildcard,
-                                    AclPatternKind::Prefixed => prefix,
-                                };
-                            check!(
-                                acl_resource_match(pattern, (same_type, exact, wildcard, prefix))
-                                    == expected
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        let operations = [
-            All,
-            Read,
-            Write,
-            Create,
-            Delete,
-            Alter,
-            Describe,
-            ClusterAction,
-            DescribeConfigs,
-            AlterConfigs,
-            IdempotentWrite,
-            TwoPhaseCommit,
-        ];
-        let arrows = [
-            (Read, Describe),
-            (Write, Describe),
-            (Delete, Describe),
-            (Alter, Describe),
-            (AlterConfigs, DescribeConfigs),
-        ];
-        for stored in operations {
-            for requested in operations {
-                for is_allow in [false, true] {
-                    let expected = stored == requested
-                        || stored == All
-                        || (is_allow && arrows.contains(&(stored, requested)));
-                    check!(acl_operation_match(stored, requested, is_allow) == expected);
-                }
-            }
+            check!(acl_operation_match(stored, requested, is_allow) == expected);
         }
     }
 

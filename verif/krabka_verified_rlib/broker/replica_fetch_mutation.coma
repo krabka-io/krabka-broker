@@ -1,66 +1,71 @@
-(* #"/proof-work-227/crates/verified/src/broker.rs" 100 0 109 25 *)
+(* #"/workspace/crates/verified/src/broker.rs" 121 0 121 79 *)
 
-let%span sbroker = "/proof-work-227/crates/verified/src/broker.rs" 61 10 67 1
-let%span sbroker'0 = "/proof-work-227/crates/verified/src/broker.rs" 68 10 75 1
-let%span sbroker'1 = "/proof-work-227/crates/verified/src/broker.rs" 76 10 84 1
-let%span sbroker'2 = "/proof-work-227/crates/verified/src/broker.rs" 85 10 93 1
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sbroker = "/workspace/crates/verified/src/broker.rs" 127 34 127 35
+let%span sbroker'0 = "/workspace/crates/verified/src/broker.rs" 129 44 129 45
+let%span sbroker'1 = "/workspace/crates/verified/src/broker.rs" 111 10 119 1
+let%span sbroker'2 = "/workspace/crates/verified/src/broker.rs" 94 8 96 45
 
-use creusot.prelude.Any
 use creusot.int.Int32
+use creusot.int.Int16
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_ReplicaFetchFacts = {
+  request_leader_epoch: Int32.t;
+  current_leader_epoch: Int32.t;
+  target_matches: bool;
+  reported_target_matches: bool;
+  error_code: Int16.t;
+  diverging_end_offset: Int64.t }
 
 type t_ReplicaFetchMutation = Reject | Retry | Truncate | Append
+
+predicate replica_fetch_fenced [#"/workspace/crates/verified/src/broker.rs" 92 0 92 61] (facts: t_ReplicaFetchFacts) =
+  [%#sbroker'2] Int32.to_int facts.request_leader_epoch <> Int32.to_int facts.current_leader_epoch
+  \/ not facts.target_matches \/ not facts.reported_target_matches
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let replica_fetch_mutation [#"/proof-work-227/crates/verified/src/broker.rs" 100 0 109 25] (topic_matches: bool)
-  (partition_matches: bool) (request_leader_epoch: Int32.t) (current_leader_epoch: Int32.t) (target_matches: bool)
-  (reported_target_matches: bool) (response_success: bool) (has_divergence: bool) (return (x: t_ReplicaFetchMutation)) =
-(! bb0
-  [ bb0 = any [ br0 -> {topic_matches = false} (! bb6) | br1 -> {topic_matches} (! bb1) ]
-  | bb1 = any [ br0 -> {partition_matches = false} (! bb6) | br1 -> {partition_matches} (! bb2) ]
-  | bb2 = s0
-    [ s0 = [ &_44 <- request_leader_epoch <> current_leader_epoch ] s1
-    | s1 = any [ br0 -> {_44 = false} (! bb4) | br1 -> {_44} (! bb6) ] ]
-  | bb4 = any [ br0 -> {target_matches = false} (! bb6) | br1 -> {target_matches} (! bb5) ]
-  | bb5 = any [ br0 -> {reported_target_matches = false} (! bb6) | br1 -> {reported_target_matches} (! bb7) ]
-  | bb7 = any [ br0 -> {response_success = false} (! bb8) | br1 -> {response_success} (! bb9) ]
-  | bb9 = any [ br0 -> {has_divergence = false} (! bb11) | br1 -> {has_divergence} (! bb10) ]
-  | bb10 = s0 [ s0 = [ &_ret <- Truncate ] s1 | s1 = return {_ret} ]
-  | bb11 = s0 [ s0 = [ &_ret <- Append ] s1 | s1 = return {_ret} ]
-  | bb8 = s0 [ s0 = [ &_ret <- Retry ] s1 | s1 = return {_ret} ]
-  | bb6 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ] ]
+let replica_fetch_mutation [#"/workspace/crates/verified/src/broker.rs" 121 0 121 79] (facts: t_ReplicaFetchFacts)
+  (return (x: t_ReplicaFetchMutation)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_4 <- facts.request_leader_epoch <> facts.current_leader_epoch ] s1
+    | s1 = any [ br0 -> {_4 = false} (! bb2) | br1 -> {_4} (! bb4) ] ]
+  | bb2 = any [ br0 -> {facts.target_matches = false} (! bb4) | br1 -> {facts.target_matches} (! bb3) ]
+  | bb3 = any
+    [ br0 -> {facts.reported_target_matches = false} (! bb4) | br1 -> {facts.reported_target_matches} (! bb5) ]
+  | bb5 = s0
+    [ s0 = [ &_9 <- facts.error_code <> ([%#sbroker] (0: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_9 = false} (! bb7) | br1 -> {_9} (! bb6) ] ]
+  | bb6 = s0 [ s0 = [ &_ret <- Retry ] s1 | s1 = return {_ret} ]
+  | bb7 = s0
+    [ s0 = [ &_11 <- Int64.ge facts.diverging_end_offset ([%#sbroker'0] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_11 = false} (! bb9) | br1 -> {_11} (! bb8) ] ]
+  | bb8 = s0 [ s0 = [ &_ret <- Truncate ] s1 | s1 = return {_ret} ]
+  | bb9 = s0 [ s0 = [ &_ret <- Append ] s1 | s1 = return {_ret} ]
+  | bb4 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_ReplicaFetchMutation = Any.any_l ()
-  | & topic_matches: bool = topic_matches
-  | & partition_matches: bool = partition_matches
-  | & request_leader_epoch: Int32.t = request_leader_epoch
-  | & current_leader_epoch: Int32.t = current_leader_epoch
-  | & target_matches: bool = target_matches
-  | & reported_target_matches: bool = reported_target_matches
-  | & response_success: bool = response_success
-  | & has_divergence: bool = has_divergence
-  | & _44: bool = Any.any_l () ])
+  | & facts: t_ReplicaFetchFacts = facts
+  | & _4: bool = Any.any_l ()
+  | & _9: bool = Any.any_l ()
+  | & _11: bool = Any.any_l () ])
   [ return (result: t_ReplicaFetchMutation) ->
-  {[@stop_split] [@expl:replica_fetch_mutation ensures] ([@stop_split] [@expl:replica_fetch_mutation ensures #0] [%#sbroker] (result
-        = Reject)
-      = (not topic_matches
-      \/ not partition_matches
-      \/ Int32.to_int request_leader_epoch <> Int32.to_int current_leader_epoch
-      \/ not target_matches \/ not reported_target_matches))
-    /\ ([@stop_split] [@expl:replica_fetch_mutation ensures #1] [%#sbroker'0] (result = Retry)
-      = (topic_matches
-      /\ partition_matches
-      /\ Int32.to_int request_leader_epoch = Int32.to_int current_leader_epoch
-      /\ target_matches /\ reported_target_matches /\ not response_success))
-    /\ ([@stop_split] [@expl:replica_fetch_mutation ensures #2] [%#sbroker'1] (result = Truncate)
-      = (topic_matches
-      /\ partition_matches
-      /\ Int32.to_int request_leader_epoch = Int32.to_int current_leader_epoch
-      /\ target_matches /\ reported_target_matches /\ response_success /\ has_divergence))
-    /\ ([@stop_split] [@expl:replica_fetch_mutation ensures #3] [%#sbroker'2] (result = Append)
-    = (topic_matches
-    /\ partition_matches
-    /\ Int32.to_int request_leader_epoch = Int32.to_int current_leader_epoch
-    /\ target_matches /\ reported_target_matches /\ response_success /\ not has_divergence))}
+  {[@stop_split] [@expl:replica_fetch_mutation ensures] [%#sbroker'1] result
+    = (if replica_fetch_fenced facts then
+      Reject
+    else
+      if Int16.to_int facts.error_code <> 0 then
+        Retry
+      else
+        if ge_log_Int (Int64.to_int facts.diverging_end_offset) 0 then Truncate else Append
+    
+    )}
     (! return {result}) ]

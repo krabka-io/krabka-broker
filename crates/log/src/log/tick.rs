@@ -1,40 +1,42 @@
-//! Periodic maintenance: the time- and size-based retention sweep over
-//! sealed segments.
+//! Periodic maintenance: the time- and size-based retention sweep, Kafka's
+//! `UnifiedLog.deleteOldSegments`.
 //!
 //! The segment roll itself is not here. Kafka rolls inside the append, in
 //! [`Log::should_roll_for_incoming`], against the incoming batch's own size
 //! and timestamp; a wall-clock roll on this sweep would roll an idle
-//! partition's active segment, which Kafka never does, and the next sweep
-//! would then delete the tail records that segment held.
+//! partition's active segment, which Kafka never does.
 //!
-//! Retention never deletes the active segment, never leaves the log with
-//! no segment at all, and never evicts a segment that still holds a record
+//! Retention may delete every segment, the active one included, and then
+//! rolls first so the log keeps a fresh empty segment. It never deletes an
+//! empty newest segment, and never evicts a segment that still holds a record
 //! whose delivery time has not arrived.
 
 use std::{collections::HashSet, time::SystemTime};
 
 use krabka_ids::Offset;
-use krabka_units::prelude::{ByteSize, ByteSizeExt};
+use krabka_units::prelude::{ByteSizeExt, TimeExt as _};
+use krabka_verified::retention::{LocalRetentionSegment, local_retention_prefix};
 use tracing::instrument;
 
 use super::Log;
-use crate::{error::LogError, retention, segment::Segment};
+use crate::{error::LogError, producer_snapshot, retention, segment::Segment};
 
 impl Log {
-    /// Periodic maintenance: apply time- and size-based retention to sealed
-    /// segments when `cleanup.policy` holds `delete`, and delete sealed
-    /// segments below the log start offset under every policy. The active
-    /// segment is never deleted, and if every segment would otherwise be
-    /// evicted we retain at least one.
+    /// Periodic maintenance: apply time- and size-based retention when `cleanup.policy` holds `delete`, and delete
+    /// segments below the log start offset under every policy. The passes
+    /// follow Kafka's `UnifiedLog.deleteOldSegments`: size retention deletes
+    /// an oldest segment only while the bytes over `retention.bytes` still
+    /// cover the whole segment, and time retention ages a segment by Kafka's
+    /// `largestTimestamp()` -- its newest record timestamp, or its `.log`
+    /// file's modification time when no record carries one. The walk covers
+    /// the active segment too; when every segment goes, the active one is
+    /// rolled first, as Kafka's `deleteSegments` does, and the fresh empty
+    /// segment stays.
     ///
-    /// `high_watermark` bounds every reason a segment can be evicted, time,
-    /// size and log-start-offset breach alike: Kafka's `UnifiedLog`
-    /// `deletableSegments` only ever considers a segment whose upper bound
-    /// offset (the next segment's base offset, or the log end offset for the
-    /// last one) is at or below the high watermark. A replica's log start
-    /// offset can be pushed past its own high watermark by a lagging
-    /// follower relationship, and without this bound retention would delete
-    /// records a fetch at the high watermark still needs to see.
+    /// Like Kafka's `deletableSegments`, the walk stops at the first segment
+    /// the partition's `high_watermark` has not passed: a segment whose upper
+    /// bound (the next segment's base, or the log end for the active one) is
+    /// above it still holds records followers may not have replicated.
     #[instrument(
         level = "debug",
         skip_all,
@@ -58,93 +60,80 @@ impl Log {
             .advance_delivery_watermark(retention::now_ms(now))
             .watermark;
 
-        let sealed_refs: Vec<&Segment> = self.segments.iter().collect();
-        let active_size = self.active.as_ref().map_or(ByteSize::ZERO, Segment::size);
-
+        let now_ms = retention::now_ms(now);
         let cfg_guard = self.config.read().unwrap();
         // Kafka's `UnifiedLog.deleteOldSegments`: time and size retention run
         // only when `cleanup.policy` holds `delete`. A compact-only log keeps
         // every key however old it is, and loses a segment only when the whole
         // segment is below the log start offset.
         let retention_applies = cfg_guard.cleanup_policy.contains_delete();
-        let time_evict = if retention_applies {
-            retention::time_based_evict(&sealed_refs, &cfg_guard, now)
-        } else {
-            Vec::new()
-        };
-        let total_size: ByteSize = sealed_refs
-            .iter()
-            .fold(active_size, |total, segment| total + segment.size());
+        // Kafka's `deleteRetentionMsBreachedSegments` ages a segment by its
+        // `largestTimestamp()` and deletes it once `now - anchor >
+        // retention.ms`. Truncating, not rounding: a sub-millisecond window
+        // must not round up into deleting a segment a millisecond early.
+        let time_cutoff = cfg_guard
+            .retention
+            .filter(|_| retention_applies)
+            .map(|window| now_ms.saturating_sub(window.millis_i64_trunc()));
+        // Kafka's `deleteRetentionSizeBreachedSegments` runs only when the log
+        // is at least its budget, and a log exactly at its budget still runs
+        // it with a debt of zero. The active segment counts toward the size.
         let size_debt = cfg_guard
             .retention_size
             .filter(|_| retention_applies)
-            .map_or(0, |budget| {
-                if total_size > budget {
-                    (total_size - budget).bytes_u64()
-                } else {
-                    0
-                }
-            });
+            .and_then(|budget| self.size().bytes_u64().checked_sub(budget.bytes_u64()));
         drop(cfg_guard);
 
-        // Kafka's `deleteLogStartOffsetBreachedSegments`: a sealed segment
-        // whose next segment starts at or below the log start offset holds no
-        // record at or above it. Every policy deletes it.
-        let log_start = self.log_start_offset();
-        let active_base = self
-            .active
-            .as_ref()
-            .map_or_else(|| self.log_end_offset(), Segment::base_offset);
-        let upper_bounds: Vec<Offset> = self
-            .segments
-            .iter()
-            .map(Segment::base_offset)
-            .skip(1)
-            .chain(std::iter::once(active_base))
-            .take(self.segments.len())
-            .collect();
-        let start_breached: Vec<bool> = upper_bounds
-            .iter()
-            .map(|next_base| *next_base <= log_start)
-            .collect();
-        let time_expired: Vec<bool> = start_breached
-            .iter()
-            .enumerate()
-            .map(|(index, breached)| *breached || index < time_evict.len())
-            .collect();
-        // Kafka's `deletableSegments`: every eviction reason, time, size and
-        // log-start-offset breach alike, is additionally gated by
-        // `highWatermark >= upperBoundOffset`. A segment above the watermark
-        // can still be truncated away by a leader election, so retention
-        // never removes it out from under a fetch sitting at the watermark.
+        // Kafka's `deletableSegments` walks every segment, the active one
+        // last, and `deleteOldSegments` runs three passes over them: the
+        // log-start breach, `retention.bytes`, then `retention.ms`. The kernel
+        // folds the breach into the time flag, which deletes the same prefix
+        // (see `local_retention_model`).
         //
-        // On an immediate topic the floor is the log end, so every entry is
-        // false. On a scheduled topic the first waiting segment stops the
-        // prefix; later segments are never skipped around it.
-        let scheduled: Vec<bool> = self
-            .segments
+        // Kafka's `deleteLogStartOffsetBreachedSegments`: a segment whose next
+        // segment starts at or below the log start offset holds no record at
+        // or above it. Every policy deletes it. The active segment has no next
+        // segment, so the breach never reaches it.
+        let log_start = self.log_start_offset();
+        let log_end = self.log_end_offset();
+        let segments: Vec<&Segment> = self.segments.iter().chain(self.active.as_ref()).collect();
+        let next_bases = segments
             .iter()
-            .zip(&upper_bounds)
-            .map(|(segment, upper_bound)| {
-                segment.last_offset() >= visible_floor || *upper_bound > high_watermark
+            .skip(1)
+            .map(|segment| Some(segment.base_offset()))
+            .chain(std::iter::once(None));
+        // On an immediate topic the floor is the log end, so no segment is
+        // blocked. On a scheduled topic the first waiting segment stops the
+        // prefix; later segments are never skipped around it.
+        let facts: Vec<LocalRetentionSegment> = segments
+            .iter()
+            .zip(next_bases)
+            .map(|(segment, next_base)| LocalRetentionSegment {
+                // Kafka's `deletableSegments` requires `highWatermark >=
+                // upperBoundOffset`, the next segment's base or the log end.
+                blocked: segment.last_offset() >= visible_floor
+                    || next_base.unwrap_or(log_end) > high_watermark,
+                expired: next_base.is_some_and(|next_base| next_base <= log_start)
+                    || time_cutoff.is_some_and(|cutoff| self.largest_timestamp(segment) < cutoff),
+                size: segment.size().bytes_u64(),
             })
             .collect();
-        let sizes: Vec<u64> = self
-            .segments
-            .iter()
-            .map(|segment| segment.size().bytes_u64())
-            .collect();
-        let selection = krabka_verified::local_retention_prefix(
-            &time_expired,
-            &scheduled,
-            &sizes,
-            size_debt,
-            self.active.is_some(),
-        );
+        let mut evict_len = local_retention_prefix(&facts, size_debt);
+        if self.active.is_none() {
+            // Nothing to roll into: the newest sealed segment stays.
+            evict_len = evict_len.min(self.segments.len().saturating_sub(1));
+        } else if evict_len == facts.len() {
+            // Kafka's `deleteSegments`: a log must always keep a segment, so
+            // when every segment goes, the active one is rolled first and the
+            // fresh empty segment the roll opens is the one that stays. The
+            // kernel never selects an empty newest segment, so the roll always
+            // seals records and never recreates what it is about to delete.
+            self.roll_active_segment()?;
+        }
         let to_evict: Vec<Offset> = self
             .segments
             .iter()
-            .take(selection.len)
+            .take(evict_len)
             .map(Segment::base_offset)
             .collect();
 
@@ -156,14 +145,16 @@ impl Log {
         let mut deleted: HashSet<Offset> = HashSet::with_capacity(to_evict.len());
         let mut failure: Option<LogError> = None;
         for base in to_evict {
-            match retention::delete_segment_files(&*self.io, &self.dir, base) {
-                Ok(()) => {
-                    deleted.insert(base);
-                }
-                Err(error) => {
-                    failure = Some(error);
-                    break;
-                }
+            if let Err(error) = retention::delete_segment_files(&*self.io, &self.dir, base) {
+                failure = Some(error);
+                break;
+            }
+            deleted.insert(base);
+            // Kafka's `deleteSegments` → `deleteProducerSnapshots`: the
+            // snapshot at a deleted segment's base goes with it.
+            if let Err(error) = producer_snapshot::remove_at(&self.dir, base) {
+                failure = Some(error);
+                break;
             }
         }
         tracing::Span::current().record("evicted", deleted.len());
@@ -193,7 +184,7 @@ impl Log {
 #[cfg(test)]
 mod tests {
     use assert2::check;
-    use krabka_units::prelude::{bytes, kibibytes, millis, secs};
+    use krabka_units::prelude::{ByteSize, bytes, kibibytes, millis, secs};
     use tempfile::tempdir;
 
     use super::*;
@@ -202,17 +193,13 @@ mod tests {
         log::test_support::{rolled_log, sample_batch},
     };
 
-    /// A high watermark that never gates retention, for tests that are not
-    /// about the watermark bound itself.
-    const UNBOUNDED_HW: Offset = Offset(i64::MAX);
-
-    /// Retention never evicts the last segment, however far past the budget
-    /// the log is.
+    /// Retention may take the whole log, but it never leaves the log without a
+    /// segment, however far past the budget the log is.
     ///
-    /// A log with no segments has nowhere to append and no offset to report;
-    /// the guard is what keeps an aggressive retention setting from leaving
-    /// one. The cap is on the count, so a budget of nothing still leaves one
-    /// behind.
+    /// A log with no segments has nowhere to append and no offset to report.
+    /// Kafka's `deleteSegments` rolls before it deletes every segment, so the
+    /// fresh empty segment that roll opens is the one that stays, and the log
+    /// end and start both land on it.
     #[test]
     fn retention_never_evicts_the_last_segment() {
         let dir = tempdir().unwrap();
@@ -229,12 +216,15 @@ mod tests {
         }
         check!(!log.segments.is_empty(), "the appends should have rolled");
 
-        log.tick(SystemTime::now(), UNBOUNDED_HW).expect("tick");
-        let remaining = log.segments.len() + usize::from(log.active.is_some());
+        let end = log.log_end_offset();
+        log.tick(SystemTime::now(), log.log_end_offset())
+            .expect("tick");
+        check!(log.segments.is_empty(), "every sealed segment is gone");
         check!(
-            remaining >= 1,
-            "a log must keep a segment to append to, got {remaining}"
+            log.active.as_ref().map(Segment::base_offset) == Some(end),
+            "an empty active segment stays at the log end"
         );
+        check!(log.log_start_offset() == end);
         // And it is still usable afterwards.
         let mut batch = sample_batch(1);
         check!(
@@ -271,13 +261,14 @@ mod tests {
                 Offset(0),
                 vec![Offset(1), Offset(2)],
             ),
-            // Size retention with a budget of nothing deletes every sealed
-            // segment, but only under a policy that deletes.
+            // Size retention with a budget of nothing deletes every segment,
+            // the active one behind a roll, but only under a policy that
+            // deletes.
             (
                 CleanupPolicy::Delete,
                 Some(ByteSize::ZERO),
                 Offset(0),
-                vec![Offset(2)],
+                vec![],
             ),
             (
                 CleanupPolicy::Compact,
@@ -289,7 +280,7 @@ mod tests {
                 CleanupPolicy::CompactAndDelete,
                 Some(ByteSize::ZERO),
                 Offset(0),
-                vec![Offset(2)],
+                vec![],
             ),
             // A segment wholly below the log start offset goes under every
             // policy, and a segment the start offset only reaches stays.
@@ -323,7 +314,7 @@ mod tests {
             }
             log.set_log_start_offset(log_start).unwrap();
 
-            log.tick(now, UNBOUNDED_HW).unwrap();
+            log.tick(now, log.log_end_offset()).unwrap();
 
             let surviving: Vec<Offset> = log
                 .segments
@@ -348,33 +339,111 @@ mod tests {
         log.append(&mut b1).unwrap();
         log.append(&mut b2).unwrap();
         let before = log.log_end_offset();
-        log.tick(SystemTime::now(), UNBOUNDED_HW).unwrap();
+        log.tick(SystemTime::now(), log.log_end_offset()).unwrap();
         assert2::assert!(log.log_end_offset() == before);
     }
 
+    /// Kafka's `deletableSegments` walks the active segment too: a lone
+    /// active segment past `retention.ms` goes behind a roll, and the log
+    /// keeps an empty segment at its end with the start moved up to it. An
+    /// empty active segment is never deleted, so a second tick changes
+    /// nothing.
     #[test]
-    fn tick_never_deletes_only_segment() {
+    fn tick_deletes_a_breached_active_segment_behind_a_roll() {
         use std::time::Duration;
         let dir = tempdir().unwrap();
         let config = LogConfig {
             retention: Some(secs(1)),
-            retention_size: Some(ByteSize::ZERO),
             ..LogConfig::default()
         };
         let mut log = Log::open(dir.path(), config).unwrap();
-        let mut b1 = sample_batch(2);
-        log.append(&mut b1).unwrap();
-        // Advance "now" 30 days into the future.
+        log.append(&mut sample_batch(2)).unwrap();
         let now = SystemTime::now() + Duration::from_hours(30 * 24);
-        log.tick(now, UNBOUNDED_HW).unwrap();
-        assert2::assert!(log.log_end_offset() == 2);
+
+        for _ in 0..2 {
+            log.tick(now, log.log_end_offset()).unwrap();
+            check!(log.segments.is_empty());
+            check!(log.active.as_ref().map(Segment::base_offset) == Some(Offset(2)));
+            check!(log.log_start_offset() == Offset(2));
+            check!(log.log_end_offset() == Offset(2));
+        }
     }
 
-    // The time-driven segment roll moved to the append path (see
-    // `crate::log::append::tests`), against the incoming batch's own
-    // timestamp rather than the wall clock, so `tick` no longer rolls at
-    // all: an idle partition's active segment never rolls, and the roll a
-    // busy one gets matches Kafka's `LogSegment.shouldRoll`.
+    /// Kafka's `LogSegment.largestTimestamp()`: a segment whose records carry
+    /// no timestamp (`-1`) is aged by its `.log` file's modification time, so
+    /// it stays while the file is young and goes once the file is older than
+    /// `retention.ms`.
+    #[test]
+    fn a_segment_without_record_timestamps_is_aged_by_its_file() {
+        use std::time::Duration;
+        for (name, age, deleted) in [
+            ("a young file stays", Duration::ZERO, false),
+            ("an old file goes", Duration::from_hours(2), true),
+        ] {
+            let dir = tempdir().unwrap();
+            let mut log = Log::open(
+                dir.path(),
+                LogConfig {
+                    segment_size: bytes(1),
+                    retention: Some(secs(60 * 60)),
+                    ..LogConfig::default()
+                },
+            )
+            .unwrap();
+            let mut untimed = sample_batch(1);
+            untimed.max_timestamp = -1;
+            log.append(&mut untimed).unwrap();
+            log.append(&mut sample_batch(1)).unwrap();
+            let now = SystemTime::now() + age;
+            // Keep the newest segment inside the window whatever `now` is.
+            let mut fresh = sample_batch(1);
+            fresh.max_timestamp = retention::now_ms(now);
+            log.append(&mut fresh).unwrap();
+
+            log.tick(now, log.log_end_offset()).unwrap();
+
+            let first = log.segments.first().map(Segment::base_offset);
+            check!((first != Some(Offset(0))) == deleted, "{name}: {first:?}");
+        }
+    }
+
+    /// Kafka's `deletableSegments` deletes a segment only once the high
+    /// watermark has passed its upper bound: the next segment's base, or the
+    /// log end for the active segment.
+    #[test]
+    fn retention_stops_at_the_high_watermark() {
+        // `(what, high watermark, log start after the tick)`. Three
+        // one-record segments at 0, 1 and 2, all past retention.ms.
+        let rows = [
+            ("nothing is replicated", Offset(0), Offset(0)),
+            ("the first segment is replicated", Offset(1), Offset(1)),
+            ("the sealed segments are replicated", Offset(2), Offset(2)),
+            ("the whole log is replicated", Offset(3), Offset(3)),
+        ];
+        for (what, high_watermark, expected_start) in rows {
+            let dir = tempdir().unwrap();
+            let config = LogConfig {
+                segment_size: bytes(1),
+                retention: Some(secs(1)),
+                ..LogConfig::default()
+            };
+            let mut log = Log::open(dir.path(), config).unwrap();
+            for _ in 0..3 {
+                let mut batch = sample_batch(1);
+                batch.base_timestamp = 1_000;
+                batch.max_timestamp = 1_000;
+                log.append(&mut batch).unwrap();
+            }
+
+            log.tick(
+                SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(60),
+                high_watermark,
+            )
+            .unwrap();
+
+            assert2::check!(log.log_start_offset() == expected_start, "{what}");
+        }
+    }
 
     #[test]
     fn tick_removes_only_retained_away_segment_stamp_indexes() {
@@ -392,13 +461,15 @@ mod tests {
             crate::stamp_source::MonotonicStampSource::new(10, 1),
         ))
         .unwrap();
-        for _ in 0..3 {
-            log.append(&mut sample_batch(1)).unwrap();
+        for timestamp in [0, 0, 1_000] {
+            let mut batch = sample_batch(1);
+            batch.max_timestamp = timestamp;
+            log.append(&mut batch).unwrap();
         }
 
         log.tick(
             std::time::UNIX_EPOCH + std::time::Duration::from_secs(1),
-            UNBOUNDED_HW,
+            log.log_end_offset(),
         )
         .unwrap();
 
@@ -409,33 +480,63 @@ mod tests {
         check!(!log.sealed_txn_indexes.contains_key(&Offset(1)));
     }
 
+    /// Kafka's `deleteRetentionSizeBreachedSegments` deletes an oldest segment
+    /// only while the size over budget still covers the whole segment
+    /// (`diff - segment.size() >= 0`), and the active segment counts toward
+    /// the log size. Each log holds four sealed segments and an active one,
+    /// all of one size `s`; the budget is the total minus the debt below.
     #[test]
-    fn tick_retention_size_debt_calculation() {
-        let dir = tempdir().unwrap();
-        let config = LogConfig {
-            segment_size: bytes(1),
-            retention_size: Some(bytes(100_000)),
-            ..LogConfig::default()
-        };
-        let mut log = Log::open(dir.path(), config).unwrap();
-        for _ in 0..5 {
-            log.append(&mut sample_batch(1)).unwrap();
-        }
-        let total = log.size();
-        assert2::assert!(total < bytes(100_000));
-        // Under budget: nothing is evicted by size
-        log.tick(SystemTime::UNIX_EPOCH, UNBOUNDED_HW).unwrap();
-        assert2::assert!(log.segments.len() == 4);
+    fn tick_size_retention_deletes_only_segments_the_debt_covers() {
+        // The size debt in half-segments, and the sealed segments left.
+        let cases: [(&str, Option<u64>, usize); 7] = [
+            ("under budget", None, 4),
+            ("exactly at budget", Some(0), 4),
+            ("half a segment over", Some(1), 4),
+            ("one segment over", Some(2), 3),
+            ("one and a half segments over", Some(3), 3),
+            ("two segments over", Some(4), 2),
+            (
+                "the whole log over, the active segment behind a roll",
+                Some(10),
+                0,
+            ),
+        ];
+        for (name, debt_halves, expected_sealed) in cases {
+            let dir = tempdir().unwrap();
+            let mut log = Log::open(
+                dir.path(),
+                LogConfig {
+                    segment_size: bytes(1),
+                    ..LogConfig::default()
+                },
+            )
+            .unwrap();
+            for _ in 0..5 {
+                log.append(&mut sample_batch(1)).unwrap();
+            }
+            let segment = log.segments[0].size().bytes_u64();
+            check!(
+                log.segments
+                    .iter()
+                    .chain(log.active.as_ref())
+                    .all(|s| s.size().bytes_u64() == segment),
+                "{name}: the fixture needs equal segments"
+            );
+            let total = log.size().bytes_u64();
+            let budget = debt_halves.map_or(total + 1, |halves| {
+                total.saturating_sub(halves * segment / 2)
+            });
+            let mut config = log.config_snapshot();
+            config.retention_size = Some(ByteSize::from_bytes(budget));
+            log.set_config(config);
 
-        // Budget smaller than total size: only excess is evicted
-        let target_budget = total - bytes(100);
-        let mut new_config = log.config_snapshot();
-        new_config.retention_size = Some(target_budget);
-        log.set_config(new_config);
-        log.tick(SystemTime::UNIX_EPOCH, UNBOUNDED_HW).unwrap();
-        // Evicts at least one segment
-        assert2::assert!(log.segments.len() < 4);
+            log.tick(SystemTime::UNIX_EPOCH, log.log_end_offset())
+                .unwrap();
+
+            check!(log.segments.len() == expected_sealed, "{name}");
+        }
     }
+
 
     #[test]
     fn tick_skips_retention_when_remote_storage_enable_is_true() {
@@ -455,7 +556,7 @@ mod tests {
         );
         let sealed_before = tiered.tierable_segments().len();
         assert2::assert!(sealed_before > 0);
-        tiered.tick(far_future, UNBOUNDED_HW).unwrap();
+        tiered.tick(far_future, Offset(i64::MAX)).unwrap();
         assert2::assert!(tiered.tierable_segments().len() == sealed_before);
 
         // Non-tiered baseline: tick should still evict aggressively.
@@ -469,9 +570,9 @@ mod tests {
             },
         );
         assert2::assert!(!plain.tierable_segments().is_empty());
-        plain.tick(far_future, UNBOUNDED_HW).unwrap();
-        // Non-tiered path keeps at least one segment (the active one); every
-        // sealed segment is evicted.
+        plain.tick(far_future, Offset(i64::MAX)).unwrap();
+        // Non-tiered path: every segment is past retention, so every sealed
+        // segment is evicted.
         assert2::assert!(plain.tierable_segments().len() == 0);
     }
 }

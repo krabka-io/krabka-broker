@@ -26,12 +26,14 @@ pub(super) fn unsupported_registered_node(
     feature: &str,
     level: i16,
 ) -> Option<String> {
+    // Kafka's `FeatureControlManager.reasonNotSupported` reads a feature a
+    // node did not register as `QuorumFeatures.DISABLED`, the range `0..=0`.
+    let supports = |features: &std::collections::BTreeMap<String, (i16, i16)>| {
+        let (min, max) = features.get(feature).copied().unwrap_or((0, 0));
+        min <= level && level <= max
+    };
     for broker in image.brokers() {
-        if !broker
-            .features
-            .get(feature)
-            .is_some_and(|&(min, max)| min <= level && level <= max)
-        {
+        if !supports(&broker.features) {
             return Some(format!(
                 "Broker {} does not support {feature} level {level}.",
                 broker.node_id
@@ -39,11 +41,7 @@ pub(super) fn unsupported_registered_node(
         }
     }
     for controller in image.controllers() {
-        if !controller
-            .features
-            .get(feature)
-            .is_some_and(|&(min, max)| min <= level && level <= max)
-        {
+        if !supports(&controller.features) {
             return Some(format!(
                 "Controller {} does not support {feature} level {level}.",
                 controller.node_id

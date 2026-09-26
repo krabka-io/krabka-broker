@@ -1,50 +1,56 @@
-(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 257 0 260 16 *)
+(* #"/workspace/crates/verified/src/restore.rs" 403 0 406 16 *)
 
-let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sconvert = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span snum = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
-let%span snum'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
-let%span sops = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
-let%span sops'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
-let%span sops'1 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
-let%span srestore = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 264 41 264 42
-let%span srestore'0 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 264 64 264 65
-let%span srestore'1 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 264 86 264 88
-let%span srestore'2 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 264 8 265 99
-let%span srestore'3 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 265 49 265 51
-let%span srestore'4 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 265 73 265 75
-let%span srestore'5 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 265 96 265 98
-let%span srestore'6 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 265 15 265 99
-let%span srestore'7 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 267 42 267 44
-let%span srestore'8 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 267 66 267 68
-let%span srestore'9 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 267 89 267 91
-let%span srestore'10 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 267 8 268 78
-let%span srestore'11 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 268 31 268 32
-let%span srestore'12 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 268 54 268 55
-let%span srestore'13 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 268 76 268 77
-let%span srestore'14 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 268 15 268 78
-let%span srestore'15 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 270 23 270 24
-let%span srestore'16 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 271 25 271 26
-let%span srestore'17 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 272 31 272 32
-let%span srestore'18 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 273 51 273 52
-let%span srestore'19 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 273 72 273 73
-let%span srestore'20 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 280 21 280 49
-let%span srestore'21 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 279 4 280 50
-let%span srestore'22 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 279 4 280 51
-let%span srestore'23 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 281 21 281 22
-let%span srestore'24 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 279 4 281 23
-let%span srestore'25 = "/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 210 10 255 1
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span srestore = "/workspace/crates/verified/src/restore.rs" 408 35 408 37
+let%span srestore'0 = "/workspace/crates/verified/src/restore.rs" 409 38 409 40
+let%span srestore'1 = "/workspace/crates/verified/src/restore.rs" 410 37 410 39
+let%span srestore'2 = "/workspace/crates/verified/src/restore.rs" 407 25 410 39
+let%span srestore'3 = "/workspace/crates/verified/src/restore.rs" 412 8 416 48
+let%span srestore'4 = "/workspace/crates/verified/src/restore.rs" 414 43 414 44
+let%span srestore'5 = "/workspace/crates/verified/src/restore.rs" 415 46 415 47
+let%span srestore'6 = "/workspace/crates/verified/src/restore.rs" 416 45 416 47
+let%span srestore'7 = "/workspace/crates/verified/src/restore.rs" 413 15 416 48
+let%span srestore'8 = "/workspace/crates/verified/src/restore.rs" 418 8 421 47
+let%span srestore'9 = "/workspace/crates/verified/src/restore.rs" 419 40 419 41
+let%span srestore'10 = "/workspace/crates/verified/src/restore.rs" 420 46 420 47
+let%span srestore'11 = "/workspace/crates/verified/src/restore.rs" 421 45 421 46
+let%span srestore'12 = "/workspace/crates/verified/src/restore.rs" 419 15 421 47
+let%span srestore'13 = "/workspace/crates/verified/src/restore.rs" 424 32 424 33
+let%span srestore'14 = "/workspace/crates/verified/src/restore.rs" 425 38 425 39
+let%span srestore'15 = "/workspace/crates/verified/src/restore.rs" 426 34 426 35
+let%span srestore'16 = "/workspace/crates/verified/src/restore.rs" 427 61 427 62
+let%span srestore'17 = "/workspace/crates/verified/src/restore.rs" 427 89 427 90
+let%span srestore'18 = "/workspace/crates/verified/src/restore.rs" 434 21 434 56
+let%span srestore'19 = "/workspace/crates/verified/src/restore.rs" 432 4 434 57
+let%span srestore'20 = "/workspace/crates/verified/src/restore.rs" 432 4 434 58
+let%span srestore'21 = "/workspace/crates/verified/src/restore.rs" 435 21 435 22
+let%span srestore'22 = "/workspace/crates/verified/src/restore.rs" 432 4 435 23
+let%span srestore'23 = "/workspace/crates/verified/src/restore.rs" 396 10 401 1
+let%span srestore'24 = "/workspace/crates/verified/src/restore.rs" 386 8 390 79
+let%span srestore'25 = "/workspace/crates/verified/src/restore.rs" 345 8 356 9
+let%span srestore'26 = "/workspace/crates/verified/src/restore.rs" 367 8 370 44
 
 use creusot.int.Int64
-use creusot.int.Int32
 use creusot.int.Int16
+use creusot.int.Int32
 use creusot.prelude.Any
 use int.Int
 
-type tup3_i64_i32_i32 = { f0: Int64.t; f1: Int32.t; f2: Int32.t }
+type t_RestoreProducer = {
+  control: bool;
+  transactional: bool;
+  producer_id: Int64.t;
+  producer_epoch: Int16.t;
+  base_sequence: Int32.t }
 
-type tup5_bool_bool_i64_i16_i32 = { f0'0: bool; f1'0: bool; f2'0: Int64.t; f3'0: Int16.t; f4'0: Int32.t }
+type t_RestoreLayout = { base_offset: Int64.t; last_offset_delta: Int32.t; records_count: Int32.t }
 
 let from_i64 (small: Int32.t) (return (x: Int64.t)) = any
   [ return (result: Int64.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert] result
@@ -55,7 +61,7 @@ type t_Option_i64 = None | Some Int64.t
 
 constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
 
-predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
 
 meta "rewrite_def" predicate gt_log_Int
 
@@ -83,7 +89,7 @@ predicate inv_Option_Infallible (_1: t_Option_Infallible)
 axiom inv_axiom [@rewrite]: forall x: t_Option_Infallible [inv_Option_Infallible x]. inv_Option_Infallible x
     = match x with
       | None'0 -> true
-      | Some'0 f0'1 -> inv_Infallible f0'1
+      | Some'0 f0 -> inv_Infallible f0
       end
 
 predicate inv_ControlFlow_Option_Infallible_i64 (_1: t_ControlFlow_Option_Infallible_i64)
@@ -91,8 +97,8 @@ predicate inv_ControlFlow_Option_Infallible_i64 (_1: t_ControlFlow_Option_Infall
 axiom inv_axiom'0 [@rewrite]:
   forall x: t_ControlFlow_Option_Infallible_i64 [inv_ControlFlow_Option_Infallible_i64 x]. inv_ControlFlow_Option_Infallible_i64 x
     = match x with
-      | Continue f0'1 -> true
-      | Break f0'1 -> inv_Option_Infallible f0'1
+      | Continue f0 -> true
+      | Break f0 -> inv_Option_Infallible f0
       end
 
 let branch_Option_i64 (self_: t_Option_i64) (return (x: t_ControlFlow_Option_Infallible_i64)) = any
@@ -104,8 +110,8 @@ let branch_Option_i64 (self_: t_Option_i64) (return (x: t_ControlFlow_Option_Inf
       end)}
     (! return {result}) ]
 
-let elim_Break (_x: t_ControlFlow_Option_Infallible_i64) (return (f0'1: t_Option_Infallible)) = any
-  [ _k (f0'1: t_Option_Infallible) -> {Break f0'1 = _x} (! return {f0'1})
+let elim_Break (_x: t_ControlFlow_Option_Infallible_i64) (return (f0: t_Option_Infallible)) = any
+  [ _k (f0: t_Option_Infallible) -> {Break f0 = _x} (! return {f0})
   | _chk -> (! {[@expl:elim Break] match _x with
       | Break _ -> true
       | _ -> false
@@ -118,176 +124,140 @@ let from_residual_Option_i64 (residual: t_Option_Infallible) (return (x: t_Optio
   [ return (result: t_Option_i64) -> {[@stop_split] [@expl:from_residual ensures] [%#sops'1] result = None}
     (! return {result}) ]
 
-let elim_Continue (_x: t_ControlFlow_Option_Infallible_i64) (return (f0'1: Int64.t)) = any
-  [ _k (f0'1: Int64.t) -> {Continue f0'1 = _x} (! return {f0'1})
+let elim_Continue (_x: t_ControlFlow_Option_Infallible_i64) (return (f0: Int64.t)) = any
+  [ _k (f0: Int64.t) -> {Continue f0 = _x} (! return {f0})
   | _chk -> (! {[@expl:elim Continue] match _x with
       | Continue _ -> true
       | _ -> false
       end}
     any) ]
 
-predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
 
 meta "rewrite_def" predicate ge_log_Int
+
+predicate legal_header [#"/workspace/crates/verified/src/restore.rs" 384 0 384 65] (layout: t_RestoreLayout) (control'0: bool) =
+  [%#srestore'24] ge_log_Int (Int64.to_int layout.base_offset) 0
+  /\ ge_log_Int (Int32.to_int layout.last_offset_delta) 0
+  /\ ge_log_Int (Int32.to_int layout.records_count) 0
+  /\ (control'0 -> Int32.to_int layout.last_offset_delta = 0 /\ Int32.to_int layout.records_count <= 1)
+  /\ Int64.to_int layout.base_offset + Int32.to_int layout.last_offset_delta + 1 <= Int64.to_int const_MAX
+
+predicate non_idempotent_producer [#"/workspace/crates/verified/src/restore.rs" 365 0 365 65] (producer: t_RestoreProducer) =
+  [%#srestore'26] not producer.transactional
+  /\ Int64.to_int producer.producer_id = - 1
+  /\ Int16.to_int producer.producer_epoch = - 1 /\ Int32.to_int producer.base_sequence = - 1
+
+predicate legal_producer [#"/workspace/crates/verified/src/restore.rs" 343 0 343 56] (producer: t_RestoreProducer) =
+  [%#srestore'25] if producer.control then
+    non_idempotent_producer producer
+    \/ producer.transactional
+    /\ ge_log_Int (Int64.to_int producer.producer_id) 0
+    /\ ge_log_Int (Int16.to_int producer.producer_epoch) 0 /\ Int32.to_int producer.base_sequence = - 1
+  else
+    non_idempotent_producer producer
+    \/ ge_log_Int (Int64.to_int producer.producer_id) 0
+    /\ ge_log_Int (Int16.to_int producer.producer_epoch) 0 /\ ge_log_Int (Int32.to_int producer.base_sequence) 0
+
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let restore_rewritten_batch_header [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/restore.rs" 257 0 260 16]
-  (layout: tup3_i64_i32_i32) (producer: tup5_bool_bool_i64_i16_i32) (return (x: t_Option_i64)) = (! bb0
-  [ bb0 = s0
-    [ s0 = [ &base_offset <- layout.f0 ] s1
-    | s1 = [ &last_offset_delta <- layout.f1 ] s2
-    | s2 = [ &records_count <- layout.f2 ] s3
-    | s3 = [ &control_batch <- producer.f0'0 ] s4
-    | s4 = [ &transactional <- producer.f1'0 ] s5
-    | s5 = [ &producer_id <- producer.f2'0 ] s6
-    | s6 = [ &producer_epoch <- producer.f3'0 ] s7
-    | s7 = [ &base_sequence <- producer.f4'0 ] s8
-    | s8 = any [ br0 -> {control_batch = false} (! bb18) | br1 -> {control_batch} (! bb1) ] ]
-  | bb1 = any [ br0 -> {transactional = false} (! bb9) | br1 -> {transactional} (! bb2) ]
+let restore_rewritten_batch_header [#"/workspace/crates/verified/src/restore.rs" 403 0 406 16] (layout: t_RestoreLayout)
+  (producer: t_RestoreProducer) (return (x: t_Option_i64)) = (! bb0
+  [ bb0 = any [ br0 -> {producer.transactional = false} (! bb1) | br1 -> {producer.transactional} (! bb6) ]
+  | bb1 = s0
+    [ s0 = [ &_8 <- producer.producer_id = ([%#srestore] (-1: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_8 = false} (! bb6) | br1 -> {_8} (! bb2) ] ]
   | bb2 = s0
-    [ s0 = [ &_23 <- Int64.ge producer_id ([%#srestore] (0: Int64.t)) ] s1
-    | s1 = any [ br0 -> {_23 = false} (! bb9) | br1 -> {_23} (! bb3) ] ]
-  | bb3 = s0
-    [ s0 = [ &_25 <- Int16.ge producer_epoch ([%#srestore'0] (0: Int16.t)) ] s1
-    | s1 = any [ br0 -> {_25 = false} (! bb9) | br1 -> {_25} (! bb4) ] ]
-  | bb4 = s0
-    [ s0 = [ &_27 <- base_sequence = ([%#srestore'1] (-1: Int32.t)) ] s1
-    | s1 = any [ br0 -> {_27 = false} (! bb9) | br1 -> {_27} (! bb5) ] ]
-  | bb5 = s0 [ s0 = [ &producer_valid <- [%#srestore'2] true ] s1 | s1 = bb34 ]
-  | bb9 = any [ br0 -> {transactional = false} (! bb10) | br1 -> {transactional} (! bb15) ]
-  | bb10 = s0
-    [ s0 = [ &_30 <- producer_id = ([%#srestore'3] (-1: Int64.t)) ] s1
-    | s1 = any [ br0 -> {_30 = false} (! bb15) | br1 -> {_30} (! bb11) ] ]
+    [ s0 = [ &_10 <- producer.producer_epoch = ([%#srestore'0] (-1: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_10 = false} (! bb6) | br1 -> {_10} (! bb3) ] ]
+  | bb3 = s0 [ s0 = [ &non_idempotent <- producer.base_sequence = ([%#srestore'1] (-1: Int32.t)) ] s1 | s1 = bb7 ]
+  | bb6 = s0 [ s0 = [ &non_idempotent <- [%#srestore'2] false ] s1 | s1 = bb7 ]
+  | bb7 = any [ br0 -> {producer.control = false} (! bb19) | br1 -> {producer.control} (! bb8) ]
+  | bb8 = any [ br0 -> {non_idempotent = false} (! bb10) | br1 -> {non_idempotent} (! bb9) ]
+  | bb9 = s0 [ s0 = [ &producer_legal <- [%#srestore'3] true ] s1 | s1 = bb29 ]
+  | bb10 = any [ br0 -> {producer.transactional = false} (! bb16) | br1 -> {producer.transactional} (! bb11) ]
   | bb11 = s0
-    [ s0 = [ &_32 <- producer_epoch = ([%#srestore'4] (-1: Int16.t)) ] s1
-    | s1 = any [ br0 -> {_32 = false} (! bb15) | br1 -> {_32} (! bb12) ] ]
-  | bb12 = s0 [ s0 = [ &producer_valid <- base_sequence = ([%#srestore'5] (-1: Int32.t)) ] s1 | s1 = bb34 ]
-  | bb15 = s0 [ s0 = [ &producer_valid <- [%#srestore'6] false ] s1 | s1 = bb34 ]
-  | bb18 = any [ br0 -> {transactional = false} (! bb19) | br1 -> {transactional} (! bb26) ]
-  | bb19 = s0
-    [ s0 = [ &_36 <- producer_id = ([%#srestore'7] (-1: Int64.t)) ] s1
-    | s1 = any [ br0 -> {_36 = false} (! bb26) | br1 -> {_36} (! bb20) ] ]
-  | bb20 = s0
-    [ s0 = [ &_38 <- producer_epoch = ([%#srestore'8] (-1: Int16.t)) ] s1
-    | s1 = any [ br0 -> {_38 = false} (! bb26) | br1 -> {_38} (! bb21) ] ]
+    [ s0 = [ &_17 <- Int64.ge producer.producer_id ([%#srestore'4] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_17 = false} (! bb16) | br1 -> {_17} (! bb12) ] ]
+  | bb12 = s0
+    [ s0 = [ &_19 <- Int16.ge producer.producer_epoch ([%#srestore'5] (0: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_19 = false} (! bb16) | br1 -> {_19} (! bb13) ] ]
+  | bb13 = s0 [ s0 = [ &producer_legal <- producer.base_sequence = ([%#srestore'6] (-1: Int32.t)) ] s1 | s1 = bb29 ]
+  | bb16 = s0 [ s0 = [ &producer_legal <- [%#srestore'7] false ] s1 | s1 = bb29 ]
+  | bb19 = any [ br0 -> {non_idempotent = false} (! bb21) | br1 -> {non_idempotent} (! bb20) ]
+  | bb20 = s0 [ s0 = [ &producer_legal <- [%#srestore'8] true ] s1 | s1 = bb29 ]
   | bb21 = s0
-    [ s0 = [ &_40 <- base_sequence = ([%#srestore'9] (-1: Int32.t)) ] s1
-    | s1 = any [ br0 -> {_40 = false} (! bb26) | br1 -> {_40} (! bb22) ] ]
-  | bb22 = s0 [ s0 = [ &producer_valid <- [%#srestore'10] true ] s1 | s1 = bb34 ]
-  | bb26 = s0
-    [ s0 = [ &_42 <- Int64.ge producer_id ([%#srestore'11] (0: Int64.t)) ] s1
-    | s1 = any [ br0 -> {_42 = false} (! bb31) | br1 -> {_42} (! bb27) ] ]
-  | bb27 = s0
-    [ s0 = [ &_44 <- Int16.ge producer_epoch ([%#srestore'12] (0: Int16.t)) ] s1
-    | s1 = any [ br0 -> {_44 = false} (! bb31) | br1 -> {_44} (! bb28) ] ]
-  | bb28 = s0 [ s0 = [ &producer_valid <- Int32.ge base_sequence ([%#srestore'13] (0: Int32.t)) ] s1 | s1 = bb34 ]
-  | bb31 = s0 [ s0 = [ &producer_valid <- [%#srestore'14] false ] s1 | s1 = bb34 ]
+    [ s0 = [ &_23 <- Int64.ge producer.producer_id ([%#srestore'9] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_23 = false} (! bb26) | br1 -> {_23} (! bb22) ] ]
+  | bb22 = s0
+    [ s0 = [ &_25 <- Int16.ge producer.producer_epoch ([%#srestore'10] (0: Int16.t)) ] s1
+    | s1 = any [ br0 -> {_25 = false} (! bb26) | br1 -> {_25} (! bb23) ] ]
+  | bb23 = s0
+    [ s0 = [ &producer_legal <- Int32.ge producer.base_sequence ([%#srestore'11] (0: Int32.t)) ] s1 | s1 = bb29 ]
+  | bb26 = s0 [ s0 = [ &producer_legal <- [%#srestore'12] false ] s1 | s1 = bb29 ]
+  | bb29 = any [ br0 -> {producer_legal = false} (! bb41) | br1 -> {producer_legal} (! bb30) ]
+  | bb30 = s0
+    [ s0 = [ &_30 <- Int64.lt layout.base_offset ([%#srestore'13] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_30 = false} (! bb32) | br1 -> {_30} (! bb41) ] ]
+  | bb32 = s0
+    [ s0 = [ &_32 <- Int32.lt layout.last_offset_delta ([%#srestore'14] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_32 = false} (! bb34) | br1 -> {_32} (! bb41) ] ]
   | bb34 = s0
-    [ s0 = [ &_48 <- Int32.lt records_count ([%#srestore'15] (0: Int32.t)) ] s1
-    | s1 = any [ br0 -> {_48 = false} (! bb36) | br1 -> {_48} (! bb47) ] ]
-  | bb36 = s0
-    [ s0 = [ &_50 <- Int64.lt base_offset ([%#srestore'16] (0: Int64.t)) ] s1
-    | s1 = any [ br0 -> {_50 = false} (! bb38) | br1 -> {_50} (! bb47) ] ]
-  | bb38 = s0
-    [ s0 = [ &_52 <- Int32.lt last_offset_delta ([%#srestore'17] (0: Int32.t)) ] s1
-    | s1 = any [ br0 -> {_52 = false} (! bb40) | br1 -> {_52} (! bb47) ] ]
-  | bb40 = any [ br0 -> {control_batch = false} (! bb46) | br1 -> {control_batch} (! bb41) ]
-  | bb41 = s0
-    [ s0 = [ &_55 <- last_offset_delta <> ([%#srestore'18] (0: Int32.t)) ] s1
-    | s1 = any [ br0 -> {_55 = false} (! bb43) | br1 -> {_55} (! bb47) ] ]
+    [ s0 = [ &_34 <- Int32.lt layout.records_count ([%#srestore'15] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_34 = false} (! bb36) | br1 -> {_34} (! bb41) ] ]
+  | bb36 = any [ br0 -> {producer.control = false} (! bb43) | br1 -> {producer.control} (! bb37) ]
+  | bb37 = s0
+    [ s0 = [ &_37 <- layout.last_offset_delta <> ([%#srestore'16] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_37 = false} (! bb39) | br1 -> {_37} (! bb41) ] ]
+  | bb39 = s0
+    [ s0 = [ &_39 <- Int32.gt layout.records_count ([%#srestore'17] (1: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_39 = false} (! bb43) | br1 -> {_39} (! bb41) ] ]
   | bb43 = s0
-    [ s0 = [ &_57 <- Int32.gt records_count ([%#srestore'19] (1: Int32.t)) ] s1
-    | s1 = any [ br0 -> {_57 = false} (! bb46) | br1 -> {_57} (! bb47) ] ]
-  | bb46 = any [ br0 -> {producer_valid = false} (! bb47) | br1 -> {producer_valid} (! bb48) ]
-  | bb48 = s0
-    [ s0 = from_i64 [%#srestore'20] {last_offset_delta} (fun (_x: Int64.t) -> [ &_65 <- _x ] s1)
-    | s1 = checked_add [%#srestore'21] {base_offset} {_65} (fun (_x: t_Option_i64) -> [ &_63 <- _x ] s2)
-    | s2 = branch_Option_i64 [%#srestore'22] {_63} (fun (_x: t_ControlFlow_Option_Infallible_i64) -> [ &_62 <- _x ] s3)
+    [ s0 = from_i64 [%#srestore'18] {layout.last_offset_delta} (fun (_x: Int64.t) -> [ &_46 <- _x ] s1)
+    | s1 = checked_add [%#srestore'19] {layout.base_offset} {_46} (fun (_x: t_Option_i64) -> [ &_44 <- _x ] s2)
+    | s2 = branch_Option_i64 [%#srestore'20] {_44} (fun (_x: t_ControlFlow_Option_Infallible_i64) -> [ &_43 <- _x ] s3)
     | s3 = any
-      [ br0 (x0: Int64.t) -> {_62 = Continue x0} (! bb54)
-      | br1 (x0: t_Option_Infallible) -> {_62 = Break x0} (! bb55) ] ]
-  | bb55 = s0
-    [ s0 = elim_Break {_62} (fun (r0: t_Option_Infallible) -> [ &residual <- r0 ] s1)
-    | s1 = from_residual_Option_i64 [%#srestore'22] {residual} (fun (_x: t_Option_i64) -> [ &_ret <- _x ] s2)
+      [ br0 (x0: Int64.t) -> {_43 = Continue x0} (! bb49)
+      | br1 (x0: t_Option_Infallible) -> {_43 = Break x0} (! bb50) ] ]
+  | bb50 = s0
+    [ s0 = elim_Break {_43} (fun (r0: t_Option_Infallible) -> [ &residual <- r0 ] s1)
+    | s1 = from_residual_Option_i64 [%#srestore'20] {residual} (fun (_x: t_Option_i64) -> [ &_ret <- _x ] s2)
     | s2 = return {_ret} ]
-  | bb54 = s0
-    [ s0 = elim_Continue {_62} (fun (r0: Int64.t) -> [ &val' <- r0 ] s1)
-    | s1 = checked_add [%#srestore'24] {val'} {[%#srestore'23] (1: Int64.t)}
+  | bb49 = s0
+    [ s0 = elim_Continue {_43} (fun (r0: Int64.t) -> [ &val' <- r0 ] s1)
+    | s1 = checked_add [%#srestore'22] {val'} {[%#srestore'21] (1: Int64.t)}
         (fun (_x: t_Option_i64) -> [ &_ret <- _x ] s2)
     | s2 = return {_ret} ]
-  | bb47 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ] ]
+  | bb41 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_Option_i64 = Any.any_l ()
-  | & layout: tup3_i64_i32_i32 = layout
-  | & producer: tup5_bool_bool_i64_i16_i32 = producer
-  | & base_offset: Int64.t = Any.any_l ()
-  | & last_offset_delta: Int32.t = Any.any_l ()
-  | & records_count: Int32.t = Any.any_l ()
-  | & control_batch: bool = Any.any_l ()
-  | & transactional: bool = Any.any_l ()
-  | & producer_id: Int64.t = Any.any_l ()
-  | & producer_epoch: Int16.t = Any.any_l ()
-  | & base_sequence: Int32.t = Any.any_l ()
-  | & producer_valid: bool = Any.any_l ()
+  | & layout: t_RestoreLayout = layout
+  | & producer: t_RestoreProducer = producer
+  | & non_idempotent: bool = Any.any_l ()
+  | & _8: bool = Any.any_l ()
+  | & _10: bool = Any.any_l ()
+  | & producer_legal: bool = Any.any_l ()
+  | & _17: bool = Any.any_l ()
+  | & _19: bool = Any.any_l ()
   | & _23: bool = Any.any_l ()
   | & _25: bool = Any.any_l ()
-  | & _27: bool = Any.any_l ()
   | & _30: bool = Any.any_l ()
   | & _32: bool = Any.any_l ()
-  | & _36: bool = Any.any_l ()
-  | & _38: bool = Any.any_l ()
-  | & _40: bool = Any.any_l ()
-  | & _42: bool = Any.any_l ()
-  | & _44: bool = Any.any_l ()
-  | & _48: bool = Any.any_l ()
-  | & _50: bool = Any.any_l ()
-  | & _52: bool = Any.any_l ()
-  | & _55: bool = Any.any_l ()
-  | & _57: bool = Any.any_l ()
-  | & _62: t_ControlFlow_Option_Infallible_i64 = Any.any_l ()
-  | & _63: t_Option_i64 = Any.any_l ()
-  | & _65: Int64.t = Any.any_l ()
+  | & _34: bool = Any.any_l ()
+  | & _37: bool = Any.any_l ()
+  | & _39: bool = Any.any_l ()
+  | & _43: t_ControlFlow_Option_Infallible_i64 = Any.any_l ()
+  | & _44: t_Option_i64 = Any.any_l ()
+  | & _46: Int64.t = Any.any_l ()
   | & residual: t_Option_Infallible = Any.any_l ()
   | & val': Int64.t = Any.any_l () ])
   [ return (result: t_Option_i64) ->
-  {[@stop_split] [@expl:restore_rewritten_batch_header ensures] [%#srestore'25] match result with
-      | Some frontier -> ge_log_Int (Int32.to_int layout.f2) 0
-      /\ ge_log_Int (Int64.to_int layout.f0) 0
-      /\ ge_log_Int (Int32.to_int layout.f1) 0
-      /\ (not producer.f0'0 \/ Int32.to_int layout.f1 = 0 /\ Int32.to_int layout.f2 <= 1)
-      /\ Int64.to_int frontier = Int64.to_int layout.f0 + Int32.to_int layout.f1 + 1
-      /\ gt_log_Int (Int64.to_int frontier) (Int64.to_int layout.f0)
-      /\ Int64.to_int frontier <= Int64.to_int const_MAX
-      /\ (if producer.f0'0 then
-        producer.f1'0
-          /\ ge_log_Int (Int64.to_int producer.f2'0) 0
-          /\ ge_log_Int (Int16.to_int producer.f3'0) 0 /\ Int32.to_int producer.f4'0 = - 1
-        \/ not producer.f1'0
-        /\ Int64.to_int producer.f2'0 = - 1 /\ Int16.to_int producer.f3'0 = - 1 /\ Int32.to_int producer.f4'0 = - 1
-      else
-        not producer.f1'0
-          /\ Int64.to_int producer.f2'0 = - 1 /\ Int16.to_int producer.f3'0 = - 1 /\ Int32.to_int producer.f4'0 = - 1
-        \/ ge_log_Int (Int64.to_int producer.f2'0) 0
-        /\ ge_log_Int (Int16.to_int producer.f3'0) 0 /\ ge_log_Int (Int32.to_int producer.f4'0) 0
-      )
-      | None -> Int32.to_int layout.f2 < 0
-      \/ Int64.to_int layout.f0 < 0
-      \/ Int32.to_int layout.f1 < 0
-      \/ producer.f0'0 /\ (Int32.to_int layout.f1 <> 0 \/ gt_log_Int (Int32.to_int layout.f2) 1)
-      \/ gt_log_Int (Int64.to_int layout.f0 + Int32.to_int layout.f1 + 1) (Int64.to_int const_MAX)
-      \/ not (if producer.f0'0 then
-        producer.f1'0
-          /\ ge_log_Int (Int64.to_int producer.f2'0) 0
-          /\ ge_log_Int (Int16.to_int producer.f3'0) 0 /\ Int32.to_int producer.f4'0 = - 1
-        \/ not producer.f1'0
-        /\ Int64.to_int producer.f2'0 = - 1 /\ Int16.to_int producer.f3'0 = - 1 /\ Int32.to_int producer.f4'0 = - 1
-      else
-        not producer.f1'0
-          /\ Int64.to_int producer.f2'0 = - 1 /\ Int16.to_int producer.f3'0 = - 1 /\ Int32.to_int producer.f4'0 = - 1
-        \/ ge_log_Int (Int64.to_int producer.f2'0) 0
-        /\ ge_log_Int (Int16.to_int producer.f3'0) 0 /\ ge_log_Int (Int32.to_int producer.f4'0) 0
-      )
+  {[@stop_split] [@expl:restore_rewritten_batch_header ensures] [%#srestore'23] match result with
+      | Some frontier -> legal_header layout producer.control
+      /\ legal_producer producer
+      /\ Int64.to_int frontier = Int64.to_int layout.base_offset + Int32.to_int layout.last_offset_delta + 1
+      | None -> not (legal_header layout producer.control /\ legal_producer producer)
       end}
     (! return {result}) ]

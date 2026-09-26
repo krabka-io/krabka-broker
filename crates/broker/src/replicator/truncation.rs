@@ -1,7 +1,8 @@
 //! Recovery paths that rewrite the local log after the follower and the leader
 //! disagree.
 //!
-//! `OFFSET_OUT_OF_RANGE` resets the log to the leader's log start.
+//! `OFFSET_OUT_OF_RANGE` asks the leader for its log end and log start with
+//! `ListOffsets` and truncates to the one this replica has overrun.
 //! `FENCED_LEADER_EPOCH` runs the KIP-101 `OffsetForLeaderEpoch` lookup and
 //! truncates to the epoch boundary the leader reports.
 //! `OFFSET_MOVED_TO_TIERED_STORAGE` runs the KIP-405
@@ -10,7 +11,6 @@
 
 use krabka_log::Offset;
 use krabka_protocol::owned::{
-    fetch_response::PartitionData,
     list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
     list_offsets_response::ListOffsetsResponse,
     offset_for_leader_epoch_request::{
@@ -25,67 +25,172 @@ use super::{
 };
 use crate::codes;
 
-pub(super) async fn handle_offset_out_of_range(
-    partition_response: &PartitionData,
-    cfg: &Config,
-) -> RowAction {
+/// Kafka's `ListOffsetsRequest.LATEST_TIMESTAMP`: a follower's `ListOffsets`
+/// is answered with the leader's log end offset.
+const LATEST_TIMESTAMP: i64 = -1;
+
+/// Kafka's `ListOffsetsRequest.EARLIEST_TIMESTAMP`: the leader's (global) log
+/// start offset.
+const EARLIEST_TIMESTAMP: i64 = -2;
+
+/// What `AbstractFetcherThread.fetchOffsetAndTruncate` does with this
+/// replica's log once it knows the leader's log end offset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LeaderEndRecovery {
+    /// The unclean-election case: the leader's log ends below this replica's,
+    /// so the replica truncates to the leader's end and fetches from there.
+    TruncateTo(i64),
+    /// The leader's log reaches at least as far as this replica's; what to do
+    /// next depends on the leader's log start.
+    AskLeaderStart,
+}
+
+/// `fetchOffsetAndTruncate`'s first test, `leaderEndOffset <
+/// replicaEndOffset`.
+///
+/// Its KIP-1023 branch, which restarts an empty replica at the last tiered
+/// offset, needs `follower.fetch.last.tiered.offset.enable`, which defaults
+/// to `false` and which this broker does not offer, so it is never taken.
+fn recovery_for_leader_end(replica_end: i64, leader_end: i64) -> LeaderEndRecovery {
+    if leader_end < replica_end {
+        LeaderEndRecovery::TruncateTo(leader_end)
+    } else {
+        LeaderEndRecovery::AskLeaderStart
+    }
+}
+
+/// `fetchOffsetAndTruncate`'s second test: the offset to restart an emptied
+/// log at (`truncateFullyAndStartAt`) when the leader's log start lies above
+/// this replica's end, or `None` when the replica keeps its log and fetches
+/// on from its own end.
+///
+/// The second case covers a tiered leader whose remote tier was momentarily
+/// unreachable, and an unclean election whose new leader has since written
+/// past this replica: neither is evidence that this replica's log is stale.
+fn reset_for_leader_start(replica_end: i64, leader_start: i64) -> Option<i64> {
+    (leader_start > replica_end).then_some(leader_start)
+}
+
+/// Recovers from `OFFSET_OUT_OF_RANGE` the way Kafka's
+/// `AbstractFetcherThread.fetchOffsetAndTruncate` does: ask the leader for
+/// its log end offset with `ListOffsets(LATEST)`, truncate to it when it lies
+/// below this replica's log end, and otherwise ask for its log start with
+/// `ListOffsets(EARLIEST)` and restart an emptied log there when the log
+/// start lies above this replica's end.
+///
+/// The error row's own offsets are not read: Kafka answers this error with
+/// `LogReadResult(Errors)`, whose offsets are all -1. A lookup that fails
+/// deletes nothing; the row backs off and fetches again, as Kafka's
+/// `handleOutOfRangeError` delays a partition whose offset lookup failed.
+// cargo-mutants: an IO-only wrapper. It connects to the leader and hands the
+// `ListOffsets` round trip to `recover_offset_out_of_range`, which the tests
+// below drive with a scripted leader.
+#[cfg_attr(test, mutants::skip)]
+pub(super) async fn handle_offset_out_of_range(cfg: &Config) -> RowAction {
+    // Kafka asks under the fetch state's `currentLeaderEpoch`: the epoch of
+    // the leader this task replicates from.
+    let our_epoch = cfg.leader_epoch.0;
+    recover_offset_out_of_range(cfg, |timestamp| {
+        leader_list_offset(cfg, our_epoch, timestamp)
+    })
+    .await
+}
+
+/// [`handle_offset_out_of_range`] over an injectable `ListOffsets` lookup,
+/// which maps a sentinel timestamp to the leader's offset for it.
+async fn recover_offset_out_of_range<F, Fut>(cfg: &Config, mut leader_offset: F) -> RowAction
+where
+    F: FnMut(i64) -> Fut,
+    Fut: std::future::Future<Output = Result<i64, String>>,
+{
     if replication_target_changed(cfg) {
         warn!(topic = %cfg.topic, partition = cfg.partition.get(),
-            "replicator: skipping out_of_range reset from stale target");
+            "replicator: skipping out_of_range recovery from stale target");
         return RowAction::Drop;
     }
-    let leader_log_start = partition_response.log_start_offset;
-    if let Some(partition) = cfg.partitions.get(&cfg.topic, cfg.partition) {
-        // Kafka's `fetchOffsetAndTruncate`: a full reset is for a follower
-        // that has fallen off the bottom of the leader's log, which is
-        // `leaderStartOffset > replicaEndOffset` and nothing else.
-        //
-        // On a tiered leader (KIP-405) the local log can start above the
-        // global one, and a fetch into that band is answered
-        // `OFFSET_OUT_OF_RANGE` so the remote tier can serve it. When the
-        // remote tier is momentarily unreachable the same code comes back with
-        // the true, lower `log_start_offset`. Resetting on that would delete a
-        // follower's good local log for a transient object-store failure, and
-        // do it again on every retry. Every non-tiered `OFFSET_OUT_OF_RANGE`
-        // still passes this test: the leader raises it precisely when the
-        // fetch offset is below its log start.
-        let local_log_end = partition.log_end_offset();
-        if leader_log_start <= local_log_end.0 {
-            warn!(
-                topic = %cfg.topic,
-                partition = cfg.partition.get(),
-                leader_log_start,
-                local_log_end = local_log_end.0,
-                "replicator.out_of_range above the leader's log start; retrying without a reset"
-            );
-            return RowAction::Continue;
-        }
+    let Some(partition) = cfg.partitions.get(&cfg.topic, cfg.partition) else {
+        return RowAction::Continue;
+    };
+    let backoff = |error: String| {
         warn!(
             topic = %cfg.topic,
             partition = cfg.partition.get(),
-            leader_log_start,
-            "replicator.out_of_range; resetting local log to leader log_start"
+            %error,
+            "replicator: could not read the leader's offsets after out_of_range; retrying"
         );
-        let _target_guard = match partition
-            .lock_replication_target(task_replication_target(cfg))
-            .await
-        {
-            Ok(guard) => guard,
-            Err(error) => {
-                warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error,
-                    "replicator: skipping out_of_range reset from stale local target");
-                return RowAction::Drop;
-            }
-        };
-        match partition.reset_to(Offset(leader_log_start)).await {
-            Ok(()) => {
-                cfg.producer_state
-                    .truncate(&cfg.topic, cfg.partition, leader_log_start)
-                    .await;
-            }
-            Err(error) => {
-                warn!(error = %error, "replicator: reset_to(leader_log_start) failed");
-            }
+        RowAction::Backoff(cfg.replication.unexpected_error_backoff)
+    };
+    let replica_end = partition.log_end_offset().0;
+    let leader_end = match leader_offset(LATEST_TIMESTAMP).await {
+        Ok(offset) => offset,
+        Err(error) => return backoff(error),
+    };
+    let (target, reset) = match recovery_for_leader_end(replica_end, leader_end) {
+        LeaderEndRecovery::TruncateTo(leader_end) => (leader_end, false),
+        LeaderEndRecovery::AskLeaderStart => {
+            let leader_start = match leader_offset(EARLIEST_TIMESTAMP).await {
+                Ok(offset) => offset,
+                Err(error) => return backoff(error),
+            };
+            let Some(leader_start) = reset_for_leader_start(replica_end, leader_start) else {
+                info!(
+                    topic = %cfg.topic,
+                    partition = cfg.partition.get(),
+                    replica_end,
+                    leader_start,
+                    leader_end,
+                    "replicator.out_of_range; fetching on from the local log end"
+                );
+                return RowAction::Continue;
+            };
+            (leader_start, true)
+        }
+    };
+    // Stale-response guard, as on every other recovery path: the metadata
+    // image can have chosen another target while the lookups were in flight.
+    if replication_target_changed(cfg) {
+        warn!(topic = %cfg.topic, partition = cfg.partition.get(),
+            "replicator: skipping out_of_range recovery from stale target");
+        return RowAction::Drop;
+    }
+    let _target_guard = match partition
+        .lock_replication_target(task_replication_target(cfg))
+        .await
+    {
+        Ok(guard) => guard,
+        Err(error) => {
+            warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error,
+                "replicator: skipping out_of_range recovery from stale local target");
+            return RowAction::Drop;
+        }
+    };
+    warn!(
+        topic = %cfg.topic,
+        partition = cfg.partition.get(),
+        replica_end,
+        target,
+        reset,
+        "replicator.out_of_range; {}",
+        if reset {
+            "truncating fully and restarting at the leader's log start"
+        } else {
+            "truncating to the leader's log end"
+        }
+    );
+    let result = if reset {
+        partition.reset_to(Offset(target)).await
+    } else {
+        partition.truncate_to(Offset(target)).await
+    };
+    match result {
+        Ok(()) => {
+            cfg.producer_state
+                .truncate(&cfg.topic, cfg.partition, target)
+                .await;
+        }
+        Err(error) => {
+            warn!(topic = %cfg.topic, partition = cfg.partition.get(), %error,
+                target, reset, "replicator: out_of_range recovery failed");
         }
     }
     RowAction::Continue
@@ -112,18 +217,16 @@ const EARLIEST_LOCAL_TIMESTAMP: i64 = -4;
 /// `truncateFullyAndStartAt`.
 ///
 /// This is a reset and not a truncation: every offset below the answer is in
-/// the archive and none of it belongs on this replica's disk. It is safe where
-/// [`handle_offset_out_of_range`]'s reset is not, because the leader named this
-/// band itself rather than the follower inferring one from a log start that a
-/// transient tier failure could have made look low.
+/// the archive and none of it belongs on this replica's disk, and the leader
+/// named this band itself.
 ///
 /// The lookup failing is not evidence about the log, so nothing is deleted:
 /// the row backs off and fetches again.
 // cargo-mutants: an IO-only wrapper. Every step is inter-broker IO -- connect,
 // send `ListOffsets`, then `reset_to` -- so no in-process seam distinguishes a
 // mutant. The request it sends and the answer it reads are computed by
-// `build_earliest_local_offsets_request` and `leader_local_log_start`, which
-// are unit-tested below.
+// `build_leader_offsets_request` and `leader_offset_from`, which are
+// unit-tested below.
 #[cfg_attr(test, mutants::skip)]
 pub(super) async fn handle_offset_moved_to_tiered_storage(cfg: &Config) -> RowAction {
     if replication_target_changed(cfg) {
@@ -139,7 +242,7 @@ pub(super) async fn handle_offset_moved_to_tiered_storage(cfg: &Config) -> RowAc
         .load(std::sync::atomic::Ordering::Acquire);
     drop(partition);
 
-    let local_log_start = match leader_local_log_start_offset(cfg, our_epoch).await {
+    let local_log_start = match leader_list_offset(cfg, our_epoch, EARLIEST_LOCAL_TIMESTAMP).await {
         Ok(offset) => offset,
         Err(error) => {
             warn!(
@@ -193,8 +296,9 @@ pub(super) async fn handle_offset_moved_to_tiered_storage(cfg: &Config) -> RowAc
     RowAction::Continue
 }
 
-/// Asks the leader for the first offset it still holds locally.
-async fn leader_local_log_start_offset(cfg: &Config, our_epoch: i32) -> Result<i64, String> {
+/// Asks the leader for its offset at a `ListOffsets` sentinel `timestamp`,
+/// Kafka's `RemoteLeaderEndPoint.fetchOffset`.
+async fn leader_list_offset(cfg: &Config, our_epoch: i32, timestamp: i64) -> Result<i64, String> {
     let opts = connection_options(&cfg.client_id);
     let client = cfg
         .inter_broker_client
@@ -206,20 +310,25 @@ async fn leader_local_log_start_offset(cfg: &Config, our_epoch: i32) -> Result<i
             opts,
         )
         .await
-        .map_err(|e| format!("earliest_local: connect: {e}"))?;
+        .map_err(|e| format!("list_offsets({timestamp}): connect: {e}"))?;
     let response = client
-        .send(build_earliest_local_offsets_request(cfg, our_epoch))
+        .send(build_leader_offsets_request(cfg, our_epoch, timestamp))
         .await
-        .map_err(|e| format!("earliest_local: send: {e}"))?;
-    leader_local_log_start(&response, &cfg.topic, cfg.partition.get())
+        .map_err(|e| format!("list_offsets({timestamp}): send: {e}"))?;
+    leader_offset_from(&response, &cfg.topic, cfg.partition.get())
 }
 
-/// The `ListOffsets` a follower sends to learn the leader's local log start.
+/// The `ListOffsets` a follower sends to learn one of the leader's offsets.
 ///
 /// `replica_id` carries this broker's id, as every inter-broker `ListOffsets`
-/// does, and `current_leader_epoch` carries the epoch this follower is
+/// does, so the leader answers LATEST with its log end rather than its high
+/// watermark, and `current_leader_epoch` carries the epoch this follower is
 /// replicating under so the leader can fence a stale question (KIP-320).
-fn build_earliest_local_offsets_request(cfg: &Config, our_epoch: i32) -> ListOffsetsRequest {
+fn build_leader_offsets_request(
+    cfg: &Config,
+    our_epoch: i32,
+    timestamp: i64,
+) -> ListOffsetsRequest {
     ListOffsetsRequest {
         replica_id: i32::try_from(cfg.node_id.0).unwrap_or(-1),
         topics: vec![ListOffsetsTopic {
@@ -227,7 +336,7 @@ fn build_earliest_local_offsets_request(cfg: &Config, our_epoch: i32) -> ListOff
             partitions: vec![ListOffsetsPartition {
                 partition_index: cfg.partition.get(),
                 current_leader_epoch: our_epoch,
-                timestamp: EARLIEST_LOCAL_TIMESTAMP,
+                timestamp,
                 ..ListOffsetsPartition::default()
             }],
             ..ListOffsetsTopic::default()
@@ -241,9 +350,9 @@ fn build_earliest_local_offsets_request(cfg: &Config, our_epoch: i32) -> ListOff
 ///
 /// A row the leader answered with an error, a row it did not answer at all,
 /// and a negative offset are all failures rather than a truncation point: none
-/// of them says where this follower's log should begin, and acting on one
-/// would delete a log on no evidence.
-fn leader_local_log_start(
+/// of them says where this follower's log should begin or end, and acting on
+/// one would delete a log on no evidence.
+fn leader_offset_from(
     response: &ListOffsetsResponse,
     topic: &str,
     partition: i32,
@@ -254,17 +363,14 @@ fn leader_local_log_start(
         .find(|t| t.name == topic)
         .and_then(|t| t.partitions.iter().find(|p| p.partition_index == partition))
     else {
-        return Err("earliest_local: the leader answered no row for this partition".into());
+        return Err("list_offsets: the leader answered no row for this partition".into());
     };
     if row.error_code != codes::NONE {
-        return Err(format!(
-            "earliest_local: ListOffsets error {}",
-            row.error_code
-        ));
+        return Err(format!("list_offsets: error {}", row.error_code));
     }
     if row.offset < 0 {
         return Err(format!(
-            "earliest_local: the leader reported offset {}",
+            "list_offsets: the leader reported offset {}",
             row.offset
         ));
     }
@@ -470,45 +576,52 @@ mod tests {
         assert!(req.replica_id == -1);
     }
 
-    /// The one question that separates a tiered leader's two floors over the
-    /// wire. `EARLIEST` would answer the global log start, which on a tiered
-    /// partition names an offset that lives only in the archive -- restarting
-    /// there is what this whole path exists to stop.
+    /// Every offset a follower asks its leader for: LATEST and EARLIEST for
+    /// `fetchOffsetAndTruncate`, and `EARLIEST_LOCAL`, the one question that
+    /// separates a tiered leader's two floors over the wire. `EARLIEST`
+    /// answers the global log start, which on a tiered partition names an
+    /// offset that lives only in the archive.
     #[test]
-    fn earliest_local_request_asks_the_leader_for_its_local_floor() {
+    fn leader_offsets_request_names_this_replica_and_the_sentinel() {
         use krabka_protocol::owned::list_offsets_request::{
             ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic,
         };
 
         let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
 
-        let req = build_earliest_local_offsets_request(&cfg, 7);
+        for (sentinel, timestamp) in [
+            (LATEST_TIMESTAMP, -1),
+            (EARLIEST_TIMESTAMP, -2),
+            (EARLIEST_LOCAL_TIMESTAMP, -4),
+        ] {
+            let req = build_leader_offsets_request(&cfg, 7, sentinel);
 
-        let expected = ListOffsetsRequest {
-            replica_id: i32::try_from(NODE_ID.0).unwrap(),
-            isolation_level: 0,
-            topics: vec![ListOffsetsTopic {
-                name: TOPIC.into(),
-                partitions: vec![ListOffsetsPartition {
-                    partition_index: PARTITION,
-                    current_leader_epoch: 7,
-                    timestamp: -4,
+            let expected = ListOffsetsRequest {
+                replica_id: i32::try_from(NODE_ID.0).unwrap(),
+                isolation_level: 0,
+                topics: vec![ListOffsetsTopic {
+                    name: TOPIC.into(),
+                    partitions: vec![ListOffsetsPartition {
+                        partition_index: PARTITION,
+                        current_leader_epoch: 7,
+                        timestamp,
+                        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+                    }],
                     unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
                 }],
+                timeout_ms: 0,
                 unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-            }],
-            timeout_ms: 0,
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-        };
-        assert!(req == expected);
+            };
+            assert!(req == expected, "timestamp {timestamp}");
+        }
     }
 
     #[test]
-    fn earliest_local_request_uses_negative_replica_sentinel_when_node_id_overflows() {
+    fn leader_offsets_request_uses_negative_replica_sentinel_when_node_id_overflows() {
         let (mut cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
         cfg.node_id = NodeId(i32::MAX as u64 + 1);
 
-        let req = build_earliest_local_offsets_request(&cfg, 7);
+        let req = build_leader_offsets_request(&cfg, 7, EARLIEST_LOCAL_TIMESTAMP);
 
         assert!(req.replica_id == -1);
     }
@@ -541,7 +654,7 @@ mod tests {
         };
 
         let answered = response(TOPIC, vec![row(PARTITION, codes::NONE, 4_096)]);
-        assert!(leader_local_log_start(&answered, TOPIC, PARTITION) == Ok(4_096));
+        assert!(leader_offset_from(&answered, TOPIC, PARTITION) == Ok(4_096));
 
         for (what, resp) in [
             (
@@ -566,7 +679,7 @@ mod tests {
             ),
         ] {
             assert!(
-                leader_local_log_start(&resp, TOPIC, PARTITION).is_err(),
+                leader_offset_from(&resp, TOPIC, PARTITION).is_err(),
                 "{what} named a restart point"
             );
         }
@@ -597,6 +710,131 @@ mod tests {
             .expect("local partition")
             .log_end_offset();
         assert!(after == before);
+    }
+
+    /// What one out-of-range recovery did: the row action, the `ListOffsets`
+    /// sentinels it asked the leader for in order, and this replica's log
+    /// bounds afterwards.
+    #[derive(Debug, PartialEq)]
+    struct Recovery {
+        action: RowAction,
+        asked: Vec<i64>,
+        log_start: i64,
+        log_end: i64,
+    }
+
+    /// Kafka's `AbstractFetcherThread.fetchOffsetAndTruncate`, over a
+    /// replica holding offsets 0..6 and a leader scripted per sentinel.
+    #[tokio::test]
+    async fn out_of_range_recovery_follows_kafka_fetch_offset_and_truncate() {
+        let backoff = RowAction::Backoff(
+            crate::config::ReplicationRuntimeConfig::default().unexpected_error_backoff,
+        );
+        let lookup_failed = || Err::<i64, _>("scripted lookup failure".to_owned());
+        let recovery = |action, asked: &[i64], log_start, log_end| Recovery {
+            action,
+            asked: asked.to_vec(),
+            log_start,
+            log_end,
+        };
+        // (name, leader LATEST, leader EARLIEST, expected recovery)
+        let cases = [
+            (
+                "unclean election: the leader ends below this replica",
+                Ok(4),
+                Ok(0),
+                recovery(RowAction::Continue, &[-1], 0, 4),
+            ),
+            (
+                "the leader's log start is above this replica's end",
+                Ok(20),
+                Ok(12),
+                recovery(RowAction::Continue, &[-1, -2], 12, 12),
+            ),
+            (
+                "the leader's log start is inside this replica's log",
+                Ok(20),
+                Ok(3),
+                recovery(RowAction::Continue, &[-1, -2], 0, 6),
+            ),
+            (
+                "the leader's log start is this replica's end",
+                Ok(20),
+                Ok(6),
+                recovery(RowAction::Continue, &[-1, -2], 0, 6),
+            ),
+            (
+                "the leader ends where this replica ends",
+                Ok(6),
+                Ok(0),
+                recovery(RowAction::Continue, &[-1, -2], 0, 6),
+            ),
+            (
+                "the log end lookup fails",
+                lookup_failed(),
+                Ok(0),
+                recovery(backoff, &[-1], 0, 6),
+            ),
+            (
+                "the log start lookup fails",
+                Ok(20),
+                lookup_failed(),
+                recovery(backoff, &[-1, -2], 0, 6),
+            ),
+        ];
+        for (name, latest, earliest, expected) in cases {
+            let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+            ensure_local_partition(&cfg).unwrap();
+            let partition = cfg.partitions.get(&cfg.topic, cfg.partition).unwrap();
+            {
+                let mut log = partition.log.lock().unwrap();
+                for _ in 0..6 {
+                    let mut batch = krabka_protocol::records::RecordBatch {
+                        partition_leader_epoch: 4,
+                        records: vec![krabka_protocol::records::Record::default()],
+                        ..Default::default()
+                    };
+                    log.append(&mut batch).unwrap();
+                }
+            }
+            let asked = std::cell::RefCell::new(Vec::new());
+
+            let action = recover_offset_out_of_range(&cfg, |timestamp| {
+                asked.borrow_mut().push(timestamp);
+                let answer = match timestamp {
+                    LATEST_TIMESTAMP => latest.clone(),
+                    EARLIEST_TIMESTAMP => earliest.clone(),
+                    other => Err(format!("unexpected sentinel {other}")),
+                };
+                std::future::ready(answer)
+            })
+            .await;
+
+            let got = Recovery {
+                action,
+                asked: asked.into_inner(),
+                log_start: partition.log_start_offset().0,
+                log_end: partition.log_end_offset().0,
+            };
+            assert!(got == expected, "{name}");
+        }
+    }
+
+    /// A recovery for a leader the metadata image no longer names asks the
+    /// old leader nothing and touches nothing.
+    #[tokio::test]
+    async fn out_of_range_recovery_from_a_stale_target_asks_nothing() {
+        let (cfg, _log_dir) = test_config(image_with_leader(NodeId(99)));
+        let mut asked = Vec::new();
+
+        let action = recover_offset_out_of_range(&cfg, |timestamp| {
+            asked.push(timestamp);
+            std::future::ready(Ok(0))
+        })
+        .await;
+
+        assert!(action == RowAction::Drop);
+        assert!(asked.is_empty());
     }
 
     #[tokio::test]

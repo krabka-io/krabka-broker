@@ -487,3 +487,64 @@ fn elr_level_one_requires_the_elr_metadata_version() {
         assert!(results[0].error_code == want_code, "{case}: {results:?}");
     }
 }
+
+/// An image at the newest `metadata.version` with `eligible.leader.replicas.version`
+/// finalized at `elr_level`, and broker 2 registered without that feature.
+fn image_with_elr_unaware_broker(elr_level: Option<i16>) -> krabka_metadata::MetadataImage {
+    let mut image = elr_image(crate::features::METADATA_VERSION_MAX, elr_level, false);
+    let mut features = krabka_metadata::supported_feature_ranges();
+    features.remove(crate::features::ELR_VERSION);
+    image.apply(&MetadataRecord::V1BrokerRegistration(
+        krabka_metadata::BrokerRegistrationRecord {
+            node_id: krabka_metadata::NodeId(2),
+            broker_epoch: 0,
+            incarnation_id: uuid::Uuid::nil(),
+            host: String::new(),
+            port: 0,
+            rack: None,
+            log_dirs: vec![],
+            endpoints: vec![],
+            features,
+        },
+    ));
+    image
+}
+
+/// Kafka's `FeatureControlManager.updateFeature` order: registered-node
+/// support precedes the direction check, an unfinalized feature reads as
+/// level 0, and a node that did not register a feature supports only level 0.
+#[test]
+fn feature_rows_follow_kafka_update_feature_precedence() {
+    let cases = [
+        (
+            "unaware broker blocks enabling before the direction check",
+            image_with_elr_unaware_broker(None),
+            elr_update(1, UPGRADE_TYPE_SAFE_DOWNGRADE),
+            codes::INVALID_UPDATE_VERSION,
+            Some("Broker 2 does not support eligible.leader.replicas.version level 1."),
+        ),
+        (
+            "a downgrade type cannot raise an unfinalized feature",
+            elr_image(crate::features::METADATA_VERSION_MAX, None, false),
+            elr_update(1, UPGRADE_TYPE_SAFE_DOWNGRADE),
+            codes::INVALID_UPDATE_VERSION,
+            Some("Can not downgrade to a newer feature version."),
+        ),
+        (
+            "unaware broker still allows turning the feature off",
+            image_with_elr_unaware_broker(Some(1)),
+            elr_update(0, UPGRADE_TYPE_SAFE_DOWNGRADE),
+            codes::NONE,
+            None,
+        ),
+    ];
+    for (case, image, update, error_code, error_message) in cases {
+        let (results, _) = validate_updates(&validate_only(vec![update]), &image, VERSION);
+        assert!(results.len() == 1, "{case}");
+        assert!(results[0].error_code == error_code, "{case}: {results:?}");
+        assert!(
+            results[0].error_message.as_deref() == error_message,
+            "{case}: {results:?}"
+        );
+    }
+}

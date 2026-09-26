@@ -4,10 +4,14 @@
     "Coma": {
       "vc_epoch_and_offset_for_entries": {
         "prover": "alt-ergo",
-        "time": 0.053
+        "time": 0.233
       },
-      "vc_len_EpochEntry": { "prover": "alt-ergo", "time": 0.007 },
-      "vc_set_UNDEFINED_EPOCH": { "prover": "alt-ergo", "time": 0.007 }
+      "vc_len_EpochEntry": { "prover": "alt-ergo", "time": 0.023 },
+      "vc_set_UNDEFINED_EPOCH": { "prover": "alt-ergo", "time": 0.02 },
+      "vc_set_UNDEFINED_EPOCH_OFFSET": {
+        "prover": "alt-ergo",
+        "time": 0.026
+      }
     }
   }
 }

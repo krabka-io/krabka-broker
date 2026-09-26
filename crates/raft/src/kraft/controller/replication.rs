@@ -8,7 +8,10 @@ use krabka_ids::Offset;
 use krabka_metadata::{MetadataImage, MetadataRecord, VotersRecord};
 use krabka_verified::{
     SnapshotInstallDecision,
-    raft::{FetchResponseMutation, fetch_response_mutation},
+    raft::{
+        FetchContent, FetchFence, FetchResponseFacts, FetchResponseMutation,
+        fetch_response_mutation,
+    },
     snapshot_install_decision,
 };
 
@@ -119,31 +122,38 @@ impl Engine {
         fields(node = self.me.0, from = from.0, log_end = self.log.log_end_offset().0)
     )]
     pub fn on_fetch_response(&mut self, from: NodeId, body: &[u8]) {
-        let Some(wire::PeerResponse::Fetch {
-            leader_id,
-            leader_epoch,
+        let Some(wire::PeerResponse::Fetch(wire::FetchAnswer {
+            error_code,
+            leader,
             diverging,
             snapshot_id,
             hwm,
+            log_start_offset: _,
             records,
-        }) = wire::PeerResponse::decode_fetch(body)
+        })) = wire::PeerResponse::decode_fetch(body)
         else {
             return;
         };
+        let leader_epoch = leader.epoch;
 
         // KIP-595: a response from a newer epoch names the leader of that
-        // epoch, and a voter or an observer follows it. Kafka's
-        // `KafkaRaftClient.maybeHandleCommonResponse` does the same. The fence
-        // below accepts only a response that matches this node's own leader and
-        // epoch, so without this step a node whose leader lost the epoch keeps
-        // fetching from it, rejects every answer, and stops replicating. A voter
-        // learns the new leader from `BeginQuorumEpoch` too, but an observer
-        // learns it only here.
+        // epoch, and a voter or an observer follows it, whatever the error.
+        // Kafka's `KafkaRaftClient.maybeHandleCommonResponse` does the same.
+        // The fence below accepts only a response that matches this node's
+        // own leader and epoch, so without this step a node whose leader lost
+        // the epoch keeps fetching from it, rejects every answer, and stops
+        // replicating. A voter learns the new leader from `BeginQuorumEpoch`
+        // too, but an observer learns it only here. A newer epoch that names
+        // no leader is left to that epoch's Vote or `BeginQuorumEpoch`;
+        // Kafka moves to Unattached in it instead.
         if leader_epoch > self.core.quorum_state().leader_epoch {
-            self.on_event(Event::ReceiveBeginQuorumEpoch {
-                leader_id,
-                leader_epoch,
-            });
+            if let Some(leader_id) = leader.leader_id {
+                self.remember_leader_endpoint(&leader);
+                self.on_event(Event::ReceiveBeginQuorumEpoch {
+                    leader_id,
+                    leader_epoch,
+                });
+            }
             return;
         }
 
@@ -167,43 +177,58 @@ impl Engine {
         );
         let state = self.core.quorum_state();
         let mutation = fetch_response_mutation(
-            (
+            FetchFence {
                 discovering,
                 role_leader,
-                state.leader_id.map(|id| id.0),
-                state.leader_epoch,
-            ),
-            (from.0, leader_id.0, leader_epoch),
-            (
-                snapshot_id.is_some(),
-                diverging.is_some(),
-                !records.is_empty(),
-            ),
+                current_leader: state.leader_id.map(|id| id.0),
+                current_epoch: state.leader_epoch,
+            },
+            FetchResponseFacts {
+                from: from.0,
+                leader: leader.leader_id.map(|id| id.0),
+                epoch: leader_epoch,
+                error_none: error_code == 0,
+            },
+            FetchContent {
+                has_snapshot: snapshot_id.is_some(),
+                has_divergence: diverging.is_some(),
+                has_records: !records.is_empty(),
+            },
         );
-        if mutation == FetchResponseMutation::Reject {
-            return;
-        }
-        self.peers.remember_peer(from, leader_id);
 
         // Record the leader's watermark as soon as the response has cleared the
-        // fence above, before any branch below can return: it is the quorum's
+        // leader fence, before any branch below can return: it is the quorum's
         // committed offset, and the readiness probe needs the gap between it and
-        // where this node has got to. The `Snapshot` and `Discover` arms return
-        // without touching the log, and a node far enough behind to need a
-        // snapshot is the one whose lag matters most -- reading its own clamped
-        // watermark there would report the worst laggard as caught up.
-        self.leader_reported_hwm = self.leader_reported_hwm.max(hwm);
+        // where this node has got to. The `Snapshot` arm returns without
+        // touching the log, and a node far enough behind to need a snapshot is
+        // the one whose lag matters most -- reading its own clamped watermark
+        // there would report the worst laggard as caught up. A discovery
+        // response has not cleared that fence, so its watermark waits for the
+        // refetch.
+        if !matches!(
+            mutation,
+            FetchResponseMutation::Reject | FetchResponseMutation::Discover
+        ) {
+            self.leader_reported_hwm = self.leader_reported_hwm.max(hwm);
+        }
 
         match mutation {
             FetchResponseMutation::Reject => return,
             FetchResponseMutation::Discover => {
-                // A leaderless observer uses the first successful Fetch only
-                // to attach to the advertised leader. Refetch under the newly
-                // established leader/epoch fence before applying any content.
-                self.on_event(Event::ReceiveBeginQuorumEpoch {
-                    leader_id,
-                    leader_epoch,
-                });
+                // A leaderless observer uses a discovery response only to
+                // attach to the advertised leader, as Kafka's
+                // `maybeHandleCommonResponse` does, and refetches under the
+                // leader fence before it applies any content. It reaches that
+                // leader through the leader's own `NodeEndpoints` entry, or
+                // its voter-set listener, never through the responder's
+                // address: the responder may be a follower redirecting it.
+                if let Some(leader_id) = leader.leader_id {
+                    self.remember_leader_endpoint(&leader);
+                    self.on_event(Event::ReceiveBeginQuorumEpoch {
+                        leader_id,
+                        leader_epoch,
+                    });
+                }
                 return;
             }
             FetchResponseMutation::Snapshot => {
@@ -215,10 +240,10 @@ impl Engine {
                 if should_start_snapshot_fetch(id, self.log.log_end_offset(), active_id) {
                     self.snapshot_fetch = Some(SnapshotFetchState::with_max(
                         id,
-                        leader_id,
+                        from,
                         self.metadata_snapshot_fetch_max,
                     ));
-                    self.send_fetch_snapshot(leader_id, id, 0);
+                    self.send_fetch_snapshot(from, id, 0);
                 }
             }
             FetchResponseMutation::Truncate => {
@@ -274,11 +299,23 @@ impl Engine {
         }
 
         // Feed the core so it re-arms its fetch timer / issues the next fetch.
+        // The leader fence held, so the responder is the leader.
         self.on_event(Event::ReceiveFetchResponse {
-            leader_id,
+            leader_id: from,
             leader_epoch,
             diverging,
         });
+    }
+
+    /// Address the leader a Fetch response names by the endpoint it
+    /// announced in `NodeEndpoints`, as Kafka's `transitionToFollower` takes
+    /// the response's leader endpoints. Without one, the transport keeps
+    /// using the leader's voter-set listener.
+    fn remember_leader_endpoint(&self, leader: &wire::QuorumLeader) {
+        if let (Some(leader_id), Some((host, port))) = (leader.leader_id, &leader.endpoint) {
+            self.peers
+                .remember_leader_endpoint(leader_id, format!("{host}:{port}"));
+        }
     }
 
     /// (Follower side) handle a `FetchSnapshot` response chunk: reassemble via

@@ -1,0 +1,78 @@
+(* #"/workspace/crates/verified/src/stretch.rs" 126 0 126 60 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sstretch = "/workspace/crates/verified/src/stretch.rs" 124 11 124 50
+let%span sstretch'0 = "/workspace/crates/verified/src/stretch.rs" 125 10 125 41
+
+use int.ComputerDivision
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant low : int
+
+constant high : int
+
+constant divisor : int
+
+function lemma_div_monotone [#"/workspace/crates/verified/src/stretch.rs" 126 0 126 60] (low: int) (high: int) (divisor: int) : ()
+
+goal vc_lemma_div_monotone: ([%#sstretch] 0 <= low /\ low <= high /\ ge_log_Int divisor 1)
+  -> (if low = divisor * ComputerDivision.div low divisor + ComputerDivision.mod low divisor then
+    0 <= ComputerDivision.mod low divisor
+    && (if high = divisor * ComputerDivision.div high divisor + ComputerDivision.mod high divisor then
+      ComputerDivision.mod high divisor < divisor
+      && (if gt_log_Int (ComputerDivision.div low divisor) (ComputerDivision.div high divisor) then
+        ge_log_Int ((ComputerDivision.div low divisor - ComputerDivision.div high divisor - 1) * divisor) 0
+        && ([@stop_split] [@expl:lemma_div_monotone ensures] [%#sstretch'0] ComputerDivision.div low divisor
+        <= ComputerDivision.div high divisor)
+      else
+        [@stop_split] [@expl:lemma_div_monotone ensures] [%#sstretch'0] ComputerDivision.div low divisor
+        <= ComputerDivision.div high divisor
+      )
+    else
+      false
+      && (if gt_log_Int (ComputerDivision.div low divisor) (ComputerDivision.div high divisor) then
+        ge_log_Int ((ComputerDivision.div low divisor - ComputerDivision.div high divisor - 1) * divisor) 0
+        && ([@stop_split] [@expl:lemma_div_monotone ensures] [%#sstretch'0] ComputerDivision.div low divisor
+        <= ComputerDivision.div high divisor)
+      else
+        [@stop_split] [@expl:lemma_div_monotone ensures] [%#sstretch'0] ComputerDivision.div low divisor
+        <= ComputerDivision.div high divisor
+      )
+    )
+  else
+    false
+    && (if high = divisor * ComputerDivision.div high divisor + ComputerDivision.mod high divisor then
+      ComputerDivision.mod high divisor < divisor
+      && (if gt_log_Int (ComputerDivision.div low divisor) (ComputerDivision.div high divisor) then
+        ge_log_Int ((ComputerDivision.div low divisor - ComputerDivision.div high divisor - 1) * divisor) 0
+        && ([@stop_split] [@expl:lemma_div_monotone ensures] [%#sstretch'0] ComputerDivision.div low divisor
+        <= ComputerDivision.div high divisor)
+      else
+        [@stop_split] [@expl:lemma_div_monotone ensures] [%#sstretch'0] ComputerDivision.div low divisor
+        <= ComputerDivision.div high divisor
+      )
+    else
+      false
+      && (if gt_log_Int (ComputerDivision.div low divisor) (ComputerDivision.div high divisor) then
+        ge_log_Int ((ComputerDivision.div low divisor - ComputerDivision.div high divisor - 1) * divisor) 0
+        && ([@stop_split] [@expl:lemma_div_monotone ensures] [%#sstretch'0] ComputerDivision.div low divisor
+        <= ComputerDivision.div high divisor)
+      else
+        [@stop_split] [@expl:lemma_div_monotone ensures] [%#sstretch'0] ComputerDivision.div low divisor
+        <= ComputerDivision.div high divisor
+      )
+    )
+  )

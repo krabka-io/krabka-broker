@@ -10,7 +10,12 @@ use creusot_std::prelude::*;
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
 pub enum FetchResponseMutation {
+    /// The response belongs to another leader, role, or epoch, or carries an
+    /// error; apply nothing.
     Reject,
+    /// Attach to the advertised leader and refetch from it. The responder's
+    /// identity plays no part: the host reaches the leader through the
+    /// leader's own `NodeEndpoints` entry or its voter-set listener.
     Discover,
     Snapshot,
     Truncate,
@@ -18,80 +23,133 @@ pub enum FetchResponseMutation {
     HighWatermark,
 }
 
+/// The receiving node's live fence for one Fetch response.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct FetchFence {
+    /// The node is an observer with no known leader.
+    pub discovering: bool,
+    /// The leader the live role fetches from.
+    pub role_leader: Option<u64>,
+    /// The leader in the durable quorum state.
+    pub current_leader: Option<u64>,
+    pub current_epoch: u32,
+}
+
+/// Who answered a Fetch, and which leader, epoch and error the answer names.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct FetchResponseFacts {
+    /// The node the request was sent to.
+    pub from: u64,
+    /// The response's `CurrentLeader.LeaderId`, `None` for Kafka's -1.
+    pub leader: Option<u64>,
+    /// The response's `CurrentLeader.LeaderEpoch`.
+    pub epoch: u32,
+    /// The partition's `ErrorCode` is `NONE`. A Kafka `KRaft` replica answers
+    /// `NONE` only as the leader of its epoch; any other replica answers
+    /// `validateLeaderOnlyRequest`'s error with the leader it knows.
+    pub error_none: bool,
+}
+
+/// Which mutations the response body carries.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct FetchContent {
+    pub has_snapshot: bool,
+    pub has_divergence: bool,
+    pub has_records: bool,
+}
+
+/// The response is a successful answer from the leader this node already
+/// follows, in this node's epoch: only such a response may change the log or
+/// the HWM (`KafkaRaftClient.handleFetchResponse` applies content only for
+/// `Errors.NONE` from the followed leader).
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub fn leader_fence_holds(fence: FetchFence, response: FetchResponseFacts) -> bool {
+    pearlite! {
+        fence.role_leader == Some(response.from)
+            && fence.current_leader == Some(response.from)
+            && response.leader == Some(response.from)
+            && response.epoch == fence.current_epoch
+            && response.error_none
+    }
+}
+
+/// Kafka's `maybeHandleCommonResponse` discovery case: a response in this
+/// node's epoch names a leader while the node knows none. It applies whatever
+/// the error is, since a follower that knows the leader answers
+/// `NOT_LEADER_OR_FOLLOWER` naming it. A newer epoch is the host's
+/// `BeginQuorumEpoch` path and never reaches this kernel.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub fn discovery_applies(fence: FetchFence, response: FetchResponseFacts) -> bool {
+    pearlite! {
+        fence.discovering
+            && fence.role_leader == None
+            && fence.current_leader == None
+            && response.epoch == fence.current_epoch
+            && response.leader != None
+    }
+}
+
 /// Fence a Fetch response against the live role, leader, and epoch, then
 /// select exactly one mutation path.
-#[cfg_attr(creusot, ensures((result == FetchResponseMutation::Discover) ==
-    (current.0
-        && current.1 == None
-        && current.2 == None
-        && response.2 >= current.3)))]
-#[cfg_attr(creusot, ensures((result == FetchResponseMutation::Reject) ==
-    (!(current.0
-        && current.1 == None
-        && current.2 == None
-        && response.2 >= current.3)
-        && (current.1 != Some(response.0)
-        || current.2 != Some(response.0)
-        || response.1 != response.0
-        || response.2 != current.3))))]
-#[cfg_attr(creusot, ensures(match result {
-    FetchResponseMutation::Discover => current.0
-        && current.1 == None
-        && current.2 == None
-        && response.2 >= current.3,
-    FetchResponseMutation::Snapshot => current.1 == Some(response.0)
-        && current.2 == Some(response.0)
-        && response.1 == response.0
-        && response.2 == current.3
-        && content.0,
-    FetchResponseMutation::Truncate => current.1 == Some(response.0)
-        && current.2 == Some(response.0)
-        && response.1 == response.0
-        && response.2 == current.3
-        && !content.0
-        && content.1,
-    FetchResponseMutation::Append => current.1 == Some(response.0)
-        && current.2 == Some(response.0)
-        && response.1 == response.0
-        && response.2 == current.3
-        && !content.0
-        && !content.1
-        && content.2,
-    FetchResponseMutation::HighWatermark => current.1 == Some(response.0)
-        && current.2 == Some(response.0)
-        && response.1 == response.0
-        && response.2 == current.3
-        && !content.0
-        && !content.1
-        && !content.2,
-    FetchResponseMutation::Reject => true,
-}))]
+///
+/// A discovery response carries no mutation: the node attaches to the
+/// advertised leader and fetches again under the leader fence, which admits
+/// content only from that leader itself. So no response is ever applied on
+/// the strength of who the responder is assumed to be.
+#[cfg_attr(creusot, ensures((result == FetchResponseMutation::Discover)
+    == discovery_applies(fence, response)))]
+#[cfg_attr(creusot, ensures((result == FetchResponseMutation::Reject)
+    == (!discovery_applies(fence, response) && !leader_fence_holds(fence, response))))]
+#[cfg_attr(creusot, ensures((result == FetchResponseMutation::Snapshot)
+    == (leader_fence_holds(fence, response) && content.has_snapshot)))]
+#[cfg_attr(creusot, ensures((result == FetchResponseMutation::Truncate)
+    == (leader_fence_holds(fence, response)
+        && !content.has_snapshot
+        && content.has_divergence)))]
+#[cfg_attr(creusot, ensures((result == FetchResponseMutation::Append)
+    == (leader_fence_holds(fence, response)
+        && !content.has_snapshot
+        && !content.has_divergence
+        && content.has_records)))]
+#[cfg_attr(creusot, ensures((result == FetchResponseMutation::HighWatermark)
+    == (leader_fence_holds(fence, response)
+        && !content.has_snapshot
+        && !content.has_divergence
+        && !content.has_records)))]
 #[must_use]
 pub fn fetch_response_mutation(
-    current: (bool, Option<u64>, Option<u64>, u32),
-    response: (u64, u64, u32),
-    content: (bool, bool, bool),
+    fence: FetchFence,
+    response: FetchResponseFacts,
+    content: FetchContent,
 ) -> FetchResponseMutation {
-    let (discovering, role_leader, current_leader, current_epoch) = current;
-    let (from, response_leader, response_epoch) = response;
-    let (has_snapshot, has_divergence, has_records) = content;
-    if discovering
-        && role_leader.is_none()
-        && current_leader.is_none()
-        && response_epoch >= current_epoch
+    if fence.discovering
+        && fence.role_leader.is_none()
+        && fence.current_leader.is_none()
+        && response.epoch == fence.current_epoch
+        && response.leader.is_some()
     {
         FetchResponseMutation::Discover
-    } else if role_leader != Some(from)
-        || current_leader != Some(from)
-        || response_leader != from
-        || response_epoch != current_epoch
+    } else if fence.role_leader != Some(response.from)
+        || fence.current_leader != Some(response.from)
+        || response.leader != Some(response.from)
+        || response.epoch != fence.current_epoch
+        || !response.error_none
     {
         FetchResponseMutation::Reject
-    } else if has_snapshot {
+    } else if content.has_snapshot {
         FetchResponseMutation::Snapshot
-    } else if has_divergence {
+    } else if content.has_divergence {
         FetchResponseMutation::Truncate
-    } else if has_records {
+    } else if content.has_records {
         FetchResponseMutation::Append
     } else {
         FetchResponseMutation::HighWatermark
@@ -163,34 +221,41 @@ pub fn control_history_frontier(offsets: &[i64], frontier: i64) -> usize {
     lo
 }
 
-/// Compute one record's contiguous offset delta and its batch's final delta.
+/// The contiguous offset deltas `0, 1, ..., record_count - 1` of one metadata
+/// batch, in record order; the last element is the batch's `lastOffsetDelta`.
 ///
-/// Empty batches, out-of-bounds indexes, and record counts that cannot be
-/// represented by Kafka's signed offset-delta field fail closed.
+/// An empty batch, and a batch whose final delta Kafka's signed 32-bit
+/// `lastOffsetDelta` cannot represent, fail closed. The deltas are counted in
+/// `i32` beside the vector's length rather than narrowed from a `usize`
+/// index, so the one executable body is the one Creusot proves.
 #[must_use]
 #[cfg_attr(creusot, ensures(match result {
-    Some((offset_delta, last_offset_delta)) => record_count@ > 0
-        && record_index@ < record_count@
+    Some(deltas) => record_count@ > 0
         && record_count@ <= i32::MAX@ + 1
-        && offset_delta@ == record_index@
-        && last_offset_delta@ == record_count@ - 1,
-    None => record_count@ == 0
-        || record_index@ >= record_count@
-        || record_count@ > i32::MAX@ + 1,
+        && deltas@.len() == record_count@
+        && forall<i: Int> 0 <= i && i < deltas@.len() ==> deltas@[i]@ == i,
+    None => record_count@ == 0 || record_count@ > i32::MAX@ + 1,
 }))]
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_sign_loss,
-    reason = "the kernel rejects values outside i32 before conversion"
-)]
-pub fn metadata_record_coordinates(record_count: usize, record_index: usize) -> Option<(i32, i32)> {
-    let max_records = i32::MAX as usize + 1;
-    if record_count == 0 || record_index >= record_count || record_count > max_records {
-        None
-    } else {
-        Some((record_index as i32, (record_count - 1) as i32))
+pub fn metadata_record_offset_deltas(record_count: usize) -> Option<Vec<i32>> {
+    // `i32::MAX + 1` records have final delta `i32::MAX`.
+    let max_records: usize = 0x8000_0000;
+    if record_count == 0 || record_count > max_records {
+        return None;
     }
+    let mut deltas = Vec::with_capacity(record_count);
+    deltas.push(0);
+    let mut last: i32 = 0;
+    #[cfg_attr(creusot, invariant(1 <= deltas@.len() && deltas@.len() <= record_count@))]
+    #[cfg_attr(creusot, invariant(last@ == deltas@.len() - 1))]
+    #[cfg_attr(creusot, invariant(forall<i: Int>
+        0 <= i && i < deltas@.len() ==> deltas@[i]@ == i))]
+    #[cfg_attr(creusot, variant(record_count@ - deltas@.len()))]
+    while deltas.len() < record_count {
+        // `last + 1 == deltas.len() < record_count <= i32::MAX + 1`.
+        last += 1;
+        deltas.push(last);
+    }
+    Some(deltas)
 }
 
 #[cfg(test)]
@@ -228,49 +293,217 @@ mod tests {
     }
 
     #[test]
-    fn metadata_coordinates_are_contiguous_and_fail_closed() {
-        assert!(metadata_record_coordinates(1, 0) == Some((0, 0)));
-        assert!(metadata_record_coordinates(3, 0) == Some((0, 2)));
-        assert!(metadata_record_coordinates(3, 1) == Some((1, 2)));
-        assert!(metadata_record_coordinates(3, 2) == Some((2, 2)));
-        assert!(metadata_record_coordinates(0, 0) == None);
-        assert!(metadata_record_coordinates(3, 3) == None);
-        assert!(metadata_record_coordinates(i32::MAX as usize + 1, 0) == Some((0, i32::MAX)));
-        assert!(metadata_record_coordinates(i32::MAX as usize + 2, 0) == None);
+    fn metadata_offset_deltas_are_contiguous_and_fail_closed() {
+        for (record_count, expected) in [
+            (0, None),
+            (1, Some(vec![0])),
+            (3, Some(vec![0, 1, 2])),
+            // One past the largest `lastOffsetDelta` Kafka can encode.
+            (0x8000_0001, None),
+            (usize::MAX, None),
+        ] {
+            assert!(metadata_record_offset_deltas(record_count) == expected);
+        }
     }
 
     #[test]
     fn fetch_response_is_fenced_before_one_exclusive_mutation() {
         use FetchResponseMutation::{Append, Discover, HighWatermark, Reject, Snapshot, Truncate};
 
-        let decide = |discovering,
-                      role_leader,
-                      current_leader,
-                      current_epoch,
-                      from,
-                      leader,
-                      epoch,
-                      s,
-                      d,
-                      r| {
-            fetch_response_mutation(
-                (discovering, role_leader, current_leader, current_epoch),
-                (from, leader, epoch),
-                (s, d, r),
-            )
+        // Following leader 2 in epoch 3.
+        let following = FetchFence {
+            discovering: false,
+            role_leader: Some(2),
+            current_leader: Some(2),
+            current_epoch: 3,
         };
-        assert!(decide(false, Some(2), Some(2), 3, 2, 2, 3, true, true, true) == Snapshot);
-        assert!(decide(false, Some(2), Some(2), 3, 2, 2, 3, false, true, true) == Truncate);
-        assert!(decide(false, Some(2), Some(2), 3, 2, 2, 3, false, false, true) == Append);
-        assert!(decide(false, Some(2), Some(2), 3, 2, 2, 3, false, false, false) == HighWatermark);
-        assert!(decide(true, None, None, 3, 2, 4, 3, false, false, true) == Discover);
-        assert!(decide(true, None, None, 3, 2, 4, 4, true, true, true) == Discover);
-        assert!(decide(true, None, None, 3, 2, 4, 2, false, false, true) == Reject);
-        assert!(decide(false, None, None, 3, 2, 2, 3, false, false, true) == Reject);
-        assert!(decide(false, None, Some(2), 3, 2, 2, 3, false, false, true) == Reject);
-        assert!(decide(false, Some(2), Some(3), 3, 2, 2, 3, false, false, true) == Reject);
-        assert!(decide(false, Some(2), Some(2), 3, 3, 2, 3, false, false, true) == Reject);
-        assert!(decide(false, Some(2), Some(2), 3, 2, 3, 3, false, false, true) == Reject);
-        assert!(decide(false, Some(2), Some(2), 3, 2, 2, 4, false, false, true) == Reject);
+        // A leaderless observer in epoch 3.
+        let discovering = FetchFence {
+            discovering: true,
+            role_leader: None,
+            current_leader: None,
+            current_epoch: 3,
+        };
+        let from_leader = FetchResponseFacts {
+            from: 2,
+            leader: Some(2),
+            epoch: 3,
+            error_none: true,
+        };
+        // Follower 1 answers NOT_LEADER_OR_FOLLOWER naming leader 2
+        // (`validateLeaderOnlyRequest`).
+        let from_follower = FetchResponseFacts {
+            from: 1,
+            error_none: false,
+            ..from_leader
+        };
+        let content = |has_snapshot, has_divergence, has_records| FetchContent {
+            has_snapshot,
+            has_divergence,
+            has_records,
+        };
+        let everything = content(true, true, true);
+        let cases = [
+            (
+                "snapshot wins",
+                following,
+                from_leader,
+                everything,
+                Snapshot,
+            ),
+            (
+                "divergence",
+                following,
+                from_leader,
+                content(false, true, true),
+                Truncate,
+            ),
+            (
+                "records",
+                following,
+                from_leader,
+                content(false, false, true),
+                Append,
+            ),
+            (
+                "watermark only",
+                following,
+                from_leader,
+                content(false, false, false),
+                HighWatermark,
+            ),
+            // KafkaRaftClient.maybeHandleCommonResponse: same epoch, a leader,
+            // and no known leader transitions to follower of that leader,
+            // whoever answered and whatever the error.
+            (
+                "leader answers observer",
+                discovering,
+                from_leader,
+                everything,
+                Discover,
+            ),
+            (
+                "follower redirects observer",
+                discovering,
+                from_follower,
+                everything,
+                Discover,
+            ),
+            (
+                "leaderless answer to observer",
+                discovering,
+                FetchResponseFacts {
+                    leader: None,
+                    ..from_follower
+                },
+                everything,
+                Reject,
+            ),
+            // An older epoch is no longer relevant; a newer one is the host's
+            // BeginQuorumEpoch path.
+            (
+                "stale epoch while discovering",
+                discovering,
+                FetchResponseFacts {
+                    epoch: 2,
+                    ..from_leader
+                },
+                everything,
+                Reject,
+            ),
+            (
+                "newer epoch while discovering",
+                discovering,
+                FetchResponseFacts {
+                    epoch: 4,
+                    ..from_leader
+                },
+                everything,
+                Reject,
+            ),
+            (
+                "observer that knows a leader",
+                FetchFence {
+                    role_leader: Some(2),
+                    ..discovering
+                },
+                from_follower,
+                everything,
+                Reject,
+            ),
+            (
+                "voter without a leader",
+                FetchFence {
+                    discovering: false,
+                    ..discovering
+                },
+                from_leader,
+                everything,
+                Reject,
+            ),
+            (
+                "durable leader differs",
+                FetchFence {
+                    current_leader: Some(3),
+                    ..following
+                },
+                from_leader,
+                everything,
+                Reject,
+            ),
+            (
+                "role has no leader",
+                FetchFence {
+                    role_leader: None,
+                    ..following
+                },
+                from_leader,
+                everything,
+                Reject,
+            ),
+            (
+                "follower answers a follower",
+                following,
+                from_follower,
+                everything,
+                Reject,
+            ),
+            (
+                "sender names another leader",
+                following,
+                FetchResponseFacts {
+                    leader: Some(3),
+                    ..from_leader
+                },
+                everything,
+                Reject,
+            ),
+            (
+                "leader answers with an error",
+                following,
+                FetchResponseFacts {
+                    error_none: false,
+                    ..from_leader
+                },
+                everything,
+                Reject,
+            ),
+            (
+                "newer epoch while following",
+                following,
+                FetchResponseFacts {
+                    epoch: 4,
+                    ..from_leader
+                },
+                everything,
+                Reject,
+            ),
+        ];
+        for (case, fence, response, body, expected) in cases {
+            assert!(
+                fetch_response_mutation(fence, response, body) == expected,
+                "{case}"
+            );
+        }
     }
 }

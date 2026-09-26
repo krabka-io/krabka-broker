@@ -5,13 +5,14 @@
 use std::sync::Arc;
 
 use krabka_ids::Offset;
-use krabka_metadata::{MetadataRecord, VotersRecord};
+use krabka_metadata::{MetadataRecord, VoterSet, VotersRecord};
 use krabka_protocol::{
     owned::k_raft_version_record::KRaftVersionRecord as WireKRaftVersionRecord,
     records::{RecordBatch, metadata::control::ControlRecord},
 };
-use krabka_verified::{
-    VoterChangeKind, VoterReconfigurationDecision, voter_reconfiguration_decision,
+use krabka_verified::reconfiguration::{
+    CurrentVoterSet, ReconfigurationLeadership, TargetMembership, TargetVoter, VoterChangeKind,
+    VoterChangeRequest, VoterReconfigurationDecision, voter_reconfiguration_decision,
 };
 use tokio::sync::oneshot;
 
@@ -27,6 +28,17 @@ use crate::{
     kraft::{role::Role, types::Epoch},
     reconfig::ReconfigOutcome,
 };
+
+/// Classify the request's voter key against the committed voter set, with a
+/// nil stored directory standing for Kafka's absent directory id.
+fn target_membership(current: &VoterSet, id: NodeId, directory_id: uuid::Uuid) -> TargetMembership {
+    match current.get(id) {
+        None => TargetMembership::Absent,
+        Some(voter) if voter.directory_id.is_nil() => TargetMembership::PresentUnknownDirectory,
+        Some(voter) if voter.directory_id == directory_id => TargetMembership::PresentSameDirectory,
+        Some(_) => TargetMembership::PresentOtherDirectory,
+    }
+}
 
 fn rejected_reconfiguration(
     decision: VoterReconfigurationDecision,
@@ -74,9 +86,6 @@ fn rejected_reconfiguration(
             },
             |id| Err(RaftError::VoterNotFound(id)),
         ),
-        VoterReconfigurationDecision::LastVoter => Err(RaftError::ReconfigRejected(
-            "cannot remove the last voter".into(),
-        )),
         VoterReconfigurationDecision::InvalidVersionTransition => {
             Err(RaftError::InvalidVoterUpdate(format!(
                 "kraft.version transition {current_version} -> {requested_version} is not supported"
@@ -122,27 +131,32 @@ impl Engine {
 
         let current = self.controls.committed_voters.clone();
         let current_version = self.controls.committed_version;
-        let is_leader = self.core.role().is_leader();
-        let single_flight_clear = self.pending_reconfig.is_none()
-            && self.controls.latest_voters() == &current
-            && self.controls.latest_version() == current_version;
-        let epoch_committed = match self.core.role() {
-            Role::Leader {
-                epoch_start_offset, ..
-            } => self.log.hwm().0 > *epoch_start_offset,
-            _ => false,
+        let leadership = ReconfigurationLeadership {
+            is_leader: self.core.role().is_leader(),
+            no_pending_change: self.pending_reconfig.is_none(),
+            epoch_committed: match self.core.role() {
+                Role::Leader {
+                    epoch_start_offset, ..
+                } => self.log.hwm().0 > *epoch_start_offset,
+                _ => false,
+            },
         };
-        let (
-            kind,
-            requested_version,
-            target_id,
-            target_present,
-            directory_matches,
-            target_version_compatible,
-            target_caught_up,
-            all_voters_support_v1,
-            lag,
-        ) = match &change {
+        let requested_version = match &change {
+            VoterChange::FinalizeKraftVersion(version) => *version,
+            VoterChange::Add(_) | VoterChange::Remove(_) | VoterChange::Update(_) => {
+                current_version
+            }
+        };
+        let voters = CurrentVoterSet {
+            voter_count: current.len(),
+            kraft_version: current_version,
+            latest_controls_committed: self.controls.latest_voters() == &current
+                && self.controls.latest_version() == current_version,
+            all_voters_support_requested: current
+                .iter()
+                .all(|voter| voter_supports_version(voter, requested_version)),
+        };
+        let (kind, target_id, target, lag) = match &change {
             VoterChange::Add(request) => {
                 let leader_end = self.log.log_end_offset().0;
                 let observer_end = self
@@ -152,67 +166,67 @@ impl Engine {
                     .unwrap_or(0);
                 (
                     VoterChangeKind::Add,
-                    current_version,
                     Some(request.voter.id),
-                    current.contains(request.voter.id),
-                    true,
-                    voter_supports_version(&request.voter, current_version),
-                    observer_end >= leader_end,
-                    true,
+                    TargetVoter {
+                        membership: target_membership(
+                            &current,
+                            request.voter.id,
+                            request.voter.directory_id,
+                        ),
+                        version_compatible: voter_supports_version(&request.voter, current_version),
+                        caught_up: observer_end >= leader_end,
+                    },
                     u64::try_from(leader_end.saturating_sub(observer_end)).unwrap_or(u64::MAX),
                 )
             }
             VoterChange::Remove(request) => (
                 VoterChangeKind::Remove,
-                current_version,
                 Some(request.id),
-                current.contains(request.id),
-                current
-                    .get(request.id)
-                    .is_some_and(|voter| voter.directory_id == request.directory_id),
-                true,
-                true,
-                true,
+                // A removal reads only the voter key; the range and catch-up
+                // facts are not consulted.
+                TargetVoter {
+                    membership: target_membership(&current, request.id, request.directory_id),
+                    version_compatible: true,
+                    caught_up: true,
+                },
                 0,
             ),
             VoterChange::Update(request) => (
                 VoterChangeKind::Update,
-                current_version,
                 Some(request.voter.id),
-                current.contains(request.voter.id),
-                current.get(request.voter.id).is_some_and(|voter| {
-                    voter.directory_id == uuid::Uuid::nil()
-                        || voter.directory_id == request.voter.directory_id
-                }),
-                voter_supports_version(&request.voter, current_version),
-                true,
-                true,
+                TargetVoter {
+                    membership: target_membership(
+                        &current,
+                        request.voter.id,
+                        request.voter.directory_id,
+                    ),
+                    version_compatible: voter_supports_version(&request.voter, current_version),
+                    // An update is not gated on catch-up.
+                    caught_up: true,
+                },
                 0,
             ),
-            VoterChange::FinalizeKraftVersion(version) => (
+            // A finalization names no voter; the kernel does not read these.
+            VoterChange::FinalizeKraftVersion(_) => (
                 VoterChangeKind::FinalizeKraftVersion,
-                *version,
                 None,
-                false,
-                true,
-                true,
-                true,
-                current
-                    .iter()
-                    .all(|voter| voter_supports_version(voter, *version)),
+                TargetVoter {
+                    membership: TargetMembership::Absent,
+                    version_compatible: true,
+                    caught_up: true,
+                },
                 0,
             ),
         };
 
         let decision = voter_reconfiguration_decision(
-            (is_leader, single_flight_clear, epoch_committed),
-            (current.len(), current_version, all_voters_support_v1),
-            (kind, requested_version, target_present),
-            (
-                directory_matches,
-                target_version_compatible,
-                target_caught_up,
-            ),
+            leadership,
+            voters,
+            VoterChangeRequest {
+                kind,
+                requested_kraft_version: requested_version,
+            },
+            target,
         );
         let plan = match decision {
             VoterReconfigurationDecision::Admit(plan) => plan,
@@ -400,6 +414,75 @@ impl Engine {
             let actions = self.core.finish_local_leader_removal(self.now());
             self.execute(actions);
             self.reconcile_timers("leader");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::assert;
+    use krabka_metadata::{KRaftVersionRange, Voter, VoterSet};
+    use krabka_verified::reconfiguration::TargetMembership;
+    use uuid::Uuid;
+
+    use super::target_membership;
+    use crate::NodeId;
+
+    fn voter(id: u64, directory_id: Uuid) -> Voter {
+        Voter {
+            id: NodeId(id),
+            directory_id,
+            endpoints: vec![],
+            kraft_version: KRaftVersionRange::default(),
+        }
+    }
+
+    #[test]
+    fn a_nil_stored_directory_is_an_unknown_directory() {
+        let current = VoterSet::from_voters([voter(1, Uuid::from_u128(1)), voter(2, Uuid::nil())]);
+        let cases = [
+            (
+                "unknown id",
+                3,
+                Uuid::from_u128(3),
+                TargetMembership::Absent,
+            ),
+            (
+                "same key",
+                1,
+                Uuid::from_u128(1),
+                TargetMembership::PresentSameDirectory,
+            ),
+            (
+                "other directory",
+                1,
+                Uuid::from_u128(9),
+                TargetMembership::PresentOtherDirectory,
+            ),
+            (
+                "nil request",
+                1,
+                Uuid::nil(),
+                TargetMembership::PresentOtherDirectory,
+            ),
+            (
+                "legacy voter",
+                2,
+                Uuid::from_u128(2),
+                TargetMembership::PresentUnknownDirectory,
+            ),
+            (
+                "legacy nil request",
+                2,
+                Uuid::nil(),
+                TargetMembership::PresentUnknownDirectory,
+            ),
+        ];
+        for (case, id, directory_id, expected) in cases {
+            assert!(
+                target_membership(&current, NodeId(id), directory_id) == expected,
+                "{case}"
+            );
         }
     }
 }

@@ -1,27 +1,39 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 58 0 64 23 *)
+(* #"/workspace/crates/verified/src/restore.rs" 286 0 289 23 *)
 
-let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sconvert = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span srestore = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 65 27 65 28
-let%span srestore'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 65 47 65 48
-let%span srestore'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 69 23 69 46
-let%span srestore'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 70 21 70 29
-let%span srestore'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 70 21 70 44
-let%span srestore'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 73 17 73 43
-let%span srestore'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 75 42 75 43
-let%span srestore'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 76 28 76 36
-let%span srestore'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 76 28 76 54
-let%span srestore'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 79 8 79 40
-let%span srestore'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 81 28 81 36
-let%span srestore'10 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 81 28 81 54
-let%span srestore'11 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 84 8 84 40
-let%span srestore'12 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 40 10 56 1
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
+let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
+let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
+let%span srestore = "/workspace/crates/verified/src/restore.rs" 290 33 290 34
+let%span srestore'0 = "/workspace/crates/verified/src/restore.rs" 291 33 291 34
+let%span srestore'1 = "/workspace/crates/verified/src/restore.rs" 298 21 298 51
+let%span srestore'2 = "/workspace/crates/verified/src/restore.rs" 296 17 298 52
+let%span srestore'3 = "/workspace/crates/verified/src/restore.rs" 296 17 298 53
+let%span srestore'4 = "/workspace/crates/verified/src/restore.rs" 301 12 301 68
+let%span srestore'5 = "/workspace/crates/verified/src/restore.rs" 301 12 301 69
+let%span srestore'6 = "/workspace/crates/verified/src/restore.rs" 279 10 284 1
+let%span srestore'7 = "/workspace/crates/verified/src/restore.rs" 265 8 270 65
+let%span srestore'8 = "/workspace/crates/verified/src/restore.rs" 250 8 253 9
 
 use creusot.int.Int32
 use creusot.int.Int64
 use creusot.prelude.Any
 use int.Int
+
+type t_RestoreTimestampType = CreateTime | LogAppendTime
+
+type t_RestoreBatchFrame = {
+  base_offset: Int64.t;
+  last_offset_delta: Int32.t;
+  timestamp_type: t_RestoreTimestampType;
+  base_timestamp: Int64.t;
+  max_timestamp: Int64.t }
+
+type t_RestoreRecordDeltas = { offset_delta: Int32.t; timestamp_delta: Int64.t }
 
 type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
 
@@ -32,101 +44,174 @@ let from_i64 (small: Int32.t) (return (x: Int64.t)) = any
     = Int64.of_int (Int32.to_int small)}
     (! return {result}) ]
 
-constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+type t_Option_i64 = None'0 | Some'0 Int64.t
 
 constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
 
-predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let checked_add (self_: Int64.t) (rhs: Int64.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:checked_add ensures] ([@stop_split] [@expl:checked_add ensures #0] [%#snum] (result = None'0)
+      = (Int64.to_int self_ + Int64.to_int rhs < Int64.to_int const_MIN
+      \/ gt_log_Int (Int64.to_int self_ + Int64.to_int rhs) (Int64.to_int const_MAX)))
+    /\ ([@stop_split] [@expl:checked_add ensures #1] [%#snum'0] forall r: Int64.t. result = Some'0 r
+      -> Int64.to_int r = Int64.to_int self_ + Int64.to_int rhs)}
+    (! return {result}) ]
+
+type t_Option_Infallible = None'1 | Some'1 ()
+
+type t_ControlFlow_Option_Infallible_i64 = Continue Int64.t | Break t_Option_Infallible
+
+predicate inv_Infallible [@inline:trivial] (_1: ()) = false
+
+meta "rewrite_def" predicate inv_Infallible
+
+predicate inv_Option_Infallible (_1: t_Option_Infallible)
+
+axiom inv_axiom [@rewrite]: forall x: t_Option_Infallible [inv_Option_Infallible x]. inv_Option_Infallible x
+    = match x with
+      | None'1 -> true
+      | Some'1 f0'0 -> inv_Infallible f0'0
+      end
+
+predicate inv_ControlFlow_Option_Infallible_i64 (_1: t_ControlFlow_Option_Infallible_i64)
+
+axiom inv_axiom'0 [@rewrite]:
+  forall x: t_ControlFlow_Option_Infallible_i64 [inv_ControlFlow_Option_Infallible_i64 x]. inv_ControlFlow_Option_Infallible_i64 x
+    = match x with
+      | Continue f0'0 -> true
+      | Break f0'0 -> inv_Option_Infallible f0'0
+      end
+
+let branch_Option_i64 (self_: t_Option_i64) (return (x: t_ControlFlow_Option_Infallible_i64)) = any
+  [ return (result: t_ControlFlow_Option_Infallible_i64) ->
+  {[@stop_split] [@expl:branch_Option_i64 ensures] ([@stop_split] [@expl:branch result type invariant] inv_ControlFlow_Option_Infallible_i64 result)
+    /\ ([@stop_split] [@expl:branch ensures] [%#sops] match self_ with
+      | Some'0 v -> result = Continue v
+      | None'0 -> result = Break (None'1)
+      end)}
+    (! return {result}) ]
+
+let elim_Break (_x: t_ControlFlow_Option_Infallible_i64) (return (f0'0: t_Option_Infallible)) = any
+  [ _k (f0'0: t_Option_Infallible) -> {Break f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Break] match _x with
+      | Break _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+let from_residual_Option_tup2_i64_i64 (residual: t_Option_Infallible) (return (x: t_Option_tup2_i64_i64)) =
+{[@stop_split] [@expl:from_residual 'residual' type invariant] [%#sops'0] inv_Option_Infallible residual}
+  any
+  [ return (result: t_Option_tup2_i64_i64) -> {[@stop_split] [@expl:from_residual ensures] [%#sops'1] result = None}
+    (! return {result}) ]
+
+let elim_Continue (_x: t_ControlFlow_Option_Infallible_i64) (return (f0'0: Int64.t)) = any
+  [ _k (f0'0: Int64.t) -> {Continue f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Continue] match _x with
+      | Continue _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
 
 meta "rewrite_def" predicate ge_log_Int
 
-predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+function kafka_record_timestamp [#"/workspace/crates/verified/src/restore.rs" 248 0 248 91] (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) : int
+ = [%#srestore'8] match frame.timestamp_type with
+    | CreateTime -> Int64.to_int frame.base_timestamp + Int64.to_int record.timestamp_delta
+    | LogAppendTime -> Int64.to_int frame.max_timestamp
+    end
 
-meta "rewrite_def" predicate gt_log_Int
+predicate restore_record_placeable [#"/workspace/crates/verified/src/restore.rs" 263 0 263 94] (frame: t_RestoreBatchFrame) (record: t_RestoreRecordDeltas) =
+  [%#srestore'7] ge_log_Int (Int32.to_int frame.last_offset_delta) 0
+  /\ ge_log_Int (Int32.to_int record.offset_delta) 0
+  /\ Int32.to_int record.offset_delta <= Int32.to_int frame.last_offset_delta
+  /\ Int64.to_int frame.base_offset + Int32.to_int record.offset_delta <= Int64.to_int const_MAX
+  /\ ge_log_Int (kafka_record_timestamp frame record) (Int64.to_int const_MIN)
+  /\ kafka_record_timestamp frame record <= Int64.to_int const_MAX
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let restore_record_coordinates [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 58 0 64 23]
-  (base_offset: Int64.t) (last_offset_delta: Int32.t) (base_timestamp: Int64.t) (offset_delta: Int32.t)
-  (timestamp_delta: Int64.t) (return (x: t_Option_tup2_i64_i64)) = (! bb0
+let restore_record_coordinates [#"/workspace/crates/verified/src/restore.rs" 286 0 289 23] (frame: t_RestoreBatchFrame)
+  (record: t_RestoreRecordDeltas) (return (x: t_Option_tup2_i64_i64)) = (! bb0
   [ bb0 = s0
-    [ s0 = [ &_13 <- Int32.lt last_offset_delta ([%#srestore] (0: Int32.t)) ] s1
-    | s1 = any [ br0 -> {_13 = false} (! bb2) | br1 -> {_13} (! bb6) ] ]
+    [ s0 = [ &_7 <- Int32.lt frame.last_offset_delta ([%#srestore] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_7 = false} (! bb2) | br1 -> {_7} (! bb6) ] ]
   | bb2 = s0
-    [ s0 = [ &_15 <- Int32.lt offset_delta ([%#srestore'0] (0: Int32.t)) ] s1
-    | s1 = any [ br0 -> {_15 = false} (! bb4) | br1 -> {_15} (! bb6) ] ]
+    [ s0 = [ &_9 <- Int32.lt record.offset_delta ([%#srestore'0] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_9 = false} (! bb4) | br1 -> {_9} (! bb6) ] ]
   | bb4 = s0
-    [ s0 = [ &_17 <- Int32.gt offset_delta last_offset_delta ] s1
-    | s1 = any [ br0 -> {_17 = false} (! bb7) | br1 -> {_17} (! bb6) ] ]
+    [ s0 = [ &_11 <- Int32.gt record.offset_delta frame.last_offset_delta ] s1
+    | s1 = any [ br0 -> {_11 = false} (! bb7) | br1 -> {_11} (! bb6) ] ]
   | bb6 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
   | bb7 = s0
-    [ s0 = from_i64 [%#srestore'1] {offset_delta} (fun (_x: Int64.t) -> [ &offset_delta'0 <- _x ] s1)
-    | s1 = Int64.sub [%#srestore'3] {[%#srestore'2] const_MAX} {offset_delta'0} (fun (_x: Int64.t) -> [ &_26 <- _x ] s2)
-    | s2 = [ &_24 <- Int64.gt base_offset _26 ] s3
-    | s3 = any [ br0 -> {_24 = false} (! bb10) | br1 -> {_24} (! bb9) ] ]
-  | bb9 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
-  | bb10 = s0
-    [ s0 = Int64.add [%#srestore'4] {base_offset} {offset_delta'0} (fun (_x: Int64.t) -> [ &offset <- _x ] s1)
-    | s1 = [ &_33 <- Int64.ge timestamp_delta ([%#srestore'5] (0: Int64.t)) ] s2
-    | s2 = any [ br0 -> {_33 = false} (! bb12) | br1 -> {_33} (! bb11) ] ]
-  | bb11 = s0
-    [ s0 = Int64.sub [%#srestore'7] {[%#srestore'6] const_MAX} {timestamp_delta}
-        (fun (_x: Int64.t) -> [ &_38 <- _x ] s1)
-    | s1 = [ &_36 <- Int64.gt base_timestamp _38 ] s2
-    | s2 = any [ br0 -> {_36 = false} (! bb14) | br1 -> {_36} (! bb13) ] ]
-  | bb13 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+    [ s0 = from_i64 [%#srestore'1] {record.offset_delta} (fun (_x: Int64.t) -> [ &_19 <- _x ] s1)
+    | s1 = checked_add [%#srestore'2] {frame.base_offset} {_19} (fun (_x: t_Option_i64) -> [ &_17 <- _x ] s2)
+    | s2 = branch_Option_i64 [%#srestore'3] {_17} (fun (_x: t_ControlFlow_Option_Infallible_i64) -> [ &_16 <- _x ] s3)
+    | s3 = any
+      [ br0 (x0: Int64.t) -> {_16 = Continue x0} (! bb13)
+      | br1 (x0: t_Option_Infallible) -> {_16 = Break x0} (! bb14) ] ]
   | bb14 = s0
-    [ s0 = Int64.add [%#srestore'8] {base_timestamp} {timestamp_delta} (fun (_x: Int64.t) -> [ &timestamp <- _x ] s1)
-    | s1 = bb17 ]
-  | bb12 = s0
-    [ s0 = Int64.sub [%#srestore'10] {[%#srestore'9] const_MIN} {timestamp_delta}
-        (fun (_x: Int64.t) -> [ &_46 <- _x ] s1)
-    | s1 = [ &_44 <- Int64.lt base_timestamp _46 ] s2
-    | s2 = any [ br0 -> {_44 = false} (! bb16) | br1 -> {_44} (! bb15) ] ]
-  | bb15 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
-  | bb16 = s0
-    [ s0 = Int64.add [%#srestore'11] {base_timestamp} {timestamp_delta} (fun (_x: Int64.t) -> [ &timestamp <- _x ] s1)
-    | s1 = bb17 ]
-  | bb17 = s0
-    [ s0 = [ &_51 <- { f0 = offset; f1 = timestamp } ] s1 | s1 = [ &_ret <- Some _51 ] s2 | s2 = return {_ret} ] ]
+    [ s0 = elim_Break {_16} (fun (r0: t_Option_Infallible) -> [ &residual <- r0 ] s1)
+    | s1 = from_residual_Option_tup2_i64_i64 [%#srestore'3] {residual}
+        (fun (_x: t_Option_tup2_i64_i64) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb13 = s0
+    [ s0 = elim_Continue {_16} (fun (r0: Int64.t) -> [ &val' <- r0 ] s1)
+    | s1 = [ &offset <- val' ] s2
+    | s2 = any
+      [ br0 -> {frame.timestamp_type = CreateTime} (! bb19) | br1 -> {frame.timestamp_type = LogAppendTime} (! bb18) ] ]
+  | bb18 = s0 [ s0 = [ &timestamp <- frame.max_timestamp ] s1 | s1 = bb27 ]
+  | bb19 = s0
+    [ s0 = checked_add [%#srestore'4] {frame.base_timestamp} {record.timestamp_delta}
+        (fun (_x: t_Option_i64) -> [ &_29 <- _x ] s1)
+    | s1 = branch_Option_i64 [%#srestore'5] {_29} (fun (_x: t_ControlFlow_Option_Infallible_i64) -> [ &_28 <- _x ] s2)
+    | s2 = any
+      [ br0 (x0: Int64.t) -> {_28 = Continue x0} (! bb24)
+      | br1 (x0: t_Option_Infallible) -> {_28 = Break x0} (! bb25) ] ]
+  | bb25 = s0
+    [ s0 = elim_Break {_28} (fun (r0: t_Option_Infallible) -> [ &residual'0 <- r0 ] s1)
+    | s1 = from_residual_Option_tup2_i64_i64 [%#srestore'5] {residual'0}
+        (fun (_x: t_Option_tup2_i64_i64) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb24 = s0
+    [ s0 = elim_Continue {_28} (fun (r0: Int64.t) -> [ &val''0 <- r0 ] s1)
+    | s1 = [ &timestamp <- val''0 ] s2
+    | s2 = bb27 ]
+  | bb27 = s0
+    [ s0 = [ &_37 <- { f0 = offset; f1 = timestamp } ] s1 | s1 = [ &_ret <- Some _37 ] s2 | s2 = return {_ret} ] ]
   [ & _ret: t_Option_tup2_i64_i64 = Any.any_l ()
-  | & base_offset: Int64.t = base_offset
-  | & last_offset_delta: Int32.t = last_offset_delta
-  | & base_timestamp: Int64.t = base_timestamp
-  | & offset_delta: Int32.t = offset_delta
-  | & timestamp_delta: Int64.t = timestamp_delta
-  | & _13: bool = Any.any_l ()
-  | & _15: bool = Any.any_l ()
-  | & _17: bool = Any.any_l ()
-  | & offset_delta'0: Int64.t = Any.any_l ()
-  | & _24: bool = Any.any_l ()
-  | & _26: Int64.t = Any.any_l ()
+  | & frame: t_RestoreBatchFrame = frame
+  | & record: t_RestoreRecordDeltas = record
+  | & _7: bool = Any.any_l ()
+  | & _9: bool = Any.any_l ()
+  | & _11: bool = Any.any_l ()
   | & offset: Int64.t = Any.any_l ()
+  | & _16: t_ControlFlow_Option_Infallible_i64 = Any.any_l ()
+  | & _17: t_Option_i64 = Any.any_l ()
+  | & _19: Int64.t = Any.any_l ()
+  | & residual: t_Option_Infallible = Any.any_l ()
+  | & val': Int64.t = Any.any_l ()
   | & timestamp: Int64.t = Any.any_l ()
-  | & _33: bool = Any.any_l ()
-  | & _36: bool = Any.any_l ()
-  | & _38: Int64.t = Any.any_l ()
-  | & _44: bool = Any.any_l ()
-  | & _46: Int64.t = Any.any_l ()
-  | & _51: tup2_i64_i64 = Any.any_l () ])
+  | & _28: t_ControlFlow_Option_Infallible_i64 = Any.any_l ()
+  | & _29: t_Option_i64 = Any.any_l ()
+  | & residual'0: t_Option_Infallible = Any.any_l ()
+  | & val''0: Int64.t = Any.any_l ()
+  | & _37: tup2_i64_i64 = Any.any_l () ])
   [ return (result: t_Option_tup2_i64_i64) ->
-  {[@stop_split] [@expl:restore_record_coordinates ensures] [%#srestore'12] match result with
-      | Some {f0 = offset; f1 = timestamp} -> ge_log_Int (Int32.to_int last_offset_delta) 0
-      /\ ge_log_Int (Int32.to_int offset_delta) 0
-      /\ Int32.to_int offset_delta <= Int32.to_int last_offset_delta
-      /\ Int64.to_int offset = Int64.to_int base_offset + Int32.to_int offset_delta
-      /\ ge_log_Int (Int64.to_int offset) (Int64.to_int const_MIN)
-      /\ Int64.to_int offset <= Int64.to_int const_MAX
-      /\ Int64.to_int timestamp = Int64.to_int base_timestamp + Int64.to_int timestamp_delta
-      /\ ge_log_Int (Int64.to_int timestamp) (Int64.to_int const_MIN)
-      /\ Int64.to_int timestamp <= Int64.to_int const_MAX
-      | None -> Int32.to_int last_offset_delta < 0
-      \/ Int32.to_int offset_delta < 0
-      \/ gt_log_Int (Int32.to_int offset_delta) (Int32.to_int last_offset_delta)
-      \/ gt_log_Int (Int64.to_int base_offset + Int32.to_int offset_delta) (Int64.to_int const_MAX)
-      \/ Int64.to_int base_timestamp + Int64.to_int timestamp_delta < Int64.to_int const_MIN
-      \/ gt_log_Int (Int64.to_int base_timestamp + Int64.to_int timestamp_delta) (Int64.to_int const_MAX)
+  {[@stop_split] [@expl:restore_record_coordinates ensures] [%#srestore'6] match result with
+      | Some {f0 = offset; f1 = timestamp} -> restore_record_placeable frame record
+      /\ Int64.to_int offset = Int64.to_int frame.base_offset + Int32.to_int record.offset_delta
+      /\ Int64.to_int timestamp = kafka_record_timestamp frame record
+      | None -> not restore_record_placeable frame record
       end}
     (! return {result}) ]

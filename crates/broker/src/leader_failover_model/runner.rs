@@ -20,13 +20,33 @@ const MAX_DEPTH: usize = 80;
 // considering a field -- into a failure instead of a silently smaller search
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
-pub(super) const PINNED_UNIQUE_STATES_FAILOVER_SAFE: usize = 105;
-pub(super) const PINNED_UNIQUE_STATES_FAILOVER_UNCLEAN: usize = 280;
-pub(super) const PINNED_UNIQUE_STATES_FAILOVER_RECOVER: usize = 105;
-pub(super) const PINNED_UNIQUE_STATES_WITNESS_SAFE: usize = 77;
-pub(super) const PINNED_UNIQUE_STATES_WITNESS_UNCLEAN: usize = 140;
-pub(super) const PINNED_UNIQUE_STATES_WITNESS_RECOVER: usize = 77;
+// The six `min.insync.replicas` 1 counts moved (from 105, 280, 105, 77, 140
+// and 77) when the state gained `elr` and `elected_from_elr` and the search
+// gained `FailoverAction::ExpandIsr`: a revived follower now rejoins the ISR,
+// so ISR shapes past the first election are reachable, and the published ELR
+// is non-empty whenever an ISR has emptied outright. The three ELR counts were
+// new configurations then.
+//
+// All nine failover counts moved again (from 2,198 / 2,198 / 2,198 / 826 /
+// 826 / 826 / 3,297 / 2,891 / 1,211) when `failover_one` took Kafka's
+// `handleBrokerFenced` semantics, and every one shrank because fewer ISR
+// shapes are reachable: a failover now removes only the dead broker from the
+// ISR, where it used to drop every member that was down at once (that is how
+// the reachable set included an empty ISR under a live leader, the
+// `leader_in_isr` counterexample); a leader that is down is re-elected by
+// whichever of its partition's failovers runs first; and a broker that is only
+// a replica leaves the partition alone. The assignment also became `[1, 3, 2]`
+// so that ISR order and assignment order can differ.
+pub(super) const PINNED_UNIQUE_STATES_FAILOVER_SAFE: usize = 525;
+pub(super) const PINNED_UNIQUE_STATES_FAILOVER_UNCLEAN: usize = 525;
+pub(super) const PINNED_UNIQUE_STATES_FAILOVER_RECOVER: usize = 525;
+pub(super) const PINNED_UNIQUE_STATES_WITNESS_SAFE: usize = 210;
+pub(super) const PINNED_UNIQUE_STATES_WITNESS_UNCLEAN: usize = 210;
+pub(super) const PINNED_UNIQUE_STATES_WITNESS_RECOVER: usize = 210;
 pub(super) const PINNED_UNIQUE_STATES_OFFSET_RECOVERY: usize = 6_859;
+pub(super) const PINNED_UNIQUE_STATES_ELR_UNCLEAN: usize = 1_470;
+pub(super) const PINNED_UNIQUE_STATES_ELR_RECOVER: usize = 1_246;
+pub(super) const PINNED_UNIQUE_STATES_WITNESS_ELR_UNCLEAN: usize = 532;
 
 pub(super) fn run_failover(model: FailoverModel, label: &str, pinned_unique_states: usize) {
     let checker = model

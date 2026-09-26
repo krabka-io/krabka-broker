@@ -15,6 +15,18 @@ use super::{
 };
 use crate::error::BrokerError;
 
+/// Open on the longest prefix that a byte-identical majority of `replicas`
+/// holds, and make every replica hold exactly that prefix.
+///
+/// The length frontier, the greatest end a majority of replicas reaches, is
+/// only an upper bound: two replicas of equal length can disagree, and then
+/// neither copy has a majority. Recovery walks down from that bound to the
+/// first offset where a majority holds the same batches. Majorities
+/// intersect, so at most one byte-identical majority prefix exists at each
+/// offset, and the one chosen extends every prefix a majority acknowledged:
+/// a replica in both majorities holds both. The recovery start itself is
+/// always such an offset (every replica agrees on an empty range), so a
+/// disagreement costs only unacknowledged records and never fails the open.
 pub(super) fn recover_durable_prefix(
     replicas: &[WalReplica],
     majority: usize,
@@ -31,16 +43,27 @@ pub(super) fn recover_durable_prefix(
         .enumerate()
         .filter_map(|(index, offset)| (index != donor_index).then_some(offset.0))
         .collect::<Vec<_>>();
-    let durable = Offset(krabka_verified::recompute_high_watermark(
+    // The majority frontier of the replica ends, with the donor as the
+    // counted leader; offsets are never negative, so 0 is only a floor.
+    let frontier = Offset(krabka_verified::consensus::majority_watermark(
         donor_end.0,
         &follower_ends,
         majority,
-        -1,
         0,
-        true,
     ));
-    let recovery_start = recovery_start(replicas, &ends, durable)?;
-    let donor_index = quorum_donor(replicas, &ends, majority, recovery_start, durable)?;
+    let recovery_start = recovery_start(replicas, &ends, frontier)?;
+    let (durable, donor_index) = (recovery_start.0..=frontier.0)
+        .rev()
+        .find_map(|durable| {
+            quorum_donor(replicas, &ends, majority, recovery_start, Offset(durable))
+                .map(|donor| (Offset(durable), donor))
+        })
+        .ok_or_else(|| {
+            BrokerError::Replication(format!(
+                "wal quorum has no byte-identical majority in recovery range {}..{}",
+                recovery_start.0, frontier.0
+            ))
+        })?;
 
     normalize_durable_prefix(replicas, &ends, donor_index, recovery_start, durable)?;
     Ok(durable)
@@ -91,7 +114,7 @@ fn quorum_donor(
     majority: usize,
     start: Offset,
     durable: Offset,
-) -> Result<usize, BrokerError> {
+) -> Option<usize> {
     for (candidate_index, candidate) in replicas.iter().enumerate() {
         if ends[candidate_index] < durable {
             continue;
@@ -109,13 +132,10 @@ fn quorum_donor(
             })
             .count();
         if supporters >= majority {
-            return Ok(candidate_index);
+            return Some(candidate_index);
         }
     }
-    Err(BrokerError::Replication(format!(
-        "wal quorum has no byte-identical majority for durable range {}..{}",
-        start.0, durable.0
-    )))
+    None
 }
 
 fn same_batches(left: &[BatchBytes], right: &[BatchBytes]) -> bool {

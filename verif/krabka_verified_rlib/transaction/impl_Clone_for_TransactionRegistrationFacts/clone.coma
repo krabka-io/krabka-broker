@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/transaction.rs" 295 27 295 32 *)
+(* #"/workspace/crates/verified/src/transaction.rs" 384 27 384 32 *)
 
 (* <transaction::TransactionRegistrationFacts as std::clone::Clone> *)
 
@@ -6,12 +6,19 @@ use creusot.prelude.Any
 
 type t_TransactionRegistrationOwnershipFacts = { is_coordinator: bool; producer_id_valid: bool; entry_exists: bool }
 
-type t_TransactionRegistrationIdentityFacts = {
+type t_TransactionRegistrationIdentityMatchFacts = {
   transactional_id_matches: bool;
-  staged_identity: bool;
-  producer_identity_matches: bool }
+  producer_id_matches: bool;
+  producer_epoch_matches: bool }
 
-type t_TransactionRegistrationStateFacts = { state_allows_registration: bool; exact_partitions_registered: bool }
+type t_TransactionRegistrationIdentityFacts = {
+  pending_transition: bool;
+  matching: t_TransactionRegistrationIdentityMatchFacts }
+
+type t_TransactionRegistrationStateFacts = {
+  state_allows_registration: bool;
+  state_is_ongoing: bool;
+  exact_partitions_registered: bool }
 
 type t_TransactionRegistrationFacts = {
   ownership: t_TransactionRegistrationOwnershipFacts;
@@ -22,7 +29,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_TransactionRegistrationFacts [#"/workspace/crates/verified/src/transaction.rs" 295 27 295 32]
+let clone_TransactionRegistrationFacts [#"/workspace/crates/verified/src/transaction.rs" 384 27 384 32]
   (self: t_TransactionRegistrationFacts) (return (x: t_TransactionRegistrationFacts)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_TransactionRegistrationFacts = Any.any_l () | & self: t_TransactionRegistrationFacts = self ])

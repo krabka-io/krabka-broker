@@ -1,146 +1,234 @@
-(* #"/workspace/crates/verified/src/producer.rs" 120 0 125 21 *)
+(* #"/workspace/crates/verified/src/producer.rs" 207 0 213 21 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sproducer = "/workspace/crates/verified/src/producer.rs" 133 28 133 29
-let%span sproducer'0 = "/workspace/crates/verified/src/producer.rs" 138 63 138 64
-let%span sproducer'1 = "/workspace/crates/verified/src/producer.rs" 138 24 138 65
-let%span sproducer'2 = "/workspace/crates/verified/src/producer.rs" 141 7 141 65
-let%span sproducer'3 = "/workspace/crates/verified/src/producer.rs" 95 28 95 79
-let%span sproducer'4 = "/workspace/crates/verified/src/producer.rs" 96 28 98 46
-let%span sproducer'5 = "/workspace/crates/verified/src/producer.rs" 99 28 101 46
-let%span sproducer'6 = "/workspace/crates/verified/src/producer.rs" 102 28 104 50
-let%span sproducer'7 = "/workspace/crates/verified/src/producer.rs" 105 28 108 46
-let%span sproducer'8 = "/workspace/crates/verified/src/producer.rs" 109 28 113 87
-let%span sproducer'9 = "/workspace/crates/verified/src/producer.rs" 114 28 118 50
-let%span sproducer'10 = "/workspace/crates/verified/src/producer.rs" 38 28 38 83
-let%span sproducer'11 = "/workspace/crates/verified/src/producer.rs" 78 12 78 86
-let%span sproducer'12 = "/workspace/crates/verified/src/producer.rs" 34 16 34 49
-let%span sproducer'13 = "/workspace/crates/verified/src/producer.rs" 69 8 72 95
-let%span sproducer'14 = "/workspace/crates/verified/src/producer.rs" 49 16 49 49
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sproducer = "/workspace/crates/verified/src/producer.rs" 218 28 218 80
+let%span sproducer'0 = "/workspace/crates/verified/src/producer.rs" 219 20 219 26
+let%span sproducer'1 = "/workspace/crates/verified/src/producer.rs" 223 18 223 38
+let%span sproducer'2 = "/workspace/crates/verified/src/producer.rs" 224 18 224 32
+let%span sproducer'3 = "/workspace/crates/verified/src/producer.rs" 221 20 222 81
+let%span sproducer'4 = "/workspace/crates/verified/src/producer.rs" 220 20 220 41
+let%span sproducer'5 = "/workspace/crates/verified/src/producer.rs" 225 33 225 44
+let%span sproducer'6 = "/workspace/crates/verified/src/producer.rs" 225 19 225 30
+let%span sproducer'7 = "/workspace/crates/verified/src/producer.rs" 225 24 225 29
+let%span sproducer'8 = "/workspace/crates/verified/src/producer.rs" 231 17 231 18
+let%span sproducer'9 = "/workspace/crates/verified/src/producer.rs" 231 12 231 18
+let%span sproducer'10 = "/workspace/crates/verified/src/producer.rs" 238 28 238 29
+let%span sproducer'11 = "/workspace/crates/verified/src/producer.rs" 243 66 243 67
+let%span sproducer'12 = "/workspace/crates/verified/src/producer.rs" 243 24 243 68
+let%span sproducer'13 = "/workspace/crates/verified/src/producer.rs" 199 10 205 1
+let%span sproducer'14 = "/workspace/crates/verified/src/producer.rs" 55 10 55 65
+let%span sproducer'15 = "/workspace/crates/verified/src/producer.rs" 100 8 105 9
+let%span sproducer'16 = "/workspace/crates/verified/src/producer.rs" 143 8 150 9
+let%span sproducer'17 = "/workspace/crates/verified/src/producer.rs" 121 8 126 9
+let%span sproducer'18 = "/workspace/crates/verified/src/producer.rs" 164 8 175 9
+let%span sproducer'19 = "/workspace/crates/verified/src/producer.rs" 46 16 46 47
 
 use creusot.int.Int16
 use creusot.int.Int32
-use creusot.int.Int64
+use creusot.int.UInt64
+use int.EuclideanDivision
+use seq.Seq
+use creusot.slice.Slice64
 use creusot.prelude.Any
 use int.Int
 
-type t_Option_i32 = None | Some Int32.t
+type t_ProducerEntryFacts = { epoch: Int16.t; last_sequence: Int32.t }
 
-type t_ProducerBatch = { epoch: Int16.t; last_sequence: Int32.t; last_offset_delta: t_Option_i32; base_offset: Int64.t }
+type t_Option_ProducerEntryFacts = None | Some t_ProducerEntryFacts
 
-type t_Option_ProducerBatch = None'0 | Some'0 t_ProducerBatch
+type t_ProducerDecision = Append | Duplicate UInt64.t | OutOfOrder | Fenced
 
-type t_ProducerDecision = Append | Duplicate Int64.t | OutOfOrder | Fenced
+let elim_Some (_x: t_Option_ProducerEntryFacts) (return (f0: t_ProducerEntryFacts)) = any
+  [ _k (f0: t_ProducerEntryFacts) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
 
-let elim_Some (_x: t_Option_ProducerBatch) (return (f0: t_ProducerBatch)) = any
-  [ _k (f0: t_ProducerBatch) -> {Some'0 f0 = _x} (! return {f0})
+function sequence_modulo_2_31 [#"/workspace/crates/verified/src/producer.rs" 45 0 45 45] (sequence: int) : int =
+  [%#sproducer'19] EuclideanDivision.mod sequence 2147483648
+
+let increment_sequence (sequence: Int32.t) (increment: Int32.t) (return (x: Int32.t)) = any
+  [ return (result: Int32.t) -> {[@stop_split] [@expl:increment_sequence ensures] [%#sproducer'14] Int32.to_int result
+    = sequence_modulo_2_31 (Int32.to_int sequence + Int32.to_int increment)}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+type t_RetainedSequenceRange = { base_sequence'0: Int32.t; last_sequence'0: Int32.t }
+
+type t_Option_RetainedSequenceRange = None'0 | Some'0 t_RetainedSequenceRange
+
+let len_Option_RetainedSequenceRange (self_: Slice64.slice t_Option_RetainedSequenceRange) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+predicate retained_matches [#"/workspace/crates/verified/src/producer.rs" 94 0 98 9] (slot: t_Option_RetainedSequenceRange) (base_sequence: Int32.t) (last_offset_delta: Int32.t) =
+  [%#sproducer'15] match slot with
+    | Some'0 range -> Int32.to_int range.base_sequence'0 = Int32.to_int base_sequence
+    /\ Int32.to_int range.last_sequence'0
+    = sequence_modulo_2_31 (Int32.to_int base_sequence + Int32.to_int last_offset_delta)
+    | None'0 -> false
+    end
+
+let elim_Some'0 (_x: t_Option_RetainedSequenceRange) (return (f0: t_RetainedSequenceRange)) = any
+  [ _k (f0: t_RetainedSequenceRange) -> {Some'0 f0 = _x} (! return {f0})
   | _chk -> (! {[@expl:elim Some] match _x with
       | Some'0 _ -> true
       | _ -> false
       end}
     any) ]
 
-constant const_MAX: Int32.t = (2147483647: Int32.t)
+predicate first_retained_duplicate [#"/workspace/crates/verified/src/producer.rs" 134 0 141 9] (entry: t_Option_ProducerEntryFacts) (retained: Seq.seq t_Option_RetainedSequenceRange) (producer_epoch: Int16.t) (base_sequence: Int32.t) (last_offset_delta: Int32.t) (index: int) =
+  [%#sproducer'16] match entry with
+    | Some tracked -> Int16.to_int tracked.epoch = Int16.to_int producer_epoch
+    /\ 0 <= index
+    /\ index < Seq.length retained
+    /\ retained_matches (Seq.get retained index) base_sequence last_offset_delta
+    /\ (forall j: int. 0 <= j /\ j < index -> not retained_matches (Seq.get retained j) base_sequence last_offset_delta)
+    | None -> false
+    end
 
-function increment_sequence_model [#"/workspace/crates/verified/src/producer.rs" 33 0 33 65] (sequence: Int32.t) (increment: Int32.t) : Int32.t
- = [%#sproducer'12] Int32.bw_and (Int32.add sequence increment) const_MAX
+predicate retained_duplicate_exists [#"/workspace/crates/verified/src/producer.rs" 113 0 119 9] (entry: t_Option_ProducerEntryFacts) (retained: Seq.seq t_Option_RetainedSequenceRange) (producer_epoch: Int16.t) (base_sequence: Int32.t) (last_offset_delta: Int32.t) =
+  [%#sproducer'17] match entry with
+    | Some tracked -> Int16.to_int tracked.epoch = Int16.to_int producer_epoch
+    /\ (exists i: int. 0 <= i
+      /\ i < Seq.length retained /\ retained_matches (Seq.get retained i) base_sequence last_offset_delta)
+    | None -> false
+    end
 
-let increment_sequence (sequence: Int32.t) (increment: Int32.t) (return (x: Int32.t)) = any
-  [ return (result: Int32.t) -> {[@stop_split] [@expl:increment_sequence ensures] [%#sproducer'10] result
-    = increment_sequence_model sequence increment}
-    (! return {result}) ]
-
-function decrement_sequence_model [#"/workspace/crates/verified/src/producer.rs" 48 0 48 65] (sequence: Int32.t) (decrement: Int32.t) : Int32.t
- = [%#sproducer'14] Int32.bw_and (Int32.sub sequence decrement) const_MAX
-
-predicate matches_last_batch_model [#"/workspace/crates/verified/src/producer.rs" 63 0 67 9] (last: t_ProducerBatch) (base_sequence: Int32.t) (last_offset_delta'0: Int32.t) =
-  [%#sproducer'13] exists committed_delta: Int32.t. last.last_offset_delta = Some committed_delta
-    /\ base_sequence = decrement_sequence_model last.last_sequence committed_delta
-    /\ increment_sequence_model base_sequence last_offset_delta'0 = last.last_sequence
-
-let matches_last_batch (last: t_ProducerBatch) (base_sequence: Int32.t) (last_offset_delta'0: Int32.t)
-  (return (x: bool)) = any
-  [ return (result: bool) -> {[@stop_split] [@expl:matches_last_batch ensures] [%#sproducer'11] result
-    = matches_last_batch_model last base_sequence last_offset_delta'0}
-    (! return {result}) ]
-
-predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
-
-meta "rewrite_def" predicate gt_log_Int
+function sequence_decision [#"/workspace/crates/verified/src/producer.rs" 158 0 162 21] (entry: t_Option_ProducerEntryFacts) (producer_epoch: Int16.t) (base_sequence: Int32.t) : t_ProducerDecision
+ = [%#sproducer'18] match entry with
+    | None -> Append
+    | Some tracked -> if Int16.to_int producer_epoch < Int16.to_int tracked.epoch then
+      Fenced
+    else
+      if gt_log_Int (Int16.to_int producer_epoch) (Int16.to_int tracked.epoch) then
+        if Int32.to_int base_sequence = 0 then Append else OutOfOrder
+      else
+        if Int32.to_int base_sequence = sequence_modulo_2_31 (Int32.to_int tracked.last_sequence + 1) then
+          Append
+        else
+          OutOfOrder
+      
+    
+    
+    end
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let producer_decision [#"/workspace/crates/verified/src/producer.rs" 120 0 125 21]
-  (last: t_Option_ProducerBatch) (producer_epoch: Int16.t) (base_sequence: Int32.t) (last_offset_delta'0: Int32.t)
-  (return (x: t_ProducerDecision)) = (! bb0
-  [ bb0 = any [ br0 -> {last = None'0} (! bb1) | br1 (x0: t_ProducerBatch) -> {last = Some'0 x0} (! bb3) ]
+let producer_decision [#"/workspace/crates/verified/src/producer.rs" 207 0 213 21] (entry: t_Option_ProducerEntryFacts)
+  (retained: Slice64.slice t_Option_RetainedSequenceRange) (producer_epoch: Int16.t) (base_sequence: Int32.t)
+  (last_offset_delta: Int32.t) (return (x: t_ProducerDecision)) = (! bb0
+  [ bb0 = any [ br0 -> {entry = None} (! bb1) | br1 (x0: t_ProducerEntryFacts) -> {entry = Some x0} (! bb3) ]
   | bb1 = s0 [ s0 = [ &_ret <- Append ] s1 | s1 = return {_ret} ]
   | bb3 = s0
-    [ s0 = elim_Some {last} (fun (r0: t_ProducerBatch) -> [ &last'0 <- r0 ] s1)
-    | s1 = [ &_36 <- Int16.lt producer_epoch last'0.epoch ] s2
-    | s2 = any [ br0 -> {_36 = false} (! bb5) | br1 -> {_36} (! bb4) ] ]
-  | bb4 = s0 [ s0 = [ &_ret <- Fenced ] s1 | s1 = return {_ret} ]
-  | bb5 = s0
-    [ s0 = [ &_41 <- Int16.gt producer_epoch last'0.epoch ] s1
-    | s1 = any [ br0 -> {_41 = false} (! bb7) | br1 -> {_41} (! bb6) ] ]
-  | bb6 = s0
-    [ s0 = [ &_46 <- base_sequence = ([%#sproducer] (0: Int32.t)) ] s1
-    | s1 = any [ br0 -> {_46 = false} (! bb9) | br1 -> {_46} (! bb8) ] ]
-  | bb8 = s0 [ s0 = [ &_ret <- Append ] s1 | s1 = return {_ret} ]
-  | bb9 = s0 [ s0 = [ &_ret <- OutOfOrder ] s1 | s1 = return {_ret} ]
-  | bb7 = s0
-    [ s0 = increment_sequence [%#sproducer'1] {last'0.last_sequence} {[%#sproducer'0] (1: Int32.t)}
-        (fun (_x: Int32.t) -> [ &_52 <- _x ] s1)
-    | s1 = [ &_50 <- base_sequence = _52 ] s2
-    | s2 = any [ br0 -> {_50 = false} (! bb12) | br1 -> {_50} (! bb11) ] ]
-  | bb11 = s0 [ s0 = [ &_ret <- Append ] s1 | s1 = return {_ret} ]
-  | bb12 = s0
-    [ s0 = matches_last_batch [%#sproducer'2] {last'0} {base_sequence} {last_offset_delta'0}
-        (fun (_x: bool) -> [ &_56 <- _x ] s1)
-    | s1 = any [ br0 -> {_56 = false} (! bb15) | br1 -> {_56} (! bb14) ] ]
-  | bb14 = s0 [ s0 = [ &_ret <- Duplicate (last'0.base_offset) ] s1 | s1 = return {_ret} ]
-  | bb15 = s0 [ s0 = [ &_ret <- OutOfOrder ] s1 | s1 = return {_ret} ] ]
+    [ s0 = elim_Some {entry} (fun (r0: t_ProducerEntryFacts) -> [ &tracked <- r0 ] s1)
+    | s1 = [ &_16 <- producer_epoch = tracked.epoch ] s2
+    | s2 = any [ br0 -> {_16 = false} (! bb21) | br1 -> {_16} (! bb4) ] ]
+  | bb4 = s0
+    [ s0 = increment_sequence [%#sproducer] {base_sequence} {last_offset_delta}
+        (fun (_x: Int32.t) -> [ &last_sequence'1 <- _x ] s1)
+    | s1 = [ &i <- [%#sproducer'0] (0: UInt64.t) ] s2
+    | s2 = bb6 ]
+  | bb6 = bb6invariant
+    [ bb6 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb6 ([%#sproducer'1] Seq.length (Slice64.view retained)
+      - UInt64.t'int i)}
+      bb6invariant
+    | bb6invariant = {[@expl:loop invariant #0] [%#sproducer'4] UInt64.t'int i <= Seq.length (Slice64.view retained)}
+      {[@expl:loop invariant #1] [%#sproducer'3] forall j: int. 0 <= j /\ j < UInt64.t'int i
+        -> not retained_matches (Seq.get (Slice64.view retained) j) base_sequence last_offset_delta}
+      (! [ &variant_old_bb6 <- [%#sproducer'1] Seq.length (Slice64.view retained) - UInt64.t'int i ] s0)
+      [ s0 = len_Option_RetainedSequenceRange [%#sproducer'2] {retained} (fun (_x: UInt64.t) -> [ &_38 <- _x ] s1)
+      | s1 = [ &_36 <- UInt64.lt i _38 ] s2
+      | s2 = any [ br0 -> {_36 = false} (! bb21) | br1 -> {_36} (! bb9) ] ]
+      [ bb9 = s0
+        [ s0 = [ &_41 <- i ] s1
+        | s1 = [ &_42 <- Slice64.length retained ] s2
+        | s2 = [ &_43 <- UInt64.lt _41 _42 ] s3
+        | s3 = {[@expl:index in bounds] [%#sproducer'5] _43} s4
+        | s4 = Slice64.get [%#sproducer'6] <t_Option_RetainedSequenceRange> {retained} {_41}
+            (fun (r: t_Option_RetainedSequenceRange) ->
+              any [ br0 -> {r = None'0} (! bb18) | br1 (x0: t_RetainedSequenceRange) -> {r = Some'0 x0} (! bb12) ]) ]
+      | bb12 = s0
+        [ s0 = Slice64.get [%#sproducer'7] <t_Option_RetainedSequenceRange> {retained} {_41}
+            (fun (r: t_Option_RetainedSequenceRange) ->
+              elim_Some'0 {r} (fun (r0: t_RetainedSequenceRange) -> [ &range <- r0 ] s1))
+        | s1 = [ &_46 <- range.base_sequence'0 = base_sequence ] s2
+        | s2 = any [ br0 -> {_46 = false} (! bb18) | br1 -> {_46} (! bb13) ] ]
+      | bb13 = s0
+        [ s0 = [ &_49 <- range.last_sequence'0 = last_sequence'1 ] s1
+        | s1 = any [ br0 -> {_49 = false} (! bb18) | br1 -> {_49} (! bb14) ] ]
+      | bb18 = s0
+        [ s0 = UInt64.add [%#sproducer'9] {i} {[%#sproducer'8] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
+        | s1 = bb6 ] ] ]
+  | bb14 = s0 [ s0 = [ &_ret <- Duplicate i ] s1 | s1 = return {_ret} ]
+  | bb21 = s0
+    [ s0 = [ &_56 <- Int16.lt producer_epoch tracked.epoch ] s1
+    | s1 = any [ br0 -> {_56 = false} (! bb23) | br1 -> {_56} (! bb22) ] ]
+  | bb22 = s0 [ s0 = [ &_ret <- Fenced ] s1 | s1 = return {_ret} ]
+  | bb23 = s0
+    [ s0 = [ &_61 <- Int16.gt producer_epoch tracked.epoch ] s1
+    | s1 = any [ br0 -> {_61 = false} (! bb25) | br1 -> {_61} (! bb24) ] ]
+  | bb24 = s0
+    [ s0 = [ &_66 <- base_sequence = ([%#sproducer'10] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_66 = false} (! bb27) | br1 -> {_66} (! bb26) ] ]
+  | bb26 = s0 [ s0 = [ &_ret <- Append ] s1 | s1 = return {_ret} ]
+  | bb27 = s0 [ s0 = [ &_ret <- OutOfOrder ] s1 | s1 = return {_ret} ]
+  | bb25 = s0
+    [ s0 = increment_sequence [%#sproducer'12] {tracked.last_sequence} {[%#sproducer'11] (1: Int32.t)}
+        (fun (_x: Int32.t) -> [ &_72 <- _x ] s1)
+    | s1 = [ &_70 <- base_sequence = _72 ] s2
+    | s2 = any [ br0 -> {_70 = false} (! bb30) | br1 -> {_70} (! bb29) ] ]
+  | bb29 = s0 [ s0 = [ &_ret <- Append ] s1 | s1 = return {_ret} ]
+  | bb30 = s0 [ s0 = [ &_ret <- OutOfOrder ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_ProducerDecision = Any.any_l ()
-  | & last: t_Option_ProducerBatch = last
+  | & entry: t_Option_ProducerEntryFacts = entry
+  | & retained: Slice64.slice t_Option_RetainedSequenceRange = retained
   | & producer_epoch: Int16.t = producer_epoch
   | & base_sequence: Int32.t = base_sequence
-  | & last_offset_delta'0: Int32.t = last_offset_delta'0
-  | & last'0: t_ProducerBatch = Any.any_l ()
+  | & last_offset_delta: Int32.t = last_offset_delta
+  | & tracked: t_ProducerEntryFacts = Any.any_l ()
+  | & _16: bool = Any.any_l ()
+  | & last_sequence'1: Int32.t = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
   | & _36: bool = Any.any_l ()
-  | & _41: bool = Any.any_l ()
+  | & _38: UInt64.t = Any.any_l ()
+  | & _41: UInt64.t = Any.any_l ()
+  | & _42: UInt64.t = Any.any_l ()
+  | & _43: bool = Any.any_l ()
+  | & range: t_RetainedSequenceRange = Any.any_l ()
   | & _46: bool = Any.any_l ()
-  | & _50: bool = Any.any_l ()
-  | & _52: Int32.t = Any.any_l ()
-  | & _56: bool = Any.any_l () ])
+  | & _49: bool = Any.any_l ()
+  | & _56: bool = Any.any_l ()
+  | & _61: bool = Any.any_l ()
+  | & _66: bool = Any.any_l ()
+  | & _70: bool = Any.any_l ()
+  | & _72: Int32.t = Any.any_l ()
+  | & variant_old_bb6: int = Any.any_l () ])
   [ return (result: t_ProducerDecision) ->
-  {[@stop_split] [@expl:producer_decision ensures] ([@stop_split] [@expl:producer_decision ensures #0] [%#sproducer'3] last
-        = None'0 -> result = Append)
-    /\ ([@stop_split] [@expl:producer_decision ensures #1] [%#sproducer'4] forall accepted: t_ProducerBatch. last
-            = Some'0 accepted
-          /\ Int16.to_int producer_epoch < Int16.to_int accepted.epoch -> result = Fenced)
-    /\ ([@stop_split] [@expl:producer_decision ensures #2] [%#sproducer'5] forall accepted: t_ProducerBatch. last
-            = Some'0 accepted
-          /\ gt_log_Int (Int16.to_int producer_epoch) (Int16.to_int accepted.epoch) /\ base_sequence = (0: Int32.t)
-        -> result = Append)
-    /\ ([@stop_split] [@expl:producer_decision ensures #3] [%#sproducer'6] forall accepted: t_ProducerBatch. last
-            = Some'0 accepted
-          /\ gt_log_Int (Int16.to_int producer_epoch) (Int16.to_int accepted.epoch) /\ base_sequence <> (0: Int32.t)
-        -> result = OutOfOrder)
-    /\ ([@stop_split] [@expl:producer_decision ensures #4] [%#sproducer'7] forall accepted: t_ProducerBatch. last
-            = Some'0 accepted
-          /\ Int16.to_int producer_epoch = Int16.to_int accepted.epoch
-          /\ base_sequence = increment_sequence_model accepted.last_sequence (1: Int32.t) -> result = Append)
-    /\ ([@stop_split] [@expl:producer_decision ensures #5] [%#sproducer'8] forall accepted: t_ProducerBatch. last
-            = Some'0 accepted
-          /\ Int16.to_int producer_epoch = Int16.to_int accepted.epoch
-          /\ base_sequence <> increment_sequence_model accepted.last_sequence (1: Int32.t)
-          /\ matches_last_batch_model accepted base_sequence last_offset_delta'0
-        -> result = Duplicate (accepted.base_offset))
-    /\ ([@stop_split] [@expl:producer_decision ensures #6] [%#sproducer'9] forall accepted: t_ProducerBatch. last
-          = Some'0 accepted
-        /\ Int16.to_int producer_epoch = Int16.to_int accepted.epoch
-        /\ base_sequence <> increment_sequence_model accepted.last_sequence (1: Int32.t)
-        /\ not matches_last_batch_model accepted base_sequence last_offset_delta'0 -> result = OutOfOrder)}
+  {[@stop_split] [@expl:producer_decision ensures] [%#sproducer'13] match result with
+      | Duplicate index -> first_retained_duplicate entry (Slice64.view retained) producer_epoch base_sequence last_offset_delta (UInt64.t'int index)
+      | _ -> not retained_duplicate_exists entry (Slice64.view retained) producer_epoch base_sequence last_offset_delta
+      /\ result = sequence_decision entry producer_epoch base_sequence
+      end}
     (! return {result}) ]

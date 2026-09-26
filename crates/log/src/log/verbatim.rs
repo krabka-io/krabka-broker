@@ -157,16 +157,7 @@ impl Log {
         let stamped = stamp.map(|now| batch.stamped_with_log_append_time(now));
         let batch = stamped.as_ref().unwrap_or(batch);
         self.append_verbatim_preserving_offset(batch, assigned_base)?;
-        if leader_epoch.is_known()
-            && self
-                .epoch_checkpoint
-                .latest_epoch()
-                .is_none_or(|e| leader_epoch > e)
-            && let Err(error) = self.epoch_checkpoint.append(leader_epoch, assigned_base)
-        {
-            self.rollback_failed_append(assigned_base)?;
-            return Err(error);
-        }
+        self.assign_appended_epoch(leader_epoch, assigned_base)?;
         Ok((assigned_base, stamp))
     }
 
@@ -207,16 +198,7 @@ impl Log {
 
         let leader_epoch = batch.leader_epoch;
         self.append_verbatim_preserving_offset(batch, base_offset)?;
-        if leader_epoch.is_known()
-            && self
-                .epoch_checkpoint
-                .latest_epoch()
-                .is_none_or(|e| leader_epoch > e)
-            && let Err(error) = self.epoch_checkpoint.append(leader_epoch, base_offset)
-        {
-            self.rollback_failed_append(base_offset)?;
-            return Err(error);
-        }
+        self.assign_appended_epoch(leader_epoch, base_offset)?;
         Ok(base_offset)
     }
 

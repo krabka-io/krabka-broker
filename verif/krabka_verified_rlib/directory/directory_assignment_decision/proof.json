@@ -4,9 +4,9 @@
     "Coma": {
       "vc_directory_assignment_decision": {
         "prover": "alt-ergo",
-        "time": 0.01
+        "time": 0.028
       },
-      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.009 }
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.022 }
     }
   }
 }

@@ -296,7 +296,7 @@ mod tests {
             heartbeat::step_heartbeat,
             test_support::{StaticMetadata, empty_metadata},
         },
-        assignor::{Assignment, MemberSubscription, TopicMetadata},
+        assignor::{Assignment, GroupSpec, TopicMetadata},
         offsets_log::fake::InMemoryOffsetsLog,
         reconciler::ReconcileInput,
     };
@@ -631,7 +631,7 @@ mod tests {
         fn name(&self) -> &'static str {
             "counting"
         }
-        fn assign(&self, _members: &[MemberSubscription], _topics: &TopicMetadata) -> Assignment {
+        fn assign(&self, _group: &GroupSpec, _topics: &TopicMetadata) -> Assignment {
             self.calls.fetch_add(1, Ordering::SeqCst);
             std::collections::HashMap::new()
         }

@@ -9,6 +9,13 @@ use krabka_log::Log;
 
 use crate::{error::BrokerError, partition::Partition};
 
+/// `Partition.makeLeader`'s `leaderLog.assignEpochStartOffset(leaderEpoch,
+/// leaderLog.logEndOffset)`.
+fn assign_leader_epoch_start(log: &mut Log, epoch: i32) -> Result<(), BrokerError> {
+    let log_end = log.log_end_offset();
+    Ok(log.assign_epoch_start_offset(krabka_ids::LeaderEpoch(epoch), log_end)?)
+}
+
 /// Immutable topic identity plus the leader generation allowed to mutate a
 /// follower log. A read guard over this value linearizes replication writes
 /// with [`Partition::install_leader_change`].
@@ -84,14 +91,11 @@ impl Partition {
         // update. Do not queue for the exclusive transition barrier when the
         // target itself is unchanged: an acks=all Produce holds a read guard
         // while it waits for that ISR update to advance the HW.
+        if self
+            .replication_target_is(topic_id, new_leader, new_epoch)
+            .await
         {
-            let current = self.replication_target.read().await;
-            if topic_id.is_none_or(|id| current.topic_id == Some(id))
-                && current.leader_node_id == krabka_raft::NodeId(new_leader)
-                && current.leader_epoch == krabka_metadata::LeaderEpoch(new_epoch)
-            {
-                return;
-            }
+            return;
         }
         // Wait for any accepted follower mutation to finish before making the
         // new local role visible. Conversely, a mutation that arrives after
@@ -99,6 +103,94 @@ impl Partition {
         let target = self.replication_target.write().await;
         self.publish_replication_target(target, topic_id, new_leader, new_epoch)
             .await;
+    }
+
+    /// Whether the installed target already is `(topic_id, leader, epoch)`,
+    /// where a `None` topic id matches any installed identity.
+    async fn replication_target_is(
+        &self,
+        topic_id: Option<uuid::Uuid>,
+        leader: u64,
+        epoch: i32,
+    ) -> bool {
+        Self::target_matches(
+            &*self.replication_target.read().await,
+            topic_id,
+            leader,
+            epoch,
+        )
+    }
+
+    fn target_matches(
+        target: &ReplicationTarget,
+        topic_id: Option<uuid::Uuid>,
+        leader: u64,
+        epoch: i32,
+    ) -> bool {
+        topic_id.is_none_or(|id| target.topic_id == Some(id))
+            && target.leader_node_id == krabka_raft::NodeId(leader)
+            && target.leader_epoch == krabka_metadata::LeaderEpoch(epoch)
+    }
+
+    /// Install this broker as the partition's leader at `epoch`, Kafka's
+    /// `Partition.makeLeader`.
+    ///
+    /// Before the role is published, the leader epoch is recorded at the
+    /// current log end (`UnifiedLog.assignEpochStartOffset` with
+    /// `leaderLog.logEndOffset`). A leader that has not written in its new
+    /// epoch yet can then still place a follower's `last_fetched_epoch`: an
+    /// epoch the new leader never saw ends where the new epoch starts, and the
+    /// follower is told to truncate there instead of being answered
+    /// `OFFSET_OUT_OF_RANGE` until the first write.
+    ///
+    /// The supervisor calls this on every reconcile. `assign` is a no-op
+    /// while `epoch` is the latest recorded epoch, so a repeat only records
+    /// the epoch again where it is missing -- the first reconcile after a
+    /// restart, whose materialization already installed this target. That is
+    /// where Kafka's fresh `Partition` object sees a new leader epoch too.
+    ///
+    /// # Errors
+    /// Returns the checkpoint's error when the epoch cannot be recorded. A
+    /// changed target is then not published, as a failed diskless promotion
+    /// is not.
+    pub(crate) async fn install_local_leadership(
+        &self,
+        topic_id: Option<uuid::Uuid>,
+        local_node: u64,
+        epoch: i32,
+    ) -> Result<(), BrokerError> {
+        {
+            // The read guard is held from the target check through the
+            // checkpoint write: a concurrent promotion to a newer epoch needs
+            // the write guard, so it cannot land in between and have its entry
+            // removed by this call's `assign`. A read guard does not wait for
+            // in-flight Produce requests, which hold read guards too.
+            let target = self.replication_target.read().await;
+            if Self::target_matches(&target, topic_id, local_node, epoch) {
+                let mut log = self
+                    .log
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                return assign_leader_epoch_start(&mut log, epoch);
+            }
+        }
+        let target = self.replication_target.write().await;
+        if target.leader_epoch.0 > epoch {
+            // A reconcile that raced a newer promotion: the newer epoch is
+            // installed and recorded, and recording this one would rewind it.
+            return Ok(());
+        }
+        let prepared = {
+            let mut log = self
+                .log
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            assign_leader_epoch_start(&mut log, epoch)
+        };
+        prepared?;
+        self.publish_replication_target(target, topic_id, local_node, epoch)
+            .await;
+        Ok(())
     }
 
     /// Serialize a local promotion with all follower mutations, prepare the
@@ -356,6 +448,182 @@ mod tests {
                 "case ({leader}, {epoch})"
             );
         }
+    }
+
+    fn append_at_epoch(partition: &Partition, epoch: i32) {
+        let mut batch = krabka_protocol::records::RecordBatch {
+            partition_leader_epoch: epoch,
+            records: vec![krabka_protocol::records::Record::default()],
+            ..Default::default()
+        };
+        partition
+            .log
+            .lock()
+            .expect("log mutex")
+            .append(&mut batch)
+            .expect("append");
+    }
+
+    fn epoch_history(partition: &Partition) -> Vec<(i32, i64)> {
+        partition
+            .log
+            .lock()
+            .expect("log mutex")
+            .epoch_checkpoint()
+            .entries()
+            .iter()
+            .map(|entry| (entry.epoch.0, entry.start_offset.0))
+            .collect()
+    }
+
+    /// One promotion step: an optional write at an epoch, or a
+    /// `Partition.makeLeader` at an epoch.
+    #[derive(Clone, Copy)]
+    enum Step {
+        Write(i32),
+        Lead(i32),
+    }
+
+    /// Kafka's `Partition.makeLeader` records the new leader epoch at the log
+    /// end (`assignEpochStartOffset`) under `LeaderEpochFileCache.assign`'s
+    /// rules: a repeat of the latest epoch is a no-op, and an epoch that
+    /// was never written is replaced by the next one at the same offset.
+    #[tokio::test]
+    async fn local_leadership_records_the_new_epoch_at_the_log_end() {
+        use Step::{Lead, Write};
+        let cases = [
+            ("empty log", &[Lead(3)][..], vec![(3, 0)]),
+            (
+                "promotion after two epochs of writes",
+                &[Write(0), Write(0), Write(1), Write(1), Lead(3)][..],
+                vec![(0, 0), (1, 2), (3, 4)],
+            ),
+            (
+                "a repeat after writing in the epoch keeps its start",
+                &[Write(0), Lead(3), Write(3), Write(3), Lead(3)][..],
+                vec![(0, 0), (3, 1)],
+            ),
+            (
+                "an epoch never written is replaced by the next one",
+                &[Write(0), Write(0), Lead(3), Lead(4)][..],
+                vec![(0, 0), (4, 2)],
+            ),
+            (
+                "writes in the promoted epoch add no entry",
+                &[Lead(2), Write(2), Write(2)][..],
+                vec![(2, 0)],
+            ),
+        ];
+        for (name, steps, expected) in cases {
+            let (partition, _dir) = test_partition(Arc::new(Notify::new()));
+            let mut led = None;
+            for step in steps {
+                match *step {
+                    Write(epoch) => append_at_epoch(&partition, epoch),
+                    Lead(epoch) => {
+                        partition
+                            .install_local_leadership(None, 1, epoch)
+                            .await
+                            .expect("promote");
+                        led = Some(epoch);
+                    }
+                }
+            }
+            assert!(epoch_history(&partition) == expected, "{name}");
+            assert!(
+                partition.current_leader.load(Ordering::Acquire) == 1,
+                "{name}"
+            );
+            assert!(
+                Some(partition.current_leader_epoch.load(Ordering::Acquire)) == led,
+                "{name}"
+            );
+        }
+    }
+
+    /// Materialization installs the target a restarted leader already
+    /// holds, and its epoch history lost the unwritten entry on reopen. The
+    /// first reconcile records the epoch again, as Kafka's fresh `Partition`
+    /// does on its first `makeLeader`.
+    #[tokio::test]
+    async fn an_already_installed_leadership_still_records_its_epoch() {
+        let (partition, _dir) = test_partition(Arc::new(Notify::new()));
+        let topic_id = Some(uuid::Uuid::new_v4());
+        append_at_epoch(&partition, 0);
+        partition.install_replication_target(topic_id, 1, 6).await;
+        assert!(epoch_history(&partition) == [(0, 0)]);
+
+        partition
+            .install_local_leadership(topic_id, 1, 6)
+            .await
+            .expect("record epoch");
+
+        assert!(epoch_history(&partition) == [(0, 0), (6, 1)]);
+    }
+
+    #[tokio::test]
+    async fn a_reconcile_that_raced_a_newer_promotion_does_not_rewind_its_epoch() {
+        let (partition, _dir) = test_partition(Arc::new(Notify::new()));
+        let topic_id = Some(uuid::Uuid::new_v4());
+        append_at_epoch(&partition, 0);
+        partition
+            .install_local_leadership(topic_id, 1, 7)
+            .await
+            .expect("promote to 7");
+
+        partition
+            .install_local_leadership(topic_id, 1, 6)
+            .await
+            .expect("a stale reconcile is a no-op");
+
+        assert!(epoch_history(&partition) == [(0, 0), (7, 1)]);
+        assert!(partition.replication_target_is(topic_id, 1, 7).await);
+    }
+
+    #[derive(Debug)]
+    struct EpochCheckpointFull;
+
+    impl krabka_log::LogIo for EpochCheckpointFull {
+        fn write_at(
+            &self,
+            target: krabka_log::IoTarget,
+            file: &std::fs::File,
+            buf: &[u8],
+        ) -> std::io::Result<usize> {
+            use std::io::Write as _;
+            if target == krabka_log::IoTarget::LeaderEpochCheckpoint {
+                return Err(std::io::ErrorKind::StorageFull.into());
+            }
+            (&*file).write(buf)
+        }
+    }
+
+    /// A promotion whose epoch cannot be recorded is not published, as a
+    /// diskless promotion whose log preparation fails is not.
+    #[tokio::test]
+    async fn a_promotion_whose_epoch_cannot_be_recorded_is_not_published() {
+        let (partition, _dir) = test_partition(Arc::new(Notify::new()));
+        partition.install_replication_target(None, 2, 4).await;
+        partition
+            .log
+            .lock()
+            .expect("log mutex")
+            .test_set_io(Arc::new(EpochCheckpointFull));
+
+        let result = partition.install_local_leadership(None, 1, 5).await;
+
+        assert!(let Err(BrokerError::Log(_)) = result);
+        assert!(epoch_history(&partition).is_empty());
+        assert!(
+            *partition.replication_target.read().await
+                == ReplicationTarget {
+                    topic_id: None,
+                    leader_node_id: krabka_raft::NodeId(2),
+                    leader_epoch: krabka_metadata::LeaderEpoch(4),
+                }
+        );
+        assert!(partition.current_leader.load(Ordering::Acquire) == 2);
+        assert!(partition.current_leader_epoch.load(Ordering::Acquire) == 4);
     }
 
     #[tokio::test]

@@ -1,13 +1,13 @@
-(* #"/proof-work-240/crates/verified/src/transaction.rs" 75 0 79 23 *)
+(* #"/workspace/crates/verified/src/transaction.rs" 585 0 589 23 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
 let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
 let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
-let%span stransaction = "/proof-work-240/crates/verified/src/transaction.rs" 80 21 80 22
-let%span stransaction'0 = "/proof-work-240/crates/verified/src/transaction.rs" 83 16 83 30
-let%span stransaction'1 = "/proof-work-240/crates/verified/src/transaction.rs" 65 10 73 1
+let%span stransaction = "/workspace/crates/verified/src/transaction.rs" 590 21 590 22
+let%span stransaction'0 = "/workspace/crates/verified/src/transaction.rs" 593 16 593 30
+let%span stransaction'1 = "/workspace/crates/verified/src/transaction.rs" 575 10 583 1
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -87,7 +87,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let aborted_transaction_interval [#"/proof-work-240/crates/verified/src/transaction.rs" 75 0 79 23]
+let aborted_transaction_interval [#"/workspace/crates/verified/src/transaction.rs" 585 0 589 23]
   (pending_start: t_Option_i64) (marker_last: Int64.t) (producer_id: Int64.t) (return (x: t_Option_tup2_i64_i64)) =
 (! bb0
   [ bb0 = s0

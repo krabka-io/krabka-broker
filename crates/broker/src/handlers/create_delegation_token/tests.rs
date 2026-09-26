@@ -6,7 +6,7 @@
 //! including act-as, and the lifetime clamp that separates
 //! `expiry_timestamp_ms` from `max_timestamp_ms`.
 
-use assert2::assert;
+use assert2::{assert, check};
 use krabka_protocol::owned::{
     create_delegation_token_request::CreateDelegationTokenRequest,
     create_delegation_token_response::CreateDelegationTokenResponse,
@@ -257,53 +257,79 @@ async fn initial_expiry_is_default_renew_period_clamped_by_max_lifetime() {
     controller.cancel().await;
 }
 
+/// `DelegationTokenControlManager.createDelegationToken` caps only a
+/// positive `maxLifetimeMs`; zero, `-1`, and every other non-positive request
+/// select the configured ceiling instead of failing. A lifetime that would
+/// carry the maximum timestamp past `i64::MAX` saturates there, as Kafka's
+/// `sum` does.
 #[tokio::test]
-async fn invalid_lifetime_returns_invalid_request() {
+async fn non_positive_and_overflowing_lifetimes_follow_kafka() {
     let dir = TempDir::new().unwrap();
     let controller = test_controller(dir.path().into()).await;
     let secret = SecretBytes::new(b"k".to_vec());
-    // Zero is invalid (only `-1` selects the default).
-    let req = CreateDelegationTokenRequest {
-        max_lifetime_ms: 0,
-        ..Default::default()
-    };
-    let resp = handle(
-        &req,
-        &authed("alice"),
-        Some(&secret),
-        60_000,
-        RENEW_24H_MS,
-        &*controller,
-        &empty_super_users(),
-    )
-    .await;
-    assert!(resp.error_code == crate::codes::INVALID_REQUEST);
+
+    // (requested maxLifetimeMs, broker ceiling, renew period,
+    //  expected expiry delta, expected max timestamp or `None` for issue + ceiling)
+    let cases: [(i64, i64, i64, i64, Option<i64>); 4] = [
+        (0, 60_000, RENEW_24H_MS, 60_000, None),
+        (-2, 60_000, RENEW_24H_MS, 60_000, None),
+        (i64::MIN, 60_000, RENEW_24H_MS, 60_000, None),
+        (-1, i64::MAX, 1, 1, Some(i64::MAX)),
+    ];
+    for (requested, ceiling_ms, renew_ms, expiry_delta, max_timestamp) in cases {
+        let resp = handle(
+            &CreateDelegationTokenRequest {
+                max_lifetime_ms: requested,
+                ..Default::default()
+            },
+            &authed("alice"),
+            Some(&secret),
+            ceiling_ms,
+            renew_ms,
+            &*controller,
+            &empty_super_users(),
+        )
+        .await;
+        let expected = CreateDelegationTokenResponse {
+            error_code: 0,
+            principal_type: "User".into(),
+            principal_name: "alice".into(),
+            token_requester_principal_type: "User".into(),
+            token_requester_principal_name: "alice".into(),
+            issue_timestamp_ms: resp.issue_timestamp_ms,
+            expiry_timestamp_ms: resp.issue_timestamp_ms + expiry_delta,
+            max_timestamp_ms: max_timestamp.unwrap_or_else(|| resp.issue_timestamp_ms + ceiling_ms),
+            token_id: resp.token_id.clone(),
+            hmac: resp.hmac.clone(),
+            throttle_time_ms: 0,
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+        };
+        assert!(resp == expected, "requested {requested}: {resp:?}");
+    }
+    check!(controller.current_image().all_delegation_tokens().count() == cases.len());
     controller.cancel().await;
 }
 
+/// `allowTokenRequests` runs on the broker before the request reaches the
+/// controller, so an unadmitted caller sees `DELEGATION_TOKEN_REQUEST_NOT_ALLOWED`
+/// even when token support is disabled.
 #[tokio::test]
-async fn overflowing_lifetime_returns_invalid_request_without_minting() {
+async fn admission_is_checked_before_token_support() {
     let dir = TempDir::new().unwrap();
     let controller = test_controller(dir.path().into()).await;
-    let secret = SecretBytes::new(b"k".to_vec());
-    let req = CreateDelegationTokenRequest {
-        max_lifetime_ms: -1,
-        ..Default::default()
-    };
-
-    let resp = handle(
-        &req,
-        &authed("alice"),
-        Some(&secret),
-        i64::MAX,
-        1,
-        &*controller,
-        &empty_super_users(),
-    )
-    .await;
-
-    assert!(resp.error_code == crate::codes::INVALID_REQUEST);
-    assert!(controller.current_image().all_delegation_tokens().count() == 0);
+    for auth in [anonymous(), authed_with_token("alice", true)] {
+        let resp = handle(
+            &CreateDelegationTokenRequest::default(),
+            &auth,
+            None,
+            60_000,
+            RENEW_24H_MS,
+            &*controller,
+            &empty_super_users(),
+        )
+        .await;
+        check!(resp.error_code == crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
+    }
     controller.cancel().await;
 }
 

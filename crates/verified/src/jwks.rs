@@ -3,9 +3,9 @@
 #[cfg(creusot)]
 use std::clone::Clone;
 
-#[cfg(creusot)]
-use creusot_std::prelude::DeepModel;
 use creusot_std::prelude::ensures;
+#[cfg(creusot)]
+use creusot_std::prelude::{DeepModel, logic};
 
 /// Whether a validator may use one observed JWKS cache generation.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
@@ -69,16 +69,38 @@ pub enum JwksOnDemandDecision {
     Refresh { next_refresh_ms: i64 },
 }
 
-/// Keep the limiter monotonic and fail closed across wall-clock rollback.
-#[ensures(match result {
-    JwksOnDemandDecision::RateLimited => true,
-    JwksOnDemandDecision::Refresh { next_refresh_ms } => {
-        next_refresh_ms@ == now_ms@
-            && now_ms@ >= 0
+/// Whether an on-demand refresh may start at `now_ms`: the clock and pause are
+/// nonnegative, the clock has not stepped back behind the last refresh, and
+/// either no refresh has happened yet (`last_refresh_ms <= 0`) or at least
+/// `min_pause_ms` has elapsed since it.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+pub fn jwks_on_demand_refresh_allowed(
+    now_ms: i64,
+    last_refresh_ms: i64,
+    min_pause_ms: i64,
+) -> bool {
+    pearlite! {
+        now_ms@ >= 0
             && min_pause_ms@ >= 0
             && now_ms@ >= last_refresh_ms@
             && (last_refresh_ms@ <= 0 || now_ms@ - last_refresh_ms@ >= min_pause_ms@)
     }
+}
+
+/// Keep the limiter monotonic and fail closed across wall-clock rollback:
+/// refresh exactly when [`jwks_on_demand_refresh_allowed`] holds, stamping
+/// `now_ms` as the new last-refresh time.
+#[ensures(match result {
+    JwksOnDemandDecision::RateLimited => !jwks_on_demand_refresh_allowed(
+        now_ms,
+        last_refresh_ms,
+        min_pause_ms,
+    ),
+    JwksOnDemandDecision::Refresh { next_refresh_ms } => next_refresh_ms == now_ms
+        && jwks_on_demand_refresh_allowed(now_ms, last_refresh_ms, min_pause_ms),
 })]
 #[must_use]
 pub fn jwks_on_demand_refresh_decision(
@@ -166,47 +188,28 @@ mod tests {
 
     #[test]
     fn on_demand_limit_is_monotonic_and_overflow_safe() {
-        assert2::check!(
-            jwks_on_demand_refresh_decision(0, 0, 0)
-                == JwksOnDemandDecision::Refresh { next_refresh_ms: 0 }
-        );
-        assert2::check!(
-            jwks_on_demand_refresh_decision(5, 0, 10)
-                == JwksOnDemandDecision::Refresh { next_refresh_ms: 5 }
-        );
-        assert2::check!(
-            jwks_on_demand_refresh_decision(110, 100, 10)
-                == JwksOnDemandDecision::Refresh {
-                    next_refresh_ms: 110
-                }
-        );
-        assert2::check!(
-            jwks_on_demand_refresh_decision(109, 100, 10) == JwksOnDemandDecision::RateLimited
-        );
-        assert2::check!(
-            jwks_on_demand_refresh_decision(-1, 0, 10) == JwksOnDemandDecision::RateLimited
-        );
-        assert2::check!(
-            jwks_on_demand_refresh_decision(100, 0, -1) == JwksOnDemandDecision::RateLimited
-        );
-        assert2::check!(
-            jwks_on_demand_refresh_decision(100, 0, 10)
-                == JwksOnDemandDecision::Refresh {
-                    next_refresh_ms: 100
-                }
-        );
-        assert2::check!(
-            jwks_on_demand_refresh_decision(99, 100, 0) == JwksOnDemandDecision::RateLimited
-        );
-        assert2::check!(
-            jwks_on_demand_refresh_decision(i64::MAX, 1, i64::MAX)
-                == JwksOnDemandDecision::RateLimited
-        );
-        assert2::check!(
-            jwks_on_demand_refresh_decision(i64::MAX, 0, i64::MAX)
-                == JwksOnDemandDecision::Refresh {
-                    next_refresh_ms: i64::MAX
-                }
-        );
+        let refresh = |next_refresh_ms| JwksOnDemandDecision::Refresh { next_refresh_ms };
+        let limited = JwksOnDemandDecision::RateLimited;
+        // (now, last refresh, min pause, expected)
+        for (now_ms, last_refresh_ms, min_pause_ms, expected) in [
+            // Never refreshed: the pause does not apply.
+            (0, 0, 0, refresh(0)),
+            (5, 0, 10, refresh(5)),
+            (100, 0, 10, refresh(100)),
+            (i64::MAX, 0, i64::MAX, refresh(i64::MAX)),
+            // The pause boundary is inclusive.
+            (110, 100, 10, refresh(110)),
+            (109, 100, 10, limited),
+            // Negative clock or pause and a backwards clock step fail closed.
+            (-1, 0, 10, limited),
+            (100, 0, -1, limited),
+            (99, 100, 0, limited),
+            // The elapsed-time subtraction cannot overflow.
+            (i64::MAX, 1, i64::MAX, limited),
+        ] {
+            assert2::check!(
+                jwks_on_demand_refresh_decision(now_ms, last_refresh_ms, min_pause_ms) == expected
+            );
+        }
     }
 }

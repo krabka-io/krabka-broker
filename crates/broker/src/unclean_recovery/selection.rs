@@ -70,6 +70,7 @@
 use std::collections::{BTreeSet, HashSet};
 
 use krabka_raft::NodeId;
+use krabka_verified::consensus::RecoveryCandidate;
 
 /// One replica's reported log state, from a `GetReplicaLogInfo` response.
 ///
@@ -87,9 +88,13 @@ pub(crate) struct ReplicaLogInfo {
 /// `last_written_leader_epoch`, then the highest `log_end_offset`, then the
 /// lowest `broker_id` for determinism. Returns `None` for an empty input.
 pub(crate) fn select_best_replica(responses: &[ReplicaLogInfo]) -> Option<NodeId> {
-    let candidates: Vec<(i32, i64, u64)> = responses
+    let candidates: Vec<RecoveryCandidate> = responses
         .iter()
-        .map(|r| (r.last_written_leader_epoch, r.log_end_offset, r.broker_id.0))
+        .map(|r| RecoveryCandidate {
+            last_epoch: r.last_written_leader_epoch,
+            log_end_offset: r.log_end_offset,
+            broker_id: r.broker_id.0,
+        })
         .collect();
     krabka_verified::consensus::select_best_recovery_replica(&candidates)
         .map(|index| responses[index].broker_id)
@@ -232,28 +237,31 @@ mod tests {
         }
     }
 
+    /// The most-complete-log ranking of KIP-966 unclean recovery, one
+    /// surviving-replica scenario per row.
     #[test]
-    fn picks_highest_epoch_then_offset() {
-        // Broker 3 has a higher epoch even though broker 2 has a longer log.
-        let r = [ri(2, 4, 100), ri(3, 5, 10)];
-        assert!(select_best_replica(&r) == Some(NodeId(3)));
-    }
-
-    #[test]
-    fn ties_on_epoch_break_by_offset() {
-        let r = [ri(2, 5, 90), ri(3, 5, 120)];
-        assert!(select_best_replica(&r) == Some(NodeId(3)));
-    }
-
-    #[test]
-    fn ties_on_epoch_and_offset_break_by_lowest_broker_id() {
-        let r = [ri(3, 5, 100), ri(1, 5, 100), ri(2, 5, 100)];
-        assert!(select_best_replica(&r) == Some(NodeId(1)));
-    }
-
-    #[test]
-    fn empty_input_returns_none() {
-        assert!(select_best_replica(&[]) == None);
+    fn the_most_complete_log_is_the_newest_epoch_then_the_longest_log() {
+        let cases = [
+            (
+                "a newer epoch beats a longer log",
+                vec![ri(2, 4, 100), ri(3, 5, 10)],
+                Some(NodeId(3)),
+            ),
+            (
+                "the longer log wins within an epoch",
+                vec![ri(2, 5, 90), ri(3, 5, 120)],
+                Some(NodeId(3)),
+            ),
+            (
+                "the lowest broker id breaks a full tie",
+                vec![ri(3, 5, 100), ri(1, 5, 100), ri(2, 5, 100)],
+                Some(NodeId(1)),
+            ),
+            ("nobody answered", vec![], None),
+        ];
+        for (label, responses, expected) in cases {
+            check!(select_best_replica(&responses) == expected, "{label}");
+        }
     }
 
     /// The eligible-leader-replica set outranks the log length. Each case

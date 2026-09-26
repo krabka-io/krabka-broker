@@ -38,6 +38,21 @@ pub enum BreakGlassConsumptionDecision {
 
 /// Admit only an exact, positive-timestamp mutation of the current pending
 /// proposal, with no uncommitted metadata tail.
+///
+/// Every refusal reports the first failing check, in this order: a missing
+/// proposal, a nonpositive consumption timestamp (`0` is the unconsumed
+/// sentinel), a stale proposal, then an uncommitted tail.
+#[ensures((result == BreakGlassConsumptionDecision::Missing) ==
+    (facts.proposal == BreakGlassProposalState::Missing))]
+#[ensures((result == BreakGlassConsumptionDecision::Malformed) ==
+    (facts.proposal != BreakGlassProposalState::Missing && facts.consumed_at_ms@ <= 0))]
+#[ensures((result == BreakGlassConsumptionDecision::Stale) ==
+    (facts.proposal == BreakGlassProposalState::Stale && facts.consumed_at_ms@ > 0))]
+#[ensures((result == BreakGlassConsumptionDecision::InFlight) == (
+    facts.proposal == BreakGlassProposalState::ExactPending
+        && facts.consumed_at_ms@ > 0
+        && facts.uncommitted_tail
+))]
 #[ensures((result == BreakGlassConsumptionDecision::Append) == (
     facts.proposal == BreakGlassProposalState::ExactPending
         && facts.consumed_at_ms@ > 0
@@ -154,7 +169,39 @@ mod tests {
             ),
             (
                 BreakGlassConsumptionFacts {
+                    proposal: BreakGlassProposalState::Missing,
+                    consumed_at_ms: 0,
+                    uncommitted_tail: true,
+                },
+                BreakGlassConsumptionDecision::Missing,
+            ),
+            (
+                BreakGlassConsumptionFacts {
+                    consumed_at_ms: -1,
+                    uncommitted_tail: true,
+                    ..valid
+                },
+                BreakGlassConsumptionDecision::Malformed,
+            ),
+            (
+                BreakGlassConsumptionFacts {
                     proposal: BreakGlassProposalState::Stale,
+                    consumed_at_ms: 0,
+                    ..valid
+                },
+                BreakGlassConsumptionDecision::Malformed,
+            ),
+            (
+                BreakGlassConsumptionFacts {
+                    proposal: BreakGlassProposalState::Stale,
+                    ..valid
+                },
+                BreakGlassConsumptionDecision::Stale,
+            ),
+            (
+                BreakGlassConsumptionFacts {
+                    proposal: BreakGlassProposalState::Stale,
+                    uncommitted_tail: true,
                     ..valid
                 },
                 BreakGlassConsumptionDecision::Stale,

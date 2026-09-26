@@ -45,10 +45,29 @@ const MAX_DEPTH: usize = 60;
 // considering a field -- into a failure instead of a silently smaller search
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
+//
+// Two configs grew when the model began to record, for one transition, that a
+// vote was refused for log recency alone (`three_voters_append` only) and that
+// the production `TruncateTo` cut a divergent log (both crash configs): 779,078
+// and 445,169 before. Replicating only onto a log the leader's extends, rather
+// than overwriting any shorter log, left every count unchanged: within these
+// bounds no follower is ever shorter than the leader and divergent when it
+// fetches, so the overwrite had never fired.
+//
+// The same two shrank, from 779,582 and 457,697, when the production
+// `handle_fetch_response` began to fetch again right after it truncates on a
+// diverging epoch, as Kafka's follower does. The truncating step now also
+// sends that fetch, which the model's replication abstraction answers at once:
+// the truncated log takes the leader's records in the same transition, and the
+// fetch replaces the node's in-flight one. The states in which a truncated
+// voter sat with no fetch in flight, able to move on only through a timeout,
+// are gone, and so are the states reachable only through them. The step
+// cannot leave the in-flight bound: it consumes the response and adds at most
+// one fetch.
 const PINNED_UNIQUE_STATES_THREE_VOTERS_ELECTION_SAFETY: usize = 10_834;
 const PINNED_UNIQUE_STATES_TWO_VOTERS_LINEARIZABLE: usize = 43_811;
-const PINNED_UNIQUE_STATES_THREE_VOTERS_FAULTS: usize = 779_078;
-const PINNED_UNIQUE_STATES_THREE_VOTERS_APPEND: usize = 445_169;
+const PINNED_UNIQUE_STATES_THREE_VOTERS_FAULTS: usize = 777_338;
+const PINNED_UNIQUE_STATES_THREE_VOTERS_APPEND: usize = 457_067;
 const PINNED_UNIQUE_STATES_TWO_VOTERS_APPEND_VIA: usize = 230_591;
 
 fn run(model: ConsensusModel, label: &str, pinned_unique_states: usize) {

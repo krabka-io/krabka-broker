@@ -1,7 +1,7 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/raft.rs" 37 0 37 65 *)
+(* #"/workspace/crates/verified/src/raft.rs" 190 0 190 65 *)
 
-let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sraft = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/raft.rs" 36 28 36 60
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sraft = "/workspace/crates/verified/src/raft.rs" 189 28 189 60
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -15,8 +15,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let frontier_reaches [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/raft.rs" 37 0 37 65]
-  (frontier: Int64.t) (target: Int64.t) (return (x: bool)) = (! bb0
+let frontier_reaches [#"/workspace/crates/verified/src/raft.rs" 190 0 190 65] (frontier: Int64.t) (target: Int64.t)
+  (return (x: bool)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- Int64.ge frontier target ] s1 | s1 = return {_ret} ] ]
   [ & _ret: bool = Any.any_l () | & frontier: Int64.t = frontier | & target: Int64.t = target ])
   [ return (result: bool) -> {[@stop_split] [@expl:frontier_reaches ensures] [%#sraft] result

@@ -1,0 +1,66 @@
+(* #"/workspace/crates/verified/src/remote_metadata.rs" 39 0 39 36 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 577 26 577 59
+let%span sremote_metadata = "/workspace/crates/verified/src/remote_metadata.rs" 40 15 40 16
+let%span sremote_metadata'0 = "/workspace/crates/verified/src/remote_metadata.rs" 42 34 42 36
+let%span sremote_metadata'1 = "/workspace/crates/verified/src/remote_metadata.rs" 42 19 42 37
+let%span sremote_metadata'2 = "/workspace/crates/verified/src/remote_metadata.rs" 42 8 42 16
+let%span sremote_metadata'3 = "/workspace/crates/verified/src/remote_metadata.rs" 42 8 42 37
+let%span sremote_metadata'4 = "/workspace/crates/verified/src/remote_metadata.rs" 44 23 44 24
+let%span sremote_metadata'5 = "/workspace/crates/verified/src/remote_metadata.rs" 44 8 44 25
+let%span sremote_metadata'6 = "/workspace/crates/verified/src/remote_metadata.rs" 38 28 38 65
+let%span sremote_metadata'7 = "/workspace/crates/verified/src/remote_metadata.rs" 34 8 34 82
+let%span sint = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/int.rs" 155 8 155 62
+
+use creusot.int.Int32
+use creusot.int.UInt32
+use creusot.prelude.Any
+use int.Int
+
+function abs_diff (self: int) (other: int) : int = [%#sint] if self < other then other - self else self - other
+
+let abs_diff'0 (self_: Int32.t) (other: Int32.t) (return (x: UInt32.t)) = any
+  [ return (result: UInt32.t) -> {[@stop_split] [@expl:abs_diff ensures] [%#snum] UInt32.t'int result
+    = abs_diff (Int32.to_int self_) (Int32.to_int other)}
+    (! return {result}) ]
+
+constant const_MAX: UInt32.t = (4294967295: UInt32.t)
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+function java_int_image_model [#"/workspace/crates/verified/src/remote_metadata.rs" 32 0 32 42] (value: Int32.t) : UInt32.t
+ = [%#sremote_metadata'7] if ge_log_Int (Int32.to_int value) 0 then
+    UInt32.of_int (Int32.to_int value)
+  else
+    UInt32.sub const_MAX (UInt32.of_int (Int32.to_int (Int32.sub (Int32.neg (1: Int32.t)) value)))
+
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let java_int_image [#"/workspace/crates/verified/src/remote_metadata.rs" 39 0 39 36] (value: Int32.t)
+  (return (x: UInt32.t)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_4 <- Int32.lt value ([%#sremote_metadata] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_4 = false} (! bb3) | br1 -> {_4} (! bb1) ] ]
+  | bb1 = s0
+    [ s0 = abs_diff'0 [%#sremote_metadata'1] {value} {[%#sremote_metadata'0] (-1: Int32.t)}
+        (fun (_x: UInt32.t) -> [ &_6 <- _x ] s1)
+    | s1 = UInt32.sub [%#sremote_metadata'3] {[%#sremote_metadata'2] const_MAX} {_6}
+        (fun (_x: UInt32.t) -> [ &_ret <- _x ] s2)
+    | s2 = return {_ret} ]
+  | bb3 = s0
+    [ s0 = abs_diff'0 [%#sremote_metadata'5] {value} {[%#sremote_metadata'4] (0: Int32.t)}
+        (fun (_x: UInt32.t) -> [ &_ret <- _x ] s1)
+    | s1 = return {_ret} ] ]
+  [ & _ret: UInt32.t = Any.any_l ()
+  | & value: Int32.t = value
+  | & _4: bool = Any.any_l ()
+  | & _6: UInt32.t = Any.any_l () ])
+  [ return (result: UInt32.t) -> {[@stop_split] [@expl:java_int_image ensures] [%#sremote_metadata'6] result
+    = java_int_image_model value}
+    (! return {result}) ]

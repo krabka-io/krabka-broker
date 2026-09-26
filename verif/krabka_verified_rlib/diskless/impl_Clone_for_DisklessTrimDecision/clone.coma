@@ -1,4 +1,4 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 9 27 9 32 *)
+(* #"/workspace/crates/verified/src/diskless.rs" 9 27 9 32 *)
 
 (* <diskless::DisklessTrimDecision as std::clone::Clone> *)
 
@@ -11,8 +11,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_DisklessTrimDecision [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/diskless.rs" 9 27 9 32]
-  (self: t_DisklessTrimDecision) (return (x: t_DisklessTrimDecision)) = (! bb0
+let clone_DisklessTrimDecision [#"/workspace/crates/verified/src/diskless.rs" 9 27 9 32] (self: t_DisklessTrimDecision)
+  (return (x: t_DisklessTrimDecision)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_DisklessTrimDecision = Any.any_l () | & self: t_DisklessTrimDecision = self ])
   [ return (result: t_DisklessTrimDecision) -> (! return {result}) ]

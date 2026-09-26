@@ -78,7 +78,7 @@ fn api_versions_response_v0() -> Vec<u8> {
 }
 
 #[test]
-fn bootstrap_servers_remain_available_without_a_voter_set() {
+fn bootstrap_servers_remain_available_and_a_leader_is_addressed_by_its_announced_endpoint() {
     let sender = RealPeerSender::new(
         VoterSet::default(),
         &["controller.example:9093".into()],
@@ -87,16 +87,13 @@ fn bootstrap_servers_remain_available_without_a_voter_set() {
         krabka_client_core::ConnectionDispatchQueueCapacity::default(),
         krabka_client_core::ClientFrameMax::default(),
     );
-    let bootstrap = sender.discovery_peers();
-    assert2::assert!(bootstrap.len() == 1);
-    sender.remember_peer(bootstrap[0], NodeId(7));
+    assert2::assert!(sender.discovery_peers() == vec![NodeId(u64::MAX)]);
+    // The bootstrap address is not the leader's: a follower behind it
+    // redirects with the leader's own `NodeEndpoints` entry.
+    sender.remember_leader_endpoint(NodeId(7), "leader.example:9093".into());
     assert2::assert!(
-        sender
-            .aliases
-            .read()
-            .expect("alias lock")
-            .get(&NodeId(7))
-            .is_some_and(|address| address == "controller.example:9093")
+        *sender.aliases.read().expect("alias lock")
+            == std::collections::BTreeMap::from([(NodeId(7), "leader.example:9093".to_string())])
     );
 }
 

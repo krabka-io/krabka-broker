@@ -97,11 +97,13 @@ mod tests {
                 member_id: "m1".into(),
                 rack_id: None,
                 subscribed_topic_ids: vec![id],
+                assigned_partitions: HashMap::new(),
             },
             MemberSubscription {
                 member_id: "m2".into(),
                 rack_id: None,
                 subscribed_topic_ids: vec![id],
+                assigned_partitions: HashMap::new(),
             },
         ];
         let a = ShareGroupAssignor.assign(&members, &topics);
@@ -118,6 +120,7 @@ mod tests {
                 member_id: format!("m{i}"),
                 rack_id: None,
                 subscribed_topic_ids: vec![id],
+                assigned_partitions: HashMap::new(),
             })
             .collect();
         let a = ShareGroupAssignor.assign(&members, &topics);

@@ -73,12 +73,11 @@ pub enum SchemaBatchAdmission {
 ///
 /// The adapter supplies the five prefix bytes only after establishing that
 /// they exist. Magic zero is the sole admitted framing version.
-#[ensures((result == None) == (magic != 0u8))]
-#[ensures(forall<id: u32> result == Some(id) ==>
-    id@ == id_0@ * 16_777_216
-        + id_1@ * 65_536
-        + id_2@ * 256
-        + id_3@)]
+#[ensures(match result {
+    None => magic != 0u8,
+    Some(id) => magic == 0u8
+        && id@ == id_0@ * 16_777_216 + id_1@ * 65_536 + id_2@ * 256 + id_3@,
+})]
 #[must_use]
 pub fn schema_frame_id(magic: u8, id_0: u8, id_1: u8, id_2: u8, id_3: u8) -> Option<u32> {
     if magic != 0 {
@@ -122,8 +121,6 @@ pub fn schema_field_action(
 /// Admit a batch only after a complete walk where every applicable field was admitted.
 #[ensures((result == SchemaBatchAdmission::Admit)
     == (walk_complete && applicable == admitted))]
-#[ensures((result == SchemaBatchAdmission::Reject)
-    == (!walk_complete || applicable != admitted))]
 #[must_use]
 pub fn schema_batch_admission(
     walk_complete: bool,
@@ -160,45 +157,106 @@ mod tests {
     }
 
     #[test]
-    fn framing_field_selection_and_batch_admission_are_exact() {
-        check!(schema_frame_id(0, 0x01, 0x23, 0x45, 0x67) == Some(0x0123_4567));
-        check!(schema_frame_id(1, 0x01, 0x23, 0x45, 0x67) == None);
-
-        for key_enabled in [false, true] {
-            for value_enabled in [false, true] {
-                for present in [false, true] {
-                    let key = schema_field_action(
-                        key_enabled,
-                        value_enabled,
-                        SchemaFieldRole::Key,
-                        present,
-                    );
-                    let value = schema_field_action(
-                        key_enabled,
-                        value_enabled,
-                        SchemaFieldRole::Value,
-                        present,
-                    );
-                    let expected_key = if key_enabled && present {
-                        SchemaFieldAction::CheckKey
-                    } else {
-                        SchemaFieldAction::Skip
-                    };
-                    let expected_value = if value_enabled && present {
-                        SchemaFieldAction::CheckValue
-                    } else {
-                        SchemaFieldAction::Skip
-                    };
-                    check!(key == expected_key);
-                    check!(value == expected_value);
-                }
-            }
+    fn confluent_framing_is_magic_zero_then_a_big_endian_id() {
+        for (frame, expected) in [
+            ([0, 0x01, 0x23, 0x45, 0x67], Some(0x0123_4567)),
+            ([0, 0, 0, 0, 1], Some(1)),
+            ([0, 0xff, 0xff, 0xff, 0xff], Some(u32::MAX)),
+            ([1, 0x01, 0x23, 0x45, 0x67], None),
+            ([0xff, 0, 0, 0, 1], None),
+        ] {
+            let [magic, id_0, id_1, id_2, id_3] = frame;
+            check!(schema_frame_id(magic, id_0, id_1, id_2, id_3) == expected);
         }
+    }
 
-        check!(schema_batch_admission(true, 0, 0) == SchemaBatchAdmission::Admit);
-        check!(schema_batch_admission(true, 4, 4) == SchemaBatchAdmission::Admit);
-        check!(schema_batch_admission(true, 4, 3) == SchemaBatchAdmission::Reject);
-        check!(schema_batch_admission(true, 3, 4) == SchemaBatchAdmission::Reject);
-        check!(schema_batch_admission(false, 4, 4) == SchemaBatchAdmission::Reject);
+    #[test]
+    fn only_configured_non_null_fields_are_validated() {
+        use SchemaFieldAction::{CheckKey, CheckValue, Skip};
+        use SchemaFieldRole::{Key, Value};
+
+        // (scenario, key validation, value validation, role, field present, expected)
+        for (scenario, key_enabled, value_enabled, role, present, expected) in [
+            (
+                "key validation checks a key",
+                true,
+                false,
+                Key,
+                true,
+                CheckKey,
+            ),
+            (
+                "value validation checks a value",
+                false,
+                true,
+                Value,
+                true,
+                CheckValue,
+            ),
+            ("both enabled checks a key", true, true, Key, true, CheckKey),
+            (
+                "both enabled checks a value",
+                true,
+                true,
+                Value,
+                true,
+                CheckValue,
+            ),
+            ("a null key is exempt", true, true, Key, false, Skip),
+            (
+                "a null value (tombstone) is exempt",
+                true,
+                true,
+                Value,
+                false,
+                Skip,
+            ),
+            (
+                "value-only validation skips the key",
+                false,
+                true,
+                Key,
+                true,
+                Skip,
+            ),
+            (
+                "key-only validation skips the value",
+                true,
+                false,
+                Value,
+                true,
+                Skip,
+            ),
+            (
+                "validation disabled skips everything",
+                false,
+                false,
+                Value,
+                true,
+                Skip,
+            ),
+        ] {
+            check!(
+                schema_field_action(key_enabled, value_enabled, role, present) == expected,
+                "{scenario}"
+            );
+        }
+    }
+
+    #[test]
+    fn batch_admits_only_a_complete_walk_with_every_field_admitted() {
+        use SchemaBatchAdmission::{Admit, Reject};
+
+        // (walk complete, applicable fields, admitted fields, expected)
+        for (walk_complete, applicable, admitted, expected) in [
+            (true, 0, 0, Admit),
+            (true, 4, 4, Admit),
+            (true, 4, 3, Reject),
+            (true, 3, 4, Reject),
+            (false, 4, 4, Reject),
+            (false, 0, 0, Reject),
+        ] {
+            check!(schema_batch_admission(walk_complete, applicable, admitted) == expected);
+        }
     }
 }

@@ -315,6 +315,7 @@ mod tests {
                 api_key::FETCH,
                 PeerRequest::Fetch {
                     from: NodeId(2),
+                    current_leader_epoch: 1,
                     fetch_epoch: 1,
                     fetch_offset: 5,
                     replica_directory_id: uuid::Uuid::nil(),

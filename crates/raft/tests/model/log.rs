@@ -27,10 +27,27 @@ impl ModelLog {
             self.epochs.truncate(offset);
         }
     }
-    pub(super) fn replicate_from(&mut self, leader: &ModelLog) {
-        if self.epochs.len() < leader.epochs.len() {
-            self.epochs.clone_from(&leader.epochs);
+    /// Whether every entry of this log is the leader's entry at the same
+    /// offset, so that the leader's log extends this one.
+    pub(super) fn is_prefix_of(&self, leader: &ModelLog) -> bool {
+        leader.epochs.starts_with(&self.epochs)
+    }
+
+    /// Append the leader's entries past this log's end, when the leader's log
+    /// extends this one. It returns whether it did, that is whether the two
+    /// logs agree on every offset this one holds.
+    ///
+    /// A log that disagrees with the leader is left alone, however short: the
+    /// leader answers its fetch with a diverging epoch and the production
+    /// core's `TruncateTo` cuts it back first. Overwriting it here would heal
+    /// the divergence without the truncation path ever running.
+    pub(super) fn extend_from(&mut self, leader: &ModelLog) -> bool {
+        if !self.is_prefix_of(leader) {
+            return false;
         }
+        self.epochs
+            .extend_from_slice(&leader.epochs[self.epochs.len()..]);
+        true
     }
     /// The leader epoch stamped on `offset`, or `None` when the log is shorter
     /// than that.

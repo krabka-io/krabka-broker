@@ -34,7 +34,9 @@ use krabka_protocol::owned::{
     describe_delegation_token_response::DescribeDelegationTokenResponse,
 };
 use krabka_security::{KafkaPrincipal, SecretBytes};
-use krabka_verified::delegation_token::{TokenApi, TokenApiAdmission, token_describe_visible};
+use krabka_verified::delegation_token::{
+    TokenApi, TokenApiAdmission, TokenDescribeFacts, token_describe_visible,
+};
 
 mod response;
 
@@ -108,14 +110,12 @@ pub(crate) fn handle(
                     .iter()
                     .any(|o| t.owner == *o || t.renewers.contains(o))
             });
-            let caller_is_owner = t.owner == caller;
-            let caller_is_renewer = t.renewers.contains(&caller);
             // The resource name is the token's own id (Kafka:
             // `authHelper.authorize(..., DESCRIBE, DELEGATION_TOKEN, tokenId)`),
             // so a `Describe` ACL grants exactly one token, not every token
             // of its owner. Skipped when the owner filter already excludes
             // the token, since `token_describe_visible` ANDs it in anyway.
-            let acl_allows = owner_filter_matches
+            let describe_authorized = owner_filter_matches
                 && authorizer.authorize(
                     &*image,
                     &AuthorizationRequest {
@@ -126,12 +126,11 @@ pub(crate) fn handle(
                         operation: AclOperation::Describe,
                     },
                 ) == AuthorizationResult::Allow;
-            token_describe_visible(
-                owner_filter_matches,
-                caller_is_owner,
-                caller_is_renewer,
-                acl_allows,
-            )
+            token_describe_visible(TokenDescribeFacts {
+                selected_by_owner_filter: owner_filter_matches,
+                caller_is_owner_or_renewer: t.owner == caller || t.renewers.contains(&caller),
+                describe_authorized,
+            })
         })
         .cloned()
         .collect();

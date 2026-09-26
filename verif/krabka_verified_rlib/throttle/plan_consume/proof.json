@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_min_u64": { "prover": "alt-ergo", "time": 0.02 },
+      "vc_min_u64": { "prover": "alt-ergo", "time": 0.009 },
       "vc_plan_consume": { "prover": "alt-ergo", "time": 0.127 },
       "vc_saturating_add": { "prover": "alt-ergo", "time": 0.025 }
     }

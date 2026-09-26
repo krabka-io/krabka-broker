@@ -1,21 +1,21 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 77 0 83 23 *)
+(* #"/workspace/crates/verified/src/transaction.rs" 721 0 727 23 *)
 
-let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span stransaction = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 88 16 88 24
-let%span stransaction'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 90 27 90 28
-let%span stransaction'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 90 16 90 24
-let%span stransaction'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 90 16 90 28
-let%span stransaction'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 93 27 93 28
-let%span stransaction'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 93 19 93 28
-let%span stransaction'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 95 8 95 45
-let%span stransaction'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 39 28 39 70
-let%span stransaction'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 43 8 48 13
-let%span stransaction'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 54 8 59 13
-let%span stransaction'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 65 8 73 13
-let%span stransaction'10 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 95 42 95 43
-let%span stransaction'11 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 95 18 95 29
-let%span soption = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 193 19 193 79
-let%span soption'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 194 18 197 9
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 193 19 193 79
+let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 194 18 197 9
+let%span stransaction = "/workspace/crates/verified/src/transaction.rs" 732 16 732 24
+let%span stransaction'0 = "/workspace/crates/verified/src/transaction.rs" 734 27 734 28
+let%span stransaction'1 = "/workspace/crates/verified/src/transaction.rs" 734 16 734 24
+let%span stransaction'2 = "/workspace/crates/verified/src/transaction.rs" 734 16 734 28
+let%span stransaction'3 = "/workspace/crates/verified/src/transaction.rs" 737 27 737 28
+let%span stransaction'4 = "/workspace/crates/verified/src/transaction.rs" 737 19 737 28
+let%span stransaction'5 = "/workspace/crates/verified/src/transaction.rs" 739 8 739 45
+let%span stransaction'6 = "/workspace/crates/verified/src/transaction.rs" 701 10 701 52
+let%span stransaction'7 = "/workspace/crates/verified/src/transaction.rs" 702 10 706 5
+let%span stransaction'8 = "/workspace/crates/verified/src/transaction.rs" 707 10 711 5
+let%span stransaction'9 = "/workspace/crates/verified/src/transaction.rs" 712 10 719 5
+let%span stransaction'10 = "/workspace/crates/verified/src/transaction.rs" 739 42 739 43
+let%span stransaction'11 = "/workspace/crates/verified/src/transaction.rs" 739 18 739 29
 
 use creusot.int.Int16
 use creusot.int.Int64
@@ -28,8 +28,8 @@ type tup2_i64_i16 = { f0: Int64.t; f1: Int16.t }
 
 type t_Option_tup2_i64_i16 = None | Some tup2_i64_i16
 
-let closure0 [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 95 18 95 29] [@coma:extspec]
-  (self: ()) (fresh_pid: Int64.t) (return (x: tup2_i64_i16)) = bb0
+let closure0 [#"/workspace/crates/verified/src/transaction.rs" 739 18 739 29] [@coma:extspec] (self: ())
+  (fresh_pid: Int64.t) (return (x: tup2_i64_i16)) = bb0
   [ bb0 = s0 [ s0 = [ &_ret <- { f0 = fresh_pid; f1 = ([%#stransaction'10] (0: Int16.t)) } ] s1 | s1 = return {_ret} ] ]
   [ & _ret: tup2_i64_i16 = Any.any_l () | & fresh_pid: Int64.t = fresh_pid ]
   [ return (result: tup2_i64_i16) -> return {result} ]
@@ -76,9 +76,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let next_producer_identity [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 77 0 83 23]
-  (verified: bool) (recovery: bool) (pid: Int64.t) (epoch: Int16.t) (fresh: t_Option_i64)
-  (return (x: t_Option_tup2_i64_i16)) = (! bb0
+let next_producer_identity [#"/workspace/crates/verified/src/transaction.rs" 721 0 727 23] (verified: bool)
+  (recovery: bool) (pid: Int64.t) (epoch: Int16.t) (fresh: t_Option_i64) (return (x: t_Option_tup2_i64_i16)) = (! bb0
   [ bb0 = any [ br0 -> {verified = false} (! bb1) | br1 -> {verified} (! bb2) ]
   | bb2 = any [ br0 -> {recovery = false} (! bb4) | br1 -> {recovery} (! bb3) ]
   | bb3 = s0 [ s0 = [ &can_increment <- Int16.lt epoch ([%#stransaction] const_MAX) ] s1 | s1 = bb5 ]

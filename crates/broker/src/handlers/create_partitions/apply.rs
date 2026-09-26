@@ -19,9 +19,10 @@ fn should_materialize_locally(replicas: &[NodeId], node_id: NodeId) -> bool {
     replicas.contains(&node_id)
 }
 
-fn is_local_leader(leader: NodeId, node_id: NodeId) -> bool {
-    leader == node_id
-}
+/// Kafka's `buildPartitionRegistration` starts every new partition at leader
+/// epoch 0, as `CreateTopics` does.
+const INITIAL_LEADER_EPOCH: i32 = 0;
+
 pub(super) fn partition_records(
     topic: &str,
     indices: &[i32],
@@ -40,7 +41,7 @@ pub(super) fn partition_records(
                 leader: leadership.leader,
                 replicas: replicas.clone(),
                 isr: leadership.isr.clone(),
-                leader_epoch: krabka_metadata::LeaderEpoch(0),
+                leader_epoch: krabka_metadata::LeaderEpoch(INITIAL_LEADER_EPOCH),
                 adding_replicas: vec![],
                 removing_replicas: vec![],
                 directories: vec![],
@@ -114,12 +115,21 @@ pub(super) async fn materialize_new_partitions(
         else {
             continue;
         };
-        let leader = leadership.leader;
-        partition.install_leader_change(leader.0, 0).await;
-        if is_local_leader(leader, context.node_id) {
-            partition
-                .install_isr(&leadership.isr, replicas, leader)
-                .await;
+        // The same leader epoch `partition_records` committed. A local
+        // disk-backed leader records it at the log end straight away, as
+        // Kafka's `Partition.makeLeader` does: see `InitialLeadership::install`.
+        if let Err(error) = leadership
+            .install(
+                &partition,
+                context.topic_id,
+                context.node_id,
+                replicas,
+                INITIAL_LEADER_EPOCH,
+            )
+            .await
+        {
+            tracing::error!(topic, partition = *index, error = %error,
+                "CreatePartitions: failed to record the initial leader epoch");
         }
     }
 }
@@ -144,7 +154,5 @@ mod tests {
             &[NodeId(1), NodeId(2)],
             NodeId(3)
         ));
-        check!(is_local_leader(NodeId(1), NodeId(1)));
-        check!(!is_local_leader(NodeId(2), NodeId(1)));
     }
 }

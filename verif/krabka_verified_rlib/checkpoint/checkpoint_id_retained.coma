@@ -1,7 +1,8 @@
-(* #"/proof-work-224/crates/verified/src/checkpoint.rs" 58 0 63 9 *)
+(* #"/workspace/crates/verified/src/checkpoint.rs" 70 0 77 9 *)
 
-let%span scheckpoint = "/proof-work-224/crates/verified/src/checkpoint.rs" 64 4 64 70
-let%span scheckpoint'0 = "/proof-work-224/crates/verified/src/checkpoint.rs" 55 10 56 43
+let%span scheckpoint = "/workspace/crates/verified/src/checkpoint.rs" 78 4 79 79
+let%span scheckpoint'0 = "/workspace/crates/verified/src/checkpoint.rs" 79 11 79 79
+let%span scheckpoint'1 = "/workspace/crates/verified/src/checkpoint.rs" 66 10 68 80
 
 use creusot.prelude.Any
 use creusot.int.Int64
@@ -11,20 +12,34 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let checkpoint_id_retained [#"/proof-work-224/crates/verified/src/checkpoint.rs" 58 0 63 9] (candidate_end: Int64.t)
-  (candidate_epoch: Int32.t) (selected_end: Int64.t) (selected_epoch: Int32.t) (return (x: bool)) = (! bb0
+let checkpoint_id_retained [#"/workspace/crates/verified/src/checkpoint.rs" 70 0 77 9] (candidate_end: Int64.t)
+  (candidate_epoch: Int32.t) (selected_end: Int64.t) (selected_epoch: Int32.t) (previous_end: Int64.t)
+  (previous_epoch: Int32.t) (return (x: bool)) = (! bb0
   [ bb0 = s0
-    [ s0 = [ &_10 <- candidate_end = selected_end ] s1
-    | s1 = any [ br0 -> {_10 = false} (! bb2) | br1 -> {_10} (! bb1) ] ]
-  | bb1 = s0 [ s0 = [ &_ret <- candidate_epoch = selected_epoch ] s1 | s1 = return {_ret} ]
-  | bb2 = s0 [ s0 = [ &_ret <- [%#scheckpoint] false ] s1 | s1 = return {_ret} ] ]
+    [ s0 = [ &_14 <- candidate_end = selected_end ] s1
+    | s1 = any [ br0 -> {_14 = false} (! bb5) | br1 -> {_14} (! bb1) ] ]
+  | bb1 = s0
+    [ s0 = [ &_17 <- candidate_epoch = selected_epoch ] s1
+    | s1 = any [ br0 -> {_17 = false} (! bb5) | br1 -> {_17} (! bb2) ] ]
+  | bb2 = s0 [ s0 = [ &_ret <- [%#scheckpoint] true ] s1 | s1 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = [ &_20 <- candidate_end = previous_end ] s1
+    | s1 = any [ br0 -> {_20 = false} (! bb7) | br1 -> {_20} (! bb6) ] ]
+  | bb6 = s0 [ s0 = [ &_ret <- candidate_epoch = previous_epoch ] s1 | s1 = return {_ret} ]
+  | bb7 = s0 [ s0 = [ &_ret <- [%#scheckpoint'0] false ] s1 | s1 = return {_ret} ] ]
   [ & _ret: bool = Any.any_l ()
   | & candidate_end: Int64.t = candidate_end
   | & candidate_epoch: Int32.t = candidate_epoch
   | & selected_end: Int64.t = selected_end
   | & selected_epoch: Int32.t = selected_epoch
-  | & _10: bool = Any.any_l () ])
-  [ return (result: bool) -> {[@stop_split] [@expl:checkpoint_id_retained ensures] [%#scheckpoint'0] result
+  | & previous_end: Int64.t = previous_end
+  | & previous_epoch: Int32.t = previous_epoch
+  | & _14: bool = Any.any_l ()
+  | & _17: bool = Any.any_l ()
+  | & _20: bool = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:checkpoint_id_retained ensures] [%#scheckpoint'1] result
     = (Int64.to_int candidate_end = Int64.to_int selected_end
-    /\ Int32.to_int candidate_epoch = Int32.to_int selected_epoch)}
+      /\ Int32.to_int candidate_epoch = Int32.to_int selected_epoch
+    \/ Int64.to_int candidate_end = Int64.to_int previous_end
+    /\ Int32.to_int candidate_epoch = Int32.to_int previous_epoch)}
     (! return {result}) ]

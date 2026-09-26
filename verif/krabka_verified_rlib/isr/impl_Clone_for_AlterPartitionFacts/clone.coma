@@ -1,0 +1,28 @@
+(* #"/workspace/crates/verified/src/isr.rs" 26 27 26 32 *)
+
+(* <isr::AlterPartitionFacts as std::clone::Clone> *)
+
+use creusot.int.Int32
+use creusot.prelude.Any
+
+type t_ProposedIsr = Invalid | WithoutLeader | Valid
+
+type t_AlterPartitionFacts = {
+  request_leader_epoch: Int32.t;
+  current_leader_epoch: Int32.t;
+  request_partition_epoch: Int32.t;
+  current_partition_epoch: Int32.t;
+  requester_is_leader: bool;
+  proposed_isr: t_ProposedIsr;
+  recovery_state_valid: bool;
+  replicas_eligible: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_AlterPartitionFacts [#"/workspace/crates/verified/src/isr.rs" 26 27 26 32] (self: t_AlterPartitionFacts)
+  (return (x: t_AlterPartitionFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_AlterPartitionFacts = Any.any_l () | & self: t_AlterPartitionFacts = self ])
+  [ return (result: t_AlterPartitionFacts) -> (! return {result}) ]

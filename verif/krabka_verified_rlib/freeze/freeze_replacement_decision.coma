@@ -1,7 +1,8 @@
-(* #"/workspace/crates/verified/src/freeze.rs" 232 0 232 94 *)
+(* #"/workspace/crates/verified/src/freeze.rs" 358 0 358 94 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sfreeze = "/workspace/crates/verified/src/freeze.rs" 224 10 230 1
+let%span sfreeze = "/workspace/crates/verified/src/freeze.rs" 356 10 356 51
+let%span sfreeze'0 = "/workspace/crates/verified/src/freeze.rs" 336 8 339 10
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -29,17 +30,30 @@ predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate gt_log_Int
 
+function freeze_replacement_model [#"/workspace/crates/verified/src/freeze.rs" 334 0 334 87] (facts: t_FreezeReplacementFacts) : t_FreezeReplacementDecision
+ = [%#sfreeze'0] let admissible = match facts.stored with
+    | Missing -> facts.incoming_frozen
+    | Present set_at_ms -> gt_log_Int (Int64.to_int facts.incoming_set_at_ms) (Int64.to_int set_at_ms)
+    end in if not admissible then
+    match facts.stored with
+      | Missing -> Missing'0
+      | Present _ -> Stale'0
+      end
+  else
+    if facts.uncommitted_tail then InFlight'0 else Append'0
+
+
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let freeze_replacement_decision [#"/workspace/crates/verified/src/freeze.rs" 232 0 232 94]
+let freeze_replacement_decision [#"/workspace/crates/verified/src/freeze.rs" 358 0 358 94]
   (facts: t_FreezeReplacementFacts) (return (x: t_FreezeReplacementDecision)) = (! bb0
   [ bb0 = any [ br0 -> {facts.stored = Missing} (! bb6) | br1 (x0: Int64.t) -> {facts.stored = Present x0} (! bb5) ]
   | bb5 = s0
     [ s0 = elim_Present {facts.stored} (fun (rset_at_ms: Int64.t) -> [ &set_at_ms'0 <- rset_at_ms ] s1)
-    | s1 = [ &_12 <- Int64.le facts.incoming_set_at_ms set_at_ms'0 ] s2
-    | s2 = any [ br0 -> {_12 = false} (! bb4) | br1 -> {_12} (! bb9) ] ]
+    | s1 = [ &_9 <- Int64.le facts.incoming_set_at_ms set_at_ms'0 ] s2
+    | s2 = any [ br0 -> {_9 = false} (! bb4) | br1 -> {_9} (! bb9) ] ]
   | bb9 = s0
     [ s0 = elim_Present {facts.stored} (fun (rset_at_ms: Int64.t) -> [ &set_at_ms <- rset_at_ms ] s1)
     | s1 = [ &_ret <- Stale'0 ] s2
@@ -53,12 +67,7 @@ let freeze_replacement_decision [#"/workspace/crates/verified/src/freeze.rs" 232
   | & facts: t_FreezeReplacementFacts = facts
   | & set_at_ms: Int64.t = Any.any_l ()
   | & set_at_ms'0: Int64.t = Any.any_l ()
-  | & _12: bool = Any.any_l () ])
+  | & _9: bool = Any.any_l () ])
   [ return (result: t_FreezeReplacementDecision) ->
-  {[@stop_split] [@expl:freeze_replacement_decision ensures] [%#sfreeze] (result = Append'0)
-    = (not facts.uncommitted_tail
-    /\ match facts.stored with
-      | Missing -> facts.incoming_frozen
-      | Present set_at_ms -> gt_log_Int (Int64.to_int facts.incoming_set_at_ms) (Int64.to_int set_at_ms)
-      end)}
+  {[@stop_split] [@expl:freeze_replacement_decision ensures] [%#sfreeze] result = freeze_replacement_model facts}
     (! return {result}) ]

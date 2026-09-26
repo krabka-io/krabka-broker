@@ -5,10 +5,13 @@
 //! a `RemoteLogManager` needs and deletes what that manager tells it to
 //! delete.
 
-use std::{collections::HashSet, path::PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 use krabka_ids::{LeaderEpoch, Offset};
-use krabka_units::prelude::ByteSize;
+use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
 use tracing::instrument;
 
 use super::Log;
@@ -28,9 +31,16 @@ pub struct SegmentExport {
     pub base_offset: Offset,
     /// Last absolute offset (inclusive) in the segment.
     pub last_offset: Offset,
-    /// Highest record timestamp in the segment, or `-1` when unknown
-    /// (a sealed segment loaded from disk without a tail scan).
+    /// Kafka's `LogSegment.largestTimestamp()`, which is what Kafka's copy
+    /// records as the remote segment's `maxTimestampMs`: the highest record
+    /// timestamp in the segment, or [`SegmentExport::last_modified_ms`] when
+    /// no record carries a non-negative one.
     pub max_timestamp: i64,
+    /// Kafka's `LogSegment.lastModified()`: the `.log` file's modification
+    /// time in epoch milliseconds, or `0` when the filesystem cannot say, as
+    /// `File.lastModified()` answers. Kafka's tiered local retention ages a
+    /// segment whose records claim a future timestamp by this instead.
+    pub last_modified_ms: i64,
     /// `.log` file size.
     pub size: ByteSize,
     /// Path to the `.log` data file.
@@ -74,7 +84,58 @@ fn epochs_for_range(
     out
 }
 
+/// Kafka's `LogSegment.lastModified()` for the file at `path`: its
+/// modification time in epoch milliseconds, or `0` when it cannot be read,
+/// which is what `java.io.File.lastModified()` returns for an I/O error.
+fn last_modified_ms(path: &Path) -> i64 {
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |since| {
+            i64::try_from(since.as_millis()).unwrap_or(i64::MAX)
+        })
+}
+
 impl Log {
+    /// Kafka's `LogSegment.largestTimestamp()`: the segment's highest record
+    /// timestamp when one is non-negative, and otherwise its `.log` file's
+    /// modification time. Retention ages a segment by this, so a segment
+    /// whose records carry no timestamp still expires once its file is old,
+    /// and an empty one is aged by when it was last written.
+    pub(super) fn largest_timestamp(&self, segment: &Segment) -> i64 {
+        let max_timestamp = segment.max_timestamp();
+        if max_timestamp >= 0 {
+            max_timestamp
+        } else {
+            last_modified_ms(&name::log_path(&self.dir, segment.base_offset().0))
+        }
+    }
+
+    /// Kafka's `UnifiedLog.onlyLocalLogSegmentsSize()`: the `.log` bytes of
+    /// every local segment, the active one included, whose base offset is
+    /// above `highest_offset_in_remote_storage`, so that none of its records
+    /// is in the remote tier yet. `None` means the remote tier holds nothing
+    /// (Kafka's `-1`), and every local segment counts.
+    ///
+    /// Kafka's remote retention (`buildRetentionSizeData`) adds this to the
+    /// remote tier's own bytes, so `retention.bytes` bounds the partition's
+    /// whole footprint and not just its remote part.
+    #[must_use]
+    pub fn only_local_log_segments_size(
+        &self,
+        highest_offset_in_remote_storage: Option<Offset>,
+    ) -> ByteSize {
+        self.segments
+            .iter()
+            .chain(self.active.as_ref())
+            .filter(|segment| {
+                highest_offset_in_remote_storage
+                    .is_none_or(|highest| segment.base_offset() > highest)
+            })
+            .fold(ByteSize::ZERO, |total, segment| total + segment.size())
+    }
+
     /// First absolute offset still readable from this broker's local disk
     /// (KIP-405): Kafka's `localLogStartOffset`.
     ///
@@ -99,7 +160,8 @@ impl Log {
     /// `local.retention.*` moves `localLogStartOffset` and leaves
     /// `logStartOffset` to `DeleteRecords` and to remote-segment deletion.
     ///
-    /// This method never touches the active segment. It returns the number of
+    /// This method never touches the active segment. The producer snapshot at
+    /// each removed segment's base goes with it. It returns the number of
     /// segments removed. It does nothing and returns `Ok(0)` when
     /// `target <= local_log_start_offset()`.
     ///
@@ -163,6 +225,12 @@ impl Log {
             .retain(|base, _| !drop_set.contains(base));
         for base in &to_drop {
             let _ = retention::delete_segment_files(&*self.io, &self.dir, *base);
+            // Kafka's `deleteSegments` → `deleteProducerSnapshots` removes the
+            // snapshot at every deleted segment's base. The one at the first
+            // surviving base stays: it is the state that segment starts from,
+            // and the copy of it the remote tier holds is the one a remote
+            // read rebuilds from.
+            producer_snapshot::remove_at(&self.dir, *base)?;
         }
 
         Ok(removed)
@@ -176,8 +244,9 @@ impl Log {
     /// `last_offset` comes from the next segment's `base_offset`. For the
     /// most-recent sealed segment it comes from the active segment's base.
     /// The value is therefore correct even for segments loaded from disk
-    /// without a tail scan. `max_timestamp` falls back to `-1`, which means
-    /// unknown, when the in-memory value is not set.
+    /// without a tail scan. `max_timestamp` is Kafka's `largestTimestamp()`,
+    /// so a segment with no record timestamp reports its file's
+    /// modification time rather than an unknown.
     #[must_use]
     pub fn tierable_segments(&self) -> Vec<SegmentExport> {
         // Sort the epoch entries once here rather than per-segment inside
@@ -202,14 +271,15 @@ impl Log {
             .map(|(seg, next_base)| {
                 let base = seg.base_offset();
                 let last = next_base - 1;
-                let max_ts = seg.max_timestamp();
                 let txn = name::txnindex_path(&self.dir, base.0);
+                let log_path = name::log_path(&self.dir, base.0);
                 SegmentExport {
                     base_offset: base,
                     last_offset: last,
-                    max_timestamp: if max_ts == i64::MIN { -1 } else { max_ts },
+                    max_timestamp: self.largest_timestamp(seg),
+                    last_modified_ms: last_modified_ms(&log_path),
                     size: seg.size(),
-                    log_path: name::log_path(&self.dir, base.0),
+                    log_path,
                     offset_index_path: name::index_path(&self.dir, base.0),
                     time_index_path: name::timeindex_path(&self.dir, base.0),
                     transaction_index_path: txn.exists().then_some(txn),
