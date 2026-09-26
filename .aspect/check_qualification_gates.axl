@@ -112,11 +112,17 @@ broker_source=$(source_repo krabka-broker)
 check m19-schema grep -F 'test live_registry::rf_three_validation_survives_registry_and_broker_failover ... ok' "$evidence/m19-schema.log"
 # Match the historical negative-pin probe: unsupported protocol records must
 # produce a compiler diagnostic, not an apparent successful compatibility run.
+# The client pin moves with it: the old protocol only resolves against the
+# client revision that was built on it.
 protocol_revision=$(revision krabka-protocol)
 bad_revision=d252ed24df9eeeb092b9a7989da8667b3229e559
+client_revision=$(revision krabka-client-rs)
+bad_client_revision=f0c86c1ccdecd1776e32349764d7d2efe5dae347
 test "$protocol_revision" != "$bad_revision"
+test "$client_revision" != "$bad_client_revision"
 grep -F "$protocol_revision" "$broker_source/Cargo.toml"
-sed -i "s/$protocol_revision/$bad_revision/g" "$broker_source/Cargo.toml"
+grep -F "$client_revision" "$broker_source/Cargo.toml"
+sed -i -e "s/$protocol_revision/$bad_revision/g" -e "s/$client_revision/$bad_client_revision/g" "$broker_source/Cargo.toml"
 (cd "$broker_source" && cargo generate-lockfile) > "$evidence/negative-lock.log" 2>&1
 if (cd "$broker_source" && cargo check --locked -p krabka-broker) > "$evidence/negative-compat.log" 2>&1; then
   echo 'unsupported protocol revision unexpectedly compiled' >&2

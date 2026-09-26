@@ -31,13 +31,13 @@
     },
     {
       "repository": "krabka-io/krabka-protocol",
-      "revision": "b79bf4965075a96ab88f2612f0b7cb9c86d2097b",
+      "revision": "05e3e32d9a0b832453b0c0de144f138c3bab735b",
       "default_branch": "main",
       "artifacts": []
     },
     {
       "repository": "krabka-io/krabka-client-rs",
-      "revision": "f0c86c1ccdecd1776e32349764d7d2efe5dae347",
+      "revision": "c4c113c74f0ef9774698734aee1ba90fc3785eca",
       "default_branch": "main",
       "artifacts": []
     },
@@ -226,5 +226,5 @@
     "url": "",
     "sha256": ""
   },
-  "runner_sha256": "sha256:6be6b4fe1676e858fb51368e8a59ff425421099cd43a0c7898e16ac55473b839"
+  "runner_sha256": "sha256:d76607b823b378d25bea7c368634502c0c0a3a67819b3b349edee9a180a331e8"
 }
