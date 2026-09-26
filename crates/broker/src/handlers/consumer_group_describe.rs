@@ -1,14 +1,17 @@
 //! `ConsumerGroupDescribe` (`api_key` 69).
 //!
 //! This handler returns one `DescribedGroup` per requested `group_id`. It
-//! renders each group from the actor's `Describe` view.
+//! renders each KIP-848 consumer group from the actor's `Describe` view the
+//! way Kafka's `ConsumerGroup.asDescribedGroup` does: the group state, the
+//! group and assignment epochs, the preferred server assignor (or the default
+//! one), and every member with its current and target assignment.
 //!
 //! Ordering and gating follow Kafka's `KafkaApis.handleConsumerGroupDescribe`:
 //!
-//! - The `group.version` protocol gate is checked once, before any
-//!   authorization. When the next-gen consumer-group RPCs are not finalized,
-//!   every requested group gets `UNSUPPORTED_VERSION` and no ACL is
-//!   consulted.
+//! - The consumer-protocol gate is checked once, before any authorization.
+//!   When the `consumer` rebalance protocol is not enabled, or `group.version`
+//!   does not finalize the next-gen consumer-group RPCs, every requested group
+//!   gets `UNSUPPORTED_VERSION` and no ACL is consulted.
 //! - Past the gate, a group `Describe` denial is a per-row
 //!   `GROUP_AUTHORIZATION_FAILED`, and those denied rows are placed first in
 //!   the response, ahead of the coordinator results (which keep request
@@ -18,18 +21,28 @@
 //!   the principal holds. Every other row keeps the wire-default `i32::MIN`
 //!   "not present" sentinel.
 
+use std::collections::HashMap;
+
 use bytes::Bytes;
+use krabka_metadata::MetadataImage;
 use krabka_protocol::{
     Decode,
     owned::{
+        common::consumer_group_describe_response::{
+            assignment::Assignment, topic_partitions::TopicPartitions,
+        },
         consumer_group_describe_request::ConsumerGroupDescribeRequest,
-        consumer_group_describe_response::{ConsumerGroupDescribeResponse, DescribedGroup},
+        consumer_group_describe_response::{ConsumerGroupDescribeResponse, DescribedGroup, Member},
     },
+    primitives::uuid::Uuid,
 };
 use tokio::sync::oneshot;
 
 use crate::{
-    broker::Broker, codes, coordinator::unified::actor::GroupActorMessage, error::BrokerError,
+    broker::Broker,
+    codes,
+    coordinator::unified::actor::{DescribeMember, DescribeView, GroupActorMessage},
+    error::BrokerError,
     handlers::authorized_operations::authorized_operations_bits,
 };
 
@@ -37,10 +50,11 @@ use crate::{
 /// enables the next-gen consumer-group RPCs.
 const NEXT_GEN_MIN_GROUP_VERSION: i16 = 1;
 
-/// Wire `group_state` reported for a next-gen group with no members.
-const GROUP_STATE_EMPTY: &str = "EMPTY";
-/// Wire `group_state` reported for a next-gen group with at least one member.
-const GROUP_STATE_STABLE: &str = "STABLE";
+/// `member_type` of a member that speaks the classic protocol inside a
+/// consumer group.
+const MEMBER_TYPE_CLASSIC: i8 = 0;
+/// `member_type` of a member that speaks the consumer protocol.
+const MEMBER_TYPE_CONSUMER: i8 = 1;
 
 pub(crate) async fn handle(
     broker: &Broker,
@@ -54,33 +68,30 @@ pub(crate) async fn handle(
     let mut cur: &[u8] = req_bytes;
     let req = ConsumerGroupDescribeRequest::decode(&mut cur, version)?;
 
-    // KIP-848 / KIP-584 protocol gate, checked before any authorization —
-    // Kafka's handleConsumerGroupDescribe answers UNSUPPORTED_VERSION for
-    // every requested group up front and never touches ACLs when the
-    // next-gen consumer-group RPCs are not finalized (group.version >= 1;
-    // below that, including UNFINALIZED which means disabled, is rejected,
-    // consistent with the heartbeat fallback).
-    if group_version_disabled(&image) {
+    // Kafka's `isConsumerGroupProtocolEnabled` gate, checked before any
+    // authorization: the `consumer` rebalance protocol must be enabled and
+    // `group.version` must be finalized at 1 or above.
+    if !coordinator.config.next_gen_enabled() || group_version_disabled(&image) {
         let described = req
             .group_ids
             .iter()
-            .map(|group_id| {
-                let mut row = ok_row(group_id);
-                row.error_code = codes::UNSUPPORTED_VERSION;
-                row
-            })
+            .map(|group_id| error_row(group_id, codes::UNSUPPORTED_VERSION, None))
             .collect();
         let resp = response(described);
         return crate::handlers::encode_response(&resp, version);
     }
 
-    let next_gen_enabled = coordinator.config.next_gen_enabled();
+    let default_assignor = coordinator
+        .config
+        .assignors
+        .first()
+        .map(|a| a.name())
+        .unwrap_or_default();
     // Kafka places every GROUP_AUTHORIZATION_FAILED row first, ahead of the
     // coordinator results, which keep request order among themselves.
     let mut denied: Vec<DescribedGroup> = Vec::new();
     let mut described: Vec<DescribedGroup> = Vec::with_capacity(req.group_ids.len());
     for group_id in &req.group_ids {
-        let mut row = ok_row(group_id);
         if crate::handlers::acl_denied(
             broker.config.authorizer.as_ref(),
             &image,
@@ -89,31 +100,25 @@ pub(crate) async fn handle(
             group_id,
             krabka_metadata::AclOperation::Describe,
         ) {
-            row.error_code = codes::GROUP_AUTHORIZATION_FAILED;
-            denied.push(row);
+            denied.push(error_row(group_id, codes::GROUP_AUTHORIZATION_FAILED, None));
+            continue;
+        }
+        // GroupCoordinatorService.consumerGroupDescribe rejects an empty id
+        // before it routes the group to a shard.
+        if group_id.is_empty() {
+            described.push(error_row("", codes::INVALID_GROUP_ID, None));
             continue;
         }
         if let Some(error_code) = crate::handlers::group_coordinator_error(broker, group_id) {
-            row.error_code = error_code;
-            described.push(row);
+            described.push(error_row(group_id, error_code, None));
             continue;
         }
-        if next_gen_config_disabled(next_gen_enabled) {
-            row.error_code = codes::GROUP_ID_NOT_FOUND;
-            described.push(row);
-            continue;
-        }
-        // Only next-gen (consumer) groups are described here; a classic
-        // group (or an unknown id) is GROUP_ID_NOT_FOUND. The `Describe` arm
-        // dispatches on the actor's LIVE `group.kind`: it replies ONLY for a
-        // consumer-kind group and drops the sender otherwise, so an UPGRADED
-        // group (spawned classic, now consumer in place via KIP-848) is
-        // reachable while a classic group's no-reply maps to
-        // GROUP_ID_NOT_FOUND — without consulting the stale spawn-time
-        // `h.kind`.
+        // The `Describe` arm dispatches on the actor's LIVE `group.kind`: it
+        // replies ONLY for a consumer-kind group and drops the sender
+        // otherwise, so an upgraded group is reachable and a classic group
+        // is not.
         let Some(handle) = coordinator.find(group_id) else {
-            row.error_code = codes::GROUP_ID_NOT_FOUND;
-            described.push(row);
+            described.push(not_found_row(group_id, "not found"));
             continue;
         };
         let (tx, rx) = oneshot::channel();
@@ -123,19 +128,16 @@ pub(crate) async fn handle(
             .await
             .is_err()
         {
-            row.error_code = codes::COORDINATOR_LOAD_IN_PROGRESS;
-            described.push(row);
+            described.push(error_row(
+                group_id,
+                codes::COORDINATOR_LOAD_IN_PROGRESS,
+                None,
+            ));
             continue;
         }
-        if let Ok(view) = rx.await {
-            row.group_state = group_state_for_member_count(view.members.len());
-            described.push(row);
-        } else {
-            // No reply means the live group is classic (not describable via
-            // api 69), which surfaces as GROUP_ID_NOT_FOUND — matching the
-            // pre-refactor behavior for a classic group.
-            row.error_code = codes::GROUP_ID_NOT_FOUND;
-            described.push(row);
+        match rx.await {
+            Ok(view) => described.push(described_group(view, default_assignor, &image)),
+            Err(_) => described.push(not_found_row(group_id, "is not a consumer group")),
         }
     }
 
@@ -162,30 +164,109 @@ pub(crate) async fn handle(
     crate::handlers::encode_response(&resp, version)
 }
 
-fn ok_row(group_id: &str) -> DescribedGroup {
+fn error_row(group_id: &str, error_code: i16, error_message: Option<String>) -> DescribedGroup {
     DescribedGroup {
         group_id: group_id.into(),
+        error_code,
+        error_message,
         ..Default::default()
     }
 }
 
-fn group_version_disabled(image: &krabka_metadata::MetadataImage) -> bool {
+/// `GROUP_ID_NOT_FOUND` with the message of Kafka's `consumerGroup` lookup,
+/// `Group <id> not found.` or `Group <id> is not a consumer group.`.
+fn not_found_row(group_id: &str, reason: &str) -> DescribedGroup {
+    error_row(
+        group_id,
+        codes::GROUP_ID_NOT_FOUND,
+        Some(format!("Group {group_id} {reason}.")),
+    )
+}
+
+/// Renders a consumer group as `ConsumerGroup.asDescribedGroup` does. Members
+/// are sorted by id, topics by name and partitions ascending, so the answer
+/// does not depend on map order.
+fn described_group(
+    view: DescribeView,
+    default_assignor: &str,
+    image: &MetadataImage,
+) -> DescribedGroup {
+    let mut members: Vec<Member> = view
+        .members
+        .into_iter()
+        .map(|m| described_member(m, image))
+        .collect();
+    members.sort_by(|a, b| a.member_id.cmp(&b.member_id));
+    DescribedGroup {
+        group_id: view.group_id,
+        group_state: view.group_state.into(),
+        group_epoch: view.group_epoch,
+        assignment_epoch: view.assignment_epoch,
+        assignor_name: view
+            .preferred_server_assignor
+            .unwrap_or_else(|| default_assignor.to_string()),
+        members,
+        ..Default::default()
+    }
+}
+
+/// `ConsumerGroupMember.asConsumerGroupDescribeMember`: the current assignment
+/// is the assigned partitions plus those pending revocation, which the member
+/// still owns until it confirms the revocation.
+fn described_member(m: DescribeMember, image: &MetadataImage) -> Member {
+    let mut owned = m.assigned_partitions;
+    for (topic_id, partitions) in m.partitions_pending_revocation {
+        owned.entry(topic_id).or_default().extend(partitions);
+    }
+    Member {
+        member_id: m.member_id,
+        instance_id: m.instance_id,
+        rack_id: m.rack_id,
+        member_epoch: m.member_epoch,
+        client_id: m.client_id,
+        client_host: m.client_host,
+        subscribed_topic_names: m.subscribed_topic_names,
+        subscribed_topic_regex: m.subscribed_topic_regex,
+        assignment: assignment(owned, image),
+        target_assignment: assignment(m.target_partitions, image),
+        member_type: if m.is_classic {
+            MEMBER_TYPE_CLASSIC
+        } else {
+            MEMBER_TYPE_CONSUMER
+        },
+        ..Default::default()
+    }
+}
+
+/// Names each topic from the metadata image. Kafka drops a topic the image no
+/// longer has.
+fn assignment(partitions: HashMap<Uuid, Vec<i32>>, image: &MetadataImage) -> Assignment {
+    let mut topic_partitions: Vec<TopicPartitions> = partitions
+        .into_iter()
+        .filter_map(|(topic_id, mut partitions)| {
+            let topic_name = image.topic_name_by_id(&uuid::Uuid::from_bytes(topic_id.0))?;
+            partitions.sort_unstable();
+            Some(TopicPartitions {
+                topic_id,
+                topic_name: topic_name.to_string(),
+                partitions,
+                ..Default::default()
+            })
+        })
+        .collect();
+    topic_partitions.sort_by(|a, b| a.topic_name.cmp(&b.topic_name));
+    Assignment {
+        topic_partitions,
+        ..Default::default()
+    }
+}
+
+fn group_version_disabled(image: &MetadataImage) -> bool {
     !crate::features::feature_enabled(
         image,
         krabka_metadata::group_version::GROUP_VERSION_FEATURE,
         NEXT_GEN_MIN_GROUP_VERSION,
     )
-}
-
-fn next_gen_config_disabled(next_gen_enabled: bool) -> bool {
-    !next_gen_enabled
-}
-
-fn group_state_for_member_count(members: usize) -> String {
-    match members {
-        0 => GROUP_STATE_EMPTY.into(),
-        _ => GROUP_STATE_STABLE.into(),
-    }
 }
 
 fn response(groups: Vec<DescribedGroup>) -> ConsumerGroupDescribeResponse {
@@ -199,7 +280,7 @@ fn response(groups: Vec<DescribedGroup>) -> ConsumerGroupDescribeResponse {
 mod tests {
     use assert2::assert;
     use bytes::BytesMut;
-    use krabka_metadata::{FeatureLevelRecord, MetadataImage, MetadataRecord};
+    use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
     use krabka_protocol::Encode;
 
     use super::*;
@@ -235,13 +316,6 @@ mod tests {
     }
 
     #[test]
-    fn ok_row_preserves_requested_group_id() {
-        let row = ok_row("orders");
-        assert!(row.group_id == "orders");
-        assert!(row.error_code == codes::NONE);
-    }
-
-    #[test]
     fn group_version_gate_distinguishes_disabled_and_enabled_images() {
         // (finalized group.version level; None = fresh image) → disabled?
         let cases = [(None, true), (Some(1), false), (Some(0), true)];
@@ -257,29 +331,176 @@ mod tests {
         }
     }
 
-    #[test]
-    fn next_gen_config_gate_inverts_enabled_flag() {
-        assert!(!next_gen_config_disabled(true));
-        assert!(next_gen_config_disabled(false));
+    const ORDERS: Uuid = Uuid([1; 16]);
+    const PAYMENTS: Uuid = Uuid([2; 16]);
+    /// A topic id the image does not hold, as after a topic deletion.
+    const DELETED: Uuid = Uuid([3; 16]);
+
+    fn image_with_topics() -> MetadataImage {
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        for (name, id) in [("orders", ORDERS), ("payments", PAYMENTS)] {
+            image.apply(&MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
+                name: name.into(),
+                topic_id: uuid::Uuid::from_bytes(id.0),
+                partitions: 4,
+                replication_factor: 1,
+            }));
+        }
+        image
     }
 
+    fn partitions(entries: &[(Uuid, &[i32])]) -> HashMap<Uuid, Vec<i32>> {
+        entries.iter().map(|(id, p)| (*id, p.to_vec())).collect()
+    }
+
+    fn view_member(member_id: &str) -> DescribeMember {
+        DescribeMember {
+            member_id: member_id.into(),
+            instance_id: None,
+            rack_id: None,
+            member_epoch: 5,
+            client_id: "client".into(),
+            client_host: "/10.0.0.1".into(),
+            subscribed_topic_names: vec!["orders".into(), "payments".into()],
+            subscribed_topic_regex: None,
+            assigned_partitions: HashMap::new(),
+            partitions_pending_revocation: HashMap::new(),
+            target_partitions: HashMap::new(),
+            is_classic: false,
+        }
+    }
+
+    fn view(group_state: &'static str, members: Vec<DescribeMember>) -> DescribeView {
+        DescribeView {
+            group_id: "cg".into(),
+            group_epoch: 5,
+            assignment_epoch: 5,
+            group_state,
+            preferred_server_assignor: None,
+            members,
+        }
+    }
+
+    fn topic(topic_id: Uuid, topic_name: &str, partitions: &[i32]) -> TopicPartitions {
+        TopicPartitions {
+            topic_id,
+            topic_name: topic_name.into(),
+            partitions: partitions.to_vec(),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+        }
+    }
+
+    fn assigned(topics: Vec<TopicPartitions>) -> Assignment {
+        Assignment {
+            topic_partitions: topics,
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+        }
+    }
+
+    fn wire_member(member_id: &str) -> Member {
+        Member {
+            member_id: member_id.into(),
+            instance_id: None,
+            rack_id: None,
+            member_epoch: 5,
+            client_id: "client".into(),
+            client_host: "/10.0.0.1".into(),
+            subscribed_topic_names: vec!["orders".into(), "payments".into()],
+            subscribed_topic_regex: None,
+            assignment: assigned(vec![]),
+            target_assignment: assigned(vec![]),
+            member_type: MEMBER_TYPE_CONSUMER,
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+        }
+    }
+
+    fn wire_group(group_state: &str, assignor_name: &str, members: Vec<Member>) -> DescribedGroup {
+        DescribedGroup {
+            error_code: codes::NONE,
+            error_message: None,
+            group_id: "cg".into(),
+            group_state: group_state.into(),
+            group_epoch: 5,
+            assignment_epoch: 5,
+            assignor_name: assignor_name.into(),
+            members,
+            authorized_operations: i32::MIN,
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+        }
+    }
+
+    /// `ConsumerGroup.asDescribedGroup`: the view's state and epochs, the
+    /// preferred assignor or the default, and each member with its owned
+    /// partitions (assigned plus pending revocation) and its target, named
+    /// from the image. A topic the image lacks is dropped.
     #[test]
-    fn group_state_reflects_member_count() {
-        let cases = [(0, "EMPTY"), (1, "STABLE"), (3, "STABLE")];
-        for (members, want) in cases {
-            assert!(
-                group_state_for_member_count(members) == want,
-                "members {members}"
-            );
+    fn a_consumer_group_is_described_whole() {
+        let stable = {
+            let mut native = view_member("m-a");
+            native.instance_id = Some("instance-a".into());
+            native.rack_id = Some("rack-1".into());
+            native.assigned_partitions = partitions(&[(PAYMENTS, &[1, 0])]);
+            native.target_partitions = partitions(&[(PAYMENTS, &[0, 1])]);
+            let mut classic = view_member("m-b");
+            classic.is_classic = true;
+            classic.subscribed_topic_regex = Some("ord.*".into());
+            classic.assigned_partitions = partitions(&[(ORDERS, &[0]), (DELETED, &[0])]);
+            classic.target_partitions = partitions(&[(ORDERS, &[0])]);
+            let mut v = view("Stable", vec![classic, native]);
+            v.preferred_server_assignor = Some("range".into());
+            v
+        };
+        let stable_expected = {
+            let mut native = wire_member("m-a");
+            native.instance_id = Some("instance-a".into());
+            native.rack_id = Some("rack-1".into());
+            native.assignment = assigned(vec![topic(PAYMENTS, "payments", &[0, 1])]);
+            native.target_assignment = assigned(vec![topic(PAYMENTS, "payments", &[0, 1])]);
+            let mut classic = wire_member("m-b");
+            classic.member_type = MEMBER_TYPE_CLASSIC;
+            classic.subscribed_topic_regex = Some("ord.*".into());
+            classic.assignment = assigned(vec![topic(ORDERS, "orders", &[0])]);
+            classic.target_assignment = assigned(vec![topic(ORDERS, "orders", &[0])]);
+            wire_group("Stable", "range", vec![native, classic])
+        };
+        let reconciling = {
+            let mut m = view_member("m-a");
+            m.member_epoch = 4;
+            m.assigned_partitions = partitions(&[(ORDERS, &[2])]);
+            m.partitions_pending_revocation = partitions(&[(ORDERS, &[1]), (PAYMENTS, &[3])]);
+            m.target_partitions = partitions(&[(ORDERS, &[2])]);
+            view("Reconciling", vec![m])
+        };
+        let reconciling_expected = {
+            let mut m = wire_member("m-a");
+            m.member_epoch = 4;
+            m.assignment = assigned(vec![
+                topic(ORDERS, "orders", &[1, 2]),
+                topic(PAYMENTS, "payments", &[3]),
+            ]);
+            m.target_assignment = assigned(vec![topic(ORDERS, "orders", &[2])]);
+            wire_group("Reconciling", "uniform", vec![m])
+        };
+        // (view, expected row)
+        let rows = [
+            (
+                view("Empty", vec![]),
+                wire_group("Empty", "uniform", vec![]),
+            ),
+            (stable, stable_expected),
+            (reconciling, reconciling_expected),
+        ];
+        let image = image_with_topics();
+        for (v, expected) in rows {
+            let state = v.group_state;
+            assert!(described_group(v, "uniform", &image) == expected, "{state}");
         }
     }
 
     #[test]
     fn response_preserves_group_rows() {
-        let mut first = ok_row("a");
-        first.error_code = codes::GROUP_ID_NOT_FOUND;
-        let mut second = ok_row("b");
-        second.error_code = codes::UNSUPPORTED_VERSION;
+        let first = error_row("a", codes::GROUP_ID_NOT_FOUND, None);
+        let second = error_row("b", codes::UNSUPPORTED_VERSION, None);
 
         let resp = response(vec![first, second]);
 
@@ -316,37 +537,65 @@ mod tests {
         assert!(resp == expected, "{resp:?}");
     }
 
+    /// A group Kafka's `consumerGroup` lookup rejects is `GROUP_ID_NOT_FOUND`
+    /// with the lookup's message, and an empty id is `INVALID_GROUP_ID`.
     #[tokio::test]
-    async fn handle_unknown_group_preserves_requested_group_id() {
+    async fn handle_answers_a_group_that_is_not_a_consumer_group() {
         let (broker_handle, _dir) = start_broker().await;
         let broker = broker_handle.broker_arc_for_test();
-        let req = request(vec!["missing-group"]);
+        let _ = broker
+            .group_coordinator
+            .get_or_create_classic("classic-group");
         let principal = crate::test_support::principal("admin");
         let peer = crate::test_support::peer();
         let ctx = crate::test_support::request_context(&principal, &peer, "admin-client");
-
-        let bytes = handle(&broker, VERSION, 3, &req, &ctx)
-            .await
-            .expect("ConsumerGroupDescribe handler");
-        let resp = decode_response(&bytes);
-
-        let expected = ConsumerGroupDescribeResponse {
-            throttle_time_ms: 0,
-            groups: vec![DescribedGroup {
-                error_code: codes::GROUP_ID_NOT_FOUND,
-                error_message: None,
-                group_id: "missing-group".to_string(),
-                group_state: String::new(),
-                group_epoch: 0,
-                assignment_epoch: 0,
-                assignor_name: String::new(),
-                members: vec![],
-                authorized_operations: -2_147_483_648,
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-            }],
+        let row = |group_id: &str, error_code, message: Option<&str>| DescribedGroup {
+            error_code,
+            error_message: message.map(str::to_string),
+            group_id: group_id.to_string(),
+            group_state: String::new(),
+            group_epoch: 0,
+            assignment_epoch: 0,
+            assignor_name: String::new(),
+            members: vec![],
+            authorized_operations: i32::MIN,
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
-        assert!(resp == expected, "{resp:?}");
+        // (requested id, expected row)
+        let rows = [
+            (
+                "missing-group",
+                row(
+                    "missing-group",
+                    codes::GROUP_ID_NOT_FOUND,
+                    Some("Group missing-group not found."),
+                ),
+            ),
+            (
+                "classic-group",
+                row(
+                    "classic-group",
+                    codes::GROUP_ID_NOT_FOUND,
+                    Some("Group classic-group is not a consumer group."),
+                ),
+            ),
+            ("", row("", codes::INVALID_GROUP_ID, None)),
+        ];
+        for (group_id, expected) in rows {
+            let bytes = handle(&broker, VERSION, 3, &request(vec![group_id]), &ctx)
+                .await
+                .expect("ConsumerGroupDescribe handler");
+            let resp = decode_response(&bytes);
+
+            assert!(
+                resp == ConsumerGroupDescribeResponse {
+                    throttle_time_ms: 0,
+                    groups: vec![expected],
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+                },
+                "{group_id:?}"
+            );
+        }
 
         broker_handle.shutdown().await;
     }
@@ -508,7 +757,8 @@ mod tests {
             resp_off.groups
                 == vec![DescribedGroup {
                     group_id: "live-group".into(),
-                    group_state: GROUP_STATE_EMPTY.into(),
+                    group_state: "Empty".into(),
+                    assignor_name: "uniform".into(),
                     authorized_operations: i32::MIN,
                     unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
                     ..Default::default()
@@ -517,7 +767,8 @@ mod tests {
         );
 
         // Flag set: bitfield filled from the group's supported operations
-        // (Read, Describe, Delete) under AllowAll.
+        // (Read, Describe, Delete, DescribeConfigs, AlterConfigs) under
+        // AllowAll.
         let req_on = request_with_ops(vec!["live-group"], true);
         let resp_on = decode_response(
             &handle(&broker, VERSION, 11, &req_on, &ctx)
@@ -537,7 +788,8 @@ mod tests {
             resp_on.groups
                 == vec![DescribedGroup {
                     group_id: "live-group".into(),
-                    group_state: GROUP_STATE_EMPTY.into(),
+                    group_state: "Empty".into(),
+                    assignor_name: "uniform".into(),
                     authorized_operations: expected_bits,
                     unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
                     ..Default::default()

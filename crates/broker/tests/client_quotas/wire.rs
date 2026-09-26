@@ -50,11 +50,8 @@ pub async fn round_trip(
 /// [`round_trip`] with the request and the response header flexibility chosen
 /// independently, and returning the body with the response header stripped.
 ///
-/// The two differ on the unsupported-version reply path. A request below a
-/// flexible-from-v0 API's minimum version parses with a non-flexible request
-/// header, because the broker resolves flexibility from the version the client
-/// asked for, while the reply is encoded at the nearest supported version and
-/// so carries the flexible response header with its tagged-fields byte.
+/// The two differ for `ApiVersions`, whose response header is v0 at every
+/// version while its v3+ request header is flexible.
 pub async fn round_trip_split_header(
     stream: &mut TcpStream,
     api_key: i16,

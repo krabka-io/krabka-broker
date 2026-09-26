@@ -2,9 +2,12 @@
 //! it elects.
 //!
 //! KIP-460 lets a client name every partition of the cluster by omitting the
-//! topic list, name a whole topic by sending it with no partitions, or name an
-//! exact set. All three shapes become one list of topics and partition indices
-//! here, resolved against the metadata image.
+//! topic list, or name an exact set per topic. A topic sent with an empty
+//! partition list names no partition: Kafka's
+//! `ReplicationControlManager.electLeaders` loops over `topic.partitions()`
+//! only, so it elects nothing for that topic and answers a topic row with no
+//! partition results. Both shapes become one list of topics and partition
+//! indices here, in the order the response carries them.
 
 use krabka_protocol::owned::elect_leaders_request::ElectLeadersRequest;
 
@@ -28,17 +31,7 @@ pub(super) fn resolve_targets(
         |topics| {
             topics
                 .iter()
-                .map(|topic| {
-                    let partitions = if topic.partitions.is_empty() {
-                        image
-                            .partitions_of(&topic.topic)
-                            .map(|partition| partition.partition)
-                            .collect()
-                    } else {
-                        topic.partitions.clone()
-                    };
-                    (topic.topic.clone(), partitions)
-                })
+                .map(|topic| (topic.topic.clone(), topic.partitions.clone()))
                 .collect()
         },
     )

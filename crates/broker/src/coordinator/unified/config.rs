@@ -76,6 +76,14 @@ pub struct NextGenConfig {
     pub actor_mailbox_capacity: usize,
     pub shutdown_ack_timeout: Duration,
     pub classic_initial_rebalance_delay: Duration,
+    /// Kafka's `group.min.session.timeout.ms`: the smallest session timeout a
+    /// classic `JoinGroup` may ask for.
+    pub classic_min_session_timeout: Duration,
+    /// Kafka's `group.max.session.timeout.ms`: the largest session timeout a
+    /// classic `JoinGroup` may ask for.
+    pub classic_max_session_timeout: Duration,
+    /// Kafka's `group.max.size`: the most members a classic group admits.
+    pub classic_max_size: usize,
     /// Registered server-side assignors. The list IS the registry. The
     /// broker matches the client's `server_assignor` field against
     /// `Assignor::name()` by string equality. `Default` seeds the two
@@ -113,6 +121,15 @@ impl std::fmt::Debug for NextGenConfig {
                 "classic_initial_rebalance_delay",
                 &self.classic_initial_rebalance_delay,
             )
+            .field(
+                "classic_min_session_timeout",
+                &self.classic_min_session_timeout,
+            )
+            .field(
+                "classic_max_session_timeout",
+                &self.classic_max_session_timeout,
+            )
+            .field("classic_max_size", &self.classic_max_size)
             .field("assignors", &self.assignors)
             .field("max_size", &self.max_size)
             .field("migration_policy", &self.migration_policy)
@@ -160,6 +177,18 @@ pub const DEFAULT_MIN_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 /// `group.consumer.max.heartbeat.interval.ms`.
 pub const DEFAULT_MAX_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 
+/// Default lower bound on a classic `JoinGroup` session timeout: 6 s, Kafka's
+/// `group.min.session.timeout.ms`.
+pub const DEFAULT_CLASSIC_MIN_SESSION_TIMEOUT: Duration = Duration::from_secs(6);
+
+/// Default upper bound on a classic `JoinGroup` session timeout: 30 min,
+/// Kafka's `group.max.session.timeout.ms`.
+pub const DEFAULT_CLASSIC_MAX_SESSION_TIMEOUT: Duration = Duration::from_mins(30);
+
+/// Default cap on classic-group membership: `Integer.MAX_VALUE`, Kafka's
+/// `group.max.size`.
+pub const DEFAULT_CLASSIC_MAX_SIZE: usize = 2_147_483_647;
+
 /// Krabka's default cap on consumer-group membership
 /// (`group.consumer.max.size`).
 pub const DEFAULT_MAX_GROUP_SIZE: usize = 200;
@@ -178,6 +207,9 @@ impl Default for NextGenConfig {
             actor_mailbox_capacity: 64,
             shutdown_ack_timeout: Duration::from_secs(5),
             classic_initial_rebalance_delay: Duration::from_secs(3),
+            classic_min_session_timeout: DEFAULT_CLASSIC_MIN_SESSION_TIMEOUT,
+            classic_max_session_timeout: DEFAULT_CLASSIC_MAX_SESSION_TIMEOUT,
+            classic_max_size: DEFAULT_CLASSIC_MAX_SIZE,
             assignors: vec![Arc::new(UniformAssignor), Arc::new(RangeAssignor)],
             max_size: DEFAULT_MAX_GROUP_SIZE,
             migration_policy: ConsumerGroupMigrationPolicy::default(),

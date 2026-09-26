@@ -13,7 +13,9 @@ mod support;
 
 use krabka_protocol::owned::{
     join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
+    join_group_response::JoinGroupResponse,
     sync_group_request::{SyncGroupRequest, SyncGroupRequestAssignment},
+    sync_group_response::SyncGroupResponse,
 };
 
 const GROUP: &str = "kip559-grp";
@@ -124,21 +126,21 @@ async fn sync_group_response_carries_protocol_type_and_name_on_success() {
 }
 
 #[tokio::test]
-async fn join_group_response_carries_protocol_type_on_inconsistent_protocol_error() {
+async fn join_group_inconsistent_protocol_error_carries_no_protocol_fields() {
     let p = support::start().await;
     // Bootstrap the group as `consumer/range`.
     let (_mid, _gen) = bootstrap_member(&p).await;
 
-    // Second member tries to join with a different protocol_type — must
-    // be rejected with INCONSISTENT_GROUP_PROTOCOL (23). KIP-559: the
-    // recorded group protocol_type must still ride along on the error
-    // response so the L7 proxy sees what dialog this belongs to.
+    // A second member with a different protocol_type is turned away with
+    // INCONSISTENT_GROUP_PROTOCOL (23). Kafka's `classicGroupJoinNewMember`
+    // answers it with the member id and the error alone: the protocol
+    // fields stay null, as in every `JoinGroup` error Kafka sends.
     let r = p
         .client
         .send(JoinGroupRequest {
             group_id: GROUP.into(),
             protocol_type: "stream".into(),
-            member_id: "some-member-2".into(),
+            member_id: String::new(),
             session_timeout_ms: 30_000,
             rebalance_timeout_ms: 1_500,
             protocols: vec![JoinGroupRequestProtocol {
@@ -151,24 +153,24 @@ async fn join_group_response_carries_protocol_type_on_inconsistent_protocol_erro
         .await
         .expect("JoinGroup");
     assert!(
-        r.error_code == 23,
-        "expected INCONSISTENT_GROUP_PROTOCOL (23), got {r:?}"
-    );
-    assert!(
-        r.protocol_type.as_deref() == Some(PROTOCOL_TYPE),
-        "INCONSISTENT_GROUP_PROTOCOL response must echo the recorded protocol_type: {r:?}"
+        r == JoinGroupResponse {
+            error_code: 23,
+            ..JoinGroupResponse::default()
+        },
+        "expected a bare INCONSISTENT_GROUP_PROTOCOL (23), got {r:?}"
     );
     p.broker.shutdown().await;
 }
 
+/// A `SyncGroup` that Kafka refuses carries only the error code. Kafka's
+/// `GroupCoordinatorService.syncGroup` answers every error with
+/// `new SyncGroupResponseData().setErrorCode(...)`, so `protocol_type` and
+/// `protocol_name` stay null even though the group has a recorded protocol.
 #[tokio::test]
-async fn sync_group_response_carries_protocol_type_on_unknown_member_error() {
+async fn sync_group_error_carries_no_protocol_fields() {
     let p = support::start().await;
     let (_mid, generation) = bootstrap_member(&p).await;
 
-    // SyncGroup with a member_id the group has never seen → broker
-    // returns UNKNOWN_MEMBER_ID (25). KIP-559: protocol_type must still
-    // ride along because the group exists and has a recorded protocol.
     let r = p
         .client
         .send(SyncGroupRequest {
@@ -183,16 +185,13 @@ async fn sync_group_response_carries_protocol_type_on_unknown_member_error() {
         .await
         .expect("SyncGroup");
     check!(
-        r.error_code == 25,
-        "expected UNKNOWN_MEMBER_ID (25), got {r:?}"
-    );
-    check!(
-        r.protocol_type.as_deref() == Some(PROTOCOL_TYPE),
-        "UNKNOWN_MEMBER_ID response must echo the recorded protocol_type: {r:?}"
-    );
-    check!(
-        r.protocol_name.as_deref() == Some(PROTOCOL_NAME),
-        "UNKNOWN_MEMBER_ID response must echo the recorded protocol_name: {r:?}"
+        r == SyncGroupResponse {
+            error_code: 25,
+            protocol_type: None,
+            protocol_name: None,
+            assignment: bytes::Bytes::default(),
+            ..Default::default()
+        }
     );
 
     p.broker.shutdown().await;

@@ -10,7 +10,7 @@
 //! `kafka-topics --alter --partitions N --replica-assignment 0:1,1:2,...`.
 //!
 //! This file holds the request loop. Each stage it walks through lives in its
-//! own submodule: `admission` for the quota and authorization preamble,
+//! own submodule: `admission` for the duplicate and authorization preamble,
 //! `assignment` for the replica placement, `apply` for the metadata records
 //! and the local materialization, and `response` for the encoding and the
 //! throttle.
@@ -36,10 +36,10 @@ mod test_support;
 mod tests;
 
 use self::{
-    admission::{denied_topics, partition_mutation_count},
+    admission::{denied_topics, duplicate_names},
     apply::{MaterializeContext, materialize_new_partitions, partition_records},
     assignment::resolve_new_partition_assignments,
-    response::{create_partitions_response, encode_response, finish_response},
+    response::finish_response,
 };
 use crate::{
     broker::Broker,
@@ -79,83 +79,86 @@ pub(crate) async fn handle(
 
     let image = broker.controller.current_image();
 
-    // KIP-599: count partition mutations before running handler logic so that
-    // even invalid/rejected requests consume quota (bad-faith clients can't
-    // escape throttling by sending malformed RPCs).
-    let mutation_count = partition_mutation_count(&req, &image);
-    let quota = crate::quota::apply_controller_mutation_quota_mode(
-        &image,
-        &broker.quota_buckets,
-        ctx.principal.name.as_str(),
-        ctx.client_id,
-        mutation_count,
-        broker.config.controller_mutation_quota_window,
-        broker.config.quota_throttle_max,
-        version >= 3,
-    );
-    if quota.is_rejected() {
-        let results = req
-            .topics
-            .iter()
-            .map(|topic| CreatePartitionsTopicResult {
-                name: topic.name.clone(),
-                error_code: codes::THROTTLING_QUOTA_EXCEEDED,
-                ..Default::default()
-            })
-            .collect();
-        return encode_response(
-            &create_partitions_response(results, crate::quota::throttle_time_ms(quota.delay())),
-            version,
-        );
-    }
+    // Kafka's `ControllerApis.createPartitions` answers each duplicated name
+    // once with INVALID_REQUEST and grows none of its rows. Growing the same
+    // topic twice from one image would write its new partitions twice.
+    let duplicates = duplicate_names(&req.topics);
+    let mut results: Vec<CreatePartitionsTopicResult> = duplicates
+        .iter()
+        .map(|name| CreatePartitionsTopicResult {
+            name: name.clone(),
+            error_code: codes::INVALID_REQUEST,
+            error_message: Some("Duplicate topic name.".into()),
+            ..Default::default()
+        })
+        .collect();
 
     // ── ACL preamble ────────────────────────────────────────
-    // Batch-authorize every topic name for `Alter`. Topics that come
-    // back `Deny` short-circuit the partition-change loop and emit
-    // TOPIC_AUTHORIZATION_FAILED on that topic row.
+    // Batch-authorize every other topic name for `Alter`. Kafka answers the
+    // denied names next, with no message, and hands the rest to the
+    // controller, whose rows come last.
+    let names: Vec<&str> = req
+        .topics
+        .iter()
+        .map(|topic| topic.name.as_str())
+        .filter(|name| !duplicates.iter().any(|duplicate| duplicate == name))
+        .collect();
     let denied_topics = denied_topics(
         broker.config.authorizer.as_ref(),
         &image,
         ctx.principal,
         ctx.peer,
-        &req,
+        &names,
+    );
+    results.extend(
+        names
+            .iter()
+            .filter(|name| denied_topics.contains(**name))
+            .map(|name| CreatePartitionsTopicResult {
+                name: (*name).to_owned(),
+                error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+                ..Default::default()
+            }),
     );
 
-    let mut results: Vec<CreatePartitionsTopicResult> = Vec::with_capacity(req.topics.len());
+    // KIP-599: Kafka's controller charges each topic with the partitions it
+    // adds, after the count checks on it pass (`createPartitions`). A strict
+    // version (v3+) refuses the topic that finds the bucket negative, and
+    // every topic after it.
+    let mut quota = crate::quota::ControllerMutationQuota::new(&crate::quota::QuotaRequest {
+        image: &image,
+        buckets: &broker.quota_buckets,
+        principal: ctx.principal.name.as_str(),
+        client_id: ctx.client_id,
+        window: broker.config.controller_mutation_quota_window,
+        strict: version >= 3,
+    });
+
     let preferred_site = resolve_preferred_leader_site(&image);
     let validate_only = req.validate_only;
 
     for t in req.topics {
+        if duplicates.contains(&t.name) || denied_topics.contains(&t.name) {
+            continue;
+        }
         let mut out = CreatePartitionsTopicResult {
             name: t.name.clone(),
             ..Default::default()
         };
 
-        // Per-topic ACL check.
-        if denied_topics.contains(&t.name) {
-            out.error_code = codes::TOPIC_AUTHORIZATION_FAILED;
-            results.push(out);
-            continue;
-        }
-
-        let Some(topic_rec) = image.topic(&t.name).cloned() else {
-            out.error_code = codes::UNKNOWN_TOPIC_OR_PARTITION;
-            out.error_message = Some(format!("unknown topic `{}`", t.name));
-            results.push(out);
-            continue;
+        let topic_rec = match admit_growth(&t, &image, &mut quota) {
+            Ok(topic_rec) => topic_rec,
+            Err((error_code, error_message)) => {
+                out.error_code = error_code;
+                out.error_message = error_message;
+                results.push(out);
+                continue;
+            }
         };
-
         let existing = topic_rec.partitions;
         let diskless = crate::config_keys::resolve_diskless(image.topic_config(&t.name));
-        if t.count <= existing {
-            out.error_code = codes::INVALID_PARTITIONS;
-            out.error_message = Some(format!(
-                "topic `{}` already has {} partitions; cannot decrease to {}",
-                t.name, existing, t.count
-            ));
-            results.push(out);
-            continue;
-        }
+        let new_partition_indices: Vec<i32> = (existing..t.count).collect();
+        let new_partition_count = new_partition_indices.len();
 
         // The automatic placement never picks an unavailable broker. A manual
         // assignment may name one, because Kafka checks only that the broker
@@ -173,9 +176,6 @@ pub(crate) async fn handle(
             },
         );
         let rf = topic_rec.replication_factor;
-        let new_count = t.count;
-        let new_partition_indices: Vec<i32> = (existing..new_count).collect();
-        let new_partition_count = new_partition_indices.len();
         let new_assignments = match resolve_new_partition_assignments(
             t.assignments.as_ref(),
             &brokers,
@@ -301,4 +301,61 @@ pub(crate) async fn handle(
     // assembly. It sets throttle_time_ms and records the window for the
     // connection loop's post-send mute (KIP-219).
     finish_response(ctx, quota.delay(), results, version)
+}
+
+/// Kafka's `ReplicationControlManager.createPartitions` checks on one
+/// authorized row ahead of the placement, in its order: the topic exists, the
+/// count grows it, an explicit assignment list holds one entry per new
+/// partition, and the KIP-599 quota admits the new partitions. The topic on
+/// success, else the row's code and Kafka's message.
+fn admit_growth(
+    topic: &krabka_protocol::owned::create_partitions_request::CreatePartitionsTopic,
+    image: &krabka_metadata::MetadataImage,
+    quota: &mut crate::quota::ControllerMutationQuota,
+) -> Result<krabka_metadata::TopicRecord, (i16, Option<String>)> {
+    // Kafka's `UnknownTopicOrPartitionException()` carries no message.
+    let topic_rec = image
+        .topic(&topic.name)
+        .cloned()
+        .ok_or((codes::UNKNOWN_TOPIC_OR_PARTITION, None))?;
+    let existing = topic_rec.partitions;
+    let count = topic.count;
+    let invalid = |message| Err((codes::INVALID_PARTITIONS, Some(message)));
+    match count.cmp(&existing) {
+        std::cmp::Ordering::Equal => {
+            return invalid(format!("Topic already has {existing} partition(s)."));
+        }
+        std::cmp::Ordering::Less => {
+            return invalid(format!(
+                "The topic {} currently has {existing} partition(s); {count} would not be an \
+                 increase.",
+                topic.name
+            ));
+        }
+        std::cmp::Ordering::Greater => {}
+    }
+    let additional = i64::from(count) - i64::from(existing);
+    if let Some(assignments) = &topic.assignments
+        && i64::try_from(assignments.len()).ok() != Some(additional)
+    {
+        return Err((
+            codes::INVALID_REPLICA_ASSIGNMENT,
+            Some(format!(
+                "Attempted to add {additional} additional partition(s), but only {} \
+                 assignment(s) were specified.",
+                assignments.len()
+            )),
+        ));
+    }
+    // KIP-599: charge the partitions this topic adds.
+    if quota
+        .record(u64::try_from(additional).unwrap_or(0))
+        .is_err()
+    {
+        return Err((
+            codes::THROTTLING_QUOTA_EXCEEDED,
+            Some("The throttling quota has been exceeded.".into()),
+        ));
+    }
+    Ok(topic_rec)
 }

@@ -32,6 +32,10 @@ use crate::{
 /// the high watermark too -- a `read_committed` client must not read past it
 /// either, and a bound that fenced only the transactional path would leave the
 /// larger hole open.
+/// How often the watermark is held and read before the test gives up on a
+/// reading no reconcile interrupted.
+const HOLD_ATTEMPTS: usize = 20;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn latest_answers_the_high_watermark_not_the_unreplicated_log_end() {
     const TOPIC: &str = "list-offsets-isolation-unreplicated";
@@ -65,17 +69,27 @@ async fn latest_answers_the_high_watermark_not_the_unreplicated_log_end() {
 
     // Now the last two records are unreplicated: durable on the leader, not yet
     // acknowledged by the ISR, exactly as they are while a follower catches up.
+    // A replicator reconcile can raise the watermark back to the log end at any
+    // moment, so the reading counts only when the hold is still in place after
+    // both isolation levels were asked; only the hold lowers the watermark, so
+    // then both answers were given under it.
+    let mut held = None;
+    for _ in 0..HOLD_ATTEMPTS {
+        check!(
+            p.broker.hold_high_watermark_for_test(TOPIC, 0, 2).await,
+            "the partition is hosted here"
+        );
+        let reading = end_of_partition(&p.client, TOPIC).await;
+        if p.broker.high_watermark_for_test(TOPIC, 0).await == Some(2) {
+            held = Some(reading);
+            break;
+        }
+    }
     check!(
-        p.broker.hold_high_watermark_for_test(TOPIC, 0, 2).await,
-        "the partition is hosted here"
-    );
-
-    check!(
-        end_of_partition(&p.client, TOPIC).await
-            == EndOfPartition {
-                read_uncommitted: latest_row(2),
-                read_committed: latest_row(2),
-            },
+        held == Some(EndOfPartition {
+            read_uncommitted: latest_row(2),
+            read_committed: latest_row(2),
+        }),
         "neither isolation level may seek into the unreplicated tail"
     );
 

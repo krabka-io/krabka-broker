@@ -194,7 +194,8 @@ async fn add_offsets_partition(
     }
     let _state_partition_write = coord.lock_state_partition_for(transactional_id).await;
     let Some(entry_mutex) = coord.get(transactional_id) else {
-        return codes::INVALID_PRODUCER_ID_MAPPING;
+        // A leadership change can evict the entry after the check above.
+        return coord.missing_entry_error(transactional_id).await;
     };
     let mut entry = entry_mutex.lock().await;
     match decide(&entry, producer, &offsets_partition) {

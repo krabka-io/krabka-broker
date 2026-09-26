@@ -1,72 +1,35 @@
-(* #"/workspace/crates/verified/src/delegation_token.rs" 414 0 419 19 *)
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 95 0 100 24 *)
 
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
-let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
-let%span scmp'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
-let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
-let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
-let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
-let%span sdelegation_token = "/workspace/crates/verified/src/delegation_token.rs" 422 8 422 68
-let%span sdelegation_token'0 = "/workspace/crates/verified/src/delegation_token.rs" 420 27 423 5
-let%span sdelegation_token'1 = "/workspace/crates/verified/src/delegation_token.rs" 426 48 426 87
-let%span sdelegation_token'2 = "/workspace/crates/verified/src/delegation_token.rs" 426 27 426 88
-let%span sdelegation_token'3 = "/workspace/crates/verified/src/delegation_token.rs" 408 11 408 55
-let%span sdelegation_token'4 = "/workspace/crates/verified/src/delegation_token.rs" 409 10 410 89
-let%span sdelegation_token'5 = "/workspace/crates/verified/src/delegation_token.rs" 411 10 412 76
-let%span sdelegation_token'6 = "/workspace/crates/verified/src/delegation_token.rs" 386 11 386 29
-let%span sdelegation_token'7 = "/workspace/crates/verified/src/delegation_token.rs" 387 10 387 68
-let%span sdelegation_token'8 = "/workspace/crates/verified/src/delegation_token.rs" 388 10 388 21
-let%span sdelegation_token'9 = "/workspace/crates/verified/src/delegation_token.rs" 375 11 375 28
-let%span sdelegation_token'10 = "/workspace/crates/verified/src/delegation_token.rs" 376 10 376 53
-let%span sdelegation_token'11 = "/workspace/crates/verified/src/delegation_token.rs" 249 16 249 83
-let%span sdelegation_token'12 = "/workspace/crates/verified/src/delegation_token.rs" 270 16 270 85
-let%span sdelegation_token'13 = "/workspace/crates/verified/src/delegation_token.rs" 239 16 239 42
+let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span snum = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span scmp = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
+let%span scmp'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
+let%span scmp'1 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
+let%span scmp'2 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
+let%span scmp'3 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
+let%span sdelegation_token = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 101 16 101 17
+let%span sdelegation_token'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 101 35 101 36
+let%span sdelegation_token'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 101 67 101 68
+let%span sdelegation_token'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 105 45 105 47
+let%span sdelegation_token'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 107 29 107 30
+let%span sdelegation_token'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 108 8 108 36
+let%span sdelegation_token'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 113 25 113 33
+let%span sdelegation_token'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 113 25 113 42
+let%span sdelegation_token'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 116 25 116 69
+let%span sdelegation_token'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 118 26 118 50
+let%span sdelegation_token'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 119 27 119 50
+let%span sdelegation_token'10 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 70 10 76 1
+let%span sdelegation_token'11 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 77 10 93 1
+let%span sdelegation_token'12 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 47 8 53 9
 
 use creusot.int.Int64
 use creusot.prelude.Any
 use int.Int
 
-predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+type t_TokenDeadlines = { max_timestamp_ms: Int64.t; initial_expiry_ms: Int64.t }
 
-meta "rewrite_def" predicate gt_log_Int
-
-function min_i [#"/workspace/crates/verified/src/delegation_token.rs" 238 0 238 35] (a: int) (b: int) : int =
-  [%#sdelegation_token'13] if a <= b then a else b
-
-function requested_period [#"/workspace/crates/verified/src/delegation_token.rs" 269 0 269 63] (requested: int) (configured: int) : int
- = [%#sdelegation_token'12] if gt_log_Int requested 0 then min_i configured requested else configured
-
-let effective_period (requested_ms: Int64.t) (configured_ms: Int64.t) (return (x: Int64.t)) =
-{[@stop_split] [@expl:effective_period requires] [%#sdelegation_token'6] gt_log_Int (Int64.to_int configured_ms) 0}
-  any
-  [ return (result: Int64.t) ->
-  {[@stop_split] [@expl:effective_period ensures] ([@stop_split] [@expl:effective_period ensures #0] [%#sdelegation_token'7] Int64.to_int result
-      = requested_period (Int64.to_int requested_ms) (Int64.to_int configured_ms))
-    /\ ([@stop_split] [@expl:effective_period ensures #1] [%#sdelegation_token'8] gt_log_Int (Int64.to_int result) 0)}
-    (! return {result}) ]
-
-predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
-
-meta "rewrite_def" predicate ge_log_Int
-
-constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
-
-function kafka_sum [#"/workspace/crates/verified/src/delegation_token.rs" 248 0 248 48] (now: int) (duration: int) : int
- = [%#sdelegation_token'11] if gt_log_Int now (Int64.to_int const_MAX - duration) then
-    Int64.to_int const_MAX
-  else
-    now + duration
-
-
-let saturating_sum (now_ms: Int64.t) (duration_ms: Int64.t) (return (x: Int64.t)) =
-{[@stop_split] [@expl:saturating_sum requires] [%#sdelegation_token'9] ge_log_Int (Int64.to_int duration_ms) 0}
-  any
-  [ return (result: Int64.t) ->
-  {[@stop_split] [@expl:saturating_sum ensures] [%#sdelegation_token'10] Int64.to_int result
-    = kafka_sum (Int64.to_int now_ms) (Int64.to_int duration_ms)}
-    (! return {result}) ]
+type t_TokenCreateDecision = Invalid | Create t_TokenDeadlines
 
 function deep_model_i64 [@inline:trivial] (self: Int64.t) : int = [%#snum] Int64.to_int self
 
@@ -82,38 +45,105 @@ let min_i64 (self_: Int64.t) (o: Int64.t) (return (x: Int64.t)) = any
     /\ ([@stop_split] [@expl:min ensures #4] [%#scmp'3] deep_model_i64 o <= deep_model_i64 self_ -> result = o)}
     (! return {result}) ]
 
-type t_TokenDeadlines = { max_timestamp_ms: Int64.t; initial_expiry_ms: Int64.t }
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+function chosen_lifetime_model [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 45 0 45 67] (requested_ms: Int64.t) (ceiling_ms: Int64.t) : int
+ = [%#sdelegation_token'12] if Int64.to_int requested_ms = - 1 then
+    Int64.to_int ceiling_ms
+  else
+    if Int64.to_int requested_ms < Int64.to_int ceiling_ms then Int64.to_int requested_ms else Int64.to_int ceiling_ms
+
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let create_token_deadlines [#"/workspace/crates/verified/src/delegation_token.rs" 414 0 419 19] (now_ms: Int64.t)
-  (requested_max_lifetime_ms: Int64.t) (max_lifetime_ms: Int64.t) (renew_period_ms: Int64.t)
-  (return (x: t_TokenDeadlines)) =
-{[@stop_split] [@expl:create_token_deadlines requires] [%#sdelegation_token'3] gt_log_Int (Int64.to_int max_lifetime_ms) 0
-  /\ gt_log_Int (Int64.to_int renew_period_ms) 0}
-  (! bb0
+let create_token_deadlines [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 95 0 100 24]
+  (now_ms: Int64.t) (requested_ms: Int64.t) (ceiling_ms: Int64.t) (default_renew_period_ms: Int64.t)
+  (return (x: t_TokenCreateDecision)) = (! bb0
   [ bb0 = s0
-    [ s0 = effective_period [%#sdelegation_token] {requested_max_lifetime_ms} {max_lifetime_ms}
-        (fun (_x: Int64.t) -> [ &_17 <- _x ] s1)
-    | s1 = saturating_sum [%#sdelegation_token'0] {now_ms} {_17} (fun (_x: Int64.t) -> [ &max_timestamp_ms'0 <- _x ] s2)
-    | s2 = saturating_sum [%#sdelegation_token'1] {now_ms} {renew_period_ms} (fun (_x: Int64.t) -> [ &_23 <- _x ] s3)
-    | s3 = min_i64 [%#sdelegation_token'2] {max_timestamp_ms'0} {_23} (fun (_x: Int64.t) -> [ &_21 <- _x ] s4)
-    | s4 = [ &_ret <- { max_timestamp_ms = max_timestamp_ms'0; initial_expiry_ms = _21 } ] s5
-    | s5 = return {_ret} ] ]
-  [ & _ret: t_TokenDeadlines = Any.any_l ()
+    [ s0 = [ &_16 <- Int64.lt now_ms ([%#sdelegation_token] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_16 = false} (! bb2) | br1 -> {_16} (! bb6) ] ]
+  | bb2 = s0
+    [ s0 = [ &_18 <- Int64.le ceiling_ms ([%#sdelegation_token'0] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_18 = false} (! bb4) | br1 -> {_18} (! bb6) ] ]
+  | bb4 = s0
+    [ s0 = [ &_20 <- Int64.le default_renew_period_ms ([%#sdelegation_token'1] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_20 = false} (! bb7) | br1 -> {_20} (! bb6) ] ]
+  | bb6 = s0 [ s0 = [ &_ret <- Invalid ] s1 | s1 = return {_ret} ]
+  | bb7 = s0
+    [ s0 = [ &_24 <- requested_ms = ([%#sdelegation_token'2] (-1: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_24 = false} (! bb9) | br1 -> {_24} (! bb8) ] ]
+  | bb8 = s0 [ s0 = [ &chosen_lifetime <- ceiling_ms ] s1 | s1 = bb13 ]
+  | bb9 = s0
+    [ s0 = [ &_26 <- Int64.gt requested_ms ([%#sdelegation_token'3] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_26 = false} (! bb11) | br1 -> {_26} (! bb10) ] ]
+  | bb10 = s0
+    [ s0 = min_i64 [%#sdelegation_token'4] {requested_ms} {ceiling_ms}
+        (fun (_x: Int64.t) -> [ &chosen_lifetime <- _x ] s1)
+    | s1 = bb13 ]
+  | bb13 = s0
+    [ s0 = Int64.sub [%#sdelegation_token'6] {[%#sdelegation_token'5] const_MAX} {now_ms}
+        (fun (_x: Int64.t) -> [ &_34 <- _x ] s1)
+    | s1 = [ &_32 <- Int64.gt chosen_lifetime _34 ] s2
+    | s2 = any [ br0 -> {_32 = false} (! bb15) | br1 -> {_32} (! bb14) ] ]
+  | bb14 = s0 [ s0 = [ &_ret <- Invalid ] s1 | s1 = return {_ret} ]
+  | bb15 = s0
+    [ s0 = min_i64 [%#sdelegation_token'7] {default_renew_period_ms} {chosen_lifetime}
+        (fun (_x: Int64.t) -> [ &initial_period <- _x ] s1)
+    | s1 = Int64.add [%#sdelegation_token'8] {now_ms} {chosen_lifetime} (fun (_x: Int64.t) -> [ &_41 <- _x ] s2)
+    | s2 = Int64.add [%#sdelegation_token'9] {now_ms} {initial_period} (fun (_x: Int64.t) -> [ &_44 <- _x ] s3)
+    | s3 = [ &_40 <- { max_timestamp_ms = _41; initial_expiry_ms = _44 } ] s4
+    | s4 = [ &_ret <- Create _40 ] s5
+    | s5 = return {_ret} ]
+  | bb11 = s0 [ s0 = [ &_ret <- Invalid ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_TokenCreateDecision = Any.any_l ()
   | & now_ms: Int64.t = now_ms
-  | & requested_max_lifetime_ms: Int64.t = requested_max_lifetime_ms
-  | & max_lifetime_ms: Int64.t = max_lifetime_ms
-  | & renew_period_ms: Int64.t = renew_period_ms
-  | & max_timestamp_ms'0: Int64.t = Any.any_l ()
-  | & _17: Int64.t = Any.any_l ()
-  | & _21: Int64.t = Any.any_l ()
-  | & _23: Int64.t = Any.any_l () ])
-  [ return (result: t_TokenDeadlines) ->
-  {[@stop_split] [@expl:create_token_deadlines ensures] ([@stop_split] [@expl:create_token_deadlines ensures #0] [%#sdelegation_token'4] Int64.to_int result.max_timestamp_ms
-      = kafka_sum (Int64.to_int now_ms) (requested_period (Int64.to_int requested_max_lifetime_ms) (Int64.to_int max_lifetime_ms)))
-    /\ ([@stop_split] [@expl:create_token_deadlines ensures #1] [%#sdelegation_token'5] Int64.to_int result.initial_expiry_ms
-    = min_i (Int64.to_int result.max_timestamp_ms) (kafka_sum (Int64.to_int now_ms) (Int64.to_int renew_period_ms)))}
+  | & requested_ms: Int64.t = requested_ms
+  | & ceiling_ms: Int64.t = ceiling_ms
+  | & default_renew_period_ms: Int64.t = default_renew_period_ms
+  | & _16: bool = Any.any_l ()
+  | & _18: bool = Any.any_l ()
+  | & _20: bool = Any.any_l ()
+  | & chosen_lifetime: Int64.t = Any.any_l ()
+  | & _24: bool = Any.any_l ()
+  | & _26: bool = Any.any_l ()
+  | & _32: bool = Any.any_l ()
+  | & _34: Int64.t = Any.any_l ()
+  | & initial_period: Int64.t = Any.any_l ()
+  | & _40: t_TokenDeadlines = Any.any_l ()
+  | & _41: Int64.t = Any.any_l ()
+  | & _44: Int64.t = Any.any_l () ])
+  [ return (result: t_TokenCreateDecision) ->
+  {[@stop_split] [@expl:create_token_deadlines ensures] ([@stop_split] [@expl:create_token_deadlines ensures #0] [%#sdelegation_token'10] (result
+        = Invalid)
+      = (Int64.to_int now_ms < 0
+      \/ Int64.to_int ceiling_ms <= 0
+      \/ Int64.to_int default_renew_period_ms <= 0
+      \/ Int64.to_int requested_ms <> - 1 /\ Int64.to_int requested_ms <= 0
+      \/ gt_log_Int (chosen_lifetime_model requested_ms ceiling_ms) (Int64.to_int const_MAX - Int64.to_int now_ms)))
+    /\ ([@stop_split] [@expl:create_token_deadlines ensures #1] [%#sdelegation_token'11] match result with
+      | Invalid -> true
+      | Create deadlines -> ge_log_Int (Int64.to_int now_ms) 0
+      /\ Int64.to_int deadlines.max_timestamp_ms = Int64.to_int now_ms + chosen_lifetime_model requested_ms ceiling_ms
+      /\ Int64.to_int deadlines.initial_expiry_ms
+        = Int64.to_int now_ms
+        + (if Int64.to_int default_renew_period_ms < chosen_lifetime_model requested_ms ceiling_ms then
+          Int64.to_int default_renew_period_ms
+        else
+          chosen_lifetime_model requested_ms ceiling_ms
+        )
+      /\ gt_log_Int (Int64.to_int deadlines.initial_expiry_ms) (Int64.to_int now_ms)
+      /\ Int64.to_int deadlines.initial_expiry_ms <= Int64.to_int deadlines.max_timestamp_ms
+      /\ Int64.to_int deadlines.max_timestamp_ms <= Int64.to_int const_MAX
+      /\ gt_log_Int (Int64.to_int deadlines.max_timestamp_ms) (Int64.to_int now_ms)
+      end)}
     (! return {result}) ]

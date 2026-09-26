@@ -126,11 +126,17 @@ impl Model for ClassicModel {
                 let now = at(s.clock);
                 let dropped = s.g.expire_dead_members(now, Duration::from_secs(3));
                 // KIP-345 gives a static member no exception: every member
-                // past its session timeout goes, and only those.
+                // past its session timeout goes, and only those. A member
+                // that waits in `JoinGroup` cannot heartbeat and stays, as
+                // Kafka's `hasSatisfiedHeartbeat` keeps it.
                 for (id, member) in &last.g.members {
+                    let awaiting_join = last.g.state == GroupState::PreparingRebalance
+                        && last.g.joined_this_round.contains(id);
                     assert2::assert!(
                         dropped.contains(id)
-                            == (now.duration_since(member.last_heartbeat) > member.session_timeout),
+                            == (!awaiting_join
+                                && now.duration_since(member.last_heartbeat)
+                                    > member.session_timeout),
                         "member {id} expiry disagrees with its session timeout"
                     );
                 }

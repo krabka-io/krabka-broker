@@ -1,66 +1,36 @@
 //! Kafka quota-entity precedence.
-//!
-//! Kafka's default quota callback, `ClientQuotaManager.DefaultQuotaCallback`
-//! (`findUserClientQuota`, `findUserQuota`, `findClientQuota`, and the tag
-//! selection in `quotaMetricTags`), consults the user and client-id quota
-//! entities in one fixed order and uses the first one that is configured:
-//!
-//! | Rank | Entity path | Candidate |
-//! | ---: | :--- | :--- |
-//! | 0 | `/config/users/<user>/clients/<client-id>` | [`UserClient`] |
-//! | 1 | `/config/users/<user>/clients/<default>` | [`UserDefaultClient`] |
-//! | 2 | `/config/users/<user>` | [`User`] |
-//! | 3 | `/config/users/<default>/clients/<client-id>` | [`DefaultUserClient`] |
-//! | 4 | `/config/users/<default>/clients/<default>` | [`DefaultUserDefaultClient`] |
-//! | 5 | `/config/users/<default>` | [`DefaultUser`] |
-//! | 6 | `/config/clients/<client-id>` | [`Client`] |
-//! | 7 | `/config/clients/<default>` | [`DefaultClient`] |
-//!
-//! The Creusot logic function `kafka_rank` states this table once, and
-//! [`user_client_quota_precedence`] is proved to return the first present
-//! candidate in it (`first_present`).
-//!
-//! Source: [`ClientQuotaManager.java`].
-//!
-//! [`UserClient`]: UserClientQuotaPrecedence::UserClient
-//! [`UserDefaultClient`]: UserClientQuotaPrecedence::UserDefaultClient
-//! [`User`]: UserClientQuotaPrecedence::User
-//! [`DefaultUserClient`]: UserClientQuotaPrecedence::DefaultUserClient
-//! [`DefaultUserDefaultClient`]: UserClientQuotaPrecedence::DefaultUserDefaultClient
-//! [`DefaultUser`]: UserClientQuotaPrecedence::DefaultUser
-//! [`Client`]: UserClientQuotaPrecedence::Client
-//! [`DefaultClient`]: UserClientQuotaPrecedence::DefaultClient
-//! [`ClientQuotaManager.java`]: https://github.com/apache/kafka/blob/trunk/server/src/main/java/org/apache/kafka/server/quota/ClientQuotaManager.java
 
 #[cfg(creusot)]
 use std::clone::Clone;
 
-use creusot_std::prelude::*;
+#[cfg(creusot)]
+use creusot_std::prelude::DeepModel;
+use creusot_std::prelude::ensures;
 
-/// Selected user/client quota candidate, named after its Kafka entity path.
+/// Selected user/client quota candidate, in Kafka's precedence order.
 ///
-/// The variants are declared in Kafka's precedence order. `None` means that no
-/// candidate is configured.
+/// The order is `DefaultQuotaCallback`'s in Kafka's `ClientQuotaManager`:
+/// every `user=U` level ranks above every `user=<default>` level, and both
+/// rank above the `client-id`-only levels.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
 pub enum UserClientQuotaPrecedence {
-    /// `/config/users/<user>/clients/<client-id>`.
-    UserClient,
-    /// `/config/users/<user>/clients/<default>`.
-    UserDefaultClient,
-    /// `/config/users/<user>`.
-    User,
-    /// `/config/users/<default>/clients/<client-id>`.
-    DefaultUserClient,
-    /// `/config/users/<default>/clients/<default>`.
-    DefaultUserDefaultClient,
-    /// `/config/users/<default>`.
+    /// 1. `user=U, client-id=C`
+    ExactPair,
+    /// 2. `user=U, client-id=<default>`
+    ExactUserDefaultClient,
+    /// 3. `user=U`
+    ExactUser,
+    /// 4. `user=<default>, client-id=C`
+    DefaultUserExactClient,
+    /// 5. `user=<default>, client-id=<default>`
+    DefaultPair,
+    /// 6. `user=<default>`
     DefaultUser,
-    /// `/config/clients/<client-id>`.
-    Client,
-    /// `/config/clients/<default>`.
+    /// 7. `client-id=C`
+    ExactClient,
+    /// 8. `client-id=<default>`
     DefaultClient,
-    /// No candidate is configured.
     None,
 }
 
@@ -72,123 +42,97 @@ pub enum QuotaCandidatePresence {
     Present,
 }
 
-/// Presence of each canonical user/client quota candidate, one field per
-/// [`UserClientQuotaPrecedence`] variant of the same name.
+/// Presence of each canonical user/client quota candidate, in Kafka's
+/// precedence order.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
 pub struct UserClientQuotaFacts {
-    pub user_client: QuotaCandidatePresence,
-    pub user_default_client: QuotaCandidatePresence,
-    pub user: QuotaCandidatePresence,
-    pub default_user_client: QuotaCandidatePresence,
-    pub default_user_default_client: QuotaCandidatePresence,
+    pub exact_pair: QuotaCandidatePresence,
+    pub exact_user_default_client: QuotaCandidatePresence,
+    pub exact_user: QuotaCandidatePresence,
+    pub default_user_exact_client: QuotaCandidatePresence,
+    pub default_pair: QuotaCandidatePresence,
     pub default_user: QuotaCandidatePresence,
-    pub client: QuotaCandidatePresence,
+    pub exact_client: QuotaCandidatePresence,
     pub default_client: QuotaCandidatePresence,
 }
 
-/// Kafka's precedence table: the rank at which `DefaultQuotaCallback`
-/// consults each candidate, 0 first. `None` ranks after every candidate.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic]
-pub fn kafka_rank(candidate: UserClientQuotaPrecedence) -> Int {
-    pearlite! {
-        match candidate {
-            UserClientQuotaPrecedence::UserClient => 0,
-            UserClientQuotaPrecedence::UserDefaultClient => 1,
-            UserClientQuotaPrecedence::User => 2,
-            UserClientQuotaPrecedence::DefaultUserClient => 3,
-            UserClientQuotaPrecedence::DefaultUserDefaultClient => 4,
-            UserClientQuotaPrecedence::DefaultUser => 5,
-            UserClientQuotaPrecedence::Client => 6,
-            UserClientQuotaPrecedence::DefaultClient => 7,
-            UserClientQuotaPrecedence::None => 8,
-        }
-    }
-}
-
-/// Whether `facts` reports `candidate` as configured. `None` is never present.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic]
-pub fn is_present(facts: UserClientQuotaFacts, candidate: UserClientQuotaPrecedence) -> bool {
-    pearlite! {
-        match candidate {
-            UserClientQuotaPrecedence::UserClient =>
-                facts.user_client == QuotaCandidatePresence::Present,
-            UserClientQuotaPrecedence::UserDefaultClient =>
-                facts.user_default_client == QuotaCandidatePresence::Present,
-            UserClientQuotaPrecedence::User =>
-                facts.user == QuotaCandidatePresence::Present,
-            UserClientQuotaPrecedence::DefaultUserClient =>
-                facts.default_user_client == QuotaCandidatePresence::Present,
-            UserClientQuotaPrecedence::DefaultUserDefaultClient =>
-                facts.default_user_default_client == QuotaCandidatePresence::Present,
-            UserClientQuotaPrecedence::DefaultUser =>
-                facts.default_user == QuotaCandidatePresence::Present,
-            UserClientQuotaPrecedence::Client =>
-                facts.client == QuotaCandidatePresence::Present,
-            UserClientQuotaPrecedence::DefaultClient =>
-                facts.default_client == QuotaCandidatePresence::Present,
-            UserClientQuotaPrecedence::None => false,
-        }
-    }
-}
-
-/// `candidate` is the first present entry of `kafka_rank`'s table: it is
-/// present (or it is `None`), and every candidate Kafka consults before it is
-/// absent. For `None` this says that no candidate is present.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic]
-pub fn first_present(facts: UserClientQuotaFacts, candidate: UserClientQuotaPrecedence) -> bool {
-    pearlite! {
-        (is_present(facts, candidate) || candidate == UserClientQuotaPrecedence::None)
-            && forall<earlier: UserClientQuotaPrecedence>
-                kafka_rank(earlier) < kafka_rank(candidate) ==> !is_present(facts, earlier)
-    }
-}
-
-/// At most one candidate is first present, so `first_present` pins the
-/// selector's result for every input and no variant is left unconstrained.
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic]
-#[requires(first_present(facts, a) && first_present(facts, b))]
-#[ensures(a == b)]
-pub fn lemma_first_present_unique(
-    facts: UserClientQuotaFacts,
-    a: UserClientQuotaPrecedence,
-    b: UserClientQuotaPrecedence,
-) {
-}
-
 /// Select Kafka's first present user/client quota candidate.
-#[ensures(first_present(facts, result))]
+#[ensures((result == UserClientQuotaPrecedence::ExactPair)
+    == (facts.exact_pair == QuotaCandidatePresence::Present))]
+#[ensures((result == UserClientQuotaPrecedence::ExactUserDefaultClient)
+    == (facts.exact_pair == QuotaCandidatePresence::Absent
+        && facts.exact_user_default_client == QuotaCandidatePresence::Present))]
+#[ensures((result == UserClientQuotaPrecedence::ExactUser)
+    == (facts.exact_pair == QuotaCandidatePresence::Absent
+        && facts.exact_user_default_client == QuotaCandidatePresence::Absent
+        && facts.exact_user == QuotaCandidatePresence::Present))]
+#[ensures((result == UserClientQuotaPrecedence::DefaultUserExactClient)
+    == (facts.exact_pair == QuotaCandidatePresence::Absent
+        && facts.exact_user_default_client == QuotaCandidatePresence::Absent
+        && facts.exact_user == QuotaCandidatePresence::Absent
+        && facts.default_user_exact_client == QuotaCandidatePresence::Present))]
+#[ensures((result == UserClientQuotaPrecedence::DefaultPair)
+    == (facts.exact_pair == QuotaCandidatePresence::Absent
+        && facts.exact_user_default_client == QuotaCandidatePresence::Absent
+        && facts.exact_user == QuotaCandidatePresence::Absent
+        && facts.default_user_exact_client == QuotaCandidatePresence::Absent
+        && facts.default_pair == QuotaCandidatePresence::Present))]
+#[ensures((result == UserClientQuotaPrecedence::DefaultUser)
+    == (facts.exact_pair == QuotaCandidatePresence::Absent
+        && facts.exact_user_default_client == QuotaCandidatePresence::Absent
+        && facts.exact_user == QuotaCandidatePresence::Absent
+        && facts.default_user_exact_client == QuotaCandidatePresence::Absent
+        && facts.default_pair == QuotaCandidatePresence::Absent
+        && facts.default_user == QuotaCandidatePresence::Present))]
+#[ensures((result == UserClientQuotaPrecedence::ExactClient)
+    == (facts.exact_pair == QuotaCandidatePresence::Absent
+        && facts.exact_user_default_client == QuotaCandidatePresence::Absent
+        && facts.exact_user == QuotaCandidatePresence::Absent
+        && facts.default_user_exact_client == QuotaCandidatePresence::Absent
+        && facts.default_pair == QuotaCandidatePresence::Absent
+        && facts.default_user == QuotaCandidatePresence::Absent
+        && facts.exact_client == QuotaCandidatePresence::Present))]
+#[ensures((result == UserClientQuotaPrecedence::DefaultClient)
+    == (facts.exact_pair == QuotaCandidatePresence::Absent
+        && facts.exact_user_default_client == QuotaCandidatePresence::Absent
+        && facts.exact_user == QuotaCandidatePresence::Absent
+        && facts.default_user_exact_client == QuotaCandidatePresence::Absent
+        && facts.default_pair == QuotaCandidatePresence::Absent
+        && facts.default_user == QuotaCandidatePresence::Absent
+        && facts.exact_client == QuotaCandidatePresence::Absent
+        && facts.default_client == QuotaCandidatePresence::Present))]
+#[ensures((result == UserClientQuotaPrecedence::None) == !(
+    facts.exact_pair == QuotaCandidatePresence::Present
+        || facts.exact_user_default_client == QuotaCandidatePresence::Present
+        || facts.exact_user == QuotaCandidatePresence::Present
+        || facts.default_user_exact_client == QuotaCandidatePresence::Present
+        || facts.default_pair == QuotaCandidatePresence::Present
+        || facts.default_user == QuotaCandidatePresence::Present
+        || facts.exact_client == QuotaCandidatePresence::Present
+        || facts.default_client == QuotaCandidatePresence::Present))]
 #[must_use]
 pub fn user_client_quota_precedence(facts: UserClientQuotaFacts) -> UserClientQuotaPrecedence {
-    if matches!(facts.user_client, QuotaCandidatePresence::Present) {
-        UserClientQuotaPrecedence::UserClient
-    } else if matches!(facts.user_default_client, QuotaCandidatePresence::Present) {
-        UserClientQuotaPrecedence::UserDefaultClient
-    } else if matches!(facts.user, QuotaCandidatePresence::Present) {
-        UserClientQuotaPrecedence::User
-    } else if matches!(facts.default_user_client, QuotaCandidatePresence::Present) {
-        UserClientQuotaPrecedence::DefaultUserClient
+    if matches!(facts.exact_pair, QuotaCandidatePresence::Present) {
+        UserClientQuotaPrecedence::ExactPair
     } else if matches!(
-        facts.default_user_default_client,
+        facts.exact_user_default_client,
         QuotaCandidatePresence::Present
     ) {
-        UserClientQuotaPrecedence::DefaultUserDefaultClient
+        UserClientQuotaPrecedence::ExactUserDefaultClient
+    } else if matches!(facts.exact_user, QuotaCandidatePresence::Present) {
+        UserClientQuotaPrecedence::ExactUser
+    } else if matches!(
+        facts.default_user_exact_client,
+        QuotaCandidatePresence::Present
+    ) {
+        UserClientQuotaPrecedence::DefaultUserExactClient
+    } else if matches!(facts.default_pair, QuotaCandidatePresence::Present) {
+        UserClientQuotaPrecedence::DefaultPair
     } else if matches!(facts.default_user, QuotaCandidatePresence::Present) {
         UserClientQuotaPrecedence::DefaultUser
-    } else if matches!(facts.client, QuotaCandidatePresence::Present) {
-        UserClientQuotaPrecedence::Client
+    } else if matches!(facts.exact_client, QuotaCandidatePresence::Present) {
+        UserClientQuotaPrecedence::ExactClient
     } else if matches!(facts.default_client, QuotaCandidatePresence::Present) {
         UserClientQuotaPrecedence::DefaultClient
     } else {
@@ -222,164 +166,47 @@ pub fn ip_quota_precedence(exact: bool, default: bool) -> IpQuotaPrecedence {
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
-
     use super::{
-        IpQuotaPrecedence, QuotaCandidatePresence, UserClientQuotaFacts,
-        UserClientQuotaPrecedence::{
-            self, Client, DefaultClient, DefaultUser, DefaultUserClient, DefaultUserDefaultClient,
-            User, UserClient, UserDefaultClient,
-        },
+        IpQuotaPrecedence, QuotaCandidatePresence, UserClientQuotaFacts, UserClientQuotaPrecedence,
         ip_quota_precedence, user_client_quota_precedence,
     };
 
-    /// Facts in which exactly the listed candidates are configured.
-    fn configured(candidates: &[UserClientQuotaPrecedence]) -> UserClientQuotaFacts {
-        let presence = |candidate| {
-            if candidates.contains(&candidate) {
-                QuotaCandidatePresence::Present
-            } else {
-                QuotaCandidatePresence::Absent
-            }
-        };
-        UserClientQuotaFacts {
-            user_client: presence(UserClient),
-            user_default_client: presence(UserDefaultClient),
-            user: presence(User),
-            default_user_client: presence(DefaultUserClient),
-            default_user_default_client: presence(DefaultUserDefaultClient),
-            default_user: presence(DefaultUser),
-            client: presence(Client),
-            default_client: presence(DefaultClient),
-        }
-    }
-
-    /// Rows from the "Quotas" section of the Kafka documentation and
-    /// `ClientQuotaManager.DefaultQuotaCallback`, which consult
-    /// `/config/users/<user>/clients/<client-id>`,
-    /// `/config/users/<user>/clients/<default>`, `/config/users/<user>`,
-    /// `/config/users/<default>/clients/<client-id>`,
-    /// `/config/users/<default>/clients/<default>`, `/config/users/<default>`,
-    /// `/config/clients/<client-id>`, and `/config/clients/<default>`, in that
-    /// order.
     #[test]
-    fn user_client_selector_follows_kafka_precedence() {
-        let rows: [(
-            &str,
-            &[UserClientQuotaPrecedence],
-            UserClientQuotaPrecedence,
-        ); 20] = [
-            ("nothing configured", &[], UserClientQuotaPrecedence::None),
-            ("only the user/client pair", &[UserClient], UserClient),
-            (
-                "only the user's default client",
-                &[UserDefaultClient],
-                UserDefaultClient,
-            ),
-            ("only the user", &[User], User),
-            (
-                "only the default user's client",
-                &[DefaultUserClient],
-                DefaultUserClient,
-            ),
-            (
-                "only the default pair",
-                &[DefaultUserDefaultClient],
-                DefaultUserDefaultClient,
-            ),
-            ("only the default user", &[DefaultUser], DefaultUser),
-            ("only the client", &[Client], Client),
-            ("only the default client", &[DefaultClient], DefaultClient),
-            (
-                "an exact user beats a default user with an exact client",
-                &[User, DefaultUserClient],
-                User,
-            ),
-            (
-                "an exact user beats the default pair",
-                &[User, DefaultUserDefaultClient],
-                User,
-            ),
-            (
-                "the user's default client beats the user alone",
-                &[UserDefaultClient, User],
-                UserDefaultClient,
-            ),
-            (
-                "the user's default client beats a default user with an exact client",
-                &[UserDefaultClient, DefaultUserClient],
-                UserDefaultClient,
-            ),
-            (
-                "the default pair beats the default user alone",
-                &[DefaultUserDefaultClient, DefaultUser],
-                DefaultUserDefaultClient,
-            ),
-            (
-                "a default user beats an exact client",
-                &[DefaultUser, Client],
-                DefaultUser,
-            ),
-            (
-                "a default user with an exact client beats the exact client alone",
-                &[DefaultUserClient, Client],
-                DefaultUserClient,
-            ),
-            (
-                "an exact client beats the default client",
-                &[Client, DefaultClient],
-                Client,
-            ),
-            ("an exact user beats an exact client", &[User, Client], User),
-            (
-                "everything configured selects the exact pair",
-                &[
-                    UserClient,
-                    UserDefaultClient,
-                    User,
-                    DefaultUserClient,
-                    DefaultUserDefaultClient,
-                    DefaultUser,
-                    Client,
-                    DefaultClient,
-                ],
-                UserClient,
-            ),
-            (
-                "everything but the exact pair selects the user's default client",
-                &[
-                    UserDefaultClient,
-                    User,
-                    DefaultUserClient,
-                    DefaultUserDefaultClient,
-                    DefaultUser,
-                    Client,
-                    DefaultClient,
-                ],
-                UserDefaultClient,
-            ),
-        ];
-        for (scenario, candidates, expected) in rows {
-            check!(
-                user_client_quota_precedence(configured(candidates)) == expected,
-                "{scenario}"
-            );
+    fn selectors_choose_the_first_present_candidate() {
+        for mask in 0_u16..256 {
+            let present = |index| mask & (1_u16 << index) != 0_u16;
+            let candidate = |index| {
+                if present(index) {
+                    QuotaCandidatePresence::Present
+                } else {
+                    QuotaCandidatePresence::Absent
+                }
+            };
+            let got = user_client_quota_precedence(UserClientQuotaFacts {
+                exact_pair: candidate(0),
+                exact_user_default_client: candidate(1),
+                exact_user: candidate(2),
+                default_user_exact_client: candidate(3),
+                default_pair: candidate(4),
+                default_user: candidate(5),
+                exact_client: candidate(6),
+                default_client: candidate(7),
+            });
+            let expected = match (0..8).find(|index| present(*index)) {
+                Some(0) => UserClientQuotaPrecedence::ExactPair,
+                Some(1) => UserClientQuotaPrecedence::ExactUserDefaultClient,
+                Some(2) => UserClientQuotaPrecedence::ExactUser,
+                Some(3) => UserClientQuotaPrecedence::DefaultUserExactClient,
+                Some(4) => UserClientQuotaPrecedence::DefaultPair,
+                Some(5) => UserClientQuotaPrecedence::DefaultUser,
+                Some(6) => UserClientQuotaPrecedence::ExactClient,
+                Some(7) => UserClientQuotaPrecedence::DefaultClient,
+                Some(_) | None => UserClientQuotaPrecedence::None,
+            };
+            assert2::check!(got == expected, "mask {mask:#010b}");
         }
-    }
-
-    #[test]
-    fn ip_selector_prefers_the_exact_ip() {
-        let rows = [
-            (true, true, IpQuotaPrecedence::Exact),
-            (true, false, IpQuotaPrecedence::Exact),
-            (false, true, IpQuotaPrecedence::Default),
-            (false, false, IpQuotaPrecedence::None),
-        ];
-        for (exact, default, expected) in rows {
-            check!(
-                ip_quota_precedence(exact, default) == expected,
-                "exact={exact} default={default}"
-            );
-        }
+        assert2::check!(ip_quota_precedence(true, true) == IpQuotaPrecedence::Exact);
+        assert2::check!(ip_quota_precedence(false, true) == IpQuotaPrecedence::Default);
+        assert2::check!(ip_quota_precedence(false, false) == IpQuotaPrecedence::None);
     }
 }

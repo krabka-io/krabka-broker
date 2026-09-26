@@ -203,7 +203,7 @@ pub(super) async fn handle_transactional(
                     // concurrent `coord.get` finds. Everything below must act
                     // on the published entry.
                     let published = coord.get(tid).unwrap_or(current);
-                    if let Err(error) = dispatch_abort_markers(coord, &prepared).await {
+                    if let Err(error) = dispatch_abort_markers(coord, &mut prepared).await {
                         // KIP-360: the epoch fence is persisted but the abort
                         // it was prepared for did not complete. The producer
                         // that owns the transaction still holds
@@ -428,7 +428,7 @@ fn fenced_response() -> InitProducerIdResponse {
 
 async fn dispatch_abort_markers(
     coord: &TxnCoordinator,
-    entry: &TxnEntry,
+    entry: &mut TxnEntry,
 ) -> Result<(), BrokerError> {
     coord
         .dispatch_transaction_markers(entry, crate::txn::marker::MarkerType::Abort)
@@ -488,7 +488,7 @@ mod tests {
             partition: PartitionIndex(0),
         });
 
-        dispatch_abort_markers(&coord, &entry)
+        dispatch_abort_markers(&coord, &mut entry)
             .await
             .expect("dispatch markers");
 
@@ -518,7 +518,7 @@ mod tests {
             topic: "ghost".to_string(),
             partition: PartitionIndex(0),
         });
-        assert!(dispatch_abort_markers(&coord, &entry).await.is_err());
+        assert!(dispatch_abort_markers(&coord, &mut entry).await.is_err());
     }
 
     /// Kafka's `transactional.id.expiration.ms` default.

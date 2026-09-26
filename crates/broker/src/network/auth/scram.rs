@@ -1,37 +1,32 @@
-//! SASL/SCRAM (RFC 5802) over `SaslAuthenticate`, with KIP-48 delegation-
-//! token login.
+//! SASL/SCRAM (RFC 5802) over `SaslAuthenticate`, with KIP-48 delegation-token
+//! authentication.
 //!
-//! The two RFC 5802 rounds and the synthetic token credential that KIP-48
-//! defines are one concern: the credential store is chosen inside SCRAM
-//! round 1, from the client-first message's `tokenauth` extension, and cannot
-//! be read apart from it.
+//! The two RFC 5802 rounds and the token credential that KIP-48 defines are
+//! one concern: the client-first `tokenauth` extension picks the token store
+//! inside SCRAM round 1, and cannot be read apart from it.
 
 use krabka_protocol::owned::{
     sasl_authenticate_request::SaslAuthenticateRequest,
     sasl_authenticate_response::SaslAuthenticateResponse,
 };
-use krabka_security::{AuthMethod, Principal, SaslMechanism, ScramServerExchange};
+use krabka_security::{Principal, SaslMechanism, ScramServerExchange};
 use krabka_units::Time;
-use krabka_verified::delegation_token::{
-    ScramCredentialFacts, ScramCredentialSource, TokenLookup, scram_credential_source,
-    token_expiry_not_passed, token_is_active,
-};
+use krabka_verified::delegation_token::{ScramCredentialSource, scram_credential_source};
 
 use super::{
-    response::fail_authenticate,
+    response::{fail_authenticate, fail_authenticate_with},
     state::{ConnectionAuth, SaslExchange, begin_reauth, finish_reauth, session_expiry},
 };
 
-/// SCRAM-SHA-256 and SCRAM-SHA-512 `SaslAuthenticate` handler. It runs the
-/// two RFC 5802 rounds over Kafka's `SaslAuthenticate` (`api_key` 36) wire
-/// envelope.
+/// SCRAM-SHA-256 and SCRAM-SHA-512 `SaslAuthenticate` handler. It runs the two RFC 5802 rounds
+/// over Kafka's `SaslAuthenticate` (`api_key` 36) wire envelope.
 ///
 /// Round 1 (client-first):
 ///   - `auth_bytes` is the raw SCRAM client-first message,
-///     `n,,n=<user>,r=<client-nonce>[,tokenauth=true]`. The handler parses the
-///     username and the `tokenauth` extension, looks up the credential in the
-///     store the extension selects (the SCRAM credentials, or the delegation
-///     tokens by token id), and builds a
+///     `n,[a=<authzid>],n=<user>,r=<client-nonce>[,tokenauth=true]`. The
+///     handler parses it as Kafka's `ScramSaslServer` does, looks up the
+///     credential in the metadata image (the delegation-token store when
+///     `tokenauth` is set, the SCRAM user store otherwise), and builds a
 ///     [`ScramServerExchange`]. The exchange consumes the same client-first
 ///     bytes and emits the server-first message (`r=…,s=…,i=…`), which
 ///     becomes the response `auth_bytes`. `auth` moves from
@@ -80,68 +75,92 @@ fn authenticate_scram(
     } = auth
     {
         let mech = *mechanism;
-        let Some(ClientFirst {
-            username,
-            token_auth_requested,
-        }) = parse_scram_client_first(&req.auth_bytes)
-        else {
+        let Some(client_first) = ClientFirst::parse(&req.auth_bytes) else {
             return fail_authenticate("malformed SCRAM client-first");
         };
+        let Some(username) = decode_sasl_name(client_first.sasl_name) else {
+            return fail_authenticate("SCRAM username has an invalid `=` escape");
+        };
 
-        // KIP-48, as Kafka's `ScramSaslServer` does it: the client's
-        // `tokenauth=true` extension alone decides whether the username is a
-        // token id checked against the delegation-token cache or a user
-        // checked against the SCRAM credential store. A token login works
-        // under either SCRAM mechanism; its credential is synthesized from
-        // the token's HMAC (see `synthesize_token_scram_credential`), the
-        // session's principal is the token owner rather than the token id,
-        // and the token's expiry bounds the session (KIP-368).
+        // Kafka's `ScramSaslServer` picks the credential store from the
+        // `tokenauth` extension alone: with it the name is a delegation-token
+        // id and only the token cache is read, without it only the SCRAM user
+        // store is. A token carries a credential for every SCRAM mechanism
+        // (`DelegationTokenManager.prepareScramCredentials`).
         let image = controller.current_image();
-        let now = crate::time_util::now_ms();
-        let regular = image.scram_credential(&username, mech);
-        let token = image.delegation_token_by_id(&username);
-        let token_lookup = match token {
-            None => TokenLookup::Missing,
-            Some(token)
-                if token_is_active(now, token.expiry_timestamp_ms, token.max_timestamp_ms) =>
-            {
-                TokenLookup::Live
+        let token_requested = client_first.token_authenticated();
+        let regular = if token_requested {
+            None
+        } else {
+            image.scram_credential(&username, mech)
+        };
+        let token = if token_requested {
+            image.delegation_token_by_id(&username)
+        } else {
+            None
+        };
+        let token_active = token.is_some_and(|token| {
+            krabka_verified::token_is_active(
+                crate::time_util::now_ms(),
+                token.expiry_timestamp_ms,
+                token.max_timestamp_ms,
+            )
+        });
+        // The verified selector's `token_mechanism` input is whether the
+        // token store may be read, which is the `tokenauth` extension.
+        let (cred, principal, token_expiry_ms) = match scram_credential_source(
+            regular.is_some(),
+            token_requested,
+            token.is_some(),
+            token_active,
+        ) {
+            ScramCredentialSource::Regular => (
+                regular.expect("verified regular source exists").clone(),
+                Principal {
+                    name: username.clone(),
+                    auth_method: krabka_security::AuthMethod::from_sasl(mech),
+                    groups: vec![],
+                },
+                None,
+            ),
+            ScramCredentialSource::DelegationToken => {
+                let token = token.expect("verified token source exists");
+                let owner = Principal {
+                    name: token.owner.name.clone(),
+                    auth_method: krabka_security::AuthMethod::from_sasl(mech),
+                    groups: vec![],
+                };
+                (
+                    synthesize_token_scram_credential(token, mech),
+                    owner,
+                    Some(token.expiry_timestamp_ms),
+                )
             }
-            Some(_) => TokenLookup::Expired,
+            ScramCredentialSource::ExpiredDelegationToken => {
+                return fail_authenticate("delegation token expired");
+            }
+            ScramCredentialSource::Unknown => {
+                return fail_authenticate("unknown user");
+            }
         };
-        let (cred, principal_override, token_expiry_ms) =
-            match scram_credential_source(ScramCredentialFacts {
-                token_auth_requested,
-                has_regular_credential: regular.is_some(),
-                token: token_lookup,
-            }) {
-                ScramCredentialSource::Regular => (
-                    regular.expect("verified regular source exists").clone(),
-                    None,
-                    None,
-                ),
-                ScramCredentialSource::DelegationToken => {
-                    let token = token.expect("verified token source exists");
-                    let synth = synthesize_token_scram_credential(token, mech);
-                    let owner = Principal {
-                        name: token.owner.name.clone(),
-                        auth_method: AuthMethod::from_sasl(mech),
-                        groups: vec![],
-                    };
-                    (synth, Some(owner), Some(token.expiry_timestamp_ms))
-                }
-                ScramCredentialSource::ExpiredDelegationToken => {
-                    return fail_authenticate("delegation token expired");
-                }
-                ScramCredentialSource::Unknown => {
-                    return fail_authenticate("unknown user");
-                }
-            };
 
-        let server = match principal_override {
-            Some(p) => ScramServerExchange::new_with_principal(username, cred, p),
-            None => ScramServerExchange::new(username, cred),
-        };
+        // Kafka checks the GS2 authorization id only once a credential is
+        // found, and this refusal is a `SaslAuthenticationException`, so its
+        // text reaches the client.
+        if client_first
+            .authorization_id
+            .is_some_and(|authzid| authzid != username)
+        {
+            return fail_authenticate_with(AUTHORIZATION_ID_MISMATCH.to_owned());
+        }
+
+        // The exchange checks the raw `n=` value against its username, so it
+        // gets the undecoded SASL name; the principal carries the decoded one.
+        let server = ScramServerExchange::new_with_principal(
+            client_first.sasl_name.to_owned(),
+            cred,
+            principal,
+        );
         // Feed the same client-first bytes; on success the exchange emits
         // the server-first message and yields the next phase.
         match server.step(&req.auth_bytes) {
@@ -165,7 +184,7 @@ fn authenticate_scram(
                 }
             }
             // Done on the first round would be a server bug — SCRAM is
-            // always two round trips. Treat as auth failure.
+            // always two round trips for SHA-512. Treat as auth failure.
             krabka_security::StepResult::Done(_, _) => {
                 fail_authenticate("SCRAM server completed in one round")
             }
@@ -191,22 +210,21 @@ fn authenticate_scram(
         };
         match server.step(&req.auth_bytes) {
             krabka_security::StepResult::Continue(_, _) => {
-                // Two-round SCRAM: an extra `Continue` here is a bug.
+                // Two-round SCRAM-SHA-512: an extra `Continue` here is a bug.
                 fail_authenticate("SCRAM second round expected Done")
             }
             krabka_security::StepResult::Done(principal, bytes) => {
-                // When round 1 selected a delegation
+                // When round-1 fell back to a delegation
                 // token, `pending_token_expiry_ms` is `Some(expiry)`
                 // — its presence is both the marker for
                 // `authenticated_via_token: true` and the value of
                 // `expires_at_ms` (the KIP-368 re-auth ceiling).
                 // For regular SCRAM, it's `None` and the
                 // session has no expiry.
-                // Round 1 checked the token's full liveness, its maximum
-                // timestamp included; the expiry is what can pass between
-                // the two rounds.
                 let now = crate::time_util::now_ms();
-                if pending_token_expiry_ms.is_some_and(|e| !token_expiry_not_passed(now, e)) {
+                if pending_token_expiry_ms
+                    .is_some_and(|e| !krabka_verified::token_is_active(now, e, e))
+                {
                     return fail_authenticate("delegation token expired");
                 }
                 let (expires_at_ms, session_lifetime_ms) =
@@ -232,29 +250,23 @@ fn authenticate_scram(
     }
 }
 
-/// KIP-48: SCRAM iteration count for delegation-token credentials, Kafka's
-/// `ScramMechanism.minIterations` for both SCRAM mechanisms, which
-/// `DelegationTokenManager.prepareScramCredentials` uses.
+/// The iteration count of a delegation token's SCRAM credential: Kafka's
+/// `DelegationTokenManager.prepareScramCredentials` uses each mechanism's
+/// `minIterations`, which is 4096 for both SCRAM mechanisms.
 const TOKEN_SCRAM_ITERS: u32 = 4096;
 
-/// Kafka's `ScramLoginModule.TOKEN_AUTH_CONFIG`, the SCRAM extension that marks
-/// a delegation-token login.
-const TOKEN_AUTH_EXTENSION: &str = "tokenauth";
+/// Kafka's `ScramSaslServer` message when the GS2 header names an
+/// authorization id other than the authenticating user.
+const AUTHORIZATION_ID_MISMATCH: &str =
+    "Authentication failed: Client requested an authorization id that is different from username";
 
-/// KIP-48: builds the synthetic SCRAM credential that authenticates a
-/// delegation-token login under `mechanism`, as Kafka's
-/// `DelegationTokenManager.prepareScramCredentials` does for every SCRAM
-/// mechanism:
-///   - "password" = base64-encoded token HMAC bytes. This is the same value
-///     that `CreateDelegationToken` returns to the client and that clients
-///     present as the SCRAM password.
-///   - salt = UTF-8 bytes of `token_id`. Kafka draws a random salt; the
-///     client reads the salt from the server-first message either way, and
-///     the token UUID is already uniformly random.
-///   - iters = [`TOKEN_SCRAM_ITERS`]
+/// Builds the SCRAM credential of a delegation token for `mechanism`.
 ///
-/// The broker computes it on every auth attempt instead of storing it for
-/// each token in the metadata image.
+/// The password is the base64 of the token HMAC, the value
+/// `CreateDelegationToken` returns and clients present as the SCRAM password.
+/// The salt is the token id's bytes: the client reads the salt from the
+/// server-first message, so a fixed salt works as well as Kafka's random one,
+/// and deriving it keeps the credential out of the metadata image.
 fn synthesize_token_scram_credential(
     token: &krabka_metadata::DelegationToken,
     mechanism: SaslMechanism,
@@ -270,38 +282,112 @@ fn synthesize_token_scram_credential(
     )
 }
 
-/// What round 1 reads from a SCRAM client-first message.
-#[derive(Debug, PartialEq, Eq)]
-struct ClientFirst {
-    username: String,
-    /// Kafka's `ScramExtensions.tokenAuthenticated`: the `tokenauth`
-    /// extension is present and `Boolean.parseBoolean` reads it as true.
-    token_auth_requested: bool,
+/// A SCRAM client-first message, parsed as Kafka's
+/// `ScramMessages.ClientFirstMessage` does:
+/// `n,[a=<authzid>],[m=<reserved>,]n=<saslname>,r=<nonce>[,<key>=<value>]*`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ClientFirst<'a> {
+    /// The GS2 `a=` value as sent, or `None` when the header has none.
+    authorization_id: Option<&'a str>,
+    /// The `n=` value, still `=2C`/`=3D` encoded.
+    sasl_name: &'a str,
+    /// The extensions after the nonce, in the order sent.
+    extensions: Vec<(&'a str, &'a str)>,
 }
 
-/// Parses a SCRAM client-first message, `n,,n=<user>,r=<nonce>[,<ext>...]`.
-///
-/// The leading `n,,` is the GS2 header, with no channel binding and no
-/// authzid. As in Kafka's `ScramMessages.ClientFirstMessage`, the username
-/// and nonce come first, in that order, and every attribute after the nonce is
-/// a `key=value` extension; a later duplicate key replaces an earlier one, as
-/// `Utils.parseMap` does. Returns `None` on any parse failure.
-fn parse_scram_client_first(bytes: &[u8]) -> Option<ClientFirst> {
-    let bare = std::str::from_utf8(bytes).ok()?.strip_prefix("n,,")?;
-    let mut attrs = bare.split(',');
-    let username = attrs.next()?.strip_prefix("n=")?.to_string();
-    attrs.next()?.strip_prefix("r=")?;
-    let mut token_auth_requested = false;
-    for extension in attrs {
-        let (key, value) = extension.split_once('=')?;
-        if key == TOKEN_AUTH_EXTENSION {
-            token_auth_requested = value.eq_ignore_ascii_case("true");
+impl<'a> ClientFirst<'a> {
+    /// Parses `bytes`, or returns `None` where Kafka's pattern does not match.
+    fn parse(bytes: &'a [u8]) -> Option<Self> {
+        let message = std::str::from_utf8(bytes).ok()?;
+        let rest = message.strip_prefix("n,")?;
+        let (authorization_id, rest) = match rest.strip_prefix("a=") {
+            Some(after) => {
+                let (authzid, rest) = after.split_once(',')?;
+                (Some(is_sasl_name(authzid).then_some(authzid)?), rest)
+            }
+            None => (None, rest.strip_prefix(',')?),
+        };
+        let rest = match rest.strip_prefix("m=") {
+            Some(after) => {
+                let (reserved, rest) = after.split_once(',')?;
+                if !is_value(reserved) {
+                    return None;
+                }
+                rest
+            }
+            None => rest,
+        };
+        let mut attributes = rest.split(',');
+        let sasl_name = attributes.next()?.strip_prefix("n=")?;
+        let nonce = attributes.next()?.strip_prefix("r=")?;
+        if !is_sasl_name(sasl_name) || !is_printable(nonce) {
+            return None;
+        }
+        let extensions = attributes
+            .map(|extension| {
+                let (key, value) = extension.split_once('=')?;
+                (!key.is_empty() && key.bytes().all(|b| b.is_ascii_alphabetic()) && is_value(value))
+                    .then_some((key, value))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self {
+            authorization_id,
+            sasl_name,
+            extensions,
+        })
+    }
+
+    /// `ScramExtensions.tokenAuthenticated`: Java's `Boolean.parseBoolean` of
+    /// the `tokenauth` extension, the last one sent winning as it does in
+    /// Kafka's `HashMap`.
+    fn token_authenticated(&self) -> bool {
+        self.extensions
+            .iter()
+            .rev()
+            .find(|(key, _)| *key == "tokenauth")
+            .is_some_and(|(_, value)| value.eq_ignore_ascii_case("true"))
+    }
+}
+
+/// Kafka's `SASLNAME`: one or more ASCII characters other than NUL, `=` and
+/// `,`, or the escapes `=2C` and `=3D`.
+fn is_sasl_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'=' if matches!(bytes.get(i + 1..i + 3), Some(b"2C" | b"3D")) => i += 3,
+            b'=' | b',' | 0 | 0x80.. => return false,
+            _ => i += 1,
         }
     }
-    Some(ClientFirst {
-        username,
-        token_auth_requested,
-    })
+    !bytes.is_empty()
+}
+
+/// Kafka's `VALUE`: one or more ASCII characters other than NUL and `,`.
+fn is_value(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|b| (0x01..=0x7F).contains(&b) && b != b',')
+}
+
+/// Kafka's `PRINTABLE`: one or more of `0x21..=0x7E` other than `,`.
+fn is_printable(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|b| (0x21..=0x7E).contains(&b) && b != b',')
+}
+
+/// `ScramFormatter.username`: turns `=2C` into `,` and `=3D` into `=`, and
+/// refuses any other `=`.
+fn decode_sasl_name(sasl_name: &str) -> Option<String> {
+    let commas = sasl_name.replace("=2C", ",");
+    if commas.replace("=3D", "").contains('=') {
+        return None;
+    }
+    Some(commas.replace("=3D", "="))
 }
 
 #[cfg(test)]

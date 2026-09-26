@@ -6,13 +6,12 @@
 use assert2::{assert, check};
 use base64::Engine;
 use krabka_protocol::owned::create_delegation_token_request::CreateDelegationTokenRequest;
-use krabka_security::SaslMechanism;
 
 use crate::{
     DELEGATION_TOKEN_AUTHORIZATION_FAILED, DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
     cluster::{start_broker_with_super_users, wait_for_token},
     rpc::send_create_delegation_token,
-    wire::{sasl_plain_authenticate, sasl_scram_token_authenticate},
+    wire::{sasl_plain_authenticate, sasl_scram_sha256_authenticate},
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -87,17 +86,12 @@ async fn act_as_super_user_mints_token_owned_by_target() {
         assert!(img_token.owner.name == "alice");
 
         // (3) Open a second connection; SASL/SCRAM-SHA-256 with username =
-        // token_id, password = base64(hmac) and `tokenauth=true`. The token
-        // login authenticates this session as the token's OWNER — alice.
+        // token_id, password = base64(hmac). The token-fallback path
+        // authenticates this session as the token's OWNER — alice.
         let token_password = base64::engine::general_purpose::STANDARD.encode(&hmac_bytes);
-        let mut tokenuser = sasl_scram_token_authenticate(
-            addr,
-            SaslMechanism::ScramSha256,
-            &token_id,
-            &token_password,
-        )
-        .await
-        .map_err(|e| format!("token SCRAM auth: {e}"))?;
+        let mut tokenuser = sasl_scram_sha256_authenticate(addr, &token_id, &token_password)
+            .await
+            .map_err(|e| format!("token SCRAM auth: {e}"))?;
 
         // (4) Re-Create from the token-authed connection MUST return 64
         // (DELEGATION_TOKEN_REQUEST_NOT_ALLOWED). This is the unambiguous

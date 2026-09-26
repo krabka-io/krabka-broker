@@ -79,14 +79,14 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 
-/// Kafka's `DELEGATION_TOKEN_REQUEST_NOT_ALLOWED`, which every writing token
-/// RPC answers on a PLAINTEXT listener: `allowTokenRequests` refuses the
-/// channel before token support is consulted.
+/// Kafka's `DELEGATION_TOKEN_REQUEST_NOT_ALLOWED`, which
+/// `ControllerApis.allowTokenRequests` answers for a token RPC that arrives
+/// over a PLAINTEXT connection without forwarding.
 const DELEGATION_TOKEN_REQUEST_NOT_ALLOWED: i16 = 64;
 
-/// Kafka's `DelegationTokenManager.ErrorTimestamp`, the expiry a refused
-/// renew or expire reports.
-const ERROR_TIMESTAMP: i64 = -1;
+/// `DelegationTokenManager.ERROR_TIMESTAMP`, the timestamp Kafka writes into
+/// every refused token response.
+const TOKEN_ERROR_TIMESTAMP: i64 = -1;
 
 /// `SCRAM-SHA-256` as KIP-554 numbers the mechanisms on the wire.
 const SCRAM_SHA_256: i8 = 1;
@@ -371,10 +371,9 @@ async fn controller_listener_serves_the_topic_lifecycle() {
                 throttle_time_ms: 0,
                 responses: vec![DeletableTopicResult {
                     name: Some("controller-lifecycle".into()),
-                    // Deleting by name answers with the nil topic id, which is
-                    // what the broker listener answers too: the routing this
-                    // case covers hands the request to the same handler.
-                    topic_id: WireUuid([0; 16]),
+                    // A deleted topic's row carries its topic id, as Kafka's
+                    // `ControllerApis.deleteTopics` answers it (#634).
+                    topic_id: created_topic.topic_id,
                     error_code: 0,
                     error_message: None,
                     unknown_tagged_fields: UnknownTaggedFields::default(),
@@ -390,9 +389,9 @@ async fn controller_listener_serves_the_writing_delegation_token_apis() {
     let (broker, _dir) = start_broker().await;
     let connection = dial_controller(&broker).await;
 
-    // The controller listener is PLAINTEXT, so Kafka's `allowTokenRequests`
-    // refuses each RPC before it looks for a secret key. That answer needs no
-    // key material to be deterministic.
+    // The controller listener in `for_tests` is PLAINTEXT and the requests are
+    // not forwarded, so Kafka's `ControllerApis.allowTokenRequests` refuses each
+    // RPC before it looks at the token or the secret key.
     let created = connection
         .send(CreateDelegationTokenRequest {
             max_lifetime_ms: -1,
@@ -422,6 +421,13 @@ async fn controller_listener_serves_the_writing_delegation_token_apis() {
         created
             == CreateDelegationTokenResponse {
                 error_code: DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
+                principal_type: "User".into(),
+                principal_name: "ANONYMOUS".into(),
+                token_requester_principal_type: "User".into(),
+                token_requester_principal_name: "ANONYMOUS".into(),
+                issue_timestamp_ms: TOKEN_ERROR_TIMESTAMP,
+                expiry_timestamp_ms: TOKEN_ERROR_TIMESTAMP,
+                max_timestamp_ms: TOKEN_ERROR_TIMESTAMP,
                 ..Default::default()
             }
     );
@@ -429,7 +435,7 @@ async fn controller_listener_serves_the_writing_delegation_token_apis() {
         renewed
             == RenewDelegationTokenResponse {
                 error_code: DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
-                expiry_timestamp_ms: ERROR_TIMESTAMP,
+                expiry_timestamp_ms: TOKEN_ERROR_TIMESTAMP,
                 ..Default::default()
             }
     );
@@ -437,7 +443,7 @@ async fn controller_listener_serves_the_writing_delegation_token_apis() {
         expired
             == ExpireDelegationTokenResponse {
                 error_code: DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
-                expiry_timestamp_ms: ERROR_TIMESTAMP,
+                expiry_timestamp_ms: TOKEN_ERROR_TIMESTAMP,
                 ..Default::default()
             }
     );
@@ -599,9 +605,9 @@ async fn controller_listener_serves_assign_replicas_to_dirs() {
 /// so its image holds no broker at all, and placement has nowhere to put a
 /// replica.
 ///
-/// Kafka answers that with `INVALID_REPLICATION_FACTOR` ("the target
-/// replication factor cannot be reached because only 0 broker(s) are
-/// registered"). Substituting the local node instead would create a topic
+/// Kafka answers that with `INVALID_REPLICATION_FACTOR`: its
+/// `StripedReplicaPlacer` finds no unfenced broker before it counts the
+/// registered ones. Substituting the local node instead would create a topic
 /// whose only replica lives on a node that serves no partition, leaving
 /// metadata nothing can ever serve.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -632,7 +638,11 @@ async fn controller_only_node_places_no_replica_on_itself() {
                     name: "controller-only-placement".into(),
                     topic_id: WireUuid([0; 16]),
                     error_code: INVALID_REPLICATION_FACTOR,
-                    error_message: None,
+                    error_message: Some(
+                        "Unable to replicate the partition 1 time(s): All brokers are currently \
+                         fenced, or have all their log directories cordoned."
+                            .into(),
+                    ),
                     num_partitions: -1,
                     replication_factor: -1,
                     configs: None,

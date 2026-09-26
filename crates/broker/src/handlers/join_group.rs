@@ -21,7 +21,10 @@ use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes,
-    coordinator::unified::actor::{GroupActorMessage, GroupKindTag},
+    coordinator::unified::{
+        actor::{GroupActorMessage, GroupKindTag},
+        config::NextGenConfig,
+    },
     error::BrokerError,
     time_util::now_ms,
 };
@@ -68,11 +71,14 @@ pub(crate) async fn handle(
         }
     }
 
-    if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
+    if let Some(error_code) = request_error(&req, &broker.group_coordinator.config)
+        .or_else(|| crate::handlers::group_coordinator_error(broker, &req.group_id))
+    {
         return encode(
             version,
             &JoinGroupResponse {
                 error_code,
+                member_id: req.member_id,
                 ..Default::default()
             },
         );
@@ -110,6 +116,20 @@ pub(crate) async fn handle(
         }
         Ok(_) => {} // NotStreams | Converted → serve the classic JoinGroup below
         Err(e) => return Err(e),
+    }
+
+    // Kafka's `classicGroupJoinToClassicGroup`: a member id names a member
+    // of an existing group, so a group that does not exist is not created
+    // for it.
+    if !req.member_id.is_empty() && broker.group_coordinator.find(&req.group_id).is_none() {
+        return encode(
+            version,
+            &JoinGroupResponse {
+                error_code: codes::UNKNOWN_MEMBER_ID,
+                member_id: req.member_id,
+                ..Default::default()
+            },
+        );
     }
 
     broker.group_coordinator.mark_classic(&req.group_id);
@@ -154,6 +174,7 @@ pub(crate) async fn handle(
         protocol_type: result.protocol_type,
         protocol_name: result.protocol_name,
         leader: result.leader,
+        skip_assignment: result.skip_assignment,
         member_id: result.member_id,
         members: result
             .members
@@ -171,6 +192,23 @@ pub(crate) async fn handle(
     encode(version, &resp)
 }
 
+/// The request checks of Kafka's `GroupCoordinatorService.joinGroup`, which
+/// answer before any group is looked up: an empty group id, then a session
+/// timeout outside `group.min.session.timeout.ms` and
+/// `group.max.session.timeout.ms`.
+fn request_error(req: &JoinGroupRequest, config: &NextGenConfig) -> Option<i16> {
+    let session_timeout = u64::try_from(req.session_timeout_ms).ok();
+    let min = u64::try_from(config.classic_min_session_timeout.as_millis()).unwrap_or(u64::MAX);
+    let max = u64::try_from(config.classic_max_session_timeout.as_millis()).unwrap_or(u64::MAX);
+    if req.group_id.is_empty() {
+        Some(codes::INVALID_GROUP_ID)
+    } else if session_timeout.is_none_or(|timeout| timeout < min || timeout > max) {
+        Some(codes::INVALID_SESSION_TIMEOUT)
+    } else {
+        None
+    }
+}
+
 fn encode(version: i16, resp: &JoinGroupResponse) -> Result<Bytes, BrokerError> {
     crate::handlers::encode_response(resp, version)
 }
@@ -178,6 +216,32 @@ fn encode(version: i16, resp: &JoinGroupResponse) -> Result<Bytes, BrokerError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #791: Kafka's `GroupCoordinatorService.joinGroup` request checks with
+    /// the default `group.min.session.timeout.ms` and
+    /// `group.max.session.timeout.ms`.
+    #[test]
+    fn request_checks_match_kafka_defaults() {
+        let config = NextGenConfig::default();
+        for (group_id, session_timeout_ms, want) in [
+            ("", 10_000, Some(codes::INVALID_GROUP_ID)),
+            ("g", -1, Some(codes::INVALID_SESSION_TIMEOUT)),
+            ("g", 5_999, Some(codes::INVALID_SESSION_TIMEOUT)),
+            ("g", 6_000, None),
+            ("g", 1_800_000, None),
+            ("g", 1_800_001, Some(codes::INVALID_SESSION_TIMEOUT)),
+        ] {
+            let req = JoinGroupRequest {
+                group_id: group_id.into(),
+                session_timeout_ms,
+                ..Default::default()
+            };
+            assert2::check!(
+                request_error(&req, &config) == want,
+                "{group_id:?} {session_timeout_ms}"
+            );
+        }
+    }
 
     #[test]
     fn encodes_join_group_response() {

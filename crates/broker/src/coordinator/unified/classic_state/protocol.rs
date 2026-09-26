@@ -1,48 +1,81 @@
-//! The classic-protocol embedded-protocol vote.
+//! The classic-protocol embedded-protocol vote and the protocol support check.
 //!
 //! `select_protocol` decides which assignor name a rebalance round settles on,
 //! from the `protocols` list every member offered in its `JoinGroup`.
+//! [`ClassicGroup::supports_protocols`] is the gate a joining member passes
+//! before the group admits it, so the vote always has a candidate.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use super::member::Member;
+use super::{
+    group::{ClassicGroup, GroupState},
+    member::Member,
+};
 
-/// Picks the protocol name with the most first-place votes, among the names
-/// that every member proposed. It breaks a tie lexicographically. It returns
-/// `None` when the intersection is empty, and when there are no members.
+/// The protocol names every member proposed, Kafka's
+/// `ClassicGroup.candidateProtocols`.
+fn candidate_protocols(members: &HashMap<String, Member>) -> HashSet<&str> {
+    let mut support: HashMap<&str, usize> = HashMap::new();
+    for member in members.values() {
+        let names: HashSet<&str> = member.protocols.iter().map(|(n, _)| n.as_str()).collect();
+        for name in names {
+            *support.entry(name).or_insert(0) += 1;
+        }
+    }
+    support
+        .into_iter()
+        .filter(|&(_, count)| count == members.len())
+        .map(|(name, _)| name)
+        .collect()
+}
+
+/// Kafka's `ClassicGroup.selectProtocol`. Each member votes for its most
+/// preferred protocol among the names every member proposed
+/// (`ClassicGroupMember.vote`), and the name with the most votes wins. Kafka
+/// breaks a tie by hash-map order; this picks the lexicographically smallest
+/// name, so the choice is deterministic. It returns `None` when the
+/// intersection is empty, and when there are no members.
 #[must_use]
 pub fn select_protocol(members: &HashMap<String, Member>) -> Option<String> {
-    if members.is_empty() {
-        return None;
-    }
-    let mut iter = members.values();
-    let first = iter.next()?;
-    let mut intersection: std::collections::HashSet<String> =
-        first.protocols.iter().map(|(n, _)| n.clone()).collect();
-    for m in iter {
-        let names: std::collections::HashSet<String> =
-            m.protocols.iter().map(|(n, _)| n.clone()).collect();
-        intersection = intersection.intersection(&names).cloned().collect();
-    }
-    if intersection.is_empty() {
-        return None;
-    }
+    let candidates = candidate_protocols(members);
     let mut votes: HashMap<&str, usize> = HashMap::new();
-    for m in members.values() {
-        if let Some((name, _)) = m.protocols.first()
-            && intersection.contains(name)
+    for member in members.values() {
+        if let Some((name, _)) = member
+            .protocols
+            .iter()
+            .find(|(name, _)| candidates.contains(name.as_str()))
         {
             *votes.entry(name.as_str()).or_insert(0) += 1;
         }
     }
-    intersection
-        .iter()
-        .max_by(|a, b| {
-            let va = votes.get(a.as_str()).copied().unwrap_or(0);
-            let vb = votes.get(b.as_str()).copied().unwrap_or(0);
-            va.cmp(&vb).then_with(|| b.cmp(a))
-        })
-        .cloned()
+    votes
+        .into_iter()
+        .max_by(|(a, va), (b, vb)| va.cmp(vb).then_with(|| b.cmp(a)))
+        .map(|(name, _)| name.to_string())
+}
+
+impl ClassicGroup {
+    /// Kafka's `ClassicGroup.supportsProtocols`. An `Empty` group accepts any
+    /// non-empty protocol type with at least one protocol. A group with
+    /// members needs the same protocol type and one protocol name that every
+    /// current member supports.
+    #[must_use]
+    pub fn supports_protocols<'a>(
+        &self,
+        protocol_type: &str,
+        mut protocol_names: impl Iterator<Item = &'a str>,
+    ) -> bool {
+        if self.state == GroupState::Empty {
+            return !protocol_type.is_empty() && protocol_names.next().is_some();
+        }
+        if self.protocol_type.as_deref() != Some(protocol_type) {
+            return false;
+        }
+        // With no members every name has the full support count of zero,
+        // exactly as Kafka's `supportedProtocols` count compares.
+        let candidates = candidate_protocols(&self.members);
+        protocol_names.any(|name| self.members.is_empty() || candidates.contains(name))
+    }
 }
 
 #[cfg(test)]
@@ -112,5 +145,92 @@ mod tests {
     fn select_protocol_empty_members_returns_none() {
         let members = HashMap::new();
         assert!(select_protocol(&members) == None);
+    }
+
+    /// #788: Kafka's `ClassicGroupMember.vote`. Each member votes for its
+    /// most preferred protocol among the ones every member supports, also
+    /// when its first choice is not one of them.
+    #[test]
+    fn each_member_votes_for_its_most_preferred_candidate() {
+        type Prefs = &'static [&'static str];
+        let rows: [(&str, &[Prefs], Option<&str>); 4] = [
+            ("one member", &[&["range", "sticky"]], Some("range")),
+            (
+                "first choices outside the intersection still vote",
+                &[
+                    &["roundrobin", "sticky", "range"],
+                    &["cooperative", "sticky", "range"],
+                    &["range", "sticky"],
+                ],
+                Some("sticky"),
+            ),
+            (
+                "majority of first choices",
+                &[
+                    &["range", "sticky"],
+                    &["range", "sticky"],
+                    &["sticky", "range"],
+                ],
+                Some("range"),
+            ),
+            ("no shared protocol", &[&["range"], &["sticky"]], None),
+        ];
+        for (name, prefs, want) in rows {
+            let members: HashMap<String, Member> = prefs
+                .iter()
+                .enumerate()
+                .map(|(i, names)| {
+                    let id = format!("m{i}");
+                    let protocols = names.iter().map(|n| (*n, &b""[..])).collect();
+                    (id.clone(), member_with_protocols(&id, protocols))
+                })
+                .collect();
+            assert!(select_protocol(&members).as_deref() == want, "{name}");
+        }
+    }
+
+    /// #788: Kafka's `ClassicGroup.supportsProtocols`.
+    #[test]
+    fn supports_protocols_matches_kafka() {
+        let mut stable = ClassicGroup::new("g");
+        stable.add_member(member_with_protocols(
+            "m1",
+            vec![("range", b""), ("sticky", b"")],
+        ));
+        stable.add_member(member_with_protocols("m2", vec![("sticky", b"")]));
+        stable.protocol_type = Some("consumer".into());
+        stable.state = GroupState::Stable;
+        let empty = ClassicGroup::new("g");
+        for (name, group, protocol_type, names, want) in [
+            ("empty, empty type", &empty, "", &["range"][..], false),
+            ("empty, no protocols", &empty, "consumer", &[][..], false),
+            ("empty, anything else", &empty, "connect", &["x"][..], true),
+            (
+                "stable, other type",
+                &stable,
+                "connect",
+                &["sticky"][..],
+                false,
+            ),
+            (
+                "stable, protocol one member lacks",
+                &stable,
+                "consumer",
+                &["range"][..],
+                false,
+            ),
+            (
+                "stable, shared protocol",
+                &stable,
+                "consumer",
+                &["x", "sticky"][..],
+                true,
+            ),
+        ] {
+            assert!(
+                group.supports_protocols(protocol_type, names.iter().copied()) == want,
+                "{name}"
+            );
+        }
     }
 }

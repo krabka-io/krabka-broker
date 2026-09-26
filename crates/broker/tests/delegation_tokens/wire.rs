@@ -1,5 +1,5 @@
 //! Raw-socket plumbing for the KIP-48 suite: the length-prefixed
-//! request/response framing and the SASL handshake drivers that every
+//! request/response framing and the two SASL handshake drivers that every
 //! delegation-token step runs over.
 //!
 //! The framing has the same shape as `auth_handlers/harness.rs`, and the
@@ -26,8 +26,6 @@ use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::TcpStream,
 };
-
-use crate::scram_client::ScramClient;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Wire framing (length-prefixed request/response). Same shape as
@@ -151,30 +149,15 @@ pub(crate) async fn sasl_plain_authenticate(
     Ok(stream)
 }
 
-/// SCRAM driver for a delegation-token login under `mechanism`. The
-/// client-first message carries Kafka's `tokenauth=true` extension, which is
-/// what makes the broker look `token_id` up in the delegation-token store
-/// rather than in the SCRAM credential store. It returns the open connection
-/// on success, which the post-login steps need.
-pub(crate) async fn sasl_scram_token_authenticate(
+/// SCRAM-SHA-256 delegation-token driver. It has the same wire shape as
+/// `auth_handlers/scram.rs::drive_sasl_scram_session`, but it returns the open
+/// connection on success, which step (c) needs, and its client-first message
+/// carries the `tokenauth=true` extension that Kafka's `ScramLoginModule`
+/// sends for a token, so `username` is a token id and `password` its HMAC.
+pub(crate) async fn sasl_scram_sha256_authenticate(
     addr: SocketAddr,
-    mechanism: SaslMechanism,
-    token_id: &str,
-    password: &str,
-) -> Result<TcpStream, io::Error> {
-    sasl_scram_authenticate(addr, mechanism, token_id, password, true).await
-}
-
-/// SCRAM driver. It has the same wire shape as
-/// `auth_handlers/scram.rs::drive_sasl_scram_session`, sends the
-/// `tokenauth=true` extension when `token_auth` is set, and returns the open
-/// connection on success.
-pub(crate) async fn sasl_scram_authenticate(
-    addr: SocketAddr,
-    mechanism: SaslMechanism,
     username: &str,
     password: &str,
-    token_auth: bool,
 ) -> Result<TcpStream, io::Error> {
     let mut stream = TcpStream::connect(addr).await?;
 
@@ -188,10 +171,9 @@ pub(crate) async fn sasl_scram_authenticate(
     ApiVersionsResponse::decode(&mut cur, 0)
         .map_err(|e| io::Error::other(format!("ApiVersions decode: {e}")))?;
 
-    let wire_name = mechanism.wire_name();
     let mut sh_body = BytesMut::new();
     SaslHandshakeRequest {
-        mechanism: wire_name.to_string(),
+        mechanism: "SCRAM-SHA-256".to_string(),
         ..Default::default()
     }
     .encode(&mut sh_body, 1)
@@ -202,13 +184,14 @@ pub(crate) async fn sasl_scram_authenticate(
         .map_err(|e| io::Error::other(format!("SaslHandshake decode: {e}")))?;
     if sh_resp.error_code != 0 {
         return Err(io::Error::other(format!(
-            "SaslHandshake({wire_name}) failed: error_code={}",
+            "SaslHandshake(SCRAM-SHA-256) failed: error_code={}",
             sh_resp.error_code
         )));
     }
 
-    let (client, client_first) =
-        ScramClient::first(mechanism, username, password.as_bytes(), token_auth);
+    let client = TokenScramClient::new(username, password);
+    let client_first = client.client_first();
+
     let mut body = BytesMut::new();
     SaslAuthenticateRequest {
         auth_bytes: bytes::Bytes::from(client_first),
@@ -227,9 +210,7 @@ pub(crate) async fn sasl_scram_authenticate(
         )));
     }
 
-    let (client_final, client) = client
-        .last(&r1_resp.auth_bytes)
-        .map_err(|e| io::Error::other(format!("scram client-final: {e}")))?;
+    let client_final = client.client_final(&r1_resp.auth_bytes)?;
     let mut body = BytesMut::new();
     SaslAuthenticateRequest {
         auth_bytes: bytes::Bytes::from(client_final),
@@ -247,9 +228,73 @@ pub(crate) async fn sasl_scram_authenticate(
             r2_resp.error_code, r2_resp.error_message
         )));
     }
-    client
-        .verify(&r2_resp.auth_bytes)
-        .map_err(|e| io::Error::other(format!("server-final verify: {e}")))?;
 
     Ok(stream)
+}
+
+/// A SCRAM-SHA-256 client that writes the messages Kafka's `ScramSaslClient`
+/// writes for a delegation token: `krabka_security::ScramClientExchange` has no
+/// way to add the `tokenauth=true` extension, which is part of the signed
+/// client-first message.
+struct TokenScramClient {
+    password: Vec<u8>,
+    client_first_bare: String,
+}
+
+impl TokenScramClient {
+    fn new(token_id: &str, token_hmac: &str) -> Self {
+        Self {
+            password: token_hmac.as_bytes().to_vec(),
+            client_first_bare: format!("n={token_id},r=tokenclientnonce,tokenauth=true"),
+        }
+    }
+
+    fn client_first(&self) -> Vec<u8> {
+        format!("n,,{}", self.client_first_bare).into_bytes()
+    }
+
+    fn client_final(&self, server_first: &[u8]) -> Result<Vec<u8>, io::Error> {
+        use base64::{Engine, engine::general_purpose::STANDARD as B64};
+        use pbkdf2::{
+            hmac::{Hmac, KeyInit, Mac},
+            sha2::{Digest, Sha256},
+        };
+
+        let hmac = |key: &[u8], data: &[u8]| {
+            let mut mac = <Hmac<Sha256>>::new_from_slice(key).expect("HMAC takes any key length");
+            mac.update(data);
+            mac.finalize().into_bytes().to_vec()
+        };
+        let server_first = std::str::from_utf8(server_first)
+            .map_err(|e| io::Error::other(format!("server-first is not UTF-8: {e}")))?;
+        let attribute = |name: &str| {
+            server_first
+                .split(',')
+                .find_map(|a| a.strip_prefix(name))
+                .ok_or_else(|| io::Error::other(format!("server-first lacks {name}")))
+        };
+        let nonce = attribute("r=")?;
+        let salt = B64
+            .decode(attribute("s=")?)
+            .map_err(|e| io::Error::other(format!("server-first salt: {e}")))?;
+        let iterations: u32 = attribute("i=")?
+            .parse()
+            .map_err(|e| io::Error::other(format!("server-first iterations: {e}")))?;
+        let salted = krabka_security::scram::pbkdf2_salted(
+            &self.password,
+            SaslMechanism::ScramSha256,
+            iterations,
+            &salt,
+        );
+        let without_proof = format!("c={},r={nonce}", B64.encode(b"n,,"));
+        let auth_message = format!("{},{server_first},{without_proof}", self.client_first_bare);
+        let client_key = hmac(&salted, b"Client Key");
+        let signature = hmac(&Sha256::digest(&client_key), auth_message.as_bytes());
+        let proof: Vec<u8> = client_key
+            .iter()
+            .zip(&signature)
+            .map(|(k, s)| k ^ s)
+            .collect();
+        Ok(format!("{without_proof},p={}", B64.encode(proof)).into_bytes())
+    }
 }

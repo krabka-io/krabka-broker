@@ -117,7 +117,7 @@ mod tests {
             filter_result(codes::NONE, None, vec![matched.clone()]),
             filter_result(
                 codes::INVALID_REQUEST,
-                Some("malformed filter axis".into()),
+                Some("Unknown entryFilter.".into()),
                 Vec::new(),
             ),
         ];
@@ -132,7 +132,7 @@ mod tests {
             },
             DeleteAclsFilterResult {
                 error_code: codes::INVALID_REQUEST,
-                error_message: Some("malformed filter axis".into()),
+                error_message: Some("Unknown entryFilter.".into()),
                 matching_acls: Vec::new(),
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             },
@@ -145,7 +145,7 @@ mod tests {
         let bytes = encode_response(
             &delete_acls_response(vec![filter_result(
                 codes::INVALID_REQUEST,
-                Some("malformed filter axis".into()),
+                Some("Unknown entryFilter.".into()),
                 Vec::new(),
             )]),
             VERSION,
@@ -157,7 +157,7 @@ mod tests {
             throttle_time_ms: 0,
             filter_results: vec![DeleteAclsFilterResult {
                 error_code: codes::INVALID_REQUEST,
-                error_message: Some("malformed filter axis".into()),
+                error_message: Some("Unknown entryFilter.".into()),
                 matching_acls: Vec::new(),
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             }],

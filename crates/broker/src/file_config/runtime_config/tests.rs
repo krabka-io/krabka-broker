@@ -211,3 +211,18 @@ fn runtime_file_config_rejects_relational_conflicts() {
         assert!(error.to_string().contains(message));
     }
 }
+
+/// Kafka's `group.initial.rebalance.delay.ms` is `atLeast(0)`, so the file
+/// accepts zero for it, where the other coordinator timings stay positive.
+#[test]
+fn runtime_file_config_accepts_a_zero_classic_group_initial_rebalance_delay() {
+    let file: FileConfig =
+        toml::from_str("[runtime]\nclassic_group_initial_rebalance_delay = \"0ms\"\n")
+            .expect("parse runtime config");
+    let mut cfg = crate::config::BrokerConfig::default();
+
+    file.apply_to(&mut cfg).expect("apply runtime config");
+
+    assert!(cfg.classic_group_initial_rebalance_delay == millis(0));
+    assert!(cfg.validate().is_ok());
+}

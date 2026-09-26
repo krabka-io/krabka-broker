@@ -18,7 +18,7 @@ use krabka_protocol::{
 };
 use krabka_units::convert::ByteSizeExt as _;
 
-use super::{handle, validate::USER_PRINCIPAL_PREFIX};
+use super::handle;
 use crate::{
     codes,
     handlers::create_acls::test_support::{
@@ -66,19 +66,13 @@ async fn handle_honors_configured_acl_input_limits() {
         ),
         (
             "r".to_string(),
-            format!(
-                "User:{}",
-                "a".repeat(PRINCIPAL_LIMIT - USER_PRINCIPAL_PREFIX.len())
-            ),
+            format!("User:{}", "a".repeat(PRINCIPAL_LIMIT - "User:".len())),
             codes::NONE,
             None,
         ),
         (
             "r".to_string(),
-            format!(
-                "User:{}",
-                "a".repeat(PRINCIPAL_LIMIT + 1 - USER_PRINCIPAL_PREFIX.len())
-            ),
+            format!("User:{}", "a".repeat(PRINCIPAL_LIMIT + 1 - "User:".len())),
             codes::INVALID_REQUEST,
             Some("principal too long"),
         ),
@@ -161,7 +155,7 @@ async fn handle_submits_valid_creations_and_reports_invalid_creations_in_order()
             },
             AclCreationResult {
                 error_code: codes::INVALID_REQUEST,
-                error_message: Some("empty resource_name".into()),
+                error_message: Some("Invalid empty resource name".into()),
                 unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
             },
         ],
@@ -303,6 +297,109 @@ async fn handle_rejects_cidr_host_below_the_cidr_metadata_version() {
     };
     assert!(resp == expected);
     assert!(all_acls(&broker_handle).is_empty());
+    broker_handle.shutdown().await;
+}
+
+/// #772: an `ANY` or `MATCH` element makes Kafka's binding construction throw
+/// for the whole request, so every creation -- the valid one too -- answers
+/// `UNKNOWN_SERVER_ERROR` with no message, and nothing is stored.
+#[tokio::test]
+async fn handle_fails_every_creation_when_one_carries_a_filter_only_value() {
+    let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let p = principal("admin");
+    let peer = peer();
+    let ctx = test_context(&p, &peer);
+    let mut any_operation = creation("topic-b", "User:bob", OPERATION_READ);
+    any_operation.operation = 1;
+    let req = request(vec![
+        creation("topic-a", "User:alice", OPERATION_READ),
+        any_operation,
+    ]);
+
+    let resp = handle(&broker, req, &ctx, VERSION).await.expect("handle");
+    let resp = decode_response(&resp);
+
+    let failed = AclCreationResult {
+        error_code: codes::UNKNOWN_SERVER_ERROR,
+        error_message: None,
+        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+    };
+    let expected = CreateAclsResponse {
+        throttle_time_ms: 0,
+        results: vec![failed.clone(), failed],
+        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+    };
+    assert!(resp == expected);
+    assert!(all_acls(&broker_handle).is_empty());
+    broker_handle.shutdown().await;
+}
+
+/// #772: a wire `UNKNOWN` element fails Kafka's request parse, which closes
+/// the connection with no response. The handler's error return is what
+/// closes it here, and it comes before authorization, as a parse does.
+#[tokio::test]
+async fn handle_errors_so_the_connection_closes_on_an_unknown_element() {
+    let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let p = principal("alice");
+    let peer = peer();
+    let ctx = test_context(&p, &peer);
+    let mut unknown_permission = creation("topic-a", "User:bob", OPERATION_READ);
+    unknown_permission.permission_type = 0;
+    let req = request(vec![unknown_permission]);
+
+    let result = handle(&broker, req, &ctx, VERSION).await;
+
+    assert!(let Err(crate::error::BrokerError::Protocol(_)) = result);
+    assert!(all_acls(&broker_handle).is_empty());
+    broker_handle.shutdown().await;
+}
+
+/// #772: a CLUSTER binding under any name but `kafka-cluster` is refused
+/// with Kafka's message, and a non-`User` principal type is stored.
+#[tokio::test]
+async fn handle_pins_the_cluster_name_and_accepts_other_principal_types() {
+    let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let p = principal("admin");
+    let peer = peer();
+    let ctx = test_context(&p, &peer);
+    let mut wrong_cluster = creation("my-cluster", "User:alice", OPERATION_READ);
+    wrong_cluster.resource_type = 4;
+    let req = request(vec![
+        wrong_cluster,
+        creation("topic-a", "Group:ops", OPERATION_READ),
+    ]);
+
+    let resp = handle(&broker, req, &ctx, VERSION).await.expect("handle");
+    let resp = decode_response(&resp);
+
+    let expected = CreateAclsResponse {
+        throttle_time_ms: 0,
+        results: vec![
+            AclCreationResult {
+                error_code: codes::INVALID_REQUEST,
+                error_message: Some(
+                    "The only valid name for the CLUSTER resource is kafka-cluster".into(),
+                ),
+                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+            },
+            AclCreationResult::default(),
+        ],
+        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+    };
+    assert!(resp == expected);
+    let expected_acls = vec![AclEntry {
+        resource_type: ResourceType::Topic,
+        resource_name: "topic-a".into(),
+        pattern_type: PatternType::Literal,
+        principal: "Group:ops".into(),
+        host: "*".into(),
+        operation: AclOperation::Read,
+        permission_type: PermissionType::Allow,
+    }];
+    assert!(all_acls(&broker_handle) == expected_acls);
     broker_handle.shutdown().await;
 }
 

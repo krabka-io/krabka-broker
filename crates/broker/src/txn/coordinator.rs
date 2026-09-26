@@ -190,6 +190,20 @@ impl TxnCoordinator {
             .unwrap_or(crate::codes::UNKNOWN_SERVER_ERROR)
     }
 
+    /// The error code for a request about `tid` whose entry lookup missed.
+    ///
+    /// A leadership change can unload the coordinator partition, and so evict
+    /// its entries, between a caller's `coordinator_error` check and its
+    /// lookup. This reads the coordinator status again after the miss: when
+    /// it names an error, the miss is the unload, and the caller answers the
+    /// retriable `COORDINATOR_LOAD_IN_PROGRESS` or `NOT_COORDINATOR`.
+    /// Otherwise the id is unknown, which is `INVALID_PRODUCER_ID_MAPPING`.
+    pub(crate) async fn missing_entry_error(&self, tid: &str) -> i16 {
+        self.coordinator_error(tid)
+            .await
+            .unwrap_or(crate::codes::INVALID_PRODUCER_ID_MAPPING)
+    }
+
     /// The load status of `partition`, or `None` when this broker does not
     /// lead it.
     pub(crate) async fn load_status(
@@ -262,6 +276,28 @@ mod tests {
         check!(coordinator.partition_for("my-tid") == PartitionIndex(20));
         check!(coordinator.partition_for("producer-1") == PartitionIndex(30));
         check!(coordinator.partition_for("tx-orders-prod") == PartitionIndex(16));
+    }
+
+    /// Regression: a leadership change can unload the coordinator partition
+    /// between a caller's `coordinator_error` check and its entry lookup. A
+    /// miss answers the fresh coordinator error, and only a coordinator that
+    /// still owns the loaded partition answers `INVALID_PRODUCER_ID_MAPPING`.
+    #[tokio::test]
+    async fn a_missing_entry_answers_the_fresh_coordinator_error() {
+        let coordinator = test_coordinator();
+        let tid = "tid-missing";
+        let unloaded = coordinator.missing_entry_error(tid).await;
+        coordinator
+            .lead_state_partition_for_test(coordinator.partition_for(tid))
+            .await;
+        let loaded = coordinator.missing_entry_error(tid).await;
+        check!(
+            (unloaded, loaded)
+                == (
+                    crate::codes::NOT_COORDINATOR,
+                    crate::codes::INVALID_PRODUCER_ID_MAPPING
+                )
+        );
     }
 
     #[test]

@@ -4,7 +4,7 @@
 //!
 //! Krabka implements the full KIP-714 receiver. The broker:
 //!   - Assigns a fresh `client_instance_id` when the caller sends nil, and
-//!     echoes nil when the caller sends a non-nil id.
+//!     answers with the caller's id otherwise.
 //!   - Returns `accepted_compression_types = [4,3,1,2]`, that is ZSTD, LZ4,
 //!     GZIP, and SNAPPY, plus `telemetry_max_bytes = 1_048_576` and
 //!     `delta_temporality = true`.
@@ -12,8 +12,9 @@
 //!     sets `push_interval_ms = 300_000`.
 //!   - With a matching subscription, sets `requested_metrics` to the matched
 //!     prefix set and `push_interval_ms` to the smallest matched interval.
-//!   - Answers a `PushTelemetry` from an unknown or unregistered instance with
-//!     `error_code 42` (`INVALID_REQUEST`).
+//!   - Answers a `PushTelemetry` from a reserved instance id with
+//!     `error_code 42` (`INVALID_REQUEST`), and builds the instance of any
+//!     other id it does not hold from the current subscriptions.
 //!   - Answers a `PushTelemetry` with a stale `subscription_id` with
 //!     `error_code 117` (`UNKNOWN_SUBSCRIPTION_ID`).
 //!   - Answers a `PushTelemetry` with an unsupported `compression_type` with
@@ -288,11 +289,12 @@ async fn get_telemetry_subscriptions_with_nil_id_returns_assigned_id_and_no_subs
     p.broker.shutdown().await;
 }
 
-/// Non-nil request id must round-trip as nil per the KIP-714 schema rule:
-/// "Assigned client instance id if `ClientInstanceId` was 0 in the request,
-/// else 0."
+/// Kafka's `ClientMetricsManager` answers with the id the client sent, and the
+/// Java client rejects a zero id in a successful response
+/// (`ClientTelemetryUtils.validateClientInstanceId`), whatever the schema
+/// text says.
 #[tokio::test]
-async fn get_telemetry_subscriptions_with_set_id_echoes_nil() {
+async fn get_telemetry_subscriptions_with_set_id_echoes_it() {
     let p = start_with_client_metrics().await;
 
     let prior_id = WireUuid([0x11; 16]);
@@ -306,39 +308,47 @@ async fn get_telemetry_subscriptions_with_set_id_echoes_nil() {
         .expect("GetTelemetrySubscriptions");
 
     assert!(resp.error_code == 0);
-    assert!(
-        resp.client_instance_id == WireUuid::ZERO,
-        "non-nil request id must round-trip as nil per schema rules"
-    );
+    assert!(resp.client_instance_id == prior_id);
 
     p.broker.shutdown().await;
 }
 
-/// The broker must reject a telemetry push from an unregistered instance with
-/// `INVALID_REQUEST` (42). The client should call `GetTelemetrySubscriptions`
-/// first.
+/// Kafka answers `INVALID_REQUEST` (42) only for the ids in `Uuid.RESERVED`.
+/// For any other id it builds the instance from the current subscriptions, so
+/// a push that carries some other subscription id gets
+/// `UNKNOWN_SUBSCRIPTION_ID` (117) and the client fetches its subscription.
 #[tokio::test]
 async fn push_telemetry_unknown_instance_rejected() {
     let p = start_with_client_metrics().await;
 
-    let resp: PushTelemetryResponse = p
-        .client
-        .send(PushTelemetryRequest {
-            client_instance_id: WireUuid([0x22; 16]),
-            subscription_id: 0,
-            terminating: false,
-            compression_type: 0,
-            metrics: bytes::Bytes::from_static(b"\x00\x01\x02"),
-            ..Default::default()
-        })
-        .await
-        .expect("PushTelemetry");
+    let mut one = [0; 16];
+    one[15] = 1;
+    for (instance, expected) in [
+        (WireUuid::ZERO, 42),
+        (WireUuid(one), 42),
+        (WireUuid([0x22; 16]), 117),
+    ] {
+        let resp: PushTelemetryResponse = p
+            .client
+            .send(PushTelemetryRequest {
+                client_instance_id: instance,
+                subscription_id: 0,
+                terminating: false,
+                compression_type: 0,
+                metrics: bytes::Bytes::from_static(b"\x00\x01\x02"),
+                ..Default::default()
+            })
+            .await
+            .expect("PushTelemetry");
 
-    assert!(
-        resp.error_code == 42,
-        "unknown instance must be rejected with INVALID_REQUEST (42), got {}",
-        resp.error_code,
-    );
+        assert!(
+            resp == PushTelemetryResponse {
+                error_code: expected,
+                ..Default::default()
+            },
+            "instance {instance:?}"
+        );
+    }
 
     p.broker.shutdown().await;
 }
@@ -487,9 +497,7 @@ async fn push_telemetry_unsupported_compression_rejected() {
     let assigned_id = get_resp.client_instance_id;
     let subscription_id = get_resp.subscription_id;
 
-    // compression_type = 5: `from_attribute_bits` masks to low 3 bits, so
-    // 5 & 0b111 = 5 which maps to None → UNSUPPORTED_COMPRESSION_TYPE.
-    // (Values 5,6,7 are all "reserved/unknown" in Kafka's codec table.)
+    // Kafka's `CompressionType.forId` knows the ids 0 to 4 only.
     let push_resp: PushTelemetryResponse = client
         .send(PushTelemetryRequest {
             client_instance_id: assigned_id,

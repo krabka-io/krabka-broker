@@ -38,6 +38,18 @@ pub struct StaticConfigOrigins {
     pub txn_id_expiration_cleanup_interval: bool,
     /// Which of the KIP-464 topic-creation defaults were supplied.
     pub topic_creation: TopicCreationOrigins,
+    /// Which of the static topic-administration switches were supplied.
+    pub topic_admin: TopicAdminOrigins,
+}
+
+/// Which of the static switches that gate topic deletion and auto-creation
+/// this node's configuration named explicitly.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TopicAdminOrigins {
+    /// `delete.topic.enable` was supplied.
+    pub delete_topic_enable: bool,
+    /// `auto.create.topics.enable` was supplied.
+    pub auto_create_topics_enable: bool,
 }
 
 /// Which of the two KIP-464 topic-creation defaults this node's configuration

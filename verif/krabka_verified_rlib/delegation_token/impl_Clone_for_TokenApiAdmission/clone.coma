@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/delegation_token.rs" 26 27 26 32 *)
+(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 19 27 19 32 *)
 
 (* <delegation_token::TokenApiAdmission as std::clone::Clone> *)
 
@@ -10,7 +10,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_TokenApiAdmission [#"/workspace/crates/verified/src/delegation_token.rs" 26 27 26 32]
+let clone_TokenApiAdmission [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 19 27 19 32]
   (self: t_TokenApiAdmission) (return (x: t_TokenApiAdmission)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_TokenApiAdmission = Any.any_l () | & self: t_TokenApiAdmission = self ])

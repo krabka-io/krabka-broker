@@ -2,10 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_clone_UserClientQuotaFacts": {
-        "prover": "alt-ergo",
-        "time": 0.023
-      }
+      "vc_clone_UserClientQuotaFacts": { "prover": "alt-ergo", "time": 0.01 }
     }
   }
 }

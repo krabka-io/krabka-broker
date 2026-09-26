@@ -161,17 +161,6 @@ fn rejects_invalid_additional_runtime_scalars() {
         ("acl_max_resource_name must be positive", |c| {
             c.acl_max_resource_name = <ByteSize as ByteSizeExt>::ZERO;
         }),
-        ("telemetry_max_decompression_ratio must be positive", |c| {
-            c.telemetry_max_decompression_ratio = <Ratio as RatioExt>::ZERO;
-        }),
-        (
-            "telemetry_decompressed_output_floor must be positive",
-            |c| c.telemetry_decompressed_output_floor = <ByteSize as ByteSizeExt>::ZERO,
-        ),
-        (
-            "telemetry_decompressed_output_ceiling must be positive",
-            |c| c.telemetry_decompressed_output_ceiling = <ByteSize as ByteSizeExt>::ZERO,
-        ),
         ("producer_id_expiration must be positive", |c| {
             c.producer_id_expiration = <Time as TimeExt>::ZERO;
         }),
@@ -371,4 +360,27 @@ fn a_disabled_expiry_sweep_and_the_kafka_defaults_validate() {
         ..base()
     };
     assert!(config.validate().is_ok());
+}
+
+/// Kafka's `group.initial.rebalance.delay.ms` is `atLeast(0)`, and its sample
+/// `server.properties` sets zero for development.
+#[test]
+fn a_zero_classic_group_initial_rebalance_delay_validates() {
+    let config = BrokerConfig {
+        classic_group_initial_rebalance_delay: <Time as TimeExt>::ZERO,
+        ..base()
+    };
+    assert!(config.validate().is_ok());
+}
+
+#[test]
+fn a_negative_classic_group_initial_rebalance_delay_is_rejected() {
+    let config = BrokerConfig {
+        classic_group_initial_rebalance_delay: <Time as TimeExt>::from_millis(-1),
+        ..base()
+    };
+    assert_invalid_runtime(
+        &config,
+        "classic_group_initial_rebalance_delay must be finite and nonnegative",
+    );
 }

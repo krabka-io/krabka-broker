@@ -290,11 +290,6 @@ impl BrokerConfig {
                 "socket_request_max exceeds u32::MAX bytes".into(),
             ));
         }
-        if self.telemetry_decompressed_output_floor > self.telemetry_decompressed_output_ceiling {
-            return Err(BrokerError::InvalidRuntimeConfig(
-                "telemetry decompressed output floor exceeds ceiling".into(),
-            ));
-        }
         if self.inter_broker_server_name.is_empty() {
             return Err(BrokerError::InvalidRuntimeConfig(
                 "inter_broker_server_name must be nonempty".into(),
@@ -452,10 +447,6 @@ mod tests {
         let cases: &[RuntimeInvalidator] = &[
             ("socket_request_max exceeds u32::MAX bytes", |c| {
                 c.socket_request_max = ByteSize::from_bytes(u64::from(u32::MAX) + 1);
-            }),
-            ("telemetry decompressed output floor exceeds ceiling", |c| {
-                c.telemetry_decompressed_output_floor =
-                    c.telemetry_decompressed_output_ceiling + bytes(1);
             }),
             ("inter_broker_server_name must be nonempty", |c| {
                 c.inter_broker_server_name.clear();

@@ -1,419 +1,492 @@
-//! Tests for the SCRAM handler's KIP-48 delegation-token login.
+//! SCRAM handler tests: Kafka's client-first grammar, the `tokenauth`
+//! credential-store selection for both mechanisms, `=2C`/`=3D` name decoding
+//! and the GS2 authorization-id check.
 //!
-//! The login cases need a running raft controller to hold the metadata image,
-//! so they are slower than the rest of the auth unit tests and sit in their
-//! own file.
+//! The exchanges run against a [`FakeMetadataSource`] seeded with SCRAM users
+//! and delegation tokens, driven by [`KafkaScramClient`], which builds the
+//! client messages the way Kafka's `ScramSaslClient` does, extensions and
+//! authorization id included.
 
-mod client_first_parsing {
-    use assert2::check;
+use assert2::{assert, check};
+use base64::{Engine, engine::general_purpose::STANDARD as B64};
+use krabka_metadata::{DelegationTokenRecord, MetadataRecord, ScramCredentialRecord};
+use krabka_protocol::owned::{
+    sasl_authenticate_request::SaslAuthenticateRequest,
+    sasl_authenticate_response::SaslAuthenticateResponse,
+};
+use krabka_security::{
+    AuthMethod, KafkaPrincipal, Principal, SaslMechanism, scram::hash_scram_password_with_salt,
+};
+use pbkdf2::{
+    hmac::{Hmac, KeyInit, Mac},
+    sha2::{Digest, Sha256, Sha512},
+};
 
-    use super::super::{ClientFirst, parse_scram_client_first};
+use super::{ClientFirst, decode_sasl_name};
+use crate::{
+    network::auth::{
+        ConnectionAuth, SaslExchange, handle_authenticate_scram,
+        test_support::assert_failed_authenticate_response,
+    },
+    test_support::FakeMetadataSource,
+};
 
-    fn parsed(username: &str, token_auth_requested: bool) -> ClientFirst {
-        ClientFirst {
-            username: username.into(),
-            token_auth_requested,
+const USER_PASSWORD: &str = "user-password";
+const TOKEN_HMAC: [u8; 32] = [0x42; 32];
+const TOKEN_OWNER: &str = "owner";
+
+/// A SCRAM client that writes the messages Kafka's `ScramSaslClient` writes.
+struct KafkaScramClient {
+    mechanism: SaslMechanism,
+    password: Vec<u8>,
+    gs2_header: String,
+    client_first_bare: String,
+}
+
+impl KafkaScramClient {
+    /// Returns the client and its client-first message.
+    fn first(
+        mechanism: SaslMechanism,
+        authorization_id: Option<&str>,
+        sasl_name: &str,
+        extensions: &str,
+        password: &[u8],
+    ) -> (Self, Vec<u8>) {
+        let gs2_header = format!(
+            "n,{},",
+            authorization_id.map_or(String::new(), |a| format!("a={a}"))
+        );
+        let client_first_bare = format!("n={sasl_name},r=clientnonce{extensions}");
+        let message = format!("{gs2_header}{client_first_bare}").into_bytes();
+        let client = Self {
+            mechanism,
+            password: password.to_vec(),
+            gs2_header,
+            client_first_bare,
+        };
+        (client, message)
+    }
+
+    /// The client-final message for `server_first`.
+    fn last(&self, server_first: &[u8]) -> Vec<u8> {
+        let server_first = std::str::from_utf8(server_first).expect("server-first is UTF-8");
+        let attribute = |name: &str| {
+            server_first
+                .split(',')
+                .find_map(|a| a.strip_prefix(name))
+                .expect("server-first attribute")
+        };
+        let nonce = attribute("r=");
+        let salt = B64.decode(attribute("s=")).expect("salt is base64");
+        let iterations: u32 = attribute("i=").parse().expect("iterations");
+        let salted = krabka_security::scram::pbkdf2_salted(
+            &self.password,
+            self.mechanism,
+            iterations,
+            &salt,
+        );
+        let without_proof = format!("c={},r={nonce}", B64.encode(&self.gs2_header));
+        let auth_message = format!("{},{server_first},{without_proof}", self.client_first_bare);
+        let client_key = self.hmac(&salted, b"Client Key");
+        let stored_key = self.hash(&client_key);
+        let signature = self.hmac(&stored_key, auth_message.as_bytes());
+        let proof: Vec<u8> = client_key
+            .iter()
+            .zip(&signature)
+            .map(|(k, s)| k ^ s)
+            .collect();
+        format!("{without_proof},p={}", B64.encode(proof)).into_bytes()
+    }
+
+    fn hmac(&self, key: &[u8], data: &[u8]) -> Vec<u8> {
+        if self.mechanism == SaslMechanism::ScramSha256 {
+            let mut mac = <Hmac<Sha256>>::new_from_slice(key).expect("any key length");
+            mac.update(data);
+            mac.finalize().into_bytes().to_vec()
+        } else {
+            let mut mac = <Hmac<Sha512>>::new_from_slice(key).expect("any key length");
+            mac.update(data);
+            mac.finalize().into_bytes().to_vec()
         }
     }
 
-    #[test]
-    fn reads_username_and_the_tokenauth_extension_as_kafka_does() {
-        for (message, expected) in [
-            ("n,,n=alice,r=abc", Some(parsed("alice", false))),
-            ("n,,n=tok,r=abc,tokenauth=true", Some(parsed("tok", true))),
-            // `Boolean.parseBoolean` ignores case and reads anything else
-            // as false.
-            ("n,,n=tok,r=abc,tokenauth=TRUE", Some(parsed("tok", true))),
-            ("n,,n=tok,r=abc,tokenauth=false", Some(parsed("tok", false))),
-            ("n,,n=tok,r=abc,tokenauth=yes", Some(parsed("tok", false))),
-            ("n,,n=tok,r=abc,tokenauth=", Some(parsed("tok", false))),
-            // Unknown extensions are ignored; a later duplicate wins, as
-            // `Utils.parseMap` puts each pair into one map.
+    fn hash(&self, data: &[u8]) -> Vec<u8> {
+        if self.mechanism == SaslMechanism::ScramSha256 {
+            Sha256::digest(data).to_vec()
+        } else {
+            Sha512::digest(data).to_vec()
+        }
+    }
+}
+
+fn scram_user(user: &str, mechanism: SaslMechanism) -> MetadataRecord {
+    let credential =
+        hash_scram_password_with_salt(USER_PASSWORD.as_bytes(), mechanism, 4096, b"salt".to_vec());
+    MetadataRecord::V1ScramCredential(ScramCredentialRecord {
+        user: user.into(),
+        mechanism,
+        salt: credential.salt,
+        stored_key: credential.stored_key,
+        server_key: credential.server_key,
+        iterations: credential.iterations,
+    })
+}
+
+fn token(token_id: &str, expiry_timestamp_ms: i64) -> MetadataRecord {
+    MetadataRecord::V1DelegationToken(DelegationTokenRecord {
+        token_id: token_id.into(),
+        owner: KafkaPrincipal {
+            principal_type: "User".into(),
+            name: TOKEN_OWNER.into(),
+        },
+        hmac: TOKEN_HMAC.to_vec(),
+        issue_timestamp_ms: 0,
+        expiry_timestamp_ms,
+        max_timestamp_ms: expiry_timestamp_ms,
+        renewers: vec![],
+    })
+}
+
+fn token_password() -> Vec<u8> {
+    B64.encode(TOKEN_HMAC).into_bytes()
+}
+
+fn authenticate(
+    source: &FakeMetadataSource,
+    auth: &mut ConnectionAuth,
+    auth_bytes: Vec<u8>,
+) -> SaslAuthenticateResponse {
+    handle_authenticate_scram(
+        &SaslAuthenticateRequest {
+            auth_bytes: bytes::Bytes::from(auth_bytes),
+            ..Default::default()
+        },
+        auth,
+        source,
+        None,
+    )
+}
+
+/// What one full exchange came to.
+#[derive(Debug, PartialEq, Eq)]
+enum Outcome {
+    /// Round 2 authenticated `principal`.
+    Authenticated {
+        principal: Principal,
+        via_token: bool,
+    },
+    /// Round 1 failed with this client-facing message (`None` is Kafka's
+    /// generic text, filled in at dispatch).
+    FirstRoundFailed(Option<String>),
+    /// Round 2 refused the proof.
+    ProofRefused,
+}
+
+/// Drives both rounds, stopping at the first failure.
+fn exchange(
+    source: &FakeMetadataSource,
+    mechanism: SaslMechanism,
+    authorization_id: Option<&str>,
+    sasl_name: &str,
+    extensions: &str,
+    password: &[u8],
+) -> Outcome {
+    let mut auth = ConnectionAuth::Negotiating {
+        mechanism,
+        exchange: SaslExchange::ScramPending,
+        pending_token_expiry_ms: None,
+    };
+    let (client, first) =
+        KafkaScramClient::first(mechanism, authorization_id, sasl_name, extensions, password);
+    let round1 = authenticate(source, &mut auth, first);
+    if round1.error_code != 0 {
+        assert_failed_authenticate_response(&round1, round1.error_message.as_deref());
+        return Outcome::FirstRoundFailed(round1.error_message);
+    }
+    let round2 = authenticate(source, &mut auth, client.last(&round1.auth_bytes));
+    if round2.error_code != 0 {
+        assert_failed_authenticate_response(&round2, None);
+        return Outcome::ProofRefused;
+    }
+    match auth {
+        ConnectionAuth::Authenticated {
+            principal,
+            mechanism: authenticated_mechanism,
+            authenticated_via_token,
+            ..
+        } => {
+            assert!(authenticated_mechanism == mechanism);
+            Outcome::Authenticated {
+                principal,
+                via_token: authenticated_via_token,
+            }
+        }
+        other => panic!("round 2 succeeded without authenticating: {other:?}"),
+    }
+}
+
+fn principal(name: &str, mechanism: SaslMechanism) -> Principal {
+    Principal {
+        name: name.into(),
+        auth_method: AuthMethod::from_sasl(mechanism),
+        groups: vec![],
+    }
+}
+
+/// One exchange row: case name, GS2 authorization id, SASL name, extensions,
+/// password and the expected outcome.
+type ExchangeCase<'a> = (
+    &'a str,
+    Option<&'a str>,
+    &'a str,
+    &'a str,
+    &'a [u8],
+    Outcome,
+);
+
+/// Kafka's `ScramSaslServer` reads the token store if and only if the
+/// client-first message carries `tokenauth=true`, for both mechanisms.
+#[test]
+fn tokenauth_extension_selects_the_credential_store() {
+    const TOKEN_AUTH: &str = ",tokenauth=true";
+    let expiry = crate::time_util::now_ms() + 60_000;
+    for mechanism in [SaslMechanism::ScramSha256, SaslMechanism::ScramSha512] {
+        let source = FakeMetadataSource::builder()
+            .records(&[
+                scram_user("alice", mechanism),
+                // A token whose id is also a SCRAM user name.
+                scram_user("shared", mechanism),
+                token("shared", expiry),
+                token("tok", expiry),
+                token("expired", crate::time_util::now_ms() - 1),
+                // `a,b=c` on the wire is `a=2Cb=3Dc`.
+                scram_user("a,b=c", mechanism),
+            ])
+            .build();
+        let user = USER_PASSWORD.as_bytes();
+        let token_pw = token_password();
+        let owner = Outcome::Authenticated {
+            principal: principal(TOKEN_OWNER, mechanism),
+            via_token: true,
+        };
+        let generic_failure = Outcome::FirstRoundFailed(None);
+        // (case, authzid, sasl name, extensions, password, expected)
+        let cases: [ExchangeCase<'_>; 12] = [
             (
-                "n,,n=tok,r=abc,other=1,tokenauth=true",
-                Some(parsed("tok", true)),
+                "SCRAM user without extension",
+                None,
+                "alice",
+                "",
+                user,
+                Outcome::Authenticated {
+                    principal: principal("alice", mechanism),
+                    via_token: false,
+                },
             ),
             (
-                "n,,n=tok,r=abc,tokenauth=true,tokenauth=false",
-                Some(parsed("tok", false)),
+                "token with tokenauth",
+                None,
+                "tok",
+                TOKEN_AUTH,
+                &token_pw,
+                owner,
             ),
-            // Username and nonce come first, in order; an extension needs `=`.
-            ("n,,r=abc,n=tok", None),
-            ("n,,n=tok", None),
-            ("n,,n=tok,r=abc,tokenauth", None),
-            ("n=tok,r=abc", None),
-        ] {
+            (
+                "tokenauth parsed as Java parseBoolean",
+                None,
+                "tok",
+                ",tokenauth=TRUE",
+                &token_pw,
+                Outcome::Authenticated {
+                    principal: principal(TOKEN_OWNER, mechanism),
+                    via_token: true,
+                },
+            ),
+            (
+                "token id without tokenauth",
+                None,
+                "tok",
+                "",
+                &token_pw,
+                generic_failure,
+            ),
+            (
+                "tokenauth=false reads the user store",
+                None,
+                "tok",
+                ",tokenauth=false",
+                &token_pw,
+                Outcome::FirstRoundFailed(None),
+            ),
+            (
+                "SCRAM user with tokenauth",
+                None,
+                "alice",
+                TOKEN_AUTH,
+                user,
+                Outcome::FirstRoundFailed(None),
+            ),
+            (
+                "shared name with tokenauth uses the token",
+                None,
+                "shared",
+                TOKEN_AUTH,
+                &token_pw,
+                Outcome::Authenticated {
+                    principal: principal(TOKEN_OWNER, mechanism),
+                    via_token: true,
+                },
+            ),
+            (
+                "shared name with tokenauth refuses the user password",
+                None,
+                "shared",
+                TOKEN_AUTH,
+                user,
+                Outcome::ProofRefused,
+            ),
+            (
+                "shared name without tokenauth uses the user",
+                None,
+                "shared",
+                "",
+                user,
+                Outcome::Authenticated {
+                    principal: principal("shared", mechanism),
+                    via_token: false,
+                },
+            ),
+            (
+                "expired token",
+                None,
+                "expired",
+                TOKEN_AUTH,
+                &token_pw,
+                Outcome::FirstRoundFailed(None),
+            ),
+            (
+                "escaped SASL name",
+                None,
+                "a=2Cb=3Dc",
+                "",
+                user,
+                Outcome::Authenticated {
+                    principal: principal("a,b=c", mechanism),
+                    via_token: false,
+                },
+            ),
+            (
+                "authorization id other than the user",
+                Some("mallory"),
+                "alice",
+                "",
+                user,
+                Outcome::FirstRoundFailed(Some(
+                    "Authentication failed: Client requested an authorization id that is \
+                     different from username"
+                        .into(),
+                )),
+            ),
+        ];
+        for (case, authorization_id, sasl_name, extensions, password, expected) in cases {
             check!(
-                parse_scram_client_first(message.as_bytes()) == expected,
-                "{message}"
+                exchange(
+                    &source,
+                    mechanism,
+                    authorization_id,
+                    sasl_name,
+                    extensions,
+                    password
+                ) == expected,
+                "{mechanism:?}: {case}"
             );
         }
     }
 }
 
-mod token_login {
-    use std::{num::NonZeroU32, sync::Arc, time::Duration};
-
-    use assert2::{assert, check};
-    use base64::{Engine, engine::general_purpose::STANDARD as B64};
-    use krabka_metadata::{DelegationTokenRecord, MetadataRecord};
-    use krabka_protocol::owned::{
-        sasl_authenticate_request::SaslAuthenticateRequest,
-        sasl_authenticate_response::SaslAuthenticateResponse,
+/// A token session carries the token expiry from round 1 to round 2.
+#[test]
+fn token_round_one_threads_the_token_expiry() {
+    let expiry = crate::time_util::now_ms() + 60_000;
+    let source = FakeMetadataSource::builder()
+        .records(&[token("tok", expiry)])
+        .build();
+    let mut auth = ConnectionAuth::Negotiating {
+        mechanism: SaslMechanism::ScramSha512,
+        exchange: SaslExchange::ScramPending,
+        pending_token_expiry_ms: None,
     };
-    use krabka_security::{
-        AuthMethod, KafkaPrincipal, Principal, SaslMechanism, scram::hash_scram_password_with_salt,
+    let (_, first) = KafkaScramClient::first(
+        SaslMechanism::ScramSha512,
+        None,
+        "tok",
+        ",tokenauth=true",
+        &token_password(),
+    );
+    let round1 = authenticate(&source, &mut auth, first);
+    assert!(round1.error_code == 0);
+    let ConnectionAuth::Negotiating {
+        pending_token_expiry_ms,
+        ..
+    } = auth
+    else {
+        panic!("round 1 must keep negotiating, got {auth:?}");
     };
-    use ring::{digest, hmac, pbkdf2};
-    use tempfile::TempDir;
+    assert!(pending_token_expiry_ms == Some(expiry));
+}
 
-    use crate::{
-        codes::SASL_AUTHENTICATION_FAILED,
-        network::auth::{
-            ConnectionAuth, SaslExchange, handle_authenticate_scram,
-            test_support::assert_failed_authenticate_response,
-        },
+/// `ClientFirst::parse` follows Kafka's `ClientFirstMessage` pattern.
+#[test]
+fn client_first_parses_as_kafka_does() {
+    let parsed = |authorization_id, sasl_name, extensions| {
+        Some(ClientFirst {
+            authorization_id,
+            sasl_name,
+            extensions,
+        })
     };
-
-    const TOKEN_ID: &str = "tok-uuid";
-    const HMAC: [u8; 32] = [0xAB; 32];
-
-    async fn test_controller(log_dir: std::path::PathBuf) -> Arc<krabka_raft::ControllerHandle> {
-        let cfg = krabka_raft::ControllerConfig {
-            election_timeout: krabka_units::millis(200),
-            heartbeat_interval: Some(krabka_units::millis(50)),
-            client_id: "test".into(),
-            ..krabka_raft::ControllerConfig::for_tests(krabka_raft::NodeId(1), log_dir)
-        };
-        let handle = Arc::new(krabka_raft::Controller::start(cfg).await.unwrap());
-        let mut rx = handle.watch_leader();
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while rx.borrow().is_none() {
-            assert!(std::time::Instant::now() < deadline, "no leader in 5s");
-            let _ = tokio::time::timeout(Duration::from_millis(100), rx.changed()).await;
-        }
-        handle
+    let cases: [(&str, Option<ClientFirst<'_>>); 11] = [
+        ("n,,n=alice,r=abc", parsed(None, "alice", vec![])),
+        (
+            "n,a=alice,n=alice,r=abc",
+            parsed(Some("alice"), "alice", vec![]),
+        ),
+        ("n,,m=ext,n=alice,r=abc", parsed(None, "alice", vec![])),
+        (
+            "n,,n=tok,r=abc,tokenauth=true,other=x",
+            parsed(None, "tok", vec![("tokenauth", "true"), ("other", "x")]),
+        ),
+        ("n,,n=a=2Cb=3Dc,r=abc", parsed(None, "a=2Cb=3Dc", vec![])),
+        // Only the `n` GS2 flag, a non-empty name and nonce, and alphabetic
+        // extension keys match.
+        ("y,,n=alice,r=abc", None),
+        ("n,,n=,r=abc", None),
+        ("n,,n=alice,r=", None),
+        ("n,,n=a=41,r=abc", None),
+        ("n,,n=alice,r=abc,token_auth=true", None),
+        ("n,,r=abc,n=alice", None),
+    ];
+    for (message, expected) in cases {
+        check!(
+            ClientFirst::parse(message.as_bytes()) == expected,
+            "{message}"
+        );
     }
+}
 
-    /// Appends a delegation token owned by `alice` to the controller's image.
-    async fn append_token(controller: &krabka_raft::ControllerHandle, expiry_timestamp_ms: i64) {
-        let rec = MetadataRecord::V1DelegationToken(DelegationTokenRecord {
-            token_id: TOKEN_ID.into(),
-            owner: KafkaPrincipal {
-                principal_type: "User".into(),
-                name: "alice".into(),
-            },
-            hmac: HMAC.to_vec(),
-            issue_timestamp_ms: 0,
-            expiry_timestamp_ms,
-            max_timestamp_ms: expiry_timestamp_ms,
-            renewers: vec![],
-        });
-        controller.submit_change(vec![rec]).await.unwrap();
-    }
-
-    /// Stores a regular SCRAM credential for `user` under both mechanisms.
-    async fn append_user(controller: &krabka_raft::ControllerHandle, user: &str, password: &[u8]) {
-        let salt = (0..16).collect::<Vec<u8>>();
-        let records = [SaslMechanism::ScramSha256, SaslMechanism::ScramSha512]
-            .into_iter()
-            .map(|mechanism| {
-                let cred = hash_scram_password_with_salt(password, mechanism, 4096, salt.clone());
-                MetadataRecord::V1ScramCredential(krabka_metadata::ScramCredentialRecord {
-                    user: user.into(),
-                    mechanism,
-                    salt: salt.clone(),
-                    stored_key: cred.stored_key,
-                    server_key: cred.server_key,
-                    iterations: cred.iterations,
-                })
-            })
-            .collect();
-        controller.submit_change(records).await.unwrap();
-    }
-
-    fn token_password() -> String {
-        B64.encode(HMAC)
-    }
-
-    /// A SCRAM client that can send Kafka's `tokenauth=true` extension, which
-    /// `krabka_security::ScramClientExchange` does not write. RFC 5802 §3.
-    ///
-    /// `tests/delegation_tokens/scram_client.rs` holds the same client for
-    /// the wire-level suite: a library unit test and an integration test
-    /// compile from disjoint Bazel source sets, so neither can include the
-    /// other's file.
-    struct Client {
-        mechanism: SaslMechanism,
-        password: Vec<u8>,
-        first_bare: String,
-    }
-
-    impl Client {
-        fn first(
-            mechanism: SaslMechanism,
-            username: &str,
-            password: &[u8],
-            token_auth: bool,
-        ) -> (Self, Vec<u8>) {
-            let extension = if token_auth { ",tokenauth=true" } else { "" };
-            let first_bare = format!("n={username},r=clientnonce{extension}");
-            let message = format!("n,,{first_bare}").into_bytes();
-            let client = Self {
-                mechanism,
-                password: password.to_vec(),
-                first_bare,
-            };
-            (client, message)
-        }
-
-        fn last(self, server_first: &[u8]) -> Vec<u8> {
-            let server_first = std::str::from_utf8(server_first).unwrap();
-            let attr = |prefix: &str| {
-                server_first
-                    .split(',')
-                    .find_map(|a| a.strip_prefix(prefix))
-                    .unwrap()
-            };
-            let nonce = attr("r=");
-            let salt = B64.decode(attr("s=")).unwrap();
-            let iterations: NonZeroU32 = attr("i=").parse().unwrap();
-            let (pbkdf2_alg, hmac_alg, digest_alg, len) = match self.mechanism {
-                SaslMechanism::ScramSha256 => (
-                    pbkdf2::PBKDF2_HMAC_SHA256,
-                    hmac::HMAC_SHA256,
-                    &digest::SHA256,
-                    32,
-                ),
-                SaslMechanism::ScramSha512 => (
-                    pbkdf2::PBKDF2_HMAC_SHA512,
-                    hmac::HMAC_SHA512,
-                    &digest::SHA512,
-                    64,
-                ),
-                other => panic!("not a SCRAM mechanism: {other:?}"),
-            };
-            let mut salted = vec![0; len];
-            pbkdf2::derive(pbkdf2_alg, iterations, &salt, &self.password, &mut salted);
-            let client_key = hmac::sign(&hmac::Key::new(hmac_alg, &salted), b"Client Key");
-            let stored_key = digest::digest(digest_alg, client_key.as_ref());
-            let without_proof = format!("c=biws,r={nonce}");
-            let auth_message = format!("{},{server_first},{without_proof}", self.first_bare);
-            let signature = hmac::sign(
-                &hmac::Key::new(hmac_alg, stored_key.as_ref()),
-                auth_message.as_bytes(),
-            );
-            let proof: Vec<u8> = client_key
-                .as_ref()
-                .iter()
-                .zip(signature.as_ref())
-                .map(|(k, s)| k ^ s)
-                .collect();
-            format!("{without_proof},p={}", B64.encode(proof)).into_bytes()
-        }
-    }
-
-    fn step(
-        controller: &krabka_raft::ControllerHandle,
-        auth: &mut ConnectionAuth,
-        bytes: Vec<u8>,
-    ) -> SaslAuthenticateResponse {
-        handle_authenticate_scram(
-            &SaslAuthenticateRequest {
-                auth_bytes: bytes::Bytes::from(bytes),
-                ..Default::default()
-            },
-            auth,
-            controller,
-            None,
-        )
-    }
-
-    /// Drives both SCRAM rounds. Returns the final auth state, or the failed
-    /// response of the round that refused the login.
-    fn login(
-        controller: &krabka_raft::ControllerHandle,
-        mechanism: SaslMechanism,
-        username: &str,
-        password: &[u8],
-        token_auth: bool,
-    ) -> Result<(ConnectionAuth, SaslAuthenticateResponse), SaslAuthenticateResponse> {
-        let mut auth = ConnectionAuth::Negotiating {
-            mechanism,
-            exchange: SaslExchange::ScramPending,
-            pending_token_expiry_ms: None,
-        };
-        let (client, first) = Client::first(mechanism, username, password, token_auth);
-        let resp1 = step(controller, &mut auth, first);
-        if resp1.error_code != 0 {
-            return Err(resp1);
-        }
-        let resp2 = step(controller, &mut auth, client.last(&resp1.auth_bytes));
-        if resp2.error_code != 0 {
-            return Err(resp2);
-        }
-        Ok((auth, resp2))
-    }
-
-    /// What an authenticated session carries: principal, mechanism, session
-    /// deadline, and whether it came from a token.
-    fn session(auth: ConnectionAuth) -> (Principal, SaslMechanism, Option<i64>, bool) {
-        let ConnectionAuth::Authenticated {
-            principal,
-            mechanism,
-            expires_at_ms,
-            authenticated_via_token,
-        } = auth
-        else {
-            panic!("expected Authenticated, got {auth:?}");
-        };
-        (principal, mechanism, expires_at_ms, authenticated_via_token)
-    }
-
-    fn refused(
-        result: Result<(ConnectionAuth, SaslAuthenticateResponse), SaslAuthenticateResponse>,
-    ) {
-        let Err(resp) = result else {
-            panic!("login must be refused");
-        };
-        check!(resp.error_code == SASL_AUTHENTICATION_FAILED);
-        assert_failed_authenticate_response(&resp);
-    }
-
-    /// Kafka's `DelegationTokenManager` prepares a token credential for every
-    /// SCRAM mechanism, so a `tokenauth` login works under SHA-256 and
-    /// SHA-512 alike and yields a session for the token's owner, bounded by
-    /// the token's expiry.
-    #[tokio::test]
-    async fn tokenauth_login_works_under_both_scram_mechanisms() {
-        let dir = TempDir::new().unwrap();
-        let controller = test_controller(dir.path().into()).await;
-        let expiry_ms = crate::time_util::now_ms() + 60_000;
-        append_token(&controller, expiry_ms).await;
-
-        for (mechanism, auth_method) in [
-            (SaslMechanism::ScramSha256, AuthMethod::SaslScramSha256),
-            (SaslMechanism::ScramSha512, AuthMethod::SaslScramSha512),
-        ] {
-            let (auth, resp2) = login(
-                &controller,
-                mechanism,
-                TOKEN_ID,
-                token_password().as_bytes(),
-                true,
-            )
-            .expect("token login succeeds");
-            check!(
-                resp2.session_lifetime_ms > 0 && resp2.session_lifetime_ms <= 60_000,
-                "{mechanism:?}"
-            );
-            let owner = Principal {
-                name: "alice".into(),
-                auth_method,
-                groups: vec![],
-            };
-            check!(session(auth) == (owner, mechanism, Some(expiry_ms), true));
-        }
-        controller.cancel().await;
-    }
-
-    /// Without `tokenauth`, Kafka reads only the SCRAM credential store, so a
-    /// token id and its HMAC are not a login under either mechanism.
-    #[tokio::test]
-    async fn token_credentials_without_tokenauth_are_refused() {
-        let dir = TempDir::new().unwrap();
-        let controller = test_controller(dir.path().into()).await;
-        append_token(&controller, crate::time_util::now_ms() + 60_000).await;
-
-        for mechanism in [SaslMechanism::ScramSha256, SaslMechanism::ScramSha512] {
-            refused(login(
-                &controller,
-                mechanism,
-                TOKEN_ID,
-                token_password().as_bytes(),
-                false,
-            ));
-        }
-        controller.cancel().await;
-    }
-
-    /// When a token id is also a SCRAM username, the `tokenauth` extension
-    /// alone decides which credential the login is checked against.
-    #[tokio::test]
-    async fn tokenauth_selects_the_store_when_a_token_id_is_also_a_username() {
-        let dir = TempDir::new().unwrap();
-        let controller = test_controller(dir.path().into()).await;
-        let expiry_ms = crate::time_util::now_ms() + 60_000;
-        append_token(&controller, expiry_ms).await;
-        append_user(&controller, TOKEN_ID, b"user-password").await;
-        let mechanism = SaslMechanism::ScramSha256;
-
-        let (auth, _) = login(
-            &controller,
-            mechanism,
-            TOKEN_ID,
-            token_password().as_bytes(),
-            true,
-        )
-        .expect("token login succeeds");
-        let owner = Principal {
-            name: "alice".into(),
-            auth_method: AuthMethod::SaslScramSha256,
-            groups: vec![],
-        };
-        check!(session(auth) == (owner, mechanism, Some(expiry_ms), true));
-
-        let (auth, resp2) = login(&controller, mechanism, TOKEN_ID, b"user-password", false)
-            .expect("user login succeeds");
-        check!(resp2.session_lifetime_ms == 0);
-        let user = Principal {
-            name: TOKEN_ID.into(),
-            auth_method: AuthMethod::SaslScramSha256,
-            groups: vec![],
-        };
-        check!(session(auth) == (user, mechanism, None, false));
-
-        // Each password is checked only against the store its login selects.
-        refused(login(
-            &controller,
-            mechanism,
-            TOKEN_ID,
-            b"user-password",
-            true,
-        ));
-        refused(login(
-            &controller,
-            mechanism,
-            TOKEN_ID,
-            token_password().as_bytes(),
-            false,
-        ));
-        controller.cancel().await;
-    }
-
-    /// A `tokenauth` login for a missing or expired token is refused in round
-    /// 1, and never falls back to a SCRAM user of the same name.
-    #[tokio::test]
-    async fn tokenauth_login_for_a_missing_or_expired_token_is_refused() {
-        let dir = TempDir::new().unwrap();
-        let controller = test_controller(dir.path().into()).await;
-        append_user(&controller, "no-such-token", b"user-password").await;
-        refused(login(
-            &controller,
-            SaslMechanism::ScramSha256,
-            "no-such-token",
-            b"user-password",
-            true,
-        ));
-
-        append_token(&controller, crate::time_util::now_ms() - 1).await;
-        refused(login(
-            &controller,
-            SaslMechanism::ScramSha512,
-            TOKEN_ID,
-            token_password().as_bytes(),
-            true,
-        ));
-        controller.cancel().await;
+/// `ScramFormatter.username`.
+#[test]
+fn sasl_name_decoding_matches_scram_formatter() {
+    for (sasl_name, expected) in [
+        ("alice", Some("alice")),
+        ("a=2Cb", Some("a,b")),
+        ("a=3Db", Some("a=b")),
+        ("=3D2C", Some("=2C")),
+        ("a=41", None),
+    ] {
+        check!(
+            decode_sasl_name(sasl_name).as_deref() == expected,
+            "{sasl_name}"
+        );
     }
 }

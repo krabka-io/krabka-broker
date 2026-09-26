@@ -145,10 +145,10 @@ pub(super) async fn handle_classic_sync_message(
                 *state = previous;
                 tracing::warn!(group_id = %state.group_id, %error,
                     "classic SyncGroup log write failed");
+                // Kafka's `propagateAssignment` leaves the protocol type and
+                // name null when it propagates an error.
                 let failure = || SyncResult {
                     error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
-                    protocol_type: state.protocol_type.clone(),
-                    protocol_name: state.protocol_name.clone(),
                     ..SyncResult::default()
                 };
                 let _ = reply.send(failure());
@@ -283,9 +283,13 @@ mod tests {
             .await
             .unwrap();
         let failure = rx.await.unwrap();
-        check!(failure.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
-        check!(failure.protocol_type.as_deref() == Some("consumer"));
-        check!(failure.protocol_name.as_deref() == Some("range"));
+        check!(
+            failure
+                == SyncResult {
+                    error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
+                    ..SyncResult::default()
+                }
+        );
         let view = rpc::classic_inspect(&handle).await;
         check!(view.state == ClassicGroupState::CompletingRebalance);
         check!(view.members[0].assignment.is_none());

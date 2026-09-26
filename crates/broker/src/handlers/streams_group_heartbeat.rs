@@ -293,7 +293,9 @@ mod tests {
                 },
                 None,
                 &"Internal topics are missing: rf-too-high-changelog; Creation failed: \
-                  rf-too-high-changelog (error code 38)."
+                  rf-too-high-changelog (Unable to replicate the partition 3 time(s): The \
+                  target replication factor of 3 cannot be reached because only 1 broker(s) \
+                  are registered or some brokers have all their log directories cordoned.)."
                     .to_string(),
             ),
             (

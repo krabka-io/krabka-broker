@@ -76,13 +76,15 @@ impl GroupCoordinator {
         rx.await.ok()
     }
 
-    /// Drop a **classic**, **streams** or **share** group from the registry.
+    /// Delete a **classic**, **consumer**, **streams** or **share** group.
     ///
-    /// The actor atomically verifies that a classic group is empty and appends
-    /// the durable tombstones of its offsets and its k2 record before the
-    /// method removes it from the registry. The
-    /// method returns `NonEmpty` when the group still has live members. It
-    /// returns `NotFound` when the group is unknown or is a consumer group.
+    /// For a classic or KIP-848 consumer group, the actor atomically verifies
+    /// that the group is empty and appends the durable tombstones of its
+    /// offsets and its group records before the method removes it from the
+    /// registry and drops its seeds, so a later request cannot re-hydrate the
+    /// deleted group. The method returns `NonEmpty` when the group still has
+    /// live members, as Kafka's `validateDeleteGroup` does for both kinds, and
+    /// `NotFound` when the group is unknown.
     /// # Errors
     /// Returns an error when the group is not deletable or the tombstone cannot
     /// be appended.
@@ -107,6 +109,8 @@ impl GroupCoordinator {
         rx.await.map_err(|_| DeleteGroupError::NotFound)??;
         self.groups.remove(group_id);
         self.group_types.remove(group_id);
+        self.seeds.remove(group_id);
+        self.remove_cached_seed(group_id);
         self.forget_group_metrics(group_id);
         Ok(())
     }

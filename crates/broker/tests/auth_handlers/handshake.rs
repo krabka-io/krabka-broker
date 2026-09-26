@@ -2,8 +2,9 @@
 //!
 //! `ApiVersions` is on the pre-auth allowlist and answers before any SASL
 //! exchange, `Metadata` is not and the broker closes the connection instead,
-//! and a `SaslHandshake` for a mechanism the listener does not enable comes
-//! back with the enabled list and leaves the connection open for a retry.
+//! a `SaslHandshake` for a mechanism the listener does not enable comes back
+//! with the enabled list and then closes, a v0 handshake runs the exchange as
+//! raw tokens, and anything but `SaslAuthenticate` after a handshake closes.
 
 use assert2::{assert, check};
 use bytes::{BufMut, BytesMut};
@@ -150,12 +151,10 @@ async fn metadata_rejected_pre_auth_on_sasl_listener() {
 
 /// A `SaslHandshake` with an unsupported mechanism, GSSAPI, must return
 /// `error_code = 33`, which is `UNSUPPORTED_SASL_MECHANISM`, with the enabled
-/// list AND keep the connection open.
-///
-/// A `SaslHandshake` that follows with the supported mechanism, PLAIN, must
-/// succeed with `error_code = 0`.
+/// list, and then close the connection, as Kafka's `SaslServerAuthenticator`
+/// does. A new connection may then negotiate the supported mechanism, PLAIN.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn unsupported_mechanism_rejected_but_handshake_retryable() {
+async fn unsupported_mechanism_answers_33_then_closes() {
     let log_dir = tempfile::tempdir().unwrap();
     let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
     cfg.listeners = vec![ListenerSpec {
@@ -203,7 +202,8 @@ async fn unsupported_mechanism_rejected_but_handshake_retryable() {
         sh_resp.mechanisms
     );
 
-    // ── 2. Retry on the SAME connection with "PLAIN" — must succeed.
+    // ── 2. Kafka's `handleHandshakeRequest` throws after that response, so
+    // the connection is closed: a retry on it gets no answer.
     let mut plain_body = BytesMut::new();
     SaslHandshakeRequest {
         mechanism: "PLAIN".to_string(),
@@ -211,15 +211,144 @@ async fn unsupported_mechanism_rejected_but_handshake_retryable() {
     }
     .encode(&mut plain_body, 1)
     .unwrap();
-    let plain_resp_bytes = round_trip(&mut stream, 17, 1, 2, false, &plain_body)
+    assert!(
+        round_trip(&mut stream, 17, 1, 2, false, &plain_body)
+            .await
+            .is_err(),
+        "the connection must be closed after UNSUPPORTED_SASL_MECHANISM"
+    );
+
+    // ── 3. A new connection may negotiate PLAIN.
+    let mut retry = TcpStream::connect(addr).await.unwrap();
+    let plain_resp_bytes = round_trip(&mut retry, 17, 1, 3, false, &plain_body)
         .await
-        .expect("SaslHandshake(PLAIN) retry must succeed on the same connection");
+        .expect("SaslHandshake(PLAIN) on a new connection");
     let mut plain_cur: &[u8] = &plain_resp_bytes;
     let plain_resp = SaslHandshakeResponse::decode(&mut plain_cur, 1)
-        .expect("SaslHandshakeResponse retry must decode");
+        .expect("SaslHandshakeResponse must decode");
+    assert!(plain_resp.error_code == 0);
+
+    handle.shutdown().await;
+}
+
+async fn start_plain_sasl_broker(log_dir: &std::path::Path) -> krabka_broker::BrokerHandle {
+    let mut cfg = BrokerConfig::for_tests(log_dir.to_path_buf());
+    cfg.listeners = vec![ListenerSpec {
+        name: "SASL_PLAINTEXT".to_string(),
+        bind_addr: "127.0.0.1:0".parse().unwrap(),
+        advertised: "127.0.0.1:0".to_string(),
+        protocol: ListenerProtocol::SaslPlaintext,
+        tls_config: None,
+        sasl_mechanisms: None,
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
+    }];
+    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+    cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
+    cfg.plain_credentials
+        .insert("alice".to_string(), crate::harness::alice_password());
+    Broker::start(cfg).await.expect("broker must start")
+}
+
+async fn plain_handshake(stream: &mut TcpStream, version: i16) -> SaslHandshakeResponse {
+    let mut body = BytesMut::new();
+    SaslHandshakeRequest {
+        mechanism: "PLAIN".to_string(),
+        ..Default::default()
+    }
+    .encode(&mut body, version)
+    .unwrap();
+    let bytes = round_trip(stream, 17, version, 1, false, &body)
+        .await
+        .expect("SaslHandshake round-trip");
+    let mut cur: &[u8] = &bytes;
+    SaslHandshakeResponse::decode(&mut cur, version).expect("SaslHandshakeResponse must decode")
+}
+
+async fn write_raw_frame(stream: &mut TcpStream, payload: &[u8]) {
+    stream
+        .write_u32(u32::try_from(payload.len()).unwrap())
+        .await
+        .unwrap();
+    stream.write_all(payload).await.unwrap();
+    stream.flush().await.unwrap();
+}
+
+/// `SaslHandshake` v0: Kafka's `enableKafkaSaslAuthenticateHeaders` stays
+/// off, so the client sends its PLAIN token as a raw size-prefixed frame with
+/// no Kafka request header, and the broker answers with a raw (here empty)
+/// size-prefixed token. The connection is then authenticated.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v0_handshake_runs_the_exchange_as_raw_tokens() {
+    let log_dir = tempfile::tempdir().unwrap();
+    let handle = start_plain_sasl_broker(log_dir.path()).await;
+    let mut stream = TcpStream::connect(handle.listen_addr()).await.unwrap();
+
+    check!(plain_handshake(&mut stream, 0).await.error_code == 0);
+
+    let mut token = vec![0_u8];
+    token.extend_from_slice(b"alice");
+    token.push(0);
+    token.extend_from_slice(crate::harness::alice_password().as_bytes());
+    write_raw_frame(&mut stream, &token).await;
+    let len = stream.read_u32().await.expect("raw server token");
+    check!(len == 0, "PLAIN's server token is empty");
+
+    // Authenticated: a data-plane request is served.
+    let mut md_body = BytesMut::new();
+    MetadataRequest::default().encode(&mut md_body, 12).unwrap();
+    check!(
+        round_trip(&mut stream, 3, 12, 2, true, &md_body)
+            .await
+            .is_ok()
+    );
+
+    handle.shutdown().await;
+}
+
+/// A v0 raw token with a bad credential has no response shape to carry an
+/// error, so Kafka closes the connection without one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v0_raw_token_with_bad_credentials_closes_without_response() {
+    let log_dir = tempfile::tempdir().unwrap();
+    let handle = start_plain_sasl_broker(log_dir.path()).await;
+    let mut stream = TcpStream::connect(handle.listen_addr()).await.unwrap();
+
+    check!(plain_handshake(&mut stream, 0).await.error_code == 0);
+    write_raw_frame(&mut stream, b"\0alice\0not-the-password").await;
+    check!(stream.read_u32().await.is_err());
+
+    handle.shutdown().await;
+}
+
+/// After a handshake chose a mechanism, Kafka accepts only
+/// `SaslAuthenticate`: an `ApiVersions` gets its own error response with
+/// `ILLEGAL_SASL_STATE` (34), and then the connection closes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn api_versions_after_the_handshake_answers_34_then_closes() {
+    let log_dir = tempfile::tempdir().unwrap();
+    let handle = start_plain_sasl_broker(log_dir.path()).await;
+    let mut stream = TcpStream::connect(handle.listen_addr()).await.unwrap();
+
+    check!(plain_handshake(&mut stream, 1).await.error_code == 0);
+
+    let mut av_body = BytesMut::new();
+    ApiVersionsRequest::default()
+        .encode(&mut av_body, 3)
+        .unwrap();
+    let resp_bytes = round_trip(&mut stream, 18, 3, 2, true, &av_body)
+        .await
+        .expect("ApiVersions gets an error response");
+    let mut cur: &[u8] = &resp_bytes;
+    let resp = ApiVersionsResponse::decode(&mut cur, 3).expect("ApiVersionsResponse must decode");
     assert!(
-        plain_resp.error_code == 0,
-        "PLAIN handshake retry on same connection must return error_code=0"
+        resp == ApiVersionsResponse {
+            error_code: 34,
+            ..Default::default()
+        }
+    );
+    check!(
+        stream.read_u32().await.is_err(),
+        "then the connection closes"
     );
 
     handle.shutdown().await;

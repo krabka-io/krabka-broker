@@ -8,19 +8,19 @@ use krabka_verified::{
 
 /// Return the configured value for `quota_key` under the most-specific
 /// matching entity for `(principal, client_id)`. First match wins, in the
-/// order of Kafka's `ClientQuotaManager.DefaultQuotaCallback` and the
-/// "Quotas" section of the Kafka documentation:
-///   1. `/config/users/<user>/clients/<client-id>` (user=alice, client-id=app1)
-///   2. `/config/users/<user>/clients/<default>` (user=alice, client-id=default)
-///   3. `/config/users/<user>` (user=alice)
-///   4. `/config/users/<default>/clients/<client-id>` (user=default, client-id=app1)
-///   5. `/config/users/<default>/clients/<default>` (user=default, client-id=default)
-///   6. `/config/users/<default>` (user=default)
-///   7. `/config/clients/<client-id>` (client-id=app1)
-///   8. `/config/clients/<default>` (client-id=default)
+/// order of Kafka's `ClientQuotaManager.DefaultQuotaCallback`:
+///   1. (user=alice, client-id=app1)
+///   2. (user=alice, client-id=default)
+///   3. (user=alice)
+///   4. (user=default, client-id=app1)
+///   5. (user=default, client-id=default)
+///   6. (user=default)
+///   7. (client-id=app1)
+///   8. (client-id=default)
 ///
-/// The verified [`user_client_quota_precedence`] kernel makes the choice.
-/// This adapter supplies one presence fact per candidate.
+/// All candidate keys are pre-sorted by `entity_type` ("client-id" <
+/// "user" alphabetically), so the lookup runs against the image map
+/// without further canonicalization.
 // Disjoint from `lookup_ip_quota` (which checks `("ip", *)` candidates only).
 #[must_use]
 pub fn lookup_quota(
@@ -32,15 +32,13 @@ pub fn lookup_quota(
     lookup_quota_with_key(image, principal, client_id, quota_key).map(|(_, v)| v)
 }
 
-/// Like `lookup_quota`, but it also returns the entity key that enforcement
-/// binds to a bucket in `QuotaBuckets`.
+/// Like `lookup_quota`, but it also returns the canonical entity key
+/// that matched. Enforcement code uses this to bind the lookup to a
+/// bucket in `QuotaBuckets`.
 ///
-/// The bucket key follows Kafka's `quotaMetricTags`: a quota configured on a
-/// user/client pair (exact or default on either side) throttles the exact
-/// `(client-id, user)` pair, a user-level quota throttles the exact user, and
-/// a client-level quota throttles the exact client id. Default entities are
-/// therefore shared limits applied per exact principal or client, not one
-/// bucket for everyone.
+/// The bucket key follows Kafka's metric tags: levels 1, 2, 4 and 5 share one
+/// sensor per `(user, client-id)`, levels 3 and 6 one per `user`, and levels
+/// 7 and 8 one per `client-id`.
 #[must_use]
 pub fn lookup_quota_with_key(
     image: &MetadataImage,
@@ -48,80 +46,72 @@ pub fn lookup_quota_with_key(
     client_id: &str,
     quota_key: &str,
 ) -> Option<(EntityKey, f64)> {
-    let rate = |candidate| {
-        let key = candidate_key(candidate, principal, client_id)?;
-        quota_for_key(image, key, quota_key)
-    };
-    let presence = |candidate| {
-        if rate(candidate).is_some() {
+    let candidates: [EntityKey; 8] = [
+        vec![
+            ("client-id".into(), Some(client_id.into())),
+            ("user".into(), Some(principal.into())),
+        ],
+        vec![
+            ("client-id".into(), None),
+            ("user".into(), Some(principal.into())),
+        ],
+        vec![("user".into(), Some(principal.into()))],
+        vec![
+            ("client-id".into(), Some(client_id.into())),
+            ("user".into(), None),
+        ],
+        vec![("client-id".into(), None), ("user".into(), None)],
+        vec![("user".into(), None)],
+        vec![("client-id".into(), Some(client_id.into()))],
+        vec![("client-id".into(), None)],
+    ];
+    let matches = candidates.map(|key| quota_for_key(image, key, quota_key));
+    let present = |index: usize| {
+        if matches[index].is_some() {
             QuotaCandidatePresence::Present
         } else {
             QuotaCandidatePresence::Absent
         }
     };
     let selected = user_client_quota_precedence(UserClientQuotaFacts {
-        user_client: presence(UserClientQuotaPrecedence::UserClient),
-        user_default_client: presence(UserClientQuotaPrecedence::UserDefaultClient),
-        user: presence(UserClientQuotaPrecedence::User),
-        default_user_client: presence(UserClientQuotaPrecedence::DefaultUserClient),
-        default_user_default_client: presence(UserClientQuotaPrecedence::DefaultUserDefaultClient),
-        default_user: presence(UserClientQuotaPrecedence::DefaultUser),
-        client: presence(UserClientQuotaPrecedence::Client),
-        default_client: presence(UserClientQuotaPrecedence::DefaultClient),
+        exact_pair: present(0),
+        exact_user_default_client: present(1),
+        exact_user: present(2),
+        default_user_exact_client: present(3),
+        default_pair: present(4),
+        default_user: present(5),
+        exact_client: present(6),
+        default_client: present(7),
     });
-    let (_, rate) = rate(selected)?;
-    Some((bucket_key(selected, principal, client_id)?, rate))
-}
-
-/// The canonical metadata key of one user/client candidate, or `None` for
-/// [`UserClientQuotaPrecedence::None`].
-///
-/// Entity parts are sorted by `entity_type` ("client-id" < "user"), which is
-/// the canonical order of the image map, so the key needs no further
-/// canonicalization.
-fn candidate_key(
-    candidate: UserClientQuotaPrecedence,
-    principal: &str,
-    client_id: &str,
-) -> Option<EntityKey> {
-    let user = || ("user".to_owned(), Some(principal.to_owned()));
-    let default_user = || ("user".to_owned(), None);
-    let client = || ("client-id".to_owned(), Some(client_id.to_owned()));
-    let default_client = || ("client-id".to_owned(), None);
-    Some(match candidate {
-        UserClientQuotaPrecedence::UserClient => vec![client(), user()],
-        UserClientQuotaPrecedence::UserDefaultClient => vec![default_client(), user()],
-        UserClientQuotaPrecedence::User => vec![user()],
-        UserClientQuotaPrecedence::DefaultUserClient => vec![client(), default_user()],
-        UserClientQuotaPrecedence::DefaultUserDefaultClient => {
-            vec![default_client(), default_user()]
-        }
-        UserClientQuotaPrecedence::DefaultUser => vec![default_user()],
-        UserClientQuotaPrecedence::Client => vec![client()],
-        UserClientQuotaPrecedence::DefaultClient => vec![default_client()],
+    let index = match selected {
+        UserClientQuotaPrecedence::ExactPair => 0,
+        UserClientQuotaPrecedence::ExactUserDefaultClient => 1,
+        UserClientQuotaPrecedence::ExactUser => 2,
+        UserClientQuotaPrecedence::DefaultUserExactClient => 3,
+        UserClientQuotaPrecedence::DefaultPair => 4,
+        UserClientQuotaPrecedence::DefaultUser => 5,
+        UserClientQuotaPrecedence::ExactClient => 6,
+        UserClientQuotaPrecedence::DefaultClient => 7,
         UserClientQuotaPrecedence::None => return None,
-    })
-}
-
-/// The bucket key Kafka's `quotaMetricTags` gives the selected candidate.
-fn bucket_key(
-    selected: UserClientQuotaPrecedence,
-    principal: &str,
-    client_id: &str,
-) -> Option<EntityKey> {
-    let user = || ("user".to_owned(), Some(principal.to_owned()));
-    let client = || ("client-id".to_owned(), Some(client_id.to_owned()));
-    Some(match selected {
-        UserClientQuotaPrecedence::UserClient
-        | UserClientQuotaPrecedence::UserDefaultClient
-        | UserClientQuotaPrecedence::DefaultUserClient
-        | UserClientQuotaPrecedence::DefaultUserDefaultClient => vec![client(), user()],
-        UserClientQuotaPrecedence::User | UserClientQuotaPrecedence::DefaultUser => vec![user()],
-        UserClientQuotaPrecedence::Client | UserClientQuotaPrecedence::DefaultClient => {
-            vec![client()]
+    };
+    let (_, rate) = matches[index].clone()?;
+    let bucket_key = match selected {
+        UserClientQuotaPrecedence::ExactPair
+        | UserClientQuotaPrecedence::ExactUserDefaultClient
+        | UserClientQuotaPrecedence::DefaultUserExactClient
+        | UserClientQuotaPrecedence::DefaultPair => vec![
+            ("client-id".into(), Some(client_id.into())),
+            ("user".into(), Some(principal.into())),
+        ],
+        UserClientQuotaPrecedence::ExactUser | UserClientQuotaPrecedence::DefaultUser => {
+            vec![("user".into(), Some(principal.into()))]
+        }
+        UserClientQuotaPrecedence::ExactClient | UserClientQuotaPrecedence::DefaultClient => {
+            vec![("client-id".into(), Some(client_id.into()))]
         }
         UserClientQuotaPrecedence::None => return None,
-    })
+    };
+    Some((bucket_key, rate))
 }
 
 /// Lookup an `ip`-scoped quota for `peer_ip`. Priority order:
@@ -339,143 +329,99 @@ mod tests {
         assert!(lookup_ip_quota(&img, ip, "connection_creation_rate") == Some(5.0));
     }
 
-    // ── precedence verification: Kafka scenarios, exhaustive enumeration, proptest
+    // ── precedence verification: exhaustive enumeration + proptest ────────────
     //
-    // The 8-priority (user/client) and 2-priority (IP) orders are declared
-    // HERE from Kafka's documented table ("Quotas" section of the Kafka docs,
-    // `ClientQuotaManager.DefaultQuotaCallback.findUserClientQuota` /
-    // `findUserQuota` / `findClientQuota`), independently of production, so a
-    // reordering in the kernel or in this adapter is caught. Index = priority
+    // The documented 8-priority (user/client) and 2-priority (IP) orders,
+    // declared HERE independently of production so a reordering in
+    // `lookup_quota_with_key`'s candidate array is caught. Index = priority
     // (lower wins). Parameterized by the probe `(principal, client_id)`.
     fn uc_candidates<'a>(
         principal: &'a str,
         client_id: &'a str,
     ) -> [Vec<(&'a str, Option<&'a str>)>; 8] {
         [
-            // /config/users/<user>/clients/<client-id>
             vec![("user", Some(principal)), ("client-id", Some(client_id))],
-            // /config/users/<user>/clients/<default>
             vec![("user", Some(principal)), ("client-id", None)],
-            // /config/users/<user>
             vec![("user", Some(principal))],
-            // /config/users/<default>/clients/<client-id>
             vec![("user", None), ("client-id", Some(client_id))],
-            // /config/users/<default>/clients/<default>
             vec![("user", None), ("client-id", None)],
-            // /config/users/<default>
             vec![("user", None)],
-            // /config/clients/<client-id>
             vec![("client-id", Some(client_id))],
-            // /config/clients/<default>
             vec![("client-id", None)],
         ]
     }
 
-    fn entity(parts: &[(&str, Option<&str>)]) -> EntityKey {
-        parts
-            .iter()
-            .map(|(kind, name)| ((*kind).to_owned(), name.map(str::to_owned)))
-            .collect()
-    }
-
-    /// Kafka scenarios for `(user=alice, client-id=app1)`. Each row lists the
-    /// configured `producer_byte_rate` entities and the whole expected result:
-    /// the rate Kafka applies and the bucket entity Kafka's `quotaMetricTags`
-    /// throttles.
+    /// Kafka's `ClientQuotaManager` ranks every `user=U` level above every
+    /// `user=<default>` level (#677). Each row sets two or more levels and
+    /// expects the higher one, with the bucket key Kafka's metric tags give.
     #[test]
-    fn user_client_lookup_matches_kafka_scenarios() {
-        const MB: f64 = 1_048_576.0;
-        type Row<'a> = (
-            &'a str,
-            Vec<(Vec<(&'a str, Option<&'a str>)>, f64)>,
-            Option<(EntityKey, f64)>,
-        );
-        let pair = entity(&[("client-id", Some("app1")), ("user", Some("alice"))]);
-        let alice = entity(&[("user", Some("alice"))]);
-        let app1 = entity(&[("client-id", Some("app1"))]);
-        let rows: Vec<Row<'_>> = vec![
-            (
-                "a user quota beats a default-user quota for the same client id",
-                vec![
-                    (vec![("user", Some("alice"))], 10.0 * MB),
-                    (vec![("user", None), ("client-id", Some("app1"))], MB),
-                ],
-                Some((alice.clone(), 10.0 * MB)),
-            ),
-            (
-                "a user quota beats the default pair",
-                vec![
-                    (vec![("user", Some("alice"))], 10.0 * MB),
-                    (vec![("user", None), ("client-id", None)], MB),
-                ],
-                Some((alice.clone(), 10.0 * MB)),
-            ),
-            (
-                "the user's default-client quota beats the user quota",
-                vec![
-                    (vec![("user", Some("alice"))], 10.0 * MB),
-                    (vec![("user", Some("alice")), ("client-id", None)], 2.0 * MB),
-                ],
-                Some((pair.clone(), 2.0 * MB)),
-            ),
-            (
-                "the exact pair beats the user's default client",
-                vec![
-                    (vec![("user", Some("alice")), ("client-id", None)], 2.0 * MB),
-                    (
-                        vec![("user", Some("alice")), ("client-id", Some("app1"))],
-                        3.0 * MB,
-                    ),
-                ],
-                Some((pair.clone(), 3.0 * MB)),
-            ),
-            (
-                "a default-user quota for the client beats the default pair",
-                vec![
-                    (vec![("user", None), ("client-id", None)], 4.0 * MB),
-                    (vec![("user", None), ("client-id", Some("app1"))], MB),
-                ],
-                Some((pair.clone(), MB)),
-            ),
-            (
-                "the default user beats a client-id quota",
-                vec![
-                    (vec![("client-id", Some("app1"))], 5.0 * MB),
-                    (vec![("user", None)], 6.0 * MB),
-                ],
-                Some((alice.clone(), 6.0 * MB)),
-            ),
-            (
-                "a client-id quota beats the default client",
-                vec![
-                    (vec![("client-id", None)], 7.0 * MB),
-                    (vec![("client-id", Some("app1"))], 5.0 * MB),
-                ],
-                Some((app1.clone(), 5.0 * MB)),
-            ),
-            (
-                "the default client applies when nothing else is configured",
-                vec![(vec![("client-id", None)], 7.0 * MB)],
-                Some((app1.clone(), 7.0 * MB)),
-            ),
-            (
-                "another user's and another client's quotas never apply",
-                vec![
-                    (vec![("user", Some("bob"))], 8.0 * MB),
-                    (vec![("client-id", Some("app2"))], 9.0 * MB),
-                ],
-                None,
-            ),
+    fn precedence_matches_kafkas_client_quota_manager() {
+        type Level = Vec<(&'static str, Option<&'static str>)>;
+        /// A case name, the configured levels and rates, and the expected
+        /// bucket key and rate.
+        type Row = (String, Vec<(Level, f64)>, (EntityKey, f64));
+        let pair: EntityKey = vec![
+            ("client-id".into(), Some("app".into())),
+            ("user".into(), Some("alice".into())),
         ];
-        for (scenario, configured, expected) in rows {
+        let user: EntityKey = vec![("user".into(), Some("alice".into()))];
+        let client: EntityKey = vec![("client-id".into(), Some("app".into()))];
+        let levels: [Level; 8] = uc_candidates("alice", "app");
+        // Every adjacent pair: level N and N+1 both set, level N wins.
+        let bucket_for_level = [&pair, &pair, &user, &pair, &pair, &user, &client, &client];
+        let mut rows: Vec<Row> = (0..7)
+            .map(|n| {
+                (
+                    format!("levels {} and {}", n + 1, n + 2),
+                    vec![(levels[n].clone(), 1000.0), (levels[n + 1].clone(), 5000.0)],
+                    (bucket_for_level[n].clone(), 1000.0),
+                )
+            })
+            .collect();
+        // The four examples from the issue.
+        rows.extend([
+            (
+                "user=alice over the default pair".to_owned(),
+                vec![
+                    (vec![("user", Some("alice"))], 1000.0),
+                    (vec![("user", None), ("client-id", None)], 5000.0),
+                ],
+                (user.clone(), 1000.0),
+            ),
+            (
+                "user=alice,client-id=default over user=default,client-id=app".to_owned(),
+                vec![
+                    (vec![("user", Some("alice")), ("client-id", None)], 1000.0),
+                    (vec![("user", None), ("client-id", Some("app"))], 5000.0),
+                ],
+                (pair.clone(), 1000.0),
+            ),
+            (
+                "user=alice over user=default,client-id=app".to_owned(),
+                vec![
+                    (vec![("user", Some("alice"))], 1000.0),
+                    (vec![("user", None), ("client-id", Some("app"))], 5000.0),
+                ],
+                (user.clone(), 1000.0),
+            ),
+            (
+                "user=default over client-id=app".to_owned(),
+                vec![
+                    (vec![("user", None)], 1000.0),
+                    (vec![("client-id", Some("app"))], 5000.0),
+                ],
+                (user.clone(), 1000.0),
+            ),
+        ]);
+        for (name, configured, expected) in rows {
             let img = img_with(
                 configured
                     .into_iter()
-                    .map(|(e, v)| rec(e, "producer_byte_rate", v))
+                    .map(|(entity, value)| rec(entity, "producer_byte_rate", value))
                     .collect(),
             );
-            let got = lookup_quota_with_key(&img, "alice", "app1", "producer_byte_rate");
-            assert!(got == expected, "{scenario}");
+            let got = lookup_quota_with_key(&img, "alice", "app", "producer_byte_rate");
+            assert2::check!(got == Some(expected), "{name}");
         }
     }
 

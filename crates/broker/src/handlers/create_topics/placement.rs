@@ -45,35 +45,98 @@ pub(crate) fn round_robin_replicas(
         .collect()
 }
 
+/// Kafka's `ReplicationControlManager.validateManualPartitionAssignment` on
+/// one partition's replica list: the replicas in the order the client sent
+/// them, or Kafka's `INVALID_REPLICA_ASSIGNMENT` message.
+///
+/// The brokers are checked in ascending id order, as Kafka sorts them, so the
+/// message names the least unregistered or repeated broker.
+/// `replication_factor` is the replica count of the partitions before this
+/// one, which this one must match.
+pub(crate) fn validate_manual_partition_assignment(
+    broker_ids: &[i32],
+    registered: &[krabka_raft::NodeId],
+    replication_factor: Option<usize>,
+) -> Result<Vec<krabka_raft::NodeId>, String> {
+    if broker_ids.is_empty() {
+        return Err("The manual partition assignment includes an empty replica list.".to_owned());
+    }
+    let mut sorted = broker_ids.to_vec();
+    sorted.sort_unstable();
+    let mut previous = None;
+    for broker_id in sorted {
+        let known =
+            u64::try_from(broker_id).is_ok_and(|id| registered.contains(&krabka_raft::NodeId(id)));
+        if !known {
+            return Err(format!(
+                "The manual partition assignment includes broker {broker_id}, but no such \
+                 broker is registered."
+            ));
+        }
+        if previous == Some(broker_id) {
+            return Err(format!(
+                "The manual partition assignment includes the broker {broker_id} more than once."
+            ));
+        }
+        previous = Some(broker_id);
+    }
+    if let Some(expected) = replication_factor
+        && broker_ids.len() != expected
+    {
+        return Err(format!(
+            "The manual partition assignment includes a partition with {} replica(s), but \
+             this is not consistent with previous partitions, which have {expected} replica(s).",
+            broker_ids.len()
+        ));
+    }
+    Ok(broker_ids
+        .iter()
+        .filter_map(|id| u64::try_from(*id).ok().map(krabka_raft::NodeId))
+        .collect())
+}
+
+/// Kafka's `ReplicationControlManager.createTopic` checks on a manual
+/// assignment, with its codes and messages: the replication factor and the
+/// partition count must be -1, no partition may be assigned twice, each
+/// replica list must pass [`validate_manual_partition_assignment`], and the
+/// partitions must be `0..n`.
 fn manual_replicas(
     topic: &CreatableTopic,
     brokers: &[krabka_raft::NodeId],
-) -> Result<Vec<Vec<krabka_raft::NodeId>>, i16> {
-    if topic.num_partitions != -1 || topic.replication_factor != -1 {
-        return Err(codes::INVALID_REQUEST);
+) -> Result<Vec<Vec<krabka_raft::NodeId>>, (i16, String)> {
+    if topic.replication_factor != -1 {
+        return Err((
+            codes::INVALID_REQUEST,
+            "A manual partition assignment was specified, but replication factor was not set \
+             to -1."
+                .to_owned(),
+        ));
+    }
+    if topic.num_partitions != -1 {
+        return Err((
+            codes::INVALID_REQUEST,
+            "A manual partition assignment was specified, but numPartitions was not set to -1."
+                .to_owned(),
+        ));
     }
     let mut by_partition = std::collections::BTreeMap::new();
     let mut replication_factor = None;
     for assignment in &topic.assignments {
-        if by_partition.contains_key(&assignment.partition_index)
-            || assignment.broker_ids.is_empty()
-        {
-            return Err(codes::INVALID_REPLICA_ASSIGNMENT);
+        if by_partition.contains_key(&assignment.partition_index) {
+            return Err((
+                codes::INVALID_REPLICA_ASSIGNMENT,
+                format!(
+                    "Found multiple manual partition assignments for partition {}",
+                    assignment.partition_index
+                ),
+            ));
         }
-        let mut replicas = Vec::with_capacity(assignment.broker_ids.len());
-        for &broker_id in &assignment.broker_ids {
-            let Ok(broker_id) = u64::try_from(broker_id) else {
-                return Err(codes::INVALID_REPLICA_ASSIGNMENT);
-            };
-            let broker_id = krabka_raft::NodeId(broker_id);
-            if !brokers.contains(&broker_id) || replicas.contains(&broker_id) {
-                return Err(codes::INVALID_REPLICA_ASSIGNMENT);
-            }
-            replicas.push(broker_id);
-        }
-        if replication_factor.is_some_and(|expected| expected != replicas.len()) {
-            return Err(codes::INVALID_REPLICA_ASSIGNMENT);
-        }
+        let replicas = validate_manual_partition_assignment(
+            &assignment.broker_ids,
+            brokers,
+            replication_factor,
+        )
+        .map_err(|message| (codes::INVALID_REPLICA_ASSIGNMENT, message))?;
         replication_factor = Some(replicas.len());
         by_partition.insert(assignment.partition_index, replicas);
     }
@@ -82,9 +145,28 @@ fn manual_replicas(
         .copied()
         .ne(0..i32::try_from(by_partition.len()).unwrap_or(i32::MAX))
     {
-        return Err(codes::INVALID_REPLICA_ASSIGNMENT);
+        return Err((
+            codes::INVALID_REPLICA_ASSIGNMENT,
+            "partitions should be a consecutive 0-based integer sequence".to_owned(),
+        ));
     }
     Ok(by_partition.into_values().collect())
+}
+
+/// The `INVALID_REPLICATION_FACTOR` message of a placement that cannot put
+/// `replication_factor` replicas on the `usable` brokers, as Kafka's
+/// `createTopic` wraps the `StripedReplicaPlacer` refusal.
+pub(crate) fn placement_failure_message(replication_factor: i16, usable: usize) -> String {
+    let reason = if usable == 0 {
+        "All brokers are currently fenced, or have all their log directories cordoned.".to_owned()
+    } else {
+        format!(
+            "The target replication factor of {replication_factor} cannot be reached because \
+             only {usable} broker(s) are registered or some brokers have all their log \
+             directories cordoned."
+        )
+    };
+    format!("Unable to replicate the partition {replication_factor} time(s): {reason}")
 }
 
 /// The leader and the ISR a new partition starts with.
@@ -217,12 +299,13 @@ pub(crate) fn site_broker_views(
 ///
 /// The result is an empty outer vec when the automatic placement cannot
 /// satisfy the request, and the caller reports `INVALID_REPLICATION_FACTOR`.
-/// An invalid explicit assignment gives the error code instead.
+/// An invalid explicit assignment gives Kafka's error code and message
+/// instead.
 pub(super) fn resolve_assignments(
     topic: &CreatableTopic,
     brokers: &[SiteBrokerView],
     preferred_site: Option<&str>,
-) -> Result<Vec<Vec<krabka_raft::NodeId>>, i16> {
+) -> Result<Vec<Vec<krabka_raft::NodeId>>, (i16, String)> {
     if topic.assignments.is_empty() {
         return Ok(stretch_replicas(
             brokers,

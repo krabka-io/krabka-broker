@@ -9,6 +9,7 @@ use futures_util::StreamExt;
 use tokio::net::TcpStream;
 
 use super::{test_support::DEFAULT_MAX_FRAME_BYTES, *};
+use crate::codes;
 
 mod throttle_mute;
 
@@ -240,8 +241,25 @@ async fn inter_broker_only_apis_close_the_connection_on_a_client_listener() {
     }
 }
 
+/// What the serve loop does with one request frame.
+#[derive(Debug, PartialEq)]
+enum Outcome {
+    /// The connection closes with no response frame.
+    Closed,
+    /// An `ApiVersions` v0 body carrying `UNSUPPORTED_VERSION` and the
+    /// listener's supported ranges.
+    ApiVersionsV0(krabka_protocol::owned::api_versions_response::ApiVersionsResponse),
+}
+
+/// #844: Kafka's `Processor.parseRequestHeader` throws
+/// `UnsupportedVersionException` for a version outside an API's range and
+/// `SocketServer` closes the channel on it. `ApiVersions` is the one
+/// exception (`ApiKeys.isVersionEnabled`): `KafkaApis` answers it with a v0
+/// `UNSUPPORTED_VERSION` body. Table-driven over every dispatched API, one
+/// connection per row, at the version above its maximum and at the version
+/// below its minimum; an unknown api key closes the connection too.
 #[tokio::test]
-async fn unsupported_versions_return_typed_errors_before_dispatch() {
+async fn unsupported_versions_close_the_connection_except_api_versions() {
     use krabka_protocol::{Decode, owned::api_versions_response::ApiVersionsResponse};
 
     let dir = tempfile::TempDir::new().expect("tempdir");
@@ -251,108 +269,100 @@ async fn unsupported_versions_return_typed_errors_before_dispatch() {
     let metrics = broker.metrics.clone();
     let registry = crate::handlers::registry::build_registry();
 
+    // The `PLAINTEXT` listener is the only one this broker binds, so it is
+    // also the one `inter_broker_listener_name` names and it carries client
+    // and inter-broker traffic together
+    // (`ListenerKind::ClientAndInterBroker`).
+    let api_versions_v0 = ApiVersionsResponse {
+        error_code: codes::UNSUPPORTED_VERSION,
+        api_keys: crate::api_catalog::supported_apis(
+            crate::api_catalog::ListenerKind::ClientAndInterBroker,
+            crate::api_catalog::ClientMetricsReceiver::Absent,
+        ),
+        ..Default::default()
+    };
+    let mut cases: Vec<(i16, i16, Outcome)> = Vec::new();
+    for api in crate::api_catalog::dispatched_apis() {
+        let outcome = || {
+            if api.api_key == API_VERSIONS_KEY {
+                Outcome::ApiVersionsV0(api_versions_v0.clone())
+            } else {
+                Outcome::Closed
+            }
+        };
+        let above = api
+            .max_version
+            .checked_add(1)
+            .expect("maximum API version has a successor");
+        cases.push((api.api_key, above, outcome()));
+        cases.push((api.api_key, api.min_version - 1, outcome()));
+    }
+    cases.push((i16::MAX, 0, Outcome::Closed));
+    let connections = cases.len();
+
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind loopback");
     let addr = listener.local_addr().expect("listener addr");
     let server = tokio::spawn(async move {
-        let (stream, peer) = listener.accept().await.expect("accept");
-        let spec = crate::config::ListenerSpec {
-            name: "PLAINTEXT".to_string(),
-            bind_addr: addr,
-            advertised: "127.0.0.1:9092".to_string(),
-            protocol: krabka_security::ListenerProtocol::Plaintext,
-            tls_config: None,
-            sasl_mechanisms: None,
-            principal_mapper: crate::SslPrincipalMapper::default(),
-        };
-        serve_connection_stream(broker, stream, spec, peer, None).await;
+        for _ in 0..connections {
+            let (stream, peer) = listener.accept().await.expect("accept");
+            let spec = crate::config::ListenerSpec {
+                name: "PLAINTEXT".to_string(),
+                bind_addr: addr,
+                advertised: "127.0.0.1:9092".to_string(),
+                protocol: krabka_security::ListenerProtocol::Plaintext,
+                tls_config: None,
+                sasl_mechanisms: None,
+                principal_mapper: crate::SslPrincipalMapper::default(),
+            };
+            serve_connection_stream(broker.clone(), stream, spec, peer, None).await;
+        }
     });
 
-    let client = TcpStream::connect(addr).await.expect("connect");
-    let mut framed = codec::frame(client, DEFAULT_MAX_FRAME_BYTES);
-
-    for (correlation_id, api) in crate::api_catalog::dispatched_apis()
-        .into_iter()
-        .enumerate()
-    {
-        let entry = registry.get(api.api_key).expect("dispatched API entry");
-        let version = api
-            .max_version
-            .checked_add(1)
-            .expect("maximum API version has a successor");
+    for (correlation_id, (api_key, version, expected)) in cases.into_iter().enumerate() {
         let correlation_id = i32::try_from(correlation_id).expect("correlation id");
+        let flexible = registry
+            .get(api_key)
+            .is_some_and(|entry| entry.body_flexible(version));
+        let client = TcpStream::connect(addr).await.expect("connect");
+        let mut framed = codec::frame(client, DEFAULT_MAX_FRAME_BYTES);
         let frame = request_frame(
-            api.api_key,
+            api_key,
             version,
             correlation_id,
             None,
-            entry.body_flexible(version).then_some(0),
+            flexible.then_some(0),
             &[],
         );
-        framed
-            .send(frame.freeze())
-            .await
-            .expect("send max+1 request");
-        let response = framed
-            .next()
-            .await
-            .expect("unsupported-version response frame")
-            .expect("unsupported-version response decode");
-        check!(
-            i32::from_be_bytes(response[..4].try_into().expect("response correlation id"))
-                == correlation_id,
-            "api_key {}",
-            api.api_key
-        );
+        framed.send(frame.freeze()).await.expect("send request");
 
-        let response_version = if api.api_key == API_VERSIONS_KEY {
-            0
-        } else {
-            entry.nearest_supported_version(version)
+        let actual = match framed.next().await {
+            None => Outcome::Closed,
+            Some(response) => {
+                let response = response.expect("response frame decode");
+                check!(
+                    i32::from_be_bytes(response[..4].try_into().expect("correlation id"))
+                        == correlation_id
+                );
+                // `ApiVersions`' response header is always v0: the
+                // correlation id alone.
+                Outcome::ApiVersionsV0(
+                    ApiVersionsResponse::decode(&mut &response[4..], 0)
+                        .expect("v0 ApiVersions body"),
+                )
+            }
         };
-        let header_len =
-            crate::network::response_header_len(api.api_key, entry.body_flexible(response_version));
-        check!(
-            response[header_len..]
-                .windows(2)
-                .any(|bytes| bytes == codes::UNSUPPORTED_VERSION.to_be_bytes()),
-            "api_key {} response carries error 35",
-            api.api_key
-        );
-
-        if api.api_key == API_VERSIONS_KEY {
-            let decoded = ApiVersionsResponse::decode(&mut &response[header_len..], 0)
-                .expect("max+1 ApiVersions uses the v0 body");
-            check!(decoded.error_code == codes::UNSUPPORTED_VERSION);
-            // The `PLAINTEXT` listener above is the only one this broker
-            // binds, so it is also the one `inter_broker_listener_name` names
-            // and it carries client and inter-broker traffic together
-            // (`ListenerKind::ClientAndInterBroker`). The point here is that
-            // the rejected-version path is scoped to the same listener the
-            // accepted path is, not which table that turns out to be.
-            check!(
-                decoded.api_keys
-                    == crate::api_catalog::supported_apis(
-                        crate::api_catalog::ListenerKind::ClientAndInterBroker,
-                        crate::api_catalog::ClientMetricsReceiver::Absent,
-                    )
-            );
-        }
+        check!(actual == expected, "api_key {api_key} at version {version}");
     }
 
-    let frame = request_frame(i16::MAX, 0, 10_000, None, None, &[]);
-    framed.send(frame.freeze()).await.expect("send unknown api");
-    check!(
-        framed.next().await.is_none(),
-        "unknown api must close connection"
-    );
+    server
+        .await
+        .expect("serve loop joins after every connection");
     let unknown = crate::metrics::ApiKeyLabel {
         api_key: crate::metrics::UNKNOWN_LABEL.into(),
     };
     check!(metrics.api_requests.get_or_create(&unknown).get() == 1);
-
-    server.await.expect("serve loop joins after unknown API");
     handle.shutdown().await;
 }
 

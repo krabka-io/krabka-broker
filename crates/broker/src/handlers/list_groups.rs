@@ -9,10 +9,17 @@
 //! - KIP-932 share groups from its share registry, type `"share"`.
 //! - KIP-1071 streams groups from its streams registry, type `"streams"`.
 //!
-//! The handler honors both optional filters: `states_filter` (v4+) and
-//! `types_filter` (v5+). For example, `kafka-share-groups.sh --list` sends
+//! Each group reports its live state, read from its actor, and the protocol
+//! type of Kafka's `asListedGroup`. The handler honors both optional filters,
+//! as Kafka's `GroupMetadataManager.listGroups` does: `states_filter` (v4+)
+//! compares without case after a trim, and `types_filter` (v5+) compares
+//! without case. For example, `kafka-share-groups.sh --list` sends
 //! `["share"]`, `kafka-streams-groups.sh --list` sends `["streams"]`, and
 //! `kafka-consumer-groups.sh --list` sends `["consumer"]`.
+//!
+//! Authorization follows Kafka's `KafkaApis.handleListGroupsRequest`: a
+//! principal with `Describe` on the cluster sees every group, and any other
+//! principal sees only the groups it may `Describe`.
 //!
 //! The handler emits a `group_id` at most once. The registries are disjoint by
 //! `GroupType`, but the handler dedups defensively.
@@ -28,13 +35,17 @@ use krabka_protocol::{
         list_groups_response::{ListGroupsResponse, ListedGroup},
     },
 };
+use tokio::sync::oneshot;
 
 use crate::{
-    authorizer::{AuthorizationRequest, AuthorizationResult},
     broker::Broker,
     codes,
-    coordinator::unified::{GroupType, classic_state::GroupState},
+    coordinator::unified::{
+        GroupType, actor::GroupActorMessage, classic_state::GroupState,
+        share::actor::ShareGroupActorMessage, streams::actor::StreamsGroupActorMessage,
+    },
     error::BrokerError,
+    handlers::{acl_denied, cluster_describe_denied},
 };
 
 /// Wire `group_type` string for classic (pre-KIP-848) groups.
@@ -45,10 +56,13 @@ const GROUP_TYPE_CONSUMER: &str = "consumer";
 const GROUP_TYPE_SHARE: &str = "share";
 /// Wire `group_type` string for KIP-1071 streams groups.
 const GROUP_TYPE_STREAMS: &str = "streams";
-/// Kafka's consumer embedded-protocol type (`ConsumerProtocol.PROTOCOL_TYPE`).
-/// The handler reports it as `protocol_type` for classic and next-gen consumer
-/// groups.
+/// Kafka's consumer embedded-protocol type (`ConsumerProtocol.PROTOCOL_TYPE`),
+/// which a next-gen consumer group reports as its `protocol_type`.
 const CONSUMER_PROTOCOL_TYPE: &str = "consumer";
+/// Kafka's `ShareGroup.PROTOCOL_TYPE`.
+const SHARE_PROTOCOL_TYPE: &str = "share";
+/// Kafka's `StreamsGroup.PROTOCOL_TYPE`.
+const STREAMS_PROTOCOL_TYPE: &str = "streams";
 
 #[tracing::instrument(
     name = "handle_list_groups",
@@ -66,180 +80,203 @@ pub(crate) async fn handle(
 ) -> Result<Bytes, BrokerError> {
     let mut cur: &[u8] = req_bytes;
     let req = ListGroupsRequest::decode(&mut cur, version)?;
-    let snapshots = broker.group_coordinator.list_groups().await;
+    let candidates = collect_groups(broker).await;
 
     let image = broker.controller.current_image();
-
-    // Both filters are plain `Vec<String>` (not Option); they are empty when
-    // no filter was requested (older wire versions always decode them empty).
-    let states_active = !req.states_filter.is_empty();
-    let types_active = !req.types_filter.is_empty();
-
-    // Per-group `Describe` ACL. On Deny the group is silently omitted from the
-    // response (no per-group error_code). With the default `AllowAllAuthorizer`
-    // every group passes; with `SimpleAclAuthorizer` the super-user bypass plus
-    // matching Describe ACLs let groups through; with `OpaAuthorizer` the policy
-    // decides per group.
-    let authorized = |group_id: &str| {
-        let acl_req = AuthorizationRequest {
-            principal: ctx.principal,
-            host: ctx.peer,
-            resource_type: ResourceType::Group,
-            resource_name: group_id,
-            operation: AclOperation::Describe,
-        };
-        broker.config.authorizer.authorize(&*image, &acl_req) != AuthorizationResult::Deny
+    let authorizer = broker.config.authorizer.as_ref();
+    // Kafka checks `Describe` on the cluster once. A principal that has it
+    // sees every group; any other principal sees only the groups it may
+    // `Describe`, and a denied group is silently omitted.
+    let cluster_describe = !cluster_describe_denied(authorizer, &image, ctx);
+    let may_describe = |group_id: &str| {
+        cluster_describe
+            || !acl_denied(
+                authorizer,
+                &image,
+                ctx,
+                ResourceType::Group,
+                group_id,
+                AclOperation::Describe,
+            )
     };
-
-    let mut groups: Vec<ListedGroup> = Vec::with_capacity(snapshots.len());
-    // Ids already emitted, so the same group_id never appears twice across the
-    // three (disjoint-by-design) registries.
-    let mut emitted: HashSet<String> = HashSet::new();
-
-    // ── Classic groups (group_type "classic") ───────────────────────────
-    for s in snapshots {
-        // KIP-1071: a Streams-locked group keeps its drained classic-kind
-        // offset-home actor in this classic snapshot. Report it via the streams
-        // pass (group_type="streams"), never here as "classic".
-        // NOTE: do NOT add to `emitted` here — the streams pass must still be
-        // able to emit it. The consumer pass is guarded separately below.
-        if broker.group_coordinator.group_type(&s.group_id) == Some(GroupType::Streams) {
-            continue;
-        }
-        if !authorized(s.group_id.as_str()) {
-            continue;
-        }
-        let state_str = state_to_str(s.state);
-        if states_active && !req.states_filter.iter().any(|v| v == state_str) {
-            continue;
-        }
-        if types_active
-            && !req
-                .types_filter
-                .iter()
-                .any(|t| t.eq_ignore_ascii_case(GROUP_TYPE_CLASSIC))
-        {
-            continue;
-        }
-        emitted.insert(s.group_id.clone());
-        groups.push(ListedGroup {
-            group_id: s.group_id,
-            protocol_type: s
-                .protocol_type
-                .unwrap_or_else(|| CONSUMER_PROTOCOL_TYPE.into()),
-            group_state: state_str.into(),
-            group_type: GROUP_TYPE_CLASSIC.into(),
-            ..Default::default()
-        });
-    }
-
-    // ── KIP-848 next-gen consumer groups (group_type "consumer") ────────
-    // These live in the unified coordinator's consumer registry, separate
-    // from the classic group registry.
-    let ng = &broker.group_coordinator;
-    // KIP-1071: consumer_group_ids returns ALL ids from self.groups (classic
-    // included). Filter out Streams-locked ids so a converted group does not
-    // appear here as "consumer" — it will be emitted by the streams pass.
-    let consumer_ids: Vec<String> = ng
-        .consumer_group_ids()
-        .into_iter()
-        .filter(|id| ng.group_type(id) != Some(GroupType::Streams))
-        .collect();
-    append_next_gen(
-        &mut groups,
-        &mut emitted,
-        GROUP_TYPE_CONSUMER,
-        consumer_ids,
-        &req,
-        &authorized,
-    );
-    // ── KIP-932 share groups (group_type "share") ───────────────────────
-    // Gated on `share_group.enable`; share groups live in the same
-    // coordinator's separate share registry.
-    if broker.config.share_group.enable {
-        append_next_gen(
-            &mut groups,
-            &mut emitted,
-            GROUP_TYPE_SHARE,
-            ng.share_group_ids(),
-            &req,
-            &authorized,
-        );
-    }
-    // ── KIP-1071 streams groups (group_type "streams") ──────────────────
-    // Surfaced so the JVM `kafka-streams-groups.sh --list` / `--describe`
-    // (AdminClient `listGroups(typesFilter=[Streams])`) can find them; the
-    // describe hop is gated behind a non-empty list on the JVM side.
-    if broker.config.streams_group.enable {
-        append_next_gen(
-            &mut groups,
-            &mut emitted,
-            GROUP_TYPE_STREAMS,
-            ng.streams_group_ids(),
-            &req,
-            &authorized,
-        );
-    }
 
     let resp = ListGroupsResponse {
         error_code: codes::NONE,
-        groups,
+        groups: filter_groups(candidates, &req, &may_describe),
         throttle_time_ms: 0,
         ..Default::default()
     };
     crate::handlers::encode_response(&resp, version)
 }
 
-/// Appends one `ListedGroup` for each next-gen group id. The `group_type` is
-/// either `"consumer"` or `"share"`.
+/// Every group the coordinator hosts, as Kafka's `asListedGroup` renders it,
+/// before the filters and the ACLs.
 ///
-/// The function honors `states_filter` and `types_filter` and the per-group
-/// Describe ACL, and it dedups against the ids that it already emitted. It
-/// stays sync. The runtime state of the group is not cheaply available without
-/// an actor round-trip, so the function reports the constant "Stable". Here
-/// `--list` filters on `types_filter`, not on the state.
-fn append_next_gen(
-    groups: &mut Vec<ListedGroup>,
-    emitted: &mut HashSet<String>,
-    group_type: &str,
-    ids: Vec<String>,
-    req: &ListGroupsRequest,
-    authorized: &impl Fn(&str) -> bool,
-) {
-    const STATE: &str = "Stable";
-    let states_active = !req.states_filter.is_empty();
-    let types_active = !req.types_filter.is_empty();
-    if states_active && !req.states_filter.iter().any(|v| v == STATE) {
-        return;
-    }
-    if types_active
-        && !req
-            .types_filter
-            .iter()
-            .any(|t| t.eq_ignore_ascii_case(group_type))
-    {
-        return;
-    }
-    // Share and streams groups carry an empty protocol_type (Kafka emits no
-    // consumer protocol for them); next-gen consumer groups use "consumer".
-    let protocol_type = if group_type == GROUP_TYPE_SHARE || group_type == GROUP_TYPE_STREAMS {
-        String::new()
-    } else {
-        CONSUMER_PROTOCOL_TYPE.into()
-    };
-    for gid in ids {
-        if emitted.contains(&gid) || !authorized(&gid) {
+/// Each next-gen group's state comes from its actor. An actor that has
+/// stopped, or that no longer holds a group of the registry's type, answers
+/// nothing and is left out.
+async fn collect_groups(broker: &Broker) -> Vec<ListedGroup> {
+    let coordinator = &broker.group_coordinator;
+    let mut groups: Vec<ListedGroup> = Vec::new();
+    // Ids already emitted, so the same group_id never appears twice across the
+    // (disjoint-by-design) registries.
+    let mut emitted: HashSet<String> = HashSet::new();
+
+    // ── Classic groups (group_type "classic") ───────────────────────────
+    for s in coordinator.list_groups().await {
+        // KIP-1071: a Streams-locked group keeps its drained classic-kind
+        // offset-home actor in this classic snapshot. Report it via the streams
+        // pass (group_type="streams"), never here as "classic".
+        if coordinator.group_type(&s.group_id) == Some(GroupType::Streams) {
             continue;
         }
-        emitted.insert(gid.clone());
-        groups.push(ListedGroup {
-            group_id: gid,
-            protocol_type: protocol_type.clone(),
-            group_state: STATE.into(),
-            group_type: group_type.into(),
-            ..Default::default()
-        });
+        let group = listed(
+            s.group_id,
+            // Kafka's `ClassicGroup.asListedGroup`: `protocolType.orElse("")`,
+            // so a group that only commits offsets reports "".
+            s.protocol_type.unwrap_or_default(),
+            state_to_str(s.state).into(),
+            GROUP_TYPE_CLASSIC,
+        );
+        push_once(&mut groups, &mut emitted, group);
     }
+
+    // ── KIP-848 next-gen consumer groups (group_type "consumer") ────────
+    // `consumer_group_ids` returns every id of the shared `groups` map. The
+    // `Describe` arm replies only for a live consumer-kind group, so a classic
+    // group, and a Streams-locked offset home, answer nothing here.
+    for gid in coordinator.consumer_group_ids() {
+        if emitted.contains(&gid) || coordinator.group_type(&gid) == Some(GroupType::Streams) {
+            continue;
+        }
+        let Some(handle) = coordinator.find(&gid) else {
+            continue;
+        };
+        let (tx, rx) = oneshot::channel();
+        if handle
+            .tx
+            .send(GroupActorMessage::Describe { reply: tx })
+            .await
+            .is_ok()
+            && let Ok(view) = rx.await
+        {
+            let group = listed(
+                gid,
+                CONSUMER_PROTOCOL_TYPE.into(),
+                view.group_state.into(),
+                GROUP_TYPE_CONSUMER,
+            );
+            push_once(&mut groups, &mut emitted, group);
+        }
+    }
+
+    // ── KIP-932 share groups (group_type "share") ───────────────────────
+    if broker.config.share_group.enable {
+        for gid in coordinator.share_group_ids() {
+            let Some(handle) = coordinator.find_share(&gid) else {
+                continue;
+            };
+            let (tx, rx) = oneshot::channel();
+            if handle
+                .tx
+                .send(ShareGroupActorMessage::Describe { reply: tx })
+                .await
+                .is_ok()
+                && let Ok(view) = rx.await
+            {
+                let group = listed(
+                    gid,
+                    SHARE_PROTOCOL_TYPE.into(),
+                    view.group_state,
+                    GROUP_TYPE_SHARE,
+                );
+                push_once(&mut groups, &mut emitted, group);
+            }
+        }
+    }
+
+    // ── KIP-1071 streams groups (group_type "streams") ──────────────────
+    // Surfaced so the JVM `kafka-streams-groups.sh --list` / `--describe`
+    // (AdminClient `listGroups(typesFilter=[Streams])`) can find them; the
+    // describe hop is gated behind a non-empty list on the JVM side.
+    if broker.config.streams_group.enable {
+        for gid in coordinator.streams_group_ids() {
+            let Some(handle) = coordinator.find_streams(&gid) else {
+                continue;
+            };
+            let (tx, rx) = oneshot::channel();
+            if handle
+                .tx
+                .send(StreamsGroupActorMessage::Describe { reply: tx })
+                .await
+                .is_ok()
+                && let Ok(view) = rx.await
+            {
+                let group = listed(
+                    gid,
+                    STREAMS_PROTOCOL_TYPE.into(),
+                    view.group_state,
+                    GROUP_TYPE_STREAMS,
+                );
+                push_once(&mut groups, &mut emitted, group);
+            }
+        }
+    }
+
+    groups
+}
+
+/// Appends `group` unless a group with its id was already emitted.
+fn push_once(groups: &mut Vec<ListedGroup>, emitted: &mut HashSet<String>, group: ListedGroup) {
+    if emitted.insert(group.group_id.clone()) {
+        groups.push(group);
+    }
+}
+
+fn listed(
+    group_id: String,
+    protocol_type: String,
+    group_state: String,
+    group_type: &str,
+) -> ListedGroup {
+    ListedGroup {
+        group_id,
+        protocol_type,
+        group_state,
+        group_type: group_type.into(),
+        ..Default::default()
+    }
+}
+
+/// Keeps the groups that match the request's filters and that `authorized`
+/// allows.
+///
+/// It follows Kafka's `GroupMetadataManager.listGroups`: each `states_filter`
+/// value is lower-cased and trimmed and compared with the lower-cased state,
+/// and each `types_filter` value is compared with the type without case. An
+/// empty filter matches every group.
+fn filter_groups(
+    groups: Vec<ListedGroup>,
+    req: &ListGroupsRequest,
+    authorized: &impl Fn(&str) -> bool,
+) -> Vec<ListedGroup> {
+    let states: HashSet<String> = req
+        .states_filter
+        .iter()
+        .map(|state| state.to_lowercase().trim().to_owned())
+        .collect();
+    groups
+        .into_iter()
+        .filter(|group| {
+            (states.is_empty() || states.contains(&group.group_state.to_lowercase()))
+                && (req.types_filter.is_empty()
+                    || req
+                        .types_filter
+                        .iter()
+                        .any(|t| t.eq_ignore_ascii_case(&group.group_type)))
+                && authorized(&group.group_id)
+        })
+        .collect()
 }
 
 fn state_to_str(s: GroupState) -> &'static str {
@@ -253,9 +290,10 @@ fn state_to_str(s: GroupState) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, sync::Arc};
+    use std::sync::Arc;
 
     use assert2::assert;
+    use krabka_metadata::MetadataRecord;
 
     use super::*;
     use crate::test_support::{peer, principal};
@@ -269,14 +307,37 @@ mod tests {
         client_id = "admin-client"
     );
 
-    use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
+    fn group(group_id: &str, protocol_type: &str, state: &str, group_type: &str) -> ListedGroup {
+        listed(
+            group_id.into(),
+            protocol_type.into(),
+            state.into(),
+            group_type,
+        )
+    }
 
+    fn sorted(mut groups: Vec<ListedGroup>) -> Vec<ListedGroup> {
+        groups.sort_by(|a, b| a.group_id.cmp(&b.group_id));
+        groups
+    }
+
+    /// Every group kind the handler lists reports its live state and Kafka's
+    /// protocol type: an offset-only classic group reports "", and an empty
+    /// consumer, share or streams group reports `Empty`.
     #[tokio::test]
-    async fn handler_lists_classic_group_once_with_wire_fields() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    async fn handler_lists_each_kind_with_its_state_and_protocol_type() {
+        let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+            cfg.audit_enabled = false;
+            cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+            cfg.share_group.enable = true;
+        })
+        .await;
         let broker = broker_handle.broker_arc_for_test();
-        let _ = broker.group_coordinator.get_or_create_classic("classic-a");
+        let coordinator = &broker.group_coordinator;
+        let _classic = coordinator.get_or_create_classic("classic-a");
+        let _consumer = coordinator.get_or_create_consumer("consumer-a");
+        coordinator.mark_share("share-a");
+        let _share = coordinator.get_or_create_share("share-a");
         let p = principal("admin");
         let peer = peer();
         let ctx = test_context(&p, &peer);
@@ -290,103 +351,155 @@ mod tests {
         let expected = ListGroupsResponse {
             throttle_time_ms: 0,
             error_code: codes::NONE,
-            groups: vec![ListedGroup {
-                group_id: "classic-a".into(),
-                protocol_type: "consumer".into(),
-                group_state: "Empty".into(),
-                group_type: "classic".into(),
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-            }],
+            groups: vec![
+                group("classic-a", "", "Empty", "classic"),
+                group("consumer-a", "consumer", "Empty", "consumer"),
+                group("share-a", "share", "Empty", "share"),
+            ],
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+        };
+        let resp = ListGroupsResponse {
+            groups: sorted(resp.groups),
+            ..resp
         };
         assert!(resp == expected, "{resp:?}");
         broker_handle.shutdown().await;
     }
 
-    #[test]
-    fn append_next_gen_filters_dedups_authorizes_and_preserves_share_fields() {
-        let req = ListGroupsRequest {
-            states_filter: vec!["Stable".into()],
-            types_filter: vec!["share".into()],
-            ..Default::default()
-        };
-        let mut groups = vec![ListedGroup {
-            group_id: "already".into(),
-            protocol_type: "consumer".into(),
-            group_state: "Stable".into(),
-            group_type: "classic".into(),
-            ..Default::default()
-        }];
-        let mut emitted = maplit::hashset! {"already".to_string()};
+    fn acl(resource_type: ResourceType, name: &str, user: &str) -> MetadataRecord {
+        MetadataRecord::V1AccessControlEntry(krabka_metadata::AclEntry {
+            resource_type,
+            resource_name: name.into(),
+            pattern_type: krabka_metadata::PatternType::Literal,
+            principal: format!("User:{user}"),
+            host: "*".into(),
+            operation: AclOperation::Describe,
+            permission_type: krabka_metadata::PermissionType::Allow,
+        })
+    }
 
-        append_next_gen(
-            &mut groups,
-            &mut emitted,
-            "share",
-            vec!["already".into(), "denied".into(), "share-a".into()],
-            &req,
-            &|gid| gid != "denied",
-        );
-
-        let expected_groups = vec![
-            ListedGroup {
-                group_id: "already".into(),
-                protocol_type: "consumer".into(),
-                group_state: "Stable".into(),
-                group_type: "classic".into(),
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-            },
-            ListedGroup {
-                group_id: "share-a".into(),
-                protocol_type: String::new(),
-                group_state: "Stable".into(),
-                group_type: "share".into(),
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-            },
+    /// Kafka's `handleListGroupsRequest`: cluster `Describe` lists every group
+    /// with no per-group check, and without it only the groups the principal
+    /// may `Describe` are listed.
+    #[tokio::test]
+    async fn handler_authorizes_by_cluster_describe_then_group_describe() {
+        let cluster = crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME;
+        let both = vec![
+            group("g-a", "", "Empty", "classic"),
+            group("g-b", "", "Empty", "classic"),
         ];
-        assert!(groups == expected_groups, "{groups:?}");
-        // "denied" was rejected by the authorizer; only "share-a" was added.
-        assert!(emitted == maplit::hashset! {"already".to_string(), "share-a".to_string()});
+        // (user, ACLs, expected groups)
+        let rows = [
+            (
+                "monitor",
+                vec![acl(ResourceType::Cluster, cluster, "monitor")],
+                both.clone(),
+            ),
+            (
+                "reader",
+                vec![acl(ResourceType::Group, "g-a", "reader")],
+                vec![group("g-a", "", "Empty", "classic")],
+            ),
+            ("nobody", Vec::new(), Vec::new()),
+            ("admin", Vec::new(), both),
+        ];
+
+        for (user, acls, expected_groups) in rows {
+            let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+                cfg.audit_enabled = false;
+                cfg.authorizer = Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
+                    HashSet::from(["admin".to_string()]),
+                ));
+            })
+            .await;
+            let broker = broker_handle.broker_arc_for_test();
+            if !acls.is_empty() {
+                broker
+                    .controller
+                    .submit_change(acls)
+                    .await
+                    .expect("commit ACLs");
+            }
+            let _a = broker.group_coordinator.get_or_create_classic("g-a");
+            let _b = broker.group_coordinator.get_or_create_classic("g-b");
+            let p = principal(user);
+            let peer = peer();
+            let ctx = test_context(&p, &peer);
+            let req = encode_request(&ListGroupsRequest::default());
+
+            let bytes = handle(&broker, VERSION, 1, &req, &ctx)
+                .await
+                .expect("handle");
+            let resp = decode_response(&bytes);
+
+            let expected = ListGroupsResponse {
+                groups: expected_groups,
+                ..Default::default()
+            };
+            let resp = ListGroupsResponse {
+                groups: sorted(resp.groups),
+                ..resp
+            };
+            assert!(resp == expected, "{user}: {resp:?}");
+            broker_handle.shutdown().await;
+        }
     }
 
     #[test]
-    fn append_next_gen_rejects_mismatched_type_filter_and_keeps_consumer_protocol() {
-        let mismatched = ListGroupsRequest {
-            types_filter: vec!["share".into()],
+    fn filter_groups_matches_kafka_filters() {
+        let groups = vec![
+            group("classic-a", "", "Empty", "classic"),
+            group("classic-b", "consumer", "PreparingRebalance", "classic"),
+            group("consumer-a", "consumer", "Reconciling", "consumer"),
+            group("consumer-b", "consumer", "Stable", "consumer"),
+            group("share-a", "share", "Empty", "share"),
+            group("streams-a", "streams", "NotReady", "streams"),
+            group("denied", "consumer", "Stable", "consumer"),
+        ];
+        let request = |states: &[&str], types: &[&str]| ListGroupsRequest {
+            states_filter: states.iter().map(|s| (*s).to_owned()).collect(),
+            types_filter: types.iter().map(|t| (*t).to_owned()).collect(),
             ..Default::default()
         };
-        let mut groups = Vec::new();
-        let mut emitted = HashSet::new();
-        append_next_gen(
-            &mut groups,
-            &mut emitted,
-            "consumer",
-            vec!["consumer-a".into()],
-            &mismatched,
-            &|_| true,
-        );
-        assert!(groups.is_empty());
+        let ids = |ids: &[&str]| ids.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>();
+        // (request, expected group ids)
+        let rows = [
+            (
+                request(&[], &[]),
+                ids(&[
+                    "classic-a",
+                    "classic-b",
+                    "consumer-a",
+                    "consumer-b",
+                    "share-a",
+                    "streams-a",
+                ]),
+            ),
+            (request(&["empty"], &[]), ids(&["classic-a", "share-a"])),
+            (request(&[" STABLE "], &[]), ids(&["consumer-b"])),
+            (
+                request(&["reconciling", "notready"], &[]),
+                ids(&["consumer-a", "streams-a"]),
+            ),
+            (request(&["Dead"], &[]), ids(&[])),
+            (request(&[], &["Share"]), ids(&["share-a"])),
+            (
+                request(&[], &["CLASSIC", "streams"]),
+                ids(&["classic-a", "classic-b", "streams-a"]),
+            ),
+            (request(&[], &["unknown"]), ids(&[])),
+            (request(&["empty"], &["consumer"]), ids(&[])),
+        ];
 
-        let matched = ListGroupsRequest {
-            types_filter: vec!["consumer".into()],
-            ..Default::default()
-        };
-        append_next_gen(
-            &mut groups,
-            &mut emitted,
-            "consumer",
-            vec!["consumer-a".into()],
-            &matched,
-            &|_| true,
-        );
-        let expected = vec![ListedGroup {
-            group_id: "consumer-a".into(),
-            protocol_type: "consumer".into(),
-            group_state: "Stable".into(),
-            group_type: "consumer".into(),
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-        }];
-        assert!(groups == expected, "{groups:?}");
+        for (req, expected) in rows {
+            let listed = filter_groups(groups.clone(), &req, &|gid| gid != "denied");
+            let expected: Vec<ListedGroup> = groups
+                .iter()
+                .filter(|g| expected.contains(&g.group_id))
+                .cloned()
+                .collect();
+            assert!(listed == expected, "{req:?}");
+        }
     }
 
     #[test]

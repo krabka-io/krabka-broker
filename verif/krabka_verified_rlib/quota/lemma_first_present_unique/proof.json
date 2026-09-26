@@ -1,8 +1,0 @@
-{
-  "profile": [],
-  "proofs": {
-    "Coma": {
-      "vc_lemma_first_present_unique": { "prover": "z3", "time": 0.011 }
-    }
-  }
-}

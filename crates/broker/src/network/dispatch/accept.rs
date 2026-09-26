@@ -179,8 +179,9 @@ where
 
 /// Inspects the post-handshake TLS stream for a peer certificate. If one is
 /// present, this derives the Subject DN with
-/// [`krabka_security::extract_principal_from_cert`] and runs it through the
-/// listener's KIP-371 `ssl.principal.mapping.rules` to get the principal name.
+/// [`crate::network::auth::subject_dn_rfc2253`], the RFC 2253 form Kafka's
+/// `X500Principal.getName()` gives, and runs it through the listener's KIP-371
+/// `ssl.principal.mapping.rules` to get the principal name.
 /// The default rule list is Kafka's `DEFAULT`, under which the DN itself is
 /// the principal.
 ///
@@ -198,7 +199,7 @@ fn peer_cert_principal<S>(
     let Some(distinguished_name) = server_conn
         .peer_certificates()
         .and_then(<[_]>::first)
-        .and_then(|cert| krabka_security::extract_principal_from_cert(cert.as_ref()))
+        .and_then(|cert| crate::network::auth::subject_dn_rfc2253(cert.as_ref()))
     else {
         return Ok(None);
     };

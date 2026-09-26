@@ -1,17 +1,17 @@
-(* #"/workspace/crates/verified/src/quota.rs" 44 27 44 32 *)
+(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/quota.rs" 11 27 11 32 *)
 
 (* <quota::UserClientQuotaPrecedence as std::clone::Clone> *)
 
 use creusot.prelude.Any
 
 type t_UserClientQuotaPrecedence =
-  | UserClient
-  | UserDefaultClient
-  | User
-  | DefaultUserClient
-  | DefaultUserDefaultClient
+  | ExactPair
+  | ExactClientDefaultUser
+  | DefaultClientExactUser
+  | DefaultPair
+  | ExactUser
+  | ExactClient
   | DefaultUser
-  | Client
   | DefaultClient
   | None
 
@@ -19,7 +19,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_UserClientQuotaPrecedence [#"/workspace/crates/verified/src/quota.rs" 44 27 44 32]
+let clone_UserClientQuotaPrecedence [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/quota.rs" 11 27 11 32]
   (self: t_UserClientQuotaPrecedence) (return (x: t_UserClientQuotaPrecedence)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_UserClientQuotaPrecedence = Any.any_l () | & self: t_UserClientQuotaPrecedence = self ])

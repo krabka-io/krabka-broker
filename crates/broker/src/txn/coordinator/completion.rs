@@ -168,11 +168,14 @@ impl TxnCoordinator {
         let Some(handle) = self.get(transactional_id) else {
             return CompletionAttempt::NothingToComplete;
         };
-        let prepared = handle.lock().await.clone();
+        let mut prepared = handle.lock().await.clone();
         let Some((marker, complete)) = completion_for(prepared.state) else {
             return CompletionAttempt::NothingToComplete;
         };
-        if let Err(error) = self.dispatch_transaction_markers(&prepared, marker).await {
+        if let Err(error) = self
+            .dispatch_transaction_markers(&mut prepared, marker)
+            .await
+        {
             if classify_marker_failure(&error) == MarkerFailureClass::Fatal {
                 // A fenced producer or coordinator generation has already
                 // superseded this fan-out (#882): retrying here can never

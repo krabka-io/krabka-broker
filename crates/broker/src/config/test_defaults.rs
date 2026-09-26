@@ -11,8 +11,7 @@ use krabka_raft::{
     MetadataRaftFetchMax, NodeId,
 };
 use krabka_units::{
-    Time, bytes, convert::TimeExt, fraction, gibibytes, hours, kibibytes, mebibytes, millis,
-    minutes, secs,
+    Time, bytes, convert::TimeExt, hours, kibibytes, mebibytes, millis, minutes, secs,
 };
 
 use crate::{
@@ -120,9 +119,6 @@ impl BrokerConfig {
             socket_receive_buffer: mebibytes(1),
             acl_max_principal: bytes(256),
             acl_max_resource_name: bytes(256),
-            telemetry_max_decompression_ratio: fraction(100.0),
-            telemetry_decompressed_output_floor: mebibytes(16),
-            telemetry_decompressed_output_ceiling: gibibytes(1),
             record_decompression_max_ratio: record_decompression.max_ratio(),
             record_decompression_output_floor: record_decompression.output_floor(),
             record_decompression_output_ceiling: record_decompression.output_ceiling(),
@@ -136,7 +132,10 @@ impl BrokerConfig {
             default_message_timestamp_after_max_ms: Some(3_600_000),
             num_partitions: 1,
             default_replication_factor: 1,
+            delete_topic_enable: true,
+            auto_create_topics_enable: true,
             max_request_partition_size_limit: 2000,
+            offset_metadata_max_bytes: 4096,
             future_log_move_read_chunk: mebibytes(1),
             offsets_topic_num_partitions: 50,
             offsets_retention_override: None,
@@ -334,11 +333,11 @@ impl BrokerConfig {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_units::convert::{ByteSizeExt, RatioExt};
+    use krabka_units::convert::ByteSizeExt;
 
     use super::*;
 
-    fn additional_policy_snapshot(config: BrokerConfig) -> [String; 30] {
+    fn additional_policy_snapshot(config: BrokerConfig) -> [String; 27] {
         [
             config.self_registration_max_attempts.to_string(),
             config.observer_fetch_max.bytes_u64().to_string(),
@@ -360,18 +359,6 @@ mod tests {
             config.socket_receive_buffer.bytes_u64().to_string(),
             config.acl_max_principal.bytes_u64().to_string(),
             config.acl_max_resource_name.bytes_u64().to_string(),
-            config
-                .telemetry_max_decompression_ratio
-                .as_f64()
-                .to_string(),
-            config
-                .telemetry_decompressed_output_floor
-                .bytes_u64()
-                .to_string(),
-            config
-                .telemetry_decompressed_output_ceiling
-                .bytes_u64()
-                .to_string(),
             config.inter_broker_server_name,
             config.producer_id_expiration.millis_i64().to_string(),
             config
@@ -414,9 +401,6 @@ mod tests {
                     "1048576",
                     "256",
                     "256",
-                    "100",
-                    "16777216",
-                    "1073741824",
                     "localhost",
                     "86400000",
                     "600000",

@@ -101,9 +101,10 @@ pub use consensus::{
     recompute_high_watermark,
 };
 pub use delegation_token::{
-    TokenDeadlines, TokenExpireDecision, TokenMutationDecision, TokenMutationFacts,
-    TokenMutationKind, TokenMutationState, TokenRenewDecision, create_token_deadlines,
-    expire_token_deadline, renew_token_expiry, token_is_active, token_mutation_decision,
+    TokenCreateDecision, TokenDeadlines, TokenExpireDecision, TokenMutationDecision,
+    TokenMutationFacts, TokenMutationKind, TokenMutationState, TokenRenewDecision,
+    create_token_deadlines, expire_token_deadline, renew_token_expiry, token_is_active,
+    token_mutation_decision,
 };
 pub use delivery::{
     coalesce_delivery_range, delivery_watermark_advance, scheduled_delivery_visible,

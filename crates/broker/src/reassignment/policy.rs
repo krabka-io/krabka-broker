@@ -465,6 +465,34 @@ mod tests {
         assert!(pr.isr == vec![NodeId(3), NodeId(4), NodeId(5)]);
     }
 
+    /// A start writes the target replicas in the operator's order followed by
+    /// the removing ones, as Kafka's `PartitionReassignmentReplicas` does, so
+    /// the completion lands on the target in that order and `replicas[0]`, the
+    /// preferred leader, is the one the operator named first.
+    #[test]
+    fn completion_keeps_the_operators_target_order() {
+        // Target [3,4,1] over current [1,2,3]: the start wrote [3,4,1,2].
+        let image = img(&[3, 4, 1, 2], &[1, 2, 3, 4], &[4], &[2], 1);
+        let record = image.partition("foo", 0).expect("seeded partition");
+        let alive = std::collections::HashSet::from([NodeId(1), NodeId(2), NodeId(3), NodeId(4)]);
+
+        let completed = reassign_one(record, &alive);
+
+        let expected = PartitionRecord {
+            topic: "foo".into(),
+            partition: 0,
+            leader: NodeId(1),
+            replicas: vec![NodeId(3), NodeId(4), NodeId(1)],
+            isr: vec![NodeId(1), NodeId(3), NodeId(4)],
+            leader_epoch: krabka_metadata::LeaderEpoch(5),
+            adding_replicas: vec![],
+            removing_replicas: vec![],
+            directories: vec![Uuid::nil(); 3],
+            partition_epoch: 1,
+        };
+        assert!(completed == Some(expected));
+    }
+
     #[tokio::test]
     async fn isr_intersection_when_some_targets_not_in_isr() {
         // adding=[4], removing=[2]; isr=[1,2,3,4]; target=[1,3,4].

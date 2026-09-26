@@ -202,6 +202,7 @@ pub(crate) fn build_hosted_classic_join_result(
         protocol_type: Some("consumer".into()),
         protocol_name,
         leader: member_id.to_string(),
+        skip_assignment: false,
         member_id: member_id.to_string(),
         members: vec![JoinResultMember {
             member_id: member_id.to_string(),

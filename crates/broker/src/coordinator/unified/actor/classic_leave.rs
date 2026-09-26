@@ -4,7 +4,7 @@
 //! answer: a leave that empties a classic group bumps and rewrites its
 //! generation, a leave against an upgraded group tombstones the departed
 //! member's next-gen records, and a delete appends the tombstones of the
-//! group's offsets and its classic k2 record, which stops the actor.
+//! group's offsets and its group records, which stops the actor.
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -171,17 +171,25 @@ fn resolve_consumer_classic_leave(
     (responses, removed)
 }
 
-/// The `ClassicDelete` mailbox arm: delete an empty classic group and every
-/// offset it holds, in one batch.
+/// The `ClassicDelete` mailbox arm: delete an empty group, classic or
+/// KIP-848 consumer, and every offset it holds, in one batch.
+///
+/// Both kinds answer the way Kafka's `validateDeleteGroup` does: a group with
+/// members answers `NON_EMPTY_GROUP`, whether it is a classic group
+/// (`ClassicGroup.validateDeleteGroup`) or a consumer group
+/// (`ConsumerGroup.validateDeleteGroup`).
 ///
 /// The batch follows Kafka's `GroupCoordinatorShard.deleteGroups`. It starts
 /// with an `OffsetCommit` tombstone for each committed offset
 /// (`OffsetMetadataManager.deleteAllOffsets`), then one for each key that an
 /// open transaction wrote and that has no committed offset, and ends with the
-/// k2 `GroupMetadata` tombstone. The open transaction keys include the ones a
-/// `TxnOffsetCommit` has reserved but not marked yet. Without the offset tombstones the commits stay
-/// live in `__consumer_offsets`, and a replay seeds the deleted group again
-/// from them.
+/// group tombstones: the k2 `GroupMetadata` tombstone of a classic group, or
+/// the `ConsumerGroupMetadata` and `ConsumerGroupTargetAssignmentMetadata`
+/// tombstones of a consumer group. An empty consumer group holds no member
+/// records, because each member's records are tombstoned when it leaves. The
+/// open transaction keys include the ones a `TxnOffsetCommit` has reserved but
+/// not marked yet. Without the offset tombstones the commits stay live in
+/// `__consumer_offsets`, and a replay seeds the deleted group again from them.
 ///
 /// Returns the actor's keep-running flag: a deleted group stops its actor.
 pub(super) async fn handle_classic_delete_message(
@@ -189,15 +197,11 @@ pub(super) async fn handle_classic_delete_message(
     offsets_log: &dyn OffsetsLog,
     reply: oneshot::Sender<Result<(), DeleteGroupError>>,
 ) -> bool {
-    let Some(state) = group.as_classic() else {
-        let _ = reply.send(Err(DeleteGroupError::NotFound));
-        return true;
-    };
-    if !state.members.is_empty() {
+    if group.has_members() {
         let _ = reply.send(Err(DeleteGroupError::NonEmpty));
         return true;
     }
-    let group_id = state.group_id.clone();
+    let group_id = group.group_id.clone();
     let batch = delete_group_batch(group, chrono_now_ms());
     match offsets_log.append(&group_id, batch).await {
         Ok(()) => {
@@ -205,7 +209,7 @@ pub(super) async fn handle_classic_delete_message(
             false
         }
         Err(error) => {
-            tracing::warn!(%group_id, %error, "classic DeleteGroups tombstone write failed");
+            tracing::warn!(%group_id, %error, "DeleteGroups tombstone write failed");
             let _ = reply.send(Err(DeleteGroupError::Internal));
             true
         }

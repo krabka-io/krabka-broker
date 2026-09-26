@@ -125,6 +125,13 @@ pub struct DescribeView {
     pub group_id: String,
     pub group_epoch: i32,
     pub assignment_epoch: i32,
+    /// The group state, from `GroupState::state_name`.
+    pub group_state: &'static str,
+    /// The server assignor most members name, as Kafka's
+    /// `ConsumerGroup.preferredServerAssignor` picks it. `None` when no
+    /// member names one; the describe path then reports the default
+    /// assignor.
+    pub preferred_server_assignor: Option<String>,
     pub members: Vec<DescribeMember>,
 }
 
@@ -132,11 +139,18 @@ pub struct DescribeView {
 pub struct DescribeMember {
     pub member_id: String,
     pub instance_id: Option<String>,
+    pub rack_id: Option<String>,
     pub member_epoch: i32,
     pub client_id: String,
     pub client_host: String,
+    /// The subscribed topic names, sorted.
     pub subscribed_topic_names: Vec<String>,
+    pub subscribed_topic_regex: Option<String>,
     pub assigned_partitions: HashMap<Uuid, Vec<i32>>,
+    /// Partitions the member still owns until it confirms their revocation.
+    pub partitions_pending_revocation: HashMap<Uuid, Vec<i32>>,
+    /// The member's share of the group's target assignment.
+    pub target_partitions: HashMap<Uuid, Vec<i32>>,
     /// `true` if and only if this is a classic member hosted in an upgraded
     /// group, which means its `ClassicMemberFacade` is set. This flag separates
     /// a classic-protocol member served through the next-gen machinery from a
@@ -185,21 +199,57 @@ pub(super) fn build_describe(state: &GroupState) -> DescribeView {
         group_id: state.group_id.clone(),
         group_epoch: state.group_epoch,
         assignment_epoch: state.target.epoch,
+        group_state: state.state_name(),
+        preferred_server_assignor: preferred_server_assignor(state),
         members: state
             .members
             .values()
-            .map(|m| DescribeMember {
-                member_id: m.member_id.clone(),
-                instance_id: m.instance_id.clone(),
-                member_epoch: m.member_epoch,
-                client_id: m.client_id.clone(),
-                client_host: m.client_host.clone(),
-                subscribed_topic_names: m.subscribed_topic_names.iter().cloned().collect(),
-                assigned_partitions: m.assigned_partitions.clone(),
-                is_classic: m.is_classic(),
+            .map(|m| {
+                let mut subscribed_topic_names: Vec<String> =
+                    m.subscribed_topic_names.iter().cloned().collect();
+                subscribed_topic_names.sort_unstable();
+                DescribeMember {
+                    member_id: m.member_id.clone(),
+                    instance_id: m.instance_id.clone(),
+                    rack_id: m.rack_id.clone(),
+                    member_epoch: m.member_epoch,
+                    client_id: m.client_id.clone(),
+                    client_host: m.client_host.clone(),
+                    subscribed_topic_names,
+                    subscribed_topic_regex: m.subscribed_topic_regex.clone(),
+                    assigned_partitions: m.assigned_partitions.clone(),
+                    partitions_pending_revocation: m.partitions_pending_revocation.clone(),
+                    target_partitions: state
+                        .target
+                        .per_member
+                        .get(&m.member_id)
+                        .cloned()
+                        .unwrap_or_default(),
+                    is_classic: m.is_classic(),
+                }
             })
             .collect(),
     }
+}
+
+/// The server assignor the most members name, as Kafka's
+/// `ConsumerGroup.preferredServerAssignor` counts them. A tie goes to the
+/// smallest name, so the answer does not depend on map order.
+fn preferred_server_assignor(state: &GroupState) -> Option<String> {
+    let mut votes: HashMap<&str, usize> = HashMap::new();
+    for name in state
+        .members
+        .values()
+        .filter_map(|m| m.server_assignor.as_deref())
+    {
+        *votes.entry(name).or_default() += 1;
+    }
+    votes
+        .into_iter()
+        .max_by(|(a_name, a_votes), (b_name, b_votes)| {
+            a_votes.cmp(b_votes).then_with(|| b_name.cmp(a_name))
+        })
+        .map(|(name, _)| name.to_string())
 }
 
 #[cfg(test)]
@@ -215,6 +265,36 @@ mod tests {
             },
         },
     };
+
+    /// Kafka's `preferredServerAssignor` takes the name the most members
+    /// chose; krabka breaks a tie on the smallest name.
+    #[test]
+    fn the_preferred_assignor_is_the_most_named_one() {
+        // (each member's `server_assignor`, expected preference)
+        let rows: [(Vec<Option<&str>>, Option<&str>); 4] = [
+            (vec![], None),
+            (vec![None, None], None),
+            (
+                vec![Some("range"), Some("uniform"), Some("uniform"), None],
+                Some("uniform"),
+            ),
+            (vec![Some("uniform"), Some("range")], Some("range")),
+        ];
+        for (assignors, expected) in rows {
+            let mut state = crate::coordinator::unified::consumer_state::GroupState::new("g");
+            for (i, assignor) in assignors.iter().enumerate() {
+                let mut m = crate::coordinator::unified::consumer_state::test_support::member(
+                    &format!("m{i}"),
+                );
+                m.server_assignor = assignor.map(str::to_string);
+                state.members.insert(m.member_id.clone(), m);
+            }
+            assert!(
+                super::preferred_server_assignor(&state).as_deref() == expected,
+                "{assignors:?}"
+            );
+        }
+    }
 
     // ── classic actor arms + coordinator admin surface ──────────────
 
@@ -234,6 +314,12 @@ mod tests {
                     group_id: "g".into(),
                     member_id: String::new(),
                     protocol_type: "consumer".into(),
+                    protocols: vec![
+                        krabka_protocol::owned::join_group_request::JoinGroupRequestProtocol {
+                            name: "range".into(),
+                            ..Default::default()
+                        },
+                    ],
                     ..Default::default()
                 },
                 version: 4,

@@ -967,13 +967,22 @@ async fn a_forwarded_request_carries_the_clients_own_delegation_token_flag() {
     )
     .await;
 
-    // The whole refusal, not just its code: Kafka's `err_response` leaves
-    // every other field at its default, and a handler that got as far as
-    // minting would have populated them.
+    // The whole refusal, not just its code: Kafka's `ControllerApis` answers
+    // it with `CreateDelegationTokenResponse.prepareResponse`, which names the
+    // owner and the requester and writes `DelegationTokenManager`'s -1
+    // `ERROR_TIMESTAMP`, and leaves the token id and HMAC empty, which a
+    // handler that got as far as minting would have populated.
     check!(
         embedded_create_delegation_token_response(&refused)
             == CreateDelegationTokenResponse {
                 error_code: DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
+                principal_type: "User".into(),
+                principal_name: "alice".into(),
+                token_requester_principal_type: "User".into(),
+                token_requester_principal_name: "alice".into(),
+                issue_timestamp_ms: -1,
+                expiry_timestamp_ms: -1,
+                max_timestamp_ms: -1,
                 ..CreateDelegationTokenResponse::default()
             }
     );

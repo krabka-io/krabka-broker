@@ -157,11 +157,39 @@ async fn topic_holding_a_pending_batch(
     delivery_mode: Option<&str>,
     ctx: &crate::handlers::RequestContext<'_>,
 ) {
+    let configs: Vec<(&str, &str)> = delivery_mode
+        .map(|mode| (crate::config_keys::DELIVERY_MODE, mode))
+        .into_iter()
+        .collect();
+    topic_with_configs_holding_a_pending_batch(broker_handle, broker, topic, &configs, ctx).await;
+}
+
+// `topic_holding_a_pending_batch` for a topic created with `configs`. It
+// waits until the delivery mode and the cleanup policy reach the partition
+// log before it appends.
+async fn topic_with_configs_holding_a_pending_batch(
+    broker_handle: &crate::broker::BrokerHandle,
+    broker: &Broker,
+    topic: &str,
+    configs: &[(&str, &str)],
+    ctx: &crate::handlers::RequestContext<'_>,
+) {
     use krabka_protocol::owned::{
         create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
         create_topics_response::{self, CreateTopicsResponse},
     };
 
+    let config = |key: &str| {
+        configs
+            .iter()
+            .find(|(name, _)| *name == key)
+            .map(|(_, value)| *value)
+    };
+    let delivery_mode = config(crate::config_keys::DELIVERY_MODE);
+    let expected_cleanup = config(crate::config_keys::CLEANUP_POLICY)
+        .map_or_else(krabka_log::CleanupPolicy::default, |policy| {
+            crate::config_keys::parse_cleanup_policy(policy).expect("a valid cleanup.policy")
+        });
     let version = create_topics_response::MAX_VERSION;
     let create = crate::test_support::encode_request(
         &CreateTopicsRequest {
@@ -169,13 +197,13 @@ async fn topic_holding_a_pending_batch(
                 name: topic.to_owned(),
                 num_partitions: 1,
                 replication_factor: 1,
-                configs: delivery_mode
-                    .map(|mode| CreatableTopicConfig {
-                        name: crate::config_keys::DELIVERY_MODE.to_owned(),
-                        value: Some(mode.to_owned()),
+                configs: configs
+                    .iter()
+                    .map(|(name, value)| CreatableTopicConfig {
+                        name: (*name).to_owned(),
+                        value: Some((*value).to_owned()),
                         ..Default::default()
                     })
-                    .into_iter()
                     .collect(),
                 ..Default::default()
             }],
@@ -200,7 +228,10 @@ async fn topic_holding_a_pending_batch(
         loop {
             if broker_handle
                 .partition_log_config_for_test(topic, 0)
-                .is_some_and(|config| config.delivery_policy == expected_policy)
+                .is_some_and(|config| {
+                    config.delivery_policy == expected_policy
+                        && config.cleanup_policy == expected_cleanup
+                })
             {
                 break;
             }
@@ -450,6 +481,127 @@ async fn a_replica_that_is_not_the_leader_refuses_a_trim() {
         "{resp:?}"
     );
     check!(part.log_start_offset() == before);
+    broker_handle.shutdown().await;
+}
+
+/// Kafka's `Partition.deleteRecordsOnLeader` refuses a trim with
+/// `POLICY_VIOLATION` and a low watermark of -1 when the topic compacts and
+/// does not delete, and trims a `compact,delete` topic like a `delete` one.
+/// Each topic holds four records, so a trim to offset 2 moves the log start.
+#[tokio::test]
+async fn a_compact_only_topic_refuses_a_trim() {
+    let cases = [
+        ("delete-records-policy-delete", "delete", 2, codes::NONE, 2),
+        (
+            "delete-records-policy-compact",
+            "compact",
+            -1,
+            codes::POLICY_VIOLATION,
+            0,
+        ),
+        (
+            "delete-records-policy-compact-delete",
+            "compact,delete",
+            2,
+            codes::NONE,
+            2,
+        ),
+    ];
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let admin = principal("admin");
+    let peer = peer();
+    let ctx = test_context(&admin, &peer);
+
+    for (topic, policy, low_watermark, error_code, log_start) in cases {
+        topic_with_configs_holding_a_pending_batch(
+            &broker_handle,
+            &broker,
+            topic,
+            &[(crate::config_keys::CLEANUP_POLICY, policy)],
+            &ctx,
+        )
+        .await;
+        let part = broker
+            .partitions
+            .get(topic, krabka_ids::PartitionIndex(0))
+            .expect("the partition is local");
+
+        let resp = drive(&broker, &request(topic, &[(0, 2)]), &admin, &peer).await;
+
+        check!(
+            resp.topics == one_row(topic, low_watermark, error_code),
+            "{policy}"
+        );
+        check!(
+            part.log_start_offset() == krabka_log::Offset(log_start),
+            "{policy}"
+        );
+    }
+    broker_handle.shutdown().await;
+}
+
+/// A partition the metadata holds and this broker does not host answers
+/// `NOT_LEADER_OR_FOLLOWER` (Kafka's `ReplicaManager.getPartitionOrError`), so
+/// the client refreshes its metadata and retries on the leader. Only a
+/// partition the metadata does not hold answers `UNKNOWN_TOPIC_OR_PARTITION`.
+#[tokio::test]
+async fn a_partition_hosted_elsewhere_answers_not_leader_or_follower() {
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let admin = principal("admin");
+    let peer = peer();
+    let topic = "delete-records-elsewhere";
+    let elsewhere = krabka_metadata::NodeId(broker.config.node_id.0 + 1);
+    broker
+        .controller
+        .submit_change(vec![
+            krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
+                name: topic.to_owned(),
+                topic_id: uuid::Uuid::from_u128(0x749),
+                partitions: 1,
+                replication_factor: 1,
+            }),
+            krabka_metadata::MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
+                topic: topic.to_owned(),
+                partition: 0,
+                leader: elsewhere,
+                replicas: vec![elsewhere],
+                isr: vec![elsewhere],
+                leader_epoch: krabka_metadata::LeaderEpoch(0),
+                adding_replicas: vec![],
+                removing_replicas: vec![],
+                directories: vec![],
+                partition_epoch: 0,
+            }),
+        ])
+        .await
+        .expect("the partition commits");
+    broker_handle
+        .wait_for_image(|image| image.partition(topic, 0).is_some())
+        .await;
+
+    let resp = drive(&broker, &request(topic, &[(0, 1), (1, 1)]), &admin, &peer).await;
+
+    let expected = vec![DeleteRecordsTopicResult {
+        name: topic.to_owned(),
+        partitions: vec![
+            DeleteRecordsPartitionResult {
+                partition_index: 0,
+                low_watermark: -1,
+                error_code: codes::NOT_LEADER_OR_FOLLOWER,
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+            },
+            DeleteRecordsPartitionResult {
+                partition_index: 1,
+                low_watermark: -1,
+                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+            },
+        ],
+        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+    }];
+    assert!(resp.topics == expected, "{resp:?}");
     broker_handle.shutdown().await;
 }
 
