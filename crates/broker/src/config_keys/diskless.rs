@@ -13,12 +13,10 @@ use super::{
 ///
 /// `true` routes every partition of the topic through the quorum-replicated
 /// WAL, the object-store flusher, and the cold-read path instead of the plain
-/// local log. Any other value, and an absent key, leave the topic on the
-/// local-log path.
+/// local log. The value is a `BOOLEAN` read the way Kafka reads one, so `TRUE`
+/// turns the path on too. Any other value, and an absent key, leave the topic
+/// on the local-log path.
 pub(crate) const DISKLESS: &str = "krabka.diskless";
-/// The one value that turns the diskless path on. The comparison is exact, so
-/// `TRUE` and `1` leave the topic on the local-log path.
-pub(crate) const DISKLESS_TRUE: &str = "true";
 
 /// Resolve a topic's diskless flag from its stored override map.
 ///
@@ -31,7 +29,8 @@ pub(crate) const DISKLESS_TRUE: &str = "true";
 pub(crate) fn resolve_diskless(config: Option<&BTreeMap<String, String>>) -> bool {
     config
         .and_then(|config| config.get(DISKLESS))
-        .is_some_and(|value| value == DISKLESS_TRUE)
+        .and_then(|value| super::parse::bool_value(value))
+        == Some(true)
 }
 
 /// Reject an alter that would change a topic's diskless flag.
@@ -91,10 +90,7 @@ pub(super) fn validate_diskless_combination(
     if !resolve_diskless(Some(overrides)) {
         return Ok(());
     }
-    if overrides
-        .get(REMOTE_STORAGE_ENABLE)
-        .is_some_and(|value| value == "true")
-    {
+    if super::validation::flag(overrides, REMOTE_STORAGE_ENABLE) {
         return Err(format!(
             "{DISKLESS}=true cannot be combined with {REMOTE_STORAGE_ENABLE}=true: a diskless \
              partition already keeps its records in the object store through the WAL flusher, and \
@@ -134,7 +130,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_diskless_requires_exact_true() {
+    fn resolve_diskless_reads_a_kafka_boolean() {
         for (label, config, expected) in [
             ("no override map at all", None, false),
             ("an override map without the key", Some(map(&[])), false),
@@ -144,9 +140,9 @@ mod tests {
                 false,
             ),
             (
-                "the key set in the wrong case",
-                Some(map(&[(DISKLESS, "TRUE")])),
-                false,
+                "the key set in upper case",
+                Some(map(&[(DISKLESS, " TRUE ")])),
+                true,
             ),
             (
                 "the key set to true",
@@ -164,7 +160,7 @@ mod tests {
         for (value, want_ok) in [
             ("true", true),
             ("false", true),
-            ("TRUE", false),
+            ("TRUE", true),
             ("1", false),
             ("", false),
         ] {

@@ -361,7 +361,10 @@ async fn kafka_configs_refuses_tiered_storage_on_a_compacted_topic() {
         "the alter must be refused, not applied: {rendered}"
     );
     assert!(
-        rendered.contains("Tiered storage is not supported for compacted topics"),
+        rendered.contains(
+            "Remote log storage only supports topics with cleanup.policy=delete or \
+             cleanup.policy being an empty list."
+        ) || rendered.contains("Tiered Storage functionality is disabled in the broker."),
         "alter should be refused with Kafka's message: {rendered}"
     );
 }

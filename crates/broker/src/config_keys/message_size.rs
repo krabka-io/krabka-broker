@@ -27,7 +27,7 @@ pub(crate) fn resolve_max_message_bytes(
     image
         .topic_config(topic)
         .and_then(|configs| configs.get(MAX_MESSAGE_BYTES))
-        .and_then(|value| value.parse::<i32>().ok())
+        .and_then(|value| super::parse::int_value(value))
         .and_then(|value| u64::try_from(value).ok())
         .map_or(broker_default, ByteSize::from_bytes)
 }

@@ -478,7 +478,7 @@ async fn handle_rejects_invalid_topic_configs_before_creating_the_topic() {
                 ("cleanup.policy", "compact"),
                 ("remote.storage.enable", "true"),
             ],
-            &["Tiered storage is not supported for compacted topics"],
+            &["Tiered Storage functionality is disabled in the broker"],
         ),
         (
             "compact-and-delete-and-tiered",
@@ -486,7 +486,7 @@ async fn handle_rejects_invalid_topic_configs_before_creating_the_topic() {
                 ("cleanup.policy", "compact,delete"),
                 ("remote.storage.enable", "true"),
             ],
-            &["Tiered storage is not supported for compacted topics"],
+            &["Tiered Storage functionality is disabled in the broker"],
         ),
         (
             "bad-delivery-mode",

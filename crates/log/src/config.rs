@@ -50,8 +50,8 @@ const DEFAULT_MIN_CLEANABLE_DIRTY_RATIO: Ratio = fraction(0.5);
 ///
 /// Kafka's `cleanup.policy` is a list, and `LogConfig` derives two independent
 /// booleans from it: `compact` when the list contains `compact` and `delete`
-/// when it contains `delete`. The three sets an operator can write are the
-/// three variants here.
+/// when it contains `delete`. The four sets an operator can write are the
+/// four variants here.
 ///
 /// `Delete` is the default. It deletes segments by age or by size in
 /// `crate::retention`. `Compact` does newest-wins dedup by key.
@@ -60,6 +60,8 @@ const DEFAULT_MIN_CLEANABLE_DIRTY_RATIO: Ratio = fraction(0.5);
 /// it *and* retention deletes its old segments. Kafka Streams writes exactly
 /// that value on every windowed-store changelog topic, so a broker that
 /// refuses it cannot host a Streams application with a windowed store.
+/// `NoCleanup` is the empty list, which Kafka accepts and documents as
+/// infinite retention: neither the cleaner nor time and size retention runs.
 ///
 /// Ask [`Self::contains_compact`] and [`Self::contains_delete`] rather than
 /// comparing variants: `Compact` and `CompactAndDelete` both run the cleaner.
@@ -69,6 +71,7 @@ pub enum CleanupPolicy {
     Delete,
     Compact,
     CompactAndDelete,
+    NoCleanup,
 }
 
 impl CleanupPolicy {
@@ -95,6 +98,7 @@ impl CleanupPolicy {
             Self::Delete => "delete",
             Self::Compact => "compact",
             Self::CompactAndDelete => "compact,delete",
+            Self::NoCleanup => "",
         }
     }
 }
@@ -413,6 +417,7 @@ mod tests {
                 true,
                 "compact,delete",
             ),
+            (CleanupPolicy::NoCleanup, false, false, ""),
         ];
         for (policy, compact, delete, rendered) in cases {
             assert2::check!(policy.contains_compact() == compact, "{policy:?}");

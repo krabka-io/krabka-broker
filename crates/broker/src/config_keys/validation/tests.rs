@@ -5,13 +5,14 @@ use krabka_log::CleanupPolicy;
 
 use super::{
     super::{
-        DELETE_RETENTION_MS, FILE_DELETE_DELAY_MS, FLUSH_MESSAGES, FLUSH_MS, INDEX_INTERVAL_BYTES,
-        INTERNAL_SEGMENT_BYTES, LOCAL_RETENTION_BYTES, LOCAL_RETENTION_MS, MAX_COMPACTION_LAG_MS,
-        MESSAGE_TIMESTAMP_AFTER_MAX_MS, MESSAGE_TIMESTAMP_BEFORE_MAX_MS, MESSAGE_TIMESTAMP_TYPE,
-        MIN_COMPACTION_LAG_MS, MIN_INSYNC_REPLICAS, PREALLOCATE, REMOTE_LOG_COPY_DISABLE,
-        REMOTE_LOG_DELETE_ON_DISABLE, REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS,
-        SEGMENT_BYTES, SEGMENT_INDEX_BYTES, SEGMENT_JITTER_MS, SEGMENT_MS,
-        delivery::DELIVERY_MODE_IMMEDIATE,
+        DELETE_RETENTION_MS, ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, FILE_DELETE_DELAY_MS,
+        FLUSH_MESSAGES, FLUSH_MS, INDEX_INTERVAL_BYTES, INTERNAL_SEGMENT_BYTES,
+        LOCAL_RETENTION_BYTES, LOCAL_RETENTION_MS, MAX_COMPACTION_LAG_MS,
+        MAX_DECOMPRESSED_MESSAGE_BYTES, MESSAGE_TIMESTAMP_AFTER_MAX_MS,
+        MESSAGE_TIMESTAMP_BEFORE_MAX_MS, MESSAGE_TIMESTAMP_TYPE, MIN_COMPACTION_LAG_MS,
+        MIN_INSYNC_REPLICAS, PREALLOCATE, REMOTE_LOG_COPY_DISABLE, REMOTE_LOG_DELETE_ON_DISABLE,
+        REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS, SEGMENT_BYTES, SEGMENT_INDEX_BYTES,
+        SEGMENT_JITTER_MS, SEGMENT_MS, delivery::DELIVERY_MODE_IMMEDIATE,
     },
     *,
 };
@@ -92,11 +93,12 @@ fn validate_retention_bytes_accepts_every_long_kafka_accepts() {
 }
 
 #[test]
-fn validate_cleanup_policy_accepts_every_non_empty_subset_of_the_list() {
+fn validate_cleanup_policy_follows_kafkas_valid_list() {
     // Kafka types `cleanup.policy` as a LIST and derives `compact` and
     // `delete` from it by membership, so either name alone and both names in
     // either order are all valid. Kafka Streams sends `compact,delete` on
-    // every windowed-store changelog topic.
+    // every windowed-store changelog topic. `ValidList.in` allows the empty
+    // list, which runs no cleanup, and refuses a repeated or an empty element.
     let cases = [
         ("delete", Some(CleanupPolicy::Delete)),
         ("compact", Some(CleanupPolicy::Compact)),
@@ -106,7 +108,11 @@ fn validate_cleanup_policy_accepts_every_non_empty_subset_of_the_list() {
         ("junk", None),
         ("compact,junk", None),
         ("compact,", None),
-        ("", None),
+        ("delete,", None),
+        ("delete,delete", None),
+        ("compact, compact", None),
+        ("", Some(CleanupPolicy::NoCleanup)),
+        (" ", Some(CleanupPolicy::NoCleanup)),
     ];
     for (value, expected) in cases {
         assert!(parse_cleanup_policy(value).ok() == expected, "{value}");
@@ -134,9 +140,10 @@ fn validate_compression_accepts_kafkas_six_names_and_no_others() {
         ("zstd", true),
         ("none", false),
         ("", false),
-        // `ValidString.in` compares the string as given, so the enum's Java
+        // `ValidString.in` compares the trimmed string, so the enum's Java
         // spelling is not a name Kafka accepts either.
         ("GZIP", false),
+        (" gzip", true),
     ];
     for (value, want_ok) in cases {
         assert!(
@@ -207,8 +214,10 @@ fn an_int_key_refuses_what_kafkas_int_cannot_hold() {
 
 #[test]
 fn validate_unknown_key_rejected() {
-    let err = validate_topic_config(UNKNOWN_KEY, "1000").unwrap_err();
-    assert!(err.contains("unrecognized"));
+    assert!(
+        validate_topic_config(UNKNOWN_KEY, "1000")
+            == Err(format!("Unknown topic config name: {UNKNOWN_KEY}"))
+    );
 }
 
 /// The Kafka `TopicConfig` names krabka registers, with the value Kafka's own
@@ -379,7 +388,7 @@ fn compact_and_scheduled_delivery_exclude_each_other() {
             overrides.insert(DELIVERY_MODE.to_string(), mode.to_string());
         }
         assert!(
-            validate_config_combination(&overrides).is_ok() == want_ok,
+            validate_config_combination(&overrides, true).is_ok() == want_ok,
             "overrides {overrides:?}"
         );
     }
@@ -413,7 +422,7 @@ fn a_min_compaction_lag_above_the_max_is_refused() {
             overrides.insert(MAX_COMPACTION_LAG_MS.to_string(), max.to_string());
         }
         assert!(
-            validate_config_combination(&overrides).is_ok() == want_ok,
+            validate_config_combination(&overrides, true).is_ok() == want_ok,
             "{case}: {overrides:?}"
         );
     }
@@ -427,7 +436,7 @@ fn the_compaction_lag_conflict_carries_kafkas_message() {
         (MAX_COMPACTION_LAG_MS.to_string(), "1".to_string()),
     ]);
     assert!(
-        validate_config_combination(&overrides)
+        validate_config_combination(&overrides, true)
             == Err(
                 "conflict topic config setting min.compaction.lag.ms (60000) > \
                  max.compaction.lag.ms (1)"
@@ -436,35 +445,185 @@ fn the_compaction_lag_conflict_carries_kafkas_message() {
     );
 }
 
-/// Kafka's `validateNoRemoteStorageForCompactedTopic`: `remote.storage.enable`
-/// and a cleanup policy containing `compact` exclude each other, and because
-/// the test is a membership test over the list, `compact,delete` is refused
-/// beside `compact`.
+/// One row of the tiered-storage table: the broker's tier state, the map, and
+/// Kafka's result.
+type TierCase<'a> = (bool, Vec<(&'a str, &'a str)>, Result<(), String>);
+
+/// Kafka's `LogConfig.validateTopicLogConfigValues` tiered-storage rules, run
+/// on the resulting map when `remote.storage.enable` is true. Each row is the
+/// broker's tier state, the map, and Kafka's result.
 #[test]
-fn tiered_storage_and_a_compacted_policy_exclude_each_other() {
-    let cases = [
-        ("compact", "true", false),
-        ("compact", "false", true),
-        ("compact,delete", "true", false),
-        ("compact,delete", "false", true),
-        ("delete", "true", true),
-        ("delete", "false", true),
+fn tiered_storage_rules_follow_kafkas_log_config() {
+    let policy_message = Err(REMOTE_STORAGE_POLICY_MESSAGE.to_owned());
+    let cases: Vec<TierCase<'_>> =
+        vec![
+        (
+            false,
+            vec![(REMOTE_STORAGE_ENABLE, "true")],
+            Err(REMOTE_STORAGE_DISABLED_MESSAGE.to_owned()),
+        ),
+        (false, vec![(REMOTE_STORAGE_ENABLE, "false")], Ok(())),
+        (
+            true,
+            vec![
+                (REMOTE_STORAGE_ENABLE, "true"),
+                (RETENTION_BYTES, "100"),
+                (LOCAL_RETENTION_BYTES, "-1"),
+            ],
+            Err("Invalid value -1 for configuration local.retention.bytes: Value must not be -1 \
+                 as retention.bytes value is set as 100."
+                .to_owned()),
+        ),
+        (
+            true,
+            vec![
+                (REMOTE_STORAGE_ENABLE, "true"),
+                (RETENTION_BYTES, "100"),
+                (LOCAL_RETENTION_BYTES, "200"),
+            ],
+            Err("Invalid value 200 for configuration local.retention.bytes: Value must not be \
+                 more than retention.bytes property value: 100"
+                .to_owned()),
+        ),
+        (
+            true,
+            vec![
+                (REMOTE_STORAGE_ENABLE, "true"),
+                (RETENTION_BYTES, "-1"),
+                (LOCAL_RETENTION_BYTES, "-1"),
+            ],
+            Ok(()),
+        ),
+        (
+            true,
+            vec![(REMOTE_STORAGE_ENABLE, "true"), (LOCAL_RETENTION_MS, "-1")],
+            Err("Invalid value -1 for configuration local.retention.ms: Value must not be -1 as \
+                 retention.ms value is set as 604800000."
+                .to_owned()),
+        ),
+        (
+            true,
+            vec![
+                (REMOTE_STORAGE_ENABLE, "true"),
+                (RETENTION_MS, "-1"),
+                (LOCAL_RETENTION_MS, "5000"),
+            ],
+            Ok(()),
+        ),
+        (
+            true,
+            vec![
+                (REMOTE_STORAGE_ENABLE, "true"),
+                (REMOTE_LOG_COPY_DISABLE, "true"),
+                (RETENTION_MS, "1000"),
+                (LOCAL_RETENTION_MS, "500"),
+            ],
+            Err("When `remote.log.copy.disable` is set to true, the `local.retention.ms` and \
+                 `retention.ms` must be set to the identical value because there will be no more \
+                 logs copied to the remote storage."
+                .to_owned()),
+        ),
+        (
+            true,
+            vec![
+                (REMOTE_STORAGE_ENABLE, "true"),
+                (REMOTE_LOG_COPY_DISABLE, "true"),
+                (LOCAL_RETENTION_MS, "-2"),
+            ],
+            Ok(()),
+        ),
+        (
+            true,
+            vec![(REMOTE_STORAGE_ENABLE, "true"), (CLEANUP_POLICY, "compact")],
+            policy_message.clone(),
+        ),
+        (
+            true,
+            vec![(REMOTE_STORAGE_ENABLE, "true"), (CLEANUP_POLICY, "compact,delete")],
+            policy_message,
+        ),
+        (
+            true,
+            vec![(REMOTE_STORAGE_ENABLE, "true"), (CLEANUP_POLICY, "")],
+            Ok(()),
+        ),
+        (
+            true,
+            vec![
+                (REMOTE_STORAGE_ENABLE, "false"),
+                (LOCAL_RETENTION_BYTES, "500"),
+                (RETENTION_BYTES, "100"),
+            ],
+            Ok(()),
+        ),
+        // Kafka trunk's copy-lag rules against the effective local retention.
+        (
+            true,
+            vec![
+                (REMOTE_STORAGE_ENABLE, "true"),
+                (LOCAL_RETENTION_MS, "1000"),
+                (REMOTE_COPY_LAG_MS, "2000"),
+            ],
+            Err("Invalid value 2000 for configuration remote.copy.lag.ms: Value must not exceed \
+                 local.retention.ms (effective value: 1000)"
+                .to_owned()),
+        ),
+        (
+            true,
+            vec![
+                (REMOTE_STORAGE_ENABLE, "true"),
+                (LOCAL_RETENTION_MS, "-1"),
+                (RETENTION_MS, "-1"),
+                (REMOTE_COPY_LAG_MS, "2000"),
+            ],
+            Ok(()),
+        ),
+        (
+            true,
+            vec![
+                (REMOTE_STORAGE_ENABLE, "true"),
+                (RETENTION_BYTES, "100"),
+                (REMOTE_COPY_LAG_BYTES, "200"),
+            ],
+            Err("Invalid value 200 for configuration remote.copy.lag.bytes: Value must not \
+                 exceed local.retention.bytes (effective value: 100)"
+                .to_owned()),
+        ),
+        (true, vec![(REMOTE_COPY_LAG_MS, "-1")], Ok(())),
+        (
+            true,
+            vec![(MAX_DECOMPRESSED_MESSAGE_BYTES, "2147483639")],
+            Ok(()),
+        ),
+        (
+            true,
+            vec![(ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, "true")],
+            Ok(()),
+        ),
     ];
-    for (policy, tiered, want_ok) in cases {
-        let overrides = maplit::btreemap! {
-        CLEANUP_POLICY.to_string() => policy.to_string(),
-        REMOTE_STORAGE_ENABLE.to_string() => tiered.to_string()};
-        let outcome = validate_config_combination(&overrides);
+    for (tier_on, pairs, want) in cases {
+        let map: BTreeMap<String, String> = pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect();
         check!(
-            outcome.is_ok() == want_ok,
-            "cleanup.policy={policy} remote.storage.enable={tiered}"
+            canonical_topic_config_map(&map, tier_on).map(drop) == want,
+            "tier={tier_on} {pairs:?}"
         );
-        if !want_ok {
-            check!(
-                outcome == Err("Tiered storage is not supported for compacted topics".to_owned()),
-                "cleanup.policy={policy} remote.storage.enable={tiered}"
-            );
-        }
+    }
+}
+
+/// The per-key refusals of Kafka trunk's four newest topic keys.
+#[test]
+fn kafka_trunks_newest_topic_keys_refuse_what_kafka_refuses() {
+    for (key, value) in [
+        (REMOTE_COPY_LAG_MS, "-2"),
+        (REMOTE_COPY_LAG_BYTES, "-2"),
+        (MAX_DECOMPRESSED_MESSAGE_BYTES, "0"),
+        (MAX_DECOMPRESSED_MESSAGE_BYTES, "2147483640"),
+        (ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, "yes"),
+    ] {
+        check!(validate_topic_config(key, value).is_err(), "{key}={value}");
     }
 }
 
@@ -476,7 +635,7 @@ fn compact_and_delete_is_compaction_for_the_scheduled_delivery_rule() {
     CLEANUP_POLICY.to_string() => "compact,delete".to_string(),
     DELIVERY_MODE.to_string() => DELIVERY_MODE_SCHEDULED.to_string()};
 
-    assert!(validate_config_combination(&overrides).is_err());
+    assert!(validate_config_combination(&overrides, true).is_err());
 }
 
 /// KFC-1's third exclusion: a scheduled topic reads each batch's
@@ -500,7 +659,7 @@ fn log_append_time_and_scheduled_delivery_exclude_each_other() {
         if let Some(mode) = mode {
             overrides.insert(DELIVERY_MODE.to_string(), mode.to_string());
         }
-        let outcome = validate_config_combination(&overrides);
+        let outcome = validate_config_combination(&overrides, true);
         check!(
             outcome.is_ok() == want_ok,
             "message.timestamp.type={timestamp_type} delivery.mode={mode:?}"
@@ -529,7 +688,7 @@ fn compact_plus_scheduled_rejection_names_both_keys() {
     let overrides = maplit::btreemap! {
     CLEANUP_POLICY.to_string() => "compact".to_string(),
     DELIVERY_MODE.to_string() => DELIVERY_MODE_SCHEDULED.to_string()};
-    let error = validate_config_combination(&overrides).unwrap_err();
+    let error = validate_config_combination(&overrides, true).unwrap_err();
     assert!(error.contains(CLEANUP_POLICY), "got: {error}");
     assert!(error.contains(DELIVERY_MODE), "got: {error}");
 }
@@ -624,6 +783,156 @@ fn the_disable_refusal_names_both_ways_out() {
     let next = BTreeMap::from([(REMOTE_STORAGE_ENABLE.to_string(), "false".to_string())]);
     let message = validate_remote_storage_disable(Some(&current), &next)
         .expect_err("the bare flip is refused");
-    check!(message.contains("remote.storage.enable=true,remote.log.copy.disable=true"));
-    check!(message.contains("remote.storage.enable=false,remote.log.delete.on.disable=true"));
+    check!(
+        message
+            == "It is invalid to disable remote storage without deleting remote data. If you \
+                want to keep the remote data and turn to read only, please set \
+                `remote.storage.enable=true,remote.log.copy.disable=true`. If you want to \
+                disable remote storage and delete all remote data, please set \
+                `remote.storage.enable=false,remote.log.delete.on.disable=true`."
+    );
+}
+
+/// Kafka's `ConfigDef.parseType` trims a value, reads a boolean in any case,
+/// reads a `DOUBLE` with `Double.parseDouble`, and checks a throttled replica
+/// list with `ThrottledReplicaListValidator`'s regex. Each row is Kafka's
+/// result, and an accepted row carries the canonical value krabka stores,
+/// which is `ConfigDef.convertToString` of the parsed value.
+#[test]
+fn values_are_parsed_the_way_kafkas_config_def_parses_them() {
+    let leader = crate::throttle::LEADER_THROTTLED_REPLICAS_KEY;
+    let follower = crate::throttle::FOLLOWER_THROTTLED_REPLICAS_KEY;
+    let cases = [
+        (PREALLOCATE, "TRUE", Some("true")),
+        (REMOTE_LOG_COPY_DISABLE, " false ", Some("false")),
+        (PREALLOCATE, "yes", None),
+        (RETENTION_MS, " 1000 ", Some("1000")),
+        (SEGMENT_BYTES, "1048576 ", Some("1048576")),
+        (COMPRESSION_TYPE, " gzip", Some("gzip")),
+        (MIN_CLEANABLE_DIRTY_RATIO, "0.5d", Some("0.5")),
+        (MIN_CLEANABLE_DIRTY_RATIO, "1", Some("1.0")),
+        (CLEANUP_POLICY, " compact , delete ", Some("compact,delete")),
+        (CLEANUP_POLICY, " ", Some("")),
+        (leader, " ", Some("")),
+        (leader, " * ", Some("*")),
+        (leader, "0:1,,1:2", Some("0:1,,1:2")),
+        (leader, "-1:1", None),
+        (leader, "+0:1", None),
+        (follower, "0 : 1", None),
+    ];
+    for (key, value, canonical) in cases {
+        check!(
+            canonical_topic_config(key, value).ok().as_deref() == canonical,
+            "{key}={value:?}"
+        );
+    }
+}
+
+/// `apply_to_log_config` reads a stored value with the parser validation uses,
+/// so a value validation accepts is never read back as its default.
+#[test]
+fn the_log_config_reader_parses_what_validation_accepts() {
+    let overrides = BTreeMap::from([
+        (REMOTE_STORAGE_ENABLE.to_owned(), "TRUE".to_owned()),
+        (RETENTION_MS.to_owned(), " 1000 ".to_owned()),
+        (CLEANUP_POLICY.to_owned(), String::new()),
+    ]);
+    let applied = super::super::log_config::apply_to_log_config(
+        &overrides,
+        &krabka_log::LogConfig::default(),
+    );
+    check!(applied.remote_storage_enable);
+    check!(applied.retention == Some(krabka_units::millis(1000)));
+    check!(applied.cleanup_policy == CleanupPolicy::NoCleanup);
+}
+
+/// Each refusal is Kafka's own `ConfigException` text: `Unknown topic config
+/// name: <key>`, or `Invalid value <parsed value> for configuration <key>:
+/// <validator message>`.
+#[test]
+fn refusals_carry_kafkas_config_exception_text() {
+    let cases = [
+        ("foo", "1", "Unknown topic config name: foo"),
+        (
+            "max.message.bytes",
+            "-1",
+            "Invalid value -1 for configuration max.message.bytes: Value must be at least 0",
+        ),
+        (
+            "compression.lz4.level",
+            "18",
+            "Invalid value 18 for configuration compression.lz4.level: Value must be no more \
+             than 17",
+        ),
+        (
+            "compression.gzip.level",
+            "0",
+            "Invalid value 0 for configuration compression.gzip.level: Value must be between 1 \
+             and 9 or equal to -1",
+        ),
+        (
+            RETENTION_MS,
+            "abc",
+            "Invalid value abc for configuration retention.ms: Not a number of type LONG",
+        ),
+        (
+            SEGMENT_BYTES,
+            "2147483648",
+            "Invalid value 2147483648 for configuration segment.bytes: Not a number of type INT",
+        ),
+        (
+            PREALLOCATE,
+            "yes",
+            "Invalid value yes for configuration preallocate: Expected value to be either true \
+             or false",
+        ),
+        (
+            COMPRESSION_TYPE,
+            "none",
+            "Invalid value none for configuration compression.type: String must be one of: \
+             uncompressed, zstd, lz4, snappy, gzip, producer",
+        ),
+        (
+            MESSAGE_TIMESTAMP_TYPE,
+            "x",
+            "Invalid value x for configuration message.timestamp.type: String must be one of: \
+             CreateTime, LogAppendTime",
+        ),
+        (
+            CLEANUP_POLICY,
+            "foo",
+            "Invalid value foo for configuration cleanup.policy: String must be one of: \
+             compact, delete",
+        ),
+        (
+            CLEANUP_POLICY,
+            "delete,delete",
+            "Configuration 'cleanup.policy' values must not be duplicated.",
+        ),
+        (
+            CLEANUP_POLICY,
+            "delete,",
+            "Configuration 'cleanup.policy' values must not be empty.",
+        ),
+        (
+            MIN_CLEANABLE_DIRTY_RATIO,
+            "2",
+            "Invalid value 2.0 for configuration min.cleanable.dirty.ratio: Value must be no \
+             more than 1",
+        ),
+        (
+            crate::throttle::FOLLOWER_THROTTLED_REPLICAS_KEY,
+            "0 : 1",
+            "Invalid value [0 : 1] for configuration follower.replication.throttled.replicas: \
+             follower.replication.throttled.replicas must be the literal '*' or a list of \
+             replicas in the following format: [partitionId]:[brokerId],[partitionId]:\
+             [brokerId],...",
+        ),
+    ];
+    for (key, value, message) in cases {
+        check!(
+            validate_topic_config(key, value) == Err(message.to_owned()),
+            "{key}={value}"
+        );
+    }
 }

@@ -19,26 +19,36 @@ pub enum ThrottledReplicas {
 }
 
 impl ThrottledReplicas {
+    /// Parse a `*.throttled.replicas` value with Kafka's
+    /// `ThrottledReplicaListValidator` rule. The value is split on commas and
+    /// each element is trimmed. The list is the literal `*`, or a list of
+    /// `[partitionId]:[brokerId]` pairs of unsigned decimal digits. An empty
+    /// element matches Kafka's `([0-9]+:[0-9]+)?` and names no pair.
+    ///
     /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
+    /// Returns an error when an element is not an unsigned `partition:broker`
+    /// pair, or when a number overflows its type.
     pub fn parse(value: &str) -> Result<Self, String> {
-        if value.is_empty() {
-            return Ok(Self::None);
-        }
-        if value == "*" {
+        let elements: Vec<&str> = value
+            .split(',')
+            .map(|element| element.trim_matches(|c: char| c <= ' '))
+            .collect();
+        if elements.concat() == "*" {
             return Ok(Self::All);
         }
+        let digits = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
         let mut out = Vec::new();
-        for pair in value.split(',') {
-            let (p_str, n_str) = pair
+        for element in elements.into_iter().filter(|element| !element.is_empty()) {
+            let (p_str, n_str) = element
                 .split_once(':')
-                .ok_or_else(|| format!("invalid pair {pair:?}"))?;
-            let p: i32 = p_str
-                .trim()
-                .parse()
-                .map_err(|e| format!("partition: {e}"))?;
-            let n: u64 = n_str.trim().parse().map_err(|e| format!("broker: {e}"))?;
+                .filter(|(p, n)| digits(p) && digits(n))
+                .ok_or_else(|| format!("invalid pair {element:?}"))?;
+            let p: i32 = p_str.parse().map_err(|e| format!("partition: {e}"))?;
+            let n: u64 = n_str.parse().map_err(|e| format!("broker: {e}"))?;
             out.push((p, NodeId(n)));
+        }
+        if out.is_empty() {
+            return Ok(Self::None);
         }
         Ok(Self::List(out))
     }
@@ -124,15 +134,28 @@ mod tests {
 
     #[test]
     fn malformed_pair_rejected() {
-        for input in ["not-a-pair", "0:x", "x:1"] {
+        // Kafka's `([0-9]+:[0-9]+)?` has no sign and no space around the colon.
+        for input in ["not-a-pair", "0:x", "x:1", "-1:1", "+0:1", "0 : 1"] {
             assert!(ThrottledReplicas::parse(input).is_err(), "{input}");
         }
     }
 
     #[test]
-    fn whitespace_tolerated() {
-        let r = ThrottledReplicas::parse(" 0 : 1 , 2:3 ").unwrap();
-        assert!(r.contains(0, NodeId(1)));
-        assert!(r.contains(2, NodeId(3)));
+    fn kafka_list_spellings_parse_as_kafka_reads_them() {
+        let cases = [
+            (" ", ThrottledReplicas::None),
+            (" * ", ThrottledReplicas::All),
+            (
+                " 0:1 , 2:3 ",
+                ThrottledReplicas::List(vec![(0, NodeId(1)), (2, NodeId(3))]),
+            ),
+            (
+                "0:1,,1:2",
+                ThrottledReplicas::List(vec![(0, NodeId(1)), (1, NodeId(2))]),
+            ),
+        ];
+        for (input, want) in cases {
+            assert!(ThrottledReplicas::parse(input) == Ok(want), "{input:?}");
+        }
     }
 }

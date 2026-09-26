@@ -96,16 +96,19 @@
 //! are both projections of it, so an operator cannot be told one thing by
 //! `kafka-configs --describe` and another by an alter refusal.
 
+pub(crate) mod broker_dynamic;
 mod broker_scope;
 mod delivery;
 mod diskless;
 mod docs;
+pub(crate) mod group;
 #[cfg(test)]
 mod kafka_parity;
 mod log_config;
 mod lookup;
 mod message_size;
 mod min_isr;
+mod parse;
 mod recovery;
 pub(crate) mod registry;
 mod schema;
@@ -116,23 +119,14 @@ mod validation;
 pub(crate) use topic_scope::ELIGIBLE_LEADER_REPLICAS;
 
 pub use self::docs::{TopicConfigDoc, topic_config_docs};
-// Reached only from #[cfg(test)] code -- the produce delivery/throttle tests and
-// the alter_configs tests -- so an ungated re-export is dead in a normal build.
-#[cfg(test)]
-pub(crate) use self::{
-    broker_scope::CONTROLLER_MANAGED_BROKER_CONFIGS,
-    delivery::{DELIVERY_MAX_DELAY_MS, DELIVERY_MODE_IMMEDIATE, DELIVERY_SCHEDULE_MONOTONIC},
-    topic_scope::CONTROLLER_MANAGED_TOPIC_CONFIGS,
-};
 pub(crate) use self::{
     broker_scope::{
         AUTO_CREATE_TOPICS_ENABLE, BROKER_FENCED, BROKER_WITNESS, CONNECTIONS_MAX_IDLE_MS,
         DEFAULT_REPLICATION_FACTOR, DELETE_TOPIC_ENABLE, FENCED_TRUE, NUM_PARTITIONS,
         OFFSETS_RETENTION_CHECK_INTERVAL_MS, OFFSETS_RETENTION_MINUTES,
-        REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS, STRETCH_PREFERRED_LEADER_SITE,
-        TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS, TRANSACTIONAL_ID_EXPIRATION_MS,
-        WITNESS_TRUE, fenced_node_ids, is_controller_managed_broker_config,
-        parse_remote_list_offsets_timeout, resolve_broker_fenced, resolve_broker_witness,
+        STRETCH_PREFERRED_LEADER_SITE, TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
+        TRANSACTIONAL_ID_EXPIRATION_MS, WITNESS_TRUE, fenced_node_ids,
+        is_controller_managed_broker_config, resolve_broker_fenced, resolve_broker_witness,
         resolve_preferred_leader_site, resolve_remote_list_offsets_timeout, witness_node_ids,
     },
     delivery::{DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, resolve_delivery_max_delay},
@@ -141,17 +135,28 @@ pub(crate) use self::{
     message_size::resolve_max_message_bytes,
     min_isr::{clear_elr_records, configured_min_insync_replicas, effective_min_insync_replicas},
     recovery::{
-        RecoveryStrategy, UNCLEAN_LEADER_ELECTION_ENABLE, UNCLEAN_RECOVERY_STRATEGY,
-        resolve_recovery_strategy, resolve_unclean_leader_election_enabled,
+        RecoveryStrategy, UNCLEAN_LEADER_ELECTION_ENABLE, resolve_recovery_strategy,
+        resolve_unclean_leader_election_enabled,
     },
     schema::resolve_schema_validation,
     topic_scope::{
         WRITE_FREEZE, controller_managed_topic_config_message, is_controller_managed_topic_config,
     },
     validation::{
-        is_recognized, parse_cleanup_policy, parse_compression_type, validate_config_combination,
-        validate_remote_storage_disable, validate_topic_config, validate_topic_config_map,
+        canonical_topic_config, canonical_topic_config_map, parse_cleanup_policy,
+        parse_compression_type, validate_config_combination, validate_remote_storage_disable,
+        validate_topic_config,
     },
+};
+// Reached only from #[cfg(test)] code -- the produce delivery/throttle tests and
+// the alter_configs tests -- so an ungated re-export is dead in a normal build.
+#[cfg(test)]
+pub(crate) use self::{
+    broker_scope::{CONTROLLER_MANAGED_BROKER_CONFIGS, REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS},
+    delivery::{DELIVERY_MAX_DELAY_MS, DELIVERY_MODE_IMMEDIATE, DELIVERY_SCHEDULE_MONOTONIC},
+    recovery::UNCLEAN_RECOVERY_STRATEGY,
+    topic_scope::CONTROLLER_MANAGED_TOPIC_CONFIGS,
+    validation::{REMOTE_STORAGE_POLICY_MESSAGE, validate_topic_config_map},
 };
 pub(crate) const RETENTION_MS: &str = "retention.ms";
 pub(crate) const RETENTION_BYTES: &str = "retention.bytes";
@@ -234,6 +239,21 @@ pub(crate) const REMOTE_LOG_DELETE_ON_DISABLE: &str = "remote.log.delete.on.disa
 pub(crate) const LOCAL_RETENTION_MS: &str = "local.retention.ms";
 /// KIP-405: per-topic local-retention size budget for tiered partitions.
 pub(crate) const LOCAL_RETENTION_BYTES: &str = "local.retention.bytes";
+/// Kafka trunk's `remote.copy.lag.ms`: how old a sealed segment may get before
+/// it is copied to the remote tier. Stored and reported only.
+pub(crate) const REMOTE_COPY_LAG_MS: &str = "remote.copy.lag.ms";
+/// Kafka trunk's `remote.copy.lag.bytes`: how many newer local bytes a sealed
+/// segment may sit behind before it is copied. Stored and reported only.
+pub(crate) const REMOTE_COPY_LAG_BYTES: &str = "remote.copy.lag.bytes";
+/// Kafka trunk's `max.decompressed.message.bytes`: the cap on one record's
+/// decompressed size. Stored and reported only.
+pub(crate) const MAX_DECOMPRESSED_MESSAGE_BYTES: &str = "max.decompressed.message.bytes";
+/// Kafka trunk's `errors.deadletterqueue.group.enable`: whether share groups
+/// may write undeliverable records to this topic. Stored and reported only.
+pub(crate) const ERRORS_DEADLETTERQUEUE_GROUP_ENABLE: &str = "errors.deadletterqueue.group.enable";
+/// Kafka's `Records.SOFT_MAX_ARRAY_LENGTH`, `Integer.MAX_VALUE - 8`: the
+/// default and the ceiling of `max.decompressed.message.bytes`.
+pub(crate) const SOFT_MAX_ARRAY_LENGTH: i32 = i32::MAX - 8;
 /// KIP-534: how long the broker keeps tombstones and transaction markers
 /// after they first become compaction-eligible. This is the delete-horizon
 /// grace window.
