@@ -55,7 +55,21 @@ async fn drive(
     let bytes = handle(broker, VERSION, 123, &req_bytes, &ctx)
         .await
         .expect("handle");
-    decode_response(&bytes)
+    sorted(decode_response(&bytes))
+}
+
+/// The response with its rows in a fixed order. The handler shuffles the rows
+/// as Kafka does, so the tests compare them as a set.
+fn sorted(mut resp: DeleteTopicsResponse) -> DeleteTopicsResponse {
+    resp.responses.sort_by(|a, b| {
+        (&a.name, a.topic_id.0, a.error_code).cmp(&(&b.name, b.topic_id.0, b.error_code))
+    });
+    resp
+}
+
+/// One response row.
+fn row(name: Option<&str>, topic_id: WireUuid, error_code: i16) -> DeletableTopicResult {
+    wire::delete_topic_result(name.map(str::to_string), topic_id, error_code)
 }
 
 #[tokio::test]
@@ -74,7 +88,7 @@ async fn handle_denied_topic_returns_authorization_failure() {
             name: Some("secret".into()),
             topic_id: WireUuid::ZERO,
             error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-            error_message: None,
+            error_message: Some("Topic authorization failed.".into()),
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         }],
         unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
@@ -98,17 +112,17 @@ async fn handle_unknown_name_and_id_preserve_error_rows() {
         throttle_time_ms: 0,
         responses: vec![
             DeletableTopicResult {
-                name: Some("missing".into()),
-                topic_id: WireUuid::ZERO,
-                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                error_message: None,
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-            },
-            DeletableTopicResult {
                 name: None,
                 topic_id: bogus_id,
                 error_code: codes::UNKNOWN_TOPIC_ID,
-                error_message: None,
+                error_message: Some("This server does not host this topic ID.".into()),
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+            },
+            DeletableTopicResult {
+                name: Some("missing".into()),
+                topic_id: WireUuid::ZERO,
+                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+                error_message: Some("This server does not host this topic-partition.".into()),
                 unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
             },
         ],
@@ -120,9 +134,10 @@ async fn handle_unknown_name_and_id_preserve_error_rows() {
 
 // ── KFC-9: the break-glass gate over a topic deletion ───────────────
 
-/// Run one `DeleteTopics` request for [`DOOMED`] against a broker with this
-/// break-glass configuration, and answer the topic row.
-async fn delete_doomed(break_glass: BreakGlassConfig) -> DeletableTopicResult {
+/// Create [`DOOMED`] on a broker with this break-glass configuration, run one
+/// `DeleteTopics` request for it, and answer the topic row, the topic id, and
+/// whether the topic still exists.
+async fn delete_doomed(break_glass: BreakGlassConfig) -> (DeletableTopicResult, WireUuid, bool) {
     let (broker_handle, _dir) = crate::test_support::start_broker_with(move |cfg| {
         cfg.audit_enabled = false;
         cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
@@ -132,6 +147,16 @@ async fn delete_doomed(break_glass: BreakGlassConfig) -> DeletableTopicResult {
     let broker = broker_handle.broker_arc_for_test();
     let principal = principal("admin");
     let peer = peer();
+    seed_topic(&broker, &principal, &peer, DOOMED).await;
+    let topic_id = WireUuid(
+        broker
+            .controller
+            .current_image()
+            .topic(DOOMED)
+            .expect("seeded topic")
+            .topic_id
+            .into_bytes(),
+    );
     let ctx = test_context(&principal, &peer);
     let req = DeleteTopicsRequest {
         topics: vec![named_state(DOOMED)],
@@ -143,17 +168,19 @@ async fn delete_doomed(break_glass: BreakGlassConfig) -> DeletableTopicResult {
         .await
         .expect("handle");
     let resp = decode_response(&bytes);
+    let exists = broker.controller.current_image().topic(DOOMED).is_some();
     broker_handle.shutdown().await;
-    resp.responses.into_iter().next().expect("one topic row")
+    let row = resp.responses.into_iter().next().expect("one topic row");
+    (row, topic_id, exists)
 }
 
 #[tokio::test]
 async fn the_wire_handler_refuses_a_deletion_that_no_proposal_covers() {
-    let refused = delete_doomed(gated_config()).await;
+    let (refused, topic_id, exists) = delete_doomed(gated_config()).await;
 
     let expected = DeletableTopicResult {
         name: Some(DOOMED.to_owned()),
-        topic_id: WireUuid::ZERO,
+        topic_id,
         error_code: codes::POLICY_VIOLATION,
         error_message: Some(
             "break-glass refused delete_topic on doomed: no approved proposal covers the request"
@@ -161,19 +188,20 @@ async fn the_wire_handler_refuses_a_deletion_that_no_proposal_covers() {
         ),
         unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
     };
-    assert!(refused == expected, "{refused:?}");
+    assert!((refused, exists) == (expected, true));
 }
 
 #[tokio::test]
 async fn a_refused_deletion_never_reaches_the_metadata_quorum() {
-    // The topic does not exist, so a broker that submits the delete record
-    // hears `UNKNOWN_TOPIC_OR_PARTITION` back from the quorum. A broker
-    // that answers `POLICY_VIOLATION` instead never submitted anything.
-    let ungated = delete_doomed(BreakGlassConfig::default()).await;
-    let gated = delete_doomed(gated_config()).await;
+    // An ungated broker deletes the topic. A gated one answers
+    // `POLICY_VIOLATION` and leaves the topic in the metadata image.
+    let (ungated, ungated_id, ungated_exists) = delete_doomed(BreakGlassConfig::default()).await;
+    let (gated, _, gated_exists) = delete_doomed(gated_config()).await;
 
-    check!(ungated.error_code == codes::UNKNOWN_TOPIC_OR_PARTITION);
+    check!(ungated == row(Some(DOOMED), ungated_id, codes::NONE));
+    check!(!ungated_exists);
     check!(gated.error_code == codes::POLICY_VIOLATION);
+    check!(gated_exists);
 }
 
 /// Kafka's `ControllerApis.deleteTopics` answers `INVALID_REQUEST` for a v6
@@ -451,31 +479,36 @@ async fn handle_authorizes_delete_per_topic_when_cluster_delete_is_denied() {
                 .expect("seed delete acls");
         }
 
+        let before = broker.controller.current_image();
+        let id_of = |name: &str| {
+            WireUuid(
+                before
+                    .topic(name)
+                    .expect("seeded topic")
+                    .topic_id
+                    .into_bytes(),
+            )
+        };
         let req = request(vec![named_state("a"), named_state("app-x")]);
         let resp = drive(&broker, &req, &p, &peer).await;
 
-        let row = |name: &str| -> DeletableTopicResult {
+        // A deleted topic's row carries its id. A refused name row carries
+        // the zero id: `Delete` implies `Describe`, so a principal with no
+        // `Delete` ACL on the topic may not describe it either.
+        let expected_row = |name: &str| -> DeletableTopicResult {
             if case.deleted.contains(&name) {
-                DeletableTopicResult {
-                    name: Some(name.into()),
-                    topic_id: WireUuid::ZERO,
-                    error_code: codes::NONE,
-                    error_message: None,
-                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-                }
+                row(Some(name), id_of(name), codes::NONE)
             } else {
-                DeletableTopicResult {
-                    name: Some(name.into()),
-                    topic_id: WireUuid::ZERO,
-                    error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                    error_message: None,
-                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
-                }
+                row(
+                    Some(name),
+                    WireUuid::ZERO,
+                    codes::TOPIC_AUTHORIZATION_FAILED,
+                )
             }
         };
         let expected = DeleteTopicsResponse {
             throttle_time_ms: 0,
-            responses: vec![row("a"), row("app-x")],
+            responses: vec![expected_row("a"), expected_row("app-x")],
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         };
         check!(resp == expected, "case: {label}");
@@ -492,4 +525,171 @@ async fn handle_authorizes_delete_per_topic_when_cluster_delete_is_denied() {
 
         broker_handle.shutdown().await;
     }
+}
+
+// ── #634: the Describe and Delete decisions and the row identities ──
+
+/// One `alice` Allow ACL on a literal resource.
+fn alice_acl(resource_type: ResourceType, name: &str, operation: AclOperation) -> AclEntry {
+    AclEntry {
+        resource_type,
+        resource_name: name.into(),
+        pattern_type: PatternType::Literal,
+        principal: "User:alice".into(),
+        host: "*".into(),
+        operation,
+        permission_type: PermissionType::Allow,
+    }
+}
+
+/// Kafka's `ControllerApis.deleteTopics` checks `Describe` and `Delete`
+/// separately. An id row the principal may not delete carries its id, and
+/// the name only when the principal may describe the topic. A name row the
+/// principal may describe but not delete answers `UNKNOWN_TOPIC_OR_PARTITION`
+/// when the topic does not exist. A deleted topic's row carries its id.
+#[tokio::test]
+async fn rows_follow_kafkas_describe_and_delete_decisions() {
+    const TOPIC: &str = "t";
+    const MISSING: &str = "missing";
+
+    struct Case {
+        label: &'static str,
+        acls: Vec<AclEntry>,
+        by_id: bool,
+        names: &'static [&'static str],
+        // (name, carries the topic id, code) per expected row.
+        expected: &'static [(Option<&'static str>, bool, i16)],
+        deleted: bool,
+    }
+
+    let unknown_id = WireUuid([8; 16]);
+    let topic = |operation| alice_acl(ResourceType::Topic, TOPIC, operation);
+    let cases = [
+        Case {
+            label: "an id row with Delete deletes and carries the id",
+            acls: vec![topic(AclOperation::Delete)],
+            by_id: true,
+            names: &[],
+            expected: &[(Some(TOPIC), true, codes::NONE)],
+            deleted: true,
+        },
+        Case {
+            label: "an id row with Describe and without Delete",
+            acls: vec![topic(AclOperation::Describe)],
+            by_id: true,
+            names: &[],
+            expected: &[(Some(TOPIC), true, codes::TOPIC_AUTHORIZATION_FAILED)],
+            deleted: false,
+        },
+        Case {
+            label: "an id row without Describe and without Delete",
+            acls: vec![],
+            by_id: true,
+            names: &[],
+            expected: &[(None, true, codes::TOPIC_AUTHORIZATION_FAILED)],
+            deleted: false,
+        },
+        Case {
+            label: "a name row with Describe and without Delete for a missing topic",
+            acls: vec![alice_acl(
+                ResourceType::Topic,
+                MISSING,
+                AclOperation::Describe,
+            )],
+            by_id: false,
+            names: &[MISSING],
+            expected: &[(Some(MISSING), false, codes::UNKNOWN_TOPIC_OR_PARTITION)],
+            deleted: false,
+        },
+        Case {
+            label: "a name row without Describe for a missing topic",
+            acls: vec![],
+            by_id: false,
+            names: &[MISSING],
+            expected: &[(Some(MISSING), false, codes::TOPIC_AUTHORIZATION_FAILED)],
+            deleted: false,
+        },
+        Case {
+            label: "a name row with Describe and without Delete for an existing topic",
+            acls: vec![topic(AclOperation::Describe)],
+            by_id: false,
+            names: &[TOPIC],
+            expected: &[(Some(TOPIC), false, codes::TOPIC_AUTHORIZATION_FAILED)],
+            deleted: false,
+        },
+    ];
+
+    let mut actual = Vec::with_capacity(cases.len());
+    let mut expected = Vec::with_capacity(cases.len());
+    for case in cases {
+        let (broker_handle, _dir) = start_broker(Arc::new(
+            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
+        ))
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("alice");
+        let peer = peer();
+        let cluster_create = alice_acl(
+            ResourceType::Cluster,
+            crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+            AclOperation::Create,
+        );
+        broker
+            .controller
+            .submit_change(vec![MetadataRecord::V1AccessControlEntry(cluster_create)])
+            .await
+            .expect("seed create acl");
+        seed_topic(&broker, &p, &peer, TOPIC).await;
+        let topic_id = WireUuid(
+            broker
+                .controller
+                .current_image()
+                .topic(TOPIC)
+                .expect("seeded topic")
+                .topic_id
+                .into_bytes(),
+        );
+        if !case.acls.is_empty() {
+            broker
+                .controller
+                .submit_change(
+                    case.acls
+                        .into_iter()
+                        .map(MetadataRecord::V1AccessControlEntry)
+                        .collect(),
+                )
+                .await
+                .expect("seed acls");
+        }
+
+        let mut rows: Vec<_> = case.names.iter().map(|name| named_state(name)).collect();
+        if case.by_id {
+            rows.push(id_state(topic_id));
+        }
+        rows.push(id_state(unknown_id));
+        let resp = drive(&broker, &request(rows), &p, &peer).await;
+        let still_there = broker.controller.current_image().topic(TOPIC).is_some();
+
+        let responses = case
+            .expected
+            .iter()
+            .map(|(name, with_id, code)| {
+                let id = if *with_id { topic_id } else { WireUuid::ZERO };
+                row(*name, id, *code)
+            })
+            .chain([row(None, unknown_id, codes::UNKNOWN_TOPIC_ID)])
+            .collect();
+        actual.push((case.label, resp, still_there));
+        expected.push((
+            case.label,
+            sorted(DeleteTopicsResponse {
+                throttle_time_ms: 0,
+                responses,
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+            }),
+            !case.deleted,
+        ));
+        broker_handle.shutdown().await;
+    }
+    assert!(actual == expected);
 }

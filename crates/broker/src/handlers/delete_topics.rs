@@ -27,7 +27,7 @@
 //! active only when `[break_glass]` names an approver set.
 //!
 //! This file holds the request flow. Request resolution lives in `request`,
-//! the `Delete` ACL check in `authz`, the break-glass gate in `gate`, the
+//! the `Describe` and `Delete` ACL checks in `authz`, the break-glass gate in `gate`, the
 //! response shapes in `wire`, the post-commit local tear-down in `teardown`,
 //! the remote-tier snapshot and cascade in `tiering`, and the audit record in
 //! `audit`.
@@ -35,13 +35,7 @@
 use bytes::Bytes;
 use krabka_audit::PrivilegedPhase;
 use krabka_metadata::BreakGlassAction;
-use krabka_protocol::{
-    Decode,
-    owned::{
-        delete_topics_request::DeleteTopicsRequest, delete_topics_response::DeletableTopicResult,
-    },
-    primitives::uuid::Uuid as WireUuid,
-};
+use krabka_protocol::{Decode, owned::delete_topics_request::DeleteTopicsRequest};
 use krabka_raft::RaftError;
 use krabka_verified::FreezeMutationKind;
 
@@ -72,12 +66,15 @@ mod tests;
 
 use self::{
     audit::{audit_deleted_topics, deleted_topic_resources},
-    authz::denied_topic_names,
+    authz::{Admission, admit_row, topic_access},
     gate::{consumed_proposal_id, delete_topic_records},
     request::{ValidatedTopics, resolve_topic_names},
     teardown::remove_local_partitions,
     tiering::{spawn_remote_cascades, tiered_partitions},
-    wire::{delete_topic_result, delete_topics_response, refused_topic_result},
+    wire::{
+        delete_topic_result, delete_topics_response, random_seed, refused_topic_result,
+        shuffle_rows,
+    },
 };
 
 #[tracing::instrument(
@@ -109,30 +106,41 @@ pub(crate) async fn handle(
     let mut validated = resolve_topic_names(&req, &image);
 
     // ── ACL preamble ────────────────────────────────────────
-    // Cluster `Delete` is a shortcut: an Allow there authorizes every topic
-    // name without a further lookup. Only a Deny falls back to `Delete` on
-    // each `Topic(name)` individually. Topics that come back `Deny` (or every
-    // topic, when even the fallback denies) short-circuit the delete loop and
-    // emit TOPIC_AUTHORIZATION_FAILED on that topic row.
-    let denied_topics = denied_topic_names(broker, &image, ctx, &validated.topics);
+    // Cluster `Delete` is a shortcut: an Allow there makes every topic
+    // describable and deletable without a further lookup. Only a Deny falls
+    // back to `Describe` and `Delete` on each `Topic(name)` individually.
+    let access = topic_access(
+        broker,
+        &image,
+        ctx,
+        validated
+            .topics
+            .iter()
+            .filter_map(|(name, _, _)| name.as_deref()),
+    );
     // A name whose topic id another row carries is INVALID_REQUEST too, but
     // Kafka decides that only for a topic the principal may delete.
-    validated.reject_names_of_supplied_ids(&image, &denied_topics);
+    validated.reject_names_of_supplied_ids(&image, &access);
     let ValidatedTopics {
         topics: name_list,
-        invalid: invalid_rows,
+        invalid: mut results,
         ..
     } = validated;
 
-    // KIP-599: count partition mutations before running the delete logic.
-    // Nonexistent topics (name_opt = None) contribute 0 partitions.
-    let mutation_count: u64 = name_list
+    // Existence and authorization, in Kafka's order per row shape. What
+    // survives is the set of existing topics the principal may delete.
+    let mut admitted = Vec::with_capacity(name_list.len());
+    for row in name_list {
+        match admit_row(row, &image, &access) {
+            Admission::Answer(result) => results.push(result),
+            Admission::Delete { name, topic_id } => admitted.push((name, topic_id)),
+        }
+    }
+
+    // KIP-599: count the partitions of the topics that pass the checks.
+    let mutation_count: u64 = admitted
         .iter()
-        .map(|(name_opt, _, _)| {
-            name_opt
-                .as_deref()
-                .map_or(0, |name| image.partitions_of(name).count() as u64)
-        })
+        .map(|(name, _)| image.partitions_of(name).count() as u64)
         .sum();
     let quota = crate::quota::apply_controller_mutation_quota_mode(
         &image,
@@ -144,44 +152,17 @@ pub(crate) async fn handle(
         version >= 5,
     );
     if quota.is_rejected() {
-        let results = name_list
-            .iter()
-            .map(|(name, _, topic_id)| {
-                delete_topic_result(name.clone(), *topic_id, codes::THROTTLING_QUOTA_EXCEEDED)
-            })
-            .chain(invalid_rows)
-            .collect();
+        results.extend(admitted.into_iter().map(|(name, topic_id)| {
+            delete_topic_result(Some(name), topic_id, codes::THROTTLING_QUOTA_EXCEEDED)
+        }));
+        shuffle_rows(&mut results, random_seed());
         return crate::handlers::encode_response(
             &delete_topics_response(results, crate::quota::throttle_time_ms(quota.delay())),
             version,
         );
     }
 
-    let mut results: Vec<DeletableTopicResult> =
-        Vec::with_capacity(name_list.len() + invalid_rows.len());
-
-    for (name_opt, requested_by_id, req_topic_id) in name_list {
-        let Some(name) = name_opt else {
-            // topic not found in image — choose error code by how it was requested.
-            let error_code = if requested_by_id {
-                codes::UNKNOWN_TOPIC_ID
-            } else {
-                codes::UNKNOWN_TOPIC_OR_PARTITION
-            };
-            results.push(delete_topic_result(None, req_topic_id, error_code));
-            continue;
-        };
-
-        // Per-topic ACL check.
-        if denied_topics.contains(&name) {
-            results.push(delete_topic_result(
-                Some(name),
-                WireUuid::ZERO,
-                codes::TOPIC_AUTHORIZATION_FAILED,
-            ));
-            continue;
-        }
-
+    for (name, wire_topic_id) in admitted {
         // KFC-9: a write freeze refuses every operation that removes data
         // from the topic it covers, and it answers ahead of the two-person
         // rule. That order is the rule: a break-glass approval to delete does
@@ -203,7 +184,12 @@ pub(crate) async fn handle(
             let verdict = crate::freeze::resolve::FreezeVerdict::from(record);
             let message = verdict.removal_message();
             tracing::warn!(topic = %name, refusal = %message, "DeleteTopics refused by a freeze");
-            results.push(refused_topic_result(name, codes::POLICY_VIOLATION, message));
+            results.push(refused_topic_result(
+                name,
+                wire_topic_id,
+                codes::POLICY_VIOLATION,
+                message,
+            ));
             continue;
         }
 
@@ -229,7 +215,12 @@ pub(crate) async fn handle(
                             reason: &message,
                         },
                     );
-                    results.push(refused_topic_result(name, codes::POLICY_VIOLATION, message));
+                    results.push(refused_topic_result(
+                        name,
+                        wire_topic_id,
+                        codes::POLICY_VIOLATION,
+                        message,
+                    ));
                     continue;
                 }
             };
@@ -249,7 +240,12 @@ pub(crate) async fn handle(
         .await
         {
             let message = format!("privileged action refused: {error}");
-            results.push(refused_topic_result(name, codes::POLICY_VIOLATION, message));
+            results.push(refused_topic_result(
+                name,
+                wire_topic_id,
+                codes::POLICY_VIOLATION,
+                message,
+            ));
             continue;
         }
 
@@ -294,8 +290,10 @@ pub(crate) async fn handle(
                 );
                 codes::NONE
             }
+            // The topic went away after this request read the image. Kafka's
+            // controller deletes by id, so it answers the id miss.
             Err(RaftError::Metadata(krabka_metadata::MetadataError::UnknownTopic(_))) => {
-                codes::UNKNOWN_TOPIC_OR_PARTITION
+                codes::UNKNOWN_TOPIC_ID
             }
             Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => codes::NOT_CONTROLLER,
             Err(e) => {
@@ -304,9 +302,9 @@ pub(crate) async fn handle(
             }
         };
 
-        results.push(delete_topic_result(Some(name), WireUuid::ZERO, error_code));
+        results.push(delete_topic_result(Some(name), wire_topic_id, error_code));
     }
-    results.extend(invalid_rows);
+    shuffle_rows(&mut results, random_seed());
 
     // Audit: emit one AdminOperation record for the successfully-deleted topics.
     audit_deleted_topics(

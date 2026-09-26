@@ -366,10 +366,9 @@ async fn controller_listener_serves_the_topic_lifecycle() {
                 throttle_time_ms: 0,
                 responses: vec![DeletableTopicResult {
                     name: Some("controller-lifecycle".into()),
-                    // Deleting by name answers with the nil topic id, which is
-                    // what the broker listener answers too: the routing this
-                    // case covers hands the request to the same handler.
-                    topic_id: WireUuid([0; 16]),
+                    // A deleted topic's row carries its topic id, as Kafka's
+                    // `ControllerApis.deleteTopics` answers it (#634).
+                    topic_id: created_topic.topic_id,
                     error_code: 0,
                     error_message: None,
                     unknown_tagged_fields: UnknownTaggedFields::default(),

@@ -22,7 +22,7 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 
-use super::wire::invalid_topic_result;
+use super::{authz::TopicAccess, wire::invalid_topic_result};
 
 /// One requested topic: the name resolved from the metadata image (`None` when
 /// the image does not know it), whether the client identified the topic by id,
@@ -154,7 +154,7 @@ pub(super) fn resolve_topic_names(
 
 impl ValidatedTopics {
     /// Rejects a name row whose topic id another row carries, when the
-    /// principal may delete that topic.
+    /// principal may describe and delete that topic.
     ///
     /// The name row answers `INVALID_REQUEST` with the name and the id. A
     /// valid id row for the same topic leaves the request and gets no response
@@ -163,7 +163,7 @@ impl ValidatedTopics {
     pub(super) fn reject_names_of_supplied_ids(
         &mut self,
         image: &krabka_metadata::MetadataImage,
-        denied: &HashSet<String>,
+        access: &TopicAccess,
     ) {
         let supplied_ids: HashSet<WireUuid> = self
             .topics
@@ -183,7 +183,8 @@ impl ValidatedTopics {
                 .map(|topic| WireUuid(topic.topic_id.into_bytes()));
             match topic_id {
                 Some(id)
-                    if !denied.contains(name)
+                    if access.may_describe(name)
+                        && access.may_delete(name)
                         && (supplied_ids.contains(&id) || self.duplicate_ids.contains(&id)) =>
                 {
                     dropped_ids.insert(id);
@@ -391,8 +392,16 @@ mod tests {
         let mut expected = Vec::new();
         for case in cases {
             let mut validated = resolve_topic_names(&case.request, &image);
-            let denied = case.denied.iter().map(|name| (*name).to_string()).collect();
-            validated.reject_names_of_supplied_ids(&image, &denied);
+            let allowed: HashSet<String> = ["orders", "other", "a", "b", "c"]
+                .into_iter()
+                .filter(|name| !case.denied.contains(name))
+                .map(str::to_string)
+                .collect();
+            let access = TopicAccess::Topics {
+                describable: allowed.clone(),
+                deletable: allowed,
+            };
+            validated.reject_names_of_supplied_ids(&image, &access);
             actual.push((case.label, validated.topics, validated.invalid));
             expected.push((case.label, case.topics, case.invalid));
         }
