@@ -294,6 +294,17 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "",
     },
     KipAnnotation {
+        key: "KIP-279",
+        claim: "Leader-epoch truncation that converges after several leader changes",
+        status: KipStatus::Implemented,
+        module: "crates/log/src/leader_epoch_checkpoint/lookup.rs",
+        tests: &[
+            "crates/log/src/leader_epoch_model.rs",
+            "crates/broker/tests/leader_epoch.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
         key: "KIP-290",
         claim: "Prefixed ACL patterns and the MATCH filter",
         status: KipStatus::Implemented,
