@@ -1,12 +1,18 @@
 # Ecosystem qualification
 
+[`qualification/milestone-23.json`](../qualification/milestone-23.json) is the
+qualified baseline: krabka-broker v0.6.1 with its sibling set, which passed all
+eight gates in
+[`qualification-36235770714`](https://github.com/krabka-io/krabka-broker/releases/tag/qualification-36235770714).
+It is the default manifest for the workflow and for `aspect
+check-qualification`. Schema 2 binds each executed check to a candidate and the
+exact qualification adapters, and requires the Milestone 22 disaster-recovery
+gate owned by issue 555 and the Milestone 23 schema-evolution,
+registry-migration, and snapshot-retention gates owned by issues 556-558.
+
 [`qualification/milestone-20.json`](../qualification/milestone-20.json) is the
-completed historical candidate. Keep its revisions, evidence and report intact.
-Schema 1 describes that historical four-gate result. Schema 2 also binds newly
-executed checks to a candidate and the exact qualification adapters, and
-requires the Milestone 22 disaster-recovery gate owned by issue 555 and the
-Milestone 23 schema-evolution, registry-migration, and snapshot-retention gates
-owned by issues 556-558.
+completed historical schema-1 candidate for the original four gates. Keep its
+revisions, evidence and report intact.
 
 ## Run a subsequent candidate
 
@@ -23,15 +29,14 @@ branch, and distributes that exact input to every job. This needs no candidate
 commit after the delivery image has been published. To change sibling revisions
 or artifacts, provide a reviewed manifest containing that full candidate set.
 
-Until the first M23 delivery and eight-gate release exist, the historical M20
-manifest remains the bootstrap seed and a run must supply the delivered M23
-broker revision and digest. After that evidence is published, check in its
-qualified manifest and use it as the scheduled baseline; do not invent a draft
-manifest or mutable image tag to make the schedule appear green.
+To qualify a new broker delivery against the baseline sibling set, run the
+baseline with the delivered revision and digest. When a run with a new sibling
+set publishes, check in its qualified manifest as the next baseline; do not
+invent a draft manifest or mutable image tag to make a run appear green.
 
 ```sh
 gh workflow run qualification.yml \
-  -f manifest=qualification/milestone-20.json \
+  -f manifest=qualification/milestone-23.json \
   -F execute=true \
   -f broker_revision="$DELIVERED_COMMIT" \
   -f broker_digest="$DELIVERED_IMAGE_DIGEST"

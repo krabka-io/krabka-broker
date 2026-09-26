@@ -36,7 +36,7 @@ _ARTIFACT_KINDS = {
     "krabka-io/krabka-broker": ["image"],
     "krabka-io/krabka-cli": ["binary"],
     "krabka-io/krabka-o11y": ["image"],
-    "krabka-io/krabka-o11y-demo": ["compose", "image"],
+    "krabka-io/krabka-o11y-demo": ["compose"],
     "krabka-io/krabka-operator": ["chart", "image"],
     "krabka-io/krabka-rebalancer": ["chart", "image"],
 }
@@ -69,13 +69,13 @@ def _test_final_requires_digests_and_evidence(_ctx):
     problems = manifest_problems(_manifest(), final = True)
     check_eq("all four gates remain pending", len([problem for problem in problems if "has not passed" in problem]), 4)
     check_eq("all four gates lack evidence", len([problem for problem in problems if "has no evidence" in problem]), 4)
-    check_eq("the artifacts are mutable", len([problem for problem in problems if "artifact has no" in problem]), 9)
+    check_eq("the artifacts are mutable", len([problem for problem in problems if "artifact has no" in problem]), 8)
 
 def _test_qualified_status_is_strict_without_the_flag(_ctx):
     manifest = _manifest(status = "qualified")
     manifest["report"] = {"url": "", "sha256": ""}
     problems = manifest_problems(manifest)
-    check_eq("all artifact digests are required", len([problem for problem in problems if "artifact has no" in problem]), 9)
+    check_eq("all artifact digests are required", len([problem for problem in problems if "artifact has no" in problem]), 8)
     check_eq("all pending gates are rejected", len([problem for problem in problems if "gate has not passed" in problem]), 4)
     check_eq("all gate evidence is required", len([problem for problem in problems if "gate has no evidence" in problem]), 4)
     check_eq("the report is required", len([problem for problem in problems if "published report" in problem]), 1)
@@ -84,6 +84,14 @@ def _test_a_draft_preserves_artifact_slots(_ctx):
     manifest = _manifest()
     manifest["components"][0]["artifacts"] = []
     check_eq("missing slot", len([problem for problem in manifest_problems(manifest) if "preserve the image slot" in problem]), 1)
+
+def _test_only_schema_two_requires_the_demo_image_slot(_ctx):
+    check_eq("historical demo slots", manifest_problems(_manifest()), [])
+    candidate = _candidate()
+    for component in candidate["components"]:
+        if component["repository"] == "krabka-io/krabka-o11y-demo":
+            component["artifacts"] = [artifact for artifact in component["artifacts"] if artifact["kind"] != "image"]
+    check_eq("candidate demo image", [problem for problem in manifest_problems(candidate) if "preserve" in problem], ["krabka-io/krabka-o11y-demo: artifacts must preserve the compose, image slot"])
 
 def _test_a_passed_gate_requires_complete_evidence(_ctx):
     manifest = _manifest()
@@ -106,6 +114,9 @@ def _test_a_qualified_manifest_is_valid(_ctx):
 def _candidate():
     document = _manifest(artifact_digest = _DIGEST)
     document["schema"] = 2
+    for component in document["components"]:
+        if component["repository"] == "krabka-io/krabka-o11y-demo":
+            component["artifacts"].append({"kind": "image", "reference": "ghcr.io/krabka-io/krabka-o11y-demo", "digest": _DIGEST})
     document["gates"].append({"name": "disaster-recovery", "issue": 555, "status": "pending", "evidence": []})
     document["gates"].append({"name": "schema-evolution", "issue": 556, "status": "pending", "evidence": []})
     document["gates"].append({"name": "registry-migration", "issue": 557, "status": "pending", "evidence": []})
@@ -301,6 +312,7 @@ check_qualification_tests = suite("check-qualification", [
     _test_final_requires_digests_and_evidence,
     _test_qualified_status_is_strict_without_the_flag,
     _test_a_draft_preserves_artifact_slots,
+    _test_only_schema_two_requires_the_demo_image_slot,
     _test_a_passed_gate_requires_complete_evidence,
     _test_timestamps_are_calendar_valid,
     _test_a_qualified_manifest_is_valid,

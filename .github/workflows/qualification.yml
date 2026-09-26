@@ -6,7 +6,7 @@ on:
       manifest:
         description: Repository-relative immutable candidate or historical manifest
         required: true
-        default: qualification/milestone-20.json
+        default: qualification/milestone-23.json
         type: string
       execute:
         description: Execute all candidate gates and publish a new qualification release
@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      MANIFEST: ${{ inputs.manifest || 'qualification/milestone-20.json' }}
+      MANIFEST: ${{ inputs.manifest || 'qualification/milestone-23.json' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: aspect-build/setup-aspect@60664fabf0aa15152c69d0ee72c9a660416c7a36 # 2026.38.2
@@ -72,7 +72,7 @@ jobs:
             done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: milestone-20-qualification
+          name: verified-qualification
           path: ${{ inputs.manifest }}
           if-no-files-found: error
           retention-days: 90
@@ -86,7 +86,7 @@ jobs:
       - uses: aspect-build/setup-aspect@60664fabf0aa15152c69d0ee72c9a660416c7a36 # 2026.38.2
       - name: freeze candidate inputs
         env:
-          MANIFEST: ${{ inputs.manifest || 'qualification/milestone-20.json' }}
+          MANIFEST: ${{ inputs.manifest || 'qualification/milestone-23.json' }}
           BROKER_REVISION: ${{ inputs.broker_revision }}
           BROKER_DIGEST: ${{ inputs.broker_digest }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
