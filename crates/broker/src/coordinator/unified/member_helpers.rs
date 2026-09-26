@@ -1,14 +1,11 @@
 //! Request-level helpers that every group protocol shares: minting the member
-//! id of a first join, fencing a member epoch, and finding the members whose
-//! session has expired.
+//! id of a first join and finding the members whose session has expired.
 //!
 //! The classic, next-gen, share, and streams paths all call them, and they are
 //! pure functions over request fields, so they sit apart from the coordinator
 //! that calls them.
 
 use std::time::{Duration, Instant};
-
-use crate::codes;
 
 pub(crate) fn first_join_member_id(request_member_id: &str) -> String {
     if request_member_id.is_empty() {
@@ -22,18 +19,6 @@ pub(crate) fn first_join_member_id(request_member_id: &str) -> String {
 pub(crate) struct ClientIdentity<'a> {
     pub id: &'a str,
     pub host: &'a str,
-}
-
-pub(crate) fn validate_member_epoch(
-    current_epoch: Option<i32>,
-    requested_epoch: i32,
-) -> Result<i32, i16> {
-    match current_epoch {
-        None => Err(codes::UNKNOWN_MEMBER_ID),
-        Some(epoch) if requested_epoch < epoch => Err(codes::STALE_MEMBER_EPOCH),
-        Some(epoch) if requested_epoch > epoch => Err(codes::FENCED_MEMBER_EPOCH),
-        Some(epoch) => Ok(epoch),
-    }
 }
 
 pub(crate) fn expired_member_ids<'a>(
@@ -65,14 +50,6 @@ mod helper_tests {
 
         check!(!member_id.is_empty());
         assert!(uuid::Uuid::parse_str(&member_id).is_ok());
-    }
-
-    #[test]
-    fn validate_member_epoch_maps_all_fencing_outcomes() {
-        assert!(validate_member_epoch(None, 7) == Err(codes::UNKNOWN_MEMBER_ID));
-        assert!(validate_member_epoch(Some(5), 4) == Err(codes::STALE_MEMBER_EPOCH));
-        assert!(validate_member_epoch(Some(5), 6) == Err(codes::FENCED_MEMBER_EPOCH));
-        assert!(validate_member_epoch(Some(5), 5) == Ok(5));
     }
 
     #[test]

@@ -55,7 +55,7 @@ use super::{
 };
 use crate::{
     codes,
-    coordinator::unified::{offsets_log::OffsetsLog, validate_member_epoch},
+    coordinator::unified::{actor::CommitFence, offsets_log::OffsetsLog},
     metadata_source::MetadataSource,
 };
 
@@ -72,16 +72,14 @@ pub enum StreamsGroupActorMessage {
         reply: oneshot::Sender<StreamsDescribeView>,
     },
     /// Validates an `OffsetCommit` or `TxnOffsetCommit` against the streams
-    /// group's membership. KIP-1071 fences by `member_epoch`, as a KIP-848
-    /// consumer group does. `Ok(())` allows the commit, and `Err(code)`
-    /// rejects it. The actor does not fence a simple-consumer commit, which
-    /// has an empty `member_id` and `member_epoch == -1`. This mirrors the
-    /// consumer-group `ValidateCommit`.
+    /// group's membership, as Kafka's `StreamsGroup.validateOffsetCommit`
+    /// does. `Ok(())` allows the commit, and `Err(code)` rejects it.
     ValidateCommit {
         member_id: String,
         /// The request's `generation_id_or_member_epoch` field, interpreted as
         /// the streams `member_epoch`.
         member_epoch: i32,
+        fence: CommitFence,
         reply: oneshot::Sender<Result<(), i16>>,
     },
     Seed(super::super::StreamsGroupSeed),
@@ -170,13 +168,11 @@ impl StreamsGroupActorHandle {
     }
 }
 
-/// Validates an `OffsetCommit` or `TxnOffsetCommit` against a streams group's
-/// membership by sending a message to its actor.
+/// Validates a `TxnOffsetCommit` against a streams group's membership by
+/// sending a message to its actor, as [`validate_offset_commit`] does with
+/// [`CommitFence::Transactional`].
 ///
 /// It returns `Some(error_code)` to reject the commit, and `None` to allow it.
-/// Per KIP-447, a streams group fences offset commits by `member_epoch`, the
-/// request's `generation_id_or_member_epoch`, exactly as a KIP-848 consumer
-/// group does.
 ///
 /// The shared `validate_group_commit` knows only about the classic and
 /// consumer `GroupActorHandle`. A streams-group consumer keeps its membership
@@ -188,12 +184,42 @@ pub(crate) async fn validate_streams_group_commit(
     member_id: &str,
     member_epoch: i32,
 ) -> Option<i16> {
+    send_validate_commit(handle, member_id, member_epoch, CommitFence::Transactional).await
+}
+
+/// Validates an `OffsetCommit` at `api_version` against a streams group's
+/// membership by sending a message to its actor, as
+/// [`validate_offset_commit`] does with [`CommitFence::Offset`].
+///
+/// It returns `Some(error_code)` to reject the commit, and `None` to allow it.
+pub(crate) async fn validate_streams_group_offset_commit(
+    handle: &StreamsGroupActorHandle,
+    member_id: &str,
+    member_epoch: i32,
+    api_version: i16,
+) -> Option<i16> {
+    send_validate_commit(
+        handle,
+        member_id,
+        member_epoch,
+        CommitFence::Offset { api_version },
+    )
+    .await
+}
+
+async fn send_validate_commit(
+    handle: &StreamsGroupActorHandle,
+    member_id: &str,
+    member_epoch: i32,
+    fence: CommitFence,
+) -> Option<i16> {
     let (tx, rx) = oneshot::channel();
     if handle
         .tx
         .send(StreamsGroupActorMessage::ValidateCommit {
             member_id: member_id.to_string(),
             member_epoch,
+            fence,
             reply: tx,
         })
         .await
@@ -205,6 +231,56 @@ pub(crate) async fn validate_streams_group_commit(
         Ok(Ok(())) => None,
         Ok(Err(code)) => Some(code),
         Err(_) => Some(codes::UNKNOWN_SERVER_ERROR),
+    }
+}
+
+/// The first `OffsetCommit` version that a member of the streams protocol may
+/// use.
+const FIRST_STREAMS_PROTOCOL_COMMIT_VERSION: i16 = 9;
+
+/// Kafka's `StreamsGroup.validateOffsetCommit`.
+///
+/// A negative epoch commits on a group with no members: that is the admin
+/// client or a consumer that does not use group management. A
+/// `TxnOffsetCommit` with no member id and the unknown generation carries no
+/// member to check. Otherwise the member must exist, an `OffsetCommit` must be
+/// v9 or later, and the epoch must be the member's epoch; a newer epoch is
+/// `STALE_MEMBER_EPOCH`.
+///
+/// Kafka accepts an older epoch for a partition whose task the member was
+/// assigned at or before that epoch. The group does not keep the epoch at
+/// which each task was assigned, so an older epoch is `STALE_MEMBER_EPOCH`
+/// for every partition. `TxnOffsetCommit` passes no group instance id here, so
+/// the transactional skip does not check it.
+///
+/// # Errors
+///
+/// Returns the error code of a refused commit.
+pub(crate) fn validate_offset_commit(
+    state: &StreamsGroupState,
+    member_id: &str,
+    member_epoch: i32,
+    fence: CommitFence,
+) -> Result<(), i16> {
+    if member_epoch < 0 && state.members.is_empty() {
+        return Ok(());
+    }
+    if fence == CommitFence::Transactional && member_epoch == -1 && member_id.is_empty() {
+        return Ok(());
+    }
+    let member = state
+        .members
+        .get(member_id)
+        .ok_or(codes::UNKNOWN_MEMBER_ID)?;
+    if let CommitFence::Offset { api_version } = fence
+        && api_version < FIRST_STREAMS_PROTOCOL_COMMIT_VERSION
+    {
+        return Err(codes::UNSUPPORTED_VERSION);
+    }
+    if member_epoch == member.member_epoch {
+        Ok(())
+    } else {
+        Err(codes::STALE_MEMBER_EPOCH)
     }
 }
 
@@ -492,22 +568,15 @@ async fn handle_message(
         StreamsGroupActorMessage::ValidateCommit {
             member_id,
             member_epoch,
+            fence,
             reply,
         } => {
-            // KIP-447 fencing for a streams group: member_epoch must
-            // match the member's current epoch, mirroring the KIP-848
-            // consumer-group check. A simple-consumer commit (empty
-            // member_id, member_epoch == -1) is not fenced.
-            let result: Result<(), i16> = if member_id.is_empty() {
-                Ok(())
-            } else {
-                validate_member_epoch(
-                    actor.state.members.get(&member_id).map(|m| m.member_epoch),
-                    member_epoch,
-                )
-                .map(|_| ())
-            };
-            let _ = reply.send(result);
+            let _ = reply.send(validate_offset_commit(
+                &actor.state,
+                &member_id,
+                member_epoch,
+                fence,
+            ));
         }
         StreamsGroupActorMessage::Seed(seed) => {
             apply_seed(actor, seed);

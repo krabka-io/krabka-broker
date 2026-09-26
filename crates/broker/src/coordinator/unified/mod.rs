@@ -48,8 +48,6 @@ pub use self::{
     seeds::{GroupSeed, ShareGroupSeed, StreamsGroupSeed},
 };
 pub(crate) use self::{
-    member_helpers::{
-        ClientIdentity, expired_member_ids, first_join_member_id, validate_member_epoch,
-    },
+    member_helpers::{ClientIdentity, expired_member_ids, first_join_member_id},
     offset_batch::OffsetRecordBatchBuilder,
 };

@@ -1814,3 +1814,103 @@ async fn a_static_member_follows_kafka_static_membership() {
         check!(described == members, "{name}");
     }
 }
+
+/// Kafka's `StreamsGroup.validateOffsetCommit`. Each row is a group (with
+/// member `m1` at epoch 5, or empty), a commit and the expected answer.
+#[test]
+fn validate_offset_commit_follows_kafka_streams_group() {
+    let offset = |api_version| CommitFence::Offset { api_version };
+    let txn = CommitFence::Transactional;
+    let mut group = crate::coordinator::unified::streams::state::StreamsGroupState::new("g");
+    let mut member = crate::coordinator::unified::streams::state::StreamsMemberState::joining(
+        "m1",
+        "client",
+        "/127.0.0.1",
+    );
+    member.member_epoch = 5;
+    group.members.insert("m1".into(), member);
+    let empty = crate::coordinator::unified::streams::state::StreamsGroupState::new("g");
+
+    // (row, group, member id, member epoch, fence, expected)
+    let rows = [
+        (
+            "admin commit on an empty group",
+            &empty,
+            "",
+            -1,
+            offset(9),
+            Ok(()),
+        ),
+        (
+            "admin commit on a live group",
+            &group,
+            "",
+            -1,
+            offset(9),
+            Err(codes::UNKNOWN_MEMBER_ID),
+        ),
+        (
+            "empty member id at a real epoch",
+            &group,
+            "",
+            5,
+            offset(9),
+            Err(codes::UNKNOWN_MEMBER_ID),
+        ),
+        (
+            "transactional commit with no member",
+            &group,
+            "",
+            -1,
+            txn,
+            Ok(()),
+        ),
+        (
+            "unknown member",
+            &group,
+            "m2",
+            5,
+            offset(9),
+            Err(codes::UNKNOWN_MEMBER_ID),
+        ),
+        (
+            "OffsetCommit before v9",
+            &group,
+            "m1",
+            5,
+            offset(8),
+            Err(codes::UNSUPPORTED_VERSION),
+        ),
+        (
+            "TxnOffsetCommit has no version floor",
+            &group,
+            "m1",
+            5,
+            txn,
+            Ok(()),
+        ),
+        ("current epoch", &group, "m1", 5, offset(9), Ok(())),
+        (
+            "newer epoch",
+            &group,
+            "m1",
+            6,
+            offset(9),
+            Err(codes::STALE_MEMBER_EPOCH),
+        ),
+        (
+            "older epoch",
+            &group,
+            "m1",
+            4,
+            offset(9),
+            Err(codes::STALE_MEMBER_EPOCH),
+        ),
+    ];
+    for (row, state, member_id, member_epoch, fence, expected) in rows {
+        check!(
+            validate_offset_commit(state, member_id, member_epoch, fence) == expected,
+            "{row}"
+        );
+    }
+}
