@@ -2,11 +2,12 @@
 //!
 //! The other TLS cases authenticate with SASL over the encrypted channel; this
 //! one authenticates with the certificate itself. The fixture client cert's
-//! Subject DN is `CN=test-client,OU=integration,O=crabka`, and the listener
-//! carries `RULE:^CN=(.*?),.*$/$1/` ahead of `DEFAULT`, so the broker has to
-//! resolve the connection to `test-client`.
+//! Subject DN is `CN=test-client\,OU\=integration\,O\=crabka` (one CN whose
+//! value holds the commas), and the listener carries `RULE:^CN=(.*?),.*$/$1/`
+//! ahead of `DEFAULT`, so the broker has to resolve the connection to
+//! `test-client\`, the prefix up to the first comma.
 //!
-//! The proof is authorization: `test-client` is the only super-user, so a JVM
+//! The proof is authorization: `test-client\` is the only super-user, so a JVM
 //! `kafka-topics --create` succeeds only if the rule ran. Without it the
 //! principal would be the whole DN, which is in nobody's super-user set, and
 //! the create would come back `CLUSTER_AUTHORIZATION_FAILED`. That is the same
@@ -37,8 +38,13 @@ use crate::jvm_acceptance::{
 
 /// The Subject DN of `tests/fixtures/security/dev_client_cert.pem`, as
 /// `x509-parser` renders it, and the principal the listener's rule maps it to.
-const CLIENT_DN: &str = "CN=test-client,OU=integration,O=crabka";
-const MAPPED_PRINCIPAL: &str = "test-client";
+/// The fixture's Subject is one CN whose value holds the commas, so its
+/// RFC 2253 form escapes them.
+const CLIENT_DN: &str = r"CN=test-client\,OU\=integration\,O\=crabka";
+/// What Kafka's `SslPrincipalMapper` makes of `CLIENT_DN` under
+/// `RULE:^CN=(.*?),.*$/$1/`: the lazy group stops at the first comma, which
+/// the escaping backslash precedes.
+const MAPPED_PRINCIPAL: &str = r"test-client\";
 
 /// Path of one file under `tests/fixtures/security/`.
 fn fixture(name: &str) -> std::path::PathBuf {
@@ -161,8 +167,8 @@ async fn start_mtls_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir)
     (handle, dir)
 }
 
-/// A JVM client that presents `CN=test-client,OU=integration,O=crabka` is
-/// authorized as `test-client`, the name the listener's rule maps that DN to.
+/// A JVM client that presents `CN=test-client\,OU\=integration\,O\=crabka` is
+/// authorized as `test-client\`, the name the listener's rule maps that DN to.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
 async fn jvm_mtls_principal_mapping_rules_shorten_the_subject_dn() {

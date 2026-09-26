@@ -171,7 +171,7 @@ fn peer_certificate_principal<S>(
     server_connection
         .peer_certificates()
         .and_then(<[_]>::first)
-        .and_then(|certificate| krabka_security::extract_principal_from_cert(certificate.as_ref()))
+        .and_then(|certificate| crate::network::auth::subject_dn_rfc2253(certificate.as_ref()))
         .map(|distinguished_name| certificate_principal(mapper, &distinguished_name))
         .transpose()
 }

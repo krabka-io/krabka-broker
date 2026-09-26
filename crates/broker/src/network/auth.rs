@@ -19,6 +19,7 @@ mod response;
 mod scram;
 mod ssl_principal_mapper;
 mod state;
+mod subject_dn;
 #[cfg(test)]
 mod test_support;
 
@@ -38,4 +39,5 @@ pub use self::{
     scram::handle_authenticate_scram,
     ssl_principal_mapper::{SslPrincipalMapper, SslPrincipalRuleError},
     state::{ConnectionAuth, SaslExchange},
+    subject_dn::subject_dn_rfc2253,
 };
