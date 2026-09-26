@@ -151,6 +151,10 @@ fn mute_deadline(window: Time) -> Option<tokio::time::Instant> {
 /// whose v3+ request carries the KIP-511 client software name and version.
 const API_VERSIONS_KEY: ApiKeyCode = ApiKey::ApiVersions as i16;
 
+/// Kafka's `ClientInformation.UNKNOWN_NAME_OR_VERSION`: the KIP-511 software
+/// name and version of a client that has not sent them.
+const UNKNOWN_CLIENT_SOFTWARE: &str = "unknown";
+
 fn capture_client_software(
     parsed: &crate::network::request::ParsedRequest<'_>,
     name: &mut String,
@@ -366,7 +370,13 @@ async fn serve_connection_stream<S>(
     // KIP-714 client software identity, populated by the first ApiVersions v3+ request.
     // so `GetTelemetrySubscriptions` can be served even on connections that
     // never sent `ApiVersions` (e.g. early-version clients).
-    let mut client_software = (String::new(), String::new());
+    // Kafka's `ClientInformation.EMPTY` names both `unknown` until a KIP-511
+    // `ApiVersions` says otherwise, so a `client_software_name=unknown`
+    // selector matches such a client.
+    let mut client_software = (
+        UNKNOWN_CLIENT_SOFTWARE.to_owned(),
+        UNKNOWN_CLIENT_SOFTWARE.to_owned(),
+    );
 
     // KIP-219 channel mute. A throttled response is written immediately and
     // the quota is enforced by refusing to read the next request until this

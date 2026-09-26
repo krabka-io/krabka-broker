@@ -14,6 +14,9 @@ pub(crate) const KEY_METRICS: &str = "metrics";
 pub(crate) const KEY_INTERVAL_MS: &str = "interval.ms";
 pub(crate) const KEY_MATCH: &str = "match";
 
+/// Kafka's `ClientMetricsConfigs.INTERVAL_MS_DEFAULT`: the push interval of a
+/// subscription with no `interval.ms`, and the cap every client starts from.
+pub(crate) const INTERVAL_MS_DEFAULT: i32 = 300_000;
 pub(crate) const MIN_INTERVAL_MS: i64 = 100;
 pub(crate) const MAX_INTERVAL_MS: i64 = 3_600_000;
 pub(crate) const ALL_METRICS: &str = "*";
@@ -78,15 +81,12 @@ pub(crate) fn is_recognized(key: &str) -> bool {
 }
 
 /// Effective push interval for a subscription's override map. The function
-/// returns the default when the key is unset.
-pub(crate) fn effective_interval_ms(
-    configs: &BTreeMap<String, String>,
-    default_interval_ms: i32,
-) -> i32 {
+/// returns [`INTERVAL_MS_DEFAULT`] when the key is unset.
+pub(crate) fn effective_interval_ms(configs: &BTreeMap<String, String>) -> i32 {
     configs
         .get(KEY_INTERVAL_MS)
         .and_then(|v| v.parse::<i32>().ok())
-        .unwrap_or(default_interval_ms)
+        .unwrap_or(INTERVAL_MS_DEFAULT)
 }
 
 /// Parse the `metrics` value into prefixes. `"*"` collapses to `["*"]`. An
@@ -119,8 +119,15 @@ pub(crate) fn parse_match_rules(value: &str) -> Result<Vec<MatchRule>, String> {
             .ok_or_else(|| format!("match entry `{entry}` is not `selector=regex`"))?;
         let selector = MatchSelector::parse(sel.trim())
             .ok_or_else(|| format!("unknown match selector `{}`", sel.trim()))?;
-        let pattern = Regex::new(pat.trim())
+        Regex::new(pat.trim()).map_err(|e| format!("invalid regex for `{}`: {e}", sel.trim()))?;
+        // Kafka tests a selector with `Matcher.matches()`, a full match. The
+        // anchored group gives the same answer for an alternation such as
+        // `app|app-1`, where a leftmost-first search would stop at `app`.
+        let pattern = Regex::new(&format!("^(?:{})$", pat.trim()))
             .map_err(|e| format!("invalid regex for `{}`: {e}", sel.trim()))?;
+        // Kafka's `parseMatchingPatterns` puts each entry into a map by
+        // selector, so a repeated selector keeps its last pattern.
+        rules.retain(|rule: &MatchRule| rule.selector != selector);
         rules.push(MatchRule { selector, pattern });
     }
     Ok(rules)
@@ -184,9 +191,9 @@ mod tests {
     #[test]
     fn effective_interval_defaults_and_clamps() {
         let mut m = std::collections::BTreeMap::new();
-        check!(effective_interval_ms(&m, 12_345) == 12_345);
+        check!(effective_interval_ms(&m) == 300_000);
         m.insert("interval.ms".to_string(), "60000".to_string());
-        check!(effective_interval_ms(&m, 12_345) == 60_000);
+        check!(effective_interval_ms(&m) == 60_000);
     }
 
     #[test]

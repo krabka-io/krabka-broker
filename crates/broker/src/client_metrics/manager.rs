@@ -12,10 +12,7 @@ use std::{
 };
 
 use krabka_metadata::MetadataImage;
-use krabka_units::{
-    ByteSize, Time,
-    convert::{ByteSizeExt as _, TimeExt as _},
-};
+use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 use uuid::Uuid;
 
 mod subscription;
@@ -40,7 +37,7 @@ pub(crate) struct ClientAttributes {
 ///
 /// The broker enforces the interval in `authorize_push`. It does not inspect
 /// the payload, so the prefixes are advisory.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ComputedSubscription {
     pub metrics: Vec<String>,
     pub push_interval_ms: i32,
@@ -74,7 +71,6 @@ pub(crate) enum PushDecision {
 
 pub(crate) struct ClientMetricsManager {
     instances: Mutex<HashMap<Uuid, ClientInstance>>,
-    default_interval: Time,
     telemetry_max: ByteSize,
 }
 
@@ -84,10 +80,9 @@ pub(crate) struct ClientMetricsManager {
 pub(crate) const ACCEPTED_COMPRESSION_TYPES: [i8; 4] = [4, 3, 1, 2];
 
 impl ClientMetricsManager {
-    pub(crate) fn new(telemetry_max: ByteSize, default_interval: Time) -> Self {
+    pub(crate) fn new(telemetry_max: ByteSize) -> Self {
         Self {
             instances: Mutex::new(HashMap::new()),
-            default_interval,
             telemetry_max,
         }
     }
@@ -114,7 +109,7 @@ impl ClientMetricsManager {
     ) -> SubscriptionDecision {
         // `push_interval_ms` is both a wire field and a byte-exact input to the
         // subscription-id hash, so the interval crosses into milliseconds here.
-        let computed = compute_subscription(image, attrs, self.default_interval.millis_i32());
+        let computed = compute_subscription(image, attrs);
         let sub_id = subscription_id(&computed, attrs.client_instance_id);
         let mut guard = self
             .instances
@@ -280,7 +275,7 @@ mod tests {
 
     #[test]
     fn push_throttle_ladder() {
-        let m = ClientMetricsManager::new(krabka_units::kibibytes(1), krabka_units::minutes(5));
+        let m = ClientMetricsManager::new(krabka_units::kibibytes(1));
         let id = Uuid::from_u128(7);
         let img = img_with("all", &[("metrics", "*"), ("interval.ms", "60000")]);
         let attrs = ClientAttributes {
@@ -345,7 +340,7 @@ mod tests {
 
     #[test]
     fn get_subscription_throttles_but_allows_error_recovery() {
-        let m = ClientMetricsManager::new(krabka_units::kibibytes(1), krabka_units::minutes(5));
+        let m = ClientMetricsManager::new(krabka_units::kibibytes(1));
         let id = Uuid::from_u128(7);
         let img = img_with("all", &[("metrics", "*"), ("interval.ms", "60000")]);
         let attrs = ClientAttributes {
@@ -388,7 +383,7 @@ mod tests {
 
     #[test]
     fn get_subscription_is_throttled_after_a_recent_push() {
-        let m = ClientMetricsManager::new(krabka_units::kibibytes(1), krabka_units::minutes(5));
+        let m = ClientMetricsManager::new(krabka_units::kibibytes(1));
         let id = Uuid::from_u128(7);
         let img = img_with("all", &[("metrics", "*"), ("interval.ms", "100")]);
         let attrs = ClientAttributes {
@@ -415,7 +410,7 @@ mod tests {
 
     #[test]
     fn get_subscription_accepts_exact_interval_boundary() {
-        let m = ClientMetricsManager::new(krabka_units::kibibytes(1), krabka_units::minutes(5));
+        let m = ClientMetricsManager::new(krabka_units::kibibytes(1));
         let img = img_with("all", &[("metrics", "*"), ("interval.ms", "100")]);
         let attrs = attrs();
         let start = Instant::now();
