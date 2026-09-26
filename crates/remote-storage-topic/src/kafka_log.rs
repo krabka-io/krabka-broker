@@ -6,7 +6,7 @@
 //! explicit per-record partition pinning. Reads come back through one
 //! cancellable manual-`Fetch` task per assigned partition. Each task
 //! drives its own dedicated [`krabka_client_core::Connection`] and emits
-//! [`MetadataEventRecord`](crate::log::MetadataEventRecord)s into a shared
+//! [`MetadataEventRecord`]s into a shared
 //! mpsc. There is **no consumer group and no broker-side offset commit**.
 //! The RLMM owns the read position. The manager assigns all partitions from
 //! offset 0 today, then resumes from snapshot offsets and restricts the
