@@ -40,10 +40,15 @@ _ARTIFACT_KINDS = {
     "krabka-io/krabka-broker": ["image"],
     "krabka-io/krabka-cli": ["binary"],
     "krabka-io/krabka-o11y": ["image"],
-    "krabka-io/krabka-o11y-demo": ["compose"],
+    "krabka-io/krabka-o11y-demo": ["compose", "image"],
     "krabka-io/krabka-operator": ["chart", "image"],
     "krabka-io/krabka-rebalancer": ["chart", "image"],
 }
+
+# Schema 1 predates the demo-app image that schema 2's observability gate pins.
+_SCHEMA_1_ARTIFACT_KINDS = dict(_ARTIFACT_KINDS)
+_SCHEMA_1_ARTIFACT_KINDS["krabka-io/krabka-o11y-demo"] = ["compose"]
+
 _EVIDENCE = {
     "installation": ["compose", "helm", "m19", "matrix", "negative-compat"],
     "operator-lifecycle": ["certificate-rotation", "ledger", "scale-down", "upgrade"],
@@ -221,6 +226,7 @@ def manifest_problems(document, final = False):
 
     repositories = []
     strict = final or document.get("status") == "qualified"
+    artifact_kinds = _ARTIFACT_KINDS if candidate else _SCHEMA_1_ARTIFACT_KINDS
     for component in document.get("components", []):
         repository = component.get("repository", "")
         repositories.append(repository)
@@ -229,8 +235,8 @@ def manifest_problems(document, final = False):
         if not component.get("default_branch"):
             problems.append("%s: default_branch is empty" % repository)
         artifacts = component.get("artifacts", [])
-        if repository in _ARTIFACT_KINDS and sorted([artifact.get("kind", "") for artifact in artifacts]) != _ARTIFACT_KINDS[repository]:
-            problems.append("%s: artifacts must preserve the %s slot" % (repository, ", ".join(_ARTIFACT_KINDS[repository])))
+        if repository in artifact_kinds and sorted([artifact.get("kind", "") for artifact in artifacts]) != artifact_kinds[repository]:
+            problems.append("%s: artifacts must preserve the %s slot" % (repository, ", ".join(artifact_kinds[repository])))
         for artifact in artifacts:
             if not artifact.get("kind") or not artifact.get("reference"):
                 problems.append("%s: artifact kind and reference are required" % repository)
@@ -329,7 +335,7 @@ check_qualification = task(
     summary = "Validate qualification or execute one immutable candidate gate",
     implementation = _impl,
     args = {
-        "manifest": args.string(default = "qualification/milestone-20.json"),
+        "manifest": args.string(default = "qualification/milestone-23.json"),
         "final": args.boolean(default = False, description = "Require immutable artifacts and passed evidence."),
         "new_candidate": args.string(default = "", description = "Copy the manifest into a fresh draft at this repository-relative path."),
         "gate": args.string(default = "", description = "Execute one candidate gate; each invocation uses an isolated work directory."),

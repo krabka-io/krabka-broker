@@ -1,12 +1,18 @@
 # Ecosystem qualification
 
+[`qualification/milestone-23.json`](../qualification/milestone-23.json) is the
+qualified baseline: krabka-broker v0.6.1 with its sibling set, which passed all
+eight gates in
+[`qualification-36235770714`](https://github.com/krabka-io/krabka-broker/releases/tag/qualification-36235770714).
+It is the default manifest for the workflow and for `aspect
+check-qualification`. Schema 2 binds each executed check to a candidate and the
+exact qualification adapters, and requires the Milestone 22 disaster-recovery
+gate owned by issue 555 and the Milestone 23 schema-evolution,
+registry-migration, and snapshot-retention gates owned by issues 556-558.
+
 [`qualification/milestone-20.json`](../qualification/milestone-20.json) is the
-completed historical candidate. Keep its revisions, evidence and report intact.
-Schema 1 describes that historical four-gate result. Schema 2 also binds newly
-executed checks to a candidate and the exact qualification adapters, and
-requires the Milestone 22 disaster-recovery gate owned by issue 555 and the
-Milestone 23 schema-evolution, registry-migration, and snapshot-retention gates
-owned by issues 556-558.
+completed historical schema-1 candidate for the original four gates. Keep its
+revisions, evidence and report intact.
 
 ## Run a subsequent candidate
 
@@ -23,15 +29,14 @@ branch, and distributes that exact input to every job. This needs no candidate
 commit after the delivery image has been published. To change sibling revisions
 or artifacts, provide a reviewed manifest containing that full candidate set.
 
-Until the first M23 delivery and eight-gate release exist, the historical M20
-manifest remains the bootstrap seed and a run must supply the delivered M23
-broker revision and digest. After that evidence is published, check in its
-qualified manifest and use it as the scheduled baseline; do not invent a draft
-manifest or mutable image tag to make the schedule appear green.
+To qualify a new broker delivery against the baseline sibling set, run the
+baseline with the delivered revision and digest. When a run with a new sibling
+set publishes, check in its qualified manifest as the next baseline; do not
+invent a draft manifest or mutable image tag to make a run appear green.
 
 ```sh
 gh workflow run qualification.yml \
-  -f manifest=qualification/milestone-20.json \
+  -f manifest=qualification/milestone-23.json \
   -F execute=true \
   -f broker_revision="$DELIVERED_COMMIT" \
   -f broker_digest="$DELIVERED_IMAGE_DIGEST"
@@ -55,7 +60,7 @@ Kind. Their timeouts bound the run rather than turning a timeout into a pass.
 | Installation | The pinned public Compose and Helm recipes with candidate images and downloaded, checksum-verified charts; produce/readback and uninstall. The existing Go and Java integration suites run against the installed broker, and the pinned broker's RF=3 schema suite plus incompatible-protocol build probe rerun the M19 supporting checks. |
 | Operator lifecycle | The pinned operator `packaging/kind-lifecycle.sh`, using published chart contents and the candidate broker, operator and rebalancer images; upgrade, disruption, scale-down, certificate rotation and acknowledged-record reconciliation. |
 | Authenticated CLI | The pinned CLI's real `candidate_broker` test, against a disposable three-broker SASL cluster. Its one executable lookup is adapted in the isolated checkout to invoke the downloaded CLI binary instead of a rebuilt binary; the patch is retained. |
-| Observability recovery | The pinned demo Compose recipe with explicit candidate broker/o11y overrides, followed by its `qualify-failover.sh`; signal queries, WAL recovery, offset reconciliation and alert firing/resolution. |
+| Observability recovery | The pinned demo Compose recipe with explicit candidate broker, o11y and demo-app image overrides on linux/amd64, followed by its `qualify-failover.sh`; signal queries, WAL recovery, offset reconciliation and alert firing/resolution. |
 | Disaster recovery | A TLS and SASL/SCRAM-SHA-512 RF=3 cluster created from the candidate broker image, a locked MinIO archive, and the image's bundled backup, restore, and WORM verifier. The job captures offsets and configuration at an explicit boundary, destroys every source data directory, restores a fresh cluster, reconciles records at their original offsets, settings, and consumer positions, and records measured RPO/RTO. Tampered, missing, untrusted-head, invalid-certificate, invalid-credential, and denied-ACL probes must fail without a complete capture. Classic and diskless topics are both required. |
 | Schema evolution | Confluent-derived Avro, JSON Schema, and Protobuf compatibility matrices, serializer reference/cache tests, RF=3 broker validation, and an old/new record round trip across broker and registry restarts. |
 | Registry migration | Full compacted `_schemas` lifecycle replay plus forward and reverse handoff against the pinned Confluent Schema Registry image. |
