@@ -22,6 +22,7 @@ use tokio::sync::{broadcast, mpsc};
 use self::{handle::InProcessAssignmentHandle, live::filtered_broadcast};
 use super::{
     AssignmentHandle, MetadataEventLog, MetadataEventRecord, MetadataEventStream, PartitionStart,
+    RangeVisitor,
 };
 use crate::error::MetadataLogError;
 
@@ -232,30 +233,35 @@ impl MetadataEventLog for InProcessMetadataEventLog {
             .collect())
     }
 
-    async fn read_range(
+    async fn visit_range(
         &self,
         partition: i32,
         start: i64,
         end: i64,
-    ) -> Result<Vec<MetadataEventRecord>, MetadataLogError> {
+        visit: &mut RangeVisitor<'_>,
+    ) -> Result<(), MetadataLogError> {
         let out_of_range = || MetadataLogError::PartitionOutOfRange {
             partition,
             count: self.inner.partition_count,
         };
         let idx = usize::try_from(partition).map_err(|_| out_of_range())?;
-        let guard = self.inner.log.lock().expect("metadata-log mutex poisoned");
-        let records = guard.get(idx).ok_or_else(out_of_range)?;
-        let high_water_mark = i64::try_from(records.len()).expect("hwm fits in i64");
-        if end > high_water_mark {
-            return Err(MetadataLogError::Other(format!(
-                "partition {partition} ends at {high_water_mark}, before {end}"
-            )));
-        }
-        Ok(records
-            .iter()
-            .filter(|record| start <= record.offset && record.offset < end)
-            .cloned()
-            .collect())
+        // Copy the range out, so `visit` never runs under the log lock.
+        let range: Vec<MetadataEventRecord> = {
+            let guard = self.inner.log.lock().expect("metadata-log mutex poisoned");
+            let records = guard.get(idx).ok_or_else(out_of_range)?;
+            let high_water_mark = i64::try_from(records.len()).expect("hwm fits in i64");
+            if end > high_water_mark {
+                return Err(MetadataLogError::Other(format!(
+                    "partition {partition} ends at {high_water_mark}, before {end}"
+                )));
+            }
+            records
+                .iter()
+                .filter(|record| start <= record.offset && record.offset < end)
+                .cloned()
+                .collect()
+        };
+        range.into_iter().try_for_each(visit)
     }
 }
 
@@ -276,39 +282,74 @@ mod tests {
         assert!(hwms == vec![2, 1]);
     }
 
+    /// Every record `visit_range` hands over, in the order it hands them.
+    async fn visited(
+        log: &InProcessMetadataEventLog,
+        partition: i32,
+        start: i64,
+        end: i64,
+    ) -> Result<Vec<MetadataEventRecord>, MetadataLogError> {
+        let mut records = Vec::new();
+        log.visit_range(partition, start, end, &mut |record| {
+            records.push(record);
+            Ok(())
+        })
+        .await?;
+        Ok(records)
+    }
+
     #[tokio::test]
-    async fn read_range_returns_the_half_open_range_without_subscribing() {
+    async fn visit_range_hands_over_the_half_open_range_without_subscribing() {
         let log = InProcessMetadataEventLog::new(2);
         for value in [b"a", b"b", b"c"] {
             log.publish(0, Bytes::from_static(value)).await.unwrap();
         }
 
-        let offsets = |records: Vec<MetadataEventRecord>| {
-            records
-                .into_iter()
-                .map(|record| (record.partition, record.offset, record.payload))
-                .collect::<Vec<_>>()
+        let record = |offset, payload| MetadataEventRecord {
+            partition: 0,
+            offset,
+            key: None,
+            payload: Bytes::from_static(payload),
+            tombstone: false,
         };
+        check!(visited(&log, 0, 1, 3).await.unwrap() == vec![record(1, b"b"), record(2, b"c")]);
+        check!(visited(&log, 1, 0, 0).await.unwrap().is_empty());
         check!(
-            offsets(log.read_range(0, 1, 3).await.unwrap())
-                == vec![
-                    (0, 1, Bytes::from_static(b"b")),
-                    (0, 2, Bytes::from_static(b"c"))
-                ]
-        );
-        check!(log.read_range(1, 0, 0).await.unwrap().is_empty());
-        check!(
-            log.read_range(0, 0, 4).await.unwrap_err().to_string()
+            visited(&log, 0, 0, 4).await.unwrap_err().to_string()
                 == "metadata log error: partition 0 ends at 3, before 4"
         );
         for partition in [-1, 2] {
             check!(matches!(
-                log.read_range(partition, 0, 0).await,
+                visited(&log, partition, 0, 0).await,
                 Err(MetadataLogError::PartitionOutOfRange { partition: got, count: 2 })
                     if got == partition
             ));
         }
         check!(log.inner.subscriptions.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn visit_range_stops_at_the_first_visitor_error() {
+        let log = InProcessMetadataEventLog::new(1);
+        for value in [b"a", b"b", b"c"] {
+            log.publish(0, Bytes::from_static(value)).await.unwrap();
+        }
+
+        let mut seen = Vec::new();
+        let error = log
+            .visit_range(0, 0, 3, &mut |record| {
+                seen.push(record.offset);
+                if record.offset == 1 {
+                    Err(MetadataLogError::Closed)
+                } else {
+                    Ok(())
+                }
+            })
+            .await
+            .unwrap_err();
+
+        check!(matches!(error, MetadataLogError::Closed));
+        check!(seen == vec![0, 1]);
     }
 
     #[tokio::test]

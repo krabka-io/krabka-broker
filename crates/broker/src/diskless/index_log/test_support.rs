@@ -14,8 +14,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::{FutureExt as _, StreamExt as _};
 use krabka_remote_storage_topic::{
-    AssignmentHandle, MetadataEventLog, MetadataEventRecord, MetadataEventStream, MetadataLogError,
-    PartitionStart,
+    AssignmentHandle, MetadataEventLog, MetadataEventStream, MetadataLogError, PartitionStart,
 };
 
 /// How fast the wrapped log's subscription delivers what it replays.
@@ -81,15 +80,6 @@ impl MetadataEventLog for PacedReplayLog {
     async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> {
         self.inner.high_water_marks().await
     }
-
-    async fn read_range(
-        &self,
-        partition: i32,
-        start: i64,
-        end: i64,
-    ) -> Result<Vec<MetadataEventRecord>, MetadataLogError> {
-        self.inner.read_range(partition, start, end).await
-    }
 }
 
 /// Publishes one record from inside `subscribe`, modelling another broker's
@@ -153,14 +143,5 @@ impl MetadataEventLog for RacingAppendLog {
 
     async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> {
         self.inner.high_water_marks().await
-    }
-
-    async fn read_range(
-        &self,
-        partition: i32,
-        start: i64,
-        end: i64,
-    ) -> Result<Vec<MetadataEventRecord>, MetadataLogError> {
-        self.inner.read_range(partition, start, end).await
     }
 }

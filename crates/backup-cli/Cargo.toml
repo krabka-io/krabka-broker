@@ -54,7 +54,7 @@ serde_json = { workspace = true }
 # the archive to check.
 sha2 = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "time"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
@@ -63,3 +63,5 @@ uuid = { workspace = true }
 assert2 = { workspace = true }
 tempfile = { workspace = true }
 async-trait = { workspace = true }
+# Paused time, for the capture deadline tests.
+tokio = { workspace = true, features = ["test-util"] }

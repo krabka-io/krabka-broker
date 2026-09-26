@@ -15,8 +15,8 @@ use krabka_remote_storage::diskless::{
     WalFlushRecord, WalIndexEntry, WalIndexKey,
 };
 use krabka_remote_storage_topic::{
-    AssignmentHandle, InProcessMetadataEventLog, MetadataEventLog, MetadataEventRecord,
-    MetadataEventStream, MetadataLogError, PartitionStart,
+    AssignmentHandle, InProcessMetadataEventLog, MetadataEventLog, MetadataEventStream,
+    MetadataLogError, PartitionStart, RangeVisitor,
 };
 use uuid::Uuid;
 
@@ -96,13 +96,14 @@ impl MetadataEventLog for InternalTopicLog {
         Ok(cutoffs)
     }
 
-    async fn read_range(
+    async fn visit_range(
         &self,
         partition: i32,
         start: i64,
         end: i64,
-    ) -> Result<Vec<MetadataEventRecord>, MetadataLogError> {
-        self.inner.read_range(partition, start, end).await
+        visit: &mut RangeVisitor<'_>,
+    ) -> Result<(), MetadataLogError> {
+        self.inner.visit_range(partition, start, end, visit).await
     }
 }
 

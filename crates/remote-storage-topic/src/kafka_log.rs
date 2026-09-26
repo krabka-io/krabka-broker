@@ -6,7 +6,7 @@
 //! explicit per-record partition pinning. Reads come back through one
 //! cancellable manual-`Fetch` task per assigned partition. Each task
 //! drives its own dedicated [`krabka_client_core::Connection`] and emits
-//! [`MetadataEventRecord`]s into a shared
+//! [`MetadataEventRecord`](crate::MetadataEventRecord)s into a shared
 //! mpsc. There is **no consumer group and no broker-side offset commit**.
 //! The RLMM owns the read position. The manager assigns all partitions from
 //! offset 0 today, then resumes from snapshot offsets and restricts the
@@ -32,9 +32,9 @@
 //! [`KafkaMetadataEventLog::open_read_only`] opens the same log without a
 //! producer and without provisioning. It sends no `InitProducerId` and no
 //! `Produce`, so a principal that holds only `READ` and `DESCRIBE` on the topic
-//! can use it. [`MetadataEventLog::read_range`] then reads a bounded offset
-//! range from the partition leader, and steps over compacted offsets by the
-//! batch progress each `Fetch` reports rather than by the records it returns.
+//! can use it. [`MetadataEventLog::visit_range`] then reads a bounded offset
+//! range from the partition leader one page at a time, and follows the leader
+//! when it moves. The `range` module holds that loop.
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -46,8 +46,8 @@ use bytes::Bytes;
 use futures_util::stream::{StreamExt, unfold};
 use krabka_client_core::{
     BrokerInfo, BrokerPool, Client, ClientError, ClientFrameMax, Connection,
-    ConnectionDispatchQueueCapacity, ConnectionOptions, FetchMinBytes, IsolatedFetch,
-    connection_target_host, fetch_partition_with_isolation_progress,
+    ConnectionDispatchQueueCapacity, ConnectionOptions, FetchMinBytes, FetchPartitionResult,
+    IsolatedFetch, connection_target_host, fetch_partition_with_isolation_progress,
 };
 use krabka_client_producer::{Acks, Producer, ProducerRecord};
 use krabka_protocol::{
@@ -59,6 +59,7 @@ use tracing::{instrument, warn};
 
 mod config;
 mod consumer;
+mod range;
 mod topic;
 
 pub use self::config::{
@@ -69,14 +70,12 @@ pub use self::config::{
 };
 use self::{
     consumer::{ConsumerState, KafkaAssignmentHandle, metadata_event_channel},
+    range::{RangeFetcher, RangeReadFailure, RangeTopic, visit_range_pages},
     topic::ensure_topic,
 };
 use crate::{
     error::MetadataLogError,
-    log::{
-        AssignmentHandle, MetadataEventLog, MetadataEventRecord, MetadataEventStream,
-        PartitionStart,
-    },
+    log::{AssignmentHandle, MetadataEventLog, MetadataEventStream, PartitionStart, RangeVisitor},
 };
 
 /// Whether an opened log may write.
@@ -94,7 +93,7 @@ pub struct KafkaMetadataEventLog {
     /// `None` for a log from [`KafkaMetadataEventLog::open_read_only`].
     producer: Option<Producer>,
     client: Client,
-    /// Leader connections for [`MetadataEventLog::read_range`].
+    /// Leader connections for [`MetadataEventLog::visit_range`].
     readers: BrokerPool,
     topic: String,
     topic_id: WireUuid,
@@ -334,31 +333,6 @@ fn brokers_of(
         .collect()
 }
 
-/// Where a range read goes after one `Fetch`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RangeStep {
-    /// Fetch again from this offset.
-    Continue(i64),
-    /// The read reached the end of its range.
-    Done,
-    /// The fetch returned no batch past its offset, so the read cannot
-    /// advance.
-    Stalled,
-}
-
-/// The step after a `Fetch` at `current` that reported `next_offset`.
-///
-/// `next_offset` is one past the last offset of every batch the fetch decoded,
-/// filtered or not, so a compacted hole cannot stall the read the way a cursor
-/// derived from the returned records would.
-fn next_range_step(current: i64, end: i64, next_offset: Option<i64>) -> RangeStep {
-    match next_offset {
-        Some(next) if next >= end => RangeStep::Done,
-        Some(next) if next > current => RangeStep::Continue(next),
-        _ => RangeStep::Stalled,
-    }
-}
-
 pub(super) fn partition_leader(
     metadata: &krabka_protocol::owned::metadata_response::MetadataResponse,
     topic: &str,
@@ -456,77 +430,60 @@ impl MetadataEventLog for KafkaMetadataEventLog {
         self.list_offsets(-1).await // LATEST
     }
 
-    // cargo-mutants: live-broker fetch loop; `next_range_step` holds its logic
-    #[cfg_attr(test, mutants::skip)]
     #[instrument(
         level = "debug",
         skip_all,
         fields(topic = %self.topic, partition, start, end),
         err
     )]
-    async fn read_range(
+    async fn visit_range(
         &self,
         partition: i32,
         start: i64,
         end: i64,
-    ) -> Result<Vec<MetadataEventRecord>, MetadataLogError> {
-        if partition < 0 || partition >= self.partition_count {
-            return Err(MetadataLogError::PartitionOutOfRange {
+        visit: &mut RangeVisitor<'_>,
+    ) -> Result<(), MetadataLogError> {
+        let topic = RangeTopic {
+            name: &self.topic,
+            partition_count: self.partition_count,
+            retry_backoff: self.fetch_retry_backoff.to_std(),
+        };
+        visit_range_pages(self, &topic, partition, start, end, visit).await
+    }
+}
+
+impl RangeFetcher for KafkaMetadataEventLog {
+    type Leader = Arc<Connection>;
+
+    // cargo-mutants: needs a live leader; `range` tests the loop around it
+    #[cfg_attr(test, mutants::skip)]
+    async fn leader(&self, partition: i32) -> Result<Arc<Connection>, RangeReadFailure> {
+        self.leader_connection(partition).await
+    }
+
+    // cargo-mutants: needs a live leader; `range` tests the loop around it
+    #[cfg_attr(test, mutants::skip)]
+    async fn fetch(
+        &self,
+        leader: &Arc<Connection>,
+        partition: i32,
+        offset: i64,
+    ) -> Result<FetchPartitionResult, ClientError> {
+        fetch_partition_with_isolation_progress(
+            leader,
+            IsolatedFetch {
+                topic: &self.topic,
+                topic_id: self.topic_id,
                 partition,
-                count: self.partition_count,
-            });
-        }
-        let mut records = Vec::new();
-        if start >= end {
-            return Ok(records);
-        }
-        let connection = self.leader_connection(partition).await?;
-        let mut offset = start;
-        loop {
-            let page = fetch_partition_with_isolation_progress(
-                &connection,
-                IsolatedFetch {
-                    topic: &self.topic,
-                    topic_id: self.topic_id,
-                    partition,
-                    fetch_offset: offset,
-                    max_wait: self.fetch_max_wait,
-                    max: krabka_client_core::DEFAULT_FETCH_RESPONSE_MAX,
-                    partition_max: self.fetch_max_bytes,
-                    fetch_min: FetchMinBytes::default(),
-                    isolation_level: 0,
-                },
-            )
-            .await
-            .map_err(|error| {
-                MetadataLogError::Other(format!(
-                    "{} partition {partition} Fetch at {offset} failed: {error}",
-                    self.topic
-                ))
-            })?;
-            records.extend(
-                page.records
-                    .into_iter()
-                    .filter(|record| offset <= record.offset && record.offset < end)
-                    .map(|record| MetadataEventRecord {
-                        partition,
-                        offset: record.offset,
-                        tombstone: record.value.is_none(),
-                        key: record.key,
-                        payload: record.value.unwrap_or_default(),
-                    }),
-            );
-            match next_range_step(offset, end, page.next_offset) {
-                RangeStep::Continue(next) => offset = next,
-                RangeStep::Done => return Ok(records),
-                RangeStep::Stalled => {
-                    return Err(MetadataLogError::Other(format!(
-                        "{} partition {partition} Fetch at {offset} returned no batch before {end}",
-                        self.topic
-                    )));
-                }
-            }
-        }
+                fetch_offset: offset,
+                max_wait: self.fetch_max_wait,
+                max: krabka_client_core::DEFAULT_FETCH_RESPONSE_MAX,
+                partition_max: self.fetch_max_bytes,
+                fetch_min: FetchMinBytes::default(),
+                isolation_level: 0,
+            },
+        )
+        .await
     }
 }
 
@@ -555,14 +512,14 @@ impl KafkaMetadataEventLog {
     /// A single-broker cluster that advertises port `0` leaves its broker out
     /// of the pool's registry. On such a cluster the bootstrap broker is the
     /// leader, so the read falls back to the bootstrap connection.
-    async fn leader_connection(&self, partition: i32) -> Result<Arc<Connection>, MetadataLogError> {
+    async fn leader_connection(&self, partition: i32) -> Result<Arc<Connection>, RangeReadFailure> {
         let metadata = self
             .client
             .refresh_metadata()
             .await
-            .map_err(|e| MetadataLogError::Other(format!("Metadata failed: {e}")))?;
+            .map_err(|error| RangeReadFailure::client("Metadata failed", &error))?;
         let leader = partition_leader(&metadata, &self.topic, partition).ok_or_else(|| {
-            MetadataLogError::Other(format!(
+            RangeReadFailure::retriable(format!(
                 "{} partition {partition} has no available leader",
                 self.topic
             ))
@@ -574,7 +531,9 @@ impl KafkaMetadataEventLog {
             }
             connection => connection,
         }
-        .map_err(|e| MetadataLogError::Other(format!("connect to broker {leader} failed: {e}")))
+        .map_err(|error| {
+            RangeReadFailure::client(&format!("connect to broker {leader} failed"), &error)
+        })
     }
 }
 
@@ -610,29 +569,6 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn range_steps_follow_batch_progress_to_the_end() {
-        let cases = [
-            // A batch that ends inside the range continues past it, even
-            // across a compacted hole wider than one offset.
-            (4, 10, Some(5), RangeStep::Continue(5)),
-            (4, 10, Some(8), RangeStep::Continue(8)),
-            // Reaching or passing the end finishes the read.
-            (4, 10, Some(10), RangeStep::Done),
-            (4, 10, Some(12), RangeStep::Done),
-            // No batch, or no progress, cannot finish the range.
-            (4, 10, None, RangeStep::Stalled),
-            (4, 10, Some(4), RangeStep::Stalled),
-            (4, 10, Some(3), RangeStep::Stalled),
-        ];
-        for (current, end, next, expected) in cases {
-            check!(
-                next_range_step(current, end, next) == expected,
-                "current {current}, end {end}, next {next:?}"
-            );
-        }
-    }
-
     #[tokio::test]
     async fn open_read_only_rejects_invalid_policy_before_connecting() {
         let cfg = KafkaMetadataLogConfig {
@@ -640,10 +576,41 @@ mod tests {
             ..KafkaMetadataLogConfig::new("not a socket address")
         };
 
-        let Err(error) = KafkaMetadataEventLog::open_read_only(cfg).await else {
-            panic!("invalid policy must fail before network I/O");
-        };
+        let error = KafkaMetadataEventLog::open_read_only(cfg)
+            .await
+            .err()
+            .expect("invalid policy must fail before network I/O");
         assert!(error.to_string().contains("topic_create_timeout"));
+    }
+
+    #[tokio::test]
+    async fn bootstrap_resolution_names_the_address_it_could_not_use() {
+        let options = ConnectionOptions::default();
+        let cases = [
+            ("", "bootstrap \"\" resolved to no address"),
+            (" , ", "bootstrap \" , \" resolved to no address"),
+            ("no-port", "DNS lookup of no-port failed"),
+        ];
+        for (bootstrap, expected) in cases {
+            let error = resolve_bootstrap(bootstrap, &options).await.unwrap_err();
+            check!(
+                error.to_string().contains(expected),
+                "{bootstrap:?}: {error}"
+            );
+        }
+
+        let resolved = resolve_bootstrap(" 127.0.0.1:9092, ,localhost:9093", &options)
+            .await
+            .unwrap();
+        check!(
+            resolved.first() == Some(&("127.0.0.1:9092".parse().unwrap(), "127.0.0.1".to_owned()))
+        );
+        check!(
+            resolved
+                .iter()
+                .skip(1)
+                .all(|(address, host)| address.port() == 9093 && host == "localhost")
+        );
     }
 
     #[tokio::test]
