@@ -77,6 +77,16 @@ impl TxnCoordinator {
                 version,
             );
         }
+        // Hold the state-partition write lock across the whole read, decide,
+        // mutate and persist sequence. Two concurrent registrations for the
+        // same transactional id must not each clone the same pre-mutation
+        // snapshot and then race `put` under this same lock: whichever
+        // published last would silently discard the other's newly registered
+        // partitions even though both callers observe success. Serializing
+        // the read with the write, the way `add_offsets_partition` and the
+        // reaper's compare-and-swap transitions already do, closes that
+        // window.
+        let _state_partition_write = self.lock_state_partition_for(tid).await;
         let Some(entry_mutex) = self.get(tid) else {
             return registration_code(
                 transaction_partition_registration(TransactionRegistrationFacts {
@@ -102,7 +112,7 @@ impl TxnCoordinator {
                 version,
             );
         };
-        let entry = entry_mutex.lock().await;
+        let mut entry = entry_mutex.lock().await;
         let decision = transaction_partition_registration(TransactionRegistrationFacts {
             ownership: TransactionRegistrationOwnershipFacts {
                 is_coordinator: true,
@@ -136,15 +146,14 @@ impl TxnCoordinator {
             TransactionRegistrationDecision::PersistRegistration => {}
             other => return registration_code(other, version),
         }
-        // Stage the mutation on a clone: `self.put` only replaces the live
-        // `self.state[tid]` entry on a successful append. Mutating the locked
-        // guard directly would leave the *live* entry looking registered
-        // (Ongoing, with the requested partitions) even when the append
-        // below fails, which would let a subsequent identical retry take the
-        // no-write `PersistRetry` path above and wrongly report success for
-        // a registration that was never made durable.
+        // Stage the mutation on a clone: the live entry is replaced only on a
+        // successful append. Mutating the locked guard directly would leave
+        // the *live* entry looking registered (Ongoing, with the requested
+        // partitions) even when the append below fails, which would let a
+        // subsequent identical retry take the no-write `PersistRetry` path
+        // above and wrongly report success for a registration that was never
+        // made durable.
         let mut snapshot = entry.clone();
-        drop(entry);
         let prior_state = snapshot.state;
         if matches!(
             prior_state,
@@ -159,11 +168,21 @@ impl TxnCoordinator {
         snapshot.partitions.extend(partitions);
         snapshot.last_update_ms = crate::txn::util::now_millis();
 
-        if let Err(error) = self.put(snapshot, txnv).await {
-            tracing::error!(tid, %error, "failed to persist registered transaction partitions");
-            return self.append_error_code(tid).await;
+        // Still holding both the entry lock and the state-partition write
+        // lock acquired above: a second concurrent caller for this tid blocks
+        // on the entry lock until this whole read-modify-persist sequence
+        // finishes, so it always rereads the just-published state rather than
+        // cloning the same stale snapshot this call started from.
+        match self.put_under_state_partition_lock(snapshot, txnv).await {
+            Ok(persisted) => {
+                *entry = persisted;
+                crate::codes::NONE
+            }
+            Err(error) => {
+                tracing::error!(tid, %error, "failed to persist registered transaction partitions");
+                self.append_error_code(tid).await
+            }
         }
-        crate::codes::NONE
     }
 
     /// KIP-890: route the offsets partition enrollment to the transaction
@@ -595,5 +614,54 @@ mod tests {
         let stored = stored.lock().await;
         assert!(!stored.partitions.contains(&requested));
         check!(stored.state == TxnState::Empty);
+    }
+
+    /// Regression test for a P1 review finding on PR #1135: two concurrent
+    /// `register_partitions` calls for the same transactional id each cloned
+    /// the same pre-mutation snapshot and raced to publish under the
+    /// state-partition write lock. Whichever call published last won
+    /// outright and silently discarded the other call's newly registered
+    /// partitions, even though both callers observed `NONE`. Fanning out many
+    /// concurrent, disjoint registrations and requiring every one of their
+    /// partitions to survive makes that loss observable without the fix and
+    /// proves it is gone with it: with the fix, the whole read-modify-persist
+    /// sequence for a given tid runs under one continuous lock scope, so a
+    /// concurrent caller always rereads the just-published state instead of a
+    /// stale clone.
+    #[tokio::test]
+    async fn concurrent_registrations_do_not_lose_partitions() {
+        const CONCURRENT_CALLS: i32 = 32;
+        let directory = tempfile::tempdir().expect("tempdir");
+        let coordinator = Arc::new(test_coordinator());
+        let entry = TxnEntry::new_empty("tid-a".into(), ProducerId(7), i16::MAX, 60_000, 0);
+        install_entry(&coordinator, entry).await;
+        let _transaction_partition =
+            open_transaction_partition(&coordinator, directory.path(), "tid-a");
+
+        let mut expected = std::collections::HashSet::new();
+        let mut tasks = tokio::task::JoinSet::new();
+        for index in 0..CONCURRENT_CALLS {
+            let requested = partition("orders", index);
+            expected.insert(requested.clone());
+            let coordinator = Arc::clone(&coordinator);
+            tasks.spawn(async move {
+                coordinator
+                    .register_partitions(
+                        "tid-a",
+                        ProducerId(7),
+                        i16::MAX,
+                        vec![requested],
+                        TxnVersion::Classic,
+                        3,
+                    )
+                    .await
+            });
+        }
+        while let Some(result) = tasks.join_next().await {
+            check!(result.expect("registration task did not panic") == crate::codes::NONE);
+        }
+
+        let stored = coordinator.get("tid-a").expect("entry remains present");
+        assert!(stored.lock().await.partitions == expected);
     }
 }
