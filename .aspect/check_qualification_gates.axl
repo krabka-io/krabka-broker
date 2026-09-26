@@ -249,7 +249,7 @@ sasl_config = { enabled_mechanisms = ["PLAIN"] }
 credentials_path = "/etc/krabka/users"
 [authorization]
 type = "simple"
-super_users = ["admin"]
+super_users = ["User:admin", "User:ANONYMOUS"]
 [process]
 roles = ["controller", "broker"]
 EOF
@@ -456,7 +456,7 @@ protocol = "SaslPlaintext"
 enabled_mechanisms = ["SCRAM-SHA-512"]
 [authorization]
 type = "simple"
-super_users = ["admin"]
+super_users = ["User:admin", "User:ANONYMOUS"]
 [process]
 roles = ["controller", "broker"]
 [remote_storage.s3]
@@ -718,7 +718,7 @@ protocol = "SaslPlaintext"
 enabled_mechanisms = ["SCRAM-SHA-512"]
 [authorization]
 type = "simple"
-super_users = ["admin"]
+super_users = ["User:admin", "User:ANONYMOUS"]
 [remote_storage.s3]
 bucket = "$bucket"
 region = "us-east-1"

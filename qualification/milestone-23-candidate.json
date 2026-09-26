@@ -78,7 +78,7 @@
       "artifacts": [
         {
           "kind": "chart",
-          "reference": "https://krabka-io.github.io/charts/krabka-operator-0.4.0.tgz",
+          "reference": "https://raw.githubusercontent.com/krabka-io/krabka-io.github.io/00dc667bb8629b34eb6b9532133080122d13070b/public/charts/krabka-operator-0.4.0.tgz",
           "digest": "sha256:bc7b1378be63676e546fa1e2c91e4633337176a69f9b0f6ac1909fb850aeff75"
         },
         {
@@ -151,7 +151,7 @@
       "artifacts": [
         {
           "kind": "chart",
-          "reference": "https://krabka-io.github.io/charts/crabka-rebalancer-0.4.0.tgz",
+          "reference": "https://raw.githubusercontent.com/krabka-io/krabka-io.github.io/00dc667bb8629b34eb6b9532133080122d13070b/public/charts/crabka-rebalancer-0.4.0.tgz",
           "digest": "sha256:6c924ea43772b77a92674a7825c71bb915d7621b9d15734f5eecaeb49e1ad700"
         },
         {
@@ -226,5 +226,5 @@
     "url": "",
     "sha256": ""
   },
-  "runner_sha256": "sha256:d7c88f221fbf41374efcdd8a3cb8723240f24ea433a993aa3c932a6f53d34e94"
+  "runner_sha256": "sha256:6be6b4fe1676e858fb51368e8a59ff425421099cd43a0c7898e16ac55473b839"
 }
