@@ -44,12 +44,26 @@ pub(super) async fn append_tombstones(
         Ok(Ok(_)) => Ok(()),
         Ok(Err(e)) => {
             tracing::error!(error = %e, "OffsetDelete writer returned error");
-            Err(codes::from_broker_error(&e))
+            Err(operation_error_code(codes::from_broker_error(&e)))
         }
         Err(e) => {
             tracing::error!(error = %e, "OffsetDelete writer ack dropped");
             Err(codes::UNKNOWN_SERVER_ERROR)
         }
+    }
+}
+
+/// Kafka's `CoordinatorOperationExceptionHelper.handleOperationException`: the
+/// top-level code a failed coordinator write answers with.
+fn operation_error_code(code: i16) -> i16 {
+    match code {
+        codes::NETWORK_EXCEPTION => codes::COORDINATOR_LOAD_IN_PROGRESS,
+        codes::UNKNOWN_TOPIC_OR_PARTITION
+        | codes::NOT_ENOUGH_REPLICAS
+        | codes::REQUEST_TIMED_OUT => codes::COORDINATOR_NOT_AVAILABLE,
+        codes::NOT_LEADER_OR_FOLLOWER | codes::KAFKA_STORAGE_ERROR => codes::NOT_COORDINATOR,
+        codes::MESSAGE_TOO_LARGE => codes::UNKNOWN_SERVER_ERROR,
+        other => other,
     }
 }
 
@@ -60,4 +74,34 @@ pub(super) fn now_ms() -> i64 {
             .map_or(0, |d| d.as_millis()),
     )
     .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::check;
+
+    use super::*;
+
+    #[test]
+    fn write_errors_map_as_kafka_handle_operation_exception() {
+        for (write, want) in [
+            (
+                codes::NETWORK_EXCEPTION,
+                codes::COORDINATOR_LOAD_IN_PROGRESS,
+            ),
+            (
+                codes::UNKNOWN_TOPIC_OR_PARTITION,
+                codes::COORDINATOR_NOT_AVAILABLE,
+            ),
+            (codes::NOT_ENOUGH_REPLICAS, codes::COORDINATOR_NOT_AVAILABLE),
+            (codes::REQUEST_TIMED_OUT, codes::COORDINATOR_NOT_AVAILABLE),
+            (codes::NOT_LEADER_OR_FOLLOWER, codes::NOT_COORDINATOR),
+            (codes::KAFKA_STORAGE_ERROR, codes::NOT_COORDINATOR),
+            (codes::MESSAGE_TOO_LARGE, codes::UNKNOWN_SERVER_ERROR),
+            (codes::UNKNOWN_SERVER_ERROR, codes::UNKNOWN_SERVER_ERROR),
+            (codes::CORRUPT_MESSAGE, codes::CORRUPT_MESSAGE),
+        ] {
+            check!(operation_error_code(write) == want, "{write}");
+        }
+    }
 }

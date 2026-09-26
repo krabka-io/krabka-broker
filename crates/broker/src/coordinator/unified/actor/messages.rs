@@ -95,9 +95,15 @@ pub enum GroupActorMessage {
     ClassicDelete {
         reply: oneshot::Sender<Result<(), DeleteGroupError>>,
     },
-    /// Read-only classic snapshot for the admin/offset-delete handlers.
+    /// Read-only classic snapshot for the admin handlers.
     ClassicInspect {
         reply: oneshot::Sender<ClassicView>,
+    },
+    /// `OffsetDelete`'s group check on the LIVE group, whatever its kind:
+    /// Kafka's `validateOffsetDelete` error, or the topics the group
+    /// subscribes to.
+    OffsetDeleteGuard {
+        reply: oneshot::Sender<Result<super::SubscribedTopics, ErrorCode>>,
     },
     /// Kind-agnostic admin snapshot for the classic `ListGroups` and
     /// `DescribeGroups` path. It projects the LIVE group into a

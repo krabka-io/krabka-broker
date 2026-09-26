@@ -23,6 +23,9 @@ use krabka_protocol::{
         offset_delete_request::{
             OffsetDeleteRequest, OffsetDeleteRequestPartition, OffsetDeleteRequestTopic,
         },
+        offset_delete_response::{
+            OffsetDeleteResponse, OffsetDeleteResponsePartition, OffsetDeleteResponseTopic,
+        },
         offset_fetch_request::{
             OffsetFetchRequest, OffsetFetchRequestGroup, OffsetFetchRequestTopics,
         },
@@ -194,7 +197,14 @@ async fn delete_offsets_unknown_group_returns_group_id_not_found() {
         })
         .await
         .expect("OffsetDelete");
-    assert!(resp.error_code == 69, "top-level GROUP_ID_NOT_FOUND (69)");
+    // A group-level refusal carries only the top-level code (#734).
+    assert!(
+        resp == OffsetDeleteResponse {
+            error_code: 69,
+            ..Default::default()
+        },
+        "top-level GROUP_ID_NOT_FOUND (69) and no topic rows"
+    );
 
     p.broker.shutdown().await;
 }
@@ -264,12 +274,29 @@ async fn delete_offsets_partition_out_of_range_returns_unknown_topic_or_partitio
         })
         .await
         .expect("OffsetDelete");
-    check!(resp.error_code == 0);
-    check!(resp.topics[0].partitions[0].error_code == 0, "p=0 deleted");
-    check!(
-        resp.topics[0].partitions[1].error_code == 3,
-        "p=99 UNKNOWN_TOPIC_OR_PARTITION"
-    );
+    // Kafka's broker answers p=99 before the coordinator answers p=0, and
+    // `OffsetDeleteResponse.Builder.merge` appends p=0 after it.
+    let expected = OffsetDeleteResponse {
+        error_code: 0,
+        topics: vec![OffsetDeleteResponseTopic {
+            name: "t4".into(),
+            partitions: vec![
+                OffsetDeleteResponsePartition {
+                    partition_index: 99,
+                    error_code: 3,
+                    ..Default::default()
+                },
+                OffsetDeleteResponsePartition {
+                    partition_index: 0,
+                    error_code: 0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    check!(resp == expected);
 
     p.broker.shutdown().await;
 }

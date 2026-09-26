@@ -29,6 +29,7 @@ mod downgrade;
 mod heartbeat;
 mod member_state;
 mod messages;
+mod offset_delete;
 mod pending_records;
 mod persistence;
 mod retention;
@@ -49,6 +50,7 @@ pub use self::{
         GroupActorMessage, JoinResult, JoinResultMember, LeaveResult, SyncResult,
         TxnOffsetReservation,
     },
+    offset_delete::SubscribedTopics,
     retention::ReapOutcome,
     views::{ClassicMemberView, ClassicView, DescribeMember, DescribeView},
 };
