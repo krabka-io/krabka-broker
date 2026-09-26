@@ -71,6 +71,13 @@ fn a_compacted_segment_keeps_the_maximum_of_the_records_it_kept() {
         log.append(&mut keyed_batch_at(key, ts)).unwrap();
     }
 
+    // The fixture needs `segment.bytes` tiny to seal one batch per segment,
+    // but a pass groups its outputs by that same limit (Kafka's
+    // `Cleaner.groupSegmentsBySize`), so widen it before compacting: this
+    // test is about the merged segment's maximum, not the grouping cap.
+    let mut merged = log.config_snapshot();
+    merged.segment_size = gibibytes(1);
+    log.set_config(merged);
     log.compact(&CompactionContext {
         now,
         last_stable_offset: Offset(i64::MAX),
@@ -161,9 +168,12 @@ fn retention_after_a_restart_keeps_segments_inside_the_window() {
 #[test]
 fn a_reopened_segment_keeps_a_maximum_that_predates_its_newest_batch() {
     let dir = tempdir().unwrap();
+    // Three batches per sealed segment. Kafka rolls before an append that
+    // would push the active segment past `segment.bytes`, so the limit is
+    // exactly three batches' worth.
+    let batch_len = u32::try_from(batch_at(0).encoded_len()).unwrap();
     let config = LogConfig {
-        // Three batches per sealed segment.
-        segment_size: bytes(600),
+        segment_size: bytes(3 * batch_len),
         // Index every batch, so the unindexed tail is the last batch alone.
         index_interval: bytes(1),
         retention: Some(hours(1)),
@@ -203,6 +213,11 @@ fn a_reopened_segment_reports_the_timestamp_of_its_newest_batch() {
         // the last entry the time index holds.
         index_interval: bytes(1 << 20),
         retention: Some(days(7)),
+        // Kafka also rolls when an incoming batch is more than `segment.ms`
+        // newer than the segment's first one. The stale and fresh batches
+        // below are 30 days apart, so keep the roll interval wider than that
+        // or the stale batch would be sealed alone and rightly deleted.
+        segment_roll_interval: days(60),
         ..LogConfig::default()
     };
 

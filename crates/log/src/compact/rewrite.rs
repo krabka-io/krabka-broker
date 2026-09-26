@@ -15,7 +15,7 @@ use krabka_units::prelude::{Time, TimeExt};
 use tracing::instrument;
 
 use super::{
-    BatchMeta, CleanedTransactionMetadata, RecordMeta, RetainDecision,
+    BatchMeta, CleanedTransactionMetadata, RecordMeta, RetainDecision, TxnDataState,
     batch_reader::read_all_batches, retain_decision,
 };
 use crate::{
@@ -260,7 +260,30 @@ pub fn rewrite_segments(
     // Rebuild the survivor `.txnindex`: carry forward aborted-txn entries
     // whose aborted data still partially survives. Producers whose data is
     // fully compacted away have their entries (and markers) dropped.
-    let retained: Vec<AbortedTxn> = txn_meta.retained_aborted().copied().collect();
+    //
+    // The entries come from THIS group's own input `segments`, not from
+    // `txn_meta`'s aborted list over the whole consumed range: a compaction
+    // pass can rewrite that range into several output segments
+    // (`Log::group_segments_by_size`), and an aborted-txn entry lives in
+    // whichever sealed segment its abort marker was appended to -- never
+    // duplicated across segments. Scoping the read to `segments` here is
+    // what keeps each output's `.txnindex` to the entries that actually
+    // belong to it; a read-committed fetch that scans several of a
+    // multi-segment pass's outputs would otherwise see the same aborted
+    // transaction once per output and inflate its response.
+    // `txn_meta.txn_state` still supplies the survivor set, which is a fact
+    // about the whole pass, not about this group alone: whether a producer's
+    // data survives compaction can be decided by a record in a different
+    // output group than the one holding that producer's abort entry.
+    let mut retained: Vec<AbortedTxn> = Vec::new();
+    for seg in segments {
+        let idx = TxnIndex::open(seg.txn_index_path())?;
+        retained.extend(
+            idx.entries().iter().copied().filter(|entry| {
+                txn_meta.txn_state(entry.producer_id) == TxnDataState::DataSurvives
+            }),
+        );
+    }
     let txnindex_swap = if retained.is_empty() {
         None
     } else {

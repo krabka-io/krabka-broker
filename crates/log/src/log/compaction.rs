@@ -59,11 +59,12 @@ pub struct CompactionContext {
 /// prefix plus that range, so the uncleanable tail is left out of both halves.
 ///
 /// krabka keeps no checkpoint file, because [`Log::compact`] rewrites the
-/// sealed segments it is given into one: the first sealed segment is therefore
-/// the previous pass's output and counts as clean, and every sealed segment
-/// after it arrived since. A log that has never been compacted reports its
-/// first segment as clean, which is the conservative direction: the ratio it
-/// reports is never larger than the true one.
+/// sealed segments it is given into one or more size-bounded outputs: the
+/// leading sealed segments are therefore the previous pass's output and count
+/// as clean, and every sealed segment after them arrived since. A log that
+/// has never been compacted reports no clean prefix at all, which is the
+/// conservative direction: the ratio it reports is never larger than the true
+/// one.
 ///
 /// The uncleanable tail is Kafka's, too. The active segment is always in it,
 /// and so is every sealed segment from the first one whose largest timestamp
@@ -206,7 +207,11 @@ impl Log {
         // reads from `cleaner-offset-checkpoint`. A log nothing has cleaned
         // has no clean prefix at all: its whole sealed region is dirty, which
         // is what makes a single sealed segment cleanable on the first pass.
-        let clean_segments = usize::from(self.compacted_once);
+        //
+        // Clamped to the segments actually on hand: retention or truncation
+        // can remove a previous pass's output out from under this count, and
+        // a clean prefix wider than the sealed list itself is nonsensical.
+        let clean_segments = self.clean_prefix_segments.min(self.segments.len());
         let clean_bytes = self.segments[..clean_segments]
             .iter()
             .fold(ByteSize::ZERO, |total, segment| total + segment.size());
@@ -317,10 +322,12 @@ impl Log {
     /// The pass never touches the active segment, and it stops short of the
     /// sealed segments `min.compaction.lag.ms` or `ctx.last_stable_offset`
     /// withholds -- the same range [`Self::compaction_due`] measures, so the
-    /// decision and the pass agree on what one pass would do. The output is a single new sealed segment at
-    /// the lowest input base offset, and it replaces the sealed segments it
-    /// consumed; any withheld sealed segments stay where they are and become
-    /// cleanable once their records outlive the lag.
+    /// decision and the pass agree on what one pass would do. The output is
+    /// one or more new sealed segments, grouped so none exceeds
+    /// `segment.bytes`, starting at the lowest input base offset; together
+    /// they replace the sealed segments this pass consumed. Any withheld
+    /// sealed segments stay where they are and become cleanable once their
+    /// records outlive the lag.
     ///
     /// `ctx` carries the wall clock, which drives the KIP-534 delete-horizon
     /// computation, the last stable offset, and the set of currently-active
@@ -368,19 +375,19 @@ impl Log {
         let compacted_from = self.log_start_offset();
         self.invalidate_delivery_schedule(compacted_from);
 
-        // Borrow sealed segments to run map + rewrite (which open
-        // additional file handles internally for reading). Then drop the
-        // borrows and clear self.segments so the original segments'
-        // file handles close before atomic_swap deletes/renames
-        // (Windows requires no open handle on a file before remove/rename).
+        // Borrow sealed segments to run map + rewrite (`rewrite_segments`
+        // reads each input segment's `.log` by path rather than through the
+        // segment's own handle, so this borrow does not itself hold anything
+        // open across the swap below).
         //
         // The offset map and the transaction metadata are built once over
         // the whole consumed range: whether a record is the newest for its
         // key, or which transaction it belongs to, is a fact about the full
         // dirty region, not about whichever output group a record lands in.
         // The rewrite itself then runs once per size-bounded group, so no
-        // output segment grows past `segment.bytes`.
-        let mut new_segments: Vec<Segment> = Vec::with_capacity(consumed);
+        // output segment grows past `segment.bytes`, and every group's
+        // `.swap` files are written before any of them is promoted.
+        let mut rewrites: Vec<(Vec<Offset>, crate::compact::RewriteOutput)> = Vec::new();
         {
             let sealed_refs: Vec<&Segment> = self.segments[..consumed].iter().collect();
             let offset_map = crate::compact::build_offset_map(&sealed_refs)?;
@@ -388,6 +395,7 @@ impl Log {
                 crate::compact::CleanedTransactionMetadata::build(&sealed_refs, &offset_map)?;
             let sizes: Vec<ByteSize> = sealed_refs.iter().map(|segment| segment.size()).collect();
             let groups = Self::group_segments_by_size(&sizes, segment_bytes);
+            rewrites.reserve_exact(groups.len());
 
             let mut start = 0usize;
             for group_len in groups {
@@ -408,36 +416,52 @@ impl Log {
                     },
                     &ctx.active_producers,
                 )?;
-                crate::compact::atomic_swap(&*self.io, &self.dir, &group_bases, &rewrite)?;
-
-                // Validation scans the new log from byte zero, rebuilds both
-                // sparse indexes, and derives exact offset and timestamp
-                // frontiers before the segment is sealed.
-                let mut new_seg = Segment::open_active_with_index_interval(
-                    &self.dir,
-                    rewrite.new_base_offset,
-                    true,
-                    index_interval,
-                )?;
-                new_seg.set_io(self.io.clone());
-                new_seg.seal();
-                let txn_index = TxnIndex::open(new_seg.txn_index_path())?;
-                for base in &group_bases {
-                    self.sealed_txn_indexes.remove(base);
-                }
-                self.sealed_txn_indexes
-                    .insert(rewrite.new_base_offset, txn_index);
-                new_segments.push(new_seg);
+                rewrites.push((group_bases, rewrite));
                 start += group_len;
             }
+            // `sealed_refs` (and the borrow of `self.segments` it holds)
+            // ends here, before the consumed segments are dropped below.
         }
 
-        self.segments.drain(..consumed);
+        // Take ownership of the consumed segments out of `self.segments` and
+        // drop them now, closing their `.log`/`.index`/`.timeindex` file
+        // handles before any `atomic_swap` runs its delete/rename steps.
+        // `compact::swap` requires this: on Windows, `remove_file` and
+        // `rename` both fail while another handle on the same file is still
+        // open, so promoting even the first output group while a consumed
+        // segment's handle is still alive would fail every time.
+        let consumed_segments: Vec<Segment> = self.segments.drain(..consumed).collect();
+        drop(consumed_segments);
+
+        let mut new_segments: Vec<Segment> = Vec::with_capacity(rewrites.len());
+        for (group_bases, rewrite) in &rewrites {
+            crate::compact::atomic_swap(&*self.io, &self.dir, group_bases, rewrite)?;
+
+            // Validation scans the new log from byte zero, rebuilds both
+            // sparse indexes, and derives exact offset and timestamp
+            // frontiers before the segment is sealed.
+            let mut new_seg = Segment::open_active_with_index_interval(
+                &self.dir,
+                rewrite.new_base_offset,
+                true,
+                index_interval,
+            )?;
+            new_seg.set_io(self.io.clone());
+            new_seg.seal();
+            let txn_index = TxnIndex::open(new_seg.txn_index_path())?;
+            for base in group_bases {
+                self.sealed_txn_indexes.remove(base);
+            }
+            self.sealed_txn_indexes
+                .insert(rewrite.new_base_offset, txn_index);
+            new_segments.push(new_seg);
+        }
+
+        // Every segment just inserted was rewritten from the full offset map
+        // over this pass's consumed range, so all of them -- not only the
+        // first -- are this pass's output and belong to the clean prefix.
+        self.clean_prefix_segments = new_segments.len();
         self.segments.splice(0..0, new_segments);
-        // The segments just inserted are this pass's output, so from here
-        // the leading sealed segments are a clean prefix — Kafka's cleaner
-        // checkpoint, in the one form this log needs it.
-        self.compacted_once = true;
         Ok(())
     }
 }
@@ -1094,5 +1118,139 @@ mod tests {
         log.compact(&compaction_ctx()).unwrap();
         let leo2 = log.log_end_offset();
         assert2::assert!(leo1 == leo2);
+    }
+
+    /// A pass that splits into more than one output segment
+    /// (`Log::group_segments_by_size`) must mark every output clean, not only
+    /// the first: `clean_prefix_segments` tracks the count of leading clean
+    /// segments rather than a single boolean, so the whole output run counts
+    /// toward the clean prefix `compaction_candidacy` reads.
+    ///
+    /// Before this fix, `compacted_once` was a `bool`, so
+    /// `compaction_candidacy` treated only the first output segment as clean
+    /// and the rest as freshly dirty -- a log made entirely of one pass's own
+    /// outputs would still (wrongly) report itself due for another pass.
+    #[test]
+    fn a_multi_group_pass_treats_every_output_as_clean() {
+        let dir = tempdir().unwrap();
+        let cfg = LogConfig {
+            cleanup_policy: crate::CleanupPolicy::Compact,
+            segment_size: bytes(1), // one record per sealed segment
+            ..Default::default()
+        };
+        let mut log = Log::open(dir.path(), cfg).unwrap();
+        // Six distinct keys: nothing is superseded, so the pass only
+        // regroups records into size-bounded outputs, it never shrinks them.
+        for i in 0..6 {
+            let key = format!("k{i}");
+            let mut batch = keyed_batch(i, &[(0, key.as_bytes(), b"v")]);
+            log.append(&mut batch).unwrap();
+        }
+        // Five sealed segments (one record each) and the active sixth.
+        assert2::assert!(log.segments.len() == 5);
+
+        let sealed_bytes: Vec<ByteSize> = log.segments.iter().map(Segment::size).collect();
+        // A cap that fits exactly the first two sealed segments together, so
+        // the pass is forced to produce more than one output group.
+        let group_cap = sealed_bytes[0] + sealed_bytes[1];
+        assert2::assert!(
+            Log::group_segments_by_size(&sealed_bytes, group_cap).len() >= 2,
+            "the fixture must actually exercise more than one output group"
+        );
+
+        // `segment.bytes` at compact time is what `Log::compact` reads for
+        // the grouping cap; widen it to exactly `group_cap`.
+        let mut grouped_cfg = log.config_snapshot();
+        grouped_cfg.segment_size = group_cap;
+        log.set_config(grouped_cfg);
+        log.compact(&compaction_ctx()).unwrap();
+
+        let output_segments = log.segments.len();
+        assert2::assert!(
+            output_segments >= 2,
+            "the pass must have split into more than one output segment"
+        );
+        assert2::assert!(
+            log.clean_prefix_segments == output_segments,
+            "every rewritten output segment must count toward the clean prefix"
+        );
+        assert2::check!(
+            !log.compaction_due(std::time::SystemTime::now(), UNBOUNDED_HW),
+            "a log made entirely of this pass's own outputs owes no further pass"
+        );
+    }
+
+    /// [`compact::swap`] requires every consumed segment's file handle
+    /// closed before it deletes or renames the underlying files -- on
+    /// Windows, `remove_file` and `rename` both fail while another handle on
+    /// the same file is open. `Log::compact` meets that precondition by
+    /// draining the consumed segments out of `self.segments` (dropping their
+    /// `Segment`s, and with them the `Arc<File>` handles inside) before any
+    /// `atomic_swap` call runs, for every output group in a multi-group pass,
+    /// not only the first.
+    ///
+    /// This test cannot reproduce the Windows failure itself on this
+    /// platform (removing or renaming a file out from under an open handle
+    /// is not an error on Linux), so it instead pins the invariant a
+    /// Windows run depends on: once a multi-group pass returns, none of the
+    /// original consumed segments' files remain, only every output's own
+    /// files. That is only possible if the consumed segments were dropped
+    /// (and their handles closed) before the swap ran, since a leftover open
+    /// handle guarding a still-existing original file is exactly what the
+    /// precondition rules out.
+    #[test]
+    fn a_multi_group_pass_drops_every_original_segment_file_before_swap() {
+        let dir = tempdir().unwrap();
+        let cfg = LogConfig {
+            cleanup_policy: crate::CleanupPolicy::Compact,
+            segment_size: bytes(1),
+            ..Default::default()
+        };
+        let mut log = Log::open(dir.path(), cfg).unwrap();
+        for i in 0..6 {
+            let key = format!("k{i}");
+            let mut batch = keyed_batch(i, &[(0, key.as_bytes(), b"v")]);
+            log.append(&mut batch).unwrap();
+        }
+        let original_bases: Vec<i64> = log.segments.iter().map(|s| s.base_offset().0).collect();
+        assert2::assert!(original_bases.len() == 5);
+
+        let sealed_bytes: Vec<ByteSize> = log.segments.iter().map(Segment::size).collect();
+        let group_cap = sealed_bytes[0] + sealed_bytes[1];
+        let mut grouped_cfg = log.config_snapshot();
+        grouped_cfg.segment_size = group_cap;
+        log.set_config(grouped_cfg);
+        log.compact(&compaction_ctx()).unwrap();
+        assert2::assert!(
+            log.segments.len() >= 2,
+            "the fixture exercises multiple groups"
+        );
+
+        // Every original consumed segment's `.log`/`.index`/`.timeindex`
+        // files are gone, except where an output group's own base offset
+        // happens to equal one it consumed (the lowest offset in that
+        // group): `atomic_swap` only removes the others once their
+        // `Segment` handle is closed, so their absence here is only
+        // possible because the drain-before-swap ordering held for every
+        // group.
+        let new_bases: Vec<i64> = log.segments.iter().map(|s| s.base_offset().0).collect();
+        for original_base in original_bases {
+            if new_bases.contains(&original_base) {
+                continue;
+            }
+            assert2::assert!(!name::log_path(dir.path(), original_base).exists());
+            assert2::assert!(!name::index_path(dir.path(), original_base).exists());
+            assert2::assert!(!name::timeindex_path(dir.path(), original_base).exists());
+        }
+        // Every output segment's own files exist, and no `.swap` scratch
+        // file was left behind.
+        for base in &new_bases {
+            assert2::assert!(name::log_path(dir.path(), *base).exists());
+        }
+        let leftover_swaps = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| entry.file_name().to_string_lossy().ends_with(".swap"));
+        assert2::assert!(!leftover_swaps, "no .swap scratch file must remain");
     }
 }

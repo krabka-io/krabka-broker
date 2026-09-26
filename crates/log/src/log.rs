@@ -103,22 +103,27 @@ pub struct Log {
     /// instead.
     start_offset_established: bool,
 
-    /// Whether a compaction pass has run over this log since it was opened,
-    /// which is what makes its first sealed segment a *clean* prefix.
+    /// How many of the leading sealed segments are a *clean* prefix, because
+    /// a compaction pass produced them and nothing has appended to the log's
+    /// dirty region since.
     ///
     /// Kafka keeps the same fact in `cleaner-offset-checkpoint`: the dirty
     /// region is everything above the last cleaned offset, and on a log
-    /// nothing has cleaned yet that is the whole log. A pass collapses every
-    /// cleanable sealed segment into one, so afterwards the first sealed
-    /// segment *is* the last pass's output, and treating it as clean is what
-    /// keeps `min.cleanable.dirty.ratio` from asking for a pass that would
-    /// rewrite an already-deduplicated segment for nothing.
+    /// nothing has cleaned yet that is the whole log. A pass groups every
+    /// cleanable sealed segment into one or more size-bounded output
+    /// segments (`segment.bytes`, Kafka's `Cleaner.groupSegmentsBySize`), and
+    /// every one of them was rewritten with the full offset map, so all of
+    /// them -- not just the first -- are the last pass's output and count as
+    /// clean. Tracking a count rather than a single boolean is what keeps
+    /// `min.cleanable.dirty.ratio` from treating every output segment past
+    /// the first as dirty and asking for a pass that would rewrite an
+    /// already-deduplicated segment for nothing.
     ///
     /// It is in memory only. A reopened log reads as never cleaned, which
     /// costs one extra pass and never skips a needed one; Kafka's checkpoint
     /// is durable, and making this one durable is the same change on both
     /// sides of a restart.
-    compacted_once: bool,
+    clean_prefix_segments: usize,
 
     /// First unstable offset: the first offset of the earliest transaction
     /// that is open, or that is complete but whose marker is not yet below the
