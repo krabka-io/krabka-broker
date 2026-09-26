@@ -272,7 +272,7 @@ pub(super) async fn execute_pending_reads(
             // rather than let a second oversized batch out: this partition's
             // row keeps its watermarks and no records, matching what Kafka
             // sends a partition beyond the byte budget.
-            read.out.records = None;
+            discard_to_metadata_only(read);
             state.bytes[index] = 0;
         } else {
             state.record_progress_exception(budget, state.bytes[index]);
@@ -501,7 +501,7 @@ async fn reread_woken(
         // an earlier partition in this response, so a batch this re-read got
         // anyway (`Log::read_raw`'s zero-budget guarantee) is discarded
         // rather than sent.
-        read.out.records = None;
+        discard_to_metadata_only(read);
         bytes = 0;
     } else {
         state.record_progress_exception(read_budget, bytes);
@@ -544,6 +544,22 @@ async fn reread_woken(
 /// local log answered charges nothing at all: the clock is only read once the
 /// fallback is entered, so a cluster with no tiered or diskless topic sees an
 /// unchanged remote phase.
+/// Turns a read the response budget had no room for into the row an empty
+/// read produces: the watermarks and log start the read just filled in, no
+/// records, and the aborted-transaction list an empty read carries.
+///
+/// Kafka reads nothing for such a partition (`maxBytes` 0, no
+/// `minOneMessage`), so the aborted-transaction range it looks up ends at the
+/// fetch offset and holds nothing. The local read here did run, because
+/// `Log::read_raw` serves a batch even at a zero budget, and its aborted
+/// transactions describe records this row no longer carries. They are
+/// replaced with what `do_read` reports for an empty read: an empty list for
+/// a `read_committed` consumer, and `None` otherwise.
+fn discard_to_metadata_only(read: &mut PendingRead) {
+    read.out.records = None;
+    read.out.aborted_transactions = (read.read_committed && !read.is_follower_fetch).then(Vec::new);
+}
+
 async fn serve_from_cold_tier(
     broker: &Broker,
     read: &mut PendingRead,
@@ -803,6 +819,151 @@ mod tests {
         assert!(served_b.records.is_none());
         assert!(served_b.high_watermark == 1);
         assert!(served_b.error_code == crate::codes::NONE);
+        broker_handle.shutdown().await;
+    }
+
+    /// A local partition whose log holds `batches`, with its high watermark
+    /// at the log end, read as a consumer (`fetch_only_leader` off).
+    async fn consumer_partition(
+        mut batches: Vec<RecordBatch>,
+    ) -> (
+        std::sync::Arc<crate::partition::Partition>,
+        tempfile::TempDir,
+    ) {
+        let (part, dir) = crate::partition::test_support::test_partition(std::sync::Arc::new(
+            tokio::sync::Notify::new(),
+        ));
+        let end = {
+            let mut log = part.log.lock().expect("log mutex poisoned");
+            for batch in &mut batches {
+                log.append(batch).expect("append a batch under test");
+            }
+            log.log_end_offset()
+        };
+        part.replica_state.lock().await.hw = end;
+        (std::sync::Arc::new(part), dir)
+    }
+
+    /// A consumer read of `topic`'s partition 0 from offset 0.
+    fn consumer_read(
+        topic: &str,
+        part: &std::sync::Arc<crate::partition::Partition>,
+        read_committed: bool,
+    ) -> super::PendingRead {
+        super::PendingRead {
+            topic_name: topic.into(),
+            topic_id: WireUuid::ZERO,
+            partition_index: 0,
+            current_leader_epoch: -1,
+            last_fetched_epoch: -1,
+            fetch_offset: 0,
+            max_bytes: 1 << 20,
+            read_committed,
+            is_follower_fetch: false,
+            fetch_only_leader: false,
+            partition: Some(std::sync::Arc::clone(part)),
+            out: super::PartitionData {
+                partition_index: 0,
+                ..Default::default()
+            },
+            cpu_micros: 0,
+        }
+    }
+
+    /// A transaction from `PRODUCER_ID` that one data batch opens and an
+    /// abort marker closes, so a `read_committed` read over it reports the
+    /// aborted range starting at offset 0.
+    fn aborted_transaction() -> Vec<RecordBatch> {
+        use krabka_protocol::records::Attributes;
+
+        const PRODUCER_ID: i64 = 1000;
+        // Control record key: version 0, marker type 0 (abort), big-endian.
+        let abort_key = [0u8; 4];
+        let mut abort_value = [0u8; 6];
+        abort_value[2..6].copy_from_slice(&17i32.to_be_bytes());
+        vec![
+            RecordBatch {
+                producer_id: PRODUCER_ID,
+                attributes: Attributes::default().with_transactional(true),
+                records: vec![Record {
+                    value: Some(Bytes::from_static(b"in an aborted transaction")),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            RecordBatch {
+                producer_id: PRODUCER_ID,
+                attributes: Attributes::default()
+                    .with_transactional(true)
+                    .with_control(true),
+                records: vec![Record {
+                    key: Some(Bytes::copy_from_slice(&abort_key)),
+                    value: Some(Bytes::copy_from_slice(&abort_value)),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ]
+    }
+
+    /// A partition the response budget has no room for gets the row an
+    /// empty read produces, including the aborted-transaction list: Kafka
+    /// reads nothing for it, so the aborted range it looks up ends at the
+    /// fetch offset. The local read behind it did run and did find an
+    /// aborted transaction in range, and that list must not survive with
+    /// the records it described gone. A `read_committed` consumer gets the
+    /// empty list `do_read` reports for an empty read; a `read_uncommitted`
+    /// one gets `None`.
+    #[tokio::test]
+    async fn a_metadata_only_row_carries_an_empty_reads_aborted_transactions() {
+        let cases = [
+            ("read_uncommitted", false, None),
+            ("read_committed", true, Some(Vec::new())),
+        ];
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let broker_handle = Broker::start(crate::config::BrokerConfig::for_tests(
+            dir.path().to_path_buf(),
+        ))
+        .await
+        .expect("start broker");
+        let broker = broker_handle.broker_arc_for_test();
+
+        for (name, read_committed, want_aborted) in cases {
+            // The first partition spends the response's one progress
+            // exception; the second is read at a zero budget after it.
+            let (spender, _spender_dir) = consumer_partition(vec![sized_batch(&[b'x'; 512])]).await;
+            let (aborted, _aborted_dir) = consumer_partition(aborted_transaction()).await;
+            let pending = vec![
+                consumer_read("spender", &spender, read_committed),
+                consumer_read("aborted", &aborted, read_committed),
+            ];
+
+            let phases = RequestPhases::default();
+            let (topics, _cpu) =
+                super::execute_pending_reads(&broker, pending, 0, 8, 0, false, &phases)
+                    .await
+                    .expect("fetch");
+
+            assert!(
+                served_base_offsets(&topics[0].partitions[0]) == vec![0],
+                "{name}"
+            );
+            assert!(
+                topics[1].partitions[0]
+                    == super::PartitionData {
+                        partition_index: 0,
+                        error_code: crate::codes::NONE,
+                        high_watermark: 2,
+                        last_stable_offset: 2,
+                        log_start_offset: 0,
+                        aborted_transactions: want_aborted,
+                        records: None,
+                        ..Default::default()
+                    },
+                "{name}"
+            );
+        }
         broker_handle.shutdown().await;
     }
 
