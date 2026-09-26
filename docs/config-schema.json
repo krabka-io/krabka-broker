@@ -1555,7 +1555,7 @@
         },
         "classic_group_initial_rebalance_delay": {
           "default": null,
-          "description": "Initial delay before a classic group begins rebalancing, Kafka's\n`group.initial.rebalance.delay.ms`.",
+          "description": "Initial delay before a classic group begins rebalancing, Kafka's\n`group.initial.rebalance.delay.ms`. Zero completes a new group's first\nrebalance as soon as its first member joins.",
           "format": "duration",
           "type": [
             "string",

@@ -101,10 +101,6 @@ impl BrokerConfig {
                 "coordinator_shutdown_ack_timeout",
                 self.coordinator_shutdown_ack_timeout,
             ),
-            (
-                "classic_group_initial_rebalance_delay",
-                self.classic_group_initial_rebalance_delay,
-            ),
             ("sync_group_follower_wait", self.sync_group_follower_wait),
             (
                 "unclean_recovery_aggressive_deadline",
@@ -295,6 +291,12 @@ impl BrokerConfig {
             ));
         }
         self.validate_txn_id_expiry_scalars()?;
+        // Kafka's `group.initial.rebalance.delay.ms` is `atLeast(0)`: zero
+        // completes a new group's first rebalance as soon as it opens.
+        require_nonnegative_time(
+            "classic_group_initial_rebalance_delay",
+            self.classic_group_initial_rebalance_delay,
+        )?;
         require_positive_size("observer_fetch_max", self.observer_fetch_max)?;
         if let Some(bytes) = self.queued_max_request_bytes {
             require_positive_size("queued_max_request_bytes", bytes)?;
@@ -543,6 +545,17 @@ fn require_positive_time(name: &str, value: Time) -> Result<(), BrokerError> {
     if value <= <Time as TimeExt>::ZERO {
         return Err(BrokerError::InvalidRuntimeConfig(format!(
             "{name} must be positive"
+        )));
+    }
+    Ok(())
+}
+
+/// Rejects a negative or non-finite time extent. The error names the config
+/// field.
+fn require_nonnegative_time(name: &str, value: Time) -> Result<(), BrokerError> {
+    if !value.secs_f64().is_finite() || value < <Time as TimeExt>::ZERO {
+        return Err(BrokerError::InvalidRuntimeConfig(format!(
+            "{name} must be finite and nonnegative"
         )));
     }
     Ok(())

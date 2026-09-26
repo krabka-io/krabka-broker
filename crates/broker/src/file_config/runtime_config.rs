@@ -223,7 +223,8 @@ pub struct RuntimeFileConfig {
     /// `group.consumer.max.size`.
     pub consumer_group_max_size: Option<usize>,
     /// Initial delay before a classic group begins rebalancing, Kafka's
-    /// `group.initial.rebalance.delay.ms`.
+    /// `group.initial.rebalance.delay.ms`. Zero completes a new group's first
+    /// rebalance as soon as its first member joins.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub classic_group_initial_rebalance_delay: Option<Time>,

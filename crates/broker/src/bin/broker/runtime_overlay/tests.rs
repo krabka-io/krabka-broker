@@ -17,6 +17,17 @@ fn runtime_policy_cli_rejects_invalid_and_accepts_valid_values() {
         (
             vec![
                 "krabka-broker",
+                "--classic-group-initial-rebalance-delay=0ms",
+            ],
+            true,
+        ),
+        (
+            vec!["krabka-broker", "--sync-group-follower-wait=0ms"],
+            false,
+        ),
+        (
+            vec![
+                "krabka-broker",
                 "--streams-internal-topic-replication-factor=0",
             ],
             false,
@@ -152,6 +163,7 @@ fn runtime_policy_cli_reads_krabka_environment() {
             ("KRABKA_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT", Some("3s")),
             ("KRABKA_BROKER_CLIENT_DISPATCH_QUEUE_CAPACITY", Some("7")),
             ("KRABKA_BROKER_CLIENT_FRAME_MAX", Some("32KiB")),
+            ("KRABKA_CLASSIC_GROUP_INITIAL_REBALANCE_DELAY", Some("0ms")),
         ],
         || {
             let args = Args::try_parse_from(["krabka-broker"]).expect("parse environment");
@@ -188,6 +200,8 @@ fn runtime_policy_cli_reads_krabka_environment() {
             assert!(config.diskless_wal_index_projection_timeout == krabka_units::secs(3));
             assert!(config.client_dispatch_queue_capacity.get() == 7);
             assert!(config.client_frame_max.size() == krabka_units::kibibytes(32));
+            assert!(config.classic_group_initial_rebalance_delay == krabka_units::millis(0));
+            assert!(config.validate().is_ok());
         },
     );
 }
