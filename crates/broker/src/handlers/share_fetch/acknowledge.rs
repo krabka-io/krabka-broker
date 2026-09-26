@@ -39,6 +39,47 @@ pub(crate) fn renew_acknowledge_enabled(image: &MetadataImage, group: &str) -> b
         .is_none_or(|value| !value.eq_ignore_ascii_case("false"))
 }
 
+/// The highest acknowledge type of a request version without `Renew`:
+/// `Reject`.
+const MAX_ACK_TYPE: i8 = 3;
+
+/// Kafka's `KafkaApis.validateAcknowledgementBatches` for the batches of one
+/// partition, as `(first_offset, last_offset, acknowledge_types)`.
+///
+/// A partition is refused with `INVALID_REQUEST` when a batch has its first
+/// offset past its last, starts before the last offset of the batch in front
+/// of it, has no acknowledge type, has more than one type but not one per
+/// offset, has a type outside `[0, 3]` (`[0, 4]` when the version supports
+/// `Renew`), or has the type `Renew` in a request without `IsRenewAck`.
+pub(crate) fn acknowledgement_batches_are_valid<'a>(
+    batches: impl IntoIterator<Item = (i64, i64, &'a [i8])>,
+    supports_renew: bool,
+    is_renew_ack: bool,
+) -> bool {
+    let max_type = if supports_renew {
+        ACK_RENEW
+    } else {
+        MAX_ACK_TYPE
+    };
+    let mut previous_last = -1_i64;
+    for (first, last, types) in batches {
+        let per_offset = types.len() > 1;
+        let covers_range = i64::try_from(types.len())
+            .is_ok_and(|count| last.checked_sub(first) == Some(count - 1));
+        let valid = first <= last
+            && first >= previous_last
+            && !types.is_empty()
+            && (!per_offset || covers_range)
+            && types.iter().all(|ack| (0..=max_type).contains(ack))
+            && (is_renew_ack || !types.contains(&ACK_RENEW));
+        if !valid {
+            return false;
+        }
+        previous_last = last;
+    }
+    true
+}
+
 /// Applies one acknowledgement batch to the state machine.
 ///
 /// A singleton `acknowledge_types` applies that type across the whole range;

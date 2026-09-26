@@ -38,7 +38,10 @@ use crate::{
     error::BrokerError,
     handlers::{
         group_read_denied,
-        share_fetch::{Renewal, apply_one_ack, member_id_is_valid, renew_acknowledge_enabled},
+        share_fetch::{
+            Renewal, acknowledgement_batches_are_valid, apply_one_ack, member_id_is_valid,
+            renew_acknowledge_enabled,
+        },
     },
 };
 
@@ -90,7 +93,17 @@ pub(crate) async fn handle(
     };
 
     let now = Instant::now();
-    let responses = process_topics(broker, &req, ctx, &cfg, &group, &member, now).await;
+    let responses = process_topics(&AcknowledgeContext {
+        broker,
+        version,
+        req: &req,
+        ctx,
+        cfg: &cfg,
+        group: &group,
+        member: &member,
+        now,
+    })
+    .await;
     broker
         .share_partition_leaders
         .release_session_partitions(&group, &member, &released)
@@ -107,15 +120,29 @@ pub(crate) async fn handle(
     crate::handlers::encode_response(&resp, version)
 }
 
-async fn process_topics(
-    broker: &Broker,
-    req: &ShareAcknowledgeRequest,
-    ctx: &crate::handlers::RequestContext<'_>,
-    cfg: &crate::coordinator::unified::share::config::ShareGroupConfig,
-    group: &str,
-    member: &str,
+/// The request-wide inputs of [`process_topics`].
+struct AcknowledgeContext<'a> {
+    broker: &'a Broker,
+    version: i16,
+    req: &'a ShareAcknowledgeRequest,
+    ctx: &'a crate::handlers::RequestContext<'a>,
+    cfg: &'a crate::coordinator::unified::share::config::ShareGroupConfig,
+    group: &'a str,
+    member: &'a str,
     now: Instant,
-) -> Vec<ShareAcknowledgeTopicResponse> {
+}
+
+async fn process_topics(context: &AcknowledgeContext<'_>) -> Vec<ShareAcknowledgeTopicResponse> {
+    let &AcknowledgeContext {
+        broker,
+        version,
+        req,
+        ctx,
+        cfg,
+        group,
+        member,
+        now,
+    } = context;
     let mgr = &broker.share_partition_leaders;
     let image = broker.controller.current_image();
     let mut responses = Vec::with_capacity(req.topics.len());
@@ -166,8 +193,34 @@ async fn process_topics(
                 ..Default::default()
             };
 
-            if denied {
-                out.error_code = codes::TOPIC_AUTHORIZATION_FAILED;
+            // Kafka's `KafkaApis.handleAcknowledgements` validates the batches
+            // first, then checks the topic `Read`, then asks the metadata
+            // cache for the partition. A partition with no batch then answers
+            // NONE without reaching the share partition.
+            let batches_are_valid = acknowledgement_batches_are_valid(
+                ap.acknowledgement_batches.iter().map(|batch| {
+                    (
+                        batch.first_offset,
+                        batch.last_offset,
+                        batch.acknowledge_types.as_slice(),
+                    )
+                }),
+                version >= 2,
+                req.is_renew_ack,
+            );
+            let error = if !batches_are_valid {
+                Some(codes::INVALID_REQUEST)
+            } else if denied {
+                Some(codes::TOPIC_AUTHORIZATION_FAILED)
+            } else if image.partition(&topic_name, ap.partition_index).is_none() {
+                Some(codes::UNKNOWN_TOPIC_OR_PARTITION)
+            } else if ap.acknowledgement_batches.is_empty() {
+                Some(codes::NONE)
+            } else {
+                None
+            };
+            if let Some(code) = error {
+                out.error_code = code;
                 parts.push(out);
                 continue;
             }

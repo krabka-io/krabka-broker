@@ -163,6 +163,7 @@ mod tests {
                 partition_max_bytes: 0,
                 leadable: false,
                 fetchable: false,
+                in_request: true,
                 ack_batches: Vec::new(),
                 out: PartitionData {
                     partition_index: 0,
@@ -189,6 +190,7 @@ mod tests {
                 partition_max_bytes: 0,
                 leadable: false,
                 fetchable: false,
+                in_request: true,
                 ack_batches: Vec::new(),
                 out: PartitionData {
                     partition_index: 3,
@@ -208,6 +210,7 @@ mod tests {
                 partition_max_bytes: 0,
                 leadable: false,
                 fetchable: false,
+                in_request: true,
                 ack_batches: Vec::new(),
                 out: PartitionData {
                     partition_index: 1,

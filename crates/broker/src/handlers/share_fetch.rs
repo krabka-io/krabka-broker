@@ -43,8 +43,11 @@ mod long_poll;
 mod pending;
 mod records;
 mod request;
+mod resolve;
 mod response;
 
+#[cfg(test)]
+mod ack_validation_tests;
 #[cfg(test)]
 mod byte_limit_tests;
 #[cfg(test)]
@@ -60,15 +63,16 @@ mod request_validation_tests;
 #[cfg(test)]
 mod topic_resolution_tests;
 
-pub(crate) use self::acknowledge::{Renewal, apply_one_ack, renew_acknowledge_enabled};
+pub(crate) use self::acknowledge::{
+    Renewal, acknowledgement_batches_are_valid, apply_one_ack, renew_acknowledge_enabled,
+};
 use self::{
     acquire::{AcquireContext, acquire_records},
-    authorization::topic_read_denied,
     pending::PendingPartition,
-    request::{collect_ack_batches, fetch_session_flags, session_release_phases},
+    request::{fetch_session_flags, session_release_phases},
+    resolve::{RowContext, resolve_row},
     response::{
         acquisition_timeout_ms, encode_error_response, encode_success_response, group_responses,
-        not_leader_response, partition_response,
     },
 };
 use crate::{broker::Broker, codes, error::BrokerError, handlers::group_read_denied};
@@ -196,95 +200,25 @@ pub(crate) async fn handle(
 
     // Resolve the complete effective session subscription plus request-only
     // acknowledgement rows into pending partitions.
-    let mut pending: Vec<PendingPartition> = Vec::new();
-    for (topic_id, partition_index) in effective_order {
-        let topic_name = mgr.topic_name_for(topic_id);
-        let request_row = request_rows.get(&(topic_id, partition_index));
-        // A renew-ack fetch acquires nothing: a fetch that took longer than
-        // the renewed lock would let the lock run out before the response
-        // arrives.
-        let fetchable = !renew_only && session.partitions.contains(&(topic_id, partition_index));
-
-        let mut out = partition_response(partition_index);
-        let ack_batches = request_row.map_or_else(Vec::new, collect_ack_batches);
-        let partition_max_bytes = request_row.map_or(0, |row| row.partition_max_bytes);
-
-        let Some(name) = topic_name.as_deref() else {
-            // Kafka's `ErroneousAndValidPartitionData` answers UNKNOWN_TOPIC_ID
-            // for every partition of the share session whose topic id does not
-            // resolve, the zero id included, before the `Read` gate. When the
-            // request carries acknowledgements,
-            // `KafkaApis.getAcknowledgeBatchesFromShareFetchRequest` also
-            // answers UNKNOWN_TOPIC_ID as the acknowledge error of every
-            // request partition of that topic.
-            if fetchable {
-                out.error_code = codes::UNKNOWN_TOPIC_ID;
-            }
-            if has_acknowledgements && request_row.is_some() {
-                out.acknowledge_error_code = codes::UNKNOWN_TOPIC_ID;
-            }
-            pending.push(PendingPartition {
-                topic_id,
-                topic_name,
-                partition_index,
-                partition_max_bytes,
-                leadable: false,
-                fetchable,
-                ack_batches,
-                out,
-            });
-            continue;
-        };
-
-        // Per-topic `Read` ACL — mirrors `fetch::handle`'s authorize call.
-        if topic_read_denied(broker, &image, ctx, name) {
-            // A renew-ack fetch runs only the acknowledgement path, so the
-            // denial is an acknowledge error.
-            if renew_only {
-                out.acknowledge_error_code = codes::TOPIC_AUTHORIZATION_FAILED;
-            } else {
-                out.error_code = codes::TOPIC_AUTHORIZATION_FAILED;
-            }
-            pending.push(PendingPartition {
-                topic_id,
-                topic_name,
-                partition_index,
-                partition_max_bytes,
-                leadable: false,
-                fetchable,
-                ack_batches,
-                out,
-            });
-            continue;
-        }
-
-        if !mgr.topic_leader_is_self(topic_id, partition_index) {
-            let (leader_id, leader_epoch) = mgr.current_leader_of(topic_id, partition_index);
-            out = not_leader_response(partition_index, leader_id, leader_epoch);
-            pending.push(PendingPartition {
-                topic_id,
-                topic_name,
-                partition_index,
-                partition_max_bytes,
-                leadable: false,
-                fetchable,
-                ack_batches,
-                out,
-            });
-            continue;
-        }
-
-        pending.push(PendingPartition {
-            topic_id,
-            topic_name,
-            partition_index,
-            partition_max_bytes,
-            leadable: true,
-            fetchable,
-            ack_batches,
-            out,
-        });
-    }
+    let row_context = RowContext {
+        broker,
+        manager: &mgr,
+        image: &image,
+        ctx,
+        has_acknowledgements,
+        supports_renew: version >= 2,
+        is_renew_ack: renew_only,
+    };
+    let mut pending: Vec<PendingPartition> = effective_order
+        .into_iter()
+        .map(|key| {
+            // A renew-ack fetch acquires nothing: a fetch that took longer
+            // than the renewed lock would let the lock run out before the
+            // response arrives.
+            let fetchable = !renew_only && session.partitions.contains(&key);
+            resolve_row(&row_context, key, fetchable, request_rows.get(&key))
+        })
+        .collect();
 
     let acquire = AcquireContext {
         broker,
@@ -313,11 +247,11 @@ pub(crate) async fn handle(
     }
     acquire_result?;
 
-    // A renew-ack fetch answers only the partitions that carried
-    // acknowledgements, because Kafka runs no fetch for it.
-    if renew_only {
-        pending.retain(|p| !p.ack_batches.is_empty());
-    }
+    // Kafka answers a fetch row for each partition of the share session that
+    // it fetched, and an acknowledge row for each request partition when the
+    // request carries acknowledgements. A renew-ack fetch runs no fetch, so it
+    // answers only the acknowledge rows.
+    pending.retain(|p| p.fetchable || (p.in_request && has_acknowledgements));
 
     // Group pending rows back into per-topic responses, preserving first-seen
     // topic order.
