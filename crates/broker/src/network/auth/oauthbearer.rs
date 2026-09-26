@@ -13,10 +13,9 @@ use krabka_protocol::owned::{
 use krabka_units::{Time, convert::TimeExt as _};
 
 use super::{
-    response::fail_authenticate,
-    state::{ConnectionAuth, SaslExchange},
+    response::{fail_authenticate, fail_authenticate_with},
+    state::{ConnectionAuth, SaslExchange, principal_change_message},
 };
-use crate::codes::SASL_AUTHENTICATION_FAILED;
 
 /// SASL/OAUTHBEARER `SaslAuthenticate` handler (KIP-255 / RFC 7628).
 ///
@@ -131,7 +130,19 @@ async fn handle_authenticate_oauthbearer_inner(
         ConnectionAuth::Negotiating {
             exchange: SaslExchange::OAuthBearerFailed,
             ..
-        } => fail_authenticate("oauthbearer token rejected"),
+        } => oauthbearer_failure(),
+        // The same `\x01` after a rejected re-authentication token: the
+        // previous session stands while the dispatcher closes the connection.
+        ConnectionAuth::Reauthenticating {
+            exchange: SaslExchange::OAuthBearerFailed,
+            ..
+        } => {
+            if let Some(previous) = super::state::begin_reauth(auth) {
+                super::state::finish_reauth(auth, previous, oauthbearer_failure())
+            } else {
+                oauthbearer_failure()
+            }
+        }
         // In-band re-authentication. Validate the new token and,
         // on success, require the principal name to match the previous
         // session (KIP-368 forbids principal switches mid-connection).
@@ -163,24 +174,14 @@ async fn handle_authenticate_oauthbearer_inner(
                                 attempted = %outcome.principal.name,
                                 "OAUTHBEARER re-auth principal mismatch"
                             );
-                            return SaslAuthenticateResponse {
-                                error_code: SASL_AUTHENTICATION_FAILED,
-                                error_message: Some(
-                                    "re-authentication may not change the principal".to_string(),
-                                ),
-                                auth_bytes: bytes::Bytes::new(),
-                                session_lifetime_ms: 0,
-                                ..Default::default()
-                            };
+                            return fail_authenticate_with(principal_change_message(
+                                &prev_name,
+                                &outcome.principal.name,
+                            ));
                         }
-                        tracing::debug!("OAUTHBEARER re-auth rejected an invalid session lifetime");
-                        return SaslAuthenticateResponse {
-                            error_code: SASL_AUTHENTICATION_FAILED,
-                            error_message: Some("re-authentication failed".to_string()),
-                            auth_bytes: bytes::Bytes::new(),
-                            session_lifetime_ms: 0,
-                            ..Default::default()
-                        };
+                        return fail_authenticate(
+                            "OAUTHBEARER re-auth rejected an invalid session lifetime",
+                        );
                     };
                     // Same clamp as the Negotiating-success arm
                     // so re-auth respects the broker cap.
@@ -194,12 +195,20 @@ async fn handle_authenticate_oauthbearer_inner(
                     };
                     successful_authentication(session_lifetime_ms)
                 }
+                // A rejected token gets the RFC 7628 error challenge, exactly
+                // as on the initial authentication; the client's `\x01` reply
+                // then fails the exchange with that JSON as the message.
                 Err(reason) => {
                     tracing::debug!(reason, "OAUTHBEARER re-auth token rejected");
+                    if let ConnectionAuth::Reauthenticating { exchange, .. } = auth {
+                        *exchange = SaslExchange::OAuthBearerFailed;
+                    }
                     SaslAuthenticateResponse {
-                        error_code: SASL_AUTHENTICATION_FAILED,
-                        error_message: Some("re-authentication failed".to_string()),
-                        auth_bytes: bytes::Bytes::new(),
+                        error_code: 0,
+                        error_message: None,
+                        auth_bytes: bytes::Bytes::from(
+                            krabka_security::invalid_token_json().into_bytes(),
+                        ),
                         session_lifetime_ms: 0,
                         ..Default::default()
                     }
@@ -262,6 +271,13 @@ fn reject_initial_oauthbearer(
         session_lifetime_ms: 0,
         ..Default::default()
     }
+}
+
+/// `OAuthBearerSaslServer` throws `SaslAuthenticationException(errorMessage)`
+/// on the client's `\x01` after an error challenge, so the failure text is the
+/// same JSON the challenge carried.
+fn oauthbearer_failure() -> SaslAuthenticateResponse {
+    fail_authenticate_with(krabka_security::invalid_token_json())
 }
 
 fn successful_authentication(session_lifetime_ms: i64) -> SaslAuthenticateResponse {

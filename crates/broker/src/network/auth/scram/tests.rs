@@ -215,7 +215,7 @@ mod token_scram_fallback {
         );
 
         check!(response.error_code == SASL_AUTHENTICATION_FAILED);
-        assert_failed_authenticate_response(&response);
+        assert_failed_authenticate_response(&response, None);
         controller.cancel().await;
     }
 
@@ -307,7 +307,7 @@ mod token_scram_fallback {
             resp.error_code == SASL_AUTHENTICATION_FAILED,
             "no SCRAM user + no token = unknown-user failure"
         );
-        assert_failed_authenticate_response(&resp);
+        assert_failed_authenticate_response(&resp, None);
         controller.cancel().await;
     }
 
@@ -348,7 +348,7 @@ mod token_scram_fallback {
             resp.error_code == SASL_AUTHENTICATION_FAILED,
             "SCRAM-SHA-512 must not consult the delegation-token table"
         );
-        assert_failed_authenticate_response(&resp);
+        assert_failed_authenticate_response(&resp, None);
         controller.cancel().await;
     }
 

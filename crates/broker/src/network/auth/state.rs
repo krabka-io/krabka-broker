@@ -14,6 +14,7 @@ use krabka_verified::{
     delegation_token::{TokenApi, TokenApiAdmission, token_api_admission},
 };
 
+use super::response::fail_authenticate_with;
 use crate::handlers::ApiKeyCode;
 
 // Several variants and the `principal` accessor are exercised by the PLAIN,
@@ -103,6 +104,12 @@ pub enum ConnectionAuth {
         /// round 2.
         pending_token_expiry_ms: Option<i64>,
     },
+    /// A KIP-368 re-authentication handshake named an enabled mechanism other
+    /// than the session's own. Kafka's `SaslServerAuthenticator` answers that
+    /// handshake with `NONE`, moves to `REAUTH_BAD_MECHANISM`, and fails the
+    /// connection on the next frame, whatever it is; the request gate refuses
+    /// every request in this state.
+    ReauthBadMechanism,
 }
 
 /// Snapshot of an `Authenticated` connection at the moment a re-auth
@@ -216,29 +223,33 @@ pub(super) fn finish_reauth(
             _ => {}
         }
     }
-    let switched_principal = matches!(auth, ConnectionAuth::Authenticated { .. });
-    if switched_principal {
-        tracing::debug!(
-            previous = %previous.principal.name,
-            "re-authentication attempted a principal switch"
-        );
-    }
+    let switched_to = match auth {
+        ConnectionAuth::Authenticated { principal, .. } => Some(principal.name.clone()),
+        _ => None,
+    };
+    let previous_name = previous.principal.name.clone();
     *auth = ConnectionAuth::Authenticated {
         principal: previous.principal,
         mechanism: previous.mechanism,
         expires_at_ms: previous.expires_at_ms,
         authenticated_via_token: previous.authenticated_via_token,
     };
-    if switched_principal {
-        return SaslAuthenticateResponse {
-            error_code: crate::codes::SASL_AUTHENTICATION_FAILED,
-            error_message: Some("re-authentication may not change the principal".to_string()),
-            auth_bytes: bytes::Bytes::new(),
-            session_lifetime_ms: 0,
-            ..Default::default()
-        };
+    if let Some(switched_to) = switched_to {
+        tracing::debug!(
+            previous = %previous_name,
+            "re-authentication attempted a principal switch"
+        );
+        return fail_authenticate_with(principal_change_message(&previous_name, &switched_to));
     }
     resp
+}
+
+/// Kafka's `ReauthInfo.ensurePrincipalUnchanged` message, which renders each
+/// principal as `<type>.<name>`. krabka's SASL principals are all `User`.
+pub(super) fn principal_change_message(previous: &str, attempted: &str) -> String {
+    format!(
+        "Cannot change principals during re-authentication from User.{previous}: User.{attempted}"
+    )
 }
 
 /// In-flight SASL exchange.
@@ -314,18 +325,25 @@ impl ConnectionAuth {
         )
     }
 
-    /// Whether the broker may serve `api_key` in the current auth state.
-    /// - `Anonymous` / `Negotiating`: allow the pre-auth allowlist
-    ///   (ApiVersions=18, SaslHandshake=17, SaslAuthenticate=36).
-    /// - `Reauthenticating`: allow only `SaslAuthenticate=36`. Any other
-    ///   request during in-band re-auth is a protocol violation and the
-    ///   dispatch layer closes the connection (KIP-368).
-    /// - `Authenticated`: allow everything.
+    /// Whether the broker may serve `api_key` in the current auth state, as
+    /// Kafka's `SaslServerAuthenticator` does.
+    /// - `Anonymous` (no handshake yet): only `SaslHandshake=17` and
+    ///   `ApiVersions=18`. A `SaslAuthenticate` here is an
+    ///   `InvalidRequestException` in Kafka, which closes the connection.
+    /// - `Negotiating` / `Reauthenticating` (a handshake chose a mechanism):
+    ///   only `SaslAuthenticate=36`.
+    /// - `ReauthBadMechanism`: nothing.
+    /// - `Authenticated`: everything.
+    ///
+    /// The dispatch layer closes the connection on a refused request.
     #[must_use]
     pub fn allows_request(&self, api_key: ApiKeyCode) -> bool {
         let state = match self {
-            Self::Anonymous | Self::Negotiating { .. } => RequestAuthState::PreAuth,
-            Self::Reauthenticating { .. } => RequestAuthState::Reauthenticating,
+            Self::Anonymous => RequestAuthState::PreHandshake,
+            Self::Negotiating { .. } | Self::Reauthenticating { .. } => {
+                RequestAuthState::Exchanging
+            }
+            Self::ReauthBadMechanism => RequestAuthState::Failed,
             Self::Authenticated { .. } => RequestAuthState::Authenticated,
         };
         request_auth_admission(state, api_key)
@@ -385,21 +403,9 @@ impl ConnectionAuth {
         match self {
             Self::Negotiating { mechanism, .. } => Some(*mechanism),
             Self::Reauthenticating { previous, .. } => Some(previous.mechanism),
-            Self::Anonymous | Self::Authenticated { .. } => None,
+            Self::Anonymous | Self::ReauthBadMechanism | Self::Authenticated { .. } => None,
         }
     }
-}
-
-/// Pre-auth allowlist: `api_key`s clients may send before completing SASL.
-///
-/// Mirrors Apache Kafka's pre-auth allowlist. Before it authenticates, a
-/// client must be able to negotiate the mechanism (`SaslHandshake` = 17), run
-/// the SASL exchange (`SaslAuthenticate` = 36), and discover the supported
-/// APIs (`ApiVersions` = 18). The broker rejects everything else with
-/// `ILLEGAL_SASL_STATE` (34) and closes the connection.
-#[must_use]
-pub fn is_pre_auth_allowed(api_key: ApiKeyCode) -> bool {
-    request_auth_admission(RequestAuthState::PreAuth, api_key)
 }
 
 #[cfg(test)]
@@ -408,19 +414,61 @@ mod tests {
 
     use super::*;
 
+    /// The request gate follows Kafka's `SaslServerAuthenticator`: before a
+    /// handshake only `SaslHandshake` and `ApiVersions`; after one only
+    /// `SaslAuthenticate`; after a re-authentication mechanism switch
+    /// nothing.
     #[test]
-    fn pre_auth_allowlist_accepts_sasl_apis_and_rejects_data_plane() {
-        let cases = [
-            (17, true),  // SaslHandshake
-            (36, true),  // SaslAuthenticate
-            (18, true),  // ApiVersions
-            (0, false),  // Produce
-            (1, false),  // Fetch
-            (3, false),  // Metadata
-            (19, false), // CreateTopics
+    fn request_gate_follows_the_sasl_server_states() {
+        fn negotiating() -> ConnectionAuth {
+            ConnectionAuth::Negotiating {
+                mechanism: SaslMechanism::Plain,
+                exchange: SaslExchange::Plain,
+                pending_token_expiry_ms: None,
+            }
+        }
+        fn reauthenticating() -> ConnectionAuth {
+            ConnectionAuth::Reauthenticating {
+                previous: AuthenticatedSnapshot {
+                    principal: Principal {
+                        name: "alice".into(),
+                        auth_method: AuthMethod::SaslPlain,
+                        groups: vec![],
+                    },
+                    mechanism: SaslMechanism::Plain,
+                    expires_at_ms: Some(1),
+                    authenticated_via_token: false,
+                },
+                exchange: SaslExchange::Plain,
+                pending_token_expiry_ms: None,
+            }
+        }
+        // (state, [SaslHandshake, ApiVersions, SaslAuthenticate, Produce, Metadata])
+        let cases: [(&str, ConnectionAuth, [bool; 5]); 4] = [
+            (
+                "anonymous",
+                ConnectionAuth::Anonymous,
+                [true, true, false, false, false],
+            ),
+            (
+                "negotiating",
+                negotiating(),
+                [false, false, true, false, false],
+            ),
+            (
+                "reauthenticating",
+                reauthenticating(),
+                [false, false, true, false, false],
+            ),
+            (
+                "reauth bad mechanism",
+                ConnectionAuth::ReauthBadMechanism,
+                [false; 5],
+            ),
         ];
-        for (api_key, allowed) in cases {
-            assert!(is_pre_auth_allowed(api_key) == allowed, "api key {api_key}");
+        for (name, auth, expected) in cases {
+            let got = [17, 18, 36, 0, 3].map(|api_key| auth.allows_request(api_key));
+            assert!(got == expected, "{name}");
         }
     }
 
@@ -614,15 +662,6 @@ mod tests {
             (18, false), // ApiVersions
             (3, false),  // Metadata
         ];
-        for (api_key, allowed) in cases {
-            assert!(auth.allows_request(api_key) == allowed, "api key {api_key}");
-        }
-    }
-
-    #[test]
-    fn allows_request_anonymous_uses_pre_auth_allowlist() {
-        let auth = ConnectionAuth::Anonymous;
-        let cases = [(17, true), (36, true), (18, true), (0, false), (3, false)];
         for (api_key, allowed) in cases {
             assert!(auth.allows_request(api_key) == allowed, "api key {api_key}");
         }
@@ -1025,7 +1064,11 @@ mod tests {
         check!(
             resp == SaslAuthenticateResponse {
                 error_code: crate::codes::SASL_AUTHENTICATION_FAILED,
-                error_message: Some("re-authentication may not change the principal".to_string()),
+                error_message: Some(
+                    "Cannot change principals during re-authentication from User.alice: \
+                     User.mallory"
+                        .to_string()
+                ),
                 auth_bytes: bytes::Bytes::new(),
                 session_lifetime_ms: 0,
                 unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),

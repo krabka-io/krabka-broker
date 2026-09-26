@@ -9,6 +9,7 @@ use futures_util::StreamExt;
 use tokio::net::TcpStream;
 
 use super::{test_support::DEFAULT_MAX_FRAME_BYTES, *};
+use crate::codes;
 
 mod throttle_mute;
 

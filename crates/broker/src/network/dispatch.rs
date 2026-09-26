@@ -122,7 +122,7 @@ use self::{
     sasl::{SaslFrameOutcome, SaslListener, try_handle_sasl_frame},
     session::{FrameWaitPolicy, initial_connection_auth, next_connection_frame},
 };
-use crate::{broker::Broker, codes, handlers::ApiKeyCode, network::codec};
+use crate::{broker::Broker, handlers::ApiKeyCode, network::codec};
 
 /// What the connection loop does once a response has been written.
 ///
@@ -383,6 +383,9 @@ async fn serve_connection_stream<S>(
     // deadline passes.
     let mut mute_until: Option<tokio::time::Instant> = None;
 
+    // Raw-token mode (v0 handshake) and the last KIP-368 re-auth start.
+    let mut sasl_session = sasl::SaslSession::default();
+
     loop {
         let Some(frame) =
             next_connection_frame(&mut framed, &auth, mute_until.take(), &frame_wait).await
@@ -420,6 +423,17 @@ async fn serve_connection_stream<S>(
         };
         let _queued_guard =
             QueuedRequestGuard::new(permit, bytes_permit, &broker.metrics, frame.len());
+        // After a `SaslHandshake` v0 the exchange carries raw size-prefixed
+        // SASL tokens with no Kafka request header, both ways.
+        // A failed v0 exchange closes with no response.
+        if is_sasl_listener && sasl_session.expects_raw_token(&auth) {
+            let session = (&sasl_listener, &mut sasl_session);
+            let token = sasl::handle_raw_sasl_token(&broker, &frame, &mut auth, session, &peer);
+            match token.await {
+                Some(token) if framed.send(token.clone()).await.is_ok() => continue,
+                _ => break,
+            }
+        }
         let Some((parsed, req_span)) = parse_connection_request(&broker, &frame, &peer) else {
             // Bytes the broker cannot read as a request are the same reason
             // as bytes the codec refused, one layer further in: the peer sent
@@ -448,59 +462,16 @@ async fn serve_connection_stream<S>(
                 .record_connection_close(crate::metrics::ConnectionCloseReason::SaslSessionExpired);
             break;
         }
-        // Per-state request gate: on SASL listeners, gate every api_key
-        // through `auth.allows_request(api_key)`. This covers:
-        //   - Anonymous / Negotiating: only the pre-auth allowlist
-        //     (ApiVersions=18, SaslHandshake=17, SaslAuthenticate=36).
-        //   - Reauthenticating (KIP-368 in-band re-auth in progress): only
-        //     SaslAuthenticate=36 — any other request during re-auth is a
-        //     protocol violation and the connection is closed.
-        //   - Authenticated: all api_keys allowed.
-        // Anything blocked closes the TCP connection with no body.
-        //
-        // Response-shape note: every api_key has a different response body,
-        // so producing a typed `error_code = 34` frame from this generic
-        // dispatch layer would require a switch over every api_key. The
-        // SASL path sends a *typed* SaslAuthenticate(36) response with error_code=58
-        // on credential failure (its specific shape is known there). For
-        // the generic pre-auth gate we close the TCP connection without
-        // sending a body — JVM clients surface this to the caller as an
-        // auth failure (closed connection during SASL), and this matches
-        // the conservative behaviour we want for unauthenticated peers.
+        // Per-state request gate after Kafka's `SaslServerAuthenticator`
+        // (see `ConnectionAuth::allows_request`). A refused request closes
+        // the connection, after the ILLEGAL_SASL_STATE answer Kafka writes
+        // when there is one (`sasl::refuse_gated_request`).
         if is_sasl_listener && !auth.allows_request(parsed.api_key) {
-            tracing::info!(
-                api_key = parsed.api_key,
-                listener = %spec.name,
-                "request blocked by per-state auth gate (ILLEGAL_SASL_STATE), closing connection"
-            );
-            let _ = codes::ILLEGAL_SASL_STATE; // referenced for docs/grep
-            // An ILLEGAL_SASL_STATE reject is an authentication failure, the
-            // same as the one `try_handle_sasl_frame` records for a
-            // `SaslAuthenticate` that arrives with no handshake behind it, so
-            // it is counted the same way: under the mechanism a handshake
-            // named, or under the `Unknown` sentinel when none did. Without
-            // it a peer that opens a connection on a SASL listener and
-            // immediately sends Produce is closed and counted nowhere.
-            let mech_label = auth
-                .negotiated_mechanism()
-                .map_or(crate::metrics::UNKNOWN_LABEL, |mechanism| {
-                    mechanism.wire_name()
-                });
-            broker.metrics.record_authentication(mech_label, false);
-            sasl::emit_authentication(
-                &broker.audit_log,
-                &peer,
-                mech_label,
-                auth.principal().map_or_else(
-                    || krabka_audit::AuditPrincipal {
-                        name: String::new(),
-                        auth_method: format!("{:?}", krabka_security::AuthMethod::Anonymous),
-                    },
-                    sasl::audit_principal,
-                ),
-                krabka_audit::AuditOutcome::Failure,
-                Some("request blocked by per-state auth gate".to_string()),
-            );
+            if let Some(response) =
+                sasl::refuse_gated_request(&broker, &parsed, &auth, &peer, &spec.name)
+            {
+                let _ = framed.send(response).await;
+            }
             break;
         }
         let Some(entry) = broker.handlers().get(parsed.api_key) else {
@@ -545,10 +516,16 @@ async fn serve_connection_stream<S>(
         // table because handlers receive only `&Broker` and have no way to
         // touch `auth`. Returning `Some(SaslFrameOutcome)` short-circuits
         // the normal registry path for that frame.
-        if let Some(outcome) =
-            try_handle_sasl_frame(&broker, &parsed, &mut auth, &sasl_listener, &peer)
-                .instrument(req_span.clone())
-                .await
+        if let Some(outcome) = try_handle_sasl_frame(
+            &broker,
+            &parsed,
+            &mut auth,
+            &sasl_listener,
+            &mut sasl_session,
+            &peer,
+        )
+        .instrument(req_span.clone())
+        .await
         {
             let SaslFrameOutcome {
                 response_bytes,
@@ -565,7 +542,7 @@ async fn serve_connection_stream<S>(
                 break;
             }
             if close_after {
-                tracing::info!("closing connection after failed SaslAuthenticate");
+                tracing::info!("closing connection after a refused SASL frame");
                 break;
             }
             continue;

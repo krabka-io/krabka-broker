@@ -20,6 +20,9 @@ const SASL_HANDSHAKE_KEY: ApiKeyCode = ApiKey::SaslHandshake as i16;
 /// handler table, because it mutates the per-connection auth state.
 const SASL_AUTHENTICATE_KEY: ApiKeyCode = ApiKey::SaslAuthenticate as i16;
 
+/// `ApiVersions` wire `api_key`.
+const API_VERSIONS_KEY: ApiKeyCode = ApiKey::ApiVersions as i16;
+
 /// Outcome of a SASL frame interception: the bytes to write back to the peer,
 /// and whether the dispatcher should close the connection after the send
 /// completes. `SaslAuthenticate` failures and an illegal state both use the
@@ -46,6 +49,138 @@ pub(super) struct SaslListener<'a> {
     pub(super) max_reauth: Option<krabka_units::Time>,
 }
 
+/// Per-connection SASL bookkeeping that outlives any one `ConnectionAuth`
+/// state, as Kafka keeps it on the channel and its authenticator.
+#[derive(Debug, Default)]
+pub(super) struct SaslSession {
+    /// A `SaslHandshake` v0 chose the mechanism: Kafka's
+    /// `enableKafkaSaslAuthenticateHeaders` is off, and the exchange runs as
+    /// raw size-prefixed SASL tokens with no Kafka request header.
+    raw_tokens: bool,
+    /// When this connection last started a KIP-368 re-authentication.
+    last_reauth_start_ms: Option<i64>,
+}
+
+impl SaslSession {
+    /// Whether the next frame is a raw SASL token rather than a Kafka request.
+    pub(super) fn expects_raw_token(&self, auth: &crate::network::auth::ConnectionAuth) -> bool {
+        self.raw_tokens && auth.negotiated_mechanism().is_some()
+    }
+}
+
+/// Accounts for a request the per-state auth gate refused, and returns the
+/// response to write before the connection closes, if Kafka writes one.
+///
+/// A refusal is an authentication failure: it is counted and audited under
+/// the mechanism a handshake named, or under the `Unknown` sentinel when none
+/// did, so a peer that opens a SASL connection and immediately sends Produce
+/// is not closed uncounted.
+pub(super) fn refuse_gated_request(
+    broker: &Broker,
+    parsed: &crate::network::request::ParsedRequest<'_>,
+    auth: &crate::network::auth::ConnectionAuth,
+    peer: &SocketAddr,
+    listener_name: &str,
+) -> Option<Bytes> {
+    tracing::info!(
+        api_key = parsed.api_key,
+        listener = %listener_name,
+        "request blocked by per-state auth gate (ILLEGAL_SASL_STATE), closing connection"
+    );
+    let mechanism = auth.negotiated_mechanism();
+    let mech_label = mechanism.map_or(
+        crate::metrics::UNKNOWN_LABEL,
+        krabka_security::SaslMechanism::wire_name,
+    );
+    broker.metrics.record_authentication(mech_label, false);
+    emit_authentication(
+        &broker.audit_log,
+        peer,
+        mech_label,
+        auth.principal().map_or_else(
+            || krabka_audit::AuditPrincipal {
+                name: String::new(),
+                auth_method: format!("{:?}", krabka_security::AuthMethod::Anonymous),
+            },
+            audit_principal,
+        ),
+        krabka_audit::AuditOutcome::Failure,
+        Some("request blocked by per-state auth gate".to_string()),
+    );
+    // Only mid-exchange does Kafka answer before closing.
+    mechanism.and_then(|_| unexpected_request_during_exchange(broker, parsed))
+}
+
+/// The typed `ILLEGAL_SASL_STATE` answer Kafka's `SaslServerAuthenticator`
+/// writes, before it closes the connection, for a `SaslHandshake` or
+/// `ApiVersions` that arrives after a handshake chose a mechanism
+/// (`Unexpected Kafka request of type ... during SASL authentication.`).
+///
+/// Kafka builds that answer with the request's own `getErrorResponse`, which
+/// krabka has no generic equivalent of; any other `api_key` gets `None` and
+/// the connection closes with no response.
+fn unexpected_request_during_exchange(
+    broker: &Broker,
+    parsed: &crate::network::request::ParsedRequest<'_>,
+) -> Option<Bytes> {
+    use krabka_protocol::Encode;
+
+    let mut body = BytesMut::new();
+    let encoded = match parsed.api_key {
+        SASL_HANDSHAKE_KEY => {
+            krabka_protocol::owned::sasl_handshake_response::SaslHandshakeResponse {
+                error_code: codes::ILLEGAL_SASL_STATE,
+                ..Default::default()
+            }
+            .encode(&mut body, parsed.api_version)
+        }
+        API_VERSIONS_KEY => krabka_protocol::owned::api_versions_response::ApiVersionsResponse {
+            error_code: codes::ILLEGAL_SASL_STATE,
+            ..Default::default()
+        }
+        .encode(&mut body, parsed.api_version),
+        _ => return None,
+    };
+    encoded.ok()?;
+    encode_response(
+        parsed.api_key,
+        parsed.correlation_id,
+        parsed.body_flexible,
+        &body,
+        broker.config.socket_request_max.bytes_usize(),
+    )
+    .ok()
+}
+
+/// Runs one raw SASL token of a `SaslHandshake` v0 exchange, as Kafka's
+/// `SaslServerAuthenticator.handleSaslToken` does with
+/// `enableKafkaSaslAuthenticateHeaders` off.
+///
+/// Returns the server token to write back as its own size-prefixed frame
+/// (possibly empty, as Kafka writes it), or `None` when the exchange failed:
+/// a v0 exchange has no response shape for an error, so Kafka closes the
+/// connection without one.
+pub(super) async fn handle_raw_sasl_token(
+    broker: &Broker,
+    token: &Bytes,
+    auth: &mut crate::network::auth::ConnectionAuth,
+    (listener, session): (&SaslListener<'_>, &mut SaslSession),
+    peer: &SocketAddr,
+) -> Option<Bytes> {
+    let req = krabka_protocol::owned::sasl_authenticate_request::SaslAuthenticateRequest {
+        auth_bytes: token.clone(),
+        ..Default::default()
+    };
+    let resp = run_authenticate(broker, &req, auth, listener.max_reauth, peer).await;
+    if resp.error_code != 0 {
+        return None;
+    }
+    if auth.is_authenticated() {
+        session.raw_tokens = false;
+    }
+    Some(resp.auth_bytes)
+}
+
 /// Handles a `SaslHandshake` (17) or `SaslAuthenticate` (36) request inline.
 ///
 /// For those two `api_key` values, the function returns a
@@ -66,6 +201,7 @@ pub(super) async fn try_handle_sasl_frame(
     parsed: &crate::network::request::ParsedRequest<'_>,
     auth: &mut crate::network::auth::ConnectionAuth,
     listener: &SaslListener<'_>,
+    session: &mut SaslSession,
     peer: &SocketAddr,
 ) -> Option<Result<SaslFrameOutcome, BrokerError>> {
     let api_key = parsed.api_key;
@@ -75,17 +211,7 @@ pub(super) async fn try_handle_sasl_frame(
     if !listener.is_sasl {
         return Some(non_sasl_listener_response(broker, parsed));
     }
-    Some(
-        handle_sasl_frame(
-            broker,
-            parsed,
-            auth,
-            listener.mechanisms,
-            listener.max_reauth,
-            peer,
-        )
-        .await,
-    )
+    Some(handle_sasl_frame(broker, parsed, auth, listener, session, peer).await)
 }
 
 /// Answers a SASL frame on a listener that runs no SASL, as Kafka's
@@ -136,14 +262,21 @@ async fn handle_sasl_frame(
     broker: &Broker,
     parsed: &crate::network::request::ParsedRequest<'_>,
     auth: &mut crate::network::auth::ConnectionAuth,
-    sasl_mechanisms: &[krabka_security::SaslMechanism],
-    max_reauth: Option<krabka_units::Time>,
+    listener: &SaslListener<'_>,
+    session: &mut SaslSession,
     peer: &SocketAddr,
 ) -> Result<SaslFrameOutcome, BrokerError> {
     use krabka_protocol::{Decode, Encode};
 
     let (resp_body, close_after) = match parsed.api_key {
-        SASL_HANDSHAKE_KEY => (handle_sasl_handshake(parsed, auth, sasl_mechanisms)?, false),
+        SASL_HANDSHAKE_KEY => {
+            let (body, close_after) =
+                handle_sasl_handshake(parsed, auth, listener.mechanisms, session)?;
+            // Kafka's `handleHandshakeRequest` turns
+            // `enableKafkaSaslAuthenticateHeaders` on only for v1+.
+            session.raw_tokens = parsed.api_version == 0 && auth.negotiated_mechanism().is_some();
+            (body, close_after)
+        }
         SASL_AUTHENTICATE_KEY => {
             let mut cur: &[u8] = parsed.body;
             let req =
@@ -151,99 +284,34 @@ async fn handle_sasl_frame(
                     &mut cur,
                     parsed.api_version,
                 )?;
-            // Must be mid-SASL: either `Negotiating` (initial auth: a
-            // SaslHandshake was the previous frame) or `Reauthenticating`
-            // (KIP-368 in-band re-auth: a SaslHandshake just ran on an
-            // already-authenticated connection). Any other state returns
-            // ILLEGAL_SASL_STATE (34) and closes.
-            let mech_opt = auth.negotiated_mechanism();
-            let resp = if let Some(mech) = mech_opt {
-                match mech {
-                    krabka_security::SaslMechanism::Plain => {
-                        crate::network::auth::handle_authenticate_plain(
-                            &req,
-                            auth,
-                            broker.config.plain_credentials.as_map(),
-                            max_reauth,
-                        )
-                    }
-                    krabka_security::SaslMechanism::ScramSha256
-                    | krabka_security::SaslMechanism::ScramSha512 => {
-                        crate::network::auth::handle_authenticate_scram(
-                            &req,
-                            auth,
-                            &*broker.controller,
-                            max_reauth,
-                        )
-                    }
-                    krabka_security::SaslMechanism::OAuthBearer => {
-                        let now_ms = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-                        crate::network::auth::handle_authenticate_oauthbearer_with_jwks_cache(
-                            &req,
-                            auth,
-                            &broker.config.oauthbearer_validator,
-                            &broker.config.oauthbearer_jwks_cache_generation,
-                            &broker.config.oauthbearer_jwks_last_successful_fetch_ms,
-                            now_ms,
-                            max_reauth,
-                        )
-                        .await
-                    }
-                    krabka_security::SaslMechanism::Gssapi => {
-                        let cfg = broker
-                            .config
-                            .gssapi
-                            .as_ref()
-                            .expect("GSSAPI enabled without config");
-                        crate::network::auth::handle_authenticate_gssapi(
-                            &req, auth, cfg, max_reauth,
-                        )
-                    }
-                }
+            // The request gate admits `SaslAuthenticate` only mid-exchange
+            // and once authenticated. On an authenticated connection Kafka
+            // hands it to `KafkaApis.handleSaslAuthenticateRequest`, which
+            // answers ILLEGAL_SASL_STATE and keeps the connection.
+            let (resp, close) = if auth.negotiated_mechanism().is_some() {
+                let resp = run_authenticate(broker, &req, auth, listener.max_reauth, peer).await;
+                let close = resp.error_code != 0;
+                (resp, close)
+            } else if !auth.is_authenticated() {
+                // Before any handshake Kafka's `handleKafkaRequest` throws
+                // `InvalidRequestException`, which closes the connection with
+                // no response. The request gate refuses this frame first; an
+                // error here closes the same way if a caller does not gate.
+                return Err(BrokerError::Protocol(
+                    krabka_protocol::ProtocolError::InvalidValue(
+                        "SaslAuthenticate before SaslHandshake",
+                    ),
+                ));
             } else {
-                krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse {
-                    error_code: codes::ILLEGAL_SASL_STATE,
-                    error_message: Some("SaslAuthenticate without prior SaslHandshake".into()),
-                    auth_bytes: Bytes::new(),
-                    session_lifetime_ms: 0,
-                    ..Default::default()
-                }
-            };
-            // Account this SaslAuthenticate frame in the
-            // per-mechanism success/failure counters. The mechanism
-            // is the one selected by the preceding SaslHandshake;
-            // ILLEGAL_SASL_STATE rejects (no prior handshake) land
-            // under the `Unknown` sentinel so the metric stays
-            // bounded.
-            let mech_label = mech_opt.map_or(
-                crate::metrics::UNKNOWN_LABEL,
-                krabka_security::SaslMechanism::wire_name,
-            );
-            let ok = resp.error_code == 0;
-            broker.metrics.record_authentication(mech_label, ok);
-            // One audit row per *completed* exchange, initial or KIP-368
-            // re-auth alike. A multi-round mechanism answers its intermediate
-            // rounds with `error_code == 0` and no principal yet, so a zero
-            // code only completes the exchange once the connection is
-            // authenticated. A non-zero code always ends it.
-            if !ok || auth.is_authenticated() {
-                emit_authentication(
-                    &broker.audit_log,
-                    peer,
-                    mech_label,
-                    auth.principal()
-                        .map_or_else(|| claimed_principal(mech_opt, &req), audit_principal),
-                    if ok {
-                        krabka_audit::AuditOutcome::Success
-                    } else {
-                        krabka_audit::AuditOutcome::Failure
+                (
+                    krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse {
+                        error_code: codes::ILLEGAL_SASL_STATE,
+                        error_message: Some(AUTHENTICATE_AFTER_AUTHENTICATION.into()),
+                        ..Default::default()
                     },
-                    resp.error_message.clone(),
-                );
-            }
-            let close = !ok;
+                    false,
+                )
+            };
             let mut buf = BytesMut::with_capacity(resp.encoded_len(parsed.api_version));
             resp.encode(&mut buf, parsed.api_version)?;
             (buf.freeze(), close)
@@ -262,6 +330,111 @@ async fn handle_sasl_frame(
         response_bytes,
         close_after,
     })
+}
+
+/// Runs one round of the exchange a handshake chose, on a `Negotiating` or
+/// `Reauthenticating` connection, and accounts for it.
+///
+/// A mechanism failure that carries no client-facing text gets Kafka's
+/// generic invalid-credentials sentence here, where the mechanism and the
+/// phase are known.
+async fn run_authenticate(
+    broker: &Broker,
+    req: &krabka_protocol::owned::sasl_authenticate_request::SaslAuthenticateRequest,
+    auth: &mut crate::network::auth::ConnectionAuth,
+    max_reauth: Option<krabka_units::Time>,
+    peer: &SocketAddr,
+) -> krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse {
+    let mech_opt = auth.negotiated_mechanism();
+    let reauthentication = matches!(
+        auth,
+        crate::network::auth::ConnectionAuth::Reauthenticating { .. }
+    );
+    let mut resp = match mech_opt {
+        Some(krabka_security::SaslMechanism::Plain) => {
+            crate::network::auth::handle_authenticate_plain(
+                req,
+                auth,
+                broker.config.plain_credentials.as_map(),
+                max_reauth,
+            )
+        }
+        Some(
+            krabka_security::SaslMechanism::ScramSha256
+            | krabka_security::SaslMechanism::ScramSha512,
+        ) => crate::network::auth::handle_authenticate_scram(
+            req,
+            auth,
+            &*broker.controller,
+            max_reauth,
+        ),
+        Some(krabka_security::SaslMechanism::OAuthBearer) => {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+            crate::network::auth::handle_authenticate_oauthbearer_with_jwks_cache(
+                req,
+                auth,
+                &broker.config.oauthbearer_validator,
+                &broker.config.oauthbearer_jwks_cache_generation,
+                &broker.config.oauthbearer_jwks_last_successful_fetch_ms,
+                now_ms,
+                max_reauth,
+            )
+            .await
+        }
+        Some(krabka_security::SaslMechanism::Gssapi) => {
+            let cfg = broker
+                .config
+                .gssapi
+                .as_ref()
+                .expect("GSSAPI enabled without config");
+            crate::network::auth::handle_authenticate_gssapi(req, auth, cfg, max_reauth)
+        }
+        // Callers only run an exchange a handshake started.
+        None => krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse {
+            error_code: codes::ILLEGAL_SASL_STATE,
+            ..Default::default()
+        },
+    };
+    if let Some(mech) = mech_opt
+        && resp.error_code == codes::SASL_AUTHENTICATION_FAILED
+        && resp.error_message.is_none()
+    {
+        resp.error_message = Some(crate::network::auth::generic_failure_message(
+            mech,
+            reauthentication,
+        ));
+    }
+    // Account this SaslAuthenticate frame in the per-mechanism
+    // success/failure counters, under the mechanism the handshake chose.
+    let mech_label = mech_opt.map_or(
+        crate::metrics::UNKNOWN_LABEL,
+        krabka_security::SaslMechanism::wire_name,
+    );
+    let ok = resp.error_code == 0;
+    broker.metrics.record_authentication(mech_label, ok);
+    // One audit row per *completed* exchange, initial or KIP-368 re-auth
+    // alike. A multi-round mechanism answers its intermediate rounds with
+    // `error_code == 0` and no principal yet, so a zero code only completes
+    // the exchange once the connection is authenticated. A non-zero code
+    // always ends it.
+    if !ok || auth.is_authenticated() {
+        emit_authentication(
+            &broker.audit_log,
+            peer,
+            mech_label,
+            auth.principal()
+                .map_or_else(|| claimed_principal(mech_opt, req), audit_principal),
+            if ok {
+                krabka_audit::AuditOutcome::Success
+            } else {
+                krabka_audit::AuditOutcome::Failure
+            },
+            resp.error_message.clone(),
+        );
+    }
+    resp
 }
 
 /// Writes one `Authentication` audit row.
@@ -348,7 +521,8 @@ fn handle_sasl_handshake(
     parsed: &crate::network::request::ParsedRequest<'_>,
     auth: &mut crate::network::auth::ConnectionAuth,
     sasl_mechanisms: &[krabka_security::SaslMechanism],
-) -> Result<Bytes, BrokerError> {
+    session: &mut SaslSession,
+) -> Result<(Bytes, bool), BrokerError> {
     use krabka_protocol::{Decode, Encode};
 
     let mut body = parsed.body;
@@ -356,10 +530,19 @@ fn handle_sasl_handshake(
         &mut body,
         parsed.api_version,
     )?;
-    let response = crate::network::auth::handle_handshake(&request, auth, sasl_mechanisms);
+    let outcome = crate::network::auth::handle_handshake(
+        &request,
+        auth,
+        sasl_mechanisms,
+        &mut crate::network::auth::ReauthClock {
+            now_ms: crate::time_util::now_ms(),
+            last_start_ms: &mut session.last_reauth_start_ms,
+        },
+    );
+    let response = outcome.response;
     let mut encoded = BytesMut::with_capacity(response.encoded_len(parsed.api_version));
     response.encode(&mut encoded, parsed.api_version)?;
-    Ok(encoded.freeze())
+    Ok((encoded.freeze(), outcome.close_after))
 }
 
 #[cfg(test)]
@@ -592,6 +775,7 @@ mod tests {
                 &parsed(3, 12, &metadata, true),
                 &mut auth,
                 &sasl_listener(&mechanisms),
+                &mut SaslSession::default(),
                 &peer,
             )
             .await
@@ -611,6 +795,7 @@ mod tests {
             &parsed(SASL_HANDSHAKE_KEY, 1, &handshake, false),
             &mut auth,
             &sasl_listener(&mechanisms),
+            &mut SaslSession::default(),
             &peer,
         )
         .await
@@ -626,6 +811,7 @@ mod tests {
             &parsed(SASL_AUTHENTICATE_KEY, 2, &good, true),
             &mut auth,
             &sasl_listener(&mechanisms),
+            &mut SaslSession::default(),
             &peer,
         )
         .await
@@ -642,6 +828,7 @@ mod tests {
             &parsed(SASL_HANDSHAKE_KEY, 1, &handshake, false),
             &mut guessing,
             &sasl_listener(&mechanisms),
+            &mut SaslSession::default(),
             &peer,
         )
         .await
@@ -653,6 +840,7 @@ mod tests {
             &parsed(SASL_AUTHENTICATE_KEY, 2, &bad, true),
             &mut guessing,
             &sasl_listener(&mechanisms),
+            &mut SaslSession::default(),
             &peer,
         )
         .await
@@ -660,31 +848,57 @@ mod tests {
         .expect("authenticate encodes");
         check!(outcome.close_after, "a refused credential must close");
         check!(
-            authenticate_response(&outcome.response_bytes).error_code
-                == codes::SASL_AUTHENTICATION_FAILED
+            authenticate_response(&outcome.response_bytes)
+                == krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse {
+                    error_code: codes::SASL_AUTHENTICATION_FAILED,
+                    error_message: Some(
+                        "Authentication failed: Invalid username or password".into()
+                    ),
+                    ..Default::default()
+                }
         );
         check!(!guessing.is_authenticated());
 
-        // A SaslAuthenticate with no handshake behind it is ILLEGAL_SASL_STATE
-        // and closes, rather than being fed to some default mechanism.
+        // A SaslAuthenticate with no handshake behind it closes the connection
+        // with no response, rather than being fed to some default mechanism.
         let mut bare = crate::network::auth::ConnectionAuth::Anonymous;
         let outcome = try_handle_sasl_frame(
             &broker,
             &parsed(SASL_AUTHENTICATE_KEY, 2, &good, true),
             &mut bare,
             &sasl_listener(&mechanisms),
+            &mut SaslSession::default(),
+            &peer,
+        )
+        .await
+        .expect("36 is intercepted");
+        check!(outcome.is_err());
+        check!(!bare.is_authenticated());
+
+        // A SaslAuthenticate after authentication completed is Kafka's
+        // `KafkaApis` answer: ILLEGAL_SASL_STATE, and the connection and its
+        // principal stay.
+        let outcome = try_handle_sasl_frame(
+            &broker,
+            &parsed(SASL_AUTHENTICATE_KEY, 2, &good, true),
+            &mut auth,
+            &sasl_listener(&mechanisms),
+            &mut SaslSession::default(),
             &peer,
         )
         .await
         .expect("36 is intercepted")
         .expect("authenticate encodes");
-        check!(outcome.close_after);
-        let resp = authenticate_response(&outcome.response_bytes);
-        check!(resp.error_code == codes::ILLEGAL_SASL_STATE);
+        check!(!outcome.close_after);
         check!(
-            resp.error_message.as_deref() == Some("SaslAuthenticate without prior SaslHandshake")
+            authenticate_response(&outcome.response_bytes)
+                == krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse {
+                    error_code: codes::ILLEGAL_SASL_STATE,
+                    error_message: Some(AUTHENTICATE_AFTER_AUTHENTICATION.into()),
+                    ..Default::default()
+                }
         );
-        check!(!bare.is_authenticated());
+        check!(auth.principal().map(|p| p.name.as_str()) == Some("alice"));
 
         // The frame is routed by the mechanism the handshake named, not by a
         // default one: a SCRAM client-first reaches the SCRAM handler, which
@@ -702,6 +916,7 @@ mod tests {
             &parsed(SASL_HANDSHAKE_KEY, 1, &scram_handshake, false),
             &mut scram,
             &sasl_listener(&[SaslMechanism::ScramSha512]),
+            &mut SaslSession::default(),
             &peer,
         )
         .await
@@ -720,15 +935,25 @@ mod tests {
             &parsed(SASL_AUTHENTICATE_KEY, 2, &client_first, true),
             &mut scram,
             &sasl_listener(&[SaslMechanism::ScramSha512]),
+            &mut SaslSession::default(),
             &peer,
         )
         .await
         .expect("36 is intercepted")
         .expect("authenticate encodes");
         check!(outcome.close_after);
+        // SCRAM raises no client-facing text, so Kafka's generic sentence.
         check!(
-            authenticate_response(&outcome.response_bytes).error_code
-                == codes::SASL_AUTHENTICATION_FAILED
+            authenticate_response(&outcome.response_bytes)
+                == krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse {
+                    error_code: codes::SASL_AUTHENTICATION_FAILED,
+                    error_message: Some(
+                        "Authentication failed during authentication due to invalid \
+                         credentials with SASL mechanism SCRAM-SHA-512"
+                            .into()
+                    ),
+                    ..Default::default()
+                }
         );
         check!(!scram.is_authenticated());
 
