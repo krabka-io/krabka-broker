@@ -53,9 +53,19 @@ pub(crate) async fn handle(
 
         // Kafka's `GroupCoordinatorService.heartbeat` answers an empty group
         // id before any group lookup.
+        // `GroupCoordinatorService.heartbeat` answers `NONE` in place of
+        // `COORDINATOR_LOAD_IN_PROGRESS`, so a member keeps its session while
+        // the new coordinator loads.
         let invalid_group = req.group_id.is_empty().then_some(codes::INVALID_GROUP_ID);
         if let Some(error_code) = invalid_group
             .or_else(|| crate::handlers::group_coordinator_error(broker, &req.group_id))
+            .map(|code| {
+                if code == codes::COORDINATOR_LOAD_IN_PROGRESS {
+                    codes::NONE
+                } else {
+                    code
+                }
+            })
         {
             return crate::handlers::encode_response(
                 &HeartbeatResponse {

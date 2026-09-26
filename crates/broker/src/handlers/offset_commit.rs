@@ -238,7 +238,13 @@ async fn commit_rows(
 ) -> Result<Vec<OffsetCommitResponseTopic>, i16> {
     let image = broker.controller.current_image();
     match local_partition_for_group(&image, broker.config.node_id, &req.group_id) {
-        Ok(_) => {}
+        Ok(partition) => {
+            if let Some(code) =
+                crate::handlers::coordinator_routing::group_partition_loading(broker, partition)
+            {
+                return Err(code);
+            }
+        }
         Err(GroupRoutingError::Unavailable) => return Err(codes::COORDINATOR_NOT_AVAILABLE),
         Err(GroupRoutingError::NotCoordinator) => return Err(codes::NOT_COORDINATOR),
     }

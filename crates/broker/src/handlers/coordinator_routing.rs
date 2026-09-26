@@ -5,7 +5,8 @@
 //! broker that does.
 
 /// Return the Kafka routing error for a group RPC sent to the wrong broker,
-/// or `None` when this broker leads the group's offsets partition.
+/// `COORDINATOR_LOAD_IN_PROGRESS` while this broker still replays the group's
+/// offsets partition, or `None` when this broker serves the group.
 pub(crate) fn group_coordinator_error(
     broker: &crate::broker::Broker,
     group_id: &str,
@@ -17,10 +18,23 @@ pub(crate) fn group_coordinator_error(
         broker.config.node_id,
         group_id,
     ) {
-        Ok(_) => None,
+        Ok(partition) => group_partition_loading(broker, partition),
         Err(GroupRoutingError::Unavailable) => Some(crate::codes::COORDINATOR_NOT_AVAILABLE),
         Err(GroupRoutingError::NotCoordinator) => Some(crate::codes::NOT_COORDINATOR),
     }
+}
+
+/// `COORDINATOR_LOAD_IN_PROGRESS` while this broker still replays the offsets
+/// `partition` it leads, as Kafka's `CoordinatorRuntime` answers for a shard in
+/// the `LOADING` state.
+pub(crate) fn group_partition_loading(
+    broker: &crate::broker::Broker,
+    partition: i32,
+) -> Option<i16> {
+    broker
+        .group_coordinator
+        .is_loading(partition)
+        .then_some(crate::codes::COORDINATOR_LOAD_IN_PROGRESS)
 }
 
 pub(crate) fn parse_advertised_host_port(addr: &str) -> (String, u16) {

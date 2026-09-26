@@ -102,6 +102,10 @@ pub struct GroupCoordinator {
     /// `coordinator::topic_deletion`.
     pub(crate) recent_topic_deletions:
         std::sync::Mutex<std::collections::VecDeque<(String, uuid::Uuid)>>,
+    /// The `__consumer_offsets` partitions this broker leads but is still
+    /// replaying, each with the id of the load that owns the entry. See
+    /// `coordinator::leadership`.
+    pub(crate) loading_partitions: std::sync::Mutex<std::collections::HashMap<i32, u64>>,
     /// Cache of the `ConsumerGroupHeartbeat` handler's
     /// `subscribed_topic_regex` → Describe-authorized-topics computation,
     /// keyed by `(group_id, member_id, principal, host)`. Bounded LRU, not an
@@ -161,6 +165,7 @@ impl GroupCoordinator {
             metadata_source: std::sync::OnceLock::new(),
             metrics: std::sync::OnceLock::new(),
             recent_topic_deletions: std::sync::Mutex::default(),
+            loading_partitions: std::sync::Mutex::default(),
             regex_authz_cache: std::sync::Mutex::new(lru::LruCache::new(
                 crate::handlers::consumer_group_heartbeat::REGEX_AUTHZ_CACHE_CAPACITY,
             )),

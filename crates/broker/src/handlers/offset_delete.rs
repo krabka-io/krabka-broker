@@ -111,6 +111,11 @@ pub(crate) async fn handle(
                 return encode(version, &whole_error(codes::NOT_COORDINATOR));
             }
         };
+    if let Some(code) =
+        crate::handlers::coordinator_routing::group_partition_loading(broker, offsets_partition)
+    {
+        return encode(version, &whole_error(code));
+    }
 
     // The group must exist and pass Kafka's `validateOffsetDelete`; its
     // answer also names the topics it subscribes to.
