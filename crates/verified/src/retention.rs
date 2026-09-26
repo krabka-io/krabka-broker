@@ -73,9 +73,27 @@ pub fn local_retention_prefix(
     } else {
         time_expired.len() - 1
     };
-    let mut len = 0usize;
+    // Segment 0 is peeled out of the loop below rather than folded into its
+    // first iteration. The `ensures` above ties `result.len@ > 0` to concrete
+    // facts about index 0 (`time_expired@[0]`, `sizes@[0]@`), and a generic
+    // loop invariant -- which must hold uniformly at every iteration,
+    // including before any of them run -- cannot also assert "the first
+    // iteration always makes progress" without this explicit case split.
+    // Kafka's size predicate (see the doc comment above) applies identically
+    // here: segment 0 is size-evictable only while
+    // `initial_size_debt >= sizes[0]`.
+    if max_delete == 0 || scheduled[0] || (!time_expired[0] && initial_size_debt < sizes[0]) {
+        return RetentionPrefix {
+            len: 0,
+            remaining_size_debt: initial_size_debt,
+        };
+    }
+    let mut len = 1usize;
     let mut remaining_size_debt = initial_size_debt;
-    #[invariant(len@ <= max_delete@)]
+    if remaining_size_debt > 0 {
+        remaining_size_debt = remaining_size_debt.saturating_sub(sizes[0]);
+    }
+    #[invariant(0 < len@ && len@ <= max_delete@)]
     #[invariant(max_delete@ <= time_expired@.len())]
     #[invariant(remaining_size_debt@ <= initial_size_debt@)]
     #[invariant(forall<i: Int> 0 <= i && i < len@ ==> !scheduled@[i])]
