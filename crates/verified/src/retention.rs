@@ -39,7 +39,9 @@ pub struct RetentionPrefix {
 /// whole segment (`remaining_size_debt >= sizes[i]`), matching Kafka's
 /// `deleteRetentionSizeBreachedSegments` predicate `diff - segment.size() >=
 /// 0`. A segment larger than the remaining excess stops the size pass, even
-/// though it is heavier than the log is allowed to be over budget by.
+/// though it is heavier than the log is allowed to be over budget by. With
+/// no excess left there is no size pass at all, so a zero-byte segment is
+/// never size-evicted on a log that is within its budget.
 #[requires(time_expired@.len() == scheduled@.len())]
 #[requires(time_expired@.len() == sizes@.len())]
 #[ensures(result.len@ <= time_expired@.len())]
@@ -52,7 +54,7 @@ pub struct RetentionPrefix {
 #[ensures(time_expired@.len() > 0
     && (has_active || time_expired@.len() > 1)
     && !scheduled@[0]
-    && (time_expired@[0] || initial_size_debt@ >= sizes@[0]@)
+    && (time_expired@[0] || (initial_size_debt@ > 0 && initial_size_debt@ >= sizes@[0]@))
     ==> result.len@ > 0)]
 #[must_use]
 pub fn local_retention_prefix(
@@ -80,9 +82,10 @@ pub fn local_retention_prefix(
     // including before any of them run -- cannot also assert "the first
     // iteration always makes progress" without this explicit case split.
     // Kafka's size predicate (see the doc comment above) applies identically
-    // here: segment 0 is size-evictable only while
+    // here: segment 0 is size-evictable only while there is excess and
     // `initial_size_debt >= sizes[0]`.
-    if max_delete == 0 || scheduled[0] || (!time_expired[0] && initial_size_debt < sizes[0]) {
+    let size_evict_first = initial_size_debt > 0 && initial_size_debt >= sizes[0];
+    if max_delete == 0 || scheduled[0] || (!time_expired[0] && !size_evict_first) {
         return RetentionPrefix {
             len: 0,
             remaining_size_debt: initial_size_debt,
@@ -108,7 +111,7 @@ pub fn local_retention_prefix(
         // the remaining excess is at least its whole size. Falling one byte
         // short of a segment's size stops the size pass at that segment,
         // the same as running out of excess entirely.
-        let size_evict = remaining_size_debt >= sizes[len];
+        let size_evict = remaining_size_debt > 0 && remaining_size_debt >= sizes[len];
         if !time_expired[len] && !size_evict {
             break;
         }
@@ -280,6 +283,39 @@ mod tests {
         assert2::assert!(
             local_retention_prefix(&[true, true], &[true, false], &[1, 1], 2, true).len == 0
         );
+    }
+
+    /// A zero-byte segment is not size-evictable on a log with no excess:
+    /// with no debt there is no size pass, so only time expiry removes it.
+    #[test]
+    fn zero_byte_segments_are_not_size_evicted_without_excess() {
+        for (name, time_expired, sizes, debt, expected) in [
+            (
+                "no debt, first empty",
+                [false, false, false],
+                [0u64, 10, 10],
+                0u64,
+                0usize,
+            ),
+            (
+                "no debt, second empty",
+                [true, false, false],
+                [10, 0, 10],
+                0,
+                1,
+            ),
+            (
+                "debt spent, next empty",
+                [false, false, false],
+                [10, 0, 10],
+                10,
+                1,
+            ),
+            ("time-expired empty", [true, true, false], [0, 0, 10], 0, 2),
+        ] {
+            let prefix = local_retention_prefix(&time_expired, &[false; 3], &sizes, debt, true);
+            assert2::check!(prefix.len == expected, "{name}: got {prefix:?}");
+        }
     }
 
     /// Kafka's `deleteRetentionSizeBreachedSegments` predicate is
