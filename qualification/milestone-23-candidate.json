@@ -43,8 +43,8 @@
     },
     {
       "repository": "krabka-io/krabka-schema-registry",
-      "revision": "cc618c9c52e5be5607ec850d2f7629ac31cd4e1e",
-      "default_branch": "claude/broker-schema-validation-registry-s451bp",
+      "revision": "904490ad9242f59da78aa4a87bcda9b1436c4a59",
+      "default_branch": "main",
       "artifacts": []
     },
     {
@@ -226,5 +226,5 @@
     "url": "",
     "sha256": ""
   },
-  "runner_sha256": "sha256:e894b31d17a8753e6dca1cad93c3be28e5d4d6d473925d6f0c76660810bb474d"
+  "runner_sha256": "sha256:d7c88f221fbf41374efcdd8a3cb8723240f24ea433a993aa3c932a6f53d34e94"
 }

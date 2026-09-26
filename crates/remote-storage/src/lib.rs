@@ -128,7 +128,7 @@
 //! # }
 //! ```
 
-#![doc(html_root_url = "https://docs.rs/krabka-remote-storage/0.5.4")]
+#![doc(html_root_url = "https://docs.rs/krabka-remote-storage/0.6.0")]
 
 mod cache;
 pub mod diskless;

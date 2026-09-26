@@ -18,149 +18,87 @@ the `krabka-*` names to crates.io.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-26
+
+Milestones 21 to 23: a release is now qualified against the exact image it
+delivers, across installation, operator lifecycle, CLI administration,
+observability, disaster recovery, schema evolution, registry migration and
+snapshot retention. A long run of Kafka-conformance work changes on-disk
+formats, error codes and authorization, so read the breaking entries before
+you point an existing data directory at this build.
+
 ### Added
 
-- A reproducible real-cluster performance qualification now drives the same
-  external workload against pinned Kafka and Krabka clusters under equal
-  durability and resource settings. Its published three-run comparison and
-  partition-envelope result include raw provenance, exact reconciliation,
-  tail latency, resource snapshots, metrics cost, controller failover,
-  readiness and reassignment; the measured 10,000-partition tier passed.
-- The nightly Criterion lane now alternates three reference and candidate runs
-  on one host and fails a machine-readable, raw-sample-backed verdict when a
-  benchmark exceeds its variance-calibrated tolerance.
-- A checked-in ecosystem qualification manifest records the exact broker,
-  operator, CLI, observability, demo and client-stack revisions as one candidate
-  set. CI validates the draft contract; the manual final gate additionally
-  requires immutable artifact digests, passed evidence for installation,
-  operator lifecycle, authenticated CLI administration and four-signal WAL
-  recovery, plus a content-addressed published report.
-- A three-worker kind lane now applies the reference Kubernetes manifests,
-  proves quorum pods land on distinct nodes, produces and consumes through the
-  bootstrap Service, and verifies the data again after a rolling restart. The
-  manifests carry required hostname spreading and bounded init/broker
-  resources. A scheduled previous-release lane also exercises the persisted
-  surfaces in one log directory and expects either compatible recovery or the
-  format refusal declared below. The new scaling guide and stalled-
-  reassignment runbook cover broker addition, throttled data movement,
-  decommission and the required break-glass approval.
-- `krabka-backup`, the operator tool for the restore inputs a KIP-405 archive
-  does not hold. `capture` copies a node's RLMM snapshot and its newest
-  controller metadata checkpoint, and every consumer group's committed offsets,
-  into the archive under `restore-inputs/<capture-id>/` with a manifest of
-  sizes and SHA-256 digests. `verify` re-reads a capture and checks it against
-  those digests, `list` names the captures, and `restore-offsets` commits a
-  capture's offsets into a restored cluster so a group resumes where it stopped
-  rather than at `auto.offset.reset`. The image has no shell, so `kubectl cp`
-  cannot take those files off a broker; this binary ships beside the broker and
-  runs from a `CronJob` with the volume mounted read-only.
-  [Backup and restore](docs/operations/backup-restore.md) and the
-  [restore-from-archive](docs/operations/runbooks/restore-from-archive.md)
-  runbook say what to copy, how often, how to check a copy, and what to do on
-  the day. `crates/restore/tests/dr_roundtrip.rs` runs the whole sequence.
+- Release images are multi-platform: one signed image index holds `linux/amd64`
+  and `linux/arm64`, and its `linux/amd64` child is the digest CI tested.
+- Ecosystem qualification binds its evidence to the delivered image digest and
+  runs eight gates: installation, operator lifecycle, CLI administration,
+  observability and recovery, secured disaster recovery, schema evolution,
+  schema-registry migration and snapshot retention. A qualification release is
+  published only when all eight pass.
+- Secured disaster recovery: `krabka-backup` and `krabka-restore` work against
+  SASL/TLS clusters, a signed WORM head is verified before a restore, diskless
+  WAL batches replay under the restore predicates, and a real JBOD `ENOSPC`
+  is covered.
+- CIDR-range ACL hosts (KIP-1276), for example `10.0.0.0/8`, including
+  IPv4-mapped IPv6 peers.
+- `allow.everyone.if.no.acl.found`, with Kafka's semantics.
+- `crates/docgen`, the benchmark harnesses and the diskless Jepsen suite live in
+  this repository, and Bazel compiles the benches.
+
+### Changed
+
+- **Breaking, on disk.** `.txnindex` files use Kafka's 34-byte,
+  version-prefixed `AbortedTxn` layout, `TransactionLogValue` records carry
+  `LastProducerEpoch` and `ClientTransactionVersion`, and krabka's private
+  metadata records ride as a tagged field of a `NoOpRecord`, so
+  `kafka-dump-log` and `kafka-metadata-shell` read the log and its checkpoints.
+  Delete data directories written by an earlier build and format them again.
+- The cluster id is reported in Kafka's URL-safe base64 `Uuid` form in
+  `Metadata` and `DescribeCluster`, not the hyphenated form.
+- Every controller-listener request is authorized against the connection
+  principal with the operation its API needs, as Kafka's `ControllerApis`
+  does. Controller-scoped APIs are no longer reachable or advertised on a
+  broker listener, whatever `inter.broker.listener.name` names.
+- ACL operation implication (Read, Write, Delete or Alter implies Describe)
+  widens ALLOW ACLs only. A DENY no longer implies a DENY on Describe.
+- A transactional Produce is verified with the transaction coordinator before
+  it is appended (KIP-890 part 1). A batch for a partition the client never
+  added to the transaction is refused.
+- A client Produce to an internal topic is refused with
+  `INVALID_TOPIC_EXCEPTION` unless its `client_id` is `__admin_client`.
+- The KIP-124 request quota is charged for every API Kafka charges, and a
+  connection over `connection_creation_rate` is closed rather than delayed.
 
 ### Fixed
 
-- Broker-only metadata observers now advance past every record offset in a
-  multi-record metadata batch. Large reassignments previously applied the
-  batch but left readiness permanently behind its high watermark.
-- Topic and partition metric families now reconcile the labels their data
-  paths actually created against the current metadata image. Invented topic
-  names, invalid partition indexes, and writes racing a reassignment are
-  collected without an ever-growing tombstone set.
-- Controller bootstrap CLI and environment entries now accept unresolved DNS
-  `host:port` names just like TOML, so a formatted joiner can discover a
-  Kubernetes Service. Automatic `CreateTopics` and `CreatePartitions`
-  placement excludes fenced and controller-dead brokers, and the reassignment
-  acceptance case now moves real records onto its added replica before the
-  source directory is pruned.
-- The `meta.properties.json` on-disk format stamp is now version 2. This build
-  refuses older or unknown stamps with instructions to run `krabka-format` on
-  a fresh directory and restore topic data, and refuses a configured cluster
-  id that disagrees with the formatted directory using
-  `INCONSISTENT_CLUSTER_ID`. This is a declared on-disk format break, not a
-  rolling-upgrade-compatible change.
-- The diskless WAL index format is now version 2 for the
-  `WalIndexEntry.max_timestamp_ms` layout. Replay refuses older, unknown or
-  undecodable records, logs and counts the failure, clears the unsafe
-  projection, and fails closed instead of serving an apparent data hole.
-- `DeleteRecords` on a tiered topic (KIP-405) now takes the deleted prefix out
-  of the remote tier as well as out of the local log. A partition keeps two
-  floors the way Kafka does: `logStartOffset`, which `DeleteRecords`, retention
-  and remote-segment deletion move, and `localLogStartOffset`, which follows
-  the segments on disk. A fetch below the global floor answers
-  `OFFSET_OUT_OF_RANGE` instead of being served from the archive, remote
-  retention frees the segments that fell below it whatever `retention.ms` and
-  `retention.bytes` say, and `ListOffsets(earliest)` follows the floor up after
-  those deletes. Dropping a copied segment from local disk no longer moves the
-  global floor, so the offsets the archive still holds stay readable, and the
-  `log-start-offset-checkpoint` carries the global floor across a restart
-  rather than the local one: a reopened tiered partition still refuses what a
-  `DeleteRecords` deleted and still serves what only the archive holds. A log
-  whose floor no checkpoint witnesses reports none at all, so neither the
-  remote read nor the log-start breach acts on a floor that is only where the
-  surviving segments happen to begin.
-
-.- A `DeleteRecords` trim now survives a broker restart even when it lands inside
-  the active segment. Segment deletion records a trim that reaches a segment
-  boundary, but the remainder used to live only in memory, so a restart served
-  the deleted records again and `ListOffsets EARLIEST` moved back down. Every
-  `krabka_log::Log` now checkpoints its log start to a
-  `log-start-offset-checkpoint` file in the partition directory and reads it
-  back on open, clamped to the offsets the log actually holds. Apache Kafka
-  keeps the same value per log dir on a 60-second schedule; krabka writes it on
-  the trim itself. The metadata log's private copy of this checkpoint is gone in
-  favour of the shared one.
-
-- Follower replicas of a tiered topic now enforce `local.retention.ms` /
-  `local.retention.bytes` on their own disks, as KIP-405 has every replica do.
-  The tiered-storage sweep used to skip a partition outright unless this broker
-  led it, so a follower kept every segment it had ever fetched until it was
-  elected: its disk grew to the topic's full `retention.*` footprint while the
-  leader's held `local.retention.*` worth. The copy pass and remote retention
-  stay leader-only, because one writer per partition owns the remote tier.
-  Local retention now asks the remote-log metadata in offsets rather than in
-  segment boundaries, so a replica whose segments do not line up with the
-  leader's cannot drop a segment the tier holds only part of.
-- A `krabka.diskless=true` topic now expires its object-store tier.
-  `retention.ms`, `retention.bytes` and the `DeleteRecords` floor run against
-  the committed WAL index on every flush tick, through the new proved
-  `diskless_retention_prefix` kernel, and each expired range gets a keyed
-  tombstone on `__diskless_wal_index`. The reclaimer then frees an object once
-  no range in it is referenced. Before this the bucket and the index topic grew
-  at the ingest rate for the life of the topic.
-  `krabka_broker_diskless_wal_expired_ranges_total` counts the tombstones.
-  `WalIndexEntry` gains the `max_timestamp_ms` field `retention.ms` reads, so
-  the `__diskless_wal_index` record format changed: delete the topic and the
-  local data directories rather than replaying an older one.
-- `DeleteRecords` on a diskless partition now deletes. It measures against the
-  offset the partition actually starts at rather than the flusher's local trim
-  frontier, so a request below that frontier is no longer a silent no-op, and
-  the object tier stops answering for the deleted offsets immediately: a fetch
-  below the floor is `OFFSET_OUT_OF_RANGE` and `ListOffsets(EARLIEST)` reports
-  the floor. The floor is a keyed record on `__diskless_wal_index`, published
-  and projected before the trim is acknowledged, so it survives a restart and a
-  leadership move on every broker. The range tombstones could not stand in for
-  it: a range that straddles the floor still holds live records, and neither it
-  nor the newest range may be expired.
-- A KFC-9 write freeze now holds the diskless retention pass, as it already
-  held the cleaner and the remote-log-manager's two retention passes. A frozen
-  topic's prefix stays byte-identical in the object tier too.
-
-- A broker-only node no longer stalls forever after a restart once the
-  controller has snapshotted and pruned `__cluster_metadata` past offset 0. The
-  observer metadata fetch now answers a pruned fetch offset with the KIP-630
-  snapshot id that replaced those records, the observer installs that snapshot
-  over `FetchSnapshot` before it resumes, and it keeps its own checkpoint in an
-  `observer` directory under `__cluster_metadata` so a restart resumes there
-  instead of at the log start. An observer that is answered but never applies
-  anything now says so at warn level, with the log-start offset it was told.
-
-- The KIP-590 row of the compatibility matrix said a Krabka broker-only node
-  forwards admin writes through `Envelope`. It does not, and no such path
-  exists: the controller listener serves `Envelope`, and a broker-only node
-  reaches its controller over the krabka-private `SubmitChange` RPC. The row
-  now claims the served half only, and says why the broker half is not needed.
+- About 150 request paths now answer with Kafka's error codes, row order and
+  authorization checks, including `ListOffsets`, `Fetch`, `OffsetForLeaderEpoch`,
+  `DeleteRecords`, `DescribeTopicPartitions`, `CreateTopics`, `DeleteTopics`,
+  `AlterConfigs`, the partition-reassignment APIs, the KIP-853 voter APIs,
+  every transaction API, and the consumer, share and streams group APIs.
+  Unresolved topic ids answer `UNKNOWN_TOPIC_ID` across the topic-id versions.
+- Idempotence: a retry of any of a producer's last five batches is answered as
+  a duplicate, the first batch at a new producer epoch must be sequence 0, and
+  `InitProducerId` rotates the producer id at the epoch ceiling.
+- The last stable offset holds until the high watermark passes the transaction
+  marker, the leader recomputes its high watermark before a produce is
+  acknowledged, and aborted transaction data is archived for a
+  `read_committed` share group.
+- `__transaction_state` and `__share_group_state` are loaded and unloaded on a
+  leadership change, and coordinator leadership follows the partition leader
+  epoch.
+- A raft leader no longer truncates its own log when it answers a diverging
+  `Fetch`. A joining controller stays attached to the current leader, and a
+  removed controller leader stays reachable until its removal commits.
+- Time and size retention run only when `cleanup.policy` includes `delete`, and
+  a record without a key is refused on a compacted topic.
+- A deleted group's offsets are tombstoned so they do not come back on reload.
+- The diskless flusher stops at shutdown when a flush outlasts its interval.
+- The registry-migration qualification gate makes `host.docker.internal`
+  resolve on the runner, since the handoff harness's in-process broker
+  advertises that name to the host-side store as well as to the
+  `cp-schema-registry` container. The gate had never passed.
 
 ## [0.5.4] - 2026-09-02
 
@@ -205,6 +143,44 @@ routine reassignment and topic deletion.
   reference and the metrics contract.
 - A README for every crate, `SECURITY.md` and `CODEOWNERS`.
 - The rustdoc set, published to GitHub Pages on every push to `main`.
+- A reproducible real-cluster performance qualification now drives the same
+  external workload against pinned Kafka and Krabka clusters under equal
+  durability and resource settings. Its published three-run comparison and
+  partition-envelope result include raw provenance, exact reconciliation,
+  tail latency, resource snapshots, metrics cost, controller failover,
+  readiness and reassignment; the measured 10,000-partition tier passed.
+- The nightly Criterion lane now alternates three reference and candidate runs
+  on one host and fails a machine-readable, raw-sample-backed verdict when a
+  benchmark exceeds its variance-calibrated tolerance.
+- A checked-in ecosystem qualification manifest records the exact broker,
+  operator, CLI, observability, demo and client-stack revisions as one candidate
+  set. CI validates the draft contract; the manual final gate additionally
+  requires immutable artifact digests, passed evidence for installation,
+  operator lifecycle, authenticated CLI administration and four-signal WAL
+  recovery, plus a content-addressed published report.
+- A three-worker kind lane now applies the reference Kubernetes manifests,
+  proves quorum pods land on distinct nodes, produces and consumes through the
+  bootstrap Service, and verifies the data again after a rolling restart. The
+  manifests carry required hostname spreading and bounded init/broker
+  resources. A scheduled previous-release lane also exercises the persisted
+  surfaces in one log directory and expects either compatible recovery or the
+  format refusal declared below. The new scaling guide and stalled-
+  reassignment runbook cover broker addition, throttled data movement,
+  decommission and the required break-glass approval.
+- `krabka-backup`, the operator tool for the restore inputs a KIP-405 archive
+  does not hold. `capture` copies a node's RLMM snapshot and its newest
+  controller metadata checkpoint, and every consumer group's committed offsets,
+  into the archive under `restore-inputs/<capture-id>/` with a manifest of
+  sizes and SHA-256 digests. `verify` re-reads a capture and checks it against
+  those digests, `list` names the captures, and `restore-offsets` commits a
+  capture's offsets into a restored cluster so a group resumes where it stopped
+  rather than at `auto.offset.reset`. The image has no shell, so `kubectl cp`
+  cannot take those files off a broker; this binary ships beside the broker and
+  runs from a `CronJob` with the volume mounted read-only.
+  [Backup and restore](docs/operations/backup-restore.md) and the
+  [restore-from-archive](docs/operations/runbooks/restore-from-archive.md)
+  runbook say what to copy, how often, how to check a copy, and what to do on
+  the day. `crates/restore/tests/dr_roundtrip.rs` runs the whole sequence.
 
 ### Changed
 
@@ -235,6 +211,102 @@ routine reassignment and topic deletion.
 - A node redirected to a snapshot reports the quorum's committed offset rather
   than its own clamped watermark, so readiness cannot read a lag of zero while
   it is behind.
+- Broker-only metadata observers now advance past every record offset in a
+  multi-record metadata batch. Large reassignments previously applied the
+  batch but left readiness permanently behind its high watermark.
+- Topic and partition metric families now reconcile the labels their data
+  paths actually created against the current metadata image. Invented topic
+  names, invalid partition indexes, and writes racing a reassignment are
+  collected without an ever-growing tombstone set.
+- Controller bootstrap CLI and environment entries now accept unresolved DNS
+  `host:port` names just like TOML, so a formatted joiner can discover a
+  Kubernetes Service. Automatic `CreateTopics` and `CreatePartitions`
+  placement excludes fenced and controller-dead brokers, and the reassignment
+  acceptance case now moves real records onto its added replica before the
+  source directory is pruned.
+- The `meta.properties.json` on-disk format stamp is now version 2. This build
+  refuses older or unknown stamps with instructions to run `krabka-format` on
+  a fresh directory and restore topic data, and refuses a configured cluster
+  id that disagrees with the formatted directory using
+  `INCONSISTENT_CLUSTER_ID`. This is a declared on-disk format break, not a
+  rolling-upgrade-compatible change.
+- The diskless WAL index format is now version 2 for the
+  `WalIndexEntry.max_timestamp_ms` layout. Replay refuses older, unknown or
+  undecodable records, logs and counts the failure, clears the unsafe
+  projection, and fails closed instead of serving an apparent data hole.
+- `DeleteRecords` on a tiered topic (KIP-405) now takes the deleted prefix out
+  of the remote tier as well as out of the local log. A partition keeps two
+  floors the way Kafka does: `logStartOffset`, which `DeleteRecords`, retention
+  and remote-segment deletion move, and `localLogStartOffset`, which follows
+  the segments on disk. A fetch below the global floor answers
+  `OFFSET_OUT_OF_RANGE` instead of being served from the archive, remote
+  retention frees the segments that fell below it whatever `retention.ms` and
+  `retention.bytes` say, and `ListOffsets(earliest)` follows the floor up after
+  those deletes. Dropping a copied segment from local disk no longer moves the
+  global floor, so the offsets the archive still holds stay readable, and the
+  `log-start-offset-checkpoint` carries the global floor across a restart
+  rather than the local one: a reopened tiered partition still refuses what a
+  `DeleteRecords` deleted and still serves what only the archive holds. A log
+  whose floor no checkpoint witnesses reports none at all, so neither the
+  remote read nor the log-start breach acts on a floor that is only where the
+  surviving segments happen to begin.
+- A `DeleteRecords` trim now survives a broker restart even when it lands inside
+  the active segment. Segment deletion records a trim that reaches a segment
+  boundary, but the remainder used to live only in memory, so a restart served
+  the deleted records again and `ListOffsets EARLIEST` moved back down. Every
+  `krabka_log::Log` now checkpoints its log start to a
+  `log-start-offset-checkpoint` file in the partition directory and reads it
+  back on open, clamped to the offsets the log actually holds. Apache Kafka
+  keeps the same value per log dir on a 60-second schedule; krabka writes it on
+  the trim itself. The metadata log's private copy of this checkpoint is gone in
+  favour of the shared one.
+- Follower replicas of a tiered topic now enforce `local.retention.ms` /
+  `local.retention.bytes` on their own disks, as KIP-405 has every replica do.
+  The tiered-storage sweep used to skip a partition outright unless this broker
+  led it, so a follower kept every segment it had ever fetched until it was
+  elected: its disk grew to the topic's full `retention.*` footprint while the
+  leader's held `local.retention.*` worth. The copy pass and remote retention
+  stay leader-only, because one writer per partition owns the remote tier.
+  Local retention now asks the remote-log metadata in offsets rather than in
+  segment boundaries, so a replica whose segments do not line up with the
+  leader's cannot drop a segment the tier holds only part of.
+- A `krabka.diskless=true` topic now expires its object-store tier.
+  `retention.ms`, `retention.bytes` and the `DeleteRecords` floor run against
+  the committed WAL index on every flush tick, through the new proved
+  `diskless_retention_prefix` kernel, and each expired range gets a keyed
+  tombstone on `__diskless_wal_index`. The reclaimer then frees an object once
+  no range in it is referenced. Before this the bucket and the index topic grew
+  at the ingest rate for the life of the topic.
+  `krabka_broker_diskless_wal_expired_ranges_total` counts the tombstones.
+  `WalIndexEntry` gains the `max_timestamp_ms` field `retention.ms` reads, so
+  the `__diskless_wal_index` record format changed: delete the topic and the
+  local data directories rather than replaying an older one.
+- `DeleteRecords` on a diskless partition now deletes. It measures against the
+  offset the partition actually starts at rather than the flusher's local trim
+  frontier, so a request below that frontier is no longer a silent no-op, and
+  the object tier stops answering for the deleted offsets immediately: a fetch
+  below the floor is `OFFSET_OUT_OF_RANGE` and `ListOffsets(EARLIEST)` reports
+  the floor. The floor is a keyed record on `__diskless_wal_index`, published
+  and projected before the trim is acknowledged, so it survives a restart and a
+  leadership move on every broker. The range tombstones could not stand in for
+  it: a range that straddles the floor still holds live records, and neither it
+  nor the newest range may be expired.
+- A KFC-9 write freeze now holds the diskless retention pass, as it already
+  held the cleaner and the remote-log-manager's two retention passes. A frozen
+  topic's prefix stays byte-identical in the object tier too.
+- A broker-only node no longer stalls forever after a restart once the
+  controller has snapshotted and pruned `__cluster_metadata` past offset 0. The
+  observer metadata fetch now answers a pruned fetch offset with the KIP-630
+  snapshot id that replaced those records, the observer installs that snapshot
+  over `FetchSnapshot` before it resumes, and it keeps its own checkpoint in an
+  `observer` directory under `__cluster_metadata` so a restart resumes there
+  instead of at the log start. An observer that is answered but never applies
+  anything now says so at warn level, with the log-start offset it was told.
+- The KIP-590 row of the compatibility matrix said a Krabka broker-only node
+  forwards admin writes through `Envelope`. It does not, and no such path
+  exists: the controller listener serves `Envelope`, and a broker-only node
+  reaches its controller over the krabka-private `SubmitChange` RPC. The row
+  now claims the served half only, and says why the broker half is not needed.
 
 ## [0.5.3] - 2026-09-01
 
@@ -359,7 +431,8 @@ robot-head/crabka.
 - An audit stamp carries the value that its freeze signature covers.
 - The release publishes the image digest that cosign signed.
 
-[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v0.5.4...HEAD
+[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.6.0
 [0.5.4]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.5.4
 [0.5.3]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.5.3
 [0.5.2]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.5.2
