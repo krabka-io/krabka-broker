@@ -181,7 +181,7 @@ alias=$scope-operator:verified
 docker tag "$operator_image" "$alias"
 check operator-alias test "$(docker image inspect "$alias" --format '{{.Id}}')" = "$(docker image inspect "$operator_image" --format '{{.Id}}')"
 export BROKER_IMAGE="$broker_image" OPERATOR_IMAGE="$alias" REBALANCER_IMAGE="$rebalancer_image"
-export REBALANCER_CHART="$work/rebalancer-chart/crabka-rebalancer"
+export REBALANCER_CHART="$work/rebalancer-chart/krabka-rebalancer"
 export OPERATOR_REVISION="$(revision krabka-operator)" BROKER_REVISION="$(revision krabka-broker)" REBALANCER_REVISION="$(revision krabka-rebalancer)"
 export EVIDENCE_DIR="$evidence/lifecycle" KIND_CLUSTER="$scope-lifecycle"
 # kubectl can still return NotFound while --ignore-not-found observes the

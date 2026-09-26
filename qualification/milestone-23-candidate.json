@@ -73,18 +73,18 @@
     },
     {
       "repository": "krabka-io/krabka-operator",
-      "revision": "0d08946add2ae2d4786f8b6b3ad91f0fb23cc588",
+      "revision": "f1000e42ecb1d6c92d3cc36eb4e8773097946efd",
       "default_branch": "main",
       "artifacts": [
         {
           "kind": "chart",
-          "reference": "https://raw.githubusercontent.com/krabka-io/krabka-io.github.io/00dc667bb8629b34eb6b9532133080122d13070b/public/charts/krabka-operator-0.4.0.tgz",
-          "digest": "sha256:bc7b1378be63676e546fa1e2c91e4633337176a69f9b0f6ac1909fb850aeff75"
+          "reference": "https://raw.githubusercontent.com/krabka-io/krabka-io.github.io/dbf4d5411835136317115a704f6da5583c31c742/public/charts/krabka-operator-0.4.0.tgz",
+          "digest": "sha256:4bc31bc1f717382f0199b458e2f07d4e900151b3098272e5fc632d18f1ba45d8"
         },
         {
           "kind": "image",
           "reference": "ghcr.io/krabka-io/krabka-operator",
-          "digest": "sha256:861796f11b63798f07cd8cfbcb0fa41376259cb6fce07b1e80e15e93de3a377b"
+          "digest": "sha256:7b961486411835d316e2d4f1f23ec10afe8eb11cf72127e710d62c04b27ee0fe"
         }
       ],
       "entrypoints": [
@@ -151,25 +151,25 @@
     },
     {
       "repository": "krabka-io/krabka-rebalancer",
-      "revision": "f932eab4004349417806eefec738ef0b20ad26f4",
+      "revision": "2aecf3613c732f9648fa18dfffccf2c07f24a373",
       "default_branch": "main",
       "artifacts": [
         {
           "kind": "chart",
-          "reference": "https://raw.githubusercontent.com/krabka-io/krabka-io.github.io/00dc667bb8629b34eb6b9532133080122d13070b/public/charts/crabka-rebalancer-0.4.0.tgz",
-          "digest": "sha256:6c924ea43772b77a92674a7825c71bb915d7621b9d15734f5eecaeb49e1ad700"
+          "reference": "https://raw.githubusercontent.com/krabka-io/krabka-io.github.io/dbf4d5411835136317115a704f6da5583c31c742/public/charts/krabka-rebalancer-0.4.0.tgz",
+          "digest": "sha256:164de0a99e57263c4d8f421a86d6958df1620acaf2b2f307f9434543b8546544"
         },
         {
           "kind": "image",
           "reference": "ghcr.io/krabka-io/krabka-rebalancer",
-          "digest": "sha256:706b3b51a521d97d4166d98a1f39e045b5dfa1508b155bce174161c4bc009b11"
+          "digest": "sha256:2e200aee4ce5411db615b8597593b16f56607ee54230bb55142debef48f5c8af"
         }
       ],
       "entrypoints": [
-        "crabka-rebalancer"
+        "krabka-rebalancer"
       ],
       "config": [
-        "charts/crabka-rebalancer/values.yaml"
+        "charts/krabka-rebalancer/values.yaml"
       ],
       "probes": [
         "/healthz",
@@ -231,5 +231,5 @@
     "url": "",
     "sha256": ""
   },
-  "runner_sha256": "sha256:559f761fb932d4f5f0195dc7abd160bde495341ede9d31690ee18c963451aa67"
+  "runner_sha256": "sha256:cbc4724e81a6c6c29593f99a0efeceaaf73712f282aeb2f392ebc18432ba5de8"
 }
