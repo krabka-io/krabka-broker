@@ -300,7 +300,7 @@ pub struct JoinResultMember {
 }
 
 /// Structured `SyncGroup` result for the handler.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SyncResult {
     pub error_code: ErrorCode,
     pub assignment: Bytes,

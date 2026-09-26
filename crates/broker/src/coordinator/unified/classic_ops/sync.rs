@@ -1,10 +1,12 @@
 //! The classic `SyncGroup` transition.
 //!
-//! `handle_sync` fences the request, installs the leader's assignments over
-//! every current member, and returns a [`SyncAction`] that tells the actor
-//! whether to reply, to park the follower until the leader arrives, or to drain
-//! the parked followers. `read_sync_result` reads one member's installed
-//! assignment back out.
+//! `handle_sync` is a port of Kafka's `classicGroupSyncToClassicGroup` and
+//! `validateSyncGroup`. It fences the request, answers `REBALANCE_IN_PROGRESS`
+//! while the group prepares a rebalance, installs the leader's assignments over
+//! every current member in `CompletingRebalance`, and returns a [`SyncAction`]
+//! that tells the actor whether to reply, to park the follower until the leader
+//! arrives, or to drain the parked followers. `read_sync_result` reads one
+//! member's installed assignment back out.
 
 use bytes::Bytes;
 use krabka_protocol::owned::sync_group_request::SyncGroupRequest;
@@ -18,9 +20,11 @@ use crate::{
 };
 
 /// What the actor should do with a `ClassicSync`.
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum SyncAction {
-    /// Reply right away, after a validation error or for a follower while the
-    /// group is `Stable`.
+    /// Reply right away: a validation error, `REBALANCE_IN_PROGRESS` while the
+    /// group prepares a rebalance, or the current assignment while it is
+    /// `Stable`.
     Immediate(SyncResult),
     /// Park the follower until the leader's `SyncGroup` installs assignments.
     Park,
@@ -29,74 +33,95 @@ pub(crate) enum SyncAction {
     LeaderInstalled(SyncResult),
 }
 
-/// Port of `handlers/sync_group.rs`. It operates on `ClassicState`.
+/// Port of Kafka's `classicGroupSyncToClassicGroup`. It operates on
+/// `ClassicState`.
 pub(crate) fn handle_sync(state: &mut ClassicState, req: &SyncGroupRequest) -> SyncAction {
-    let protocol_type = state.protocol_type.clone();
-    let protocol_name = state.protocol_name.clone();
-
-    // KIP-345 fence, as Kafka's `ClassicGroup.validateMember`.
-    if let Err(code) = state.validate_member(&req.member_id, req.group_instance_id.as_deref()) {
-        return SyncAction::Immediate(sync_err(code, protocol_type, protocol_name));
-    }
-    if state.generation_id != req.generation_id {
-        return SyncAction::Immediate(sync_err(
-            codes::ILLEGAL_GENERATION,
-            protocol_type,
-            protocol_name,
-        ));
+    if let Err(code) = validate_sync(state, req) {
+        return SyncAction::Immediate(sync_err(code));
     }
 
-    // Kafka's `classicGroupSyncToClassicGroup`: only the leader's
-    // `SyncGroup` in `CompletingRebalance` installs assignments. In
-    // `Stable` every member, the leader included, reads its current one; a
-    // KIP-814 leader that skipped the assignment sends none.
-    let is_leader = state.leader_id.as_deref() == Some(&req.member_id);
-    if is_leader && state.state == GroupState::CompletingRebalance {
-        let supplied: std::collections::HashMap<&str, &Bytes> = req
-            .assignments
-            .iter()
-            .map(|a| (a.member_id.as_str(), &a.assignment))
-            .collect();
-        // Kafka installs an assignment for every current member. A leader may
-        // omit a member from the request; that member gets an empty assignment
-        // instead of retaining bytes from the previous generation.
-        let assignments = state
-            .members
-            .keys()
-            .map(|member_id| {
-                (
-                    member_id.clone(),
-                    supplied
-                        .get(member_id.as_str())
-                        .map_or_else(Bytes::new, |assignment| (*assignment).clone()),
-                )
-            })
-            .collect();
-        state.install_assignments(assignments);
-        SyncAction::LeaderInstalled(read_sync_result(
-            state,
-            &req.member_id,
-            protocol_type,
-            protocol_name,
-        ))
-    } else if matches!(
-        state.state,
-        GroupState::Stable | GroupState::PreparingRebalance
-    ) {
-        // `PreparingRebalance` answers `REBALANCE_IN_PROGRESS`.
-        SyncAction::Immediate(read_sync_result(
-            state,
-            &req.member_id,
-            protocol_type,
-            protocol_name,
-        ))
-    } else {
-        SyncAction::Park
+    match state.state {
+        // Kafka answers every `SyncGroup` in `PreparingRebalance` at once, the
+        // leader's included: a late leader of the previous round must not end
+        // the round that gathers members now. An `Empty` group has no member,
+        // so `validate_sync` has already answered `UNKNOWN_MEMBER_ID`.
+        GroupState::PreparingRebalance | GroupState::Empty => {
+            SyncAction::Immediate(sync_err(codes::REBALANCE_IN_PROGRESS))
+        }
+        // Only the leader's `SyncGroup` in `CompletingRebalance` installs
+        // assignments. A follower waits for it.
+        GroupState::CompletingRebalance => {
+            if state.leader_id.as_deref() == Some(&req.member_id) {
+                install_leader_assignments(state, req);
+                SyncAction::LeaderInstalled(read_current(state, &req.member_id))
+            } else {
+                SyncAction::Park
+            }
+        }
+        // In `Stable` every member, the leader included, reads its current
+        // assignment. A KIP-814 leader that skipped the assignment sends none.
+        GroupState::Stable => SyncAction::Immediate(read_current(state, &req.member_id)),
     }
 }
 
-/// Read back one member's installed assignment. Mirrors `sync_group.rs` step 3.
-/// It returns `REBALANCE_IN_PROGRESS` if the group is not `Stable`.
+/// Kafka's `validateSyncGroup`: the member and instance
+/// (`ClassicGroup.validateMember`), then the generation, then the protocol type
+/// and name that the request names against the group's.
+fn validate_sync(state: &ClassicState, req: &SyncGroupRequest) -> Result<(), i16> {
+    state.validate_member(&req.member_id, req.group_instance_id.as_deref())?;
+    if state.generation_id != req.generation_id {
+        return Err(codes::ILLEGAL_GENERATION);
+    }
+    if is_protocol_inconsistent(req.protocol_type.as_deref(), state.protocol_type.as_deref())
+        || is_protocol_inconsistent(req.protocol_name.as_deref(), state.protocol_name.as_deref())
+    {
+        return Err(codes::INCONSISTENT_GROUP_PROTOCOL);
+    }
+    Ok(())
+}
+
+/// Kafka's `isProtocolInconsistent`: both sides are set and differ.
+fn is_protocol_inconsistent(requested: Option<&str>, group: Option<&str>) -> bool {
+    matches!((requested, group), (Some(requested), Some(group)) if requested != group)
+}
+
+/// Installs the leader's assignments over every current member. A member that
+/// the leader omitted gets an empty assignment instead of keeping bytes from the
+/// previous generation, as Kafka's `membersWithMissingAssignment`.
+fn install_leader_assignments(state: &mut ClassicState, req: &SyncGroupRequest) {
+    let supplied: std::collections::HashMap<&str, &Bytes> = req
+        .assignments
+        .iter()
+        .map(|a| (a.member_id.as_str(), &a.assignment))
+        .collect();
+    let assignments = state
+        .members
+        .keys()
+        .map(|member_id| {
+            (
+                member_id.clone(),
+                supplied
+                    .get(member_id.as_str())
+                    .map_or_else(Bytes::new, |assignment| (*assignment).clone()),
+            )
+        })
+        .collect();
+    state.install_assignments(assignments);
+}
+
+/// One member's current assignment with the group's protocol type and name.
+fn read_current(state: &ClassicState, member_id: &str) -> SyncResult {
+    read_sync_result(
+        state,
+        member_id,
+        state.protocol_type.clone(),
+        state.protocol_name.clone(),
+    )
+}
+
+/// Read back one member's installed assignment. It returns
+/// `REBALANCE_IN_PROGRESS`, with no protocol fields, if the group is not
+/// `Stable`.
 pub(crate) fn read_sync_result(
     state: &ClassicState,
     member_id: &str,
@@ -104,7 +129,7 @@ pub(crate) fn read_sync_result(
     protocol_name: Option<String>,
 ) -> SyncResult {
     if !matches!(state.state, GroupState::Stable) {
-        return sync_err(codes::REBALANCE_IN_PROGRESS, protocol_type, protocol_name);
+        return sync_err(codes::REBALANCE_IN_PROGRESS);
     }
     let assignment = state
         .members
@@ -119,12 +144,12 @@ pub(crate) fn read_sync_result(
     }
 }
 
-fn sync_err(code: i16, protocol_type: Option<String>, protocol_name: Option<String>) -> SyncResult {
+/// Kafka's error replies set only `error_code`: the protocol type and name
+/// stay null and the assignment stays empty.
+fn sync_err(code: i16) -> SyncResult {
     SyncResult {
         error_code: code,
-        assignment: Bytes::new(),
-        protocol_type,
-        protocol_name,
+        ..SyncResult::default()
     }
 }
 
@@ -134,7 +159,9 @@ mod tests {
     use krabka_protocol::owned::sync_group_request::SyncGroupRequestAssignment;
 
     use super::*;
-    use crate::coordinator::unified::classic_ops::test_support::stable_two_member_group;
+    use crate::coordinator::unified::classic_ops::test_support::{
+        handle_join, join_req, stable_two_member_group,
+    };
 
     fn sync_req(member_id: &str, generation: i32) -> SyncGroupRequest {
         SyncGroupRequest {
@@ -145,18 +172,221 @@ mod tests {
         }
     }
 
+    fn ok(assignment: &'static [u8]) -> SyncResult {
+        SyncResult {
+            error_code: codes::NONE,
+            assignment: Bytes::from_static(assignment),
+            protocol_type: Some("consumer".into()),
+            protocol_name: Some("range".into()),
+        }
+    }
+
+    fn err(code: i16) -> SyncResult {
+        SyncResult {
+            error_code: code,
+            ..SyncResult::default()
+        }
+    }
+
+    /// The group state a `handle_sync` table row starts from.
+    #[derive(Clone, Copy, Debug)]
+    enum Start {
+        /// `stable_two_member_group`: generation 1, leader `m1`, awaiting the
+        /// leader's `SyncGroup`.
+        Completing,
+        /// `Completing` after the leader installed `L` for `m1` and `F` for
+        /// `m2`.
+        Stable,
+        /// `Stable` after `m3` joined: the round that opened keeps generation
+        /// 1, so a `SyncGroup` of that generation still passes validation.
+        Preparing,
+    }
+
+    fn group(start: Start) -> ClassicState {
+        let mut g = stable_two_member_group();
+        if matches!(start, Start::Stable | Start::Preparing) {
+            g.install_assignments(std::collections::HashMap::from([
+                ("m1".to_string(), Bytes::from_static(b"L")),
+                ("m2".to_string(), Bytes::from_static(b"F")),
+            ]));
+        }
+        if matches!(start, Start::Preparing) {
+            let _ = handle_join(&mut g, &join_req("m3", None), "h");
+            assert!(g.state == GroupState::PreparingRebalance);
+        }
+        g
+    }
+
+    /// Kafka's `classicGroupSyncToClassicGroup` and `validateSyncGroup`, row by
+    /// row: the whole action and the group state after it.
+    #[test]
+    fn sync_follows_kafka_state_and_validation_rules() {
+        struct Row {
+            name: &'static str,
+            start: Start,
+            member: &'static str,
+            instance: Option<&'static str>,
+            generation_delta: i32,
+            protocol_type: Option<&'static str>,
+            protocol_name: Option<&'static str>,
+            want: SyncAction,
+            state_after: GroupState,
+        }
+        let row = |name, start, member, want, state_after| Row {
+            name,
+            start,
+            member,
+            instance: None,
+            generation_delta: 0,
+            protocol_type: None,
+            protocol_name: None,
+            want,
+            state_after,
+        };
+        let immediate = |code| SyncAction::Immediate(err(code));
+        let rows = [
+            // #793: a late leader of the previous round in `PreparingRebalance`
+            // gets `REBALANCE_IN_PROGRESS` and installs nothing.
+            row(
+                "preparing leader",
+                Start::Preparing,
+                "m1",
+                immediate(codes::REBALANCE_IN_PROGRESS),
+                GroupState::PreparingRebalance,
+            ),
+            row(
+                "preparing follower",
+                Start::Preparing,
+                "m2",
+                immediate(codes::REBALANCE_IN_PROGRESS),
+                GroupState::PreparingRebalance,
+            ),
+            row(
+                "completing follower parks",
+                Start::Completing,
+                "m2",
+                SyncAction::Park,
+                GroupState::CompletingRebalance,
+            ),
+            row(
+                "completing leader installs",
+                Start::Completing,
+                "m1",
+                SyncAction::LeaderInstalled(ok(b"new-L")),
+                GroupState::Stable,
+            ),
+            row(
+                "stable follower reads current",
+                Start::Stable,
+                "m2",
+                SyncAction::Immediate(ok(b"F")),
+                GroupState::Stable,
+            ),
+            row(
+                "stable leader reads current",
+                Start::Stable,
+                "m1",
+                SyncAction::Immediate(ok(b"L")),
+                GroupState::Stable,
+            ),
+            Row {
+                protocol_type: Some("consumer"),
+                protocol_name: Some("range"),
+                ..row(
+                    "matching protocol",
+                    Start::Stable,
+                    "m2",
+                    SyncAction::Immediate(ok(b"F")),
+                    GroupState::Stable,
+                )
+            },
+            Row {
+                protocol_type: Some("connect"),
+                ..row(
+                    "other protocol type",
+                    Start::Completing,
+                    "m1",
+                    immediate(codes::INCONSISTENT_GROUP_PROTOCOL),
+                    GroupState::CompletingRebalance,
+                )
+            },
+            Row {
+                protocol_name: Some("roundrobin"),
+                ..row(
+                    "other protocol name",
+                    Start::Stable,
+                    "m2",
+                    immediate(codes::INCONSISTENT_GROUP_PROTOCOL),
+                    GroupState::Stable,
+                )
+            },
+            Row {
+                generation_delta: 1,
+                protocol_type: Some("connect"),
+                ..row(
+                    "generation before protocol",
+                    Start::Stable,
+                    "m2",
+                    immediate(codes::ILLEGAL_GENERATION),
+                    GroupState::Stable,
+                )
+            },
+            row(
+                "unknown member",
+                Start::Stable,
+                "ghost",
+                immediate(codes::UNKNOWN_MEMBER_ID),
+                GroupState::Stable,
+            ),
+            Row {
+                instance: Some("i-unknown"),
+                ..row(
+                    "unknown instance",
+                    Start::Preparing,
+                    "m1",
+                    immediate(codes::UNKNOWN_MEMBER_ID),
+                    GroupState::PreparingRebalance,
+                )
+            },
+        ];
+
+        for r in rows {
+            let mut g = group(r.start);
+            let req = SyncGroupRequest {
+                group_instance_id: r.instance.map(String::from),
+                protocol_type: r.protocol_type.map(String::from),
+                protocol_name: r.protocol_name.map(String::from),
+                assignments: vec![
+                    SyncGroupRequestAssignment {
+                        member_id: "m1".into(),
+                        assignment: Bytes::from_static(b"new-L"),
+                        ..Default::default()
+                    },
+                    SyncGroupRequestAssignment {
+                        member_id: "m2".into(),
+                        assignment: Bytes::from_static(b"new-F"),
+                        ..Default::default()
+                    },
+                ],
+                ..sync_req(r.member, g.generation_id + r.generation_delta)
+            };
+            let before: Vec<_> = ["m1", "m2"].map(|m| g.members[m].assignment.clone()).into();
+
+            let got = handle_sync(&mut g, &req);
+
+            check!(got == r.want, "{}", r.name);
+            check!(g.state == r.state_after, "{}", r.name);
+            if !matches!(r.want, SyncAction::LeaderInstalled(_)) {
+                let after: Vec<_> = ["m1", "m2"].map(|m| g.members[m].assignment.clone()).into();
+                check!(after == before, "{}: assignments must not change", r.name);
+            }
+        }
+    }
+
     #[test]
     fn sync_unknown_member_and_wrong_generation() {
         let mut g = stable_two_member_group();
         let cur_gen = g.generation_id;
-        match handle_sync(&mut g, &sync_req("ghost", cur_gen)) {
-            SyncAction::Immediate(r) => assert!(r.error_code == codes::UNKNOWN_MEMBER_ID),
-            _ => panic!("expected UNKNOWN_MEMBER_ID"),
-        }
-        match handle_sync(&mut g, &sync_req("m1", cur_gen + 9)) {
-            SyncAction::Immediate(r) => assert!(r.error_code == codes::ILLEGAL_GENERATION),
-            _ => panic!("expected ILLEGAL_GENERATION"),
-        }
         // KIP-345, as Kafka's `ClassicGroup.validateMember`: an instance id no
         // member holds (a static member whose session expired) is unknown, and
         // an instance id another member holds is fenced.
@@ -169,10 +399,10 @@ mod tests {
                 group_instance_id: Some(instance.into()),
                 ..sync_req(member, cur_gen)
             };
-            match handle_sync(&mut g, &req) {
-                SyncAction::Immediate(r) => assert!(r.error_code == want, "{member} {instance}"),
-                _ => panic!("expected an immediate error for {member} {instance}"),
-            }
+            check!(
+                handle_sync(&mut g, &req) == SyncAction::Immediate(err(want)),
+                "{member} {instance}"
+            );
         }
     }
 
@@ -201,19 +431,12 @@ mod tests {
                 ..Default::default()
             },
         ];
-        match handle_sync(&mut g, &req) {
-            SyncAction::LeaderInstalled(r) => {
-                assert!(r.error_code == codes::NONE);
-                assert!(r.assignment == Bytes::from_static(b"L"));
-            }
-            _ => panic!("expected LeaderInstalled"),
-        }
+        assert!(handle_sync(&mut g, &req) == SyncAction::LeaderInstalled(ok(b"L")));
         assert!(g.state == GroupState::Stable);
         // Now the follower (re-sync) reads its assignment immediately.
-        match handle_sync(&mut g, &sync_req(follower, cur_gen)) {
-            SyncAction::Immediate(r) => assert!(r.assignment == Bytes::from_static(b"F")),
-            _ => panic!("expected Immediate follower assignment"),
-        }
+        assert!(
+            handle_sync(&mut g, &sync_req(follower, cur_gen)) == SyncAction::Immediate(ok(b"F"))
+        );
     }
 
     #[test]
@@ -238,11 +461,13 @@ mod tests {
         check!(g.members[omitted].assignment.as_deref() == Some(&b""[..]));
     }
 
+    /// Outside `Stable`, the read answers `REBALANCE_IN_PROGRESS` with null
+    /// protocol fields, as Kafka's error replies set only `error_code`.
     #[test]
     fn read_sync_result_rebalance_in_progress_when_not_stable() {
         let mut g = stable_two_member_group(); // CompletingRebalance, not Stable
-        let r = read_sync_result(&g, "m1", None, None);
-        assert!(r.error_code == codes::REBALANCE_IN_PROGRESS);
+        let r = read_sync_result(&g, "m1", Some("consumer".into()), Some("range".into()));
+        assert!(r == err(codes::REBALANCE_IN_PROGRESS));
         // Drive to Stable, then it returns NONE.
         let leader = g.leader_id.clone().unwrap();
         let cur_gen = g.generation_id;
@@ -262,18 +487,9 @@ mod tests {
     /// its current one back instead of clearing every member's.
     #[test]
     fn leader_sync_in_stable_reads_current_assignment() {
-        let mut g = stable_two_member_group();
-        g.install_assignments(std::collections::HashMap::from([
-            ("m1".to_string(), Bytes::from_static(b"L")),
-            ("m2".to_string(), Bytes::from_static(b"F")),
-        ]));
+        let mut g = group(Start::Stable);
         let generation = g.generation_id;
-        match handle_sync(&mut g, &sync_req("m1", generation)) {
-            SyncAction::Immediate(r) => {
-                check!(r.assignment == Bytes::from_static(b"L"));
-            }
-            _ => panic!("expected the leader's current assignment"),
-        }
+        check!(handle_sync(&mut g, &sync_req("m1", generation)) == SyncAction::Immediate(ok(b"L")));
         check!(g.members["m2"].assignment.as_deref() == Some(&b"F"[..]));
     }
 }
