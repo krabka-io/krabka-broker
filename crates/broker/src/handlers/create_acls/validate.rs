@@ -410,7 +410,7 @@ mod tests {
                 true,
                 Some((
                     crate::codes::INVALID_REQUEST,
-                    "Invalid CIDR notation '10.0.0.0/33': prefix length 33 exceeds the 32-bit address",
+                    "Invalid CIDR notation '10.0.0.0/33': Value [33] not in range [0,32]",
                 )),
             ),
             ("2001:db8::/32", true, None),
