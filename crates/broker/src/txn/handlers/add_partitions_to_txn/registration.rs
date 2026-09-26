@@ -87,7 +87,9 @@ pub(super) async fn process_one_txn(
 
     // 2. Look up entry for the TV_2 verify-only path.
     let Some(entry_mutex) = coord.get(tid) else {
-        return per_topic_with_refusals(topics, denied, frozen, codes::INVALID_PRODUCER_ID_MAPPING);
+        // A leadership change can evict the entry after the check above.
+        let code = coord.missing_entry_error(tid).await;
+        return per_topic_with_refusals(topics, denied, frozen, code);
     };
     // Kafka's `TransactionCoordinator.handleVerifyPartitionsInTransaction`
     // answers a verify-only request at every transaction version. A partition

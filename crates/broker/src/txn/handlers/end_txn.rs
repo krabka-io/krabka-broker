@@ -29,7 +29,6 @@ use krabka_protocol::{Decode, owned::end_txn_request::EndTxnRequest};
 
 use crate::{
     broker::Broker,
-    codes,
     error::BrokerError,
     txn::{
         decision::{CompletionDecision, decide_end_txn_completion},
@@ -174,9 +173,10 @@ pub(crate) async fn handle(
     // in between.
     let _state_partition_write = coord.lock_state_partition_for(tid).await;
     let Some(current_mutex) = coord.get(tid) else {
-        // The entry vanished (e.g. expired/deleted) while markers were in
-        // flight. Treat as a producer-mapping loss.
-        return encode_err(version, codes::INVALID_PRODUCER_ID_MAPPING);
+        // The entry vanished while markers were in flight: an unload of the
+        // coordinator partition answers its retriable coordinator error, and
+        // anything else is a producer-mapping loss.
+        return encode_err(version, coord.missing_entry_error(tid).await);
     };
 
     // The completion identity was selected and persisted with the Prepare

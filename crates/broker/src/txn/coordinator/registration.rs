@@ -88,29 +88,8 @@ impl TxnCoordinator {
         // window.
         let _state_partition_write = self.lock_state_partition_for(tid).await;
         let Some(entry_mutex) = self.get(tid) else {
-            return registration_code(
-                transaction_partition_registration(TransactionRegistrationFacts {
-                    ownership: TransactionRegistrationOwnershipFacts {
-                        is_coordinator: true,
-                        producer_id_valid: producer_id.get() >= 0,
-                        entry_exists: false,
-                    },
-                    identity: TransactionRegistrationIdentityFacts {
-                        pending_transition: false,
-                        matching: TransactionRegistrationIdentityMatchFacts {
-                            transactional_id_matches: false,
-                            producer_id_matches: false,
-                            producer_epoch_matches: false,
-                        },
-                    },
-                    state: TransactionRegistrationStateFacts {
-                        state_allows_registration: false,
-                        state_is_ongoing: false,
-                        exact_partitions_registered: false,
-                    },
-                }),
-                version,
-            );
+            // A leadership change can evict the entry after the check above.
+            return self.missing_entry_error(tid).await;
         };
         let mut entry = entry_mutex.lock().await;
         let decision = transaction_partition_registration(TransactionRegistrationFacts {
