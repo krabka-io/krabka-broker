@@ -1,8 +1,9 @@
 //! KIP-430: computes the `(cluster|topic|group)_authorized_operations`
 //! bitfield.
 //!
-//! The `Metadata`, `DescribeCluster`, and `DescribeGroups` responses carry the
-//! bitfield when the matching request flag is set.
+//! The `Metadata`, `DescribeCluster`, `DescribeGroups`, and
+//! `ConsumerGroupDescribe` responses carry the bitfield when the matching
+//! request flag is set.
 //!
 //! The encoding works like this. For each operation in the supported set of
 //! the resource type, the module asks the authorizer. On Allow it ORs
@@ -16,13 +17,13 @@
 //! opts in.
 //!
 //! The map from a resource to its supported-operation set follows
-//! `org.apache.kafka.common.acl.AclEntry#supportedOperations` for Kafka 3.6+:
+//! `org.apache.kafka.security.authorizer.AclEntry#supportedOperations`:
 //!
 //! | resource         | operations                                                        |
 //! |------------------|-------------------------------------------------------------------|
 //! | Topic            | Read, Write, Create, Delete, Alter, Describe, DescribeConfigs,    |
 //! |                  | AlterConfigs                                                      |
-//! | Group            | Read, Describe, Delete                                            |
+//! | Group            | Read, Describe, Delete, DescribeConfigs, AlterConfigs             |
 //! | Cluster          | Create, Alter, Describe, ClusterAction, AlterConfigs,             |
 //! |                  | DescribeConfigs, IdempotentWrite                                  |
 //! | TransactionalId  | Describe, Write, TwoPhaseCommit                                    |
@@ -52,10 +53,14 @@ pub fn supported_operations(resource_type: ResourceType) -> &'static [AclOperati
             AclOperation::DescribeConfigs,
             AclOperation::AlterConfigs,
         ],
+        // KIP-848 group configs made DescribeConfigs and AlterConfigs
+        // grantable on a group.
         ResourceType::Group => &[
             AclOperation::Read,
             AclOperation::Describe,
             AclOperation::Delete,
+            AclOperation::DescribeConfigs,
+            AclOperation::AlterConfigs,
         ],
         ResourceType::Cluster => &[
             AclOperation::Create,
@@ -180,6 +185,8 @@ mod tests {
             AclOperation::Read,
             AclOperation::Describe,
             AclOperation::Delete,
+            AclOperation::DescribeConfigs,
+            AclOperation::AlterConfigs,
         ]
         .into_iter()
         .collect();
@@ -304,23 +311,52 @@ mod tests {
         assert!(bits == expected);
     }
 
+    /// The group bitfield per granted ACL, as Kafka's `AclEntry` supported
+    /// set and its implication table give it: `Read` and `Delete` imply
+    /// `Describe`, `AlterConfigs` implies `DescribeConfigs`, and `All`
+    /// grants all five group operations.
     #[test]
-    fn read_allow_on_group_sets_read_and_describe_only() {
-        let mut img = MetadataImage::new(Uuid::nil());
-        img.apply(&MetadataRecord::V1AccessControlEntry(allow_acl(
-            ResourceType::Group,
-            AclOperation::Read,
-            "cg",
-            "alice",
-        )));
-        let auth = SimpleAclAuthorizer::new(HashSet::new());
-        let p = principal("alice");
-        let h = addr();
-        let bits = authorized_operations_bits(&auth, &img, &p, &h, ResourceType::Group, "cg");
-        let expected = bit(AclOperation::Read) | bit(AclOperation::Describe);
-        assert!(bits == expected);
-        // Bit for Delete (6) must NOT be set.
-        assert!(bits & bit(AclOperation::Delete) == 0);
+    fn group_bits_follow_the_granted_acl() {
+        let rows = [
+            (
+                AclOperation::Read,
+                bit(AclOperation::Read) | bit(AclOperation::Describe),
+            ),
+            (
+                AclOperation::Delete,
+                bit(AclOperation::Delete) | bit(AclOperation::Describe),
+            ),
+            (
+                AclOperation::DescribeConfigs,
+                bit(AclOperation::DescribeConfigs),
+            ),
+            (
+                AclOperation::AlterConfigs,
+                bit(AclOperation::DescribeConfigs) | bit(AclOperation::AlterConfigs),
+            ),
+            (
+                AclOperation::All,
+                bit(AclOperation::Read)
+                    | bit(AclOperation::Describe)
+                    | bit(AclOperation::Delete)
+                    | bit(AclOperation::DescribeConfigs)
+                    | bit(AclOperation::AlterConfigs),
+            ),
+        ];
+        for (granted, expected) in rows {
+            let mut img = MetadataImage::new(Uuid::nil());
+            img.apply(&MetadataRecord::V1AccessControlEntry(allow_acl(
+                ResourceType::Group,
+                granted,
+                "cg",
+                "alice",
+            )));
+            let auth = SimpleAclAuthorizer::new(HashSet::new());
+            let p = principal("alice");
+            let h = addr();
+            let bits = authorized_operations_bits(&auth, &img, &p, &h, ResourceType::Group, "cg");
+            assert!(bits == expected, "{granted:?}");
+        }
     }
 
     #[test]

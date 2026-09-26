@@ -6,6 +6,11 @@
 //! name (`protocol_data`) and its stored `protocol_type`. That type is `""`
 //! for a typeless or dead group, which matches Kafka.
 //!
+//! As in Kafka's `KafkaApis.handleDescribeGroupsRequest`, every group the
+//! principal may not `Describe` is answered first with
+//! `GROUP_AUTHORIZATION_FAILED`, ahead of the coordinator results for the
+//! allowed groups.
+//!
 //! KIP-430: when the request sets `include_authorized_operations`, each Allow
 //! row carries a bitfield of the group operations that the principal may
 //! perform. A row that fails the auth check, and a row for a group that does
@@ -52,6 +57,9 @@ pub(crate) async fn handle(
 
     let image = broker.controller.current_image();
 
+    // Kafka answers every GROUP_AUTHORIZATION_FAILED row first, then the
+    // coordinator results for the allowed groups in request order.
+    let mut denied: Vec<DescribedGroup> = Vec::new();
     let mut groups: Vec<DescribedGroup> = Vec::with_capacity(req.groups.len());
     for gid in req.groups {
         // ── ACL preamble ────────────────────────────────────
@@ -65,7 +73,7 @@ pub(crate) async fn handle(
             operation: AclOperation::Describe,
         };
         if broker.config.authorizer.authorize(&*image, &acl_req) == AuthorizationResult::Deny {
-            groups.push(DescribedGroup {
+            denied.push(DescribedGroup {
                 group_id: gid,
                 error_code: codes::GROUP_AUTHORIZATION_FAILED,
                 ..Default::default()
@@ -163,8 +171,9 @@ pub(crate) async fn handle(
         });
     }
 
+    denied.extend(groups);
     let resp = DescribeGroupsResponse {
-        groups,
+        groups: denied,
         throttle_time_ms: 0,
         ..Default::default()
     };
@@ -342,6 +351,103 @@ mod tests {
                 == vec![("classic-a", codes::NONE, expected)]
         );
         broker_handle.shutdown().await;
+    }
+
+    fn allow(group: &str, operation: AclOperation) -> krabka_metadata::MetadataRecord {
+        krabka_metadata::MetadataRecord::V1AccessControlEntry(krabka_metadata::AclEntry {
+            resource_type: ResourceType::Group,
+            resource_name: group.into(),
+            pattern_type: krabka_metadata::PatternType::Literal,
+            principal: "User:admin".into(),
+            host: "*".into(),
+            operation,
+            permission_type: krabka_metadata::PermissionType::Allow,
+        })
+    }
+
+    fn bit(op: AclOperation) -> i32 {
+        1_i32 << crate::handlers::acl_wire::operation_to_wire(op)
+    }
+
+    /// `Empty` classic `allowed`, as `DescribeGroups` answers it with
+    /// `authorized_operations` bits.
+    fn empty_row(group_id: &str, authorized_operations: i32) -> DescribedGroup {
+        DescribedGroup {
+            group_state: "Empty".into(),
+            authorized_operations,
+            ..error_row(group_id, codes::NONE)
+        }
+    }
+
+    /// Kafka's `handleDescribeGroupsRequest` answers the denied groups first
+    /// and then the coordinator results, and fills KIP-430 bits from the
+    /// group's whole supported set (`Read`, `Describe`, `Delete`,
+    /// `DescribeConfigs`, `AlterConfigs`).
+    #[tokio::test]
+    async fn denied_rows_come_first_and_the_bits_cover_every_group_operation() {
+        // (ACLs on `allowed`, include flag, expected response rows)
+        let rows = [
+            (
+                vec![AclOperation::Describe],
+                false,
+                vec![
+                    error_row("denied", codes::GROUP_AUTHORIZATION_FAILED),
+                    empty_row("allowed", i32::MIN),
+                ],
+            ),
+            (
+                vec![AclOperation::Describe, AclOperation::AlterConfigs],
+                true,
+                vec![
+                    error_row("denied", codes::GROUP_AUTHORIZATION_FAILED),
+                    empty_row(
+                        "allowed",
+                        bit(AclOperation::Describe)
+                            | bit(AclOperation::DescribeConfigs)
+                            | bit(AclOperation::AlterConfigs),
+                    ),
+                ],
+            ),
+            (
+                vec![AclOperation::All],
+                true,
+                vec![
+                    error_row("denied", codes::GROUP_AUTHORIZATION_FAILED),
+                    empty_row(
+                        "allowed",
+                        bit(AclOperation::Read)
+                            | bit(AclOperation::Describe)
+                            | bit(AclOperation::Delete)
+                            | bit(AclOperation::DescribeConfigs)
+                            | bit(AclOperation::AlterConfigs),
+                    ),
+                ],
+            ),
+        ];
+        for (acls, include_ops, expected) in rows {
+            let authorizer =
+                crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
+            let (broker_handle, _dir) = start_broker(Arc::new(authorizer)).await;
+            let broker = broker_handle.broker_arc_for_test();
+            broker
+                .controller
+                .submit_change(acls.iter().map(|op| allow("allowed", *op)).collect())
+                .await
+                .expect("grant ACLs");
+            let _ = broker.group_coordinator.get_or_create_classic("allowed");
+
+            let resp = drive(&broker, &request(&["allowed", "denied"], include_ops)).await;
+
+            assert!(
+                resp == DescribeGroupsResponse {
+                    throttle_time_ms: 0,
+                    groups: expected,
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+                },
+                "{acls:?}"
+            );
+            broker_handle.shutdown().await;
+        }
     }
 
     /// The `GroupState` -> Kafka string projection is exhaustive; every state a
