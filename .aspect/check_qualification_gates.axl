@@ -601,6 +601,29 @@ for attempt in $(seq 1 60); do
 done
 check capture-source-files test -s "$work/source-node1/remote-log-metadata/snapshot"
 
+# Producers and the dr-group reader have stopped and capture is read-only, so
+# the source state the restore must reproduce is read here, concurrently, and
+# stays out of the RPO window. The ledger readers assign the partition rather
+# than join a group, so no read waits out the initial rebalance delay.
+background=()
+for topic in classic diskless; do
+  messages=200
+  if [ "$topic" = classic ]; then messages=201; fi
+  kafka source get-offsets --topic "$topic" > "$evidence/source-$topic-offsets.txt" &
+  background+=($!)
+  kafka source configs --describe --topic "$topic" > "$evidence/source-$topic-config.txt" &
+  background+=($!)
+  docker run --rm --network "$network" -v "$work:/work:ro" "$tools_image" \
+    /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server "$scope-source-1:9094" \
+    --consumer.config /work/admin.properties --topic "$topic" --partition 0 --from-beginning \
+    --max-messages "$messages" --timeout-ms 60000 --property print.offset=true > "$evidence/source-$topic-ledger.txt" &
+  background+=($!)
+done
+kafka source consumer-groups --describe --group dr-group > "$evidence/source-group-offsets.txt" &
+background+=($!)
+for pid in "${background[@]}"; do wait "$pid"; done
+awk 'NR > 1 {print $1, $2, $3, $4}' "$evidence/source-group-offsets.txt" > "$evidence/source-group-positions.txt"
+
 # The image's tool captures snapshots, group positions, and the committed WAL
 # projection over the real SASL/TLS coordinator paths.
 docker run --rm --network "$network" -v "$work:/work:ro" -v "$work/source-node1:/var/lib/krabka:ro" \
@@ -612,40 +635,8 @@ docker run --rm --network "$network" -v "$work:/work:ro" -v "$work/source-node1:
   --archive-s3-secret-access-key "$secret" --archive-s3-allow-http --archive-prefix "$capture_prefix" \
   --worm-signing-key-id qualification-worm --worm-signing-key /work/worm/signing.pk8 \
   2>&1 | tee "$evidence/capture.log"
-docker run --rm --network "$network" --entrypoint /usr/bin/krabka-backup "$broker_image" verify \
-  --archive-s3-bucket "$bucket" --archive-s3-region us-east-1 \
-  --archive-s3-endpoint "http://$scope-minio:9000" --archive-s3-access-key-id "$access" \
-  --archive-s3-secret-access-key "$secret" --archive-s3-allow-http --archive-prefix "$capture_prefix" \
-  > "$evidence/capture-verify.txt"
-capture_id=$(docker run --rm --network "$network" --entrypoint /usr/bin/krabka-backup "$broker_image" list \
-  --archive-s3-bucket "$bucket" --archive-s3-region us-east-1 \
-  --archive-s3-endpoint "http://$scope-minio:9000" --archive-s3-access-key-id "$access" \
-  --archive-s3-secret-access-key "$secret" --archive-s3-allow-http --archive-prefix "$capture_prefix" | tail -1 | awk '{print $1}')
-test -n "$capture_id"
-docker run --rm --network "$network" -v "$work/capture:/capture" --entrypoint /bin/sh "$mc_image" -c \
-  "mc alias set local http://$scope-minio:9000 $access $secret >/dev/null; mc cp --recursive local/$bucket/$capture_prefix/restore-inputs/$capture_id/ /capture/"
-check captured-inputs jq -e '
-  ([.artifacts[].name] | sort) == ["cluster-metadata.checkpoint","diskless-wal-index.json","group-offsets.json","rlmm-snapshot"]
-' "$work/capture/manifest.json"
-check captured-group-offset jq -e '
-  any(.groups[]; .group == "dr-group" and any(.offsets[]; .topic == "classic" and .partition == 0 and .offset == 75))
-' "$work/capture/group-offsets.json"
-capture_ms=$(jq -er .captured_at_ms "$work/capture/manifest.json")
-kafka source get-offsets --topic classic > "$evidence/source-classic-offsets.txt"
-kafka source get-offsets --topic diskless > "$evidence/source-diskless-offsets.txt"
-kafka source configs --describe --topic classic > "$evidence/source-classic-config.txt"
-kafka source configs --describe --topic diskless > "$evidence/source-diskless-config.txt"
-kafka source consumer-groups --describe --group dr-group > "$evidence/source-group-offsets.txt"
-awk 'NR > 1 {print $1, $2, $3, $4}' "$evidence/source-group-offsets.txt" > "$evidence/source-group-positions.txt"
-for topic in classic diskless; do
-  messages=200
-  if [ "$topic" = classic ]; then messages=201; fi
-  docker run --rm --network "$network" -v "$work:/work:ro" "$tools_image" \
-    /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server "$scope-source-1:9094" \
-    --consumer.config /work/admin.properties --topic "$topic" --from-beginning \
-    --max-messages "$messages" --timeout-ms 60000 --property print.offset=true > "$evidence/source-$topic-ledger.txt"
-done
-
+# Restore demands each archive tip equal its expected head, so the heads are
+# read after the capture, the last point the source could still archive.
 worm_verify "$bucket" "$work/worm-current" --prefix "$data_prefix" \
   --key-id qualification-worm --public-key /worm/signing.pub --deep \
   > "$evidence/worm-verified.txt"
@@ -654,6 +645,39 @@ awk '/: tip / && $3 != "none," {sub(/:$/, "", $1); sub(/,$/, "", $3); print $1, 
 awk '/diskless-capture WORM head / {print $1, $4}' "$evidence/capture.log" >> "$evidence/worm-heads.txt"
 check worm-heads test -s "$evidence/worm-heads.txt"
 check diskless-worm-head grep -Eq '^diskless-capture [0-9a-f]{64}$' "$evidence/worm-heads.txt"
+
+# Complete loss means no source log directory survives into materialization.
+# Nothing is written after the capture, so no record is lost; the RPO this
+# records is the capture's age when the cluster is lost.
+docker rm -f "$scope-source-1" "$scope-source-2" "$scope-source-3" >/dev/null
+docker run --rm -v "$work:/work" --entrypoint /bin/sh "$mc_image" -c \
+  'rm -rf /work/source-node1 /work/source-node2 /work/source-node3'
+check source-volumes-destroyed test ! -e "$work/source-node1"
+disaster_ms=$(date +%s%3N)
+
+# From here to the committed group positions is the recovery an operator runs:
+# find the newest capture, verify it, fetch its inputs, restore, start, commit.
+capture_id=$(docker run --rm --network "$network" --entrypoint /usr/bin/krabka-backup "$broker_image" list \
+  --archive-s3-bucket "$bucket" --archive-s3-region us-east-1 \
+  --archive-s3-endpoint "http://$scope-minio:9000" --archive-s3-access-key-id "$access" \
+  --archive-s3-secret-access-key "$secret" --archive-s3-allow-http --archive-prefix "$capture_prefix" | tail -1 | awk '{print $1}')
+test -n "$capture_id"
+docker run --rm --network "$network" --entrypoint /usr/bin/krabka-backup "$broker_image" verify \
+  --archive-s3-bucket "$bucket" --archive-s3-region us-east-1 \
+  --archive-s3-endpoint "http://$scope-minio:9000" --archive-s3-access-key-id "$access" \
+  --archive-s3-secret-access-key "$secret" --archive-s3-allow-http --archive-prefix "$capture_prefix" \
+  > "$evidence/capture-verify.txt" &
+verify_pid=$!
+docker run --rm --network "$network" -v "$work/capture:/capture" --entrypoint /bin/sh "$mc_image" -c \
+  "mc alias set local http://$scope-minio:9000 $access $secret >/dev/null; mc cp --recursive local/$bucket/$capture_prefix/restore-inputs/$capture_id/ /capture/"
+wait "$verify_pid"
+check captured-inputs jq -e '
+  ([.artifacts[].name] | sort) == ["cluster-metadata.checkpoint","diskless-wal-index.json","group-offsets.json","rlmm-snapshot"]
+' "$work/capture/manifest.json"
+check captured-group-offset jq -e '
+  any(.groups[]; .group == "dr-group" and any(.offsets[]; .topic == "classic" and .partition == 0 and .offset == 75))
+' "$work/capture/group-offsets.json"
+capture_ms=$(jq -er .captured_at_ms "$work/capture/manifest.json")
 jq -n --argjson captured_at_ms "$capture_ms" \
   --rawfile classic "$evidence/source-classic-offsets.txt" \
   --rawfile diskless "$evidence/source-diskless-offsets.txt" \
@@ -661,13 +685,6 @@ jq -n --argjson captured_at_ms "$capture_ms" \
   '{captured_at_ms:$captured_at_ms,classic_offsets:$classic,diskless_offsets:$diskless,worm_heads:$heads}' \
   > "$evidence/capture-boundary.json"
 check capture-boundary jq -e '.captured_at_ms > 0 and (.classic_offsets|length)>0 and (.diskless_offsets|length)>0 and (.worm_heads|length)>0' "$evidence/capture-boundary.json"
-
-# Complete loss means no source log directory survives into materialization.
-for n in 1 2 3; do docker rm -f "$scope-source-$n" >/dev/null; done
-docker run --rm -v "$work:/work" --entrypoint /bin/sh "$mc_image" -c \
-  'rm -rf /work/source-node1 /work/source-node2 /work/source-node3'
-check source-volumes-destroyed test ! -e "$work/source-node1"
-disaster_ms=$(date +%s%3N)
 
 # The trusted tips are independently retained above and passed back during
 # authenticated restore; the diskless capture names committed cutoffs.
@@ -754,33 +771,55 @@ docker run -d --name "$scope-restored-1" --network "$network" \
   -v "$work/restored-node1:/var/lib/krabka" -v "$work/tls:/etc/krabka/tls:ro" \
   -v "$work/worm:/etc/krabka/worm:ro" \
   "$broker_image" --broker-id 1 --config-file /var/lib/krabka/broker.toml
-for attempt in $(seq 1 90); do
-  if kafka restored topics --list; then break; fi
-  test "$attempt" -lt 90
-  sleep 2
+# The pinned Krabka CLI answers in a fraction of a JVM tool's start-up, so the
+# readiness poll does not round the recovery up to the next two seconds.
+for attempt in $(seq 1 300); do
+  if docker run --rm --network "$network" -v "$work:/work:ro" -v "$cli_binary:/tmp/krabka:ro" \
+    --entrypoint /tmp/krabka "$broker_image" topics --list --bootstrap-server "$scope-restored-1:9094" \
+    --command-config /work/admin.properties --timeout 2s >/dev/null 2>&1; then break; fi
+  test "$attempt" -lt 300
+  sleep 0.2
 done
-docker run --rm --network "$network" -v "$work:/work:ro" --entrypoint /usr/bin/krabka-backup "$broker_image" restore-offsets \
-  --bootstrap-server "$scope-restored-1:9095" --command-config /work/backup.properties \
-  --archive-s3-bucket "$bucket" --archive-s3-region us-east-1 \
-  --archive-s3-endpoint "http://$scope-minio:9000" --archive-s3-access-key-id "$access" \
-  --archive-s3-secret-access-key "$secret" --archive-s3-allow-http --archive-prefix "$capture_prefix" \
-  --worm-key-id qualification-worm --worm-public-key /work/worm/signing.pub \
-  --worm-expect-head "$(awk '$1 == "diskless-capture" {print $2}' "$evidence/worm-heads.txt")"
+# Serving metadata does not mean the group coordinator has loaded, and
+# restore-offsets does not retry FindCoordinator. Committing the captured
+# positions again is idempotent, so a short bounded retry covers that window.
+for attempt in $(seq 1 50); do
+  if docker run --rm --network "$network" -v "$work:/work:ro" --entrypoint /usr/bin/krabka-backup "$broker_image" restore-offsets \
+    --bootstrap-server "$scope-restored-1:9095" --command-config /work/backup.properties \
+    --archive-s3-bucket "$bucket" --archive-s3-region us-east-1 \
+    --archive-s3-endpoint "http://$scope-minio:9000" --archive-s3-access-key-id "$access" \
+    --archive-s3-secret-access-key "$secret" --archive-s3-allow-http --archive-prefix "$capture_prefix" \
+    --worm-key-id qualification-worm --worm-public-key /work/worm/signing.pub \
+    --worm-expect-head "$(awk '$1 == "diskless-capture" {print $2}' "$evidence/worm-heads.txt")"; then break; fi
+  test "$attempt" -lt 50
+  sleep 0.2
+done
 
+restore_ready_ms=$(date +%s%3N)
+
+# Recovery is complete; what follows proves it reproduced the source.
+background=()
 for topic in classic diskless; do
   messages=200
   if [ "$topic" = classic ]; then messages=201; fi
-  kafka restored get-offsets --topic "$topic" > "$evidence/restored-$topic-offsets.txt"
-  kafka restored configs --describe --topic "$topic" > "$evidence/restored-$topic-config.txt"
-  check "$topic-original-offsets" grep -Eq "^$topic:[[:space:]]*0:[[:space:]]*[1-9][0-9]*$" "$evidence/restored-$topic-offsets.txt"
-  check "$topic-settings" cmp "$evidence/source-$topic-config.txt" "$evidence/restored-$topic-config.txt"
+  kafka restored get-offsets --topic "$topic" > "$evidence/restored-$topic-offsets.txt" &
+  background+=($!)
+  kafka restored configs --describe --topic "$topic" > "$evidence/restored-$topic-config.txt" &
+  background+=($!)
   docker run --rm --network "$network" -v "$work:/work:ro" "$tools_image" \
     /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server "$scope-restored-1:9094" \
-    --consumer.config /work/admin.properties --topic "$topic" --from-beginning \
-    --max-messages "$messages" --timeout-ms 60000 --property print.offset=true > "$evidence/restored-$topic-ledger.txt"
+    --consumer.config /work/admin.properties --topic "$topic" --partition 0 --from-beginning \
+    --max-messages "$messages" --timeout-ms 60000 --property print.offset=true > "$evidence/restored-$topic-ledger.txt" &
+  background+=($!)
+done
+kafka restored consumer-groups --describe --group dr-group > "$evidence/restored-group-offsets.txt" &
+background+=($!)
+for pid in "${background[@]}"; do wait "$pid"; done
+for topic in classic diskless; do
+  check "$topic-original-offsets" grep -Eq "^$topic:[[:space:]]*0:[[:space:]]*[1-9][0-9]*$" "$evidence/restored-$topic-offsets.txt"
+  check "$topic-settings" cmp "$evidence/source-$topic-config.txt" "$evidence/restored-$topic-config.txt"
   check "$topic-ledger" cmp "$evidence/source-$topic-ledger.txt" "$evidence/restored-$topic-ledger.txt"
 done
-kafka restored consumer-groups --describe --group dr-group > "$evidence/restored-group-offsets.txt"
 awk 'NR > 1 {print $1, $2, $3, $4}' "$evidence/restored-group-offsets.txt" > "$evidence/restored-group-positions.txt"
 check consumer-positions cmp "$evidence/source-group-positions.txt" "$evidence/restored-group-positions.txt"
 
@@ -812,10 +851,14 @@ for attempt in $(seq 1 60); do
   sleep 2
 done
 check worm-chain-continued test -n "$classic_new_head" -a "$classic_new_head" != "$classic_old_head"
-restore_ready_ms=$(date +%s%3N)
+drill_complete_ms=$(date +%s%3N)
+# RPO is the capture's age at the loss. RTO runs from the loss to a restored
+# cluster serving the captured records, settings and group positions; the proof
+# that it did, and the resumed WORM chain, are the verification that follows.
 jq -n --argjson captured_at_ms "$capture_ms" --argjson source_started_ms "$source_started_ms" \
   --argjson disaster_ms "$disaster_ms" --argjson restore_ready_ms "$restore_ready_ms" \
-  '{capture_boundary_ms:$captured_at_ms,disaster_ms:$disaster_ms,rpo_ms:($disaster_ms-$captured_at_ms),rto_ms:($restore_ready_ms-$disaster_ms),source_runtime_ms:($captured_at_ms-$source_started_ms)}' \
+  --argjson drill_complete_ms "$drill_complete_ms" \
+  '{capture_boundary_ms:$captured_at_ms,disaster_ms:$disaster_ms,rpo_ms:($disaster_ms-$captured_at_ms),rto_ms:($restore_ready_ms-$disaster_ms),verification_ms:($drill_complete_ms-$restore_ready_ms),source_runtime_ms:($captured_at_ms-$source_started_ms)}' \
   > "$evidence/rpo-rto.json"
 check measured-rpo-rto jq -e '.rpo_ms >= 0 and .rto_ms > 0' "$evidence/rpo-rto.json"
 
