@@ -3192,7 +3192,7 @@ dependencies = [
 
 [[package]]
 name = "krabka-audit"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "arc-swap",
  "assert2",
@@ -3231,7 +3231,7 @@ dependencies = [
 
 [[package]]
 name = "krabka-authz"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "assert2",
  "krabka-metadata",
@@ -3244,7 +3244,7 @@ dependencies = [
 
 [[package]]
 name = "krabka-backup"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "assert2",
  "async-trait",
@@ -3252,7 +3252,7 @@ dependencies = [
  "clap",
  "futures-util",
  "hex",
- "krabka-audit 0.6.0",
+ "krabka-audit 0.6.1",
  "krabka-client-admin",
  "krabka-client-core",
  "krabka-object-store",
@@ -3274,7 +3274,7 @@ dependencies = [
 
 [[package]]
 name = "krabka-barrier"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "assert2",
  "bytes",
@@ -3292,7 +3292,7 @@ dependencies = [
 
 [[package]]
 name = "krabka-bench-driver"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "assert2",
@@ -3330,7 +3330,7 @@ dependencies = [
 
 [[package]]
 name = "krabka-broker"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "apache-avro",
  "arc-swap",
@@ -3349,8 +3349,8 @@ dependencies = [
  "jsonpath-rust",
  "jsonschema 0.57.0",
  "krabka-audit 0.4.0",
- "krabka-audit 0.6.0",
- "krabka-authz 0.6.0",
+ "krabka-audit 0.6.1",
+ "krabka-authz 0.6.1",
  "krabka-broker",
  "krabka-client-admin",
  "krabka-client-consumer",
@@ -3372,7 +3372,7 @@ dependencies = [
  "krabka-schema-registry",
  "krabka-schema-serde",
  "krabka-security",
- "krabka-telemetry 0.6.0",
+ "krabka-telemetry 0.6.1",
  "krabka-throttle",
  "krabka-units",
  "krabka-verified",
@@ -3541,7 +3541,7 @@ dependencies = [
 
 [[package]]
 name = "krabka-docgen"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "assert2",
@@ -3555,7 +3555,7 @@ dependencies = [
 
 [[package]]
 name = "krabka-format"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "assert2",
  "base64 0.23.1",
@@ -3579,12 +3579,12 @@ dependencies = [
 
 [[package]]
 name = "krabka-guard"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "assert2",
  "clap",
  "hex",
- "krabka-audit 0.6.0",
+ "krabka-audit 0.6.1",
  "krabka-broker",
  "krabka-client-core",
  "krabka-protocol",
@@ -3611,7 +3611,7 @@ dependencies = [
 
 [[package]]
 name = "krabka-kraft-core"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "assert2",
  "bytes",
@@ -3626,7 +3626,7 @@ dependencies = [
 
 [[package]]
 name = "krabka-log"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "assert2",
  "bytes",
@@ -3652,7 +3652,7 @@ dependencies = [
 
 [[package]]
 name = "krabka-log-iobench"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "assert2",
  "bytes",
@@ -3677,7 +3677,7 @@ dependencies = [
 
 [[package]]
 name = "krabka-logfmt"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "assert2",
  "serde_json",
@@ -3707,7 +3707,7 @@ dependencies = [
 
 [[package]]
 name = "krabka-object-store"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "assert2",
  "async-trait",
@@ -3729,7 +3729,7 @@ dependencies = [
 
 [[package]]
 name = "krabka-parse-benches"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "assert2",
  "clap",
@@ -3760,7 +3760,7 @@ dependencies = [
 
 [[package]]
 name = "krabka-raft"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "assert2",
  "async-trait",
@@ -3796,7 +3796,7 @@ dependencies = [
 
 [[package]]
 name = "krabka-records-legacy"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "assert2",
  "bytes",
@@ -3811,7 +3811,7 @@ dependencies = [
 
 [[package]]
 name = "krabka-remote-storage"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "assert2",
  "async-trait",
@@ -3821,7 +3821,7 @@ dependencies = [
  "derive_more",
  "futures-util",
  "hex",
- "krabka-audit 0.6.0",
+ "krabka-audit 0.6.1",
  "krabka-ids",
  "krabka-log",
  "krabka-object-store",
@@ -3849,7 +3849,7 @@ dependencies = [
 
 [[package]]
 name = "krabka-remote-storage-topic"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "assert2",
  "async-trait",
@@ -3877,7 +3877,7 @@ dependencies = [
 
 [[package]]
 name = "krabka-restore"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "assert2",
  "async-trait",
@@ -3886,7 +3886,7 @@ dependencies = [
  "clap",
  "crc32c",
  "futures-util",
- "krabka-audit 0.6.0",
+ "krabka-audit 0.6.1",
  "krabka-backup",
  "krabka-broker",
  "krabka-client-admin",
@@ -4049,14 +4049,14 @@ dependencies = [
 
 [[package]]
 name = "krabka-telemetry"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "assert2",
  "axum",
  "clap",
  "flate2",
  "jemalloc_pprof",
- "krabka-logfmt 0.6.0",
+ "krabka-logfmt 0.6.1",
  "krabka-trace-context",
  "krabka-units",
  "mutants",
@@ -4078,7 +4078,7 @@ dependencies = [
 
 [[package]]
 name = "krabka-throttle"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "assert2",
  "krabka-units",
@@ -4112,7 +4112,7 @@ dependencies = [
 
 [[package]]
 name = "krabka-verified"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "assert2",
  "creusot-std",

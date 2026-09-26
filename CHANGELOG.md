@@ -18,6 +18,56 @@ the `krabka-*` names to crates.io.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-26
+
+A patch release that makes secured disaster recovery work on a diskless
+cluster, and a wave of Kafka-conformance fixes to Fetch, Produce, ListOffsets,
+transactions and log retention.
+
+### Changed
+
+- `krabka-backup capture` only reads `__diskless_wal_index`. It captures each
+  partition from its low watermark up to the high watermark it saw when the
+  capture started, and it no longer writes a replay fence of its own. The
+  backup principal needs READ and DESCRIBE on the index, not WRITE.
+- A segment rolls on Kafka's append-time rule: when the next batch would
+  overflow `segment.bytes`, or when the gap since the active segment's first
+  timestamp passes `segment.ms`. An empty active segment never rolls on age.
+- `log.message.timestamp.before.max.ms` and
+  `log.message.timestamp.after.max.ms` set in the broker config apply to every
+  topic that does not override them.
+
+### Fixed
+
+- `krabka-backup capture` failed with `broker error_code 17` on any cluster
+  with a `__diskless_wal_index` topic, because the broker refuses a Produce to
+  an internal topic from any client other than `__admin_client`. The read-only
+  capture streams the index one Fetch page at a time and follows a leader move
+  within its 30 s bound.
+- Fetch sessions are classified on `session_epoch` as Kafka does, so a
+  reconnecting consumer gets a new session rather than
+  `INVALID_FETCH_SESSION_EPOCH`.
+- Fetch honors the request's `max_bytes` across all partitions, error rows
+  carry Kafka's `-1` watermarks, a preferred read replica answers without
+  reading the log, and a `read_committed` response lists only the aborted
+  transactions in the range it served.
+- Produce: `acks` outside `-1`, `0` and `1` answers `INVALID_REQUIRED_ACKS`; an
+  `acks=0` request with a partition error closes the connection; zstd below
+  Produce v7 answers `UNSUPPORTED_COMPRESSION_TYPE`; a nonzero `base_offset` is
+  accepted; and keyless or out-of-window records get Kafka's per-record
+  `record_errors` and message. `min.insync.replicas` is clamped to the replica
+  count for `acks=all`.
+- ListOffsets fills `leader_epoch`, answers `OFFSET_NOT_AVAILABLE` (KIP-207)
+  while the high watermark trails the leader epoch's start, and clamps
+  `EARLIEST_PENDING_UPLOAD` to the log start offset.
+- Transactions: WriteTxnMarkers retries only retriable per-partition errors
+  and no longer abandons the rest of a fan-out; completion persists when the
+  log end offset does not move; AddPartitionsToTxn v4+ returns one row per
+  partition; and concurrent partition registrations are serialized.
+- Compaction writes each output segment's `.txnindex` from its own inputs,
+  treats every output of a pass as clean, and closes consumed segments before
+  it swaps the outputs in.
+
 ## [0.6.0] - 2026-09-26
 
 Milestones 21 to 23: a release is now qualified against the exact image it
@@ -431,7 +481,8 @@ robot-head/crabka.
 - An audit stamp carries the value that its freeze signature covers.
 - The release publishes the image digest that cosign signed.
 
-[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/krabka-io/krabka-broker/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.6.1
 [0.6.0]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.6.0
 [0.5.4]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.5.4
 [0.5.3]: https://github.com/krabka-io/krabka-broker/releases/tag/v0.5.3
