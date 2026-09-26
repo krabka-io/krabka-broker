@@ -322,8 +322,8 @@ mod tests {
             };
             let r = req(requested_id, case.epoch, vec![], vec![]);
             match (cache.classify(&r), case.want) {
-                (SessionDecision::Sessionless, Want::Sessionless) => {}
-                (SessionDecision::NewSession, Want::NewSession) => {}
+                (SessionDecision::Sessionless, Want::Sessionless)
+                | (SessionDecision::NewSession, Want::NewSession) => {}
                 (SessionDecision::Error { code }, Want::Error(want_code)) => {
                     check!(code == want_code, "{}", case.name);
                 }
