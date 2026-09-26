@@ -241,6 +241,15 @@ def _test_disaster_recovery_uses_the_packaged_secured_loss_path(_ctx):
     ]:
         check_eq(requirement, requirement in commands, True)
 
+def _test_registry_migration_resolves_the_advertised_host_before_the_handoffs(_ctx):
+    commands = gate_script("registry-migration")
+    resolve = commands.find("127.0.0.1 host.docker.internal")
+    forward = commands.find("//crates/schema-registry:interop_test")
+    reverse = commands.find("//crates/schema-registry:interop_reverse_test")
+    check_eq("hosts entry exists", resolve >= 0, True)
+    check_eq("before forward handoff", resolve < forward, True)
+    check_eq("before reverse handoff", resolve < reverse, True)
+
 def _test_a_failed_smoke_pipeline_cannot_pass(ctx):
     script = "set -eu\nfalse | tee /dev/null\nexit 0\n"
     result = ctx.std.process.command("bash").args(["-o", "pipefail", "-c", script]).spawn().wait()
@@ -305,6 +314,7 @@ check_qualification_tests = suite("check-qualification", [
     _test_installation_enables_the_streams_protocol,
     _test_installation_finalizes_topics_before_the_cluster,
     _test_disaster_recovery_uses_the_packaged_secured_loss_path,
+    _test_registry_migration_resolves_the_advertised_host_before_the_handoffs,
     _test_a_failed_smoke_pipeline_cannot_pass,
     _test_retained_evidence_cannot_be_substituted,
     _test_assembly_writes_a_verified_manifest_and_real_bundles,

@@ -43,8 +43,8 @@
     },
     {
       "repository": "krabka-io/krabka-schema-registry",
-      "revision": "cc618c9c52e5be5607ec850d2f7629ac31cd4e1e",
-      "default_branch": "claude/broker-schema-validation-registry-s451bp",
+      "revision": "904490ad9242f59da78aa4a87bcda9b1436c4a59",
+      "default_branch": "main",
       "artifacts": []
     },
     {
