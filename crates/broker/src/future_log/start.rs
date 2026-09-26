@@ -18,6 +18,7 @@ use tokio_util::sync::CancellationToken;
 use super::{
     FutureLogState, MoveError, MovePolicy, canonicalize_or_self,
     cleanup::cancel_move,
+    configured_log_dir, future_dir_name_too_long,
     replicator::{ReplicatorTask, replicator_loop},
 };
 use crate::{log_dir, partition::Partition, partition_registry::PartitionRegistry};
@@ -42,14 +43,14 @@ pub(crate) async fn start_move(
     policy: MovePolicy,
 ) -> Result<(), MoveError> {
     let (topic, partition) = topic_partition;
-    // (1) Validate the target is a configured log.dir. Path comparison
-    //     is canonical-form to side-step trailing-slash / `.` quirks.
-    let target_canon = canonicalize_or_self(target_log_dir);
-    let target_match = all_log_dirs
-        .iter()
-        .find(|d| canonicalize_or_self(d) == target_canon)
-        .cloned();
-    let Some(target_log_dir) = target_match else {
+    // (0) Kafka refuses a move whose future directory name would pass 255
+    //     characters before it looks at the destination.
+    if future_dir_name_too_long(topic, partition.get()) {
+        return Err(MoveError::TopicNameTooLong);
+    }
+    // (1) Validate the target is a configured log.dir, by Kafka's string
+    //     equality with the configured absolute path.
+    let Some(target_log_dir) = configured_log_dir(all_log_dirs, target_log_dir) else {
         return Err(MoveError::LogDirNotFound);
     };
     if log_dir_status.is_offline(&target_log_dir) {
