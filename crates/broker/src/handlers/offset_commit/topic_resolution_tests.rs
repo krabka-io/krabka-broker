@@ -5,7 +5,8 @@
 //! v10 and later. A row whose name stays empty answers `UNKNOWN_TOPIC_ID` on
 //! every partition row, the zero id included, and the coordinator commits
 //! nothing for it. The check runs after the group authorization and before the
-//! topic authorization.
+//! topic authorization. After the topic authorization, a topic or a partition
+//! that the image does not hold answers `UNKNOWN_TOPIC_OR_PARTITION`.
 
 use std::sync::Arc;
 
@@ -258,6 +259,16 @@ async fn topic_row_error_follows_version_and_topic_reference() {
                 error_code: codes::NONE,
             },
             Case {
+                version: 2,
+                topic: TopicRef::UnknownName,
+                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+            },
+            Case {
+                version: 9,
+                topic: TopicRef::UnknownName,
+                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+            },
+            Case {
                 version: 10,
                 topic: TopicRef::KnownId,
                 error_code: codes::NONE,
@@ -388,5 +399,77 @@ async fn refused_rows_precede_the_committed_row() {
         (actual, committed_keys(&broker, GROUP).await)
             == (expected, vec![(KNOWN_NAME.to_string(), 0)])
     );
+    broker.shutdown().await;
+}
+
+/// A partition index that the topic does not have answers
+/// `UNKNOWN_TOPIC_OR_PARTITION` on its own row at every version, and the other
+/// partitions of the same topic commit. The refused row comes first, and the
+/// coordinator's row for the same topic merges into it, as Kafka's
+/// `Builder.addPartition` and `Builder.merge` order them.
+#[tokio::test]
+async fn unknown_partition_answers_on_its_own_row() {
+    const MISSING_PARTITION: i32 = 7;
+    let (broker, _dir) = start_broker_with_authorizer_no_audit(Arc::new(AllowAllAuthorizer)).await;
+    let known_id = create_known_topic(&broker).await;
+    let shared = broker.broker_arc_for_test();
+    let user = principal("consumer");
+    let address = peer();
+    let ctx = request_context(&user, &address, "consumer-client");
+    let partition = |partition_index| OffsetCommitRequestPartition {
+        partition_index,
+        committed_offset: 42,
+        ..Default::default()
+    };
+    let answer = |partition_index, error_code| OffsetCommitResponsePartition {
+        partition_index,
+        error_code,
+        ..Default::default()
+    };
+
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for version in [2_i16, 9, 10] {
+        let group = format!("unknown-partition-v{version}");
+        let id_only = version >= super::FIRST_TOPIC_ID_VERSION;
+        let (name, topic_id) = if id_only {
+            ("", known_id)
+        } else {
+            (KNOWN_NAME, WireUuid::ZERO)
+        };
+        let request = OffsetCommitRequest {
+            group_id: group.clone(),
+            topics: vec![OffsetCommitRequestTopic {
+                name: name.to_string(),
+                topic_id,
+                partitions: vec![partition(MISSING_PARTITION), partition(0)],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let request_bytes = encode_request(&request, version);
+        let response_bytes = handle(&shared, version, 7, &request_bytes, &ctx)
+            .await
+            .expect("handle offset commit");
+        let response: OffsetCommitResponse = decode_response(&response_bytes, version);
+        actual.push((version, response, committed_keys(&broker, &group).await));
+        expected.push((
+            version,
+            OffsetCommitResponse {
+                topics: vec![OffsetCommitResponseTopic {
+                    name: name.to_string(),
+                    topic_id,
+                    partitions: vec![
+                        answer(MISSING_PARTITION, codes::UNKNOWN_TOPIC_OR_PARTITION),
+                        answer(0, codes::NONE),
+                    ],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            vec![(KNOWN_NAME.to_string(), 0)],
+        ));
+    }
+    assert!(actual == expected);
     broker.shutdown().await;
 }

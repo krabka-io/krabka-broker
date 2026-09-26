@@ -19,7 +19,7 @@ use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
     Decode,
     owned::{
-        offset_commit_request::OffsetCommitRequest,
+        offset_commit_request::{OffsetCommitRequest, OffsetCommitRequestTopic},
         offset_commit_response::{
             OffsetCommitResponse, OffsetCommitResponsePartition, OffsetCommitResponseTopic,
         },
@@ -67,12 +67,14 @@ const FIRST_TOPIC_ID_VERSION: i16 = 10;
 ///    id is such a row.
 /// 3. `Read` on each `Topic(name)`. A denied topic answers
 ///    `TOPIC_AUTHORIZATION_FAILED` on every partition row.
-/// 4. The group coordinator commits the rows that remain, and a coordinator
+/// 4. A topic or a partition that the image does not hold answers
+///    `UNKNOWN_TOPIC_OR_PARTITION` on its partition rows.
+/// 5. The group coordinator commits the rows that remain, and a coordinator
 ///    error goes on those rows only.
 ///
 /// The error rows come first in the response and the committed rows follow,
 /// as `OffsetCommitResponse.Builder.merge` puts them. The handler writes no
-/// offset for a row that steps 2 or 3 refuse.
+/// offset for a row that steps 2 to 4 refuse.
 #[tracing::instrument(
     name = "handle_offset_commit",
     level = "info",
@@ -137,7 +139,7 @@ pub(crate) async fn handle(
             response.add_topic(&topic, codes::UNKNOWN_TOPIC_ID);
         } else if !allowed {
             response.add_topic(&topic, codes::TOPIC_AUTHORIZATION_FAILED);
-        } else {
+        } else if let Some(topic) = existing_partitions(topic, &image, &mut response) {
             accepted.push(topic);
         }
     }
@@ -164,6 +166,43 @@ fn resolve_topic_names(request: &mut OffsetCommitRequest, image: &krabka_metadat
             topic.name = name.to_string();
         }
     }
+}
+
+/// Keeps the partitions of an authorized `topic` that the image holds.
+///
+/// A topic that the image does not hold answers `UNKNOWN_TOPIC_OR_PARTITION`
+/// on every partition row, with the zero id. A partition that the image does
+/// not hold answers `UNKNOWN_TOPIC_OR_PARTITION` on its own row. This is the
+/// existence check of Kafka's `KafkaApis.handleOffsetCommitRequest`, which
+/// runs after the topic `Read` check and keeps every refused row away from
+/// the group coordinator. It returns `None` when no partition remains.
+fn existing_partitions(
+    mut topic: OffsetCommitRequestTopic,
+    image: &krabka_metadata::MetadataImage,
+    response: &mut ResponseBuilder,
+) -> Option<OffsetCommitRequestTopic> {
+    if image.topic(&topic.name).is_none() {
+        topic.topic_id = WireUuid::ZERO;
+        response.add_topic(&topic, codes::UNKNOWN_TOPIC_OR_PARTITION);
+        return None;
+    }
+    let (present, missing): (Vec<_>, Vec<_>) = std::mem::take(&mut topic.partitions)
+        .into_iter()
+        .partition(|partition| {
+            image
+                .partition(&topic.name, partition.partition_index)
+                .is_some()
+        });
+    for partition in missing {
+        response.add_partition(
+            topic.topic_id,
+            &topic.name,
+            partition.partition_index,
+            codes::UNKNOWN_TOPIC_OR_PARTITION,
+        );
+    }
+    topic.partitions = present;
+    (!topic.partitions.is_empty()).then_some(topic)
 }
 
 /// Commits every row of `req` through the group coordinator, and returns the
