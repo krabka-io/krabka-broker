@@ -53,9 +53,16 @@ pub(super) fn empty_metadata() -> Arc<dyn MetadataProvider> {
 }
 
 pub(super) fn make_coordinator() -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
+    make_coordinator_with_config(NextGenConfig::default())
+}
+
+/// As [`make_coordinator`], but with an explicit consumer-group config.
+pub(super) fn make_coordinator_with_config(
+    config: NextGenConfig,
+) -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
     let log = Arc::new(InMemoryOffsetsLog::default());
     let coord = Arc::new(GroupCoordinator::new(
-        NextGenConfig::default(),
+        config,
         crate::coordinator::unified::share::config::ShareGroupConfig::default(),
         empty_metadata(),
         log.clone(),

@@ -243,11 +243,11 @@ async fn capture_diskless_index(
     let mut config = KafkaMetadataLogConfig::new(bootstrap);
     TOPIC.clone_into(&mut config.topic);
     "krabka-backup-diskless-capture".clone_into(&mut config.client_id);
-    // Capture is read-only: the broker owns provisioning and compaction policy.
-    config.compacted = false;
-    config.provision_topic = false;
     config.security = security;
-    let log = KafkaMetadataEventLog::start(config)
+    // Capture only reads. The broker owns provisioning and compaction policy,
+    // and Kafka refuses a client Produce to an internal topic, so the log
+    // opens without a producer and needs only READ and DESCRIBE on the index.
+    let log = KafkaMetadataEventLog::open_read_only(config)
         .await
         .map_err(|error| BackupError::Cluster(format!("diskless WAL index: {error}")))?;
     let mut capture = crate::diskless::capture_projection(log.clone(), &topics, now_ms())

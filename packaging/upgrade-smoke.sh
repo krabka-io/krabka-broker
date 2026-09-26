@@ -151,6 +151,23 @@ else
     -v "${volume}:/var/lib/krabka" -e KRABKA_CLUSTER_ID="${cluster_id}" \
     -v "${old_config}:/etc/krabka.toml:ro" "${head_image}" \
     --config-file /etc/krabka.toml
+  head_ready=false
+  for _ in $(seq 1 60); do
+    if [ "$(docker inspect --format '{{.State.Running}}' "${head_container}")" != true ]; then
+      break
+    fi
+    if docker exec "${tools_container}" /opt/kafka/bin/kafka-topics.sh \
+        --bootstrap-server krabka-upgrade-head:9092 --list >/dev/null 2>&1; then
+      head_ready=true
+      break
+    fi
+    sleep 1
+  done
+  if [ "${head_ready}" != true ]; then
+    docker logs "${head_container}" >&2
+    echo "HEAD did not become ready after upgrading ${previous}" >&2
+    exit 1
+  fi
   consumed=$(docker exec "${tools_container}" /opt/kafka/bin/kafka-console-consumer.sh \
     --bootstrap-server krabka-upgrade-head:9092 --topic upgrade-smoke \
     --from-beginning --max-messages 1 --timeout-ms 30000)

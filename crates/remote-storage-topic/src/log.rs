@@ -26,7 +26,7 @@ mod in_process;
 pub use self::in_process::InProcessMetadataEventLog;
 
 /// One event read from the metadata log.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetadataEventRecord {
     /// Metadata-topic partition the event came from.
     pub partition: i32,
@@ -43,6 +43,11 @@ pub struct MetadataEventRecord {
 
 /// Boxed event stream the [`MetadataEventLog`] hands to subscribers.
 pub type MetadataEventStream = Pin<Box<dyn Stream<Item = MetadataEventRecord> + Send + 'static>>;
+
+/// Receives each record of [`MetadataEventLog::visit_range`]. An error stops
+/// the read, and the read returns it.
+pub type RangeVisitor<'a> =
+    dyn FnMut(MetadataEventRecord) -> Result<(), MetadataLogError> + Send + 'a;
 
 /// One partition to consume and the offset to begin at (inclusive).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,6 +151,39 @@ pub trait MetadataEventLog: Send + Sync {
     /// Returns [`MetadataLogError`] only on an underlying store failure. An
     /// empty partition is `0`, not an error.
     async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError>;
+
+    /// Pass every retained record of `partition` whose offset lies in
+    /// `[start, end)` to `visit`, in offset order.
+    ///
+    /// The read neither subscribes nor writes, so a reader that holds only
+    /// `READ` and `DESCRIBE` on the topic can use it. A transport hands
+    /// records over as it fetches them and holds at most one fetched page, so
+    /// the range can be larger than memory. A compacted transport steps over
+    /// the offsets compaction removed and still returns once it reaches `end`.
+    /// An empty range visits nothing.
+    ///
+    /// A networked transport retries transient failures, such as a leader
+    /// change, without a bound of its own. Bound the read with a deadline.
+    ///
+    /// The default reports that the transport does not serve range reads.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MetadataLogError::PartitionOutOfRange`] for a partition
+    /// outside the log, the first error that `visit` returns, and
+    /// [`MetadataLogError`] when the store fails or stops short of `end`.
+    async fn visit_range(
+        &self,
+        partition: i32,
+        start: i64,
+        end: i64,
+        visit: &mut RangeVisitor<'_>,
+    ) -> Result<(), MetadataLogError> {
+        let _ = (partition, start, end, visit);
+        Err(MetadataLogError::Other(
+            "metadata log does not serve range reads".into(),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -196,5 +234,22 @@ mod tests {
             .await
             .unwrap_err();
         assert2::assert!(error.to_string().contains("does not support tombstones"));
+    }
+
+    #[tokio::test]
+    async fn default_range_read_refuses_without_visiting() {
+        let mut visits = 0;
+        let error = AppendOnlyLog
+            .visit_range(0, 0, 1, &mut |_record| {
+                visits += 1;
+                Ok(())
+            })
+            .await
+            .unwrap_err();
+
+        assert2::assert!(
+            error.to_string() == "metadata log error: metadata log does not serve range reads"
+        );
+        assert2::assert!(visits == 0);
     }
 }

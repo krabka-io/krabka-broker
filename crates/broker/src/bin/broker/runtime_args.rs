@@ -141,7 +141,7 @@ pub struct RuntimeArgs {
     pub consumer_group_max_heartbeat_interval: Option<Time>,
     #[arg(long, env = "KRABKA_CONSUMER_GROUP_MAX_SIZE", value_parser = parse_positive_count)]
     pub consumer_group_max_size: Option<PositiveCount>,
-    #[arg(long, env = "KRABKA_CLASSIC_GROUP_INITIAL_REBALANCE_DELAY", value_parser = krabka_units::parse::positive_time)]
+    #[arg(long, env = "KRABKA_CLASSIC_GROUP_INITIAL_REBALANCE_DELAY", value_parser = krabka_units::parse::non_negative_time)]
     pub classic_group_initial_rebalance_delay: Option<Time>,
     #[arg(long, env = "KRABKA_CLASSIC_GROUP_MIN_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub classic_group_min_session_timeout: Option<Time>,

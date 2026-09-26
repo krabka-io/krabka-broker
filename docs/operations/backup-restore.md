@@ -164,7 +164,8 @@ The reusable candidate drill is the `disaster-recovery` leg of the
 `ecosystem qualification` workflow. It uses a digest-pinned broker image, an
 RF=3 TLS and SASL/SCRAM-SHA-512 source cluster and a locked S3-compatible
 bucket. Its backup principal has only the cluster, group, user-topic and
-`__diskless_wal_index` permissions capture needs. It records the
+`__diskless_wal_index` permissions capture needs: READ and DESCRIBE on the
+index, and no WRITE, because capture only reads it. It records the
 capture manifest, independently held WORM chain heads, source ledger, topic
 settings and consumer positions before deleting every source data directory.
 The fresh cluster must reproduce those values through the capture boundary and

@@ -6,7 +6,7 @@
 //! explicit per-record partition pinning. Reads come back through one
 //! cancellable manual-`Fetch` task per assigned partition. Each task
 //! drives its own dedicated [`krabka_client_core::Connection`] and emits
-//! [`MetadataEventRecord`](crate::log::MetadataEventRecord)s into a shared
+//! [`MetadataEventRecord`](crate::MetadataEventRecord)s into a shared
 //! mpsc. There is **no consumer group and no broker-side offset commit**.
 //! The RLMM owns the read position. The manager assigns all partitions from
 //! offset 0 today, then resumes from snapshot offsets and restricts the
@@ -28,6 +28,13 @@
 //! [`krabka_client_core::Client`] pulls the high-water marks, rather than a
 //! consumer. [`MetadataEventLog::high_water_marks`] therefore does not need
 //! any fetch task to have made progress.
+//!
+//! [`KafkaMetadataEventLog::open_read_only`] opens the same log without a
+//! producer and without provisioning. It sends no `InitProducerId` and no
+//! `Produce`, so a principal that holds only `READ` and `DESCRIBE` on the topic
+//! can use it. [`MetadataEventLog::visit_range`] then reads a bounded offset
+//! range from the partition leader one page at a time, and follows the leader
+//! when it moves. The `range` module holds that loop.
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -37,17 +44,22 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream::{StreamExt, unfold};
-use krabka_client_core::{Client, ClientFrameMax, ConnectionDispatchQueueCapacity};
+use krabka_client_core::{
+    BrokerInfo, BrokerPool, Client, ClientError, ClientFrameMax, Connection,
+    ConnectionDispatchQueueCapacity, ConnectionOptions, FetchMinBytes, FetchPartitionResult,
+    IsolatedFetch, connection_target_host, fetch_partition_with_isolation_progress,
+};
 use krabka_client_producer::{Acks, Producer, ProducerRecord};
 use krabka_protocol::{
     owned::list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
     primitives::uuid::Uuid as WireUuid,
 };
-use krabka_units::prelude::{ByteSize, Time};
+use krabka_units::prelude::{ByteSize, Time, TimeExt as _};
 use tracing::{instrument, warn};
 
 mod config;
 mod consumer;
+mod range;
 mod topic;
 
 pub use self::config::{
@@ -58,17 +70,31 @@ pub use self::config::{
 };
 use self::{
     consumer::{ConsumerState, KafkaAssignmentHandle, metadata_event_channel},
+    range::{RangeFetcher, RangeReadFailure, RangeTopic, visit_range_pages},
     topic::ensure_topic,
 };
 use crate::{
     error::MetadataLogError,
-    log::{AssignmentHandle, MetadataEventLog, MetadataEventStream, PartitionStart},
+    log::{AssignmentHandle, MetadataEventLog, MetadataEventStream, PartitionStart, RangeVisitor},
 };
+
+/// Whether an opened log may write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Access {
+    /// Provision the topic when configured to, and build the idempotent
+    /// producer.
+    ReadWrite,
+    /// Neither provision nor produce.
+    ReadOnly,
+}
 
 /// Production [`MetadataEventLog`] backed by an internal Kafka topic.
 pub struct KafkaMetadataEventLog {
-    producer: Producer,
+    /// `None` for a log from [`KafkaMetadataEventLog::open_read_only`].
+    producer: Option<Producer>,
     client: Client,
+    /// Leader connections for [`MetadataEventLog::visit_range`].
+    readers: BrokerPool,
     topic: String,
     topic_id: WireUuid,
     partition_count: i32,
@@ -94,6 +120,35 @@ impl KafkaMetadataEventLog {
     /// client construction failures.
     #[instrument(skip_all, fields(topic = %cfg.topic, bootstrap = %cfg.bootstrap), err)]
     pub async fn start(cfg: KafkaMetadataLogConfig) -> Result<Arc<Self>, MetadataLogError> {
+        Box::pin(Self::open(cfg, Access::ReadWrite)).await
+    }
+
+    /// Open an existing topic for reads only, and return the log.
+    ///
+    /// The log neither provisions the topic nor changes its cleanup policy,
+    /// whatever `cfg.provision_topic` and `cfg.compacted` say, and it builds
+    /// no producer. Its reads therefore need only `DESCRIBE` and `READ` on the
+    /// topic. [`MetadataEventLog::publish`] and
+    /// [`MetadataEventLog::publish_keyed`] return
+    /// [`MetadataLogError::Publish`] without contacting the broker.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MetadataLogError::Other`] when the topic does not exist, and
+    /// on admin or client construction failures.
+    #[instrument(skip_all, fields(topic = %cfg.topic, bootstrap = %cfg.bootstrap), err)]
+    pub async fn open_read_only(
+        mut cfg: KafkaMetadataLogConfig,
+    ) -> Result<Arc<Self>, MetadataLogError> {
+        cfg.provision_topic = false;
+        cfg.compacted = false;
+        Box::pin(Self::open(cfg, Access::ReadOnly)).await
+    }
+
+    async fn open(
+        cfg: KafkaMetadataLogConfig,
+        access: Access,
+    ) -> Result<Arc<Self>, MetadataLogError> {
         cfg.validate()
             .map_err(|error| MetadataLogError::Other(format!("invalid config: {error}")))?;
 
@@ -104,17 +159,23 @@ impl KafkaMetadataEventLog {
 
         // 2. Producer with acks=All and idempotence on. Read-your-writes
         //    depends on the broker durably acking the publish.
-        let producer = Producer::builder()
-            .bootstrap(cfg.bootstrap.clone())
-            .client_id(format!("{}-producer", cfg.client_id))
-            .dispatch_queue_capacity(cfg.dispatch_queue_capacity.get())
-            .frame_max(cfg.frame_max.size())
-            .acks(Acks::All)
-            .enable_idempotence(true)
-            .maybe_security(cfg.security.clone())
-            .build()
-            .await
-            .map_err(|e| MetadataLogError::Other(format!("producer build failed: {e}")))?;
+        //    A read-only log builds none, so it never sends InitProducerId.
+        let producer = match access {
+            Access::ReadWrite => Some(
+                Producer::builder()
+                    .bootstrap(cfg.bootstrap.clone())
+                    .client_id(format!("{}-producer", cfg.client_id))
+                    .dispatch_queue_capacity(cfg.dispatch_queue_capacity.get())
+                    .frame_max(cfg.frame_max.size())
+                    .acks(Acks::All)
+                    .enable_idempotence(true)
+                    .maybe_security(cfg.security.clone())
+                    .build()
+                    .await
+                    .map_err(|e| MetadataLogError::Other(format!("producer build failed: {e}")))?,
+            ),
+            Access::ReadOnly => None,
+        };
 
         // 3. Raw client for ListOffsets and any future low-level queries.
         let client = Client::builder()
@@ -127,9 +188,23 @@ impl KafkaMetadataEventLog {
             .await
             .map_err(|e| MetadataLogError::Other(format!("client build failed: {e}")))?;
 
+        // 4. Leader connections for bounded range reads.
+        let reader_options = ConnectionOptions {
+            client_id: format!("{}-reader", cfg.client_id),
+            dispatch_queue_capacity: cfg.dispatch_queue_capacity,
+            frame_max: cfg.frame_max,
+            security: cfg.security.clone().map(Box::new),
+            ..ConnectionOptions::default()
+        };
+        let readers = BrokerPool::new_with_server_names(
+            resolve_bootstrap(&cfg.bootstrap, &reader_options).await?,
+            reader_options,
+        );
+
         Ok(Arc::new(Self {
             producer,
             client,
+            readers,
             topic: cfg.topic,
             topic_id,
             partition_count,
@@ -210,6 +285,52 @@ impl KafkaMetadataEventLog {
         }
         Ok(offsets)
     }
+}
+
+/// Resolve every `host:port` of a bootstrap list inside the DNS deadline,
+/// keeping each host name for TLS.
+async fn resolve_bootstrap(
+    bootstrap: &str,
+    options: &ConnectionOptions,
+) -> Result<Vec<(std::net::SocketAddr, String)>, MetadataLogError> {
+    let mut resolved = Vec::new();
+    for address in bootstrap.split(',').map(str::trim) {
+        if address.is_empty() {
+            continue;
+        }
+        let lookup = tokio::time::timeout(
+            options.dns_timeout.time().to_std(),
+            tokio::net::lookup_host(address),
+        )
+        .await
+        .map_err(|_elapsed| MetadataLogError::Other(format!("DNS lookup of {address} timed out")))?
+        .map_err(|error| {
+            MetadataLogError::Other(format!("DNS lookup of {address} failed: {error}"))
+        })?;
+        resolved.extend(lookup.map(|socket| (socket, connection_target_host(address).to_owned())));
+    }
+    if resolved.is_empty() {
+        return Err(MetadataLogError::Other(format!(
+            "bootstrap {bootstrap:?} resolved to no address"
+        )));
+    }
+    Ok(resolved)
+}
+
+/// The brokers a `Metadata` response names, in the pool's shape.
+fn brokers_of(
+    metadata: &krabka_protocol::owned::metadata_response::MetadataResponse,
+) -> Vec<BrokerInfo> {
+    metadata
+        .brokers
+        .iter()
+        .map(|broker| BrokerInfo {
+            id: broker.node_id,
+            host: broker.host.clone(),
+            port: broker.port,
+            rack: broker.rack.clone(),
+        })
+        .collect()
 }
 
 pub(super) fn partition_leader(
@@ -308,6 +429,62 @@ impl MetadataEventLog for KafkaMetadataEventLog {
     async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> {
         self.list_offsets(-1).await // LATEST
     }
+
+    #[instrument(
+        level = "debug",
+        skip_all,
+        fields(topic = %self.topic, partition, start, end),
+        err
+    )]
+    async fn visit_range(
+        &self,
+        partition: i32,
+        start: i64,
+        end: i64,
+        visit: &mut RangeVisitor<'_>,
+    ) -> Result<(), MetadataLogError> {
+        let topic = RangeTopic {
+            name: &self.topic,
+            partition_count: self.partition_count,
+            retry_backoff: self.fetch_retry_backoff.to_std(),
+        };
+        visit_range_pages(self, &topic, partition, start, end, visit).await
+    }
+}
+
+impl RangeFetcher for KafkaMetadataEventLog {
+    type Leader = Arc<Connection>;
+
+    // cargo-mutants: needs a live leader; `range` tests the loop around it
+    #[cfg_attr(test, mutants::skip)]
+    async fn leader(&self, partition: i32) -> Result<Arc<Connection>, RangeReadFailure> {
+        self.leader_connection(partition).await
+    }
+
+    // cargo-mutants: needs a live leader; `range` tests the loop around it
+    #[cfg_attr(test, mutants::skip)]
+    async fn fetch(
+        &self,
+        leader: &Arc<Connection>,
+        partition: i32,
+        offset: i64,
+    ) -> Result<FetchPartitionResult, ClientError> {
+        fetch_partition_with_isolation_progress(
+            leader,
+            IsolatedFetch {
+                topic: &self.topic,
+                topic_id: self.topic_id,
+                partition,
+                fetch_offset: offset,
+                max_wait: self.fetch_max_wait,
+                max: krabka_client_core::DEFAULT_FETCH_RESPONSE_MAX,
+                partition_max: self.fetch_max_bytes,
+                fetch_min: FetchMinBytes::default(),
+                isolation_level: 0,
+            },
+        )
+        .await
+    }
 }
 
 impl KafkaMetadataEventLog {
@@ -318,12 +495,45 @@ impl KafkaMetadataEventLog {
         event: Option<Bytes>,
     ) -> Result<i64, MetadataLogError> {
         let record = producer_record(&self.topic, self.partition_count, partition, key, event)?;
-        let ack = self.producer.send(record).await;
+        let producer = self
+            .producer
+            .as_ref()
+            .ok_or_else(|| MetadataLogError::Publish("the metadata log is read-only".into()))?;
+        let ack = producer.send(record).await;
         let meta = ack
             .await
             .map_err(|_| MetadataLogError::Publish("producer dropped before ack".into()))?
             .map_err(|e| MetadataLogError::Publish(e.to_string()))?;
         Ok(meta.offset)
+    }
+
+    /// A connection to the current leader of `partition`.
+    ///
+    /// A single-broker cluster that advertises port `0` leaves its broker out
+    /// of the pool's registry. On such a cluster the bootstrap broker is the
+    /// leader, so the read falls back to the bootstrap connection.
+    async fn leader_connection(&self, partition: i32) -> Result<Arc<Connection>, RangeReadFailure> {
+        let metadata = self
+            .client
+            .refresh_metadata()
+            .await
+            .map_err(|error| RangeReadFailure::client("Metadata failed", &error))?;
+        let leader = partition_leader(&metadata, &self.topic, partition).ok_or_else(|| {
+            RangeReadFailure::retriable(format!(
+                "{} partition {partition} has no available leader",
+                self.topic
+            ))
+        })?;
+        self.readers.refresh_brokers(&brokers_of(&metadata)).await;
+        match self.readers.get(leader).await {
+            Err(ClientError::Disconnected) if !self.readers.knows_broker(leader) => {
+                self.readers.bootstrap_connection().await
+            }
+            connection => connection,
+        }
+        .map_err(|error| {
+            RangeReadFailure::client(&format!("connect to broker {leader} failed"), &error)
+        })
     }
 }
 
@@ -355,10 +565,53 @@ fn usize_count(n: i32) -> Result<usize, MetadataLogError> {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use krabka_units::convert::TimeExt as _;
+    use assert2::{assert, check};
 
     use super::*;
+
+    #[tokio::test]
+    async fn open_read_only_rejects_invalid_policy_before_connecting() {
+        let cfg = KafkaMetadataLogConfig {
+            topic_create_timeout: Time::ZERO,
+            ..KafkaMetadataLogConfig::new("not a socket address")
+        };
+
+        let error = KafkaMetadataEventLog::open_read_only(cfg)
+            .await
+            .err()
+            .expect("invalid policy must fail before network I/O");
+        assert!(error.to_string().contains("topic_create_timeout"));
+    }
+
+    #[tokio::test]
+    async fn bootstrap_resolution_names_the_address_it_could_not_use() {
+        let options = ConnectionOptions::default();
+        let cases = [
+            ("", "bootstrap \"\" resolved to no address"),
+            (" , ", "bootstrap \" , \" resolved to no address"),
+            ("no-port", "DNS lookup of no-port failed"),
+        ];
+        for (bootstrap, expected) in cases {
+            let error = resolve_bootstrap(bootstrap, &options).await.unwrap_err();
+            check!(
+                error.to_string().contains(expected),
+                "{bootstrap:?}: {error}"
+            );
+        }
+
+        let resolved = resolve_bootstrap(" 127.0.0.1:9092, ,localhost:9093", &options)
+            .await
+            .unwrap();
+        check!(
+            resolved.first() == Some(&("127.0.0.1:9092".parse().unwrap(), "127.0.0.1".to_owned()))
+        );
+        check!(
+            resolved
+                .iter()
+                .skip(1)
+                .all(|(address, host)| address.port() == 9093 && host == "localhost")
+        );
+    }
 
     #[tokio::test]
     async fn start_rejects_invalid_policy_before_connecting() {

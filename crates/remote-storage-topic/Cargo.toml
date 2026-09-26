@@ -19,20 +19,20 @@ workspace = true
 [dependencies]
 assert2 = { workspace = true }
 maplit = { workspace = true }
-krabka-remote-storage = { version = "0.6.0", path = "../remote-storage" }
+krabka-remote-storage = { version = "0.6.1", path = "../remote-storage" }
 krabka-client-admin = { version = "0.4.0" }
 krabka-client-core = { version = "0.4.0" }
 krabka-client-producer = { version = "0.4.0" }
 krabka-protocol = { version = "0.4.0" }
 krabka-ids = { version = "0.4.0" }
 krabka-units = { workspace = true }
-krabka-verified = { version = "0.6.0", path = "../verified" }
+krabka-verified = { version = "0.6.1", path = "../verified" }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 futures-util = { workspace = true }
 refined_type = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["sync", "rt", "macros"] }
+tokio = { workspace = true, features = ["sync", "rt", "macros", "net", "time"] }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }

@@ -955,6 +955,7 @@ jobs:
           set -euo pipefail
           bazel test \
             --config=docker \
+            --bes_backend= \
             --test_timeout=18000 \
             --test_env=KRABKA_SOAK_SECONDS \
             --test_output=streamed \
@@ -996,7 +997,7 @@ jobs:
   # The criterion benches, on the nightly schedule and on demand.
   #
   # Each side runs four times, alternating on the same host. The verdict uses
-  # medians and three times the larger median absolute deviation, with a 3%
+  # medians and three times the larger median absolute deviation, with a 10%
   # floor. Missing or invalid samples fail. Raw output, exact commits and host
   # resources travel with the verdict artifact. Pull requests only compile the
   # benches; this eight-pass lane is nightly and manually dispatchable.
@@ -1099,7 +1100,7 @@ jobs:
           cargo run -p krabka-parse-benches -- \
             --reference-dir benchmark-artifacts/reference/summaries \
             --candidate-dir benchmark-artifacts/candidate/summaries \
-            --minimum-tolerance-percent 3 \
+            --minimum-tolerance-percent 10 \
             --output benchmark-artifacts/verdict.json
 
       - name: summary

@@ -250,11 +250,41 @@ mod tests {
             GroupActorMessage, SyncResult,
             test_support::{
                 completing_classic_group, decode_assignment, last_classic_metadata,
-                make_coordinator, make_coordinator_with_topic_policy, rpc, seed_and_upgrade,
+                make_coordinator, make_coordinator_with_config, make_coordinator_with_topic_policy,
+                rpc, seed_and_upgrade,
             },
         },
         classic_state::GroupState as ClassicGroupState,
+        config::NextGenConfig,
     };
+
+    /// Kafka's `group.initial.rebalance.delay.ms = 0`: the first member of a
+    /// new group gets its `JoinGroup` answer as soon as the round opens, rather
+    /// than after the three-second default batching window.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn zero_initial_rebalance_delay_completes_a_new_groups_first_join_at_once() {
+        let (coord, _log) = make_coordinator_with_config(NextGenConfig {
+            classic_initial_rebalance_delay: std::time::Duration::ZERO,
+            ..NextGenConfig::default()
+        });
+        let handle = coord.get_or_create_classic("g");
+        coord.mark_classic("g");
+
+        let join = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            rpc::classic_join(&handle, "m1", "t"),
+        )
+        .await
+        .expect("a zero delay must not wait out a batching window");
+
+        check!(join.error_code == codes::NONE);
+        check!(join.generation_id == 1);
+        check!(join.member_id == "m1");
+        check!(join.leader == "m1");
+        check!(join.protocol_name.as_deref() == Some("range"));
+        let members: Vec<&str> = join.members.iter().map(|m| m.member_id.as_str()).collect();
+        check!(members == ["m1"]);
+    }
 
     /// A `Stable` group whose one member, `m1`, is the static member
     /// `instance-1`, and a `JoinGroup` v4 from a restarted `instance-1`.

@@ -89,8 +89,8 @@ coefficient-of-variation marker. Plan the budget with care: 9 scenarios ×
 2 stacks × 10 runs is a long run that uses many PVCs.
 
 If you need a cluster, [`bench/terraform/gke/`](./terraform/gke) provisions the
-exact GKE cluster that the published [Krabka vs Strimzi](https://krabka-io.github.io/benchmarks/krabka-vs-strimzi/)
-run used (`e2-standard-4` / COS / pd-ssd). Its
+exact GKE cluster used for the Krabka vs Strimzi run (`e2-standard-4` / COS /
+pd-ssd). Its
 [README](./terraform/gke/README.md) gives the full provision → install → run →
 aggregate recipe.
 

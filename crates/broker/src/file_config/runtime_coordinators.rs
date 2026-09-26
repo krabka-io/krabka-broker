@@ -9,7 +9,10 @@ use krabka_units::convert::TimeExt as _;
 
 use super::{
     FileConfigError, RuntimeFileConfig,
-    validate::{invalid_runtime_value, positive_i16, positive_i32, positive_time, positive_usize},
+    validate::{
+        invalid_runtime_value, nonnegative_time, positive_i16, positive_i32, positive_time,
+        positive_usize,
+    },
 };
 
 impl RuntimeFileConfig {
@@ -63,11 +66,13 @@ impl RuntimeFileConfig {
             consumer_group_max_size,
             cfg.next_gen_consumer_group.max_size
         );
-        set_runtime_time_millis!(
-            runtime,
-            classic_group_initial_rebalance_delay,
-            cfg.classic_group_initial_rebalance_delay
-        );
+        // Zero is Kafka's own development setting for
+        // `group.initial.rebalance.delay.ms`, so this one bypasses the
+        // positive-only macro.
+        if let Some(value) = runtime.classic_group_initial_rebalance_delay {
+            cfg.classic_group_initial_rebalance_delay =
+                nonnegative_time("classic_group_initial_rebalance_delay", value)?;
+        }
         set_runtime_duration!(
             runtime,
             classic_group_min_session_timeout,

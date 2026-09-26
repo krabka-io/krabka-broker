@@ -18,7 +18,7 @@ Only a maintainer with push access to the repository can do steps 3 and 4.
 The broker release and the tested ecosystem set are separate claims. Before a
 release is advertised as an ecosystem-qualified stack, the manually dispatched
 `ecosystem qualification` workflow must pass on the candidate recorded in
-[`qualification/milestone-20.json`](../qualification/milestone-20.json). See
+[`qualification/milestone-23.json`](../qualification/milestone-23.json). See
 [Ecosystem qualification](qualification.md). A broker release may exist without
 that result; it must not be described as the tested operator/CLI/o11y stack.
 
