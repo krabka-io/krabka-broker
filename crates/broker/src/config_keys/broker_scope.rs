@@ -195,6 +195,17 @@ pub(crate) const DEFAULT_REPLICATION_FACTOR: &str = "default.replication.factor"
 /// [`crate::config::BrokerConfig::delete_topic_enable`].
 pub(crate) const DELETE_TOPIC_ENABLE: &str = "delete.topic.enable";
 
+/// Whether `Metadata` may create a topic it is asked about and that does not
+/// exist. Kafka's `ServerConfigs.AUTO_CREATE_TOPICS_ENABLE_CONFIG`, a boolean
+/// that defaults to `true`. `KafkaApis.handleTopicMetadataRequest` creates a
+/// missing topic only when it is `true` and the request sets
+/// `allow_auto_topic_creation`; when it is `false`, a missing topic answers
+/// `UNKNOWN_TOPIC_OR_PARTITION` and no `Create` is checked.
+///
+/// Static in Kafka. `DescribeConfigs` reports it read-only out of
+/// [`crate::config::BrokerConfig::auto_create_topics_enable`].
+pub(crate) const AUTO_CREATE_TOPICS_ENABLE: &str = "auto.create.topics.enable";
+
 /// KIP-98: how long a transactional id may sit in a terminal or idle state
 /// before the transaction coordinator tombstones it out of
 /// `__transaction_state`. Kafka defaults it to 604800000 ms (7 days).

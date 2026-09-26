@@ -12,10 +12,11 @@
 //!    `UNKNOWN_TOPIC_ID` without authorization.
 //! 2. `Describe` on each topic splits the set into described and denied
 //!    topics.
-//! 3. When the request allows auto-creation and
-//!    [`AUTO_CREATE_TOPICS_ENABLE`] holds, a described topic that does not
-//!    exist needs `Create` on the cluster or, failing that, on the topic. A
-//!    topic denied both leaves the described set.
+//! 3. When the request allows auto-creation and the broker's
+//!    `auto.create.topics.enable`
+//!    ([`crate::config::BrokerConfig::auto_create_topics_enable`]) holds, a
+//!    described topic that does not exist needs `Create` on the cluster or,
+//!    failing that, on the topic. A topic denied both leaves the described set.
 //! 4. The described set answers full metadata for the topics that exist and a
 //!    partitionless row for the rest; see [`missing_topics`].
 //!
@@ -75,13 +76,6 @@ const CLUSTER_AUTHORIZED_OPERATIONS_VERSIONS: std::ops::RangeInclusive<i16> = 8.
 
 /// The first version that carries `topic_authorized_operations` (KIP-430).
 const FIRST_TOPIC_AUTHORIZED_OPERATIONS_VERSION: i16 = 8;
-
-/// Kafka's `auto.create.topics.enable`, at Kafka's default.
-///
-/// The broker has no `auto.create.topics.enable` key yet, so auto-creation
-/// runs whenever the request allows it, as it does on a Kafka broker that
-/// leaves the key unset.
-const AUTO_CREATE_TOPICS_ENABLE: bool = true;
 
 #[tracing::instrument(
     name = "handle_metadata",
@@ -361,8 +355,9 @@ async fn build_topic_rows(
         .map(String::as_str)
         .partition(|name| allowed(&describe, name));
 
-    let auto_create =
-        AUTO_CREATE_TOPICS_ENABLE && inputs.request.allow_auto_topic_creation && !requested.all;
+    let auto_create = broker.config.auto_create_topics_enable
+        && inputs.request.allow_auto_topic_creation
+        && !requested.all;
     let mut denied_create: Vec<&str> = Vec::new();
     if auto_create {
         let missing: Vec<&str> = described

@@ -205,6 +205,10 @@ macro_rules! tuning_fields {
             /// Whether `DeleteTopics` may delete a topic. Kafka's
             /// `delete.topic.enable`, default `true`.
             pub delete_topic_enable: bool,
+            /// Whether `Metadata` may create a topic it is asked about and
+            /// that does not exist, when the request allows it. Kafka's
+            /// `auto.create.topics.enable`, default `true`.
+            pub auto_create_topics_enable: bool,
             /// Upper clamp on `DescribeTopicPartitions`'
             /// `response_partition_limit`. Kafka's
             /// `max.request.partition.size.limit`

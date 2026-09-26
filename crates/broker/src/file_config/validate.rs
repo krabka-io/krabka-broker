@@ -346,7 +346,7 @@ mod tests {
                     txn_id_expiration: false,
                     txn_id_expiration_cleanup_interval: false,
                     topic_creation: crate::config::TopicCreationOrigins::default(),
-                    delete_topic_enable: false,
+                    topic_admin: crate::config::TopicAdminOrigins::default(),
                 },
             ),
             (
@@ -356,7 +356,7 @@ mod tests {
                     txn_id_expiration: true,
                     txn_id_expiration_cleanup_interval: false,
                     topic_creation: crate::config::TopicCreationOrigins::default(),
-                    delete_topic_enable: false,
+                    topic_admin: crate::config::TopicAdminOrigins::default(),
                 },
             ),
             (
@@ -367,7 +367,7 @@ mod tests {
                     txn_id_expiration: true,
                     txn_id_expiration_cleanup_interval: true,
                     topic_creation: crate::config::TopicCreationOrigins::default(),
-                    delete_topic_enable: false,
+                    topic_admin: crate::config::TopicAdminOrigins::default(),
                 },
             ),
             (
@@ -380,7 +380,7 @@ mod tests {
                         num_partitions: true,
                         default_replication_factor: true,
                     },
-                    delete_topic_enable: false,
+                    topic_admin: crate::config::TopicAdminOrigins::default(),
                 },
             ),
         ] {

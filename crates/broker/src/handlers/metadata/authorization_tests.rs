@@ -1,9 +1,10 @@
 //! Handler tests for how `Metadata` authorizes, auto-creates and orders its
 //! topic rows, after Kafka's `KafkaApis.handleTopicMetadataRequest`.
 //!
-//! One broker serves every case. The principal under test holds exactly the
-//! grants a case lists, and each case asks about topics of its own, so a
-//! topic one case auto-creates is never missing in another.
+//! One broker serves every case that shares an `auto.create.topics.enable`
+//! value. The principal under test holds exactly the grants a case lists, and
+//! each case asks about topics of its own, so a topic one case auto-creates is
+//! never missing in another.
 
 use std::{
     collections::HashSet,
@@ -95,12 +96,15 @@ struct Fixture {
     _dir: tempfile::TempDir,
 }
 
-async fn start() -> Fixture {
+/// A broker whose `auto.create.topics.enable` is `auto_create_topics_enable`,
+/// holding [`EXISTING`].
+async fn start(auto_create_topics_enable: bool) -> Fixture {
     let grants = Arc::new(Grants::default());
     let authorizer: Arc<dyn Authorizer> = Arc::clone(&grants) as Arc<dyn Authorizer>;
     let (broker, dir) = start_broker_with(|cfg| {
         cfg.audit_enabled = false;
         cfg.authorizer = authorizer;
+        cfg.auto_create_topics_enable = auto_create_topics_enable;
     })
     .await;
     let client = krabka_client_core::Client::builder()
@@ -199,6 +203,8 @@ enum Expect {
 
 struct Case {
     name: &'static str,
+    /// The broker's `auto.create.topics.enable`.
+    auto_create_topics_enable: bool,
     version: i16,
     topics: &'static [&'static str],
     allow_auto_topic_creation: bool,
@@ -209,18 +215,14 @@ struct Case {
     creates: &'static [&'static str],
 }
 
-/// Kafka's `handleTopicMetadataRequest`: `Describe` first, then cluster
-/// `Create`, then topic `Create`, for a missing topic that the request asks to
-/// auto-create; rows ordered described, denied `Create`, denied `Describe`;
-/// one row per distinct name; and the topic authorized operations on every
-/// described row, the rows for missing topics included.
-#[tokio::test]
-async fn topic_rows_follow_kafka_authorization_and_auto_creation() {
+/// The cases of [`topic_rows_follow_kafka_authorization_and_auto_creation`].
+fn topic_row_cases() -> Vec<Case> {
     use AclOperation::{Create, Describe};
     use Expect::{Existing, Row};
-    let cases = vec![
+    vec![
         Case {
             name: "cluster Create auto-creates a missing topic and answers 3",
+            auto_create_topics_enable: true,
             version: 12,
             topics: &["authz-cluster-create"],
             allow_auto_topic_creation: true,
@@ -235,6 +237,7 @@ async fn topic_rows_follow_kafka_authorization_and_auto_creation() {
         },
         Case {
             name: "topic Create alone auto-creates a missing topic",
+            auto_create_topics_enable: true,
             version: 12,
             topics: &["authz-topic-create"],
             allow_auto_topic_creation: true,
@@ -252,6 +255,7 @@ async fn topic_rows_follow_kafka_authorization_and_auto_creation() {
         },
         Case {
             name: "no Create answers 29 with the zero id",
+            auto_create_topics_enable: true,
             version: 12,
             topics: &["authz-no-create"],
             allow_auto_topic_creation: true,
@@ -266,6 +270,7 @@ async fn topic_rows_follow_kafka_authorization_and_auto_creation() {
         },
         Case {
             name: "no auto-creation asked needs no Create",
+            auto_create_topics_enable: true,
             version: 12,
             topics: &["authz-no-auto"],
             allow_auto_topic_creation: false,
@@ -280,6 +285,7 @@ async fn topic_rows_follow_kafka_authorization_and_auto_creation() {
         },
         Case {
             name: "an invalid name answers 17 and is not created",
+            auto_create_topics_enable: true,
             version: 12,
             topics: &["authz bad name"],
             allow_auto_topic_creation: true,
@@ -294,6 +300,7 @@ async fn topic_rows_follow_kafka_authorization_and_auto_creation() {
         },
         Case {
             name: "rows are described, then denied Create, then denied Describe",
+            auto_create_topics_enable: true,
             version: 12,
             topics: &["authz-hidden", "authz-order-no-create", EXISTING],
             allow_auto_topic_creation: true,
@@ -315,6 +322,7 @@ async fn topic_rows_follow_kafka_authorization_and_auto_creation() {
         },
         Case {
             name: "a repeated name answers one row",
+            auto_create_topics_enable: true,
             version: 12,
             topics: &[EXISTING, EXISTING, "authz-twice", "authz-twice"],
             allow_auto_topic_creation: false,
@@ -328,6 +336,7 @@ async fn topic_rows_follow_kafka_authorization_and_auto_creation() {
         },
         Case {
             name: "the missing topic row carries its authorized operations",
+            auto_create_topics_enable: true,
             version: 10,
             topics: &["authz-ops-missing", EXISTING],
             allow_auto_topic_creation: false,
@@ -347,10 +356,44 @@ async fn topic_rows_follow_kafka_authorization_and_auto_creation() {
             ],
             creates: &[],
         },
-    ];
+        Case {
+            name: "auto.create.topics.enable = false answers 3 and creates nothing",
+            auto_create_topics_enable: false,
+            version: 12,
+            topics: &["authz-auto-create-disabled"],
+            allow_auto_topic_creation: true,
+            include_ops: false,
+            grants: vec![
+                topic("authz-auto-create-disabled", Describe),
+                cluster(Create),
+            ],
+            rows: vec![Row(
+                codes::UNKNOWN_TOPIC_OR_PARTITION,
+                "authz-auto-create-disabled",
+                i32::MIN,
+            )],
+            creates: &[],
+        },
+    ]
+}
 
-    let fixture = start().await;
-    for case in cases {
+/// Kafka's `handleTopicMetadataRequest`: `Describe` first, then cluster
+/// `Create`, then topic `Create`, for a missing topic that the request asks to
+/// auto-create on a broker whose `auto.create.topics.enable` holds, and no
+/// auto-creation at all on one where it does not; rows ordered described, denied `Create`, denied `Describe`;
+/// one row per distinct name; and the topic authorized operations on every
+/// described row, the rows for missing topics included.
+#[tokio::test]
+async fn topic_rows_follow_kafka_authorization_and_auto_creation() {
+    use Expect::{Existing, Row};
+    let enabled = start(true).await;
+    let disabled = start(false).await;
+    for case in topic_row_cases() {
+        let fixture = if case.auto_create_topics_enable {
+            &enabled
+        } else {
+            &disabled
+        };
         let existing = fixture.existing_row(case.version).await;
         fixture.grants.set(&case.grants);
         let response = fixture
@@ -388,7 +431,8 @@ async fn topic_rows_follow_kafka_authorization_and_auto_creation() {
             }
         }
     }
-    fixture.broker.shutdown().await;
+    enabled.broker.shutdown().await;
+    disabled.broker.shutdown().await;
 }
 
 /// KIP-430 `cluster_authorized_operations`: Kafka answers 0 when `Describe`
@@ -407,7 +451,7 @@ async fn cluster_authorized_operations_need_cluster_describe() {
             DESCRIBE_BIT | CREATE_BIT,
         ),
     ];
-    let fixture = start().await;
+    let fixture = start(true).await;
     for (name, grants, expected) in cases {
         fixture.grants.set(&grants);
         let request = MetadataRequest {
@@ -426,7 +470,7 @@ async fn cluster_authorized_operations_need_cluster_describe() {
 /// principal may not describe.
 #[tokio::test]
 async fn an_empty_version_0_request_asks_for_every_topic() {
-    let fixture = start().await;
+    let fixture = start(true).await;
     let existing = fixture.existing_row(0).await;
     fixture
         .grants

@@ -30,8 +30,8 @@ use super::{
     REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS, RETENTION_UNLIMITED, SEGMENT_BYTES,
     SEGMENT_INDEX_BYTES, SEGMENT_JITTER_MS, SEGMENT_MS,
     broker_scope::{
-        BROKER_FENCED, BROKER_WITNESS, CONNECTIONS_MAX_IDLE_MS, CONNECTIONS_MAX_REAUTH_MS,
-        DEFAULT_REPLICATION_FACTOR, DELETE_TOPIC_ENABLE, NUM_PARTITIONS,
+        AUTO_CREATE_TOPICS_ENABLE, BROKER_FENCED, BROKER_WITNESS, CONNECTIONS_MAX_IDLE_MS,
+        CONNECTIONS_MAX_REAUTH_MS, DEFAULT_REPLICATION_FACTOR, DELETE_TOPIC_ENABLE, NUM_PARTITIONS,
         OFFSETS_RETENTION_CHECK_INTERVAL_MS, OFFSETS_RETENTION_MINUTES,
         REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS, STRETCH_PREFERRED_LEADER_SITE,
         TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS, TRANSACTIONAL_ID_EXPIRATION_MS,
@@ -207,6 +207,7 @@ impl ConfigKey {
                 | NUM_PARTITIONS
                 | DEFAULT_REPLICATION_FACTOR
                 | DELETE_TOPIC_ENABLE
+                | AUTO_CREATE_TOPICS_ENABLE
         )
     }
 
@@ -963,6 +964,17 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigType::Boolean,
             Some("true"),
             "Whether `DeleteTopics` may delete a topic. When it is `false`, every `DeleteTopics` request is refused: `INVALID_REQUEST` below v3 and `TOPIC_DELETION_DISABLED` from v3. Read from this node's own configuration; Kafka refuses to alter it dynamically.",
+            ValueCheck::NotAltered,
+        )
+    },
+    ConfigKey {
+        read_only: true,
+        ..key(
+            AUTO_CREATE_TOPICS_ENABLE,
+            ConfigScope::Broker,
+            ConfigType::Boolean,
+            Some("true"),
+            "Whether `Metadata` creates a topic it is asked about and that does not exist, when the request sets `allow_auto_topic_creation`. When it is `false`, such a topic answers `UNKNOWN_TOPIC_OR_PARTITION` and is not created. Read from this node's own configuration; Kafka refuses to alter it dynamically.",
             ValueCheck::NotAltered,
         )
     },

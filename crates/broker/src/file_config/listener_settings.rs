@@ -49,27 +49,45 @@ fn apply_topic_creation_properties(
     Ok(())
 }
 
-/// Kafka's `delete.topic.enable` under its Kafka name. Kafka's `ConfigDef`
-/// reads a boolean case-insensitively and refuses anything but `true` and
-/// `false` at startup, and so does this.
-fn apply_delete_topic_enable(
+/// A boolean `server_properties` value under its Kafka name, or `None` when
+/// the operator did not name it. Kafka's `ConfigDef` reads a boolean
+/// case-insensitively and refuses anything but `true` and `false` at startup,
+/// and so does this.
+fn boolean_property(
+    properties: &std::collections::BTreeMap<String, String>,
+    key: &str,
+) -> Result<Option<bool>, FileConfigError> {
+    let Some(value) = properties.get(key) else {
+        return Ok(None);
+    };
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" => Ok(Some(true)),
+        "false" => Ok(Some(false)),
+        _ => Err(FileConfigError::InvalidConfig(format!(
+            "server_properties `{key}` must be `true` or `false`, got `{value}`"
+        ))),
+    }
+}
+
+/// The static boolean broker keys Kafka reads at startup:
+/// `delete.topic.enable` and `auto.create.topics.enable`, each recorded as
+/// operator-supplied when named.
+fn apply_boolean_properties(
     properties: &std::collections::BTreeMap<String, String>,
     cfg: &mut crate::config::BrokerConfig,
 ) -> Result<(), FileConfigError> {
-    let Some(value) = properties.get(crate::config_keys::DELETE_TOPIC_ENABLE) else {
-        return Ok(());
-    };
-    cfg.delete_topic_enable = match value.trim().to_ascii_lowercase().as_str() {
-        "true" => true,
-        "false" => false,
-        _ => {
-            return Err(FileConfigError::InvalidConfig(format!(
-                "server_properties `{}` must be `true` or `false`, got `{value}`",
-                crate::config_keys::DELETE_TOPIC_ENABLE
-            )));
-        }
-    };
-    cfg.static_config_origins.delete_topic_enable = true;
+    if let Some(enabled) = boolean_property(properties, crate::config_keys::DELETE_TOPIC_ENABLE)? {
+        cfg.delete_topic_enable = enabled;
+        cfg.static_config_origins.topic_admin.delete_topic_enable = true;
+    }
+    if let Some(enabled) =
+        boolean_property(properties, crate::config_keys::AUTO_CREATE_TOPICS_ENABLE)?
+    {
+        cfg.auto_create_topics_enable = enabled;
+        cfg.static_config_origins
+            .topic_admin
+            .auto_create_topics_enable = true;
+    }
     Ok(())
 }
 
@@ -167,7 +185,7 @@ pub(super) fn apply_listener_settings(
             value.trim().eq_ignore_ascii_case("true");
     }
     apply_topic_creation_properties(&settings.server_properties, cfg)?;
-    apply_delete_topic_enable(&settings.server_properties, cfg)?;
+    apply_boolean_properties(&settings.server_properties, cfg)?;
     let num_val = settings
         .server_properties
         .get("quota.window.num")
@@ -388,25 +406,56 @@ connections_max_idle = "5s"
         }
     }
 
-    /// `delete.topic.enable` under its Kafka name: a boolean Kafka reads
-    /// case-insensitively, default `true`, and a value that is neither word
-    /// refuses the configuration.
+    /// `delete.topic.enable` and `auto.create.topics.enable` under their Kafka
+    /// names: booleans Kafka reads case-insensitively, default `true`, and a
+    /// value that is neither word refuses the configuration.
     #[test]
-    fn delete_topic_enable_is_read_from_server_properties() {
-        let cases = [
-            ("not named", "broker_id = 0\n", Ok((true, false))),
+    fn boolean_keys_are_read_from_server_properties() {
+        /// The value and the operator-supplied flag of one key.
+        type Read = fn(&crate::config::BrokerConfig) -> (bool, bool);
+        /// A label, the key it reads, the file, and the value, flag or error.
+        type Case = (
+            &'static str,
+            Read,
+            &'static str,
+            Result<(bool, bool), String>,
+        );
+        let delete: Read = |cfg| {
             (
-                "false",
+                cfg.delete_topic_enable,
+                cfg.static_config_origins.topic_admin.delete_topic_enable,
+            )
+        };
+        let auto_create: Read = |cfg| {
+            (
+                cfg.auto_create_topics_enable,
+                cfg.static_config_origins
+                    .topic_admin
+                    .auto_create_topics_enable,
+            )
+        };
+        let cases: [Case; 6] = [
+            (
+                "delete not named",
+                delete,
+                "broker_id = 0\n",
+                Ok((true, false)),
+            ),
+            (
+                "delete false",
+                delete,
                 "[server_properties]\n\"delete.topic.enable\" = \"false\"\n",
                 Ok((false, true)),
             ),
             (
-                "upper case",
+                "delete upper case",
+                delete,
                 "[server_properties]\n\"delete.topic.enable\" = \"TRUE\"\n",
                 Ok((true, true)),
             ),
             (
-                "a word",
+                "delete a word",
+                delete,
                 "[server_properties]\n\"delete.topic.enable\" = \"maybe\"\n",
                 Err(
                     "invalid config: server_properties `delete.topic.enable` must be `true` or \
@@ -414,20 +463,27 @@ connections_max_idle = "5s"
                         .to_owned(),
                 ),
             ),
+            (
+                "auto-create not named",
+                auto_create,
+                "broker_id = 0\n",
+                Ok((true, false)),
+            ),
+            (
+                "auto-create false",
+                auto_create,
+                "[server_properties]\n\"auto.create.topics.enable\" = \"False\"\n",
+                Ok((false, true)),
+            ),
         ];
         let mut actual = Vec::with_capacity(cases.len());
         let mut expected = Vec::with_capacity(cases.len());
-        for (label, src, want) in cases {
+        for (label, read, src, want) in cases {
             let file: FileConfig = toml::from_str(src).expect("parse");
             let mut cfg = crate::config::BrokerConfig::default();
             let result = file
                 .apply_to(&mut cfg)
-                .map(|()| {
-                    (
-                        cfg.delete_topic_enable,
-                        cfg.static_config_origins.delete_topic_enable,
-                    )
-                })
+                .map(|()| read(&cfg))
                 .map_err(|error| error.to_string());
             actual.push((label, result));
             expected.push((label, want));
