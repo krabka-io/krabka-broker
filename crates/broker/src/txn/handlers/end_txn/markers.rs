@@ -188,6 +188,7 @@ pub(crate) async fn dispatch_markers(
                         marker_type,
                         coordinator_epoch,
                         commit_stamp: None,
+                        transaction_version: entry.client_transaction_version,
                     },
                 )
                 .await

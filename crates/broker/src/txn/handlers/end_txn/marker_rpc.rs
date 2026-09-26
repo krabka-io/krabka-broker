@@ -160,6 +160,10 @@ fn build_write_txn_markers_request(
             transaction_result: marker_type == MarkerType::Commit,
             topics,
             coordinator_epoch,
+            // Kafka's `TransactionMarkerChannelManager` stamps the
+            // transaction's client transaction version, which decides the
+            // receiving leader's marker epoch rule. The level is 0 to 3.
+            transaction_version: i8::try_from(entry.client_transaction_version).unwrap_or(i8::MAX),
             ..Default::default()
         }],
         ..Default::default()
@@ -326,6 +330,37 @@ mod tests {
 
         assert!(request.markers.len() == 1);
         assert!(request.markers[0].coordinator_epoch == 42);
+    }
+
+    /// #876: Kafka's `TransactionMarkerChannelManager` stamps the
+    /// transaction's client transaction version on every marker it sends.
+    #[test]
+    fn marker_request_carries_the_transaction_version() {
+        let mut entry = marker_entry();
+        entry.producer_epoch = 3;
+        entry.client_transaction_version = 2;
+
+        let request = build_write_txn_markers_request(&entry, MarkerType::Commit, &tps(), 5);
+
+        assert!(
+            request
+                == WriteTxnMarkersRequest {
+                    markers: vec![WritableTxnMarker {
+                        producer_id: 7,
+                        producer_epoch: 3,
+                        transaction_result: true,
+                        topics: vec![WritableTxnMarkerTopic {
+                            name: "t".to_string(),
+                            partition_indexes: vec![0],
+                            ..Default::default()
+                        }],
+                        coordinator_epoch: 5,
+                        transaction_version: 2,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }
+        );
     }
 
     async fn send_test_markers(

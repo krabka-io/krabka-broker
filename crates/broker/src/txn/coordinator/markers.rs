@@ -119,6 +119,7 @@ impl TxnCoordinator {
                     marker_type,
                     coordinator_epoch: UNKNOWN_COORDINATOR_EPOCH,
                     commit_stamp: None,
+                    transaction_version: entry.client_transaction_version,
                 },
             )
             .await
