@@ -200,8 +200,13 @@ compose=$(download krabka-o11y-demo compose)
 test "$(sha256sum "$demo/demo/observability/docker-compose.yml" | cut -d' ' -f1)" = "$(sha256sum "$compose" | cut -d' ' -f1)"
 export KRABKA_BROKER_IMAGE="$broker_image"
 export KRABKA_O11Y_IMAGE="$(image_ref krabka-o11y)"
+export KRABKA_DEMO_IMAGE="$(image_ref krabka-o11y-demo)"
+# The candidate images publish linux/amd64 only; the compose defaults to arm64.
+export KRABKA_PLATFORM=linux/amd64
+export KRABKA_REVISION="$(revision krabka-o11y-demo)"
 export KRABKA_QUALIFICATION_ARTIFACT_DIR="$evidence/recovery"
-export KRABKA_SMOKE_TARGETS='metrics logs traces cross-signal profiles demo-produce demo-stream demo-consume'
+export KRABKA_SMOKE_TARGETS='ready metrics logs traces cross-signal profiles gres demo-produce demo-stream demo-consume'
+export KRABKA_SMOKE_TIMEOUT_SECONDS=600
 export COMPOSE_PROJECT_NAME=$scope-recovery
 mkdir -p "$KRABKA_QUALIFICATION_ARTIFACT_DIR"
 cd "$demo/demo/observability"
@@ -210,7 +215,8 @@ trap cleanup EXIT
 docker compose config --format json > "$evidence/compose.json"
 check candidate-broker jq -e --arg image "$KRABKA_BROKER_IMAGE" '.services.broker.image == $image' "$evidence/compose.json"
 check candidate-o11y jq -e --arg image "$KRABKA_O11Y_IMAGE" '.services["metrics-distributor"].image == $image' "$evidence/compose.json"
-docker compose up -d --wait --wait-timeout 600 grafana cadvisor demo-produce demo-stream demo-consume metrics-distributor metrics-compactor metrics-querier traces-distributor traces-block-builder traces-metrics-generator traces-querier logs-distributor logs-compactor logs-querier profiles-distributor profiles-block-builder profiles-querier
+check candidate-demo jq -e --arg image "$KRABKA_DEMO_IMAGE" '.services["demo-stream"].image == $image' "$evidence/compose.json"
+docker compose up -d --wait --wait-timeout 600
 check observability-recovery bash -o pipefail ./qualify-failover.sh
 for file in reconciliation.txt alerts-firing.json alerts-resolved.json seed-log-before.json seed-log-after.json seed-trace-before.pb seed-trace-after.pb profiles-before.json profiles-after.json; do
   check "retained-$file" test -s "$KRABKA_QUALIFICATION_ARTIFACT_DIR/$file"

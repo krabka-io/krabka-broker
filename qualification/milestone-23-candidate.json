@@ -116,25 +116,30 @@
     },
     {
       "repository": "krabka-io/krabka-o11y",
-      "revision": "12bce8a0093208a1e49f0258ad23b848c19e6a8b",
+      "revision": "f960dedf6bd71b85b32eeed912ad426da51baddd",
       "default_branch": "main",
       "artifacts": [
         {
           "kind": "image",
           "reference": "ghcr.io/krabka-io/krabka-o11y",
-          "digest": "sha256:1f278b3e776feb246953ea6a4ed6474be11f392e4a3a3d41819a038b52b0b23a"
+          "digest": "sha256:3032e3ba2c11a6c014e499edabd7fb6f8939f9d7d40ae659bd4dfbdad1051efa"
         }
       ]
     },
     {
       "repository": "krabka-io/krabka-o11y-demo",
-      "revision": "fadddcfb46da03a51792ab744cc8070e7fd8b779",
+      "revision": "73789644829c67107e9056b7f9718472ce2c089d",
       "default_branch": "main",
       "artifacts": [
         {
           "kind": "compose",
-          "reference": "https://raw.githubusercontent.com/krabka-io/krabka-o11y-demo/fadddcfb46da03a51792ab744cc8070e7fd8b779/demo/observability/docker-compose.yml",
-          "digest": "sha256:50b7c328fccc1c71a74164a5c9df57bb6629168b08f7ef0a617abf777d37af13"
+          "reference": "https://raw.githubusercontent.com/krabka-io/krabka-o11y-demo/73789644829c67107e9056b7f9718472ce2c089d/demo/observability/docker-compose.yml",
+          "digest": "sha256:a4d617ba3b61f58d4eaf7e47e18d8783d71e3f057206d2999489ff16fddb439c"
+        },
+        {
+          "kind": "image",
+          "reference": "ghcr.io/krabka-io/krabka-o11y-demo",
+          "digest": "sha256:45665df6fd39a93fbe1f80db13dc03c8bacc4c1214ff6b75e34a4e58a8504e3b"
         }
       ]
     },
@@ -226,5 +231,5 @@
     "url": "",
     "sha256": ""
   },
-  "runner_sha256": "sha256:d76607b823b378d25bea7c368634502c0c0a3a67819b3b349edee9a180a331e8"
+  "runner_sha256": "sha256:559f761fb932d4f5f0195dc7abd160bde495341ede9d31690ee18c963451aa67"
 }

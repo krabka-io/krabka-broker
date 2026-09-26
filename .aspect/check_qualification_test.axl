@@ -36,7 +36,7 @@ _ARTIFACT_KINDS = {
     "krabka-io/krabka-broker": ["image"],
     "krabka-io/krabka-cli": ["binary"],
     "krabka-io/krabka-o11y": ["image"],
-    "krabka-io/krabka-o11y-demo": ["compose"],
+    "krabka-io/krabka-o11y-demo": ["compose", "image"],
     "krabka-io/krabka-operator": ["chart", "image"],
     "krabka-io/krabka-rebalancer": ["chart", "image"],
 }
@@ -69,13 +69,13 @@ def _test_final_requires_digests_and_evidence(_ctx):
     problems = manifest_problems(_manifest(), final = True)
     check_eq("all four gates remain pending", len([problem for problem in problems if "has not passed" in problem]), 4)
     check_eq("all four gates lack evidence", len([problem for problem in problems if "has no evidence" in problem]), 4)
-    check_eq("the artifacts are mutable", len([problem for problem in problems if "artifact has no" in problem]), 8)
+    check_eq("the artifacts are mutable", len([problem for problem in problems if "artifact has no" in problem]), 9)
 
 def _test_qualified_status_is_strict_without_the_flag(_ctx):
     manifest = _manifest(status = "qualified")
     manifest["report"] = {"url": "", "sha256": ""}
     problems = manifest_problems(manifest)
-    check_eq("all artifact digests are required", len([problem for problem in problems if "artifact has no" in problem]), 8)
+    check_eq("all artifact digests are required", len([problem for problem in problems if "artifact has no" in problem]), 9)
     check_eq("all pending gates are rejected", len([problem for problem in problems if "gate has not passed" in problem]), 4)
     check_eq("all gate evidence is required", len([problem for problem in problems if "gate has no evidence" in problem]), 4)
     check_eq("the report is required", len([problem for problem in problems if "published report" in problem]), 1)

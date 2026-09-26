@@ -40,7 +40,7 @@ _ARTIFACT_KINDS = {
     "krabka-io/krabka-broker": ["image"],
     "krabka-io/krabka-cli": ["binary"],
     "krabka-io/krabka-o11y": ["image"],
-    "krabka-io/krabka-o11y-demo": ["compose"],
+    "krabka-io/krabka-o11y-demo": ["compose", "image"],
     "krabka-io/krabka-operator": ["chart", "image"],
     "krabka-io/krabka-rebalancer": ["chart", "image"],
 }
