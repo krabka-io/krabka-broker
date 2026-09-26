@@ -93,7 +93,7 @@ WORKSPACE_RUSTC_FLAGS = ["-Funsafe_code"]
 # The root `Cargo.toml`'s `[workspace.package] version`. It reaches the release
 # artifacts through the purl `crate_library` stamps below, so a release bump
 # has to land here as well as in the manifest.
-WORKSPACE_VERSION = "0.6.0"
+WORKSPACE_VERSION = "0.6.1"
 
 def _features():
     return DEP_DATA[native.package_name()]["crate_features"]
