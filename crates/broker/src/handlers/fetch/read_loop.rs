@@ -58,6 +58,20 @@ struct LongPollState {
     /// not the per-partition cap itself, can still push the response over
     /// the whole budget.
     remaining_response_bytes: usize,
+    /// Whether some partition already in this response was read at a
+    /// budget of zero and came back with bytes anyway, because
+    /// `Log::read_raw` guarantees at least one complete batch however small
+    /// the budget it is given.
+    ///
+    /// That guarantee exists so a fetch parked behind one huge record still
+    /// makes progress, and Kafka grants it to exactly one partition per
+    /// response (`minOneMessage` on the first partition read). Granting it
+    /// again to every later partition whose own turn finds the budget
+    /// already spent would let a fetch over many nonempty partitions answer
+    /// with one oversized batch each, exceeding `max_bytes` by an amount
+    /// proportional to the partition count -- so once this is `true`, a
+    /// partition found at a zero budget gets a metadata-only read instead.
+    granted_oversized_read: bool,
 }
 
 impl LongPollState {
@@ -70,6 +84,35 @@ impl LongPollState {
     fn partition_read_budget(&self, requested_max_bytes: i32) -> i32 {
         let requested = usize::try_from(requested_max_bytes.max(0)).unwrap_or(usize::MAX);
         i32::try_from(requested.min(self.remaining_response_bytes)).unwrap_or(i32::MAX)
+    }
+
+    /// Whether a partition read at `budget` should be metadata-only (no
+    /// records attempted) rather than a real read that `Log::read_raw`
+    /// would still serve at least one batch out of.
+    ///
+    /// True only once the response's one-batch progress exception has
+    /// already gone to an earlier partition and this partition's own budget
+    /// is fully spent. A nonzero budget is never metadata-only: it is a
+    /// real cap the log read already honors on its own.
+    fn wants_metadata_only(&self, budget: i32) -> bool {
+        budget == 0 && self.granted_oversized_read
+    }
+
+    /// Records whether a read just made spent this response's one progress
+    /// exception, by serving more bytes than its own `budget` allowed.
+    ///
+    /// That overrun is `Log::read_raw`'s "at least one whole batch"
+    /// guarantee firing, whether `budget` itself was already zero or merely
+    /// too small for the one batch the partition had -- either way, the
+    /// exception has now been spent for the rest of this response. A read
+    /// that stayed within its budget, including one that served nothing at a
+    /// zero budget because there was nothing left to read, leaves the
+    /// exception free for the first partition that does need it.
+    fn record_progress_exception(&mut self, budget: i32, served: usize) {
+        let budget = usize::try_from(budget.max(0)).unwrap_or(usize::MAX);
+        if served > budget {
+            self.granted_oversized_read = true;
+        }
     }
 
     /// Charges `served` bytes against the response budget. Saturates at
@@ -172,6 +215,7 @@ pub(super) async fn execute_pending_reads(
         bytes: vec![0; pending.len()],
         cold_served: vec![false; pending.len()],
         remaining_response_bytes: response_max_bytes,
+        granted_oversized_read: false,
     };
     // Arm the long poll's waiters before the first read pass, so that an
     // append landing between a partition's read and the park cannot be lost.
@@ -198,6 +242,13 @@ pub(super) async fn execute_pending_reads(
             read.out = refused;
             continue;
         }
+        // Cap this partition's read at what the response has left. The
+        // original per-partition request stays in `read.max_bytes`, which a
+        // later long-poll re-read of this same partition still consults;
+        // only the current pass's own budget is capped here.
+        let requested_max_bytes = read.max_bytes;
+        let budget = state.partition_read_budget(requested_max_bytes);
+        let metadata_only = state.wants_metadata_only(budget);
         let started = std::time::Instant::now();
         state.bytes[index] = do_read(
             &partition,
@@ -205,7 +256,7 @@ pub(super) async fn execute_pending_reads(
                 topic_id: Some(uuid::Uuid::from_bytes(read.topic_id.0)),
                 hot_tail: Some(broker.hot_tail.clone()),
                 fetch_offset: Offset(read.fetch_offset),
-                max_bytes: state.partition_read_budget(read.max_bytes),
+                max_bytes: budget,
                 read_committed: read.read_committed,
                 is_follower_fetch: read.is_follower_fetch,
                 sendfile_capable,
@@ -214,6 +265,18 @@ pub(super) async fn execute_pending_reads(
             &mut read.out,
         )
         .await?;
+        if metadata_only {
+            // The response's one-batch progress exception already went to an
+            // earlier partition. `Log::read_raw` still serves at least one
+            // whole batch at a zero budget, so discard what it just read
+            // rather than let a second oversized batch out: this partition's
+            // row keeps its watermarks and no records, matching what Kafka
+            // sends a partition beyond the byte budget.
+            read.out.records = None;
+            state.bytes[index] = 0;
+        } else {
+            state.record_progress_exception(budget, state.bytes[index]);
+        }
         read.cpu_micros = read
             .cpu_micros
             .saturating_add(u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX));
@@ -222,7 +285,15 @@ pub(super) async fn execute_pending_reads(
         // feeds the rebalancer, while the phase is per request and is the
         // Fetch half of `request_local_duration_seconds`.
         phases.add_local(started.elapsed());
+        // `serve_from_cold_tier` reads its budget off `read.max_bytes`
+        // itself, so this pass's capped budget is loaned to it here and
+        // given back immediately after: the field's steady-state value stays
+        // the original per-partition request, which is what a later
+        // long-poll re-read of this partition (or an epoch recheck) must
+        // still see.
+        read.max_bytes = budget;
         let cold = serve_from_cold_tier(broker, read, &partition, phases).await;
+        read.max_bytes = requested_max_bytes;
         state.cold_served[index] = cold > 0;
         state.bytes[index] += cold;
         state.charge(state.bytes[index]);
@@ -402,12 +473,14 @@ async fn reread_woken(
     // budget tracks what the response currently holds, not a cumulative
     // total of every read this partition has ever produced.
     state.remaining_response_bytes += state.bytes[index];
-    let read_budget = state.partition_read_budget(read.max_bytes);
+    let requested_max_bytes = read.max_bytes;
+    let read_budget = state.partition_read_budget(requested_max_bytes);
+    let metadata_only = state.wants_metadata_only(read_budget);
     // Time the re-read so its duration accumulates into the same
     // per-partition CPU counter as the first pass (wall-clock delta;
     // see the first-pass comment for why this replaces TaskMonitor).
     let read_start = std::time::Instant::now();
-    let bytes = do_read(
+    let mut bytes = do_read(
         &part,
         ReadRequest {
             topic_id: Some(uuid::Uuid::from_bytes(read.topic_id.0)),
@@ -423,6 +496,16 @@ async fn reread_woken(
         &mut read.out,
     )
     .await?;
+    if metadata_only {
+        // See the first-pass comment: the progress exception already went to
+        // an earlier partition in this response, so a batch this re-read got
+        // anyway (`Log::read_raw`'s zero-budget guarantee) is discarded
+        // rather than sent.
+        read.out.records = None;
+        bytes = 0;
+    } else {
+        state.record_progress_exception(read_budget, bytes);
+    }
     let micros = u64::try_from(read_start.elapsed().as_micros()).unwrap_or(u64::MAX);
     read.cpu_micros = read.cpu_micros.saturating_add(micros);
     // The re-read is local work like the first pass, so it accumulates on
@@ -430,8 +513,12 @@ async fn reread_woken(
     phases.add_local(read_start.elapsed());
 
     // The partition may have aged past this offset while the fetch was parked,
-    // in which case the cold tier is where the records now are.
+    // in which case the cold tier is where the records now are. Loan the
+    // capped budget to it the same way the first pass does, and give the
+    // original per-partition request back afterward.
+    read.max_bytes = read_budget;
     let cold = serve_from_cold_tier(broker, read, &part, phases).await;
+    read.max_bytes = requested_max_bytes;
     state.cold_served[index] = cold > 0;
     state.bytes[index] = bytes + cold;
     state.charge(state.bytes[index]);
@@ -588,6 +675,7 @@ mod tests {
                 bytes: Vec::new(),
                 cold_served: Vec::new(),
                 remaining_response_bytes: case.response_budget,
+                granted_oversized_read: false,
             };
             for (i, step) in case.steps.iter().enumerate() {
                 let given = state.partition_read_budget(step.partition_max_bytes);
@@ -607,6 +695,331 @@ mod tests {
                 case.want_remaining
             );
         }
+    }
+
+    /// A local partition read planned against `Broker`'s "leader with no
+    /// replication target installed" default, for a topic that already holds
+    /// one appended batch at offset 0.
+    async fn nonempty_local_partition(
+        broker: &Broker,
+        dir: &std::path::Path,
+        topic: &str,
+        payload: &'static [u8],
+    ) -> std::sync::Arc<crate::partition::Partition> {
+        let part_dir = dir.join(format!("{topic}-0"));
+        std::fs::create_dir_all(&part_dir).expect("partition dir");
+        let part = crate::broker::spawn_partition(
+            topic.to_string(),
+            PartitionIndex(0),
+            dir.to_path_buf(),
+            Log::open(&part_dir, LogConfig::default()).expect("open partition log"),
+            broker.log_dir_status.clone(),
+            broker.producer_state.clone(),
+            false,
+        );
+        part.install_replication_target(None, broker.config.node_id.0, 0)
+            .await;
+        part.produce_batch(sized_batch(payload))
+            .await
+            .expect("append the partition's one batch");
+        part
+    }
+
+    /// A fetch over several nonempty partitions where the first one's single
+    /// batch already exceeds the whole response budget: `Log::read_raw`
+    /// guarantees at least one complete batch however small a budget it is
+    /// given, so the first partition's read can run over on its own. Kafka
+    /// spends that progress guarantee on exactly one partition per response;
+    /// a second nonempty partition read once the budget is gone gets a
+    /// metadata-only row -- its watermarks, no records -- rather than a
+    /// second oversized batch, or a fetch over many nonempty partitions would
+    /// exceed `max_bytes` by an amount proportional to the partition count
+    /// (PR #1135, finding 1).
+    #[tokio::test]
+    async fn only_the_first_nonempty_partition_gets_the_over_budget_batch() {
+        const TOPIC_A: &str = "budget-progress-a";
+        const TOPIC_B: &str = "budget-progress-b";
+        const PAYLOAD: &[u8; 512] = &[b'x'; 512];
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let broker_handle = Broker::start(crate::config::BrokerConfig::for_tests(
+            dir.path().to_path_buf(),
+        ))
+        .await
+        .expect("start broker");
+        let broker = broker_handle.broker_arc_for_test();
+
+        let part_a = nonempty_local_partition(&broker, dir.path(), TOPIC_A, PAYLOAD).await;
+        let part_b = nonempty_local_partition(&broker, dir.path(), TOPIC_B, PAYLOAD).await;
+
+        let request = super::EffectivePartition {
+            partition: 0,
+            current_leader_epoch: 0,
+            last_fetched_epoch: -1,
+            fetch_offset: 0,
+            log_start_offset: -1,
+            partition_max_bytes: 1 << 20,
+        };
+        let pending = vec![
+            super::PendingRead::planned(
+                TOPIC_A,
+                WireUuid::ZERO,
+                &request,
+                (false, true),
+                Some(std::sync::Arc::clone(&part_a)),
+                super::PartitionData {
+                    partition_index: 0,
+                    ..Default::default()
+                },
+            ),
+            super::PendingRead::planned(
+                TOPIC_B,
+                WireUuid::ZERO,
+                &request,
+                (false, true),
+                Some(std::sync::Arc::clone(&part_b)),
+                super::PartitionData {
+                    partition_index: 0,
+                    ..Default::default()
+                },
+            ),
+        ];
+        let phases = RequestPhases::default();
+        // A response budget far smaller than either partition's one batch:
+        // the first partition's read still serves it whole, which alone
+        // spends the entire budget before the second partition is read.
+        let (topics, _cpu) =
+            super::execute_pending_reads(&broker, pending, 0, 8, 0, false, &phases)
+                .await
+                .expect("fetch");
+
+        let served_a = &topics[0].partitions[0];
+        let served_b = &topics[1].partitions[0];
+        assert!(served_base_offsets(served_a) == vec![0]);
+        assert!(served_a.high_watermark == 1);
+        // The second partition still has data of its own, but the response
+        // budget was already spent on the first: it gets its watermarks and
+        // no records, not a second oversized batch.
+        assert!(served_b.records.is_none());
+        assert!(served_b.high_watermark == 1);
+        assert!(served_b.error_code == crate::codes::NONE);
+        broker_handle.shutdown().await;
+    }
+
+    /// A partition whose local log holds one record and then has it trimmed
+    /// away, so a fetch at offset 0 falls straight through to the cold tier
+    /// -- the shape [`serve_from_cold_tier`] exists for.
+    fn evicted_diskless_partition(
+        broker: &Broker,
+        dir: &std::path::Path,
+        topic: &str,
+    ) -> std::sync::Arc<crate::partition::Partition> {
+        let part_dir = dir.join(format!("{topic}-0"));
+        std::fs::create_dir_all(&part_dir).expect("partition dir");
+        let mut log = Log::open(&part_dir, LogConfig::default()).expect("open partition log");
+        log.append(&mut RecordBatch {
+            records: vec![Record {
+                value: Some(Bytes::from_static(b"evicted")),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .expect("append the batch retention then evicts");
+        let limit = log.log_end_offset();
+        log.trim_to_offset(limit)
+            .expect("trim the whole log away from under the fetch");
+        crate::broker::spawn_partition(
+            topic.to_string(),
+            PartitionIndex(0),
+            dir.to_path_buf(),
+            log,
+            broker.log_dir_status.clone(),
+            broker.producer_state.clone(),
+            true,
+        )
+    }
+
+    /// One encoded batch of a single record.
+    fn encoded_batch(base_offset: i64, payload: Vec<u8>) -> Bytes {
+        let mut buf = BytesMut::new();
+        RecordBatch {
+            base_offset,
+            records: vec![Record {
+                value: Some(Bytes::from(payload)),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+        .encode(&mut buf)
+        .expect("encode a diskless WAL batch");
+        buf.freeze()
+    }
+
+    /// KIP-405/diskless cold reads are bound by the response's remaining
+    /// byte budget too, and not by each partition's own uncapped
+    /// `max_bytes`. Two tiered partitions each ask for far more than the
+    /// whole response allows; the first partition's cold read alone spends
+    /// the budget, so the second partition's cold read must be capped to
+    /// what is left -- here, exactly zero -- rather than served against its
+    /// own large per-partition request (PR #1135, finding 2).
+    #[tokio::test]
+    async fn cold_tier_reads_are_capped_by_the_response_budget_left_after_an_earlier_partition() {
+        const TOPIC_A: &str = "budget-cold-a";
+        const TOPIC_B: &str = "budget-cold-b";
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let object_dir = tempfile::tempdir().expect("object tempdir");
+        let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        config.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
+            dir: object_dir.path().to_path_buf(),
+        });
+        config.remote_log_metadata = crate::config::RlmmKind::InMemory;
+        let broker_handle = Broker::start(config).await.expect("start broker");
+        let broker = broker_handle.broker_arc_for_test();
+
+        let topic_a = uuid::Uuid::from_u128(0xA0);
+        let topic_b = uuid::Uuid::from_u128(0xB0);
+        let part_a = evicted_diskless_partition(&broker, dir.path(), TOPIC_A);
+        let part_b = evicted_diskless_partition(&broker, dir.path(), TOPIC_B);
+
+        // Partition A: one cold batch big enough to spend the whole response
+        // budget by itself.
+        let batch_a = encoded_batch(0, vec![b'a'; 300]);
+        let read_handle = broker.diskless_read.as_ref().expect("diskless read handle");
+        read_handle
+            .object_store()
+            .put(
+                &Path::from("diskless-wal/a"),
+                PutPayload::from(batch_a.clone()),
+            )
+            .await
+            .expect("put partition a's cold run");
+        read_handle
+            .index
+            .lock()
+            .await
+            .apply(&crate::diskless::wal_index::WalFlushRecord {
+                object_key: "diskless-wal/a".into(),
+                format_version: crate::diskless::wal_index::WalFlushRecord::FORMAT_VERSION,
+                entries: vec![crate::diskless::wal_index::WalIndexEntry {
+                    topic_id: topic_a,
+                    partition: 0,
+                    first_offset: 0,
+                    last_offset: 0,
+                    byte_start: 0,
+                    byte_len: u32::try_from(batch_a.len()).expect("small run"),
+                    max_timestamp_ms: 0,
+                }],
+            });
+
+        // Partition B: two adjacent cold batches in one object. A read given
+        // the full, uncapped per-partition request would extend across both;
+        // a read capped to the near-zero budget left after A must stop after
+        // the first.
+        let first = encoded_batch(0, b"first".to_vec());
+        let second = encoded_batch(1, vec![b'b'; 300]);
+        let mut combined = BytesMut::new();
+        combined.extend_from_slice(&first);
+        combined.extend_from_slice(&second);
+        let combined = combined.freeze();
+        read_handle
+            .object_store()
+            .put(&Path::from("diskless-wal/b"), PutPayload::from(combined))
+            .await
+            .expect("put partition b's cold run");
+        read_handle
+            .index
+            .lock()
+            .await
+            .apply(&crate::diskless::wal_index::WalFlushRecord {
+                object_key: "diskless-wal/b".into(),
+                format_version: crate::diskless::wal_index::WalFlushRecord::FORMAT_VERSION,
+                entries: vec![
+                    crate::diskless::wal_index::WalIndexEntry {
+                        topic_id: topic_b,
+                        partition: 0,
+                        first_offset: 0,
+                        last_offset: 0,
+                        byte_start: 0,
+                        byte_len: u32::try_from(first.len()).expect("small run"),
+                        max_timestamp_ms: 0,
+                    },
+                    crate::diskless::wal_index::WalIndexEntry {
+                        topic_id: topic_b,
+                        partition: 0,
+                        first_offset: 1,
+                        last_offset: 1,
+                        byte_start: u64::try_from(first.len()).expect("small run"),
+                        byte_len: u32::try_from(second.len()).expect("small run"),
+                        max_timestamp_ms: 0,
+                    },
+                ],
+            });
+
+        let request_for = |topic_id: WireUuid| super::PendingRead {
+            topic_name: String::new(),
+            topic_id,
+            partition_index: 0,
+            current_leader_epoch: 0,
+            last_fetched_epoch: -1,
+            fetch_offset: 0,
+            max_bytes: 1 << 20,
+            read_committed: false,
+            is_follower_fetch: false,
+            fetch_only_leader: false,
+            partition: None,
+            out: super::PartitionData {
+                partition_index: 0,
+                ..Default::default()
+            },
+            cpu_micros: 0,
+        };
+        let pending = vec![
+            super::PendingRead {
+                topic_name: TOPIC_A.into(),
+                topic_id: WireUuid(topic_a.into_bytes()),
+                partition: Some(std::sync::Arc::clone(&part_a)),
+                ..request_for(WireUuid(topic_a.into_bytes()))
+            },
+            super::PendingRead {
+                topic_name: TOPIC_B.into(),
+                topic_id: WireUuid(topic_b.into_bytes()),
+                partition: Some(std::sync::Arc::clone(&part_b)),
+                ..request_for(WireUuid(topic_b.into_bytes()))
+            },
+        ];
+
+        let phases = RequestPhases::default();
+        // A response budget smaller than partition A's own cold batch: A's
+        // read alone spends it, leaving B with nothing.
+        let (topics, _cpu) =
+            super::execute_pending_reads(&broker, pending, 0, 1, 0, false, &phases)
+                .await
+                .expect("fetch");
+
+        let served_a = &topics[0].partitions[0];
+        let served_b = &topics[1].partitions[0];
+        assert!(served_a.error_code == crate::codes::NONE);
+        assert!(
+            served_a
+                .records
+                .as_ref()
+                .map(krabka_protocol::records::RecordsPayload::payload_len)
+                == Some(batch_a.len())
+        );
+        assert!(served_b.error_code == crate::codes::NONE);
+        // Capped to the near-zero budget left after A, B's cold read stops
+        // after its first batch. Served against the uncapped per-partition
+        // request instead, it would have extended into the second and come
+        // back with `first.len() + second.len()`.
+        assert!(
+            served_b
+                .records
+                .as_ref()
+                .map(krabka_protocol::records::RecordsPayload::payload_len)
+                == Some(first.len())
+        );
+        broker_handle.shutdown().await;
     }
 
     /// A cold read is a round trip to an object store, so it belongs to the
@@ -950,6 +1363,7 @@ mod tests {
             bytes: vec![0; pending.len()],
             cold_served: vec![false; pending.len()],
             remaining_response_bytes: usize::MAX,
+            granted_oversized_read: false,
         }
     }
 
