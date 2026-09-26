@@ -35,8 +35,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: aspect-build/setup-aspect@60664fabf0aa15152c69d0ee72c9a660416c7a36 # 2026.38.2
-        with:
-          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
       - name: require completed evidence
         run: aspect check-qualification --manifest "${MANIFEST}" --final
       - name: verify source revisions, branches and OCI digests still exist
@@ -86,8 +84,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: aspect-build/setup-aspect@60664fabf0aa15152c69d0ee72c9a660416c7a36 # 2026.38.2
-        with:
-          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
       - name: freeze candidate inputs
         env:
           MANIFEST: ${{ inputs.manifest || 'qualification/milestone-20.json' }}
@@ -137,7 +133,6 @@ jobs:
           name: qualification-input
       - uses: aspect-build/setup-aspect@60664fabf0aa15152c69d0ee72c9a660416c7a36 # 2026.38.2
         with:
-          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
       - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
         if: matrix.gate == 'installation' || matrix.gate == 'operator-lifecycle'
@@ -185,8 +180,6 @@ jobs:
           pattern: qualification-*
           path: qualification-downloads
       - uses: aspect-build/setup-aspect@60664fabf0aa15152c69d0ee72c9a660416c7a36 # 2026.38.2
-        with:
-          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
       - name: assemble and validate exact candidate receipts
         run: |
           set -euo pipefail
