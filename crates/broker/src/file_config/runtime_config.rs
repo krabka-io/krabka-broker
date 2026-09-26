@@ -381,19 +381,6 @@ pub struct RuntimeFileConfig {
     /// Upper clamp on `DescribeTopicPartitions`' `response_partition_limit`,
     /// Kafka's `max.request.partition.size.limit`.
     pub max_request_partition_size_limit: Option<i32>,
-    /// Maximum accepted decompression ratio for a KIP-714 telemetry payload.
-    #[serde(default, with = "krabka_units::serde_units::human::option_ratio")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Ratio>")]
-    pub telemetry_max_decompression_ratio: Option<krabka_units::Ratio>,
-    /// Minimum decompressed-output allowance granted to a telemetry payload,
-    /// whatever the ratio bound computes.
-    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
-    #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
-    pub telemetry_decompressed_output_floor: Option<ByteSize>,
-    /// Maximum decompressed-output allowance granted to a telemetry payload.
-    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
-    #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
-    pub telemetry_decompressed_output_ceiling: Option<ByteSize>,
     /// Maximum accepted decompression ratio for a produced record batch.
     #[serde(default, with = "krabka_units::serde_units::human::option_ratio")]
     #[schemars(with = "Option<crate::file_config::schema_units::Ratio>")]

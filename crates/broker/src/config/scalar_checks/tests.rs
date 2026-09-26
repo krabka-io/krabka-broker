@@ -161,17 +161,6 @@ fn rejects_invalid_additional_runtime_scalars() {
         ("acl_max_resource_name must be positive", |c| {
             c.acl_max_resource_name = <ByteSize as ByteSizeExt>::ZERO;
         }),
-        ("telemetry_max_decompression_ratio must be positive", |c| {
-            c.telemetry_max_decompression_ratio = <Ratio as RatioExt>::ZERO;
-        }),
-        (
-            "telemetry_decompressed_output_floor must be positive",
-            |c| c.telemetry_decompressed_output_floor = <ByteSize as ByteSizeExt>::ZERO,
-        ),
-        (
-            "telemetry_decompressed_output_ceiling must be positive",
-            |c| c.telemetry_decompressed_output_ceiling = <ByteSize as ByteSizeExt>::ZERO,
-        ),
         ("producer_id_expiration must be positive", |c| {
             c.producer_id_expiration = <Time as TimeExt>::ZERO;
         }),

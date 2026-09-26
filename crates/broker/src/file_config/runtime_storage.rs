@@ -217,22 +217,6 @@ impl RuntimeFileConfig {
             max_request_partition_size_limit,
             cfg.max_request_partition_size_limit
         );
-        if let Some(value) = runtime.telemetry_max_decompression_ratio {
-            cfg.telemetry_max_decompression_ratio =
-                positive_ratio("telemetry_max_decompression_ratio", value)?;
-        }
-        set_runtime_size_bytes!(
-            runtime,
-            telemetry_decompressed_output_floor,
-            cfg.telemetry_decompressed_output_floor,
-            whole_bytes_usize
-        );
-        set_runtime_size_bytes!(
-            runtime,
-            telemetry_decompressed_output_ceiling,
-            cfg.telemetry_decompressed_output_ceiling,
-            whole_bytes_usize
-        );
         if let Some(value) = runtime.record_decompression_max_ratio {
             cfg.record_decompression_max_ratio =
                 positive_ratio("record_decompression_max_ratio", value)?;

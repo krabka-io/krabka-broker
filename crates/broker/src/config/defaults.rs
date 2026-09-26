@@ -9,9 +9,7 @@ use krabka_raft::{
     BootstrapMode, ControllerFetchMissLimit, MetadataRaftCommandQueueCapacity,
     MetadataRaftFetchMax, NodeId,
 };
-use krabka_units::{
-    bytes, fraction, gibibytes, hours, kibibytes, mebibytes, millis, minutes, secs,
-};
+use krabka_units::{bytes, hours, kibibytes, mebibytes, millis, minutes, secs};
 
 use crate::{
     config::{
@@ -118,9 +116,6 @@ impl Default for BrokerConfig {
             socket_receive_buffer: mebibytes(1),
             acl_max_principal: bytes(256),
             acl_max_resource_name: bytes(256),
-            telemetry_max_decompression_ratio: fraction(100.0),
-            telemetry_decompressed_output_floor: mebibytes(16),
-            telemetry_decompressed_output_ceiling: gibibytes(1),
             record_decompression_max_ratio: record_decompression.max_ratio(),
             record_decompression_output_floor: record_decompression.output_floor(),
             record_decompression_output_ceiling: record_decompression.output_ceiling(),
@@ -322,6 +317,7 @@ impl Default for BrokerConfig {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
+    use krabka_units::gibibytes;
 
     use super::*;
 

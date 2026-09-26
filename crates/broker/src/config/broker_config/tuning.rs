@@ -165,12 +165,6 @@ macro_rules! tuning_fields {
             pub acl_max_principal: ByteSize,
             /// Maximum encoded ACL resource-name length.
             pub acl_max_resource_name: ByteSize,
-            /// Maximum accepted telemetry decompression ratio.
-            pub telemetry_max_decompression_ratio: Ratio,
-            /// Minimum telemetry decompression output allowance.
-            pub telemetry_decompressed_output_floor: ByteSize,
-            /// Maximum telemetry decompression output allowance.
-            pub telemetry_decompressed_output_ceiling: ByteSize,
             /// Maximum accepted Kafka record decompression ratio.
             pub record_decompression_max_ratio: Ratio,
             /// Minimum Kafka record decompression output allowance.

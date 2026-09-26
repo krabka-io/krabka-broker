@@ -407,8 +407,6 @@ mod tests {
             "socket_receive_buffer",
             "acl_max_principal",
             "acl_max_resource_name",
-            "telemetry_decompressed_output_floor",
-            "telemetry_decompressed_output_ceiling",
             "record_decompression_output_floor",
             "record_decompression_output_ceiling",
             // `message_max_bytes` is deliberately absent: Kafka declares it an
@@ -429,18 +427,14 @@ mod tests {
             assert!(error.to_string().contains(field), "{error}");
         }
 
-        for (field, value) in [
-            ("telemetry_max_decompression_ratio", "0"),
-            ("record_decompression_max_ratio", "0"),
-        ] {
-            let source = format!("[runtime]\n{field} = \"{value}\"\n");
-            let file: FileConfig = toml::from_str(&source).expect("parse runtime config");
-            let mut cfg = crate::config::BrokerConfig::default();
-            let error = file
-                .apply_to(&mut cfg)
-                .expect_err("invalid ratio must fail");
-            assert!(error.to_string().contains(field), "{error}");
-        }
+        let field = "record_decompression_max_ratio";
+        let source = format!("[runtime]\n{field} = \"0\"\n");
+        let file: FileConfig = toml::from_str(&source).expect("parse runtime config");
+        let mut cfg = crate::config::BrokerConfig::default();
+        let error = file
+            .apply_to(&mut cfg)
+            .expect_err("invalid ratio must fail");
+        assert!(error.to_string().contains(field), "{error}");
     }
 
     #[test]

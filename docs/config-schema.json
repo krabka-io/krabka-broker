@@ -2777,33 +2777,6 @@
             "null"
           ]
         },
-        "telemetry_decompressed_output_ceiling": {
-          "default": null,
-          "description": "Maximum decompressed-output allowance granted to a telemetry payload.",
-          "format": "byte-size",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "telemetry_decompressed_output_floor": {
-          "default": null,
-          "description": "Minimum decompressed-output allowance granted to a telemetry payload,\nwhatever the ratio bound computes.",
-          "format": "byte-size",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "telemetry_max_decompression_ratio": {
-          "default": null,
-          "description": "Maximum accepted decompression ratio for a KIP-714 telemetry payload.",
-          "format": "ratio",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "tls_reload_interval": {
           "default": null,
           "description": "Cadence at which the TLS watcher polls the certificate, key, and\nclient-CA files and rebuilds the server configuration if any changed.\nZero disables the periodic watcher.",
