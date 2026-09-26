@@ -252,19 +252,19 @@ fn rejects_invalid_additional_runtime_scalars() {
             c.share_coordinator.state_topic_min_isr = 0;
         }),
         (
-            "offsets_topic_segment_bytes: value `1024` must be >= 1048576",
+            "offsets_topic_segment_bytes: Invalid value 1024 for configuration segment.bytes: Value must be at least 1048576",
             |c| {
                 c.offsets_topic_segment_bytes = krabka_units::kibibytes(1);
             },
         ),
         (
-            "transaction_state_segment_bytes: value `1024` must be >= 1048576",
+            "transaction_state_segment_bytes: Invalid value 1024 for configuration segment.bytes: Value must be at least 1048576",
             |c| {
                 c.transaction_state_segment_bytes = krabka_units::kibibytes(1);
             },
         ),
         (
-            "share_state_segment_bytes: value `1024` must be >= 1048576",
+            "share_state_segment_bytes: Invalid value 1024 for configuration segment.bytes: Value must be at least 1048576",
             |c| {
                 c.share_coordinator.state_topic_segment_bytes = krabka_units::kibibytes(1);
             },
