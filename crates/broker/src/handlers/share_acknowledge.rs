@@ -38,7 +38,7 @@ use crate::{
     error::BrokerError,
     handlers::{
         group_read_denied,
-        share_fetch::{Renewal, apply_one_ack, renew_acknowledge_enabled},
+        share_fetch::{Renewal, apply_one_ack, member_id_is_valid, renew_acknowledge_enabled},
     },
 };
 
@@ -66,16 +66,19 @@ pub(crate) async fn handle(
         return encode_error_response(version, codes::UNSUPPORTED_VERSION);
     }
 
-    let group = req.group_id.clone().unwrap_or_default();
-    let member = req.member_id.clone().unwrap_or_default();
-
-    // Kafka's `KafkaApis.handleShareAcknowledgeRequest` checks `Read` on the
-    // group after the feature gate, and before the member, the share session
-    // and the topic checks.
+    // Kafka's `KafkaApis.handleShareAcknowledgeRequest` refuses a null group
+    // id after the feature gate, then checks `Read` on the group, then the
+    // member id format, all before the share session and the topic checks.
+    let Some(group) = req.group_id.clone() else {
+        return encode_error_response(version, codes::INVALID_REQUEST);
+    };
     let image = broker.controller.current_image();
     if group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &group) {
         return encode_error_response(version, codes::GROUP_AUTHORIZATION_FAILED);
     }
+    let Some(member) = req.member_id.clone().filter(|id| member_id_is_valid(id)) else {
+        return encode_error_response(version, codes::INVALID_REQUEST);
+    };
 
     let released = match broker.share_partition_leaders.update_acknowledge_session(
         &group,

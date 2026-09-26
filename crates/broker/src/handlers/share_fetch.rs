@@ -3,7 +3,7 @@
 //! This handler drives the per-`(group, topic, partition)`
 //! [`AcquisitionState`] machine that
 //! [`crate::share_partition::manager::SharePartitionLeaderManager`] owns. It
-//! validates the share session and checks membership. Then, for every
+//! validates the group id, the member id and the share session. Then, for every
 //! requested partition that this broker leads, it applies any piggybacked
 //! acknowledgement, expires stale locks, materializes newly produced records
 //! up to the high watermark, acquires a batch of `Available` records under a
@@ -56,12 +56,14 @@ mod persister_error_tests;
 #[cfg(test)]
 mod renew_tests;
 #[cfg(test)]
+mod request_validation_tests;
+#[cfg(test)]
 mod topic_resolution_tests;
 
 pub(crate) use self::acknowledge::{Renewal, apply_one_ack, renew_acknowledge_enabled};
 use self::{
     acquire::{AcquireContext, acquire_records},
-    authorization::{member_is_valid, topic_read_denied},
+    authorization::topic_read_denied,
     pending::PendingPartition,
     request::{collect_ack_batches, fetch_session_flags, session_release_phases},
     response::{
@@ -70,6 +72,16 @@ use self::{
     },
 };
 use crate::{broker::Broker, codes, error::BrokerError, handlers::group_read_denied};
+
+/// The longest member id that Kafka accepts: a human-readable UUID.
+const MAX_MEMBER_ID_LEN: usize = 36;
+
+/// Kafka's `KafkaApis.isMemberIdValid`: a member id is non-empty and at most
+/// 36 characters long. The length is Java's `String.length`, that is UTF-16
+/// code units.
+pub(crate) fn member_id_is_valid(member_id: &str) -> bool {
+    !member_id.is_empty() && member_id.encode_utf16().count() <= MAX_MEMBER_ID_LEN
+}
 
 /// Whether a renew-ack `ShareFetch` asks for no records and no wait:
 /// `MaxBytes`, `MinBytes`, `MaxRecords` and `MaxWaitMs` are all 0.
@@ -100,25 +112,21 @@ pub(crate) async fn handle(
     if !cfg.enable {
         return encode_error_response(version, codes::UNSUPPORTED_VERSION);
     }
-    let group = req.group_id.clone().unwrap_or_default();
-    let member = req.member_id.clone().unwrap_or_default();
+    // Kafka's `KafkaApis.handleShareFetchRequest` refuses a null group id
+    // after the feature gate, then checks `Read` on the group, then the
+    // member id format. It asks the group coordinator nothing about the
+    // member: the share session and the acquisition locks are keyed by the
+    // member id alone.
+    let Some(group) = req.group_id.clone() else {
+        return encode_error_response(version, codes::INVALID_REQUEST);
+    };
     let image = broker.controller.current_image();
-
-    // Kafka's `KafkaApis.handleShareFetchRequest` checks `Read` on the group
-    // after the feature gate, and before the member, the share session and the
-    // topic checks.
     if group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &group) {
         return encode_error_response(version, codes::GROUP_AUTHORIZATION_FAILED);
     }
-
-    // Best-effort membership check: if the group has a live share actor, the
-    // member must be present in its describe view. When no actor exists yet
-    // (e.g. the group was never joined) we are lenient and skip the check —
-    // the Task-7 tests always join via `ShareGroupHeartbeat` first, so a
-    // present actor with an absent member is the only hard failure.
-    if !member_is_valid(broker, &group, &member).await {
-        return encode_error_response(version, codes::UNKNOWN_MEMBER_ID);
-    }
+    let Some(member) = req.member_id.clone().filter(|id| member_id_is_valid(id)) else {
+        return encode_error_response(version, codes::INVALID_REQUEST);
+    };
 
     // KIP-1222: a renew-ack fetch renews locks and fetches no records, so
     // Kafka's `KafkaApis.handleShareFetchRequest` refuses one that asks for
