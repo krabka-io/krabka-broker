@@ -128,18 +128,18 @@
     },
     {
       "repository": "krabka-io/krabka-o11y-demo",
-      "revision": "73789644829c67107e9056b7f9718472ce2c089d",
+      "revision": "e4e5d08db5b9fdf792dd0c5aa12d48cc28915855",
       "default_branch": "main",
       "artifacts": [
         {
           "kind": "compose",
-          "reference": "https://raw.githubusercontent.com/krabka-io/krabka-o11y-demo/73789644829c67107e9056b7f9718472ce2c089d/demo/observability/docker-compose.yml",
-          "digest": "sha256:a4d617ba3b61f58d4eaf7e47e18d8783d71e3f057206d2999489ff16fddb439c"
+          "reference": "https://raw.githubusercontent.com/krabka-io/krabka-o11y-demo/e4e5d08db5b9fdf792dd0c5aa12d48cc28915855/demo/observability/docker-compose.yml",
+          "digest": "sha256:2f23283066c36411a8a1ccc1a9bf64db3198196ac8570a5cc267c8d995f94a9c"
         },
         {
           "kind": "image",
           "reference": "ghcr.io/krabka-io/krabka-o11y-demo",
-          "digest": "sha256:45665df6fd39a93fbe1f80db13dc03c8bacc4c1214ff6b75e34a4e58a8504e3b"
+          "digest": "sha256:3116d67f1d69e226a55a3ea8affc9a7fa99c481bce8163be59f28b687674a9a4"
         }
       ]
     },
@@ -231,5 +231,5 @@
     "url": "",
     "sha256": ""
   },
-  "runner_sha256": "sha256:cbc4724e81a6c6c29593f99a0efeceaaf73712f282aeb2f392ebc18432ba5de8"
+  "runner_sha256": "sha256:8dbaed5f731d329c64ad67bfeec570ce0e2b167b267e182708d19a23ef302fe6"
 }
