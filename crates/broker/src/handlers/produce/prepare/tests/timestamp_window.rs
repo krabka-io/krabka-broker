@@ -26,7 +26,7 @@ use crate::{
     },
     handlers::produce::{
         framing::PartitionPayload,
-        prepare::prepare_batch,
+        prepare::{DecodeEnv, prepare_batch},
         test_support::{encode_batch, image_with_topic},
         topic_settings::{TimestampPolicy, resolve_timestamp_policy},
     },
@@ -57,7 +57,11 @@ fn policy(overrides: &[(&str, &str)]) -> TimestampPolicy {
         topic: "t".into(),
         overrides: map,
     }));
-    resolve_timestamp_policy(&img, "t")
+    resolve_timestamp_policy(
+        &img,
+        "t",
+        crate::handlers::produce::topic_settings::kafka_stock_broker_default(),
+    )
 }
 
 /// A two-record batch whose records carry `first_ms` and `second_ms`, stored
@@ -97,16 +101,27 @@ fn prepare(
     topic_compression: Option<CompressionType>,
 ) -> Result<(), i16> {
     let metrics = crate::metrics::BrokerMetrics::new();
-    prepare_batch(
+    let prepared = prepare_batch(
         PartitionPayload::Slice(encode_batch(batch)),
         topic_compression,
         timestamps,
         false,
-        &Arc::from("t"),
-        &metrics,
-        RecordDecompressionPolicy::default(),
-    )
-    .map(|_| ())
+        DecodeEnv {
+            topic_name: &Arc::from("t"),
+            metrics: &metrics,
+            policy: RecordDecompressionPolicy::default(),
+        },
+        13,
+    )?;
+    // `prepare_batch` no longer refuses a batch outright over a timestamp
+    // violation -- it defers to the pipeline, the same as a keyless record on
+    // a compacted topic -- so these cases fold that back into the refusal
+    // they test for.
+    if prepared.invalid_timestamp_records.is_empty() {
+        Ok(())
+    } else {
+        Err(codes::INVALID_TIMESTAMP)
+    }
 }
 
 /// The window refuses a record outside it and admits one inside it, and it

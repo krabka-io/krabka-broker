@@ -95,7 +95,7 @@ mod tests {
     use super::*;
     use crate::handlers::produce::{
         framing::PartitionPayload,
-        prepare::{PreparedSource, prepare_batch},
+        prepare::{DecodeEnv, PreparedSource, prepare_batch},
     };
 
     #[test]
@@ -176,9 +176,12 @@ mod tests {
             None,
             crate::handlers::produce::hot_path::TimestampPolicy::default(),
             false,
-            &Arc::from("orders"),
-            &crate::metrics::BrokerMetrics::new(),
-            RecordDecompressionPolicy::default(),
+            DecodeEnv {
+                topic_name: &Arc::from("orders"),
+                metrics: &crate::metrics::BrokerMetrics::new(),
+                policy: RecordDecompressionPolicy::default(),
+            },
+            13,
         )
         .unwrap();
         match prepared.source {

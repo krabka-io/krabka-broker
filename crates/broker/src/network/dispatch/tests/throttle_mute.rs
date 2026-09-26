@@ -74,7 +74,24 @@ async fn broker_with_anonymous_quotas(
     let mut cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
     cfg.quota_throttle_max = throttle_max;
     let handle = Broker::start(cfg).await.expect("start broker");
+    seed_anonymous_quotas(&handle, quotas).await;
+    (handle, dir)
+}
 
+/// Seeds `quotas` against the ANONYMOUS user on an already-running `handle`,
+/// the way [`broker_with_anonymous_quotas`] does at startup.
+///
+/// PLAINTEXT authenticates every connection as ANONYMOUS, so that is the
+/// principal every quota in this module is looked up under. The function
+/// returns once the seeded quotas are visible in the metadata image, so a
+/// request driven afterwards is guaranteed to see them.
+///
+/// A caller that also needs a topic to exist should create it *before*
+/// calling this: seeding a `request_percentage` quota this low mutes the
+/// connection for `throttle_max` on the very next quota-charged request, so a
+/// topic created through the wire protocol afterwards would eat the mute
+/// window this function's caller is trying to test around.
+async fn seed_anonymous_quotas(handle: &crate::broker::BrokerHandle, quotas: &[(&str, f64)]) {
     let records: Vec<MetadataRecord> = quotas
         .iter()
         .map(|(key, value)| {
@@ -105,7 +122,6 @@ async fn broker_with_anonymous_quotas(
                 .all(|(name, value)| configs.get(*name) == Some(value))
         })
         .await;
-    (handle, dir)
 }
 
 /// Accepts one PLAINTEXT connection and serves it through the real dispatch
@@ -363,8 +379,15 @@ async fn a_throttled_fetch_writes_its_plan_before_the_mute() {
 /// the next request on the connection goes unserved for the window, and when
 /// the connection does speak it is that request's response, never a produce
 /// response.
+///
+/// The produce targets a topic created just before it: an `acks = 0` produce
+/// that errors on any partition closes the connection instead of muting it
+/// (#858/#860), which is a different (and also tested) behavior from the
+/// byte-rate mute-then-recover this test is about.
 #[tokio::test]
 async fn acks_zero_produce_writes_no_response_and_still_mutes() {
+    use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
+
     let mute_window = millis(1000);
     // 128 bytes/sec against an 8 KiB produce is about a minute of debt, so the
     // window saturates at the configured maximum.
@@ -372,23 +395,44 @@ async fn acks_zero_produce_writes_no_response_and_still_mutes() {
         broker_with_anonymous_quotas(mute_window, &[("producer_byte_rate", 128.0)]).await;
     let (server, mut framed) = connect_to_serve_loop(&handle).await;
 
+    let create_topics_body = encoded(
+        &CreateTopicsRequest {
+            topics: vec![CreatableTopic {
+                name: "acks-zero-mute".to_owned(),
+                num_partitions: 1,
+                replication_factor: 1,
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        },
+        7,
+    );
+    send_request(&mut framed, 19, 7, 1, &create_topics_body).await;
+    let create_topics_response = tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
+        .await
+        .expect("the response must beat the client timeout")
+        .expect("a response frame")
+        .expect("response decode");
+    check!(response_correlation_id(&create_topics_response) == 1);
+
     let produced_at = Instant::now();
     send_request(
         &mut framed,
         PRODUCE_KEY,
         PRODUCE_VERSION,
-        1,
-        &produce_body("no-such-topic", 0, 1024, 8),
+        2,
+        &produce_body("acks-zero-mute", 0, 1024, 8),
     )
     .await;
-    send_api_versions(&mut framed, 2).await;
+    send_api_versions(&mut framed, 3).await;
 
     // Nothing at all for the window: no produce response, because `acks=0`
     // asks for none, and no `ApiVersions` response, because the produce muted
     // the connection.
     let (frame, muted_for) = read_after_mute(&mut framed, produced_at).await;
     check!(
-        response_correlation_id(&frame) == 2,
+        response_correlation_id(&frame) == 3,
         "the only response must be the ApiVersions one; acks=0 writes no produce response"
     );
     check!(muted_for >= mute_window.to_std().saturating_sub(SLACK));
@@ -654,29 +698,65 @@ async fn every_charged_api_reports_its_delay_and_mutes() {
 /// Kafka's `KafkaApis.handleProduceRequest` charges no request quota for an
 /// `acks = 0` produce (#692), so a connection with only a `request_percentage`
 /// quota is not muted by one.
+///
+/// The produce targets a topic created just before the quota is seeded: an
+/// `acks = 0` produce that errors on any partition closes the connection
+/// instead (#858/#860), which would be indistinguishable here from the
+/// request-quota exemption this test is about, and creating the topic
+/// *through* the low `request_percentage` quota would itself mute the
+/// connection for the window this test needs clear of any mute.
 #[tokio::test]
 async fn acks_zero_produce_is_exempt_from_the_request_quota() {
+    use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
+
     let mute_window = millis(1000);
-    let (handle, _dir) =
-        broker_with_anonymous_quotas(mute_window, &[("request_percentage", 0.0001)]).await;
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let mut cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+    cfg.quota_throttle_max = mute_window;
+    let handle = Broker::start(cfg).await.expect("start broker");
     let (server, mut framed) = connect_to_serve_loop(&handle).await;
+
+    let create_topics_body = encoded(
+        &CreateTopicsRequest {
+            topics: vec![CreatableTopic {
+                name: "acks-zero-exempt".to_owned(),
+                num_partitions: 1,
+                replication_factor: 1,
+                ..Default::default()
+            }],
+            timeout_ms: 5_000,
+            ..Default::default()
+        },
+        7,
+    );
+    send_request(&mut framed, 19, 7, 1, &create_topics_body).await;
+    let create_topics_response = tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
+        .await
+        .expect("the response must beat the client timeout")
+        .expect("a response frame")
+        .expect("response decode");
+    check!(response_correlation_id(&create_topics_response) == 1);
+
+    // Seeded only now: the topic exists before the connection has any
+    // request-quota debt to charge against it.
+    seed_anonymous_quotas(&handle, &[("request_percentage", 0.0001)]).await;
 
     send_request(
         &mut framed,
         PRODUCE_KEY,
         PRODUCE_VERSION,
-        1,
-        &produce_body("no-such-topic", 0, 1024, 8),
+        2,
+        &produce_body("acks-zero-exempt", 0, 1024, 8),
     )
     .await;
-    send_api_versions(&mut framed, 2).await;
+    send_api_versions(&mut framed, 3).await;
 
     let next = tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
         .await
         .expect("an acks=0 produce must not mute the connection")
         .expect("a response frame")
         .expect("response decode");
-    check!(response_correlation_id(&next) == 2);
+    check!(response_correlation_id(&next) == 3);
 
     drop(framed);
     server.await.expect("serve loop joins on client EOF");

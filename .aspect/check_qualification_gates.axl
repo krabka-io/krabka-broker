@@ -513,7 +513,7 @@ for topic in classic diskless; do
   kafka source acls --add --allow-principal User:backup --operation READ --operation DESCRIBE --operation DescribeConfigs --topic "$topic"
 done
 kafka source acls --add --allow-principal User:backup --operation READ --operation DESCRIBE --group dr-group
-kafka source acls --add --allow-principal User:backup --operation READ --operation WRITE --operation DESCRIBE --topic __diskless_wal_index
+kafka source acls --add --allow-principal User:backup --operation READ --operation DESCRIBE --topic __diskless_wal_index
 kafka source topics --create --topic classic --partitions 1 --replication-factor 3 \
   --config remote.storage.enable=true --config local.retention.bytes=1 \
   --config retention.bytes=-1 --config retention.ms=604800000 --config segment.ms=1000

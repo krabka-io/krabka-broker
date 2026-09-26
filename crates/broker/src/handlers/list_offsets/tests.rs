@@ -43,15 +43,14 @@ fn topic_describe_denied_yields_topic_authorization_failed_rows() {
     };
     let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
 
-    let ctx = crate::handlers::RequestContext {
-        principal: &principal,
-        peer: &peer,
-        client_id: "client-a",
-        connection_id: "connection-a",
-        sendfile_capable: false,
-        connection_listener_name: "PLAINTEXT",
-        throttle: crate::quota::ThrottleSlot::default(),
-    };
+    let ctx = crate::handlers::RequestContext::new(
+        &principal,
+        &peer,
+        "client-a",
+        "connection-a",
+        false,
+        "PLAINTEXT",
+    );
     assert!(crate::handlers::acl_denied(
         &authorizer,
         &image,

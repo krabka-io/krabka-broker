@@ -118,15 +118,14 @@ mod tests {
         let image = MetadataImage::new(uuid::Uuid::nil());
         let principal = principal();
         let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
-        let ctx = RequestContext {
-            principal: &principal,
-            peer: &peer,
-            client_id: "client-a",
-            connection_id: "connection-a",
-            sendfile_capable: false,
-            connection_listener_name: "PLAINTEXT",
-            throttle: crate::quota::ThrottleSlot::default(),
-        };
+        let ctx = RequestContext::new(
+            &principal,
+            &peer,
+            "client-a",
+            "connection-a",
+            false,
+            "PLAINTEXT",
+        );
 
         assert!(acl_denied(
             &authorizer,
@@ -146,15 +145,14 @@ mod tests {
         let image = MetadataImage::new(uuid::Uuid::nil());
         let principal = principal();
         let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
-        let ctx = RequestContext {
-            principal: &principal,
-            peer: &peer,
-            client_id: "krabka-guard",
-            connection_id: "connection-a",
-            sendfile_capable: false,
-            connection_listener_name: "PLAINTEXT",
-            throttle: crate::quota::ThrottleSlot::default(),
-        };
+        let ctx = RequestContext::new(
+            &principal,
+            &peer,
+            "krabka-guard",
+            "connection-a",
+            false,
+            "PLAINTEXT",
+        );
 
         for (label, super_users, denied) in [
             ("an empty acl store denies by default", Vec::new(), true),

@@ -71,7 +71,7 @@
 //! # }
 //! ```
 
-#![doc(html_root_url = "https://docs.rs/krabka-remote-storage-topic/0.6.0")]
+#![doc(html_root_url = "https://docs.rs/krabka-remote-storage-topic/0.6.1")]
 
 pub mod error;
 pub mod kafka_log;
@@ -92,7 +92,7 @@ pub use kafka_log::{
 };
 pub use log::{
     AssignmentHandle, InProcessMetadataEventLog, MetadataEventLog, MetadataEventRecord,
-    MetadataEventStream, PartitionStart,
+    MetadataEventStream, PartitionStart, RangeVisitor,
 };
 pub use manager::TopicBasedRemoteLogMetadataManager;
 pub use not_ready::NotReadyRlmm;

@@ -42,6 +42,13 @@ pub(crate) struct RequestContext<'a> {
     /// mutes the connection for that long. Handlers that charge no quota leave
     /// it at zero.
     pub throttle: crate::quota::ThrottleSlot,
+    /// Set by an `acks=0` `Produce` whose response carries an error on any
+    /// partition. `KafkaApis.handleProduceRequest` closes the connection in
+    /// that case instead of muting it, because a suppressed response is the
+    /// only signal such a producer gets; the dispatch loop drains this with
+    /// [`RequestContext::take_close_after_response`] once the (empty) response
+    /// has been written and closes the connection instead of muting it.
+    close_after_response: std::sync::atomic::AtomicBool,
 }
 
 /// Connection attributes a KIP-714 telemetry handler needs to match a
@@ -72,6 +79,7 @@ impl<'a> RequestContext<'a> {
             sendfile_capable,
             connection_listener_name,
             throttle: crate::quota::ThrottleSlot::default(),
+            close_after_response: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -93,6 +101,21 @@ impl<'a> RequestContext<'a> {
     /// quota charged this request.
     pub(crate) fn take_throttle(&self) -> krabka_units::Time {
         self.throttle.take()
+    }
+
+    /// Marks this request's connection to be closed once its (suppressed)
+    /// response has been written. Only an `acks=0` `Produce` whose response
+    /// carries an error on any partition calls this.
+    pub(crate) fn mark_close_after_response(&self) {
+        self.close_after_response
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Drains the close-after-response flag [`Self::mark_close_after_response`]
+    /// set. `false` unless that call happened.
+    pub(crate) fn take_close_after_response(&self) -> bool {
+        self.close_after_response
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Kafka's group coordinator stores `InetAddress::toString()`, which is

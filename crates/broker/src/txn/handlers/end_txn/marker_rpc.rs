@@ -184,12 +184,15 @@ fn validate_marker_response(
                 ))
             })?;
         if result.error_code != codes::NONE {
-            return Err(BrokerError::Txn(format!(
-                "WriteTxnMarkers failed for {}-{} with error code {}",
-                tp.topic,
-                tp.partition.get(),
-                result.error_code
-            )));
+            return Err(BrokerError::MarkerWriteRefused {
+                code: result.error_code,
+                message: format!(
+                    "WriteTxnMarkers failed for {}-{} with error code {}",
+                    tp.topic,
+                    tp.partition.get(),
+                    result.error_code
+                ),
+            });
         }
     }
     Ok(())

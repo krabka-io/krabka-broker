@@ -14,6 +14,7 @@
 use bytes::{Bytes, BytesMut};
 use krabka_ids::{LeaderEpoch, Offset, ProducerId};
 use krabka_protocol::records::{Attributes, CRC_COVERAGE_START, HEADER_LEN, TimestampType};
+use krabka_units::prelude::{ByteSize, ByteSizeExt as _};
 use tracing::instrument;
 
 use super::Log;
@@ -247,16 +248,27 @@ impl Log {
             batch.last_offset_delta,
             base_offset,
         )?;
-        let (segment_size, index_interval, flush_on_append) = {
+        let (segment_size, segment_roll_interval, index_interval, flush_on_append) = {
             let cfg = self.config.read().unwrap();
-            (cfg.segment_size, cfg.index_interval, cfg.flush_on_append)
+            (
+                cfg.segment_size,
+                cfg.segment_roll_interval,
+                cfg.index_interval,
+                cfg.flush_on_append,
+            )
         };
-
-        let should_roll = match &self.active {
-            Some(seg) => seg.size() >= segment_size,
-            None => false,
-        };
-        if should_roll {
+        // Same append-time roll check as the owned path (`Log::should_roll_
+        // for_incoming`), against this replicated batch's own bytes and
+        // timestamp, so a follower rolls its segments at the same boundaries
+        // the leader did.
+        let incoming_size =
+            ByteSize::from_bytes(u64::try_from(batch.bytes.len()).unwrap_or(u64::MAX));
+        if self.should_roll_for_incoming(
+            incoming_size,
+            batch.max_timestamp,
+            segment_size,
+            segment_roll_interval,
+        ) {
             self.roll_active_segment()?;
         }
 

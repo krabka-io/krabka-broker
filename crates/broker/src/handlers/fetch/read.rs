@@ -274,6 +274,12 @@ fn read_records(
     // path). The descriptor is captured here under the log lock so
     // retention can't truncate the region out from under the later
     // async send (the `Arc<File>` pins the inode).
+    // Set only on the raw-byte path below, which is the only path
+    // `read_committed_aborts` ever takes (the sendfile path is skipped
+    // whenever it is set — see the comment there). It is the offset just
+    // past the last batch this call actually served, which bounds the
+    // aborted-transaction scan below to what the response carries.
+    let mut served_upper_bound: Option<Offset> = None;
     #[cfg(any(
         target_os = "linux",
         target_os = "macos",
@@ -297,9 +303,12 @@ fn read_records(
                 chosen = Some(RecordsPayload::FileRegions(desc.regions));
             }
         }
-        match chosen {
-            Some(p) => p,
-            None => RecordsPayload::Raw(log.read_raw(fetch_offset, limit_offset, read_max)?.bytes),
+        if let Some(p) = chosen {
+            p
+        } else {
+            let raw = log.read_raw(fetch_offset, limit_offset, read_max)?;
+            served_upper_bound = raw.last_offset.map(|o| o + 1);
+            RecordsPayload::Raw(raw.bytes)
         }
     };
     // Windows fallback: no safe `sendfile`/`TransmitFile`, so always
@@ -318,7 +327,9 @@ fn read_records(
         // branch above, so discard them here or `-D warnings` fails
         // the build on this target.
         let _ = (sendfile_capable, sendfile_min_bytes);
-        RecordsPayload::Raw(log.read_raw(fetch_offset, limit_offset, read_max)?.bytes)
+        let raw = log.read_raw(fetch_offset, limit_offset, read_max)?;
+        served_upper_bound = raw.last_offset.map(|o| o + 1);
+        RecordsPayload::Raw(raw.bytes)
     };
 
     // read_committed does NO server-side batch filtering: verbatim
@@ -326,10 +337,17 @@ fn read_records(
     // consumer drops them client-side via `aborted_transactions`,
     // matching Apache Kafka's behavior. Skip the Vec allocation
     // entirely when there are no aborted txns in range.
+    //
+    // The scan is bounded by the offset just past the bytes this call
+    // actually served, not by `effective_lso`: `partition_max_bytes` (or
+    // KFC-1's delivery watermark) can clip the read well short of the LSO,
+    // and Kafka's `LocalLog.addAbortedTransactions` bounds the same scan by
+    // `fetchUpperBoundOffset`, the position the read stopped at, for
+    // exactly that reason. A read that served nothing scans nothing.
     let aborted = if read_committed_aborts {
-        let mut it = log
-            .aborted_in_range(fetch_offset, effective_lso)
-            .into_iter();
+        let upper_bound =
+            served_upper_bound.map_or(fetch_offset, |served| served.min(effective_lso));
+        let mut it = log.aborted_in_range(fetch_offset, upper_bound).into_iter();
         if let Some(first) = it.next() {
             let mut v = vec![AbortedTransaction {
                 // Unwrap the log-layer `ProducerId` into the wire `i64` field.
@@ -487,7 +505,7 @@ mod tests {
         owned::fetch_response::{AbortedTransaction, PartitionData},
         records::{Attributes, Record, RecordBatch, RecordsPayload},
     };
-    use krabka_units::prelude::mebibytes;
+    use krabka_units::prelude::{ByteSizeExt as _, mebibytes};
 
     /// The read budget for the hand-off test: larger than the log it reads, so
     /// the served bytes are the whole batch under either runtime flavor.
@@ -676,6 +694,65 @@ mod tests {
                 )
         );
         assert!(read_uncommitted == (RecordsPayload::Raw(raw), Vec::new()));
+    }
+
+    /// `partition_max_bytes` can clip a read well short of the last stable
+    /// offset. The aborted-transaction scan has to stop at the bytes the
+    /// response actually carries, not at the full LSO, or a response with one
+    /// batch can carry the aborted list of a much longer range (#874).
+    #[test]
+    fn read_committed_aborted_scan_stops_at_the_bytes_actually_served() {
+        const OTHER_PID: i64 = PID + 1;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut log = Log::open(dir.path(), LogConfig::default()).expect("open log");
+        log.append(&mut transactional_batch(PID))
+            .expect("append the first transaction's data");
+        log.append(&mut abort_marker(PID))
+            .expect("append the first transaction's abort marker");
+        let clip_at = log.log_end_offset();
+        log.append(&mut transactional_batch(OTHER_PID))
+            .expect("append the second transaction's data");
+        log.append(&mut abort_marker(OTHER_PID))
+            .expect("append the second transaction's abort marker");
+        let full_end = log.log_end_offset();
+
+        // The exact byte length of the first transaction's two batches: a
+        // budget of this many bytes should serve exactly them, whatever
+        // `limit_offset` or `effective_lso` ask for beyond that.
+        let clip = log
+            .read_raw(Offset(0), clip_at, UNBOUNDED)
+            .expect("read the first transaction alone");
+
+        let log = Mutex::new(log);
+        let (records, aborted) = super::read_records(
+            &log,
+            &super::BlockingRead {
+                fetch_offset: Offset(0),
+                limit_offset: full_end,
+                // Spans both transactions; only the byte budget below clips
+                // the read to the first one.
+                effective_lso: full_end,
+                read_max: krabka_units::ByteSize::from_bytes(
+                    u64::try_from(clip.total).unwrap_or(u64::MAX),
+                ),
+                read_committed_aborts: true,
+                sendfile_capable: false,
+                sendfile_min_bytes: 0,
+            },
+        )
+        .expect("the blocking read succeeds");
+
+        assert!(records == RecordsPayload::Raw(clip.bytes));
+        assert!(
+            aborted
+                == vec![AbortedTransaction {
+                    producer_id: PID,
+                    first_offset: 0,
+                    ..AbortedTransaction::default()
+                }],
+            "the second transaction's abort must not appear: its batches were never served"
+        );
     }
 
     /// One transactional data record from `pid`, the batch that opens the

@@ -20,7 +20,7 @@ use tracing::{info, warn};
 use super::TxnCoordinator;
 use crate::txn::{
     handlers::end_txn::completion_producer_identity,
-    marker::MarkerType,
+    marker::{MarkerFailureClass, MarkerType, classify_marker_failure},
     state::{TxnEntry, TxnState},
     version::TxnVersion,
 };
@@ -168,6 +168,19 @@ impl TxnCoordinator {
             return CompletionAttempt::NothingToComplete;
         };
         if let Err(error) = self.dispatch_transaction_markers(&prepared, marker).await {
+            if classify_marker_failure(&error) == MarkerFailureClass::Fatal {
+                // A fenced producer or coordinator generation has already
+                // superseded this fan-out (#882): retrying here can never
+                // succeed, and would otherwise loop forever at
+                // `RETRY_BACKOFF`. Whatever superseded this generation is
+                // responsible for completing the transaction now.
+                warn!(
+                    tid = transactional_id,
+                    %error,
+                    "transaction completion: marker fan-out fenced by a newer generation; giving up"
+                );
+                return CompletionAttempt::NothingToComplete;
+            }
             warn!(
                 tid = transactional_id,
                 %error,

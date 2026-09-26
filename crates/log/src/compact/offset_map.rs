@@ -10,11 +10,9 @@ use krabka_ids::{Offset, ProducerId};
 use tracing::instrument;
 
 use super::{TxnDataState, batch_reader::read_all_batches, should_index_key};
-use crate::{
-    error::LogError,
-    segment::Segment,
-    txn_index::{AbortedTxn, TxnIndex},
-};
+#[cfg(test)]
+use crate::txn_index::{AbortedTxn, TxnIndex};
+use crate::{error::LogError, segment::Segment};
 
 /// Build a map of `key → latest absolute offset` across the given sealed
 /// segments in input order.
@@ -64,22 +62,18 @@ pub fn build_offset_map(segments: &[&Segment]) -> Result<HashMap<Bytes, Offset>,
 /// transaction's data records survive compaction. Once compaction removes all
 /// of the data, the marker ages out through the delete horizon.
 ///
-/// This type is seeded with the aborted-txn entries from each sealed segment's
-/// `.txnindex`, so the rewrite can rebuild the survivor `.txnindex` for
-/// transactions whose data still partly survives.
+/// The survivor set this type computes lets the rewrite rebuild each output
+/// group's own survivor `.txnindex` straight from that group's input
+/// segments, for the transactions whose data still partly survives.
 pub struct CleanedTransactionMetadata {
     /// Producers (`producer_id`) with at least one surviving data record.
     survivors: HashSet<ProducerId>,
-    /// Aborted-txn entries gathered from the consumed segments' `.txnindex`
-    /// files, in input order.
-    aborted: Vec<AbortedTxn>,
 }
 
 impl CleanedTransactionMetadata {
     /// Build the metadata. For each producer, this records whether any of its
     /// transactional DATA records will survive, that is, a data record that is
-    /// newest-for-key in `offset_map`. The aborted-txn entries come from every
-    /// sealed segment's `.txnindex`.
+    /// newest-for-key in `offset_map`.
     #[instrument(
         level = "debug",
         skip_all,
@@ -91,12 +85,7 @@ impl CleanedTransactionMetadata {
         offset_map: &HashMap<Bytes, Offset>,
     ) -> Result<Self, LogError> {
         let mut survivors: HashSet<ProducerId> = HashSet::new();
-        let mut aborted: Vec<AbortedTxn> = Vec::new();
         for seg in segments {
-            // Seed aborted-txn entries from this segment's transaction index.
-            let idx = TxnIndex::open(seg.txn_index_path())?;
-            aborted.extend(idx.entries().iter().copied());
-
             for batch in read_all_batches(seg)? {
                 // Only data batches contribute survivors. Control batches
                 // carry no data records.
@@ -122,7 +111,7 @@ impl CleanedTransactionMetadata {
             }
         }
         tracing::Span::current().record("survivors", survivors.len());
-        Ok(Self { survivors, aborted })
+        Ok(Self { survivors })
     }
 
     /// The transactional-data state for a given producer.
@@ -136,17 +125,6 @@ impl CleanedTransactionMetadata {
         } else {
             TxnDataState::DataFullyGone
         }
-    }
-
-    /// Aborted-txn entries to carry forward into the rewritten survivor
-    /// `.txnindex`. These are the entries whose aborted data still partly
-    /// survives, that is, the producer is in the survivor set. The rewrite
-    /// drops the entries of producers whose data is fully gone, together with
-    /// the marker, which is then removable.
-    pub(super) fn retained_aborted(&self) -> impl Iterator<Item = &AbortedTxn> {
-        self.aborted
-            .iter()
-            .filter(move |e| self.survivors.contains(&e.producer_id))
     }
 }
 
@@ -308,6 +286,9 @@ mod tests {
         assert2::assert!(txn.txn_state(ProducerId(0)) == TxnDataState::DataSurvives);
         assert2::assert!(txn.txn_state(ProducerId(999)) == TxnDataState::DataFullyGone);
         assert2::assert!(txn.txn_state(ProducerId(-2)) == TxnDataState::NotTransactional);
-        assert2::assert!(txn.retained_aborted().count() == 1);
+        // Which aborted-txn entries carry forward into a rewritten output's
+        // `.txnindex` is `rewrite_segments`'s job now, scoped to that
+        // output's own input segments; see
+        // `compact::rewrite::tests::a_survivor_txn_entry_lands_only_in_its_own_group_txnindex`.
     }
 }

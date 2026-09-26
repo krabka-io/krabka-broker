@@ -1,7 +1,5 @@
 # krabka-bench-driver
 
-[![Crates.io](https://img.shields.io/crates/v/krabka-bench-driver.svg)](https://crates.io/crates/krabka-bench-driver)
-[![Docs.rs](https://docs.rs/krabka-bench-driver/badge.svg)](https://docs.rs/krabka-bench-driver)
 [![CI](https://github.com/krabka-io/krabka-broker/actions/workflows/ci.yml/badge.svg)](https://github.com/krabka-io/krabka-broker/actions/workflows/ci.yml)
 
 Load driver and report aggregator for the Krabka vs Strimzi benchmark harness.
@@ -10,11 +8,7 @@ This crate is part of [Krabka](https://github.com/krabka-io/krabka-broker), a Ru
 
 ## Install
 
-```sh
-cargo add krabka-bench-driver
-```
-
-For workspace development, use the path dependency from this repository instead.
+This crate is workspace-only; use its path dependency from this repository.
 
 ## Usage example
 
@@ -60,7 +54,7 @@ The `RunOutput` JSON that the driver writes encodes its measurements as exact in
 
 ## Documentation
 
-Read the API documentation on [docs.rs/krabka-bench-driver](https://docs.rs/krabka-bench-driver). The repository README contains the project-wide setup, development, and release notes.
+Generate the API documentation with `cargo doc -p krabka-bench-driver --open`.
 
 ## License
 

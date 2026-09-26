@@ -13,6 +13,8 @@ use bytes::Bytes;
 use krabka_log::{Offset, ProducerId};
 use krabka_protocol::records::{Attributes, Record, RecordBatch};
 
+use crate::{codes, error::BrokerError};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarkerType {
     Commit,
@@ -25,6 +27,51 @@ impl MarkerType {
             MarkerType::Commit => 1,
             MarkerType::Abort => 0,
         }
+    }
+}
+
+/// How the `EndTxn` marker fan-out should react to one partition's marker
+/// write failing.
+///
+/// Kafka's `TransactionMarkerRequestCompletionHandler` classifies every
+/// per-partition `WriteTxnMarkers` code this way: a retriable code goes back
+/// into the retry queue for that partition alone, and a fencing code cancels
+/// the whole fan-out for this producer generation (a newer generation has
+/// already superseded it, so retrying cannot succeed and must not corrupt
+/// state). Every other outcome -- including a code this broker does not
+/// otherwise recognize -- is treated as retriable, since retrying is always
+/// safe (`append_marker_and_materialize` is idempotent per generation) while
+/// giving up early is not (#882).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MarkerFailureClass {
+    /// Retry this partition; the fan-out has not been superseded.
+    Retriable,
+    /// A newer producer or coordinator generation has fenced this fan-out.
+    /// Retrying cannot succeed, so the fan-out must stop.
+    Fatal,
+}
+
+/// Classify one marker-write failure by the wire code it maps to.
+///
+/// Both the local append path
+/// ([`append_marker_and_materialize`](crate::txn::handlers::write_txn_markers::append_marker_and_materialize),
+/// via [`BrokerError::ProducerEpochFenced`] / [`BrokerError::CoordinatorEpochFenced`])
+/// and the remote `WriteTxnMarkers` RPC (via [`BrokerError::MarkerWriteRefused`])
+/// go through this one classification, so a fenced producer or coordinator
+/// generation cancels the fan-out the same way whether the failing partition
+/// is local or remote.
+pub(crate) fn classify_marker_failure(error: &BrokerError) -> MarkerFailureClass {
+    let code = match error {
+        BrokerError::ProducerEpochFenced { .. } => codes::INVALID_PRODUCER_EPOCH,
+        BrokerError::CoordinatorEpochFenced { .. } => codes::TRANSACTION_COORDINATOR_FENCED,
+        BrokerError::MarkerWriteRefused { code, .. } => *code,
+        _ => return MarkerFailureClass::Retriable,
+    };
+    match code {
+        codes::INVALID_PRODUCER_EPOCH | codes::TRANSACTION_COORDINATOR_FENCED => {
+            MarkerFailureClass::Fatal
+        }
+        _ => MarkerFailureClass::Retriable,
     }
 }
 
@@ -69,6 +116,69 @@ mod tests {
     use assert2::assert;
 
     use super::*;
+
+    #[test]
+    fn classifies_fenced_generations_as_fatal_and_everything_else_as_retriable() {
+        let cases: &[(BrokerError, MarkerFailureClass)] = &[
+            (
+                BrokerError::ProducerEpochFenced {
+                    producer_id: 7,
+                    current: 3,
+                    requested: 1,
+                },
+                MarkerFailureClass::Fatal,
+            ),
+            (
+                BrokerError::CoordinatorEpochFenced {
+                    current: 9,
+                    requested: 3,
+                },
+                MarkerFailureClass::Fatal,
+            ),
+            (
+                BrokerError::MarkerWriteRefused {
+                    code: codes::INVALID_PRODUCER_EPOCH,
+                    message: "fenced".into(),
+                },
+                MarkerFailureClass::Fatal,
+            ),
+            (
+                BrokerError::MarkerWriteRefused {
+                    code: codes::TRANSACTION_COORDINATOR_FENCED,
+                    message: "fenced".into(),
+                },
+                MarkerFailureClass::Fatal,
+            ),
+            (
+                BrokerError::MarkerWriteRefused {
+                    code: codes::NOT_LEADER_OR_FOLLOWER,
+                    message: "retry".into(),
+                },
+                MarkerFailureClass::Retriable,
+            ),
+            (
+                BrokerError::MarkerWriteRefused {
+                    code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+                    message: "retry".into(),
+                },
+                MarkerFailureClass::Retriable,
+            ),
+            (
+                BrokerError::MarkerWriteRefused {
+                    code: codes::REQUEST_TIMED_OUT,
+                    message: "retry".into(),
+                },
+                MarkerFailureClass::Retriable,
+            ),
+            (
+                BrokerError::Txn("connect failed".into()),
+                MarkerFailureClass::Retriable,
+            ),
+        ];
+        for (error, expected) in cases {
+            assert!(classify_marker_failure(error) == *expected, "{error:?}");
+        }
+    }
 
     #[test]
     fn commit_marker_attribute_bits_set() {

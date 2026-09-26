@@ -109,36 +109,69 @@ async fn update_follower_progress(
     }
 }
 
-fn preferred_read_replica(
+/// Chooses a preferred read replica, or `-1` for "read from the leader".
+///
+/// Kafka's `ReplicaManager.findPreferredReadReplica` only offers a candidate
+/// whose reported range can serve `fetch_offset`: `logEndOffset >=
+/// fetchOffset` and `logStartOffset <= fetchOffset`. Without that check a
+/// consumer can be redirected to an in-ISR replica that has not replicated
+/// far enough yet, or has already trimmed the offset away, and the follower
+/// answers it `OFFSET_OUT_OF_RANGE` in the redirect's place.
+async fn preferred_read_replica(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
+    partition: &Partition,
     topic: &str,
-    partition: i32,
+    partition_index: i32,
     rack_id: &str,
+    fetch_offset: Offset,
 ) -> i32 {
     if rack_id.is_empty() {
         return -1;
     }
-    let Some(record) = image.partition(topic, partition) else {
+    let Some(record) = image.partition(topic, partition_index) else {
         return -1;
     };
     let isr: std::collections::HashSet<krabka_metadata::NodeId> =
         record.isr.iter().copied().collect();
-    let replicas: Vec<crate::replica_selector::ReplicaView> = record
-        .replicas
-        .iter()
-        .map(|&node_id| crate::replica_selector::ReplicaView {
-            node_id: i32::try_from(node_id.0).unwrap_or(-1),
-            rack: image.broker(node_id).and_then(|broker| broker.rack.clone()),
-            in_isr: isr.contains(&node_id),
-            is_witness: crate::config_keys::resolve_broker_witness(image, node_id),
-        })
-        .collect();
+    let replicas: Vec<crate::replica_selector::ReplicaView> = {
+        let state = partition.replica_state.lock().await;
+        record
+            .replicas
+            .iter()
+            .filter(|&&node_id| {
+                node_id == record.leader || state.follower_can_serve(node_id, fetch_offset)
+            })
+            .map(|&node_id| crate::replica_selector::ReplicaView {
+                node_id: i32::try_from(node_id.0).unwrap_or(-1),
+                rack: image.broker(node_id).and_then(|broker| broker.rack.clone()),
+                in_isr: isr.contains(&node_id),
+                is_witness: crate::config_keys::resolve_broker_witness(image, node_id),
+            })
+            .collect()
+    };
     broker.config.replica_selector.select(
         Some(rack_id),
         i32::try_from(record.leader.0).unwrap_or(-1),
         &replicas,
     )
+}
+
+/// The response Kafka's `ReplicaManager.readFromLog` gives a fetch it never
+/// reads: empty records at the offset snapshot's live bounds.
+///
+/// `ReplicaManager.fetchMessages` skips the log read entirely once it has
+/// named a preferred read replica (`hasPreferredReadReplica` in
+/// `maybeReadFromLocalLog` and again at `tryComplete`), and answers with this
+/// snapshot rather than parking in the fetch purgatory -- a consumer told to
+/// go elsewhere should not also wait out `fetch.max.wait.ms` on this broker
+/// first.
+async fn preferred_replica_snapshot(partition: &Partition) -> (i64, i64, i64) {
+    let hw = partition.high_watermark().await;
+    let mut log = partition.log.lock().expect("log mutex poisoned");
+    let log_start = log.log_start_offset();
+    let last_stable_offset = log.last_stable_offset(hw);
+    (hw.0, last_stable_offset.0, log_start.0)
 }
 
 /// The node that must lead a partition before a fetch may read it, or `None`
@@ -257,13 +290,25 @@ pub(super) fn apply_epoch_checks(
     if let Some((error_code, current_epoch)) =
         partition.fetch_leader_epoch_fence(request.current_leader_epoch)
     {
-        output.error_code = error_code;
-        output.current_leader = LeaderIdAndEpoch {
-            leader_id: image
-                .partition(topic, partition_index)
-                .map_or(-1, |record| i32::try_from(record.leader.0).unwrap_or(-1)),
-            leader_epoch: current_epoch,
-            ..Default::default()
+        // Kafka's `FetchResponse.partitionResponse` gives this row the -1
+        // sentinels of a refused read, same as `leader_refusal` below it: the
+        // fence trips before the log is ever touched. `CurrentLeader` is
+        // filled for `FENCED_LEADER_EPOCH` (the client is ahead) and for
+        // `NOT_LEADER_OR_FOLLOWER`, but not for `UNKNOWN_LEADER_EPOCH` (the
+        // client is behind and has nothing new to learn from it).
+        *output = PartitionData {
+            current_leader: if error_code == codes::FENCED_LEADER_EPOCH {
+                LeaderIdAndEpoch {
+                    leader_id: image
+                        .partition(topic, partition_index)
+                        .map_or(-1, |record| i32::try_from(record.leader.0).unwrap_or(-1)),
+                    leader_epoch: current_epoch,
+                    ..Default::default()
+                }
+            } else {
+                LeaderIdAndEpoch::default()
+            },
+            ..refused_read(partition_index, error_code)
         };
         return true;
     }
@@ -354,7 +399,14 @@ pub(super) fn apply_epoch_checks(
     if found_epoch >= request.last_fetched_epoch && end_offset.0 >= request.fetch_offset {
         return false;
     }
+    // Kafka's `Partition.readRecords` fills a diverging-epoch row with the
+    // partition's live bounds (`initialHighWatermark`, `initialLogStartOffset`
+    // and `initialLastStableOffset`), the same values this check already read
+    // under the log mutex above, not the zero defaults the row started from.
     output.error_code = codes::NONE;
+    output.high_watermark = high_watermark.0;
+    output.last_stable_offset = last_stable_offset.0;
+    output.log_start_offset = log_start_offset.0;
     output.diverging_epoch = EpochEndOffset {
         epoch: found_epoch.0,
         end_offset: end_offset.0,
@@ -367,8 +419,11 @@ pub(super) fn apply_epoch_checks(
 ///
 /// `KafkaApis.handleFetchRequest` uses it for a row that it refuses before the
 /// read: `UNKNOWN_TOPIC_ID`, `TOPIC_AUTHORIZATION_FAILED` and
-/// `UNKNOWN_TOPIC_OR_PARTITION`. Every offset is -1, and the aborted
-/// transactions are an empty list, not a null one.
+/// `UNKNOWN_TOPIC_OR_PARTITION`. Every offset is -1. `partitionResponse` never
+/// sets the aborted transactions, so they keep the generated default: the
+/// schema gives `AbortedTransactions` no `"default": "null"`, which makes it
+/// an empty list, not a null one. A row refused by the read itself
+/// ([`refused_read`]) is the one that carries null.
 pub(super) fn refused_partition(partition_index: i32, error_code: i16) -> PartitionData {
     PartitionData {
         partition_index,
@@ -433,7 +488,9 @@ pub(super) async fn plan_partition_read(
     // lookup, so a witness answers a consumer the same way whether or not it
     // hosts the partition.
     if !context.mode.1 && context.broker.config.is_witness() {
-        output.error_code = codes::NOT_LEADER_OR_FOLLOWER;
+        // This row never touches the log, so it carries the -1 sentinels of
+        // a refused read, like `leader_refusal` below it.
+        output = refused_read(request.partition, codes::NOT_LEADER_OR_FOLLOWER);
         // KIP-951: name the leader the consumer should go to instead. Kafka
         // fills `CurrentLeader` on every NOT_LEADER_OR_FOLLOWER row of a v16+
         // Fetch response, and the response's `NodeEndpoints` then carries that
@@ -499,7 +556,17 @@ pub(super) async fn plan_partition_read(
             .log_dir_status
             .is_offline(&partition.log_dir.load())
     {
-        output.error_code = codes::KAFKA_STORAGE_ERROR;
+        // `KAFKA_STORAGE_ERROR` (56) postdates Fetch v5; a fetcher that old
+        // has no code for it, so Kafka's `KafkaApis.handleFetchRequest`
+        // down-converts it to `NOT_LEADER_OR_FOLLOWER` for those versions.
+        // Either way this row never touches the log, so it carries the -1
+        // sentinels of a refused read.
+        let error_code = if context.version <= LAST_PRE_STORAGE_ERROR_FETCH_VERSION {
+            codes::NOT_LEADER_OR_FOLLOWER
+        } else {
+            codes::KAFKA_STORAGE_ERROR
+        };
+        let output = refused_read(request.partition, error_code);
         return PendingRead::planned(topic_name, topic_id, request, context.mode, None, output);
     }
     if context.mode.1
@@ -520,13 +587,47 @@ pub(super) async fn plan_partition_read(
             == node_id.0
     });
     if !context.mode.1 && leads {
+        let leader_partition = partition
+            .as_ref()
+            .expect("`leads` implies a local partition");
         output.preferred_read_replica = preferred_read_replica(
             context.broker,
             context.image,
+            leader_partition,
             topic_name,
             request.partition,
             context.rack_id,
-        );
+            Offset(request.fetch_offset),
+        )
+        .await;
+        if output.preferred_read_replica >= 0 {
+            // Kafka never reads the log for a fetch it is redirecting: it
+            // answers at once from the offset snapshot instead of also
+            // parking this broker's copy of the request in the fetch
+            // purgatory.
+            let (high_watermark, last_stable_offset, log_start_offset) =
+                preferred_replica_snapshot(leader_partition).await;
+            output.error_code = codes::NONE;
+            output.high_watermark = high_watermark;
+            output.last_stable_offset = last_stable_offset;
+            output.log_start_offset = log_start_offset;
+            output.records = Some(krabka_protocol::records::RecordsPayload::Raw(
+                bytes::Bytes::new(),
+            ));
+            return PendingRead {
+                fetch_only_leader,
+                ..PendingRead::planned(
+                    topic_name,
+                    topic_id,
+                    request,
+                    context.mode,
+                    // No `partition`: the read loop skips both the read and
+                    // the long-poll arm for an entry with none.
+                    None,
+                    output,
+                )
+            };
+        }
     }
     PendingRead {
         fetch_only_leader,
@@ -544,6 +645,12 @@ pub(super) async fn plan_partition_read(
 /// The first `Fetch` version that carries client metadata, from which Kafka
 /// lets a consumer read from a follower replica (KIP-392).
 const FIRST_CLIENT_METADATA_VERSION: i16 = 11;
+
+/// The last `Fetch` version a fetcher could speak before `KAFKA_STORAGE_ERROR`
+/// (56) existed. Kafka's `KafkaApis.handleFetchRequest` down-converts that
+/// code to `NOT_LEADER_OR_FOLLOWER` at this version and below, because an
+/// older fetcher has no case for the code it does not know.
+const LAST_PRE_STORAGE_ERROR_FETCH_VERSION: i16 = 5;
 
 /// Whether `follower_id` is a replica of the partition other than this node,
 /// as Kafka's `Partition.getReplica` finds it in the remote replicas of the
@@ -713,11 +820,7 @@ mod tests {
                 "client fetch",
                 false,
                 -1,
-                super::PartitionData {
-                    partition_index: 0,
-                    error_code: crate::codes::NOT_LEADER_OR_FOLLOWER,
-                    ..Default::default()
-                },
+                super::refused_read(0, crate::codes::NOT_LEADER_OR_FOLLOWER),
             ),
             (
                 "follower fetch",
@@ -757,15 +860,174 @@ mod tests {
         config.replica_selector = crate::replica_selector::ReplicaSelectorKind::RackAware;
         let broker_handle = Broker::start(config).await.expect("start broker");
         let broker = broker_handle.broker_arc_for_test();
+        let part_dir = dir.path().join("orders-0");
+        std::fs::create_dir_all(&part_dir).expect("partition dir");
+        // A freshly spawned partition's replica state has no per-follower
+        // entries yet, which default to a log end offset of 0 and an unknown
+        // (permissive) log start -- exactly what a fetch at offset 0 needs to
+        // pass the offset-range check.
+        let partition = crate::broker::spawn_partition(
+            "orders".to_string(),
+            PartitionIndex(0),
+            dir.path().to_path_buf(),
+            Log::open(&part_dir, LogConfig::default()).expect("open partition log"),
+            broker.log_dir_status.clone(),
+            broker.producer_state.clone(),
+            false,
+        );
 
         for (name, witness_ids, want) in [
             ("node 2 is a plain broker in dc-b", &[][..], 2),
             ("node 2 is the witness in dc-b", &[2u64][..], -1),
         ] {
             let image = stretch_image(witness_ids);
-            let got = super::preferred_read_replica(&broker, &image, "orders", 0, "dc-b");
+            let got = super::preferred_read_replica(
+                &broker,
+                &image,
+                &partition,
+                "orders",
+                0,
+                "dc-b",
+                super::Offset(0),
+            )
+            .await;
             assert!(got == want, "{name}: got {got}, want {want}");
         }
+        broker_handle.shutdown().await;
+    }
+
+    /// Table over the follower's reported log end and log start offset
+    /// against the fetch offset, to whether `preferred_read_replica` still
+    /// names it (#873). A candidate that could not serve the offset, either
+    /// because it has not replicated far enough or because it has already
+    /// trimmed the offset away, must never be offered.
+    #[tokio::test]
+    async fn preferred_read_replica_excludes_a_follower_outside_its_reported_range() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        config.replica_selector = crate::replica_selector::ReplicaSelectorKind::RackAware;
+        let broker_handle = Broker::start(config).await.expect("start broker");
+        let broker = broker_handle.broker_arc_for_test();
+        let part_dir = dir.path().join("orders-0");
+        std::fs::create_dir_all(&part_dir).expect("partition dir");
+        let partition = crate::broker::spawn_partition(
+            "orders".to_string(),
+            PartitionIndex(0),
+            dir.path().to_path_buf(),
+            Log::open(&part_dir, LogConfig::default()).expect("open partition log"),
+            broker.log_dir_status.clone(),
+            broker.producer_state.clone(),
+            false,
+        );
+        let image = stretch_image(&[]);
+
+        for (name, follower_leo, follower_log_start, fetch_offset, want) in [
+            ("caught up, fetch at the tail: eligible", 40, 0, 40, 2),
+            ("not replicated that far yet: excluded", 39, 0, 40, -1),
+            ("already trimmed the offset away: excluded", 40, 41, 40, -1),
+            ("in range on both bounds: eligible", 40, 10, 20, 2),
+        ] {
+            {
+                let mut state = partition.replica_state.lock().await;
+                state.install_isr(
+                    &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
+                    &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
+                    krabka_raft::NodeId(1),
+                    std::time::Instant::now(),
+                );
+                state.update_follower_leo(
+                    krabka_raft::NodeId(2),
+                    super::Offset(follower_leo),
+                    super::Offset(follower_leo.max(fetch_offset)),
+                    std::time::Instant::now(),
+                );
+                state.record_follower_log_start(
+                    krabka_raft::NodeId(2),
+                    super::Offset(follower_log_start),
+                );
+            }
+            let got = super::preferred_read_replica(
+                &broker,
+                &image,
+                &partition,
+                "orders",
+                0,
+                "dc-b",
+                super::Offset(fetch_offset),
+            )
+            .await;
+            assert!(got == want, "{name}: got {got}, want {want}");
+        }
+        broker_handle.shutdown().await;
+    }
+
+    /// A named preferred read replica skips the log read and the long poll
+    /// entirely: the response is the offset snapshot taken at plan time, with
+    /// empty records, and there is nothing left for the read loop to do with
+    /// this partition (#873).
+    #[tokio::test]
+    async fn a_named_preferred_read_replica_skips_the_read() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        config.replica_selector = crate::replica_selector::ReplicaSelectorKind::RackAware;
+        let broker_handle = Broker::start(config).await.expect("start broker");
+        let broker = broker_handle.broker_arc_for_test();
+        let part_dir = dir.path().join("orders-0");
+        std::fs::create_dir_all(&part_dir).expect("partition dir");
+        let partition = crate::broker::spawn_partition(
+            "orders".to_string(),
+            PartitionIndex(0),
+            dir.path().to_path_buf(),
+            Log::open(&part_dir, LogConfig::default()).expect("open partition log"),
+            broker.log_dir_status.clone(),
+            broker.producer_state.clone(),
+            false,
+        );
+        broker.partitions.insert(
+            "orders".into(),
+            PartitionIndex(0),
+            std::sync::Arc::clone(&partition),
+        );
+        partition
+            .install_replication_target(None, broker.config.node_id.0, 0)
+            .await;
+        let image = stretch_image(&[]);
+        let consumer = super::FetchAuthorization::Consumer {
+            denied_topics: std::collections::HashSet::new(),
+        };
+        let context = super::PendingPlanContext {
+            broker: &broker,
+            image: &image,
+            authorization: &consumer,
+            rack_id: "dc-b",
+            version: super::super::FIRST_TOPIC_ID_VERSION,
+            mode: (false, false),
+            follower_id: -1,
+        };
+        let request = super::EffectivePartition {
+            partition: 0,
+            current_leader_epoch: -1,
+            last_fetched_epoch: -1,
+            fetch_offset: 0,
+            log_start_offset: -1,
+            partition_max_bytes: 1024,
+        };
+
+        let read =
+            super::plan_partition_read(&context, "orders", super::WireUuid::ZERO, None, &request)
+                .await;
+
+        assert!(read.out.preferred_read_replica == 2);
+        assert!(read.out.error_code == crate::codes::NONE);
+        assert!(
+            matches!(read.out.records, Some(ref r) if r.payload_len() == 0),
+            "empty records, not absent ones: {:?}",
+            read.out.records
+        );
+        assert!(
+            read.partition.is_none(),
+            "no `Partition` left to read: the loop must not read or park on it"
+        );
         broker_handle.shutdown().await;
     }
 
@@ -926,6 +1188,13 @@ mod tests {
                 super::PartitionData {
                     partition_index: 0,
                     error_code: crate::codes::NONE,
+                    // A brand-new empty log's live bounds are all 0, and
+                    // `apply_epoch_checks` now fills them on this row rather
+                    // than leaving the wire defaults (-1) `PartitionData`
+                    // starts from (#872/#873).
+                    high_watermark: 0,
+                    last_stable_offset: 0,
+                    log_start_offset: 0,
                     diverging_epoch: super::EpochEndOffset {
                         epoch: -1,
                         end_offset: 0,
@@ -944,6 +1213,12 @@ mod tests {
                 super::PartitionData {
                     partition_index: 0,
                     error_code: crate::codes::NONE,
+                    high_watermark: 4,
+                    last_stable_offset: 4,
+                    // `with_history` is never trimmed, so its live log start
+                    // is still 0, not the wire default (-1) that
+                    // `apply_epoch_checks` now fills over on this row.
+                    log_start_offset: 0,
                     diverging_epoch: super::EpochEndOffset {
                         epoch: -1,
                         end_offset: 4,
@@ -975,6 +1250,12 @@ mod tests {
                 super::PartitionData {
                     partition_index: 0,
                     error_code: crate::codes::NONE,
+                    high_watermark: 4,
+                    last_stable_offset: 4,
+                    // `with_history` is never trimmed, so its live log start
+                    // is still 0, not the wire default (-1) that
+                    // `apply_epoch_checks` now fills over on this row.
+                    log_start_offset: 0,
                     diverging_epoch: super::EpochEndOffset {
                         epoch: 0,
                         end_offset: 2,

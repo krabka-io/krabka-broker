@@ -35,7 +35,7 @@ fn epoch_batch(base: i64, value: &[u8]) -> RecordBatch {
 /// `segment_size` is small enough that each append seals the previous segment,
 /// and `retention` is a millisecond, so every sealed segment is past its
 /// expiry the moment the sweep looks at it.
-pub(super) fn expired_partition(
+pub(super) async fn expired_partition(
     root: &TempDir,
     topic: &str,
     leader: NodeId,
@@ -63,6 +63,13 @@ pub(super) fn expired_partition(
         false,
     );
     part.current_leader.store(leader.0, Ordering::Relaxed);
+    // Retention now bounds every eviction reason at the high watermark
+    // (Kafka's `deletableSegments`), so a fixture whose replica state never
+    // advanced past 0 would see nothing evicted. A replica that has caught
+    // up: `set_follower_hw` clamps to the local log end, so this leaves the
+    // whole log committed, the same fixture pattern
+    // `cleaner::test_support::compactable_partition` uses.
+    part.set_follower_hw(krabka_log::Offset(i64::MAX)).await;
     part
 }
 

@@ -151,10 +151,11 @@ Benchmarks are Cargo's alone: there is no `crate_bench` rule, so `cargo bench -p
 krabka-broker` (and `-p krabka-log` for the storage suite) is how you get a
 number on your own machine. The other way is to read one somebody else already
 took: the `bench` job of the `ci` workflow runs every criterion suite on the
-nightly schedule. It alternates three runs of a reference commit and the
+nightly schedule. It alternates four runs of a reference commit and the
 candidate on one host, then publishes raw output, exact commits, host resources
-and a variance-calibrated verdict in the `benchmark-regression-evidence`
-artifact. A performance figure quoted in a comment names that run.
+and a variance-calibrated verdict with a 10% materiality floor in the
+`benchmark-regression-evidence` artifact. A performance figure quoted in a
+comment names that run.
 
 Those are microbenchmarks. [`bench/`](bench/README.md) is the other kind: a
 cluster harness that runs `krabka-bench-driver` as a Kubernetes Job against a

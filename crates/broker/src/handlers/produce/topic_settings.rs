@@ -74,7 +74,9 @@ pub struct TimestampPolicy {
     /// `message.timestamp.after.max.ms`: how far ahead of the broker's clock a
     /// producer timestamp may sit. `None` removes the bound, which is what
     /// `Long.MAX_VALUE` spells; unlike the past window, this one is bounded by
-    /// default, at [`DEFAULT_AFTER_MAX_MS`].
+    /// default, at Kafka's compiled-in one hour (this broker's compiled-in
+    /// default too -- see [`crate::config::BrokerConfig`]'s
+    /// `default_message_timestamp_after_max_ms`).
     after_max_ms: Option<i64>,
 }
 
@@ -83,9 +85,9 @@ impl Default for TimestampPolicy {
     /// neither window applied.
     ///
     /// This is not the policy a stock topic resolves to.
-    /// [`resolve_timestamp_policy`] gives an unconfigured topic Kafka's own
-    /// default, which bounds the future window at
-    /// [`DEFAULT_AFTER_MAX_MS`]. What resolves to this is a
+    /// [`resolve_timestamp_policy`] gives an unconfigured topic the broker's
+    /// own default, which normally bounds the future window at Kafka's
+    /// compiled-in one hour. What resolves to this is a
     /// `delivery.mode=scheduled` topic, whose timestamps are delivery times
     /// rather than create times, and the benchmark seam, which exists to time
     /// the append rather than the window.
@@ -131,6 +133,18 @@ impl TimestampPolicy {
                 .after_max_ms
                 .is_some_and(|after| difference.saturating_neg() > after)
     }
+
+    /// The inclusive window Kafka's `LogValidator.validateTimestamp` message
+    /// reports around `now_ms`: `[now_ms - before.max.ms, now_ms +
+    /// after.max.ms]`. An unset side reads as `i64::MAX`, the same "no bound"
+    /// value Kafka's own `Long.MAX_VALUE` default spells, and the arithmetic
+    /// saturates rather than wraps for the same reason [`Self::rejects_record`]
+    /// does.
+    pub(super) fn window(self, now_ms: i64) -> (i64, i64) {
+        let low = now_ms.saturating_sub(self.before_max_ms.unwrap_or(i64::MAX));
+        let high = now_ms.saturating_add(self.after_max_ms.unwrap_or(i64::MAX));
+        (low, high)
+    }
 }
 
 /// Kafka's `RecordBatch.NO_TIMESTAMP`: a record that carries no create time.
@@ -144,14 +158,67 @@ const NO_TIMESTAMP: i64 = -1;
 /// and is therefore unbounded, so the asymmetry here is Kafka's: a stock topic
 /// accepts a record from any point in the past and refuses one stamped more
 /// than an hour ahead of the broker's clock.
+///
+/// This is what [`crate::config::BrokerConfig::default`]'s
+/// `default_message_timestamp_after_max_ms` is set to, and
+/// [`kafka_stock_broker_default`] pins it for the tests that exercise
+/// [`resolve_timestamp_policy`] against that same value directly, without
+/// reaching into `BrokerConfig`.
+#[cfg(test)]
 const DEFAULT_AFTER_MAX_MS: i64 = 3_600_000;
+
+/// The stock `log.message.timestamp.*` broker defaults: `CreateTime`, the
+/// past window open, and the future window at [`DEFAULT_AFTER_MAX_MS`].
+///
+/// This is the broker default an operator who configured none of the three
+/// `log.message.timestamp.*` keys resolves to -- see
+/// [`crate::config::BrokerConfig`]'s `default_message_timestamp_before_max_ms`
+/// and `default_message_timestamp_after_max_ms`, and
+/// [`broker_default_timestamp_policy`], which the produce handler builds from
+/// them. This function exists so the tests below can pass
+/// [`resolve_timestamp_policy`] that same value without reaching into
+/// `BrokerConfig`.
+#[cfg(test)]
+#[must_use]
+pub(super) fn kafka_stock_broker_default() -> TimestampPolicy {
+    TimestampPolicy {
+        timestamp_type: TimestampType::CreateTime,
+        before_max_ms: None,
+        after_max_ms: Some(DEFAULT_AFTER_MAX_MS),
+    }
+}
+
+/// Build the broker-wide `log.message.timestamp.*` default
+/// [`resolve_timestamp_policy`] falls back to, from this broker's own
+/// `log.message.timestamp.type`, `log.message.timestamp.before.max.ms` and
+/// `log.message.timestamp.after.max.ms`.
+///
+/// [`TimestampPolicy`]'s fields are private to this module, so this is the
+/// seam a caller outside it (the produce handler, which reads
+/// [`crate::config::BrokerConfig`]) builds one through.
+#[must_use]
+pub(super) fn broker_default_timestamp_policy(
+    timestamp_type: TimestampType,
+    before_max_ms: Option<i64>,
+    after_max_ms: Option<i64>,
+) -> TimestampPolicy {
+    TimestampPolicy {
+        timestamp_type,
+        before_max_ms,
+        after_max_ms,
+    }
+}
 
 /// Resolve a topic's produce-time timestamp policy from the metadata image.
 ///
 /// Every topic has one, so this returns a value rather than an `Option`. A
-/// topic that configured none of the keys resolves to Kafka's own default:
-/// `CreateTime`, the past window open, and the future window at
-/// [`DEFAULT_AFTER_MAX_MS`].
+/// topic that configured none of the three keys resolves to `broker_default`
+/// -- Kafka's three `log.message.timestamp.*` broker configs, layered under
+/// the topic's `message.timestamp.*` overrides exactly as
+/// `LogConfig`'s topic keys take the matching broker key as their own
+/// default. [`kafka_stock_broker_default`] is what a broker that set none of
+/// them resolves to, which keeps an operator who configured nothing on
+/// Kafka's own compiled-in defaults.
 ///
 /// # Scheduled delivery
 ///
@@ -176,14 +243,14 @@ const DEFAULT_AFTER_MAX_MS: i64 = 3_600_000;
 pub(super) fn resolve_timestamp_policy(
     image: &krabka_metadata::MetadataImage,
     topic: &str,
+    broker_default: TimestampPolicy,
 ) -> TimestampPolicy {
     let configs = image.topic_config(topic);
     let value = |key: &str| configs.and_then(|c| c.get(key)).map(String::as_str);
-    let timestamp_type = if value(MESSAGE_TIMESTAMP_TYPE) == Some(MESSAGE_TIMESTAMP_TYPE_LOG_APPEND)
-    {
-        TimestampType::LogAppendTime
-    } else {
-        TimestampType::CreateTime
+    let timestamp_type = match value(MESSAGE_TIMESTAMP_TYPE) {
+        Some(MESSAGE_TIMESTAMP_TYPE_LOG_APPEND) => TimestampType::LogAppendTime,
+        Some(_) => TimestampType::CreateTime,
+        None => broker_default.timestamp_type,
     };
     if value(DELIVERY_MODE) == Some(DELIVERY_MODE_SCHEDULED) {
         return TimestampPolicy {
@@ -193,12 +260,12 @@ pub(super) fn resolve_timestamp_policy(
     }
     TimestampPolicy {
         timestamp_type,
-        before_max_ms: parse_timestamp_window(value(MESSAGE_TIMESTAMP_BEFORE_MAX_MS)),
+        before_max_ms: match value(MESSAGE_TIMESTAMP_BEFORE_MAX_MS) {
+            None => broker_default.before_max_ms,
+            explicit => parse_timestamp_window(explicit),
+        },
         after_max_ms: match value(MESSAGE_TIMESTAMP_AFTER_MAX_MS) {
-            // Kafka's default applies to the topic that set nothing, and only
-            // to it: an explicit value speaks for itself, `Long.MAX_VALUE`
-            // included.
-            None => Some(DEFAULT_AFTER_MAX_MS),
+            None => broker_default.after_max_ms,
             explicit => parse_timestamp_window(explicit),
         },
     }
@@ -210,10 +277,9 @@ pub(super) fn resolve_timestamp_policy(
 /// carries a value that does not parse. A negative value is a bound of its own
 /// in Kafka -- the config's minimum is 0 -- so nothing here clamps one.
 ///
-/// Unset means "no bound" only for the *past* window, whose Kafka default is
-/// `Long.MAX_VALUE`. The future window defaults to
-/// [`DEFAULT_AFTER_MAX_MS`], so [`resolve_timestamp_policy`] handles the unset
-/// case for that key before it reaches this function.
+/// This function is what a topic's own explicit override parses through.
+/// [`resolve_timestamp_policy`] handles the unset case itself, by falling
+/// back to the broker-wide default before either key reaches here.
 fn parse_timestamp_window(value: Option<&str>) -> Option<i64> {
     value
         .and_then(|raw| raw.parse::<i64>().ok())
@@ -486,13 +552,11 @@ mod tests {
 
     /// Kafka's own default policy: `CreateTime`, no bound on how old a record
     /// may be, and one hour of tolerance on how far ahead of the broker's
-    /// clock it may be stamped.
+    /// clock it may be stamped. The alias keeps the cases below reading as
+    /// "Kafka's default" while pinning it to the same value
+    /// `resolve_timestamp_policy`'s callers fall back to.
     fn kafka_default() -> TimestampPolicy {
-        TimestampPolicy {
-            timestamp_type: TimestampType::CreateTime,
-            before_max_ms: None,
-            after_max_ms: Some(DEFAULT_AFTER_MAX_MS),
-        }
+        kafka_stock_broker_default()
     }
 
     /// The keys the produce path resolves per topic, and the defaults it
@@ -559,7 +623,10 @@ mod tests {
                 topic: "t".into(),
                 overrides: map,
             }));
-            check!(resolve_timestamp_policy(&img, "t") == want, "{label}");
+            check!(
+                resolve_timestamp_policy(&img, "t", kafka_stock_broker_default()) == want,
+                "{label}"
+            );
         }
     }
 
@@ -605,7 +672,7 @@ mod tests {
                 topic: "t".into(),
                 overrides: map,
             }));
-            let resolved = resolve_timestamp_policy(&img, "t");
+            let resolved = resolve_timestamp_policy(&img, "t", kafka_stock_broker_default());
             check!(resolved == want, "{label}");
             check!(
                 resolved.bounds_records() == want.bounds_records(),
@@ -620,6 +687,62 @@ mod tests {
     fn resolve_timestamp_policy_defaults_on_an_unknown_topic() {
         let img = MetadataImage::new(Uuid::nil());
 
-        check!(resolve_timestamp_policy(&img, "ghost") == kafka_default());
+        check!(
+            resolve_timestamp_policy(&img, "ghost", kafka_stock_broker_default())
+                == kafka_default()
+        );
+    }
+
+    /// Table over (broker key value, topic override present?): a topic that
+    /// names none of the three keys takes the broker-wide default, and a
+    /// topic that names one overrides only that one.
+    ///
+    /// The three `log.message.timestamp.*` broker configs
+    /// [`crate::config::BrokerConfig`] carries are resolved through
+    /// [`broker_default_timestamp_policy`] the way the produce handler
+    /// resolves them, so an operator who sets a cluster-wide policy sees it
+    /// take effect on every topic that did not override it for itself.
+    #[test]
+    fn a_broker_wide_default_governs_a_topic_that_names_none_of_the_three_keys() {
+        let strict_broker_default =
+            broker_default_timestamp_policy(TimestampType::LogAppendTime, Some(1_000), Some(2_000));
+        let cases = [
+            (
+                "no topic override: the broker-wide default governs",
+                vec![],
+                strict_broker_default,
+            ),
+            (
+                "a topic override on one key wins for that key alone",
+                vec![(MESSAGE_TIMESTAMP_AFTER_MAX_MS, "5000")],
+                TimestampPolicy {
+                    after_max_ms: Some(5_000),
+                    ..strict_broker_default
+                },
+            ),
+            (
+                "a topic override on the type wins over the broker default",
+                vec![(MESSAGE_TIMESTAMP_TYPE, "WallClock")],
+                TimestampPolicy {
+                    timestamp_type: TimestampType::CreateTime,
+                    ..strict_broker_default
+                },
+            ),
+        ];
+        for (label, overrides, want) in cases {
+            let mut img = image_with_topic("t", &[1]);
+            let mut map = BTreeMap::new();
+            for (key, value) in overrides {
+                map.insert(key.to_string(), value.to_string());
+            }
+            img.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+                topic: "t".into(),
+                overrides: map,
+            }));
+            check!(
+                resolve_timestamp_policy(&img, "t", strict_broker_default) == want,
+                "{label}"
+            );
+        }
     }
 }

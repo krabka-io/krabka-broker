@@ -103,6 +103,7 @@ fn settings(metrics: &BrokerMetrics) -> HotPathSettings<'_> {
         decompression_policy: RecordDecompressionPolicy::default(),
         metrics,
         leader_epoch: LEADER_EPOCH,
+        version: 13,
     }
 }
 

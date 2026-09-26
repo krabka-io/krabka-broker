@@ -54,7 +54,7 @@
 //! Mixed JVM and Krabka controller quorums are outside this crate's
 //! compatibility target.
 
-#![doc(html_root_url = "https://docs.rs/krabka-raft/0.6.0")]
+#![doc(html_root_url = "https://docs.rs/krabka-raft/0.6.1")]
 
 mod config;
 mod controller;

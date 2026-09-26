@@ -44,10 +44,15 @@ pub(super) async fn handle_compact(
 ) {
     let (topic, partition) = identity;
     let (log, log_dir, log_dir_status) = storage;
-    // The pass is bounded at the high watermark, so it never rewrites a
-    // record a leader election could still take away. The watermark is read
-    // inside the writer actor, which is the only task that moves the log, so
-    // no append or truncation can land between the read and the rewrite.
+    // The pass is bounded at the last stable offset, not the high watermark:
+    // Kafka's `LogCleanerManager.cleanableOffsets` takes `lastStableOffset`,
+    // because the records between the LSO and the high watermark belong to
+    // transactions with no marker yet. Rewriting them before the commit or
+    // abort is known would leave the output segment's aborted-transaction
+    // index unable to learn about a marker that arrives later. The watermark
+    // is read inside the writer actor, which is the only task that moves the
+    // log, so no append or truncation can land between the read and the
+    // rewrite.
     let high_watermark = replica_state.lock().await.hw;
     let now = std::time::SystemTime::now();
     let now_ms = now
@@ -63,15 +68,16 @@ pub(super) async fn handle_compact(
         producer_id_expiration,
     )
     .await;
-    let context = krabka_log::CompactionContext {
-        now,
-        high_watermark,
-        active_producers,
-    };
     let log_for_blocking = Arc::clone(log);
     let join = tokio::task::spawn_blocking(move || {
-        lock_log(&log_for_blocking)
-            .compact(&context)
+        let mut log = lock_log(&log_for_blocking);
+        let last_stable_offset = log.last_stable_offset(high_watermark);
+        let context = krabka_log::CompactionContext {
+            now,
+            last_stable_offset,
+            active_producers,
+        };
+        log.compact(&context)
             .map_err(crate::error::BrokerError::from)
     });
     let result = match join.await {

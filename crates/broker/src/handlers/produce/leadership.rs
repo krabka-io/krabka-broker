@@ -92,14 +92,17 @@ pub(super) fn validate_partition_gate(
             current_leader: None,
         });
     }
-    if acks == ACKS_ALL
-        && i32::try_from(record.isr.len()).unwrap_or(i32::MAX)
-            < topic_min_insync_replicas(image, topic_name, default_min_insync_replicas)
-    {
-        return Err(PartitionGateError {
-            code: codes::NOT_ENOUGH_REPLICAS,
-            current_leader: None,
-        });
+    if acks == ACKS_ALL {
+        let configured_min_isr =
+            topic_min_insync_replicas(image, topic_name, default_min_insync_replicas);
+        let replica_count = i32::try_from(record.replicas.len()).unwrap_or(i32::MAX);
+        let effective_min_isr = configured_min_isr.min(replica_count);
+        if i32::try_from(record.isr.len()).unwrap_or(i32::MAX) < effective_min_isr {
+            return Err(PartitionGateError {
+                code: codes::NOT_ENOUGH_REPLICAS,
+                current_leader: None,
+            });
+        }
     }
     let leader_epoch = partition
         .current_leader_epoch
@@ -347,6 +350,53 @@ mod tests {
         // `acks=all` durability gate, not a partition-wide refusal.
         let admitted = gate_with_acks(&image, krabka_audit::NodeId(1), false, false, 1, 1);
         assert!(admitted.is_none(), "got {admitted:?}");
+    }
+
+    /// Kafka's `Partition.effectiveMinIsr` clamps `min.insync.replicas` to
+    /// the replica count before comparing it against the ISR. A topic with
+    /// replication factor 1 on a cluster whose default asks for 2 must still
+    /// accept `acks=all`, because the clamp brings the effective threshold
+    /// down to 1.
+    #[tokio::test]
+    async fn acks_all_clamps_min_isr_to_the_replica_count() {
+        for (name, replicas, isr_len, cluster_min_isr, want_refused) in [
+            ("rf1 clamps below the cluster default", 1, 1, 2, false),
+            ("rf1 with an empty isr still refuses", 1, 0, 2, true),
+            ("rf3 below the cluster default refuses", 3, 1, 2, true),
+            ("rf3 at the cluster default admits", 3, 2, 2, false),
+        ] {
+            let replica_ids: Vec<krabka_audit::NodeId> =
+                (1..=replicas).map(krabka_audit::NodeId).collect();
+            let mut image = image_with_topic(
+                "orders",
+                &replica_ids.iter().map(|n| n.0).collect::<Vec<_>>(),
+            );
+            image.apply(&MetadataRecord::V1Partition(
+                krabka_metadata::PartitionRecord {
+                    topic: "orders".into(),
+                    partition: 0,
+                    leader: krabka_audit::NodeId(1),
+                    replicas: replica_ids.clone(),
+                    isr: replica_ids.into_iter().take(isr_len).collect(),
+                    leader_epoch: krabka_metadata::LeaderEpoch(0),
+                    adding_replicas: vec![],
+                    removing_replicas: vec![],
+                    directories: vec![],
+                    partition_epoch: 1,
+                },
+            ));
+            image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+                node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+                config_name: crate::config_keys::MIN_INSYNC_REPLICAS.into(),
+                config_value: Some(cluster_min_isr.to_string()),
+            }));
+
+            let got = gate_with_acks(&image, krabka_audit::NodeId(1), false, false, -1, 1);
+            let refused = got
+                .as_ref()
+                .is_some_and(|(code, _)| *code == crate::codes::NOT_ENOUGH_REPLICAS);
+            assert!(refused == want_refused, "{name}: got {got:?}");
+        }
     }
 
     #[tokio::test]

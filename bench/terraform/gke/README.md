@@ -1,7 +1,7 @@
 # Reproduce the Krabka-vs-Strimzi benchmark on GKE
 
-This is the end-to-end recipe for the published [**Krabka vs Strimzi**](https://krabka-io.github.io/benchmarks/krabka-vs-strimzi/)
-Kubernetes benchmark. Provision a GKE cluster with Terraform. Install both
+This is the end-to-end recipe for the **Krabka vs Strimzi** Kubernetes
+benchmark. Provision a GKE cluster with Terraform. Install both
 operators and Prometheus. Drive each scenario through the in-cluster
 `krabka-bench-driver` Job. Then aggregate the per-run JSON into a report.
 
