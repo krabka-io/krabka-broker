@@ -51,7 +51,12 @@ pub(crate) async fn handle(
             }
         }
 
-        if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
+        // Kafka's `GroupCoordinatorService.heartbeat` answers an empty group
+        // id before any group lookup.
+        let invalid_group = req.group_id.is_empty().then_some(codes::INVALID_GROUP_ID);
+        if let Some(error_code) = invalid_group
+            .or_else(|| crate::handlers::group_coordinator_error(broker, &req.group_id))
+        {
             return crate::handlers::encode_response(
                 &HeartbeatResponse {
                     error_code,
