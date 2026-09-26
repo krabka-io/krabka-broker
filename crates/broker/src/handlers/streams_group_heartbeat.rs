@@ -626,6 +626,111 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
+    /// Kafka writes no record for a join that its coordinator refuses, so
+    /// `getOrCreateStreamsGroup` never materializes the group: neither
+    /// `ListGroups` nor `StreamsGroupDescribe` sees it, and the id keeps no
+    /// type lock. Each row sends a join that the coordinator refuses for its
+    /// own group id and compares the whole response; a later valid join then
+    /// creates the group.
+    #[tokio::test]
+    async fn handle_leaves_no_group_behind_a_join_the_coordinator_refuses() {
+        use krabka_protocol::owned::{
+            common::streams_group_heartbeat_request::topic_info::TopicInfo,
+            streams_group_heartbeat_request::Subtopology,
+        };
+
+        use crate::coordinator::unified::streams::actor::response::error_resp;
+
+        let version = streams_group_heartbeat_response::MAX_VERSION;
+        let (broker_handle, _dir) = start_broker(true).await;
+        let broker = broker_handle.broker_arc_for_test();
+        finalize_streams_version(&broker).await;
+        create_source_topic(&broker, "in").await;
+        let principal = principal();
+        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let ctx = context(&principal, &peer);
+        let with_subtopology = |group_id: &str, subtopology: Subtopology| {
+            let mut req = request(group_id);
+            req.topology
+                .as_mut()
+                .expect("the join carries a topology")
+                .subtopologies = vec![subtopology];
+            req
+        };
+        // (group id, the refused join, the expected response)
+        let rows = [
+            (
+                "no-source-topics",
+                with_subtopology(
+                    "no-source-topics",
+                    Subtopology {
+                        subtopology_id: "0".into(),
+                        ..Default::default()
+                    },
+                ),
+                error_resp(
+                    codes::STREAMS_INVALID_TOPOLOGY,
+                    Some("No source topics found for subtopology 0".into()),
+                ),
+            ),
+            (
+                "never-written-repartition",
+                with_subtopology(
+                    "never-written-repartition",
+                    Subtopology {
+                        subtopology_id: "0".into(),
+                        source_topics: vec!["in".into()],
+                        repartition_source_topics: vec![TopicInfo {
+                            name: "never-written-repartition-topic".into(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    },
+                ),
+                error_resp(
+                    codes::STREAMS_INVALID_TOPOLOGY,
+                    Some(
+                        "Failed to compute number of partitions for all repartition topics, \
+                         because a repartition source topic is never used as a sink topic."
+                            .into(),
+                    ),
+                ),
+            ),
+        ];
+
+        for (group_id, req, expected) in rows {
+            let bytes = handle(&broker, version, 1, &encode_request(&req), &ctx)
+                .await
+                .expect("handle");
+            assert!(decode_response(&bytes) == expected, "{group_id}");
+            let coordinator = &broker.group_coordinator;
+            assert!(coordinator.find_streams(group_id).is_none(), "{group_id}");
+            assert!(
+                !coordinator
+                    .streams_group_ids()
+                    .contains(&group_id.to_owned()),
+                "{group_id}"
+            );
+            assert!(coordinator.group_type(group_id).is_none(), "{group_id}");
+
+            let bytes = handle(
+                &broker,
+                version,
+                2,
+                &encode_request(&request(group_id)),
+                &ctx,
+            )
+            .await
+            .expect("handle");
+            assert!(
+                decode_response(&bytes).error_code == codes::NONE,
+                "{group_id}"
+            );
+            assert!(coordinator.find_streams(group_id).is_some(), "{group_id}");
+        }
+        broker_handle.shutdown().await;
+    }
+
     fn encode_request(req: &StreamsGroupHeartbeatRequest) -> Bytes {
         crate::test_support::encode_request(req, streams_group_heartbeat_response::MAX_VERSION)
     }

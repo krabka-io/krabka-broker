@@ -260,79 +260,49 @@ async fn actor_loop(
         tokio::select! {
             msg = rx.recv() => {
                 let Some(msg) = msg else { break };
-                match msg {
-                    StreamsGroupActorMessage::Heartbeat { request, client_id, client_host, reply } => {
-                        match handle_heartbeat(
-                            &mut actor,
-                            &config,
-                            &*offsets_log,
-                            metadata_source.as_ref(),
-                            &coordinator,
-                            &request,
-                            super::super::ClientIdentity {
-                                id: &client_id,
-                                host: &client_host,
-                            },
-                        )
-                        .await
-                        {
-                            Ok(response) => {
-                                // Kafka answers the internal topics to create
-                                // only with a response that the group accepted.
-                                let creatable_topics = if response.error_code == codes::NONE {
-                                    actor.creatable_topics.clone()
-                                } else {
-                                    Vec::new()
-                                };
-                                let _ = reply.send(StreamsHeartbeatResult {
-                                    response,
-                                    creatable_topics,
-                                });
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    group_id = %actor.state.group_id,
-                                    error = %e,
-                                    "streams-group actor exiting after log-write failure",
-                                );
-                                let _ = reply.send(StreamsHeartbeatResult {
-                                    response: response::error_resp(
-                                        codes::COORDINATOR_LOAD_IN_PROGRESS,
-                                        None,
-                                    ),
-                                    creatable_topics: Vec::new(),
-                                });
-                                break;
-                            }
-                        }
-                    }
-                    StreamsGroupActorMessage::Describe { reply } => {
-                        let _ = reply.send(build_describe(&actor.state, actor.topology.as_ref()));
-                    }
-                    StreamsGroupActorMessage::ValidateCommit { member_id, member_epoch, reply } => {
-                        // KIP-447 fencing for a streams group: member_epoch must
-                        // match the member's current epoch, mirroring the KIP-848
-                        // consumer-group check. A simple-consumer commit (empty
-                        // member_id, member_epoch == -1) is not fenced.
-                        let result: Result<(), i16> = if member_id.is_empty() {
-                            Ok(())
-                        } else {
-                            validate_member_epoch(
-                                actor.state.members.get(&member_id).map(|m| m.member_epoch),
-                                member_epoch,
-                            )
-                            .map(|_| ())
-                        };
-                        let _ = reply.send(result);
-                    }
-                    StreamsGroupActorMessage::Seed(seed) => {
-                        apply_seed(&mut actor, seed);
-                    }
-                    StreamsGroupActorMessage::Shutdown(reply) => {
-                        let _ = reply.send(());
-                        break;
+                let refused = match handle_message(
+                    &mut actor,
+                    &config,
+                    &*offsets_log,
+                    metadata_source.as_ref(),
+                    &coordinator,
+                    msg,
+                )
+                .await
+                {
+                    Step::Continue => continue,
+                    Step::Stop => break,
+                    Step::RefusedJoin(refused) => refused,
+                };
+                // Kafka writes no record for a heartbeat that its coordinator
+                // refuses, so such a heartbeat never creates the group. With
+                // nothing queued behind it, the actor of a group that holds
+                // nothing closes its mailbox, answers what raced in, and
+                // leaves no group behind.
+                if !rx.is_empty() {
+                    refused.send();
+                    continue;
+                }
+                rx.close();
+                while let Some(msg) = rx.recv().await {
+                    if let Step::RefusedJoin(other) = handle_message(
+                        &mut actor,
+                        &config,
+                        &*offsets_log,
+                        metadata_source.as_ref(),
+                        &coordinator,
+                        msg,
+                    )
+                    .await
+                    {
+                        other.send();
                     }
                 }
+                if actor.holds_nothing() {
+                    forget_abandoned_group(&coordinator, &actor.state.group_id);
+                }
+                refused.send();
+                break;
             }
             _ = tick.tick() => {
                 if handle_session_tick(&mut actor, &config, &*offsets_log, metadata_source.as_ref(), &coordinator).await.is_err() {
@@ -377,6 +347,149 @@ async fn actor_loop(
             }
         }
     }
+}
+
+/// What the actor loop does after one message.
+enum Step {
+    Continue,
+    Stop,
+    /// A heartbeat that the coordinator refused, for a group that holds
+    /// nothing. The loop sends the answer once it decided whether the group
+    /// goes away.
+    RefusedJoin(Box<DeferredReply>),
+}
+
+/// A heartbeat answer that the loop sends later.
+struct DeferredReply {
+    reply: oneshot::Sender<StreamsHeartbeatResult>,
+    response: StreamsGroupHeartbeatResponse,
+}
+
+impl DeferredReply {
+    fn send(self) {
+        let _ = self.reply.send(StreamsHeartbeatResult {
+            response: self.response,
+            creatable_topics: Vec::new(),
+        });
+    }
+}
+
+impl ActorState {
+    /// Whether the group holds nothing that a record wrote: no group epoch,
+    /// no member and no topology. Such a group exists only because a
+    /// heartbeat reached its actor.
+    fn holds_nothing(&self) -> bool {
+        self.state.group_epoch == 0 && self.state.members.is_empty() && self.topology.is_none()
+    }
+}
+
+/// Drops the registry entry and the `Streams` type lock of a group whose
+/// actor closed without writing a record. A newer actor for the same id, whose
+/// mailbox is open, keeps both.
+fn forget_abandoned_group(coordinator: &super::super::GroupCoordinator, group_id: &str) {
+    coordinator
+        .streams_groups
+        .remove_if(group_id, |_, handle| handle.tx.is_closed());
+    coordinator
+        .group_types
+        .remove_if(group_id, |_, group_type| {
+            *group_type == super::super::GroupType::Streams
+                && !coordinator.streams_groups.contains_key(group_id)
+        });
+}
+
+/// Handles one mailbox message.
+async fn handle_message(
+    actor: &mut ActorState,
+    config: &StreamsGroupConfig,
+    offsets_log: &dyn OffsetsLog,
+    metadata_source: Option<&Arc<dyn MetadataSource>>,
+    coordinator: &Arc<super::super::GroupCoordinator>,
+    msg: StreamsGroupActorMessage,
+) -> Step {
+    match msg {
+        StreamsGroupActorMessage::Heartbeat {
+            request,
+            client_id,
+            client_host,
+            reply,
+        } => {
+            match handle_heartbeat(
+                actor,
+                config,
+                offsets_log,
+                metadata_source,
+                coordinator,
+                &request,
+                super::super::ClientIdentity {
+                    id: &client_id,
+                    host: &client_host,
+                },
+            )
+            .await
+            {
+                Ok(response) if response.error_code != codes::NONE && actor.holds_nothing() => {
+                    return Step::RefusedJoin(Box::new(DeferredReply { reply, response }));
+                }
+                Ok(response) => {
+                    // Kafka answers the internal topics to create only with a
+                    // response that the group accepted.
+                    let creatable_topics = if response.error_code == codes::NONE {
+                        actor.creatable_topics.clone()
+                    } else {
+                        Vec::new()
+                    };
+                    let _ = reply.send(StreamsHeartbeatResult {
+                        response,
+                        creatable_topics,
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        group_id = %actor.state.group_id,
+                        error = %e,
+                        "streams-group actor exiting after log-write failure",
+                    );
+                    let _ = reply.send(StreamsHeartbeatResult {
+                        response: response::error_resp(codes::COORDINATOR_LOAD_IN_PROGRESS, None),
+                        creatable_topics: Vec::new(),
+                    });
+                    return Step::Stop;
+                }
+            }
+        }
+        StreamsGroupActorMessage::Describe { reply } => {
+            let _ = reply.send(build_describe(&actor.state, actor.topology.as_ref()));
+        }
+        StreamsGroupActorMessage::ValidateCommit {
+            member_id,
+            member_epoch,
+            reply,
+        } => {
+            // KIP-447 fencing for a streams group: member_epoch must
+            // match the member's current epoch, mirroring the KIP-848
+            // consumer-group check. A simple-consumer commit (empty
+            // member_id, member_epoch == -1) is not fenced.
+            let result: Result<(), i16> = if member_id.is_empty() {
+                Ok(())
+            } else {
+                validate_member_epoch(
+                    actor.state.members.get(&member_id).map(|m| m.member_epoch),
+                    member_epoch,
+                )
+                .map(|_| ())
+            };
+            let _ = reply.send(result);
+        }
+        StreamsGroupActorMessage::Seed(seed) => {
+            apply_seed(actor, seed);
+        }
+        StreamsGroupActorMessage::Shutdown(reply) => {
+            let _ = reply.send(());
+            return Step::Stop;
+        }
+    }
+    Step::Continue
 }
 
 fn resolve_group_config(
