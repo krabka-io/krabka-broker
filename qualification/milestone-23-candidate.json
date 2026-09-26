@@ -128,13 +128,13 @@
     },
     {
       "repository": "krabka-io/krabka-o11y-demo",
-      "revision": "e4e5d08db5b9fdf792dd0c5aa12d48cc28915855",
+      "revision": "5802b8bf572bf331b9e8808900a93ee9b71dcdae",
       "default_branch": "main",
       "artifacts": [
         {
           "kind": "compose",
-          "reference": "https://raw.githubusercontent.com/krabka-io/krabka-o11y-demo/e4e5d08db5b9fdf792dd0c5aa12d48cc28915855/demo/observability/docker-compose.yml",
-          "digest": "sha256:2f23283066c36411a8a1ccc1a9bf64db3198196ac8570a5cc267c8d995f94a9c"
+          "reference": "https://raw.githubusercontent.com/krabka-io/krabka-o11y-demo/5802b8bf572bf331b9e8808900a93ee9b71dcdae/demo/observability/docker-compose.yml",
+          "digest": "sha256:9f8f726de617e833f7ff1dccf8ee4f069e9b918d69cec7de473750c1eb47de45"
         },
         {
           "kind": "image",
