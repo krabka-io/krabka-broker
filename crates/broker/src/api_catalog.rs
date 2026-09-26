@@ -1026,6 +1026,16 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "",
     },
     KipAnnotation {
+        key: "KIP-1251",
+        claim: "OffsetCommit accepts an older member epoch for a partition assigned at or before that epoch",
+        status: KipStatus::Partial,
+        module: "crates/broker/src/coordinator/unified/actor/commit_validation.rs",
+        tests: &[
+            "crates/broker/src/handlers/offset_commit/group_validation_tests.rs::commit_is_fenced_by_kafka_group_rule",
+        ],
+        note: "Commits are fenced by Kafka's validateOffsetCommit, but every older epoch is still refused: krabka does not record the epoch at which each partition was assigned, so the per-partition acceptance is open (#800).",
+    },
+    KipAnnotation {
         key: "KIP-1263",
         claim: "The AssignmentTimestamp tagged field on the target-assignment metadata records",
         status: KipStatus::OutOfScope,
