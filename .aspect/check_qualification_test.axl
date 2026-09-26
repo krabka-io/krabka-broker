@@ -261,8 +261,11 @@ def _test_disaster_recovery_times_recovery_and_not_its_proof(_ctx):
         ("capture fetch", "restore-inputs/$capture_id/"),
         ("restore", "--entrypoint /usr/bin/krabka-restore"),
         ("group positions", "restore-offsets"),
-        ("recovered", "restore_ready_ms=$(date"),
         ("restored ledger", 'restored-$topic-ledger.txt" &'),
+        ("restored group", 'restored-group-offsets.txt" &'),
+        ("recovered", "restore_ready_ms=$(date"),
+        ("ledger proof", "check \"$topic-ledger\" cmp"),
+        ("position proof", "check consumer-positions cmp"),
         ("chain resumed", "check worm-chain-continued"),
         ("drill complete", "drill_complete_ms=$(date"),
     ]

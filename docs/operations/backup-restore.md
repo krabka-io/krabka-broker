@@ -172,9 +172,10 @@ The fresh cluster must reproduce those values through the capture boundary and
 the evidence bundle records measured RPO and RTO. `rpo_ms` is the capture's age
 when the source is lost. `rto_ms` runs from the loss through listing,
 verifying and fetching the capture, `krabka-restore`, broker start and
-`restore-offsets`, to a cluster serving the captured records, settings and
-group positions. The drill proves that state and the resumed WORM chain after
-recovery completes, and records that time separately as `verification_ms`.
+`restore-offsets`, to a cluster that has served every captured record, each
+topic's settings and the group positions back to a reader. Comparing what it
+served with the source, and proving the resumed WORM chain, come after recovery
+completes, and the drill records that time separately as `verification_ms`.
 Separate copies of the
 archive prove that changed data, missing manifests or objects, an untrusted
 chain head, and unavailable credentials fail closed. Both classic and diskless

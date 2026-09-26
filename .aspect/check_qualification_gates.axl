@@ -795,9 +795,10 @@ for attempt in $(seq 1 50); do
   sleep 0.2
 done
 
-restore_ready_ms=$(date +%s%3N)
-
-# Recovery is complete; what follows proves it reproduced the source.
+# Recovery ends when the restored cluster serves the captured state, so these
+# reads -- a Fetch of every captured record, each topic's settings and the
+# group's positions -- sit inside RTO. Comparing them with the source is the
+# proof, and that stays outside.
 background=()
 for topic in classic diskless; do
   messages=200
@@ -815,6 +816,7 @@ done
 kafka restored consumer-groups --describe --group dr-group > "$evidence/restored-group-offsets.txt" &
 background+=($!)
 for pid in "${background[@]}"; do wait "$pid"; done
+restore_ready_ms=$(date +%s%3N)
 for topic in classic diskless; do
   check "$topic-original-offsets" grep -Eq "^$topic:[[:space:]]*0:[[:space:]]*[1-9][0-9]*$" "$evidence/restored-$topic-offsets.txt"
   check "$topic-settings" cmp "$evidence/source-$topic-config.txt" "$evidence/restored-$topic-config.txt"
