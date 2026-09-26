@@ -111,7 +111,6 @@ async fn acquire_request_bytes(broker: &Broker, frame_bytes: usize) -> RequestBy
 mod tests;
 #[cfg(test)]
 mod throttle_audit;
-mod unsupported_version;
 
 pub use self::accept::serve_connection_on_listener;
 use self::{
@@ -122,7 +121,11 @@ use self::{
     sasl::{SaslFrameOutcome, SaslListener, try_handle_sasl_frame},
     session::{FrameWaitPolicy, initial_connection_auth, next_connection_frame},
 };
-use crate::{broker::Broker, handlers::ApiKeyCode, network::codec};
+use crate::{
+    broker::Broker,
+    handlers::{ApiKeyCode, ApiVersion},
+    network::codec,
+};
 
 /// What the connection loop does once a response has been written.
 ///
@@ -231,7 +234,15 @@ fn begin_request(
     (started, InFlightGuard::new(&broker.metrics, parsed.api_key))
 }
 
-async fn send_unsupported_version<S>(
+/// Rejects a request at a version outside its API's range.
+///
+/// Kafka's `Processor.parseRequestHeader` throws `UnsupportedVersionException`
+/// for such a version, and `SocketServer` closes the channel on it: no
+/// response frame. `ApiVersions` is the one exception, since
+/// `ApiKeys.isVersionEnabled` accepts every version of it: the request reaches
+/// `KafkaApis`, which answers `UNSUPPORTED_VERSION` with a v0 body carrying
+/// the supported ranges, and the client falls back to that version.
+async fn reject_unsupported_version<S>(
     framed: &mut Framed<S, LengthDelimitedCodec>,
     broker: &Broker,
     entry: crate::handlers::registry::DispatchEntry,
@@ -242,6 +253,19 @@ async fn send_unsupported_version<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    const RESPONSE_VERSION: ApiVersion = 0;
+    if parsed.api_key != API_VERSIONS_KEY {
+        broker.metrics.record_api_request(parsed.api_key);
+        broker
+            .metrics
+            .record_unsupported_api_request(parsed.api_key);
+        tracing::warn!(
+            api_key = parsed.api_key,
+            api_version = parsed.api_version,
+            "unsupported api version, closing connection"
+        );
+        return AfterResponse::Close;
+    }
     let (started, _in_flight) = begin_request(broker, parsed);
     tracing::warn!(
         api_key = parsed.api_key,
@@ -251,41 +275,19 @@ where
     broker
         .metrics
         .record_unsupported_api_request(parsed.api_key);
-    let response_version = if parsed.api_key == API_VERSIONS_KEY {
-        0
-    } else {
-        entry.nearest_supported_version(parsed.api_version)
-    };
-    let encoded_body = if parsed.api_key == API_VERSIONS_KEY {
-        Some(crate::handlers::api_versions::unsupported_version_response(
-            broker,
-            listener_name,
-        ))
-    } else {
-        unsupported_version::body(parsed.api_key, response_version)
-    };
-    let Some(encoded_body) = encoded_body else {
-        tracing::warn!(
-            api_key = parsed.api_key,
-            "missing unsupported-version response shape, closing"
-        );
-        return AfterResponse::Close;
-    };
-    let body = match encoded_body {
-        Ok(body) => body,
-        Err(error) => {
-            tracing::warn!(%error, "unsupported-version response encode error, closing");
-            return AfterResponse::Close;
-        }
-    };
-    // The reply is encoded at `response_version`, not at the version the
-    // client asked for, and its header flexibility follows that version. The
-    // throttle patch has to read the same pair or it writes over the wrong
-    // bytes: a request below a flexible-from-v0 API's minimum parses with a
-    // non-flexible header while the reply carries the flexible one.
+    let body =
+        match crate::handlers::api_versions::unsupported_version_response(broker, listener_name) {
+            Ok(body) => body,
+            Err(error) => {
+                tracing::warn!(%error, "unsupported-version response encode error, closing");
+                return AfterResponse::Close;
+            }
+        };
+    // The reply is encoded at v0, not at the version the client asked for,
+    // and the throttle patch has to read that version and its flexibility.
     let shape = ResponseShape {
-        version: response_version,
-        body_flexible: entry.body_flexible(response_version),
+        version: RESPONSE_VERSION,
+        body_flexible: entry.body_flexible(RESPONSE_VERSION),
     };
     let response = match encode_response(
         parsed.api_key,
@@ -503,8 +505,15 @@ async fn serve_connection_stream<S>(
             break;
         }
         if !entry.supports_version(parsed.api_version) {
-            match send_unsupported_version(&mut framed, &broker, entry, &parsed, &auth, &spec.name)
-                .await
+            match reject_unsupported_version(
+                &mut framed,
+                &broker,
+                entry,
+                &parsed,
+                &auth,
+                &spec.name,
+            )
+            .await
             {
                 AfterResponse::Close => break,
                 AfterResponse::Mute(window) => mute_until = mute_deadline(window),

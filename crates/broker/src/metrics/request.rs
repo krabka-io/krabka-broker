@@ -30,9 +30,10 @@ impl BrokerMetrics {
         self.api_requests.get_or_create(&lbl).inc();
     }
 
-    /// Account one request the dispatcher rejected with
-    /// `UNSUPPORTED_VERSION` because its version is outside the registered
-    /// range. Mirrors the labelling of `record_api_request`.
+    /// Account one request the dispatcher rejected because its version is
+    /// outside the registered range: by closing the connection, or for
+    /// `ApiVersions` with `UNSUPPORTED_VERSION`. Mirrors the labelling of
+    /// `record_api_request`.
     pub fn record_unsupported_api_request(&self, api_key: crate::handlers::ApiKeyCode) {
         let lbl = ApiKeyLabel {
             api_key: api_key_label_name(api_key).to_string(),
