@@ -21,8 +21,8 @@ use super::TopicBasedRemoteLogMetadataManager;
 use crate::{
     error::MetadataLogError,
     log::{
-        AssignmentHandle, InProcessMetadataEventLog, MetadataEventLog, MetadataEventStream,
-        PartitionStart,
+        AssignmentHandle, InProcessMetadataEventLog, MetadataEventLog, MetadataEventRecord,
+        MetadataEventStream, PartitionStart,
     },
 };
 
@@ -67,6 +67,14 @@ impl MetadataEventLog for HwmFlakyLog {
             return Err(MetadataLogError::Other("injected HWM failure".into()));
         }
         self.inner.high_water_marks().await
+    }
+    async fn read_range(
+        &self,
+        partition: i32,
+        start: i64,
+        end: i64,
+    ) -> Result<Vec<MetadataEventRecord>, MetadataLogError> {
+        self.inner.read_range(partition, start, end).await
     }
 }
 

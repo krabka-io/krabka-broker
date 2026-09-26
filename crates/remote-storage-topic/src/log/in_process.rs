@@ -231,6 +231,32 @@ impl MetadataEventLog for InProcessMetadataEventLog {
             .map(|v| i64::try_from(v.len()).expect("hwm fits in i64"))
             .collect())
     }
+
+    async fn read_range(
+        &self,
+        partition: i32,
+        start: i64,
+        end: i64,
+    ) -> Result<Vec<MetadataEventRecord>, MetadataLogError> {
+        let out_of_range = || MetadataLogError::PartitionOutOfRange {
+            partition,
+            count: self.inner.partition_count,
+        };
+        let idx = usize::try_from(partition).map_err(|_| out_of_range())?;
+        let guard = self.inner.log.lock().expect("metadata-log mutex poisoned");
+        let records = guard.get(idx).ok_or_else(out_of_range)?;
+        let high_water_mark = i64::try_from(records.len()).expect("hwm fits in i64");
+        if end > high_water_mark {
+            return Err(MetadataLogError::Other(format!(
+                "partition {partition} ends at {high_water_mark}, before {end}"
+            )));
+        }
+        Ok(records
+            .iter()
+            .filter(|record| start <= record.offset && record.offset < end)
+            .cloned()
+            .collect())
+    }
 }
 
 #[cfg(test)]
@@ -248,6 +274,41 @@ mod tests {
         check!(log.publish(1, Bytes::from_static(b"c")).await.unwrap() == 0);
         let hwms = log.high_water_marks().await.unwrap();
         assert!(hwms == vec![2, 1]);
+    }
+
+    #[tokio::test]
+    async fn read_range_returns_the_half_open_range_without_subscribing() {
+        let log = InProcessMetadataEventLog::new(2);
+        for value in [b"a", b"b", b"c"] {
+            log.publish(0, Bytes::from_static(value)).await.unwrap();
+        }
+
+        let offsets = |records: Vec<MetadataEventRecord>| {
+            records
+                .into_iter()
+                .map(|record| (record.partition, record.offset, record.payload))
+                .collect::<Vec<_>>()
+        };
+        check!(
+            offsets(log.read_range(0, 1, 3).await.unwrap())
+                == vec![
+                    (0, 1, Bytes::from_static(b"b")),
+                    (0, 2, Bytes::from_static(b"c"))
+                ]
+        );
+        check!(log.read_range(1, 0, 0).await.unwrap().is_empty());
+        check!(
+            log.read_range(0, 0, 4).await.unwrap_err().to_string()
+                == "metadata log error: partition 0 ends at 3, before 4"
+        );
+        for partition in [-1, 2] {
+            check!(matches!(
+                log.read_range(partition, 0, 0).await,
+                Err(MetadataLogError::PartitionOutOfRange { partition: got, count: 2 })
+                    if got == partition
+            ));
+        }
+        check!(log.inner.subscriptions.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

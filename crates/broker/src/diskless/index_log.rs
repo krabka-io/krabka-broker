@@ -443,8 +443,8 @@ mod tests {
     use assert2::assert;
     use async_trait::async_trait;
     use krabka_remote_storage_topic::{
-        AssignmentHandle, InProcessMetadataEventLog, MetadataEventLog, MetadataEventStream,
-        MetadataLogError, PartitionStart,
+        AssignmentHandle, InProcessMetadataEventLog, MetadataEventLog, MetadataEventRecord,
+        MetadataEventStream, MetadataLogError, PartitionStart,
     };
     use tokio::time::timeout;
     use uuid::Uuid;
@@ -505,6 +505,15 @@ mod tests {
 
         async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> {
             self.inner.high_water_marks().await
+        }
+
+        async fn read_range(
+            &self,
+            partition: i32,
+            start: i64,
+            end: i64,
+        ) -> Result<Vec<MetadataEventRecord>, MetadataLogError> {
+            self.inner.read_range(partition, start, end).await
         }
     }
 

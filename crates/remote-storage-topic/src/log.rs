@@ -146,6 +146,26 @@ pub trait MetadataEventLog: Send + Sync {
     /// Returns [`MetadataLogError`] only on an underlying store failure. An
     /// empty partition is `0`, not an error.
     async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError>;
+
+    /// Every retained record of `partition` whose offset lies in
+    /// `[start, end)`, in offset order.
+    ///
+    /// The read neither subscribes nor writes, so a reader that holds only
+    /// `READ` and `DESCRIBE` on the topic can use it. A compacted transport
+    /// steps over the offsets compaction removed and still returns once it
+    /// reaches `end`. An empty range returns no records.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MetadataLogError::PartitionOutOfRange`] for a partition
+    /// outside the log, and [`MetadataLogError`] when the store fails or stops
+    /// short of `end`.
+    async fn read_range(
+        &self,
+        partition: i32,
+        start: i64,
+        end: i64,
+    ) -> Result<Vec<MetadataEventRecord>, MetadataLogError>;
 }
 
 #[cfg(test)]
@@ -173,6 +193,15 @@ mod tests {
 
         async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> {
             Ok(vec![0])
+        }
+
+        async fn read_range(
+            &self,
+            _partition: i32,
+            _start: i64,
+            _end: i64,
+        ) -> Result<Vec<MetadataEventRecord>, MetadataLogError> {
+            unreachable!("not used by these tests")
         }
     }
 
