@@ -243,7 +243,7 @@ def _test_disaster_recovery_uses_the_packaged_secured_loss_path(_ctx):
 
 def _test_registry_migration_resolves_the_advertised_host_before_the_handoffs(_ctx):
     commands = gate_script("registry-migration")
-    resolve = commands.find("127.0.0.1 host.docker.internal")
+    resolve = commands.find("127.0.0.1 host.docker.internal # krabka-qualification")
     forward = commands.find("//crates/schema-registry:interop_test")
     reverse = commands.find("//crates/schema-registry:interop_reverse_test")
     check_eq("hosts entry exists", resolve >= 0, True)
