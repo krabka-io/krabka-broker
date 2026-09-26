@@ -33,7 +33,12 @@ pub enum ScramCredentialSource {
     Unknown,
 }
 
-/// Preserve regular-credential precedence and restrict KIP-48 fallback.
+/// Classify the credential for SCRAM round 1.
+///
+/// `token_mechanism` is whether the delegation-token store may be read: the
+/// broker passes the client-first `tokenauth` extension there, and leaves
+/// `has_regular_credential` false when it is set, so exactly one store is
+/// consulted, as in Kafka's `ScramSaslServer`.
 #[ensures((result == ScramCredentialSource::Regular) == has_regular_credential)]
 #[ensures((result == ScramCredentialSource::DelegationToken) ==
     (!has_regular_credential && token_mechanism && has_token && token_active))]

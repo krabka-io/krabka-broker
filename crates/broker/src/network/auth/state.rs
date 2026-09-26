@@ -76,7 +76,8 @@ pub enum ConnectionAuth {
         expires_at_ms: Option<i64>,
         /// KIP-48: whether this connection authenticated with a delegation
         /// token instead of a "real" principal credential. Token auth uses
-        /// SCRAM-SHA-256 with the token's HMAC as the password equivalent.
+        /// SCRAM-SHA-256 or SCRAM-SHA-512 with the `tokenauth=true` extension
+        /// and the token's HMAC as the password equivalent.
         ///
         /// The delegation-token RPCs read this flag.
         /// `CreateDelegationToken` rejects token-authed callers with
