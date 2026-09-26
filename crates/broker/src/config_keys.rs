@@ -52,9 +52,7 @@
 //! path reads it on ISR-empty. One key is the KIP-966 offset-aware recovery
 //! strategy, `unclean.recovery.strategy`, which supersedes that toggle. Both
 //! unclean-recovery settings also accept a cluster-wide default broker config;
-//! a topic override takes precedence. One
-//! key is krabka's `QoS` routing key, `qos.tier`. Producer quota enforcement
-//! uses it to partition runtime buckets by topic tier.
+//! a topic override takes precedence.
 //!
 //! One key is krabka's data-path opt-in, `krabka.diskless`. It takes
 //! `true`/`false` and it is the only key a partition reads once, when it is
@@ -108,7 +106,6 @@ mod log_config;
 mod lookup;
 mod message_size;
 mod min_isr;
-mod qos;
 mod recovery;
 pub(crate) mod registry;
 mod schema;
@@ -125,7 +122,6 @@ pub use self::docs::{TopicConfigDoc, topic_config_docs};
 pub(crate) use self::{
     broker_scope::CONTROLLER_MANAGED_BROKER_CONFIGS,
     delivery::{DELIVERY_MAX_DELAY_MS, DELIVERY_MODE_IMMEDIATE, DELIVERY_SCHEDULE_MONOTONIC},
-    qos::{DEFAULT_QOS_TIER, QOS_TIER},
     topic_scope::CONTROLLER_MANAGED_TOPIC_CONFIGS,
 };
 pub(crate) use self::{
@@ -144,7 +140,6 @@ pub(crate) use self::{
     log_config::apply_to_log_config,
     message_size::resolve_max_message_bytes,
     min_isr::{clear_elr_records, configured_min_insync_replicas, effective_min_insync_replicas},
-    qos::resolve_qos_tier,
     recovery::{
         RecoveryStrategy, UNCLEAN_LEADER_ELECTION_ENABLE, UNCLEAN_RECOVERY_STRATEGY,
         resolve_recovery_strategy, resolve_unclean_leader_election_enabled,

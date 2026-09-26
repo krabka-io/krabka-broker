@@ -41,7 +41,6 @@ use super::{
         DELIVERY_MODE_IMMEDIATE, DELIVERY_MODE_SCHEDULED, DELIVERY_SCHEDULE_MONOTONIC,
     },
     diskless::DISKLESS,
-    qos::{DEFAULT_QOS_TIER, QOS_TIER},
     recovery::{UNCLEAN_LEADER_ELECTION_ENABLE, UNCLEAN_RECOVERY_STRATEGY},
     schema::{
         SCHEMA_VALIDATION_KEY, SCHEMA_VALIDATION_MODE, SCHEMA_VALIDATION_MODE_FULL,
@@ -504,14 +503,6 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ValueCheck::I64AtLeast(0),
         )
     },
-    key(
-        QOS_TIER,
-        ConfigScope::Topic,
-        ConfigType::String,
-        Some(DEFAULT_QOS_TIER),
-        "Krabka QoS tier used to partition producer quota buckets.",
-        ValueCheck::Parsed,
-    ),
     ConfigKey {
         read_only: true,
         ..key(

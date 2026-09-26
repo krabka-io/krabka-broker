@@ -1,4 +1,4 @@
-//! Producer-byte quota enforcement with Krabka QoS-tier bucket partitioning.
+//! KIP-13 `producer_byte_rate` enforcement.
 
 use krabka_metadata::MetadataImage;
 use krabka_units::{Time, convert::TimeExt as _};
@@ -6,13 +6,18 @@ use num_traits::cast::ToPrimitive as _;
 
 use super::{QuotaConsumption, buckets::QuotaBuckets, consume_configured_quota, u64_to_f64};
 
+/// Charges `bytes` to the `producer_byte_rate` bucket of the quota entity
+/// that `(principal, client_id)` resolves to.
+///
+/// Kafka keeps one bandwidth sensor per quota entity
+/// (`ClientQuotaManager.getOrCreateQuotaSensors`), so every topic a producer
+/// writes draws on the same bucket.
 #[must_use]
 pub fn consume_producer_quota(
     image: &MetadataImage,
     buckets: &QuotaBuckets,
     principal: &str,
     client_id: &str,
-    qos_tier: &str,
     bytes: u64,
 ) -> super::QuotaDelay {
     consume_configured_quota(
@@ -24,7 +29,6 @@ pub fn consume_producer_quota(
             quota_key: "producer_byte_rate",
             amount: bytes,
         },
-        |entity_key| entity_key.push(("qos-tier".into(), Some(qos_tier.into()))),
         quota_rate_to_bucket_rate,
         |overage, rate, _| {
             let overage = u64_to_f64(overage);
@@ -56,8 +60,10 @@ mod tests {
         quota_image(entity, "producer_byte_rate", rate)
     }
 
+    /// One bucket per quota entity (#748): two charges share it, so the
+    /// second one, which fits the rate on its own, is throttled by the first.
     #[test]
-    fn producer_quota_buckets_are_separate_by_qos_tier() {
+    fn producer_quota_keeps_one_bucket_per_entity() {
         let img = img_with_quota(
             vec![("user", Some("alice")), ("client-id", Some("app"))],
             128.0,
@@ -66,25 +72,24 @@ mod tests {
         // these amounts are about the overage and not about the window.
         let buckets = QuotaBuckets::with_window(secs(1));
 
-        let gold = consume_producer_quota(&img, &buckets, "alice", "app", "gold", 1024);
-        let bulk = consume_producer_quota(&img, &buckets, "alice", "app", "bulk", 64);
+        let first = consume_producer_quota(&img, &buckets, "alice", "app", 1024);
+        let second = consume_producer_quota(&img, &buckets, "alice", "app", 64);
 
-        check!(gold > <Time as TimeExt>::ZERO);
-        check!(bulk == <Time as TimeExt>::ZERO);
-        check!(buckets.len() == 2);
+        check!(first > <Time as TimeExt>::ZERO);
+        check!(second > <Time as TimeExt>::ZERO);
+        check!(buckets.len() == 1);
     }
 
     #[test]
-    fn producer_quota_uses_client_id_entity_precedence_per_tier() {
+    fn producer_quota_uses_client_id_entity_precedence() {
         let img = img_with_quota(
             vec![("user", Some("alice")), ("client-id", Some("app"))],
             128.0,
         );
         let buckets = QuotaBuckets::new();
 
-        let matching = consume_producer_quota(&img, &buckets, "alice", "app", "default", 4096);
-        let other_client =
-            consume_producer_quota(&img, &buckets, "alice", "other", "default", 4096);
+        let matching = consume_producer_quota(&img, &buckets, "alice", "app", 4096);
+        let other_client = consume_producer_quota(&img, &buckets, "alice", "other", 4096);
 
         assert!(matching > <Time as TimeExt>::ZERO);
         assert!(other_client == <Time as TimeExt>::ZERO);
@@ -95,7 +100,7 @@ mod tests {
         let img = img_with_quota(vec![("user", Some("alice"))], 1_000.0);
         let buckets = QuotaBuckets::with_window(secs(1));
 
-        let delay = consume_producer_quota(&img, &buckets, "alice", "app", "default", 1_250);
+        let delay = consume_producer_quota(&img, &buckets, "alice", "app", 1_250);
 
         assert!(delay == millis(250));
     }
@@ -110,8 +115,7 @@ mod tests {
         // is 20 seconds of debt at 1 KiB/s.
         let buckets = QuotaBuckets::new();
 
-        let delay =
-            consume_producer_quota(&img, &buckets, "alice", "app", "default", 1024 * (11 + 20));
+        let delay = consume_producer_quota(&img, &buckets, "alice", "app", 1024 * (11 + 20));
 
         assert!(delay > secs(19) && delay <= secs(20), "{delay:?}");
     }

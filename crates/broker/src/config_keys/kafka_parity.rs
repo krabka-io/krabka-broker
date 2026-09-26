@@ -52,7 +52,6 @@ use super::{
     delivery::{DELIVERY_MAX_DELAY_MS, DELIVERY_MODE, DELIVERY_SCHEDULE_MONOTONIC},
     diskless::DISKLESS,
     docs::topic_config_docs,
-    qos::QOS_TIER,
     recovery::UNCLEAN_RECOVERY_STRATEGY,
     registry::{self, ConfigScope, ConfigType},
     schema::{SCHEMA_VALIDATION_KEY, SCHEMA_VALIDATION_MODE, SCHEMA_VALIDATION_VALUE},
@@ -248,7 +247,6 @@ const KAFKA_TOPIC_CONFIGS: &[KafkaTopicConfig] = &[
 /// 4.3.1; the rest are krabka's own.
 const KRABKA_TOPIC_CONFIGS: &[&str] = &[
     UNCLEAN_RECOVERY_STRATEGY,
-    QOS_TIER,
     DISKLESS,
     DELIVERY_MODE,
     DELIVERY_MAX_DELAY_MS,

@@ -43,7 +43,6 @@ pub fn consume_request_quota(
             quota_key: "request_percentage",
             amount: elapsed_micros,
         },
-        |_| {},
         |rate_pct| {
             let rate_micros_per_sec = request_percentage_token_rate(rate_pct);
             (rate_micros_per_sec != 0).then_some(rate_micros_per_sec)

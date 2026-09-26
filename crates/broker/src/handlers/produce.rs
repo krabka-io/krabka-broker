@@ -26,7 +26,7 @@ use self::{
     pipeline::{PartitionInput, PartitionOutcome, PartitionServices, process_partition},
     producer_checks::TransactionRequest,
     response::build_topic_error_response,
-    throttle::{finish_produce_response, produce_bytes_by_qos_tier},
+    throttle::finish_produce_response,
     topic_settings::{
         broker_default_timestamp_policy, resolve_compacted_topic, resolve_timestamp_policy,
         resolve_topic_compression,
@@ -93,7 +93,7 @@ fn durability_frontier(base_offset: i64, last_offset_delta: i32) -> Option<krabk
 /// as-is.
 /// The request-specific fields [`invalid_required_acks_response`] needs
 /// beside the response-building context every early-return branch of
-/// `handle` shares (`broker`, `image`, `ctx`, `produce_bytes_by_qos_tier`).
+/// `handle` shares (`broker`, `image`, `ctx`).
 /// Bundled into one parameter so the function stays under Clippy's
 /// argument-count lint. Every field is a reference or itself `Copy`, so this
 /// is too, and passes by value like they would have.
@@ -109,7 +109,6 @@ fn invalid_required_acks_response(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     ctx: &crate::handlers::RequestContext<'_>,
-    produce_bytes_by_qos_tier: &std::collections::BTreeMap<String, u64>,
     request: AcksRequest<'_>,
 ) -> Option<Result<Bytes, BrokerError>> {
     let AcksRequest {
@@ -130,7 +129,6 @@ fn invalid_required_acks_response(
         image,
         ctx,
         (acks != 0).then_some(handler_start),
-        produce_bytes_by_qos_tier,
         topic_results,
         version,
     ))
@@ -257,15 +255,6 @@ pub(crate) async fn handle(
     // topic-resolution loop below, not inside it.
     let image = controller.current_image();
 
-    // ── KIP-13: measure total request bytes before consuming the topic_data ──
-    // Computed here, ahead of every early-return below (including the
-    // transactional-authorization refusal), so a denied request is still
-    // charged to `producer_byte_rate` the same as an accepted one -- Kafka
-    // throttles on bytes received, not on whether the request was allowed to
-    // write. Computed once here so the iterator doesn't conflict with `for
-    // topic in req.topic_data` below (which moves the vector).
-    let produce_bytes_by_qos_tier = produce_bytes_by_qos_tier(&image, &req.topic_data);
-
     if req.has_transactional_batch()
         && !is_authorized_transactional(broker, &image, ctx, req.transactional_id.as_deref())
     {
@@ -284,7 +273,6 @@ pub(crate) async fn handle(
             &image,
             ctx,
             (acks != 0).then_some(handler_start),
-            &produce_bytes_by_qos_tier,
             topic_results,
             version,
         );
@@ -299,7 +287,6 @@ pub(crate) async fn handle(
         broker,
         &image,
         ctx,
-        &produce_bytes_by_qos_tier,
         AcksRequest {
             topic_data: &req.topic_data,
             acks,
@@ -558,7 +545,6 @@ pub(crate) async fn handle(
         &image,
         ctx,
         (acks != 0).then_some(handler_start),
-        &produce_bytes_by_qos_tier,
         topic_results,
         version,
     )

@@ -1,6 +1,6 @@
 //! KIP-13 + KIP-124 + KIP-257 client quotas.
 
-use krabka_metadata::{EntityKey, MetadataImage};
+use krabka_metadata::MetadataImage;
 use krabka_units::{
     ByteRate, Time,
     convert::{ByteRateExt as _, TimeExt},
@@ -102,14 +102,13 @@ struct QuotaConsumption<'a> {
 
 fn consume_configured_quota(
     request: QuotaConsumption<'_>,
-    bucket_entity_key: impl FnOnce(&mut EntityKey),
     initial_rate: impl FnOnce(f64) -> Option<u64>,
     delay_for_overage: impl FnOnce(u64, f64, u64) -> Time,
 ) -> QuotaDelay {
     if request.amount == 0 {
         return QuotaDelay::zero();
     }
-    let Some((mut entity_key, rate)) = lookup::lookup_quota_with_key(
+    let Some((entity_key, rate)) = lookup::lookup_quota_with_key(
         request.image,
         request.principal,
         request.client_id,
@@ -132,7 +131,6 @@ fn consume_configured_quota(
         .find(|(k, _)| k == "client-id")
         .and_then(|(_, v)| v.clone());
 
-    bucket_entity_key(&mut entity_key);
     let bucket = request.buckets.get_or_create(
         request.quota_key,
         &entity_key,
@@ -308,7 +306,6 @@ mod tests {
     fn consume_configured_quota_returns_zero_without_mutating_bucket_for_zero_amount() {
         let image = image_with_quota(vec![("user", Some("alice"))], "request_percentage", 100.0);
         let buckets = QuotaBuckets::new();
-        let bucket_entity_key_called = Arc::new(AtomicBool::new(false));
         let initial_rate_called = Arc::new(AtomicBool::new(false));
         let delay_for_overage_called = Arc::new(AtomicBool::new(false));
 
@@ -320,10 +317,6 @@ mod tests {
                 client_id: "",
                 quota_key: "request_percentage",
                 amount: 0,
-            },
-            {
-                let called = Arc::clone(&bucket_entity_key_called);
-                move |_| called.store(true, Ordering::Relaxed)
             },
             {
                 let called = Arc::clone(&initial_rate_called);
@@ -343,7 +336,6 @@ mod tests {
 
         check!(delay == <Time as TimeExt>::ZERO);
         check!(buckets.is_empty());
-        check!(!bucket_entity_key_called.load(Ordering::Relaxed));
         check!(!initial_rate_called.load(Ordering::Relaxed));
         assert!(!delay_for_overage_called.load(Ordering::Relaxed));
     }
@@ -364,7 +356,6 @@ mod tests {
                     quota_key: "producer_byte_rate",
                     amount: 1,
                 },
-                |_| {},
                 {
                     let called = Arc::clone(&initial_rate_called);
                     move |_| {
@@ -399,7 +390,6 @@ mod tests {
                 quota_key: "controller_mutation_rate",
                 amount: 1,
             },
-            |_| {},
             |_| None,
             |_, _, _| secs(1),
         );
@@ -424,7 +414,6 @@ mod tests {
                 quota_key: "producer_byte_rate",
                 amount: 10,
             },
-            |entity_key| entity_key.push(("qos-tier".into(), Some("bulk".into()))),
             |_| Some(1),
             |overage, rate, initial_rate| {
                 check!(overage == 9);

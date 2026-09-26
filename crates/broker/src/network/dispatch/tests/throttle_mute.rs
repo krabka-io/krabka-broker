@@ -501,6 +501,39 @@ async fn a_request_tripping_two_quotas_is_muted_once_for_the_longest_window() {
     handle.shutdown().await;
 }
 
+/// KIP-13: a `Produce` is charged its whole request, header and body, once
+/// (#748), as Kafka's `KafkaApis.handleProduceRequest` charges
+/// `request.sizeInBytes` -- not only the record payloads. At 1000 bytes/sec
+/// with a one-second burst, the reported throttle is the frame size less the
+/// burst, in milliseconds.
+#[tokio::test]
+async fn produce_charges_the_whole_request_frame_once() {
+    let (handle, _dir) =
+        broker_with_anonymous_quotas(millis(1000), &[("producer_byte_rate", 1000.0)]).await;
+    let (server, mut framed) = connect_to_serve_loop(&handle).await;
+
+    let body = produce_body("frame-charge", 1, 256, 8);
+    let frame_len = request_frame(PRODUCE_KEY, PRODUCE_VERSION, 1, None, Some(0), &body).len();
+    send_request(&mut framed, PRODUCE_KEY, PRODUCE_VERSION, 1, &body).await;
+    let response = tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
+        .await
+        .expect("the response must beat the client timeout")
+        .expect("a response frame")
+        .expect("response decode");
+    let produce: ProduceResponse = decode_response_body(&response, PRODUCE_VERSION);
+
+    let expected = i32::try_from(frame_len).expect("frame length") - 1000;
+    check!(
+        (expected - 5..=expected).contains(&produce.throttle_time_ms),
+        "frame of {frame_len} bytes, throttle {}",
+        produce.throttle_time_ms
+    );
+
+    drop(framed);
+    server.await.expect("serve loop joins on client EOF");
+    handle.shutdown().await;
+}
+
 /// One request of [`every_charged_api_reports_its_delay_and_mutes`]: the api,
 /// the version, whether the body is flexible, the encoded body, and how to
 /// read `throttle_time_ms` back out of the response body.
