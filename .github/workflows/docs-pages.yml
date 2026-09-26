@@ -40,7 +40,6 @@ jobs:
 
       - uses: aspect-build/setup-aspect@60664fabf0aa15152c69d0ee72c9a660416c7a36 # 2026.38.2
         with:
-          aspect-api-token: ${{ secrets.ASPECT_API_TOKEN }}
           bazelisk-cache: true
           # Redundant beside the remote cache, and it is what consumed the
           # 10 GB repository-wide Actions quota. Off explicitly: omitting the
