@@ -9,7 +9,7 @@
 
 use bytes::Bytes;
 use krabka_protocol::owned::share_fetch_response::{
-    LeaderIdAndEpoch, PartitionData, ShareFetchResponse, ShareFetchableTopicResponse,
+    LeaderIdAndEpoch, NodeEndpoint, PartitionData, ShareFetchResponse, ShareFetchableTopicResponse,
 };
 
 use super::pending::PendingPartition;
@@ -72,6 +72,7 @@ pub(super) fn encode_success_response(
     version: i16,
     lock_timeout_ms: i32,
     responses: Vec<ShareFetchableTopicResponse>,
+    node_endpoints: Vec<NodeEndpoint>,
 ) -> Result<Bytes, BrokerError> {
     let response = ShareFetchResponse {
         throttle_time_ms: 0,
@@ -79,6 +80,7 @@ pub(super) fn encode_success_response(
         error_message: None,
         acquisition_lock_timeout_ms: lock_timeout_ms,
         responses,
+        node_endpoints,
         ..Default::default()
     };
     crate::handlers::encode_response(&response, version)

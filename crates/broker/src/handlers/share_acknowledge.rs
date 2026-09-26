@@ -25,7 +25,7 @@ use krabka_protocol::{
     owned::{
         share_acknowledge_request::ShareAcknowledgeRequest,
         share_acknowledge_response::{
-            LeaderIdAndEpoch, PartitionData, ShareAcknowledgeResponse,
+            LeaderIdAndEpoch, NodeEndpoint, PartitionData, ShareAcknowledgeResponse,
             ShareAcknowledgeTopicResponse,
         },
     },
@@ -39,8 +39,8 @@ use crate::{
     handlers::{
         group_read_denied,
         share_fetch::{
-            Renewal, acknowledgement_batches_are_valid, apply_one_ack, member_id_is_valid,
-            renew_acknowledge_enabled,
+            Renewal, acknowledgement_batches_are_valid, apply_one_ack, current_leader,
+            leader_endpoints, member_id_is_valid, names_the_leader, renew_acknowledge_enabled,
         },
     },
 };
@@ -93,7 +93,7 @@ pub(crate) async fn handle(
     };
 
     let now = Instant::now();
-    let responses = process_topics(&AcknowledgeContext {
+    let mut responses = process_topics(&AcknowledgeContext {
         broker,
         version,
         req: &req,
@@ -109,15 +109,59 @@ pub(crate) async fn handle(
         .release_session_partitions(&group, &member, &released)
         .await;
 
+    let node_endpoints = hint_current_leaders(broker, ctx, &mut responses);
     let resp = ShareAcknowledgeResponse {
         throttle_time_ms: 0,
         error_code: codes::NONE,
         error_message: None,
         acquisition_lock_timeout_ms: lock_timeout_ms,
         responses,
+        node_endpoints,
         ..Default::default()
     };
     crate::handlers::encode_response(&resp, version)
+}
+
+/// Kafka's `processShareAcknowledgeResponse`: sets the current leader on
+/// every row whose error names another leader, and returns the endpoint of
+/// each such leader on the request's listener.
+fn hint_current_leaders(
+    broker: &Broker,
+    ctx: &crate::handlers::RequestContext<'_>,
+    responses: &mut [ShareAcknowledgeTopicResponse],
+) -> Vec<NodeEndpoint> {
+    let mgr = &broker.share_partition_leaders;
+    let mut leader_ids = Vec::new();
+    for topic in responses.iter_mut() {
+        let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
+        for partition in &mut topic.partitions {
+            if names_the_leader(partition.error_code) {
+                let (leader_id, leader_epoch) =
+                    current_leader(mgr, topic_id, partition.partition_index);
+                partition.current_leader = LeaderIdAndEpoch {
+                    leader_id,
+                    leader_epoch,
+                    ..Default::default()
+                };
+                leader_ids.push(leader_id);
+            }
+        }
+    }
+    leader_endpoints(
+        &broker.controller.current_image(),
+        ctx.connection_listener_name,
+        &broker.config.inter_broker_listener_name,
+        leader_ids,
+    )
+    .into_iter()
+    .map(|endpoint| NodeEndpoint {
+        node_id: endpoint.node_id,
+        host: endpoint.host,
+        port: endpoint.port,
+        rack: endpoint.rack,
+        ..Default::default()
+    })
+    .collect()
 }
 
 /// The request-wide inputs of [`process_topics`].

@@ -33,12 +33,16 @@ use std::collections::{HashMap, HashSet};
 use bytes::Bytes;
 use krabka_protocol::{
     Decode,
-    owned::share_fetch_request::{FetchPartition, ShareFetchRequest},
+    owned::{
+        share_fetch_request::{FetchPartition, ShareFetchRequest},
+        share_fetch_response::{LeaderIdAndEpoch, NodeEndpoint},
+    },
 };
 
 mod acknowledge;
 mod acquire;
 mod authorization;
+mod leader_hint;
 mod long_poll;
 mod pending;
 mod records;
@@ -55,6 +59,8 @@ mod group_authorization_tests;
 #[cfg(test)]
 mod log_start_lockout_tests;
 #[cfg(test)]
+mod node_endpoints_tests;
+#[cfg(test)]
 mod persister_error_tests;
 #[cfg(test)]
 mod renew_tests;
@@ -63,8 +69,11 @@ mod request_validation_tests;
 #[cfg(test)]
 mod topic_resolution_tests;
 
-pub(crate) use self::acknowledge::{
-    Renewal, acknowledgement_batches_are_valid, apply_one_ack, renew_acknowledge_enabled,
+pub(crate) use self::{
+    acknowledge::{
+        Renewal, acknowledgement_batches_are_valid, apply_one_ack, renew_acknowledge_enabled,
+    },
+    leader_hint::{current_leader, leader_endpoints, names_the_leader},
 };
 use self::{
     acquire::{AcquireContext, acquire_records},
@@ -253,9 +262,40 @@ pub(crate) async fn handle(
     // answers only the acknowledge rows.
     pending.retain(|p| p.fetchable || (p.in_request && has_acknowledgements));
 
+    // Kafka's `processShareFetchResponse`: every row that names another
+    // leader carries the current leader and its endpoint.
+    for p in &mut pending {
+        if names_the_leader(p.out.error_code) {
+            let (leader_id, leader_epoch) = current_leader(&mgr, p.topic_id, p.partition_index);
+            p.out.current_leader = LeaderIdAndEpoch {
+                leader_id,
+                leader_epoch,
+                ..Default::default()
+            };
+        }
+    }
+    let node_endpoints = leader_endpoints(
+        &image,
+        ctx.connection_listener_name,
+        &broker.config.inter_broker_listener_name,
+        pending
+            .iter()
+            .filter(|p| names_the_leader(p.out.error_code))
+            .map(|p| p.out.current_leader.leader_id),
+    )
+    .into_iter()
+    .map(|endpoint| NodeEndpoint {
+        node_id: endpoint.node_id,
+        host: endpoint.host,
+        port: endpoint.port,
+        rack: endpoint.rack,
+        ..Default::default()
+    })
+    .collect();
+
     // Group pending rows back into per-topic responses, preserving first-seen
     // topic order.
     let responses = group_responses(pending);
 
-    encode_success_response(version, lock_timeout_ms, responses)
+    encode_success_response(version, lock_timeout_ms, responses, node_endpoints)
 }
