@@ -162,7 +162,7 @@ async fn join_group_inconsistent_protocol_error_carries_no_protocol_fields() {
     p.broker.shutdown().await;
 }
 
-/// A SyncGroup that Kafka refuses carries only the error code. Kafka's
+/// A `SyncGroup` that Kafka refuses carries only the error code. Kafka's
 /// `GroupCoordinatorService.syncGroup` answers every error with
 /// `new SyncGroupResponseData().setErrorCode(...)`, so `protocol_type` and
 /// `protocol_name` stay null even though the group has a recorded protocol.
@@ -189,7 +189,7 @@ async fn sync_group_error_carries_no_protocol_fields() {
             error_code: 25,
             protocol_type: None,
             protocol_name: None,
-            assignment: Default::default(),
+            assignment: bytes::Bytes::default(),
             ..Default::default()
         }
     );
