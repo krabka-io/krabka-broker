@@ -33,7 +33,7 @@ pub(super) fn mutation_count<'a>(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_units::{Time, convert::TimeExt, secs};
+    use krabka_units::{Time, convert::TimeExt};
 
     #[test]
     fn consume_controller_mutation_quota_tuple_match_overage_throttles() {
@@ -62,12 +62,7 @@ mod tests {
         for (client_id, want_throttle) in cases {
             let buckets = crate::quota::QuotaBuckets::new();
             let delay = crate::quota::consume_controller_mutation_quota(
-                &img,
-                &buckets,
-                "alice",
-                client_id,
-                10,
-                secs(1),
+                &img, &buckets, "alice", client_id, 10,
             );
             assert!(
                 (delay > <Time as TimeExt>::ZERO) == want_throttle,

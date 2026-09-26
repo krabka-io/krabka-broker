@@ -105,7 +105,6 @@ fn consume_configured_quota(
     bucket_entity_key: impl FnOnce(&mut EntityKey),
     initial_rate: impl FnOnce(f64) -> Option<u64>,
     delay_for_overage: impl FnOnce(u64, f64, u64) -> Time,
-    maximum_delay: Time,
 ) -> QuotaDelay {
     if request.amount == 0 {
         return QuotaDelay::zero();
@@ -145,7 +144,10 @@ fn consume_configured_quota(
     if granted >= request.amount {
         return QuotaDelay::zero();
     }
-    let delay = delay_for_overage(request.amount - granted, rate, initial_rate).min(maximum_delay);
+    // Kafka bounds only the request quota's throttle (`ClientRequestQuotaManager`
+    // takes `boundedThrottleTime`), so the bound, where there is one, is the
+    // caller's.
+    let delay = delay_for_overage(request.amount - granted, rate, initial_rate);
     QuotaDelay::new(delay, user, client_id)
 }
 
@@ -337,7 +339,6 @@ mod tests {
                     secs(1)
                 }
             },
-            secs(1),
         );
 
         check!(delay == <Time as TimeExt>::ZERO);
@@ -372,7 +373,6 @@ mod tests {
                     }
                 },
                 |_, _, _| secs(1),
-                secs(1),
             );
 
             check!(delay == <Time as TimeExt>::ZERO);
@@ -402,7 +402,6 @@ mod tests {
             |_| {},
             |_| None,
             |_, _, _| secs(1),
-            secs(1),
         );
 
         check!(delay == <Time as TimeExt>::ZERO);
@@ -410,7 +409,7 @@ mod tests {
     }
 
     #[test]
-    fn consume_configured_quota_caps_overage_delay() {
+    fn consume_configured_quota_leaves_the_overage_delay_uncapped() {
         let image = image_with_quota(vec![("user", Some("alice"))], "producer_byte_rate", 1.0);
         // A one-second window: at 1 B/s the burst is one byte, so 10 bytes
         // leaves the 9-byte overage the closure below checks.
@@ -433,10 +432,9 @@ mod tests {
                 check!(initial_rate == 1);
                 secs(10)
             },
-            secs(1),
         );
 
-        check!(delay == secs(1));
+        check!(delay == secs(10));
         assert!(buckets.len() == 1);
     }
 }

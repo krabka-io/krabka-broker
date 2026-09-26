@@ -2286,7 +2286,7 @@
         },
         "quota_throttle_max": {
           "default": null,
-          "description": "Maximum client quota throttle delay, which bounds how long one response\nmutes a client. Equivalent to Kafka's `quota.window.size.seconds *\n(quota.window.num - 1)`.",
+          "description": "Maximum request-quota throttle delay, which bounds how long one\nresponse over `request_percentage` mutes a client. Equivalent to\nKafka's `quota.window.size.seconds`; byte-rate and controller-mutation\nthrottles are not bounded.",
           "format": "duration",
           "type": [
             "string",

@@ -155,7 +155,8 @@ pub(super) fn apply_listener_settings(
         let num = num_val.unwrap_or(11);
         let size_secs = size_val.unwrap_or(1);
         if cfg.quota_throttle_max == defaults.quota_throttle_max {
-            let s = u32::try_from(size_secs * u64::from(num.saturating_sub(1))).unwrap_or(u32::MAX);
+            // `ClientRequestQuotaManager.maxThrottleTimeMs`: one window.
+            let s = u32::try_from(size_secs).unwrap_or(u32::MAX);
             cfg.quota_throttle_max = krabka_units::secs(s);
         }
         if cfg.quota_window == defaults.quota_window {
@@ -416,8 +417,8 @@ connections_max_idle = "5s"
         let file: FileConfig = toml::from_str(toml).unwrap();
         let mut cfg = BrokerConfig::default();
         file.apply_to(&mut cfg).unwrap();
-        // size * (num - 1) = 2 * 5 = 10s
-        assert!(cfg.quota_throttle_max == secs(10));
+        // The request-quota bound is one window: size = 2s.
+        assert!(cfg.quota_throttle_max == secs(2));
         // size * num = 2 * 6 = 12s
         assert!(cfg.quota_window == secs(12));
     }

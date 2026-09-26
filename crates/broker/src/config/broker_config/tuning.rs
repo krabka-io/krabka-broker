@@ -91,7 +91,7 @@ macro_rules! tuning_fields {
             pub unclean_recovery_balanced_deadline: Time,
             /// Operator-triggered recovery deadline.
             pub operator_recovery_deadline: Time,
-            /// Maximum client quota throttle delay (default 10 s), bounding per-response client muting. Equivalent to Kafka's `quotaWindowSizeSeconds * (numQuotaSamples - 1)` under `quota.window.num` and `quota.window.size.seconds`.
+            /// Maximum request-quota throttle delay (default 1 s), bounding how long one response over `request_percentage` mutes a client. Equivalent to Kafka's `ClientRequestQuotaManager.maxThrottleTimeMs`, one `quota.window.size.seconds`. Byte-rate and controller-mutation throttles are not bounded.
             pub quota_throttle_max: Time,
             /// Time window sizing the byte-rate quota token bucket burst capacity (default 11 s). Equivalent to Kafka's sampling window `quota.window.num * quota.window.size.seconds`.
             pub quota_window: Time,

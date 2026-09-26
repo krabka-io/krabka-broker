@@ -19,8 +19,8 @@ use super::{
 ///
 /// It returns the throttle delay to apply before the broker sends the
 /// response. The delay is a zero extent when no quota is configured, when the
-/// rate is not positive, or when there was no overage. `maximum_delay` caps
-/// the returned delay.
+/// rate is not positive, or when there was no overage. `maximum_delay`, one
+/// `quota.window.size.seconds` in Kafka, caps the returned delay.
 ///
 /// `request_percentage` is a percentage of one thread-second, so `100.0` gives
 /// a budget of 1 000 000 µs per second. The bucket therefore meters in
@@ -53,8 +53,11 @@ pub fn consume_request_quota(
                 i64::try_from(overage_micros.saturating_mul(1_000_000) / rate_micros_per_sec)
                     .unwrap_or(i64::MAX),
             )
+            // Kafka's `ClientRequestQuotaManager` bounds this throttle at one
+            // quota window (`boundedThrottleTime`), the only client quota it
+            // bounds.
+            .min(maximum_delay)
         },
-        maximum_delay,
     )
 }
 

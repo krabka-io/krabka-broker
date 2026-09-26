@@ -389,10 +389,11 @@ async fn acks_zero_produce_writes_no_response_and_still_mutes() {
     use krabka_protocol::owned::create_topics_request::{CreatableTopic, CreateTopicsRequest};
 
     let mute_window = millis(1000);
-    // 128 bytes/sec against an 8 KiB produce is about a minute of debt, so the
-    // window saturates at the configured maximum.
+    // A byte-rate throttle is not bounded (#709): 2800 bytes/sec against an
+    // 8 KiB produce, after the one-second burst, is about two seconds of debt,
+    // longer than `mute_window` and well inside `MUTE_LIFT_TIMEOUT`.
     let (handle, _dir) =
-        broker_with_anonymous_quotas(mute_window, &[("producer_byte_rate", 128.0)]).await;
+        broker_with_anonymous_quotas(mute_window, &[("producer_byte_rate", 2800.0)]).await;
     let (server, mut framed) = connect_to_serve_loop(&handle).await;
 
     let create_topics_body = encoded(
@@ -445,9 +446,10 @@ async fn acks_zero_produce_writes_no_response_and_still_mutes() {
 /// A request that trips two quotas is muted once, for the longer window, not
 /// once per quota and not for their sum.
 ///
-/// A produce charges both `producer_byte_rate` and `request_percentage`. Both
-/// are seeded far below what this request needs, so both saturate at
-/// `quota_throttle_max` and the two windows are equal — which makes summing
+/// A produce charges both `producer_byte_rate` and `request_percentage`. The
+/// request quota is seeded far below what this request needs, so it saturates
+/// at `quota_throttle_max`. The byte rate leaves about three quarters of a
+/// window of debt, which Kafka does not bound — so summing the two is
 /// observably different from taking the longest. Kafka reports one
 /// `throttle_time_ms` and mutes the channel once, so the response must carry a
 /// single window and the connection must be readable again after one.
@@ -457,7 +459,7 @@ async fn a_request_tripping_two_quotas_is_muted_once_for_the_longest_window() {
     let (handle, _dir) = broker_with_anonymous_quotas(
         mute_window,
         &[
-            ("producer_byte_rate", 128.0),
+            ("producer_byte_rate", 4800.0),
             ("request_percentage", 0.0001),
         ],
     )

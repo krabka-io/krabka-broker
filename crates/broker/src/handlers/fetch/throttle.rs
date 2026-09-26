@@ -64,7 +64,6 @@ pub(super) fn apply_consumer_fetch_quota(
         &context.principal.name,
         context.client_id,
         sum_response_bytes(responses),
-        broker.config.quota_throttle_max,
     );
     let elapsed_micros = u64::try_from(
         handler_start
@@ -151,14 +150,13 @@ fn consume_consumer_quota(
     principal: &str,
     client_id: &str,
     bytes: u64,
-    maximum: Time,
 ) -> crate::quota::QuotaDelay {
     let Some((entity_key, rate)) =
         crate::quota::lookup_quota_with_key(image, principal, client_id, "consumer_byte_rate")
     else {
         return crate::quota::QuotaDelay::zero();
     };
-    if rate <= 0.0 {
+    if !rate.is_finite() || rate <= 0.0 {
         return crate::quota::QuotaDelay::zero();
     }
     let user = entity_key
@@ -182,7 +180,9 @@ fn consume_consumer_quota(
     }
     let overage = bytes - granted;
     let delay_secs = overage.to_f64().unwrap_or(f64::MAX) / rate;
-    let delay = Time::from_secs_f64(delay_secs).min(maximum);
+    // Kafka's `ClientQuotaManager.throttleTime` does not bound a byte-rate
+    // throttle.
+    let delay = Time::from_secs_f64(delay_secs);
     crate::quota::QuotaDelay::new(delay, user, client_id_opt)
 }
 
@@ -212,15 +212,15 @@ mod tests {
         // A one-second window, so 4096 bytes at 1024 B/s is over the burst
         // rather than inside the default 11-second one.
         let buckets = crate::quota::QuotaBuckets::with_window(secs(1));
-        let delay_match =
-            super::consume_consumer_quota(&img, &buckets, "alice", "app-x", 4096, millis(25));
+        // 3072 bytes over at 1024 B/s is three seconds, reported whole: Kafka
+        // does not bound a byte-rate throttle (#709).
+        let delay_match = super::consume_consumer_quota(&img, &buckets, "alice", "app-x", 4096);
         assert!(
-            delay_match == millis(25),
-            "tuple quota match should honor the configured cap; got {delay_match:?}"
+            delay_match > millis(2_900) && delay_match <= secs(3),
+            "tuple quota match should throttle for the whole overage; got {delay_match:?}"
         );
         let buckets2 = crate::quota::QuotaBuckets::with_window(secs(1));
-        let delay_other =
-            super::consume_consumer_quota(&img, &buckets2, "alice", "other", 4096, millis(25));
+        let delay_other = super::consume_consumer_quota(&img, &buckets2, "alice", "other", 4096);
         assert!(
             delay_other == <Time as TimeExt>::ZERO,
             "non-matching client_id should not throttle; got {delay_other:?}"

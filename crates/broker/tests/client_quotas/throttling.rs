@@ -47,9 +47,9 @@ const QUOTA_THROTTLE_MAX_MS: i32 = 1000;
 ///
 /// Rate = 128 bytes/sec, burst = 1 second at rate = 128 bytes free. A produce
 /// of 8 KB = 8192 bytes is about 7168 bytes over budget. At 128 bytes/sec that
-/// is about 56 seconds of debt, but the response `throttle_time_ms` has a cap
-/// of 1000ms. This test asserts only `throttle_time_ms` > 0. The exact value is
-/// not load-bearing.
+/// is about 56 seconds of debt, which Kafka reports whole: a byte-rate
+/// throttle has no cap. This test asserts only `throttle_time_ms` > 0. The
+/// exact value is not load-bearing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn producer_byte_rate_throttles_produce() {
     let (handle, _dir, addr) = start_single_broker_sasl_plaintext_with_users(

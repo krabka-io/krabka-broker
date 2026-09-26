@@ -14,7 +14,6 @@ pub fn consume_producer_quota(
     client_id: &str,
     qos_tier: &str,
     bytes: u64,
-    maximum_delay: Time,
 ) -> super::QuotaDelay {
     consume_configured_quota(
         QuotaConsumption {
@@ -29,9 +28,10 @@ pub fn consume_producer_quota(
         quota_rate_to_bucket_rate,
         |overage, rate, _| {
             let overage = u64_to_f64(overage);
+            // Kafka's `ClientQuotaManager.throttleTime` does not bound a
+            // byte-rate throttle.
             Time::from_secs_f64(overage / rate)
         },
-        maximum_delay,
     )
 }
 
@@ -66,8 +66,8 @@ mod tests {
         // these amounts are about the overage and not about the window.
         let buckets = QuotaBuckets::with_window(secs(1));
 
-        let gold = consume_producer_quota(&img, &buckets, "alice", "app", "gold", 1024, secs(1));
-        let bulk = consume_producer_quota(&img, &buckets, "alice", "app", "bulk", 64, secs(1));
+        let gold = consume_producer_quota(&img, &buckets, "alice", "app", "gold", 1024);
+        let bulk = consume_producer_quota(&img, &buckets, "alice", "app", "bulk", 64);
 
         check!(gold > <Time as TimeExt>::ZERO);
         check!(bulk == <Time as TimeExt>::ZERO);
@@ -82,10 +82,9 @@ mod tests {
         );
         let buckets = QuotaBuckets::new();
 
-        let matching =
-            consume_producer_quota(&img, &buckets, "alice", "app", "default", 4096, secs(1));
+        let matching = consume_producer_quota(&img, &buckets, "alice", "app", "default", 4096);
         let other_client =
-            consume_producer_quota(&img, &buckets, "alice", "other", "default", 4096, secs(1));
+            consume_producer_quota(&img, &buckets, "alice", "other", "default", 4096);
 
         assert!(matching > <Time as TimeExt>::ZERO);
         assert!(other_client == <Time as TimeExt>::ZERO);
@@ -96,20 +95,24 @@ mod tests {
         let img = img_with_quota(vec![("user", Some("alice"))], 1_000.0);
         let buckets = QuotaBuckets::with_window(secs(1));
 
-        let delay =
-            consume_producer_quota(&img, &buckets, "alice", "app", "default", 1_250, secs(1));
+        let delay = consume_producer_quota(&img, &buckets, "alice", "app", "default", 1_250);
 
         assert!(delay == millis(250));
     }
 
+    /// Kafka leaves a byte-rate throttle unbounded (#709): a producer far
+    /// over its rate is told to back off for the whole debt, past the ten
+    /// seconds the broker once capped it at.
     #[test]
-    fn producer_quota_uses_configured_maximum_delay() {
-        let img = img_with_quota(vec![("user", Some("alice"))], 1.0);
+    fn producer_quota_delay_is_not_capped() {
+        let img = img_with_quota(vec![("user", Some("alice"))], 1024.0);
+        // The default 11-second window gives an 11 KiB burst; 20 KiB past it
+        // is 20 seconds of debt at 1 KiB/s.
         let buckets = QuotaBuckets::new();
 
         let delay =
-            consume_producer_quota(&img, &buckets, "alice", "app", "default", 100, millis(25));
+            consume_producer_quota(&img, &buckets, "alice", "app", "default", 1024 * (11 + 20));
 
-        assert!(delay == millis(25));
+        assert!(delay > secs(19) && delay <= secs(20), "{delay:?}");
     }
 }

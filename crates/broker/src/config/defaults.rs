@@ -86,7 +86,7 @@ impl Default for BrokerConfig {
             unclean_recovery_aggressive_deadline: secs(2),
             unclean_recovery_balanced_deadline: secs(30),
             operator_recovery_deadline: secs(25),
-            quota_throttle_max: secs(10),
+            quota_throttle_max: secs(1),
             quota_window: DEFAULT_QUOTA_WINDOW,
             controller_mutation_quota_window: secs(1),
             self_registration_max_attempts: 8,
@@ -429,9 +429,9 @@ mod tests {
                 secs(2),
                 secs(30),
                 secs(25),
-                // KIP-13's `quota.window.size.seconds` ceiling: Kafka caps an
-                // applied throttle at 10 s, and #397 moved krabka onto it.
-                secs(10),
+                // Kafka's `ClientRequestQuotaManager` bounds the request-quota
+                // throttle at one `quota.window.size.seconds` (#709).
+                secs(1),
                 secs(1),
             )
         );

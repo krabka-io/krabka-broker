@@ -948,8 +948,15 @@ async fn strict_create_topics_rejects_after_quota_exhaustion() {
     assert!(resp == expected);
 
     let rejected = drive(&broker, &request(vec![topic("rejected", 1, 1)]), &p, &peer).await;
+    // Five mutations against a two-mutation burst at 2/sec leave three of
+    // debt: 1.5 s to refill, less what refilled since. Kafka reports the
+    // whole refill time, with no cap (#709).
+    check!(
+        (1_400..=1_500).contains(&rejected.throttle_time_ms),
+        "{rejected:?}"
+    );
     let expected = CreateTopicsResponse {
-        throttle_time_ms: 1_000,
+        throttle_time_ms: rejected.throttle_time_ms,
         topics: vec![CreatableTopicResult {
             name: "rejected".into(),
             error_code: codes::THROTTLING_QUOTA_EXCEEDED,

@@ -461,7 +461,7 @@ Validated operational policy loaded from `[runtime]`.
 | `producer_id_expiration_scan_interval` | string | broker default | duration | Cadence of the producer-state expiry scan, Kafka's `producer.id.expiration.check.interval.ms`. |
 | `queued_max_request_bytes` | string | broker default | byte size | Maximum byte size across all queued requests before accepting additional requests is paused, Kafka's `queued.max.request.bytes`. |
 | `queued_max_requests` | integer (uint) | broker default |  | Maximum number of queued requests allowed in the broker dispatch queue, Kafka's `queued.max.requests`. |
-| `quota_throttle_max` | string | broker default | duration | Maximum client quota throttle delay, which bounds how long one response mutes a client. Equivalent to Kafka's `quota.window.size.seconds * (quota.window.num - 1)`. |
+| `quota_throttle_max` | string | broker default | duration | Maximum request-quota throttle delay, which bounds how long one response over `request_percentage` mutes a client. Equivalent to Kafka's `quota.window.size.seconds`; byte-rate and controller-mutation throttles are not bounded. |
 | `quota_window` | string | broker default | duration | Time window that sizes the client byte-rate quota token bucket's burst capacity. Equivalent to Kafka's sampling window `quota.window.num * quota.window.size.seconds`. |
 | `record_decompression_max_ratio` | string | broker default | ratio | Maximum accepted decompression ratio for a produced record batch. |
 | `record_decompression_output_ceiling` | string | broker default | byte size | Maximum decompressed-output allowance granted to a record batch. |

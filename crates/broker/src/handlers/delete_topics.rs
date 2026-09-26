@@ -141,7 +141,6 @@ pub(crate) async fn handle(
         ctx.client_id,
         mutation_count,
         broker.config.controller_mutation_quota_window,
-        broker.config.quota_throttle_max,
         version >= 5,
     );
     if quota.is_rejected() {

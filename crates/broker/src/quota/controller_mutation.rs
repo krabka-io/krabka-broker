@@ -54,8 +54,8 @@ impl ControllerMutationQuotaDecision {
 /// Consume `mutations` from the `controller_mutation_rate` bucket for
 /// `(principal, client_id)`. This function returns the throttle delay to apply
 /// before the handler sends the response. The delay is zero if no quota is
-/// configured, if there is no overage, or if `mutations == 0`. The delay is
-/// capped at `maximum_delay`.
+/// configured, if there is no overage, or if `mutations == 0`. Like Kafka's
+/// `ControllerMutationQuotaManager.throttleTimeMs`, it is not bounded.
 #[must_use]
 pub fn consume_controller_mutation_quota(
     image: &MetadataImage,
@@ -63,7 +63,6 @@ pub fn consume_controller_mutation_quota(
     principal: &str,
     client_id: &str,
     mutations: u64,
-    maximum_delay: Time,
 ) -> super::QuotaDelay {
     apply_controller_mutation_quota_mode(
         image,
@@ -72,7 +71,6 @@ pub fn consume_controller_mutation_quota(
         client_id,
         mutations,
         secs(1),
-        maximum_delay,
         false,
     )
     .quota_delay()
@@ -81,8 +79,6 @@ pub fn consume_controller_mutation_quota(
 /// Atomically check accumulated controller-mutation debt and record this
 /// operation. Strict APIs reject only when debt already exists; an operation
 /// that crosses the limit is accepted and makes the next operation fail.
-#[allow(clippy::too_many_arguments)] // Quota identity and policy are separate inputs.
-#[allow(clippy::cast_precision_loss)] // Mutation counts cannot approach f64's integer limit.
 pub(crate) fn apply_controller_mutation_quota_mode(
     image: &MetadataImage,
     buckets: &QuotaBuckets,
@@ -90,7 +86,6 @@ pub(crate) fn apply_controller_mutation_quota_mode(
     client_id: &str,
     mutations: u64,
     window: Time,
-    maximum_delay: Time,
     strict: bool,
 ) -> ControllerMutationQuotaDecision {
     if mutations == 0 {
@@ -151,15 +146,15 @@ pub(crate) fn apply_controller_mutation_quota_mode(
 
     if strict && bucket.tokens < 0.0 {
         return ControllerMutationQuotaDecision::Rejected {
-            delay: Time::from_secs_f64((-bucket.tokens / rate).max(0.0)).min(maximum_delay),
+            delay: Time::from_secs_f64((-bucket.tokens / rate).max(0.0)),
             user,
             client_id: client_id_opt,
         };
     }
 
-    bucket.tokens -= mutations as f64;
+    bucket.tokens -= super::u64_to_f64(mutations);
     let delay = if !strict && bucket.tokens < 0.0 {
-        Time::from_secs_f64((-bucket.tokens / rate).max(0.0)).min(maximum_delay)
+        Time::from_secs_f64((-bucket.tokens / rate).max(0.0))
     } else {
         <Time as TimeExt>::ZERO
     };
@@ -172,8 +167,8 @@ pub(crate) fn apply_controller_mutation_quota_mode(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
-    use krabka_units::{millis, secs};
+    use assert2::{assert, check};
+    use krabka_units::secs;
 
     use super::*;
     use crate::quota::test_support::image_with_quota as quota_image;
@@ -186,7 +181,7 @@ mod tests {
     fn zero_mutations_returns_zero_delay() {
         let img = img_with_quota(vec![("user", Some("alice"))], 1.0);
         let buckets = QuotaBuckets::new();
-        let delay = consume_controller_mutation_quota(&img, &buckets, "alice", "", 0, secs(1));
+        let delay = consume_controller_mutation_quota(&img, &buckets, "alice", "", 0);
         assert!(delay == <Time as TimeExt>::ZERO);
     }
 
@@ -196,28 +191,45 @@ mod tests {
         // 5 mutations consumed → bucket has 5 left → no overage.
         let img = img_with_quota(vec![("user", Some("alice"))], 10.0);
         let buckets = QuotaBuckets::new();
-        let delay = consume_controller_mutation_quota(&img, &buckets, "alice", "", 5, secs(1));
+        let delay = consume_controller_mutation_quota(&img, &buckets, "alice", "", 5);
         assert!(delay == <Time as TimeExt>::ZERO);
     }
 
+    /// Kafka's `ControllerMutationQuotaManager.throttleTimeMs` is the full
+    /// time to refill the bucket, with no bound (#709). At 1/sec with a
+    /// one-mutation burst, 61 mutations leave 60 seconds of debt.
     #[test]
-    fn overage_returns_capped_delay() {
-        // rate=1/sec, burst=1; 100 mutations → overage 99 → delay 99s
-        // → capped at 1s.
+    fn overage_delay_is_not_capped() {
         let img = img_with_quota(vec![("user", Some("alice"))], 1.0);
         let buckets = QuotaBuckets::new();
-        let delay = consume_controller_mutation_quota(&img, &buckets, "alice", "", 100, secs(1));
-        assert!(delay == secs(1));
+        let delay = consume_controller_mutation_quota(&img, &buckets, "alice", "", 61);
+        check!(delay > secs(59) && delay <= secs(60), "{delay:?}");
     }
 
+    /// A strict caller in debt is rejected with the whole refill time.
     #[test]
-    fn overage_uses_configured_maximum_delay() {
+    fn strict_rejection_reports_the_uncapped_refill_time() {
         let img = img_with_quota(vec![("user", Some("alice"))], 1.0);
         let buckets = QuotaBuckets::new();
+        let apply = |mutations| {
+            apply_controller_mutation_quota_mode(
+                &img,
+                &buckets,
+                "alice",
+                "",
+                mutations,
+                secs(1),
+                true,
+            )
+        };
 
-        let delay = consume_controller_mutation_quota(&img, &buckets, "alice", "", 100, millis(25));
-
-        assert!(delay == millis(25));
+        assert!(!apply(61).is_rejected());
+        let rejected = apply(1);
+        check!(rejected.is_rejected());
+        check!(
+            rejected.delay() > secs(59) && rejected.delay() <= secs(60),
+            "{rejected:?}"
+        );
     }
 
     #[test]
@@ -232,7 +244,6 @@ mod tests {
                 "",
                 mutations,
                 secs(2_000),
-                secs(1),
                 true,
             )
         };

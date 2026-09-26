@@ -246,9 +246,10 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub operator_recovery_deadline: Option<Time>,
-    /// Maximum client quota throttle delay, which bounds how long one response
-    /// mutes a client. Equivalent to Kafka's `quota.window.size.seconds *
-    /// (quota.window.num - 1)`.
+    /// Maximum request-quota throttle delay, which bounds how long one
+    /// response over `request_percentage` mutes a client. Equivalent to
+    /// Kafka's `quota.window.size.seconds`; byte-rate and controller-mutation
+    /// throttles are not bounded.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub quota_throttle_max: Option<Time>,
