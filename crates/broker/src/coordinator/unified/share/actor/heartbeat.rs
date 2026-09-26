@@ -12,7 +12,7 @@ use krabka_protocol::owned::{
 use super::{
     assignment::reconcile,
     records::{PendingShareRecords, chrono_now_ms, flush_pending, snapshot_pending_after_change},
-    response::{base_resp, build_assignment_resp, error_resp},
+    response::{build_assignment_resp, error_resp},
     share_state::reconcile_share_state,
 };
 use crate::{
@@ -139,6 +139,11 @@ fn update_member_state(
 }
 
 /// Handle a leave-group heartbeat (`member_epoch == -1`).
+///
+/// It follows Kafka's `GroupMetadataManager.shareGroupLeave`. An unknown
+/// member answers `UNKNOWN_MEMBER_ID` with Kafka's message and writes no
+/// record. A known member is fenced: its records are tombstoned, the group
+/// epoch is bumped, and the response echoes the member id and epoch `-1`.
 async fn handle_leave(
     state: &mut ShareGroupState,
     config: &ShareGroupConfig,
@@ -147,19 +152,27 @@ async fn handle_leave(
     req: &ShareGroupHeartbeatRequest,
     now_ms: i64,
 ) -> Result<ShareGroupHeartbeatResponse, crate::error::BrokerError> {
+    if !state.members.contains_key(&req.member_id) {
+        return Ok(ShareGroupHeartbeatResponse {
+            error_code: codes::UNKNOWN_MEMBER_ID,
+            error_message: Some(format!(
+                "Member {} is not a member of group {}.",
+                req.member_id, state.group_id
+            )),
+            ..Default::default()
+        });
+    }
     if crate::metadata_epoch::next_i32(state.group_epoch).is_none() {
         return Ok(error_resp(codes::INVALID_REQUEST, config));
     }
     let mut pending = PendingShareRecords::default();
-    if state.members.contains_key(&req.member_id) {
-        pending.member_metadata.push((req.member_id.clone(), None));
-        pending
-            .target_per_member
-            .push((req.member_id.clone(), None));
-        pending
-            .current_per_member
-            .push((req.member_id.clone(), None));
-    }
+    pending.member_metadata.push((req.member_id.clone(), None));
+    pending
+        .target_per_member
+        .push((req.member_id.clone(), None));
+    pending
+        .current_per_member
+        .push((req.member_id.clone(), None));
     state.remove_member(&req.member_id);
     if !state.bump_epoch() {
         return Ok(error_resp(codes::INVALID_REQUEST, config));
@@ -171,7 +184,17 @@ async fn handle_leave(
     // Initialize the partitions that the remaining members gained. The share
     // state of a dropped partition stays, as in Kafka.
     reconcile_share_state(state, offsets_log, coordinator, now_ms).await;
-    Ok(base_resp(0, req.member_epoch, config))
+    Ok(leave_resp(&req.member_id, req.member_epoch))
+}
+
+/// The response to a successful leave: Kafka's `shareGroupLeave` sets only
+/// the member id and the request's member epoch.
+fn leave_resp(member_id: &str, member_epoch: i32) -> ShareGroupHeartbeatResponse {
+    ShareGroupHeartbeatResponse {
+        member_id: Some(member_id.to_owned()),
+        member_epoch,
+        ..Default::default()
+    }
 }
 
 pub(super) fn build_member(
@@ -309,43 +332,80 @@ mod tests {
         check!(existing.member_epoch == joined.member_epoch);
     }
 
+    /// Kafka's `shareGroupLeave`: a known member is fenced, with its records
+    /// tombstoned and the group epoch bumped, and the response echoes its id
+    /// and epoch `-1`. An unknown member answers `UNKNOWN_MEMBER_ID` and
+    /// leaves the group and the log untouched.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn leave_removes_member() {
-        let (metadata, _id) = metadata_with_topic("t", 4);
-        let (coord, log) = make_coordinator(metadata);
-        let handle = coord.get_or_create_share("g");
-        let joined = heartbeat(
-            &handle,
-            ShareGroupHeartbeatRequest {
-                group_id: "g".into(),
-                member_id: String::new(),
-                member_epoch: 0,
-                subscribed_topic_names: Some(vec!["t".into()]),
-                ..Default::default()
-            },
-        )
-        .await;
-        let mid = joined.member_id.unwrap();
-        let pre_leave = log.batches().await.len();
+    async fn leave_matches_kafka() {
+        // (leaving member id, expected response, expected new batches,
+        // expected group epoch afterwards)
+        let rows = [
+            (
+                "m1",
+                ShareGroupHeartbeatResponse {
+                    member_id: Some("m1".into()),
+                    member_epoch: -1,
+                    ..Default::default()
+                },
+                1,
+                2,
+            ),
+            (
+                "m9",
+                ShareGroupHeartbeatResponse {
+                    error_code: codes::UNKNOWN_MEMBER_ID,
+                    error_message: Some("Member m9 is not a member of group g.".into()),
+                    ..Default::default()
+                },
+                0,
+                1,
+            ),
+        ];
+        for (member_id, expected, new_batches, group_epoch) in rows {
+            let (metadata, _id) = metadata_with_topic("t", 4);
+            let (coord, log) = make_coordinator(metadata);
+            let handle = coord.get_or_create_share("g");
+            let joined = heartbeat(
+                &handle,
+                ShareGroupHeartbeatRequest {
+                    group_id: "g".into(),
+                    member_id: "m1".into(),
+                    member_epoch: 0,
+                    subscribed_topic_names: Some(vec!["t".into()]),
+                    ..Default::default()
+                },
+            )
+            .await;
+            check!(joined.error_code == codes::NONE);
+            let pre_leave = log.batches().await.len();
 
-        let resp = heartbeat(
-            &handle,
-            ShareGroupHeartbeatRequest {
-                group_id: "g".into(),
-                member_id: mid,
-                member_epoch: -1,
-                ..Default::default()
-            },
-        )
-        .await;
-        assert!(resp.error_code == 0);
-        let batches = log.batches().await;
-        assert!(batches.len() == pre_leave + 1);
-        let leave_batch = &batches[batches.len() - 1];
-        assert!(
-            leave_batch.records.iter().any(|r| r.value.is_none()),
-            "leave batch must contain at least one tombstone"
-        );
+            let resp = heartbeat(
+                &handle,
+                ShareGroupHeartbeatRequest {
+                    group_id: "g".into(),
+                    member_id: member_id.into(),
+                    member_epoch: -1,
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            check!(resp == expected, "{member_id}");
+            let batches = log.batches().await;
+            check!(batches.len() == pre_leave + new_batches, "{member_id}");
+            if new_batches > 0 {
+                check!(
+                    batches[batches.len() - 1]
+                        .records
+                        .iter()
+                        .any(|r| r.value.is_none()),
+                    "leave batch must contain at least one tombstone"
+                );
+            }
+            let seed = coord.cached_share_seed("g").expect("seed cached");
+            check!(seed.group_epoch == group_epoch, "{member_id}");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
