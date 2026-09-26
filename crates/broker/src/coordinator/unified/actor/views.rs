@@ -125,7 +125,7 @@ pub struct DescribeView {
     pub group_id: String,
     pub group_epoch: i32,
     pub assignment_epoch: i32,
-    /// The group state from [`GroupState::state_name`].
+    /// The group state, from `GroupState::state_name`.
     pub group_state: &'static str,
     pub members: Vec<DescribeMember>,
 }
