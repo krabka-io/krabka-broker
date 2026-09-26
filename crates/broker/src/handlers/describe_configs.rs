@@ -173,6 +173,9 @@ pub(crate) fn handle(
                 .topic_creation
                 .default_replication_factor
                 .then_some(broker.config.default_replication_factor),
+            delete_topic_enable: origins
+                .delete_topic_enable
+                .then_some(broker.config.delete_topic_enable),
             connections_max_idle: broker.config.connections_max_idle,
             connections_max_idle_overrides: &broker.config.connections_max_idle_overrides,
         };

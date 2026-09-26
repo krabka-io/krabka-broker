@@ -136,6 +136,7 @@ impl BrokerConfig {
             default_message_timestamp_after_max_ms: Some(3_600_000),
             num_partitions: 1,
             default_replication_factor: 1,
+            delete_topic_enable: true,
             max_request_partition_size_limit: 2000,
             offset_metadata_max_bytes: 4096,
             future_log_move_read_chunk: mebibytes(1),

@@ -73,7 +73,7 @@ use self::{
     tiering::{spawn_remote_cascades, tiered_partitions},
     wire::{
         delete_topic_result, delete_topics_response, random_seed, refused_topic_result,
-        shuffle_rows,
+        request_error_results, shuffle_rows,
     },
 };
 
@@ -97,6 +97,21 @@ pub(crate) async fn handle(
 
     let mut cur: &[u8] = req_bytes;
     let req = DeleteTopicsRequest::decode(&mut cur, version)?;
+
+    // Kafka's `ControllerApis.deleteTopics` refuses the whole request when
+    // `delete.topic.enable` is false, ahead of every other check: below v3
+    // with INVALID_REQUEST, from v3 with TOPIC_DELETION_DISABLED.
+    if !broker.config.delete_topic_enable {
+        let error_code = if version < 3 {
+            codes::INVALID_REQUEST
+        } else {
+            codes::TOPIC_DELETION_DISABLED
+        };
+        return crate::handlers::encode_response(
+            &delete_topics_response(request_error_results(&req, error_code), 0),
+            version,
+        );
+    }
 
     let image = controller.current_image();
     // Kafka's `ControllerApis.deleteTopics` answers INVALID_REQUEST for a row

@@ -367,3 +367,63 @@ fn topic_creation_defaults_report_their_provenance() {
         check!(entries == expected, "{label}");
     }
 }
+
+/// #743: `delete.topic.enable` reports Kafka's default of `true` at
+/// `DEFAULT_CONFIG` on a node that never named it, and a named value at
+/// `STATIC_BROKER_CONFIG` with the default beneath it.
+#[test]
+fn delete_topic_enable_reports_its_provenance() {
+    let wanted = |key: &str| key == config_keys::DELETE_TOPIC_ENABLE;
+    let synonym = |value: &str, source| DescribeConfigsSynonym {
+        name: config_keys::DELETE_TOPIC_ENABLE.to_owned(),
+        value: Some(value.to_owned()),
+        source,
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+    let entry = |value: &str, source, synonyms| DescribeConfigsResourceResult {
+        name: config_keys::DELETE_TOPIC_ENABLE.to_owned(),
+        value: Some(value.to_owned()),
+        read_only: true,
+        config_source: source,
+        is_sensitive: false,
+        synonyms,
+        config_type: registry::ConfigType::Boolean.wire(),
+        documentation: Some(doc_for(config_keys::DELETE_TOPIC_ENABLE)),
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+    let cases = [
+        (
+            "not named",
+            None,
+            vec![entry(
+                "true",
+                CONFIG_SOURCE_DEFAULT,
+                vec![synonym("true", CONFIG_SOURCE_DEFAULT)],
+            )],
+        ),
+        (
+            "named false",
+            Some(false),
+            vec![entry(
+                "false",
+                CONFIG_SOURCE_STATIC_BROKER,
+                vec![
+                    synonym("false", CONFIG_SOURCE_STATIC_BROKER),
+                    synonym("true", CONFIG_SOURCE_DEFAULT),
+                ],
+            )],
+        ),
+    ];
+
+    let mut actual = Vec::with_capacity(cases.len());
+    let mut expected = Vec::with_capacity(cases.len());
+    for (label, delete_topic_enable, entries) in cases {
+        let configs = StaticBrokerConfigs {
+            delete_topic_enable,
+            ..kafka_default_static_broker()
+        };
+        actual.push((label, static_broker_entries(configs, &wanted, BOTH)));
+        expected.push((label, entries));
+    }
+    assert!(actual == expected);
+}

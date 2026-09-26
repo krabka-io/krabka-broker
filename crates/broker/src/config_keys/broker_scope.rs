@@ -186,6 +186,15 @@ pub(crate) const NUM_PARTITIONS: &str = "num.partitions";
 /// read-only out of [`crate::config::BrokerConfig::default_replication_factor`].
 pub(crate) const DEFAULT_REPLICATION_FACTOR: &str = "default.replication.factor";
 
+/// Whether `DeleteTopics` may delete a topic. Kafka's
+/// `ServerConfigs.DELETE_TOPIC_ENABLE_CONFIG`, a boolean that defaults to
+/// `true`. When it is `false`, `ControllerApis.deleteTopics` refuses every
+/// request: `INVALID_REQUEST` below v3 and `TOPIC_DELETION_DISABLED` from v3.
+///
+/// Static in Kafka. `DescribeConfigs` reports it read-only out of
+/// [`crate::config::BrokerConfig::delete_topic_enable`].
+pub(crate) const DELETE_TOPIC_ENABLE: &str = "delete.topic.enable";
+
 /// KIP-98: how long a transactional id may sit in a terminal or idle state
 /// before the transaction coordinator tombstones it out of
 /// `__transaction_state`. Kafka defaults it to 604800000 ms (7 days).

@@ -112,6 +112,9 @@ kafka_codes! {
     INVALID_PARTITIONS = 37;
     INVALID_REPLICATION_FACTOR = 38;
     NOT_CONTROLLER = 41;
+    /// `TOPIC_DELETION_DISABLED` (73): `delete.topic.enable` is `false`, so
+    /// `DeleteTopics` v3 and later refuse every topic.
+    TOPIC_DELETION_DISABLED = 73;
     /// `INVALID_REQUEST` (42): the request is structurally or semantically
     /// unacceptable. It is also the code Kafka returns for a resource type
     /// that an `AlterConfigs` or `IncrementalAlterConfigs` broker does not

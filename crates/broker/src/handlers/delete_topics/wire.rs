@@ -54,6 +54,33 @@ pub(super) fn delete_topic_result(
     }
 }
 
+/// The rows of a request that fails as a whole, as Kafka's
+/// `DeleteTopicsRequest.getErrorResponse` builds them: one per requested
+/// topic, in request order, with the name and the id the client sent, the
+/// code, and no message.
+pub(super) fn request_error_results(
+    request: &krabka_protocol::owned::delete_topics_request::DeleteTopicsRequest,
+    error_code: i16,
+) -> Vec<DeletableTopicResult> {
+    let row = |name, topic_id| DeletableTopicResult {
+        name,
+        topic_id,
+        error_code,
+        ..Default::default()
+    };
+    request
+        .topic_names
+        .iter()
+        .map(|name| row(Some(name.clone()), WireUuid::ZERO))
+        .chain(
+            request
+                .topics
+                .iter()
+                .map(|topic| row(topic.name.clone(), topic.topic_id)),
+        )
+        .collect()
+}
+
 /// A refused row that also carries the text of the refusal.
 ///
 /// `DeleteTopics` v5 and later carry `error_message`, and a break-glass refusal

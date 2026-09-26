@@ -49,6 +49,30 @@ fn apply_topic_creation_properties(
     Ok(())
 }
 
+/// Kafka's `delete.topic.enable` under its Kafka name. Kafka's `ConfigDef`
+/// reads a boolean case-insensitively and refuses anything but `true` and
+/// `false` at startup, and so does this.
+fn apply_delete_topic_enable(
+    properties: &std::collections::BTreeMap<String, String>,
+    cfg: &mut crate::config::BrokerConfig,
+) -> Result<(), FileConfigError> {
+    let Some(value) = properties.get(crate::config_keys::DELETE_TOPIC_ENABLE) else {
+        return Ok(());
+    };
+    cfg.delete_topic_enable = match value.trim().to_ascii_lowercase().as_str() {
+        "true" => true,
+        "false" => false,
+        _ => {
+            return Err(FileConfigError::InvalidConfig(format!(
+                "server_properties `{}` must be `true` or `false`, got `{value}`",
+                crate::config_keys::DELETE_TOPIC_ENABLE
+            )));
+        }
+    };
+    cfg.static_config_origins.delete_topic_enable = true;
+    Ok(())
+}
+
 /// A positive integer `server_properties` value.
 fn parse_positive<T: std::str::FromStr + Default + PartialOrd>(
     name: &str,
@@ -143,6 +167,7 @@ pub(super) fn apply_listener_settings(
             value.trim().eq_ignore_ascii_case("true");
     }
     apply_topic_creation_properties(&settings.server_properties, cfg)?;
+    apply_delete_topic_enable(&settings.server_properties, cfg)?;
     let num_val = settings
         .server_properties
         .get("quota.window.num")
@@ -361,6 +386,53 @@ connections_max_idle = "5s"
                 "{label}: {result:?}"
             );
         }
+    }
+
+    /// `delete.topic.enable` under its Kafka name: a boolean Kafka reads
+    /// case-insensitively, default `true`, and a value that is neither word
+    /// refuses the configuration.
+    #[test]
+    fn delete_topic_enable_is_read_from_server_properties() {
+        let cases = [
+            ("not named", "broker_id = 0\n", Ok((true, false))),
+            (
+                "false",
+                "[server_properties]\n\"delete.topic.enable\" = \"false\"\n",
+                Ok((false, true)),
+            ),
+            (
+                "upper case",
+                "[server_properties]\n\"delete.topic.enable\" = \"TRUE\"\n",
+                Ok((true, true)),
+            ),
+            (
+                "a word",
+                "[server_properties]\n\"delete.topic.enable\" = \"maybe\"\n",
+                Err(
+                    "invalid config: server_properties `delete.topic.enable` must be `true` or \
+                     `false`, got `maybe`"
+                        .to_owned(),
+                ),
+            ),
+        ];
+        let mut actual = Vec::with_capacity(cases.len());
+        let mut expected = Vec::with_capacity(cases.len());
+        for (label, src, want) in cases {
+            let file: FileConfig = toml::from_str(src).expect("parse");
+            let mut cfg = crate::config::BrokerConfig::default();
+            let result = file
+                .apply_to(&mut cfg)
+                .map(|()| {
+                    (
+                        cfg.delete_topic_enable,
+                        cfg.static_config_origins.delete_topic_enable,
+                    )
+                })
+                .map_err(|error| error.to_string());
+            actual.push((label, result));
+            expected.push((label, want));
+        }
+        assert!(actual == expected);
     }
 
     /// Omitted everywhere, the broker keeps Kafka's 600000 default and no

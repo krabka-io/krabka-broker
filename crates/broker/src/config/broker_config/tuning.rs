@@ -208,6 +208,9 @@ macro_rules! tuning_fields {
             /// creates with `replication_factor = -1`. Kafka's
             /// `default.replication.factor`, default 1.
             pub default_replication_factor: i16,
+            /// Whether `DeleteTopics` may delete a topic. Kafka's
+            /// `delete.topic.enable`, default `true`.
+            pub delete_topic_enable: bool,
             /// Upper clamp on `DescribeTopicPartitions`'
             /// `response_partition_limit`. Kafka's
             /// `max.request.partition.size.limit`

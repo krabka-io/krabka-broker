@@ -692,6 +692,17 @@ fn a_broker_that_overrides_nothing_still_reports_its_static_configuration() {
                     unknown_tagged_fields: UnknownTaggedFields::default(),
                 },
                 DescribeConfigsResourceResult {
+                    name: config_keys::DELETE_TOPIC_ENABLE.to_owned(),
+                    value: Some("true".to_owned()),
+                    read_only: true,
+                    config_source: CONFIG_SOURCE_DEFAULT,
+                    is_sensitive: false,
+                    synonyms: Vec::new(),
+                    config_type: ConfigType::Boolean.wire(),
+                    documentation: None,
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                },
+                DescribeConfigsResourceResult {
                     name: NODE_ID.to_owned(),
                     value: Some("7".to_owned()),
                     read_only: true,
@@ -821,6 +832,7 @@ fn the_key_filter_decides_what_a_broker_resource_reports() {
             vec![
                 config_keys::CONNECTIONS_MAX_IDLE_MS,
                 config_keys::DEFAULT_REPLICATION_FACTOR,
+                config_keys::DELETE_TOPIC_ENABLE,
                 crate::throttle::FOLLOWER_THROTTLED_RATE_KEY,
                 crate::throttle::LEADER_THROTTLED_RATE_KEY,
                 NODE_ID,
@@ -1400,6 +1412,7 @@ fn a_broker_reports_its_idle_window_beside_the_static_node_id() {
             == vec![
                 config_keys::CONNECTIONS_MAX_IDLE_MS,
                 config_keys::DEFAULT_REPLICATION_FACTOR,
+                config_keys::DELETE_TOPIC_ENABLE,
                 NODE_ID,
                 config_keys::NUM_PARTITIONS,
                 config_keys::OFFSETS_RETENTION_CHECK_INTERVAL_MS,

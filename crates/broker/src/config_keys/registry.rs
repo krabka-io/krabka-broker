@@ -31,10 +31,10 @@ use super::{
     SEGMENT_INDEX_BYTES, SEGMENT_JITTER_MS, SEGMENT_MS,
     broker_scope::{
         BROKER_FENCED, BROKER_WITNESS, CONNECTIONS_MAX_IDLE_MS, CONNECTIONS_MAX_REAUTH_MS,
-        DEFAULT_REPLICATION_FACTOR, NUM_PARTITIONS, OFFSETS_RETENTION_CHECK_INTERVAL_MS,
-        OFFSETS_RETENTION_MINUTES, REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS,
-        STRETCH_PREFERRED_LEADER_SITE, TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS,
-        TRANSACTIONAL_ID_EXPIRATION_MS,
+        DEFAULT_REPLICATION_FACTOR, DELETE_TOPIC_ENABLE, NUM_PARTITIONS,
+        OFFSETS_RETENTION_CHECK_INTERVAL_MS, OFFSETS_RETENTION_MINUTES,
+        REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS, STRETCH_PREFERRED_LEADER_SITE,
+        TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS, TRANSACTIONAL_ID_EXPIRATION_MS,
     },
     delivery::{
         DELIVERY_MAX_DELAY_MS, DELIVERY_MAX_DELAY_UNLIMITED, DELIVERY_MODE,
@@ -206,6 +206,7 @@ impl ConfigKey {
                 | TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS
                 | NUM_PARTITIONS
                 | DEFAULT_REPLICATION_FACTOR
+                | DELETE_TOPIC_ENABLE
         )
     }
 
@@ -951,6 +952,17 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigType::Int,
             Some("1"),
             "The replication factor `CreateTopics` gives a topic that asks for `replication_factor = -1`, which is what `kafka-topics --create` sends without `--replication-factor`. Read from this node's own configuration; Kafka refuses to alter it dynamically.",
+            ValueCheck::NotAltered,
+        )
+    },
+    ConfigKey {
+        read_only: true,
+        ..key(
+            DELETE_TOPIC_ENABLE,
+            ConfigScope::Broker,
+            ConfigType::Boolean,
+            Some("true"),
+            "Whether `DeleteTopics` may delete a topic. When it is `false`, every `DeleteTopics` request is refused: `INVALID_REQUEST` below v3 and `TOPIC_DELETION_DISABLED` from v3. Read from this node's own configuration; Kafka refuses to alter it dynamically.",
             ValueCheck::NotAltered,
         )
     },

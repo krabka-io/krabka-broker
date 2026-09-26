@@ -693,3 +693,91 @@ async fn rows_follow_kafkas_describe_and_delete_decisions() {
     }
     assert!(actual == expected);
 }
+
+// ── #743: delete.topic.enable ───────────────────────────────────────
+
+/// Kafka's `ControllerApis.deleteTopics` refuses every row when
+/// `delete.topic.enable` is false: `INVALID_REQUEST` below v3 and
+/// `TOPIC_DELETION_DISABLED` from v3, with the name and the id the client sent
+/// and no message. The topic stays.
+#[tokio::test]
+async fn delete_topic_enable_false_refuses_every_row() {
+    const TOPIC: &str = "kept";
+    let cases = [
+        (true, 6, codes::NONE, false),
+        (false, 2, codes::INVALID_REQUEST, true),
+        (false, 3, codes::TOPIC_DELETION_DISABLED, true),
+        (false, 6, codes::TOPIC_DELETION_DISABLED, true),
+    ];
+
+    let mut actual = Vec::with_capacity(cases.len());
+    let mut expected = Vec::with_capacity(cases.len());
+    for (enabled, version, error_code, exists) in cases {
+        let (broker_handle, _dir) = crate::test_support::start_broker_with(move |cfg| {
+            cfg.audit_enabled = false;
+            cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+            cfg.delete_topic_enable = enabled;
+        })
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("admin");
+        let peer = peer();
+        seed_topic(&broker, &p, &peer, TOPIC).await;
+        let topic_id = WireUuid(
+            broker
+                .controller
+                .current_image()
+                .topic(TOPIC)
+                .expect("seeded topic")
+                .topic_id
+                .into_bytes(),
+        );
+        let req = if version < 6 {
+            DeleteTopicsRequest {
+                topic_names: vec![TOPIC.into()],
+                timeout_ms: 5_000,
+                ..Default::default()
+            }
+        } else {
+            request(vec![named_state(TOPIC)])
+        };
+        let ctx = test_context(&p, &peer);
+        let bytes = handle(
+            &broker,
+            version,
+            1,
+            &crate::test_support::encode_request(&req, version),
+            &ctx,
+        )
+        .await
+        .expect("handle");
+        let resp: DeleteTopicsResponse = crate::test_support::decode_response(&bytes, version);
+        let still_there = broker.controller.current_image().topic(TOPIC).is_some();
+        actual.push(((enabled, version), resp, still_there));
+
+        // A deleted topic's v6 row carries its id; a refused row carries the
+        // zero id the name row was sent with, and v2 carries no id at all.
+        let row = DeletableTopicResult {
+            name: Some(TOPIC.into()),
+            topic_id: if error_code == codes::NONE {
+                topic_id
+            } else {
+                WireUuid::ZERO
+            },
+            error_code,
+            error_message: None,
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+        };
+        expected.push((
+            (enabled, version),
+            DeleteTopicsResponse {
+                throttle_time_ms: 0,
+                responses: vec![row],
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+            },
+            exists,
+        ));
+        broker_handle.shutdown().await;
+    }
+    assert!(actual == expected);
+}
