@@ -401,7 +401,7 @@ Validated operational policy loaded from `[runtime]`.
 | `controller_election_timeout` | string | broker default | duration | Controller election timeout, Kafka's `controller.quorum.fetch.timeout.ms`. It is the follower fetch watchdog, and 1.5x of it is the leader's check-quorum window: a leader that a majority of the voters has not fetched from within that window resigns its epoch. |
 | `controller_fetch_miss_limit` | integer (uint32) | broker default |  | Consecutive follower fetch misses tolerated before a new election. |
 | `controller_heartbeat_interval` | string | broker default | duration | Raft heartbeat interval on the controller quorum. It should stay at or below `controller_election_timeout / 3`. |
-| `controller_mutation_quota_window` | string | broker default | duration | Time window whose throughput defines the KIP-599 controller-mutation quota burst capacity. |
+| `controller_mutation_quota_window` | string | broker default | duration | Time window whose throughput defines the KIP-599 controller-mutation quota burst capacity (default 11 s), Kafka's `controller.quota.window.num` x `controller.quota.window.size.seconds`. |
 | `coordinator_actor_mailbox_capacity` | integer (uint) | broker default |  | Mailbox capacity of each coordinator actor. |
 | `coordinator_session_expiry_tick` | string | broker default | duration | Cadence of the consumer-group session expiry scan. |
 | `coordinator_shutdown_ack_timeout` | string | broker default | duration | Maximum wait for coordinator shutdown acknowledgements. |

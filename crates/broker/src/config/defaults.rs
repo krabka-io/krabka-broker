@@ -88,7 +88,7 @@ impl Default for BrokerConfig {
             operator_recovery_deadline: secs(25),
             quota_throttle_max: secs(1),
             quota_window: DEFAULT_QUOTA_WINDOW,
-            controller_mutation_quota_window: secs(1),
+            controller_mutation_quota_window: DEFAULT_QUOTA_WINDOW,
             self_registration_max_attempts: 8,
             observer_fetch_max: mebibytes(1),
             audit_event_queue_capacity: 8_192,
@@ -433,7 +433,9 @@ mod tests {
                 // Kafka's `ClientRequestQuotaManager` bounds the request-quota
                 // throttle at one `quota.window.size.seconds` (#709).
                 secs(1),
-                secs(1),
+                // KIP-599: Kafka's `controller.quota.window.num` (11) x
+                // `controller.quota.window.size.seconds` (1).
+                secs(11),
             )
         );
     }

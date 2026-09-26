@@ -1751,7 +1751,7 @@
         },
         "controller_mutation_quota_window": {
           "default": null,
-          "description": "Time window whose throughput defines the KIP-599 controller-mutation\nquota burst capacity.",
+          "description": "Time window whose throughput defines the KIP-599 controller-mutation\nquota burst capacity (default 11 s), Kafka's\n`controller.quota.window.num` x `controller.quota.window.size.seconds`.",
           "format": "duration",
           "type": [
             "string",

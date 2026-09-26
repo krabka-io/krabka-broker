@@ -241,7 +241,12 @@ async fn handle_reports_invalid_partition_count_and_replication_factor() {
                 name: "bad-rf".into(),
                 topic_id: ProtoUuid([0; 16]),
                 error_code: codes::INVALID_REPLICATION_FACTOR,
-                error_message: None,
+                error_message: Some(
+                    "Unable to replicate the partition 2 time(s): The target replication factor \
+                     of 2 cannot be reached because only 1 broker(s) are registered or some \
+                     brokers have all their log directories cordoned."
+                        .into(),
+                ),
                 num_partitions: -1,
                 replication_factor: -1,
                 configs: None,
@@ -811,11 +816,10 @@ async fn duplicate_topic_reports_error_without_success_fields() {
         throttle_time_ms: 0,
         topics: vec![CreatableTopicResult {
             name: "dupe".into(),
-            // A fresh topic_id is generated before submit_change even on
-            // the error path; copied from the actual response.
-            topic_id: second.topics[0].topic_id,
+            // Kafka's existence check answers before a topic id is minted.
+            topic_id: ProtoUuid([0; 16]),
             error_code: codes::TOPIC_ALREADY_EXISTS,
-            error_message: None,
+            error_message: Some("Topic 'dupe' already exists.".into()),
             num_partitions: -1,
             replication_factor: -1,
             configs: None,
@@ -843,12 +847,12 @@ async fn validate_only_answers_the_verdict_and_commits_nothing() {
     let cases: [DryRun<'_>; 2] = [
         (
             // Kafka's `validateOnly` reports `TopicExistsException` for a name
-            // that is already taken, and the committing path never runs here
-            // to find that out.
+            // that is already taken, with the committing path's message.
             "existing",
             CreatableTopicResult {
                 name: "existing".into(),
                 error_code: codes::TOPIC_ALREADY_EXISTS,
+                error_message: Some("Topic 'existing' already exists.".into()),
                 num_partitions: -1,
                 replication_factor: -1,
                 ..Default::default()
@@ -960,6 +964,7 @@ async fn strict_create_topics_rejects_after_quota_exhaustion() {
         topics: vec![CreatableTopicResult {
             name: "rejected".into(),
             error_code: codes::THROTTLING_QUOTA_EXCEEDED,
+            error_message: Some("The throttling quota has been exceeded.".into()),
             ..Default::default()
         }],
         ..Default::default()
@@ -1601,11 +1606,18 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
 
         let resp = drive(&broker, &req, &p, &peer).await;
 
-        let row = |index: usize, name: &str| -> CreatableTopicResult {
+        let id_of = |name: &str| {
+            resp.topics
+                .iter()
+                .find(|row| row.name == name)
+                .map(|row| row.topic_id)
+                .expect("a row per name")
+        };
+        let row = |name: &str| -> CreatableTopicResult {
             if case.created.contains(&name) {
                 CreatableTopicResult {
                     name: name.into(),
-                    topic_id: resp.topics[index].topic_id,
+                    topic_id: id_of(name),
                     error_code: codes::NONE,
                     error_message: None,
                     num_partitions: -1,
@@ -1653,17 +1665,22 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
             unknown_tagged_fields: UnknownTaggedFields::default(),
         };
 
+        // Kafka answers the controller's rows first, then one row per
+        // duplicated name ("b" appears twice but gets exactly one row), then
+        // the protected topic and the topics denied `Create`.
+        let (created, denied): (Vec<&str>, Vec<&str>) = ["a", "app-x"]
+            .into_iter()
+            .partition(|name| case.created.contains(name));
+        let topics = created
+            .into_iter()
+            .map(row)
+            .chain([duplicate_row("b")])
+            .chain(denied.into_iter().map(row))
+            .chain([protected_row])
+            .collect();
         let expected = CreateTopicsResponse {
             throttle_time_ms: 0,
-            topics: vec![
-                row(0, "a"),
-                row(1, "app-x"),
-                // "b" appears twice in the request but gets exactly one
-                // result row -- Kafka removes every duplicate entry before
-                // it ever builds a response for the name.
-                duplicate_row("b"),
-                protected_row,
-            ],
+            topics,
             unknown_tagged_fields: UnknownTaggedFields::default(),
         };
         check!(resp == expected, "case: {label}");
@@ -1685,4 +1702,246 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
 
         broker_handle.shutdown().await;
     }
+}
+
+// ── #730, #739, #740, #742: Kafka's check order, rows and messages ──
+
+/// A `CreatableTopic` whose configs may carry a null value.
+fn topic_with_nullable_configs(name: &str, configs: &[(&str, Option<&str>)]) -> CreatableTopic {
+    CreatableTopic {
+        configs: configs
+            .iter()
+            .map(|(key, value)| CreatableTopicConfig {
+                name: (*key).into(),
+                value: value.map(str::to_owned),
+                ..Default::default()
+            })
+            .collect(),
+        ..topic(name, 1, 1)
+    }
+}
+
+/// An error row, as Kafka builds it: no topic id and no KIP-525 fields.
+fn error_row(name: &str, error_code: i16, message: &str) -> CreatableTopicResult {
+    CreatableTopicResult {
+        name: name.into(),
+        error_code,
+        error_message: Some(message.into()),
+        ..Default::default()
+    }
+}
+
+/// The request rows of one scenario, whether it is a dry run, the rows the
+/// response must carry (`None` for a created topic, whose id and configs are
+/// minted per create), and the topics that must exist afterwards.
+struct CheckOrderCase {
+    label: &'static str,
+    topics: Vec<CreatableTopic>,
+    validate_only: bool,
+    rows: Vec<(&'static str, Option<CreatableTopicResult>)>,
+    exist: &'static [&'static str],
+}
+
+/// Kafka's `ControllerApis.createTopics` and
+/// `ReplicationControlManager.createTopics` on a single broker that already
+/// holds topic `t`: duplicate names answer one `INVALID_REQUEST` row after the
+/// controller's rows, an existing topic answers `TOPIC_ALREADY_EXISTS` ahead
+/// of every other check, a null config answers `INVALID_CONFIG`, and a request
+/// for more than 10000 partitions answers `POLICY_VIOLATION` on every row.
+#[tokio::test]
+async fn rows_follow_kafkas_check_order_and_messages() {
+    const EXISTS: &str = "Topic 't' already exists.";
+    const TOO_MANY: &str = "Too many partitions in request.";
+    let duplicate = |name| error_row(name, codes::INVALID_REQUEST, "Duplicate topic name.");
+    let exists = || Some(error_row("t", codes::TOPIC_ALREADY_EXISTS, EXISTS));
+    let manual_rf_2 = CreatableTopic {
+        assignments: vec![
+            krabka_protocol::owned::create_topics_request::CreatableReplicaAssignment {
+                partition_index: 0,
+                broker_ids: vec![1],
+                ..Default::default()
+            },
+        ],
+        ..topic("m", -1, 2)
+    };
+    let cases = vec![
+        CheckOrderCase {
+            label: "a name twice creates nothing",
+            topics: vec![topic("n", 1, 1), topic("n", 1, 1)],
+            validate_only: false,
+            rows: vec![("n", Some(duplicate("n")))],
+            exist: &["t"],
+        },
+        CheckOrderCase {
+            label: "a name twice in a dry run",
+            topics: vec![topic("n", 1, 1), topic("n", 1, 1)],
+            validate_only: true,
+            rows: vec![("n", Some(duplicate("n")))],
+            exist: &["t"],
+        },
+        CheckOrderCase {
+            label: "a duplicate answers after the controller's rows",
+            topics: vec![topic("n", 1, 1), topic("u", 1, 1), topic("n", 1, 1)],
+            validate_only: false,
+            rows: vec![("u", None), ("n", Some(duplicate("n")))],
+            exist: &["t", "u"],
+        },
+        CheckOrderCase {
+            label: "an existing topic with an invalid config",
+            topics: vec![topic_with_configs("t", &[("retention.ms", "abc")])],
+            validate_only: false,
+            rows: vec![("t", exists())],
+            exist: &["t"],
+        },
+        CheckOrderCase {
+            label: "an existing topic with no partitions",
+            topics: vec![topic("t", 0, 1)],
+            validate_only: false,
+            rows: vec![("t", exists())],
+            exist: &["t"],
+        },
+        CheckOrderCase {
+            label: "an existing topic with an unplaceable replication factor",
+            topics: vec![topic("t", 1, 3)],
+            validate_only: false,
+            rows: vec![("t", exists())],
+            exist: &["t"],
+        },
+        CheckOrderCase {
+            label: "an existing topic with an invalid config in a dry run",
+            topics: vec![topic_with_configs("t", &[("retention.ms", "abc")])],
+            validate_only: true,
+            rows: vec![("t", exists())],
+            exist: &["t"],
+        },
+        CheckOrderCase {
+            label: "a null config",
+            topics: vec![topic_with_nullable_configs("n", &[("retention.ms", None)])],
+            validate_only: false,
+            rows: vec![(
+                "n",
+                Some(error_row(
+                    "n",
+                    codes::INVALID_CONFIG,
+                    "Null value not supported for topic configs: retention.ms",
+                )),
+            )],
+            exist: &["t"],
+        },
+        CheckOrderCase {
+            label: "two null configs in a dry run",
+            topics: vec![topic_with_nullable_configs(
+                "n",
+                &[
+                    ("retention.ms", None),
+                    ("segment.ms", Some("60000")),
+                    ("cleanup.policy", None),
+                ],
+            )],
+            validate_only: true,
+            rows: vec![(
+                "n",
+                Some(error_row(
+                    "n",
+                    codes::INVALID_CONFIG,
+                    "Null value not supported for topic configs: retention.ms,cleanup.policy",
+                )),
+            )],
+            exist: &["t"],
+        },
+        CheckOrderCase {
+            label: "a manual assignment with a replication factor",
+            topics: vec![manual_rf_2],
+            validate_only: false,
+            rows: vec![(
+                "m",
+                Some(error_row(
+                    "m",
+                    codes::INVALID_REQUEST,
+                    "A manual partition assignment was specified, but replication factor was not \
+                     set to -1.",
+                )),
+            )],
+            exist: &["t"],
+        },
+        CheckOrderCase {
+            label: "one topic above the partition limit",
+            topics: vec![topic("a", 10_001, 1)],
+            validate_only: false,
+            rows: vec![("a", Some(error_row("a", codes::POLICY_VIOLATION, TOO_MANY)))],
+            exist: &["t"],
+        },
+        CheckOrderCase {
+            label: "two topics above the limit together answer every requested row",
+            topics: vec![
+                topic("a", 6_000, 1),
+                topic("d", 1, 1),
+                topic("b", 6_000, 1),
+                topic("d", 1, 1),
+            ],
+            validate_only: false,
+            rows: vec![
+                ("a", Some(error_row("a", codes::POLICY_VIOLATION, TOO_MANY))),
+                ("d", Some(error_row("d", codes::POLICY_VIOLATION, TOO_MANY))),
+                ("b", Some(error_row("b", codes::POLICY_VIOLATION, TOO_MANY))),
+                ("d", Some(error_row("d", codes::POLICY_VIOLATION, TOO_MANY))),
+            ],
+            exist: &["t"],
+        },
+    ];
+
+    let mut actual = Vec::with_capacity(cases.len());
+    let mut expected = Vec::with_capacity(cases.len());
+    for case in cases {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("admin");
+        let peer = peer();
+        let seeded = drive(&broker, &request(vec![topic("t", 1, 1)]), &p, &peer).await;
+        assert!(seeded.topics[0].error_code == codes::NONE);
+
+        let req = CreateTopicsRequest {
+            validate_only: case.validate_only,
+            ..request(case.topics)
+        };
+        let resp = drive(&broker, &req, &p, &peer).await;
+
+        // A created topic's row carries a minted id and the KIP-525 fields,
+        // so its expectation is built from the row the response carries.
+        let topics = case
+            .rows
+            .into_iter()
+            .zip(&resp.topics)
+            .map(|((name, row), actual_row)| {
+                row.unwrap_or_else(|| CreatableTopicResult {
+                    name: name.into(),
+                    topic_id: actual_row.topic_id,
+                    num_partitions: 1,
+                    replication_factor: 1,
+                    configs: Some(expected_configs(&[])),
+                    ..Default::default()
+                })
+            })
+            .collect();
+        let image = broker_handle.controller_image_for_test();
+        let mut exist: Vec<String> = image
+            .topics()
+            .map(|topic| topic.name.clone())
+            .filter(|name| !name.starts_with("__"))
+            .collect();
+        exist.sort();
+        actual.push((case.label, resp, exist));
+        expected.push((
+            case.label,
+            CreateTopicsResponse {
+                throttle_time_ms: 0,
+                topics,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            },
+            case.exist.iter().map(|name| (*name).to_owned()).collect(),
+        ));
+        broker_handle.shutdown().await;
+    }
+    assert!(actual == expected);
 }

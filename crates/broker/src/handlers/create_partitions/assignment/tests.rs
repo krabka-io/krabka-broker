@@ -250,65 +250,73 @@ fn honored_assignments_pass_through_verbatim() {
     );
 }
 
+/// Kafka's `validateManualPartitionAssignment` refuses an explicit list with
+/// these messages, on brokers 0 to 2 and a topic of replication factor 2.
 #[test]
-fn explicit_length_mismatch_returns_invalid_replica_assignment() {
+fn invalid_explicit_assignments_answer_kafkas_messages() {
     let brokers = plain_brokers(&[0, 1, 2]);
-    let provided = vec![assn(&[0, 1]), assn(&[1, 2])];
-    let err = resolve_new_partition_assignments(Some(&provided), &brokers, 0, 3, 2, None)
-        .expect_err("2 assignments for 3 new partitions must fail");
-    let expected = (
-        codes::INVALID_REPLICA_ASSIGNMENT,
-        "assignments.len()=2 does not match new partition count=3".to_string(),
-    );
-    assert!(err == expected);
+    let cases: [(&[&[i32]], &str); 5] = [
+        (
+            &[&[0, 1, 2]],
+            "The manual partition assignment includes a partition with 3 replica(s), but this \
+             is not consistent with previous partitions, which have 2 replica(s).",
+        ),
+        (
+            &[&[1, 1]],
+            "The manual partition assignment includes the broker 1 more than once.",
+        ),
+        (
+            &[&[0, 9]],
+            "The manual partition assignment includes broker 9, but no such broker is \
+             registered.",
+        ),
+        (
+            &[&[0, -1]],
+            "The manual partition assignment includes broker -1, but no such broker is \
+             registered.",
+        ),
+        (
+            &[&[0, 1], &[]],
+            "The manual partition assignment includes an empty replica list.",
+        ),
+    ];
+
+    let (actual, expected): (Vec<_>, Vec<_>) = cases
+        .into_iter()
+        .map(|(lists, message)| {
+            let provided: Vec<CreatePartitionsAssignment> =
+                lists.iter().map(|list| assn(list)).collect();
+            (
+                resolve_new_partition_assignments(
+                    Some(&provided),
+                    &brokers,
+                    0,
+                    provided.len(),
+                    2,
+                    None,
+                ),
+                Err((codes::INVALID_REPLICA_ASSIGNMENT, message.to_owned())),
+            )
+        })
+        .unzip();
+    assert!(actual == expected);
 }
 
+/// An automatic placement that cannot put `rf` replicas on the brokers
+/// answers Kafka's `INVALID_REPLICATION_FACTOR` message.
 #[test]
-fn explicit_wrong_rf_returns_invalid_replica_assignment() {
-    let brokers = plain_brokers(&[0, 1, 2]);
-    let provided = vec![assn(&[0, 1, 2])]; // 3 replicas, but rf=2
-    let err = resolve_new_partition_assignments(Some(&provided), &brokers, 0, 1, 2, None)
-        .expect_err("rf mismatch must fail");
-    assert!(err.0 == codes::INVALID_REPLICA_ASSIGNMENT);
-    assert!(err.1.contains("does not match replication_factor=2"));
-}
-
-#[test]
-fn explicit_duplicate_broker_in_assignment_returns_invalid_replica_assignment() {
-    let brokers = plain_brokers(&[0, 1, 2]);
-    let provided = vec![assn(&[1, 1])]; // duplicate
-    let err = resolve_new_partition_assignments(Some(&provided), &brokers, 0, 1, 2, None)
-        .expect_err("duplicate broker must fail");
-    assert!(err.0 == codes::INVALID_REPLICA_ASSIGNMENT);
-    assert!(err.1.contains("duplicate broker id 1"));
-}
-
-#[test]
-fn explicit_unknown_broker_returns_invalid_replica_assignment() {
-    let brokers = plain_brokers(&[0, 1, 2]);
-    let provided = vec![assn(&[0, 9])]; // 9 unknown
-    let err = resolve_new_partition_assignments(Some(&provided), &brokers, 0, 1, 2, None)
-        .expect_err("unknown broker must fail");
-    assert!(err.0 == codes::INVALID_REPLICA_ASSIGNMENT);
-    assert!(err.1.contains("unknown broker id 9"));
-}
-
-#[test]
-fn explicit_negative_broker_id_returns_invalid_replica_assignment() {
-    let brokers = plain_brokers(&[0, 1, 2]);
-    let provided = vec![assn(&[0, -1])];
-    let err = resolve_new_partition_assignments(Some(&provided), &brokers, 0, 1, 2, None)
-        .expect_err("negative broker id must fail");
-    assert!(err.0 == codes::INVALID_REPLICA_ASSIGNMENT);
-    assert!(err.1.contains("negative broker id -1"));
-}
-
-#[test]
-fn empty_assignments_some_with_new_partitions_fails() {
+fn an_unplaceable_rf_answers_kafkas_message() {
     let brokers = plain_brokers(&[0, 1]);
-    let provided: Vec<CreatePartitionsAssignment> = vec![];
-    let err = resolve_new_partition_assignments(Some(&provided), &brokers, 0, 2, 1, None)
-        .expect_err("Some(empty) for >0 new partitions must fail");
-    assert!(err.0 == codes::INVALID_REPLICA_ASSIGNMENT);
-    assert!(err.1.contains("assignments.len()=0"));
+
+    let err = resolve_new_partition_assignments(None, &brokers, 0, 1, 3, None);
+
+    assert!(
+        err == Err((
+            codes::INVALID_REPLICATION_FACTOR,
+            "Unable to replicate the partition 3 time(s): The target replication factor of 3 \
+             cannot be reached because only 2 broker(s) are registered or some brokers have \
+             all their log directories cordoned."
+                .to_owned(),
+        ))
+    );
 }

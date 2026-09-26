@@ -1,27 +1,28 @@
 //! The checks that `CreatePartitions` runs before it touches a single topic:
-//! the KIP-599 mutation count that the controller quota charges the caller,
-//! and the batch authorization that decides which topic rows short-circuit to
+//! the duplicate names Kafka refuses outright, and the batch authorization
+//! that decides which topic rows short-circuit to
 //! `TOPIC_AUTHORIZATION_FAILED`.
 
 use krabka_metadata::AclOperation;
-use krabka_protocol::owned::create_partitions_request::CreatePartitionsRequest;
+use krabka_protocol::owned::create_partitions_request::CreatePartitionsTopic;
 
 use crate::authorizer::{AuthorizationResult, authorize_topics};
 
-pub(super) fn partition_mutation_count(
-    request: &CreatePartitionsRequest,
-    image: &krabka_metadata::MetadataImage,
-) -> u64 {
-    request
-        .topics
+/// The names that more than one request row carries, in the order of their
+/// first row. Kafka's `ControllerApis.createPartitions` answers each once
+/// with `INVALID_REQUEST` and grows none of them.
+pub(super) fn duplicate_names(topics: &[CreatePartitionsTopic]) -> Vec<String> {
+    let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for topic in topics {
+        *counts.entry(topic.name.as_str()).or_insert(0) += 1;
+    }
+    let mut seen = std::collections::HashSet::new();
+    topics
         .iter()
-        .map(|topic| {
-            let current =
-                i32::try_from(image.partitions_of(&topic.name).count()).unwrap_or(i32::MAX);
-            u64::try_from((i64::from(topic.count) - i64::from(current)).max(0))
-                .expect("mutation count is non-negative")
-        })
-        .sum()
+        .map(|topic| topic.name.as_str())
+        .filter(|name| counts[name] > 1 && seen.insert(*name))
+        .map(str::to_owned)
+        .collect()
 }
 
 pub(super) fn denied_topics(
@@ -29,7 +30,7 @@ pub(super) fn denied_topics(
     image: &krabka_metadata::MetadataImage,
     principal: &krabka_security::Principal,
     peer: &std::net::SocketAddr,
-    request: &CreatePartitionsRequest,
+    names: &[&str],
 ) -> std::collections::HashSet<String> {
     authorize_topics(
         authorizer,
@@ -37,7 +38,7 @@ pub(super) fn denied_topics(
         principal,
         peer,
         AclOperation::Alter,
-        request.topics.iter().map(|topic| topic.name.as_str()),
+        names.iter().copied(),
     )
     .into_iter()
     .filter(|(_, result)| *result == AuthorizationResult::Deny)

@@ -1,61 +1,175 @@
-//! KIP-599 `controller_mutation_rate` helper. The `CreateTopics`,
-//! `CreatePartitions`, and `DeleteTopics` handlers call it after they assemble
-//! the response.
+//! KIP-599 `controller_mutation_rate`: the token bucket that the
+//! `CreateTopics`, `CreatePartitions` and `DeleteTopics` handlers charge.
+//!
+//! Kafka charges each topic on its own, after the topic has passed every other
+//! check, with the number of partitions it creates or deletes
+//! (`ReplicationControlManager.createTopic`, `deleteTopic` and
+//! `createPartitions` call `applyPartitionChangeQuota`). A handler therefore
+//! opens one [`ControllerMutationQuota`] per request and calls
+//! [`ControllerMutationQuota::record`] once per topic that reaches that point.
+//!
+//! The bucket holds `window x rate` tokens. Kafka sizes it as
+//! `controller.quota.window.num x controller.quota.window.size.seconds x rate`
+//! (`TokenBucket`, `QuotaFactory`), so `window` is that product: 11 s by
+//! default.
+
+use std::sync::{Arc, Mutex};
 
 use krabka_metadata::MetadataImage;
 use krabka_units::{Time, convert::TimeExt, secs};
 
-use super::buckets::QuotaBuckets;
+use super::buckets::{ControllerMutationBucket, QuotaBuckets};
 
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum ControllerMutationQuotaDecision {
-    Allowed {
-        delay: Time,
-        user: Option<String>,
-        client_id: Option<String>,
-    },
-    Rejected {
-        delay: Time,
-        user: Option<String>,
-        client_id: Option<String>,
-    },
+/// A strict quota refused one mutation: Kafka's
+/// `ThrottlingQuotaExceededException`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ThrottlingQuotaExceeded;
+
+/// The bucket one request charges and the entity it belongs to.
+struct Limit {
+    bucket: Arc<Mutex<ControllerMutationBucket>>,
+    rate: f64,
+    window_secs: f64,
+    user: Option<String>,
+    client_id: Option<String>,
 }
 
-impl ControllerMutationQuotaDecision {
+/// The KIP-599 controller-mutation quota of one request.
+///
+/// A strict quota (`CreateTopics` v6+, `CreatePartitions` v3+, `DeleteTopics`
+/// v5+) refuses a mutation when the bucket is already negative, and records
+/// nothing for it. A mutation that finds the bucket at zero or above is
+/// recorded even when it drives the bucket below zero. A permissive quota
+/// records every mutation and reports the time the bucket needs to refill as
+/// the throttle.
+pub(crate) struct ControllerMutationQuota {
+    limit: Option<Limit>,
+    strict: bool,
+    delay: Time,
+}
+
+/// The inputs that pick the bucket of one request.
+pub(crate) struct QuotaRequest<'a> {
+    pub(crate) image: &'a MetadataImage,
+    pub(crate) buckets: &'a QuotaBuckets,
+    pub(crate) principal: &'a str,
+    pub(crate) client_id: &'a str,
+    /// `controller.quota.window.num x controller.quota.window.size.seconds`.
+    pub(crate) window: Time,
+    /// Whether the request version refuses a mutation over the quota.
+    pub(crate) strict: bool,
+}
+
+impl ControllerMutationQuota {
+    /// Opens the quota of one request. A principal with no
+    /// `controller_mutation_rate`, or with a rate that is not positive, is
+    /// never throttled.
+    pub(crate) fn new(request: &QuotaRequest<'_>) -> Self {
+        let limit = super::lookup::lookup_quota_with_key(
+            request.image,
+            request.principal,
+            request.client_id,
+            "controller_mutation_rate",
+        )
+        .and_then(|(entity_key, rate)| {
+            let window_secs = request.window.secs_f64();
+            let usable =
+                rate.is_finite() && rate > 0.0 && window_secs.is_finite() && window_secs > 0.0;
+            usable.then(|| {
+                let field = |name: &str| {
+                    entity_key
+                        .iter()
+                        .find(|(key, _)| key == name)
+                        .and_then(|(_, value)| value.clone())
+                };
+                Limit {
+                    bucket: request.buckets.controller_mutation_bucket(
+                        &entity_key,
+                        rate,
+                        window_secs,
+                    ),
+                    rate,
+                    window_secs,
+                    user: field("user"),
+                    client_id: field("client-id"),
+                }
+            })
+        });
+        Self {
+            limit,
+            strict: request.strict,
+            delay: <Time as TimeExt>::ZERO,
+        }
+    }
+
+    /// Charges `mutations` partitions, as Kafka's
+    /// `ControllerMutationQuota.record` does.
+    ///
+    /// # Errors
+    ///
+    /// [`ThrottlingQuotaExceeded`] when the quota is strict and the bucket is
+    /// already negative. Nothing is recorded then.
+    pub(crate) fn record(&mut self, mutations: u64) -> Result<(), ThrottlingQuotaExceeded> {
+        let Some(limit) = &self.limit else {
+            return Ok(());
+        };
+        let mut bucket = limit
+            .bucket
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let now = std::time::Instant::now();
+        let capacity = limit.rate * limit.window_secs;
+        if bucket.rate.to_bits() != limit.rate.to_bits()
+            || bucket.window_secs.to_bits() != limit.window_secs.to_bits()
+        {
+            bucket.rate = limit.rate;
+            bucket.window_secs = limit.window_secs;
+            bucket.tokens = capacity;
+        } else {
+            bucket.tokens = (bucket.tokens
+                + now.duration_since(bucket.updated_at).as_secs_f64() * limit.rate)
+                .min(capacity);
+        }
+        bucket.updated_at = now;
+
+        let refill = |tokens: f64| Time::from_secs_f64((-tokens / limit.rate).max(0.0));
+        if self.strict && bucket.tokens < 0.0 {
+            let delay = refill(bucket.tokens);
+            drop(bucket);
+            self.delay = self.delay.max(delay);
+            return Err(ThrottlingQuotaExceeded);
+        }
+        bucket.tokens -= super::u64_to_f64(mutations);
+        if !self.strict && bucket.tokens < 0.0 {
+            let delay = refill(bucket.tokens);
+            drop(bucket);
+            self.delay = self.delay.max(delay);
+        }
+        Ok(())
+    }
+
+    /// The throttle the response reports: the time the bucket needs to
+    /// refill after the last refusal (strict) or overdraft (permissive).
     #[must_use]
     pub(crate) fn delay(&self) -> Time {
-        match self {
-            Self::Allowed { delay, .. } | Self::Rejected { delay, .. } => *delay,
-        }
+        self.delay
     }
 
+    /// The throttle together with the quota entity it belongs to.
     #[must_use]
-    pub(crate) fn quota_delay(self) -> super::QuotaDelay {
-        match self {
-            Self::Allowed {
-                delay,
-                user,
-                client_id,
-            }
-            | Self::Rejected {
-                delay,
-                user,
-                client_id,
-            } => super::QuotaDelay::new(delay, user, client_id),
-        }
-    }
-
-    #[must_use]
-    pub(crate) fn is_rejected(&self) -> bool {
-        matches!(self, Self::Rejected { .. })
+    pub(crate) fn quota_delay(&self) -> super::QuotaDelay {
+        let (user, client_id) = self.limit.as_ref().map_or((None, None), |limit| {
+            (limit.user.clone(), limit.client_id.clone())
+        });
+        super::QuotaDelay::new(self.delay, user, client_id)
     }
 }
 
-/// Consume `mutations` from the `controller_mutation_rate` bucket for
-/// `(principal, client_id)`. This function returns the throttle delay to apply
-/// before the handler sends the response. The delay is zero if no quota is
-/// configured, if there is no overage, or if `mutations == 0`. Like Kafka's
-/// `ControllerMutationQuotaManager.throttleTimeMs`, it is not bounded.
+/// Consume `mutations` from the permissive `controller_mutation_rate` bucket
+/// for `(principal, client_id)`, with a one-second window. This function
+/// returns the throttle delay to apply before the handler sends the response.
+/// The delay is zero if no quota is configured or if there is no overage. Like
+/// Kafka's `ControllerMutationQuotaManager.throttleTimeMs`, it is not bounded.
 #[must_use]
 pub fn consume_controller_mutation_quota(
     image: &MetadataImage,
@@ -64,111 +178,23 @@ pub fn consume_controller_mutation_quota(
     client_id: &str,
     mutations: u64,
 ) -> super::QuotaDelay {
-    apply_controller_mutation_quota_mode(
+    let mut quota = ControllerMutationQuota::new(&QuotaRequest {
         image,
         buckets,
         principal,
         client_id,
-        mutations,
-        secs(1),
-        false,
-    )
-    .quota_delay()
-}
-
-/// Atomically check accumulated controller-mutation debt and record this
-/// operation. Strict APIs reject only when debt already exists; an operation
-/// that crosses the limit is accepted and makes the next operation fail.
-pub(crate) fn apply_controller_mutation_quota_mode(
-    image: &MetadataImage,
-    buckets: &QuotaBuckets,
-    principal: &str,
-    client_id: &str,
-    mutations: u64,
-    window: Time,
-    strict: bool,
-) -> ControllerMutationQuotaDecision {
-    if mutations == 0 {
-        return ControllerMutationQuotaDecision::Allowed {
-            delay: <Time as TimeExt>::ZERO,
-            user: None,
-            client_id: None,
-        };
-    }
-    let Some((entity_key, rate)) = super::lookup::lookup_quota_with_key(
-        image,
-        principal,
-        client_id,
-        "controller_mutation_rate",
-    ) else {
-        return ControllerMutationQuotaDecision::Allowed {
-            delay: <Time as TimeExt>::ZERO,
-            user: None,
-            client_id: None,
-        };
-    };
-    let user = entity_key
-        .iter()
-        .find(|(k, _)| k == "user")
-        .and_then(|(_, v)| v.clone());
-    let client_id_opt = entity_key
-        .iter()
-        .find(|(k, _)| k == "client-id")
-        .and_then(|(_, v)| v.clone());
-
-    let window_secs = window.secs_f64();
-    if !rate.is_finite() || rate <= 0.0 || !window_secs.is_finite() || window_secs <= 0.0 {
-        return ControllerMutationQuotaDecision::Allowed {
-            delay: <Time as TimeExt>::ZERO,
-            user,
-            client_id: client_id_opt,
-        };
-    }
-
-    let bucket = buckets.controller_mutation_bucket(&entity_key, rate, window_secs);
-    let mut bucket = bucket
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let now = std::time::Instant::now();
-    let capacity = rate * window_secs;
-    if bucket.rate.to_bits() != rate.to_bits()
-        || bucket.window_secs.to_bits() != window_secs.to_bits()
-    {
-        bucket.rate = rate;
-        bucket.window_secs = window_secs;
-        bucket.tokens = capacity;
-    } else {
-        bucket.tokens = (bucket.tokens
-            + now.duration_since(bucket.updated_at).as_secs_f64() * rate)
-            .min(capacity);
-    }
-    bucket.updated_at = now;
-
-    if strict && bucket.tokens < 0.0 {
-        return ControllerMutationQuotaDecision::Rejected {
-            delay: Time::from_secs_f64((-bucket.tokens / rate).max(0.0)),
-            user,
-            client_id: client_id_opt,
-        };
-    }
-
-    bucket.tokens -= super::u64_to_f64(mutations);
-    let delay = if !strict && bucket.tokens < 0.0 {
-        Time::from_secs_f64((-bucket.tokens / rate).max(0.0))
-    } else {
-        <Time as TimeExt>::ZERO
-    };
-    ControllerMutationQuotaDecision::Allowed {
-        delay,
-        user,
-        client_id: client_id_opt,
-    }
+        window: secs(1),
+        strict: false,
+    });
+    // A permissive quota records every mutation, so it never refuses one.
+    let _ = quota.record(mutations);
+    quota.quota_delay()
 }
 
 #[cfg(test)]
 mod tests {
     use assert2::{assert, check};
-    use krabka_units::secs;
+    use krabka_units::{millis, secs};
 
     use super::*;
     use crate::quota::test_support::image_with_quota as quota_image;
@@ -182,7 +208,9 @@ mod tests {
         let img = img_with_quota(vec![("user", Some("alice"))], 1.0);
         let buckets = QuotaBuckets::new();
         let delay = consume_controller_mutation_quota(&img, &buckets, "alice", "", 0);
-        assert!(delay == <Time as TimeExt>::ZERO);
+        let expected =
+            crate::quota::QuotaDelay::new(<Time as TimeExt>::ZERO, Some("alice".into()), None);
+        assert!(delay == expected);
     }
 
     #[test]
@@ -192,7 +220,7 @@ mod tests {
         let img = img_with_quota(vec![("user", Some("alice"))], 10.0);
         let buckets = QuotaBuckets::new();
         let delay = consume_controller_mutation_quota(&img, &buckets, "alice", "", 5);
-        assert!(delay == <Time as TimeExt>::ZERO);
+        assert!(delay.delay == <Time as TimeExt>::ZERO);
     }
 
     /// Kafka's `ControllerMutationQuotaManager.throttleTimeMs` is the full
@@ -203,32 +231,133 @@ mod tests {
         let img = img_with_quota(vec![("user", Some("alice"))], 1.0);
         let buckets = QuotaBuckets::new();
         let delay = consume_controller_mutation_quota(&img, &buckets, "alice", "", 61);
-        check!(delay > secs(59) && delay <= secs(60), "{delay:?}");
+        check!(
+            delay.delay > secs(59) && delay.delay <= secs(60),
+            "{delay:?}"
+        );
     }
 
-    /// A strict caller in debt is rejected with the whole refill time.
+    /// Kafka's examples for `controller_mutation_rate = 10` with the default
+    /// 11 s window (a 110-token bucket): each list is the per-topic charges of
+    /// one or more strict requests on a fresh bucket, and the expected
+    /// outcome of each charge.
+    #[test]
+    fn strict_quota_refuses_only_once_the_bucket_is_negative() {
+        type Outcome = Result<(), ThrottlingQuotaExceeded>;
+        const OK: Outcome = Ok(());
+        const REFUSED: Outcome = Err(ThrottlingQuotaExceeded);
+        /// A label, the per-topic charges of each request, and their outcomes.
+        type Case = (
+            &'static str,
+            &'static [&'static [u64]],
+            &'static [&'static [Outcome]],
+        );
+        let cases: [Case; 4] = [
+            (
+                "50 partitions, then two topics of 5",
+                &[&[50], &[5, 5]],
+                &[&[OK], &[OK, OK]],
+            ),
+            (
+                "60, 60 and 1 in one request",
+                &[&[60, 60, 1]],
+                &[&[OK, OK, REFUSED]],
+            ),
+            (
+                "a request that ends below zero refuses the next one",
+                &[&[120], &[1]],
+                &[&[OK], &[REFUSED]],
+            ),
+            (
+                "a refused topic records nothing",
+                &[&[111, 5, 5]],
+                &[&[OK, REFUSED, REFUSED]],
+            ),
+        ];
+
+        let img = img_with_quota(vec![("user", Some("alice"))], 10.0);
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (label, requests, outcomes) in cases {
+            let buckets = QuotaBuckets::new();
+            let got: Vec<Vec<Outcome>> = requests
+                .iter()
+                .map(|charges| {
+                    let mut quota = ControllerMutationQuota::new(&QuotaRequest {
+                        image: &img,
+                        buckets: &buckets,
+                        principal: "alice",
+                        client_id: "",
+                        window: secs(11),
+                        strict: true,
+                    });
+                    charges.iter().map(|charge| quota.record(*charge)).collect()
+                })
+                .collect();
+            actual.push((label, got));
+            expected.push((
+                label,
+                outcomes
+                    .iter()
+                    .map(|request| request.to_vec())
+                    .collect::<Vec<_>>(),
+            ));
+        }
+        assert!(actual == expected);
+    }
+
+    /// A strict request that is refused reports the time the bucket needs to
+    /// climb back to zero. One that is accepted reports no throttle, even when
+    /// it leaves the bucket below zero.
+    #[test]
+    fn strict_quota_reports_the_throttle_of_a_refusal_only() {
+        let img = img_with_quota(vec![("user", Some("alice"))], 10.0);
+        let buckets = QuotaBuckets::new();
+        let open = || {
+            ControllerMutationQuota::new(&QuotaRequest {
+                image: &img,
+                buckets: &buckets,
+                principal: "alice",
+                client_id: "",
+                window: secs(11),
+                strict: true,
+            })
+        };
+
+        let mut first = open();
+        let accepted = first.record(130);
+        let mut second = open();
+        let refused = second.record(1);
+
+        assert!(accepted == Ok(()));
+        assert!(first.delay() == <Time as TimeExt>::ZERO);
+        assert!(refused == Err(ThrottlingQuotaExceeded));
+        assert!(second.delay() > millis(1_900));
+        assert!(second.delay() <= secs(2));
+    }
+
+    /// A strict caller in debt is rejected with the whole refill time, which
+    /// no bound shortens (#709).
     #[test]
     fn strict_rejection_reports_the_uncapped_refill_time() {
         let img = img_with_quota(vec![("user", Some("alice"))], 1.0);
         let buckets = QuotaBuckets::new();
-        let apply = |mutations| {
-            apply_controller_mutation_quota_mode(
-                &img,
-                &buckets,
-                "alice",
-                "",
-                mutations,
-                secs(1),
-                true,
-            )
-        };
+        let mut quota = ControllerMutationQuota::new(&QuotaRequest {
+            image: &img,
+            buckets: &buckets,
+            principal: "alice",
+            client_id: "",
+            window: secs(1),
+            strict: true,
+        });
 
-        assert!(!apply(61).is_rejected());
-        let rejected = apply(1);
-        check!(rejected.is_rejected());
+        let outcomes = [61, 1].map(|charge| quota.record(charge));
+
+        assert!(outcomes == [Ok(()), Err(ThrottlingQuotaExceeded)]);
         check!(
-            rejected.delay() > secs(59) && rejected.delay() <= secs(60),
-            "{rejected:?}"
+            quota.delay() > secs(59) && quota.delay() <= secs(60),
+            "{:?}",
+            quota.delay()
         );
     }
 
@@ -236,21 +365,64 @@ mod tests {
     fn fractional_strict_quota_rejects_the_operation_after_debt() {
         let img = img_with_quota(vec![("user", Some("alice"))], 0.015);
         let buckets = QuotaBuckets::new();
-        let apply = |mutations| {
-            apply_controller_mutation_quota_mode(
-                &img,
-                &buckets,
-                "alice",
-                "",
-                mutations,
-                secs(2_000),
-                true,
-            )
-        };
+        let mut quota = ControllerMutationQuota::new(&QuotaRequest {
+            image: &img,
+            buckets: &buckets,
+            principal: "alice",
+            client_id: "",
+            window: secs(2_000),
+            strict: true,
+        });
 
-        assert!(!apply(10).is_rejected());
-        assert!(!apply(10).is_rejected());
-        assert!(!apply(20).is_rejected());
-        assert!(apply(1).is_rejected());
+        let outcomes = [10, 10, 20, 1].map(|charge| quota.record(charge));
+
+        assert!(outcomes == [Ok(()), Ok(()), Ok(()), Err(ThrottlingQuotaExceeded)]);
+    }
+
+    /// A `(user, client-id)` quota charges only the client it names.
+    #[test]
+    fn a_user_and_client_quota_matches_its_client_only() {
+        use krabka_metadata::{ClientQuotaRecord, MetadataRecord, QuotaEntity};
+        let mut img = MetadataImage::new(uuid::Uuid::nil());
+        img.apply(&MetadataRecord::V1ClientQuota(ClientQuotaRecord {
+            entity: vec![
+                QuotaEntity {
+                    entity_type: "user".into(),
+                    entity_name: Some("alice".into()),
+                },
+                QuotaEntity {
+                    entity_type: "client-id".into(),
+                    entity_name: Some("app-x".into()),
+                },
+            ],
+            config_key: "controller_mutation_rate".into(),
+            config_value: Some(1.0),
+        }));
+        let throttled = ["app-x", "other"].map(|client_id| {
+            let buckets = QuotaBuckets::new();
+            consume_controller_mutation_quota(&img, &buckets, "alice", client_id, 10).delay
+                > <Time as TimeExt>::ZERO
+        });
+
+        assert!(throttled == [true, false]);
+    }
+
+    /// A principal with no `controller_mutation_rate` is never throttled.
+    #[test]
+    fn no_quota_never_refuses() {
+        let img = img_with_quota(vec![("user", Some("bob"))], 1.0);
+        let buckets = QuotaBuckets::new();
+        let mut quota = ControllerMutationQuota::new(&QuotaRequest {
+            image: &img,
+            buckets: &buckets,
+            principal: "alice",
+            client_id: "",
+            window: secs(11),
+            strict: true,
+        });
+
+        let outcomes = [1_000, 1_000].map(|charge| quota.record(charge));
+
+        assert!((outcomes, quota.delay()) == ([Ok(()), Ok(())], <Time as TimeExt>::ZERO));
     }
 }

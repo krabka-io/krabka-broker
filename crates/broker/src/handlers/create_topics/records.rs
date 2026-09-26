@@ -8,8 +8,26 @@ use uuid::Uuid;
 
 use super::INITIAL_LEADER_EPOCH;
 
-/// A topic's config overrides, as `CreateTopics` carries them. A config with
-/// no value is Kafka's "use the default", so it contributes no override.
+/// Kafka's `computeConfigChanges` refusal of a config with a null value: the
+/// `INVALID_CONFIG` message that names every such config, in request order.
+pub(super) fn null_config_error(request: &CreatableTopic) -> Option<String> {
+    let nulls: Vec<&str> = request
+        .configs
+        .iter()
+        .filter(|config| config.value.is_none())
+        .map(|config| config.name.as_str())
+        .collect();
+    (!nulls.is_empty()).then(|| {
+        format!(
+            "Null value not supported for topic configs: {}",
+            nulls.join(",")
+        )
+    })
+}
+
+/// A topic's config overrides, as `CreateTopics` carries them. The handler
+/// refuses a config with a null value first ([`null_config_error`]), so every
+/// config here has a value.
 pub(super) fn topic_config_overrides(
     request: &CreatableTopic,
 ) -> std::collections::BTreeMap<String, String> {

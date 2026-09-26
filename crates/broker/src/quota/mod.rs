@@ -16,8 +16,8 @@ mod request;
 mod throttle_slot;
 
 pub use buckets::QuotaBuckets;
-pub(crate) use controller_mutation::apply_controller_mutation_quota_mode;
 pub use controller_mutation::consume_controller_mutation_quota;
+pub(crate) use controller_mutation::{ControllerMutationQuota, QuotaRequest};
 pub use lookup::{lookup_ip_quota, lookup_ip_quota_with_key, lookup_quota, lookup_quota_with_key};
 pub use producer::consume_producer_quota;
 pub use request::consume_request_quota;

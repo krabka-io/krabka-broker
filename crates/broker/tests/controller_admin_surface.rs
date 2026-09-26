@@ -605,9 +605,9 @@ async fn controller_listener_serves_assign_replicas_to_dirs() {
 /// so its image holds no broker at all, and placement has nowhere to put a
 /// replica.
 ///
-/// Kafka answers that with `INVALID_REPLICATION_FACTOR` ("the target
-/// replication factor cannot be reached because only 0 broker(s) are
-/// registered"). Substituting the local node instead would create a topic
+/// Kafka answers that with `INVALID_REPLICATION_FACTOR`: its
+/// `StripedReplicaPlacer` finds no unfenced broker before it counts the
+/// registered ones. Substituting the local node instead would create a topic
 /// whose only replica lives on a node that serves no partition, leaving
 /// metadata nothing can ever serve.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -638,7 +638,11 @@ async fn controller_only_node_places_no_replica_on_itself() {
                     name: "controller-only-placement".into(),
                     topic_id: WireUuid([0; 16]),
                     error_code: INVALID_REPLICATION_FACTOR,
-                    error_message: None,
+                    error_message: Some(
+                        "Unable to replicate the partition 1 time(s): All brokers are currently \
+                         fenced, or have all their log directories cordoned."
+                            .into(),
+                    ),
                     num_partitions: -1,
                     replication_factor: -1,
                     configs: None,

@@ -260,7 +260,8 @@ pub struct RuntimeFileConfig {
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub quota_window: Option<Time>,
     /// Time window whose throughput defines the KIP-599 controller-mutation
-    /// quota burst capacity.
+    /// quota burst capacity (default 11 s), Kafka's
+    /// `controller.quota.window.num` x `controller.quota.window.size.seconds`.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub controller_mutation_quota_window: Option<Time>,

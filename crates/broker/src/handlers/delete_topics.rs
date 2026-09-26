@@ -152,32 +152,30 @@ pub(crate) async fn handle(
         }
     }
 
-    // KIP-599: count the partitions of the topics that pass the checks.
-    let mutation_count: u64 = admitted
-        .iter()
-        .map(|(name, _)| image.partitions_of(name).count() as u64)
-        .sum();
-    let quota = crate::quota::apply_controller_mutation_quota_mode(
-        &image,
-        &broker.quota_buckets,
-        ctx.principal.name.as_str(),
-        ctx.client_id,
-        mutation_count,
-        broker.config.controller_mutation_quota_window,
-        version >= 5,
-    );
-    if quota.is_rejected() {
-        results.extend(admitted.into_iter().map(|(name, topic_id)| {
-            delete_topic_result(Some(name), topic_id, codes::THROTTLING_QUOTA_EXCEEDED)
-        }));
-        shuffle_rows(&mut results, random_seed());
-        return crate::handlers::encode_response(
-            &delete_topics_response(results, crate::quota::throttle_time_ms(quota.delay())),
-            version,
-        );
-    }
+    // KIP-599: Kafka's controller charges each topic it deletes with its
+    // partition count, after the checks above (`deleteTopic`). A strict
+    // version (v5+) refuses the topic that finds the bucket negative, and
+    // every topic after it.
+    let mut quota = crate::quota::ControllerMutationQuota::new(&crate::quota::QuotaRequest {
+        image: &image,
+        buckets: &broker.quota_buckets,
+        principal: ctx.principal.name.as_str(),
+        client_id: ctx.client_id,
+        window: broker.config.controller_mutation_quota_window,
+        strict: version >= 5,
+    });
 
     for (name, wire_topic_id) in admitted {
+        let partition_count = image.partitions_of(&name).count() as u64;
+        if quota.record(partition_count).is_err() {
+            results.push(delete_topic_result(
+                Some(name),
+                wire_topic_id,
+                codes::THROTTLING_QUOTA_EXCEEDED,
+            ));
+            continue;
+        }
+
         // KFC-9: a write freeze refuses every operation that removes data
         // from the topic it covers, and it answers ahead of the two-person
         // rule. That order is the rule: a break-glass approval to delete does

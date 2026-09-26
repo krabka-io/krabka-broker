@@ -95,7 +95,7 @@ macro_rules! tuning_fields {
             pub quota_throttle_max: Time,
             /// Time window sizing the byte-rate quota token bucket burst capacity (default 11 s). Equivalent to Kafka's sampling window `quota.window.num * quota.window.size.seconds`.
             pub quota_window: Time,
-            /// Window whose throughput defines the controller-mutation burst capacity.
+            /// Time window sizing the KIP-599 controller-mutation token bucket burst capacity (default 11 s): the bucket holds `window x controller_mutation_rate` tokens. Equivalent to Kafka's `controller.quota.window.num * controller.quota.window.size.seconds`.
             pub controller_mutation_quota_window: Time,
             /// Maximum self-registration attempts before startup fails.
             pub self_registration_max_attempts: u32,

@@ -135,13 +135,86 @@ fn manual_assignments_preserve_partition_order_and_validate_brokers() {
     let assignments =
         manual_replicas(&topic, &[NodeId(1), NodeId(2)]).expect("valid manual assignments");
     assert!(assignments == vec![vec![NodeId(1), NodeId(2)], vec![NodeId(2), NodeId(1)]]);
+}
 
-    let mut unknown_broker = topic;
-    unknown_broker.assignments[0].broker_ids[0] = 3;
-    assert!(
-        manual_replicas(&unknown_broker, &[NodeId(1), NodeId(2)])
-            == Err(codes::INVALID_REPLICA_ASSIGNMENT)
-    );
+/// Kafka's `createTopic` and `validateManualPartitionAssignment` refuse a
+/// manual assignment with these codes and messages, on brokers 1 and 2.
+#[test]
+fn invalid_manual_assignments_answer_kafkas_codes_and_messages() {
+    fn topic(
+        num_partitions: i32,
+        replication_factor: i16,
+        lists: &[(i32, &[i32])],
+    ) -> CreatableTopic {
+        CreatableTopic {
+            num_partitions,
+            replication_factor,
+            assignments: lists
+                .iter()
+                .map(|(partition_index, broker_ids)| CreatableReplicaAssignment {
+                    partition_index: *partition_index,
+                    broker_ids: broker_ids.to_vec(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+    let cases = [
+        (
+            topic(-1, 2, &[(0, &[1, 2])]),
+            codes::INVALID_REQUEST,
+            "A manual partition assignment was specified, but replication factor was not set to \
+             -1.",
+        ),
+        (
+            topic(1, -1, &[(0, &[1, 2])]),
+            codes::INVALID_REQUEST,
+            "A manual partition assignment was specified, but numPartitions was not set to -1.",
+        ),
+        (
+            topic(-1, -1, &[(0, &[1, 2]), (0, &[2, 1])]),
+            codes::INVALID_REPLICA_ASSIGNMENT,
+            "Found multiple manual partition assignments for partition 0",
+        ),
+        (
+            topic(-1, -1, &[(0, &[])]),
+            codes::INVALID_REPLICA_ASSIGNMENT,
+            "The manual partition assignment includes an empty replica list.",
+        ),
+        (
+            topic(-1, -1, &[(0, &[9, 1, 7])]),
+            codes::INVALID_REPLICA_ASSIGNMENT,
+            "The manual partition assignment includes broker 7, but no such broker is registered.",
+        ),
+        (
+            topic(-1, -1, &[(0, &[2, 1, 2])]),
+            codes::INVALID_REPLICA_ASSIGNMENT,
+            "The manual partition assignment includes the broker 2 more than once.",
+        ),
+        (
+            topic(-1, -1, &[(0, &[1, 2]), (1, &[1])]),
+            codes::INVALID_REPLICA_ASSIGNMENT,
+            "The manual partition assignment includes a partition with 1 replica(s), but this is \
+             not consistent with previous partitions, which have 2 replica(s).",
+        ),
+        (
+            topic(-1, -1, &[(0, &[1]), (2, &[2])]),
+            codes::INVALID_REPLICA_ASSIGNMENT,
+            "partitions should be a consecutive 0-based integer sequence",
+        ),
+    ];
+
+    let (actual, expected): (Vec<_>, Vec<_>) = cases
+        .into_iter()
+        .map(|(topic, code, message)| {
+            (
+                manual_replicas(&topic, &[NodeId(1), NodeId(2)]),
+                Err((code, message.to_owned())),
+            )
+        })
+        .unzip();
+    assert!(actual == expected);
 }
 
 #[test]
