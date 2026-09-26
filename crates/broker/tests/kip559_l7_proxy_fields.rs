@@ -15,6 +15,7 @@ use krabka_protocol::owned::{
     join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
     join_group_response::JoinGroupResponse,
     sync_group_request::{SyncGroupRequest, SyncGroupRequestAssignment},
+    sync_group_response::SyncGroupResponse,
 };
 
 const GROUP: &str = "kip559-grp";
@@ -161,14 +162,15 @@ async fn join_group_inconsistent_protocol_error_carries_no_protocol_fields() {
     p.broker.shutdown().await;
 }
 
+/// A SyncGroup that Kafka refuses carries only the error code. Kafka's
+/// `GroupCoordinatorService.syncGroup` answers every error with
+/// `new SyncGroupResponseData().setErrorCode(...)`, so `protocol_type` and
+/// `protocol_name` stay null even though the group has a recorded protocol.
 #[tokio::test]
-async fn sync_group_response_carries_protocol_type_on_unknown_member_error() {
+async fn sync_group_error_carries_no_protocol_fields() {
     let p = support::start().await;
     let (_mid, generation) = bootstrap_member(&p).await;
 
-    // SyncGroup with a member_id the group has never seen → broker
-    // returns UNKNOWN_MEMBER_ID (25). KIP-559: protocol_type must still
-    // ride along because the group exists and has a recorded protocol.
     let r = p
         .client
         .send(SyncGroupRequest {
@@ -183,16 +185,13 @@ async fn sync_group_response_carries_protocol_type_on_unknown_member_error() {
         .await
         .expect("SyncGroup");
     check!(
-        r.error_code == 25,
-        "expected UNKNOWN_MEMBER_ID (25), got {r:?}"
-    );
-    check!(
-        r.protocol_type.as_deref() == Some(PROTOCOL_TYPE),
-        "UNKNOWN_MEMBER_ID response must echo the recorded protocol_type: {r:?}"
-    );
-    check!(
-        r.protocol_name.as_deref() == Some(PROTOCOL_NAME),
-        "UNKNOWN_MEMBER_ID response must echo the recorded protocol_name: {r:?}"
+        r == SyncGroupResponse {
+            error_code: 25,
+            protocol_type: None,
+            protocol_name: None,
+            assignment: Default::default(),
+            ..Default::default()
+        }
     );
 
     p.broker.shutdown().await;
