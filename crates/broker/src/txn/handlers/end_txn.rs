@@ -52,7 +52,7 @@ mod test_support;
 #[cfg(test)]
 pub(crate) use self::producer_identity::prepare_completion_identities_with_fresh;
 pub(crate) use self::{
-    markers::{MarkerDispatchContext, dispatch_markers},
+    markers::{MarkerDispatchContext, MarkerFanOut, dispatch_markers},
     producer_identity::{
         client_producer_identity, completion_producer_identity, next_producer_identity,
         next_recovery_producer_identity, prepare_completion_identities,
@@ -107,7 +107,7 @@ pub(crate) async fn handle(
 
     // ── Phase 1: Ongoing → Prepare{Commit,Abort} ──────────────────────
 
-    let (marker_type, prepare, complete, prepare_snap) = match prepare_transaction(
+    let (marker_type, prepare, complete, mut prepare_snap) = match prepare_transaction(
         &coord,
         &entry_mutex,
         (req.committed, no_partition_added),
@@ -129,7 +129,7 @@ pub(crate) async fn handle(
 
     // ── Phase 2: Fan out WriteTxnMarkers ──────────────────────────────
 
-    match dispatch_transaction_markers(broker, &prepare_snap, marker_type, tid).await {
+    match dispatch_transaction_markers(broker, &mut prepare_snap, marker_type, tid).await {
         MarkerFanOutOutcome::Complete => {}
         MarkerFanOutOutcome::Retry => {
             coord.request_completion(tid);

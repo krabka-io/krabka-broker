@@ -13,7 +13,7 @@ use krabka_protocol::owned::{
     write_txn_markers_response::WriteTxnMarkersResponse,
 };
 
-use super::markers::MarkerDispatchContext;
+use super::markers::{MarkerDispatchContext, MarkerFanOut};
 use crate::{
     codes,
     error::BrokerError,
@@ -40,20 +40,36 @@ use crate::{
 ///
 /// The caller resolves the current `__transaction_state` partition leader epoch
 /// from the metadata image and stamps it on every marker.
-// cargo-mutants: an I/O-only wrapper with no in-process signal. It dials a remote
-// broker through the shared `InterBrokerClient`, sends one
-// `WriteTxnMarkersRequest` and maps the reply; no test in this process can build
-// the connection, so every mutant of the dial-and-send sequence survives
-// unobserved. The marker batch it sends is built by `marker::build`, which is
-// mutation-tested.
-#[cfg_attr(test, mutants::skip)]
 pub(super) async fn send_write_txn_markers(
     context: MarkerDispatchContext<'_>,
     leader_node: NodeId,
     entry: &TxnEntry,
     marker_type: MarkerType,
     tps: &[TopicPartition],
-) -> Result<(), BrokerError> {
+) -> MarkerFanOut {
+    match write_remote_markers(context, leader_node, entry, marker_type, tps).await {
+        Ok(response) => validate_marker_response(entry, tps, &response),
+        Err(error) => MarkerFanOut {
+            written: Vec::new(),
+            failure: Some(error),
+        },
+    }
+}
+
+/// Dials `leader_node` and sends it the markers for `tps`.
+// cargo-mutants: an I/O-only wrapper with no in-process signal. It dials a remote
+// broker through the shared `InterBrokerClient` and sends one
+// `WriteTxnMarkersRequest`; no test in this process can build the connection, so
+// every mutant of the dial-and-send sequence survives unobserved. The request it
+// sends and the reply check are mutation-tested on their own.
+#[cfg_attr(test, mutants::skip)]
+async fn write_remote_markers(
+    context: MarkerDispatchContext<'_>,
+    leader_node: NodeId,
+    entry: &TxnEntry,
+    marker_type: MarkerType,
+    tps: &[TopicPartition],
+) -> Result<WriteTxnMarkersResponse, BrokerError> {
     let MarkerDispatchContext {
         node_id: my_node_id,
         coordinator_epoch,
@@ -109,7 +125,7 @@ pub(super) async fn send_write_txn_markers(
         .map_err(|e| BrokerError::Txn(format!("EndTxn: WriteTxnMarkers to {host}:{port}: {e}")))?;
 
     conn.close();
-    validate_marker_response(entry, tps, &resp)
+    Ok(resp)
 }
 
 fn build_write_txn_markers_request(
@@ -150,21 +166,26 @@ fn build_write_txn_markers_request(
     }
 }
 
+/// Splits the requested partitions into those whose marker the leader wrote
+/// and the most severe failure, per Kafka's
+/// `TransactionMarkerRequestCompletionHandler`.
 fn validate_marker_response(
     entry: &TxnEntry,
     tps: &[TopicPartition],
     response: &WriteTxnMarkersResponse,
-) -> Result<(), BrokerError> {
-    let marker = response
+) -> MarkerFanOut {
+    let mut outcome = MarkerFanOut::default();
+    let Some(marker) = response
         .markers
         .iter()
         .find(|marker| marker.producer_id == entry.producer_id.get())
-        .ok_or_else(|| {
-            BrokerError::Txn(format!(
-                "WriteTxnMarkers response omitted producer {}",
-                entry.producer_id.get()
-            ))
-        })?;
+    else {
+        outcome.fail(BrokerError::Txn(format!(
+            "WriteTxnMarkers response omitted producer {}",
+            entry.producer_id.get()
+        )));
+        return outcome;
+    };
     for tp in tps {
         let result = marker
             .topics
@@ -175,16 +196,15 @@ fn validate_marker_response(
                     .partitions
                     .iter()
                     .find(|partition| partition.partition_index == tp.partition.get())
-            })
-            .ok_or_else(|| {
-                BrokerError::Txn(format!(
-                    "WriteTxnMarkers response omitted {}-{}",
-                    tp.topic,
-                    tp.partition.get()
-                ))
-            })?;
-        if result.error_code != codes::NONE {
-            return Err(BrokerError::MarkerWriteRefused {
+            });
+        match result {
+            None => outcome.fail(BrokerError::Txn(format!(
+                "WriteTxnMarkers response omitted {}-{}",
+                tp.topic,
+                tp.partition.get()
+            ))),
+            Some(result) if result.error_code == codes::NONE => outcome.written.push(tp.clone()),
+            Some(result) => outcome.fail(BrokerError::MarkerWriteRefused {
                 code: result.error_code,
                 message: format!(
                     "WriteTxnMarkers failed for {}-{} with error code {}",
@@ -192,10 +212,10 @@ fn validate_marker_response(
                     tp.partition.get(),
                     result.error_code
                 ),
-            });
+            }),
         }
     }
-    Ok(())
+    outcome
 }
 
 #[cfg(test)]
@@ -215,17 +235,22 @@ mod tests {
         txn::handlers::end_txn::test_support::{marker_entry, plaintext_client, tps},
     };
 
-    fn marker_response(error_code: i16) -> WriteTxnMarkersResponse {
+    fn marker_response(codes_by_partition: &[(i32, i16)]) -> WriteTxnMarkersResponse {
         WriteTxnMarkersResponse {
             markers: vec![WritableTxnMarkerResult {
                 producer_id: 7,
                 topics: vec![WritableTxnMarkerTopicResult {
                     name: "t".to_string(),
-                    partitions: vec![WritableTxnMarkerPartitionResult {
-                        partition_index: 0,
-                        error_code,
-                        ..Default::default()
-                    }],
+                    partitions: codes_by_partition
+                        .iter()
+                        .map(
+                            |&(partition_index, error_code)| WritableTxnMarkerPartitionResult {
+                                partition_index,
+                                error_code,
+                                ..Default::default()
+                            },
+                        )
+                        .collect(),
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -234,25 +259,64 @@ mod tests {
         }
     }
 
+    fn partition(index: i32) -> TopicPartition {
+        TopicPartition {
+            topic: "t".to_string(),
+            partition: krabka_ids::PartitionIndex(index),
+        }
+    }
+
+    /// How a fan-out attempt failed: `None` when it did not, and the refused
+    /// code for a `MarkerWriteRefused`, `-1` for any other error.
+    fn failure_code(outcome: &MarkerFanOut) -> Option<i16> {
+        outcome.failure.as_ref().map(|error| match error {
+            BrokerError::MarkerWriteRefused { code, .. } => *code,
+            _ => -1,
+        })
+    }
+
+    /// #852: every partition the leader acknowledged is reported as written,
+    /// even when another partition in the same request is refused, so the
+    /// coordinator drops exactly those from the transaction.
     #[test]
-    fn marker_response_requires_every_partition_to_succeed() {
+    fn marker_response_reports_each_acknowledged_partition() {
         let entry = marker_entry();
-        let partitions = tps();
-        assert!(
-            validate_marker_response(&entry, &partitions, &marker_response(codes::NONE)).is_ok()
-        );
-        assert!(
-            validate_marker_response(
-                &entry,
-                &partitions,
-                &marker_response(codes::NOT_LEADER_OR_FOLLOWER)
-            )
-            .is_err()
-        );
-        assert!(
-            validate_marker_response(&entry, &partitions, &WriteTxnMarkersResponse::default())
-                .is_err()
-        );
+        let requested = vec![partition(0), partition(1)];
+        // (label, response, partitions written, failure code)
+        let cases = [
+            (
+                "both acknowledged",
+                marker_response(&[(0, codes::NONE), (1, codes::NONE)]),
+                vec![partition(0), partition(1)],
+                None,
+            ),
+            (
+                "one refused",
+                marker_response(&[(0, codes::NONE), (1, codes::NOT_LEADER_OR_FOLLOWER)]),
+                vec![partition(0)],
+                Some(codes::NOT_LEADER_OR_FOLLOWER),
+            ),
+            (
+                "one omitted",
+                marker_response(&[(1, codes::NONE)]),
+                vec![partition(1)],
+                Some(-1),
+            ),
+            (
+                "producer omitted",
+                WriteTxnMarkersResponse::default(),
+                vec![],
+                Some(-1),
+            ),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (label, response, written, failure) in cases {
+            let outcome = validate_marker_response(&entry, &requested, &response);
+            actual.push((label, failure_code(&outcome), outcome.written));
+            expected.push((label, failure, written));
+        }
+        assert!(actual == expected);
     }
 
     #[test]
@@ -268,7 +332,7 @@ mod tests {
         image: &MetadataImage,
         leader: NodeId,
         listener_name: &str,
-    ) -> Result<(), BrokerError> {
+    ) -> MarkerFanOut {
         let client = plaintext_client();
         let entry = marker_entry();
         let partitions = tps();
@@ -298,7 +362,8 @@ mod tests {
         let image = MetadataImage::default();
         let err = send_test_markers(&image, NodeId(99), "PLAINTEXT")
             .await
-            .expect_err("missing leader must error");
+            .failure
+            .expect("missing leader must error");
         assert!(
             matches!(&err, BrokerError::Txn(m) if m.contains("not found")),
             "unexpected error: {err:?}"
@@ -332,7 +397,8 @@ mod tests {
         ));
         let err = send_test_markers(&image, NodeId(2), "INTERNAL")
             .await
-            .expect_err("unreachable endpoint must error");
+            .failure
+            .expect("unreachable endpoint must error");
         assert!(
             matches!(&err, BrokerError::Txn(m) if m.contains("connect to 127.0.0.1:9")),
             "unexpected error: {err:?}"
@@ -367,7 +433,8 @@ mod tests {
         ));
         let err = send_test_markers(&image, NodeId(2), "INTERNAL")
             .await
-            .expect_err("unreachable fallback must error");
+            .failure
+            .expect("unreachable fallback must error");
         assert!(
             matches!(&err, BrokerError::Txn(m) if m.contains("connect to 127.0.0.1:9")),
             "expected fallback to top-level 127.0.0.1:9, got: {err:?}"
@@ -446,7 +513,7 @@ mod tests {
         .await;
 
         assert!(
-            result.is_err(),
+            result.failure.is_some(),
             "capture server intentionally stops after ClientHello"
         );
         assert!(

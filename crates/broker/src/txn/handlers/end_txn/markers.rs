@@ -35,10 +35,36 @@ pub(super) enum MarkerFanOutOutcome {
     GivenUp,
 }
 
+/// What one marker fan-out attempt achieved.
+#[derive(Debug, Default)]
+pub(crate) struct MarkerFanOut {
+    /// The partitions whose marker is durable, and those that no longer exist
+    /// and so need none. Kafka's `TransactionMarkerRequestCompletionHandler`
+    /// removes each of them from the transaction's partition set.
+    pub(crate) written: Vec<TopicPartition>,
+    /// The most severe failure of the attempt, if any partition failed.
+    pub(crate) failure: Option<BrokerError>,
+}
+
+impl MarkerFanOut {
+    /// Records `error`, keeping the most severe failure seen so far.
+    pub(crate) fn fail(&mut self, error: BrokerError) {
+        record_worse_failure(&mut self.failure, error);
+    }
+
+    /// Folds another group's outcome into this one.
+    pub(crate) fn merge(&mut self, other: Self) {
+        self.written.extend(other.written);
+        if let Some(error) = other.failure {
+            self.fail(error);
+        }
+    }
+}
+
 /// Write the markers for a prepared transaction.
 pub(super) async fn dispatch_transaction_markers(
     broker: &Broker,
-    snapshot: &TxnEntry,
+    snapshot: &mut TxnEntry,
     marker_type: MarkerType,
     transactional_id: &str,
 ) -> MarkerFanOutOutcome {
@@ -98,7 +124,7 @@ pub(crate) async fn dispatch_markers(
     partitions: &std::sync::Arc<crate::partition_registry::PartitionRegistry>,
     entry: &TxnEntry,
     marker_type: MarkerType,
-) -> Result<(), BrokerError> {
+) -> MarkerFanOut {
     let MarkerDispatchContext {
         node_id,
         coordinator_epoch,
@@ -107,17 +133,21 @@ pub(crate) async fn dispatch_markers(
     } = context;
     // Group every involved (topic, partition) by its current leader.
     let mut by_leader: HashMap<NodeId, Vec<TopicPartition>> = HashMap::new();
+    let mut outcome = MarkerFanOut::default();
 
     for tp in &entry.partitions {
         let leader = if let Some(partition) = image.partition(&tp.topic, tp.partition.get()) {
             Some(partition.leader)
         } else if let Some(partition) = partitions.get(&tp.topic, tp.partition) {
             if partition.current_leader.load(Ordering::Acquire) != node_id.0 {
-                return Err(BrokerError::Txn(format!(
-                    "transaction marker target {}-{} is materialized locally but missing from metadata",
-                    tp.topic,
-                    tp.partition.get()
-                )));
+                return MarkerFanOut {
+                    written: Vec::new(),
+                    failure: Some(BrokerError::Txn(format!(
+                        "transaction marker target {}-{} is materialized locally but missing from metadata",
+                        tp.topic,
+                        tp.partition.get()
+                    ))),
+                };
             }
             Some(node_id)
         } else {
@@ -125,8 +155,9 @@ pub(crate) async fn dispatch_markers(
             // is no log left to mark, so it must not block completion.
             None
         };
-        if let Some(leader) = leader {
-            by_leader.entry(leader).or_default().push(tp.clone());
+        match leader {
+            Some(leader) => by_leader.entry(leader).or_default().push(tp.clone()),
+            None => outcome.written.push(tp.clone()),
         }
     }
 
@@ -135,23 +166,19 @@ pub(crate) async fn dispatch_markers(
     // different partition in the same fan-out round needs a retry (#882). The
     // worst classified failure (a fatal one over a retriable one) is what the
     // caller sees, so a fenced generation still cancels the whole attempt.
-    let mut worst: Option<BrokerError> = None;
     for (leader, tps) in by_leader {
         if leader == node_id {
             // Local path: directly append a marker batch to each partition.
-            for tp in &tps {
+            for tp in tps {
                 let Some(part) = partitions.get(&tp.topic, tp.partition) else {
-                    record_worse_failure(
-                        &mut worst,
-                        BrokerError::Txn(format!(
-                            "transaction marker target {}-{} is led locally but is not materialized",
-                            tp.topic,
-                            tp.partition.get()
-                        )),
-                    );
+                    outcome.fail(BrokerError::Txn(format!(
+                        "transaction marker target {}-{} is led locally but is not materialized",
+                        tp.topic,
+                        tp.partition.get()
+                    )));
                     continue;
                 };
-                if let Err(error) = append_marker_and_materialize(
+                match append_marker_and_materialize(
                     &part,
                     context.group_coordinator,
                     &tp.topic,
@@ -165,23 +192,16 @@ pub(crate) async fn dispatch_markers(
                 )
                 .await
                 {
-                    record_worse_failure(&mut worst, error);
+                    Ok(()) => outcome.written.push(tp),
+                    Err(error) => outcome.fail(error),
                 }
             }
         } else {
             // Remote path: send WriteTxnMarkersRequest to the leader.
-            if let Err(error) =
-                send_write_txn_markers(context, leader, entry, marker_type, &tps).await
-            {
-                record_worse_failure(&mut worst, error);
-            }
+            outcome.merge(send_write_txn_markers(context, leader, entry, marker_type, &tps).await);
         }
     }
-
-    match worst {
-        Some(error) => Err(error),
-        None => Ok(()),
-    }
+    outcome
 }
 
 /// Keeps `worst` at the most severe of what it already holds and `error`: a
@@ -233,7 +253,9 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_ok());
+        // A deleted partition needs no marker, so it leaves the transaction.
+        assert!(result.failure.is_none());
+        assert!(result.written == tps());
     }
 
     #[tokio::test]
@@ -273,14 +295,14 @@ mod tests {
         assert!(
             dispatch_markers(context, &partitions, &entry, MarkerType::Commit)
                 .await
-                .is_err()
+                .failure
+                .is_some()
         );
         assert!(part.log_end_offset() == Offset(0));
 
         part.current_leader.store(1, Ordering::Release);
-        dispatch_markers(context, &partitions, &entry, MarkerType::Commit)
-            .await
-            .unwrap();
+        let written = dispatch_markers(context, &partitions, &entry, MarkerType::Commit).await;
+        assert!(written.failure.is_none());
 
         assert!(part.log_end_offset() == Offset(1));
         assert!(part.last_stable_offset(Offset(1)) == Offset(1));
@@ -373,7 +395,17 @@ mod tests {
         .await;
 
         // Retriable: the remote connect failure is not a fenced generation.
-        let error = result.expect_err("the unreachable remote partition must fail");
+        // #852: only the local partition's marker is written.
+        assert!(
+            result.written
+                == vec![TopicPartition {
+                    topic: "local-topic".into(),
+                    partition: PIdx(0),
+                }]
+        );
+        let error = result
+            .failure
+            .expect("the unreachable remote partition must fail");
         assert!(classify_marker_failure(&error) == MarkerFailureClass::Retriable);
         // The local partition's marker landed despite the remote failure.
         assert!(local_partition.log_end_offset() == Offset(1));
