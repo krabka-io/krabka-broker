@@ -125,6 +125,8 @@ pub struct DescribeView {
     pub group_id: String,
     pub group_epoch: i32,
     pub assignment_epoch: i32,
+    /// The group state from [`GroupState::state_name`].
+    pub group_state: &'static str,
     pub members: Vec<DescribeMember>,
 }
 
@@ -185,6 +187,7 @@ pub(super) fn build_describe(state: &GroupState) -> DescribeView {
         group_id: state.group_id.clone(),
         group_epoch: state.group_epoch,
         assignment_epoch: state.target.epoch,
+        group_state: state.state_name(),
         members: state
             .members
             .values()
