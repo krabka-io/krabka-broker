@@ -30,12 +30,17 @@ use crate::{
 };
 
 /// Classify the request's voter key against the committed voter set, with a
-/// nil stored directory standing for Kafka's absent directory id.
+/// nil directory standing for Kafka's absent directory id on either side.
+///
+/// Kafka compares whole `ReplicaKey`s, so two absent directory ids are equal.
+/// The RPC handlers refuse a request without a directory id before this runs;
+/// only an in-process change for a statically configured voter reaches the
+/// nil-to-nil match.
 fn target_membership(current: &VoterSet, id: NodeId, directory_id: uuid::Uuid) -> TargetMembership {
     match current.get(id) {
         None => TargetMembership::Absent,
-        Some(voter) if voter.directory_id.is_nil() => TargetMembership::PresentUnknownDirectory,
         Some(voter) if voter.directory_id == directory_id => TargetMembership::PresentSameDirectory,
+        Some(voter) if voter.directory_id.is_nil() => TargetMembership::PresentUnknownDirectory,
         Some(_) => TargetMembership::PresentOtherDirectory,
     }
 }
@@ -438,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn a_nil_stored_directory_is_an_unknown_directory() {
+    fn a_nil_stored_directory_matches_only_a_nil_request() {
         let current = VoterSet::from_voters([voter(1, Uuid::from_u128(1)), voter(2, Uuid::nil())]);
         let cases = [
             (
@@ -475,7 +480,7 @@ mod tests {
                 "legacy nil request",
                 2,
                 Uuid::nil(),
-                TargetMembership::PresentUnknownDirectory,
+                TargetMembership::PresentSameDirectory,
             ),
         ];
         for (case, id, directory_id, expected) in cases {
