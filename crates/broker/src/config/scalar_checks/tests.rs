@@ -372,3 +372,26 @@ fn a_disabled_expiry_sweep_and_the_kafka_defaults_validate() {
     };
     assert!(config.validate().is_ok());
 }
+
+/// Kafka's `group.initial.rebalance.delay.ms` is `atLeast(0)`, and its sample
+/// `server.properties` sets zero for development.
+#[test]
+fn a_zero_classic_group_initial_rebalance_delay_validates() {
+    let config = BrokerConfig {
+        classic_group_initial_rebalance_delay: <Time as TimeExt>::ZERO,
+        ..base()
+    };
+    assert!(config.validate().is_ok());
+}
+
+#[test]
+fn a_negative_classic_group_initial_rebalance_delay_is_rejected() {
+    let config = BrokerConfig {
+        classic_group_initial_rebalance_delay: <Time as TimeExt>::from_millis(-1),
+        ..base()
+    };
+    assert_invalid_runtime(
+        &config,
+        "classic_group_initial_rebalance_delay must be finite and nonnegative",
+    );
+}
