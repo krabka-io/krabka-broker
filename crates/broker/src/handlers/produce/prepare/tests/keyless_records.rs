@@ -66,14 +66,16 @@ fn a_compacted_topic_names_every_keyless_record_on_both_paths() {
                 vec![],
             ),
             (
-                // The only record with a bad timestamp has a key, so Kafka
-                // reports the timestamp error rather than a key error, and the
-                // batch is no longer refused outright: `prepare_batch` defers
-                // to the pipeline, the same as a keyless record.
+                // Record 0 is still keyless on this compacted topic, exactly
+                // as in `keyless_future`; only its position changed. The
+                // record with a bad timestamp (index 1) has a key, so Kafka
+                // reports the timestamp error rather than a key error for
+                // it, and the batch is no longer refused outright:
+                // `prepare_batch` defers to the pipeline.
                 "keyed record in the future",
                 &keyed_future,
                 true,
-                vec![],
+                vec![0],
                 vec![1],
             ),
         ] {

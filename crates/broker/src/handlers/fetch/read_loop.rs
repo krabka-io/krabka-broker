@@ -783,7 +783,13 @@ mod tests {
             .expect("re-read");
 
         assert!(pending[0].out.error_code == crate::codes::FENCED_LEADER_EPOCH);
-        assert!(pending[0].out.records.is_none());
+        // A fenced-epoch row never touches the log, so it carries the -1
+        // sentinels of a refused read (#872/#873): `records` is present but
+        // empty, not null.
+        assert!(
+            pending[0].out.records
+                == Some(krabka_protocol::records::RecordsPayload::Raw(Bytes::new()))
+        );
         broker_handle.shutdown().await;
     }
 

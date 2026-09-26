@@ -213,10 +213,27 @@ mod tests {
         // The recency order is only useful if a live session's own traffic
         // updates it. `refetched` is allocated first, so it starts as the
         // victim; one incremental fetch on it must hand that role to `idle`.
+        //
+        // Each session is seeded with one cached partition: a session with no
+        // partitions never occurs against real Kafka (a full fetch with no
+        // partition data is never cached, and `classify` closes a session
+        // whose partition set becomes empty), so an empty-partition fixture
+        // here would exercise that close path instead of the recency touch
+        // this test is about.
+        let mk = |p| {
+            (
+                FetchSessionKey {
+                    topic_name: "t".into(),
+                    topic_id: WireUuid::ZERO,
+                    partition: p,
+                },
+                CachedPartitionState::default(),
+            )
+        };
         let (cache, clock) = manual_cache(2);
-        let refetched = cache.try_allocate(false, "refetched".into(), vec![]);
+        let refetched = cache.try_allocate(false, "refetched".into(), vec![mk(0)]);
         clock.advance(TICK).expect("manual time moves forward");
-        let idle = cache.try_allocate(false, "idle".into(), vec![]);
+        let idle = cache.try_allocate(false, "idle".into(), vec![mk(0)]);
 
         clock.advance(TICK).expect("manual time moves forward");
         let incremental = req(refetched, 1, vec![], vec![]);

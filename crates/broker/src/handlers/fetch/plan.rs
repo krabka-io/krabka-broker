@@ -817,11 +817,7 @@ mod tests {
                 "client fetch",
                 false,
                 -1,
-                super::PartitionData {
-                    partition_index: 0,
-                    error_code: crate::codes::NOT_LEADER_OR_FOLLOWER,
-                    ..Default::default()
-                },
+                super::refused_read(0, crate::codes::NOT_LEADER_OR_FOLLOWER),
             ),
             (
                 "follower fetch",
@@ -1189,6 +1185,13 @@ mod tests {
                 super::PartitionData {
                     partition_index: 0,
                     error_code: crate::codes::NONE,
+                    // A brand-new empty log's live bounds are all 0, and
+                    // `apply_epoch_checks` now fills them on this row rather
+                    // than leaving the wire defaults (-1) `PartitionData`
+                    // starts from (#872/#873).
+                    high_watermark: 0,
+                    last_stable_offset: 0,
+                    log_start_offset: 0,
                     diverging_epoch: super::EpochEndOffset {
                         epoch: -1,
                         end_offset: 0,
@@ -1209,6 +1212,10 @@ mod tests {
                     error_code: crate::codes::NONE,
                     high_watermark: 4,
                     last_stable_offset: 4,
+                    // `with_history` is never trimmed, so its live log start
+                    // is still 0, not the wire default (-1) that
+                    // `apply_epoch_checks` now fills over on this row.
+                    log_start_offset: 0,
                     diverging_epoch: super::EpochEndOffset {
                         epoch: -1,
                         end_offset: 4,
@@ -1242,6 +1249,10 @@ mod tests {
                     error_code: crate::codes::NONE,
                     high_watermark: 4,
                     last_stable_offset: 4,
+                    // `with_history` is never trimmed, so its live log start
+                    // is still 0, not the wire default (-1) that
+                    // `apply_epoch_checks` now fills over on this row.
+                    log_start_offset: 0,
                     diverging_epoch: super::EpochEndOffset {
                         epoch: 0,
                         end_offset: 2,

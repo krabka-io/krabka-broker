@@ -714,7 +714,7 @@ mod tests {
             ),
             (
                 "a topic override on one key wins for that key alone",
-                vec![(MESSAGE_TIMESTAMP_AFTER_MAX_MS, "5_000")],
+                vec![(MESSAGE_TIMESTAMP_AFTER_MAX_MS, "5000")],
                 TimestampPolicy {
                     after_max_ms: Some(5_000),
                     ..strict_broker_default
