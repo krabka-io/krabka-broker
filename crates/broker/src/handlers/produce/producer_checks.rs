@@ -589,6 +589,7 @@ mod tests {
                 delivery: None,
                 topic_name: "orders".into(),
                 freeze: crate::freeze::resolve::FreezeMutationResolution::Admit,
+                internal_topic_denied: false,
                 transaction: crate::handlers::produce::producer_checks::TransactionRequest {
                     transactional_id: None,
                     version: 9,
@@ -720,6 +721,7 @@ mod tests {
                         delivery: None,
                         topic_name: "orders".into(),
                         freeze: crate::freeze::resolve::FreezeMutationResolution::Admit,
+                        internal_topic_denied: false,
                         transaction: super::TransactionRequest {
                             transactional_id: None,
                             version: 9,
