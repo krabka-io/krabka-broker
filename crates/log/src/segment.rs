@@ -200,10 +200,26 @@ impl Segment {
     }
 
     /// Highest timestamp observed across all batches in this segment.
-    /// Returns `i64::MIN` for an empty segment.
+    /// Returns `i64::MIN` for an empty segment, and can also read `-1`
+    /// (`NO_TIMESTAMP`) when every batch in the segment carries no
+    /// timestamp. See [`Segment::last_modified`] for Kafka's fallback for
+    /// both cases.
     #[must_use]
     pub fn max_timestamp(&self) -> i64 {
         self.max_timestamp
+    }
+
+    /// The `.log` file's last-modified time, as Kafka's `LogSegment.
+    /// lastModified` reads it. Time retention falls back to this when the
+    /// segment carries no record timestamp of its own (`max_timestamp()` is
+    /// `i64::MIN` or `-1`), the same as `UnifiedLog`'s
+    /// `largestRecordTimestamp().orElse(lastModified())`.
+    ///
+    /// `None` when the filesystem cannot report it, which retention treats
+    /// as "unknown, not overdue" rather than as license to guess.
+    #[must_use]
+    pub fn last_modified(&self) -> Option<std::time::SystemTime> {
+        self.log_file.metadata().ok()?.modified().ok()
     }
 
     /// `true` once [`Segment::seal`] has sealed the segment. Sealed segments

@@ -24,10 +24,6 @@ pub(super) fn finalize_fetch_session(
 ) -> i32 {
     let session_id = match decision {
         SessionDecision::Sessionless => INVALID_SESSION_ID,
-        SessionDecision::Close { session_id } => {
-            broker.fetch_session_cache.close(*session_id);
-            INVALID_SESSION_ID
-        }
         SessionDecision::NewSession => {
             let snapshot = snapshot_response_state(effective_topics, responses);
             broker.fetch_session_cache.try_allocate(
@@ -220,15 +216,18 @@ fn filter_incremental_response(
                 // Kafka's `CachedPartition.maybeUpdateResponseData` always
                 // includes a partition with an error, so an incremental
                 // response repeats the error on every fetch until it clears.
+                // It compares `highWatermark`, `logStartOffset` and
+                // `preferredReadReplica` (plus records and the error code
+                // here); it does not compare `lastStableOffset` or the
+                // aborted-transaction list, so those two never force a resend
+                // on their own.
                 Some((_, prev)) => {
                     records_present
                         || p.error_code != codes::NONE
                         || p.error_code != prev.last_error_code
                         || p.high_watermark != prev.last_high_watermark
-                        || p.last_stable_offset != prev.last_last_stable_offset
                         || p.log_start_offset != prev.last_log_start_offset
                         || p.preferred_read_replica != prev.last_preferred_read_replica
-                        || aborted_hash != prev.last_aborted_txns_hash
                         || p.diverging_epoch.end_offset >= 0
                 }
                 // Partition not in the cached set — newly added by this

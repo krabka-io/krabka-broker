@@ -50,7 +50,8 @@ async fn run_ticks_until_shutdown() {
 
     let dir = tempfile::tempdir().expect("log root");
     let registry = Arc::new(PartitionRegistry::new());
-    let partition = expired_partition(&dir, "run-retain", NodeId(7), LogDirRegistry::default());
+    let partition =
+        expired_partition(&dir, "run-retain", NodeId(7), LogDirRegistry::default()).await;
     let before = segment_files(&dir, "run-retain");
     registry.insert(
         "run-retain".into(),
@@ -119,7 +120,8 @@ async fn run_ticks_until_shutdown() {
 async fn run_stops_without_sweeping_when_the_first_deadline_is_refused() {
     let dir = tempfile::tempdir().expect("log root");
     let registry = Arc::new(PartitionRegistry::new());
-    let partition = expired_partition(&dir, "unarmable", NodeId(7), LogDirRegistry::default());
+    let partition =
+        expired_partition(&dir, "unarmable", NodeId(7), LogDirRegistry::default()).await;
     let before = segment_files(&dir, "unarmable");
     registry.insert(
         "unarmable".into(),

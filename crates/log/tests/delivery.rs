@@ -333,7 +333,7 @@ fn size_retention_never_evicts_a_segment_holding_an_undelivered_record() {
     let (_dir, mut log) = log_of(config, &[PAST_MS, PAST_MS, FUTURE_MS, FUTURE_MS, PAST_MS]);
 
     let now = SystemTime::UNIX_EPOCH + Duration::from_millis(u64::try_from(NOW_MS).unwrap());
-    log.tick(now).unwrap();
+    log.tick(now, Offset(i64::MAX)).unwrap();
 
     check!(log.delivery_watermark() == Offset(4));
 
@@ -358,7 +358,7 @@ fn size_retention_on_an_unscheduled_topic_is_untouched_by_the_guard() {
     let (_dir, mut log) = log_of(config, &[PAST_MS, PAST_MS, PAST_MS]);
 
     let now = SystemTime::UNIX_EPOCH + Duration::from_millis(u64::try_from(NOW_MS).unwrap());
-    log.tick(now).unwrap();
+    log.tick(now, Offset(i64::MAX)).unwrap();
 
     // Only the active segment survives.
     check!(log.log_start_offset() == Offset(4));

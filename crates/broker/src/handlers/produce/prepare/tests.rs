@@ -37,9 +37,12 @@ fn record_decompression_policy_limits_owned_and_verbatim_produce() {
         None,
         TimestampPolicy::default(),
         false,
-        &topic(),
-        &metrics,
-        policy,
+        DecodeEnv {
+            topic_name: &topic(),
+            metrics: &metrics,
+            policy,
+        },
+        13,
     )
     .unwrap_err();
     assert!(error == crate::codes::INVALID_RECORD);
@@ -49,9 +52,12 @@ fn record_decompression_policy_limits_owned_and_verbatim_produce() {
         Some(CompressionType::Zstd),
         TimestampPolicy::default(),
         false,
-        &topic(),
-        &metrics,
-        policy,
+        DecodeEnv {
+            topic_name: &topic(),
+            metrics: &metrics,
+            policy,
+        },
+        13,
     )
     .unwrap_err();
     assert!(error == crate::codes::INVALID_RECORD);
@@ -61,9 +67,12 @@ fn record_decompression_policy_limits_owned_and_verbatim_produce() {
             Some(CompressionType::Zstd),
             TimestampPolicy::default(),
             false,
-            &topic(),
-            &metrics,
-            RecordDecompressionPolicy::default(),
+            DecodeEnv {
+                topic_name: &topic(),
+                metrics: &metrics,
+                policy: RecordDecompressionPolicy::default(),
+            },
+            13,
         )
         .is_ok()
     );

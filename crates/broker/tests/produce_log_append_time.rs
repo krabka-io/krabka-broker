@@ -37,7 +37,7 @@ use krabka_protocol::{
         create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
         list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
-        produce_response::{LeaderIdAndEpoch, PartitionProduceResponse},
+        produce_response::{BatchIndexAndErrorMessage, LeaderIdAndEpoch, PartitionProduceResponse},
     },
     primitives::uuid::Uuid as WireUuid,
     records::{Record, RecordBatch, RecordsPayload, TimestampType},
@@ -141,7 +141,7 @@ async fn a_timestamp_older_than_the_window_is_refused() {
     .await;
 
     let refused = produce(&p.client, "metrics", topic_id, PRODUCER_TIMESTAMP_MS).await;
-    check!(refused == refusal());
+    check!(refused == refusal(PRODUCER_TIMESTAMP_MS, &refused));
     check!(
         p.broker.local_log_end_offset("metrics", 0) == Some(0),
         "a refused batch must not have appended"
@@ -167,8 +167,9 @@ async fn a_timestamp_newer_than_the_window_is_refused() {
     )
     .await;
 
-    let refused = produce(&p.client, "forecasts", topic_id, now_ms() + 2 * WINDOW_MS).await;
-    check!(refused == refusal());
+    let ahead_ms = now_ms() + 2 * WINDOW_MS;
+    let refused = produce(&p.client, "forecasts", topic_id, ahead_ms).await;
+    check!(refused == refusal(ahead_ms, &refused));
 
     let accepted_row = produce(&p.client, "forecasts", topic_id, now_ms()).await;
     assert!(accepted_row.error_code == codes::NONE);
@@ -219,18 +220,41 @@ fn accepted(base_offset: i64, log_append_time_ms: i64) -> PartitionProduceRespon
     }
 }
 
-/// The partition row a timestamp outside the window answers with. Every offset
-/// field is the -1 of `LogAppendInfo.UNKNOWN_LOG_APPEND_INFO`, because the
-/// refusal happens before any append.
-fn refusal() -> PartitionProduceResponse {
+/// The partition row a single-record batch stamped `timestamp_ms`, outside the
+/// window, answers with: Kafka's `RecordValidationException` row from
+/// `ReplicaManager.appendToLocalLog`. The base offset and append time are the
+/// -1 of `LogAppendInfo.unknownLogAppendInfoWithAdditionalInfo`, the log start
+/// offset is the partition's own, and the batch's one record carries
+/// `LogValidator.validateTimestamp`'s message under the fixed top-level
+/// message of `processRecordErrors`.
+///
+/// The per-record message ends with the window the broker computed from its
+/// own clock, which the test cannot know, so it is taken from `actual` once
+/// everything before the window has been checked.
+fn refusal(timestamp_ms: i64, actual: &PartitionProduceResponse) -> PartitionProduceResponse {
+    let prefix = format!(
+        "Timestamp {timestamp_ms} of message with offset 0 is out of range. The timestamp should \
+         be within ["
+    );
+    let message = actual
+        .record_errors
+        .first()
+        .and_then(|error| error.batch_index_error_message.clone())
+        .filter(|message| message.starts_with(&prefix));
     PartitionProduceResponse {
         index: 0,
         error_code: codes::INVALID_TIMESTAMP,
         base_offset: -1,
         log_append_time_ms: -1,
-        log_start_offset: -1,
-        record_errors: vec![],
-        error_message: None,
+        log_start_offset: 0,
+        record_errors: vec![BatchIndexAndErrorMessage {
+            batch_index: 0,
+            batch_index_error_message: Some(message.unwrap_or(prefix)),
+            ..BatchIndexAndErrorMessage::default()
+        }],
+        error_message: Some(
+            "One or more records have been rejected due to invalid timestamp".into(),
+        ),
         current_leader: LeaderIdAndEpoch::default(),
         unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
     }

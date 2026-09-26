@@ -27,7 +27,7 @@ use krabka_security::Principal;
 use super::{
     authz::{TopicAuthorization, failed_partitions},
     registration::{TransactionRequest, process_one_txn},
-    results::topic_error,
+    results::{dedup_topics, topic_error},
     wire::encode_response,
     write_freeze::frozen_topics,
 };
@@ -73,6 +73,7 @@ async fn process_transaction(
     dependencies: &HandlerDependencies<'_>,
     client: bool,
     txn: &Transaction<'_>,
+    version: i16,
 ) -> Vec<AddPartitionsToTxnTopicResult> {
     let &HandlerDependencies {
         coord,
@@ -83,6 +84,13 @@ async fn process_transaction(
         peer,
         config,
     } = dependencies;
+    // Kafka's response schema keys its per-partition results by (topic,
+    // partition), so a request that names either one twice must still get
+    // one response row for it (#883). Deduping here, before either
+    // authorization check, means every downstream step -- the ACL sweep, the
+    // freeze gate, and the coordinator call -- already works from the
+    // collapsed list.
+    let topics = dedup_topics(txn.topics);
     let authorization = if client {
         let tid_req = AuthorizationRequest {
             principal,
@@ -92,7 +100,7 @@ async fn process_transaction(
             operation: AclOperation::Write,
         };
         if authorizer.authorize(image, &tid_req) == AuthorizationResult::Deny {
-            return topic_error(txn.topics, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED);
+            return topic_error(&topics, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED);
         }
         TopicAuthorization::Client {
             authorizer,
@@ -103,22 +111,23 @@ async fn process_transaction(
     } else {
         TopicAuthorization::Broker
     };
-    if let Some(rows) = failed_partitions(image, authorization, txn.topics) {
+    if let Some(rows) = failed_partitions(image, authorization, &topics) {
         return rows;
     }
     let authorized = HashSet::new();
-    let frozen = frozen_topics(image, txn.topics, &authorized);
+    let frozen = frozen_topics(image, &topics, &authorized);
     process_one_txn(
         coord,
         TransactionRequest {
             transactional_id: txn.transactional_id,
             producer_id: krabka_log::ProducerId(txn.producer_id),
             producer_epoch: txn.producer_epoch,
-            topics: txn.topics,
+            topics: &topics,
             denied: &authorized,
             frozen: &frozen,
             txnv,
             verify_only: txn.verify_only,
+            version,
         },
     )
     .await
@@ -131,8 +140,14 @@ pub(super) async fn handle_v4(
     version: i16,
     req: &AddPartitionsToTxnRequest,
 ) -> Result<Bytes, BrokerError> {
-    let mut results_by_transaction: Vec<AddPartitionsToTxnResult> =
-        Vec::with_capacity(req.transactions.len());
+    // `TransactionalId` is a `mapKey` field of `AddPartitionsToTxnResponse`,
+    // and Kafka's `KafkaApis` keeps its per-transaction results in an
+    // `AddPartitionsToTxnResultCollection` keyed by it. A request that names
+    // the same transactional id twice gets one response row, keyed by first
+    // occurrence and holding the last-processed result (#883).
+    let mut order: Vec<String> = Vec::with_capacity(req.transactions.len());
+    let mut by_tid: std::collections::HashMap<String, AddPartitionsToTxnResult> =
+        std::collections::HashMap::with_capacity(req.transactions.len());
 
     for txn in &req.transactions {
         let topic_results = process_transaction(
@@ -145,14 +160,29 @@ pub(super) async fn handle_v4(
                 topics: &txn.topics,
                 verify_only: txn.verify_only,
             },
+            version,
         )
         .await;
-        results_by_transaction.push(AddPartitionsToTxnResult {
-            transactional_id: txn.transactional_id.clone(),
-            topic_results,
-            ..Default::default()
-        });
+        if !by_tid.contains_key(&txn.transactional_id) {
+            order.push(txn.transactional_id.clone());
+        }
+        by_tid.insert(
+            txn.transactional_id.clone(),
+            AddPartitionsToTxnResult {
+                transactional_id: txn.transactional_id.clone(),
+                topic_results,
+                ..Default::default()
+            },
+        );
     }
+    let results_by_transaction = order
+        .into_iter()
+        .map(|tid| {
+            by_tid
+                .remove(&tid)
+                .expect("every ordered id was inserted into the map above")
+        })
+        .collect();
 
     let resp = AddPartitionsToTxnResponse {
         results_by_transaction,
@@ -179,6 +209,7 @@ pub(super) async fn handle_v3(
             // v0-3 has no `verify_only` field (predates KIP-890); always add.
             verify_only: false,
         },
+        version,
     )
     .await;
 
@@ -256,6 +287,64 @@ mod tests {
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
         assert!(resp == expected);
+        broker_handle.shutdown().await;
+    }
+
+    /// #883: `TransactionalId` is a `mapKey` field, so a v4+ request that
+    /// names the same transactional id twice must answer with exactly one
+    /// `results_by_transaction` row for it, holding the last-processed
+    /// result.
+    #[tokio::test]
+    async fn handle_v4_duplicate_transactional_id_collapses_to_one_result() {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::test_support::GrantsInPrincipalName)).await;
+        let principal = crate::test_support::principal("Cluster:ClusterAction");
+        let peer = peer();
+        let ctx = test_context(&principal, &peer);
+        let req = AddPartitionsToTxnRequest {
+            transactions: vec![
+                AddPartitionsToTxnTransaction {
+                    transactional_id: "dup-tid".into(),
+                    producer_id: 11,
+                    producer_epoch: 2,
+                    verify_only: false,
+                    topics: vec![topic("first-topic", &[0])],
+                    ..Default::default()
+                },
+                AddPartitionsToTxnTransaction {
+                    transactional_id: "dup-tid".into(),
+                    producer_id: 11,
+                    producer_epoch: 2,
+                    verify_only: false,
+                    topics: vec![topic("second-topic", &[0])],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let req_bytes = encode_request(&req, 4);
+
+        let bytes = handle(
+            &broker_handle.broker_arc_for_test(),
+            4,
+            123,
+            &req_bytes,
+            &ctx,
+        )
+        .await
+        .expect("handle");
+        let resp = decode_response(&bytes, 4);
+
+        assert!(resp.results_by_transaction.len() == 1);
+        let expected = AddPartitionsToTxnResult {
+            transactional_id: "dup-tid".into(),
+            topic_results: vec![topic_result(
+                "second-topic",
+                &[(0, codes::UNKNOWN_TOPIC_OR_PARTITION)],
+            )],
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+        };
+        assert!(resp.results_by_transaction[0] == expected);
         broker_handle.shutdown().await;
     }
 

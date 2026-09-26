@@ -15,33 +15,54 @@ use crate::{
     network::client::InterBrokerClient,
     txn::{
         handlers::write_txn_markers::{MarkerAppend, append_marker_and_materialize},
-        marker::MarkerType,
+        marker::{MarkerFailureClass, MarkerType, classify_marker_failure},
         state::{TopicPartition, TxnEntry},
     },
 };
 
-/// Write the markers for a prepared transaction. Returns `false` when the
-/// fan-out failed. The `Prepare*` record is durable, so the caller hands the
-/// transaction to the completion task.
+/// The outcome of one attempt to fan out `WriteTxnMarkers`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MarkerFanOutOutcome {
+    /// Every partition's marker is durable.
+    Complete,
+    /// At least one partition failed with a retriable code. The `Prepare*`
+    /// record is durable, so the caller hands the transaction to the
+    /// completion task, which retries the fan-out.
+    Retry,
+    /// A fenced producer or coordinator generation cancelled the fan-out
+    /// (#882). A newer generation has already superseded this attempt, so
+    /// retrying cannot succeed; the caller must not queue it for completion.
+    GivenUp,
+}
+
+/// Write the markers for a prepared transaction.
 pub(super) async fn dispatch_transaction_markers(
     broker: &Broker,
     snapshot: &TxnEntry,
     marker_type: MarkerType,
     transactional_id: &str,
-) -> bool {
+) -> MarkerFanOutOutcome {
     match broker
         .txn_coordinator
         .dispatch_transaction_markers(snapshot, marker_type)
         .await
     {
-        Ok(()) => true,
+        Ok(()) => MarkerFanOutOutcome::Complete,
+        Err(error) if classify_marker_failure(&error) == MarkerFailureClass::Fatal => {
+            tracing::warn!(
+                tid = transactional_id,
+                error = %error,
+                "EndTxn: WriteTxnMarkers fan-out fenced by a newer generation; giving up"
+            );
+            MarkerFanOutOutcome::GivenUp
+        }
         Err(error) => {
             tracing::warn!(
                 tid = transactional_id,
                 error = %error,
                 "EndTxn: WriteTxnMarkers fan-out failed; queued for completion"
             );
-            false
+            MarkerFanOutOutcome::Retry
         }
     }
 }
@@ -109,18 +130,28 @@ pub(crate) async fn dispatch_markers(
         }
     }
 
+    // Every leader group is attempted, even after an earlier group fails: a
+    // partition whose marker already landed must not be abandoned because a
+    // different partition in the same fan-out round needs a retry (#882). The
+    // worst classified failure (a fatal one over a retriable one) is what the
+    // caller sees, so a fenced generation still cancels the whole attempt.
+    let mut worst: Option<BrokerError> = None;
     for (leader, tps) in by_leader {
         if leader == node_id {
             // Local path: directly append a marker batch to each partition.
             for tp in &tps {
-                let part = partitions.get(&tp.topic, tp.partition).ok_or_else(|| {
-                    BrokerError::Txn(format!(
-                        "transaction marker target {}-{} is led locally but is not materialized",
-                        tp.topic,
-                        tp.partition.get()
-                    ))
-                })?;
-                append_marker_and_materialize(
+                let Some(part) = partitions.get(&tp.topic, tp.partition) else {
+                    record_worse_failure(
+                        &mut worst,
+                        BrokerError::Txn(format!(
+                            "transaction marker target {}-{} is led locally but is not materialized",
+                            tp.topic,
+                            tp.partition.get()
+                        )),
+                    );
+                    continue;
+                };
+                if let Err(error) = append_marker_and_materialize(
                     &part,
                     context.group_coordinator,
                     &tp.topic,
@@ -132,15 +163,41 @@ pub(crate) async fn dispatch_markers(
                         commit_stamp: None,
                     },
                 )
-                .await?;
+                .await
+                {
+                    record_worse_failure(&mut worst, error);
+                }
             }
         } else {
             // Remote path: send WriteTxnMarkersRequest to the leader.
-            send_write_txn_markers(context, leader, entry, marker_type, &tps).await?;
+            if let Err(error) =
+                send_write_txn_markers(context, leader, entry, marker_type, &tps).await
+            {
+                record_worse_failure(&mut worst, error);
+            }
         }
     }
 
-    Ok(())
+    match worst {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+/// Keeps `worst` at the most severe of what it already holds and `error`: a
+/// fatal classification always wins over a retriable one, and the first
+/// error is kept when both are the same class.
+fn record_worse_failure(worst: &mut Option<BrokerError>, error: BrokerError) {
+    let replace = match worst {
+        None => true,
+        Some(existing) => {
+            classify_marker_failure(&error) == MarkerFailureClass::Fatal
+                && classify_marker_failure(existing) != MarkerFailureClass::Fatal
+        }
+    };
+    if replace {
+        *worst = Some(error);
+    }
 }
 
 #[cfg(test)]
@@ -227,5 +284,98 @@ mod tests {
 
         assert!(part.log_end_offset() == Offset(1));
         assert!(part.last_stable_offset(Offset(1)) == Offset(1));
+    }
+
+    /// #882: a marker failure on one partition must not abandon the others
+    /// in the same fan-out round. The local, reachable partition still gets
+    /// its marker even though the remote, unreachable one fails.
+    #[tokio::test]
+    async fn marker_dispatch_appends_every_reachable_partition_despite_one_failing() {
+        use krabka_ids::PartitionIndex as PIdx;
+        use krabka_log::{Log, LogConfig, Offset};
+        use krabka_metadata::{
+            BrokerRegistrationRecord, MetadataRecord, PartitionRecord, TopicRecord,
+        };
+
+        let mut image = MetadataImage::default();
+        for (topic, leader) in [("local-topic", NodeId(1)), ("remote-topic", NodeId(2))] {
+            image.apply(&MetadataRecord::V1Topic(TopicRecord {
+                name: topic.to_owned(),
+                topic_id: uuid::Uuid::nil(),
+                partitions: 1,
+                replication_factor: 1,
+            }));
+            image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+                topic: topic.to_owned(),
+                partition: 0,
+                leader,
+                replicas: vec![leader],
+                isr: vec![leader],
+                ..Default::default()
+            }));
+        }
+        image.apply(&MetadataRecord::V1BrokerRegistration(
+            BrokerRegistrationRecord {
+                node_id: NodeId(2),
+                broker_epoch: 0,
+                incarnation_id: uuid::Uuid::nil(),
+                host: "127.0.0.1".to_string(),
+                // Discard port: refuses connections immediately.
+                port: 9,
+                rack: None,
+                log_dirs: vec![],
+                endpoints: vec![],
+                features: std::collections::BTreeMap::new(),
+            },
+        ));
+
+        let client = plaintext_client();
+        let partitions = std::sync::Arc::new(crate::partition_registry::PartitionRegistry::new());
+        let dir = tempfile::tempdir().unwrap();
+        let part_dir = crate::log_dir::partition_dir(dir.path(), "local-topic", 0);
+        std::fs::create_dir_all(&part_dir).unwrap();
+        let local_partition = crate::broker::spawn_partition(
+            "local-topic".to_string(),
+            PIdx(0),
+            dir.path().to_path_buf(),
+            Log::open(&part_dir, LogConfig::default()).unwrap(),
+            crate::log_dir_status::LogDirRegistry::default(),
+            std::sync::Arc::new(crate::producer_state::ProducerState::new()),
+            false,
+        );
+        partitions.insert("local-topic".into(), PIdx(0), local_partition.clone());
+
+        let mut entry = marker_entry();
+        entry.partitions.insert(TopicPartition {
+            topic: "local-topic".into(),
+            partition: PIdx(0),
+        });
+        entry.partitions.insert(TopicPartition {
+            topic: "remote-topic".into(),
+            partition: PIdx(0),
+        });
+
+        let result = dispatch_markers(
+            MarkerDispatchContext {
+                node_id: NodeId(1),
+                coordinator_epoch: 0,
+                image: &image,
+                inter_broker_client: &client,
+                inter_broker_protocol: ListenerProtocol::Plaintext,
+                inter_broker_listener_name: "PLAINTEXT",
+                inter_broker_server_name: "localhost",
+                group_coordinator: None,
+            },
+            &partitions,
+            &entry,
+            MarkerType::Commit,
+        )
+        .await;
+
+        // Retriable: the remote connect failure is not a fenced generation.
+        let error = result.expect_err("the unreachable remote partition must fail");
+        assert!(classify_marker_failure(&error) == MarkerFailureClass::Retriable);
+        // The local partition's marker landed despite the remote failure.
+        assert!(local_partition.log_end_offset() == Offset(1));
     }
 }

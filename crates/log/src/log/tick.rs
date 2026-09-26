@@ -1,5 +1,11 @@
-//! Periodic maintenance: the time-driven segment roll and the time- and
-//! size-based retention sweep over sealed segments.
+//! Periodic maintenance: the time- and size-based retention sweep over
+//! sealed segments.
+//!
+//! The segment roll itself is not here. Kafka rolls inside the append, in
+//! [`Log::should_roll_for_incoming`], against the incoming batch's own size
+//! and timestamp; a wall-clock roll on this sweep would roll an idle
+//! partition's active segment, which Kafka never does, and the next sweep
+//! would then delete the tail records that segment held.
 //!
 //! Retention never deletes the active segment, never leaves the log with
 //! no segment at all, and never evicts a segment that still holds a record
@@ -8,19 +14,27 @@
 use std::{collections::HashSet, time::SystemTime};
 
 use krabka_ids::Offset;
-use krabka_units::prelude::{ByteSize, ByteSizeExt, TimeExt as _};
+use krabka_units::prelude::{ByteSize, ByteSizeExt};
 use tracing::instrument;
 
 use super::Log;
 use crate::{error::LogError, retention, segment::Segment};
 
 impl Log {
-    /// Periodic maintenance: roll an old active segment, then apply time- and
-    /// size-based retention to sealed segments when `cleanup.policy` holds
-    /// `delete`, and delete sealed segments below the log start offset under
-    /// every policy. The active segment is never
-    /// deleted, and if every segment would otherwise be evicted we retain at
-    /// least one.
+    /// Periodic maintenance: apply time- and size-based retention to sealed
+    /// segments when `cleanup.policy` holds `delete`, and delete sealed
+    /// segments below the log start offset under every policy. The active
+    /// segment is never deleted, and if every segment would otherwise be
+    /// evicted we retain at least one.
+    ///
+    /// `high_watermark` bounds every reason a segment can be evicted, time,
+    /// size and log-start-offset breach alike: Kafka's `UnifiedLog`
+    /// `deletableSegments` only ever considers a segment whose upper bound
+    /// offset (the next segment's base offset, or the log end offset for the
+    /// last one) is at or below the high watermark. A replica's log start
+    /// offset can be pushed past its own high watermark by a lagging
+    /// follower relationship, and without this bound retention would delete
+    /// records a fetch at the high watermark still needs to see.
     #[instrument(
         level = "debug",
         skip_all,
@@ -31,19 +45,7 @@ impl Log {
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     /// # Panics
     /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
-    pub fn tick(&mut self, now: SystemTime) -> Result<(), LogError> {
-        let segment_roll_interval = self.config.read().unwrap().segment_roll_interval;
-        let roll_cutoff =
-            retention::now_ms(now).saturating_sub(segment_roll_interval.millis_i64_trunc());
-        let should_roll = self.active.as_ref().is_some_and(|segment| {
-            segment
-                .offset_for_timestamp(i64::MIN)
-                .is_some_and(|(_, first_timestamp)| first_timestamp < roll_cutoff)
-        });
-        if should_roll {
-            self.roll_active_segment()?;
-        }
-
+    pub fn tick(&mut self, now: SystemTime, high_watermark: Offset) -> Result<(), LogError> {
         // Tiered topics' segment lifecycle is owned by the RemoteLogManager.
         if self.config.read().unwrap().remote_storage_enable {
             return Ok(());
@@ -93,27 +95,39 @@ impl Log {
             .active
             .as_ref()
             .map_or_else(|| self.log_end_offset(), Segment::base_offset);
-        let start_breached: Vec<bool> = self
+        let upper_bounds: Vec<Offset> = self
             .segments
             .iter()
             .map(Segment::base_offset)
             .skip(1)
             .chain(std::iter::once(active_base))
             .take(self.segments.len())
-            .map(|next_base| next_base <= log_start)
+            .collect();
+        let start_breached: Vec<bool> = upper_bounds
+            .iter()
+            .map(|next_base| *next_base <= log_start)
             .collect();
         let time_expired: Vec<bool> = start_breached
             .iter()
             .enumerate()
             .map(|(index, breached)| *breached || index < time_evict.len())
             .collect();
+        // Kafka's `deletableSegments`: every eviction reason, time, size and
+        // log-start-offset breach alike, is additionally gated by
+        // `highWatermark >= upperBoundOffset`. A segment above the watermark
+        // can still be truncated away by a leader election, so retention
+        // never removes it out from under a fetch sitting at the watermark.
+        //
         // On an immediate topic the floor is the log end, so every entry is
         // false. On a scheduled topic the first waiting segment stops the
         // prefix; later segments are never skipped around it.
         let scheduled: Vec<bool> = self
             .segments
             .iter()
-            .map(|segment| segment.last_offset() >= visible_floor)
+            .zip(&upper_bounds)
+            .map(|(segment, upper_bound)| {
+                segment.last_offset() >= visible_floor || *upper_bound > high_watermark
+            })
             .collect();
         let sizes: Vec<u64> = self
             .segments
@@ -188,6 +202,10 @@ mod tests {
         log::test_support::{rolled_log, sample_batch},
     };
 
+    /// A high watermark that never gates retention, for tests that are not
+    /// about the watermark bound itself.
+    const UNBOUNDED_HW: Offset = Offset(i64::MAX);
+
     /// Retention never evicts the last segment, however far past the budget
     /// the log is.
     ///
@@ -211,7 +229,7 @@ mod tests {
         }
         check!(!log.segments.is_empty(), "the appends should have rolled");
 
-        log.tick(SystemTime::now()).expect("tick");
+        log.tick(SystemTime::now(), UNBOUNDED_HW).expect("tick");
         let remaining = log.segments.len() + usize::from(log.active.is_some());
         check!(
             remaining >= 1,
@@ -305,7 +323,7 @@ mod tests {
             }
             log.set_log_start_offset(log_start).unwrap();
 
-            log.tick(now).unwrap();
+            log.tick(now, UNBOUNDED_HW).unwrap();
 
             let surviving: Vec<Offset> = log
                 .segments
@@ -330,7 +348,7 @@ mod tests {
         log.append(&mut b1).unwrap();
         log.append(&mut b2).unwrap();
         let before = log.log_end_offset();
-        log.tick(SystemTime::now()).unwrap();
+        log.tick(SystemTime::now(), UNBOUNDED_HW).unwrap();
         assert2::assert!(log.log_end_offset() == before);
     }
 
@@ -348,71 +366,15 @@ mod tests {
         log.append(&mut b1).unwrap();
         // Advance "now" 30 days into the future.
         let now = SystemTime::now() + Duration::from_hours(30 * 24);
-        log.tick(now).unwrap();
+        log.tick(now, UNBOUNDED_HW).unwrap();
         assert2::assert!(log.log_end_offset() == 2);
     }
 
-    #[test]
-    fn tick_rolls_active_segment_when_first_record_is_old() {
-        let dir = tempdir().unwrap();
-        let config = LogConfig {
-            segment_roll_interval: secs(10),
-            retention: None,
-            ..LogConfig::default()
-        };
-        let mut log = Log::open(dir.path(), config).unwrap();
-        let mut batch = sample_batch(2);
-        batch.base_timestamp = 1_000;
-        batch.max_timestamp = 1_000;
-        log.append(&mut batch).unwrap();
-
-        log.tick(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(12))
-            .unwrap();
-
-        assert2::assert!(log.segments.len() == 1);
-        assert2::assert!(log.active.as_ref().unwrap().base_offset() == Offset(2));
-    }
-
-    #[test]
-    fn tick_keeps_active_segment_at_roll_boundary() {
-        let dir = tempdir().unwrap();
-        let config = LogConfig {
-            segment_roll_interval: secs(10),
-            retention: None,
-            ..LogConfig::default()
-        };
-        let mut log = Log::open(dir.path(), config).unwrap();
-        let mut batch = sample_batch(1);
-        batch.base_timestamp = 1_000;
-        batch.max_timestamp = 1_000;
-        log.append(&mut batch).unwrap();
-
-        log.tick(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(11))
-            .unwrap();
-
-        assert2::assert!(log.segments.is_empty());
-        assert2::assert!(log.active.as_ref().unwrap().base_offset() == Offset(0));
-    }
-
-    #[test]
-    fn tick_rolls_tiered_segment_without_local_eviction() {
-        let dir = tempdir().unwrap();
-        let config = LogConfig {
-            segment_roll_interval: secs(1),
-            retention: Some(secs(1)),
-            remote_storage_enable: true,
-            ..LogConfig::default()
-        };
-        let mut log = Log::open(dir.path(), config).unwrap();
-        let mut batch = sample_batch(1);
-        log.append(&mut batch).unwrap();
-
-        log.tick(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10))
-            .unwrap();
-
-        assert2::assert!(log.segments.len() == 1);
-        assert2::assert!(log.active.as_ref().unwrap().base_offset() == Offset(1));
-    }
+    // The time-driven segment roll moved to the append path (see
+    // `crate::log::append::tests`), against the incoming batch's own
+    // timestamp rather than the wall clock, so `tick` no longer rolls at
+    // all: an idle partition's active segment never rolls, and the roll a
+    // busy one gets matches Kafka's `LogSegment.shouldRoll`.
 
     #[test]
     fn tick_removes_only_retained_away_segment_stamp_indexes() {
@@ -434,8 +396,11 @@ mod tests {
             log.append(&mut sample_batch(1)).unwrap();
         }
 
-        log.tick(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1))
-            .unwrap();
+        log.tick(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(1),
+            UNBOUNDED_HW,
+        )
+        .unwrap();
 
         check!(log.stamp_for_offset(Offset(0)) == None);
         check!(log.stamp_for_offset(Offset(1)) == None);
@@ -459,7 +424,7 @@ mod tests {
         let total = log.size();
         assert2::assert!(total < bytes(100_000));
         // Under budget: nothing is evicted by size
-        log.tick(SystemTime::UNIX_EPOCH).unwrap();
+        log.tick(SystemTime::UNIX_EPOCH, UNBOUNDED_HW).unwrap();
         assert2::assert!(log.segments.len() == 4);
 
         // Budget smaller than total size: only excess is evicted
@@ -467,18 +432,18 @@ mod tests {
         let mut new_config = log.config_snapshot();
         new_config.retention_size = Some(target_budget);
         log.set_config(new_config);
-        log.tick(SystemTime::UNIX_EPOCH).unwrap();
+        log.tick(SystemTime::UNIX_EPOCH, UNBOUNDED_HW).unwrap();
         // Evicts at least one segment
         assert2::assert!(log.segments.len() < 4);
     }
 
     #[test]
-    fn tick_rolls_but_skips_retention_when_remote_storage_enable_is_true() {
+    fn tick_skips_retention_when_remote_storage_enable_is_true() {
         use std::time::Duration;
         let far_future = SystemTime::now() + Duration::from_hours(365 * 24);
 
-        // Tiered topic: tick rolls the old active segment but must not delete
-        // any segment. The remote-log manager owns local eviction.
+        // Tiered topic: tick must not delete any segment, however old.
+        // The remote-log manager owns local eviction.
         let dir_tiered = tempdir().unwrap();
         let mut tiered = rolled_log(
             dir_tiered.path(),
@@ -490,8 +455,8 @@ mod tests {
         );
         let sealed_before = tiered.tierable_segments().len();
         assert2::assert!(sealed_before > 0);
-        tiered.tick(far_future).unwrap();
-        assert2::assert!(tiered.tierable_segments().len() == sealed_before + 1);
+        tiered.tick(far_future, UNBOUNDED_HW).unwrap();
+        assert2::assert!(tiered.tierable_segments().len() == sealed_before);
 
         // Non-tiered baseline: tick should still evict aggressively.
         let dir_plain = tempdir().unwrap();
@@ -504,7 +469,7 @@ mod tests {
             },
         );
         assert2::assert!(!plain.tierable_segments().is_empty());
-        plain.tick(far_future).unwrap();
+        plain.tick(far_future, UNBOUNDED_HW).unwrap();
         // Non-tiered path keeps at least one segment (the active one); every
         // sealed segment is evicted.
         assert2::assert!(plain.tierable_segments().len() == 0);

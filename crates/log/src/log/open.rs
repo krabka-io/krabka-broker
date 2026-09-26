@@ -170,7 +170,7 @@ impl Log {
             start_offset_established: false,
             // Nothing has cleaned this log yet, so every sealed segment is
             // dirty until the first pass says otherwise.
-            compacted_once: false,
+            clean_prefix_segments: 0,
             lso,
             pending: HashMap::new(),
             verification_states: HashMap::new(),

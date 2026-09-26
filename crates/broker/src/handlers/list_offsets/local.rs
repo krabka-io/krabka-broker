@@ -60,6 +60,26 @@ pub(super) fn leader_epoch_for_offset(partition: &crate::partition::Partition, o
         .map_or(-1, |epoch| epoch.0)
 }
 
+/// The start offset of the partition's live leader epoch, from the epoch
+/// checkpoint this node's own log keeps. `None` when the checkpoint holds no
+/// entry for that epoch, which a fresh promotion whose log prepare has not
+/// yet appended one leaves in that state.
+///
+/// KIP-207 reads this to decide whether the high watermark has caught up to
+/// the epoch it is supposed to bound: see
+/// [`resolve_partition`](super::resolve::resolve_partition).
+pub(super) fn epoch_start_offset(partition: &crate::partition::Partition) -> Option<i64> {
+    let current = partition
+        .current_leader_epoch
+        .load(std::sync::atomic::Ordering::Acquire);
+    let log = partition.log.lock().expect("log mutex poisoned");
+    log.epoch_checkpoint()
+        .entries()
+        .iter()
+        .find(|entry| entry.epoch.0 == current)
+        .map(|entry| entry.start_offset.0)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -194,13 +214,16 @@ mod tests {
         response.topics.remove(0).partitions.remove(0)
     }
 
-    // The whole LATEST row for a healthy partition 0.
+    // The whole LATEST row for a healthy partition 0. Every fixture this
+    // module builds installs leader epoch 0, and LATEST now reports the
+    // partition's live leader epoch rather than leaving it unfilled.
     fn latest_row(offset: i64) -> ListOffsetsPartitionResponse {
         ListOffsetsPartitionResponse {
             partition_index: 0,
             error_code: codes::NONE,
             timestamp: UNKNOWN_TIMESTAMP,
             offset,
+            leader_epoch: 0,
             ..Default::default()
         }
     }

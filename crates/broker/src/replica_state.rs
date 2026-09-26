@@ -141,6 +141,30 @@ impl ReplicaState {
         (self.leader, &self.replicas)
     }
 
+    /// Whether `follower`'s reported range can serve `fetch_offset`, as
+    /// Kafka's `ReplicaManager.findPreferredReadReplica` checks it: the
+    /// follower's log end offset must be at least the fetch offset, and its
+    /// log start at most the fetch offset. KIP-392 never redirects a consumer
+    /// to a replica that would have to answer it `OFFSET_OUT_OF_RANGE`.
+    ///
+    /// A follower that has not fetched since this broker became leader has no
+    /// `per_follower` entry, so its LEO reads 0 -- excluding it from any
+    /// `fetch_offset` above 0, the same as Kafka's freshly reset `Replica` --
+    /// and no `follower_log_start` entry, which reads `UNKNOWN_OFFSET` (-1)
+    /// and never excludes it on the low end.
+    pub(crate) fn follower_can_serve(&self, follower: NodeId, fetch_offset: Offset) -> bool {
+        let leo = self
+            .per_follower
+            .get(&follower)
+            .map_or(Offset(0), |stats| stats.leo);
+        let log_start = self
+            .follower_log_start
+            .get(&follower)
+            .copied()
+            .unwrap_or(Offset(-1));
+        leo >= fetch_offset && log_start <= fetch_offset
+    }
+
     // cargo-mutants: deleting the `!` (ISR-vs-non-ISR branch select) is equivalent: both
     // branch bodies set identical follower stats (leo=min, last_fetch, and
     // last_caught_up under the same `>= leader_leo` guard) and both end by

@@ -19,7 +19,7 @@ use super::{
         BrokerProducePolicy, current_leader_hint, diskless_role_ready, replica_state_matches_image,
         replication_target_matches_image, validate_partition_gate,
     },
-    prepare::{PreparedBatch, prepare_batch},
+    prepare::{DecodeEnv, PreparedBatch, prepare_batch},
     producer_checks::{
         DedupOutcome, TransactionRequest, handle_duplicate, verify_transactional_produce,
     },
@@ -332,9 +332,12 @@ pub(super) async fn process_partition(
         topic_compression,
         timestamps,
         compacted_topic,
-        &shared_topic,
-        metrics,
-        record_decompression_policy,
+        DecodeEnv {
+            topic_name: &shared_topic,
+            metrics,
+            policy: record_decompression_policy,
+        },
+        transaction.version,
     ) {
         Ok(p) => p,
         Err(code) => {
@@ -425,7 +428,7 @@ pub(super) async fn process_partition(
     }
 
     // ── compacted topic: Kafka's `LogValidator.validateKey` ──────────
-    if let Some(refusal) = keyless_record_refusal(&out, &prepared, &part, topic_name) {
+    if let Some(refusal) = record_validation_refusal(&out, &prepared, &part, topic_name) {
         return Ok(PartitionOutcome::Done(refusal));
     }
 
@@ -560,27 +563,39 @@ pub(super) async fn process_partition(
     })
 }
 
-/// The row Kafka answers for a batch that holds a record with no key on a
-/// compacted topic, or `None` when every record has a key.
+/// Kafka's `LogValidator.processRecordErrors` message when at least one
+/// `RecordError` in the batch came from the timestamp check: a fixed string,
+/// not the per-record enumeration the general case uses, even when the same
+/// batch also carries a keyless-record error.
+const INVALID_TIMESTAMP_MESSAGE: &str = "One or more records have been rejected due to invalid \
+                                          timestamp";
+
+/// The row Kafka answers for a batch that carries a per-record validation
+/// error: a keyless record on a compacted topic
+/// (`LogValidator.validateKey`), a record whose timestamp falls outside the
+/// topic's window (`LogValidator.validateTimestamp`), or both. `None` when
+/// neither check refused anything.
 ///
-/// Compaction keeps the last record per key, so a record with no key would be
-/// acknowledged and later removed by the cleaner. Kafka refuses the whole
-/// batch: `RecordValidationException` carries one `RecordError` per keyless
-/// record, with `LogValidator.validateKey`'s message, and the row carries the
-/// log start offset.
-fn keyless_record_refusal(
+/// Kafka's `processRecordErrors` merges every `RecordError` the batch earned
+/// into one list and picks the top-level message by whether any of them came
+/// from the timestamp check: `INVALID_TIMESTAMP` with the fixed message if
+/// so, `INVALID_RECORD` with the enumerated one otherwise. The merged list
+/// itself keeps every entry either way, in the batch's record order, because
+/// the two checks never both fire on the same record: `validateRecord` checks
+/// a record's key first, and skips the timestamp check for that record when
+/// the key check already refused it.
+fn record_validation_refusal(
     out: &PartitionProduceResponse,
     prepared: &PreparedBatch,
     part: &crate::partition::Partition,
     topic_name: &str,
 ) -> Option<PartitionProduceResponse> {
-    if prepared.keyless_records.is_empty() {
+    if prepared.keyless_records.is_empty() && prepared.invalid_timestamp_records.is_empty() {
         return None;
     }
     let partition_label = format!("{topic_name}-{}", out.index);
     let mut out = out.clone();
-    out.error_code = codes::INVALID_RECORD;
-    out.record_errors = prepared
+    let keyless = prepared
         .keyless_records
         .iter()
         .map(|&batch_index| BatchIndexAndErrorMessage {
@@ -590,9 +605,19 @@ fn keyless_record_refusal(
                  {partition_label}"
             )),
             ..Default::default()
-        })
+        });
+    let mut record_errors: Vec<BatchIndexAndErrorMessage> = keyless
+        .chain(prepared.invalid_timestamp_records.iter().cloned())
         .collect();
-    out.error_message = Some(record_errors_message(&out.record_errors));
+    record_errors.sort_by_key(|error| error.batch_index);
+    if prepared.invalid_timestamp_records.is_empty() {
+        out.error_code = codes::INVALID_RECORD;
+        out.error_message = Some(record_errors_message(&record_errors));
+    } else {
+        out.error_code = codes::INVALID_TIMESTAMP;
+        out.error_message = Some(INVALID_TIMESTAMP_MESSAGE.to_owned());
+    }
+    out.record_errors = record_errors;
     // Kafka's `processFailedRecord` reads the log start offset for the row.
     out.log_start_offset = part.log_start_offset().0;
     Some(out)

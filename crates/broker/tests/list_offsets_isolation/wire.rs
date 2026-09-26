@@ -47,13 +47,19 @@ pub(super) struct EndOfPartition {
 
 /// The whole row a partition 0 answers with for a sentinel that matched a
 /// record: the offset it matched and that record's timestamp.
+///
+/// Every partition this suite builds stays on leader epoch 0 for its whole
+/// life, so a resolved match reports that epoch. A refusal (`offset == -1`,
+/// Kafka's `Unknown` selection outcome) reports the unknown-epoch sentinel
+/// instead, regardless of the live epoch: Kafka never fills the epoch for an
+/// answer it did not resolve.
 pub(super) fn matched_row(offset: i64, timestamp: i64) -> ListOffsetsPartitionResponse {
     ListOffsetsPartitionResponse {
         partition_index: 0,
         error_code: codes::NONE,
         timestamp,
         offset,
-        leader_epoch: -1,
+        leader_epoch: if offset < 0 { -1 } else { 0 },
         ..Default::default()
     }
 }
@@ -74,8 +80,9 @@ pub(super) fn refused_row() -> ListOffsetsPartitionResponse {
 /// The whole `LATEST` row a healthy partition 0 answers with.
 ///
 /// `LATEST` matches no record, so the response echoes Kafka's
-/// `UNKNOWN_TIMESTAMP` (-1), and the handler leaves the leader epoch at the
-/// same sentinel. Spelling the full row out is what makes an isolation level
+/// `UNKNOWN_TIMESTAMP` (-1), but it does report the partition's live leader
+/// epoch: Kafka fills it from `Partition.getLeaderEpoch` rather than leaving
+/// it unknown. Spelling the full row out is what makes an isolation level
 /// that quietly changed the error code or the timestamp fail here too.
 pub(super) fn latest_row(offset: i64) -> ListOffsetsPartitionResponse {
     matched_row(offset, -1)

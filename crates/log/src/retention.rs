@@ -53,15 +53,47 @@ pub fn time_based_evict(sealed: &[&Segment], config: &LogConfig, now: SystemTime
     let cutoff_ms = now_ms(now).saturating_sub(retention.millis_i64_trunc());
     let out: Vec<Offset> = sealed
         .iter()
-        .take_while(|s| s.max_timestamp() < cutoff_ms)
+        .take_while(|s| retention_anchor_ms(s) < cutoff_ms)
         .map(|s| s.base_offset())
         .collect();
     tracing::Span::current().record("evicted", out.len());
     out
 }
 
+/// Kafka's `UnifiedLog.deleteRetentionMsBreachedSegments` anchor:
+/// `largestRecordTimestamp().orElse(lastModified())`. A segment with no
+/// record timestamp of its own -- `i64::MIN` for one that holds no batch,
+/// `-1` (`NO_TIMESTAMP`) for one whose batches carry none -- is judged by its
+/// `.log` file's modification time instead, so it still ages out of
+/// `retention.ms` from when it was written rather than being deleted on the
+/// very first sweep that sees it.
+///
+/// Falls back to `i64::MAX` when even the file time is unavailable: retention
+/// treats an unknown age as not yet overdue rather than as license to guess,
+/// the same direction every other "cannot confirm" case in this module takes.
+fn retention_anchor_ms(segment: &Segment) -> i64 {
+    let recorded = segment.max_timestamp();
+    if recorded >= 0 {
+        return recorded;
+    }
+    segment.last_modified().map_or(i64::MAX, |modified| {
+        modified
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(i64::MAX, |duration| {
+                i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
+            })
+    })
+}
+
 /// Remove one segment's whole file set: the `.log`, both sparse indexes, and
-/// the optional `.txnindex` and `.stampindex` sidecars.
+/// the optional `.txnindex`, `.stampindex` and `.snapshot` sidecars.
+///
+/// The producer snapshot is written at this segment's base offset on every
+/// roll (see `Log::roll_active_segment`), so it belongs to this segment the
+/// same way its `.txnindex` does. Kafka's `UnifiedLog.deleteSegments` deletes
+/// it alongside the segment (`deleteProducerSnapshots`); leaving it behind
+/// piles up `.snapshot` files for the life of the partition, and every
+/// `Log::open` lists and sorts all of them.
 ///
 /// Every file is first renamed to a `<name>.deleted` tombstone and only then
 /// unlinked, the way Kafka's `deleteSegments` renames before it deletes. A
@@ -73,21 +105,22 @@ pub fn time_based_evict(sealed: &[&Segment], config: &LogConfig, now: SystemTime
 ///
 /// # Errors
 /// Returns the first rename or unlink error. A missing file is not one: a
-/// segment need not carry either optional sidecar, and a retried deletion
-/// finds part of the set already gone.
+/// segment need not carry any of the optional sidecars, and a retried
+/// deletion finds part of the set already gone.
 #[instrument(level = "debug", skip_all, fields(dir = %dir.display(), base_offset = base_offset.0), err)]
 pub fn delete_segment_files(
     io: &dyn LogIo,
     dir: &Path,
     base_offset: Offset,
 ) -> Result<(), LogError> {
-    let mut tombstones = Vec::with_capacity(5);
+    let mut tombstones = Vec::with_capacity(6);
     for path in [
         name::log_path(dir, base_offset.0),
         name::index_path(dir, base_offset.0),
         name::timeindex_path(dir, base_offset.0),
         name::txnindex_path(dir, base_offset.0),
         name::stampindex_path(dir, base_offset.0),
+        name::producer_snapshot_path(dir, base_offset.0),
     ] {
         let tombstone = deleted_path(&path);
         match io.rename(IoTarget::SegmentDeletion, &path, &tombstone) {
@@ -181,6 +214,65 @@ mod tests {
         check!(time_based_evict(&refs, &config, past) == vec![Offset(0)]);
     }
 
+    /// A segment holding no batch has no record timestamp at all
+    /// (`max_timestamp()` reads `i64::MIN`). Without the file-mtime fallback
+    /// it would look infinitely old and be evicted on the very first sweep.
+    /// A long retention window and a segment just created must instead
+    /// survive, judged by the file's modification time.
+    #[test]
+    fn time_retention_falls_back_to_file_mtime_for_an_empty_segment() {
+        let dir = tempdir().unwrap();
+        let mut seg = Segment::create(dir.path(), Offset(0)).expect("create segment");
+        seg.seal();
+        assert2::assert!(seg.max_timestamp() == i64::MIN);
+        let refs = [&seg];
+        let config = LogConfig {
+            // Long enough that "created moments ago" is nowhere near the cutoff.
+            retention: Some(krabka_units::prelude::millis(1_000_000_000)),
+            ..LogConfig::default()
+        };
+        check!(
+            time_based_evict(&refs, &config, SystemTime::now()).is_empty(),
+            "a segment created moments ago must survive a long retention window"
+        );
+    }
+
+    /// A segment whose batches carry `NO_TIMESTAMP` (`-1`) gets the same file-
+    /// mtime fallback as one holding no batch at all.
+    #[test]
+    fn time_retention_falls_back_to_file_mtime_when_every_batch_has_no_timestamp() {
+        use bytes::Bytes;
+        use krabka_protocol::records::{Record, RecordBatch};
+
+        let dir = tempdir().unwrap();
+        let mut seg = Segment::create(dir.path(), Offset(0)).expect("create segment");
+        let mut batch = RecordBatch {
+            base_offset: 0,
+            base_timestamp: -1,
+            max_timestamp: -1,
+            last_offset_delta: 0,
+            ..RecordBatch::default()
+        };
+        batch.records.push(Record {
+            offset_delta: 0,
+            key: None,
+            value: Some(Bytes::from_static(b"v")),
+            ..Default::default()
+        });
+        seg.append(&batch, ByteSize::ZERO).expect("append");
+        seg.seal();
+        assert2::assert!(seg.max_timestamp() == -1);
+        let refs = [&seg];
+        let config = LogConfig {
+            retention: Some(krabka_units::prelude::millis(1_000_000_000)),
+            ..LogConfig::default()
+        };
+        check!(
+            time_based_evict(&refs, &config, SystemTime::now()).is_empty(),
+            "a segment created moments ago must survive a long retention window"
+        );
+    }
+
     #[test]
     fn delete_segment_files_removes_required_and_optional_sidecars() {
         let dir = tempdir().unwrap();
@@ -191,6 +283,7 @@ mod tests {
             name::timeindex_path(dir.path(), base.0),
             name::txnindex_path(dir.path(), base.0),
             name::stampindex_path(dir.path(), base.0),
+            name::producer_snapshot_path(dir.path(), base.0),
         ];
         for path in &paths {
             std::fs::write(path, []).unwrap();

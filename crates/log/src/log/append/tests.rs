@@ -500,6 +500,86 @@ fn segment_rolls_when_bytes_exceeded() {
     assert2::assert!(log_files.len() >= 2);
 }
 
+/// Kafka's `LogSegment.shouldRoll` measures the wait to roll against the
+/// gap between the incoming batch's own timestamp and the segment's first
+/// record's timestamp, never the wall clock. Table over
+/// (`segment.ms`, first batch timestamp, incoming batch timestamp) to
+/// rolled or not, all with a `segment.bytes` too large to roll on size.
+#[test]
+fn segment_ms_rolls_against_the_incoming_batch_timestamp() {
+    use krabka_units::prelude::{gibibytes, millis};
+
+    // `(segment_ms, first_ts, incoming_ts, expect_roll, label)`.
+    let cases: [(u32, i64, i64, bool, &str); 4] = [
+        (10_000, 0, 10_001, true, "gap exceeds segment.ms"),
+        (
+            10_000,
+            0,
+            10_000,
+            false,
+            "gap equal to segment.ms does not roll",
+        ),
+        (10_000, 0, 5_000, false, "within segment.ms"),
+        // A backfill batch with an old timestamp: the gap is measured from
+        // the batch's own stamp, not from when it arrived, so a producer
+        // backfilling old records rolls on krabka exactly when it would on
+        // Kafka and not otherwise.
+        (
+            10_000,
+            100_000,
+            80_000,
+            false,
+            "backfill batch narrows the gap",
+        ),
+    ];
+    for (segment_ms, first_ts, incoming_ts, expect_roll, label) in cases {
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(
+            dir.path(),
+            LogConfig {
+                segment_size: gibibytes(1),
+                segment_roll_interval: millis(segment_ms),
+                ..LogConfig::default()
+            },
+        )
+        .unwrap();
+        let mut first = test_batch_at(0);
+        first.base_timestamp = first_ts;
+        first.max_timestamp = first_ts;
+        log.append(&mut first).unwrap();
+
+        let mut second = test_batch_at(0);
+        second.base_timestamp = incoming_ts;
+        second.max_timestamp = incoming_ts;
+        log.append(&mut second).unwrap();
+
+        let rolled = !log.segments.is_empty();
+        check!(rolled == expect_roll, "{label}");
+    }
+}
+
+/// An idle partition never rolls: nothing (not even a later `tick`) rolls a
+/// segment that never sees another append, because the roll test only ever
+/// runs inside the append itself.
+#[test]
+fn an_idle_partition_never_rolls() {
+    use krabka_units::prelude::millis;
+
+    let dir = tempdir().unwrap();
+    let mut log = Log::open(
+        dir.path(),
+        LogConfig {
+            segment_roll_interval: millis(1),
+            ..LogConfig::default()
+        },
+    )
+    .unwrap();
+    log.append(&mut sample_batch(1)).unwrap();
+
+    assert!(log.segments.is_empty());
+    assert!(log.active.as_ref().unwrap().base_offset() == Offset(0));
+}
+
 /// A roll to a new segment reopens the active `.stampindex` at the
 /// sidecar of the new segment. The entry for the post-roll batch lands in
 /// the new segment's file and does not leak back into the sealed

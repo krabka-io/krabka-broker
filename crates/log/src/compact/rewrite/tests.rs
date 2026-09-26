@@ -9,7 +9,7 @@ use krabka_units::prelude::millis;
 
 use super::*;
 use crate::compact::{
-    build_offset_map,
+    TxnDataState, build_offset_map,
     test_support::{
         RETENTION, control_batch, make_record, write_sealed_batches, write_sealed_segment,
     },
@@ -425,5 +425,103 @@ fn rewrite_retain_empty_extends_last_offset() {
                     ..RecordBatch::default()
                 },
             ]
+    );
+}
+
+/// A survivor's aborted-txn entry lands only in the output whose own input
+/// segment carried it, not duplicated into every group a multi-segment
+/// compaction pass produces.
+///
+/// `Log::compact` builds `CleanedTransactionMetadata` once, over the whole
+/// consumed range, and shares it across every size-bounded output group
+/// (`Log::group_segments_by_size`). The survivor set that metadata carries is
+/// correctly global -- producer 2000's data survives via segment A even
+/// though this test also rewrites segment B, which holds none of producer
+/// 2000's records. But each group's own rewritten `.txnindex` must still be
+/// scoped to that group's own input segments: segment B never held the
+/// aborted-txn entry, so B's output must not inherit it from the shared
+/// `txn_meta`. Before the fix, `rewrite_segments` wrote the whole shared
+/// aborted list into every group's output, so a `read_committed` fetch
+/// scanning both A's and B's rewritten segments would see producer 2000's
+/// aborted transaction twice.
+#[test]
+fn a_survivor_txn_entry_lands_only_in_its_own_group_txnindex() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Segment A: producer 2000's only data record, and its aborted-txn entry
+    // seeded into A's own `.txnindex`.
+    let data_a = RecordBatch {
+        base_offset: 0,
+        last_offset_delta: 0,
+        producer_id: 2000,
+        attributes: Attributes::default().with_transactional(true),
+        records: vec![make_record(0, Some(b"k1"), Some(b"v1"))],
+        ..RecordBatch::default()
+    };
+    let seg_a = write_sealed_batches(dir.path(), &[data_a]);
+    let aborted_entry = AbortedTxn {
+        start_offset: Offset(0),
+        last_offset: Offset(0),
+        producer_id: ProducerId(2000),
+        last_stable_offset: Offset(1),
+    };
+    TxnIndex::open(seg_a.txn_index_path())
+        .unwrap()
+        .append(aborted_entry)
+        .unwrap();
+
+    // Segment B: unrelated data from a different producer, with no
+    // aborted-txn entries of its own.
+    let seg_b = write_sealed_segment(
+        dir.path(),
+        10,
+        vec![make_record(0, Some(b"k2"), Some(b"v2"))],
+    );
+
+    // Survivor determination is global, over both segments, exactly as
+    // `Log::compact` builds it once for the whole consumed range.
+    let all_refs = vec![&seg_a, &seg_b];
+    let map = build_offset_map(&all_refs).unwrap();
+    let txn = CleanedTransactionMetadata::build(&all_refs, &map).unwrap();
+    assert2::assert!(txn.txn_state(ProducerId(2000)) == TxnDataState::DataSurvives);
+
+    // Group 1: rewrite segment A alone. Its own `.txnindex` carried the
+    // entry, so the output carries it forward.
+    let out_a = rewrite_segments(
+        &crate::io::FileIo,
+        dir.path(),
+        &[&seg_a],
+        &map,
+        &txn,
+        RewriteRetention {
+            now_ms: NEVER_AGE_NOW_MS,
+            delete_retention: RETENTION,
+        },
+        &HashMap::new(),
+    )
+    .unwrap();
+    let swap_a = out_a
+        .txnindex_swap
+        .expect("segment A's own aborted entry survives into its own output");
+    assert2::assert!(TxnIndex::open(swap_a).unwrap().entries() == [aborted_entry]);
+
+    // Group 2: rewrite segment B alone, with the SAME shared `txn_meta`. B's
+    // own `.txnindex` held nothing, so its output must not inherit A's entry.
+    let out_b = rewrite_segments(
+        &crate::io::FileIo,
+        dir.path(),
+        &[&seg_b],
+        &map,
+        &txn,
+        RewriteRetention {
+            now_ms: NEVER_AGE_NOW_MS,
+            delete_retention: RETENTION,
+        },
+        &HashMap::new(),
+    )
+    .unwrap();
+    assert2::assert!(
+        out_b.txnindex_swap.is_none(),
+        "segment B must not inherit segment A's aborted entry from the shared txn_meta"
     );
 }

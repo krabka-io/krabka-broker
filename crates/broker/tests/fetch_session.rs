@@ -401,10 +401,11 @@ async fn close_session_drops_cache_entry() {
     p.broker.shutdown().await;
 }
 
-/// `session_id=0` with a stray epoch, that is, not 0 and not -1, is a wire
-/// error.
+/// `session_id=0` with a stray epoch, that is, not 0 and not -1, is an
+/// incremental fetch. Kafka's `FetchManager.newContext` looks the id up, and
+/// id 0 is never allocated, so it answers `FETCH_SESSION_ID_NOT_FOUND`.
 #[tokio::test]
-async fn sessionless_zero_id_with_stray_epoch_is_invalid() {
+async fn sessionless_zero_id_with_stray_epoch_is_session_id_not_found() {
     let p = support::start().await;
     let r = p
         .client
@@ -416,7 +417,7 @@ async fn sessionless_zero_id_with_stray_epoch_is_invalid() {
         })
         .await
         .expect("stray");
-    assert!(r.error_code == INVALID_FETCH_SESSION_EPOCH);
+    assert!(r.error_code == FETCH_SESSION_ID_NOT_FOUND);
     assert!(r.session_id == 0);
     p.broker.shutdown().await;
 }

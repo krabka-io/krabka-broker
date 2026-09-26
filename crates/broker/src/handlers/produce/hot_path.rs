@@ -22,7 +22,7 @@ pub use super::topic_settings::TimestampPolicy;
 use super::{
     append::build_produce_data,
     framing::PartitionPayload,
-    prepare::{owned_fallback, prepare_batch},
+    prepare::{DecodeEnv, owned_fallback, prepare_batch},
 };
 use crate::{codes, metrics::BrokerMetrics, partition::ProduceData};
 
@@ -70,6 +70,9 @@ pub struct HotPathSettings<'a> {
     pub decompression_policy: RecordDecompressionPolicy,
     pub metrics: &'a BrokerMetrics,
     pub leader_epoch: i32,
+    /// The negotiated `Produce` version, for the same zstd-below-v7 gate
+    /// [`prepare_batch`] applies in production.
+    pub version: i16,
 }
 
 /// Run one partition's records field through prepare, writer-data build and
@@ -89,24 +92,23 @@ pub fn append_one_batch(
     settings: &HotPathSettings<'_>,
     log: &mut Log,
 ) -> Result<ProducePath, i16> {
+    let env = || DecodeEnv {
+        topic_name: &settings.topic_name,
+        metrics: settings.metrics,
+        policy: settings.decompression_policy,
+    };
     let prepared = match choice {
         PathChoice::Dispatch => prepare_batch(
             PartitionPayload::Slice(records),
             settings.topic_compression,
             settings.timestamps,
             false,
-            &settings.topic_name,
-            settings.metrics,
-            settings.decompression_policy,
+            env(),
+            settings.version,
         )?,
-        PathChoice::ForceOwned => owned_fallback(
-            records,
-            settings.timestamps,
-            false,
-            &settings.topic_name,
-            settings.metrics,
-            settings.decompression_policy,
-        )?,
+        PathChoice::ForceOwned => {
+            owned_fallback(records, settings.timestamps, false, env(), settings.version)?
+        }
     };
     append_produce_data(build_produce_data(prepared, settings.leader_epoch), log)
 }

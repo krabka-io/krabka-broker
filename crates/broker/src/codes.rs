@@ -334,6 +334,12 @@ kafka_codes! {
     /// ISR follower.
     NOT_ENOUGH_REPLICAS_AFTER_APPEND = 20;
 
+    /// `INVALID_REQUIRED_ACKS` (21): a Produce request's `acks` field held a
+    /// value other than 0, 1 or -1. `ReplicaManager.isValidRequiredAcks`
+    /// admits only those three; every other value refuses every partition of
+    /// the request with this code, and appends nothing.
+    INVALID_REQUIRED_ACKS = 21;
+
     /// `FENCED_LEADER_EPOCH` (74, KIP-101): caller's `current_leader_epoch` is
     /// older than the partition's current `leader_epoch`. The caller should
     /// re-fetch metadata, or call `OffsetForLeaderEpoch` to learn the
@@ -344,6 +350,17 @@ kafka_codes! {
     /// is newer than the broker's view. This is metadata propagation lag. The
     /// caller retries after a brief wait.
     UNKNOWN_LEADER_EPOCH = 75;
+
+    /// `OFFSET_NOT_AVAILABLE` (78, KIP-207): a `ListOffsets` v5-and-up request
+    /// asked for `LATEST`, or resolved a sentinel to an offset at or above the
+    /// bound, while the new leader's high watermark has not yet caught up to
+    /// the start offset of its own epoch. Answering with a real offset here
+    /// could later move backwards once the watermark advances, which would
+    /// let a client observe a non-monotonic end of partition.
+    /// `Partition.maybeOffsetsError` raises it; a v1-v4 request gets
+    /// `LEADER_NOT_AVAILABLE` (5) for the same condition instead, because the
+    /// dedicated code did not exist yet.
+    OFFSET_NOT_AVAILABLE = 78;
 
     /// `TRANSACTIONAL_ID_NOT_FOUND` (105, KIP-664): `DescribeTransactions`
     /// named a transactional id this broker's coordinator holds no entry
@@ -425,7 +442,10 @@ kafka_codes! {
     INCONSISTENT_TOPIC_ID = 103;
 
     /// `UNSUPPORTED_COMPRESSION_TYPE` (76): a KIP-714 `PushTelemetry` carried
-    /// a `compression_type` that the broker cannot decompress.
+    /// a `compression_type` that the broker cannot decompress, or a `Produce`
+    /// batch below v7 used zstd, which `ProduceRequest.validateRecords`
+    /// refuses because a client that old is not assumed to be able to decode
+    /// zstd back out of a fetch.
     UNSUPPORTED_COMPRESSION_TYPE = 76;
 
     /// `THROTTLING_QUOTA_EXCEEDED` (89): a KIP-714 client pushed or fetched
@@ -600,6 +620,7 @@ pub fn from_broker_error(err: &crate::error::BrokerError) -> i16 {
         | BrokerError::Protocol(_)
         | BrokerError::Startup(_)
         | BrokerError::Txn(_)
+        | BrokerError::MarkerWriteRefused { .. }
         | BrokerError::Share(_)
         | BrokerError::SharePartitionState { .. }
         | BrokerError::ListenerConflict { .. }
