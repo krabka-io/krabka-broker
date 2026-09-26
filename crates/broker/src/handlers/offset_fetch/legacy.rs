@@ -7,6 +7,8 @@
 //! and above `groups[]` shape lives in `groups` and shares nothing but the
 //! group gate and the offset read.
 
+use std::collections::BTreeMap;
+
 use bytes::Bytes;
 use krabka_metadata::AclOperation;
 use krabka_protocol::owned::{
@@ -101,11 +103,14 @@ pub(super) async fn handle_legacy(
 
 /// Builds the response rows for an explicit topic list on the legacy shape.
 ///
-/// Each requested topic is gated with `Read`; a denial replaces every one of
-/// its partitions with `TOPIC_AUTHORIZATION_FAILED` and the `-1` sentinels,
-/// and an offset the group never committed reports `-1` with no error, which
-/// is what the JVM consumer expects for an unset partition. Under
-/// `require_stable`, a partition an unresolved transaction has written reports
+/// Kafka serves the legacy shape through the same `fetchOffsetsForGroup` as
+/// the KIP-516 shape and flattens the one group's rows. Each requested topic
+/// is gated with `Describe`. A refused topic answers every partition with
+/// `TOPIC_AUTHORIZATION_FAILED`, and its row follows every allowed row, as
+/// Kafka appends `errorTopics` after the coordinator's rows. An offset the
+/// group never committed reports `-1` with no error, which is what the JVM
+/// consumer expects for an unset partition. Under `require_stable`, a
+/// partition an unresolved transaction has written reports
 /// `UNSTABLE_OFFSET_COMMIT` ahead of either of those.
 fn legacy_named_topics(
     broker: &Broker,
@@ -114,9 +119,6 @@ fn legacy_named_topics(
     offsets: &GroupOffsets,
     require_stable: bool,
 ) -> Vec<OffsetFetchResponseTopic> {
-    // ── ACL preamble ─────────────────────────────────────
-    // Step 2 (named topics): `Read` on each requested topic. On Deny →
-    // per-topic `error_code = TOPIC_AUTHORIZATION_FAILED (29)`.
     let topic_decisions = {
         let image = broker.controller.current_image();
         authorize_topics(
@@ -124,75 +126,40 @@ fn legacy_named_topics(
             &*image,
             ctx.principal,
             ctx.peer,
-            AclOperation::Read,
+            AclOperation::Describe,
             req_topics.iter().map(|t| t.name.as_str()),
         )
     };
 
-    req_topics
-        .iter()
-        .map(|t| {
-            let denied = topic_decisions
-                .get(t.name.as_str())
-                .copied()
-                .unwrap_or(AuthorizationResult::Deny)
-                == AuthorizationResult::Deny;
-            if denied {
-                // Return all partitions with TOPIC_AUTHORIZATION_FAILED.
-                let partitions = t
-                    .partition_indexes
-                    .iter()
-                    .map(|&pid| OffsetFetchResponsePartition {
-                        partition_index: pid,
-                        committed_offset: -1,
-                        committed_leader_epoch: -1,
-                        metadata: None,
-                        error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                        ..Default::default()
-                    })
-                    .collect();
-                OffsetFetchResponseTopic {
-                    name: t.name.clone(),
-                    partitions,
-                    ..Default::default()
+    let mut allowed = Vec::with_capacity(req_topics.len());
+    let mut refused = Vec::new();
+    for topic in req_topics {
+        let authorized =
+            topic_decisions.get(topic.name.as_str()).copied() == Some(AuthorizationResult::Allow);
+        let partitions = topic
+            .partition_indexes
+            .iter()
+            .map(|&partition| {
+                if authorized {
+                    committed_row(&topic.name, partition, offsets, require_stable)
+                } else {
+                    missing_offset_row(partition, codes::TOPIC_AUTHORIZATION_FAILED)
                 }
-            } else {
-                let partitions = t
-                    .partition_indexes
-                    .iter()
-                    .map(|&pid| {
-                        let key = (t.name.clone(), pid);
-                        if require_stable && offsets.pending_txn.contains(&key) {
-                            return unstable::legacy_row(pid);
-                        }
-                        match offsets.committed.get(&key) {
-                            Some(entry) => OffsetFetchResponsePartition {
-                                partition_index: pid,
-                                committed_offset: entry.offset.0,
-                                committed_leader_epoch: entry.leader_epoch,
-                                metadata: Some(entry.metadata.clone()),
-                                error_code: codes::NONE,
-                                ..Default::default()
-                            },
-                            None => OffsetFetchResponsePartition {
-                                partition_index: pid,
-                                committed_offset: -1,
-                                committed_leader_epoch: -1,
-                                metadata: None,
-                                error_code: codes::NONE,
-                                ..Default::default()
-                            },
-                        }
-                    })
-                    .collect();
-                OffsetFetchResponseTopic {
-                    name: t.name.clone(),
-                    partitions,
-                    ..Default::default()
-                }
-            }
-        })
-        .collect()
+            })
+            .collect();
+        let row = OffsetFetchResponseTopic {
+            name: topic.name.clone(),
+            partitions,
+            ..Default::default()
+        };
+        if authorized {
+            allowed.push(row);
+        } else {
+            refused.push(row);
+        }
+    }
+    allowed.extend(refused);
+    allowed
 }
 
 /// Builds the response rows for the fetch-all sentinel on the legacy shape.
@@ -200,57 +167,79 @@ fn legacy_named_topics(
 /// The rows come from the group's stable offsets, so a partition that an open
 /// transaction has written but that has no earlier committed offset is absent
 /// here, exactly as it is in Kafka. `require_stable` still applies to the rows
-/// that are present.
+/// that are present. Kafka's `fetchAllOffsetsForGroup` leaves out every topic
+/// that the principal may not `Describe`, rather than answering it with an
+/// error. The topics come in name order.
 fn legacy_fetch_all(
     broker: &Broker,
     context: &crate::handlers::RequestContext<'_>,
     offsets: &GroupOffsets,
     require_stable: bool,
 ) -> Vec<OffsetFetchResponseTopic> {
-    let mut by_topic: std::collections::HashMap<String, Vec<OffsetFetchResponsePartition>> =
-        std::collections::HashMap::new();
-    for (key, entry) in &offsets.committed {
-        let (topic, partition) = key;
-        let row = if require_stable && offsets.pending_txn.contains(key) {
-            unstable::legacy_row(*partition)
-        } else {
-            OffsetFetchResponsePartition {
-                partition_index: *partition,
-                committed_offset: entry.offset.0,
-                committed_leader_epoch: entry.leader_epoch,
-                metadata: Some(entry.metadata.clone()),
-                error_code: codes::NONE,
-                ..Default::default()
-            }
-        };
-        by_topic.entry(topic.clone()).or_default().push(row);
+    let mut by_topic: BTreeMap<&str, Vec<OffsetFetchResponsePartition>> = BTreeMap::new();
+    for (topic, partition) in offsets.committed.keys() {
+        by_topic
+            .entry(topic.as_str())
+            .or_default()
+            .push(committed_row(topic, *partition, offsets, require_stable));
     }
-    let names: Vec<_> = by_topic.keys().cloned().collect();
     let image = broker.controller.current_image();
     let decisions = authorize_topics(
         broker.config.authorizer.as_ref(),
         &*image,
         context.principal,
         context.peer,
-        AclOperation::Read,
-        names.iter().map(String::as_str),
+        AclOperation::Describe,
+        by_topic.keys().copied(),
     );
     by_topic
         .into_iter()
+        .filter(|(name, _)| decisions.get(name).copied() == Some(AuthorizationResult::Allow))
         .map(|(name, mut partitions)| {
-            if decisions.get(name.as_str()).copied() != Some(AuthorizationResult::Allow) {
-                for partition in &mut partitions {
-                    partition.committed_offset = -1;
-                    partition.committed_leader_epoch = -1;
-                    partition.metadata = None;
-                    partition.error_code = codes::TOPIC_AUTHORIZATION_FAILED;
-                }
-            }
+            partitions.sort_by_key(|p| p.partition_index);
             OffsetFetchResponseTopic {
-                name,
+                name: name.to_string(),
                 partitions,
                 ..Default::default()
             }
         })
         .collect()
+}
+
+/// The row of one partition of an allowed topic.
+fn committed_row(
+    topic: &str,
+    partition_index: i32,
+    offsets: &GroupOffsets,
+    require_stable: bool,
+) -> OffsetFetchResponsePartition {
+    let key = (topic.to_string(), partition_index);
+    if require_stable && offsets.pending_txn.contains(&key) {
+        return unstable::legacy_row(partition_index);
+    }
+    offsets.committed.get(&key).map_or_else(
+        || missing_offset_row(partition_index, codes::NONE),
+        |entry| OffsetFetchResponsePartition {
+            partition_index,
+            committed_offset: entry.offset.0,
+            committed_leader_epoch: entry.leader_epoch,
+            metadata: Some(entry.metadata.clone()),
+            error_code: codes::NONE,
+            ..Default::default()
+        },
+    )
+}
+
+/// A partition row that carries no committed offset: offset -1, leader epoch
+/// -1, and the empty metadata string, which is the schema default of
+/// `Metadata` that Kafka writes on this row, not null.
+fn missing_offset_row(partition_index: i32, error_code: i16) -> OffsetFetchResponsePartition {
+    OffsetFetchResponsePartition {
+        partition_index,
+        committed_offset: -1,
+        committed_leader_epoch: -1,
+        metadata: Some(String::new()),
+        error_code,
+        ..Default::default()
+    }
 }
