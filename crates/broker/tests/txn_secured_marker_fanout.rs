@@ -266,6 +266,18 @@ async fn wait_both_registered(cluster: &[(BrokerHandle, BrokerConfig, TempDir)])
 /// The function waits until both partitions have an elected leader in
 /// `handle`'s metadata image. The broker serves Metadata to the connected admin
 /// client from that same image.
+/// Waits until every broker's image holds both partitions of `topic`. The
+/// coordinator answers the leader's `AddPartitionsToTxn` with
+/// `UNKNOWN_TOPIC_OR_PARTITION` until its own image holds the partition, as
+/// Kafka's `handleAddPartitionsToTxnRequest` does.
+async fn wait_all_hold_topic<'a>(handles: impl Iterator<Item = &'a BrokerHandle>, topic: &str) {
+    for handle in handles {
+        handle
+            .wait_for_image(|img| (0..2).all(|p| img.partition(topic, p).is_some()))
+            .await;
+    }
+}
+
 async fn partition_leaders(client: &Client, handle: &BrokerHandle, topic: &str) -> Vec<(i32, i32)> {
     // A non-zero `leader` in the image is exactly the wire condition the old
     // loop polled for (`leader_id >= 0`); await both partitions' elections
@@ -628,6 +640,7 @@ async fn a_remote_coordinator_verifies_a_produce_for_a_broker_with_only_cluster_
             case.name
         );
         let leaders = partition_leaders(&admin, &cluster[0].0, case.name).await;
+        wait_all_hold_topic(cluster.iter().map(|(handle, _, _)| handle), case.name).await;
 
         let (coordinator, coordinator_host, coordinator_port) =
             find_coordinator(&client_bootstrap, case.name).await;
