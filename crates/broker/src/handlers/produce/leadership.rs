@@ -92,24 +92,17 @@ pub(super) fn validate_partition_gate(
             current_leader: None,
         });
     }
-    // The `min.insync.replicas` threshold here is the raw configured value,
-    // never capped by the replica count. `config_keys::min_isr`'s
-    // `effective_min_insync_replicas` (the replication-factor cap) is a
-    // KIP-966 controller-side notion: it is what lets the ELR clear even on a
-    // topic whose `min.insync.replicas` exceeds its replication factor. It is
-    // not part of this durability gate. A topic with replication factor 1
-    // and `min.insync.replicas=2` genuinely cannot ever satisfy `acks=all` on
-    // real Kafka -- every such write answers `NOT_ENOUGH_REPLICAS` -- and
-    // applying the controller's cap here would silently admit writes the
-    // operator's own config asked to refuse.
-    if acks == ACKS_ALL
-        && i32::try_from(record.isr.len()).unwrap_or(i32::MAX)
-            < topic_min_insync_replicas(image, topic_name, default_min_insync_replicas)
-    {
-        return Err(PartitionGateError {
-            code: codes::NOT_ENOUGH_REPLICAS,
-            current_leader: None,
-        });
+    if acks == ACKS_ALL {
+        let configured_min_isr =
+            topic_min_insync_replicas(image, topic_name, default_min_insync_replicas);
+        let replica_count = i32::try_from(record.replicas.len()).unwrap_or(i32::MAX);
+        let effective_min_isr = configured_min_isr.min(replica_count);
+        if i32::try_from(record.isr.len()).unwrap_or(i32::MAX) < effective_min_isr {
+            return Err(PartitionGateError {
+                code: codes::NOT_ENOUGH_REPLICAS,
+                current_leader: None,
+            });
+        }
     }
     let leader_epoch = partition
         .current_leader_epoch
@@ -359,16 +352,15 @@ mod tests {
         assert!(admitted.is_none(), "got {admitted:?}");
     }
 
-    /// The `acks=all` gate compares the ISR against the raw configured
-    /// `min.insync.replicas`, never a replication-factor cap. A topic whose
-    /// `min.insync.replicas` exceeds its replication factor -- an rf=1 topic
-    /// on a cluster whose default asks for 2, say -- can then never satisfy
-    /// `acks=all` at all, which matches real Kafka: it is a well-known
-    /// operator footgun, not a case the gate should paper over.
+    /// Kafka's `Partition.effectiveMinIsr` clamps `min.insync.replicas` to
+    /// the replica count before comparing it against the ISR. A topic with
+    /// replication factor 1 on a cluster whose default asks for 2 must still
+    /// accept `acks=all`, because the clamp brings the effective threshold
+    /// down to 1.
     #[tokio::test]
-    async fn acks_all_never_clamps_min_isr_to_the_replica_count() {
+    async fn acks_all_clamps_min_isr_to_the_replica_count() {
         for (name, replicas, isr_len, cluster_min_isr, want_refused) in [
-            ("rf1 below the cluster default refuses", 1, 1, 2, true),
+            ("rf1 clamps below the cluster default", 1, 1, 2, false),
             ("rf1 with an empty isr still refuses", 1, 0, 2, true),
             ("rf3 below the cluster default refuses", 3, 1, 2, true),
             ("rf3 at the cluster default admits", 3, 2, 2, false),

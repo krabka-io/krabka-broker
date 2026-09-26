@@ -127,14 +127,14 @@ async fn alter_configs_rejects_unknown_key() {
     );
 }
 
-/// `min.insync.replicas` pre-flight: the operator sets
-/// `min.insync.replicas=2` with `AlterConfigs`. An `acks=-1` produce
-/// against a 1-broker cluster (ISR={1}, isr.len()=1) must then fail fast
-/// with `NOT_ENOUGH_REPLICAS` (19), before the writer queues the batch.
-/// An `acks=1` produce against the same topic still succeeds, because
-/// leader-only acks bypass the ISR threshold entirely.
+/// `min.insync.replicas` pre-flight against a replication-factor-1 topic:
+/// the operator sets `min.insync.replicas=2` with `AlterConfigs`. Kafka's
+/// `Partition.effectiveMinIsr` clamps the threshold to the replica count,
+/// so an `acks=-1` produce with ISR={1} is accepted, as is an `acks=1`
+/// produce. The refusal when the ISR falls below a satisfiable threshold is
+/// covered by `leadership.rs`'s table test.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn min_insync_replicas_blocks_acks_all_when_isr_too_small() {
+async fn min_insync_replicas_is_clamped_to_the_replica_count_for_acks_all() {
     let cluster = start_n_node(1).await.expect("start_n_node");
     let (broker, cfg, _dir) = &cluster[0];
     let client = build_client(cfg.listen_addr).await;
@@ -164,8 +164,8 @@ async fn min_insync_replicas_blocks_acks_all_when_isr_too_small() {
         .expect("topic in Metadata response")
         .topic_id;
 
-    // Set min.insync.replicas=2 on the topic. The 1-broker cluster only
-    // has ISR={1}, so this is impossible to satisfy.
+    // Set min.insync.replicas=2 on the topic. The topic has one replica, so
+    // the effective threshold is min(2, 1) = 1.
     let alter = AlterConfigsRequest {
         resources: vec![AlterConfigsResource {
             resource_type: RESOURCE_TYPE_TOPIC,
@@ -199,8 +199,8 @@ async fn min_insync_replicas_blocks_acks_all_when_isr_too_small() {
         ..RecordBatch::default()
     };
 
-    // acks=-1 ("all"): must be rejected pre-flight with NOT_ENOUGH_REPLICAS (19).
-    let bad = client
+    // acks=-1 ("all"): ISR={1} meets the clamped threshold of 1.
+    let all = client
         .send(ProduceRequest {
             acks: -1,
             timeout_ms: 5_000,
@@ -219,15 +219,13 @@ async fn min_insync_replicas_blocks_acks_all_when_isr_too_small() {
         .await
         .expect("Produce (acks=-1)");
     assert!(
-        bad.responses[0].partition_responses[0].error_code == 19,
-        "acks=-1 with isr.len()=1 < min.insync.replicas=2 must return NOT_ENOUGH_REPLICAS (19); \
+        all.responses[0].partition_responses[0].error_code == 0,
+        "acks=-1 with isr.len()=1 and min(min.insync.replicas=2, replicas=1) = 1 must succeed; \
          got code = {}",
-        bad.responses[0].partition_responses[0].error_code
+        all.responses[0].partition_responses[0].error_code
     );
 
-    // acks=1: leader-only — min.insync.replicas does NOT gate, so this
-    // must still succeed even though the threshold is unsatisfiable for
-    // acks=all.
+    // acks=1: leader-only; min.insync.replicas never gates it.
     let ok = client
         .send(ProduceRequest {
             acks: 1,
