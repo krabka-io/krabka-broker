@@ -1,6 +1,7 @@
 //! Handler tests for how `OffsetCommit` fences a commit against the group,
 //! as Kafka's `OffsetMetadataManager.validateOffsetCommit` does through
-//! `ClassicGroup.validateOffsetCommit` and `ConsumerGroup.validateOffsetCommit`.
+//! `ClassicGroup.validateOffsetCommit` and `ConsumerGroup.validateOffsetCommit`,
+//! and how it refuses a partition whose metadata is too large.
 
 use std::{sync::Arc, time::Duration};
 
@@ -21,7 +22,7 @@ use crate::{
     broker::{Broker, BrokerHandle},
     codes,
     coordinator::unified::{
-        actor::GroupKindTag,
+        actor::{GroupActorMessage, GroupKindTag},
         classic_state::{ClassicGroup, GroupState, Member},
         group::{CoordinatorGroup, GroupKind},
     },
@@ -241,5 +242,65 @@ async fn commit_is_fenced_by_kafka_group_rule() {
         ));
     }
     assert!(actual == expected);
+    broker.shutdown().await;
+}
+
+/// A partition whose metadata is longer than `offset.metadata.max.bytes`
+/// answers `OFFSET_METADATA_TOO_LARGE` and leaves no committed offset.
+#[tokio::test]
+async fn oversized_metadata_is_refused_through_the_handler() {
+    const GROUP_ID: &str = "oversized-metadata";
+    let (broker, _dir) = start_broker_with_authorizer_no_audit(Arc::new(AllowAllAuthorizer)).await;
+    let shared = broker.broker_arc_for_test();
+    create_topic(&shared).await;
+    broker.wait_until_partition_present(TOPIC, 0).await;
+    let max = usize::try_from(shared.config.offset_metadata_max_bytes).unwrap();
+    let request = OffsetCommitRequest {
+        group_id: GROUP_ID.to_string(),
+        topics: vec![OffsetCommitRequestTopic {
+            name: TOPIC.to_string(),
+            partitions: vec![OffsetCommitRequestPartition {
+                partition_index: 0,
+                committed_offset: 42,
+                committed_metadata: Some("m".repeat(max + 1)),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let user = principal("consumer");
+    let address = peer();
+    let ctx = request_context(&user, &address, "consumer-client");
+    let bytes = handle(&shared, 9, 7, &encode_request(&request, 9), &ctx)
+        .await
+        .expect("handle offset commit");
+    let response: OffsetCommitResponse = decode_response(&bytes, 9);
+
+    let actor = shared
+        .group_coordinator
+        .find(GROUP_ID)
+        .expect("simple group");
+    let (reply, offsets) = tokio::sync::oneshot::channel();
+    actor
+        .tx
+        .send(GroupActorMessage::FetchOffsets { reply })
+        .await
+        .expect("send FetchOffsets");
+    let committed = offsets.await.expect("FetchOffsets reply").committed;
+
+    let expected = OffsetCommitResponse {
+        topics: vec![OffsetCommitResponseTopic {
+            name: TOPIC.to_string(),
+            partitions: vec![OffsetCommitResponsePartition {
+                partition_index: 0,
+                error_code: codes::OFFSET_METADATA_TOO_LARGE,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    assert!((response, committed.is_empty()) == (expected, true));
     broker.shutdown().await;
 }

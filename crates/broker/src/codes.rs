@@ -71,6 +71,9 @@ kafka_codes! {
     /// `message.max.bytes`. The JVM maps it to `RecordTooLargeException`,
     /// which no producer retries.
     MESSAGE_TOO_LARGE = 10;
+    /// `OFFSET_METADATA_TOO_LARGE` (12): an `OffsetCommit` partition row
+    /// carries committed metadata longer than `offset.metadata.max.bytes`.
+    OFFSET_METADATA_TOO_LARGE = 12;
     /// `KAFKA_STORAGE_ERROR` (56, KIP-113): a log-dir-level I/O failure on
     /// open, rename, or remove, or a concurrent move with a conflicting
     /// target.

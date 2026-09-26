@@ -155,8 +155,7 @@ pub(crate) async fn handle(
     }
 
     req.topics = accepted;
-    let error_code = commit(broker, &req, version).await;
-    response.merge(build_response_all(&req, error_code).topics);
+    response.merge(commit(broker, &req, version).await);
     encode(version, &response.build())
 }
 
@@ -212,37 +211,108 @@ fn existing_partitions(
     (!topic.partitions.is_empty()).then_some(topic)
 }
 
-/// Commits every row of `req` through the group coordinator, and returns the
-/// error code that goes on each of those rows.
+/// Commits the rows of `req` through the group coordinator, and returns the
+/// coordinator's topic rows.
 ///
 /// The group routing, the membership and epoch check, and the append each
 /// answer with one code for the whole commit, as Kafka's
 /// `GroupCoordinatorService.commitOffsets` does with
-/// `OffsetCommitRequest.getErrorResponse`.
-async fn commit(broker: &Broker, req: &OffsetCommitRequest, version: i16) -> i16 {
+/// `OffsetCommitRequest.getErrorResponse`. Past those, a partition whose
+/// metadata is too large answers `OFFSET_METADATA_TOO_LARGE` on its own row,
+/// and the others commit, as `OffsetMetadataManager.commitOffset` does.
+async fn commit(
+    broker: &Broker,
+    req: &OffsetCommitRequest,
+    version: i16,
+) -> Vec<OffsetCommitResponseTopic> {
+    match commit_rows(broker, req, version).await {
+        Ok(topics) => topics,
+        Err(code) => build_response_all(req, code).topics,
+    }
+}
+
+async fn commit_rows(
+    broker: &Broker,
+    req: &OffsetCommitRequest,
+    version: i16,
+) -> Result<Vec<OffsetCommitResponseTopic>, i16> {
     let image = broker.controller.current_image();
     match local_partition_for_group(&image, broker.config.node_id, &req.group_id) {
         Ok(_) => {}
-        Err(GroupRoutingError::Unavailable) => return codes::COORDINATOR_NOT_AVAILABLE,
-        Err(GroupRoutingError::NotCoordinator) => return codes::NOT_COORDINATOR,
+        Err(GroupRoutingError::Unavailable) => return Err(codes::COORDINATOR_NOT_AVAILABLE),
+        Err(GroupRoutingError::NotCoordinator) => return Err(codes::NOT_COORDINATOR),
     }
 
     let now_ms = now_ms();
     let expire_timestamp_ms = expire_timestamp_ms(req.retention_time_ms, now_ms);
-    let handle = match validate(broker, req, version).await {
-        Ok(handle) => handle,
-        Err(code) => return code,
-    };
+    let handle = validate(broker, req, version).await?;
 
-    let commit = Commit {
-        now_ms,
-        expire_timestamp_ms,
-        image: &image,
-    };
-    match commit_through_actor(&handle, req, commit).await {
-        Ok(()) => codes::NONE,
-        Err(code) => code,
+    let (valid, rows) = split_oversized_metadata(req, broker.config.offset_metadata_max_bytes);
+    if valid
+        .topics
+        .iter()
+        .any(|topic| !topic.partitions.is_empty())
+    {
+        let commit = Commit {
+            now_ms,
+            expire_timestamp_ms,
+            image: &image,
+        };
+        commit_through_actor(&handle, &valid, commit).await?;
     }
+    Ok(rows)
+}
+
+/// Whether `metadata` is longer than `max_bytes`, as Kafka's
+/// `OffsetMetadataManager.isMetadataInvalid` measures it: in UTF-16 code
+/// units, which is Java's `String.length()`. A null metadata is valid.
+fn metadata_too_large(metadata: Option<&str>, max_bytes: i32) -> bool {
+    metadata.is_some_and(|metadata| {
+        i64::try_from(metadata.encode_utf16().count()).unwrap_or(i64::MAX) > i64::from(max_bytes)
+    })
+}
+
+/// Splits `req` into the request that holds the partitions whose metadata
+/// fits in `max_bytes`, and the coordinator's topic rows in request order: a
+/// partition whose metadata is too large answers `OFFSET_METADATA_TOO_LARGE`,
+/// and every other partition answers `NONE`.
+fn split_oversized_metadata(
+    req: &OffsetCommitRequest,
+    max_bytes: i32,
+) -> (OffsetCommitRequest, Vec<OffsetCommitResponseTopic>) {
+    let mut valid = OffsetCommitRequest {
+        topics: Vec::with_capacity(req.topics.len()),
+        ..req.clone()
+    };
+    let mut rows = Vec::with_capacity(req.topics.len());
+    for topic in &req.topics {
+        let mut row = OffsetCommitResponseTopic {
+            name: topic.name.clone(),
+            topic_id: topic.topic_id,
+            ..Default::default()
+        };
+        let mut kept = OffsetCommitRequestTopic {
+            partitions: Vec::with_capacity(topic.partitions.len()),
+            ..topic.clone()
+        };
+        for partition in &topic.partitions {
+            let error_code =
+                if metadata_too_large(partition.committed_metadata.as_deref(), max_bytes) {
+                    codes::OFFSET_METADATA_TOO_LARGE
+                } else {
+                    kept.partitions.push(partition.clone());
+                    codes::NONE
+                };
+            row.partitions.push(OffsetCommitResponsePartition {
+                partition_index: partition.partition_index,
+                error_code,
+                ..Default::default()
+            });
+        }
+        valid.topics.push(kept);
+        rows.push(row);
+    }
+    (valid, rows)
 }
 
 /// The wire value of `retention_time_ms` that asks for the broker's own
@@ -456,6 +526,7 @@ fn encode(version: i16, resp: &OffsetCommitResponse) -> Result<Bytes, BrokerErro
 #[cfg(test)]
 mod tests {
     use assert2::check;
+    use krabka_protocol::owned::offset_commit_request::OffsetCommitRequestPartition;
 
     use super::*;
 
@@ -481,5 +552,71 @@ mod tests {
                 "retention_time_ms={retention_time_ms} now_ms={now_ms}"
             );
         }
+    }
+
+    /// `OffsetMetadataManager.isMetadataInvalid`: Java's `String.length()`
+    /// against `offset.metadata.max.bytes`. A character outside the Basic
+    /// Multilingual Plane is two UTF-16 code units.
+    #[test]
+    fn oversized_metadata_answers_on_its_own_row_and_is_not_committed() {
+        const LIMIT: i32 = 4096;
+        let supplementary = format!("{}\u{1F980}", "a".repeat(4095));
+        let cases: [(Option<String>, i16); 6] = [
+            (None, codes::NONE),
+            (Some(String::new()), codes::NONE),
+            (Some("a".repeat(4096)), codes::NONE),
+            (Some("a".repeat(4097)), codes::OFFSET_METADATA_TOO_LARGE),
+            // 4095 + 2 code units, though 4096 characters.
+            (Some(supplementary), codes::OFFSET_METADATA_TOO_LARGE),
+            // 4096 characters of two UTF-8 bytes each are 4096 code units.
+            (Some("\u{e9}".repeat(4096)), codes::NONE),
+        ];
+        let partition = |index: usize, metadata: &Option<String>| OffsetCommitRequestPartition {
+            partition_index: i32::try_from(index).unwrap(),
+            committed_offset: 42,
+            committed_metadata: metadata.clone(),
+            ..Default::default()
+        };
+        let request = OffsetCommitRequest {
+            group_id: "g".into(),
+            topics: vec![OffsetCommitRequestTopic {
+                name: "t".into(),
+                partitions: cases
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (metadata, _))| partition(index, metadata))
+                    .collect(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let expected_valid = OffsetCommitRequest {
+            topics: vec![OffsetCommitRequestTopic {
+                name: "t".into(),
+                partitions: cases
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (_, code))| *code == codes::NONE)
+                    .map(|(index, (metadata, _))| partition(index, metadata))
+                    .collect(),
+                ..Default::default()
+            }],
+            ..request.clone()
+        };
+        let expected_rows = vec![OffsetCommitResponseTopic {
+            name: "t".into(),
+            partitions: cases
+                .iter()
+                .enumerate()
+                .map(|(index, (_, error_code))| OffsetCommitResponsePartition {
+                    partition_index: i32::try_from(index).unwrap(),
+                    error_code: *error_code,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }];
+        check!(split_oversized_metadata(&request, LIMIT) == (expected_valid, expected_rows));
     }
 }

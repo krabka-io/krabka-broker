@@ -214,6 +214,10 @@ macro_rules! tuning_fields {
             /// (`ServerConfigs.MAX_REQUEST_PARTITION_SIZE_LIMIT_DEFAULT`),
             /// default 2000.
             pub max_request_partition_size_limit: i32,
+            /// Longest committed metadata an `OffsetCommit` partition may
+            /// carry, in UTF-16 code units. Kafka's
+            /// `offset.metadata.max.bytes`, default 4096.
+            pub offset_metadata_max_bytes: i32,
             /// Bytes copied per future-log move read.
             pub future_log_move_read_chunk: ByteSize,
             /// Partition count for the consumer-offsets internal topic.
