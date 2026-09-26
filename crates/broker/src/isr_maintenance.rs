@@ -42,6 +42,9 @@ pub(crate) struct Config {
     pub partitions: Arc<PartitionRegistry>,
     pub controller: Arc<dyn crate::metadata_source::MetadataSource>,
     pub replica_lag_time_max: Time,
+    /// This broker's static `min.insync.replicas`, the last resort when the
+    /// image names no value for a topic.
+    pub default_min_insync_replicas: i32,
     pub broker_id: i32,
     pub shutdown: CancellationToken,
     /// Bumped on each proposed shrink or expand.
@@ -80,6 +83,7 @@ pub(crate) async fn run(cfg: Config) {
                 &image,
                 record,
                 cfg.replica_lag_time_max.to_std(),
+                cfg.default_min_insync_replicas,
             );
             let proposal = compute_proposal(&part, record, policy).await;
             let recovering = image.leader_recovery_state(&part.topic, part.index.get())
@@ -202,6 +206,7 @@ mod tests {
             partitions,
             controller,
             replica_lag_time_max: secs(5),
+            default_min_insync_replicas: 1,
             broker_id: 1,
             shutdown: shutdown.clone(),
             metrics: metrics.clone(),

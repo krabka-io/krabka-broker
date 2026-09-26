@@ -133,17 +133,23 @@ impl LeaderPolicy {
 
     /// The policy `image` gives partition `record`.
     ///
-    /// `min.insync.replicas` resolves through
-    /// [`effective_min_insync_replicas`](crate::config_keys::effective_min_insync_replicas),
-    /// the threshold the controller maintains the KIP-966 eligible-leader set
-    /// against, so the high watermark freezes exactly when the controller
-    /// starts to name eligible leaders. The image carries no controlled
+    /// `min.insync.replicas` resolves as Kafka's `Partition.effectiveMinIsr`
+    /// reads it out of the log config: the topic override, then the cluster's
+    /// dynamic default
+    /// ([`configured_min_insync_replicas`](crate::config_keys::configured_min_insync_replicas),
+    /// the lookup the
+    /// controller maintains the KIP-966 eligible-leader set against), then
+    /// `default_min_insync_replicas`, this broker's static value, capped by
+    /// the replica count. It is the value the produce gate admits `acks=all`
+    /// against, so a write admitted under it is never committed below it. The
+    /// image carries no controlled
     /// shutdown state; the controller's `AlterPartition` check refuses a
     /// broker in controlled shutdown as `INELIGIBLE_REPLICA`.
     pub(crate) fn from_image(
         image: &krabka_metadata::MetadataImage,
         record: &krabka_metadata::PartitionRecord,
         replica_lag_time_max: Duration,
+        default_min_insync_replicas: i32,
     ) -> Self {
         let brokers = record
             .replicas
@@ -160,12 +166,12 @@ impl LeaderPolicy {
                 )
             })
             .collect();
+        let configured = crate::config_keys::configured_min_insync_replicas(image, &record.topic)
+            .unwrap_or(default_min_insync_replicas);
         Self {
-            effective_min_isr: crate::config_keys::effective_min_insync_replicas(
-                image,
-                &record.topic,
-                record.replicas.len(),
-            ),
+            effective_min_isr: usize::try_from(configured)
+                .unwrap_or(1)
+                .min(record.replicas.len()),
             replica_lag_time_max,
             brokers,
         }
@@ -1126,7 +1132,7 @@ mod tests {
         };
         let lag = Duration::from_secs(30);
         check!(
-            LeaderPolicy::from_image(&image, &record(&[1, 2, 3, 4]), lag)
+            LeaderPolicy::from_image(&image, &record(&[1, 2, 3, 4]), lag, 1)
                 == LeaderPolicy {
                     effective_min_isr: 2,
                     replica_lag_time_max: lag,
@@ -1141,9 +1147,40 @@ mod tests {
                 }
         );
         check!(
-            LeaderPolicy::from_image(&image, &record(&[1]), lag).effective_min_isr == 1,
+            LeaderPolicy::from_image(&image, &record(&[1]), lag, 1).effective_min_isr == 1,
             "a single replica caps min ISR at one"
         );
+    }
+
+    /// With no topic override and no cluster default in the image, the
+    /// broker's static `min.insync.replicas` decides, capped by the replica
+    /// count, as the produce gate resolves it.
+    #[test]
+    fn a_policy_falls_back_to_the_static_min_isr() {
+        use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
+        let record = |replicas: &[u64]| PartitionRecord {
+            topic: "t".into(),
+            partition: 0,
+            leader: NodeId(1),
+            replicas: replicas.iter().copied().map(NodeId).collect(),
+            isr: replicas.iter().copied().map(NodeId).collect(),
+            ..Default::default()
+        };
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        image.apply(&MetadataRecord::V1Topic(TopicRecord {
+            name: "t".into(),
+            topic_id: uuid::Uuid::from_u128(1),
+            partitions: 1,
+            replication_factor: 3,
+        }));
+        let lag = Duration::from_secs(30);
+        let min_isr = |replicas: &[u64], static_default| {
+            LeaderPolicy::from_image(&image, &record(replicas), lag, static_default)
+                .effective_min_isr
+        };
+        check!(min_isr(&[1, 2, 3], 2) == 2);
+        check!(min_isr(&[1, 2, 3], 1) == 1);
+        check!(min_isr(&[1], 2) == 1, "the replica count still caps it");
     }
 }
 
