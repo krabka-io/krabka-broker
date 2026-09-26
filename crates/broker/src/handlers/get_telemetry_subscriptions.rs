@@ -40,15 +40,8 @@ pub(crate) fn handle(
     let mut cur: &[u8] = req_bytes;
     let req = GetTelemetrySubscriptionsRequest::decode(&mut cur, version)?;
 
-    let (instance_uuid, echo_id) = if req.client_instance_id == WireUuid::ZERO {
-        let fresh = Uuid::new_v4();
-        (fresh, WireUuid(fresh.into_bytes()))
-    } else {
-        (Uuid::from_bytes(req.client_instance_id.0), WireUuid::ZERO)
-    };
-
     let attrs = ClientAttributes {
-        client_instance_id: instance_uuid,
+        client_instance_id: Uuid::from_bytes(req.client_instance_id.0),
         client_id: ctx.client_id.to_string(),
         software_name: ctx.software_name.to_string(),
         software_version: ctx.software_version.to_string(),
@@ -57,9 +50,13 @@ pub(crate) fn handle(
     };
 
     let image = broker.controller.current_image();
-    let resp = match broker.client_metrics.manager.assign(&image, &attrs) {
+    let resp = match broker
+        .client_metrics
+        .manager
+        .get_subscription(&image, &attrs)
+    {
         SubscriptionDecision::Assign(assignment) => GetTelemetrySubscriptionsResponse {
-            client_instance_id: echo_id,
+            client_instance_id: WireUuid(assignment.client_instance_id.into_bytes()),
             subscription_id: assignment.subscription_id,
             accepted_compression_types: ACCEPTED_COMPRESSION_TYPES.to_vec(),
             push_interval_ms: assignment.push_interval_ms,
@@ -68,11 +65,9 @@ pub(crate) fn handle(
             requested_metrics: assignment.metrics,
             ..Default::default()
         },
-        SubscriptionDecision::Reject {
-            error_code,
-            throttle_ms,
-        } => GetTelemetrySubscriptionsResponse {
-            throttle_time_ms: throttle_ms,
+        // Kafka answers a rejected request with `throttle_time_ms` 0; only the
+        // request quota raises it.
+        SubscriptionDecision::Reject { error_code } => GetTelemetrySubscriptionsResponse {
             error_code,
             ..Default::default()
         },
@@ -86,7 +81,13 @@ mod tests {
     use krabka_protocol::owned::get_telemetry_subscriptions_response;
 
     use super::*;
-    use crate::codes;
+    use crate::{
+        client_metrics::{
+            config::INTERVAL_MS_DEFAULT,
+            manager::{ComputedSubscription, subscription_id},
+        },
+        codes,
+    };
 
     crate::test_support::codec_helpers!(
         GetTelemetrySubscriptionsRequest,
@@ -94,8 +95,11 @@ mod tests {
         version = get_telemetry_subscriptions_response::MAX_VERSION
     );
 
+    /// Kafka answers with the client instance id it used: a new one for a
+    /// zero request id, the request's id otherwise (#665). An early repeat
+    /// gets `THROTTLING_QUOTA_EXCEEDED` with `throttle_time_ms` 0 (#672).
     #[tokio::test]
-    async fn repeated_get_is_throttled() {
+    async fn get_answers_with_the_instance_id_and_throttles_without_delay() {
         let (broker_handle, _dir) = crate::test_support::start_broker_with(|_cfg| {}).await;
         let broker = broker_handle.broker_arc_for_test();
         let peer = "127.0.0.1:9092".parse().unwrap();
@@ -106,35 +110,58 @@ mod tests {
             software_version: "1.0.0",
         };
 
-        let first = handle(
-            &broker,
-            get_telemetry_subscriptions_response::MAX_VERSION,
-            7,
-            &encode_request(&GetTelemetrySubscriptionsRequest {
-                client_instance_id: WireUuid::ZERO,
-                ..Default::default()
-            }),
-            &ctx,
-        )
-        .expect("first get");
-        let first = decode_response(&first);
-        assert!(first.error_code == codes::NONE);
-        assert!(first.client_instance_id != WireUuid::ZERO);
+        let get = |id: WireUuid| {
+            decode_response(
+                &handle(
+                    &broker,
+                    get_telemetry_subscriptions_response::MAX_VERSION,
+                    7,
+                    &encode_request(&GetTelemetrySubscriptionsRequest {
+                        client_instance_id: id,
+                        ..Default::default()
+                    }),
+                    &ctx,
+                )
+                .expect("get"),
+            )
+        };
+        let assigned = |id: WireUuid| GetTelemetrySubscriptionsResponse {
+            client_instance_id: id,
+            subscription_id: subscription_id(
+                &ComputedSubscription {
+                    metrics: vec![],
+                    push_interval_ms: INTERVAL_MS_DEFAULT,
+                },
+                Uuid::from_bytes(id.0),
+            ),
+            accepted_compression_types: ACCEPTED_COMPRESSION_TYPES.to_vec(),
+            push_interval_ms: INTERVAL_MS_DEFAULT,
+            telemetry_max_bytes: broker.client_metrics.manager.telemetry_max_bytes(),
+            delta_temporality: true,
+            ..Default::default()
+        };
+        let throttled = GetTelemetrySubscriptionsResponse {
+            error_code: codes::THROTTLING_QUOTA_EXCEEDED,
+            ..Default::default()
+        };
 
-        let second = handle(
-            &broker,
-            get_telemetry_subscriptions_response::MAX_VERSION,
-            8,
-            &encode_request(&GetTelemetrySubscriptionsRequest {
-                client_instance_id: first.client_instance_id,
-                ..Default::default()
-            }),
-            &ctx,
-        )
-        .expect("second get");
-        let second = decode_response(&second);
-        assert!(second.error_code == codes::THROTTLING_QUOTA_EXCEEDED);
-        assert!(second.throttle_time_ms == first.push_interval_ms);
+        let fresh = get(WireUuid::ZERO);
+        assert!(fresh.client_instance_id != WireUuid::ZERO);
+        assert!(fresh == assigned(fresh.client_instance_id));
+
+        let known = WireUuid(Uuid::from_u128(7).into_bytes());
+        let rows = [
+            ("a client's own id", known, assigned(known)),
+            ("an early repeat", known, throttled.clone()),
+            (
+                "an early repeat of the new id",
+                fresh.client_instance_id,
+                throttled,
+            ),
+        ];
+        for (name, id, expected) in rows {
+            assert!(get(id) == expected, "row {name}");
+        }
 
         broker_handle.shutdown().await;
     }

@@ -413,3 +413,95 @@ async fn delete_tombstones_the_keys_of_an_in_flight_transactional_commit() {
         check!(!reservation(&handle, keys(&[3]), true).await, "{name}");
     }
 }
+
+/// Kafka's `validateDeleteGroup` answers `NON_EMPTY_GROUP` for a group with
+/// members, classic or KIP-848 consumer, and deletes an empty group of either
+/// kind. A deleted consumer group leaves its group tombstones in the log and
+/// no registry entry or seed behind, so no later request re-hydrates it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delete_answers_by_members_for_classic_and_consumer_groups() {
+    use crate::coordinator::{
+        DeleteGroupError,
+        unified::{GroupType, config::ConsumerGroupMigrationPolicy},
+    };
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Setup {
+        EmptyConsumer,
+        ConsumerWithMember,
+        EmptyClassic,
+    }
+
+    /// `(delete result, group still described, type lock, seed cached,
+    /// consumer tombstones appended, classic tombstone appended)`.
+    type Outcome = (
+        Result<(), DeleteGroupError>,
+        bool,
+        Option<GroupType>,
+        bool,
+        bool,
+        bool,
+    );
+
+    let rows: [(Setup, Outcome); 3] = [
+        (
+            Setup::EmptyConsumer,
+            (Ok(()), false, None, false, true, false),
+        ),
+        (
+            Setup::ConsumerWithMember,
+            (
+                Err(DeleteGroupError::NonEmpty),
+                true,
+                Some(GroupType::NextGen),
+                true,
+                false,
+                false,
+            ),
+        ),
+        (
+            Setup::EmptyClassic,
+            (Ok(()), false, None, false, false, true),
+        ),
+    ];
+    let mut actual = Vec::with_capacity(rows.len());
+    let mut expected = Vec::with_capacity(rows.len());
+    for (setup, outcome) in rows {
+        let (coord, log) =
+            make_coordinator_with_topic_policy("t", 2, ConsumerGroupMigrationPolicy::Bidirectional);
+        match setup {
+            Setup::EmptyConsumer | Setup::ConsumerWithMember => {
+                let handle = coord.get_or_create_consumer("g");
+                coord.mark_next_gen("g");
+                let join = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;
+                check!(join.error_code == codes::NONE, "{setup:?}");
+                if let Setup::EmptyConsumer = setup {
+                    let member = join.member_id.expect("member id");
+                    let leave = rpc::consumer_heartbeat(&handle, &member, -1, None).await;
+                    check!(leave.error_code == codes::NONE, "{setup:?}");
+                }
+            }
+            Setup::EmptyClassic => {
+                let _ = coord.get_or_create_classic("g");
+                coord.mark_classic("g");
+            }
+        }
+
+        let result = coord.delete_group("g").await;
+
+        actual.push((
+            setup,
+            (
+                result,
+                coord.describe_group("g").await.is_some(),
+                coord.group_type("g"),
+                coord.cached_seed("g").is_some(),
+                log.has_next_gen_group_metadata_tombstone("g").await
+                    && log.has_next_gen_target_metadata_tombstone("g").await,
+                log.has_classic_group_metadata_tombstone("g").await,
+            ),
+        ));
+        expected.push((setup, outcome));
+    }
+    check!(actual == expected);
+}

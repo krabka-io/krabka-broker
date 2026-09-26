@@ -23,7 +23,7 @@ mod test_support;
 
 pub use self::{
     group::{ClassicGroup, GroupState},
-    member::{AddMemberOutcome, Member},
+    member::Member,
     protocol::select_protocol,
 };
 

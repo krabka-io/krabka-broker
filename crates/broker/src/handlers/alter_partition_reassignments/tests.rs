@@ -224,7 +224,7 @@ async fn handle_preserves_unknown_partition_response_shape() {
             partitions: vec![ReassignablePartitionResponse {
                 partition_index: 8,
                 error_code: UNKNOWN_TOPIC_OR_PARTITION,
-                error_message: Some("unknown partition".into()),
+                error_message: Some("Unable to find a topic named payments.".into()),
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             }],
             unknown_tagged_fields: UnknownTaggedFields::default(),

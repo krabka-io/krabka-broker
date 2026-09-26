@@ -160,7 +160,11 @@ async fn dispatch_registered_bytes(
                 connection_id,
                 false,
                 "",
-            );
+            )
+            // KIP-13: `Produce` charges `producer_byte_rate` with the whole
+            // request, as Kafka's `KafkaApis.handleProduceRequest` charges
+            // `request.sizeInBytes`.
+            .with_request_size(frame.len());
             let body_offset = frame.len() - parsed.body.len();
             let body_bytes = frame.slice(body_offset..);
             let response_required = match crate::handlers::produce::response_required(

@@ -263,6 +263,30 @@ impl GroupState {
     pub fn current_member_for_instance(&self, instance_id: &str) -> Option<&str> {
         self.instance_to_member.get(instance_id).map(String::as_str)
     }
+
+    /// The group state that `ListGroups` reports, from Kafka's
+    /// `ConsumerGroup.maybeUpdateGroupState`.
+    ///
+    /// A group with no members is `Empty`. A group whose epoch is ahead of its
+    /// target assignment is `Assigning`. A group with a member that is not
+    /// reconciled to the target, which means a member that is not `Stable` or
+    /// not at the target epoch, is `Reconciling`. Every other group is
+    /// `Stable`.
+    #[must_use]
+    pub fn state_name(&self) -> &'static str {
+        if self.members.is_empty() {
+            "Empty"
+        } else if self.group_epoch > self.target.epoch {
+            "Assigning"
+        } else if self.members.values().any(|m| {
+            m.assignment_state != MemberAssignmentState::Stable
+                || m.member_epoch != self.target.epoch
+        }) {
+            "Reconciling"
+        } else {
+            "Stable"
+        }
+    }
 }
 
 #[cfg(test)]
@@ -271,6 +295,48 @@ mod tests {
 
     use super::*;
     use crate::coordinator::unified::consumer_state::test_support::member;
+
+    #[test]
+    fn state_name_follows_kafka_consumer_group_state() {
+        let at = |epoch, assignment_state| {
+            let mut m = member("m1");
+            m.member_epoch = epoch;
+            m.assignment_state = assignment_state;
+            m
+        };
+        // (group epoch, target epoch, members, expected state)
+        let rows = [
+            (3, 3, vec![], "Empty"),
+            (
+                4,
+                3,
+                vec![at(3, MemberAssignmentState::Stable)],
+                "Assigning",
+            ),
+            (
+                3,
+                3,
+                vec![at(2, MemberAssignmentState::Stable)],
+                "Reconciling",
+            ),
+            (
+                3,
+                3,
+                vec![at(3, MemberAssignmentState::UnreleasedPartitions)],
+                "Reconciling",
+            ),
+            (3, 3, vec![at(3, MemberAssignmentState::Stable)], "Stable"),
+        ];
+        for (group_epoch, target_epoch, members, expected) in rows {
+            let mut g = GroupState::new("g");
+            g.group_epoch = group_epoch;
+            g.target.epoch = target_epoch;
+            for m in members {
+                g.members.insert(m.member_id.clone(), m);
+            }
+            assert!(g.state_name() == expected);
+        }
+    }
 
     #[test]
     fn add_member_marks_dirty_first_time() {

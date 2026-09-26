@@ -47,6 +47,7 @@ pub(crate) async fn append_marker_and_materialize(
         marker_type,
         coordinator_epoch,
         commit_stamp,
+        transaction_version,
     } = marker;
     if commit_stamp.is_some() && marker_type != MarkerType::Commit {
         return Err(BrokerError::Txn(
@@ -77,6 +78,18 @@ pub(crate) async fn append_marker_and_materialize(
         .lock()
         .map_err(|_| BrokerError::Txn("transaction marker log lock poisoned".into()))?
         .transaction_marker_state(producer_id);
+    if equal_epoch_marker_fenced(
+        transaction_version,
+        producer_epoch,
+        current_producer_epoch,
+        has_pending_transaction,
+    ) {
+        return Err(BrokerError::ProducerEpochFenced {
+            producer_id: producer_id.get(),
+            current: current_producer_epoch,
+            requested: producer_epoch,
+        });
+    }
     let decision = krabka_verified::transaction_marker_materialization_decision(
         (producer_id.get(), producer_epoch, coordinator_epoch),
         (
@@ -176,6 +189,29 @@ pub(crate) struct MarkerAppend {
     pub(crate) marker_type: MarkerType,
     pub(crate) coordinator_epoch: i32,
     pub(crate) commit_stamp: Option<u64>,
+    /// The `transaction.version` the transaction completes under, from the
+    /// `WriteTxnMarkers` v2 `TransactionVersion` field. At 2 and above an
+    /// equal producer epoch fences the marker.
+    pub(crate) transaction_version: i16,
+}
+
+/// Whether a marker at the partition's current producer epoch is a zombie.
+///
+/// Kafka's `ProducerAppendInfo.checkProducerEpoch` rejects an epoch equal to
+/// the current one at transaction version 2 and above, where every completion
+/// bumps the epoch, unless no transaction is open (a retry of a marker already
+/// written, KAFKA-19999) or the epoch is `i16::MAX`. A lower epoch is fenced
+/// at every version by the materialization decision.
+fn equal_epoch_marker_fenced(
+    transaction_version: i16,
+    producer_epoch: i16,
+    current_producer_epoch: i16,
+    has_pending_transaction: bool,
+) -> bool {
+    transaction_version >= 2
+        && producer_epoch == current_producer_epoch
+        && has_pending_transaction
+        && producer_epoch != i16::MAX
 }
 
 #[cfg(test)]
@@ -247,6 +283,7 @@ mod tests {
                 marker_type: MarkerType::Abort,
                 coordinator_epoch: 0,
                 commit_stamp: None,
+                transaction_version: 0,
             },
         )
         .await
@@ -303,6 +340,7 @@ mod tests {
                 marker_type: MarkerType::Commit,
                 coordinator_epoch: 0,
                 commit_stamp: Some(900),
+                transaction_version: 0,
             },
         )
         .await
@@ -310,6 +348,119 @@ mod tests {
 
         assert!(part.stamp_for_offset(krabka_log::Offset(0)) == Some(900));
         assert!(part.stamp_for_offset(krabka_log::Offset(1)).is_none());
+        broker_handle.shutdown().await;
+    }
+
+    /// #876: Kafka's `ProducerAppendInfo.checkProducerEpoch`. At transaction
+    /// version 2 and above a marker at the partition's current epoch is
+    /// fenced while that producer's transaction is open, and admitted as a
+    /// retry once it is not. Below 2 only a lower epoch is fenced.
+    #[tokio::test]
+    async fn transaction_version_2_fences_an_equal_marker_epoch() {
+        use krabka_protocol::records::{Attributes, Record, RecordBatch};
+
+        let (broker_handle, dir) = start_broker().await;
+        let broker = broker_handle.broker_arc_for_test();
+        let producer_id = krabka_log::ProducerId(711);
+        // (label, transaction version, marker epoch, transaction open,
+        //  expected code, whether the marker is appended)
+        let cases = [
+            (
+                "classic, equal epoch, open",
+                0,
+                4,
+                true,
+                crate::codes::NONE,
+                true,
+            ),
+            (
+                "tv2, equal epoch, open",
+                2,
+                4,
+                true,
+                crate::codes::INVALID_PRODUCER_EPOCH,
+                false,
+            ),
+            // The retry of a marker already written: krabka's exact-retry
+            // suppression answers it without a second append.
+            (
+                "tv2, equal epoch, closed",
+                2,
+                4,
+                false,
+                crate::codes::NONE,
+                false,
+            ),
+            (
+                "tv2, lower epoch, closed",
+                2,
+                3,
+                false,
+                crate::codes::INVALID_PRODUCER_EPOCH,
+                false,
+            ),
+            (
+                "tv2, higher epoch, open",
+                2,
+                5,
+                true,
+                crate::codes::NONE,
+                true,
+            ),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (index, (label, transaction_version, marker_epoch, open, code, appended)) in
+            cases.into_iter().enumerate()
+        {
+            let topic = format!("tv-marker-{index}");
+            let part = open_partition(&broker, dir.path(), &topic, 0);
+            part.produce_batch(RecordBatch {
+                producer_id: producer_id.get(),
+                producer_epoch: 4,
+                base_sequence: 0,
+                attributes: Attributes::default().with_transactional(true),
+                records: vec![Record {
+                    value: Some(Bytes::from_static(b"event")),
+                    ..Record::default()
+                }],
+                ..RecordBatch::default()
+            })
+            .await
+            .expect("append transactional data");
+            let marker = MarkerAppend {
+                producer_id,
+                producer_epoch: 4,
+                marker_type: MarkerType::Commit,
+                coordinator_epoch: 0,
+                commit_stamp: None,
+                transaction_version: 0,
+            };
+            if !open {
+                append_marker_and_materialize(&part, None, &topic, marker)
+                    .await
+                    .expect("close the transaction");
+            }
+            let before = part.log_end_offset();
+            let result = append_marker_and_materialize(
+                &part,
+                None,
+                &topic,
+                MarkerAppend {
+                    producer_epoch: marker_epoch,
+                    transaction_version,
+                    ..marker
+                },
+            )
+            .await;
+            let answered = result.map_or_else(
+                |error| crate::codes::from_broker_error(&error),
+                |()| crate::codes::NONE,
+            );
+            actual.push((label, answered, part.log_end_offset() != before));
+            expected.push((label, code, appended));
+        }
+        assert!(actual == expected);
         broker_handle.shutdown().await;
     }
 
@@ -351,6 +502,7 @@ mod tests {
                 marker_type: MarkerType::Commit,
                 coordinator_epoch: 0,
                 commit_stamp: None,
+                transaction_version: 0,
             },
         )
         .await;
@@ -366,6 +518,7 @@ mod tests {
                 marker_type: MarkerType::Commit,
                 coordinator_epoch: 10,
                 commit_stamp: None,
+                transaction_version: 0,
             },
         )
         .await;
@@ -381,6 +534,7 @@ mod tests {
             marker_type: MarkerType::Commit,
             coordinator_epoch: 10,
             commit_stamp: None,
+            transaction_version: 0,
         };
         let conflicting_marker = MarkerAppend {
             marker_type: MarkerType::Abort,
@@ -414,6 +568,7 @@ mod tests {
                 marker_type: MarkerType::Abort,
                 coordinator_epoch: 9,
                 commit_stamp: None,
+                transaction_version: 0,
             },
         )
         .await;
@@ -486,6 +641,7 @@ mod tests {
                 marker_type: MarkerType::Commit,
                 coordinator_epoch: 0,
                 commit_stamp: None,
+                transaction_version: 0,
             },
         )
         .await;
@@ -517,6 +673,7 @@ mod tests {
             marker_type: MarkerType::Commit,
             coordinator_epoch: 4,
             commit_stamp: None,
+            transaction_version: 0,
         };
         append_marker_and_materialize(
             &part,

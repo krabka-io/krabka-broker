@@ -20,8 +20,15 @@ use crate::{
     codes::{CLUSTER_AUTHORIZATION_FAILED, DUPLICATE_RESOURCE, RESOURCE_NOT_FOUND},
 };
 
+/// Kafka's `ScramImage.DESCRIBE_DUPLICATE_USER`; the row message appends the
+/// user name after `": "`.
 const DESCRIBE_DUPLICATE_USER: &str =
     "Cannot describe SCRAM credentials for the same user twice in a single request";
+
+/// Kafka's `ScramImage.DESCRIBE_USER_THAT_DOES_NOT_EXIST`; the row message
+/// appends the user name after `": "`.
+const DESCRIBE_USER_THAT_DOES_NOT_EXIST: &str =
+    "Attempt to describe a user credential that does not exist";
 
 #[tracing::instrument(
     name = "handle_describe_user_scram_credentials",
@@ -49,14 +56,7 @@ pub(crate) fn handle(
         },
     );
     if matches!(allow, AuthorizationResult::Deny) {
-        let resp = DescribeUserScramCredentialsResponse {
-            throttle_time_ms: 0,
-            error_code: CLUSTER_AUTHORIZATION_FAILED,
-            error_message: Some("describe-user-scram-credentials denied".into()),
-            results: vec![],
-            ..Default::default()
-        };
-        return encode_response(&resp, api_version);
+        return encode_response(&denied_response(&req), api_version);
     }
 
     let known_users: std::collections::HashSet<String> =
@@ -73,6 +73,35 @@ pub(crate) fn handle(
         ..Default::default()
     };
     encode_response(&resp, api_version)
+}
+
+/// The refusal Kafka's `DescribeUserScramCredentialsRequest.getErrorResponse`
+/// builds for a `CLUSTER_AUTHORIZATION_FAILED` exception.
+///
+/// `ApiError.fromThrowable` drops a message equal to the error's default text,
+/// so the top level carries no message. Each requested user gets one row with
+/// the same code and an empty user name, because Kafka never sets `user` on
+/// those rows. A null user list gives no rows.
+fn denied_response(
+    req: &DescribeUserScramCredentialsRequest,
+) -> DescribeUserScramCredentialsResponse {
+    let results = req
+        .users
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(|_| DescribeUserScramCredentialsResult {
+            error_code: CLUSTER_AUTHORIZATION_FAILED,
+            ..Default::default()
+        })
+        .collect();
+    DescribeUserScramCredentialsResponse {
+        throttle_time_ms: 0,
+        error_code: CLUSTER_AUTHORIZATION_FAILED,
+        error_message: None,
+        results,
+        ..Default::default()
+    }
 }
 
 fn build_results(
@@ -97,9 +126,9 @@ fn build_results(
             let mut pairs = image.scram_credentials_for_user(&user);
             if pairs.is_empty() && !known_users.contains(&user) {
                 DescribeUserScramCredentialsResult {
-                    user,
                     error_code: RESOURCE_NOT_FOUND,
-                    error_message: Some("no such SCRAM user".into()),
+                    error_message: Some(format!("{DESCRIBE_USER_THAT_DOES_NOT_EXIST}: {user}")),
+                    user,
                     credential_infos: vec![],
                     ..Default::default()
                 }
@@ -330,7 +359,9 @@ mod tests {
         let expected = vec![DescribeUserScramCredentialsResult {
             user: "ghost".to_string(),
             error_code: 91,
-            error_message: Some("no such SCRAM user".to_string()),
+            error_message: Some(
+                "Attempt to describe a user credential that does not exist: ghost".to_string(),
+            ),
             credential_infos: Vec::new(),
             unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
         }];
@@ -458,8 +489,54 @@ mod tests {
         let resp: DescribeUserScramCredentialsResponse =
             crate::test_support::decode_response(&bytes, 0);
 
-        assert!(resp.error_code == CLUSTER_AUTHORIZATION_FAILED);
-        assert!(resp.results.is_empty());
+        assert!(
+            resp == DescribeUserScramCredentialsResponse {
+                error_code: CLUSTER_AUTHORIZATION_FAILED,
+                ..Default::default()
+            }
+        );
         broker_handle.shutdown().await;
+    }
+
+    #[test]
+    fn denied_response_matches_kafka_get_error_response() {
+        use krabka_protocol::owned::describe_user_scram_credentials_request::UserName;
+
+        let denied_row = DescribeUserScramCredentialsResult {
+            user: String::new(),
+            error_code: CLUSTER_AUTHORIZATION_FAILED,
+            error_message: None,
+            credential_infos: Vec::new(),
+            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+        };
+        for (users, want_rows) in [
+            (None, Vec::new()),
+            (Some(Vec::new()), Vec::new()),
+            (
+                Some(vec!["alice", "bob", "alice"]),
+                vec![denied_row.clone(), denied_row.clone(), denied_row.clone()],
+            ),
+        ] {
+            let req = DescribeUserScramCredentialsRequest {
+                users: users.clone().map(|names| {
+                    names
+                        .into_iter()
+                        .map(|name| UserName {
+                            name: name.to_string(),
+                            ..Default::default()
+                        })
+                        .collect()
+                }),
+                ..Default::default()
+            };
+            let want = DescribeUserScramCredentialsResponse {
+                throttle_time_ms: 0,
+                error_code: CLUSTER_AUTHORIZATION_FAILED,
+                error_message: None,
+                results: want_rows,
+                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+            };
+            assert!(denied_response(&req) == want, "users = {users:?}");
+        }
     }
 }

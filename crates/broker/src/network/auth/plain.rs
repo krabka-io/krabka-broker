@@ -13,7 +13,7 @@ use krabka_security::SaslMechanism;
 use krabka_units::Time;
 
 use super::{
-    response::fail_authenticate,
+    response::fail_authenticate_with,
     state::{ConnectionAuth, SaslExchange, begin_reauth, finish_reauth, session_expiry},
 };
 use crate::codes::ILLEGAL_SASL_STATE;
@@ -73,32 +73,52 @@ fn authenticate_plain<S: BuildHasher>(
 ) -> SaslAuthenticateResponse {
     let parts: Vec<&[u8]> = req.auth_bytes.split(|&b| b == 0).collect();
     if parts.len() != 3 {
-        return fail_authenticate("malformed PLAIN payload");
+        // `PlainSaslServer.extractTokens` stops splitting at four tokens.
+        return fail_authenticate_with(format!(
+            "Invalid SASL/PLAIN response: expected 3 tokens, got {}",
+            parts.len().min(4)
+        ));
     }
-    let Ok(user) = std::str::from_utf8(parts[1]) else {
-        return fail_authenticate("non-utf8 username");
+    let (authzid, username, password) = (parts[0], parts[1], parts[2]);
+    if username.is_empty() {
+        return fail_authenticate_with("Authentication failed: username not specified".to_owned());
+    }
+    if password.is_empty() {
+        return fail_authenticate_with("Authentication failed: password not specified".to_owned());
+    }
+    // A username that is not UTF-8 names no configured user.
+    let verified = std::str::from_utf8(username)
+        .ok()
+        .and_then(|user| krabka_security::verify_plain(plain_credentials, user, password).ok());
+    let Some(p) = verified else {
+        return fail_authenticate_with(
+            "Authentication failed: Invalid username or password".to_owned(),
+        );
     };
-    let password = parts[2];
-    match krabka_security::verify_plain(plain_credentials, user, password) {
-        Ok(p) => {
-            let (expires_at_ms, session_lifetime_ms) =
-                session_expiry(crate::time_util::now_ms(), None, max_reauth);
-            *auth = ConnectionAuth::Authenticated {
-                principal: p,
-                mechanism: SaslMechanism::Plain,
-                expires_at_ms,
-                // PLAIN never auths via a delegation token.
-                authenticated_via_token: false,
-            };
-            SaslAuthenticateResponse {
-                error_code: 0,
-                error_message: None,
-                auth_bytes: bytes::Bytes::new(),
-                session_lifetime_ms,
-                ..Default::default()
-            }
-        }
-        Err(_) => fail_authenticate("authentication failed"),
+    // RFC 4616 lets the client ask to act as another identity; Kafka refuses
+    // any authorization id that is not the authenticated username.
+    if !authzid.is_empty() && authzid != username {
+        return fail_authenticate_with(
+            "Authentication failed: Client requested an authorization id that is different \
+             from username"
+                .to_owned(),
+        );
+    }
+    let (expires_at_ms, session_lifetime_ms) =
+        session_expiry(crate::time_util::now_ms(), None, max_reauth);
+    *auth = ConnectionAuth::Authenticated {
+        principal: p,
+        mechanism: SaslMechanism::Plain,
+        expires_at_ms,
+        // PLAIN never auths via a delegation token.
+        authenticated_via_token: false,
+    };
+    SaslAuthenticateResponse {
+        error_code: 0,
+        error_message: None,
+        auth_bytes: bytes::Bytes::new(),
+        session_lifetime_ms,
+        ..Default::default()
     }
 }
 
@@ -217,30 +237,82 @@ mod tests {
         }
     }
 
-    /// Every way a PLAIN credential can be refused answers with the one opaque
-    /// failure envelope, so a peer cannot tell "no such user" from "bad
-    /// password" from "malformed payload", and none of them authenticates the
-    /// connection.
+    /// Every way a PLAIN credential can be refused answers with
+    /// `PlainSaslServer`'s message. An unknown user and a wrong password share
+    /// one message, so a peer cannot tell them apart, and none of the refusals
+    /// authenticates the connection -- including an authorization id that
+    /// asks to act as another user.
     #[test]
-    fn every_plain_refusal_is_the_same_opaque_failure() {
-        let cases: [(&str, Vec<u8>); 6] = [
-            ("empty payload", Vec::new()),
-            ("two fields", b"\0alice".to_vec()),
-            ("four fields", b"\0alice\0wonderland\0extra".to_vec()),
-            ("non-utf8 username", vec![0, 0xff, 0xfe, 0, b'w', b'o']),
-            ("unknown user", b"\0carol\0wonderland".to_vec()),
-            ("wrong password", b"\0alice\0hunter2".to_vec()),
+    fn every_plain_refusal_answers_kafkas_message() {
+        const INVALID: &str = "Authentication failed: Invalid username or password";
+        let cases: [(&str, Vec<u8>, &str); 10] = [
+            (
+                "empty payload",
+                Vec::new(),
+                "Invalid SASL/PLAIN response: expected 3 tokens, got 1",
+            ),
+            (
+                "two fields",
+                b"\0alice".to_vec(),
+                "Invalid SASL/PLAIN response: expected 3 tokens, got 2",
+            ),
+            (
+                "four fields",
+                b"\0alice\0wonderland\0extra".to_vec(),
+                "Invalid SASL/PLAIN response: expected 3 tokens, got 4",
+            ),
+            (
+                "five fields report four",
+                b"\0alice\0wonderland\0a\0b".to_vec(),
+                "Invalid SASL/PLAIN response: expected 3 tokens, got 4",
+            ),
+            (
+                "empty username",
+                b"\0\0wonderland".to_vec(),
+                "Authentication failed: username not specified",
+            ),
+            (
+                "empty password",
+                b"\0alice\0".to_vec(),
+                "Authentication failed: password not specified",
+            ),
+            (
+                "non-utf8 username",
+                vec![0, 0xff, 0xfe, 0, b'w', b'o'],
+                INVALID,
+            ),
+            ("unknown user", b"\0carol\0wonderland".to_vec(), INVALID),
+            ("wrong password", b"\0alice\0hunter2".to_vec(), INVALID),
+            (
+                "authzid names another user",
+                b"bob\0alice\0wonderland".to_vec(),
+                "Authentication failed: Client requested an authorization id that is different \
+                 from username",
+            ),
         ];
-        for (case, bytes) in cases {
+        for (case, bytes, message) in cases {
             let req = SaslAuthenticateRequest {
                 auth_bytes: bytes::Bytes::from(bytes),
                 ..Default::default()
             };
             let mut auth = negotiating();
             let resp = handle_authenticate_plain(&req, &mut auth, &credentials(), None);
-            assert_failed_authenticate_response(&resp);
+            assert_failed_authenticate_response(&resp, Some(message));
             check!(!auth.is_authenticated(), "{case}");
         }
+    }
+
+    /// An authorization id equal to the username is accepted.
+    #[test]
+    fn an_authzid_equal_to_the_username_authenticates() {
+        let req = SaslAuthenticateRequest {
+            auth_bytes: bytes::Bytes::from_static(b"alice\0alice\0wonderland"),
+            ..Default::default()
+        };
+        let mut auth = negotiating();
+        let resp = handle_authenticate_plain(&req, &mut auth, &credentials(), None);
+        assert_success_authenticate_response(&resp, b"", 0);
+        check!(auth.principal().map(|p| p.name.as_str()) == Some("alice"));
     }
 
     /// KIP-368: PLAIN carries no lifetime of its own, so the listener's
@@ -337,7 +409,10 @@ mod tests {
         assert!(
             resp == SaslAuthenticateResponse {
                 error_code: crate::codes::SASL_AUTHENTICATION_FAILED,
-                error_message: Some("re-authentication may not change the principal".to_string()),
+                error_message: Some(
+                    "Cannot change principals during re-authentication from User.alice: User.bob"
+                        .to_string()
+                ),
                 auth_bytes: bytes::Bytes::new(),
                 session_lifetime_ms: 0,
                 unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
@@ -373,7 +448,10 @@ mod tests {
             &credentials(),
             None,
         );
-        assert_failed_authenticate_response(&resp);
+        assert_failed_authenticate_response(
+            &resp,
+            Some("Authentication failed: Invalid username or password"),
+        );
         match auth {
             ConnectionAuth::Authenticated {
                 principal,

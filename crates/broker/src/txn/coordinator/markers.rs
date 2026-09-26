@@ -12,24 +12,40 @@ use crate::{
     txn::{
         bootstrap,
         handlers::{
-            end_txn::{MarkerDispatchContext, dispatch_markers},
+            end_txn::{MarkerDispatchContext, MarkerFanOut, dispatch_markers},
             write_txn_markers::{MarkerAppend, append_marker_and_materialize},
         },
         marker::MarkerType,
-        state::TxnEntry,
+        state::{TopicPartition, TxnEntry, TxnState},
     },
 };
 
 const UNKNOWN_COORDINATOR_EPOCH: i32 = -1;
 
 impl TxnCoordinator {
+    /// Writes the markers of the prepared transaction `entry`, and then drops
+    /// every partition whose marker is written from `entry` and from the live
+    /// entry it was taken from. Kafka's `TransactionMarkerRequestCompletionHandler`
+    /// calls `TransactionMetadata.removePartition` for each acknowledged
+    /// partition, so `DescribeTransactions` of a preparing transaction lists
+    /// only the partitions whose markers are outstanding, and a retry sends
+    /// only those.
     pub(crate) async fn dispatch_transaction_markers(
         &self,
-        entry: &TxnEntry,
+        entry: &mut TxnEntry,
         marker_type: MarkerType,
     ) -> Result<(), BrokerError> {
         #[cfg(any(test, feature = "test-helpers"))]
         self.marker_fanout_gate.pass().await?;
+        let outcome = self.fan_out_markers(entry, marker_type).await;
+        self.remove_marked_partitions(entry, &outcome.written).await;
+        match outcome.failure {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    async fn fan_out_markers(&self, entry: &TxnEntry, marker_type: MarkerType) -> MarkerFanOut {
         let Some(transport) = &self.marker_transport else {
             return self.dispatch_local_markers(entry, marker_type).await;
         };
@@ -37,16 +53,16 @@ impl TxnCoordinator {
         let coordinator_partition = self.partition_for(&entry.transactional_id);
         // Kafka sends the coordinator epoch that the partition was loaded at,
         // not the epoch of a later image.
-        let coordinator_epoch = self
-            .loaded_leader_epoch(coordinator_partition)
-            .await
-            .ok_or_else(|| {
-                BrokerError::Txn(format!(
+        let Some(coordinator_epoch) = self.loaded_leader_epoch(coordinator_partition).await else {
+            return MarkerFanOut {
+                written: Vec::new(),
+                failure: Some(BrokerError::Txn(format!(
                     "this broker does not coordinate {}-{}",
                     bootstrap::TOPIC,
                     coordinator_partition.get()
-                ))
-            })?;
+                ))),
+            };
+        };
         dispatch_markers(
             MarkerDispatchContext {
                 node_id: self.node_id,
@@ -65,23 +81,35 @@ impl TxnCoordinator {
         .await
     }
 
+    /// Drops `written` from the prepared snapshot and, while it still holds
+    /// the same prepared transaction, from the live entry.
+    async fn remove_marked_partitions(&self, snapshot: &mut TxnEntry, written: &[TopicPartition]) {
+        if written.is_empty() {
+            return;
+        }
+        if let Some(handle) = self.get(&snapshot.transactional_id) {
+            let mut live = handle.lock().await;
+            remove_marked_partitions(&mut live, snapshot, written);
+        }
+        remove_marked_partitions_from(snapshot, written);
+    }
+
     async fn dispatch_local_markers(
         &self,
         entry: &TxnEntry,
         marker_type: MarkerType,
-    ) -> Result<(), BrokerError> {
+    ) -> MarkerFanOut {
+        let mut outcome = MarkerFanOut::default();
         for tp in &entry.partitions {
-            let part = self
-                .partitions
-                .get(&tp.topic, tp.partition)
-                .ok_or_else(|| {
-                    BrokerError::Txn(format!(
-                        "transaction marker transport is not configured for remote partition {}-{}",
-                        tp.topic,
-                        tp.partition.get()
-                    ))
-                })?;
-            append_marker_and_materialize(
+            let Some(part) = self.partitions.get(&tp.topic, tp.partition) else {
+                outcome.fail(BrokerError::Txn(format!(
+                    "transaction marker transport is not configured for remote partition {}-{}",
+                    tp.topic,
+                    tp.partition.get()
+                )));
+                continue;
+            };
+            match append_marker_and_materialize(
                 &part,
                 self.group_coordinator.as_ref(),
                 &tp.topic,
@@ -91,22 +119,150 @@ impl TxnCoordinator {
                     marker_type,
                     coordinator_epoch: UNKNOWN_COORDINATOR_EPOCH,
                     commit_stamp: None,
+                    transaction_version: entry.client_transaction_version,
                 },
             )
-            .await?;
+            .await
+            {
+                Ok(()) => outcome.written.push(tp.clone()),
+                Err(error) => outcome.fail(error),
+            }
         }
-        Ok(())
+        outcome
+    }
+}
+
+/// Kafka's `TransactionMetadata.removePartition`: only a transaction that is
+/// preparing to commit or abort loses a partition to its marker. `live` loses
+/// `written` only while it is the same prepared transaction as `prepared`.
+fn remove_marked_partitions(live: &mut TxnEntry, prepared: &TxnEntry, written: &[TopicPartition]) {
+    let same_prepared = matches!(live.state, TxnState::PrepareCommit | TxnState::PrepareAbort)
+        && live.state == prepared.state
+        && live.producer_id == prepared.producer_id
+        && live.producer_epoch == prepared.producer_epoch;
+    if same_prepared {
+        remove_marked_partitions_from(live, written);
+    }
+}
+
+fn remove_marked_partitions_from(entry: &mut TxnEntry, written: &[TopicPartition]) {
+    if matches!(
+        entry.state,
+        TxnState::PrepareCommit | TxnState::PrepareAbort
+    ) {
+        for tp in written {
+            entry.partitions.remove(tp);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use assert2::check;
+    use std::{collections::HashSet, sync::Arc};
+
+    use assert2::{assert, check};
+    use krabka_ids::PartitionIndex;
+    use krabka_log::{Log, LogConfig, ProducerId};
 
     use super::*;
+    use crate::txn::coordinator::test_support::test_coordinator;
 
     #[test]
     fn local_marker_uses_the_unknown_coordinator_epoch_sentinel() {
         check!(UNKNOWN_COORDINATOR_EPOCH == -1);
+    }
+
+    fn tp(topic: &str) -> TopicPartition {
+        TopicPartition {
+            topic: topic.to_string(),
+            partition: PartitionIndex(0),
+        }
+    }
+
+    fn prepared(state: TxnState, epoch: i16) -> TxnEntry {
+        let mut entry = TxnEntry::new_empty("tid-m".into(), ProducerId(9), epoch, 60_000, 0);
+        entry.state = state;
+        entry.partitions = [tp("a"), tp("b")].into_iter().collect();
+        entry
+    }
+
+    /// Kafka's `TransactionMetadata.removePartition` runs only while the
+    /// transaction prepares, and only for the transaction whose markers were
+    /// written.
+    #[test]
+    fn only_the_same_prepared_transaction_loses_its_marked_partitions() {
+        let snapshot = prepared(TxnState::PrepareCommit, 3);
+        // (label, live entry, partitions it keeps)
+        let cases = [
+            (
+                "the same prepared transaction",
+                prepared(TxnState::PrepareCommit, 3),
+                vec![tp("b")],
+            ),
+            (
+                "a completed transaction",
+                prepared(TxnState::CompleteCommit, 3),
+                vec![tp("a"), tp("b")],
+            ),
+            (
+                "a newer producer epoch",
+                prepared(TxnState::PrepareCommit, 4),
+                vec![tp("a"), tp("b")],
+            ),
+            (
+                "the other prepared outcome",
+                prepared(TxnState::PrepareAbort, 3),
+                vec![tp("a"), tp("b")],
+            ),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (label, mut live, kept) in cases {
+            remove_marked_partitions(&mut live, &snapshot, &[tp("a")]);
+            actual.push((label, live.partitions));
+            expected.push((label, kept.into_iter().collect::<HashSet<_>>()));
+        }
+        assert!(actual == expected);
+    }
+
+    /// #852: after a fan-out in which one partition takes its marker and the
+    /// other does not, the live transaction and the caller's snapshot both
+    /// hold only the partition whose marker is outstanding, which is what
+    /// `DescribeTransactions` reports.
+    #[tokio::test]
+    async fn a_written_marker_removes_its_partition_from_the_prepared_transaction() {
+        let coordinator = test_coordinator();
+        let dir = tempfile::tempdir().expect("temp dir");
+        let part_dir = crate::log_dir::partition_dir(dir.path(), "a", 0);
+        std::fs::create_dir_all(&part_dir).expect("partition dir");
+        let local = crate::broker::spawn_partition(
+            "a".to_string(),
+            PartitionIndex(0),
+            dir.path().to_path_buf(),
+            Log::open(&part_dir, LogConfig::default()).expect("open log"),
+            crate::log_dir_status::LogDirRegistry::default(),
+            Arc::new(crate::producer_state::ProducerState::new()),
+            false,
+        );
+        coordinator
+            .partitions
+            .insert("a".into(), PartitionIndex(0), local);
+        let mut snapshot = prepared(TxnState::PrepareCommit, 3);
+        let live = Arc::new(tokio::sync::Mutex::new(snapshot.clone()));
+        coordinator
+            .state
+            .insert(snapshot.transactional_id.clone(), live.clone());
+
+        // `b-0` is neither local nor reachable, so its marker fails.
+        let result = coordinator
+            .dispatch_transaction_markers(&mut snapshot, MarkerType::Commit)
+            .await;
+
+        let outstanding: HashSet<TopicPartition> = [tp("b")].into_iter().collect();
+        assert!(result.is_err());
+        assert!(
+            (live.lock().await.partitions.clone(), snapshot.partitions)
+                == (outstanding.clone(), outstanding)
+        );
     }
 }

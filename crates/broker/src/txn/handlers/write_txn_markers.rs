@@ -144,6 +144,7 @@ fn serve(
                 marker_type,
                 coordinator_epoch: marker_entry.coordinator_epoch,
                 commit_stamp: None,
+                transaction_version: i16::from(marker_entry.transaction_version),
             };
 
             for topic in &marker_entry.topics {

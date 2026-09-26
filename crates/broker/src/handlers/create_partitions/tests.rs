@@ -95,15 +95,13 @@ async fn handle_reports_unknown_topic_and_rejects_same_partition_count() {
             CreatePartitionsTopicResult {
                 name: "missing".into(),
                 error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                error_message: Some("unknown topic `missing`".into()),
+                error_message: None,
                 unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
             },
             CreatePartitionsTopicResult {
                 name: "stable".into(),
                 error_code: codes::INVALID_PARTITIONS,
-                error_message: Some(
-                    "topic `stable` already has 2 partitions; cannot decrease to 2".into(),
-                ),
+                error_message: Some("Topic already has 2 partition(s).".into()),
                 unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
             },
         ],
@@ -263,6 +261,7 @@ async fn strict_create_partitions_rejects_after_quota_exhaustion() {
         results: vec![CreatePartitionsTopicResult {
             name: "metered".into(),
             error_code: codes::THROTTLING_QUOTA_EXCEEDED,
+            error_message: Some("The throttling quota has been exceeded.".into()),
             ..Default::default()
         }],
         ..Default::default()
@@ -459,4 +458,106 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
         );
         broker_handle.shutdown().await;
     }
+}
+
+/// #744: Kafka's `ControllerApis.createPartitions` answers a duplicated name
+/// once with `INVALID_REQUEST` and grows none of its rows, and the
+/// controller's count checks answer with Kafka's messages. Topic `t` has 2
+/// partitions of replication factor 1.
+#[tokio::test]
+async fn rows_follow_kafkas_duplicate_and_count_checks() {
+    fn row(name: &str, error_code: i16, message: Option<&str>) -> CreatePartitionsTopicResult {
+        CreatePartitionsTopicResult {
+            name: name.into(),
+            error_code,
+            error_message: message.map(str::to_owned),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+        }
+    }
+    let duplicate = || row("t", codes::INVALID_REQUEST, Some("Duplicate topic name."));
+    let cases = [
+        (
+            "the same growth twice",
+            vec![topic_req("t", 4, None), topic_req("t", 4, None)],
+            false,
+            vec![duplicate()],
+        ),
+        (
+            "two different growths",
+            vec![topic_req("t", 4, None), topic_req("t", 6, None)],
+            false,
+            vec![duplicate()],
+        ),
+        (
+            "the same growth twice, validate only",
+            vec![topic_req("t", 4, None), topic_req("t", 4, None)],
+            true,
+            vec![duplicate()],
+        ),
+        (
+            "a duplicate answers ahead of the other rows",
+            vec![
+                topic_req("u", 3, None),
+                topic_req("t", 4, None),
+                topic_req("t", 4, None),
+            ],
+            false,
+            vec![
+                duplicate(),
+                row("u", codes::UNKNOWN_TOPIC_OR_PARTITION, None),
+            ],
+        ),
+        (
+            "a count below the current one",
+            vec![topic_req("t", 1, None)],
+            false,
+            vec![row(
+                "t",
+                codes::INVALID_PARTITIONS,
+                Some("The topic t currently has 2 partition(s); 1 would not be an increase."),
+            )],
+        ),
+        (
+            "fewer assignments than new partitions",
+            vec![topic_req("t", 4, Some(vec![assn(&[1])]))],
+            false,
+            vec![row(
+                "t",
+                codes::INVALID_REPLICA_ASSIGNMENT,
+                Some(
+                    "Attempted to add 2 additional partition(s), but only 1 assignment(s) were \
+                     specified.",
+                ),
+            )],
+        ),
+    ];
+
+    let mut actual = Vec::with_capacity(cases.len());
+    let mut expected = Vec::with_capacity(cases.len());
+    for (label, topics, validate_only, results) in cases {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        seed_topic(&broker_handle, "t", 2, 1).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let p = principal("admin");
+        let peer = peer();
+
+        let resp = drive(&broker, &request(topics, validate_only), &p, &peer).await;
+        let partitions = broker_handle
+            .controller_image_for_test()
+            .partitions_of("t")
+            .count();
+        actual.push((label, resp, partitions));
+        expected.push((
+            label,
+            CreatePartitionsResponse {
+                throttle_time_ms: 0,
+                results,
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+            },
+            2,
+        ));
+        broker_handle.shutdown().await;
+    }
+    assert!(actual == expected);
 }

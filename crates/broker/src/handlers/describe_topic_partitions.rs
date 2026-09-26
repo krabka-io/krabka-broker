@@ -8,7 +8,8 @@
 //! ## Request shape
 //!
 //! - `topics`: if empty, the broker returns all topics in alphabetical order.
-//!   If not empty, the broker returns exactly those topics, in request order.
+//!   If not empty, the broker returns exactly those topics, deduplicated and
+//!   sorted by name.
 //! - `response_partition_limit`: the maximum number of partition rows in the
 //!   response. Default 2000.
 //! - `cursor`: an optional resume point `(topic_name, partition_index)`. If
@@ -60,6 +61,7 @@
 //! schema has no field for it in any version. See [`crate::elr`].
 
 use bytes::Bytes;
+use krabka_log::topic_name::validate_topic_name;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
     Decode,
@@ -128,7 +130,8 @@ pub(crate) async fn handle(
 
     // ── 1. Resolve the topic-name iteration order ──────────────────────
     // Named request: every requested name, deduplicated and sorted, even
-    // if some don't exist (those rows carry UNKNOWN_TOPIC_OR_PARTITION).
+    // if some don't exist (those rows carry UNKNOWN_TOPIC_OR_PARTITION, or
+    // INVALID_TOPIC_EXCEPTION for a name `Topic.validate` refuses).
     // Fetch-all (empty `topics`): walk every topic from the image,
     // alphabetical for deterministic pagination.
     let (named, ordered_names, cursor_partition) = resolve_names(&image, &req);
@@ -328,12 +331,13 @@ fn error_topic(name: &str, error_code: i16) -> DescribeTopicPartitionsResponseTo
     }
 }
 
-/// The `UNKNOWN_TOPIC_OR_PARTITION` row for a named topic the image doesn't
-/// hold.
+/// The error row for a named topic the image doesn't hold.
 ///
-/// Kafka's `describeTopicResponse` still answers `Topic.isInternal(name)` and
-/// `topic_authorized_operations` on this row, computed from the name alone --
-/// so a request for a missing `__consumer_offsets` still reports
+/// Kafka's `describeTopicResponse` runs `Topic.validate(name)` here: a name it
+/// refuses answers `INVALID_TOPIC_EXCEPTION` (17), any other name answers
+/// `UNKNOWN_TOPIC_OR_PARTITION` (3). It still answers `Topic.isInternal(name)`
+/// and `topic_authorized_operations` on this row, computed from the name
+/// alone -- so a request for a missing `__consumer_offsets` still reports
 /// `is_internal: true`, and the KIP-430 bitfield is never left unset.
 fn unknown_topic_row(
     broker: &Broker,
@@ -341,8 +345,13 @@ fn unknown_topic_row(
     ctx: &crate::handlers::RequestContext<'_>,
     name: &str,
 ) -> DescribeTopicPartitionsResponseTopic {
+    let error_code = if validate_topic_name(name).is_ok() {
+        codes::UNKNOWN_TOPIC_OR_PARTITION
+    } else {
+        codes::INVALID_TOPIC_EXCEPTION
+    };
     DescribeTopicPartitionsResponseTopic {
-        error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+        error_code,
         name: Some(name.to_string()),
         topic_id: WireUuid::ZERO,
         is_internal: is_internal_topic(&broker.config, name),
@@ -828,10 +837,11 @@ mod tests {
         }
     }
 
-    /// An `UNKNOWN_TOPIC_OR_PARTITION` row still answers `is_internal` (by
-    /// name, since the image has no record of the topic to look it up on)
-    /// and `topic_authorized_operations` -- neither field is left at its
-    /// unset default the way a Deny row's is.
+    /// A missing named topic's row answers `is_internal` (by name, since the
+    /// image has no record of the topic to look it up on) and
+    /// `topic_authorized_operations` -- neither field is left at its unset
+    /// default the way a Deny row's is -- and its error code follows
+    /// `Topic.validate`: 17 for a name it refuses, 3 otherwise.
     ///
     /// Uses `__transaction_state` rather than `__consumer_offsets`: the
     /// broker's coordinator bootstrap creates `__consumer_offsets` eagerly on
@@ -840,45 +850,60 @@ mod tests {
     /// `__transaction_state` is internal (`INTERNAL_TOPICS`) but has no such
     /// eager bootstrap.
     #[tokio::test]
-    async fn unknown_topic_row_computes_is_internal_and_authorized_operations() {
+    async fn missing_topic_row_follows_topic_validate() {
+        let too_long = "a".repeat(250);
+        let cases: [(&str, i16, bool); 5] = [
+            (
+                "__transaction_state",
+                codes::UNKNOWN_TOPIC_OR_PARTITION,
+                true,
+            ),
+            ("no-such-topic", codes::UNKNOWN_TOPIC_OR_PARTITION, false),
+            ("bad/name", codes::INVALID_TOPIC_EXCEPTION, false),
+            ("..", codes::INVALID_TOPIC_EXCEPTION, false),
+            (&too_long, codes::INVALID_TOPIC_EXCEPTION, false),
+        ];
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
         let p = principal("admin");
         let peer = peer();
         let ctx = test_context(&p, &peer);
-        let req = encode_request(&request(vec!["__transaction_state"], 2000, None));
 
-        let bytes = handle(&broker, VERSION, 123, &req, &ctx)
-            .await
-            .expect("handle");
-        let resp = decode_response(&bytes);
+        for (name, error_code, is_internal) in cases {
+            let req = encode_request(&request(vec![name], 2000, None));
+            let bytes = handle(&broker, VERSION, 123, &req, &ctx)
+                .await
+                .expect("handle");
+            let resp = decode_response(&bytes);
 
-        let expected_ops = authorized_operations_bits(
-            broker.config.authorizer.as_ref(),
-            &broker.controller.current_image(),
-            &p,
-            &peer,
-            ResourceType::Topic,
-            "__transaction_state",
-        );
-        assert!(expected_ops != i32::MIN);
-        assert!(
-            resp == DescribeTopicPartitionsResponse {
-                throttle_time_ms: 0,
-                topics: vec![DescribeTopicPartitionsResponseTopic {
-                    error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                    name: Some("__transaction_state".into()),
-                    topic_id: WireUuid::ZERO,
-                    is_internal: true,
-                    partitions: Vec::new(),
-                    topic_authorized_operations: expected_ops,
+            let expected_ops = authorized_operations_bits(
+                broker.config.authorizer.as_ref(),
+                &broker.controller.current_image(),
+                &p,
+                &peer,
+                ResourceType::Topic,
+                name,
+            );
+            assert!(expected_ops != i32::MIN);
+            assert!(
+                resp == DescribeTopicPartitionsResponse {
+                    throttle_time_ms: 0,
+                    topics: vec![DescribeTopicPartitionsResponseTopic {
+                        error_code,
+                        name: Some(name.into()),
+                        topic_id: WireUuid::ZERO,
+                        is_internal,
+                        partitions: Vec::new(),
+                        topic_authorized_operations: expected_ops,
+                        ..Default::default()
+                    }],
+                    next_cursor: None,
                     ..Default::default()
-                }],
-                next_cursor: None,
-                ..Default::default()
-            }
-        );
+                },
+                "case {name}"
+            );
+        }
 
         broker_handle.shutdown().await;
     }

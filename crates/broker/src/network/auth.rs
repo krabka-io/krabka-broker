@@ -19,6 +19,7 @@ mod response;
 mod scram;
 mod ssl_principal_mapper;
 mod state;
+mod subject_dn;
 #[cfg(test)]
 mod test_support;
 
@@ -29,12 +30,14 @@ mod test_support;
 pub use self::state::AuthenticatedSnapshot;
 pub use self::{
     gssapi::handle_authenticate_gssapi,
-    handshake::handle_handshake,
+    handshake::{ReauthClock, handle_handshake},
     oauthbearer::{
         handle_authenticate_oauthbearer, handle_authenticate_oauthbearer_with_jwks_cache,
     },
     plain::handle_authenticate_plain,
+    response::generic_failure_message,
     scram::handle_authenticate_scram,
     ssl_principal_mapper::{SslPrincipalMapper, SslPrincipalRuleError},
-    state::{ConnectionAuth, SaslExchange, is_pre_auth_allowed},
+    state::{ConnectionAuth, SaslExchange},
+    subject_dn::subject_dn_rfc2253,
 };

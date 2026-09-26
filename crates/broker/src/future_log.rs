@@ -70,11 +70,16 @@ pub struct FutureLogState {
 
 /// Why a [`start_move`] or [`resume_move`] call could not be honoured.
 /// The handler translates these to the wire error codes
+/// [`crate::codes::INVALID_TOPIC_EXCEPTION`],
 /// [`crate::codes::LOG_DIR_NOT_FOUND`],
 /// [`crate::codes::REPLICA_NOT_AVAILABLE`], and
 /// [`crate::codes::KAFKA_STORAGE_ERROR`].
 #[derive(Debug)]
 pub enum MoveError {
+    /// Kafka's future directory name for the partition,
+    /// `<topic>-<partition>.<uniqueId>-future`, would be longer than 255
+    /// characters (`ReplicaManager.alterReplicaLogDirs`, KAFKA-4893).
+    TopicNameTooLong,
     /// Target path is not one of this broker's configured `log.dirs`.
     LogDirNotFound,
     /// The named partition is not hosted on this broker.
@@ -108,6 +113,54 @@ pub(crate) struct MovePolicy {
     pub retry_backoff: Time,
     pub read_chunk: ByteSize,
     pub throttle: Arc<crate::throttle::TokenBucket>,
+}
+
+/// The longest directory name Kafka lets a future log take.
+const MAX_FUTURE_DIR_NAME_LEN: usize = 255;
+
+/// The length of the unique id in Kafka's future directory name: a random
+/// UUID in hex with its dashes removed.
+const FUTURE_DIR_UNIQUE_ID_LEN: usize = 32;
+
+/// Whether Kafka's future directory name for `(topic, partition)` is longer
+/// than 255 characters.
+///
+/// Kafka names a future log `<topic>-<partition>.<uniqueId>-future`
+/// (`LocalLog.logFutureDirName`), and `AlterReplicaLogDirs` refuses a move
+/// whose name would be longer with "The topic name is too long." The length
+/// is a Java `String.length`, so it counts UTF-16 code units.
+fn future_dir_name_too_long(topic: &str, partition: i32) -> bool {
+    let len = topic.encode_utf16().count()
+        + "-".len()
+        + partition.to_string().len()
+        + ".".len()
+        + FUTURE_DIR_UNIQUE_ID_LEN
+        + crate::log_dir::FUTURE_SUFFIX.len();
+    len > MAX_FUTURE_DIR_NAME_LEN
+}
+
+/// The configured log directory that an `AlterReplicaLogDirs` destination
+/// names, or `None` when it names none.
+///
+/// Kafka compares the request string with the absolute path of each
+/// configured directory by string equality (`LogManager.isLogDirOnline`).
+/// A relative path, a trailing slash, or a symbolic link to a configured
+/// directory names nothing. The destination may spell a directory as its
+/// absolute path or as the canonical path that `DescribeLogDirs` reports.
+/// The two are the same string unless the configured path runs through a
+/// link.
+fn configured_log_dir(all_log_dirs: &[PathBuf], requested: &Path) -> Option<PathBuf> {
+    let requested = requested.as_os_str();
+    all_log_dirs
+        .iter()
+        .find(|dir| {
+            let absolute: PathBuf = std::path::absolute(dir)
+                .unwrap_or_else(|_| (*dir).clone())
+                .components()
+                .collect();
+            absolute.as_os_str() == requested || canonicalize_or_self(dir).as_os_str() == requested
+        })
+        .cloned()
 }
 
 /// Canonicalize a path for equality comparisons. It falls back to the

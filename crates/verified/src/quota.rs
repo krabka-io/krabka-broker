@@ -7,17 +7,29 @@ use std::clone::Clone;
 use creusot_std::prelude::DeepModel;
 use creusot_std::prelude::ensures;
 
-/// Selected user/client quota candidate, ordered from most to least specific.
+/// Selected user/client quota candidate, in Kafka's precedence order.
+///
+/// The order is `DefaultQuotaCallback`'s in Kafka's `ClientQuotaManager`:
+/// every `user=U` level ranks above every `user=<default>` level, and both
+/// rank above the `client-id`-only levels.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
 pub enum UserClientQuotaPrecedence {
+    /// 1. `user=U, client-id=C`
     ExactPair,
-    ExactClientDefaultUser,
-    DefaultClientExactUser,
-    DefaultPair,
+    /// 2. `user=U, client-id=<default>`
+    ExactUserDefaultClient,
+    /// 3. `user=U`
     ExactUser,
-    ExactClient,
+    /// 4. `user=<default>, client-id=C`
+    DefaultUserExactClient,
+    /// 5. `user=<default>, client-id=<default>`
+    DefaultPair,
+    /// 6. `user=<default>`
     DefaultUser,
+    /// 7. `client-id=C`
+    ExactClient,
+    /// 8. `client-id=<default>`
     DefaultClient,
     None,
 }
@@ -30,96 +42,97 @@ pub enum QuotaCandidatePresence {
     Present,
 }
 
-/// Presence of each canonical user/client quota candidate.
+/// Presence of each canonical user/client quota candidate, in Kafka's
+/// precedence order.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
 pub struct UserClientQuotaFacts {
     pub exact_pair: QuotaCandidatePresence,
-    pub exact_client_default_user: QuotaCandidatePresence,
-    pub default_client_exact_user: QuotaCandidatePresence,
-    pub default_pair: QuotaCandidatePresence,
+    pub exact_user_default_client: QuotaCandidatePresence,
     pub exact_user: QuotaCandidatePresence,
-    pub exact_client: QuotaCandidatePresence,
+    pub default_user_exact_client: QuotaCandidatePresence,
+    pub default_pair: QuotaCandidatePresence,
     pub default_user: QuotaCandidatePresence,
+    pub exact_client: QuotaCandidatePresence,
     pub default_client: QuotaCandidatePresence,
 }
 
 /// Select Kafka's first present user/client quota candidate.
 #[ensures((result == UserClientQuotaPrecedence::ExactPair)
     == (facts.exact_pair == QuotaCandidatePresence::Present))]
-#[ensures((result == UserClientQuotaPrecedence::ExactClientDefaultUser)
+#[ensures((result == UserClientQuotaPrecedence::ExactUserDefaultClient)
     == (facts.exact_pair == QuotaCandidatePresence::Absent
-        && facts.exact_client_default_user == QuotaCandidatePresence::Present))]
-#[ensures((result == UserClientQuotaPrecedence::DefaultClientExactUser)
-    == (facts.exact_pair == QuotaCandidatePresence::Absent
-        && facts.exact_client_default_user == QuotaCandidatePresence::Absent
-        && facts.default_client_exact_user == QuotaCandidatePresence::Present))]
-#[ensures((result == UserClientQuotaPrecedence::DefaultPair)
-    == (facts.exact_pair == QuotaCandidatePresence::Absent
-        && facts.exact_client_default_user == QuotaCandidatePresence::Absent
-        && facts.default_client_exact_user == QuotaCandidatePresence::Absent
-        && facts.default_pair == QuotaCandidatePresence::Present))]
+        && facts.exact_user_default_client == QuotaCandidatePresence::Present))]
 #[ensures((result == UserClientQuotaPrecedence::ExactUser)
     == (facts.exact_pair == QuotaCandidatePresence::Absent
-        && facts.exact_client_default_user == QuotaCandidatePresence::Absent
-        && facts.default_client_exact_user == QuotaCandidatePresence::Absent
-        && facts.default_pair == QuotaCandidatePresence::Absent
+        && facts.exact_user_default_client == QuotaCandidatePresence::Absent
         && facts.exact_user == QuotaCandidatePresence::Present))]
-#[ensures((result == UserClientQuotaPrecedence::ExactClient)
+#[ensures((result == UserClientQuotaPrecedence::DefaultUserExactClient)
     == (facts.exact_pair == QuotaCandidatePresence::Absent
-        && facts.exact_client_default_user == QuotaCandidatePresence::Absent
-        && facts.default_client_exact_user == QuotaCandidatePresence::Absent
-        && facts.default_pair == QuotaCandidatePresence::Absent
+        && facts.exact_user_default_client == QuotaCandidatePresence::Absent
         && facts.exact_user == QuotaCandidatePresence::Absent
-        && facts.exact_client == QuotaCandidatePresence::Present))]
+        && facts.default_user_exact_client == QuotaCandidatePresence::Present))]
+#[ensures((result == UserClientQuotaPrecedence::DefaultPair)
+    == (facts.exact_pair == QuotaCandidatePresence::Absent
+        && facts.exact_user_default_client == QuotaCandidatePresence::Absent
+        && facts.exact_user == QuotaCandidatePresence::Absent
+        && facts.default_user_exact_client == QuotaCandidatePresence::Absent
+        && facts.default_pair == QuotaCandidatePresence::Present))]
 #[ensures((result == UserClientQuotaPrecedence::DefaultUser)
     == (facts.exact_pair == QuotaCandidatePresence::Absent
-        && facts.exact_client_default_user == QuotaCandidatePresence::Absent
-        && facts.default_client_exact_user == QuotaCandidatePresence::Absent
-        && facts.default_pair == QuotaCandidatePresence::Absent
+        && facts.exact_user_default_client == QuotaCandidatePresence::Absent
         && facts.exact_user == QuotaCandidatePresence::Absent
-        && facts.exact_client == QuotaCandidatePresence::Absent
+        && facts.default_user_exact_client == QuotaCandidatePresence::Absent
+        && facts.default_pair == QuotaCandidatePresence::Absent
         && facts.default_user == QuotaCandidatePresence::Present))]
+#[ensures((result == UserClientQuotaPrecedence::ExactClient)
+    == (facts.exact_pair == QuotaCandidatePresence::Absent
+        && facts.exact_user_default_client == QuotaCandidatePresence::Absent
+        && facts.exact_user == QuotaCandidatePresence::Absent
+        && facts.default_user_exact_client == QuotaCandidatePresence::Absent
+        && facts.default_pair == QuotaCandidatePresence::Absent
+        && facts.default_user == QuotaCandidatePresence::Absent
+        && facts.exact_client == QuotaCandidatePresence::Present))]
 #[ensures((result == UserClientQuotaPrecedence::DefaultClient)
     == (facts.exact_pair == QuotaCandidatePresence::Absent
-        && facts.exact_client_default_user == QuotaCandidatePresence::Absent
-        && facts.default_client_exact_user == QuotaCandidatePresence::Absent
-        && facts.default_pair == QuotaCandidatePresence::Absent
+        && facts.exact_user_default_client == QuotaCandidatePresence::Absent
         && facts.exact_user == QuotaCandidatePresence::Absent
-        && facts.exact_client == QuotaCandidatePresence::Absent
+        && facts.default_user_exact_client == QuotaCandidatePresence::Absent
+        && facts.default_pair == QuotaCandidatePresence::Absent
         && facts.default_user == QuotaCandidatePresence::Absent
+        && facts.exact_client == QuotaCandidatePresence::Absent
         && facts.default_client == QuotaCandidatePresence::Present))]
 #[ensures((result == UserClientQuotaPrecedence::None) == !(
     facts.exact_pair == QuotaCandidatePresence::Present
-        || facts.exact_client_default_user == QuotaCandidatePresence::Present
-        || facts.default_client_exact_user == QuotaCandidatePresence::Present
-        || facts.default_pair == QuotaCandidatePresence::Present
+        || facts.exact_user_default_client == QuotaCandidatePresence::Present
         || facts.exact_user == QuotaCandidatePresence::Present
-        || facts.exact_client == QuotaCandidatePresence::Present
+        || facts.default_user_exact_client == QuotaCandidatePresence::Present
+        || facts.default_pair == QuotaCandidatePresence::Present
         || facts.default_user == QuotaCandidatePresence::Present
+        || facts.exact_client == QuotaCandidatePresence::Present
         || facts.default_client == QuotaCandidatePresence::Present))]
 #[must_use]
 pub fn user_client_quota_precedence(facts: UserClientQuotaFacts) -> UserClientQuotaPrecedence {
     if matches!(facts.exact_pair, QuotaCandidatePresence::Present) {
         UserClientQuotaPrecedence::ExactPair
     } else if matches!(
-        facts.exact_client_default_user,
+        facts.exact_user_default_client,
         QuotaCandidatePresence::Present
     ) {
-        UserClientQuotaPrecedence::ExactClientDefaultUser
-    } else if matches!(
-        facts.default_client_exact_user,
-        QuotaCandidatePresence::Present
-    ) {
-        UserClientQuotaPrecedence::DefaultClientExactUser
-    } else if matches!(facts.default_pair, QuotaCandidatePresence::Present) {
-        UserClientQuotaPrecedence::DefaultPair
+        UserClientQuotaPrecedence::ExactUserDefaultClient
     } else if matches!(facts.exact_user, QuotaCandidatePresence::Present) {
         UserClientQuotaPrecedence::ExactUser
-    } else if matches!(facts.exact_client, QuotaCandidatePresence::Present) {
-        UserClientQuotaPrecedence::ExactClient
+    } else if matches!(
+        facts.default_user_exact_client,
+        QuotaCandidatePresence::Present
+    ) {
+        UserClientQuotaPrecedence::DefaultUserExactClient
+    } else if matches!(facts.default_pair, QuotaCandidatePresence::Present) {
+        UserClientQuotaPrecedence::DefaultPair
     } else if matches!(facts.default_user, QuotaCandidatePresence::Present) {
         UserClientQuotaPrecedence::DefaultUser
+    } else if matches!(facts.exact_client, QuotaCandidatePresence::Present) {
+        UserClientQuotaPrecedence::ExactClient
     } else if matches!(facts.default_client, QuotaCandidatePresence::Present) {
         UserClientQuotaPrecedence::DefaultClient
     } else {
@@ -171,22 +184,22 @@ mod tests {
             };
             let got = user_client_quota_precedence(UserClientQuotaFacts {
                 exact_pair: candidate(0),
-                exact_client_default_user: candidate(1),
-                default_client_exact_user: candidate(2),
-                default_pair: candidate(3),
-                exact_user: candidate(4),
-                exact_client: candidate(5),
-                default_user: candidate(6),
+                exact_user_default_client: candidate(1),
+                exact_user: candidate(2),
+                default_user_exact_client: candidate(3),
+                default_pair: candidate(4),
+                default_user: candidate(5),
+                exact_client: candidate(6),
                 default_client: candidate(7),
             });
             let expected = match (0..8).find(|index| present(*index)) {
                 Some(0) => UserClientQuotaPrecedence::ExactPair,
-                Some(1) => UserClientQuotaPrecedence::ExactClientDefaultUser,
-                Some(2) => UserClientQuotaPrecedence::DefaultClientExactUser,
-                Some(3) => UserClientQuotaPrecedence::DefaultPair,
-                Some(4) => UserClientQuotaPrecedence::ExactUser,
-                Some(5) => UserClientQuotaPrecedence::ExactClient,
-                Some(6) => UserClientQuotaPrecedence::DefaultUser,
+                Some(1) => UserClientQuotaPrecedence::ExactUserDefaultClient,
+                Some(2) => UserClientQuotaPrecedence::ExactUser,
+                Some(3) => UserClientQuotaPrecedence::DefaultUserExactClient,
+                Some(4) => UserClientQuotaPrecedence::DefaultPair,
+                Some(5) => UserClientQuotaPrecedence::DefaultUser,
+                Some(6) => UserClientQuotaPrecedence::ExactClient,
                 Some(7) => UserClientQuotaPrecedence::DefaultClient,
                 Some(_) | None => UserClientQuotaPrecedence::None,
             };

@@ -9,9 +9,7 @@ use krabka_raft::{
     BootstrapMode, ControllerFetchMissLimit, MetadataRaftCommandQueueCapacity,
     MetadataRaftFetchMax, NodeId,
 };
-use krabka_units::{
-    bytes, fraction, gibibytes, hours, kibibytes, mebibytes, millis, minutes, secs,
-};
+use krabka_units::{bytes, hours, kibibytes, mebibytes, millis, minutes, secs};
 
 use crate::{
     config::{
@@ -86,9 +84,9 @@ impl Default for BrokerConfig {
             unclean_recovery_aggressive_deadline: secs(2),
             unclean_recovery_balanced_deadline: secs(30),
             operator_recovery_deadline: secs(25),
-            quota_throttle_max: secs(10),
+            quota_throttle_max: secs(1),
             quota_window: DEFAULT_QUOTA_WINDOW,
-            controller_mutation_quota_window: secs(1),
+            controller_mutation_quota_window: DEFAULT_QUOTA_WINDOW,
             self_registration_max_attempts: 8,
             observer_fetch_max: mebibytes(1),
             audit_event_queue_capacity: 8_192,
@@ -118,9 +116,6 @@ impl Default for BrokerConfig {
             socket_receive_buffer: mebibytes(1),
             acl_max_principal: bytes(256),
             acl_max_resource_name: bytes(256),
-            telemetry_max_decompression_ratio: fraction(100.0),
-            telemetry_decompressed_output_floor: mebibytes(16),
-            telemetry_decompressed_output_ceiling: gibibytes(1),
             record_decompression_max_ratio: record_decompression.max_ratio(),
             record_decompression_output_floor: record_decompression.output_floor(),
             record_decompression_output_ceiling: record_decompression.output_ceiling(),
@@ -134,7 +129,10 @@ impl Default for BrokerConfig {
             default_message_timestamp_after_max_ms: Some(3_600_000),
             num_partitions: 1,
             default_replication_factor: 1,
+            delete_topic_enable: true,
+            auto_create_topics_enable: true,
             max_request_partition_size_limit: 2000,
+            offset_metadata_max_bytes: 4096,
             future_log_move_read_chunk: mebibytes(1),
             offsets_topic_num_partitions: 50,
             offsets_retention_override: None,
@@ -320,6 +318,7 @@ impl Default for BrokerConfig {
 #[cfg(test)]
 mod tests {
     use assert2::assert;
+    use krabka_units::gibibytes;
 
     use super::*;
 
@@ -428,10 +427,12 @@ mod tests {
                 secs(2),
                 secs(30),
                 secs(25),
-                // KIP-13's `quota.window.size.seconds` ceiling: Kafka caps an
-                // applied throttle at 10 s, and #397 moved krabka onto it.
-                secs(10),
+                // Kafka's `ClientRequestQuotaManager` bounds the request-quota
+                // throttle at one `quota.window.size.seconds` (#709).
                 secs(1),
+                // KIP-599: Kafka's `controller.quota.window.num` (11) x
+                // `controller.quota.window.size.seconds` (1).
+                secs(11),
             )
         );
     }

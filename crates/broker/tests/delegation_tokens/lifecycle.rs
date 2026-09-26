@@ -140,16 +140,14 @@ async fn delegation_token_lifecycle_end_to_end() {
 
         // ── (e) Third connection: bob (a listed renewer) calls Renew.
         //         Renew authorization (owner OR renewer) is what's load-bearing
-        //         here. With the KIP-48 fix, Create sets
-        //         `expiry_timestamp_ms = issue + 24h` and
-        //         `max_timestamp_ms = issue + 7d` as SEPARATE values, so
-        //         `min(now + renew_period_ms, max_timestamp_ms)` actually
-        //         advances the expiry — bounded above by `max_timestamp_ms`.
+        //         here. Create sets `expiry_timestamp_ms = issue + 24h` and
+        //         `max_timestamp_ms = issue + 7d` as SEPARATE values, and Renew
+        //         sets `min(max_timestamp_ms, now + min(24h, renew_period_ms))`,
+        //         so it advances the expiry by the time elapsed since Create.
         let mut bob = sasl_plain_authenticate(addr, "bob", b"builder")
             .await
             .map_err(|e| format!("bob PLAIN auth: {e}"))?;
-        // Use a huge renew period so the clamp lands at `max_timestamp_ms`
-        // regardless of wall-clock drift between Create and Renew.
+        // A renew period above the 24h default is capped at the default.
         let renew_resp = send_renew_delegation_token(
             &mut bob,
             300,
@@ -166,11 +164,11 @@ async fn delegation_token_lifecycle_end_to_end() {
             "Renew by listed renewer must succeed; got {}",
             renew_resp.error_code
         );
-        // KIP-48: with the fix, Renew strictly extends the expiry past
-        // its initial value, capped at `max_timestamp_ms`.
+        // Renew moves the expiry to `now + 24h`, no earlier than the
+        // `issue + 24h` Create set, and never past `max_timestamp_ms`.
         check!(
-            renew_resp.expiry_timestamp_ms > initial_expiry_ms,
-            "Renew must strictly extend expiry past initial value: \
+            renew_resp.expiry_timestamp_ms >= initial_expiry_ms,
+            "Renew must not move the expiry before its initial value: \
              renewed={} initial={}",
             renew_resp.expiry_timestamp_ms,
             initial_expiry_ms,

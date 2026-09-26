@@ -41,6 +41,13 @@ pub(crate) async fn handle(
         let mut cur: &[u8] = req_bytes;
         let req = SyncGroupRequest::decode(&mut cur, version)?;
 
+        // Kafka's `KafkaApis.handleSyncGroupRequest` answers a v5+ request
+        // without a protocol type or name before the ACL check
+        // (`SyncGroupRequest.areMandatoryProtocolTypeAndNamePresent`).
+        if !mandatory_protocol_type_and_name_present(&req, version) {
+            return encode_err(version, codes::INCONSISTENT_GROUP_PROTOCOL);
+        }
+
         // ── ACL preamble ────────────────────────────────────────────
         // `Read` on `Group(group_id)`. On Deny → whole-response
         // `error_code = GROUP_AUTHORIZATION_FAILED (30)`.
@@ -52,16 +59,21 @@ pub(crate) async fn handle(
                 ctx,
                 &req.group_id,
             ) {
-                return encode_err(version, codes::GROUP_AUTHORIZATION_FAILED, None, None);
+                return encode_err(version, codes::GROUP_AUTHORIZATION_FAILED);
             }
         }
 
-        if let Some(error_code) = crate::handlers::group_coordinator_error(broker, &req.group_id) {
-            return encode_err(version, error_code, None, None);
+        // Kafka's `GroupCoordinatorService.syncGroup` answers an empty group
+        // id before any group lookup.
+        let invalid_group = req.group_id.is_empty().then_some(codes::INVALID_GROUP_ID);
+        if let Some(error_code) = invalid_group
+            .or_else(|| crate::handlers::group_coordinator_error(broker, &req.group_id))
+        {
+            return encode_err(version, error_code);
         }
 
         let Some(handle) = coordinator.find(&req.group_id) else {
-            return encode_err(version, codes::UNKNOWN_MEMBER_ID, None, None);
+            return encode_err(version, codes::UNKNOWN_MEMBER_ID);
         };
 
         let (tx, rx) = oneshot::channel();
@@ -71,7 +83,7 @@ pub(crate) async fn handle(
             .await
             .is_err()
         {
-            return encode_err(version, codes::REBALANCE_IN_PROGRESS, None, None);
+            return encode_err(version, codes::REBALANCE_IN_PROGRESS);
         }
         // The leader and the already-Stable follower reply immediately; a
         // not-yet-synced follower is parked and resolved when the leader's
@@ -79,7 +91,7 @@ pub(crate) async fn handle(
         let Ok(Ok(result)) =
             tokio::time::timeout(broker.config.sync_group_follower_wait.to_std(), rx).await
         else {
-            return encode_err(version, codes::REBALANCE_IN_PROGRESS, None, None);
+            return encode_err(version, codes::REBALANCE_IN_PROGRESS);
         };
 
         let resp = SyncGroupResponse {
@@ -93,16 +105,23 @@ pub(crate) async fn handle(
     }
 }
 
+/// Kafka's `SyncGroupRequest.areMandatoryProtocolTypeAndNamePresent`: from v5
+/// the request must name both its protocol type and its protocol name.
+fn mandatory_protocol_type_and_name_present(
+    req: &SyncGroupRequest,
+    version: crate::handlers::ApiVersion,
+) -> bool {
+    version < 5 || (req.protocol_type.is_some() && req.protocol_name.is_some())
+}
+
+/// Kafka's `SyncGroupRequest.getErrorResponse`: only `error_code` is set, so
+/// the protocol type and name stay null and the assignment stays empty.
 fn encode_err(
     version: crate::handlers::ApiVersion,
     code: crate::handlers::ErrorCode,
-    protocol_type: Option<String>,
-    protocol_name: Option<String>,
 ) -> Result<Bytes, BrokerError> {
     let resp = SyncGroupResponse {
         error_code: code,
-        protocol_type,
-        protocol_name,
         ..Default::default()
     };
     crate::handlers::encode_response(&resp, version)
@@ -231,8 +250,6 @@ mod tests {
         let bytes = encode_err(
             sync_group_response::MAX_VERSION,
             codes::GROUP_AUTHORIZATION_FAILED,
-            None,
-            None,
         )
         .expect("encode");
         let mut cur: &[u8] = &bytes;
@@ -240,26 +257,118 @@ mod tests {
         assert!(resp.error_code == codes::GROUP_AUTHORIZATION_FAILED);
     }
 
-    #[test]
-    fn encode_err_preserves_empty_assignment_and_kip559_protocol_fields() {
-        let bytes = encode_err(
-            sync_group_response::MAX_VERSION,
-            codes::UNKNOWN_MEMBER_ID,
-            Some(PROTOCOL_TYPE.into()),
-            Some(PROTOCOL_NAME.into()),
-        )
-        .expect("encode error");
-        let resp = decode_sync(&bytes);
+    /// #736 and #793: from v5 a missing protocol type or name answers
+    /// `INCONSISTENT_GROUP_PROTOCOL` before the group ACL, and an empty group
+    /// id answers `INVALID_GROUP_ID` after it. Every error reply carries only
+    /// its `error_code`, as Kafka's `SyncGroupRequest.getErrorResponse`.
+    #[tokio::test]
+    async fn handle_checks_mandatory_protocol_fields_acl_and_group_id_in_kafka_order() {
+        struct Row {
+            name: &'static str,
+            version: i16,
+            group_id: &'static str,
+            protocol_type: Option<&'static str>,
+            protocol_name: Option<&'static str>,
+            allowed: bool,
+            want: i16,
+        }
+        let rows = [
+            Row {
+                name: "v5 null type, denied",
+                version: 5,
+                group_id: GROUP,
+                protocol_type: None,
+                protocol_name: Some(PROTOCOL_NAME),
+                allowed: false,
+                want: codes::INCONSISTENT_GROUP_PROTOCOL,
+            },
+            Row {
+                name: "v5 null name, allowed",
+                version: 5,
+                group_id: GROUP,
+                protocol_type: Some(PROTOCOL_TYPE),
+                protocol_name: None,
+                allowed: true,
+                want: codes::INCONSISTENT_GROUP_PROTOCOL,
+            },
+            Row {
+                name: "v4 null both, allowed: normal path to an unknown group",
+                version: 4,
+                group_id: GROUP,
+                protocol_type: None,
+                protocol_name: None,
+                allowed: true,
+                want: codes::UNKNOWN_MEMBER_ID,
+            },
+            Row {
+                name: "v5 both present, denied",
+                version: 5,
+                group_id: GROUP,
+                protocol_type: Some(PROTOCOL_TYPE),
+                protocol_name: Some(PROTOCOL_NAME),
+                allowed: false,
+                want: codes::GROUP_AUTHORIZATION_FAILED,
+            },
+            Row {
+                name: "empty group id, allowed",
+                version: 5,
+                group_id: "",
+                protocol_type: Some(PROTOCOL_TYPE),
+                protocol_name: Some(PROTOCOL_NAME),
+                allowed: true,
+                want: codes::INVALID_GROUP_ID,
+            },
+            Row {
+                name: "empty group id, denied",
+                version: 5,
+                group_id: "",
+                protocol_type: Some(PROTOCOL_TYPE),
+                protocol_name: Some(PROTOCOL_NAME),
+                allowed: false,
+                want: codes::GROUP_AUTHORIZATION_FAILED,
+            },
+        ];
+        let (denied_handle, _denied_dir) = start_broker(Arc::new(DenyAll)).await;
+        let (allowed_handle, _allowed_dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let principal = principal();
+        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let ctx = context(&principal, &peer);
 
-        let expected = SyncGroupResponse {
-            throttle_time_ms: 0,
-            error_code: codes::UNKNOWN_MEMBER_ID,
-            protocol_type: Some(PROTOCOL_TYPE.into()),
-            protocol_name: Some(PROTOCOL_NAME.into()),
-            assignment: Bytes::new(),
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        };
-        assert!(resp == expected);
+        for r in rows {
+            let broker = if r.allowed {
+                allowed_handle.broker_arc_for_test()
+            } else {
+                denied_handle.broker_arc_for_test()
+            };
+            let req = SyncGroupRequest {
+                group_id: r.group_id.into(),
+                member_id: "member-a".into(),
+                generation_id: 1,
+                protocol_type: r.protocol_type.map(String::from),
+                protocol_name: r.protocol_name.map(String::from),
+                ..Default::default()
+            };
+
+            let resp = handle(
+                &broker,
+                r.version,
+                3,
+                &encode_request(&req, r.version),
+                &ctx,
+            )
+            .await
+            .expect("SyncGroup");
+            let resp: SyncGroupResponse = crate::test_support::decode_response(&resp, r.version);
+
+            let expected = SyncGroupResponse {
+                error_code: r.want,
+                ..Default::default()
+            };
+            assert!(resp == expected, "{}: {resp:?}", r.name);
+        }
+        denied_handle.shutdown().await;
+        allowed_handle.shutdown().await;
     }
 
     #[tokio::test]

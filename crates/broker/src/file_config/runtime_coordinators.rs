@@ -73,6 +73,21 @@ impl RuntimeFileConfig {
             cfg.classic_group_initial_rebalance_delay =
                 nonnegative_time("classic_group_initial_rebalance_delay", value)?;
         }
+        set_runtime_duration!(
+            runtime,
+            classic_group_min_session_timeout,
+            cfg.next_gen_consumer_group.classic_min_session_timeout
+        );
+        set_runtime_duration!(
+            runtime,
+            classic_group_max_session_timeout,
+            cfg.next_gen_consumer_group.classic_max_session_timeout
+        );
+        set_runtime_usize!(
+            runtime,
+            classic_group_max_size,
+            cfg.next_gen_consumer_group.classic_max_size
+        );
         set_runtime_time_millis!(
             runtime,
             sync_group_follower_wait,

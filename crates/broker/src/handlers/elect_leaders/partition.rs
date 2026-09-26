@@ -94,11 +94,11 @@ pub(super) async fn elect_one(
             }
         }
         Err(err) => {
-            let (code, msg) = elect_error_to_wire(err);
+            let (code, msg) = elect_error_to_wire(err, env.image, topic, partition);
             PartitionResult {
                 partition_id: partition,
                 error_code: code,
-                error_message: Some(msg.into()),
+                error_message: Some(msg),
                 ..Default::default()
             }
         }

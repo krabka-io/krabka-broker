@@ -29,7 +29,6 @@ use uuid::Uuid;
 
 mod authorization;
 mod materialize;
-mod mutation_quota;
 mod name;
 mod placement;
 mod records;
@@ -39,16 +38,15 @@ mod response;
 mod tests;
 
 pub(crate) use self::placement::{
-    InitialLeadership, automatic_leaderships, manual_leaderships, round_robin_replicas,
-    site_broker_views,
+    InitialLeadership, automatic_leaderships, manual_leaderships, placement_failure_message,
+    round_robin_replicas, site_broker_views, validate_manual_partition_assignment,
 };
 use self::{
     authorization::{authorize_create_topics, describe_configs_denied},
     materialize::{TopicMaterialization, materialize_topic},
-    mutation_quota::mutation_count,
     name::{CLUSTER_METADATA_TOPIC, topic_name_error},
     placement::resolve_assignments,
-    records::{topic_config_overrides, topic_records},
+    records::{null_config_error, topic_config_overrides, topic_records},
     response::{
         create_topics_response, effective_topic_configs, encode_response, finish_response,
         topic_error_result,
@@ -125,21 +123,10 @@ pub(crate) async fn handle(
     let image = broker.controller.current_image();
 
     // Kafka removes duplicate names from the request before authorizing
-    // (`ControllerApis.handleCreateTopics`): every row that shares a
-    // duplicated name answers INVALID_REQUEST and never reaches the
-    // authorizer.
-    let duplicate_names: std::collections::HashSet<String> = {
-        let mut name_counts: std::collections::HashMap<&str, usize> =
-            std::collections::HashMap::new();
-        for topic in &req.topics {
-            *name_counts.entry(topic.name.as_str()).or_insert(0) += 1;
-        }
-        name_counts
-            .into_iter()
-            .filter(|(_, count)| *count > 1)
-            .map(|(name, _)| name.to_owned())
-            .collect()
-    };
+    // (`ControllerApis.createTopics`): every row that shares a duplicated
+    // name leaves the request, and the name answers one INVALID_REQUEST row
+    // after the controller's rows.
+    let duplicate_names = duplicate_names(&req.topics);
 
     // Cluster `Create` is a shortcut; on Deny, `authorize_create_topics`
     // falls back to topic-level `Create` per surviving name, so a principal
@@ -150,7 +137,10 @@ pub(crate) async fn handle(
         .topics
         .iter()
         .map(|topic| topic.name.as_str())
-        .filter(|name| !duplicate_names.contains(*name) && *name != CLUSTER_METADATA_TOPIC)
+        .filter(|name| {
+            !duplicate_names.iter().any(|duplicate| duplicate == *name)
+                && *name != CLUSTER_METADATA_TOPIC
+        })
         .collect();
     let denied_names: std::collections::HashSet<String> =
         authorize_create_topics(broker, &image, ctx, candidate_names.iter().copied())
@@ -159,24 +149,65 @@ pub(crate) async fn handle(
             .map(|(name, _)| name.to_owned())
             .collect();
 
-    // The topics that will actually attempt creation: not a duplicate
-    // request entry, not the protected raft metadata topic, and not denied
-    // `Create`. Both mutation-quota accounting and the quota-rejected
-    // response below charge and throttle only these, matching the per-topic
-    // loop's own precheck order -- a topic this request will answer
-    // INVALID_REQUEST or TOPIC_AUTHORIZATION_FAILED regardless of quota must
-    // keep that result rather than being overwritten with
-    // THROTTLING_QUOTA_EXCEEDED, and must not consume budget for a mutation
-    // that never happens.
-    let authorized_topics: Vec<&CreatableTopic> = req
-        .topics
+    // Kafka appends the rows the request answers without the controller
+    // after the controller's own rows: one per duplicated name, then the
+    // protected raft metadata topic and the topics denied `Create`. The
+    // controller sees the rest, in request order.
+    let mut trailing: Vec<CreatableTopicResult> = duplicate_names
         .iter()
-        .filter(|topic| {
-            !duplicate_names.contains(topic.name.as_str())
-                && topic.name != CLUSTER_METADATA_TOPIC
-                && !denied_names.contains(topic.name.as_str())
+        .map(|name| {
+            topic_error_result(
+                name.clone(),
+                codes::INVALID_REQUEST,
+                Some("Duplicate topic name.".into()),
+            )
         })
         .collect();
+    let mut effective: Vec<CreatableTopic> = Vec::with_capacity(req.topics.len());
+    for topic in &req.topics {
+        if duplicate_names.contains(&topic.name) {
+            continue;
+        }
+        if topic.name == CLUSTER_METADATA_TOPIC {
+            trailing.push(topic_error_result(
+                topic.name.clone(),
+                codes::INVALID_REQUEST,
+                Some(format!(
+                    "Creation of internal topic {CLUSTER_METADATA_TOPIC} is prohibited."
+                )),
+            ));
+        } else if denied_names.contains(&topic.name) {
+            // Kafka answers a denial TOPIC_AUTHORIZATION_FAILED with this
+            // exact message, never CLUSTER_AUTHORIZATION_FAILED: the cluster
+            // check is only a shortcut past the per-topic lookup.
+            trailing.push(topic_error_result(
+                topic.name.clone(),
+                codes::TOPIC_AUTHORIZATION_FAILED,
+                Some("Authorization failed.".into()),
+            ));
+        } else {
+            effective.push(topic.clone());
+        }
+    }
+
+    // Kafka's `validateTotalNumberOfPartitions` refuses the whole request
+    // when the topics the controller sees add up to more partitions than one
+    // metadata batch may carry. The failure answers every requested row, as
+    // `CreateTopicsRequest.getErrorResponse` does, and creates nothing.
+    if total_partitions(&effective, broker.config.num_partitions) > MAX_PARTITIONS_PER_REQUEST {
+        let results = req
+            .topics
+            .iter()
+            .map(|topic| {
+                topic_error_result(
+                    topic.name.clone(),
+                    codes::POLICY_VIOLATION,
+                    Some(TOO_MANY_PARTITIONS.into()),
+                )
+            })
+            .collect();
+        return encode_response(&create_topics_response(results, 0), version);
+    }
 
     let controller = broker.controller.clone();
     let node_id = broker.config.node_id;
@@ -188,107 +219,54 @@ pub(crate) async fn handle(
     let hot_tail = broker.hot_tail.clone();
     let wal_shards = broker.wal_shards.clone();
 
-    // KIP-599: count mutations before running handler logic so that even
-    // invalid requests consume quota (bad-faith clients can't escape by
-    // sending malformed RPCs). num_partitions == -1 means "use cluster
-    // default"; count it as 1 for accounting.
-    let mutation_count = mutation_count(
-        authorized_topics.iter().copied(),
-        broker.config.num_partitions,
-    );
-    let quota = crate::quota::apply_controller_mutation_quota_mode(
-        &image,
-        &broker.quota_buckets,
-        &ctx.principal.name,
-        ctx.client_id,
-        mutation_count,
-        broker.config.controller_mutation_quota_window,
-        broker.config.quota_throttle_max,
-        version >= 6,
-    );
-    if quota.is_rejected() {
-        let mut emitted_duplicates: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
-        let results = req
-            .topics
-            .iter()
-            .filter_map(|topic| {
-                let name = topic.name.clone();
-                if let Some((code, message)) = duplicate_or_protected_error(&duplicate_names, &name)
-                {
-                    // One row per duplicated name, not one per occurrence --
-                    // Kafka removes the repeats from the request before it
-                    // ever builds a response row for them.
-                    if !emitted_duplicates.insert(name.clone()) {
-                        return None;
-                    }
-                    return Some(topic_error_result(name, code, Some(message)));
-                }
-                if denied_names.contains(&name) {
-                    return Some(topic_error_result(
-                        name,
-                        codes::TOPIC_AUTHORIZATION_FAILED,
-                        Some("Authorization failed.".into()),
-                    ));
-                }
-                Some(topic_error_result(
-                    name,
-                    codes::THROTTLING_QUOTA_EXCEEDED,
-                    None,
-                ))
-            })
-            .collect();
-        return encode_response(
-            &create_topics_response(results, crate::quota::throttle_time_ms(quota.delay())),
-            version,
-        );
-    }
+    // KIP-599: Kafka's controller charges each topic with the partitions it
+    // creates, after every other check on it has passed
+    // (`ReplicationControlManager.createTopic`). A strict version (v6+)
+    // refuses the topic that finds the bucket negative, and every topic
+    // after it.
+    let mut quota = crate::quota::ControllerMutationQuota::new(&crate::quota::QuotaRequest {
+        image: &image,
+        buckets: &broker.quota_buckets,
+        principal: &ctx.principal.name,
+        client_id: ctx.client_id,
+        window: broker.config.controller_mutation_quota_window,
+        strict: version >= 6,
+    });
 
     let mut results: Vec<CreatableTopicResult> = Vec::with_capacity(req.topics.len());
-    let mut emitted_duplicates: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
     let preferred_site = resolve_preferred_leader_site(&image);
     // KIP-108: a validate-only request runs every check and commits nothing,
     // so the policy below sees it exactly as it sees a committing one.
     let validate_only = req.validate_only;
 
-    for mut topic_req in req.topics {
+    for mut topic_req in effective {
         let name = topic_req.name.clone();
-
-        // Duplicate and protected names never reached the authorizer above,
-        // and Kafka answers every one of them INVALID_REQUEST before any
-        // other check.
-        if let Some((code, message)) = duplicate_or_protected_error(&duplicate_names, &name) {
-            // Kafka removes every repeat of a duplicated name from the
-            // request before it builds a response, so only its first
-            // occurrence gets a row -- not one row per repeat.
-            if duplicate_names.contains(&name) && !emitted_duplicates.insert(name.clone()) {
-                continue;
-            }
-            results.push(topic_error_result(name, code, Some(message)));
-            continue;
-        }
-
-        // The Create decision computed above: an Allow either from the
-        // cluster-wide shortcut or from a per-topic ACL. Kafka answers a
-        // denial TOPIC_AUTHORIZATION_FAILED with this exact message
-        // (`ControllerApis.createTopics`), never CLUSTER_AUTHORIZATION_FAILED
-        // -- the cluster check was only ever a shortcut to skip the per-topic
-        // lookup, not a distinct failure mode.
-        if denied_names.contains(&name) {
-            results.push(topic_error_result(
-                name,
-                codes::TOPIC_AUTHORIZATION_FAILED,
-                Some("Authorization failed.".into()),
-            ));
-            continue;
-        }
 
         // Kafka checks the name before anything else. The name becomes part
         // of the partition directory path, so no later step may see a name
         // that this check refuses.
         if let Some((code, message)) = topic_name_error(&image, &name) {
             results.push(topic_error_result(name, code, Some(message)));
+            continue;
+        }
+
+        // Kafka answers an existing topic TOPIC_ALREADY_EXISTS before it
+        // looks at the configs, the counts, the placement or the policy, so
+        // `kafka-topics --create --if-not-exists` succeeds whatever else the
+        // request carries.
+        if image.topic(&name).is_some() {
+            results.push(topic_exists_result(name));
+            continue;
+        }
+
+        // Kafka's `computeConfigChanges` refuses a config with a null value
+        // before it validates the others.
+        if let Some(message) = null_config_error(&topic_req) {
+            results.push(topic_error_result(
+                name,
+                codes::INVALID_CONFIG,
+                Some(message),
+            ));
             continue;
         }
 
@@ -373,8 +351,8 @@ pub(crate) async fn handle(
 
         let assignments = match resolve_assignments(&topic_req, &brokers, preferred_site) {
             Ok(assignments) => assignments,
-            Err(code) => {
-                results.push(topic_error_result(name, code, None));
+            Err((code, message)) => {
+                results.push(topic_error_result(name, code, Some(message)));
                 continue;
             }
         };
@@ -382,11 +360,14 @@ pub(crate) async fn handle(
         if assignments.is_empty() {
             // The placement cannot satisfy the request. RF above the broker
             // count is the common cause. Surface INVALID_REPLICATION_FACTOR
-            // per Apache Kafka semantics.
+            // with the message of Kafka's replica placer.
             results.push(topic_error_result(
                 name,
                 codes::INVALID_REPLICATION_FACTOR,
-                None,
+                Some(placement_failure_message(
+                    topic_req.replication_factor,
+                    brokers.len(),
+                )),
             ));
             continue;
         }
@@ -424,16 +405,6 @@ pub(crate) async fn handle(
             continue;
         }
 
-        // The committing path learns of a name collision from
-        // `submit_change`, which decides it inside the quorum and is the
-        // race-safe answer. A dry run never gets there, so ask the image
-        // directly: Kafka's `validateOnly` reports `TopicExistsException` for
-        // an existing name, and it reports it ahead of the topic policy.
-        if validate_only && image.topic(&name).is_some() {
-            results.push(topic_error_result(name, codes::TOPIC_ALREADY_EXISTS, None));
-            continue;
-        }
-
         // KIP-108: the operator-declared topic policy, on the effective
         // partition count and replication factor the placement resolved and
         // on the topic's own config overrides. Kafka calls
@@ -454,12 +425,23 @@ pub(crate) async fn handle(
             continue;
         }
 
+        // KIP-599: charge the partitions this topic creates.
+        let partition_count = u64::try_from(assignments.len()).unwrap_or(u64::MAX);
+        if quota.record(partition_count).is_err() {
+            results.push(topic_error_result(
+                name,
+                codes::THROTTLING_QUOTA_EXCEEDED,
+                Some(THROTTLING_QUOTA_EXCEEDED_MESSAGE.into()),
+            ));
+            continue;
+        }
+
         let topic_id = Uuid::new_v4();
 
         // A validate-only request has now passed every check the committing
         // path runs, and commits nothing.
-        let error_code = if validate_only {
-            codes::NONE
+        let failure = if validate_only {
+            None
         } else {
             // Build the batch: one TopicRecord + N PartitionRecords.
             let records = topic_records(
@@ -499,76 +481,117 @@ pub(crate) async fn handle(
                         &leaderships,
                     )
                     .await;
-                    codes::NONE
+                    None
                 }
+                // Another request created the name after this one read the
+                // image. The quorum decides that race, and the row is the one
+                // Kafka's existence check answers.
                 Err(RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))) => {
-                    codes::TOPIC_ALREADY_EXISTS
+                    Some(topic_exists_result(name.clone()))
                 }
                 Err(RaftError::Metadata(krabka_metadata::MetadataError::InvalidRecord(_))) => {
                     // E.g., `partitions <= 0` rejected by image::validate.
-                    codes::INVALID_PARTITIONS
+                    Some(topic_error_result(
+                        name.clone(),
+                        codes::INVALID_PARTITIONS,
+                        None,
+                    ))
                 }
-                Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
-                    codes::NOT_CONTROLLER
-                }
+                Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => Some(
+                    topic_error_result(name.clone(), codes::NOT_CONTROLLER, None),
+                ),
                 Err(e) => {
                     tracing::error!(topic = %name, error = %e, "CreateTopics submit_change failed");
-                    codes::UNKNOWN_SERVER_ERROR
+                    Some(topic_error_result(
+                        name.clone(),
+                        codes::UNKNOWN_SERVER_ERROR,
+                        None,
+                    ))
                 }
             }
         };
-
-        // Convert uuid::Uuid → krabka_protocol::primitives::uuid::Uuid.
-        let proto_uuid = ProtoUuid(topic_id.into_bytes());
+        if let Some(failure) = failure {
+            results.push(failure);
+            continue;
+        }
 
         let mut result = CreatableTopicResult {
             name,
-            topic_id: proto_uuid,
-            error_code,
+            topic_id: ProtoUuid(topic_id.into_bytes()),
+            error_code: codes::NONE,
             ..Default::default()
         };
-
-        if error_code == codes::NONE {
-            disclose_created_topic(
-                broker,
-                ctx,
-                &image,
-                version,
-                &CreatedTopic {
-                    controller: &controller,
-                    assignments: &assignments,
-                    overrides: &config_overrides,
-                },
-                &mut result,
-            );
-        }
+        disclose_created_topic(
+            broker,
+            ctx,
+            &image,
+            version,
+            &CreatedTopic {
+                controller: &controller,
+                assignments: &assignments,
+                overrides: &config_overrides,
+            },
+            &mut result,
+        );
         results.push(result);
     }
+    results.extend(trailing);
 
     finish_response(broker, ctx, results, validate_only, quota.delay(), version)
 }
 
-/// The error a topic name fails before `Create` authorization even has a
-/// chance to run: a duplicate request entry, or the protected raft metadata
-/// topic. Both answer `INVALID_REQUEST` unconditionally
-/// (`ControllerApis.handleCreateTopics` removes both from `allowedTopicNames`
-/// before it authorizes), so their result must not depend on the quota
-/// decision either -- checked here both for the quota-rejected response and
-/// for the ordinary per-topic loop, so the two branches cannot drift apart.
-fn duplicate_or_protected_error(
-    duplicate_names: &std::collections::HashSet<String>,
-    name: &str,
-) -> Option<(i16, String)> {
-    if duplicate_names.contains(name) {
-        return Some((codes::INVALID_REQUEST, "Duplicate topic name.".into()));
+/// Kafka's `maxRecordsPerBatch` (`controller.max.records.per.batch`, default
+/// 10000): the most partitions one `CreateTopics` request may create.
+const MAX_PARTITIONS_PER_REQUEST: u64 = 10_000;
+
+/// The message of Kafka's `validateTotalNumberOfPartitions` refusal.
+const TOO_MANY_PARTITIONS: &str = "Too many partitions in request.";
+
+/// Kafka's `Errors.THROTTLING_QUOTA_EXCEEDED.message()`, which
+/// `StrictControllerMutationQuota.record` puts on the exception.
+const THROTTLING_QUOTA_EXCEEDED_MESSAGE: &str = "The throttling quota has been exceeded.";
+
+/// The names that more than one request row carries, in the order of their
+/// first row.
+fn duplicate_names(topics: &[CreatableTopic]) -> Vec<String> {
+    let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for topic in topics {
+        *counts.entry(topic.name.as_str()).or_insert(0) += 1;
     }
-    if name == CLUSTER_METADATA_TOPIC {
-        return Some((
-            codes::INVALID_REQUEST,
-            format!("Creation of internal topic {CLUSTER_METADATA_TOPIC} is prohibited."),
-        ));
-    }
-    None
+    let mut seen = std::collections::HashSet::new();
+    topics
+        .iter()
+        .map(|topic| topic.name.as_str())
+        .filter(|name| counts[name] > 1 && seen.insert(*name))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The partitions a request asks for, as Kafka's
+/// `validateTotalNumberOfPartitions` counts them: an assignment list counts
+/// its length, -1 counts `num.partitions`, and a count that is not positive
+/// counts nothing.
+fn total_partitions(topics: &[CreatableTopic], default_num_partitions: i32) -> u64 {
+    topics
+        .iter()
+        .map(|topic| {
+            let count = if !topic.assignments.is_empty() {
+                i64::try_from(topic.assignments.len()).unwrap_or(i64::MAX)
+            } else if topic.num_partitions == -1 {
+                i64::from(default_num_partitions)
+            } else {
+                i64::from(topic.num_partitions.max(0))
+            };
+            u64::try_from(count).unwrap_or(0)
+        })
+        .fold(0, u64::saturating_add)
+}
+
+/// Kafka's row for a topic that already exists: zero topic id, and the
+/// message `ReplicationControlManager.createTopics` gives it.
+fn topic_exists_result(name: String) -> CreatableTopicResult {
+    let message = format!("Topic '{name}' already exists.");
+    topic_error_result(name, codes::TOPIC_ALREADY_EXISTS, Some(message))
 }
 
 /// Kafka's refusal of a requested topic shape without a manual assignment:

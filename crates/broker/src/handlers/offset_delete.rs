@@ -4,29 +4,30 @@
 //! tuples inside a consumer group. `kafka-consumer-groups --delete-offsets`
 //! calls it.
 //!
-//! Authorization, per KIP-496:
-//!   - `Delete` on `Group(group_id)` for the whole response
-//!   - `Read` on `Topic(name)` for each topic. On Deny, every partition of
-//!     that topic gets `TOPIC_AUTHORIZATION_FAILED`.
+//! It follows Kafka's `KafkaApis.handleOffsetDeleteRequest`,
+//! `GroupCoordinatorService.deleteOffsets` and
+//! `OffsetMetadataManager.deleteOffsets`:
+//!   - `Delete` on `Group(group_id)` denied → `GROUP_AUTHORIZATION_FAILED`
+//!   - an empty `group_id` → `INVALID_GROUP_ID`
+//!   - coordinator routing → `COORDINATOR_NOT_AVAILABLE` / `NOT_COORDINATOR`
+//!   - missing group → `GROUP_ID_NOT_FOUND`
+//!   - a non-empty classic group that does not use the consumer protocol →
+//!     `NON_EMPTY_GROUP`
 //!
-//! Semantics:
-//!   - missing group → whole-response `GROUP_ID_NOT_FOUND`
-//!   - missing topic / partition out of range → per-partition
-//!     `UNKNOWN_TOPIC_OR_PARTITION`
-//!   - group has live members AND any member's consumer-protocol
-//!     subscription contains the topic → per-partition
-//!     `GROUP_SUBSCRIBED_TO_TOPIC` (86)
-//!   - otherwise: append a tombstone (key = `OffsetCommitKey`, value =
-//!     null) to the group's `__consumer_offsets` partition, remove the entry from
-//!     `Group.committed_offsets`, per-partition `NONE`.
+//! Each of those is a group-level refusal with only the top-level code.
+//! Otherwise every requested partition gets a row: `Read` on `Topic(name)`
+//! denied → `TOPIC_AUTHORIZATION_FAILED`; a missing topic or partition →
+//! `UNKNOWN_TOPIC_OR_PARTITION`; a topic the group subscribes to →
+//! `GROUP_SUBSCRIBED_TO_TOPIC`; otherwise a tombstone (key =
+//! `OffsetCommitKey`, value = null) goes to the group's `__consumer_offsets`
+//! partition, the entry leaves the group's committed offsets, and the row
+//! answers `NONE`.
 //!
 //! This file is the module root and holds the wire entry point: decode,
 //! authorize, consult the group actor, then delegate. Each child holds one
 //! concern: `rows` the per-partition decision table, `response` the
-//! whole-response shapes and the encoder, `tombstone` the
-//! `__consumer_offsets` append, and `subscription` the member-metadata decode.
-
-use std::collections::HashSet;
+//! group-level response and the encoder, and `tombstone` the
+//! `__consumer_offsets` append.
 
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, ResourceType};
@@ -41,15 +42,15 @@ use tokio::sync::oneshot;
 
 mod response;
 mod rows;
-mod subscription;
 #[cfg(test)]
 mod test_support;
+#[cfg(test)]
+mod tests;
 mod tombstone;
 
 use self::{
-    response::{encode, rewrite_success_as, whole_error},
-    rows::build_response_rows,
-    subscription::decode_subscribed_topics,
+    response::{encode, whole_error},
+    rows::{Rows, build_response_rows},
     tombstone::{append_tombstones, now_ms},
 };
 use crate::{
@@ -58,12 +59,11 @@ use crate::{
     codes,
     coordinator::{
         partitioner::{GroupRoutingError, local_partition_for_group},
-        unified::{actor::GroupActorMessage, classic_state::GroupState},
+        unified::actor::GroupActorMessage,
     },
     error::BrokerError,
 };
 
-// ACL preamble + subscription guard + tombstone pipeline; splitting hurts readability
 #[tracing::instrument(
     name = "handle_offset_delete",
     level = "info",
@@ -83,7 +83,7 @@ pub(crate) async fn handle(
 
     let image = broker.controller.current_image();
 
-    // Group `Delete` ACL — whole-response on Deny.
+    // Group `Delete` ACL — `OffsetDeleteRequest.getErrorResponse` on Deny.
     let acl_req = AuthorizationRequest {
         principal: ctx.principal,
         host: ctx.peer,
@@ -92,29 +92,48 @@ pub(crate) async fn handle(
         operation: AclOperation::Delete,
     };
     if broker.config.authorizer.authorize(&*image, &acl_req) == AuthorizationResult::Deny {
-        return encode(
-            version,
-            &whole_error(&req, codes::GROUP_AUTHORIZATION_FAILED),
-        );
+        return encode(version, &whole_error(codes::GROUP_AUTHORIZATION_FAILED));
+    }
+
+    // `GroupCoordinatorService.deleteOffsets` answers an empty group id
+    // before it routes the request.
+    if req.group_id.is_empty() {
+        return encode(version, &whole_error(codes::INVALID_GROUP_ID));
     }
 
     let offsets_partition =
         match local_partition_for_group(&image, broker.config.node_id, &req.group_id) {
             Ok(partition) => partition,
             Err(GroupRoutingError::Unavailable) => {
-                return encode(
-                    version,
-                    &whole_error(&req, codes::COORDINATOR_NOT_AVAILABLE),
-                );
+                return encode(version, &whole_error(codes::COORDINATOR_NOT_AVAILABLE));
             }
             Err(GroupRoutingError::NotCoordinator) => {
-                return encode(version, &whole_error(&req, codes::NOT_COORDINATOR));
+                return encode(version, &whole_error(codes::NOT_COORDINATOR));
             }
         };
 
-    // Group must exist.
+    // The group must exist and pass Kafka's `validateOffsetDelete`; its
+    // answer also names the topics it subscribes to.
     let Some(group_handle) = broker.group_coordinator.find(&req.group_id) else {
-        return encode(version, &whole_error(&req, codes::GROUP_ID_NOT_FOUND));
+        return encode(version, &whole_error(codes::GROUP_ID_NOT_FOUND));
+    };
+    let subscribed_topics = {
+        let (tx, rx) = oneshot::channel();
+        let sent = group_handle
+            .tx
+            .send(GroupActorMessage::OffsetDeleteGuard { reply: tx })
+            .await
+            .is_ok();
+        // An actor that stopped holds no group any more.
+        let guard = if sent {
+            rx.await.unwrap_or(Err(codes::GROUP_ID_NOT_FOUND))
+        } else {
+            Err(codes::GROUP_ID_NOT_FOUND)
+        };
+        match guard {
+            Ok(topics) => topics,
+            Err(code) => return encode(version, &whole_error(code)),
+        }
     };
 
     // Per-topic `Read` ACL — per-partition `TOPIC_AUTHORIZATION_FAILED` on Deny.
@@ -130,38 +149,6 @@ pub(crate) async fn handle(
         )
     };
 
-    // Snapshot live subscriptions. KIP-496 only blocks deletion when a
-    // *consumer-protocol* classic group with live members still subscribes to
-    // the topic; Empty/Dead groups, non-`"consumer"` protocol_type groups, and
-    // next-gen consumer groups skip the guard.
-    // `ClassicInspect` dispatches on the actor's LIVE `group.kind`: it replies
-    // ONLY for a classic-kind group and drops the sender for a consumer-kind
-    // group, so the `&& let Ok(view) = rx.await` guard yields the empty set for
-    // a consumer group (including an UPGRADED one) without consulting the stale
-    // spawn-time `handle.kind`. A KIP-848 downgrade leaves the group classic, so
-    // its `ClassicInspect` view is the one that matters.
-    let subscribed_topics: HashSet<String> = {
-        let (tx, rx) = oneshot::channel();
-        if group_handle
-            .tx
-            .send(GroupActorMessage::ClassicInspect { reply: tx })
-            .await
-            .is_ok()
-            && let Ok(view) = rx.await
-            && view.state != GroupState::Empty
-            && view.protocol_type.as_deref() == Some("consumer")
-        {
-            view.members
-                .iter()
-                .flat_map(|m| decode_subscribed_topics(&m.protocol_metadata))
-                .collect()
-        } else {
-            HashSet::new()
-        }
-    };
-
-    // Build per-topic/per-partition result rows and queue the tombstone
-    // batch for the rows that should actually delete.
     let topic_partition_counts: std::collections::HashMap<&str, i32> = req
         .topics
         .iter()
@@ -171,7 +158,11 @@ pub(crate) async fn handle(
                 .map(|tr| (t.name.as_str(), tr.partitions))
         })
         .collect();
-    let (topics_out, tombstone_records, to_remove) = build_response_rows(
+    let Rows {
+        topics,
+        tombstones,
+        to_remove,
+    } = build_response_rows(
         &req.group_id,
         &req.topics,
         &topic_decisions,
@@ -179,17 +170,19 @@ pub(crate) async fn handle(
         &topic_partition_counts,
     );
 
-    if !tombstone_records.is_empty() {
+    if !tombstones.is_empty() {
         let last_offset_delta =
-            i32::try_from(tombstone_records.len().saturating_sub(1)).unwrap_or(i32::MAX);
-        let tombstones = RecordBatch {
+            i32::try_from(tombstones.len().saturating_sub(1)).unwrap_or(i32::MAX);
+        let batch = RecordBatch {
             max_timestamp: now_ms(),
             last_offset_delta,
-            records: tombstone_records,
+            records: tombstones,
             ..RecordBatch::default()
         };
-        if let Err(code) = append_tombstones(broker, offsets_partition, tombstones).await {
-            return encode(version, &rewrite_success_as(topics_out, code));
+        // A failed coordinator write replaces the whole response, as
+        // `OffsetDeleteResponse.Builder.merge` does with a top-level error.
+        if let Err(code) = append_tombstones(broker, offsets_partition, batch).await {
+            return encode(version, &whole_error(code));
         }
         let (tx, rx) = oneshot::channel();
         if group_handle
@@ -208,7 +201,7 @@ pub(crate) async fn handle(
     let resp = OffsetDeleteResponse {
         error_code: codes::NONE,
         throttle_time_ms: 0,
-        topics: topics_out,
+        topics,
         ..Default::default()
     };
     encode(version, &resp)

@@ -124,27 +124,37 @@ pub fn acl_operation_match(
     }
 }
 
-/// Authentication phase used to admit a Kafka request.
+/// Authentication phase used to admit a Kafka request, after Kafka's
+/// `SaslServerAuthenticator` states.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
 pub enum RequestAuthState {
-    PreAuth,
-    Reauthenticating,
+    /// No `SaslHandshake` has run yet: only `SaslHandshake` (17) and
+    /// `ApiVersions` (18) are Kafka requests the authenticator handles.
+    PreHandshake,
+    /// A handshake chose a mechanism, for the initial authentication or a
+    /// KIP-368 re-authentication: only `SaslAuthenticate` (36) may follow.
+    Exchanging,
+    /// A re-authentication handshake switched mechanisms: the next frame,
+    /// whatever it is, fails the connection.
+    Failed,
     Authenticated,
 }
 
 /// Decide whether an API key may run in the current authentication phase.
 #[ensures(state == RequestAuthState::Authenticated ==> result)]
-#[ensures(state == RequestAuthState::Reauthenticating ==>
+#[ensures(state == RequestAuthState::Failed ==> !result)]
+#[ensures(state == RequestAuthState::Exchanging ==>
     result == (api_key@ == 36))]
-#[ensures(state == RequestAuthState::PreAuth ==>
-    result == (api_key@ == 17 || api_key@ == 18 || api_key@ == 36))]
+#[ensures(state == RequestAuthState::PreHandshake ==>
+    result == (api_key@ == 17 || api_key@ == 18))]
 #[must_use]
 pub fn request_auth_admission(state: RequestAuthState, api_key: i16) -> bool {
     match state {
         RequestAuthState::Authenticated => true,
-        RequestAuthState::Reauthenticating => api_key == 36,
-        RequestAuthState::PreAuth => matches!(api_key, 17 | 18 | 36),
+        RequestAuthState::Failed => false,
+        RequestAuthState::Exchanging => api_key == 36,
+        RequestAuthState::PreHandshake => matches!(api_key, 17 | 18),
     }
 }
 
@@ -279,17 +289,21 @@ mod tests {
 
     #[test]
     fn request_auth_admission_truth_table() {
-        use RequestAuthState::{Authenticated, PreAuth, Reauthenticating};
+        use RequestAuthState::{Authenticated, Exchanging, Failed, PreHandshake};
 
         for (state, api_key, allowed) in [
-            (PreAuth, 17, true),
-            (PreAuth, 18, true),
-            (PreAuth, 36, true),
-            (PreAuth, -1, false),
-            (PreAuth, 0, false),
-            (Reauthenticating, 36, true),
-            (Reauthenticating, 17, false),
-            (Reauthenticating, i16::MAX, false),
+            (PreHandshake, 17, true),
+            (PreHandshake, 18, true),
+            (PreHandshake, 36, false),
+            (PreHandshake, -1, false),
+            (PreHandshake, 0, false),
+            (Exchanging, 36, true),
+            (Exchanging, 17, false),
+            (Exchanging, 18, false),
+            (Exchanging, i16::MAX, false),
+            (Failed, 36, false),
+            (Failed, 17, false),
+            (Failed, 18, false),
             (Authenticated, 0, true),
             (Authenticated, i16::MAX, true),
         ] {

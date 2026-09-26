@@ -5,7 +5,11 @@
 //! and delegates to the module that implements that RPC. The return value is
 //! the actor loop's keep-running flag.
 
-use krabka_protocol::{owned::heartbeat_request::HeartbeatRequest, records::RecordBatch};
+use krabka_protocol::{
+    owned::{heartbeat_request::HeartbeatRequest, leave_group_request::LeaveGroupRequest},
+    records::RecordBatch,
+};
+use tokio::sync::oneshot;
 
 use super::{
     ActorServices, ErrorCode, GroupActorMessage, MetadataProvider, ParkedWaiters,
@@ -14,7 +18,8 @@ use super::{
     classic_sync::handle_classic_sync_message,
     commit_validation::validate_commit_message,
     heartbeat::handle_actor_heartbeat,
-    messages::classic_leave_result,
+    messages::{LeaveResult, classic_leave_result},
+    offset_delete::offset_delete_guard,
     retention::handle_reap_message,
     seed::apply_seed,
     topic_deletion::reply_delete_topic_offsets,
@@ -40,6 +45,23 @@ fn handle_classic_heartbeat_message(
     } else {
         codes::UNKNOWN_MEMBER_ID
     }
+}
+
+/// Answers a classic `LeaveGroup` and returns the actor's keep-running flag,
+/// which is false only when a consumer-kind group's leave fails.
+async fn reply_classic_leave(
+    group: &mut CoordinatorGroup,
+    parked: &mut ParkedWaiters,
+    services: ActorServices<'_>,
+    request: &LeaveGroupRequest,
+    version: i16,
+    reply: oneshot::Sender<LeaveResult>,
+) -> bool {
+    let consumer_kind = group.is_consumer();
+    let result = handle_classic_leave_message(group, parked, services, request, version).await;
+    let keep_running = result.is_ok() || !consumer_kind;
+    let _ = reply.send(classic_leave_result(version, result));
+    keep_running
 }
 
 /// Appends an `OffsetCommit` batch, and records its offsets in the group
@@ -93,6 +115,7 @@ pub(super) async fn handle_actor_message(
             member_id,
             group_instance_id,
             generation_or_epoch,
+            fence,
             reply,
         } => {
             let result = validate_commit_message(
@@ -100,6 +123,7 @@ pub(super) async fn handle_actor_message(
                 &member_id,
                 group_instance_id.as_deref(),
                 generation_or_epoch,
+                fence,
             );
             let _ = reply.send(result);
             true
@@ -142,14 +166,7 @@ pub(super) async fn handle_actor_message(
             req,
             version,
             reply,
-        } => {
-            let consumer_kind = group.is_consumer();
-            let result = handle_classic_leave_message(group, parked, services, &req, version).await;
-            let keep_running = result.is_ok() || !consumer_kind;
-            let result = classic_leave_result(version, result);
-            let _ = reply.send(result);
-            keep_running
-        }
+        } => reply_classic_leave(group, parked, services, &req, version, reply).await,
         GroupActorMessage::ClassicDelete { reply } => {
             handle_classic_delete_message(group, services.offsets_log, reply).await
         }
@@ -157,6 +174,10 @@ pub(super) async fn handle_actor_message(
             if let Some(state) = group.as_classic() {
                 let _ = reply.send(build_classic_view(state));
             }
+            true
+        }
+        GroupActorMessage::OffsetDeleteGuard { reply } => {
+            let _ = reply.send(offset_delete_guard(group));
             true
         }
         GroupActorMessage::InspectAny { reply } => {

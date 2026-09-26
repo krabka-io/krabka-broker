@@ -399,6 +399,12 @@ async fn topic_ids_follow_kafka_version_rules() {
             rows: vec![(Name::Null, Id::A), (Name::Null, Id::A)],
             expect: Rows(vec![Row::Described(Id::A)]),
         },
+        // A repeated name is described once (#640).
+        Case {
+            version: 12,
+            rows: vec![(Name::A, Id::Zero), (Name::A, Id::Zero)],
+            expect: Rows(vec![Row::Described(Id::A)]),
+        },
         // With only zero ids, the names are described, and a null name fails
         // the whole request.
         Case {
@@ -425,7 +431,8 @@ async fn topic_ids_follow_kafka_version_rules() {
 }
 
 /// A denied id row carries a null name and the real id. A denied name row
-/// carries the name and the zero id. An unknown id needs no authorization.
+/// carries the name and the zero id. An unknown id needs no authorization, and
+/// Kafka lists it ahead of every other row.
 #[tokio::test]
 async fn a_denied_topic_row_follows_how_the_request_names_it() {
     use Expect::Rows;
@@ -433,7 +440,7 @@ async fn a_denied_topic_row_follows_how_the_request_names_it() {
         Case {
             version: 13,
             rows: vec![(Name::Null, Id::A), (Name::Null, Id::Unknown)],
-            expect: Rows(vec![Row::DeniedId, Row::UnknownId]),
+            expect: Rows(vec![Row::UnknownId, Row::DeniedId]),
         },
         Case {
             version: 12,

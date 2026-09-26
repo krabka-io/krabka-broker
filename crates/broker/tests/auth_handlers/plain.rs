@@ -462,11 +462,11 @@ async fn plain_in_band_reauth_with_different_principal_closes() {
     handle.shutdown().await;
 }
 
-/// A `SaslAuthenticate` on a connection that is neither negotiating nor
-/// re-authenticating is `ILLEGAL_SASL_STATE` (34), not a silent principal
-/// overwrite.
+/// A `SaslAuthenticate` before any handshake closes the connection with no
+/// response, as Kafka's `SaslServerAuthenticator.handleKafkaRequest` does
+/// (`InvalidRequestException`), rather than authenticating anyone.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn plain_authenticate_without_handshake_is_illegal_sasl_state() {
+async fn plain_authenticate_without_handshake_closes_the_connection() {
     let log_dir = tempfile::tempdir().unwrap();
     let handle = start_plain_reauth_broker(log_dir.path(), krabka_units::secs(30)).await;
     let addr = handle.listen_addr();
@@ -482,15 +482,11 @@ async fn plain_authenticate_without_handshake_is_illegal_sasl_state() {
     };
     let mut auth_body = BytesMut::new();
     auth_req.encode(&mut auth_body, 2).unwrap();
-    let resp_bytes = round_trip(&mut stream, 36, 2, 1, true, &auth_body)
-        .await
-        .expect("SaslAuthenticate round-trip");
-    let mut cur: &[u8] = &resp_bytes;
-    let resp = SaslAuthenticateResponse::decode(&mut cur, 2).unwrap();
     check!(
-        resp.error_code == 34,
-        "expected ILLEGAL_SASL_STATE, got {}",
-        resp.error_code
+        round_trip(&mut stream, 36, 2, 1, true, &auth_body)
+            .await
+            .is_err(),
+        "a SaslAuthenticate before a handshake must close with no response"
     );
 
     handle.shutdown().await;
@@ -502,7 +498,7 @@ async fn plain_authenticate_without_handshake_is_illegal_sasl_state() {
 /// A JVM client re-authenticates only when it next has a request to write, so
 /// on its own send cadence it opens the exchange past the deadline routinely.
 /// The window here is short and the test sleeps past it before every round, so
-/// each of the five rounds starts expired.
+/// each of the three rounds starts expired.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plain_reauth_after_the_window_elapsed_keeps_serving_round_after_round() {
     let log_dir = tempfile::tempdir().unwrap();
@@ -516,8 +512,10 @@ async fn plain_reauth_after_the_window_elapsed_keeps_serving_round_after_round()
         .expect("initial PLAIN authenticate");
     check!(initial.error_code == 0);
 
-    for round in 1..=5 {
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    for round in 1..=3 {
+        // Past the deadline, and a second or more after the previous
+        // re-authentication started (Kafka's `MIN_REAUTH_INTERVAL_ONE_SECOND`).
+        tokio::time::sleep(std::time::Duration::from_millis(1_050)).await;
 
         let reauth =
             plain_authenticate(&mut stream, &mut corr, "alice", alice_password().as_bytes())

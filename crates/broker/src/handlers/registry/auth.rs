@@ -164,7 +164,6 @@ pub(super) fn renew_delegation_token_adapter<'a>(
                 .delegation_token_default_renew_period
                 .millis_i64(),
             &*broker.controller,
-            &broker.config.super_users,
         )
         .await;
         if resp.error_code == crate::codes::NONE
@@ -198,7 +197,6 @@ pub(super) fn expire_delegation_token_adapter<'a>(
             auth,
             broker.config.delegation_token_secret_key.as_ref(),
             &*broker.controller,
-            &broker.config.super_users,
         )
         .await;
         if resp.error_code == crate::codes::NONE

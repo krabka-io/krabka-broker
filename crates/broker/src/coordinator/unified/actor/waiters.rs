@@ -5,7 +5,7 @@
 //! of these functions when the boundary arrives: the rebalance deadline, an
 //! early completion, a member removal, or the leader's `SyncGroup`.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Instant};
 
 use tokio::sync::oneshot;
 
@@ -18,8 +18,9 @@ use crate::{
     },
 };
 
-/// Runs the rebalance vote and resolves every parked joiner. It mirrors
-/// `join_group.rs` block 5 and `notify_waiters()`.
+/// Runs Kafka's `completeClassicGroupJoin` and resolves every parked joiner.
+/// It returns `true` when the round emptied the group, which the caller must
+/// persist as Kafka writes the empty generation.
 ///
 /// It also drains any stale parked follower with `REBALANCE_IN_PROGRESS`. Such
 /// a follower belongs to a previous `CompletingRebalance` whose leader was
@@ -29,35 +30,90 @@ pub(super) fn complete_classic_rebalance(
     state: &mut ClassicState,
     joiners: &mut HashMap<String, oneshot::Sender<JoinResult>>,
     followers: &mut HashMap<String, oneshot::Sender<SyncResult>>,
+) -> bool {
+    drain_followers_with(followers, codes::REBALANCE_IN_PROGRESS);
+    match classic_ops::try_complete(state, Instant::now()) {
+        Ok(classic_ops::Completion::NotPreparing) => {
+            answer_joiners(state, joiners);
+            false
+        }
+        Ok(classic_ops::Completion::Generation { removed }) => {
+            drain_removed_classic_waiters(&removed, joiners, followers);
+            answer_joiners(state, joiners);
+            false
+        }
+        Ok(classic_ops::Completion::Postponed { removed }) => {
+            drain_removed_classic_waiters(&removed, joiners, followers);
+            false
+        }
+        Ok(classic_ops::Completion::Emptied { removed }) => {
+            drain_removed_classic_waiters(&removed, joiners, followers);
+            true
+        }
+        Err(error) => {
+            state.rebalance_deadline = None;
+            state.joined_this_round.clear();
+            let error_code = match error {
+                classic_ops::CompleteError::InconsistentProtocol => {
+                    codes::INCONSISTENT_GROUP_PROTOCOL
+                }
+                classic_ops::CompleteError::EpochExhausted => codes::INVALID_REQUEST,
+            };
+            for (member_id, sender) in joiners.drain() {
+                let _ = sender.send(JoinResult {
+                    error_code,
+                    member_id,
+                    protocol_type: state.protocol_type.clone(),
+                    ..JoinResult::default()
+                });
+            }
+            false
+        }
+    }
+}
+
+fn answer_joiners(
+    state: &ClassicState,
+    joiners: &mut HashMap<String, oneshot::Sender<JoinResult>>,
+) {
+    for (member_id, sender) in joiners.drain() {
+        let _ = sender.send(classic_ops::build_join_result(state, &member_id));
+    }
+}
+
+/// Answers every parked `SyncGroup` follower with `error_code`, as Kafka's
+/// `prepareRebalance` does from `CompletingRebalance`.
+pub(super) fn drain_followers_with(
+    followers: &mut HashMap<String, oneshot::Sender<SyncResult>>,
+    error_code: i16,
 ) {
     for (_, sender) in followers.drain() {
         let _ = sender.send(SyncResult {
-            error_code: codes::REBALANCE_IN_PROGRESS,
+            error_code,
             ..SyncResult::default()
         });
     }
-    let completion_error = classic_ops::try_complete(state).err();
-    if completion_error.is_some() {
-        state.rebalance_deadline = None;
-        state.joined_this_round.clear();
+}
+
+/// Kafka's `replaceStaticMember` fence: the old member id's parked
+/// `JoinGroup` and `SyncGroup` get `FENCED_INSTANCE_ID`.
+pub(super) fn fence_replaced_classic_member(
+    member_id: &str,
+    joiners: &mut HashMap<String, oneshot::Sender<JoinResult>>,
+    followers: &mut HashMap<String, oneshot::Sender<SyncResult>>,
+) {
+    if let Some(sender) = joiners.remove(member_id) {
+        let _ = sender.send(JoinResult {
+            error_code: codes::FENCED_INSTANCE_ID,
+            member_id: member_id.to_string(),
+            ..JoinResult::default()
+        });
     }
-    for (member_id, sender) in joiners.drain() {
-        let result = if let Some(error) = completion_error {
-            JoinResult {
-                error_code: match error {
-                    classic_ops::CompleteError::InconsistentProtocol => {
-                        codes::INCONSISTENT_GROUP_PROTOCOL
-                    }
-                    classic_ops::CompleteError::EpochExhausted => codes::INVALID_REQUEST,
-                },
-                member_id: member_id.clone(),
-                protocol_type: state.protocol_type.clone(),
-                ..JoinResult::default()
-            }
-        } else {
-            classic_ops::build_join_result(state, &member_id)
-        };
-        let _ = sender.send(result);
+    if let Some(sender) = followers.remove(member_id) {
+        let _ = sender.send(SyncResult {
+            error_code: codes::FENCED_INSTANCE_ID,
+            ..SyncResult::default()
+        });
     }
 }
 
@@ -83,19 +139,22 @@ pub(super) fn drain_removed_classic_waiters(
     }
 }
 
-/// Completes the rebalance early if and only if every still-live member has
-/// joined this round and the group has rebalanced before. This mirrors
-/// `wake_other_joiners`.
+/// Completes the rebalance early if and only if every member has joined a
+/// round that did not open from `Empty`, Kafka's `maybeCompleteJoinPhase`
+/// after a member left or expired.
 pub(super) fn maybe_complete_classic(
     state: &mut ClassicState,
     joiners: &mut HashMap<String, oneshot::Sender<JoinResult>>,
     followers: &mut HashMap<String, oneshot::Sender<SyncResult>>,
 ) {
-    let should = state.generation_id > 0
+    let should = !state.rebalance_from_empty
         && matches!(state.state, ClassicGroupState::PreparingRebalance)
-        && state.all_members_joined_this_round();
+        && !state.members.is_empty()
+        && state.has_all_members_joined();
     if should {
-        complete_classic_rebalance(state, joiners, followers);
+        // Every member joined, so none is removed and the group stays
+        // non-empty: there is nothing to persist.
+        let _ = complete_classic_rebalance(state, joiners, followers);
     }
 }
 

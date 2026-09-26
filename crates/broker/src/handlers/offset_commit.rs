@@ -19,7 +19,7 @@ use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::{
     Decode,
     owned::{
-        offset_commit_request::OffsetCommitRequest,
+        offset_commit_request::{OffsetCommitRequest, OffsetCommitRequestTopic},
         offset_commit_response::{
             OffsetCommitResponse, OffsetCommitResponsePartition, OffsetCommitResponseTopic,
         },
@@ -38,8 +38,9 @@ use crate::{
         partitioner::{GroupRoutingError, local_partition_for_group},
         persistence::OffsetCommitValue,
         unified::{
-            actor::{GroupActorHandle, GroupActorMessage, GroupKindTag, validate_group_commit},
+            actor::{GroupActorHandle, GroupActorMessage, GroupKindTag, validate_offset_commit},
             classic_state::OffsetEntry,
+            streams::actor::validate_streams_group_commit,
         },
     },
     error::BrokerError,
@@ -48,12 +49,18 @@ use crate::{
 mod response;
 
 #[cfg(test)]
+mod group_validation_tests;
+#[cfg(test)]
 mod topic_resolution_tests;
 
 /// The first `OffsetCommit` version that names each topic by `topic_id` only
 /// (KIP-848). The request schema carries `name` at versions 0-9 and
 /// `topic_id` from this version on.
 const FIRST_TOPIC_ID_VERSION: i16 = 10;
+
+/// The first `OffsetCommit` version that answers `GROUP_ID_NOT_FOUND` for a
+/// group that does not exist. Earlier versions answer `ILLEGAL_GENERATION`.
+const FIRST_GROUP_ID_NOT_FOUND_VERSION: i16 = 9;
 
 /// Serves one `OffsetCommit` request.
 ///
@@ -67,12 +74,14 @@ const FIRST_TOPIC_ID_VERSION: i16 = 10;
 ///    id is such a row.
 /// 3. `Read` on each `Topic(name)`. A denied topic answers
 ///    `TOPIC_AUTHORIZATION_FAILED` on every partition row.
-/// 4. The group coordinator commits the rows that remain, and a coordinator
+/// 4. A topic or a partition that the image does not hold answers
+///    `UNKNOWN_TOPIC_OR_PARTITION` on its partition rows.
+/// 5. The group coordinator commits the rows that remain, and a coordinator
 ///    error goes on those rows only.
 ///
 /// The error rows come first in the response and the committed rows follow,
 /// as `OffsetCommitResponse.Builder.merge` puts them. The handler writes no
-/// offset for a row that steps 2 or 3 refuse.
+/// offset for a row that steps 2 to 4 refuse.
 #[tracing::instrument(
     name = "handle_offset_commit",
     level = "info",
@@ -137,7 +146,7 @@ pub(crate) async fn handle(
             response.add_topic(&topic, codes::UNKNOWN_TOPIC_ID);
         } else if !allowed {
             response.add_topic(&topic, codes::TOPIC_AUTHORIZATION_FAILED);
-        } else {
+        } else if let Some(topic) = existing_partitions(topic, &image, &mut response) {
             accepted.push(topic);
         }
     }
@@ -146,8 +155,7 @@ pub(crate) async fn handle(
     }
 
     req.topics = accepted;
-    let error_code = commit(broker, &req).await;
-    response.merge(build_response_all(&req, error_code).topics);
+    response.merge(commit(broker, &req, version).await);
     encode(version, &response.build())
 }
 
@@ -166,50 +174,145 @@ fn resolve_topic_names(request: &mut OffsetCommitRequest, image: &krabka_metadat
     }
 }
 
-/// Commits every row of `req` through the group coordinator, and returns the
-/// error code that goes on each of those rows.
+/// Keeps the partitions of an authorized `topic` that the image holds.
+///
+/// A topic that the image does not hold answers `UNKNOWN_TOPIC_OR_PARTITION`
+/// on every partition row, with the zero id. A partition that the image does
+/// not hold answers `UNKNOWN_TOPIC_OR_PARTITION` on its own row. This is the
+/// existence check of Kafka's `KafkaApis.handleOffsetCommitRequest`, which
+/// runs after the topic `Read` check and keeps every refused row away from
+/// the group coordinator. It returns `None` when no partition remains.
+fn existing_partitions(
+    mut topic: OffsetCommitRequestTopic,
+    image: &krabka_metadata::MetadataImage,
+    response: &mut ResponseBuilder,
+) -> Option<OffsetCommitRequestTopic> {
+    if image.topic(&topic.name).is_none() {
+        topic.topic_id = WireUuid::ZERO;
+        response.add_topic(&topic, codes::UNKNOWN_TOPIC_OR_PARTITION);
+        return None;
+    }
+    let (present, missing): (Vec<_>, Vec<_>) = std::mem::take(&mut topic.partitions)
+        .into_iter()
+        .partition(|partition| {
+            image
+                .partition(&topic.name, partition.partition_index)
+                .is_some()
+        });
+    for partition in missing {
+        response.add_partition(
+            topic.topic_id,
+            &topic.name,
+            partition.partition_index,
+            codes::UNKNOWN_TOPIC_OR_PARTITION,
+        );
+    }
+    topic.partitions = present;
+    (!topic.partitions.is_empty()).then_some(topic)
+}
+
+/// Commits the rows of `req` through the group coordinator, and returns the
+/// coordinator's topic rows.
 ///
 /// The group routing, the membership and epoch check, and the append each
 /// answer with one code for the whole commit, as Kafka's
 /// `GroupCoordinatorService.commitOffsets` does with
-/// `OffsetCommitRequest.getErrorResponse`.
-async fn commit(broker: &Broker, req: &OffsetCommitRequest) -> i16 {
+/// `OffsetCommitRequest.getErrorResponse`. Past those, a partition whose
+/// metadata is too large answers `OFFSET_METADATA_TOO_LARGE` on its own row,
+/// and the others commit, as `OffsetMetadataManager.commitOffset` does.
+async fn commit(
+    broker: &Broker,
+    req: &OffsetCommitRequest,
+    version: i16,
+) -> Vec<OffsetCommitResponseTopic> {
+    match commit_rows(broker, req, version).await {
+        Ok(topics) => topics,
+        Err(code) => build_response_all(req, code).topics,
+    }
+}
+
+async fn commit_rows(
+    broker: &Broker,
+    req: &OffsetCommitRequest,
+    version: i16,
+) -> Result<Vec<OffsetCommitResponseTopic>, i16> {
     let image = broker.controller.current_image();
     match local_partition_for_group(&image, broker.config.node_id, &req.group_id) {
         Ok(_) => {}
-        Err(GroupRoutingError::Unavailable) => return codes::COORDINATOR_NOT_AVAILABLE,
-        Err(GroupRoutingError::NotCoordinator) => return codes::NOT_COORDINATOR,
+        Err(GroupRoutingError::Unavailable) => return Err(codes::COORDINATOR_NOT_AVAILABLE),
+        Err(GroupRoutingError::NotCoordinator) => return Err(codes::NOT_COORDINATOR),
     }
 
     let now_ms = now_ms();
     let expire_timestamp_ms = expire_timestamp_ms(req.retention_time_ms, now_ms);
-    // Find the group's actor (a classic actor is created for an unknown id —
-    // e.g. a "simple" consumer committing offsets without joining a group).
-    // Offsets are protocol-agnostic, so an existing actor of either kind serves
-    // the commit the same way.
-    let handle = broker
-        .group_coordinator
-        .find(&req.group_id)
-        .unwrap_or_else(|| {
-            broker
-                .group_coordinator
-                .get_or_create_group(&req.group_id, GroupKindTag::Classic)
-        });
+    let handle = validate(broker, req, version).await?;
 
-    // Validate membership/epoch through the actor (kind-specific).
-    if let Some(code) = validate(&handle, req).await {
-        return code;
+    let (valid, rows) = split_oversized_metadata(req, broker.config.offset_metadata_max_bytes);
+    if valid
+        .topics
+        .iter()
+        .any(|topic| !topic.partitions.is_empty())
+    {
+        let commit = Commit {
+            now_ms,
+            expire_timestamp_ms,
+            image: &image,
+        };
+        commit_through_actor(&handle, &valid, commit).await?;
     }
+    Ok(rows)
+}
 
-    let commit = Commit {
-        now_ms,
-        expire_timestamp_ms,
-        image: &image,
+/// Whether `metadata` is longer than `max_bytes`, as Kafka's
+/// `OffsetMetadataManager.isMetadataInvalid` measures it: in UTF-16 code
+/// units, which is Java's `String.length()`. A null metadata is valid.
+fn metadata_too_large(metadata: Option<&str>, max_bytes: i32) -> bool {
+    metadata.is_some_and(|metadata| {
+        i64::try_from(metadata.encode_utf16().count()).unwrap_or(i64::MAX) > i64::from(max_bytes)
+    })
+}
+
+/// Splits `req` into the request that holds the partitions whose metadata
+/// fits in `max_bytes`, and the coordinator's topic rows in request order: a
+/// partition whose metadata is too large answers `OFFSET_METADATA_TOO_LARGE`,
+/// and every other partition answers `NONE`.
+fn split_oversized_metadata(
+    req: &OffsetCommitRequest,
+    max_bytes: i32,
+) -> (OffsetCommitRequest, Vec<OffsetCommitResponseTopic>) {
+    let mut valid = OffsetCommitRequest {
+        topics: Vec::with_capacity(req.topics.len()),
+        ..req.clone()
     };
-    match commit_through_actor(&handle, req, commit).await {
-        Ok(()) => codes::NONE,
-        Err(code) => code,
+    let mut rows = Vec::with_capacity(req.topics.len());
+    for topic in &req.topics {
+        let mut row = OffsetCommitResponseTopic {
+            name: topic.name.clone(),
+            topic_id: topic.topic_id,
+            ..Default::default()
+        };
+        let mut kept = OffsetCommitRequestTopic {
+            partitions: Vec::with_capacity(topic.partitions.len()),
+            ..topic.clone()
+        };
+        for partition in &topic.partitions {
+            let error_code =
+                if metadata_too_large(partition.committed_metadata.as_deref(), max_bytes) {
+                    codes::OFFSET_METADATA_TOO_LARGE
+                } else {
+                    kept.partitions.push(partition.clone());
+                    codes::NONE
+                };
+            row.partitions.push(OffsetCommitResponsePartition {
+                partition_index: partition.partition_index,
+                error_code,
+                ..Default::default()
+            });
+        }
+        valid.topics.push(kept);
+        rows.push(row);
     }
+    (valid, rows)
 }
 
 /// The wire value of `retention_time_ms` that asks for the broker's own
@@ -250,23 +353,50 @@ fn now_ms() -> i64 {
     .unwrap_or(0)
 }
 
-/// Validate the commit against the group's membership and epoch through its
-/// actor.
+/// Finds the group of `req` and validates the commit against its membership,
+/// as Kafka's `OffsetMetadataManager.validateOffsetCommit` does. It returns
+/// the actor that holds the group's offsets, or the error code for every row.
 ///
-/// This function returns `Some(error_code)` if the broker must reject the
-/// request. It is a thin wrapper over the shared [`validate_group_commit`],
-/// which `TxnOffsetCommit` also uses. That function dispatches on the actor's
-/// LIVE `group.kind`. A KIP-848 migration may have flipped the protocol in
-/// place after spawn, so validation must run against the current protocol,
-/// not the spawn-time `handle.kind`.
-async fn validate(handle: &Arc<GroupActorHandle>, req: &OffsetCommitRequest) -> Option<i16> {
-    validate_group_commit(
-        handle,
-        &req.member_id,
-        req.generation_id_or_member_epoch,
-        req.group_instance_id.as_deref(),
-    )
-    .await
+/// A group that does not exist is created as a simple group when the
+/// generation is negative, which is the admin client or a consumer that does
+/// not use group management. Otherwise it answers `GROUP_ID_NOT_FOUND` from
+/// v9 on and `ILLEGAL_GENERATION` before.
+///
+/// A classic or consumer group validates inside its actor, on the actor's
+/// LIVE protocol: a KIP-848 migration may have flipped the protocol in place
+/// after spawn. A streams group (KIP-1071) validates in its streams actor, and
+/// its offsets live in a group actor of the same id, as `TxnOffsetCommit`
+/// keeps them.
+async fn validate(
+    broker: &Broker,
+    req: &OffsetCommitRequest,
+    version: i16,
+) -> Result<Arc<GroupActorHandle>, i16> {
+    let coordinator = &broker.group_coordinator;
+    let generation = req.generation_id_or_member_epoch;
+    let code = if let Some(streams) = coordinator.find_streams(&req.group_id) {
+        validate_streams_group_commit(&streams, &req.member_id, generation).await
+    } else if let Some(handle) = coordinator.find(&req.group_id) {
+        let code = validate_offset_commit(
+            &handle,
+            &req.member_id,
+            generation,
+            req.group_instance_id.as_deref(),
+            version,
+        )
+        .await;
+        return code.map_or(Ok(handle), Err);
+    } else if generation < 0 {
+        None
+    } else if version >= FIRST_GROUP_ID_NOT_FOUND_VERSION {
+        Some(codes::GROUP_ID_NOT_FOUND)
+    } else {
+        Some(codes::ILLEGAL_GENERATION)
+    };
+    match code {
+        Some(code) => Err(code),
+        None => Ok(coordinator.get_or_create_group(&req.group_id, GroupKindTag::Classic)),
+    }
 }
 
 /// One commit's two halves: the `__consumer_offsets` records for every
@@ -396,6 +526,7 @@ fn encode(version: i16, resp: &OffsetCommitResponse) -> Result<Bytes, BrokerErro
 #[cfg(test)]
 mod tests {
     use assert2::check;
+    use krabka_protocol::owned::offset_commit_request::OffsetCommitRequestPartition;
 
     use super::*;
 
@@ -421,5 +552,71 @@ mod tests {
                 "retention_time_ms={retention_time_ms} now_ms={now_ms}"
             );
         }
+    }
+
+    /// `OffsetMetadataManager.isMetadataInvalid`: Java's `String.length()`
+    /// against `offset.metadata.max.bytes`. A character outside the Basic
+    /// Multilingual Plane is two UTF-16 code units.
+    #[test]
+    fn oversized_metadata_answers_on_its_own_row_and_is_not_committed() {
+        const LIMIT: i32 = 4096;
+        let supplementary = format!("{}\u{1F980}", "a".repeat(4095));
+        let cases: [(Option<String>, i16); 6] = [
+            (None, codes::NONE),
+            (Some(String::new()), codes::NONE),
+            (Some("a".repeat(4096)), codes::NONE),
+            (Some("a".repeat(4097)), codes::OFFSET_METADATA_TOO_LARGE),
+            // 4095 + 2 code units, though 4096 characters.
+            (Some(supplementary), codes::OFFSET_METADATA_TOO_LARGE),
+            // 4096 characters of two UTF-8 bytes each are 4096 code units.
+            (Some("\u{e9}".repeat(4096)), codes::NONE),
+        ];
+        let partition = |index: usize, metadata: &Option<String>| OffsetCommitRequestPartition {
+            partition_index: i32::try_from(index).unwrap(),
+            committed_offset: 42,
+            committed_metadata: metadata.clone(),
+            ..Default::default()
+        };
+        let request = OffsetCommitRequest {
+            group_id: "g".into(),
+            topics: vec![OffsetCommitRequestTopic {
+                name: "t".into(),
+                partitions: cases
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (metadata, _))| partition(index, metadata))
+                    .collect(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let expected_valid = OffsetCommitRequest {
+            topics: vec![OffsetCommitRequestTopic {
+                name: "t".into(),
+                partitions: cases
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (_, code))| *code == codes::NONE)
+                    .map(|(index, (metadata, _))| partition(index, metadata))
+                    .collect(),
+                ..Default::default()
+            }],
+            ..request.clone()
+        };
+        let expected_rows = vec![OffsetCommitResponseTopic {
+            name: "t".into(),
+            partitions: cases
+                .iter()
+                .enumerate()
+                .map(|(index, (_, error_code))| OffsetCommitResponsePartition {
+                    partition_index: i32::try_from(index).unwrap(),
+                    error_code: *error_code,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }];
+        check!(split_oversized_metadata(&request, LIMIT) == (expected_valid, expected_rows));
     }
 }

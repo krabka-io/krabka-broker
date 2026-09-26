@@ -398,7 +398,7 @@ mod tests {
             results: vec![expected_result(
                 "alice",
                 codes::RESOURCE_NOT_FOUND,
-                Some("credential not found"),
+                Some("Attempt to delete a user credential that does not exist"),
             )],
             unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
         };

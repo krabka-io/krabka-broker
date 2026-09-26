@@ -130,6 +130,11 @@ impl BrokerHandle {
     ///
     /// Nothing here reopens the log or moves the log end offset, so a caller
     /// that has already settled its writes can take a reading immediately.
+    ///
+    /// The hold is not sticky: a replicator reconcile reinstalls the ISR and
+    /// recomputes the watermark from the log end, which raises it again. A
+    /// caller that reads under the hold confirms with
+    /// [`Self::high_watermark_for_test`] that it was still in place.
     #[cfg(any(test, feature = "test-helpers"))]
     pub async fn hold_high_watermark_for_test(
         &self,
@@ -142,6 +147,17 @@ impl BrokerHandle {
         };
         part.replica_state.lock().await.hw = krabka_log::Offset(offset);
         true
+    }
+
+    /// Test-only: the high watermark of `(topic, partition)` on this broker,
+    /// or `None` when the partition is not hosted here.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn high_watermark_for_test(&self, topic: &str, partition: i32) -> Option<i64> {
+        let part = self
+            .broker
+            .partitions
+            .get(topic, PartitionIndex(partition))?;
+        Some(part.high_watermark().await.0)
     }
 
     /// Test-only: return the `retention.ms` override currently active in

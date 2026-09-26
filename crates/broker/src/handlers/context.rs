@@ -49,6 +49,11 @@ pub(crate) struct RequestContext<'a> {
     /// [`RequestContext::take_close_after_response`] once the (empty) response
     /// has been written and closes the connection instead of muting it.
     close_after_response: std::sync::atomic::AtomicBool,
+    /// Size of the request as Kafka's `Request.sizeInBytes` counts it: the
+    /// header and the body, without the four-byte length prefix. `Produce`
+    /// charges it to `producer_byte_rate`. It is zero unless the dispatch loop
+    /// set it with [`RequestContext::with_request_size`].
+    pub request_size: u64,
 }
 
 /// Connection attributes a KIP-714 telemetry handler needs to match a
@@ -80,7 +85,16 @@ impl<'a> RequestContext<'a> {
             connection_listener_name,
             throttle: crate::quota::ThrottleSlot::default(),
             close_after_response: std::sync::atomic::AtomicBool::new(false),
+            request_size: 0,
         }
+    }
+
+    /// Records the size of the request frame this context serves, header and
+    /// body, as Kafka's `Request.sizeInBytes` counts it.
+    #[must_use]
+    pub(crate) fn with_request_size(mut self, frame_len: usize) -> Self {
+        self.request_size = u64::try_from(frame_len).unwrap_or(u64::MAX);
+        self
     }
 
     /// Records the KIP-219 window this request must be throttled for. The
@@ -191,6 +205,8 @@ mod tests {
         assert!(ctx.sendfile_capable);
         assert!(ctx.connection_listener_name == "SASL_SSL");
         assert!(ctx.client_host() == "/127.0.0.1");
+        assert!(ctx.request_size == 0);
+        assert!(ctx.with_request_size(8_300).request_size == 8_300);
     }
 
     #[test]

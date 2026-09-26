@@ -7,15 +7,15 @@ use krabka_verified::{
 };
 
 /// Return the configured value for `quota_key` under the most-specific
-/// matching entity for `(principal, client_id)`. First match wins per
-/// Kafka's documented precedence:
-///   1. (client-id=app1, user=alice)
-///   2. (client-id=app1, user=default)
-///   3. (client-id=default, user=alice)
-///   4. (client-id=default, user=default)
-///   5. (user=alice)
-///   6. (client-id=app1)
-///   7. (user=default)
+/// matching entity for `(principal, client_id)`. First match wins, in the
+/// order of Kafka's `ClientQuotaManager.DefaultQuotaCallback`:
+///   1. (user=alice, client-id=app1)
+///   2. (user=alice, client-id=default)
+///   3. (user=alice)
+///   4. (user=default, client-id=app1)
+///   5. (user=default, client-id=default)
+///   6. (user=default)
+///   7. (client-id=app1)
 ///   8. (client-id=default)
 ///
 /// All candidate keys are pre-sorted by `entity_type` ("client-id" <
@@ -35,6 +35,10 @@ pub fn lookup_quota(
 /// Like `lookup_quota`, but it also returns the canonical entity key
 /// that matched. Enforcement code uses this to bind the lookup to a
 /// bucket in `QuotaBuckets`.
+///
+/// The bucket key follows Kafka's metric tags: levels 1, 2, 4 and 5 share one
+/// sensor per `(user, client-id)`, levels 3 and 6 one per `user`, and levels
+/// 7 and 8 one per `client-id`.
 #[must_use]
 pub fn lookup_quota_with_key(
     image: &MetadataImage,
@@ -48,17 +52,17 @@ pub fn lookup_quota_with_key(
             ("user".into(), Some(principal.into())),
         ],
         vec![
-            ("client-id".into(), Some(client_id.into())),
-            ("user".into(), None),
-        ],
-        vec![
             ("client-id".into(), None),
             ("user".into(), Some(principal.into())),
         ],
-        vec![("client-id".into(), None), ("user".into(), None)],
         vec![("user".into(), Some(principal.into()))],
-        vec![("client-id".into(), Some(client_id.into()))],
+        vec![
+            ("client-id".into(), Some(client_id.into())),
+            ("user".into(), None),
+        ],
+        vec![("client-id".into(), None), ("user".into(), None)],
         vec![("user".into(), None)],
+        vec![("client-id".into(), Some(client_id.into()))],
         vec![("client-id".into(), None)],
     ];
     let matches = candidates.map(|key| quota_for_key(image, key, quota_key));
@@ -71,30 +75,30 @@ pub fn lookup_quota_with_key(
     };
     let selected = user_client_quota_precedence(UserClientQuotaFacts {
         exact_pair: present(0),
-        exact_client_default_user: present(1),
-        default_client_exact_user: present(2),
-        default_pair: present(3),
-        exact_user: present(4),
-        exact_client: present(5),
-        default_user: present(6),
+        exact_user_default_client: present(1),
+        exact_user: present(2),
+        default_user_exact_client: present(3),
+        default_pair: present(4),
+        default_user: present(5),
+        exact_client: present(6),
         default_client: present(7),
     });
     let index = match selected {
         UserClientQuotaPrecedence::ExactPair => 0,
-        UserClientQuotaPrecedence::ExactClientDefaultUser => 1,
-        UserClientQuotaPrecedence::DefaultClientExactUser => 2,
-        UserClientQuotaPrecedence::DefaultPair => 3,
-        UserClientQuotaPrecedence::ExactUser => 4,
-        UserClientQuotaPrecedence::ExactClient => 5,
-        UserClientQuotaPrecedence::DefaultUser => 6,
+        UserClientQuotaPrecedence::ExactUserDefaultClient => 1,
+        UserClientQuotaPrecedence::ExactUser => 2,
+        UserClientQuotaPrecedence::DefaultUserExactClient => 3,
+        UserClientQuotaPrecedence::DefaultPair => 4,
+        UserClientQuotaPrecedence::DefaultUser => 5,
+        UserClientQuotaPrecedence::ExactClient => 6,
         UserClientQuotaPrecedence::DefaultClient => 7,
         UserClientQuotaPrecedence::None => return None,
     };
     let (_, rate) = matches[index].clone()?;
     let bucket_key = match selected {
         UserClientQuotaPrecedence::ExactPair
-        | UserClientQuotaPrecedence::ExactClientDefaultUser
-        | UserClientQuotaPrecedence::DefaultClientExactUser
+        | UserClientQuotaPrecedence::ExactUserDefaultClient
+        | UserClientQuotaPrecedence::DefaultUserExactClient
         | UserClientQuotaPrecedence::DefaultPair => vec![
             ("client-id".into(), Some(client_id.into())),
             ("user".into(), Some(principal.into())),
@@ -336,15 +340,89 @@ mod tests {
         client_id: &'a str,
     ) -> [Vec<(&'a str, Option<&'a str>)>; 8] {
         [
-            vec![("client-id", Some(client_id)), ("user", Some(principal))],
-            vec![("client-id", Some(client_id)), ("user", None)],
-            vec![("client-id", None), ("user", Some(principal))],
-            vec![("client-id", None), ("user", None)],
+            vec![("user", Some(principal)), ("client-id", Some(client_id))],
+            vec![("user", Some(principal)), ("client-id", None)],
             vec![("user", Some(principal))],
-            vec![("client-id", Some(client_id))],
+            vec![("user", None), ("client-id", Some(client_id))],
+            vec![("user", None), ("client-id", None)],
             vec![("user", None)],
+            vec![("client-id", Some(client_id))],
             vec![("client-id", None)],
         ]
+    }
+
+    /// Kafka's `ClientQuotaManager` ranks every `user=U` level above every
+    /// `user=<default>` level (#677). Each row sets two or more levels and
+    /// expects the higher one, with the bucket key Kafka's metric tags give.
+    #[test]
+    fn precedence_matches_kafkas_client_quota_manager() {
+        type Level = Vec<(&'static str, Option<&'static str>)>;
+        /// A case name, the configured levels and rates, and the expected
+        /// bucket key and rate.
+        type Row = (String, Vec<(Level, f64)>, (EntityKey, f64));
+        let pair: EntityKey = vec![
+            ("client-id".into(), Some("app".into())),
+            ("user".into(), Some("alice".into())),
+        ];
+        let user: EntityKey = vec![("user".into(), Some("alice".into()))];
+        let client: EntityKey = vec![("client-id".into(), Some("app".into()))];
+        let levels: [Level; 8] = uc_candidates("alice", "app");
+        // Every adjacent pair: level N and N+1 both set, level N wins.
+        let bucket_for_level = [&pair, &pair, &user, &pair, &pair, &user, &client, &client];
+        let mut rows: Vec<Row> = (0..7)
+            .map(|n| {
+                (
+                    format!("levels {} and {}", n + 1, n + 2),
+                    vec![(levels[n].clone(), 1000.0), (levels[n + 1].clone(), 5000.0)],
+                    (bucket_for_level[n].clone(), 1000.0),
+                )
+            })
+            .collect();
+        // The four examples from the issue.
+        rows.extend([
+            (
+                "user=alice over the default pair".to_owned(),
+                vec![
+                    (vec![("user", Some("alice"))], 1000.0),
+                    (vec![("user", None), ("client-id", None)], 5000.0),
+                ],
+                (user.clone(), 1000.0),
+            ),
+            (
+                "user=alice,client-id=default over user=default,client-id=app".to_owned(),
+                vec![
+                    (vec![("user", Some("alice")), ("client-id", None)], 1000.0),
+                    (vec![("user", None), ("client-id", Some("app"))], 5000.0),
+                ],
+                (pair.clone(), 1000.0),
+            ),
+            (
+                "user=alice over user=default,client-id=app".to_owned(),
+                vec![
+                    (vec![("user", Some("alice"))], 1000.0),
+                    (vec![("user", None), ("client-id", Some("app"))], 5000.0),
+                ],
+                (user.clone(), 1000.0),
+            ),
+            (
+                "user=default over client-id=app".to_owned(),
+                vec![
+                    (vec![("user", None)], 1000.0),
+                    (vec![("client-id", Some("app"))], 5000.0),
+                ],
+                (user.clone(), 1000.0),
+            ),
+        ]);
+        for (name, configured, expected) in rows {
+            let img = img_with(
+                configured
+                    .into_iter()
+                    .map(|(entity, value)| rec(entity, "producer_byte_rate", value))
+                    .collect(),
+            );
+            let got = lookup_quota_with_key(&img, "alice", "app", "producer_byte_rate");
+            assert2::check!(got == Some(expected), "{name}");
+        }
     }
 
     /// Distinct per-candidate sentinel values, where the index is the priority.

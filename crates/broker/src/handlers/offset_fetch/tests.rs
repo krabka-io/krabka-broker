@@ -753,6 +753,231 @@ async fn refused_topics_follow_the_answered_topics() {
     broker_handle.shutdown().await;
 }
 
+/// Allows every group operation, denies `Read` on every topic, and allows
+/// `Describe` on the known topic only.
+#[derive(Debug)]
+struct DescribeKnownTopic;
+
+impl crate::authorizer::Authorizer for DescribeKnownTopic {
+    fn authorize(
+        &self,
+        _source: &dyn krabka_authz::AclSource,
+        req: &crate::authorizer::AuthorizationRequest<'_>,
+    ) -> crate::authorizer::AuthorizationResult {
+        let allowed = req.resource_type != krabka_metadata::ResourceType::Topic
+            || (req.operation == krabka_metadata::AclOperation::Describe
+                && req.resource_name == KNOWN_NAME);
+        if allowed {
+            crate::authorizer::AuthorizationResult::Allow
+        } else {
+            crate::authorizer::AuthorizationResult::Deny
+        }
+    }
+}
+
+/// The legacy (v0 to v7) partition row of the seeded offset of the known
+/// topic.
+fn legacy_seeded_row() -> OffsetFetchResponsePartition {
+    OffsetFetchResponsePartition {
+        partition_index: 0,
+        committed_offset: 42,
+        committed_leader_epoch: 5,
+        metadata: Some(String::new()),
+        error_code: codes::NONE,
+        ..Default::default()
+    }
+}
+
+/// The legacy (v0 to v7) partition row of a refused topic.
+fn legacy_refused_row() -> OffsetFetchResponsePartition {
+    OffsetFetchResponsePartition {
+        partition_index: 0,
+        committed_offset: -1,
+        committed_leader_epoch: -1,
+        metadata: Some(String::new()),
+        error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+        ..Default::default()
+    }
+}
+
+/// A legacy (v0 to v7) response that carries one partition row per topic.
+fn legacy_response(topics: Vec<(&str, OffsetFetchResponsePartition)>) -> OffsetFetchResponse {
+    OffsetFetchResponse {
+        topics: topics
+            .into_iter()
+            .map(|(name, partition)| OffsetFetchResponseTopic {
+                name: name.to_string(),
+                partitions: vec![partition],
+                ..Default::default()
+            })
+            .collect(),
+        error_code: codes::NONE,
+        ..Default::default()
+    }
+}
+
+/// A legacy (v0 to v7) request for partition 0 of `topics`, or for every
+/// topic when `None`.
+fn legacy_request(topics: Option<&[&str]>) -> OffsetFetchRequest {
+    OffsetFetchRequest {
+        group_id: "grp".into(),
+        topics: topics.map(|names| {
+            names
+                .iter()
+                .map(
+                    |name| krabka_protocol::owned::offset_fetch_request::OffsetFetchRequestTopic {
+                        name: (*name).to_string(),
+                        partition_indexes: vec![0],
+                        ..Default::default()
+                    },
+                )
+                .collect()
+        }),
+        ..Default::default()
+    }
+}
+
+/// A KIP-516 request for partition 0 of `topics` by name, or for every topic
+/// when `None`.
+fn named_groups_request(topics: Option<&[&str]>) -> OffsetFetchRequest {
+    OffsetFetchRequest {
+        groups: vec![OffsetFetchRequestGroup {
+            group_id: "grp".into(),
+            topics: topics.map(|names| {
+                names
+                    .iter()
+                    .map(|name| OffsetFetchRequestTopics {
+                        name: (*name).to_string(),
+                        partition_indexes: vec![0],
+                        ..Default::default()
+                    })
+                    .collect()
+            }),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+/// A KIP-516 (v8 and v9) topic row by name, with one partition row.
+fn named_topic(name: &str, partition: OffsetFetchResponsePartitions) -> OffsetFetchResponseTopics {
+    OffsetFetchResponseTopics {
+        name: name.to_string(),
+        partitions: vec![partition],
+        ..Default::default()
+    }
+}
+
+/// Sends each case's request and compares every whole response with the one
+/// that the case expects.
+async fn run_response_table(
+    broker: &Broker,
+    cases: Vec<(&str, i16, OffsetFetchRequest, OffsetFetchResponse)>,
+) {
+    let mut actual = Vec::with_capacity(cases.len());
+    let mut expected = Vec::with_capacity(cases.len());
+    for (case, version, request, response) in cases {
+        actual.push((case, fetch(broker, version, &request).await));
+        expected.push((case, response));
+    }
+    assert!(actual == expected);
+}
+
+/// Kafka authorizes each topic with `Describe`, not `Read`, and appends the
+/// refused topics after the answered ones on both shapes. A fetch-all leaves
+/// out every topic that the principal may not describe instead of answering
+/// it with `TOPIC_AUTHORIZATION_FAILED`.
+#[tokio::test]
+async fn topics_are_authorized_with_describe_and_fetch_all_hides_refused_topics() {
+    let (broker_handle, _dir) = start_broker(Arc::new(DescribeKnownTopic)).await;
+    seed_topic_reference_group(&broker_handle).await;
+    let broker = broker_handle.broker_arc_for_test();
+    seed_committed_offset(&broker, "grp", UNKNOWN_NAME, 0, 9).await;
+    let both: &[&str] = &[UNKNOWN_NAME, KNOWN_NAME];
+    run_response_table(
+        &broker,
+        vec![
+            (
+                "v7 explicit list",
+                7,
+                legacy_request(Some(both)),
+                legacy_response(vec![
+                    (KNOWN_NAME, legacy_seeded_row()),
+                    (UNKNOWN_NAME, legacy_refused_row()),
+                ]),
+            ),
+            (
+                "v7 fetch-all",
+                7,
+                legacy_request(None),
+                legacy_response(vec![(KNOWN_NAME, legacy_seeded_row())]),
+            ),
+            (
+                "v9 explicit list",
+                9,
+                named_groups_request(Some(both)),
+                groups_response(vec![
+                    named_topic(KNOWN_NAME, seeded_row()),
+                    named_topic(
+                        UNKNOWN_NAME,
+                        no_offset_row(codes::TOPIC_AUTHORIZATION_FAILED),
+                    ),
+                ]),
+            ),
+            (
+                "v9 fetch-all",
+                9,
+                named_groups_request(None),
+                groups_response(vec![named_topic(KNOWN_NAME, seeded_row())]),
+            ),
+        ],
+    )
+    .await;
+    broker_handle.shutdown().await;
+}
+
+/// A fetch-all names each topic by id at v10, so Kafka leaves out a topic that
+/// the metadata image does not hold. Before v10 the name carries the row. The
+/// topics come in name order.
+#[tokio::test]
+async fn fetch_all_leaves_out_topics_without_an_id_at_v10() {
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let known_id = seed_topic_reference_group(&broker_handle).await;
+    let broker = broker_handle.broker_arc_for_test();
+    seed_committed_offset(&broker, "grp", UNKNOWN_NAME, 0, 9).await;
+    let offset_row = |committed_offset| OffsetFetchResponsePartitions {
+        committed_offset,
+        ..seeded_row()
+    };
+    run_response_table(
+        &broker,
+        vec![
+            (
+                "v9 fetch-all",
+                9,
+                named_groups_request(None),
+                groups_response(vec![
+                    named_topic("", offset_row(7)),
+                    named_topic(UNKNOWN_NAME, offset_row(9)),
+                    named_topic(KNOWN_NAME, seeded_row()),
+                ]),
+            ),
+            (
+                "v10 fetch-all",
+                10,
+                named_groups_request(None),
+                groups_response(vec![OffsetFetchResponseTopics {
+                    topic_id: known_id,
+                    partitions: vec![seeded_row()],
+                    ..Default::default()
+                }]),
+            ),
+        ],
+    )
+    .await;
+    broker_handle.shutdown().await;
+}
+
 /// Joins `member_id` to the KIP-848 consumer group `group` and returns its
 /// member epoch.
 async fn join_consumer_group(broker: &Broker, group: &str, member_id: &str) -> i32 {

@@ -2,7 +2,7 @@
 //! through, on both the legacy and the KIP-516 request shapes.
 //!
 //! Committed offsets belong to a group, so the first authorization decision is
-//! always `Describe` on `Group(group_id)`; the per-topic `Read` checks that
+//! always `Describe` on `Group(group_id)`; the per-topic `Describe` checks that
 //! follow are made where the topic rows are built. Keeping the group decision
 //! in one place is what lets the v0 to v7 and v8 and above paths apply it
 //! identically.

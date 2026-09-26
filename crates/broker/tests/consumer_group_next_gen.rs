@@ -232,7 +232,7 @@ async fn describe_after_join() {
         .unwrap();
     assert!(desc.groups.len() == 1);
     check!(desc.groups[0].error_code == 0);
-    check!(desc.groups[0].group_state == "STABLE");
+    check!(desc.groups[0].group_state == "Stable");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

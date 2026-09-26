@@ -66,9 +66,10 @@ pub(crate) trait ReaperBackend: Send + Sync {
     /// must not be reaped, or when the persistence failed.
     async fn prepare_abort(&self, tid: &str, now_ms: i64, txnv: TxnVersion) -> Option<TxnEntry>;
 
-    /// Fan out abort markers for `entry`. Returns `false` if any marker could
-    /// not be written, leaving the transaction in `PrepareAbort` for retry.
-    async fn dispatch_abort_markers(&self, entry: &TxnEntry) -> bool;
+    /// Fan out abort markers for `entry`, and drop each partition whose
+    /// marker is written from it. Returns `false` if any marker could not be
+    /// written, leaving the transaction in `PrepareAbort` for retry.
+    async fn dispatch_abort_markers(&self, entry: &mut TxnEntry) -> bool;
 
     /// Moves `PrepareAbort → CompleteAbort` under `tid`'s entry lock,
     /// atomically.
@@ -148,12 +149,12 @@ async fn sweep_with_backend<B: ReaperBackend + ?Sized>(
         }
 
         // Phase 1: decide + Ongoing → PrepareAbort, persisted under the lock.
-        let Some(prepared) = backend.prepare_abort(&tid, now_ms, txnv).await else {
+        let Some(mut prepared) = backend.prepare_abort(&tid, now_ms, txnv).await else {
             continue;
         };
 
         // Phase 2: fan out abort markers to local partition leaders.
-        if !backend.dispatch_abort_markers(&prepared).await {
+        if !backend.dispatch_abort_markers(&mut prepared).await {
             continue;
         }
 
@@ -263,7 +264,7 @@ impl ReaperBackend for TxnCoordinator {
 
     // cargo-mutants: writes abort markers to live partition logs
     #[cfg_attr(test, mutants::skip)]
-    async fn dispatch_abort_markers(&self, entry: &TxnEntry) -> bool {
+    async fn dispatch_abort_markers(&self, entry: &mut TxnEntry) -> bool {
         match self
             .dispatch_transaction_markers(entry, MarkerType::Abort)
             .await

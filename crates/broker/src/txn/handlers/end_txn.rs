@@ -29,7 +29,6 @@ use krabka_protocol::{Decode, owned::end_txn_request::EndTxnRequest};
 
 use crate::{
     broker::Broker,
-    codes,
     error::BrokerError,
     txn::{
         decision::{CompletionDecision, decide_end_txn_completion},
@@ -53,7 +52,7 @@ mod test_support;
 #[cfg(test)]
 pub(crate) use self::producer_identity::prepare_completion_identities_with_fresh;
 pub(crate) use self::{
-    markers::{MarkerDispatchContext, dispatch_markers},
+    markers::{MarkerDispatchContext, MarkerFanOut, dispatch_markers},
     producer_identity::{
         client_producer_identity, completion_producer_identity, next_producer_identity,
         next_recovery_producer_identity, prepare_completion_identities,
@@ -108,7 +107,7 @@ pub(crate) async fn handle(
 
     // ── Phase 1: Ongoing → Prepare{Commit,Abort} ──────────────────────
 
-    let (marker_type, prepare, complete, prepare_snap) = match prepare_transaction(
+    let (marker_type, prepare, complete, mut prepare_snap) = match prepare_transaction(
         &coord,
         &entry_mutex,
         (req.committed, no_partition_added),
@@ -130,7 +129,7 @@ pub(crate) async fn handle(
 
     // ── Phase 2: Fan out WriteTxnMarkers ──────────────────────────────
 
-    match dispatch_transaction_markers(broker, &prepare_snap, marker_type, tid).await {
+    match dispatch_transaction_markers(broker, &mut prepare_snap, marker_type, tid).await {
         MarkerFanOutOutcome::Complete => {}
         MarkerFanOutOutcome::Retry => {
             coord.request_completion(tid);
@@ -174,9 +173,10 @@ pub(crate) async fn handle(
     // in between.
     let _state_partition_write = coord.lock_state_partition_for(tid).await;
     let Some(current_mutex) = coord.get(tid) else {
-        // The entry vanished (e.g. expired/deleted) while markers were in
-        // flight. Treat as a producer-mapping loss.
-        return encode_err(version, codes::INVALID_PRODUCER_ID_MAPPING);
+        // The entry vanished while markers were in flight: an unload of the
+        // coordinator partition answers its retriable coordinator error, and
+        // anything else is a producer-mapping loss.
+        return encode_err(version, coord.missing_entry_error(tid).await);
     };
 
     // The completion identity was selected and persisted with the Prepare
