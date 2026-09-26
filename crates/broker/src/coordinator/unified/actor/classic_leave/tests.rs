@@ -505,3 +505,43 @@ async fn delete_answers_by_members_for_classic_and_consumer_groups() {
     }
     check!(actual == expected);
 }
+
+/// A member that leaves a `CompletingRebalance` group reopens the rebalance,
+/// as Kafka's `maybePrepareRebalanceOrCompleteJoin` does, and the follower
+/// parked in `SyncGroup` is answered `REBALANCE_IN_PROGRESS` rather than an
+/// assignment that still names the departed member.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn classic_leave_in_completing_rebalance_reopens_the_rebalance() {
+    let (coord, _log) = make_coordinator();
+    let group = completing_classic_group(&["m1", "m2", "m3"]);
+    let generation = group.as_classic().unwrap().generation_id;
+    coord.seed_classic("g", Box::new(group));
+    let handle = coord.find("g").unwrap();
+    let (sync_tx, sync_rx) = tokio::sync::oneshot::channel();
+    handle
+        .tx
+        .send(GroupActorMessage::ClassicSync {
+            req: krabka_protocol::owned::sync_group_request::SyncGroupRequest {
+                group_id: "g".into(),
+                member_id: "m2".into(),
+                generation_id: generation,
+                ..Default::default()
+            },
+            reply: sync_tx,
+        })
+        .await
+        .unwrap();
+
+    let left = rpc::classic_leave(&handle, "m3").await;
+
+    check!(
+        left == vec![MemberResponse {
+            member_id: "m3".into(),
+            error_code: codes::NONE,
+            ..Default::default()
+        }]
+    );
+    check!(sync_rx.await.unwrap().error_code == codes::REBALANCE_IN_PROGRESS);
+    let view = rpc::classic_inspect(&handle).await;
+    check!(view.state == ClassicGroupState::PreparingRebalance);
+}

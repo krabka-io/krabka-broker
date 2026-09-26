@@ -2,8 +2,10 @@
 //!
 //! `handle_leave` resolves each requested identity through the KIP-345 static
 //! instance index or the member index, removes the members it resolved, and
-//! reopens a rebalance when a survivor remains in a `Stable` group. It returns
-//! the per-member responses in request order.
+//! reopens a rebalance when a survivor remains in a `Stable` or
+//! `CompletingRebalance` group, as Kafka's `classicGroupLeaveToClassicGroup`
+//! does through `maybePrepareRebalanceOrCompleteJoin`. It returns the
+//! per-member responses in request order.
 
 use std::time::Instant;
 
@@ -22,8 +24,8 @@ struct MemberIdentityIn {
 }
 
 /// Port of `handlers/leave_group.rs`. It removes the resolved members. If the
-/// group was `Stable` and members survive, it reopens a rebalance and sets the
-/// deadline. It returns the per-member responses.
+/// group was `Stable` or `CompletingRebalance` and members survive, it reopens
+/// a rebalance and sets the deadline. It returns the per-member responses.
 pub(crate) fn handle_leave(
     state: &mut ClassicState,
     req: &LeaveGroupRequest,
@@ -77,7 +79,13 @@ pub(crate) fn handle_leave(
             ..Default::default()
         });
     }
-    if any_removed && !state.members.is_empty() && matches!(state.state, GroupState::Stable) {
+    if any_removed
+        && !state.members.is_empty()
+        && matches!(
+            state.state,
+            GroupState::Stable | GroupState::CompletingRebalance
+        )
+    {
         state.state = GroupState::PreparingRebalance;
         // A member left a live group: this is a membership-change rebalance,
         // not a start-from-empty herd, so the survivors eager-complete.
@@ -105,21 +113,43 @@ mod tests {
         handle_join, join_req, stable_two_member_group,
     };
 
+    /// (state before, state after) when one of two members leaves at v2.
+    /// Kafka's `maybePrepareRebalanceOrCompleteJoin` reopens a rebalance from
+    /// `Stable` and from `CompletingRebalance`, so the leader's `SyncGroup`
+    /// cannot install an assignment that still names the departed member.
     #[test]
-    fn leave_v2_single_member_removed() {
-        let mut g = stable_two_member_group();
-        g.state = GroupState::Stable;
-        let req = LeaveGroupRequest {
-            group_id: "g".into(),
-            member_id: "m1".into(),
-            ..Default::default()
-        };
-        let out = handle_leave(&mut g, &req, 2);
-        assert!(out.len() == 1);
-        check!(out[0].error_code == codes::NONE);
-        check!(!g.members.contains_key("m1"));
-        // Surviving member + was Stable → reopened a rebalance.
-        check!(g.state == GroupState::PreparingRebalance);
+    fn leave_reopens_a_rebalance_from_stable_and_completing_rebalance() {
+        let rows = [
+            (GroupState::Stable, GroupState::PreparingRebalance),
+            (
+                GroupState::CompletingRebalance,
+                GroupState::PreparingRebalance,
+            ),
+            (
+                GroupState::PreparingRebalance,
+                GroupState::PreparingRebalance,
+            ),
+        ];
+        for (before, after) in rows {
+            let mut g = stable_two_member_group();
+            g.state = before;
+            let req = LeaveGroupRequest {
+                group_id: "g".into(),
+                member_id: "m1".into(),
+                ..Default::default()
+            };
+            let out = handle_leave(&mut g, &req, 2);
+            check!(
+                out == vec![MemberResponse {
+                    member_id: "m1".into(),
+                    error_code: codes::NONE,
+                    ..Default::default()
+                }],
+                "{before:?}"
+            );
+            check!(!g.members.contains_key("m1"), "{before:?}");
+            check!(g.state == after, "{before:?}");
+        }
     }
 
     #[test]
