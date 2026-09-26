@@ -537,7 +537,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn tick_skips_retention_when_remote_storage_enable_is_true() {
         use std::time::Duration;

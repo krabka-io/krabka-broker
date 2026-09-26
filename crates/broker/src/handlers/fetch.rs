@@ -44,8 +44,6 @@ mod leader_read_tests;
 #[cfg(test)]
 mod topic_resolution_tests;
 
-pub(crate) use self::plan::PendingRead;
-pub(crate) use self::read::LiveOffsets;
 use self::{
     node_endpoints::fetch_node_endpoints,
     plan::{PendingPlanContext, build_pending_reads},
@@ -55,6 +53,7 @@ use self::{
     session::finalize_fetch_session,
     throttle::{apply_consumer_fetch_quota, throttle_follower_responses},
 };
+pub(crate) use self::{plan::PendingRead, read::LiveOffsets};
 use crate::{
     broker::Broker, error::BrokerError, fetch_session::INVALID_SESSION_ID,
     network::fetch_writer::records_to_serve,

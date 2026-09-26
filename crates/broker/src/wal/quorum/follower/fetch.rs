@@ -157,13 +157,18 @@ mod tests {
                 "negative epoch",
                 -1,
                 10,
-                Err(String::from("leader returned an invalid WAL diverging epoch")),
+                Err(String::from(
+                    "leader returned an invalid WAL diverging epoch",
+                )),
             ),
         ] {
             let mut partition = frontiers(0, 0, 10);
             partition.diverging_epoch.epoch = epoch;
             partition.diverging_epoch.end_offset = end_offset;
-            assert!(validate_diverging_epoch(&partition) == expected, "case {name}");
+            assert!(
+                validate_diverging_epoch(&partition) == expected,
+                "case {name}"
+            );
         }
     }
 

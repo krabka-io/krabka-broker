@@ -209,9 +209,7 @@ fn records_lost_body_without_a_generation_is_rejected() {
     log.append(&mut audit_record_to_batch(&marker, 0)).unwrap();
 
     let report = verify_partition_dir(tmp.path(), &TrustedKeys::default()).unwrap();
-    check!(
-        (report.ok, report.records, report.losses) == (false, RecordCount(0), vec![])
-    );
+    check!((report.ok, report.records, report.losses) == (false, RecordCount(0), vec![]));
     check!(
         report
             .first_break

@@ -244,8 +244,18 @@ mod tests {
     fn a_future_timestamp_is_aged_by_the_file() {
         for (name, max_timestamp, last_modified_ms, expected) in [
             ("a past timestamp ages the segment", 100, 100, Some(10)),
-            ("a future timestamp with an old file goes", 20_000, 100, Some(10)),
-            ("a future timestamp with a young file stays", 20_000, 9_999, None),
+            (
+                "a future timestamp with an old file goes",
+                20_000,
+                100,
+                Some(10),
+            ),
+            (
+                "a future timestamp with a young file stays",
+                20_000,
+                9_999,
+                None,
+            ),
         ] {
             let exports = vec![SegmentExport {
                 last_modified_ms,

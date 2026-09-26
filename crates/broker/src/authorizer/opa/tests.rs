@@ -5,11 +5,7 @@
 //! The tests for the Kafka-to-OPA vocabulary mapping live beside that mapping
 //! in [`super::wire`].
 
-use std::{
-    collections::HashSet,
-    net::SocketAddr,
-    time::Duration,
-};
+use std::{collections::HashSet, net::SocketAddr, time::Duration};
 
 use assert2::assert;
 use krabka_authz::{AuthorizationRequest, AuthorizationResult, Authorizer};

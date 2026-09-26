@@ -6,7 +6,9 @@
 //! separate from the per-segment one in
 //! [`RemoteLogSegmentState`](crate::metadata::RemoteLogSegmentState).
 
-use krabka_verified::storage::{RemotePartitionDeleteLifecycle, remote_partition_delete_transition};
+use krabka_verified::storage::{
+    RemotePartitionDeleteLifecycle, remote_partition_delete_transition,
+};
 
 use crate::metadata::TopicIdPartition;
 
