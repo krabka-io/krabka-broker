@@ -185,41 +185,49 @@ pub(crate) fn handle(
             connections_max_idle_overrides: &broker.config.connections_max_idle_overrides,
         };
         // ── ACL preamble ────────────────────────────────────────────
-        // Per-resource `DescribeConfigs`: Topic → `Topic(name)`; Broker →
-        // `Cluster("kafka-cluster")`. On Deny stamp the result entry with
-        // the matching authorization-failed code; authorized resources
-        // resolve normally.
-        let results: Vec<DescribeConfigsResult> = req
+        // Per-resource `DescribeConfigs`: Topic → `Topic(name)`, Group →
+        // `Group(name)`, Broker, BrokerLogger and ClientMetrics →
+        // `Cluster("kafka-cluster")`. On Deny stamp the result entry with the
+        // matching authorization-failed code. Kafka's `ConfigHelper` answers
+        // every authorized resource first and every denied one after them.
+        let (authorized, denied): (Vec<_>, Vec<_>) = req
             .resources
             .into_iter()
             .map(|r| {
-                if let Some(code) = resource_authz_failure(
+                let failure = resource_authz_failure(
                     broker.config.authorizer.as_ref(),
                     &image,
                     ctx.principal,
                     ctx.peer,
                     r.resource_type,
                     &r.resource_name,
-                ) {
-                    denied_result(r.resource_type, r.resource_name, code)
-                } else {
-                    describe_one(
-                        &image,
-                        r,
-                        ServingBroker {
-                            node: serving_node,
-                            static_broker,
-                            loggers: BrokerLoggers {
-                                node_id: broker.config.broker_id,
-                                levels: &broker.config.log_levels,
-                            },
-                        },
-                        broker.config.client_metrics_default_interval.millis_i32(),
-                        &broker.config.streams_group,
-                        options,
-                    )
-                }
+                );
+                (r, failure)
             })
+            .partition(|(_, failure)| failure.is_none());
+        let results: Vec<DescribeConfigsResult> = authorized
+            .into_iter()
+            .map(|(r, _)| {
+                describe_one(
+                    &image,
+                    &r,
+                    ServingBroker {
+                        node: serving_node,
+                        static_broker,
+                        loggers: BrokerLoggers {
+                            node_id: broker.config.broker_id,
+                            levels: &broker.config.log_levels,
+                        },
+                        static_min_insync_replicas: broker.config.default_min_insync_replicas,
+                    },
+                    broker.config.client_metrics_default_interval.millis_i32(),
+                    &broker.config.streams_group,
+                    options,
+                )
+            })
+            .chain(denied.into_iter().filter_map(|(r, failure)| {
+                failure.map(|code| denied_result(r.resource_type, r.resource_name, code))
+            }))
             .collect();
 
         let resp = DescribeConfigsResponse {
