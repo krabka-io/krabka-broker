@@ -38,8 +38,9 @@ use crate::{
         partitioner::{GroupRoutingError, local_partition_for_group},
         persistence::OffsetCommitValue,
         unified::{
-            actor::{GroupActorHandle, GroupActorMessage, GroupKindTag, validate_group_commit},
+            actor::{GroupActorHandle, GroupActorMessage, GroupKindTag, validate_offset_commit},
             classic_state::OffsetEntry,
+            streams::actor::validate_streams_group_commit,
         },
     },
     error::BrokerError,
@@ -48,12 +49,18 @@ use crate::{
 mod response;
 
 #[cfg(test)]
+mod group_validation_tests;
+#[cfg(test)]
 mod topic_resolution_tests;
 
 /// The first `OffsetCommit` version that names each topic by `topic_id` only
 /// (KIP-848). The request schema carries `name` at versions 0-9 and
 /// `topic_id` from this version on.
 const FIRST_TOPIC_ID_VERSION: i16 = 10;
+
+/// The first `OffsetCommit` version that answers `GROUP_ID_NOT_FOUND` for a
+/// group that does not exist. Earlier versions answer `ILLEGAL_GENERATION`.
+const FIRST_GROUP_ID_NOT_FOUND_VERSION: i16 = 9;
 
 /// Serves one `OffsetCommit` request.
 ///
@@ -148,7 +155,7 @@ pub(crate) async fn handle(
     }
 
     req.topics = accepted;
-    let error_code = commit(broker, &req).await;
+    let error_code = commit(broker, &req, version).await;
     response.merge(build_response_all(&req, error_code).topics);
     encode(version, &response.build())
 }
@@ -212,7 +219,7 @@ fn existing_partitions(
 /// answer with one code for the whole commit, as Kafka's
 /// `GroupCoordinatorService.commitOffsets` does with
 /// `OffsetCommitRequest.getErrorResponse`.
-async fn commit(broker: &Broker, req: &OffsetCommitRequest) -> i16 {
+async fn commit(broker: &Broker, req: &OffsetCommitRequest, version: i16) -> i16 {
     let image = broker.controller.current_image();
     match local_partition_for_group(&image, broker.config.node_id, &req.group_id) {
         Ok(_) => {}
@@ -222,23 +229,10 @@ async fn commit(broker: &Broker, req: &OffsetCommitRequest) -> i16 {
 
     let now_ms = now_ms();
     let expire_timestamp_ms = expire_timestamp_ms(req.retention_time_ms, now_ms);
-    // Find the group's actor (a classic actor is created for an unknown id —
-    // e.g. a "simple" consumer committing offsets without joining a group).
-    // Offsets are protocol-agnostic, so an existing actor of either kind serves
-    // the commit the same way.
-    let handle = broker
-        .group_coordinator
-        .find(&req.group_id)
-        .unwrap_or_else(|| {
-            broker
-                .group_coordinator
-                .get_or_create_group(&req.group_id, GroupKindTag::Classic)
-        });
-
-    // Validate membership/epoch through the actor (kind-specific).
-    if let Some(code) = validate(&handle, req).await {
-        return code;
-    }
+    let handle = match validate(broker, req, version).await {
+        Ok(handle) => handle,
+        Err(code) => return code,
+    };
 
     let commit = Commit {
         now_ms,
@@ -289,23 +283,50 @@ fn now_ms() -> i64 {
     .unwrap_or(0)
 }
 
-/// Validate the commit against the group's membership and epoch through its
-/// actor.
+/// Finds the group of `req` and validates the commit against its membership,
+/// as Kafka's `OffsetMetadataManager.validateOffsetCommit` does. It returns
+/// the actor that holds the group's offsets, or the error code for every row.
 ///
-/// This function returns `Some(error_code)` if the broker must reject the
-/// request. It is a thin wrapper over the shared [`validate_group_commit`],
-/// which `TxnOffsetCommit` also uses. That function dispatches on the actor's
-/// LIVE `group.kind`. A KIP-848 migration may have flipped the protocol in
-/// place after spawn, so validation must run against the current protocol,
-/// not the spawn-time `handle.kind`.
-async fn validate(handle: &Arc<GroupActorHandle>, req: &OffsetCommitRequest) -> Option<i16> {
-    validate_group_commit(
-        handle,
-        &req.member_id,
-        req.generation_id_or_member_epoch,
-        req.group_instance_id.as_deref(),
-    )
-    .await
+/// A group that does not exist is created as a simple group when the
+/// generation is negative, which is the admin client or a consumer that does
+/// not use group management. Otherwise it answers `GROUP_ID_NOT_FOUND` from
+/// v9 on and `ILLEGAL_GENERATION` before.
+///
+/// A classic or consumer group validates inside its actor, on the actor's
+/// LIVE protocol: a KIP-848 migration may have flipped the protocol in place
+/// after spawn. A streams group (KIP-1071) validates in its streams actor, and
+/// its offsets live in a group actor of the same id, as `TxnOffsetCommit`
+/// keeps them.
+async fn validate(
+    broker: &Broker,
+    req: &OffsetCommitRequest,
+    version: i16,
+) -> Result<Arc<GroupActorHandle>, i16> {
+    let coordinator = &broker.group_coordinator;
+    let generation = req.generation_id_or_member_epoch;
+    let code = if let Some(streams) = coordinator.find_streams(&req.group_id) {
+        validate_streams_group_commit(&streams, &req.member_id, generation).await
+    } else if let Some(handle) = coordinator.find(&req.group_id) {
+        let code = validate_offset_commit(
+            &handle,
+            &req.member_id,
+            generation,
+            req.group_instance_id.as_deref(),
+            version,
+        )
+        .await;
+        return code.map_or(Ok(handle), Err);
+    } else if generation < 0 {
+        None
+    } else if version >= FIRST_GROUP_ID_NOT_FOUND_VERSION {
+        Some(codes::GROUP_ID_NOT_FOUND)
+    } else {
+        Some(codes::ILLEGAL_GENERATION)
+    };
+    match code {
+        Some(code) => Err(code),
+        None => Ok(coordinator.get_or_create_group(&req.group_id, GroupKindTag::Classic)),
+    }
 }
 
 /// One commit's two halves: the `__consumer_offsets` records for every

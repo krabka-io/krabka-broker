@@ -14,7 +14,9 @@ use krabka_protocol::owned::{
 
 use super::subscription_blob;
 use crate::coordinator::unified::{
-    actor::{ClassicView, GroupActorHandle, GroupActorMessage, JoinResult, SyncResult},
+    actor::{
+        ClassicView, CommitFence, GroupActorHandle, GroupActorMessage, JoinResult, SyncResult,
+    },
     classic_state::OffsetEntry,
 };
 
@@ -162,6 +164,7 @@ pub async fn validate_commit(
     handle: &GroupActorHandle,
     member_id: &str,
     generation_or_epoch: i32,
+    fence: CommitFence,
 ) -> Result<(), i16> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     handle
@@ -170,6 +173,7 @@ pub async fn validate_commit(
             member_id: member_id.into(),
             group_instance_id: None,
             generation_or_epoch,
+            fence,
             reply: tx,
         })
         .await

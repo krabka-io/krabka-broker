@@ -93,6 +93,7 @@ pub(super) async fn handle_actor_message(
             member_id,
             group_instance_id,
             generation_or_epoch,
+            fence,
             reply,
         } => {
             let result = validate_commit_message(
@@ -100,6 +101,7 @@ pub(super) async fn handle_actor_message(
                 &member_id,
                 group_instance_id.as_deref(),
                 generation_or_epoch,
+                fence,
             );
             let _ = reply.send(result);
             true

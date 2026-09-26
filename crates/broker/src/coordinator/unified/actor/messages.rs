@@ -59,6 +59,9 @@ pub enum GroupActorMessage {
         /// reads it as the consumer `member_epoch` or as the classic
         /// generation, depending on the live kind.
         generation_or_epoch: i32,
+        /// Whether `OffsetCommit` or `TxnOffsetCommit` asks, which selects
+        /// the rule.
+        fence: super::commit_validation::CommitFence,
         reply: oneshot::Sender<Result<(), ErrorCode>>,
     },
     Describe {

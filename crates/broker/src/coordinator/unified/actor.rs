@@ -43,21 +43,22 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::{
-    commit_validation::validate_group_commit,
-    pending_records::PendingRecords,
-    persistence::{classic_group_metadata_record, full_pending_records},
-};
-use self::{
-    dispatch::handle_actor_message, tick::handle_actor_tick, waiters::complete_classic_rebalance,
-};
 pub use self::{
+    commit_validation::CommitFence,
     messages::{
         GroupActorMessage, JoinResult, JoinResultMember, LeaveResult, SyncResult,
         TxnOffsetReservation,
     },
     retention::ReapOutcome,
     views::{ClassicMemberView, ClassicView, DescribeMember, DescribeView},
+};
+pub(crate) use self::{
+    commit_validation::{validate_group_commit, validate_offset_commit},
+    pending_records::PendingRecords,
+    persistence::{classic_group_metadata_record, full_pending_records},
+};
+use self::{
+    dispatch::handle_actor_message, tick::handle_actor_tick, waiters::complete_classic_rebalance,
 };
 use crate::{
     coordinator::unified::{
