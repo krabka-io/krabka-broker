@@ -344,4 +344,12 @@ crate_tests(
     # image fails the guard until the table is re-derived. `build.rs` emits the
     # same variables under Cargo.
     unit_rustc_env_files = ["//bazel/images:pinned_digests"],
+    # The unit target runs four exhaustive stateright models at once --
+    # `classic_wide` (~483k states) and the three `data_path_model` configs --
+    # each CPU-bound for a minute or more. Sharing the four cores with three
+    # other test actions pushed the target past its 300s bound, with all four
+    # still running when it timed out. `cpu:4` reserves the cores; it is not
+    # `timing-sensitive`, so the target stays in the main test lane and keeps
+    # contributing coverage.
+    unit_tags = ["cpu:4"],
 )
