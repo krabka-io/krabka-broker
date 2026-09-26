@@ -1,44 +1,222 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
-use assert2::check;
+use assert2::assert;
+use async_trait::async_trait;
 use bytes::Bytes;
 use krabka_backup::diskless::capture_projection;
-use krabka_remote_storage::diskless::{WalFlushRecord, WalIndexEntry, WalIndexKey};
-use krabka_remote_storage_topic::{InProcessMetadataEventLog, MetadataEventLog};
+use krabka_remote_storage::diskless::{
+    CapturedWalRange, DisklessPartitionCapture, DisklessWalCapture, REPLAY_FENCE_KEY,
+    WalFlushRecord, WalIndexEntry, WalIndexKey,
+};
+use krabka_remote_storage_topic::{
+    AssignmentHandle, InProcessMetadataEventLog, MetadataEventLog, MetadataEventStream,
+    MetadataLogError, PartitionStart, RangeVisitor,
+};
 use uuid::Uuid;
 
-#[tokio::test]
-async fn capture_replays_only_committed_index_values_before_its_fences() {
-    let log = InProcessMetadataEventLog::new(2);
-    let entry = WalIndexEntry {
-        topic_id: Uuid::from_u128(9),
+const TOPIC_ID: Uuid = Uuid::from_u128(9);
+
+/// A diskless WAL index as a Kafka-compatible broker serves it to a backup
+/// client: reads work, and every `Produce` to the internal topic fails with
+/// `INVALID_TOPIC_EXCEPTION`, because the client is not `__admin_client`.
+///
+/// Reading the high watermarks also lands one record just past them, the way
+/// a broker flush that commits while the capture runs does.
+struct InternalTopicLog {
+    inner: Arc<InProcessMetadataEventLog>,
+    publishes: AtomicUsize,
+    subscriptions: AtomicUsize,
+    after_cutoff: Mutex<Option<(i32, Bytes, Bytes)>>,
+}
+
+impl InternalTopicLog {
+    fn new(
+        inner: Arc<InProcessMetadataEventLog>,
+        after_cutoff: Option<(i32, Bytes, Bytes)>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            inner,
+            publishes: AtomicUsize::new(0),
+            subscriptions: AtomicUsize::new(0),
+            after_cutoff: Mutex::new(after_cutoff),
+        })
+    }
+
+    fn refuse(&self) -> MetadataLogError {
+        self.publishes.fetch_add(1, Ordering::SeqCst);
+        MetadataLogError::Publish("broker error_code 17".into())
+    }
+}
+
+#[async_trait]
+impl MetadataEventLog for InternalTopicLog {
+    fn partition_count(&self) -> i32 {
+        self.inner.partition_count()
+    }
+
+    async fn publish(&self, _partition: i32, _event: Bytes) -> Result<i64, MetadataLogError> {
+        Err(self.refuse())
+    }
+
+    async fn publish_keyed(
+        &self,
+        _partition: i32,
+        _key: Bytes,
+        _event: Option<Bytes>,
+    ) -> Result<i64, MetadataLogError> {
+        Err(self.refuse())
+    }
+
+    fn subscribe(
+        &self,
+        assignment: Vec<PartitionStart>,
+    ) -> (MetadataEventStream, Arc<dyn AssignmentHandle>) {
+        self.subscriptions.fetch_add(1, Ordering::SeqCst);
+        self.inner.subscribe(assignment)
+    }
+
+    async fn low_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> {
+        self.inner.low_water_marks().await
+    }
+
+    async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> {
+        let cutoffs = self.inner.high_water_marks().await?;
+        let late = self.after_cutoff.lock().unwrap().take();
+        if let Some((partition, key, value)) = late {
+            self.inner
+                .publish_keyed(partition, key, Some(value))
+                .await?;
+        }
+        Ok(cutoffs)
+    }
+
+    async fn visit_range(
+        &self,
+        partition: i32,
+        start: i64,
+        end: i64,
+        visit: &mut RangeVisitor<'_>,
+    ) -> Result<(), MetadataLogError> {
+        self.inner.visit_range(partition, start, end, visit).await
+    }
+}
+
+fn entry(first_offset: i64, last_offset: i64, byte_start: u64) -> WalIndexEntry {
+    WalIndexEntry {
+        topic_id: TOPIC_ID,
         partition: 0,
-        first_offset: 4,
-        last_offset: 7,
-        byte_start: 6,
+        first_offset,
+        last_offset,
+        byte_start,
         byte_len: 10,
         max_timestamp_ms: 1,
-    };
+    }
+}
+
+/// The keyed index record a broker flush publishes for `entry`.
+fn flush(object_key: &str, entry: WalIndexEntry) -> (Bytes, Bytes) {
     let key = WalIndexKey::from(&entry).to_bytes();
     let value = WalFlushRecord {
-        object_key: "diskless-wal/1/a.ckwl".into(),
+        object_key: object_key.into(),
         format_version: WalFlushRecord::FORMAT_VERSION,
         entries: vec![entry],
     }
     .to_bytes()
     .unwrap();
-    log.publish_keyed(0, key, Some(value)).await.unwrap();
+    (key, value)
+}
 
-    let capture = capture_projection(
-        log,
-        &HashMap::from([(Uuid::from_u128(9), ("orders".to_owned(), 1))]),
-        42,
-    )
-    .await
-    .unwrap();
-    check!(capture.captured_at_ms == 42);
-    check!(capture.source_cutoffs.len() == 2);
-    check!(capture.partitions[0].recovery_cutoff == 8);
-    check!(capture.partitions[0].ranges[0].object_key == "diskless-wal/1/a.ckwl");
-    let _ = Bytes::new();
+fn orders() -> HashMap<Uuid, (String, i32)> {
+    HashMap::from([(TOPIC_ID, ("orders".to_owned(), 1))])
+}
+
+#[tokio::test]
+async fn capture_reads_committed_index_state_to_the_high_watermarks_without_producing() {
+    let index = InProcessMetadataEventLog::new(3);
+    // p0: a live range, then a broker's replay fence.
+    let (live_key, live_value) = flush("diskless-wal/1/a.ckwl", entry(4, 7, 6));
+    index
+        .publish_keyed(0, live_key, Some(live_value))
+        .await
+        .unwrap();
+    index
+        .publish_keyed(0, Bytes::from_static(REPLAY_FENCE_KEY), Some(Bytes::new()))
+        .await
+        .unwrap();
+    // p1: a range that a later tombstone deleted.
+    let (deleted_key, deleted_value) = flush("diskless-wal/1/b.ckwl", entry(8, 9, 0));
+    index
+        .publish_keyed(1, deleted_key.clone(), Some(deleted_value))
+        .await
+        .unwrap();
+    index.publish_keyed(1, deleted_key, None).await.unwrap();
+    // p2 stays empty. A flush that commits on p0 after the capture reads the
+    // watermarks lies past its cutoff.
+    let late = flush("diskless-wal/1/c.ckwl", entry(10, 11, 0));
+    let log = InternalTopicLog::new(index, Some((0, late.0, late.1)));
+
+    let capture = capture_projection(log.clone(), &orders(), 42)
+        .await
+        .unwrap();
+
+    assert!(
+        capture
+            == DisklessWalCapture {
+                format_version: DisklessWalCapture::FORMAT_VERSION,
+                captured_at_ms: 42,
+                source_cutoffs: vec![2, 2, 0],
+                partitions: vec![DisklessPartitionCapture {
+                    topic: "orders".to_owned(),
+                    topic_id: TOPIC_ID,
+                    partition: 0,
+                    delete_floor: 0,
+                    recovery_cutoff: 8,
+                    ranges: vec![CapturedWalRange {
+                        object_key: "diskless-wal/1/a.ckwl".to_owned(),
+                        entry: entry(4, 7, 6),
+                    }],
+                }],
+                metadata_snapshot_sha256: None,
+                rlmm_snapshot_sha256: None,
+                group_offsets_sha256: None,
+                authentication: None,
+            }
+    );
+    assert!(log.publishes.load(Ordering::SeqCst) == 0);
+    assert!(log.subscriptions.load(Ordering::SeqCst) == 0);
+}
+
+#[tokio::test]
+async fn capture_of_an_empty_index_completes_at_zero_cutoffs() {
+    let log = InternalTopicLog::new(InProcessMetadataEventLog::new(2), None);
+
+    let capture = capture_projection(log.clone(), &orders(), 7).await.unwrap();
+
+    assert!(
+        capture
+            == DisklessWalCapture {
+                format_version: DisklessWalCapture::FORMAT_VERSION,
+                captured_at_ms: 7,
+                source_cutoffs: vec![0, 0],
+                partitions: vec![DisklessPartitionCapture {
+                    topic: "orders".to_owned(),
+                    topic_id: TOPIC_ID,
+                    partition: 0,
+                    delete_floor: 0,
+                    recovery_cutoff: 0,
+                    ranges: Vec::new(),
+                }],
+                metadata_snapshot_sha256: None,
+                rlmm_snapshot_sha256: None,
+                group_offsets_sha256: None,
+                authentication: None,
+            }
+    );
+    assert!(log.publishes.load(Ordering::SeqCst) == 0);
 }

@@ -92,7 +92,7 @@ pub use kafka_log::{
 };
 pub use log::{
     AssignmentHandle, InProcessMetadataEventLog, MetadataEventLog, MetadataEventRecord,
-    MetadataEventStream, PartitionStart,
+    MetadataEventStream, PartitionStart, RangeVisitor,
 };
 pub use manager::TopicBasedRemoteLogMetadataManager;
 pub use not_ready::NotReadyRlmm;
