@@ -1,7 +1,13 @@
-//! Broker-scoped resources for `IncrementalAlterConfigs`. This module holds
-//! the whitelist of broker config keys, the per-key value validators, the
-//! mapping from a resource name to a `NodeId`, and the op merge that stages
-//! one `V1BrokerConfig` record per altered key.
+//! Broker-scoped resources for `IncrementalAlterConfigs`: Kafka's
+//! `ConfigAdminManager.validateBrokerConfigChange` over the resource's stored
+//! dynamic configs with the operations applied, then one `V1BrokerConfig`
+//! record per altered key.
+//!
+//! The key rules themselves -- which keys are dynamic, which need a named
+//! broker, and each key's value check -- are shared with `AlterConfigs` and
+//! live in [`crate::config_keys::broker_dynamic`].
+
+use std::collections::BTreeMap;
 
 use krabka_metadata::{BrokerConfigRecord, MetadataImage, MetadataRecord, NodeId};
 use krabka_protocol::owned::{
@@ -9,424 +15,418 @@ use krabka_protocol::owned::{
     incremental_alter_configs_response::AlterConfigsResourceResponse,
 };
 
-use super::{OP_DELETE, OP_SET};
-use crate::{codes, config_keys};
+use super::{OP_APPEND, OP_DELETE, OP_SET, OP_SUBTRACT};
+use crate::{
+    codes,
+    config_keys::{
+        self,
+        broker_dynamic::{
+            BrokerKeyKind, CLUSTER_DEFAULT_ONLY, broker_key_kind, broker_resource_node,
+            canonical_dynamic_broker_configs, elr_min_isr_error,
+        },
+    },
+};
 
-/// Returns `true` if `name` is a broker-scoped config key accepted by this
-/// broker.
-pub(in crate::handlers) fn is_known_broker_config(name: &str) -> bool {
-    matches!(
-        name,
-        crate::throttle::LEADER_THROTTLED_RATE_KEY
-            | crate::throttle::FOLLOWER_THROTTLED_RATE_KEY
-            | crate::throttle::ALTER_LOG_DIRS_THROTTLED_RATE_KEY
-            | config_keys::UNCLEAN_LEADER_ELECTION_ENABLE
-            | config_keys::UNCLEAN_RECOVERY_STRATEGY
-            | config_keys::MIN_INSYNC_REPLICAS
-            | config_keys::REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS
-    )
+/// The default a `LIST` broker key starts from when the resource does not
+/// hold it, as Kafka's `prepareIncrementalConfigs` reads it from
+/// `ConfigKey.defaultValue`.
+fn list_default(name: &str) -> &'static str {
+    config_keys::broker_dynamic::TOPIC_DEFAULT_SYNONYMS
+        .iter()
+        .find(|(broker, _)| *broker == name)
+        .and_then(|(_, topic)| {
+            config_keys::registry::lookup(config_keys::registry::ConfigScope::Topic, topic)
+        })
+        .and_then(|row| row.default)
+        .unwrap_or("")
 }
 
-/// Returns `true` for a topic setting that the controller may inherit from
-/// the cluster-wide default broker-config resource. Per-broker values would
-/// have no deterministic meaning for controller policy, so handlers reject
-/// them.
-pub(in crate::handlers) fn is_cluster_default_topic_config(name: &str) -> bool {
-    matches!(
-        name,
-        config_keys::UNCLEAN_LEADER_ELECTION_ENABLE
-            | config_keys::UNCLEAN_RECOVERY_STRATEGY
-            | config_keys::MIN_INSYNC_REPLICAS
-    )
-}
-
-/// Validate the value for a broker-scoped config key.
-/// Returns `Err` if the key is unknown or if the value does not parse as an
-/// `i64`.
-pub(in crate::handlers) fn validate_broker_config_value(
-    name: &str,
-    value: &str,
-) -> Result<(), String> {
-    match name {
-        crate::throttle::LEADER_THROTTLED_RATE_KEY
-        | crate::throttle::FOLLOWER_THROTTLED_RATE_KEY
-        | crate::throttle::ALTER_LOG_DIRS_THROTTLED_RATE_KEY => value
-            .parse::<i64>()
-            .map(|_| ())
-            .map_err(|e| format!("invalid rate: {e}")),
-        config_keys::UNCLEAN_LEADER_ELECTION_ENABLE
-        | config_keys::UNCLEAN_RECOVERY_STRATEGY
-        | config_keys::MIN_INSYNC_REPLICAS => config_keys::validate_topic_config(name, value),
-        config_keys::REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS => {
-            config_keys::parse_remote_list_offsets_timeout(value).map(|_| ())
+/// Kafka's `prepareIncrementalConfigs`: apply one resource's operations to its
+/// stored dynamic configs.
+fn apply_operations(
+    resource: &AlterConfigsResource,
+    props: &mut BTreeMap<String, String>,
+) -> Result<(), (i16, String)> {
+    for cfg in &resource.configs {
+        let name = cfg.name.as_str();
+        let value = cfg.value.as_deref().unwrap_or_default();
+        match cfg.config_operation {
+            OP_SET => {
+                props.insert(name.to_owned(), value.to_owned());
+            }
+            OP_DELETE => {
+                props.remove(name);
+            }
+            operation => {
+                let verb = if operation == OP_APPEND {
+                    "append"
+                } else {
+                    "subtract"
+                };
+                match broker_key_kind(name) {
+                    BrokerKeyKind::Unknown => {
+                        return Err((
+                            codes::INVALID_CONFIG,
+                            format!("Unknown config name: {name}"),
+                        ));
+                    }
+                    BrokerKeyKind::Scalar => {
+                        return Err((
+                            codes::INVALID_CONFIG,
+                            format!("Config value {verb} is not allowed for config key: {name}"),
+                        ));
+                    }
+                    BrokerKeyKind::List => {}
+                }
+                let old = props
+                    .get(name)
+                    .map_or_else(|| list_default(name).to_owned(), Clone::clone);
+                let mut parts: Vec<&str> = old.split(',').filter(|part| !part.is_empty()).collect();
+                let items: Vec<&str> = value.split(',').collect();
+                if operation == OP_APPEND {
+                    for item in items {
+                        if !parts.contains(&item) {
+                            parts.push(item);
+                        }
+                    }
+                } else {
+                    parts.retain(|part| !items.contains(part));
+                }
+                props.insert(name.to_owned(), parts.join(","));
+            }
         }
-        _ => Err(format!("unknown broker config {name}")),
     }
+    Ok(())
 }
 
-pub(in crate::handlers) fn broker_config_node_id(
-    resource_name: &str,
+/// The records one `BROKER` resource stages, or the error it answers with.
+fn broker_records(
+    resource: &AlterConfigsResource,
     image: &MetadataImage,
-) -> Result<NodeId, (i16, String)> {
-    if resource_name.is_empty() {
-        return Ok(krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID);
-    }
-    let node_id = resource_name.parse::<u64>().map(NodeId).map_err(|_| {
-        (
-            codes::INVALID_REQUEST,
-            format!("invalid broker id {resource_name:?}"),
+    serving: NodeId,
+) -> Result<Vec<MetadataRecord>, (i16, String)> {
+    let node_id = broker_resource_node(&resource.resource_name, serving)?;
+    if let Some(cfg) = resource.configs.iter().find(|cfg| {
+        !matches!(
+            cfg.config_operation,
+            OP_SET | OP_DELETE | OP_APPEND | OP_SUBTRACT
         )
-    })?;
-    if image.broker(node_id).is_none() {
-        return Err((codes::INVALID_REQUEST, format!("unknown broker {node_id}")));
+    }) {
+        return Err((
+            codes::INVALID_REQUEST,
+            format!("Unknown operations type {}", cfg.config_operation),
+        ));
     }
-    Ok(node_id)
+    for cfg in &resource.configs {
+        // krabka's controller-published keys stand outside the alter paths.
+        if config_keys::is_controller_managed_broker_config(&cfg.name) {
+            return Err((
+                codes::INVALID_CONFIG,
+                format!(
+                    "broker config {} is controller-managed and read-only",
+                    cfg.name
+                ),
+            ));
+        }
+        if node_id != krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID
+            && CLUSTER_DEFAULT_ONLY.contains(&cfg.name.as_str())
+        {
+            return Err((
+                codes::INVALID_CONFIG,
+                format!(
+                    "broker config {} is valid only on the cluster-default resource",
+                    cfg.name
+                ),
+            ));
+        }
+    }
+    let mut props: BTreeMap<String, String> = image
+        .broker_config(node_id)
+        .into_iter()
+        .flatten()
+        .filter(|(name, _)| !config_keys::is_controller_managed_broker_config(name))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    apply_operations(resource, &mut props)?;
+    let per_broker = node_id != krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID;
+    let canonical = canonical_dynamic_broker_configs(&props, per_broker)?;
+
+    // Kafka writes a record for every key the request names, changed or not
+    // (KAFKA-14136), and checks the ELR rules on each.
+    let mut records = Vec::with_capacity(resource.configs.len());
+    for cfg in &resource.configs {
+        let value = canonical.get(&cfg.name).cloned();
+        if let Some(error) = elr_min_isr_error(image, node_id, &cfg.name, value.as_deref()) {
+            return Err(error);
+        }
+        records.push(MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+            node_id,
+            config_name: cfg.name.clone(),
+            config_value: value,
+        }));
+    }
+    Ok(records)
 }
 
 pub(super) fn handle_broker_scoped(
     resource: &AlterConfigsResource,
     image: &MetadataImage,
+    serving: NodeId,
     out: &mut AlterConfigsResourceResponse,
     to_submit: &mut Vec<MetadataRecord>,
 ) {
-    let node_id = match broker_config_node_id(&resource.resource_name, image) {
-        Ok(node_id) => node_id,
+    match broker_records(resource, image, serving) {
+        Ok(records) => to_submit.extend(records),
         Err((code, message)) => {
             out.error_code = code;
             out.error_message = Some(message);
-            return;
         }
-    };
-    for cfg in &resource.configs {
-        if config_keys::is_controller_managed_broker_config(&cfg.name) {
-            out.error_code = codes::INVALID_CONFIG;
-            out.error_message = Some(format!(
-                "broker config {} is controller-managed and read-only",
-                cfg.name
-            ));
-            return; // halt processing this resource
-        }
-        if !is_known_broker_config(&cfg.name) {
-            out.error_code = codes::INVALID_CONFIG;
-            out.error_message = Some(format!("unknown broker config {}", cfg.name));
-            return; // halt processing this resource
-        }
-        if node_id != krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID
-            && is_cluster_default_topic_config(&cfg.name)
-        {
-            out.error_code = codes::INVALID_CONFIG;
-            out.error_message = Some(format!(
-                "broker config {} is valid only on the cluster-default resource",
-                cfg.name
-            ));
-            return;
-        }
-        let new_value = match cfg.config_operation {
-            OP_SET => {
-                let v = cfg.value.clone().unwrap_or_default();
-                if let Err(e) = validate_broker_config_value(&cfg.name, &v) {
-                    out.error_code = codes::INVALID_CONFIG;
-                    out.error_message = Some(e);
-                    return;
-                }
-                Some(v)
-            }
-            OP_DELETE => {
-                if cfg.name == config_keys::MIN_INSYNC_REPLICAS
-                    && image.finalized_feature(crate::features::ELR_VERSION) == Some(1)
-                    && image
-                        .broker_config(node_id)
-                        .is_some_and(|configs| configs.contains_key(&cfg.name))
-                {
-                    out.error_code = codes::INVALID_CONFIG;
-                    out.error_message = Some(
-                        "cannot remove the cluster-wide min.insync.replicas while ELR is enabled"
-                            .into(),
-                    );
-                    return;
-                }
-                None
-            }
-            _ => {
-                out.error_code = codes::INVALID_REQUEST;
-                out.error_message = Some(format!(
-                    "unsupported config_operation {}",
-                    cfg.config_operation
-                ));
-                return;
-            }
-        };
-        to_submit.push(MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id,
-            config_name: cfg.name.clone(),
-            config_value: new_value,
-        }));
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use assert2::{assert, check};
+    use assert2::check;
+    use krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig;
 
     use super::*;
     use crate::handlers::incremental_alter_configs::test_support::{
         make_del_cfg, make_image_with_broker, make_resource, make_set_cfg,
     };
 
-    #[test]
-    fn broker_scoped_configs_recognized() {
-        assert!(is_known_broker_config(
-            crate::throttle::LEADER_THROTTLED_RATE_KEY
-        ));
-        assert!(is_known_broker_config(
-            crate::throttle::FOLLOWER_THROTTLED_RATE_KEY
-        ));
-        assert!(is_known_broker_config(
-            crate::throttle::ALTER_LOG_DIRS_THROTTLED_RATE_KEY
-        ));
-        assert!(is_known_broker_config(
-            config_keys::UNCLEAN_LEADER_ELECTION_ENABLE
-        ));
-        assert!(is_known_broker_config(
-            config_keys::UNCLEAN_RECOVERY_STRATEGY
-        ));
-        assert!(is_known_broker_config(
-            config_keys::REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS
-        ));
-    }
+    const SERVING: NodeId = NodeId(1);
 
-    #[test]
-    fn broker_scoped_unknown_config_rejected() {
-        assert!(!is_known_broker_config("not.a.real.config"));
-        assert!(validate_broker_config_value("not.a.real.config", "1024").is_err());
-    }
-
-    #[test]
-    fn broker_scoped_invalid_value_rejected() {
-        assert!(
-            validate_broker_config_value(
-                crate::throttle::LEADER_THROTTLED_RATE_KEY,
-                "not-a-number"
-            )
-            .is_err()
-        );
-        assert!(
-            validate_broker_config_value(crate::throttle::LEADER_THROTTLED_RATE_KEY, "1024")
-                .is_ok()
-        );
-        assert!(
-            validate_broker_config_value(
-                config_keys::REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS,
-                "30000"
-            )
-            .is_ok()
-        );
-        for invalid in ["", "0", "-1", "2147483648", "not-a-number"] {
-            assert!(
-                validate_broker_config_value(
-                    config_keys::REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS,
-                    invalid
-                )
-                .is_err(),
-                "{invalid}"
-            );
+    fn op(key: &str, operation: i8, value: &str) -> AlterableConfig {
+        AlterableConfig {
+            name: key.into(),
+            config_operation: operation,
+            value: Some(value.into()),
+            ..Default::default()
         }
     }
 
-    #[test]
-    fn broker_scoped_empty_name_targets_cluster_default() {
-        let img = make_image_with_broker(krabka_audit::NodeId(1));
-        let resource = make_resource(
-            "",
-            vec![
-                make_set_cfg(crate::throttle::LEADER_THROTTLED_RATE_KEY, "2048"),
-                make_set_cfg(config_keys::UNCLEAN_RECOVERY_STRATEGY, "Balanced"),
-            ],
-        );
-        let mut out = AlterConfigsResourceResponse::default();
-        let mut to_submit = Vec::new();
-        handle_broker_scoped(&resource, &img, &mut out, &mut to_submit);
-        assert!(out.error_code == codes::NONE);
-        assert!(
-            to_submit
-                == vec![
-                    MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-                        node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
-                        config_name: crate::throttle::LEADER_THROTTLED_RATE_KEY.to_string(),
-                        config_value: Some("2048".to_string()),
-                    }),
-                    MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-                        node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
-                        config_name: config_keys::UNCLEAN_RECOVERY_STRATEGY.to_string(),
-                        config_value: Some("Balanced".to_string()),
-                    }),
-                ]
-        );
+    fn record(node: NodeId, key: &str, value: Option<&str>) -> MetadataRecord {
+        MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+            node_id: node,
+            config_name: key.into(),
+            config_value: value.map(str::to_owned),
+        })
     }
 
-    #[test]
-    fn recovery_settings_reject_per_broker_scope() {
-        let img = make_image_with_broker(krabka_audit::NodeId(1));
-        for (key, value) in [
-            (config_keys::UNCLEAN_LEADER_ELECTION_ENABLE, "true"),
-            (config_keys::UNCLEAN_RECOVERY_STRATEGY, "Balanced"),
-        ] {
-            let resource = make_resource("1", vec![make_set_cfg(key, value)]);
-            let mut out = AlterConfigsResourceResponse::default();
-            let mut to_submit = Vec::new();
-
-            handle_broker_scoped(&resource, &img, &mut out, &mut to_submit);
-
-            assert!(out.error_code == codes::INVALID_CONFIG, "key {key}");
-            assert!(to_submit.is_empty(), "key {key}");
+    fn image_with(configs: &[(NodeId, &str, &str)], elr: bool) -> MetadataImage {
+        let mut image = make_image_with_broker(SERVING);
+        image.apply(&MetadataRecord::V1BrokerRegistration(
+            krabka_metadata::BrokerRegistrationRecord {
+                node_id: NodeId(2),
+                broker_epoch: 0,
+                incarnation_id: uuid::Uuid::nil(),
+                host: "127.0.0.1".into(),
+                port: 9093,
+                rack: None,
+                log_dirs: vec![],
+                endpoints: vec![],
+                features: BTreeMap::new(),
+            },
+        ));
+        for (node, key, value) in configs {
+            image.apply(&record(*node, key, Some(value)));
         }
+        if elr {
+            image.apply(&MetadataRecord::V1FeatureLevel(
+                krabka_metadata::FeatureLevelRecord {
+                    name: crate::features::ELR_VERSION.into(),
+                    level: 1,
+                },
+            ));
+        }
+        image
     }
 
+    /// One row of the broker-resource table.
+    type Case<'a> = (
+        &'a str,
+        MetadataImage,
+        Vec<AlterableConfig>,
+        Result<Vec<MetadataRecord>, (i16, &'a str)>,
+    );
+
+    /// Each row is a resource name, the stored state, the operations, and the
+    /// whole expected outcome: the staged records, or the error.
     #[test]
-    fn recovery_settings_validate_cluster_default_values() {
-        let img = make_image_with_broker(krabka_audit::NodeId(1));
-        for (key, value) in [
-            (config_keys::UNCLEAN_LEADER_ELECTION_ENABLE, "yes"),
-            (config_keys::UNCLEAN_RECOVERY_STRATEGY, "fast"),
-        ] {
-            let resource = make_resource("", vec![make_set_cfg(key, value)]);
-            let mut out = AlterConfigsResourceResponse::default();
-            let mut to_submit = Vec::new();
-
-            handle_broker_scoped(&resource, &img, &mut out, &mut to_submit);
-
-            assert!(out.error_code == codes::INVALID_CONFIG, "key {key}");
-            assert!(to_submit.is_empty(), "key {key}");
+    fn broker_resources_follow_kafkas_dynamic_config_rules() {
+        let cluster = krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID;
+        let rate = crate::throttle::LEADER_THROTTLED_RATE_KEY;
+        let min_isr = config_keys::MIN_INSYNC_REPLICAS;
+        let cases: Vec<Case<'_>> = vec![
+            (
+                "1",
+                image_with(&[], false),
+                vec![make_set_cfg(rate, "2048")],
+                Ok(vec![record(SERVING, rate, Some("2048"))]),
+            ),
+            (
+                "2",
+                image_with(&[], false),
+                vec![make_set_cfg(rate, "2048")],
+                Err((
+                    codes::INVALID_REQUEST,
+                    "Unexpected broker id, expected 1, but received 2",
+                )),
+            ),
+            (
+                "x",
+                image_with(&[], false),
+                vec![make_set_cfg(rate, "2048")],
+                Err((
+                    codes::INVALID_REQUEST,
+                    "Node id must be an integer, but it is: x",
+                )),
+            ),
+            (
+                "1",
+                image_with(&[], false),
+                vec![op(rate, 7, "1")],
+                Err((codes::INVALID_REQUEST, "Unknown operations type 7")),
+            ),
+            (
+                "",
+                image_with(&[], false),
+                vec![make_set_cfg("log.retention.ms", "86400000")],
+                Ok(vec![record(cluster, "log.retention.ms", Some("86400000"))]),
+            ),
+            (
+                "",
+                image_with(&[], false),
+                vec![make_set_cfg("num.io.threads", "16")],
+                Ok(vec![record(cluster, "num.io.threads", Some("16"))]),
+            ),
+            (
+                "1",
+                image_with(&[], false),
+                vec![make_set_cfg(
+                    "listener.name.client.ssl.keystore.location",
+                    "/k",
+                )],
+                Ok(vec![record(
+                    SERVING,
+                    "listener.name.client.ssl.keystore.location",
+                    Some("/k"),
+                )]),
+            ),
+            (
+                "",
+                image_with(&[], false),
+                vec![make_set_cfg("log.dirs", "/tmp")],
+                Err((
+                    codes::INVALID_REQUEST,
+                    "Cannot update these configs dynamically: [log.dirs]",
+                )),
+            ),
+            (
+                "1",
+                image_with(&[], false),
+                vec![make_set_cfg(rate, "-5")],
+                Err((
+                    codes::INVALID_REQUEST,
+                    "Invalid value -5 for configuration leader.replication.throttled.rate: \
+                     Value must be at least 0",
+                )),
+            ),
+            (
+                "1",
+                image_with(&[], false),
+                vec![make_set_cfg(
+                    config_keys::UNCLEAN_LEADER_ELECTION_ENABLE,
+                    "true",
+                )],
+                Ok(vec![record(
+                    SERVING,
+                    config_keys::UNCLEAN_LEADER_ELECTION_ENABLE,
+                    Some("true"),
+                )]),
+            ),
+            (
+                "1",
+                image_with(&[], false),
+                vec![make_set_cfg(min_isr, "2")],
+                Ok(vec![record(SERVING, min_isr, Some("2"))]),
+            ),
+            (
+                "1",
+                image_with(&[], true),
+                vec![make_set_cfg(min_isr, "2")],
+                Err((
+                    codes::INVALID_CONFIG,
+                    "Broker-level min.insync.replicas cannot be altered while ELR is enabled.",
+                )),
+            ),
+            (
+                "",
+                image_with(&[], true),
+                vec![make_del_cfg(min_isr)],
+                Err((
+                    codes::INVALID_CONFIG,
+                    "Cluster-level min.insync.replicas cannot be removed while ELR is enabled.",
+                )),
+            ),
+            (
+                "1",
+                image_with(&[], false),
+                vec![op(rate, OP_APPEND, "1")],
+                Err((
+                    codes::INVALID_CONFIG,
+                    "Config value append is not allowed for config key: \
+                     leader.replication.throttled.rate",
+                )),
+            ),
+            (
+                "1",
+                image_with(&[], false),
+                vec![op("not.a.kafka.key", OP_SUBTRACT, "1")],
+                Err((
+                    codes::INVALID_CONFIG,
+                    "Unknown config name: not.a.kafka.key",
+                )),
+            ),
+            (
+                "",
+                image_with(&[], false),
+                vec![op("log.cleanup.policy", OP_APPEND, "compact")],
+                Ok(vec![record(
+                    cluster,
+                    "log.cleanup.policy",
+                    Some("delete,compact"),
+                )]),
+            ),
+            (
+                "",
+                image_with(&[(cluster, "log.cleanup.policy", "compact,delete")], false),
+                vec![op("log.cleanup.policy", OP_SUBTRACT, "delete")],
+                Ok(vec![record(cluster, "log.cleanup.policy", Some("compact"))]),
+            ),
+        ];
+        for (name, image, configs, want) in cases {
+            let resource = make_resource(name, configs.clone());
+            let got = broker_records(&resource, &image, SERVING);
+            let want = want.map_err(|(code, message)| (code, message.to_owned()));
+            check!(got == want, "{name:?} {configs:?}");
         }
     }
 
     #[test]
     fn controller_managed_broker_configs_are_rejected_as_read_only() {
-        let img = make_image_with_broker(krabka_audit::NodeId(1));
         for key in config_keys::CONTROLLER_MANAGED_BROKER_CONFIGS {
             for cfg in [make_set_cfg(key, "true"), make_del_cfg(key)] {
-                for resource_name in ["1", ""] {
-                    let resource = make_resource(resource_name, vec![cfg.clone()]);
-                    let mut out = AlterConfigsResourceResponse::default();
-                    let mut to_submit = Vec::new();
-
-                    handle_broker_scoped(&resource, &img, &mut out, &mut to_submit);
-
-                    check!(out.error_code == codes::INVALID_CONFIG, "key {key}");
-                    check!(
-                        out.error_message
-                            == Some(format!(
-                                "broker config {key} is controller-managed and read-only"
-                            )),
-                        "key {key}"
-                    );
-                    check!(to_submit.is_empty(), "key {key}");
-                }
+                let resource = make_resource("1", vec![cfg]);
+                check!(
+                    broker_records(&resource, &image_with(&[], false), SERVING)
+                        == Err((
+                            codes::INVALID_CONFIG,
+                            format!("broker config {key} is controller-managed and read-only"),
+                        )),
+                    "key {key}"
+                );
             }
         }
-    }
-
-    #[test]
-    fn broker_scoped_unknown_broker_returns_invalid_request() {
-        let img = make_image_with_broker(krabka_audit::NodeId(1));
-        let resource = make_resource("99", vec![]);
-        let mut out = AlterConfigsResourceResponse::default();
-        let mut to_submit = Vec::new();
-        handle_broker_scoped(&resource, &img, &mut out, &mut to_submit);
-        assert!(out.error_code == codes::INVALID_REQUEST);
-    }
-
-    #[test]
-    fn broker_scoped_unknown_config_key_returns_invalid_config() {
-        let img = make_image_with_broker(krabka_audit::NodeId(1));
-        let resource = make_resource("1", vec![make_set_cfg("some.unknown.key", "123")]);
-        let mut out = AlterConfigsResourceResponse::default();
-        let mut to_submit = Vec::new();
-        handle_broker_scoped(&resource, &img, &mut out, &mut to_submit);
-        assert!(out.error_code == codes::INVALID_CONFIG);
-        assert!(to_submit.is_empty());
-    }
-
-    #[test]
-    fn broker_scoped_set_produces_broker_config_record() {
-        let img = make_image_with_broker(krabka_audit::NodeId(1));
-        let resource = make_resource(
-            "1",
-            vec![make_set_cfg(
-                crate::throttle::LEADER_THROTTLED_RATE_KEY,
-                "2048",
-            )],
-        );
-        let mut out = AlterConfigsResourceResponse::default();
-        let mut to_submit = Vec::new();
-        handle_broker_scoped(&resource, &img, &mut out, &mut to_submit);
-        assert!(out.error_code == codes::NONE);
-        let expected = vec![MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: krabka_audit::NodeId(1),
-            config_name: crate::throttle::LEADER_THROTTLED_RATE_KEY.to_string(),
-            config_value: Some("2048".to_string()),
-        })];
-        assert!(to_submit == expected);
-    }
-
-    #[test]
-    fn broker_scoped_log_dir_rate_is_validated_and_persisted() {
-        let img = make_image_with_broker(krabka_audit::NodeId(1));
-        let resource = make_resource(
-            "1",
-            vec![make_set_cfg(
-                crate::throttle::ALTER_LOG_DIRS_THROTTLED_RATE_KEY,
-                "4096",
-            )],
-        );
-        let mut out = AlterConfigsResourceResponse::default();
-        let mut to_submit = Vec::new();
-        handle_broker_scoped(&resource, &img, &mut out, &mut to_submit);
-
-        assert!(out.error_code == codes::NONE);
-        assert!(
-            to_submit
-                == vec![MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-                    node_id: krabka_audit::NodeId(1),
-                    config_name: crate::throttle::ALTER_LOG_DIRS_THROTTLED_RATE_KEY.to_string(),
-                    config_value: Some("4096".to_string()),
-                })]
-        );
-    }
-
-    #[test]
-    fn broker_scoped_delete_produces_broker_config_record_none_value() {
-        let img = make_image_with_broker(krabka_audit::NodeId(1));
-        let resource = make_resource(
-            "1",
-            vec![make_del_cfg(crate::throttle::FOLLOWER_THROTTLED_RATE_KEY)],
-        );
-        let mut out = AlterConfigsResourceResponse::default();
-        let mut to_submit = Vec::new();
-        handle_broker_scoped(&resource, &img, &mut out, &mut to_submit);
-        assert!(out.error_code == codes::NONE);
-        let expected = vec![MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: krabka_audit::NodeId(1),
-            config_name: crate::throttle::FOLLOWER_THROTTLED_RATE_KEY.to_string(),
-            config_value: None,
-        })];
-        assert!(to_submit == expected);
-    }
-
-    #[test]
-    fn broker_scoped_invalid_rate_value_returns_invalid_config() {
-        let img = make_image_with_broker(krabka_audit::NodeId(1));
-        let resource = make_resource(
-            "1",
-            vec![make_set_cfg(
-                crate::throttle::LEADER_THROTTLED_RATE_KEY,
-                "not-a-number",
-            )],
-        );
-        let mut out = AlterConfigsResourceResponse::default();
-        let mut to_submit = Vec::new();
-        handle_broker_scoped(&resource, &img, &mut out, &mut to_submit);
-        assert!(out.error_code == codes::INVALID_CONFIG);
-        assert!(to_submit.is_empty());
     }
 }

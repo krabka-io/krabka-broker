@@ -7,9 +7,9 @@
 //! Supported operations:
 //! - SET (0): set or replace
 //! - DELETE (1): remove
-//! - APPEND (2) and SUBTRACT (3) are list-valued operations. No whitelisted
-//!   key is list-valued, so the handler rejects these two with
-//!   `INVALID_CONFIG`.
+//! - APPEND (2) and SUBTRACT (3) merge items into, or out of, a key Kafka
+//!   types `LIST`, starting from its default when the resource does not hold
+//!   it. Any other key refuses them with `INVALID_CONFIG`, in Kafka's words.
 //!
 //! `BROKER_LOGGER` (8) is the one resource type that stages no metadata
 //! record at all: it retargets this node's live `tracing` filter and nothing
@@ -47,10 +47,6 @@ mod group_scope;
 mod test_support;
 mod topic_scope;
 
-pub(super) use self::broker_scope::{
-    broker_config_node_id, is_cluster_default_topic_config, is_known_broker_config,
-    validate_broker_config_value,
-};
 use self::{
     broker_logger_scope::handle_broker_logger_scoped, broker_scope::handle_broker_scoped,
     client_metrics_scope::handle_client_metrics_scoped, group_scope::handle_group_scoped,
@@ -70,6 +66,8 @@ const RESOURCE_TYPE_CLIENT_METRICS: i8 = 16;
 const RESOURCE_TYPE_GROUP: i8 = 32;
 const OP_SET: i8 = 0;
 const OP_DELETE: i8 = 1;
+const OP_APPEND: i8 = 2;
+const OP_SUBTRACT: i8 = 3;
 
 #[tracing::instrument(
     name = "handle_incremental_alter_configs",
@@ -92,8 +90,9 @@ pub(crate) async fn handle(
     let mut responses: Vec<AlterConfigsResourceResponse> = Vec::with_capacity(req.resources.len());
     let validate_only = req.validate_only;
     let mut audited: Vec<krabka_audit::AuditResource> = Vec::new();
+    let duplicate_flags = duplicate_resource_flags(&req.resources);
 
-    for resource in req.resources {
+    for (resource, is_duplicate) in req.resources.into_iter().zip(duplicate_flags) {
         // The keys, never the values: a config value can be a password or a
         // key store path, and the record only has to say who changed what.
         let named: Vec<krabka_audit::AuditResource> =
@@ -107,7 +106,8 @@ pub(crate) async fn handle(
                 }),
             )
             .collect();
-        let response = process_resource(broker, &image, ctx, resource, validate_only).await;
+        let response =
+            process_resource(broker, &image, ctx, resource, validate_only, is_duplicate).await;
         // A `--dry-run` request stores nothing, so it changed no resource.
         if response.error_code == codes::NONE && !validate_only {
             audited.extend(named);
@@ -129,12 +129,68 @@ pub(crate) async fn handle(
     crate::handlers::encode_response(&resp, version)
 }
 
+/// Kafka's `ConfigAdminManager.preprocess` rejects a request that names the
+/// same `(resource_type, resource_name)` pair more than once, on every row
+/// that names it. This computes that flag for each resource in request order.
+fn duplicate_resource_flags(resources: &[AlterConfigsResource]) -> Vec<bool> {
+    let mut counts: std::collections::HashMap<(i8, &str), usize> = std::collections::HashMap::new();
+    for resource in resources {
+        *counts
+            .entry((resource.resource_type, resource.resource_name.as_str()))
+            .or_insert(0) += 1;
+    }
+    resources
+        .iter()
+        .map(|resource| counts[&(resource.resource_type, resource.resource_name.as_str())] > 1)
+        .collect()
+}
+
+/// Kafka's `ConfigAdminManager.preprocess` shape checks, which run before any
+/// authorization: a resource named twice, a key named twice within one
+/// resource, and a null value on any operation but DELETE.
+fn validate_resource_shape(
+    resource: &AlterConfigsResource,
+    is_duplicate: bool,
+) -> Result<(), (i16, String)> {
+    if is_duplicate {
+        return Err((
+            codes::INVALID_REQUEST,
+            "Each resource must appear at most once.".into(),
+        ));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    if resource
+        .configs
+        .iter()
+        .any(|config| !seen.insert(config.name.as_str()))
+    {
+        return Err((
+            codes::INVALID_REQUEST,
+            "Error due to duplicate config keys".into(),
+        ));
+    }
+    let null_names: Vec<&str> = resource
+        .configs
+        .iter()
+        .filter(|config| config.config_operation != OP_DELETE && config.value.is_none())
+        .map(|config| config.name.as_str())
+        .collect();
+    if !null_names.is_empty() {
+        return Err((
+            codes::INVALID_REQUEST,
+            format!("Null value not supported for : {}", null_names.join(", ")),
+        ));
+    }
+    Ok(())
+}
+
 async fn process_resource(
     broker: &Broker,
     image: &MetadataImage,
     ctx: &crate::handlers::RequestContext<'_>,
     resource: AlterConfigsResource,
     validate_only: bool,
+    is_duplicate: bool,
 ) -> AlterConfigsResourceResponse {
     let mut out = AlterConfigsResourceResponse {
         resource_type: resource.resource_type,
@@ -144,61 +200,56 @@ async fn process_resource(
         ..Default::default()
     };
 
+    // ── Kafka validates the request shape before it authorizes ──
+    if let Err((code, message)) = validate_resource_shape(&resource, is_duplicate) {
+        out.error_code = code;
+        out.error_message = Some(message);
+        return out;
+    }
+
     // ── ACL preamble ────────────────────────────────────────
-    // Per-resource authorization based on resource_type.
-    // Topic (2) → AlterConfigs on Topic(resource_name) → TOPIC_AUTHORIZATION_FAILED on Deny.
-    // Broker (4) and BrokerLogger (8) → AlterConfigs on Cluster("kafka-cluster")
-    // → CLUSTER_AUTHORIZATION_FAILED on Deny.
-    // Other resource types are unsupported; Kafka assigns no distinct code for
-    // that, so they get INVALID_REQUEST — checked after ACL.
-    let acl_result = match resource.resource_type {
-        RESOURCE_TYPE_TOPIC => broker.config.authorizer.authorize(
-            image,
-            &AuthorizationRequest {
-                principal: ctx.principal,
-                host: ctx.peer,
-                resource_type: ResourceType::Topic,
-                resource_name: &resource.resource_name,
-                operation: AclOperation::AlterConfigs,
-            },
+    // `ControllerApis.authorizeAlterResource`, and `preprocess` for the
+    // broker types: Topic → AlterConfigs on Topic(name), Group → on
+    // Group(name), Broker, BrokerLogger and ClientMetrics → on the cluster.
+    // `preprocess` refuses any other resource type before it authorizes.
+    let (acl_type, acl_name, denied_code, denied_message) = match resource.resource_type {
+        RESOURCE_TYPE_TOPIC => (
+            ResourceType::Topic,
+            resource.resource_name.as_str(),
+            codes::TOPIC_AUTHORIZATION_FAILED,
+            "Topic authorization failed.",
         ),
-        RESOURCE_TYPE_BROKER | RESOURCE_TYPE_BROKER_LOGGER | RESOURCE_TYPE_CLIENT_METRICS => {
-            broker.config.authorizer.authorize(
-                image,
-                &AuthorizationRequest {
-                    principal: ctx.principal,
-                    host: ctx.peer,
-                    resource_type: ResourceType::Cluster,
-                    resource_name: crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
-                    operation: AclOperation::AlterConfigs,
-                },
-            )
-        }
-        RESOURCE_TYPE_GROUP => broker.config.authorizer.authorize(
-            image,
-            &AuthorizationRequest {
-                principal: ctx.principal,
-                host: ctx.peer,
-                resource_type: ResourceType::Group,
-                resource_name: &resource.resource_name,
-                operation: AclOperation::AlterConfigs,
-            },
+        RESOURCE_TYPE_GROUP => (
+            ResourceType::Group,
+            resource.resource_name.as_str(),
+            codes::GROUP_AUTHORIZATION_FAILED,
+            "Group authorization failed.",
         ),
-        _ => {
+        RESOURCE_TYPE_BROKER | RESOURCE_TYPE_BROKER_LOGGER | RESOURCE_TYPE_CLIENT_METRICS => (
+            ResourceType::Cluster,
+            crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+            codes::CLUSTER_AUTHORIZATION_FAILED,
+            "Cluster authorization failed.",
+        ),
+        other => {
             out.error_code = codes::INVALID_REQUEST;
-            out.error_message = Some(format!(
-                "resource_type={} not supported",
-                resource.resource_type
-            ));
+            out.error_message = Some(format!("Unknown resource type {other}"));
             return out;
         }
     };
+    let acl_result = broker.config.authorizer.authorize(
+        image,
+        &AuthorizationRequest {
+            principal: ctx.principal,
+            host: ctx.peer,
+            resource_type: acl_type,
+            resource_name: acl_name,
+            operation: AclOperation::AlterConfigs,
+        },
+    );
     if acl_result == AuthorizationResult::Deny {
-        out.error_code = match resource.resource_type {
-            RESOURCE_TYPE_TOPIC => codes::TOPIC_AUTHORIZATION_FAILED,
-            RESOURCE_TYPE_GROUP => codes::GROUP_AUTHORIZATION_FAILED,
-            _ => codes::CLUSTER_AUTHORIZATION_FAILED,
-        };
+        out.error_code = denied_code;
+        out.error_message = Some(denied_message.into());
         return out;
     }
 
@@ -207,7 +258,12 @@ async fn process_resource(
 
     match resource.resource_type {
         RESOURCE_TYPE_TOPIC => {
-            match topic_config_record(&resource, image, &broker.config.topic_policy) {
+            match topic_config_record(
+                &resource,
+                image,
+                &broker.config.topic_policy,
+                broker.config.remote_storage_backend.is_some(),
+            ) {
                 Ok(record) => to_submit.push(record),
                 Err((code, message)) => {
                     out.error_code = code;
@@ -217,7 +273,13 @@ async fn process_resource(
             }
         }
         RESOURCE_TYPE_BROKER => {
-            handle_broker_scoped(&resource, image, &mut out, &mut to_submit);
+            handle_broker_scoped(
+                &resource,
+                image,
+                krabka_metadata::NodeId(broker.config.node_id.0),
+                &mut out,
+                &mut to_submit,
+            );
             if out.error_code != codes::NONE {
                 return out;
             }
@@ -252,16 +314,7 @@ async fn process_resource(
                 return out;
             }
         }
-        _ => {
-            // Already handled by the ACL match above (unreachable), but be
-            // explicit for exhaustiveness.
-            out.error_code = codes::INVALID_REQUEST;
-            out.error_message = Some(format!(
-                "resource_type={} not supported",
-                resource.resource_type
-            ));
-            return out;
-        }
+        other => unreachable!("resource type {other} passed the ACL dispatch"),
     }
 
     if to_submit.iter().any(|record| match record {
@@ -310,4 +363,87 @@ async fn process_resource(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::check;
+    use krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig;
+
+    use super::*;
+
+    fn config(name: &str, operation: i8, value: Option<&str>) -> AlterableConfig {
+        AlterableConfig {
+            name: name.into(),
+            config_operation: operation,
+            value: value.map(str::to_owned),
+            ..Default::default()
+        }
+    }
+
+    /// Kafka's `ConfigAdminManager.preprocess` shape checks, which answer
+    /// before any authorization. Each row is a request's resources and the
+    /// outcome for each.
+    #[test]
+    fn the_request_shape_is_checked_the_way_kafka_preprocesses_it() {
+        let resource =
+            |resource_type: i8, name: &str, configs: Vec<AlterableConfig>| AlterConfigsResource {
+                resource_type,
+                resource_name: name.into(),
+                configs,
+                ..Default::default()
+            };
+        let duplicate = Err((
+            codes::INVALID_REQUEST,
+            "Each resource must appear at most once.".to_owned(),
+        ));
+        let cases = [
+            (
+                vec![
+                    resource(RESOURCE_TYPE_TOPIC, "t", vec![]),
+                    resource(RESOURCE_TYPE_TOPIC, "t", vec![]),
+                    resource(RESOURCE_TYPE_GROUP, "t", vec![]),
+                ],
+                vec![duplicate.clone(), duplicate, Ok(())],
+            ),
+            (
+                vec![resource(
+                    RESOURCE_TYPE_TOPIC,
+                    "t",
+                    vec![
+                        config("retention.ms", OP_SET, Some("1")),
+                        config("retention.ms", OP_DELETE, None),
+                    ],
+                )],
+                vec![Err((
+                    codes::INVALID_REQUEST,
+                    "Error due to duplicate config keys".to_owned(),
+                ))],
+            ),
+            (
+                vec![resource(
+                    RESOURCE_TYPE_GROUP,
+                    "g",
+                    vec![
+                        config("a", OP_SET, None),
+                        config("b", OP_DELETE, None),
+                        config("c", OP_APPEND, None),
+                    ],
+                )],
+                vec![Err((
+                    codes::INVALID_REQUEST,
+                    "Null value not supported for : a, c".to_owned(),
+                ))],
+            ),
+        ];
+        for (resources, want) in cases {
+            let flags = duplicate_resource_flags(&resources);
+            let got: Vec<Result<(), (i16, String)>> = resources
+                .iter()
+                .zip(flags)
+                .map(|(resource, is_duplicate)| validate_resource_shape(resource, is_duplicate))
+                .collect();
+            check!(got == want);
+        }
+    }
 }

@@ -35,7 +35,7 @@ async fn handle_preserves_resource_identity_for_unsupported_type() {
         throttle_time_ms: 0,
         responses: vec![AlterConfigsResourceResponse {
             error_code: codes::INVALID_REQUEST,
-            error_message: Some("resource_type=77 not supported".to_string()),
+            error_message: Some("Unknown resource type 77".to_string()),
             resource_type: 77,
             resource_name: "mystery".to_string(),
             unknown_tagged_fields: UnknownTaggedFields::default(),
@@ -210,18 +210,25 @@ async fn duplicate_config_key_is_a_validation_error_even_when_unauthorized() {
 #[tokio::test]
 async fn null_config_value_is_a_validation_error_even_when_unauthorized() {
     let mut resource = resource(RESOURCE_TYPE_TOPIC, "orders");
-    resource.configs = vec![AlterableConfig {
-        name: "retention.ms".into(),
-        value: None,
-        ..Default::default()
-    }];
+    resource.configs = ["retention.ms", "cleanup.policy"]
+        .into_iter()
+        .map(|name| AlterableConfig {
+            name: name.into(),
+            value: None,
+            ..Default::default()
+        })
+        .collect();
 
     let resp = Box::pin(drive_one(Arc::new(DenyAll), resource)).await;
 
     assert!(resp.responses.len() == 1);
     let row = &resp.responses[0];
     assert!(row.error_code == codes::INVALID_REQUEST);
-    assert!(row.error_message.as_deref() == Some("Null value not supported for : retention.ms"));
+    // Kafka joins the names with `String.join(", ", ...)`.
+    assert!(
+        row.error_message.as_deref()
+            == Some("Null value not supported for : retention.ms, cleanup.policy")
+    );
 }
 
 /// A valid, uniquely-named resource with well-formed configs still gets an
@@ -269,7 +276,7 @@ async fn broker_resource_denial_uses_cluster_authorization_error() {
         throttle_time_ms: 0,
         responses: vec![AlterConfigsResourceResponse {
             error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
-            error_message: None,
+            error_message: Some("Cluster authorization failed.".to_string()),
             resource_type: RESOURCE_TYPE_BROKER,
             resource_name: "1".to_string(),
             unknown_tagged_fields: UnknownTaggedFields::default(),

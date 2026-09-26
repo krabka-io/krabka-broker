@@ -1,7 +1,8 @@
-//! Group resources for `IncrementalAlterConfigs`, the KIP-1071 group configs.
-//! The handler merges the per-key operations onto the group's current override
-//! map, checks the merged map against the broker's `StreamsGroupConfig`
-//! defaults and bounds, and stages a `V1GroupConfig` record with that map.
+//! Group resources for `IncrementalAlterConfigs`, the KIP-848, KIP-932 and
+//! KIP-1071 group configs. The handler merges the per-key operations onto
+//! the group's current override map, checks the merged map with Kafka's
+//! `GroupConfig.validate` against the broker's `StreamsGroupConfig` bounds,
+//! and stages a `V1GroupConfig` record with that map.
 
 use krabka_metadata::{GroupConfigRecord, MetadataImage, MetadataRecord};
 use krabka_protocol::owned::{
@@ -9,11 +10,64 @@ use krabka_protocol::owned::{
     incremental_alter_configs_response::AlterConfigsResourceResponse,
 };
 
-use super::{OP_DELETE, OP_SET};
+use super::{
+    OP_DELETE, OP_SET,
+    topic_scope::{merge_list_op, not_a_list},
+};
 use crate::{
     codes,
-    coordinator::unified::streams::config::{GROUP_CONFIG_KEYS, StreamsGroupConfig},
+    config_keys::{
+        group::{kafka_group_key, validate_group_configs},
+        registry::ConfigType,
+    },
+    coordinator::unified::streams::config::StreamsGroupConfig,
 };
+
+fn group_record(
+    resource: &AlterConfigsResource,
+    image: &MetadataImage,
+    defaults: &StreamsGroupConfig,
+) -> Result<MetadataRecord, (i16, String)> {
+    let mut merged = image
+        .group_config(&resource.resource_name)
+        .cloned()
+        .unwrap_or_default();
+    for cfg in &resource.configs {
+        let value = cfg.value.as_deref().unwrap_or_default();
+        match cfg.config_operation {
+            OP_SET => {
+                merged.insert(cfg.name.clone(), value.to_owned());
+            }
+            OP_DELETE => {
+                merged.remove(&cfg.name);
+            }
+            operation => {
+                let key = kafka_group_key(&cfg.name)
+                    .filter(|key| key.config_type == ConfigType::List)
+                    .ok_or_else(|| not_a_list(operation, &cfg.name))?;
+                let next = merge_list_op(
+                    operation,
+                    merged.get(&cfg.name).map(String::as_str),
+                    key.default,
+                    value,
+                );
+                merged.insert(cfg.name.clone(), next);
+            }
+        }
+    }
+    // `ControllerConfigurationValidator.validateGroupName`, then the map.
+    if resource.resource_name.is_empty() {
+        return Err((
+            codes::INVALID_REQUEST,
+            "Default group resources are not allowed.".into(),
+        ));
+    }
+    validate_group_configs(&merged, defaults).map_err(|reason| (codes::INVALID_CONFIG, reason))?;
+    Ok(MetadataRecord::V1GroupConfig(GroupConfigRecord {
+        group_id: resource.resource_name.clone(),
+        configs: merged,
+    }))
+}
 
 pub(super) fn handle_group_scoped(
     resource: &AlterConfigsResource,
@@ -22,47 +76,13 @@ pub(super) fn handle_group_scoped(
     out: &mut AlterConfigsResourceResponse,
     to_submit: &mut Vec<MetadataRecord>,
 ) {
-    if resource.resource_name.is_empty() {
-        out.error_code = codes::INVALID_REQUEST;
-        out.error_message = Some("group id must not be empty".into());
-        return;
-    }
-    let mut merged = image
-        .group_config(&resource.resource_name)
-        .cloned()
-        .unwrap_or_default();
-    for cfg in &resource.configs {
-        if !GROUP_CONFIG_KEYS.contains(&cfg.name.as_str()) {
-            out.error_code = codes::INVALID_CONFIG;
-            out.error_message = Some(format!("unknown group config `{}`", cfg.name));
-            return;
-        }
-        match cfg.config_operation {
-            OP_SET => {
-                merged.insert(cfg.name.clone(), cfg.value.clone().unwrap_or_default());
-            }
-            OP_DELETE => {
-                merged.remove(&cfg.name);
-            }
-            op => {
-                out.error_code = codes::INVALID_CONFIG;
-                out.error_message = Some(format!(
-                    "config_operation={op} is not valid for group config `{}`",
-                    cfg.name
-                ));
-                return;
-            }
+    match group_record(resource, image, defaults) {
+        Ok(record) => to_submit.push(record),
+        Err((code, message)) => {
+            out.error_code = code;
+            out.error_message = Some(message);
         }
     }
-    if let Err(reason) = defaults.with_group_overrides(&merged) {
-        out.error_code = codes::INVALID_CONFIG;
-        out.error_message = Some(reason);
-        return;
-    }
-    to_submit.push(MetadataRecord::V1GroupConfig(GroupConfigRecord {
-        group_id: resource.resource_name.clone(),
-        configs: merged,
-    }));
 }
 
 #[cfg(test)]
@@ -186,5 +206,77 @@ mod tests {
         );
         assert!(out.error_code == codes::INVALID_CONFIG);
         assert!(records.is_empty());
+    }
+
+    /// Kafka's controller order for a `GROUP` resource: the operations merge,
+    /// then the group name, then `GroupConfig.validate`. Each row is the whole
+    /// outcome.
+    #[test]
+    fn group_resources_follow_kafkas_merge_and_validation_order() {
+        let set = |key: &str, value: &str| AlterableConfig {
+            name: key.into(),
+            config_operation: OP_SET,
+            value: Some(value.into()),
+            ..Default::default()
+        };
+        let append = |key: &str| AlterableConfig {
+            name: key.into(),
+            config_operation: 2,
+            value: Some("1".into()),
+            ..Default::default()
+        };
+        let cases = [
+            (
+                "g",
+                vec![set("not.a.group.key", "1")],
+                Err((
+                    codes::INVALID_CONFIG,
+                    "Unknown group config name: not.a.group.key".to_owned(),
+                )),
+            ),
+            (
+                "g",
+                vec![append(KEY_SESSION_TIMEOUT_MS)],
+                Err((
+                    codes::INVALID_CONFIG,
+                    "Can't APPEND to key streams.session.timeout.ms because its type is not LIST."
+                        .to_owned(),
+                )),
+            ),
+            (
+                "",
+                vec![set(KEY_NUM_STANDBY_REPLICAS, "1")],
+                Err((
+                    codes::INVALID_REQUEST,
+                    "Default group resources are not allowed.".to_owned(),
+                )),
+            ),
+            (
+                "g",
+                vec![set(KEY_NUM_STANDBY_REPLICAS, "1")],
+                Ok(MetadataRecord::V1GroupConfig(GroupConfigRecord {
+                    group_id: "g".into(),
+                    configs: maplit::btreemap! {
+                        KEY_NUM_STANDBY_REPLICAS.to_owned() => "1".to_owned(),
+                    },
+                })),
+            ),
+        ];
+        for (name, configs, want) in cases {
+            let resource = AlterConfigsResource {
+                resource_type: RESOURCE_TYPE_GROUP,
+                resource_name: name.into(),
+                configs: configs.clone(),
+                ..Default::default()
+            };
+            assert!(
+                group_record(
+                    &resource,
+                    &MetadataImage::new(uuid::Uuid::nil()),
+                    &StreamsGroupConfig::default(),
+                ) == want,
+                "{name:?} {configs:?}"
+            );
+        }
     }
 }

@@ -71,7 +71,7 @@ fn validate_resource_shape(
     if !null_names.is_empty() {
         return Err((
             codes::INVALID_REQUEST,
-            format!("Null value not supported for : {}", null_names.join(",")),
+            format!("Null value not supported for : {}", null_names.join(", ")),
         ));
     }
     Ok(())
@@ -105,11 +105,11 @@ pub(super) async fn process_resource(
     // `ControllerApis.authorizeAlterResource` for the types it handles
     // (Topic, ClientMetrics, Group) and the legacy in-broker path for Broker.
     // Topic (2)          → AlterConfigs on Topic(resource_name)     → TOPIC_AUTHORIZATION_FAILED, "Topic authorization failed."
-    // Broker (4)         → AlterConfigs on Cluster("kafka-cluster") → CLUSTER_AUTHORIZATION_FAILED, no message (legacy in-broker path).
+    // Broker (4)         → AlterConfigs on Cluster("kafka-cluster") → CLUSTER_AUTHORIZATION_FAILED, "Cluster authorization failed."
     // ClientMetrics (16) → AlterConfigs on Cluster("kafka-cluster") → CLUSTER_AUTHORIZATION_FAILED, "Cluster authorization failed."
     // Group (32)         → AlterConfigs on Group(resource_name)     → GROUP_AUTHORIZATION_FAILED, "Group authorization failed."
-    // Other resource types are unsupported; Kafka assigns no distinct code for
-    // that, so they get INVALID_REQUEST.
+    // `preprocess` refuses any other type with INVALID_REQUEST, "Unknown
+    // resource type <n>".
     let acl_result = match resource.resource_type {
         RESOURCE_TYPE_TOPIC => broker.config.authorizer.authorize(
             image,
@@ -143,10 +143,7 @@ pub(super) async fn process_resource(
         ),
         _ => {
             out.error_code = codes::INVALID_REQUEST;
-            out.error_message = Some(format!(
-                "resource_type={} not supported",
-                resource.resource_type
-            ));
+            out.error_message = Some(format!("Unknown resource type {}", resource.resource_type));
             return out;
         }
     };
@@ -159,8 +156,9 @@ pub(super) async fn process_resource(
         out.error_message = match resource.resource_type {
             RESOURCE_TYPE_TOPIC => Some("Topic authorization failed.".into()),
             RESOURCE_TYPE_GROUP => Some("Group authorization failed.".into()),
-            RESOURCE_TYPE_CLIENT_METRICS => Some("Cluster authorization failed.".into()),
-            RESOURCE_TYPE_BROKER => None,
+            RESOURCE_TYPE_CLIENT_METRICS | RESOURCE_TYPE_BROKER => {
+                Some("Cluster authorization failed.".into())
+            }
             _ => unreachable!("resource type passed ACL dispatch"),
         };
         return out;
@@ -168,7 +166,12 @@ pub(super) async fn process_resource(
 
     let mut records = match resource.resource_type {
         RESOURCE_TYPE_TOPIC => {
-            match topic_config_record(&resource, image, &broker.config.topic_policy) {
+            match topic_config_record(
+                &resource,
+                image,
+                &broker.config.topic_policy,
+                broker.config.remote_storage_backend.is_some(),
+            ) {
                 Ok(record) => vec![record],
                 Err((code, message)) => {
                     out.error_code = code;
@@ -177,7 +180,11 @@ pub(super) async fn process_resource(
                 }
             }
         }
-        RESOURCE_TYPE_BROKER => match broker_config_records(&resource, image) {
+        RESOURCE_TYPE_BROKER => match broker_config_records(
+            &resource,
+            image,
+            krabka_metadata::NodeId(broker.config.node_id.0),
+        ) {
             Ok(records) => records,
             Err((code, message)) => {
                 out.error_code = code;
