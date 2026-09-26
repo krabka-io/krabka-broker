@@ -79,9 +79,14 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 
-/// Kafka's `DELEGATION_TOKEN_AUTH_DISABLED`, which every token RPC answers
-/// when the broker has no delegation-token secret key.
-const DELEGATION_TOKEN_AUTH_DISABLED: i16 = 61;
+/// Kafka's `DELEGATION_TOKEN_REQUEST_NOT_ALLOWED`, which
+/// `ControllerApis.allowTokenRequests` answers for a token RPC that arrives
+/// over a PLAINTEXT connection without forwarding.
+const DELEGATION_TOKEN_REQUEST_NOT_ALLOWED: i16 = 64;
+
+/// `DelegationTokenManager.ERROR_TIMESTAMP`, the timestamp Kafka writes into
+/// every refused token response.
+const TOKEN_ERROR_TIMESTAMP: i64 = -1;
 
 /// `SCRAM-SHA-256` as KIP-554 numbers the mechanisms on the wire.
 const SCRAM_SHA_256: i8 = 1;
@@ -384,9 +389,9 @@ async fn controller_listener_serves_the_writing_delegation_token_apis() {
     let (broker, _dir) = start_broker().await;
     let connection = dial_controller(&broker).await;
 
-    // `for_tests` configures no delegation-token secret key, so each RPC takes
-    // its "tokens are switched off" branch. That is the same answer Kafka gives
-    // and it needs no key material to be deterministic.
+    // The controller listener in `for_tests` is PLAINTEXT and the requests are
+    // not forwarded, so Kafka's `ControllerApis.allowTokenRequests` refuses each
+    // RPC before it looks at the token or the secret key.
     let created = connection
         .send(CreateDelegationTokenRequest {
             max_lifetime_ms: -1,
@@ -415,21 +420,30 @@ async fn controller_listener_serves_the_writing_delegation_token_apis() {
     check!(
         created
             == CreateDelegationTokenResponse {
-                error_code: DELEGATION_TOKEN_AUTH_DISABLED,
+                error_code: DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
+                principal_type: "User".into(),
+                principal_name: "ANONYMOUS".into(),
+                token_requester_principal_type: "User".into(),
+                token_requester_principal_name: "ANONYMOUS".into(),
+                issue_timestamp_ms: TOKEN_ERROR_TIMESTAMP,
+                expiry_timestamp_ms: TOKEN_ERROR_TIMESTAMP,
+                max_timestamp_ms: TOKEN_ERROR_TIMESTAMP,
                 ..Default::default()
             }
     );
     check!(
         renewed
             == RenewDelegationTokenResponse {
-                error_code: DELEGATION_TOKEN_AUTH_DISABLED,
+                error_code: DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
+                expiry_timestamp_ms: TOKEN_ERROR_TIMESTAMP,
                 ..Default::default()
             }
     );
     check!(
         expired
             == ExpireDelegationTokenResponse {
-                error_code: DELEGATION_TOKEN_AUTH_DISABLED,
+                error_code: DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
+                expiry_timestamp_ms: TOKEN_ERROR_TIMESTAMP,
                 ..Default::default()
             }
     );
