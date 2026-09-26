@@ -1,9 +1,11 @@
-//! Recomputation of a streams group's target assignment.
+//! Recomputation of a streams group's group epoch and target assignment.
 //!
 //! Reconciliation is the one place that bumps the group epoch. It resolves the
 //! stored topology against the current [`MetadataImage`], creates the internal
-//! topics the topology needs, records any blocking topology status, and then
-//! runs the assignor to produce the new active and standby target.
+//! topics the topology needs, records any blocking topology status, and bumps
+//! the group epoch. It then runs the assignor to produce the new active and
+//! standby target, unless Kafka's initial rebalance delay or assignment
+//! interval holds the assignment back; the group is `Assigning` meanwhile.
 //!
 //! [`MetadataImage`]: krabka_metadata::MetadataImage
 
@@ -12,19 +14,32 @@ use std::{
     sync::Arc,
 };
 
+use tokio::time::Instant;
+
 use super::ActorState;
 use crate::{
     coordinator::unified::streams::{
         assignor::{self, AssignorInput, AssignorMember},
         config::StreamsGroupConfig,
         persistence::StreamsGroupTopologyValue,
-        state::{StreamsGroupState, StreamsGroupStatePhase, StreamsTargetAssignment},
+        state::{StreamsGroupStatePhase, StreamsTargetAssignment},
         topology,
     },
     metadata_source::MetadataSource,
 };
 
-/// Recomputes the target assignment when the group is dirty.
+/// Kafka's status detail while the initial rebalance delay holds the first
+/// assignment of a group back.
+pub(super) const INITIAL_DELAY_DETAIL: &str =
+    "Assignment delayed due to the configured initial rebalance delay.";
+
+/// Kafka's status detail while the assignment interval holds the next
+/// assignment back.
+pub(super) const ASSIGNMENT_INTERVAL_DETAIL: &str =
+    "Assignment delayed due to the configured assignment interval.";
+
+/// Bumps the group epoch when the group is dirty, and computes the target
+/// assignment when it is behind the group epoch and nothing delays it.
 ///
 /// With no connected [`MetadataSource`], as in the unit tests, or before any
 /// member supplies a topology, the group stays `NotReady` with an empty
@@ -41,14 +56,41 @@ pub(super) fn reconcile(
     config: &StreamsGroupConfig,
     metadata_source: Option<&Arc<dyn MetadataSource>>,
 ) {
-    if !actor.state.dirty {
-        return;
-    }
     let target_epoch = actor.state.target.epoch;
-    reconcile_dirty(actor, config, metadata_source);
+    if actor.state.dirty {
+        update_group_epoch(actor, metadata_source);
+    }
+    if actor.assignment_pending() && assignment_delay(actor, config, Instant::now()).is_none() {
+        update_target_assignment(actor, config);
+    }
     if actor.state.target.epoch != target_epoch {
         actor.target_changed = true;
     }
+}
+
+/// The status detail of Kafka's `ASSIGNMENT_DELAYED` when a delay holds the
+/// assignment back at `now`, or `None`.
+///
+/// The initial rebalance delay holds any assignment back while it runs. The
+/// assignment interval holds back a pending assignment until it elapsed since
+/// the last one; a zero interval, or a group that never computed one, does not
+/// wait (Kafka's `canComputeNextTargetAssignment`).
+pub(super) fn assignment_delay(
+    actor: &ActorState,
+    config: &StreamsGroupConfig,
+    now: Instant,
+) -> Option<&'static str> {
+    if actor
+        .initial_rebalance_deadline
+        .is_some_and(|deadline| now < deadline)
+    {
+        return Some(INITIAL_DELAY_DETAIL);
+    }
+    let interval_running = !config.assignment_interval.is_zero()
+        && actor
+            .assignment_timestamp
+            .is_some_and(|last| now < last + config.assignment_interval);
+    (actor.assignment_pending() && interval_running).then_some(ASSIGNMENT_INTERVAL_DETAIL)
 }
 
 /// Configures the topology of a seeded group against the current image
@@ -76,64 +118,95 @@ pub(super) fn configure_after_load(actor: &mut ActorState, source: &Arc<dyn Meta
     actor.configured_topology = Some(configured);
 }
 
-fn reconcile_dirty(
-    actor: &mut ActorState,
-    config: &StreamsGroupConfig,
-    metadata_source: Option<&Arc<dyn MetadataSource>>,
-) {
-    let (Some(source), Some(topology)) = (metadata_source, actor.topology.clone()) else {
-        // No metadata source or no topology yet: cannot assign. Bump the epoch
-        // and install an empty target so members still advance (to an empty
-        // assignment) and the group sits in NotReady.
-        install_empty_target(&mut actor.state, StreamsGroupStatePhase::NotReady);
-        return;
-    };
-
-    let image = source.current_image();
-    actor.configured = true;
-    actor.metadata_hash = topology::metadata_hash(&topology, &image);
-    actor.creatable_topics.clear();
-    actor.partition_metadata = Some(topology::partition_metadata(&topology, &image));
-
-    let configured = match topology::configure_topics(&topology, &image) {
-        Ok(configured) => configured,
-        Err(error) => {
-            tracing::warn!(
-                group_id = %actor.state.group_id,
-                %error,
-                "streams topology cannot be configured",
-            );
-            actor.state.status = None;
-            actor.configured_topology = None;
-            install_empty_target(&mut actor.state, StreamsGroupStatePhase::NotReady);
-            return;
+/// Configures the topology against the current image and bumps the group
+/// epoch, which leaves the target assignment behind it.
+fn update_group_epoch(actor: &mut ActorState, metadata_source: Option<&Arc<dyn MetadataSource>>) {
+    if let (Some(source), Some(topology)) = (metadata_source, actor.topology.clone()) {
+        let image = source.current_image();
+        actor.configured = true;
+        actor.metadata_hash = topology::metadata_hash(&topology, &image);
+        actor.creatable_topics.clear();
+        actor.partition_metadata = Some(topology::partition_metadata(&topology, &image));
+        match topology::configure_topics(&topology, &image) {
+            Ok(configured) => {
+                // The heartbeat hands the internal topics that the image does
+                // not hold to `CreateTopics`, as Kafka's `KafkaApis` does.
+                actor.creatable_topics = topology::internal_topic_specs(&configured);
+                actor.state.status.clone_from(&configured.status);
+                actor.configured_topology = Some(configured);
+            }
+            Err(error) => {
+                tracing::warn!(
+                    group_id = %actor.state.group_id,
+                    %error,
+                    "streams topology cannot be configured",
+                );
+                actor.state.status = None;
+                actor.configured_topology = None;
+            }
         }
-    };
-
-    // The heartbeat hands the internal topics that the image does not hold to
-    // `CreateTopics`, as Kafka's `KafkaApis` does.
-    actor.creatable_topics = topology::internal_topic_specs(&configured);
-    actor.state.status.clone_from(&configured.status);
-    let ready = configured.is_ready();
-    let number_of_tasks = configured.number_of_tasks();
-    actor.configured_topology = Some(configured);
-
-    if !ready {
-        install_empty_target(&mut actor.state, StreamsGroupStatePhase::NotReady);
+    } else {
+        // No metadata source or no topology yet: the group cannot be assigned.
+        actor.configured_topology = None;
+    }
+    if !actor.state.bump_epoch() {
         return;
     }
+    actor.state.dirty = false;
+    actor.state.phase = if actor.state.members.is_empty() {
+        StreamsGroupStatePhase::Empty
+    } else if actor.ready_topology().is_none() {
+        StreamsGroupStatePhase::NotReady
+    } else {
+        StreamsGroupStatePhase::Assigning
+    };
+}
 
-    // Build assignor inputs, compute the target, and install it.
-    compute_and_install_target(actor, config, &topology, &number_of_tasks);
+/// Installs the target assignment of the group epoch: the assignor's output
+/// for a ready topology, and an empty target otherwise.
+fn update_target_assignment(actor: &mut ActorState, config: &StreamsGroupConfig) {
+    actor.assignment_timestamp = Some(Instant::now());
+    let ready = actor
+        .ready_topology()
+        .map(topology::ConfiguredTopology::number_of_tasks)
+        .zip(actor.topology.clone());
+    if let Some((number_of_tasks, topology)) = ready {
+        install_computed_target(actor, config, &topology, &number_of_tasks);
+    } else {
+        actor
+            .state
+            .install_target(StreamsTargetAssignment::default());
+        actor.state.phase = if actor.state.members.is_empty() {
+            StreamsGroupStatePhase::Empty
+        } else {
+            StreamsGroupStatePhase::NotReady
+        };
+    }
+}
+
+/// Bumps the group epoch and installs the assignor's target at once, with no
+/// delay, for the reconciliation model.
+#[cfg(test)]
+pub(super) fn compute_and_install_target(
+    actor: &mut ActorState,
+    config: &StreamsGroupConfig,
+    topology: &StreamsGroupTopologyValue,
+    num_tasks: &BTreeMap<String, i32>,
+) {
+    if !actor.state.bump_epoch() {
+        return;
+    }
+    actor.state.dirty = false;
+    install_computed_target(actor, config, topology, num_tasks);
 }
 
 /// Runs the assignor over the resolved topology and installs its output as the
-/// new target.
+/// target of the group epoch.
 ///
-/// The function bumps the group epoch and installs the target, which computes
-/// the active revoke-split. It sets the phase to `Reconciling` while any
-/// member still owns un-revoked active tasks, and to `Stable` otherwise.
-pub(super) fn compute_and_install_target(
+/// Installing the target computes the active revoke-split. The phase becomes
+/// `Reconciling` while any member still owns un-revoked active tasks, and
+/// `Stable` otherwise.
+fn install_computed_target(
     actor: &mut ActorState,
     config: &StreamsGroupConfig,
     topology: &StreamsGroupTopologyValue,
@@ -178,29 +251,8 @@ pub(super) fn compute_and_install_target(
         standby: assignment.standby,
         warmup: HashMap::new(),
     };
-    if !actor.state.bump_epoch() {
-        return;
-    }
     actor.state.install_target(target);
     // A computed target ends `NotReady`; the members then reconcile toward it.
     actor.state.phase = StreamsGroupStatePhase::Reconciling;
     actor.state.refresh_phase();
-    actor.state.dirty = false;
-}
-
-/// Bumps the group epoch, installs an empty target assignment, and moves the
-/// group to `phase`, or to `Empty` when it has no members, as Kafka's
-/// `maybeUpdateGroupState` does. Members still advance to the new, empty assignment epoch
-/// on their next `advance_member_epoch`. The function clears `dirty`.
-fn install_empty_target(state: &mut StreamsGroupState, phase: StreamsGroupStatePhase) {
-    if !state.bump_epoch() {
-        return;
-    }
-    state.install_target(StreamsTargetAssignment::default());
-    state.phase = if state.members.is_empty() {
-        StreamsGroupStatePhase::Empty
-    } else {
-        phase
-    };
-    state.dirty = false;
 }

@@ -322,6 +322,13 @@ struct ActorState {
     /// recent configuration against the metadata image sized it. It is
     /// `None` until a configuration succeeds.
     configured_topology: Option<super::topology::ConfiguredTopology>,
+    /// When Kafka's initial rebalance delay of the group ends: set when the
+    /// first member joins an empty group, and cleared when the delayed
+    /// assignment runs.
+    initial_rebalance_deadline: Option<tokio::time::Instant>,
+    /// When the last target assignment was computed, for Kafka's assignment
+    /// interval. `None` until one is computed.
+    assignment_timestamp: Option<tokio::time::Instant>,
 }
 
 impl ActorState {
@@ -335,6 +342,8 @@ impl ActorState {
             target_changed: false,
             configured: false,
             configured_topology: None,
+            initial_rebalance_deadline: None,
+            assignment_timestamp: None,
         }
     }
 }
@@ -405,6 +414,21 @@ async fn actor_loop(
                     break;
                 }
             }
+            () = wait_for_initial_rebalance_delay(actor.initial_rebalance_deadline) => {
+                // Kafka's `computeDelayedTargetAssignment`.
+                actor.initial_rebalance_deadline = None;
+                if actor.state.members.is_empty() || !actor.assignment_pending() {
+                    continue;
+                }
+                reconcile(&mut actor, &config, metadata_source.as_ref());
+                let pending = snapshot_pending_after_change(&mut actor, &[]);
+                if flush_pending(&actor, pending, &*offsets_log, &coordinator, chrono_now_ms())
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
             () = wait_for_rebalance_deadline(actor.state.next_rebalance_deadline()) => {
                 if handle_session_tick(&mut actor, &config, &*offsets_log, metadata_source.as_ref(), &coordinator).await.is_err() {
                     break;
@@ -471,6 +495,18 @@ impl DeferredReply {
 }
 
 impl ActorState {
+    /// Whether the target assignment is behind the group epoch.
+    fn assignment_pending(&self) -> bool {
+        self.state.target.epoch < self.state.group_epoch
+    }
+
+    /// The configured topology, when it is ready for an assignment.
+    fn ready_topology(&self) -> Option<&super::topology::ConfiguredTopology> {
+        self.configured_topology
+            .as_ref()
+            .filter(|configured| configured.is_ready())
+    }
+
     /// Whether the group holds nothing that a record wrote: no group epoch,
     /// no member and no topology. Such a group exists only because a
     /// heartbeat reached its actor.
@@ -555,14 +591,10 @@ async fn handle_message(
             }
         }
         StreamsGroupActorMessage::Describe { reply } => {
-            let configured = actor
-                .configured_topology
-                .as_ref()
-                .filter(|configured| configured.is_ready());
             let _ = reply.send(build_describe(
                 &actor.state,
                 actor.topology.as_ref(),
-                configured,
+                actor.ready_topology(),
             ));
         }
         StreamsGroupActorMessage::ValidateCommit {
@@ -621,6 +653,14 @@ fn resolve_group_config_from_image(
 async fn wait_for_rebalance_deadline(deadline: Option<std::time::Instant>) {
     match deadline {
         Some(deadline) => tokio::time::sleep_until(deadline.into()).await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Sleeps until the initial rebalance delay ends, or for ever when none runs.
+async fn wait_for_initial_rebalance_delay(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
         None => std::future::pending().await,
     }
 }

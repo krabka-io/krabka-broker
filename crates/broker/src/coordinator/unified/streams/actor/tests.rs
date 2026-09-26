@@ -31,6 +31,16 @@ fn persisted_group_config_overrides_actor_defaults() {
     assert!(unaffected == StreamsGroupConfig::default());
 }
 
+/// The default config with no initial rebalance delay and no assignment
+/// interval, so that every change assigns at once.
+fn undelayed() -> StreamsGroupConfig {
+    StreamsGroupConfig {
+        initial_rebalance_delay: std::time::Duration::ZERO,
+        assignment_interval: std::time::Duration::ZERO,
+        ..StreamsGroupConfig::default()
+    }
+}
+
 #[derive(Debug)]
 struct EmptyMetadata;
 impl MetadataProvider for EmptyMetadata {
@@ -49,7 +59,7 @@ fn make_coordinator() -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
         ShareGroupConfig::default(),
         metadata,
         log.clone(),
-        StreamsGroupConfig::default(),
+        undelayed(),
     ));
     (coord, log)
 }
@@ -163,7 +173,7 @@ async fn member_limit_rejects_only_new_members() {
         log,
         StreamsGroupConfig {
             max_size: 1,
-            ..StreamsGroupConfig::default()
+            ..undelayed()
         },
     ));
     let handle = coord.get_or_create_streams("g");
@@ -733,7 +743,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             standby_tasks: row.active.as_ref().map(|_| vec![]),
             warmup_tasks: row.active.as_ref().map(|_| vec![]),
             active_tasks: row.active.map(tasks),
-            ..super::response::base_resp(codes::NONE, row.epoch, &StreamsGroupConfig::default())
+            ..super::response::base_resp(codes::NONE, row.epoch, &undelayed())
         };
         check!(resp == expected, "{}", row.name);
     }
@@ -861,7 +871,7 @@ async fn a_seeded_group_asks_for_its_missing_internal_topics_again() {
             status_detail: "Internal topics are missing: store-changelog".into(),
             ..Default::default()
         }]),
-        ..super::response::base_resp(codes::NONE, 1, &StreamsGroupConfig::default())
+        ..super::response::base_resp(codes::NONE, 1, &undelayed())
     };
     check!(result.response == expected);
 }
@@ -997,7 +1007,7 @@ async fn a_join_sizes_the_internal_topics_as_kafka_does() {
             active_tasks: Some(vec![]),
             standby_tasks: Some(vec![]),
             warmup_tasks: Some(vec![]),
-            ..super::response::base_resp(codes::NONE, 1, &StreamsGroupConfig::default())
+            ..super::response::base_resp(codes::NONE, 1, &undelayed())
         };
         check!(result.response == expected, "{}", row.name);
     }
@@ -1204,7 +1214,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
                     }]
                 }
             }),
-            ..super::response::base_resp(codes::NONE, row.epoch, &StreamsGroupConfig::default())
+            ..super::response::base_resp(codes::NONE, row.epoch, &undelayed())
         };
         check!(last == Some(expected), "{}", row.name);
     }
@@ -1258,7 +1268,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
         standby_partitions: vec![],
         ..Default::default()
     };
-    let config = StreamsGroupConfig::default();
+    let config = undelayed();
     let accepted =
         |member_id: &str, member_epoch, tasks: Option<Vec<i32>>| StreamsGroupHeartbeatResponse {
             member_id: member_id.into(),
@@ -1380,7 +1390,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
             Arc::new(InMemoryOffsetsLog::default()),
             StreamsGroupConfig {
                 max_size,
-                ..StreamsGroupConfig::default()
+                ..undelayed()
             },
         ));
         coord.set_metadata_source(source);
@@ -1435,7 +1445,7 @@ async fn a_member_keeps_its_epoch_until_it_revokes_and_is_fenced_after_its_timeo
 
     use crate::test_support::FakeMetadataSource;
 
-    let config = StreamsGroupConfig::default();
+    let config = undelayed();
     let accepted =
         |member_id: &str, member_epoch, tasks: Option<Vec<i32>>| StreamsGroupHeartbeatResponse {
             member_id: member_id.into(),
@@ -1656,7 +1666,7 @@ async fn a_static_member_follows_kafka_static_membership() {
 
     let config = StreamsGroupConfig {
         max_size: 2,
-        ..StreamsGroupConfig::default()
+        ..undelayed()
     };
     let join = |member_id: &str, instance_id: &str| StreamsGroupHeartbeatRequest {
         group_id: "g".into(),
@@ -1922,7 +1932,7 @@ fn validate_offset_commit_follows_kafka_streams_group() {
 fn heartbeat_response_carries_no_recovery_lag_at_version_0() {
     let config = StreamsGroupConfig {
         acceptable_recovery_lag: 10_000,
-        ..StreamsGroupConfig::default()
+        ..undelayed()
     };
     assert!(
         response::base_resp(codes::NONE, 3, &config)
@@ -1936,4 +1946,100 @@ fn heartbeat_response_carries_no_recovery_lag_at_version_0() {
                 ..Default::default()
             }
     );
+}
+
+/// Kafka's initial rebalance delay and assignment interval
+/// (`maybeUpdateStreamsTargetAssignment`, `computeDelayedTargetAssignment`).
+/// Each row configures the delays, then runs timed heartbeats on a paused
+/// clock and compares each answer's error code, member epoch and status list.
+/// With no metadata source every target is empty, so a member's epoch shows
+/// whether the assignment of its group epoch was computed.
+#[tokio::test(start_paused = true)]
+async fn assignment_waits_for_the_initial_delay_and_the_interval() {
+    use std::time::Duration;
+
+    use crate::coordinator::unified::streams::{
+        actor::reconciliation::{ASSIGNMENT_INTERVAL_DETAIL, INITIAL_DELAY_DETAIL},
+        topology::status::ASSIGNMENT_DELAYED,
+    };
+
+    // (member id, member epoch sent, clock advance before the heartbeat,
+    // expected member epoch, expected ASSIGNMENT_DELAYED detail)
+    type Step = (&'static str, i32, u64, i32, Option<&'static str>);
+    let rows: [(&str, u64, u64, Vec<Step>); 3] = [
+        (
+            // Three members join within one second: one assignment, after
+            // the delay, for the third group epoch.
+            "initial delay coalesces the joins",
+            3_000,
+            0,
+            vec![
+                ("m1", 0, 0, 0, Some(INITIAL_DELAY_DETAIL)),
+                ("m2", 0, 500, 0, Some(INITIAL_DELAY_DETAIL)),
+                ("m3", 0, 500, 0, Some(INITIAL_DELAY_DETAIL)),
+                ("m1", 0, 2_100, 3, None),
+            ],
+        ),
+        (
+            // A change 200 ms after an assignment waits for the interval.
+            "assignment interval defers a change",
+            0,
+            1_000,
+            vec![
+                ("m1", 0, 0, 1, None),
+                ("m2", 0, 200, 1, Some(ASSIGNMENT_INTERVAL_DETAIL)),
+                ("m2", 1, 900, 2, None),
+            ],
+        ),
+        (
+            "no delay assigns at once",
+            0,
+            0,
+            vec![("m1", 0, 0, 1, None), ("m2", 0, 200, 2, None)],
+        ),
+    ];
+
+    for (name, delay_ms, interval_ms, steps) in rows {
+        let coord = Arc::new(GroupCoordinator::new(
+            NextGenConfig::default(),
+            ShareGroupConfig::default(),
+            Arc::new(EmptyMetadata),
+            Arc::new(InMemoryOffsetsLog::default()),
+            StreamsGroupConfig {
+                initial_rebalance_delay: Duration::from_millis(delay_ms),
+                assignment_interval: Duration::from_millis(interval_ms),
+                ..StreamsGroupConfig::default()
+            },
+        ));
+        let handle = coord.get_or_create_streams("g");
+        for (member_id, member_epoch, advance_ms, want_epoch, want_delay) in steps {
+            tokio::time::sleep(Duration::from_millis(advance_ms)).await;
+            let resp = heartbeat(
+                &handle,
+                StreamsGroupHeartbeatRequest {
+                    group_id: "g".into(),
+                    member_id: member_id.into(),
+                    member_epoch,
+                    rebalance_timeout_ms: 1_000,
+                    ..Default::default()
+                },
+            )
+            .await;
+            let delayed: Vec<(i8, String)> = resp
+                .status
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|status| status.status_code == ASSIGNMENT_DELAYED)
+                .map(|status| (status.status_code, status.status_detail))
+                .collect();
+            let want: Vec<(i8, String)> = want_delay
+                .map(|detail| (ASSIGNMENT_DELAYED, detail.to_owned()))
+                .into_iter()
+                .collect();
+            check!(
+                (resp.error_code, resp.member_epoch, delayed) == (codes::NONE, want_epoch, want),
+                "{name}: {member_id} after {advance_ms} ms"
+            );
+        }
+    }
 }

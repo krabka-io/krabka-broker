@@ -391,8 +391,9 @@ impl StreamsGroupState {
     }
 
     /// Kafka's `StreamsGroup.maybeUpdateGroupState` for a group with a ready
-    /// topology: `Empty` with no members, `Reconciling` while a member is not
-    /// reconciled to the assignment epoch, and `Stable` otherwise. A
+    /// topology: `Empty` with no members, `Assigning` while the target
+    /// assignment is behind the group epoch, `Reconciling` while a member is
+    /// not reconciled to the assignment epoch, and `Stable` otherwise. A
     /// `NotReady` group stays `NotReady` until a target is computed.
     pub fn refresh_phase(&mut self) {
         if self.members.is_empty() {
@@ -400,6 +401,10 @@ impl StreamsGroupState {
             return;
         }
         if self.phase == StreamsGroupStatePhase::NotReady {
+            return;
+        }
+        if self.group_epoch > self.target.epoch {
+            self.phase = StreamsGroupStatePhase::Assigning;
             return;
         }
         let reconciled = self.members.values().all(|member| {

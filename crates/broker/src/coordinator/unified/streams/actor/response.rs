@@ -83,6 +83,9 @@ pub(super) struct ResponseDelta {
     /// Send the three task lists: the member joined or its assignment
     /// changed. Kafka sends null lists otherwise.
     pub send_tasks: bool,
+    /// The detail of Kafka's `ASSIGNMENT_DELAYED` status, when a delay holds
+    /// the assignment back.
+    pub assignment_delayed: Option<&'static str>,
     pub endpoint_information_epoch: i32,
     pub partitions_by_user_endpoint: Option<Vec<EndpointToPartitions>>,
 }
@@ -113,6 +116,12 @@ pub(super) fn build_assignment_resp(
                 "The member's topology epoch {} is behind the group's topology epoch {}.",
                 m.topology_epoch, state.topology_epoch
             ),
+        ));
+    }
+    if let Some(detail) = delta.assignment_delayed {
+        status.push(status_entry(
+            topo_status::ASSIGNMENT_DELAYED,
+            detail.to_owned(),
         ));
     }
     if let Some((code, detail)) = &state.status {
