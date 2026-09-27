@@ -189,4 +189,4 @@ krabka-security = { git = "https://github.com/krabka-io/krabka-protocol", rev = 
 krabka-trace-context = { git = "https://github.com/krabka-io/krabka-protocol", rev = "d4e2fe530c70e7459825ea51cc24c638623c5d23" }
 krabka-units = { git = "https://github.com/krabka-io/krabka-protocol", rev = "d4e2fe530c70e7459825ea51cc24c638623c5d23" }
 krabka-voters = { git = "https://github.com/krabka-io/krabka-protocol", rev = "d4e2fe530c70e7459825ea51cc24c638623c5d23" }
-krabka-schema-serde = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "bebac316a49d9fd7cf6df403ed0c341464ad5da6" }
+krabka-schema-serde = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "bc033b21e8fa0cf5c3f6873988ca17ad1484416b" }
