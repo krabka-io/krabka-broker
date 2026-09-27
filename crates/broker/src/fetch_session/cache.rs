@@ -29,6 +29,9 @@ pub struct FetchSession {
     /// fetch.
     pub next_epoch: FetchSessionEpoch,
     pub privileged: bool,
+    /// Whether the request that created the session named topics by id
+    /// (`Fetch` v13 and later). Kafka's `FetchSession.usesTopicIds`.
+    pub uses_topic_ids: bool,
     pub creator_principal: String,
     pub partitions: HashMap<FetchSessionKey, CachedPartitionState>,
 }
@@ -176,7 +179,7 @@ mod tests {
     use super::*;
     use crate::fetch_session::{
         SessionDecision,
-        test_support::{req, topic},
+        test_support::{NAME_FETCH_VERSION, req, topic},
     };
 
     #[test]
@@ -184,7 +187,7 @@ mod tests {
         let cache = FetchSessionCache::new(10);
         assert!(cache.is_empty());
 
-        let id = cache.try_allocate(false, "alice".into(), vec![]);
+        let id = cache.try_allocate(false, false, "alice".into(), vec![]);
         assert!(!cache.is_empty());
 
         cache.close(id);
@@ -200,6 +203,7 @@ mod tests {
             partition: 0,
         };
         let id = cache.try_allocate(
+            false,
             false,
             "a".into(),
             vec![(key.clone(), CachedPartitionState::default())],
@@ -232,8 +236,8 @@ mod tests {
                 CachedPartitionState::default(),
             )
         };
-        cache.try_allocate(false, "a".into(), vec![mk(0), mk(1)]);
-        cache.try_allocate(false, "b".into(), vec![mk(2), mk(3), mk(4)]);
+        cache.try_allocate(false, false, "a".into(), vec![mk(0), mk(1)]);
+        cache.try_allocate(false, false, "b".into(), vec![mk(2), mk(3), mk(4)]);
         assert!(cache.total_partitions_cached() == 5);
     }
 
@@ -251,7 +255,7 @@ mod tests {
             )
         };
         // Two partitions on allocate.
-        let id = cache.try_allocate(false, "a".into(), vec![mk(0), mk(1)]);
+        let id = cache.try_allocate(false, false, "a".into(), vec![mk(0), mk(1)]);
         assert!(cache.len() == 1);
         assert!(cache.total_partitions_cached() == 2);
 
@@ -265,7 +269,7 @@ mod tests {
         }];
         let r = req(id, 1, vec![topic("t", &[0, 2, 3])], forgotten);
         assert!(matches!(
-            cache.classify(&r),
+            cache.classify(&r, NAME_FETCH_VERSION),
             SessionDecision::Incremental { .. }
         ));
         assert!(cache.total_partitions_cached() == 3);
@@ -289,11 +293,11 @@ mod tests {
                 CachedPartitionState::default(),
             )
         };
-        let id = cache.try_allocate(false, "a".into(), vec![mk(0), mk(1)]);
+        let id = cache.try_allocate(false, false, "a".into(), vec![mk(0), mk(1)]);
 
         let r = req(id, 1, vec![topic("t", &[0, 1, 2, 3, 4])], vec![]);
         assert!(matches!(
-            cache.classify(&r),
+            cache.classify(&r, NAME_FETCH_VERSION),
             SessionDecision::Incremental { .. }
         ));
 
@@ -313,7 +317,12 @@ mod tests {
                 CachedPartitionState::default(),
             )
         };
-        let id = cache.try_allocate(false, "a".into(), vec![mk(0), mk(1), mk(2), mk(3), mk(4)]);
+        let id = cache.try_allocate(
+            false,
+            false,
+            "a".into(),
+            vec![mk(0), mk(1), mk(2), mk(3), mk(4)],
+        );
         let forgotten = vec![ForgottenTopic {
             topic: "t".into(),
             topic_id: WireUuid::ZERO,
@@ -323,7 +332,7 @@ mod tests {
 
         let r = req(id, 1, vec![], forgotten);
         assert!(matches!(
-            cache.classify(&r),
+            cache.classify(&r, NAME_FETCH_VERSION),
             SessionDecision::Incremental { .. }
         ));
 

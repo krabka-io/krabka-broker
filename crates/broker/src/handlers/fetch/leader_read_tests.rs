@@ -278,8 +278,9 @@ fn expected(case: Case, label: String, topic: &str) -> Outcome {
                 aborted_transactions: None,
                 preferred_read_replica: -1,
                 records: Some(RecordsPayload::Legacy(Bytes::new())),
-                // `CurrentLeader` is a tagged field from v12.
-                current_leader: current_leader.filter(|_| case.version >= 12).map_or_else(
+                // `CurrentLeader` is a tagged field from v12, but Kafka
+                // fills it only from v16.
+                current_leader: current_leader.filter(|_| case.version >= 16).map_or_else(
                     LeaderIdAndEpoch::default,
                     |leader| LeaderIdAndEpoch {
                         leader_id: i32::try_from(leader).expect("small node id"),

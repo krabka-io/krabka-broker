@@ -39,6 +39,19 @@ impl TokenBucket {
         let now = self.now_nanos();
         state.consume(now, requested)
     }
+
+    /// Gives back `tokens` that an earlier [`Self::try_consume`] granted and
+    /// the caller did not use, capped at the burst.
+    ///
+    /// This is Kafka's `ClientQuotaManager.unrecordQuotaSensor`: a fetch that
+    /// is throttled sends no records, so the bytes it was charged come off
+    /// the quota again. A rate-0 bucket holds no balance to give back to.
+    pub fn refund(&self, tokens: u64) {
+        if tokens == 0 {
+            return;
+        }
+        self.lock_state().refund(tokens);
+    }
 }
 
 impl BucketState {
@@ -75,6 +88,14 @@ impl BucketState {
         self.last_refill_nanos += claimed;
         self.available = new_available.0;
         grant.0
+    }
+
+    /// Adds `tokens` back to the balance, capped at the burst. A rate-0
+    /// bucket is unthrottled and keeps no balance, so it is left alone.
+    fn refund(&mut self, tokens: u64) {
+        if self.rate_per_sec != 0 {
+            self.available = self.available.saturating_add(tokens).min(self.burst);
+        }
     }
 }
 
@@ -158,6 +179,22 @@ mod tests {
                 try_consume_with_timeout(&b, 500)
             ) == (bytes_per_sec(100), bytes(1000), 500)
         );
+    }
+
+    /// A refund gives back what a consume took, and never more than the
+    /// burst: consuming 600 of a 1000-token burst and refunding it leaves the
+    /// whole burst; a second refund cannot push past it.
+    #[test]
+    fn refund_returns_granted_tokens_up_to_the_burst() {
+        let (b, _clock) = manual_bucket();
+        b.set_byte_rate_with_burst(bytes_per_sec(100), bytes(1000));
+        let granted = try_consume_with_timeout(&b, 600);
+        b.refund(granted);
+        let after_one_refund = try_consume_with_timeout(&b, 1000);
+        b.refund(after_one_refund);
+        b.refund(500);
+        let after_overflowing_refund = try_consume_with_timeout(&b, 2000);
+        check!((granted, after_one_refund, after_overflowing_refund) == (600, 1000, 1000));
     }
 
     #[test]

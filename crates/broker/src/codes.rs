@@ -418,6 +418,11 @@ kafka_codes! {
     /// `session_id == 0` and `session_epoch` is neither `0` (new session) nor
     /// `-1` (sessionless full fetch).
     INVALID_FETCH_SESSION_EPOCH = 71;
+    /// `FETCH_SESSION_TOPIC_ID_ERROR` (106): the broker returns this at the
+    /// top level of a `FetchResponse` when an incremental request's version
+    /// does not match the topic-id use of its session: v12 or earlier on a
+    /// session a v13+ request created, or the other way round.
+    FETCH_SESSION_TOPIC_ID_ERROR = 106;
 
     // KIP-48 delegation-token codes.
     DELEGATION_TOKEN_AUTH_DISABLED = 61;

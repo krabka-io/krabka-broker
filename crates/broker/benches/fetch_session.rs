@@ -81,6 +81,8 @@ const CONCURRENCY: [u32; 3] = [1, 8, 64];
 
 const TOPIC: &str = "bench-topic";
 const PRINCIPAL: &str = "bench-principal";
+/// The requests below name their topic, as `Fetch` v12 and earlier do.
+const NAME_FETCH_VERSION: i16 = 12;
 
 /// The partition set the handler hands `try_allocate` after serving a fetch.
 fn partition_set() -> Vec<(FetchSessionKey, CachedPartitionState)> {
@@ -127,7 +129,7 @@ fn prefilled(occupancy: usize) -> FetchSessionCache {
     let cache = FetchSessionCache::new(SLOTS);
     let template = partition_set();
     for _ in 0..(SLOTS * occupancy / 100) {
-        let id = cache.try_allocate(false, PRINCIPAL.to_string(), template.clone());
+        let id = cache.try_allocate(false, false, PRINCIPAL.to_string(), template.clone());
         assert!(id != INVALID_SESSION_ID, "prefill was refused a session");
     }
     cache
@@ -159,8 +161,8 @@ fn timed_session_turns(
         let principal = PRINCIPAL.to_string();
 
         let start = Instant::now();
-        let decision = cache.classify(request);
-        let id = cache.try_allocate(false, principal, partitions);
+        let decision = cache.classify(request, NAME_FETCH_VERSION);
+        let id = cache.try_allocate(false, false, principal, partitions);
         if close_explicitly {
             cache.close(id);
         }

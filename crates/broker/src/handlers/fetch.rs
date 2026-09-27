@@ -49,9 +49,15 @@ use self::{
     plan::{PendingPlanContext, build_pending_reads},
     read_loop::execute_pending_reads,
     request::{FetchPreparation, prepare_fetch},
-    response::{downconvert_legacy_responses, record_fetch_metrics},
-    session::finalize_fetch_session,
-    throttle::{apply_consumer_fetch_quota, throttle_follower_responses},
+    response::{
+        charge_fetch_cpu, downconvert_legacy_responses, record_fetch_metrics,
+        withhold_current_leader_before_kip_951,
+    },
+    session::{commit_fetch_session, prepare_fetch_session, refresh_fetch_session_metrics},
+    throttle::{
+        apply_consumer_fetch_quota, consumer_quota_window_bytes, fetch_response_size,
+        throttle_follower_responses,
+    },
 };
 pub(crate) use self::{plan::PendingRead, read::LiveOffsets};
 use crate::{
@@ -65,7 +71,9 @@ use crate::{
 const FETCH_API_KEY: crate::handlers::ApiKeyCode = krabka_protocol::api_key::ApiKey::Fetch as i16;
 
 /// First `Fetch` response version that carries the KIP-951 `CurrentLeader`
-/// hint and its `NodeEndpoints` companion. Both are tagged fields at v16+.
+/// hint and its `NodeEndpoints` companion. `NodeEndpoints` is a tagged field
+/// from v16. `CurrentLeader` is one from v12, but Kafka fills it only from
+/// v16.
 const KIP_951_FETCH_VERSION: i16 = 16;
 
 /// The first `Fetch` version that names each topic by `topic_id` only
@@ -116,7 +124,7 @@ pub(crate) async fn handle(
         FetchRequest::decode(&mut cur, version)?
     };
 
-    let preparation = match prepare_fetch(broker, &req, ctx) {
+    let preparation = match prepare_fetch(broker, (&req, version), ctx) {
         Ok(preparation) => preparation,
         Err(code) => {
             let resp = FetchResponse {
@@ -190,7 +198,18 @@ pub(crate) async fn handle(
     // TODO(#869): there is no broker-side `fetch.max.bytes` floor yet, so a
     // client that sets a very large `max_bytes` is capped only by its own
     // request.
-    let response_max_bytes = usize::try_from(req.max_bytes.max(0)).unwrap_or(usize::MAX);
+    //
+    // A consumer fetch is also capped at what its `consumer_byte_rate` lets
+    // it take in one quota window (`maxQuotaWindowBytes`), so one fetch
+    // cannot return more than the quota allows in the whole window.
+    let quota_window_bytes = if is_follower_fetch {
+        usize::MAX
+    } else {
+        consumer_quota_window_bytes(broker, &image, ctx)
+    };
+    let response_max_bytes = usize::try_from(req.max_bytes.max(0))
+        .unwrap_or(usize::MAX)
+        .min(quota_window_bytes);
     let read = execute_pending_reads(
         broker,
         pending,
@@ -217,33 +236,17 @@ pub(crate) async fn handle(
         .observe_request_phases(FETCH_API_KEY, &phases);
 
     downconvert_legacy_responses(broker, version, &mut responses);
+    withhold_current_leader_before_kip_951(version, &mut responses);
 
     if is_follower_fetch {
         throttle_follower_responses(broker, &image, effective_replica_id, &mut responses);
     }
 
-    let throttle_time_ms_val = if is_follower_fetch {
-        // An inter-broker fetch is charged no client quota, so it applies no
-        // throttle. Observing the zero anyway keeps the throttle phase's
-        // `_count` equal to the other two phases' for this api.
-        broker
-            .metrics
-            .observe_request_throttle_duration(FETCH_API_KEY, 0.0);
-        0
-    } else {
-        apply_consumer_fetch_quota(broker, &image, ctx, handler_start, &responses)
-    };
+    let metric_rows = charge_fetch_cpu(broker, &responses, &cpu_micros_by_idx);
 
-    record_fetch_metrics(broker, &responses, &cpu_micros_by_idx, is_follower_fetch);
-
-    let response_session_id = finalize_fetch_session(
-        broker,
-        &decision,
-        &effective_topics,
-        &mut responses,
-        is_follower_fetch,
-        &ctx.principal.name,
-    );
+    // Kafka's `FetchContext` decides the rows before the quota check, and
+    // charges the quota the size of the response those rows make.
+    let commit = prepare_fetch_session(&decision, &effective_topics, &mut responses);
 
     // KIP-951: a partition row that names a new leader is only actionable if
     // the client can resolve that node id to an address. Both halves of the
@@ -259,14 +262,56 @@ pub(crate) async fn handle(
     } else {
         Vec::new()
     };
-    let resp = FetchResponse {
-        throttle_time_ms: throttle_time_ms_val,
+    let mut resp = FetchResponse {
         error_code: 0,
-        session_id: response_session_id,
         responses,
         node_endpoints,
         ..Default::default()
     };
+
+    let throttle_time_ms = if is_follower_fetch {
+        // An inter-broker fetch is charged no client quota, so it applies no
+        // throttle. Observing the zero anyway keeps the throttle phase's
+        // `_count` equal to the other two phases' for this api.
+        broker
+            .metrics
+            .observe_request_throttle_duration(FETCH_API_KEY, 0.0);
+        0
+    } else {
+        let (throttle_time_ms, charge) = apply_consumer_fetch_quota(
+            broker,
+            &image,
+            ctx,
+            handler_start,
+            fetch_response_size(&resp, version),
+        );
+        if throttle_time_ms > 0 {
+            // Kafka's throttled consumer fetch: the bytes come off the quota
+            // again, the session is left as it was, and the response is
+            // empty with the throttle in it.
+            charge.refund();
+            refresh_fetch_session_metrics(broker);
+            return Ok((
+                FetchResponse {
+                    throttle_time_ms,
+                    session_id: commit.throttled_session_id(),
+                    responses: Vec::new(),
+                    ..resp
+                },
+                version,
+            ));
+        }
+        throttle_time_ms
+    };
+
+    record_fetch_metrics(broker, metric_rows, is_follower_fetch);
+    resp.throttle_time_ms = throttle_time_ms;
+    resp.session_id = commit_fetch_session(
+        broker,
+        commit,
+        (is_follower_fetch, version),
+        &ctx.principal.name,
+    );
     Ok((resp, version))
 }
 

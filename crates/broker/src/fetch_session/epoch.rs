@@ -31,6 +31,12 @@ pub const INITIAL_EPOCH: FetchSessionEpoch = 0;
 /// request with `session_id != 0`, it means close the named session.
 pub const FINAL_EPOCH: FetchSessionEpoch = -1;
 
+/// The first `Fetch` version that names topics by id (KIP-516). A session
+/// remembers whether the request that created it was at this version or
+/// later, and Kafka's `FetchManager.newContext` refuses an incremental fetch
+/// of the other kind with `FETCH_SESSION_TOPIC_ID_ERROR`.
+pub const FIRST_TOPIC_ID_FETCH_VERSION: i16 = 13;
+
 /// The first id the allocator gives out. Ids count up from here. `0` is
 /// reserved as [`INVALID_SESSION_ID`], and negative ids never go on the wire
 /// because clients reject them.
