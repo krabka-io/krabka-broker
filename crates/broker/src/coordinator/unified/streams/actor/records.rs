@@ -19,7 +19,8 @@ use crate::coordinator::unified::{
             StreamsGroupTargetAssignmentMemberValue, StreamsGroupTargetAssignmentMetadataValue,
         },
         state::{
-            StoredTopologyHandle, StreamsGroupState, StreamsGroupStatePhase, StreamsMemberState,
+            INITIAL_EPOCH, StoredTopologyHandle, StreamsGroupState, StreamsGroupStatePhase,
+            StreamsMemberState,
         },
     },
 };
@@ -28,7 +29,10 @@ use crate::coordinator::unified::{
 ///
 /// The result always holds the current group epoch. It holds the topology and
 /// the partition metadata when both are present, and the target metadata once
-/// the actor has installed the target, that is, when `epoch > 0`. After a
+/// the actor has installed a target, that is, when its epoch is past
+/// [`INITIAL_EPOCH`]: Kafka's `TargetAssignmentBuilder` writes the record, and a
+/// new group writes none while the initial rebalance delay holds its
+/// assignment back. After a
 /// reconcile that installed a new target, it holds the records of every
 /// member, because the new target changed the assignment of all of them.
 pub(super) fn snapshot_pending_after_change(
@@ -58,7 +62,7 @@ pub(super) fn snapshot_pending_after_change(
     if let Some(pm) = &actor.partition_metadata {
         pending.partition_metadata = Some(pm.clone());
     }
-    if state.target.epoch > 0 {
+    if state.target.epoch > INITIAL_EPOCH {
         pending.target_metadata = Some(StreamsGroupTargetAssignmentMetadataValue {
             assignment_epoch: state.target.epoch,
         });

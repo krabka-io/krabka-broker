@@ -83,8 +83,9 @@ pub(super) async fn handle_heartbeat(
     let now = Instant::now();
     let now_ms = chrono_now_ms();
     // Kafka's `groups.containsKey`: a group that this heartbeat creates
-    // reports endpoint information epoch 0.
-    let group_existed = actor.state.group_epoch > 0;
+    // reports endpoint information epoch 0. A new group already holds its
+    // initial group epoch, so the epoch alone does not tell.
+    let group_existed = !actor.holds_nothing();
 
     // ─── Leave path ──────────────────────────────────────────────
     // -1 leaves, and -2 is the temporary leave of a static member.

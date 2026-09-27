@@ -51,7 +51,7 @@ use self::{
 use super::{
     config::StreamsGroupConfig,
     persistence::{StreamsGroupPartitionMetadataValue, StreamsGroupTopologyValue},
-    state::StreamsGroupState,
+    state::{self, StreamsGroupState},
 };
 use crate::{
     codes,
@@ -507,11 +507,13 @@ impl ActorState {
             .filter(|configured| configured.is_ready())
     }
 
-    /// Whether the group holds nothing that a record wrote: no group epoch,
-    /// no member and no topology. Such a group exists only because a
+    /// Whether the group holds nothing that a record wrote: its initial group
+    /// epoch, no member and no topology. Such a group exists only because a
     /// heartbeat reached its actor.
     fn holds_nothing(&self) -> bool {
-        self.state.group_epoch == 0 && self.state.members.is_empty() && self.topology.is_none()
+        self.state.group_epoch == state::INITIAL_EPOCH
+            && self.state.members.is_empty()
+            && self.topology.is_none()
     }
 }
 

@@ -7,8 +7,8 @@
 //! [`StreamsGroupState::reconcile_member`], and the real
 //! snapshot/apply replay adapters. MODELED: two member identities, one
 //! subtopology with one or two tasks, a logical clock through three ticks,
-//! topology epochs through two, group epochs through five, and one
-//! crash/replay in every reachable ordering.
+//! topology epochs through two, five group epoch bumps past Kafka's initial
+//! group epoch 1, and one crash/replay in every reachable ordering.
 //!
 //! The model counts a task pending revocation as still owned. Its exclusivity
 //! property therefore prevents a target member from receiving an active task
@@ -31,14 +31,15 @@ use crate::coordinator::unified::streams::{
     config::{StreamsAssignorKind, StreamsGroupConfig},
     persistence::{StoredSubtopology, StreamsGroupTopologyValue},
     state::{
-        OwnedTasks, RoleTasks, StreamsGroupState, StreamsGroupStatePhase,
+        INITIAL_EPOCH, OwnedTasks, RoleTasks, StreamsGroupState, StreamsGroupStatePhase,
         StreamsMemberAssignmentState, StreamsMemberState,
     },
 };
 
 const SUBTOPOLOGY: &str = "s";
 const MAX_CLOCK: u8 = 3;
-const MAX_GROUP_EPOCH: i32 = 5;
+/// A new group starts at [`INITIAL_EPOCH`], so the bound allows five bumps.
+const MAX_GROUP_EPOCH: i32 = INITIAL_EPOCH + 5;
 const MAX_TOPOLOGY_EPOCH: i32 = 2;
 const MAX_STATES: usize = 1_000_000;
 const MAX_DEPTH: usize = 64;
@@ -50,7 +51,12 @@ const MAX_DEPTH: usize = 64;
 // considering a field -- into a failure instead of a silently smaller search
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
-const PINNED_UNIQUE_STATES: usize = 37_688;
+// With the stale heartbeat restricted to epochs past `INITIAL_EPOCH` the count
+// is the 37_688 of the model that started at group epoch 0: the start at 1 is a
+// plain shift. The difference is a stale heartbeat at epoch 1 from a member at
+// its first assigned epoch 2, which Kafka 4.3 fences and a start at 0 could
+// not send, because its epoch 0 is a rejoin.
+const PINNED_UNIQUE_STATES: usize = 37_960;
 const WITNESS_STALE_FENCED: u16 = 1 << 0;
 const WITNESS_FORWARD_FENCED: u16 = 1 << 1;
 const WITNESS_UNKNOWN_FENCED: u16 = 1 << 2;

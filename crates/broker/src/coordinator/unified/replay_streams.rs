@@ -14,6 +14,16 @@ use super::{
     streams,
 };
 
+/// The seed of a group that its first replayed record creates. Kafka replays
+/// the records into a new `StreamsGroup`, whose target assignment epoch is
+/// the initial one until a target assignment metadata record sets it.
+fn new_seed() -> StreamsGroupSeed {
+    StreamsGroupSeed {
+        assignment_epoch: streams::state::INITIAL_EPOCH,
+        ..StreamsGroupSeed::default()
+    }
+}
+
 impl GroupCoordinator {
     pub fn replay_streams_group_metadata(
         &self,
@@ -31,14 +41,20 @@ impl GroupCoordinator {
             return;
         }
         {
-            let mut seed = self.streams_seeds.entry(group_id.into()).or_default();
+            let mut seed = self
+                .streams_seeds
+                .entry(group_id.into())
+                .or_insert_with(new_seed);
             if replay_epoch_is_admissible(seed.group_epoch, epoch) {
                 seed.group_epoch = epoch;
                 seed.metadata_hash = value.metadata_hash;
             }
         }
         {
-            let mut cached = self.streams_seeds_cache.entry(group_id.into()).or_default();
+            let mut cached = self
+                .streams_seeds_cache
+                .entry(group_id.into())
+                .or_insert_with(new_seed);
             if replay_epoch_is_admissible(cached.group_epoch, epoch) {
                 cached.group_epoch = epoch;
                 cached.metadata_hash = value.metadata_hash;
@@ -338,6 +354,31 @@ mod tests {
         };
         assert!(*coord.streams_seeds.get("st").unwrap() == expected);
         assert!(coord.cached_streams_seed("st") == Some(expected));
+    }
+
+    /// Kafka replays the records into a new `StreamsGroup`, so a group with no
+    /// target assignment metadata record keeps the initial assignment epoch 1,
+    /// as a group does while its initial rebalance delay holds the first
+    /// assignment back.
+    #[test]
+    fn a_group_without_target_metadata_replays_at_the_initial_assignment_epoch() {
+        let coord = make_coord();
+        coord.replay_streams_group_metadata(
+            "st",
+            streams::persistence::StreamsGroupMetadataValue {
+                epoch: 2,
+                metadata_hash: 7,
+            },
+        );
+
+        let expected = StreamsGroupSeed {
+            group_epoch: 2,
+            metadata_hash: 7,
+            assignment_epoch: 1,
+            ..StreamsGroupSeed::default()
+        };
+        check!(*coord.streams_seeds.get("st").unwrap() == expected);
+        check!(coord.cached_streams_seed("st") == Some(expected));
     }
 
     #[test]

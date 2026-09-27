@@ -432,8 +432,8 @@ async fn ready_group_describes_the_configured_topology_and_every_member_field() 
             error_message: None,
             group_id: "app".into(),
             group_state: "Stable".into(),
-            group_epoch: 1,
-            assignment_epoch: 1,
+            group_epoch: 2,
+            assignment_epoch: 2,
             topology: Some(Topology {
                 epoch: 1,
                 subtopologies: Some(vec![Subtopology {
@@ -454,7 +454,7 @@ async fn ready_group_describes_the_configured_topology_and_every_member_field() 
             }),
             members: vec![Member {
                 member_id: "m1".into(),
-                member_epoch: 1,
+                member_epoch: 2,
                 instance_id: None,
                 rack_id: None,
                 client_id: "streams-client".into(),
