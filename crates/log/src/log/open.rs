@@ -179,6 +179,7 @@ impl Log {
             pending_stamp_ranges: HashMap::new(),
             coordinator_epochs: HashMap::new(),
             producer_state: HashMap::new(),
+            earlier_batches: HashMap::new(),
             active_txn_index,
             sealed_txn_indexes,
             stamp_source: None,
@@ -276,6 +277,7 @@ impl Log {
         self.pending_stamp_ranges.clear();
         self.coordinator_epochs.clear();
         self.producer_state.clear();
+        self.earlier_batches.clear();
         let end = self.log_end_offset();
         let range = self.producer_reload_range(end);
         let snapshot = producer_snapshot::reload(&self.dir, range)?;
@@ -484,6 +486,7 @@ impl Log {
             if entry.producer_epoch != batch.producer_epoch {
                 // Kafka clears the retained data-batch metadata when an end
                 // marker advances the producer epoch (transaction version 2).
+                self.earlier_batches.remove(&producer_id);
                 entry.last_sequence = -1;
                 entry.last_offset = Offset(-1);
                 entry.offset_delta = 0;
@@ -538,6 +541,18 @@ impl Log {
             .producer_state
             .entry(producer_id)
             .or_insert_with(|| ProducerSnapshotEntry::empty(producer_id, producer_epoch));
+        // Kafka's `ProducerStateEntry.addBatch`: a new epoch clears the
+        // retained batches, and the batch that was last joins the earlier
+        // ones, the oldest leaving at capacity.
+        if entry.producer_epoch != producer_epoch {
+            self.earlier_batches.remove(&producer_id);
+        } else if let Some(previous) = entry.last_batch() {
+            let earlier = self.earlier_batches.entry(producer_id).or_default();
+            earlier.push_back(previous);
+            if earlier.len() >= crate::producer_snapshot::NUM_BATCHES_TO_RETAIN {
+                earlier.pop_front();
+            }
+        }
         entry.producer_epoch = producer_epoch;
         entry.last_sequence = last_sequence;
         entry.last_offset = last_offset;

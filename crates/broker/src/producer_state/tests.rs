@@ -397,3 +397,53 @@ async fn a_marker_mirror_keeps_the_earlier_batches_only_at_the_same_epoch() {
         );
     }
 }
+
+/// #981: after a reopen, the tracker dedups a retry of any batch that Kafka's
+/// `UnifiedLog.rebuildProducerState` retains: the snapshot's batch and the
+/// replayed tail, up to five. Six single-record batches; the stop leaves only
+/// the snapshot a segment roll wrote before the last four. Batches 1 to 5
+/// answer as duplicates at their own offsets, and batch 0, which left the
+/// five, is out of order.
+#[tokio::test]
+async fn a_rebuild_retains_the_replayed_tail_for_duplicates() {
+    use krabka_protocol::records::{Record, RecordBatch};
+
+    let dir = tempfile::tempdir().unwrap();
+    let config = krabka_log::LogConfig {
+        segment_size: krabka_units::prelude::bytes(1),
+        ..krabka_log::LogConfig::default()
+    };
+    let mut log = krabka_log::Log::open(dir.path(), config.clone()).unwrap();
+    for sequence in 0..6 {
+        log.append(&mut RecordBatch {
+            producer_id: 42,
+            producer_epoch: 0,
+            base_sequence: sequence,
+            records: vec![Record {
+                value: Some(bytes::Bytes::from_static(b"v")),
+                ..Record::default()
+            }],
+            ..RecordBatch::default()
+        })
+        .unwrap();
+    }
+    drop(log);
+    for offset in 3..=6 {
+        let _ = std::fs::remove_file(krabka_log::name::producer_snapshot_path(dir.path(), offset));
+    }
+    let log = krabka_log::Log::open(dir.path(), config).unwrap();
+    let s = ProducerState::new();
+    s.rebuild_from_log("t", PartitionIndex(0), &log)
+        .await
+        .unwrap();
+
+    let mut answers = Vec::new();
+    for sequence in 0..6 {
+        answers.push(s.check("t", PartitionIndex(0), 42, 0, sequence, 0).await);
+    }
+    let mut expected = vec![Decision::OutOfOrder];
+    expected.extend((1..6).map(|offset| Decision::Duplicate {
+        base_offset: offset,
+    }));
+    check!(answers == expected);
+}

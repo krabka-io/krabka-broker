@@ -732,3 +732,87 @@ fn reopen_removes_stray_snapshots_and_loads_one_at_the_log_end() {
     check!(snapshot_offsets(dir.path()) == vec![2, 4, 6]);
     check!(reopened.producer_state_snapshot() == vec![shutdown]);
 }
+
+/// #981: Kafka's `UnifiedLog.rebuildProducerState` replays the tail past the
+/// loaded snapshot through `ProducerStateEntry.addBatch`, so a producer's
+/// retained batches after a reopen are the snapshot's batch and the replayed
+/// ones, up to `NUM_BATCHES_TO_RETAIN` (5). Six batches, then a stop that
+/// leaves only the snapshot a segment roll wrote before the last four:
+/// the reopen retains batches 1 to 5.
+#[test]
+fn reopen_retains_the_snapshot_batch_and_the_replayed_tail() {
+    let dir = tempdir().unwrap();
+    let config = LogConfig {
+        segment_size: bytes(1),
+        ..LogConfig::default()
+    };
+    let mut log = Log::open(dir.path(), config.clone()).unwrap();
+    for sequence in 0..6 {
+        let mut batch = sample_batch(1);
+        batch.producer_id = 42;
+        batch.producer_epoch = 0;
+        batch.base_sequence = sequence;
+        batch.max_timestamp = 100 + i64::from(sequence);
+        log.append(&mut batch).unwrap();
+    }
+    drop(log);
+    // Every append rolled a segment and wrote a snapshot at its base. Keep
+    // the ones up to offset 2, as if the stop came before the later ones.
+    for offset in 3..=6 {
+        let _ = std::fs::remove_file(crate::name::producer_snapshot_path(dir.path(), offset));
+    }
+
+    let reopened = Log::open(dir.path(), config).unwrap();
+    let batch = |sequence: i32| crate::ProducerBatchMetadata {
+        last_sequence: sequence,
+        last_offset: Offset(i64::from(sequence)),
+        offset_delta: 0,
+        timestamp: 100 + i64::from(sequence),
+    };
+    check!(
+        reopened.recovered_producers()
+            == vec![crate::RecoveredProducer {
+                entry: ProducerSnapshotEntry {
+                    producer_id: ProducerId(42),
+                    producer_epoch: 0,
+                    last_sequence: 5,
+                    last_offset: Offset(5),
+                    offset_delta: 0,
+                    timestamp: 105,
+                    coordinator_epoch: -1,
+                    current_txn_first_offset: None,
+                },
+                earlier: (1..5).map(batch).collect(),
+            }]
+    );
+}
+
+/// Kafka's `ProducerStateEntry`: a live append keeps the four batches before
+/// the last one, oldest first, and a new producer epoch clears them.
+#[test]
+fn appends_retain_four_earlier_batches_until_the_epoch_moves() {
+    let dir = tempdir().unwrap();
+    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let append = |log: &mut Log, epoch: i16, sequence: i32| {
+        let mut batch = sample_batch(1);
+        batch.producer_id = 7;
+        batch.producer_epoch = epoch;
+        batch.base_sequence = sequence;
+        log.append(&mut batch).unwrap();
+    };
+    let earlier_offsets = |log: &Log| -> Vec<i64> {
+        log.recovered_producers()[0]
+            .earlier
+            .iter()
+            .map(|batch| batch.last_offset.0)
+            .collect()
+    };
+    for sequence in 0..7 {
+        append(&mut log, 0, sequence);
+    }
+    check!(earlier_offsets(&log) == vec![2, 3, 4, 5]);
+    append(&mut log, 1, 0);
+    check!(earlier_offsets(&log).is_empty());
+    append(&mut log, 1, 1);
+    check!(earlier_offsets(&log) == vec![7]);
+}
