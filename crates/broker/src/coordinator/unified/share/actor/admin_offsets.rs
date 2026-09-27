@@ -161,7 +161,7 @@ pub(crate) async fn reset_offsets(
 
     if !newly_initialized.is_empty() {
         for (_, topic_id, partition, topic_name) in &newly_initialized {
-            state.initialized.insert((*topic_id, *partition));
+            state.mark_initialized((*topic_id, *partition));
             state
                 .topic_names
                 .entry(*topic_id)

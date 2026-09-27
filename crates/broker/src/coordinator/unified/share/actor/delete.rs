@@ -67,17 +67,19 @@ pub(super) async fn delete_group(
     Ok(())
 }
 
-/// Deletes the share state of every initialized partition of the group.
+/// Deletes the share state of every initialized and initializing partition
+/// of the group, as Kafka's `shareGroupBuildPartitionDeleteRequest` combines
+/// both sets: an initializing partition may already hold state.
 ///
 /// When a delete fails, the partitions whose state is already gone leave the
-/// initialized set, and the method writes the new
-/// `ShareGroupStatePartitionMetadata`, so a retry deletes only the rest.
+/// sets, and the method writes the new `ShareGroupStatePartitionMetadata`, so
+/// a retry deletes only the rest.
 async fn delete_share_state(
     state: &mut ShareGroupState,
     offsets_log: &dyn OffsetsLog,
     coordinator: &GroupCoordinator,
 ) -> Result<(), DeleteGroupError> {
-    if state.initialized.is_empty() {
+    if state.initialized.is_empty() && state.initializing.is_empty() {
         return Ok(());
     }
     let Some(persister) = coordinator.share_persister() else {
@@ -86,7 +88,14 @@ async fn delete_share_state(
         ));
     };
 
-    let mut partitions: Vec<_> = state.initialized.iter().copied().collect();
+    let mut partitions: Vec<_> = state
+        .initialized
+        .iter()
+        .chain(state.initializing.keys())
+        .copied()
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
     partitions.sort_unstable_by_key(|(topic_id, partition)| (topic_id.0, *partition));
     let mut failed = false;
     let mut removed = false;
@@ -98,6 +107,7 @@ async fn delete_share_state(
         {
             Ok(()) => {
                 state.initialized.remove(&(topic_id, partition));
+                state.initializing.remove(&(topic_id, partition));
                 removed = true;
             }
             Err(error) => {
@@ -172,7 +182,7 @@ mod tests {
         ShareGroupSeed,
         share::{
             actor::ShareGroupActorMessage,
-            persistence::{InitializedTopic, ShareGroupStatePartitionMetadataValue},
+            persistence::{ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo},
         },
         test_support::{fixed_source, make_coord_with_log, make_share_persister, share_member},
     };
@@ -194,7 +204,7 @@ mod tests {
         let initialized = if initialized_partitions.is_empty() {
             Vec::new()
         } else {
-            vec![InitializedTopic {
+            vec![TopicPartitionsInfo {
                 topic_id: uuid::Uuid::from_bytes([9; 16]),
                 topic_name: "orders".to_owned(),
                 partitions: initialized_partitions.to_vec(),
@@ -206,6 +216,7 @@ mod tests {
                 .map(|index| (format!("member-{index}"), share_member("client")))
                 .collect::<HashMap<_, _>>(),
             state_partition_metadata: ShareGroupStatePartitionMetadataValue {
+                initializing: Vec::new(),
                 initialized,
                 deleting: Vec::new(),
             },
@@ -213,8 +224,19 @@ mod tests {
         }
     }
 
+    /// An empty group whose only partitions are still initializing.
+    fn initializing_seed(partitions: &[i32]) -> ShareGroupSeed {
+        let mut seed = seed(0, &[]);
+        seed.state_partition_metadata.initializing = vec![TopicPartitionsInfo {
+            topic_id: uuid::Uuid::from_bytes([9; 16]),
+            topic_name: "orders".to_owned(),
+            partitions: partitions.to_vec(),
+        }];
+        seed
+    }
+
     /// `DeleteGroups` on a share group, per row: whether the group exists,
-    /// its members and initialized partitions, and whether a share persister
+    /// its members and initialized or initializing partitions, and whether a share persister
     /// is wired. The persister runs over a metadata image with no brokers, so
     /// it cannot reach a share coordinator and every state delete fails.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -226,7 +248,7 @@ mod tests {
             .collect();
         // (share group seed, persister wired, expected result, group kept,
         //  expected appended records)
-        let rows: [Row; 5] = [
+        let rows: [Row; 6] = [
             (
                 None,
                 true,
@@ -253,6 +275,18 @@ mod tests {
             ),
             (
                 Some(seed(0, &[0])),
+                false,
+                Err(DeleteGroupError::ShareState(
+                    codes::COORDINATOR_NOT_AVAILABLE,
+                )),
+                true,
+                Vec::new(),
+            ),
+            // Kafka's `shareGroupBuildPartitionDeleteRequest` deletes the
+            // initializing partitions too, so a group that holds only those
+            // still needs the persister.
+            (
+                Some(initializing_seed(&[0])),
                 false,
                 Err(DeleteGroupError::ShareState(
                     codes::COORDINATOR_NOT_AVAILABLE,

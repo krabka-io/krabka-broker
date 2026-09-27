@@ -45,13 +45,26 @@ pub(super) fn apply_seed(state: &mut ShareGroupState, seed: ShareGroupSeed) {
     // record names every topic it lists, so the names come back with it and
     // the next record the group writes keeps naming those topics even if the
     // metadata image has since dropped them.
+    //
+    // The partitions the group was still initializing come back as
+    // initializing, stamped with the replay time as Kafka's replay does, so
+    // the lifecycle hook retries them once the retry interval passes.
     state.initialized.clear();
+    state.initializing.clear();
     state.topic_names.clear();
+    let replayed_at = super::records::chrono_now_ms();
+    for topic in &seed.state_partition_metadata.initializing {
+        let tid = Uuid(*topic.topic_id.as_bytes());
+        state.topic_names.insert(tid, topic.topic_name.clone());
+        for p in &topic.partitions {
+            state.initializing.insert((tid, *p), replayed_at);
+        }
+    }
     for topic in &seed.state_partition_metadata.initialized {
         let tid = Uuid(*topic.topic_id.as_bytes());
         state.topic_names.insert(tid, topic.topic_name.clone());
         for p in &topic.partitions {
-            state.initialized.insert((tid, *p));
+            state.mark_initialized((tid, *p));
         }
     }
     state.forget_unused_topic_names();
@@ -117,7 +130,7 @@ mod tests {
 
     use super::*;
     use crate::coordinator::unified::share::persistence::{
-        InitializedTopic, ShareGroupStatePartitionMetadataValue,
+        ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo,
     };
 
     #[test]
@@ -163,6 +176,7 @@ mod tests {
         let mut state = ShareGroupState::new("g");
         state.initialized.insert((id, 0));
         state.initialized.insert((id, 1));
+        state.initializing.insert((id, 2), 0);
         state.topic_names.insert(id, "orders".to_owned());
 
         let seed = snapshot_seed(&state);
@@ -171,6 +185,7 @@ mod tests {
 
         check!(restored.topic_names == state.topic_names);
         check!(restored.initialized == state.initialized);
+        check!(restored.initializing.keys().collect::<Vec<_>>() == vec![&(id, 2)]);
         assert!(snapshot_seed(&restored).state_partition_metadata == seed.state_partition_metadata);
     }
 
@@ -184,7 +199,8 @@ mod tests {
             &mut restored,
             ShareGroupSeed {
                 state_partition_metadata: ShareGroupStatePartitionMetadataValue {
-                    initialized: vec![InitializedTopic {
+                    initializing: Vec::new(),
+                    initialized: vec![TopicPartitionsInfo {
                         topic_id: uuid::Uuid::from_bytes([7; 16]),
                         topic_name: "orders".to_owned(),
                         partitions: Vec::new(),

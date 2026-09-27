@@ -156,7 +156,7 @@ mod tests {
     use crate::{
         authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
         coordinator::unified::share::persistence::{
-            InitializedTopic, ShareGroupMetadataValue, ShareGroupStatePartitionMetadataValue,
+            ShareGroupMetadataValue, ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo,
         },
         handlers::describe_share_group_offsets::test_support::{
             image_with_topic, register_topic, start_broker,
@@ -274,13 +274,14 @@ mod tests {
             .replay_share_state_partition_metadata(
                 "g3",
                 ShareGroupStatePartitionMetadataValue {
+                    initializing: Vec::new(),
                     initialized: vec![
-                        InitializedTopic {
+                        TopicPartitionsInfo {
                             topic_id: orders_id,
                             topic_name: "orders".into(),
                             partitions: vec![0],
                         },
-                        InitializedTopic {
+                        TopicPartitionsInfo {
                             topic_id: secret_id,
                             topic_name: "secret".into(),
                             partitions: vec![0, 1],
@@ -466,13 +467,14 @@ mod tests {
                 .replay_share_state_partition_metadata(
                     "g2",
                     ShareGroupStatePartitionMetadataValue {
+                        initializing: Vec::new(),
                         initialized: vec![
-                            InitializedTopic {
+                            TopicPartitionsInfo {
                                 topic_id: orders_id,
                                 topic_name: "orders".into(),
                                 partitions: vec![0],
                             },
-                            InitializedTopic {
+                            TopicPartitionsInfo {
                                 topic_id: secret_id,
                                 topic_name: "secret".into(),
                                 partitions: vec![0],

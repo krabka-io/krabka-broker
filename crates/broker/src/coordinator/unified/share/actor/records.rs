@@ -14,10 +14,10 @@ use crate::coordinator::unified::{
     offsets_log::OffsetsLog,
     share::{
         persistence::{
-            InitializedTopic, ShareGroupCurrentMemberAssignmentValue, ShareGroupKey,
-            ShareGroupMemberMetadataValue, ShareGroupMetadataValue,
-            ShareGroupStatePartitionMetadataValue, ShareGroupTargetAssignmentMemberValue,
-            ShareGroupTargetAssignmentMetadataValue, UNKNOWN_TOPIC_NAME, encode_share_key,
+            ShareGroupCurrentMemberAssignmentValue, ShareGroupKey, ShareGroupMemberMetadataValue,
+            ShareGroupMetadataValue, ShareGroupStatePartitionMetadataValue,
+            ShareGroupTargetAssignmentMemberValue, ShareGroupTargetAssignmentMetadataValue,
+            TopicPartitionsInfo, UNKNOWN_TOPIC_NAME, encode_share_key,
         },
         state::ShareGroupState,
     },
@@ -164,8 +164,8 @@ pub(super) fn snapshot_pending_after_change(
 }
 
 /// Build the `ShareGroupStatePartitionMetadata` (key v15) value from the live
-/// Initialized set. There is one row per topic, and the partitions are sorted
-/// for a stable encoding.
+/// initializing and initialized sets. There is one row per topic in each, and
+/// the partitions are sorted for a stable encoding.
 ///
 /// Each row names its topic. The name comes from
 /// [`ShareGroupState::topic_names`], which the lifecycle hook fills from the
@@ -177,15 +177,27 @@ pub(super) fn snapshot_pending_after_change(
 pub(super) fn state_partition_metadata_from(
     state: &ShareGroupState,
 ) -> ShareGroupStatePartitionMetadataValue {
+    ShareGroupStatePartitionMetadataValue {
+        initializing: topic_partitions_infos(state, state.initializing.keys()),
+        initialized: topic_partitions_infos(state, state.initialized.iter()),
+        deleting: Vec::new(),
+    }
+}
+
+/// Groups `partitions` into one named, sorted row per topic.
+fn topic_partitions_infos<'a>(
+    state: &ShareGroupState,
+    partitions: impl Iterator<Item = &'a (Uuid, i32)>,
+) -> Vec<TopicPartitionsInfo> {
     let mut by_topic: HashMap<Uuid, Vec<i32>> = HashMap::new();
-    for (tid, p) in &state.initialized {
+    for (tid, p) in partitions {
         by_topic.entry(*tid).or_default().push(*p);
     }
-    let mut initialized: Vec<InitializedTopic> = by_topic
+    let mut topics: Vec<TopicPartitionsInfo> = by_topic
         .into_iter()
         .map(|(tid, mut parts)| {
             parts.sort_unstable();
-            InitializedTopic {
+            TopicPartitionsInfo {
                 topic_id: uuid::Uuid::from_bytes(tid.0),
                 topic_name: state
                     .topic_names
@@ -195,11 +207,8 @@ pub(super) fn state_partition_metadata_from(
             }
         })
         .collect();
-    initialized.sort_by_key(|topic| topic.topic_id);
-    ShareGroupStatePartitionMetadataValue {
-        initialized,
-        deleting: Vec::new(),
-    }
+    topics.sort_by_key(|topic| topic.topic_id);
+    topics
 }
 
 pub(super) async fn flush_pending(
@@ -248,6 +257,7 @@ mod tests {
             state.initialized.insert((named, partition));
         }
         state.initialized.insert((forgotten, 0));
+        state.initializing.insert((named, 2), 5);
         state.topic_names.insert(named, "orders".to_owned());
 
         // Rows sorted by topic id, partitions sorted, and the topic whose name
@@ -255,13 +265,18 @@ mod tests {
         assert!(
             state_partition_metadata_from(&state)
                 == ShareGroupStatePartitionMetadataValue {
+                    initializing: vec![TopicPartitionsInfo {
+                        topic_id: uuid::Uuid::from_bytes([1; 16]),
+                        topic_name: "orders".to_owned(),
+                        partitions: vec![2],
+                    }],
                     initialized: vec![
-                        InitializedTopic {
+                        TopicPartitionsInfo {
                             topic_id: uuid::Uuid::from_bytes([1; 16]),
                             topic_name: "orders".to_owned(),
                             partitions: vec![0, 1],
                         },
-                        InitializedTopic {
+                        TopicPartitionsInfo {
                             topic_id: uuid::Uuid::from_bytes([2; 16]),
                             topic_name: UNKNOWN_TOPIC_NAME.to_owned(),
                             partitions: vec![0],

@@ -25,16 +25,13 @@
 //! `GroupMetadataManager.attachInitValue` write for a topic id the metadata
 //! image no longer holds.
 //!
-//! The broker's share-state lifecycle has no separate "initializing" phase to
-//! persist, so it writes an empty `InitializingTopics`, and it drives the
-//! persister's delete to completion before it writes the record rather than
-//! staging the topic in `DeletingTopics`, so it writes that array empty too.
-//! Both are values Kafka's reader accepts, and a record from another writer
-//! that carries either still decodes: `DeletingTopics` round-trips through
-//! [`ShareGroupStatePartitionMetadataValue::deleting`], and an
-//! `InitializingTopics` entry is dropped, because a partition whose state is
-//! only being initialized is not yet initialized and so is nothing the broker
-//! would act on.
+//! The group writes a partition to `InitializingTopics` before it asks the
+//! persister to initialize it, and moves it to `InitializedTopics` once the
+//! persister answers, as Kafka's `GroupMetadataManager.addInitializingTopicsRecords`
+//! and `initializeShareGroupState` do. It drives the persister's delete to
+//! completion before it writes the record rather than staging the topic in
+//! `DeletingTopics`, so it writes that array empty, and a record from another
+//! writer that carries it still decodes.
 
 use bytes::{BufMut, Bytes, BytesMut};
 
@@ -54,9 +51,10 @@ use crate::{
 /// byte for byte what Kafka's `GroupMetadataManager` writes in the same spot.
 pub const UNKNOWN_TOPIC_NAME: &str = "<UNKNOWN>";
 
-/// One `TopicPartitionsInfo` of the `InitializedTopics` array.
+/// One `TopicPartitionsInfo` of the `InitializingTopics` or
+/// `InitializedTopics` array.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct InitializedTopic {
+pub struct TopicPartitionsInfo {
     pub topic_id: uuid::Uuid,
     pub topic_name: String,
     pub partitions: Vec<i32>,
@@ -77,7 +75,8 @@ pub struct DeletingTopic {
 /// of partitions across restarts.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ShareGroupStatePartitionMetadataValue {
-    pub initialized: Vec<InitializedTopic>,
+    pub initializing: Vec<TopicPartitionsInfo>,
+    pub initialized: Vec<TopicPartitionsInfo>,
     pub deleting: Vec<DeletingTopic>,
 }
 
@@ -86,13 +85,14 @@ impl ShareGroupStatePartitionMetadataValue {
     pub fn encode(&self) -> Bytes {
         let mut buf = BytesMut::new();
         buf.put_i16(0);
-        put_compact_array_len(&mut buf, 0); // InitializingTopics
-        put_compact_array_len(&mut buf, self.initialized.len());
-        for topic in &self.initialized {
-            put_uuid(&mut buf, *topic.topic_id.as_bytes());
-            put_compact_string(&mut buf, &topic.topic_name);
-            put_i32_array(&mut buf, &topic.partitions);
-            put_empty_tagged_fields(&mut buf);
+        for topics in [&self.initializing, &self.initialized] {
+            put_compact_array_len(&mut buf, topics.len());
+            for topic in topics {
+                put_uuid(&mut buf, *topic.topic_id.as_bytes());
+                put_compact_string(&mut buf, &topic.topic_name);
+                put_i32_array(&mut buf, &topic.partitions);
+                put_empty_tagged_fields(&mut buf);
+            }
         }
         put_compact_array_len(&mut buf, self.deleting.len());
         for topic in &self.deleting {
@@ -108,29 +108,8 @@ impl ShareGroupStatePartitionMetadataValue {
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
         let _v = get_i16(&mut buf)?;
-        // InitializingTopics: the broker never writes one, and a partition
-        // whose state is still being initialized is not yet initialized, so a
-        // record from elsewhere loses nothing the broker would act on.
-        let initializing = get_compact_array_len(&mut buf)?;
-        for _ in 0..initializing {
-            let _topic_id = get_uuid(&mut buf)?;
-            let _topic_name = get_compact_string(&mut buf)?;
-            let _partitions = get_i32_array(&mut buf)?;
-            skip_tagged_fields(&mut buf)?;
-        }
-        let n = get_compact_array_len(&mut buf)?;
-        let mut initialized = Vec::with_capacity(n);
-        for _ in 0..n {
-            let topic_id = uuid::Uuid::from_bytes(get_uuid(&mut buf)?);
-            let topic_name = get_compact_string(&mut buf)?;
-            let partitions = get_i32_array(&mut buf)?;
-            skip_tagged_fields(&mut buf)?;
-            initialized.push(InitializedTopic {
-                topic_id,
-                topic_name,
-                partitions,
-            });
-        }
+        let initializing = get_topic_partitions_infos(&mut buf)?;
+        let initialized = get_topic_partitions_infos(&mut buf)?;
         let dn = get_compact_array_len(&mut buf)?;
         let mut deleting = Vec::with_capacity(dn);
         for _ in 0..dn {
@@ -144,10 +123,29 @@ impl ShareGroupStatePartitionMetadataValue {
         }
         skip_tagged_fields(&mut buf)?;
         Ok(Self {
+            initializing,
             initialized,
             deleting,
         })
     }
+}
+
+/// Decodes one `[]TopicPartitionsInfo` array.
+fn get_topic_partitions_infos(buf: &mut &[u8]) -> Result<Vec<TopicPartitionsInfo>, BrokerError> {
+    let n = get_compact_array_len(buf)?;
+    let mut topics = Vec::with_capacity(n);
+    for _ in 0..n {
+        let topic_id = uuid::Uuid::from_bytes(get_uuid(buf)?);
+        let topic_name = get_compact_string(buf)?;
+        let partitions = get_i32_array(buf)?;
+        skip_tagged_fields(buf)?;
+        topics.push(TopicPartitionsInfo {
+            topic_id,
+            topic_name,
+            partitions,
+        });
+    }
+    Ok(topics)
 }
 
 #[cfg(test)]
@@ -160,8 +158,8 @@ mod tests {
         test_support::peek_version,
     };
 
-    fn initialized(id: u8, name: &str, partitions: Vec<i32>) -> InitializedTopic {
-        InitializedTopic {
+    fn initialized(id: u8, name: &str, partitions: Vec<i32>) -> TopicPartitionsInfo {
+        TopicPartitionsInfo {
             topic_id: uuid::Uuid::from_bytes([id; 16]),
             topic_name: name.to_owned(),
             partitions,
@@ -178,6 +176,7 @@ mod tests {
     #[test]
     fn state_partition_metadata_bytes_match_kafka_schema() {
         let v = ShareGroupStatePartitionMetadataValue {
+            initializing: vec![],
             initialized: vec![initialized(1, "orders", vec![0])],
             deleting: vec![deleting(9, "carts")],
         };
@@ -212,6 +211,7 @@ mod tests {
         let cases = [
             ShareGroupStatePartitionMetadataValue::default(),
             ShareGroupStatePartitionMetadataValue {
+                initializing: vec![initialized(5, "returns", vec![3])],
                 initialized: vec![
                     initialized(1, "orders", vec![0, 1, 2]),
                     initialized(2, "shipments", vec![]),
@@ -222,6 +222,7 @@ mod tests {
             // would have written, and a name with multi-byte characters keeps
             // its byte length through the compact-string codec.
             ShareGroupStatePartitionMetadataValue {
+                initializing: vec![],
                 initialized: vec![initialized(3, UNKNOWN_TOPIC_NAME, vec![7])],
                 deleting: vec![deleting(4, "temperaturmålinger")],
             },
@@ -232,9 +233,9 @@ mod tests {
     }
 
     #[test]
-    fn state_partition_metadata_skips_a_kafka_initializing_list() {
-        // A record another writer left with an InitializingTopics entry still
-        // decodes, and the entry does not shift the fields after it.
+    fn state_partition_metadata_decodes_an_initializing_list() {
+        // An InitializingTopics entry decodes, and it does not shift the
+        // fields after it.
         let mut bytes: Vec<u8> = vec![0x00, 0x00];
         bytes.push(0x02); // one InitializingTopics entry
         bytes.extend_from_slice(&[7u8; 16]);
@@ -247,7 +248,10 @@ mod tests {
         bytes.push(0x00); // message tagged fields
         assert!(
             ShareGroupStatePartitionMetadataValue::decode(&bytes).unwrap()
-                == ShareGroupStatePartitionMetadataValue::default()
+                == ShareGroupStatePartitionMetadataValue {
+                    initializing: vec![initialized(7, "t", vec![4])],
+                    ..Default::default()
+                }
         );
     }
 

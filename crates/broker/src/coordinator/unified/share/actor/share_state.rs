@@ -19,33 +19,42 @@ use krabka_protocol::primitives::uuid::Uuid;
 use super::records::{PendingShareRecords, flush_pending, state_partition_metadata_from};
 use crate::{
     coordinator::unified::{
-        GroupCoordinator, actor::MetadataProvider, offsets_log::OffsetsLog,
-        share::state::ShareGroupState,
+        GroupCoordinator,
+        offsets_log::OffsetsLog,
+        reconciler::ReconcileInput,
+        share::{config::ShareGroupConfig, state::ShareGroupState},
     },
     share_coordinator::coordinator::UNINITIALIZED_START_OFFSET,
 };
 
-/// KIP-932 lifecycle hook. It runs AFTER `reconcile`, off the
-/// sync state machine. It gathers the group's full assigned `(topic_id,
-/// partition)` set and drives [`SharePersister::initialize`] for each entry
-/// that is not already Initialized. On success it records the partition in
-/// `state.initialized`, records the topic's name from the metadata image in
-/// `state.topic_names` because the record names every topic it lists, and
-/// persists an updated `ShareGroupStatePartitionMetadata` (key v15) through
-/// the offsets log.
+/// KIP-932 lifecycle hook. It runs after `reconcile`, off the sync state
+/// machine, and initializes the share state of every partition of a
+/// subscribed topic that the group has not initialized yet, as Kafka's
+/// `GroupMetadataManager.maybeCreateInitializeShareGroupStateRequest` and
+/// `GroupCoordinatorService.persisterInitialize` do.
 ///
-/// The hook is best-effort. A persister error leaves the partition
-/// un-recorded, so the next heartbeat retries it, and the error never fails
-/// the heartbeat. `state_epoch` is the group epoch, which is monotonic and
-/// bumps on every membership change. For a topic that the group sees for the
-/// first time, `start_offset` is `-1`, Kafka's
-/// `PartitionFactory.UNINITIALIZED_START_OFFSET`: the coordinator records that
-/// the partition exists without deciding where it starts, and the share
-/// partition itself resolves the group's `share.auto.offset.reset` when it is
-/// first loaded, exactly as `SharePartition.maybeInitialize` does. A new
-/// partition of a topic that the group already initialized starts at `0`.
+/// The partitions are first written to the `InitializingTopics` of
+/// `ShareGroupStatePartitionMetadata` (Kafka's `addInitializingTopicsRecords`),
+/// so a group delete finds any state the persister may write. Only then does
+/// the hook call [`SharePersister::initialize`]. A partition the persister
+/// initialized moves to `InitializedTopics` (`initializeShareGroupState`), and
+/// one it failed leaves the initializing set (`uninitializeShareGroupState`),
+/// so the next heartbeat retries it. A partition still initializing after a
+/// restart is retried once `initialize_retry_interval` has passed. The newly
+/// initialized partitions reach the assignment on the next heartbeat, which
+/// sees them unassigned and bumps the group epoch.
+///
+/// The hook is best-effort and never fails the heartbeat. `state_epoch` is
+/// the group epoch. For a topic that the group sees for the first time,
+/// `start_offset` is `-1`, Kafka's `PartitionFactory.UNINITIALIZED_START_OFFSET`,
+/// and the share partition resolves `share.auto.offset.reset` when it first
+/// loads. A new partition of a topic that the group already initialized
+/// starts at `0`.
+///
+/// [`SharePersister::initialize`]: crate::share_coordinator::SharePersister::initialize
 pub(super) async fn reconcile_share_state(
     state: &mut ShareGroupState,
+    config: &ShareGroupConfig,
     offsets_log: &dyn OffsetsLog,
     coordinator: &GroupCoordinator,
     now_ms: i64,
@@ -55,75 +64,34 @@ pub(super) async fn reconcile_share_state(
         return;
     };
 
-    // The union of every member's assigned partitions is the set of
-    // (topic_id, partition) the group actively uses.
-    let mut assigned: HashSet<(Uuid, i32)> = HashSet::new();
-    for m in state.members.values() {
-        for (tid, parts) in &m.assigned_partitions {
-            for p in parts {
-                assigned.insert((*tid, *p));
-            }
-        }
-    }
-
-    // KIP-932 names every topic the ShareGroupStatePartitionMetadata record
-    // lists, and the metadata image is the authority on the name behind an id,
-    // the same source Kafka's `GroupMetadataManager.attachInitValue` reads. The
+    // The metadata image is the authority on the name behind an id, the same
+    // source Kafka's `GroupMetadataManager.attachInitValue` reads. The
     // snapshot is taken once per lifecycle pass.
-    let topic_names = topic_names_by_id(coordinator.metadata.as_ref());
-
-    let to_init: Vec<(Uuid, i32)> = assigned
+    let input = coordinator.metadata.snapshot();
+    let topic_names: HashMap<Uuid, String> = input
+        .topic_id_by_name
         .iter()
-        .copied()
-        .filter(|tp| !state.initialized.contains(tp) && topic_names.contains_key(&tp.0))
+        .map(|(name, topic_id)| (*topic_id, name.clone()))
         .collect();
+
+    let retry_ms = i64::try_from(config.initialize_retry_interval.as_millis()).unwrap_or(i64::MAX);
+    let to_init = partitions_to_initialize(state, &input, now_ms, retry_ms);
     let to_delete = deleted_topic_partitions(&state.initialized, &topic_names);
     if to_init.is_empty() && to_delete.is_empty() {
         return;
     }
 
-    // Kafka's `buildInitializeShareGroupStateRequest`: a new partition of a
-    // topic that the group already knows starts at offset 0, so the records
-    // produced to it before its share partition loads are delivered. The
-    // partitions of a topic that the group sees for the first time start at
-    // -1, and the share partition resolves `share.auto.offset.reset`. The set
-    // is taken before this pass initializes anything.
-    let known_topics: HashSet<Uuid> = state
-        .initialized
-        .iter()
-        .map(|(topic_id, _)| *topic_id)
-        .collect();
-    let state_epoch = state.group_epoch;
     let mut changed = false;
-    for (tid, partition) in to_init {
-        let topic_uuid = uuid::Uuid::from_bytes(tid.0);
-        match persister
-            .initialize(
-                &state.group_id,
-                topic_uuid,
-                partition,
-                state_epoch,
-                krabka_log::Offset(initial_start_offset(&known_topics, tid)),
-            )
-            .await
-        {
-            Ok(()) => {
-                state.initialized.insert((tid, partition));
-                if let Some(name) = topic_names.get(&tid) {
-                    state.topic_names.insert(tid, name.clone());
-                }
-                changed = true;
-            }
-            Err(e) => {
-                tracing::warn!(
-                    group_id = %state.group_id,
-                    topic_id = %topic_uuid,
-                    partition,
-                    error = %e,
-                    "share-state Initialize failed; will retry next heartbeat",
-                );
-            }
-        }
+    if !to_init.is_empty() {
+        changed |= initialize(
+            state,
+            &to_init,
+            &topic_names,
+            offsets_log,
+            coordinator,
+            now_ms,
+        )
+        .await;
     }
     for (tid, partition) in to_delete {
         let topic_uuid = uuid::Uuid::from_bytes(tid.0);
@@ -147,19 +115,150 @@ pub(super) async fn reconcile_share_state(
         }
     }
     if changed {
+        write_state_partition_metadata(state, offsets_log, coordinator, now_ms).await;
+    }
+}
+
+/// Records `to_init` as initializing, then initializes each partition through
+/// the persister. Says whether the sets changed after the initializing record
+/// was written.
+async fn initialize(
+    state: &mut ShareGroupState,
+    to_init: &[(Uuid, i32)],
+    topic_names: &HashMap<Uuid, String>,
+    offsets_log: &dyn OffsetsLog,
+    coordinator: &GroupCoordinator,
+    now_ms: i64,
+) -> bool {
+    let Some(persister) = coordinator.share_persister() else {
+        return false;
+    };
+    // Kafka's `buildInitializeShareGroupStateRequest`: a new partition of a
+    // topic that the group already knows starts at offset 0, so the records
+    // produced to it before its share partition loads are delivered. The
+    // partitions of a topic that the group sees for the first time start at
+    // -1, and the share partition resolves `share.auto.offset.reset`. The set
+    // is taken before this pass initializes anything.
+    let known_topics: HashSet<Uuid> = state
+        .initialized
+        .iter()
+        .map(|(topic_id, _)| *topic_id)
+        .collect();
+
+    let previous: Vec<Option<i64>> = to_init
+        .iter()
+        .map(|tp| state.initializing.insert(*tp, now_ms))
+        .collect();
+    for (tid, _) in to_init {
+        if let Some(name) = topic_names.get(tid) {
+            state.topic_names.insert(*tid, name.clone());
+        }
+    }
+    if !write_state_partition_metadata(state, offsets_log, coordinator, now_ms).await {
+        // The initializing record is not durable, so the persister is not
+        // called: a delete could not find what it would write.
+        for (tp, before) in to_init.iter().zip(previous) {
+            match before {
+                Some(at) => state.initializing.insert(*tp, at),
+                None => state.initializing.remove(tp),
+            };
+        }
         state.forget_unused_topic_names();
-        let pending = PendingShareRecords {
-            state_partition_metadata: Some(state_partition_metadata_from(state)),
-            ..Default::default()
-        };
-        if let Err(e) = flush_pending(state, pending, offsets_log, coordinator, now_ms).await {
+        return false;
+    }
+
+    let state_epoch = state.group_epoch;
+    for &(tid, partition) in to_init {
+        let topic_uuid = uuid::Uuid::from_bytes(tid.0);
+        match persister
+            .initialize(
+                &state.group_id,
+                topic_uuid,
+                partition,
+                state_epoch,
+                krabka_log::Offset(initial_start_offset(&known_topics, tid)),
+            )
+            .await
+        {
+            Ok(()) => state.mark_initialized((tid, partition)),
+            Err(e) => {
+                state.initializing.remove(&(tid, partition));
+                tracing::warn!(
+                    group_id = %state.group_id,
+                    topic_id = %topic_uuid,
+                    partition,
+                    error = %e,
+                    "share-state Initialize failed; will retry next heartbeat",
+                );
+            }
+        }
+    }
+    true
+}
+
+/// Writes the group's `ShareGroupStatePartitionMetadata` record, and says
+/// whether the write succeeded.
+async fn write_state_partition_metadata(
+    state: &mut ShareGroupState,
+    offsets_log: &dyn OffsetsLog,
+    coordinator: &GroupCoordinator,
+    now_ms: i64,
+) -> bool {
+    state.forget_unused_topic_names();
+    let pending = PendingShareRecords {
+        state_partition_metadata: Some(state_partition_metadata_from(state)),
+        ..Default::default()
+    };
+    match flush_pending(state, pending, offsets_log, coordinator, now_ms).await {
+        Ok(()) => true,
+        Err(e) => {
             tracing::warn!(
                 group_id = %state.group_id,
                 error = %e,
                 "persisting ShareGroupStatePartitionMetadata failed; in-memory set retained",
             );
+            false
         }
     }
+}
+
+/// Kafka's `GroupMetadataManager.subscribedTopicsChangeMap`: every partition
+/// of a subscribed topic in the image that is neither initialized nor
+/// initializing for less than `retry_ms`, sorted. A topic whose partitions
+/// are all covered contributes nothing.
+fn partitions_to_initialize(
+    state: &ShareGroupState,
+    input: &ReconcileInput,
+    now_ms: i64,
+    retry_ms: i64,
+) -> Vec<(Uuid, i32)> {
+    let subscribed: HashSet<&String> = state
+        .members
+        .values()
+        .flat_map(|m| m.subscribed_topic_names.iter())
+        .collect();
+    let covered = |tp: &(Uuid, i32)| {
+        state.initialized.contains(tp)
+            || state
+                .initializing
+                .get(tp)
+                .is_some_and(|&at| now_ms.saturating_sub(at) < retry_ms)
+    };
+    let mut out: Vec<(Uuid, i32)> = subscribed
+        .into_iter()
+        .filter_map(|name| input.topic_id_by_name.get(name))
+        .flat_map(|topic_id| {
+            let count = input
+                .partitions_per_topic
+                .get(topic_id)
+                .copied()
+                .unwrap_or(0);
+            (0..count).map(move |p| (*topic_id, p))
+        })
+        .filter(|tp| !covered(tp))
+        .collect();
+    out.sort_unstable_by_key(|(topic_id, partition)| (topic_id.0, *partition));
+    out
 }
 
 /// The start offset that a new share partition of `topic_id` is initialized
@@ -191,39 +290,47 @@ fn deleted_topic_partitions(
     deleted
 }
 
-/// Invert the metadata snapshot's `name → id` map into the `id → name` lookup
-/// the share-state record needs. A topic the image does not hold has no entry,
-/// and the record writer falls back to Kafka's `<UNKNOWN>`.
-fn topic_names_by_id(metadata: &dyn MetadataProvider) -> HashMap<Uuid, String> {
-    metadata
-        .snapshot()
-        .topic_id_by_name
-        .into_iter()
-        .map(|(name, topic_id)| (topic_id, name))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::coordinator::unified::reconciler::ReconcileInput;
+    use crate::coordinator::unified::share::state::ShareMemberState;
 
-    #[derive(Debug)]
-    struct Metadata(Vec<(&'static str, Uuid)>);
-
-    impl MetadataProvider for Metadata {
-        fn snapshot(&self) -> ReconcileInput {
-            ReconcileInput {
-                topic_id_by_name: self
-                    .0
-                    .iter()
-                    .map(|(name, id)| ((*name).to_owned(), *id))
-                    .collect(),
-                partitions_per_topic: HashMap::new(),
-                partition_racks: HashMap::new(),
-            }
+    /// Kafka's `subscribedTopicsChangeMap`: every partition of a subscribed
+    /// topic in the image that is neither initialized nor freshly
+    /// initializing.
+    #[test]
+    fn partitions_to_initialize_skip_initialized_and_fresh_initializing() {
+        let orders = Uuid([1; 16]);
+        let input = ReconcileInput {
+            topic_id_by_name: HashMap::from([("orders".to_owned(), orders)]),
+            partitions_per_topic: HashMap::from([(orders, 4)]),
+            ..ReconcileInput::default()
+        };
+        // (row, initializing partition 1 recorded at, expected partitions)
+        let rows = [
+            ("fresh initializing entry is covered", 950, vec![2, 3]),
+            ("stale initializing entry is retried", 800, vec![1, 2, 3]),
+        ];
+        for (row, recorded_at, expected) in rows {
+            let mut state = ShareGroupState::new("g");
+            state.members.insert(
+                "m".to_owned(),
+                ShareMemberState::joining(
+                    "m",
+                    "c",
+                    "h",
+                    HashSet::from(["orders".to_owned(), "missing".to_owned()]),
+                ),
+            );
+            state.initialized.insert((orders, 0));
+            state.initializing.insert((orders, 1), recorded_at);
+            let expected: Vec<(Uuid, i32)> = expected.into_iter().map(|p| (orders, p)).collect();
+            assert!(
+                partitions_to_initialize(&state, &input, 1_000, 100) == expected,
+                "{row}"
+            );
         }
     }
 
@@ -254,17 +361,5 @@ mod tests {
                 "row {index}"
             );
         }
-    }
-
-    #[test]
-    fn topic_names_come_from_the_metadata_snapshot() {
-        let orders = Uuid([1; 16]);
-        let carts = Uuid([2; 16]);
-        let metadata = Metadata(vec![("orders", orders), ("carts", carts)]);
-
-        assert!(
-            topic_names_by_id(&metadata)
-                == HashMap::from([(orders, "orders".to_owned()), (carts, "carts".to_owned()),])
-        );
     }
 }

@@ -276,7 +276,8 @@ mod tests {
 
         let tid = uuid::Uuid::from_u128(1);
         let v = share::persistence::ShareGroupStatePartitionMetadataValue {
-            initialized: vec![share::persistence::InitializedTopic {
+            initializing: Vec::new(),
+            initialized: vec![share::persistence::TopicPartitionsInfo {
                 topic_id: tid,
                 topic_name: "orders".into(),
                 partitions: vec![0, 1],
@@ -326,6 +327,7 @@ mod tests {
             target_per_member: maplit::hashmap! {"share-member".to_string() => target},
             current_per_member: maplit::hashmap! {"share-member".to_string() => current},
             state_partition_metadata: share::persistence::ShareGroupStatePartitionMetadataValue {
+                initializing: Vec::new(),
                 initialized: vec![],
                 deleting: vec![],
             },

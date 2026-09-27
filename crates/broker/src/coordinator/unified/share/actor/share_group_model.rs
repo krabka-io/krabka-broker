@@ -48,7 +48,7 @@ const MAX_DEPTH: usize = 64;
 // considering a field -- into a failure instead of a silently smaller search
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
-const PINNED_UNIQUE_STATES: usize = 54_304;
+const PINNED_UNIQUE_STATES: usize = 71_656;
 const WITNESS_STALE_FENCED: u8 = 1 << 0;
 const WITNESS_FORWARD_FENCED: u8 = 1 << 1;
 const WITNESS_TIMEOUT: u8 = 1 << 2;
@@ -180,6 +180,14 @@ impl MetadataProvider for ModelMetadata {
     }
 }
 
+/// Marks the share state of exactly the topic's `partitions` initialized, as
+/// the lifecycle hook leaves it once the persister answers. The model's
+/// assignor only hands out initialized partitions.
+fn initialize(group: &mut ShareGroupState, partitions: i32) {
+    group.initialized = (0..partitions).map(|p| (TOPIC, p)).collect();
+    group.topic_names.insert(TOPIC, TOPIC_NAME.to_owned());
+}
+
 fn metadata(partitions: i32) -> ModelMetadata {
     ModelMetadata { partitions }
 }
@@ -284,8 +292,10 @@ impl Model for ShareModel {
     type Action = Action;
 
     fn init_states(&self) -> Vec<Self::State> {
+        let mut group = ShareGroupState::new("g");
+        initialize(&mut group, 1);
         vec![State {
-            group: ShareGroupState::new("g"),
+            group,
             origin: Instant::now(),
             clock: 0,
             partitions: 1,
@@ -398,6 +408,7 @@ impl Model for ShareModel {
             Action::MetadataHeartbeat(member_id, partitions) => {
                 let current = state.group.members.get(member_id)?.member_epoch;
                 state.partitions = partitions;
+                initialize(&mut state.group, partitions);
                 let before = state.group.group_epoch;
                 if !reconcile(&mut state.group, &metadata(state.partitions)) {
                     return None;

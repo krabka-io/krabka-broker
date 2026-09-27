@@ -239,7 +239,7 @@ mod tests {
             ShareGroupSeed,
             share::{
                 actor::ShareGroupActorMessage,
-                persistence::{InitializedTopic, ShareGroupStatePartitionMetadataValue},
+                persistence::{ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo},
             },
         },
         test_support::DenyAll,
@@ -486,13 +486,14 @@ mod tests {
             .tx
             .send(ShareGroupActorMessage::Seed(ShareGroupSeed {
                 state_partition_metadata: ShareGroupStatePartitionMetadataValue {
+                    initializing: Vec::new(),
                     initialized: vec![
-                        InitializedTopic {
+                        TopicPartitionsInfo {
                             topic_id: deleted_id,
                             topic_name: "deleted".into(),
                             partitions: vec![0],
                         },
-                        InitializedTopic {
+                        TopicPartitionsInfo {
                             topic_id: kept_id,
                             topic_name: "kept".into(),
                             partitions: vec![0],
@@ -601,13 +602,14 @@ mod tests {
                 .tx
                 .send(ShareGroupActorMessage::Seed(ShareGroupSeed {
                     state_partition_metadata: ShareGroupStatePartitionMetadataValue {
+                        initializing: Vec::new(),
                         initialized: vec![
-                            InitializedTopic {
+                            TopicPartitionsInfo {
                                 topic_id: allow_id,
                                 topic_name: "allow-topic".into(),
                                 partitions: vec![0],
                             },
-                            InitializedTopic {
+                            TopicPartitionsInfo {
                                 topic_id: deny_id,
                                 topic_name: "deny-topic".into(),
                                 partitions: vec![0],

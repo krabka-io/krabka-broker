@@ -5,7 +5,7 @@
 //! so members carry no assignment-ack state beyond a member epoch.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     time::{Duration, Instant},
 };
 
@@ -76,7 +76,21 @@ pub struct ShareGroupState {
     /// post-restart heartbeat does not re-Initialize. The lifecycle hook adds
     /// to this on each successful `SharePersister::initialize`.
     pub initialized: HashSet<(Uuid, i32)>,
-    /// The topic name behind each topic id in [`Self::initialized`].
+    /// KIP-932: `(topic_id, partition)` share-states whose `Initialize` the
+    /// group has recorded but the persister has not yet confirmed, each with
+    /// the time in milliseconds it was recorded. Kafka's
+    /// `ShareGroupStatePartitionMetadata.InitializingTopics`: the group writes
+    /// a partition here before it calls the persister, so a group delete
+    /// never misses state that an initialize may have written. An entry older
+    /// than the retry interval is initialized again.
+    pub initializing: HashMap<(Uuid, i32), i64>,
+    /// The subscribed topics of the group as the metadata image last showed
+    /// them: name to topic id and partition count. A change bumps the group
+    /// epoch, as Kafka's metadata hash does. `None` until the first
+    /// reconcile.
+    pub subscribed_metadata: Option<BTreeMap<String, ([u8; 16], i32)>>,
+    /// The topic name behind each topic id in [`Self::initialized`] and
+    /// [`Self::initializing`].
     ///
     /// KIP-932's `ShareGroupStatePartitionMetadata` carries `TopicName` beside
     /// `TopicId` on every entry, and the tooling that reads that record has no
@@ -104,20 +118,34 @@ impl ShareGroupState {
             },
             dirty: false,
             initialized: HashSet::new(),
+            initializing: HashMap::new(),
+            subscribed_metadata: None,
             topic_names: HashMap::new(),
         }
     }
 
-    /// Drop the name of every topic that no longer has an initialized
-    /// partition, so the map stays exactly the set of topics the next
-    /// `ShareGroupStatePartitionMetadata` record will name.
+    /// Records that the persister initialized `tp`, as Kafka's
+    /// `initializeShareGroupState` moves it from initializing to initialized.
+    pub fn mark_initialized(&mut self, tp: (Uuid, i32)) {
+        self.initializing.remove(&tp);
+        self.initialized.insert(tp);
+    }
+
+    /// Drop the name of every topic that no longer has an initialized or
+    /// initializing partition, so the map stays exactly the set of topics the
+    /// next `ShareGroupStatePartitionMetadata` record will name.
     pub fn forget_unused_topic_names(&mut self) {
         let Self {
             initialized,
+            initializing,
             topic_names,
             ..
         } = self;
-        let live: HashSet<Uuid> = initialized.iter().map(|(topic_id, _)| *topic_id).collect();
+        let live: HashSet<Uuid> = initialized
+            .iter()
+            .chain(initializing.keys())
+            .map(|(topic_id, _)| *topic_id)
+            .collect();
         topic_names.retain(|topic_id, _| live.contains(topic_id));
     }
 

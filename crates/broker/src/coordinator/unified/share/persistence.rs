@@ -40,6 +40,7 @@ pub use self::{
     },
     member::ShareGroupMemberMetadataValue,
     partition_metadata::{
-        DeletingTopic, InitializedTopic, ShareGroupStatePartitionMetadataValue, UNKNOWN_TOPIC_NAME,
+        DeletingTopic, ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo,
+        UNKNOWN_TOPIC_NAME,
     },
 };

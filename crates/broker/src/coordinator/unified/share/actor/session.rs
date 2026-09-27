@@ -68,7 +68,7 @@ pub(super) async fn handle_session_tick(
     }
     // Initialize the partitions that the remaining members gained. The share
     // state of a dropped partition stays, as in Kafka.
-    reconcile_share_state(state, offsets_log, coordinator, now_ms).await;
+    reconcile_share_state(state, config, offsets_log, coordinator, now_ms).await;
     Ok(())
 }
 
