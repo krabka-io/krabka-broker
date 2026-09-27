@@ -25,15 +25,20 @@ pub(crate) fn group_coordinator_error(
 }
 
 /// `COORDINATOR_LOAD_IN_PROGRESS` while this broker still replays the offsets
-/// `partition` it leads, as Kafka's `CoordinatorRuntime` answers for a shard in
-/// the `LOADING` state.
+/// `partition` it leads, or has not yet taken up the leadership term the
+/// current image names, as Kafka's `CoordinatorRuntime` answers for a shard
+/// that is not `ACTIVE`.
 pub(crate) fn group_partition_loading(
     broker: &crate::broker::Broker,
     partition: i32,
 ) -> Option<i16> {
-    broker
-        .group_coordinator
-        .is_loading(partition)
+    let epoch = broker
+        .controller
+        .current_image()
+        .partition(crate::coordinator::bootstrap::OFFSETS_TOPIC, partition)
+        .map(|record| record.leader_epoch);
+    epoch
+        .is_none_or(|epoch| broker.group_coordinator.is_loading(partition, epoch))
         .then_some(crate::codes::COORDINATOR_LOAD_IN_PROGRESS)
 }
 

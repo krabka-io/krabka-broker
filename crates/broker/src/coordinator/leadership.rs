@@ -7,9 +7,14 @@
 //! [`GroupCoordinator::is_loading`] is what the group RPC routing check reads
 //! to do the same. Without it a request would find no actor, create an empty
 //! one, and have its answer overwritten when the replay seeds the group.
+//!
+//! A request can read a new metadata image before the image watcher below has
+//! taken the new leadership up. A leadership term the watcher has not taken up
+//! yet is loading too, as Kafka's runtime has no `ACTIVE` shard for an
+//! election it has not processed, so no request slips in ahead of the load.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -17,7 +22,7 @@ use std::{
     time::Duration,
 };
 
-use krabka_ids::PartitionIndex;
+use krabka_ids::{LeaderEpoch, PartitionIndex};
 use krabka_metadata::{MetadataImage, NodeId};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -40,10 +45,15 @@ pub(crate) fn spawn(
     coordinator: Arc<GroupCoordinator>,
     shutdown: CancellationToken,
 ) {
+    // The partitions led at start were replayed by the storage recovery, so
+    // their terms are taken up as served before any request is routed.
+    let mut images = metadata.watch_image();
+    let mut previous_image = images.borrow_and_update().clone();
+    let mut led = led_partitions(&previous_image, node_id);
+    for (&partition, &epoch) in &led {
+        coordinator.take_up(partition, epoch);
+    }
     tokio::spawn(async move {
-        let mut images = metadata.watch_image();
-        let mut previous_image = images.borrow_and_update().clone();
-        let mut led = led_partitions(&previous_image, node_id);
         loop {
             tokio::select! {
                 () = shutdown.cancelled() => break,
@@ -53,14 +63,23 @@ pub(crate) fn spawn(
                     }
                     let image = images.borrow_and_update().clone();
                     let next = led_partitions(&image, node_id);
-                    for partition in led.difference(&next).copied().collect::<Vec<_>>() {
+                    let lost: Vec<PartitionIndex> =
+                        led.keys().filter(|p| !next.contains_key(p)).copied().collect();
+                    for partition in lost {
                         coordinator.end_any_load(partition);
                         unload_partition(&coordinator, &previous_image, partition).await;
                     }
-                    for partition in next.difference(&led).copied().collect::<Vec<_>>() {
+                    for (&partition, &epoch) in &next {
+                        if led.contains_key(&partition) {
+                            // Still led: a newer epoch keeps the shard as it
+                            // is, as Kafka's `scheduleLoadOperation` only
+                            // bumps the epoch of a loaded or loading shard.
+                            coordinator.take_up(partition, epoch);
+                            continue;
+                        }
                         // Marked before the task starts, so no request routed
                         // after this image lands can slip in ahead of it.
-                        let load = LoadGuard::begin(Arc::clone(&coordinator), partition);
+                        let load = LoadGuard::begin(Arc::clone(&coordinator), partition, epoch);
                         spawn_partition_load(
                             node_id,
                             Arc::clone(&metadata),
@@ -81,22 +100,46 @@ pub(crate) fn spawn(
 /// Source of the ids that tell one load of a partition from the next.
 static NEXT_LOAD_ID: AtomicU64 = AtomicU64::new(0);
 
+/// The `__consumer_offsets` leadership terms the image watcher has taken up,
+/// and which of them are still replaying. One lock guards both, so a routing
+/// check never sees a term taken up without the load that came with it.
+#[derive(Debug, Default)]
+pub(crate) struct ShardTerms {
+    /// The leader epoch of every offsets partition this broker leads, as the
+    /// image watcher last took it up.
+    led: HashMap<i32, LeaderEpoch>,
+    /// The led partitions still replaying, each with the id of the load that
+    /// owns the entry.
+    loading: HashMap<i32, u64>,
+}
+
 impl GroupCoordinator {
-    /// `true` while `partition` of `__consumer_offsets` is led here but not
-    /// yet replayed.
-    pub(crate) fn is_loading(&self, partition: i32) -> bool {
-        self.loading_partitions
+    fn shard_terms(&self) -> std::sync::MutexGuard<'_, ShardTerms> {
+        self.shard_terms
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains_key(&partition)
     }
 
-    fn begin_load(&self, partition: i32) -> u64 {
+    /// `true` while `partition` of `__consumer_offsets`, which the image
+    /// names this broker's to lead at `leader_epoch`, is not yet served here:
+    /// the image watcher has not taken that term up, or its replay has not
+    /// finished.
+    pub(crate) fn is_loading(&self, partition: i32, leader_epoch: LeaderEpoch) -> bool {
+        let terms = self.shard_terms();
+        terms.led.get(&partition) != Some(&leader_epoch) || terms.loading.contains_key(&partition)
+    }
+
+    /// Record `epoch` as the term this broker leads `partition` under,
+    /// without a load.
+    fn take_up(&self, partition: PartitionIndex, epoch: LeaderEpoch) {
+        self.shard_terms().led.insert(partition.get(), epoch);
+    }
+
+    fn begin_load(&self, partition: PartitionIndex, epoch: LeaderEpoch) -> u64 {
         let load_id = NEXT_LOAD_ID.fetch_add(1, Ordering::Relaxed);
-        self.loading_partitions
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(partition, load_id);
+        let mut terms = self.shard_terms();
+        terms.led.insert(partition.get(), epoch);
+        terms.loading.insert(partition.get(), load_id);
         load_id
     }
 
@@ -104,20 +147,18 @@ impl GroupCoordinator {
     /// that outlives a lost and regained leadership cannot clear the newer
     /// load's mark.
     fn end_load(&self, partition: i32, load_id: u64) {
-        let mut loading = self
-            .loading_partitions
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if loading.get(&partition) == Some(&load_id) {
-            loading.remove(&partition);
+        let mut terms = self.shard_terms();
+        if terms.loading.get(&partition) == Some(&load_id) {
+            terms.loading.remove(&partition);
         }
     }
 
+    /// Forget the term and any load of a partition this broker no longer
+    /// leads.
     fn end_any_load(&self, partition: PartitionIndex) {
-        self.loading_partitions
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&partition.get());
+        let mut terms = self.shard_terms();
+        terms.led.remove(&partition.get());
+        terms.loading.remove(&partition.get());
     }
 }
 
@@ -130,8 +171,12 @@ struct LoadGuard {
 }
 
 impl LoadGuard {
-    fn begin(coordinator: Arc<GroupCoordinator>, partition: PartitionIndex) -> Self {
-        let load_id = coordinator.begin_load(partition.get());
+    fn begin(
+        coordinator: Arc<GroupCoordinator>,
+        partition: PartitionIndex,
+        epoch: LeaderEpoch,
+    ) -> Self {
+        let load_id = coordinator.begin_load(partition, epoch);
         Self {
             coordinator,
             partition: partition.get(),
@@ -189,11 +234,11 @@ fn spawn_partition_load(
     });
 }
 
-fn led_partitions(image: &MetadataImage, node_id: NodeId) -> HashSet<PartitionIndex> {
+fn led_partitions(image: &MetadataImage, node_id: NodeId) -> HashMap<PartitionIndex, LeaderEpoch> {
     image
         .partitions_of(OFFSETS_TOPIC)
         .filter(|partition| partition.leader == node_id)
-        .map(|partition| PartitionIndex(partition.partition))
+        .map(|partition| (PartitionIndex(partition.partition), partition.leader_epoch))
         .collect()
 }
 
@@ -320,13 +365,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn led_partition_set_tracks_all_local_offsets_leaders() {
+    fn led_partitions_track_every_local_offsets_leader_and_its_epoch() {
         let mut image = MetadataImage::new(uuid::Uuid::nil());
-        for (partition, leader) in [(0, NodeId(1)), (1, NodeId(2)), (2, NodeId(1))] {
+        for (partition, leader, epoch) in [(0, NodeId(1), 4), (1, NodeId(2), 5), (2, NodeId(1), 6)]
+        {
             image.apply(&MetadataRecord::V1Partition(PartitionRecord {
                 topic: OFFSETS_TOPIC.into(),
                 partition,
                 leader,
+                leader_epoch: LeaderEpoch(epoch),
                 replicas: vec![leader],
                 isr: vec![leader],
                 ..PartitionRecord::default()
@@ -334,7 +381,10 @@ mod tests {
         }
         check!(
             led_partitions(&image, NodeId(1))
-                == maplit::hashset! {PartitionIndex(0), PartitionIndex(2)}
+                == maplit::hashmap! {
+                    PartitionIndex(0) => LeaderEpoch(4),
+                    PartitionIndex(2) => LeaderEpoch(6),
+                }
         );
     }
 
@@ -591,23 +641,37 @@ mod tests {
         }
     }
 
-    /// While the group's offsets partition loads, every group RPC answers
-    /// `COORDINATOR_LOAD_IN_PROGRESS` (the classic `Heartbeat` `NONE`, as
-    /// `GroupCoordinatorService.heartbeat` maps it) and creates no actor. Once
-    /// the load ends the same group is served again.
+    /// How this broker stands with a group's offsets partition that the image
+    /// says it leads, short of serving it.
+    #[derive(Debug, Clone, Copy)]
+    enum Unserved {
+        /// The image watcher took the term up and the replay runs.
+        Loading,
+        /// The image is published but the watcher has not taken the term up.
+        NotTakenUp,
+        /// The watcher last took up an older term of the same partition.
+        OlderTerm,
+    }
+
+    /// While the group's offsets partition is not served, every group RPC
+    /// answers `COORDINATOR_LOAD_IN_PROGRESS` (the classic `Heartbeat` `NONE`,
+    /// as `GroupCoordinatorService.heartbeat` maps it) and creates no actor.
+    /// Once the partition is served the same group is served again.
     #[tokio::test]
-    async fn group_rpcs_answer_load_in_progress_while_the_partition_loads() {
+    async fn group_rpcs_answer_load_in_progress_until_the_partition_is_served() {
         let (broker_handle, _dir) = crate::test_support::start_broker_with(|config| {
             config.audit_enabled = false;
             config.offsets_topic_replication_factor = 1;
         })
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        let partition = partition_for_group(&broker.controller.current_image(), "g");
-        let load = LoadGuard::begin(
-            Arc::clone(&broker.group_coordinator),
-            PartitionIndex(partition),
-        );
+        let image = broker.controller.current_image();
+        let partition = PartitionIndex(partition_for_group(&image, "g"));
+        let epoch = image
+            .partition(OFFSETS_TOPIC, partition.get())
+            .unwrap()
+            .leader_epoch;
+        check!(!broker.group_coordinator.is_loading(partition.get(), epoch));
 
         let rows = [
             (
@@ -636,14 +700,34 @@ mod tests {
                 crate::codes::COORDINATOR_LOAD_IN_PROGRESS,
             ),
         ];
-        for (rpc, want) in rows {
-            check!(call(&broker, rpc).await == want, "{rpc:?}");
-            check!(broker.group_coordinator.find("g").is_none(), "{rpc:?}");
+        for unserved in [Unserved::Loading, Unserved::NotTakenUp, Unserved::OlderTerm] {
+            let coordinator = &broker.group_coordinator;
+            let load = match unserved {
+                Unserved::Loading => {
+                    Some(LoadGuard::begin(Arc::clone(coordinator), partition, epoch))
+                }
+                Unserved::NotTakenUp => {
+                    coordinator.end_any_load(partition);
+                    None
+                }
+                Unserved::OlderTerm => {
+                    coordinator.take_up(partition, LeaderEpoch(epoch.0 - 1));
+                    None
+                }
+            };
+            for (rpc, want) in rows {
+                check!(call(&broker, rpc).await == want, "{unserved:?} {rpc:?}");
+                check!(coordinator.find("g").is_none(), "{unserved:?} {rpc:?}");
+            }
+
+            drop(load);
+            coordinator.take_up(partition, epoch);
+
+            check!(
+                !coordinator.is_loading(partition.get(), epoch),
+                "{unserved:?}"
+            );
         }
-
-        drop(load);
-
-        check!(!broker.group_coordinator.is_loading(partition));
         check!(call(&broker, GroupRpc::JoinGroup).await == crate::codes::MEMBER_ID_REQUIRED);
         broker_handle.shutdown().await;
     }
@@ -661,13 +745,13 @@ mod tests {
             Arc::new(crate::coordinator::unified::offsets_log::fake::InMemoryOffsetsLog::default()),
             crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
         ));
-        let stale = LoadGuard::begin(Arc::clone(&coordinator), PartitionIndex(3));
+        let stale = LoadGuard::begin(Arc::clone(&coordinator), PartitionIndex(3), LeaderEpoch(1));
         coordinator.end_any_load(PartitionIndex(3));
-        let current = LoadGuard::begin(Arc::clone(&coordinator), PartitionIndex(3));
+        let current = LoadGuard::begin(Arc::clone(&coordinator), PartitionIndex(3), LeaderEpoch(2));
 
         drop(stale);
-        check!(coordinator.is_loading(3));
+        check!(coordinator.is_loading(3, LeaderEpoch(2)));
         drop(current);
-        check!(!coordinator.is_loading(3));
+        check!(!coordinator.is_loading(3, LeaderEpoch(2)));
     }
 }
