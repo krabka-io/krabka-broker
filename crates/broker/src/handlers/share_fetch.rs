@@ -80,6 +80,7 @@ pub(crate) use self::{
 use self::{
     acquire::{AcquireContext, acquire_records},
     pending::PendingPartition,
+    records::AcquireMode,
     request::has_acknowledgements,
     resolve::{RowContext, resolve_row},
     response::{encode_error_response, encode_success_response, group_responses},
@@ -103,6 +104,17 @@ const MAX_MEMBER_ID_LEN: usize = 36;
 /// code units.
 pub(crate) fn member_id_is_valid(member_id: &str) -> bool {
     !member_id.is_empty() && member_id.encode_utf16().count() <= MAX_MEMBER_ID_LEN
+}
+
+/// Kafka's `PartitionRotateStrategy.rotateRoundRobin`: from session epoch 1
+/// on, the partitions rotate left by `epoch % len`, so that a small
+/// `MaxRecords` budget reaches every partition in turn.
+fn rotate_round_robin<T>(mut partitions: Vec<T>, session_epoch: i32) -> Vec<T> {
+    if session_epoch >= 1 && partitions.len() > 1 {
+        let by = usize::try_from(session_epoch).unwrap_or(0) % partitions.len();
+        partitions.rotate_left(by);
+    }
+    partitions
 }
 
 /// Whether a renew-ack `ShareFetch` asks for no records and no wait:
@@ -215,7 +227,8 @@ pub(crate) async fn handle(
     // partitions that only acknowledge: those that a final request names and
     // those that a request forgets.
     let fetched: HashSet<(uuid::Uuid, i32)> = session.partitions.iter().copied().collect();
-    let mut effective_order = session.partitions.clone();
+    let mut effective_order =
+        rotate_round_robin(session.partitions.clone(), req.share_session_epoch);
     effective_order.extend(
         requested_order
             .iter()
@@ -252,6 +265,14 @@ pub(crate) async fn handle(
         member: &member,
         max_records: req.max_records,
         max_bytes: req.max_bytes,
+        mode: AcquireMode::of(
+            if version >= 2 {
+                req.share_acquire_mode
+            } else {
+                0
+            },
+            req.batch_size,
+        ),
         renewal: Renewal {
             requested: req.is_renew_ack,
             enabled: settings.renew_acknowledge_enabled,
@@ -334,4 +355,30 @@ pub(crate) async fn handle(
     let responses = group_responses(pending);
 
     encode_success_response(version, lock_timeout_ms, responses, node_endpoints)
+}
+
+#[cfg(test)]
+mod rotation_tests {
+    use assert2::assert;
+
+    use super::rotate_round_robin;
+
+    #[test]
+    fn partitions_rotate_left_by_the_session_epoch() {
+        let rotated: Vec<Vec<i32>> = [-1, 0, 1, 2, 3, 4]
+            .into_iter()
+            .map(|epoch| rotate_round_robin(vec![1, 2, 3], epoch))
+            .collect();
+        assert!(
+            rotated
+                == vec![
+                    vec![1, 2, 3],
+                    vec![1, 2, 3],
+                    vec![2, 3, 1],
+                    vec![3, 1, 2],
+                    vec![1, 2, 3],
+                    vec![2, 3, 1],
+                ]
+        );
+    }
 }

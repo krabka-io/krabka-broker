@@ -446,3 +446,68 @@ async fn group_share_settings_override_the_broker_defaults() {
     );
     broker.shutdown().await;
 }
+
+/// Kafka's `ShareAcquireMode` and `BatchSize` over two three-record log
+/// batches at offsets 0 and 3, each case in a group of its own.
+#[tokio::test]
+async fn the_acquire_mode_and_batch_size_shape_the_acquired_rows() {
+    let (broker, _dir) = start(10_000).await;
+    let topic_id = create_topic(&broker, "shaped", 1).await;
+    produce(&broker, "shaped", 0).await;
+    produce(&broker, "shaped", 0).await;
+    // (version, ShareAcquireMode, MaxRecords, BatchSize, acquired rows)
+    let cases: [(i16, i8, i32, i32, Vec<(i64, i64)>); 4] = [
+        // batch_optimized, the only mode at v1: a whole log batch.
+        (1, 0, 2, 500, vec![(0, 2)]),
+        // record_limit: exactly MaxRecords.
+        (2, 1, 2, 500, vec![(0, 1)]),
+        // BatchSize splits new records on log batch boundaries.
+        (2, 0, 500, 3, vec![(0, 2), (3, 5)]),
+        (2, 1, 500, 3, vec![(0, 5)]),
+    ];
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (index, (version, mode, max_records, batch_size, rows)) in cases.into_iter().enumerate() {
+        let group = format!("shaped-{index}");
+        earliest(&broker, &group, topic_id, 1).await;
+        let request = ShareFetchRequest {
+            group_id: Some(group),
+            member_id: Some("member".into()),
+            max_bytes: 1 << 20,
+            max_records,
+            batch_size,
+            share_acquire_mode: mode,
+            topics: vec![FetchTopic {
+                topic_id,
+                partitions: vec![FetchPartition::default()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let shared = broker.broker_arc_for_test();
+        let user = principal("share-consumer");
+        let address = peer();
+        let ctx = request_context(&user, &address, "share-client");
+        let response = handle(
+            &shared,
+            version,
+            7,
+            &encode_request(&request, version),
+            &ctx,
+        )
+        .await
+        .expect("handle share fetch");
+        let response: ShareFetchResponse = decode_response(&response, version);
+        let acquired: Vec<(i64, i64)> = response
+            .responses
+            .iter()
+            .flat_map(|topic| &topic.partitions)
+            .flat_map(|row| &row.acquired_records)
+            .map(|range| (range.first_offset, range.last_offset))
+            .collect();
+        actual.push((index, acquired));
+        expected.push((index, rows));
+    }
+    assert!(actual == expected);
+    broker.shutdown().await;
+}

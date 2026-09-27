@@ -292,13 +292,15 @@ fn cases() -> Vec<Case> {
             },
         },
         Case {
+            // `batch_optimized`: MaxRecords is a soft limit that rounds up to
+            // the end of the log batch holding the third record.
             name: "records-limit-below-bytes-limit",
             max_records: 3,
             max_bytes_in_batches: (4, 1),
             expected: Outcome {
-                acquired: vec![(0, 2)],
+                acquired: vec![(0, 3)],
                 records: (0..=3).collect(),
-                remainder: vec![(3, 7)],
+                remainder: vec![(4, 7)],
             },
         },
     ]

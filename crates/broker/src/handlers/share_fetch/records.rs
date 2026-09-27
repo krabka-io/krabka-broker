@@ -26,7 +26,7 @@ use zerocopy::FromBytes as _;
 
 use crate::{
     error::BrokerError,
-    share_partition::state::{AcquiredRange, AcquisitionState},
+    share_partition::state::{AcquireShape, AcquiredRange, AcquisitionState},
 };
 
 /// What one acquire step may take from a share partition.
@@ -42,6 +42,30 @@ pub(super) struct AcquireRequest<'a> {
     pub(super) now: Instant,
     pub(super) lock_duration: Duration,
     pub(super) max_attempts: i16,
+    /// How the request shapes what it acquires.
+    pub(super) mode: AcquireMode,
+}
+
+/// Kafka's `ShareAcquireMode` with the request's `BatchSize`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AcquireMode {
+    /// `batch_optimized` (0, and the only mode before v2): `MaxRecords` is a
+    /// soft limit that rounds up to a log batch end, and new records come
+    /// back in rows of about `batch_size` records on log batch boundaries.
+    BatchOptimized { batch_size: i32 },
+    /// `record_limit` (1): at most `MaxRecords` records, in one row per run.
+    RecordLimit,
+}
+
+impl AcquireMode {
+    /// The mode of a request: its `ShareAcquireMode` and `BatchSize`.
+    pub(crate) fn of(share_acquire_mode: i8, batch_size: i32) -> Self {
+        if share_acquire_mode == 1 {
+            Self::RecordLimit
+        } else {
+            Self::BatchOptimized { batch_size }
+        }
+    }
 }
 
 /// The byte budget of one partition's log read.
@@ -85,12 +109,19 @@ pub(super) async fn acquire_read_records(
         return Ok(0);
     };
     let last = read_last.min(request.upper - 1);
-    let acquired = state.acquire(
+    let bounds = batch_bounds(&read.bytes)?;
+    let ends: Vec<Offset> = bounds.iter().map(|(_, last)| Offset(*last)).collect();
+    let acquired = state.acquire_shaped(
         request.member,
-        request.max_records,
+        AcquireShape {
+            max_records: request.max_records,
+            batch_ends: match request.mode {
+                AcquireMode::BatchOptimized { .. } => Some(&ends),
+                AcquireMode::RecordLimit => None,
+            },
+        },
         last,
-        request.now,
-        request.lock_duration,
+        (request.now, request.lock_duration),
         request.max_attempts,
     );
     if acquired.is_empty() {
@@ -100,19 +131,74 @@ pub(super) async fn acquire_read_records(
     if !records.is_empty() {
         out.records = Some(RecordsPayload::Raw(records));
     }
+    let bases: Vec<i64> = bounds.iter().map(|(base, _)| *base).collect();
     out.acquired_records = acquired
         .iter()
-        .map(|range| AcquiredRecords {
-            first_offset: range.first.0,
-            last_offset: range.last.0,
-            delivery_count: range.delivery_count,
-            ..Default::default()
-        })
+        .flat_map(|range| rows_of(range, request.mode, &bases))
         .collect();
     Ok(acquired
         .iter()
         .map(|range| range.last.0 - range.first.0 + 1)
         .sum())
+}
+
+/// The `AcquiredRecords` rows of one acquired run.
+///
+/// Kafka's `SharePartition.createBatches`: in `batch_optimized` mode a run
+/// of new records (delivery count 1) longer than `batch_size` is split into
+/// rows on log batch boundaries, a new row starting at the first batch base
+/// at least `batch_size` records past the start of the current one. Every
+/// other run is one row.
+fn rows_of(range: &AcquiredRange, mode: AcquireMode, bases: &[i64]) -> Vec<AcquiredRecords> {
+    let row = |first_offset, last_offset| AcquiredRecords {
+        first_offset,
+        last_offset,
+        delivery_count: range.delivery_count,
+        ..Default::default()
+    };
+    let (first, last) = (range.first.0, range.last.0);
+    let AcquireMode::BatchOptimized { batch_size } = mode else {
+        return vec![row(first, last)];
+    };
+    if range.delivery_count != 1 || batch_size <= 0 || last - first < i64::from(batch_size) {
+        return vec![row(first, last)];
+    }
+    let mut rows = Vec::new();
+    let mut current = first;
+    for base in bases
+        .iter()
+        .copied()
+        .filter(|base| *base > first && *base <= last)
+    {
+        if base - current >= i64::from(batch_size) {
+            rows.push(row(current, base - 1));
+            current = base;
+        }
+    }
+    rows.push(row(current, last));
+    rows
+}
+
+/// The `(base_offset, last_offset)` of every v2 batch in `bytes`, in log
+/// order. It reads only the batch headers.
+fn batch_bounds(bytes: &Bytes) -> Result<Vec<(i64, i64)>, BrokerError> {
+    let mut bounds = Vec::new();
+    let mut at = 0_usize;
+    while at < bytes.len() {
+        let header = bytes
+            .get(at..at + HEADER_LEN)
+            .and_then(|raw| RecordBatchHeader::ref_from_bytes(raw).ok())
+            .ok_or_else(|| corrupt_read("a truncated record batch header"))?;
+        let length = usize::try_from(header.batch_length.get())
+            .ok()
+            .map(|length| length + LOG_OVERHEAD)
+            .filter(|length| *length >= HEADER_LEN && at + length <= bytes.len())
+            .ok_or_else(|| corrupt_read("a record batch length outside the read"))?;
+        let base = header.base_offset.get();
+        bounds.push((base, base + i64::from(header.last_offset_delta.get())));
+        at += length;
+    }
+    Ok(bounds)
 }
 
 /// Returns the batches of `bytes` that hold at least one offset of
@@ -369,5 +455,52 @@ mod tests {
             .await
             .expect("scan the schedule");
         assert!(none == Vec::new());
+    }
+
+    /// Kafka's `createBatches` over log batches of five records at 0, 5, 10
+    /// and 15.
+    #[test]
+    fn new_records_split_into_rows_on_batch_boundaries() {
+        let bases = [0, 5, 10, 15];
+        let range = |first, last, delivery_count| AcquiredRange {
+            first: Offset(first),
+            last: Offset(last),
+            delivery_count,
+        };
+        let rows = [
+            (
+                range(0, 19, 1),
+                AcquireMode::BatchOptimized { batch_size: 10 },
+                vec![(0, 9), (10, 19)],
+            ),
+            (
+                range(0, 19, 1),
+                AcquireMode::BatchOptimized { batch_size: 7 },
+                vec![(0, 9), (10, 19)],
+            ),
+            (
+                range(0, 19, 1),
+                AcquireMode::BatchOptimized { batch_size: 20 },
+                vec![(0, 19)],
+            ),
+            (range(0, 19, 1), AcquireMode::RecordLimit, vec![(0, 19)]),
+            // A redelivery keeps its one row.
+            (
+                range(0, 19, 2),
+                AcquireMode::BatchOptimized { batch_size: 5 },
+                vec![(0, 19)],
+            ),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (range, mode, want) in rows {
+            let got: Vec<_> = rows_of(&range, mode, &bases)
+                .into_iter()
+                .map(|row| (row.first_offset, row.last_offset))
+                .collect();
+            actual.push((mode, range.delivery_count, got));
+            expected.push((mode, range.delivery_count, want));
+        }
+        assert2::assert!(actual == expected);
     }
 }

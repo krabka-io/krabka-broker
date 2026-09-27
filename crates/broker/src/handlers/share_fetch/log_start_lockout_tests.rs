@@ -197,6 +197,9 @@ async fn share_fetch_rows_with_max_records(
         max_bytes: 1 << 20,
         max_records,
         batch_size: max_records.max(1),
+        // `record_limit`, so a priming fetch takes exactly `max_records` of
+        // the one five-record batch.
+        share_acquire_mode: 1,
         topics: vec![FetchTopic {
             topic_id,
             partitions: partitions
@@ -446,10 +449,13 @@ async fn a_healthy_partition_in_the_same_request_is_unaffected() {
     assert!(delete_error == codes::NONE, "{delete_error}");
 
     let rows = share_fetch_rows(&broker, group, 1, topic_id, &[0, 1]).await;
-    let by_partition: Vec<PartitionOutcome> = rows
+    // The partitions rotate by session epoch, so the rows come in either
+    // order.
+    let mut by_partition: Vec<PartitionOutcome> = rows
         .iter()
         .map(|row| (row.partition_index, row.error_code, acquired(row)))
         .collect();
+    by_partition.sort_unstable();
 
     assert!(
         by_partition

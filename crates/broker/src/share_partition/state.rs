@@ -81,6 +81,8 @@ impl AckType {
     }
 }
 
+pub use self::acquire::AcquireShape;
+
 /// A contiguous run of offsets acquired by a single `acquire` call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcquiredRange {

@@ -15,7 +15,7 @@ use super::{
     long_poll::{arm_waits, long_poll},
     pending::PendingPartition,
     records::{
-        AcquireRequest, acquire_read_records, pending_activation_ranges, read_budget,
+        AcquireMode, AcquireRequest, acquire_read_records, pending_activation_ranges, read_budget,
         unreadable_batch_ranges,
     },
 };
@@ -52,6 +52,8 @@ pub(super) struct AcquireContext<'a> {
     pub(super) member: &'a str,
     pub(super) max_records: i32,
     pub(super) max_bytes: i32,
+    /// `ShareAcquireMode` and `BatchSize`.
+    pub(super) mode: AcquireMode,
     pub(super) renewal: super::acknowledge::Renewal,
     /// The group's share settings: lock duration, delivery count limit,
     /// record lock limit and isolation level.
@@ -156,6 +158,7 @@ struct GrowAndAcquireArgs<'a> {
     member: &'a str,
     max_bytes: i32,
     remaining_records: i32,
+    mode: AcquireMode,
     now: Instant,
 }
 
@@ -179,6 +182,7 @@ async fn grow_and_acquire(
         member,
         max_bytes,
         remaining_records,
+        mode,
         now,
     } = args;
     grow_readable_window(
@@ -211,6 +215,7 @@ async fn grow_and_acquire(
         now,
         lock_duration: settings.record_lock_duration,
         max_attempts: settings.delivery_count_limit,
+        mode,
     };
     acquire_read_records(out, part, st, &request).await
 }
@@ -255,6 +260,7 @@ async fn acquire_pass(
         member,
         max_records,
         max_bytes,
+        mode,
         renewal,
         settings,
     } = context;
@@ -369,6 +375,7 @@ async fn acquire_pass(
             member,
             max_bytes: read_max_bytes,
             remaining_records,
+            mode,
             now,
         };
         let outcome = grow_and_acquire(&mut st, &mut p.out, grow_and_acquire_args()).await;
