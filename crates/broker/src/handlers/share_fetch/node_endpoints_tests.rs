@@ -137,6 +137,9 @@ async fn seed_remote_leaders(broker: &BrokerHandle) {
                 }],
                 log_dirs: vec![],
                 features: std::collections::BTreeMap::new(),
+                fenced: false,
+                in_controlled_shutdown: false,
+                cordoned_log_dirs: None,
             }),
             MetadataRecord::V1Topic(TopicRecord {
                 name: "remote".into(),
