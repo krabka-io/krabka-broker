@@ -21,12 +21,12 @@ async fn single_member_join_assignment() {
     let client = connect(&bootstrap).await;
     create_topic(&client, "t1", 4).await;
 
-    let mut req = heartbeat("g1", "", 0);
+    let mut req = heartbeat("g1", &uuid::Uuid::new_v4().to_string(), 0);
     req.subscribed_topic_names = Some(vec!["t1".into()]);
     let resp = client.send(req).await.unwrap();
 
     check!(resp.error_code == 0, "join failed: {:?}", resp.error_code);
-    check!(resp.member_id.is_some(), "broker must mint a member id");
+    check!(resp.member_id.is_some(), "the broker echoes the member id");
     check!(
         resp.member_epoch == 1,
         "first join advances member to epoch 1, got {}",
@@ -46,13 +46,13 @@ async fn two_members_then_describe() {
     let client = connect(&bootstrap).await;
     create_topic(&client, "t2", 4).await;
 
-    let mut m1 = heartbeat("g1", "", 0);
+    let mut m1 = heartbeat("g1", &uuid::Uuid::new_v4().to_string(), 0);
     m1.subscribed_topic_names = Some(vec!["t2".into()]);
     let r1 = client.send(m1).await.unwrap();
     assert!(r1.error_code == 0, "m1 join failed: {:?}", r1.error_code);
     let mid1 = r1.member_id.clone().unwrap();
 
-    let mut m2 = heartbeat("g1", "", 0);
+    let mut m2 = heartbeat("g1", &uuid::Uuid::new_v4().to_string(), 0);
     m2.subscribed_topic_names = Some(vec!["t2".into()]);
     let r2 = client.send(m2).await.unwrap();
     assert!(r2.error_code == 0, "m2 join failed: {:?}", r2.error_code);
@@ -91,7 +91,7 @@ async fn member_leave_epoch_minus_one() {
     let client = connect(&bootstrap).await;
     create_topic(&client, "t3", 2).await;
 
-    let mut join = heartbeat("g1", "", 0);
+    let mut join = heartbeat("g1", &uuid::Uuid::new_v4().to_string(), 0);
     join.subscribed_topic_names = Some(vec!["t3".into()]);
     let r = client.send(join).await.unwrap();
     assert!(r.error_code == 0, "join failed: {:?}", r.error_code);
@@ -135,7 +135,7 @@ async fn state_survives_restart() {
         let client = connect(&bootstrap).await;
         create_topic(&client, "t4", 2).await;
 
-        let mut join = heartbeat("g1", "", 0);
+        let mut join = heartbeat("g1", &uuid::Uuid::new_v4().to_string(), 0);
         join.subscribed_topic_names = Some(vec!["t4".into()]);
         let r = client.send(join).await.unwrap();
         assert!(r.error_code == 0, "join failed: {:?}", r.error_code);

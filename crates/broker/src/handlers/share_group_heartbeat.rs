@@ -73,16 +73,12 @@ pub(crate) async fn handle(
             );
         }
 
-        // ── Malformed-request check ────────────────────────────────
-        // Kafka's `ShareGroupHeartbeatRequestManager` validates the request
-        // shape -- a non-zero `member_epoch` (rejoin, steady-state, or leave)
-        // must carry a non-empty `member_id` -- between the group ACL check
-        // and topic filtering. Only `member_epoch == 0` (first join) allows
-        // an empty id, which the actor mints a fresh member id for. Running
-        // this before `subscribed_names_describe_denied` matters: a malformed
-        // request with a Describe-denied topic must answer `INVALID_REQUEST`,
-        // not `TOPIC_AUTHORIZATION_FAILED`.
-        if req.member_epoch != 0 && req.member_id.is_empty() {
+        // Kafka's `KafkaApis.isMemberIdValid`: the member id must be set and
+        // at most 36 characters long. The share consumer mints its own id, so
+        // even a first join must carry one. `getErrorResponse` sets only the
+        // code. This runs before the topic `Describe` check, so a malformed
+        // request that names a denied topic answers `INVALID_REQUEST`.
+        if !member_id_valid(&req.member_id) {
             return crate::handlers::encode_response(&error(codes::INVALID_REQUEST), version);
         }
 
@@ -98,6 +94,19 @@ pub(crate) async fn handle(
         if subscribed_names_describe_denied(broker, &image, ctx, &req) {
             return crate::handlers::encode_response(
                 &error(codes::TOPIC_AUTHORIZATION_FAILED),
+                version,
+            );
+        }
+
+        // Kafka's `GroupCoordinatorService.throwIfShareGroupHeartbeatRequestIsInvalid`
+        // runs before the operation reaches a coordinator shard.
+        if let Some(message) = invalid_request_message(&req) {
+            return crate::handlers::encode_response(
+                &ShareGroupHeartbeatResponse {
+                    error_code: codes::INVALID_REQUEST,
+                    error_message: Some(message.to_owned()),
+                    ..Default::default()
+                },
                 version,
             );
         }
@@ -212,6 +221,46 @@ fn share_group_lookup_error(
     } else {
         format!("Share group {group_id} not found.")
     })
+}
+
+/// Kafka's `KafkaApis.isMemberIdValid`: set, and at most 36 UTF-16 code
+/// units long, as Java's `String.length` counts them.
+fn member_id_valid(member_id: &str) -> bool {
+    !member_id.is_empty() && member_id.encode_utf16().count() <= 36
+}
+
+/// Kafka's `Utils.throwIfEmptyString` test: a set value that Java's
+/// `String.trim` reduces to nothing, which strips every character at or below
+/// U+0020 from both ends.
+fn blank(value: &str) -> bool {
+    value.chars().all(|c| c <= ' ')
+}
+
+/// The `INVALID_REQUEST` message of Kafka's
+/// `GroupCoordinatorService.throwIfShareGroupHeartbeatRequestIsInvalid`, or
+/// `None` for a well-formed request.
+fn invalid_request_message(req: &ShareGroupHeartbeatRequest) -> Option<&'static str> {
+    if blank(&req.member_id) {
+        return Some("MemberId can't be empty.");
+    }
+    if blank(&req.group_id) {
+        return Some("GroupId can't be empty.");
+    }
+    if req.rack_id.as_deref().is_some_and(blank) {
+        return Some("RackId can't be empty.");
+    }
+    if req.member_epoch == 0 {
+        if req
+            .subscribed_topic_names
+            .as_ref()
+            .is_none_or(Vec::is_empty)
+        {
+            return Some("SubscribedTopicNames must be set in first request.");
+        }
+    } else if req.member_epoch < LEAVE_GROUP_MEMBER_EPOCH {
+        return Some("MemberEpoch is invalid.");
+    }
+    None
 }
 
 fn error(code: i16) -> ShareGroupHeartbeatResponse {
@@ -365,7 +414,7 @@ mod tests {
     fn request(group_id: &str, subscribed: Vec<&str>) -> ShareGroupHeartbeatRequest {
         ShareGroupHeartbeatRequest {
             group_id: group_id.into(),
-            member_id: String::new(),
+            member_id: "member-1".into(),
             member_epoch: 0,
             subscribed_topic_names: Some(subscribed.into_iter().map(String::from).collect()),
             ..Default::default()
@@ -518,6 +567,121 @@ mod tests {
         .expect("ShareGroupHeartbeat handler");
         let resp = decode_response(&bytes);
         assert!(resp.error_code == codes::INVALID_REQUEST, "{resp:?}");
+
+        broker_handle.shutdown().await;
+    }
+
+    /// Kafka's `KafkaApis.isMemberIdValid` and
+    /// `GroupCoordinatorService.throwIfShareGroupHeartbeatRequestIsInvalid`:
+    /// each malformed heartbeat answers `INVALID_REQUEST`, with the
+    /// coordinator's message where Kafka sets one, and creates no group.
+    #[tokio::test]
+    async fn handle_refuses_malformed_heartbeats_as_kafka_does() {
+        let version = share_group_heartbeat_response::MAX_VERSION;
+        let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+            cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+            cfg.share_group.enable = true;
+        })
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        let principal = anonymous_principal();
+        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let ctx = test_context(&principal, &peer);
+        let valid = ShareGroupHeartbeatRequest {
+            group_id: "g".into(),
+            member_id: "member-1".into(),
+            member_epoch: 0,
+            subscribed_topic_names: Some(vec!["t".into()]),
+            ..Default::default()
+        };
+        let invalid = |message: Option<&str>| ShareGroupHeartbeatResponse {
+            error_code: codes::INVALID_REQUEST,
+            error_message: message.map(str::to_owned),
+            ..Default::default()
+        };
+        // (row, request, expected response)
+        let rows = [
+            (
+                "empty member id",
+                ShareGroupHeartbeatRequest {
+                    member_id: String::new(),
+                    ..valid.clone()
+                },
+                invalid(None),
+            ),
+            (
+                "member id of 37 characters",
+                ShareGroupHeartbeatRequest {
+                    member_id: "m".repeat(37),
+                    ..valid.clone()
+                },
+                invalid(None),
+            ),
+            (
+                "blank member id",
+                ShareGroupHeartbeatRequest {
+                    member_id: "  ".into(),
+                    ..valid.clone()
+                },
+                invalid(Some("MemberId can't be empty.")),
+            ),
+            (
+                "empty group id",
+                ShareGroupHeartbeatRequest {
+                    group_id: String::new(),
+                    ..valid.clone()
+                },
+                invalid(Some("GroupId can't be empty.")),
+            ),
+            (
+                "blank group id",
+                ShareGroupHeartbeatRequest {
+                    group_id: " \t".into(),
+                    ..valid.clone()
+                },
+                invalid(Some("GroupId can't be empty.")),
+            ),
+            (
+                "empty rack id",
+                ShareGroupHeartbeatRequest {
+                    rack_id: Some(String::new()),
+                    ..valid.clone()
+                },
+                invalid(Some("RackId can't be empty.")),
+            ),
+            (
+                "first heartbeat with no subscription",
+                ShareGroupHeartbeatRequest {
+                    subscribed_topic_names: None,
+                    ..valid.clone()
+                },
+                invalid(Some("SubscribedTopicNames must be set in first request.")),
+            ),
+            (
+                "first heartbeat with an empty subscription",
+                ShareGroupHeartbeatRequest {
+                    subscribed_topic_names: Some(Vec::new()),
+                    ..valid.clone()
+                },
+                invalid(Some("SubscribedTopicNames must be set in first request.")),
+            ),
+            (
+                "member epoch below -1",
+                ShareGroupHeartbeatRequest {
+                    member_epoch: -2,
+                    ..valid.clone()
+                },
+                invalid(Some("MemberEpoch is invalid.")),
+            ),
+        ];
+
+        for (row, req, expected) in rows {
+            let bytes = handle(&broker, version, 1, &encode_request(&req), &ctx)
+                .await
+                .expect("ShareGroupHeartbeat handler");
+            assert!(decode_response(&bytes) == expected, "{row}");
+        }
+        assert!(broker.group_coordinator.share_group_ids().is_empty());
 
         broker_handle.shutdown().await;
     }
@@ -709,9 +873,9 @@ mod tests {
         let ctx = test_context(&principal, &peer);
         let req = ShareGroupHeartbeatRequest {
             group_id: "identity-group".into(),
-            member_id: String::new(),
+            member_id: "member-1".into(),
             member_epoch: 0,
-            subscribed_topic_names: Some(Vec::new()),
+            subscribed_topic_names: Some(vec!["t".into()]),
             ..Default::default()
         };
 
@@ -741,7 +905,7 @@ mod tests {
             group_id: "identity-group".into(),
             member_id: view.members[0].member_id.clone(),
             member_epoch: view.members[0].member_epoch,
-            subscribed_topic_names: Some(Vec::new()),
+            subscribed_topic_names: Some(vec!["t".into()]),
             ..Default::default()
         };
         let bytes = handle(&broker, version, 2, &encode_request(&req), &ctx)
@@ -826,7 +990,7 @@ mod tests {
                 group_id: group_id.into(),
                 member_id: "m1".into(),
                 member_epoch,
-                subscribed_topic_names: Some(Vec::new()),
+                subscribed_topic_names: Some(vec!["t".into()]),
                 ..Default::default()
             };
             let bytes = handle(&broker, version, 1, &encode_request(&req), &ctx)

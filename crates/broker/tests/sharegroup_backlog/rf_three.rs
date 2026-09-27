@@ -232,7 +232,7 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
     let joined = coordinator_client
         .send(ShareGroupHeartbeatRequest {
             group_id: group_id.clone(),
-            member_id: String::new(),
+            member_id: uuid::Uuid::new_v4().to_string(),
             member_epoch: 0,
             subscribed_topic_names: Some(vec![TOPIC.into()]),
             ..Default::default()
@@ -240,7 +240,7 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
         .await
         .unwrap();
     assert!(joined.error_code == 0, "{joined:?}");
-    let member_id = joined.member_id.expect("broker mints a share member id");
+    let member_id = joined.member_id.expect("the broker echoes the member id");
     let mut member_epoch = joined.member_epoch;
     let initialized = tokio::time::timeout(Duration::from_secs(30), async {
         loop {

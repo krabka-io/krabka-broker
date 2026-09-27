@@ -33,7 +33,7 @@ async fn lifecycle_initializes_share_state() {
     create_topic(&client, "t5", 3).await;
     let tid = topic_id(&broker, "t5");
 
-    let mut join = heartbeat("g5", "", 0);
+    let mut join = heartbeat("g5", &uuid::Uuid::new_v4().to_string(), 0);
     join.subscribed_topic_names = Some(vec!["t5".into()]);
     let r = client.send(join).await.unwrap();
     assert!(r.error_code == 0, "join failed: {:?}", r.error_code);
@@ -102,7 +102,7 @@ async fn lifecycle_metadata_survives_restart() {
         create_topic(&client, "t6", 2).await;
         tid = topic_id(&broker, "t6");
 
-        let mut join = heartbeat("g6", "", 0);
+        let mut join = heartbeat("g6", &uuid::Uuid::new_v4().to_string(), 0);
         join.subscribed_topic_names = Some(vec!["t6".into()]);
         let r = client.send(join).await.unwrap();
         assert!(r.error_code == 0, "join failed: {:?}", r.error_code);
@@ -210,7 +210,7 @@ async fn delete_groups_deletes_an_empty_share_group_and_its_state() {
     create_topic(&client, "t-delete", 2).await;
     let tid = topic_id(&broker, "t-delete");
 
-    let mut join = heartbeat("g-delete", "", 0);
+    let mut join = heartbeat("g-delete", &uuid::Uuid::new_v4().to_string(), 0);
     join.subscribed_topic_names = Some(vec!["t-delete".into()]);
     let joined = client.send(join).await.unwrap();
     assert!(

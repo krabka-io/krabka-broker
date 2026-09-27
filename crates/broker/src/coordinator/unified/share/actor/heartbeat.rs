@@ -20,7 +20,6 @@ use crate::{
     coordinator::unified::{
         ClientIdentity, GroupCoordinator,
         actor::MetadataProvider,
-        first_join_member_id,
         offsets_log::OffsetsLog,
         share::{
             config::ShareGroupConfig,
@@ -49,15 +48,15 @@ pub(super) async fn handle_heartbeat(
 
     // ─── First-join path ─────────────────────────────────────────
     // KIP-932 mirrors KIP-848: the client mints its own member UUID and
-    // sends it with `member_epoch == 0`. Treat epoch 0 from an unknown member
-    // as a first-join, adopting the client-supplied id; an empty id is
-    // tolerated by minting a server-side UUID. Epoch 0 from a known member is
-    // a rejoin and takes the existing-member path below.
+    // sends it with `member_epoch == 0`. Epoch 0 from an unknown member is a
+    // first join under the client's id, which the handler has checked is set
+    // (`KafkaApis.isMemberIdValid`). Epoch 0 from a known member is a rejoin
+    // and takes the existing-member path below.
     if req.member_epoch == 0 && !state.members.contains_key(&req.member_id) {
         if state.members.len() >= config.max_size {
             return Ok(error_resp(codes::GROUP_MAX_SIZE_REACHED, config));
         }
-        let new_member_id = first_join_member_id(&req.member_id);
+        let new_member_id = req.member_id.clone();
         let m = build_member(&new_member_id, req, client, now);
         state.add_or_update_member(m);
         if !reconcile(state, metadata) {
@@ -237,7 +236,7 @@ mod tests {
             &handle,
             ShareGroupHeartbeatRequest {
                 group_id: "g".into(),
-                member_id: String::new(),
+                member_id: "m1".into(),
                 member_epoch: 0,
                 subscribed_topic_names: Some(vec!["t".into()]),
                 ..Default::default()
