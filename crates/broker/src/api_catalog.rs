@@ -1376,7 +1376,10 @@ fn admin_apis() -> Vec<ApiVersion> {
         v!(add_offsets_to_txn_request),
         v!(end_txn_request),
         v!(write_txn_markers_request),
-        // v6 (topic ids) is Kafka trunk's; Kafka 4.3 serves up to v5.
+        // Version 6 (KIP-1319, topic ids; Kafka trunk, not 4.3) is handled but
+        // not advertised: krabka-client-rs' producer would negotiate it and
+        // send topic names, which v6 does not carry. See
+        // `txn::handlers::txn_offset_commit`.
         v!(txn_offset_commit_request, max = 5),
         v!(describe_configs_request),
         v!(alter_replica_log_dirs_request),

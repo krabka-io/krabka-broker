@@ -238,11 +238,12 @@ async fn txn_offset_commit_runs_the_existence_check_after_the_topic_read_gate() 
     handle.shutdown().await;
 }
 
-/// A v3+ request that both names an unknown row and fails KIP-447 group
-/// fencing (a non-empty, never-registered `member_id` against a fresh
-/// classic group) must keep `UNKNOWN_TOPIC_OR_PARTITION` on the unknown row
-/// rather than have the fencing error overwrite it, and the valid row must
-/// still get the fencing error and skip the append.
+/// A v3+ request that both names an unknown row and fails group fencing (a
+/// generation for a group the coordinator does not hold, which Kafka's
+/// `validateTransactionalOffsetCommit` answers `ILLEGAL_GENERATION` below v6)
+/// must keep `UNKNOWN_TOPIC_OR_PARTITION` on the unknown row rather than have
+/// the fencing error overwrite it, and the valid row must still get the
+/// fencing error and skip the append.
 #[tokio::test]
 async fn unknown_rows_survive_a_group_fencing_failure() {
     let (handle, _dir) = start_broker_with(|cfg| {
@@ -288,13 +289,240 @@ async fn unknown_rows_survive_a_group_fencing_failure() {
         })
         .collect();
     let expected = vec![
-        ("a".to_string(), 0, codes::UNKNOWN_MEMBER_ID),
+        ("a".to_string(), 0, codes::ILLEGAL_GENERATION),
         ("missing".to_string(), 0, codes::UNKNOWN_TOPIC_OR_PARTITION),
     ];
     check!(got == expected, "fenced response preserves unknown rows");
 
     check!(!log_holds_key(&broker, group_id, "a", 0));
     check!(!log_holds_key(&broker, group_id, "missing", 0));
+
+    handle.shutdown().await;
+}
+
+/// Finalizes `transaction.version` 1, so a v5+ commit takes no KIP-890
+/// offsets-partition registration and needs no open transaction.
+async fn transaction_version_1(broker: &crate::broker::Broker) {
+    broker
+        .controller
+        .submit_change(vec![krabka_metadata::MetadataRecord::V1FeatureLevel(
+            krabka_metadata::FeatureLevelRecord {
+                name: krabka_metadata::transaction_version::TRANSACTION_VERSION_FEATURE.into(),
+                level: 1,
+            },
+        )])
+        .await
+        .expect("finalize transaction.version 1");
+}
+
+/// The `OffsetCommitValue` the log holds for `(group_id, topic, partition)`.
+fn logged_value(
+    broker: &crate::broker::Broker,
+    group_id: &str,
+    topic: &str,
+    partition: i32,
+) -> Option<OffsetCommitValue> {
+    let image = broker.controller.current_image();
+    let part = broker.partitions.get(
+        OFFSETS_TOPIC,
+        PartitionIndex(partition_for_group(&image, group_id)),
+    )?;
+    let log = part.log.lock().expect("lock offsets log");
+    let read = log
+        .read(krabka_log::Offset(0), krabka_units::mebibytes(4))
+        .ok()?;
+    let wanted = OffsetCommitValue::encode_key(group_id, topic, partition);
+    read.batches
+        .iter()
+        .flat_map(|batch| batch.records.iter())
+        .filter(|record| record.key.as_ref() == Some(&wanted))
+        .find_map(|record| OffsetCommitValue::decode_value(record.value.as_ref()?).ok())
+}
+
+/// #867, KIP-1319: v6 names each topic by id. An id the image holds commits
+/// under the topic's name and records the id with the offset; an id it does
+/// not hold, and the zero id, answer `UNKNOWN_TOPIC_ID` and commit nothing.
+/// v5 still names the topic, and the offset records the id the image holds
+/// for that name, as Kafka trunk's `KafkaApis` resolves it for the
+/// coordinator.
+#[tokio::test]
+async fn v6_resolves_topic_ids_and_answers_unknown_ones() {
+    use krabka_protocol::{
+        owned::txn_offset_commit_response::{
+            TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic,
+        },
+        primitives::uuid::Uuid as WireUuid,
+    };
+
+    let (handle, _dir) = start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.authorizer = Arc::new(GrantsInPrincipalName);
+    })
+    .await;
+    let broker = handle.broker_arc_for_test();
+    seed_topic_a(&broker).await;
+    transaction_version_1(&broker).await;
+    let a_id = broker
+        .controller
+        .current_image()
+        .topic("a")
+        .expect("topic a")
+        .topic_id;
+    let address = peer();
+    let user = principal(READ_ON_STAR);
+    let ctx = request_context(&user, &address, "txn-offset-commit-v6");
+
+    let by_id = |id: uuid::Uuid| TxnOffsetCommitRequestTopic {
+        topic_id: WireUuid(id.into_bytes()),
+        ..topic("", &[0])
+    };
+    // (version, request topic, response topic name, error code, logged topic id)
+    let cases = [
+        (
+            5,
+            topic("a", &[0]),
+            "a",
+            WireUuid::default(),
+            codes::NONE,
+            Some(a_id),
+        ),
+        (
+            6,
+            by_id(a_id),
+            "",
+            WireUuid(a_id.into_bytes()),
+            codes::NONE,
+            Some(a_id),
+        ),
+        (
+            6,
+            by_id(uuid::Uuid::from_u128(0xDEAD)),
+            "",
+            WireUuid(uuid::Uuid::from_u128(0xDEAD).into_bytes()),
+            codes::UNKNOWN_TOPIC_ID,
+            None,
+        ),
+        (
+            6,
+            by_id(uuid::Uuid::nil()),
+            "",
+            WireUuid::default(),
+            codes::UNKNOWN_TOPIC_ID,
+            None,
+        ),
+    ];
+    for (row, (version, request_topic, name, topic_id, error_code, logged_id)) in
+        cases.into_iter().enumerate()
+    {
+        let group_id = format!("group-v6-{row}");
+        let request = TxnOffsetCommitRequest {
+            transactional_id: format!("tid-v6-{row}"),
+            group_id: group_id.clone(),
+            producer_id: 42,
+            producer_epoch: 0,
+            generation_id_or_member_epoch: -1,
+            topics: vec![request_topic],
+            ..Default::default()
+        };
+        let bytes = super::handle(
+            &broker,
+            version,
+            1,
+            &encode_request(&request, version),
+            &ctx,
+        )
+        .await
+        .expect("handle");
+        let response: TxnOffsetCommitResponse = decode_response(&bytes, version);
+
+        let expected = TxnOffsetCommitResponse {
+            throttle_time_ms: 0,
+            topics: vec![TxnOffsetCommitResponseTopic {
+                name: name.into(),
+                topic_id,
+                partitions: vec![TxnOffsetCommitResponsePartition {
+                    partition_index: 0,
+                    error_code,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        check!(response == expected, "row {row}");
+        check!(
+            logged_value(&broker, &group_id, "a", 0).map(|value| value.topic_id)
+                == logged_id.map(Some),
+            "row {row}"
+        );
+    }
+
+    handle.shutdown().await;
+}
+
+/// KIP-1319 changes two answers of `validateTransactionalOffsetCommit` at v6:
+/// a generation for a group the coordinator does not hold is
+/// `GROUP_ID_NOT_FOUND` rather than `ILLEGAL_GENERATION`, and a member epoch
+/// the consumer group refuses is `STALE_MEMBER_EPOCH` rather than
+/// `ILLEGAL_GENERATION`.
+#[tokio::test]
+async fn v6_answers_group_id_not_found_where_older_versions_answer_illegal_generation() {
+    let (handle, _dir) = start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.authorizer = Arc::new(GrantsInPrincipalName);
+    })
+    .await;
+    let broker = handle.broker_arc_for_test();
+    seed_topic_a(&broker).await;
+    transaction_version_1(&broker).await;
+    let address = peer();
+    let user = principal(READ_ON_STAR);
+    let ctx = request_context(&user, &address, "txn-offset-commit-missing-group");
+    let a_id = broker
+        .controller
+        .current_image()
+        .topic("a")
+        .expect("topic a")
+        .topic_id;
+
+    for (version, want) in [
+        (3, codes::ILLEGAL_GENERATION),
+        (5, codes::ILLEGAL_GENERATION),
+        (6, codes::GROUP_ID_NOT_FOUND),
+    ] {
+        let group_id = format!("missing-group-v{version}");
+        let request = TxnOffsetCommitRequest {
+            transactional_id: format!("tid-missing-{version}"),
+            group_id: group_id.clone(),
+            producer_id: 42,
+            producer_epoch: 0,
+            member_id: "member".into(),
+            generation_id_or_member_epoch: 3,
+            topics: vec![TxnOffsetCommitRequestTopic {
+                topic_id: krabka_protocol::primitives::uuid::Uuid(a_id.into_bytes()),
+                ..topic("a", &[0])
+            }],
+            ..Default::default()
+        };
+        let bytes = super::handle(
+            &broker,
+            version,
+            1,
+            &encode_request(&request, version),
+            &ctx,
+        )
+        .await
+        .expect("handle");
+        let response: TxnOffsetCommitResponse = decode_response(&bytes, version);
+        check!(
+            response.topics[0].partitions[0].error_code == want,
+            "version {version}"
+        );
+        check!(
+            !log_holds_key(&broker, &group_id, "a", 0),
+            "version {version}"
+        );
+    }
 
     handle.shutdown().await;
 }
