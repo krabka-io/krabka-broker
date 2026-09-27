@@ -125,6 +125,22 @@ const RANGE_DIVERGENCE_INTENTS: &[(i16, &str)] = &[
          v6 against a cluster whose transaction version cannot serve it, and \
          learns that from the error code rather than from negotiation.",
     ),
+    (
+        88, // StreamsGroupHeartbeat
+        "Intended: krabka advertises Kafka trunk's StreamsGroupHeartbeat v1, \
+         which Kafka 4.3 does not serve. v1 changes only the response: the \
+         int64 `AcceptableRecoveryLag` replaces the int32 legacy field, and \
+         `coordinator::unified::streams::actor::response::base_resp` fills it \
+         from the group's `streams.acceptable.recovery.lag`, as trunk's \
+         `GroupMetadataManager` does; KIP-1331's \
+         `TopologyDescriptionRequired` stays false, which is trunk's answer \
+         when no topology-description plugin is configured, and krabka has \
+         none. v1 also licenses the MISSING_CLIENT_TAGS status, which trunk \
+         sends only when `streams.rack.aware.assignment.tags` names a tag; \
+         krabka has no such config, so it never sends it. Same risk as \
+         ApiVersions v5: a shape change before Kafka releases v1 lands here \
+         as a wire break.",
+    ),
 ];
 
 /// The recorded intent for one row of the join.

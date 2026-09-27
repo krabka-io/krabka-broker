@@ -1110,6 +1110,16 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "",
     },
     KipAnnotation {
+        key: "KIP-1331",
+        claim: "StreamsGroupHeartbeat v1 asks a Streams client for its topology description",
+        status: KipStatus::Partial,
+        module: "crates/broker/src/handlers/streams_group_heartbeat.rs",
+        tests: &[
+            "crates/broker/src/handlers/streams_group_heartbeat.rs::handle_answers_v1_with_the_recovery_lag_and_no_topology_description_request",
+        ],
+        note: "Heartbeat v1 is served and `TopologyDescriptionRequired` is always false, which is Kafka's answer when `group.streams.topology.description.plugin.class` is unset. The plugin and the `StreamsGroupTopologyDescriptionUpdate` RPC that would store a description are not implemented.",
+    },
+    KipAnnotation {
         key: "SASL/GSSAPI",
         claim: "SASL/Kerberos authentication",
         status: KipStatus::Implemented,
@@ -1455,9 +1465,13 @@ fn admin_apis() -> Vec<ApiVersion> {
         // KIP-932 share-group membership protocol.
         v!(share_group_heartbeat_request),
         v!(share_group_describe_request),
-        // KIP-1071 streams-group rebalance protocol.
-        // v1 is Kafka trunk's; Kafka 4.3 serves v0.
-        v!(streams_group_heartbeat_request, max = 0),
+        // KIP-1071 streams-group rebalance protocol. Heartbeat v1 is Kafka
+        // trunk's (Kafka 4.3 serves v0): it adds the int64
+        // `AcceptableRecoveryLag`, which the group config fills, and
+        // KIP-1331's `TopologyDescriptionRequired`, which stays false because
+        // no topology-description plugin is configured. Describe v1 is
+        // trunk's too, and is not served yet.
+        v!(streams_group_heartbeat_request),
         v!(streams_group_describe_request, max = 0),
         // KIP-932 ShareFetch / ShareAcknowledge data-plane RPCs.
         v!(share_fetch_request),
@@ -1516,7 +1530,9 @@ mod tests {
         assert!(keys.contains(&88));
         assert!(keys.contains(&89));
         let hb = apis.iter().find(|a| a.api_key == 88).unwrap();
-        assert!(hb.min_version == 0 && hb.max_version == 0);
+        assert!(hb.min_version == 0 && hb.max_version == 1);
+        let describe = apis.iter().find(|a| a.api_key == 89).unwrap();
+        assert!(describe.min_version == 0 && describe.max_version == 0);
     }
 
     #[test]
