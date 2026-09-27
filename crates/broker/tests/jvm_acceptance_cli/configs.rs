@@ -145,8 +145,9 @@ async fn kafka_configs_describe_all_shows_effective_values_and_their_sources() {
              DEFAULT_CONFIG:unclean.leader.election.enable=false}",
         ),
         (
-            "a key nobody set still reports its effective value",
-            "cleanup.policy=delete sensitive=false synonyms={}",
+            "a key nobody set reports its effective value and the broker default behind it",
+            "cleanup.policy=delete sensitive=false \
+             synonyms={DEFAULT_CONFIG:log.cleanup.policy=delete}",
         ),
     ] {
         assert!(
