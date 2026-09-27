@@ -83,17 +83,14 @@ pub(super) enum AppendOutcome {
 pub(super) struct PendingAck {
     response: PartitionProduceResponse,
     partition: Arc<Partition>,
-    /// The effective `min.insync.replicas` the leadership gate read. The ISR
-    /// must still hold that many replicas when the high watermark arrives.
-    effective_min_isr: usize,
     target: Offset,
     commit: Option<AppendCommit>,
     /// The transition barrier this produce took at the leadership gate. A
     /// diskless promotion takes the write side while it hydrates the canonical
     /// log and rebuilds producer state, so holding the read side here is what
     /// keeps that publication boundary from landing between an append and its
-    /// ack. It is only ever dropped, never read.
-    _transition: ProduceTransition,
+    /// ack. The completion reads the topic id it was admitted under from it.
+    transition: ProduceTransition,
 }
 
 impl PendingAck {
@@ -102,7 +99,7 @@ impl PendingAck {
     /// watermark yet.
     pub(super) fn new(
         response: PartitionProduceResponse,
-        (partition, effective_min_isr): (Arc<Partition>, usize),
+        partition: Arc<Partition>,
         target: Offset,
         commit: Option<AppendCommit>,
         transition: ProduceTransition,
@@ -110,10 +107,9 @@ impl PendingAck {
         Self {
             response,
             partition,
-            effective_min_isr,
             target,
             commit,
-            _transition: transition,
+            transition,
         }
     }
 
@@ -124,11 +120,22 @@ impl PendingAck {
     /// so N partitions of one `acks=-1` request wait out one `timeout.ms`
     /// between them rather than N of them in turn.
     ///
-    /// The code is [`ack_completion_code`]'s. Every path commits
-    /// afterwards: the append is durable on the leader, so the idempotent
-    /// tracker must advance either way, and a retry is then recognized as a
-    /// duplicate rather than as out-of-order.
-    pub(super) async fn finish(mut self, deadline: std::time::Instant) -> PartitionProduceResponse {
+    /// `current_min_isr` reads the partition in the current image once the
+    /// wait ends, given the topic id the append was admitted under: the
+    /// effective `min.insync.replicas`, as Kafka's
+    /// `Partition.checkEnoughReplicasReachOffset` reads `effectiveMinIsr` at
+    /// completion, or the error code of a partition that is gone or was
+    /// replaced by a recreated topic, as Kafka's `DelayedProduce` answers
+    /// through `ReplicaManager.getPartitionOrError`. That error is the row's
+    /// code; otherwise the code is [`ack_completion_code`]'s. Every path
+    /// commits afterwards: the append is durable on the leader, so the
+    /// idempotent tracker must advance either way, and a retry is then
+    /// recognized as a duplicate rather than as out-of-order.
+    pub(super) async fn finish(
+        mut self,
+        deadline: std::time::Instant,
+        current_min_isr: impl FnOnce(&Partition, Option<uuid::Uuid>) -> Result<usize, i16>,
+    ) -> PartitionProduceResponse {
         let gate = self
             .partition
             .await_hw_at_least(self.target, deadline)
@@ -137,7 +144,11 @@ impl PendingAck {
             Ok(()) => Some(self.partition.replica_state.lock().await.isr.len()),
             Err(_timeout) => None,
         };
-        self.response.error_code = ack_completion_code(isr_size, self.effective_min_isr);
+        self.response.error_code = match current_min_isr(&self.partition, self.transition.topic_id)
+        {
+            Ok(effective_min_isr) => ack_completion_code(isr_size, effective_min_isr),
+            Err(code) => code,
+        };
         // The row's log start offset is read after the gate on both paths, the
         // way it was when the gate ran inline.
         self.response.log_start_offset = stamp_log_start(&self.partition);
@@ -441,7 +452,10 @@ mod tests {
     /// Kafka's `acks=all` completion: `DelayedProduce` leaves an expired wait
     /// at `REQUEST_TIMED_OUT`, and `Partition.checkEnoughReplicasReachOffset`
     /// answers `NOT_ENOUGH_REPLICAS_AFTER_APPEND` when the high watermark
-    /// arrived but the ISR is below the effective `min.insync.replicas`.
+    /// arrived but the ISR is below the effective `min.insync.replicas`. It
+    /// reads that minimum at completion, so a change during the wait applies.
+    /// A partition that is gone or was replaced by a recreated topic answers
+    /// the code `ReplicaManager.getPartitionOrError` gives it, reached or not.
     #[tokio::test]
     async fn an_acks_all_wait_ends_with_kafkas_completion_code() {
         struct Case {
@@ -451,7 +465,10 @@ mod tests {
             /// 1 never is.
             target: i64,
             isr: &'static [u64],
-            effective_min_isr: usize,
+            /// What the current image holds for the admitted partition when
+            /// the wait ends: its effective minimum, or the code of a
+            /// partition that is gone or replaced.
+            current_min_isr: Result<usize, i16>,
             error_code: i16,
         }
         let cases = [
@@ -459,29 +476,64 @@ mod tests {
                 name: "reached with a full ISR",
                 target: 0,
                 isr: &[1, 2, 3],
-                effective_min_isr: 2,
+                current_min_isr: Ok(2),
                 error_code: codes::NONE,
             },
             Case {
                 name: "reached with the ISR at the minimum",
                 target: 0,
                 isr: &[1, 2],
-                effective_min_isr: 2,
+                current_min_isr: Ok(2),
                 error_code: codes::NONE,
             },
             Case {
                 name: "reached after the ISR shrank below the minimum",
                 target: 0,
                 isr: &[1],
-                effective_min_isr: 2,
+                current_min_isr: Ok(2),
                 error_code: codes::NOT_ENOUGH_REPLICAS_AFTER_APPEND,
+            },
+            Case {
+                name: "reached after the minimum rose above the ISR",
+                target: 0,
+                isr: &[1, 2],
+                current_min_isr: Ok(3),
+                error_code: codes::NOT_ENOUGH_REPLICAS_AFTER_APPEND,
+            },
+            Case {
+                name: "reached after the minimum fell to the ISR",
+                target: 0,
+                isr: &[1],
+                current_min_isr: Ok(1),
+                error_code: codes::NONE,
+            },
+            Case {
+                name: "reached after the topic was recreated",
+                target: 0,
+                isr: &[1, 2, 3],
+                current_min_isr: Err(codes::NOT_LEADER_OR_FOLLOWER),
+                error_code: codes::NOT_LEADER_OR_FOLLOWER,
+            },
+            Case {
+                name: "reached after the topic was deleted",
+                target: 0,
+                isr: &[1, 2, 3],
+                current_min_isr: Err(codes::UNKNOWN_TOPIC_OR_PARTITION),
+                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
             },
             Case {
                 name: "expired",
                 target: 1,
                 isr: &[1, 2, 3],
-                effective_min_isr: 2,
+                current_min_isr: Ok(2),
                 error_code: codes::REQUEST_TIMED_OUT,
+            },
+            Case {
+                name: "expired after the topic was deleted",
+                target: 1,
+                isr: &[1, 2, 3],
+                current_min_isr: Err(codes::UNKNOWN_TOPIC_OR_PARTITION),
+                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
             },
         ];
         for case in cases {
@@ -502,26 +554,37 @@ mod tests {
                 .install_isr(&isr, &[NodeId(1), NodeId(2), NodeId(3)], NodeId(1))
                 .await;
             let transition = partition.lock_produce_transition().await;
+            let admitted_topic_id = transition.topic_id;
             let pending = PendingAck::new(
                 PartitionProduceResponse {
                     index: 0,
                     base_offset: 0,
                     ..Default::default()
                 },
-                (Arc::clone(&partition), case.effective_min_isr),
+                Arc::clone(&partition),
                 Offset(case.target),
                 None,
                 transition,
             );
-            let row = pending.finish(std::time::Instant::now()).await;
+            let mut asked_for = None;
+            let row = pending
+                .finish(std::time::Instant::now(), |_, topic_id| {
+                    asked_for = Some(topic_id);
+                    case.current_min_isr
+                })
+                .await;
             assert!(
-                row == PartitionProduceResponse {
-                    index: 0,
-                    error_code: case.error_code,
-                    base_offset: 0,
-                    log_start_offset: 0,
-                    ..Default::default()
-                },
+                (row, asked_for)
+                    == (
+                        PartitionProduceResponse {
+                            index: 0,
+                            error_code: case.error_code,
+                            base_offset: 0,
+                            log_start_offset: 0,
+                            ..Default::default()
+                        },
+                        Some(admitted_topic_id)
+                    ),
                 "{}",
                 case.name
             );

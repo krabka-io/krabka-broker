@@ -10,9 +10,7 @@
 use krabka_metadata::MetadataImage;
 use krabka_units::{Time, convert::TimeExt};
 
-use super::{
-    QuotaConsumption, buckets::QuotaBuckets, consume_configured_quota, positive_f64_to_u64,
-};
+use super::{QuotaConsumption, buckets::QuotaBuckets, consume_configured_quota};
 
 /// Consumes `elapsed_micros` of request-handler time from the
 /// `request_percentage` bucket for `(principal, client_id)`.
@@ -43,27 +41,21 @@ pub fn consume_request_quota(
             quota_key: "request_percentage",
             amount: elapsed_micros,
         },
-        |rate_pct| {
-            let rate_micros_per_sec = request_percentage_token_rate(rate_pct);
-            (rate_micros_per_sec != 0).then_some(rate_micros_per_sec)
-        },
+        request_percentage_token_rate,
         |overage_micros, _, rate_micros_per_sec| {
-            Time::from_micros(
-                i64::try_from(overage_micros.saturating_mul(1_000_000) / rate_micros_per_sec)
-                    .unwrap_or(i64::MAX),
-            )
-            // Kafka's `ClientRequestQuotaManager` bounds this throttle at one
-            // quota window (`boundedThrottleTime`), the only client quota it
-            // bounds.
-            .min(maximum_delay)
+            Time::from_secs_f64(overage_micros / rate_micros_per_sec)
+                // Kafka's `ClientRequestQuotaManager` bounds this throttle at
+                // one quota window (`boundedThrottleTime`), the only client
+                // quota it bounds.
+                .min(maximum_delay)
         },
     )
 }
 
 /// The token rate of a `request_percentage` bucket: microseconds of handler
 /// time per second, so `100.0` is 1 000 000.
-pub(super) fn request_percentage_token_rate(rate_pct: f64) -> u64 {
-    positive_f64_to_u64(rate_pct * 10_000.0)
+pub(super) fn request_percentage_token_rate(rate_pct: f64) -> f64 {
+    rate_pct * 10_000.0
 }
 
 #[cfg(test)]

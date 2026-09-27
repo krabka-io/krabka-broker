@@ -79,6 +79,9 @@ pub(super) async fn append_txn_batch(
                 // version, so a transactional commit always takes the
                 // broker-wide retention.
                 expire_timestamp_ms: None,
+                // The id the handler resolved the topic to, as Kafka trunk's
+                // `OffsetAndMetadata.fromRequest` keeps it (KIP-1319).
+                topic_id: Some(uuid::Uuid::from_bytes(topic.topic_id.0)).filter(|id| !id.is_nil()),
             };
             batch.records.push(Record {
                 offset_delta: delta,

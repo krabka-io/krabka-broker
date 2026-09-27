@@ -2,9 +2,11 @@
 //! accessors that read the configuration back, and the reset that publishes
 //! the `{rate, burst, available, last_refill}` group as one unit.
 //!
-//! The bucket stores raw tokens, so every dimensioned quantity narrows here.
-//! The byte pair and the event pair stay separate because a token means a
-//! different thing in each.
+//! The bucket stores micro-tokens, so every dimensioned quantity narrows here.
+//! A byte rate and a byte burst keep their fractional part, so a rate of half
+//! a byte per second is stored as half a byte per second. The byte pair and
+//! the event pair stay separate because a token means a different thing in
+//! each.
 
 use std::sync::atomic::Ordering::Relaxed;
 
@@ -12,30 +14,49 @@ use krabka_units::prelude::{
     ByteRate, ByteRateExt as _, ByteSize, ByteSizeExt as _, Frequency, FrequencyExt as _, Time,
     secs,
 };
+use num_traits::ToPrimitive as _;
 
-use super::{BucketState, TokenBucket};
+use super::{BucketState, MICROS_PER_TOKEN, TokenBucket};
 
 /// The time window that [`TokenBucket::set_byte_rate`] uses for the burst
 /// capacity when the caller does not give one. The burst is the throughput of
 /// this window.
 const DEFAULT_BURST_WINDOW: Time = secs(1);
 
-/// A throughput in the bucket's raw storage unit: whole bytes per second.
+/// [`MICROS_PER_TOKEN`] as a float, for the fractional conversions.
+const MICROS_PER_TOKEN_F64: f64 = 1_000_000.0;
+
+/// A token count, fractional or not, in micro-tokens, rounded to the nearest.
 ///
-/// The bucket stores its rate in an `AtomicU64` because the refill arithmetic is
-/// verified over integers. Every rate that crosses the accessor boundary
-/// narrows here. A negative rate is not a throughput, so it becomes `0`, the
-/// bucket's "no limit configured" sentinel.
-fn rate_to_bytes_per_sec(rate: ByteRate) -> u64 {
-    u64::try_from(rate.bytes_per_sec_i64()).unwrap_or(0)
+/// A negative or `NaN` count is not a quantity, so it becomes `0`, and
+/// anything past `u64::MAX` micro-tokens saturates.
+fn tokens_to_micros(tokens: f64) -> u64 {
+    if tokens.is_nan() || tokens <= 0.0 {
+        return 0;
+    }
+    (tokens * MICROS_PER_TOKEN_F64)
+        .round()
+        .to_u64()
+        .unwrap_or(u64::MAX)
 }
 
-/// The inverse of [`rate_to_bytes_per_sec`].
+/// A rate in tokens per second, fractional or not, as the bucket's stored
+/// micro-tokens per second.
 ///
-/// This is exact for every value the bucket can hold. A stored rate came
-/// through [`rate_to_bytes_per_sec`], which saturates at `i64::MAX`.
-fn rate_from_bytes_per_sec(raw: u64) -> ByteRate {
-    ByteRate::from_bytes_per_sec(i64::try_from(raw).unwrap_or(i64::MAX))
+/// A rate that is not positive is not a throughput, so it becomes `0`, the
+/// bucket's "no limit configured" sentinel. A positive rate never does: one
+/// under the storage resolution of a micro-token per second is stored as
+/// that resolution, the slowest rate the bucket can meter.
+fn rate_to_micros(tokens_per_sec: f64) -> u64 {
+    if tokens_per_sec.is_nan() || tokens_per_sec <= 0.0 {
+        return 0;
+    }
+    tokens_to_micros(tokens_per_sec).max(1)
+}
+
+/// A stored micro-token count as tokens. Exact below 2^53 micro-tokens.
+fn micros_to_tokens(micros: u64) -> f64 {
+    micros.to_f64().unwrap_or(f64::INFINITY) / MICROS_PER_TOKEN_F64
 }
 
 impl TokenBucket {
@@ -54,33 +75,44 @@ impl TokenBucket {
     /// Updates the rate and the independent burst capacity, both in raw tokens.
     ///
     /// This method refills the bucket to `burst` and restarts the refill clock.
+    pub fn set_token_rate_with_burst(&self, new_rate: u64, burst: u64) {
+        self.set_micro_rate_with_burst(
+            new_rate.saturating_mul(MICROS_PER_TOKEN),
+            burst.saturating_mul(MICROS_PER_TOKEN),
+        );
+    }
+
+    /// Updates the rate and the burst, both in micro-tokens.
+    ///
     /// It stores the whole `{rate, burst, available, last_refill}` group in one
     /// critical section, so a concurrent [`Self::try_consume`] runs either
     /// wholly before the reset or wholly after it. No consume can commit a
     /// balance it computed under the old configuration.
-    pub fn set_token_rate_with_burst(&self, new_rate: u64, burst: u64) {
+    fn set_micro_rate_with_burst(&self, micro_rate_per_sec: u64, micro_burst: u64) {
         let mut state = self.lock_state();
         let now = self.now_nanos();
         *state = BucketState {
-            rate_per_sec: new_rate,
-            burst,
-            available: burst,
+            micro_rate_per_sec,
+            micro_burst,
+            micro_available: micro_burst,
             last_refill_nanos: now,
         };
-        self.rate_per_sec.store(new_rate, Relaxed);
+        self.micro_rate_per_sec.store(micro_rate_per_sec, Relaxed);
     }
 
-    /// The configured rate in raw tokens per second. `0` means no limit.
+    /// The configured rate in whole raw tokens per second, rounded down. `0`
+    /// means no limit, or a rate under one token per second:
+    /// [`Self::byte_rate`] reads a fractional rate back exactly.
     #[must_use]
     pub fn token_rate(&self) -> u64 {
-        self.fast_path_rate()
+        self.fast_path_rate() / MICROS_PER_TOKEN
     }
 
-    /// The configured burst capacity in raw tokens. This is the most the bucket
-    /// holds.
+    /// The configured burst capacity in whole raw tokens, rounded down. This
+    /// is the most the bucket holds.
     #[must_use]
     pub fn token_burst(&self) -> u64 {
-        self.lock_state().burst
+        self.lock_state().micro_burst / MICROS_PER_TOKEN
     }
 
     /// Updates a byte throughput and bursts one second's worth.
@@ -92,21 +124,41 @@ impl TokenBucket {
     }
 
     /// Updates a byte throughput and an independent byte burst capacity.
+    ///
+    /// Both keep their fractional part to a millionth of a byte, so a rate of
+    /// half a byte per second is enforced as half a byte per second. Kafka
+    /// holds a byte-rate quota as a double. A positive rate is never stored
+    /// as the unlimited rate `0`.
     pub fn set_byte_rate_with_burst(&self, new_rate: ByteRate, burst: ByteSize) {
-        self.set_token_rate_with_burst(rate_to_bytes_per_sec(new_rate), burst.bytes_u64());
+        self.set_micro_rate_with_burst(
+            rate_to_micros(new_rate.bytes_per_sec_f64()),
+            tokens_to_micros(burst.bytes_f64()),
+        );
     }
 
-    /// The configured byte throughput.
+    /// The configured byte throughput, fractional part included.
     /// [`krabka_units::prelude::ByteRateExt::ZERO`] means no limit.
     #[must_use]
     pub fn byte_rate(&self) -> ByteRate {
-        rate_from_bytes_per_sec(self.token_rate())
+        ByteRate::from_bytes_per_sec_f64(micros_to_tokens(self.fast_path_rate()))
     }
 
-    /// The configured byte burst capacity.
+    /// Whether the bucket already runs at `rate`, as
+    /// [`Self::set_byte_rate_with_burst`] would store it.
+    ///
+    /// A caller that re-applies a configured rate compares with this rather
+    /// than with [`Self::byte_rate`]: a rate finer than a micro-token per
+    /// second reads back rounded, and a reset refills the bucket, so a
+    /// comparison that never matched would refill it on every re-apply.
+    #[must_use]
+    pub fn runs_at_byte_rate(&self, rate: ByteRate) -> bool {
+        self.fast_path_rate() == rate_to_micros(rate.bytes_per_sec_f64())
+    }
+
+    /// The configured byte burst capacity, fractional part included.
     #[must_use]
     pub fn byte_burst(&self) -> ByteSize {
-        ByteSize::from_bytes(self.token_burst())
+        ByteSize::from_bytes_f64(micros_to_tokens(self.lock_state().micro_burst))
     }
 
     /// Updates an event throughput, such as samples, records, or requests, and
@@ -125,7 +177,8 @@ impl TokenBucket {
         self.set_token_rate_with_burst(new_rate.per_sec_u64(), burst);
     }
 
-    /// The configured event throughput. Zero means no limit.
+    /// The configured event throughput in whole events per second, rounded
+    /// down. Zero means no limit.
     #[must_use]
     pub fn event_rate(&self) -> Frequency {
         Frequency::from_per_sec_u64(self.token_rate())
@@ -153,6 +206,18 @@ mod tests {
             (bytes_per_sec(1024), kibibytes(1)),
             (bytes_per_sec(3_000_000), mebibytes(2)),
             (kibibytes_per_sec(64), mebibytes(1)),
+            (
+                ByteRate::from_bytes_per_sec_f64(0.5),
+                ByteSize::from_bytes_f64(5.5),
+            ),
+            (
+                ByteRate::from_bytes_per_sec_f64(1.25),
+                ByteSize::from_bytes_f64(0.75),
+            ),
+            (
+                ByteRate::from_bytes_per_sec_f64(0.000_001),
+                ByteSize::from_bytes_f64(0.000_011),
+            ),
         ];
 
         for (rate, burst) in cases {
@@ -188,6 +253,47 @@ mod tests {
             let b = TokenBucket::new();
             b.set_token_rate(per_sec);
             check!((b.token_rate(), b.token_burst()) == (per_sec, per_sec));
+        }
+    }
+
+    /// A positive byte rate never reads back as the unlimited rate `0`:
+    /// one under the storage resolution is stored as that resolution, and a
+    /// rate that is not positive is no limit.
+    #[test]
+    fn a_positive_byte_rate_is_never_unlimited() {
+        let resolution = ByteRate::from_bytes_per_sec_f64(0.000_001);
+        let cases = [
+            (1e-12, resolution),
+            (0.000_000_4, resolution),
+            (0.0, ByteRate::from_bytes_per_sec(0)),
+            (-3.0, ByteRate::from_bytes_per_sec(0)),
+            (f64::NAN, ByteRate::from_bytes_per_sec(0)),
+        ];
+        for (rate, want) in cases {
+            let b = TokenBucket::new();
+            b.set_byte_rate_with_burst(ByteRate::from_bytes_per_sec_f64(rate), bytes(1));
+            check!(b.byte_rate() == want, "{rate}");
+        }
+    }
+
+    /// A rate finer than the storage resolution still matches the bucket it
+    /// configured, and a different rate does not.
+    #[test]
+    fn runs_at_byte_rate_compares_the_stored_rate() {
+        let b = TokenBucket::new();
+        b.set_byte_rate_with_burst(ByteRate::from_bytes_per_sec_f64(0.123_456_7), bytes(1));
+        let cases = [
+            (0.123_456_7, true),
+            (0.123_457, true),
+            (0.123_456, false),
+            (0.5, false),
+            (0.0, false),
+        ];
+        for (rate, want) in cases {
+            check!(
+                b.runs_at_byte_rate(ByteRate::from_bytes_per_sec_f64(rate)) == want,
+                "{rate}"
+            );
         }
     }
 

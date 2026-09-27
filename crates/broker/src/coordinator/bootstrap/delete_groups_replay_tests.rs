@@ -56,6 +56,7 @@ fn commit(topic: &str, partition: i32, offset: i64) -> Record {
                 metadata: String::new(),
                 commit_timestamp_ms: 0,
                 expire_timestamp_ms: None,
+                topic_id: None,
             }
             .encode_value(),
         ),

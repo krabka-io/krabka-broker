@@ -1111,13 +1111,25 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
     },
     KipAnnotation {
         key: "KIP-1331",
-        claim: "StreamsGroupHeartbeat v1 asks a Streams client for its topology description",
+        claim: "Streams topology descriptions: StreamsGroupHeartbeat and StreamsGroupDescribe v1",
         status: KipStatus::Partial,
-        module: "crates/broker/src/handlers/streams_group_heartbeat.rs",
+        module: "crates/broker/src/coordinator/unified/streams/actor/response.rs",
         tests: &[
+            "crates/broker/src/coordinator/unified/streams/actor/tests.rs::heartbeat_response_carries_the_recovery_lag_at_version_1_only",
             "crates/broker/src/handlers/streams_group_heartbeat.rs::handle_answers_v1_with_the_recovery_lag_and_no_topology_description_request",
+            "crates/broker/src/handlers/streams_group_describe/tests.rs::version_1_names_the_assignor_and_the_topology_description_status",
         ],
-        note: "Heartbeat v1 is served and `TopologyDescriptionRequired` is always false, which is Kafka's answer when `group.streams.topology.description.plugin.class` is unset. The plugin and the `StreamsGroupTopologyDescriptionUpdate` RPC that would store a description are not implemented.",
+        note: "krabka has no topology description plugin, as a Kafka broker has none by default: a heartbeat never sets TopologyDescriptionRequired, a describe that asks for the description answers NOT_STORED, and StreamsGroupTopologyDescriptionUpdate (93) is not served. The MISSING_CLIENT_TAGS status heartbeat v1 may carry needs `streams.rack.aware.assignment.tags`, which krabka does not support, so it is never sent, as Kafka never sends it with that list empty.",
+    },
+    KipAnnotation {
+        key: "KIP-1357",
+        claim: "StreamsGroupDescribe v1 names the group's task assignor",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/streams_group_describe/render.rs",
+        tests: &[
+            "crates/broker/src/handlers/streams_group_describe/tests.rs::version_1_names_the_assignor_and_the_topology_description_status",
+        ],
+        note: "",
     },
     KipAnnotation {
         key: "SASL/GSSAPI",
@@ -1386,7 +1398,10 @@ fn admin_apis() -> Vec<ApiVersion> {
         v!(add_offsets_to_txn_request),
         v!(end_txn_request),
         v!(write_txn_markers_request),
-        // v6 (topic ids) is Kafka trunk's; Kafka 4.3 serves up to v5.
+        // Version 6 (KIP-1319, topic ids; Kafka trunk, not 4.3) is handled but
+        // not advertised: krabka-client-rs' producer would negotiate it and
+        // send topic names, which v6 does not carry. See
+        // `txn::handlers::txn_offset_commit`.
         v!(txn_offset_commit_request, max = 5),
         v!(describe_configs_request),
         v!(alter_replica_log_dirs_request),
@@ -1465,14 +1480,9 @@ fn admin_apis() -> Vec<ApiVersion> {
         // KIP-932 share-group membership protocol.
         v!(share_group_heartbeat_request),
         v!(share_group_describe_request),
-        // KIP-1071 streams-group rebalance protocol. Heartbeat v1 is Kafka
-        // trunk's (Kafka 4.3 serves v0): it adds the int64
-        // `AcceptableRecoveryLag`, which the group config fills, and
-        // KIP-1331's `TopologyDescriptionRequired`, which stays false because
-        // no topology-description plugin is configured. Describe v1 is
-        // trunk's too, and is not served yet.
+        // KIP-1071 streams-group rebalance protocol.
         v!(streams_group_heartbeat_request),
-        v!(streams_group_describe_request, max = 0),
+        v!(streams_group_describe_request),
         // KIP-932 ShareFetch / ShareAcknowledge data-plane RPCs.
         v!(share_fetch_request),
         v!(share_acknowledge_request),
@@ -1530,9 +1540,7 @@ mod tests {
         assert!(keys.contains(&88));
         assert!(keys.contains(&89));
         let hb = apis.iter().find(|a| a.api_key == 88).unwrap();
-        assert!(hb.min_version == 0 && hb.max_version == 1);
-        let describe = apis.iter().find(|a| a.api_key == 89).unwrap();
-        assert!(describe.min_version == 0 && describe.max_version == 0);
+        assert!((hb.min_version, hb.max_version) == (0, 1));
     }
 
     #[test]

@@ -83,16 +83,16 @@ pub(super) fn consumer_quota_window_bytes(
     (rate * window_secs).to_usize().unwrap_or(usize::MAX)
 }
 
-/// The byte-rate charge a consumer fetch made, which a throttled fetch gives
-/// back.
+/// The byte-rate charge a consumer fetch made, in micro-bytes, which a
+/// throttled fetch gives back.
 pub(super) struct ConsumerCharge(Option<(std::sync::Arc<crate::throttle::TokenBucket>, u64)>);
 
 impl ConsumerCharge {
     /// Kafka's `quotas.fetch.unrecordQuotaSensor`: a throttled fetch sends
     /// no records, so the bytes it was charged come off the quota.
     pub(super) fn refund(self) {
-        if let Some((bucket, granted)) = self.0 {
-            bucket.refund(granted);
+        if let Some((bucket, granted_micros)) = self.0 {
+            bucket.refund_micros(granted_micros);
         }
     }
 }
@@ -218,20 +218,22 @@ fn consume_consumer_quota(
         .iter()
         .find(|(k, _)| k == "client-id")
         .and_then(|(_, v)| v.clone());
+    // Kafka holds the quota as a double (`ClientQuotaManager`), so the bucket
+    // runs at the configured rate, fractional part included, and grants a
+    // part byte too: the throttle is the exact shortfall over the rate.
     let bucket = buckets.get_or_create(
         "consumer_byte_rate",
         &entity_key,
         principal,
         client_id,
-        rate.to_u64().unwrap_or(u64::MAX),
+        rate,
     );
-    let granted = bucket.try_consume(bytes);
-    let charge = ConsumerCharge(Some((std::sync::Arc::clone(&bucket), granted)));
-    if granted >= bytes {
+    let granted_micros = bucket.try_consume_micros(bytes);
+    let charge = ConsumerCharge(Some((std::sync::Arc::clone(&bucket), granted_micros)));
+    let Some(overage) = crate::quota::overage_tokens(bytes, granted_micros) else {
         return (crate::quota::QuotaDelay::zero(), charge);
-    }
-    let overage = bytes - granted;
-    let delay_secs = overage.to_f64().unwrap_or(f64::MAX) / rate;
+    };
+    let delay_secs = overage / rate;
     // Kafka's `ClientQuotaManager.throttleTime` does not bound a byte-rate
     // throttle.
     let delay = Time::from_secs_f64(delay_secs);
@@ -282,5 +284,44 @@ mod tests {
             delay_other == <Time as TimeExt>::ZERO,
             "non-matching client_id should not throttle; got {delay_other:?}"
         );
+    }
+
+    /// Kafka's `ClientQuotaManager` holds `consumer_byte_rate` as a double,
+    /// so a fractional rate throttles a fetch at that rate: the shortfall
+    /// over the rate, neither unbounded nor rounded to a whole byte per
+    /// second.
+    #[test]
+    fn a_fractional_consumer_byte_rate_throttles() {
+        use krabka_metadata::{ClientQuotaRecord, MetadataImage, MetadataRecord, QuotaEntity};
+        // `(consumer_byte_rate, response bytes, expected throttle)`. The
+        // one-second window gives the bucket a burst of exactly its rate.
+        let cases = [
+            (1024.0, 1024, <Time as TimeExt>::ZERO),
+            (1024.0, 2048, secs(1)),
+            (0.5, 1, secs(1)),
+            (0.5, 100, secs(199)),
+            (0.25, 1, secs(3)),
+            (1.5, 1, <Time as TimeExt>::ZERO),
+            (1.5, 3, secs(1)),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (rate, bytes, delay) in cases {
+            let mut img = MetadataImage::new(uuid::Uuid::nil());
+            img.apply(&MetadataRecord::V1ClientQuota(ClientQuotaRecord {
+                entity: vec![QuotaEntity {
+                    entity_type: "user".into(),
+                    entity_name: Some("alice".into()),
+                }],
+                config_key: "consumer_byte_rate".into(),
+                config_value: Some(rate),
+            }));
+            let buckets = crate::quota::QuotaBuckets::with_window(secs(1));
+            let (throttle, _) =
+                super::consume_consumer_quota(&img, &buckets, "alice", "app", bytes);
+            actual.push((rate.to_string(), bytes, throttle.delay));
+            expected.push((rate.to_string(), bytes, delay));
+        }
+        assert!(actual == expected);
     }
 }

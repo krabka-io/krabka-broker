@@ -19,8 +19,8 @@ use super::{
     long_poll::{LongPollOutcome, arm_waits, long_poll},
     pending::PendingPartition,
     records::{
-        AcquireMode, AcquireRequest, acquire_read_records, pending_activation_ranges, read_budget,
-        unreadable_batch_ranges,
+        AcquireMode, AcquireRequest, acquire_read_records, merge_batches,
+        pending_activation_ranges, read_budget, unreadable_batch_ranges,
     },
 };
 use crate::{
@@ -222,6 +222,7 @@ struct GrowAndAcquireArgs<'a> {
     settings: &'a GroupShareSettings,
     member: &'a str,
     max_bytes: i32,
+    min_one_batch: bool,
     remaining_records: i32,
     mode: AcquireMode,
     now: Instant,
@@ -246,6 +247,7 @@ async fn grow_and_acquire(
         settings,
         member,
         max_bytes,
+        min_one_batch,
         remaining_records,
         mode,
         now,
@@ -276,6 +278,7 @@ async fn grow_and_acquire(
         member,
         max_records: remaining_records,
         max_bytes,
+        min_one_batch,
         upper,
         now,
         lock_duration: settings.record_lock_duration,
@@ -442,13 +445,22 @@ async fn acquire_pass(
         } else {
             0
         };
-        let read_max_bytes = read_budget(p.partition_max_bytes, share);
+        // Kafka's `ReplicaManager.readFromLog`: each read is capped at what
+        // the response has left, and only a read made while the response
+        // still holds no record may exceed its cap, by the one batch that it
+        // starts with. Without that, each partition whose next batch is
+        // larger than its share would add one oversized batch.
+        let response_left = i64::from(max_bytes).saturating_sub(total.bytes).max(0);
+        let read_max_bytes = read_budget(p.partition_max_bytes, share)
+            .min(i32::try_from(response_left).unwrap_or(i32::MAX));
+        let min_one_batch = total.bytes == 0;
         let grow_and_acquire_args = || GrowAndAcquireArgs {
             part: &part,
             upper,
             settings: &settings,
             member,
             max_bytes: read_max_bytes,
+            min_one_batch,
             remaining_records,
             mode,
             now,
@@ -503,7 +515,7 @@ async fn acquire_pass(
             Err(code) if fences_the_partition(code) => fail_partition(p, false, code),
             _ => {
                 total.records += acquired_count;
-                total.bytes += append_records(&mut p.out, fresh);
+                total.bytes += append_records(&mut p.out, fresh)?;
             }
         }
     }
@@ -512,22 +524,23 @@ async fn acquire_pass(
 
 /// Adds the records and the acquired rows of one pass to a partition row, and
 /// returns the record bytes it added.
-fn append_records(out: &mut PartitionData, fresh: PartitionData) -> i64 {
+///
+/// A batch that an earlier pass already put in the row is not added again:
+/// see [`merge_batches`].
+fn append_records(out: &mut PartitionData, fresh: PartitionData) -> Result<i64, BrokerError> {
     out.acquired_records.extend(fresh.acquired_records);
     let Some(RecordsPayload::Raw(added)) = fresh.records else {
-        return 0;
+        return Ok(0);
     };
-    let added_len = i64::try_from(added.len()).unwrap_or(i64::MAX);
-    out.records = Some(RecordsPayload::Raw(match out.records.take() {
-        Some(RecordsPayload::Raw(before)) if !before.is_empty() => {
-            let mut joined = bytes::BytesMut::with_capacity(before.len() + added.len());
-            joined.extend_from_slice(&before);
-            joined.extend_from_slice(&added);
-            joined.freeze()
+    let (joined, added_len) = match out.records.take() {
+        Some(RecordsPayload::Raw(before)) if !before.is_empty() => merge_batches(&before, &added)?,
+        _ => {
+            let added_len = i64::try_from(added.len()).unwrap_or(i64::MAX);
+            (added, added_len)
         }
-        _ => added,
-    }));
-    added_len
+    };
+    out.records = Some(RecordsPayload::Raw(joined));
+    Ok(added_len)
 }
 
 /// Fails one partition row with a share-partition error, and leaves it out of

@@ -292,9 +292,11 @@ async fn txn_offset_commit_fences_classic_generation_and_member() {
 }
 
 /// The broker fences a KIP-848 next-gen "consumer"-protocol `TxnOffsetCommit`
-/// when it carries a stale member epoch (`STALE_MEMBER_EPOCH`), and accepts it
-/// at the current epoch. The member epoch travels in the `generation_id`
-/// field.
+/// that carries a member epoch other than the member's, and accepts it at the
+/// current epoch. The member epoch travels in the
+/// `generation_id_or_member_epoch` field. Below v6, the version this broker
+/// negotiates, Kafka's `validateTransactionalOffsetCommit` answers the
+/// group's `StaleMemberEpochException` with `ILLEGAL_GENERATION`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn txn_offset_commit_fences_next_gen_member_epoch() {
     use krabka_protocol::owned::{
@@ -353,19 +355,14 @@ async fn txn_offset_commit_fences_next_gen_member_epoch() {
         ..Default::default()
     };
 
-    // Stale epoch (< current) → STALE_MEMBER_EPOCH (113).
-    let stale = client.send(mk(epoch - 1)).await.unwrap();
-    assert!(
-        stale.topics[0].partitions[0].error_code == 113,
-        "stale epoch should be STALE_MEMBER_EPOCH: {stale:?}"
-    );
-
-    // Future epoch (> current) → FENCED_MEMBER_EPOCH (110).
-    let fenced = client.send(mk(epoch + 1)).await.unwrap();
-    assert!(
-        fenced.topics[0].partitions[0].error_code == 110,
-        "future epoch should be FENCED_MEMBER_EPOCH: {fenced:?}"
-    );
+    // An older and a newer epoch → ILLEGAL_GENERATION (22).
+    for other_epoch in [epoch - 1, epoch + 1] {
+        let fenced = client.send(mk(other_epoch)).await.unwrap();
+        assert!(
+            fenced.topics[0].partitions[0].error_code == 22,
+            "epoch {other_epoch} against {epoch} should be ILLEGAL_GENERATION: {fenced:?}"
+        );
+    }
 
     // Current epoch + known member → accepted (NONE = 0).
     let ok = client.send(mk(epoch)).await.unwrap();

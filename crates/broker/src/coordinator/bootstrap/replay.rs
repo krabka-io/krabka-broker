@@ -278,17 +278,10 @@ fn apply_record_at_timestamp(
             partition,
         } => {
             let v = OffsetCommitValue::decode_value(value_bytes)?;
-            acc.committed.entry(group_id).or_default().insert(
-                (topic, partition),
-                OffsetEntry {
-                    offset: v.offset,
-                    leader_epoch: v.leader_epoch,
-                    metadata: v.metadata,
-                    commit_timestamp_ms: v.commit_timestamp_ms,
-                    expire_timestamp_ms: v.expire_timestamp_ms,
-                    topic_id: None,
-                },
-            );
+            acc.committed
+                .entry(group_id)
+                .or_default()
+                .insert((topic, partition), OffsetEntry::from(v));
         }
         Key::GroupMetadata { group_id } => {
             let v = GroupMetadataValue::decode_value(value_bytes)?;

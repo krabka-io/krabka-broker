@@ -20,9 +20,16 @@ use krabka_protocol::{
 
 use crate::{codes, error::BrokerError};
 
+/// `unresolved_ids` is the v6+ topic sweep: a topic whose id the image could
+/// not name, whose name is still empty, answers `UNKNOWN_TOPIC_ID` on every
+/// row, ahead of the ACL and existence codes, as Kafka's
+/// `KafkaApis.handleTxnOffsetCommitRequest` checks it first. The response row
+/// carries the request's topic id, which is what v6 encodes, and the name the
+/// id resolved to.
 pub(super) fn build_response(
     req: &TxnOffsetCommitRequest,
     code: i16,
+    unresolved_ids: bool,
     denied_topics: &std::collections::HashSet<String>,
     unknown_rows: &std::collections::HashSet<(String, i32)>,
 ) -> TxnOffsetCommitResponse {
@@ -30,14 +37,18 @@ pub(super) fn build_response(
         .topics
         .iter()
         .map(|t| {
+            let unknown_id = unresolved_ids && t.name.is_empty();
             let denied = denied_topics.contains(&t.name);
             TxnOffsetCommitResponseTopic {
                 name: t.name.clone(),
+                topic_id: t.topic_id,
                 partitions: t
                     .partitions
                     .iter()
                     .map(|p| {
-                        let row_code = if denied {
+                        let row_code = if unknown_id {
+                            codes::UNKNOWN_TOPIC_ID
+                        } else if denied {
                             codes::TOPIC_AUTHORIZATION_FAILED
                         } else if unknown_rows.contains(&(t.name.clone(), p.partition_index)) {
                             codes::UNKNOWN_TOPIC_OR_PARTITION
@@ -84,7 +95,7 @@ pub(super) fn encode_err_all(
     let empty_rows: std::collections::HashSet<(String, i32)> = std::collections::HashSet::new();
     encode_resp(
         version,
-        &build_response(req, code, &empty_topics, &empty_rows),
+        &build_response(req, code, false, &empty_topics, &empty_rows),
     )
 }
 
@@ -133,6 +144,7 @@ mod tests {
         let resp = build_response(
             &req,
             codes::GROUP_AUTHORIZATION_FAILED,
+            false,
             &HashSet::new(),
             &HashSet::new(),
         );
@@ -145,7 +157,7 @@ mod tests {
         let req = request();
         let denied = maplit::hashset! {"orders".to_string()};
 
-        let resp = build_response(&req, codes::NONE, &denied, &HashSet::new());
+        let resp = build_response(&req, codes::NONE, false, &denied, &HashSet::new());
 
         assert_response_rows(&resp, codes::TOPIC_AUTHORIZATION_FAILED);
     }
@@ -155,7 +167,7 @@ mod tests {
         let req = request();
         let unknown = maplit::hashset! {("orders".to_string(), 3)};
 
-        let resp = build_response(&req, codes::NONE, &HashSet::new(), &unknown);
+        let resp = build_response(&req, codes::NONE, false, &HashSet::new(), &unknown);
 
         let expected = TxnOffsetCommitResponse {
             throttle_time_ms: 0,
@@ -188,6 +200,7 @@ mod tests {
         let resp = build_response(
             &req,
             codes::INVALID_TXN_STATE,
+            false,
             &HashSet::new(),
             &HashSet::new(),
         );

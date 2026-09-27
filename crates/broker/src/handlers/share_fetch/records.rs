@@ -36,6 +36,10 @@ pub(super) struct AcquireRequest<'a> {
     pub(super) max_records: i32,
     /// The byte budget of the log read.
     pub(super) max_bytes: i32,
+    /// Whether the read may exceed `max_bytes` by the one batch it starts
+    /// with: Kafka's `minOneMessage`, which only the first partition of a
+    /// response that returns records gets.
+    pub(super) min_one_batch: bool,
     /// The exclusive end of the readable window: the high watermark, or the
     /// last stable offset under `read_committed`.
     pub(super) upper: Offset,
@@ -105,11 +109,12 @@ pub(super) async fn acquire_read_records(
     let Some(read) = read_raw(partition, from, request.upper, request.max_bytes).await? else {
         return Ok(0);
     };
-    let Some(read_last) = read.last_offset else {
+    let read_bytes = batches_within(&read.bytes, request.max_bytes, request.min_one_batch)?;
+    let bounds = batch_bounds(&read_bytes)?;
+    let Some(&(_, read_last)) = bounds.last() else {
         return Ok(0);
     };
-    let last = read_last.min(request.upper - 1);
-    let bounds = batch_bounds(&read.bytes)?;
+    let last = Offset(read_last).min(request.upper - 1);
     let ends: Vec<Offset> = bounds.iter().map(|(_, last)| Offset(*last)).collect();
     let acquired = state.acquire_shaped(
         request.member,
@@ -127,7 +132,7 @@ pub(super) async fn acquire_read_records(
     if acquired.is_empty() {
         return Ok(0);
     }
-    let records = batches_holding(&read.bytes, &acquired)?;
+    let records = batches_holding(&read_bytes, &acquired)?;
     if !records.is_empty() {
         out.records = Some(RecordsPayload::Raw(records));
     }
@@ -179,60 +184,60 @@ fn rows_of(range: &AcquiredRange, mode: AcquireMode, bases: &[i64]) -> Vec<Acqui
     rows
 }
 
+/// One v2 batch of a read: where its bytes sit, and the offsets it holds.
+struct BatchSpan {
+    bytes: std::ops::Range<usize>,
+    base: i64,
+    last: i64,
+}
+
+/// Every v2 batch in `bytes`, in the order that the bytes hold them. It reads
+/// only the batch headers.
+fn batch_spans(bytes: &Bytes) -> Result<Vec<BatchSpan>, BrokerError> {
+    let mut spans = Vec::new();
+    let mut at = 0_usize;
+    while at < bytes.len() {
+        let header = bytes
+            .get(at..at + HEADER_LEN)
+            .and_then(|raw| RecordBatchHeader::ref_from_bytes(raw).ok())
+            .ok_or_else(|| corrupt_read("a truncated record batch header"))?;
+        let length = usize::try_from(header.batch_length.get())
+            .ok()
+            .map(|length| length + LOG_OVERHEAD)
+            .filter(|length| *length >= HEADER_LEN && at + length <= bytes.len())
+            .ok_or_else(|| corrupt_read("a record batch length outside the read"))?;
+        let base = header.base_offset.get();
+        spans.push(BatchSpan {
+            bytes: at..at + length,
+            base,
+            last: base + i64::from(header.last_offset_delta.get()),
+        });
+        at += length;
+    }
+    Ok(spans)
+}
+
 /// The `(base_offset, last_offset)` of every v2 batch in `bytes`, in log
 /// order. It reads only the batch headers.
 fn batch_bounds(bytes: &Bytes) -> Result<Vec<(i64, i64)>, BrokerError> {
-    let mut bounds = Vec::new();
-    let mut at = 0_usize;
-    while at < bytes.len() {
-        let header = bytes
-            .get(at..at + HEADER_LEN)
-            .and_then(|raw| RecordBatchHeader::ref_from_bytes(raw).ok())
-            .ok_or_else(|| corrupt_read("a truncated record batch header"))?;
-        let length = usize::try_from(header.batch_length.get())
-            .ok()
-            .map(|length| length + LOG_OVERHEAD)
-            .filter(|length| *length >= HEADER_LEN && at + length <= bytes.len())
-            .ok_or_else(|| corrupt_read("a record batch length outside the read"))?;
-        let base = header.base_offset.get();
-        bounds.push((base, base + i64::from(header.last_offset_delta.get())));
-        at += length;
-    }
-    Ok(bounds)
+    Ok(batch_spans(bytes)?
+        .into_iter()
+        .map(|span| (span.base, span.last))
+        .collect())
 }
 
-/// Returns the batches of `bytes` that hold at least one offset of
-/// `acquired`, in log order.
-///
-/// It walks the v2 batch headers and decodes no record. When every batch
-/// qualifies, it returns `bytes` without a copy.
-fn batches_holding(bytes: &Bytes, acquired: &[AcquiredRange]) -> Result<Bytes, BrokerError> {
-    let mut kept: Vec<std::ops::Range<usize>> = Vec::new();
-    let mut at = 0_usize;
-    while at < bytes.len() {
-        let header = bytes
-            .get(at..at + HEADER_LEN)
-            .and_then(|raw| RecordBatchHeader::ref_from_bytes(raw).ok())
-            .ok_or_else(|| corrupt_read("a truncated record batch header"))?;
-        let length = usize::try_from(header.batch_length.get())
-            .ok()
-            .map(|length| length + LOG_OVERHEAD)
-            .filter(|length| *length >= HEADER_LEN && at + length <= bytes.len())
-            .ok_or_else(|| corrupt_read("a record batch length outside the read"))?;
-        let base = header.base_offset.get();
-        let last = base + i64::from(header.last_offset_delta.get());
-        if acquired
-            .iter()
-            .any(|range| range.first.0 <= last && base <= range.last.0)
-        {
-            match kept.last_mut() {
-                Some(run) if run.end == at => run.end = at + length,
-                _ => kept.push(at..at + length),
-            }
+/// The byte ranges of `bytes`, joined into one buffer. It copies nothing
+/// when one range covers them.
+fn gather(bytes: &Bytes, ranges: &[std::ops::Range<usize>]) -> Bytes {
+    // Adjacent ranges read as one run.
+    let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
+    for range in ranges {
+        match runs.last_mut() {
+            Some(run) if run.end == range.start => run.end = range.end,
+            _ => runs.push(range.clone()),
         }
-        at += length;
     }
-    Ok(match kept.as_slice() {
+    match runs.as_slice() {
         [] => Bytes::new(),
         [run] => bytes.slice(run.clone()),
         runs => {
@@ -242,7 +247,95 @@ fn batches_holding(bytes: &Bytes, acquired: &[AcquiredRange]) -> Result<Bytes, B
             }
             blob.freeze()
         }
-    })
+    }
+}
+
+/// Returns the batches of `bytes` that hold at least one offset of
+/// `acquired`, in log order.
+///
+/// It walks the v2 batch headers and decodes no record. When every batch
+/// qualifies, it returns `bytes` without a copy.
+fn batches_holding(bytes: &Bytes, acquired: &[AcquiredRange]) -> Result<Bytes, BrokerError> {
+    let kept: Vec<_> = batch_spans(bytes)?
+        .into_iter()
+        .filter(|span| {
+            acquired
+                .iter()
+                .any(|range| range.first.0 <= span.last && span.base <= range.last.0)
+        })
+        .map(|span| span.bytes)
+        .collect();
+    Ok(gather(bytes, &kept))
+}
+
+/// The leading whole batches of `bytes` that fit in `max_bytes`.
+///
+/// `Log::read_raw` can return one batch past the budget: a read that crosses
+/// a segment boundary takes the next segment's first batch whole. Only
+/// Kafka's `minOneMessage` lets a read exceed its budget, and only by the
+/// first batch when no batch fits (`LogSegment.read` raises the size to that
+/// one batch, and `LocalLog.read` reads a single segment). So with
+/// `min_one_batch` the result is the batches that fit, or the first batch
+/// alone when none does; without it, only the batches that fit, so a later
+/// partition whose first batch does not fit returns no records.
+fn batches_within(
+    bytes: &Bytes,
+    max_bytes: i32,
+    min_one_batch: bool,
+) -> Result<Bytes, BrokerError> {
+    let budget = usize::try_from(max_bytes.max(0)).unwrap_or(usize::MAX);
+    let spans = batch_spans(bytes)?;
+    let mut kept: Vec<_> = spans
+        .iter()
+        .map(|span| span.bytes.clone())
+        .take_while(|range| range.end <= budget)
+        .collect();
+    if kept.is_empty() && min_one_batch {
+        kept.extend(spans.into_iter().next().map(|span| span.bytes));
+    }
+    Ok(gather(bytes, &kept))
+}
+
+/// Joins the batches that a later acquire pass read onto the batches that
+/// the earlier passes of the same response already carry, and returns the
+/// joined records with the number of bytes that the join added.
+///
+/// Two passes can read the same batch: a pass that acquires part of a batch
+/// leaves the rest of it to a later pass, and the later read starts inside
+/// that batch, so `Log::read_raw` returns the whole batch again. Kafka reads
+/// the log once per response, so its records never hold a batch twice. This
+/// keeps one copy of each batch, by base offset, in log order.
+pub(super) fn merge_batches(before: &Bytes, added: &Bytes) -> Result<(Bytes, i64), BrokerError> {
+    let held = batch_spans(before)?;
+    let fresh: Vec<BatchSpan> = batch_spans(added)?
+        .into_iter()
+        .filter(|span| held.iter().all(|kept| kept.base != span.base))
+        .collect();
+    let added_len =
+        i64::try_from(fresh.iter().map(|span| span.bytes.len()).sum::<usize>()).unwrap_or(i64::MAX);
+    if fresh.is_empty() {
+        return Ok((before.clone(), 0));
+    }
+    if held.is_empty() {
+        return Ok((
+            gather(
+                added,
+                &fresh.into_iter().map(|span| span.bytes).collect::<Vec<_>>(),
+            ),
+            added_len,
+        ));
+    }
+    let mut all: Vec<(i64, &Bytes, std::ops::Range<usize>)> = held
+        .into_iter()
+        .map(|span| (span.base, before, span.bytes))
+        .chain(fresh.into_iter().map(|span| (span.base, added, span.bytes)))
+        .collect();
+    all.sort_by_key(|(base, _, _)| *base);
+    let mut blob = BytesMut::with_capacity(all.iter().map(|(_, _, range)| range.len()).sum());
+    for (_, source, range) in all {
+        blob.extend_from_slice(&source[range]);
+    }
+    Ok((blob.freeze(), added_len))
 }
 
 /// The bytes of a v2 batch in front of its `batch_length` field: the base
@@ -455,6 +548,59 @@ mod tests {
             .await
             .expect("scan the schedule");
         assert!(none == Vec::new());
+    }
+
+    /// Three one-record batches of equal size at offsets 0, 1 and 2, whole
+    /// and one by one.
+    fn three_batches() -> (Bytes, Vec<Bytes>) {
+        let batches: Vec<Bytes> = (0..3)
+            .map(|base| {
+                let mut one = BytesMut::new();
+                krabka_protocol::records::RecordBatch {
+                    base_offset: base,
+                    records: vec![krabka_protocol::records::Record {
+                        value: Some(Bytes::from(vec![0_u8; 32])),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }
+                .encode(&mut one)
+                .expect("encode a batch");
+                one.freeze()
+            })
+            .collect();
+        (batches.concat().into(), batches)
+    }
+
+    /// Kafka's `minOneMessage` lets a read exceed its budget only by its
+    /// first batch, and only when no batch fits: a read that crossed a
+    /// segment boundary and brought back a later batch past the budget keeps
+    /// just the batches that fit.
+    #[test]
+    fn only_the_first_batch_may_exceed_the_budget() {
+        let (read, batches) = three_batches();
+        let size = i32::try_from(batches[0].len()).expect("a small batch");
+        let first = batches[0].clone();
+        let first_two: Bytes = [batches[0].clone(), batches[1].clone()].concat().into();
+        // (budget, min_one_batch, kept)
+        let cases = [
+            (size, true, first.clone()),
+            (size + size / 2, true, first.clone()),
+            (size / 2, true, first.clone()),
+            (0, true, first.clone()),
+            (2 * size, true, first_two.clone()),
+            (size / 2, false, Bytes::new()),
+            (size + size / 2, false, first),
+            (3 * size, false, read.clone()),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (budget, min_one_batch, want) in cases {
+            let kept = batches_within(&read, budget, min_one_batch).expect("whole batches");
+            actual.push((budget, min_one_batch, kept));
+            expected.push((budget, min_one_batch, want));
+        }
+        assert!(actual == expected);
     }
 
     /// Kafka's `createBatches` over log batches of five records at 0, 5, 10

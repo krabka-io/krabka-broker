@@ -18,6 +18,12 @@ on:
         default: 8
         type: number
 
+# One sweep at a time. A dispatch that lands while the Sunday sweep runs
+# waits for it rather than doubling the load on the shared runners.
+concurrency:
+  group: mutants
+  cancel-in-progress: false
+
 permissions:
   contents: read
   id-token: write
@@ -115,6 +121,14 @@ jobs:
     timeout-minutes: ${{ matrix.shard.timeout }}
     strategy:
       fail-fast: false
+      # GitHub runs at most 20 jobs at once for the whole krabka-io account,
+      # and every repository in it draws from that pool. The scheduled sweep is
+      # about 130 shards, some allowed five hours, so without a cap it held
+      # every runner for most of each Sunday and pull requests in all the
+      # repositories queued behind it. Six leaves room for a pull request's
+      # container wave (`ci.yml` sizes that at 12 plus its other jobs). The
+      # sweep takes longer, and nothing waits on it.
+      max-parallel: 6
       matrix:
         shard: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     steps:

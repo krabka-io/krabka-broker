@@ -22,7 +22,7 @@ use self::{
     authorization::{authorize_produce_topics, is_authorized_transactional},
     delivery::resolve_delivery_gate,
     framing::decode_produce_request,
-    leadership::BrokerProducePolicy,
+    leadership::{BrokerProducePolicy, current_effective_min_isr},
     pipeline::{PartitionInput, PartitionOutcome, PartitionServices, process_partition},
     producer_checks::TransactionRequest,
     response::build_topic_error_response,
@@ -590,6 +590,15 @@ async fn await_durability(
     }
     let started = std::time::Instant::now();
     let deadline = started + timeout;
+    let default_min_insync_replicas = broker.config.default_min_insync_replicas;
+    let current_min_isr = |partition: &crate::partition::Partition, admitted_topic_id| {
+        current_effective_min_isr(
+            &broker.controller.current_image(),
+            (&partition.topic, partition.index.0),
+            admitted_topic_id,
+            default_min_insync_replicas,
+        )
+    };
     let finished = futures_util::future::join_all(awaiting.into_iter().map(|pending| {
         let PendingPartition {
             topic_row,
@@ -602,7 +611,7 @@ async fn await_durability(
                 topic_row,
                 partition_row,
                 topic_name,
-                ack.finish(deadline).await,
+                ack.finish(deadline, current_min_isr).await,
             )
         }
     }))

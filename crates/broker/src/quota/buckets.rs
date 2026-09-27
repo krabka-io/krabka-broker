@@ -71,7 +71,8 @@ impl QuotaBuckets {
     }
 
     /// Returns the bucket for `(quota_key, entity_key)`, and creates it
-    /// lazily if it does not exist. A new bucket starts at `initial_rate`.
+    /// lazily if it does not exist. A new bucket starts at `initial_rate`
+    /// tokens per second, fractional part included.
     ///
     /// # Panics
     ///
@@ -85,7 +86,7 @@ impl QuotaBuckets {
         entity_key: &EntityKey,
         principal: &str,
         client_id: &str,
-        initial_rate: u64,
+        initial_rate: f64,
     ) -> Arc<TokenBucket> {
         let key = (quota_key.to_string(), entity_key.clone());
         if let Some(entry) = self.buckets.get(&key) {
@@ -204,8 +205,8 @@ mod tests {
     #[test]
     fn the_configured_window_sizes_a_new_bucket_s_burst() {
         for (window, rate, spend_without_throttle) in [
-            (krabka_units::secs(1), 1_024_u64, 1_024_u64),
-            (krabka_units::secs(11), 1_024, 11_264),
+            (krabka_units::secs(1), 1_024.0, 1_024_u64),
+            (krabka_units::secs(11), 1_024.0, 11_264),
         ] {
             let buckets = QuotaBuckets::with_window(window);
             let bucket =
@@ -222,35 +223,35 @@ mod tests {
     #[test]
     fn get_or_create_returns_new_bucket_first_time() {
         let buckets = QuotaBuckets::new();
-        let b = buckets.get_or_create("producer_byte_rate", &key("alice"), "alice", "", 1024);
-        assert!(b.byte_rate() == bucket_rate(1024));
+        let b = buckets.get_or_create("producer_byte_rate", &key("alice"), "alice", "", 1024.0);
+        assert!(b.byte_rate() == bucket_rate(1024.0));
         assert!(buckets.len() == 1);
     }
 
     #[test]
     fn get_or_create_returns_existing_bucket_second_time() {
         let buckets = QuotaBuckets::new();
-        let b1 = buckets.get_or_create("producer_byte_rate", &key("alice"), "alice", "", 1024);
-        let b2 = buckets.get_or_create("producer_byte_rate", &key("alice"), "alice", "", 4096);
+        let b1 = buckets.get_or_create("producer_byte_rate", &key("alice"), "alice", "", 1024.0);
+        let b2 = buckets.get_or_create("producer_byte_rate", &key("alice"), "alice", "", 4096.0);
         // Same Arc — initial_rate on second call is ignored.
         check!(Arc::ptr_eq(&b1, &b2));
-        check!(b1.byte_rate() == bucket_rate(1024));
+        check!(b1.byte_rate() == bucket_rate(1024.0));
         check!(buckets.len() == 1);
     }
 
     #[test]
     fn different_quota_keys_get_different_buckets() {
         let buckets = QuotaBuckets::new();
-        let _ = buckets.get_or_create("producer_byte_rate", &key("alice"), "alice", "", 1024);
-        let _ = buckets.get_or_create("consumer_byte_rate", &key("alice"), "alice", "", 2048);
+        let _ = buckets.get_or_create("producer_byte_rate", &key("alice"), "alice", "", 1024.0);
+        let _ = buckets.get_or_create("consumer_byte_rate", &key("alice"), "alice", "", 2048.0);
         assert!(buckets.len() == 2);
     }
 
     #[test]
     fn different_entities_get_different_buckets() {
         let buckets = QuotaBuckets::new();
-        let _ = buckets.get_or_create("producer_byte_rate", &key("alice"), "alice", "", 1024);
-        let _ = buckets.get_or_create("producer_byte_rate", &key("bob"), "bob", "", 2048);
+        let _ = buckets.get_or_create("producer_byte_rate", &key("alice"), "alice", "", 1024.0);
+        let _ = buckets.get_or_create("producer_byte_rate", &key("bob"), "bob", "", 2048.0);
         assert!(buckets.len() == 2);
     }
 }

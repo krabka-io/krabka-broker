@@ -31,12 +31,18 @@
 //! # Driven and modeled
 //!
 //! DRIVEN: the production cap-and-grant arithmetic,
-//! [`krabka_verified::throttle::plan_consume`], at every commit.
+//! [`krabka_verified::throttle::plan_consume`], and the whole-token request
+//! cut, [`krabka_throttle::whole_token_request`], at every commit.
 //!
-//! MODELED: one clock unit is one second and every rate is a whole number of
-//! tokens per second, so a refill is `elapsed * rate` and a consume claims the
-//! whole elapsed gap. Production's part-token remainder is covered by the unit
-//! tests in `src/runtime/consume.rs`. Memory is sequentially consistent: the
+//! MODELED: one clock unit is one second and every quantity is in the
+//! bucket's storage unit, `units_per_token` to a token; production stores
+//! micro-tokens. Every rate is a whole number of storage units per second, so
+//! a refill is `elapsed * rate` and a consume claims the whole elapsed gap.
+//! Production's part-unit remainder is covered by the unit tests in
+//! `src/runtime/consume.rs`. A consume asks for whole tokens and is granted
+//! whole tokens, so with `units_per_token > 1` a rate or a burst of a
+//! fraction of a token leaves part tokens in the bucket, as production does
+//! under a fractional quota rate. Memory is sequentially consistent: the
 //! model checks the protocol, not the atomic orderings, and `Locked` needs no
 //! ordering beyond what the lock gives.
 //!
@@ -49,6 +55,8 @@
 //! state, and under the lock nobody can see one.
 //!
 //! * `available_within_burst`: `available <= burst`.
+//! * `grants_whole_tokens`: every grant in the configuration is a whole
+//!   number of tokens, even when the bucket holds a part token.
 //! * `claimed_refill_conserved`: `available + granted + capped + in_flight ==
 //!   burst + rate * (last_refill - t0)`. The right side is every token the
 //!   configuration has made available: its initial burst plus the refill for
@@ -63,8 +71,9 @@
 //!
 //! # Runs
 //!
-//! `bucket_basic` and `bucket_wide` check `Locked` exhaustively and pin their
-//! unique-state counts. The RED runs check `SeqlockCas` in the smallest search
+//! `bucket_basic`, `bucket_wide` and `bucket_fractional` check `Locked`
+//! exhaustively and pin their unique-state counts. `bucket_fractional` runs
+//! at two storage units to a token, so its rates and bursts are half tokens. The RED runs check `SeqlockCas` in the smallest search
 //! that shows each bug, and `locked_holds_where_seqlock_cas_fails` checks
 //! `Locked` in the same searches. Two scripted schedules replay each bug step
 //! by step, and show that the lock disables the same interleaving.
@@ -75,6 +84,7 @@
 //! on an abstract `pending` counter. It could not reach either bug, and
 //! production shipped both.
 
+use krabka_throttle::whole_token_request;
 use krabka_verified::throttle::{
     AvailableTokens, BurstCapacity, RefillTokens, RequestedTokens, plan_consume,
 };
@@ -98,6 +108,7 @@ const MAX_DEPTH: usize = 80;
 // conservation ghosts.
 const PINNED_UNIQUE_STATES_BASIC: usize = 41_601;
 const PINNED_UNIQUE_STATES_WIDE: usize = 222_236;
+const PINNED_UNIQUE_STATES_FRACTIONAL: usize = 25_984;
 
 /// Which consume and reset protocol the model steps through.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -311,18 +322,28 @@ impl BucketState {
             .sum()
     }
 
-    /// Commits the planned consume of `req` from `cur` plus `refill` under
-    /// `burst`, recording the grant and the capped remainder in the ghosts.
-    fn commit(&mut self, cur: u64, refill: u64, burst: u64, req: u64) {
-        let (grant, new) = plan_consume(
+    /// Commits the planned consume of `req` whole tokens from `cur` plus
+    /// `refill` under `burst`, in storage units, `units_per_token` to a token,
+    /// recording the grant and the capped remainder in the ghosts.
+    ///
+    /// Production's whole-token consume: cap the refill, cut the request to
+    /// the whole tokens the capped balance holds, then grant.
+    fn commit(&mut self, cur: u64, refill: u64, burst: u64, req: u64, units_per_token: u64) {
+        let (_, total) = plan_consume(
             AvailableTokens(cur),
             RefillTokens(refill),
             BurstCapacity(burst),
-            RequestedTokens(req),
+            RequestedTokens(0),
+        );
+        let (grant, new) = plan_consume(
+            AvailableTokens(total.0),
+            RefillTokens(0),
+            BurstCapacity(burst),
+            RequestedTokens(whole_token_request(req, total.0, units_per_token)),
         );
         self.available = new.0;
         self.granted += grant.0;
-        self.capped += cur + refill - new.0 - grant.0;
+        self.capped += cur + refill - total.0;
     }
 
     /// Starts a new ghost configuration after a reset stored the group.
@@ -345,6 +366,8 @@ fn claimed_refill_conserved(s: &BucketState) -> bool {
 
 struct BucketModel {
     algorithm: Algorithm,
+    /// Storage units to a token: `1` meters whole tokens, `2` half tokens.
+    units_per_token: u64,
     consumers: usize,
     /// `configs[0]` is installed at start; a reset installs any of them.
     configs: Vec<Config>,
@@ -394,7 +417,13 @@ impl BucketModel {
                 }
             }
             Consumer::LockedCommit { req, claim } => {
-                s.commit(s.available, claim.refill, s.burst, req);
+                s.commit(
+                    s.available,
+                    claim.refill,
+                    s.burst,
+                    req,
+                    self.units_per_token,
+                );
                 Consumer::Release
             }
             Consumer::Release => {
@@ -479,7 +508,7 @@ impl BucketModel {
                 if s.available != read.cur {
                     return Some(restart);
                 }
-                s.commit(read.cur, read.refill, read.burst, read.req);
+                s.commit(read.cur, read.refill, read.burst, read.req, 1);
                 return Some(Consumer::Idle);
             }
         };
@@ -622,6 +651,9 @@ impl Model for BucketModel {
             Property::always("claimed_refill_conserved", |_, s: &BucketState| {
                 claimed_refill_conserved(s)
             }),
+            Property::always("grants_whole_tokens", |m: &BucketModel, s: &BucketState| {
+                s.granted.is_multiple_of(m.units_per_token)
+            }),
             Property::sometimes("consumers_overlap", |_, s: &BucketState| {
                 s.consumers
                     .iter()
@@ -678,6 +710,7 @@ fn bucket_basic() {
     green_run(
         BucketModel {
             algorithm: Algorithm::Locked,
+            units_per_token: 1,
             consumers: 2,
             configs: vec![Config { rate: 1, burst: 2 }, Config { rate: 1, burst: 1 }],
             max_resets: 1,
@@ -694,6 +727,7 @@ fn bucket_wide() {
     green_run(
         BucketModel {
             algorithm: Algorithm::Locked,
+            units_per_token: 1,
             consumers: 2,
             configs: vec![
                 Config { rate: 1, burst: 3 },
@@ -710,11 +744,34 @@ fn bucket_wide() {
     );
 }
 
+/// Half-token rates and bursts, as a fractional quota rate gives production:
+/// at two storage units to a token, `rate: 1` is half a token per second and
+/// `burst: 1` holds half a token, so no whole token is ever granted under it.
+/// The bucket still conserves every claimed refill, stays within its burst,
+/// and grants only whole tokens.
+#[test]
+fn bucket_fractional() {
+    green_run(
+        BucketModel {
+            algorithm: Algorithm::Locked,
+            units_per_token: 2,
+            consumers: 2,
+            configs: vec![Config { rate: 1, burst: 3 }, Config { rate: 1, burst: 1 }],
+            max_resets: 1,
+            max_time: 2,
+            max_req: 2,
+        },
+        "bucket_fractional",
+        PINNED_UNIQUE_STATES_FRACTIONAL,
+    );
+}
+
 /// The smallest search in which the seqlock lets a straddled reset raise
 /// `available` past the new burst: one consumer, one shrinking reset.
 fn straddle_config(algorithm: Algorithm) -> BucketModel {
     BucketModel {
         algorithm,
+        units_per_token: 1,
         consumers: 1,
         configs: vec![Config { rate: 1, burst: 2 }, Config { rate: 1, burst: 1 }],
         max_resets: 1,
@@ -728,6 +785,7 @@ fn straddle_config(algorithm: Algorithm) -> BucketModel {
 fn contention_config(algorithm: Algorithm) -> BucketModel {
     BucketModel {
         algorithm,
+        units_per_token: 1,
         consumers: 2,
         configs: vec![Config { rate: 1, burst: 3 }],
         max_resets: 0,
@@ -816,6 +874,7 @@ fn reset(steps: usize) -> Vec<Act> {
 fn straddled_reset_schedule() {
     let model = |algorithm| BucketModel {
         algorithm,
+        units_per_token: 1,
         consumers: 1,
         configs: vec![Config { rate: 1, burst: 10 }, Config { rate: 3, burst: 3 }],
         max_resets: 1,
@@ -867,6 +926,7 @@ fn straddled_reset_schedule() {
 fn dropped_refill_schedule() {
     let model = |algorithm| BucketModel {
         algorithm,
+        units_per_token: 1,
         consumers: 2,
         configs: vec![Config { rate: 1, burst: 3 }],
         max_resets: 0,

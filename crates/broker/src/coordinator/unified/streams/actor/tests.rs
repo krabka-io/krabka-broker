@@ -1930,28 +1930,44 @@ fn validate_offset_commit_follows_kafka_streams_group() {
     }
 }
 
-/// Kafka's version 0 heartbeat response carries `AcceptableRecoveryLagLegacy
-/// = 0` whatever `acceptable.recovery.lag` says: 4.3.0 never sets the field,
-/// and trunk sets only the `int64` field of version 1, to the config.
+/// #972: an accepted heartbeat carries the group's `acceptable.recovery.lag`
+/// in version 1's `int64` field, as Kafka trunk sets it, and 0 in version 0's
+/// `int32` field, which Kafka never sets. On the wire version 0 carries only
+/// the 0 and version 1 only the lag, so a decoder reads the other field's
+/// default.
 #[test]
-fn heartbeat_response_carries_no_recovery_lag_at_version_0() {
+fn heartbeat_response_carries_the_recovery_lag_at_version_1_only() {
+    use krabka_protocol::{Decode as _, Encode as _};
+
     let config = StreamsGroupConfig {
         acceptable_recovery_lag: 10_000,
         ..undelayed()
     };
-    assert!(
-        response::base_resp(codes::NONE, 3, &config)
-            == StreamsGroupHeartbeatResponse {
-                error_code: codes::NONE,
-                member_epoch: 3,
-                heartbeat_interval_ms: 5_000,
-                acceptable_recovery_lag_legacy: 0,
-                acceptable_recovery_lag: 10_000,
-                task_offset_interval_ms: i32::try_from(config.task_offset_interval.as_millis())
-                    .expect("fits"),
-                ..Default::default()
-            }
-    );
+    let response = response::base_resp(codes::NONE, 3, &config);
+    let expected = StreamsGroupHeartbeatResponse {
+        error_code: codes::NONE,
+        member_epoch: 3,
+        heartbeat_interval_ms: 5_000,
+        acceptable_recovery_lag_legacy: 0,
+        acceptable_recovery_lag: 10_000,
+        task_offset_interval_ms: i32::try_from(config.task_offset_interval.as_millis())
+            .expect("fits"),
+        ..Default::default()
+    };
+    assert!(response == expected);
+    for (version, legacy, lag) in [(0, 0, -1), (1, 0, 10_000)] {
+        let mut bytes = bytes::BytesMut::new();
+        response.encode(&mut bytes, version).expect("encode");
+        let decoded =
+            StreamsGroupHeartbeatResponse::decode(&mut &bytes[..], version).expect("decode");
+        assert!(
+            (
+                decoded.acceptable_recovery_lag_legacy,
+                decoded.acceptable_recovery_lag
+            ) == (legacy, lag),
+            "version {version}"
+        );
+    }
 }
 
 /// Kafka's initial rebalance delay and assignment interval

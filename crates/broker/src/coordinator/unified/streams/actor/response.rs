@@ -45,10 +45,12 @@ fn map_to_task_ids(map: &BTreeMap<String, Vec<i32>>) -> Vec<RespTaskIds> {
 
 /// The fields of every accepted heartbeat response.
 ///
-/// Version 0 of the response carries the recovery lag in an `int32` field
-/// that Kafka never sets: 4.3.0 leaves it out, and trunk sets only the
-/// `int64` field of version 1, from the group's `acceptable.recovery.lag`.
-/// The legacy field is therefore 0 here too.
+/// Kafka trunk's `GroupMetadataManager.streamsGroupHeartbeat` sets the
+/// group's `acceptable.recovery.lag` in the `int64` field of version 1
+/// (KIP-1331), which version 0 does not encode. It never sets version 0's
+/// `int32` field, so that one carries 0 here too, as 4.3.0 sends it.
+/// `TopologyDescriptionRequired` stays false: without a topology description
+/// plugin Kafka's `maybeSetTopologyDescriptionRequired` never asks for one.
 pub(super) fn base_resp(
     error_code: i16,
     member_epoch: i32,
@@ -59,7 +61,9 @@ pub(super) fn base_resp(
         member_epoch,
         heartbeat_interval_ms: duration_ms(config.heartbeat_interval, 5_000),
         task_offset_interval_ms: duration_ms(config.task_offset_interval, 30_000),
+        acceptable_recovery_lag_legacy: 0,
         acceptable_recovery_lag: config.acceptable_recovery_lag,
+        topology_description_required: false,
         ..Default::default()
     }
 }

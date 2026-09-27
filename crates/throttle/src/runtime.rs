@@ -30,8 +30,19 @@
 //! inside `synchronized` blocks. The critical section is a clock read and a
 //! few integer operations.
 //!
-//! One value is read outside the lock. `rate_per_sec` mirrors the locked
-//! rate, and it is written only while the lock is held, so the unthrottled
+//! # Sub-token accounting
+//!
+//! The group counts micro-tokens, [`MICROS_PER_TOKEN`] to a token, so a rate
+//! that is not a whole number of tokens per second is enforced as configured.
+//! Kafka holds every client quota as a double (`ClientQuotaManager` compares
+//! the measured `Rate` with a `Quota` bound), so a `consumer_byte_rate` of
+//! `0.5` must admit half a byte per second, not one and not an unlimited
+//! stream. A whole-token caller is granted whole tokens and leaves any part
+//! token in the bucket; [`TokenBucket::try_consume_micros`] also grants the
+//! part token, for a caller that turns the rest into a throttle delay.
+//!
+//! One value is read outside the lock. `micro_rate_per_sec` mirrors the
+//! locked rate, and it is written only while the lock is held, so the unthrottled
 //! fast path in `try_consume` and [`TokenBucket::token_rate`] skip the lock.
 //! A fast-path read that sees `0` takes effect at that read, which orders the
 //! consume before any reset that is still in flight. A non-zero read proves
@@ -57,7 +68,16 @@ mod consume;
 mod rate;
 mod state;
 
-pub use self::state::ThrottleState;
+pub use self::{consume::whole_token_request, state::ThrottleState};
+
+/// Micro-tokens to one token: the resolution the bucket stores its rate,
+/// burst and balance in.
+///
+/// A millionth of a token per second is the smallest positive rate the bucket
+/// holds. A micro-token count fits a `u64` up to about 1.8e13 tokens, which
+/// is a larger burst than any quota window of a 64-bit byte rate reaches in
+/// practice, and every larger value saturates.
+pub const MICROS_PER_TOKEN: u64 = 1_000_000;
 
 /// Reads the injected clock's nanoseconds elapsed since its origin as a `u64`.
 ///
@@ -74,16 +94,17 @@ fn clock_nanos(clock: &dyn MonotonicClock) -> u64 {
 
 /// The group every consume and every reset reads and writes as one unit.
 ///
-/// It lives behind [`TokenBucket::state`]. `available <= burst` holds whenever
-/// the lock is free, and `last_refill_nanos` never moves backwards.
+/// It lives behind [`TokenBucket::state`]. `micro_available <= micro_burst`
+/// holds whenever the lock is free, and `last_refill_nanos` never moves
+/// backwards. Every count is in micro-tokens; see [`MICROS_PER_TOKEN`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct BucketState {
-    /// Tokens per second. `0` means no limit.
-    rate_per_sec: u64,
-    /// The most tokens the bucket holds.
-    burst: u64,
-    /// Tokens the bucket can grant now.
-    available: u64,
+    /// Micro-tokens per second. `0` means no limit.
+    micro_rate_per_sec: u64,
+    /// The most micro-tokens the bucket holds.
+    micro_burst: u64,
+    /// Micro-tokens the bucket can grant now.
+    micro_available: u64,
     /// The clock reading up to which elapsed time has become tokens.
     last_refill_nanos: u64,
 }
@@ -92,9 +113,9 @@ pub struct TokenBucket {
     /// The group, and the lock that makes each consume and each reset one
     /// indivisible step on it. See the module documentation.
     state: Mutex<BucketState>,
-    /// A copy of `state.rate_per_sec` for the unthrottled fast path. It is
-    /// written only while `state` is locked, right after the locked copy.
-    rate_per_sec: AtomicU64,
+    /// A copy of `state.micro_rate_per_sec` for the unthrottled fast path. It
+    /// is written only while `state` is locked, right after the locked copy.
+    micro_rate_per_sec: AtomicU64,
     /// Monotonic time source. The caller injects it, so tests can drive
     /// refills deterministically with a [`qubit_clock::ManualMonotonicClock`]
     /// instead of sleeping.
@@ -105,9 +126,9 @@ impl std::fmt::Debug for TokenBucket {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let state = *self.lock_state();
         f.debug_struct("TokenBucket")
-            .field("rate_per_sec", &state.rate_per_sec)
-            .field("burst", &state.burst)
-            .field("available", &state.available)
+            .field("micro_rate_per_sec", &state.micro_rate_per_sec)
+            .field("micro_burst", &state.micro_burst)
+            .field("micro_available", &state.micro_available)
             .field("last_refill_nanos", &state.last_refill_nanos)
             .finish_non_exhaustive()
     }
@@ -128,14 +149,14 @@ impl TokenBucket {
     #[must_use]
     pub fn with_clock(clock: Arc<dyn MonotonicClock>) -> Self {
         let state = BucketState {
-            rate_per_sec: 0,
-            burst: 0,
-            available: 0,
+            micro_rate_per_sec: 0,
+            micro_burst: 0,
+            micro_available: 0,
             last_refill_nanos: clock_nanos(&*clock),
         };
         Self {
             state: Mutex::new(state),
-            rate_per_sec: AtomicU64::new(0),
+            micro_rate_per_sec: AtomicU64::new(0),
             clock,
         }
     }
@@ -154,10 +175,11 @@ impl TokenBucket {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The rate the unthrottled fast path sees, read without the lock.
+    /// The micro-token rate the unthrottled fast path sees, read without the
+    /// lock.
     #[inline]
     fn fast_path_rate(&self) -> u64 {
-        self.rate_per_sec.load(Relaxed)
+        self.micro_rate_per_sec.load(Relaxed)
     }
 }
 
@@ -180,9 +202,9 @@ mod tests {
         b.set_byte_rate_with_burst(bytes_per_sec(100), bytes(200));
         let s = format!("{b:?}");
         check!(s.contains("TokenBucket"));
-        check!(s.contains("rate_per_sec: 100"));
-        check!(s.contains("burst: 200"));
-        check!(s.contains("available: 200"));
+        check!(s.contains("micro_rate_per_sec: 100000000"));
+        check!(s.contains("micro_burst: 200000000"));
+        check!(s.contains("micro_available: 200000000"));
         check!(s.contains("last_refill_nanos"));
     }
 }

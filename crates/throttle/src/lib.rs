@@ -2,4 +2,4 @@
 
 mod runtime;
 
-pub use runtime::{ThrottleState, TokenBucket};
+pub use runtime::{MICROS_PER_TOKEN, ThrottleState, TokenBucket, whole_token_request};

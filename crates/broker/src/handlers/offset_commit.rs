@@ -426,12 +426,15 @@ fn commit_records(req: &OffsetCommitRequest, commit: Commit<'_>) -> CommitRecord
     let mut delta: i32 = 0;
     for topic in &req.topics {
         for part in &topic.partitions {
-            let value = OffsetCommitValue {
+            // Kafka's `OffsetAndMetadata.fromRequest` keeps the topic id the
+            // request resolved to, and the record carries it (#987).
+            let entry = OffsetEntry {
                 offset: krabka_log::Offset(part.committed_offset),
                 leader_epoch: part.committed_leader_epoch,
                 metadata: part.committed_metadata.clone().unwrap_or_default(),
                 commit_timestamp_ms: commit.now_ms,
                 expire_timestamp_ms: commit.expire_timestamp_ms,
+                topic_id: commit.image.topic(&topic.name).map(|t| t.topic_id),
             };
             batch.records.push(Record {
                 offset_delta: delta,
@@ -441,20 +444,10 @@ fn commit_records(req: &OffsetCommitRequest, commit: Commit<'_>) -> CommitRecord
                     &topic.name,
                     part.partition_index,
                 )),
-                value: Some(value.encode_value()),
+                value: Some(OffsetCommitValue::from(&entry).encode_value()),
                 ..Default::default()
             });
-            entries.push((
-                (topic.name.clone(), part.partition_index),
-                OffsetEntry {
-                    offset: krabka_log::Offset(part.committed_offset),
-                    leader_epoch: part.committed_leader_epoch,
-                    metadata: part.committed_metadata.clone().unwrap_or_default(),
-                    commit_timestamp_ms: commit.now_ms,
-                    expire_timestamp_ms: commit.expire_timestamp_ms,
-                    topic_id: commit.image.topic(&topic.name).map(|t| t.topic_id),
-                },
-            ));
+            entries.push(((topic.name.clone(), part.partition_index), entry));
             delta += 1;
         }
     }

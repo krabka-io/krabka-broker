@@ -39,13 +39,12 @@ fn connection_creation_throttle(broker: &Broker, peer_ip: std::net::IpAddr) -> O
     if rate <= 0.0 {
         return None;
     }
-    let initial_rate = crate::quota::positive_f64_to_u64(rate).max(1);
     let bucket = broker.quota_buckets.get_or_create(
         CONNECTION_CREATION_RATE_QUOTA_KEY,
         &entity_key,
         "",
         "",
-        initial_rate,
+        rate,
     );
     (bucket.try_consume(1) == 0)
         .then(|| connection_creation_delay(rate, broker.config.connection_creation_throttle_max))

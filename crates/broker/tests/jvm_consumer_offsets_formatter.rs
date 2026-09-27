@@ -628,10 +628,11 @@ fn expected_offset_row(group: &str, committed: i64) -> OffsetRow {
         group: group.to_owned(),
         topic: TOPIC.to_owned(),
         partition: 0,
-        // The newest non-flexible schema, the one that carries `leaderEpoch`.
-        // krabka writes version 1 only for a KIP-211 per-commit expiry, which
-        // no modern consumer asks for.
-        value_version: 3,
+        // The version that carries the topic id. Kafka 4.3's
+        // `GroupCoordinatorRecordHelpers.offsetCommitValueVersion` writes it
+        // for every commit except a KIP-211 per-commit expiry, which gets
+        // version 1 and which no modern consumer asks for.
+        value_version: 4,
         offset: committed,
         // The JVM consumer commits no metadata.
         metadata: String::new(),

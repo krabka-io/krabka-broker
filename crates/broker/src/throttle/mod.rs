@@ -1,6 +1,6 @@
 //! KIP-73 throttled replication: the value types and the parser.
 
-pub use krabka_throttle::{ThrottleState, TokenBucket};
+pub use krabka_throttle::{MICROS_PER_TOKEN, ThrottleState, TokenBucket};
 
 mod refresh;
 use krabka_metadata::{MetadataImage, NodeId};

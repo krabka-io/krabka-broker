@@ -43,11 +43,19 @@ pub(super) fn render_group(view: StreamsDescribeView) -> DescribedGroup {
         assignment_epoch: view.assignment_epoch,
         topology,
         members: view.members.into_iter().map(render_member).collect(),
+        // KIP-1357: the assignor the next assignment will use. Every group
+        // runs krabka's port of Kafka's `StickyTaskAssignor`, whatever its
+        // `streams.assignor.name` says, and "sticky" is that assignor's name.
+        assignor_name: Some(STICKY_ASSIGNOR_NAME.to_owned()),
         // The handler fills the authorized operations when they are asked
-        // for; the wire default (INT32_MIN) means "not set".
+        // for; the wire default (INT32_MIN) means "not set". It also sets the
+        // topology description status when the request asks for one.
         ..Default::default()
     }
 }
+
+/// Kafka's `StickyTaskAssignor.STICKY_ASSIGNOR_NAME`.
+const STICKY_ASSIGNOR_NAME: &str = "sticky";
 
 /// Map a describe-view member into a wire `Member`, as Kafka's
 /// `StreamsGroupMember.asStreamsGroupDescribeMember` does.
@@ -301,7 +309,7 @@ mod tests {
             // v1 fields, at their schema defaults: the handler serves v0.
             topology_description: None,
             topology_description_status: 0,
-            assignor_name: None,
+            assignor_name: Some("sticky".into()),
             unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
         };
         assert!(rendered == expected);

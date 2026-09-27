@@ -271,6 +271,7 @@ mod tests {
                         metadata: "aborted".into(),
                         commit_timestamp_ms: 456,
                         expire_timestamp_ms: None,
+                        topic_id: None,
                     }
                     .encode_value(),
                 ),
@@ -626,6 +627,7 @@ mod tests {
                         metadata: "must-stay-hidden".into(),
                         commit_timestamp_ms: 1,
                         expire_timestamp_ms: None,
+                        topic_id: None,
                     }
                     .encode_value(),
                 ),

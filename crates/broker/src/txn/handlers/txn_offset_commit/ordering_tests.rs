@@ -61,8 +61,9 @@ impl Authorizer for DenyOneTopic {
 enum Member {
     /// No group metadata: a simple consumer, which is never fenced.
     Simple,
-    /// A member id the group never registered, which classic fencing answers
-    /// with `UNKNOWN_MEMBER_ID`.
+    /// A member id and generation for a group the coordinator does not hold,
+    /// which Kafka's `validateTransactionalOffsetCommit` answers with
+    /// `ILLEGAL_GENERATION` below v6.
     Unregistered,
 }
 
@@ -243,7 +244,7 @@ async fn per_topic_codes_survive_every_exit_and_gate_the_coordinator_call() {
             coordinator: true,
             staged: false,
             member: Member::Unregistered,
-            expected: vec![("a", 0, codes::UNKNOWN_MEMBER_ID)],
+            expected: vec![("a", 0, codes::ILLEGAL_GENERATION)],
             appended: vec![],
         },
         Case {

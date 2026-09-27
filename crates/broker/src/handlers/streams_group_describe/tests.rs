@@ -15,9 +15,9 @@ use krabka_protocol::UnknownTaggedFields;
 
 use super::{
     test_support::{
-        describe, describe_as, error_group, finalize_streams_version, seed_streams_group_topology,
-        start_broker, start_broker_with_authorizer, topology_with_source_topic,
-        unfinalize_streams_version,
+        describe, describe_as, describe_at, error_group, finalize_streams_version,
+        seed_streams_group_topology, start_broker, start_broker_with_authorizer,
+        topology_with_source_topic, unfinalize_streams_version,
     },
     *,
 };
@@ -484,7 +484,7 @@ async fn ready_group_describes_the_configured_topology_and_every_member_field() 
             authorized_operations: i32::MIN,
             topology_description: None,
             topology_description_status: 0,
-            assignor_name: None,
+            assignor_name: Some("sticky".into()),
             unknown_tagged_fields: none(),
         }],
         unknown_tagged_fields: none(),
@@ -568,6 +568,48 @@ async fn empty_group_is_empty_and_another_group_type_is_not_found() {
                     0,
                 ),
             ]
+    );
+    broker_handle.shutdown().await;
+}
+
+/// #973, KIP-1331 and KIP-1357: version 1 names the assignor of every
+/// described group, "sticky", the assignor krabka runs for every group, and
+/// answers a request for the topology description with `NOT_STORED` (1),
+/// what Kafka answers without a topology description plugin, or
+/// `NOT_REQUESTED` (0) when not asked. Version 0 carries neither field, and an
+/// error row carries neither at any version.
+#[tokio::test]
+async fn version_1_names_the_assignor_and_the_topology_description_status() {
+    let (broker_handle, _dir) = start_broker(true).await;
+    let broker = broker_handle.broker_arc_for_test();
+    finalize_streams_version(&broker).await;
+    seed_streams_group_topology(&broker, "app", topology_with_source_topic("in")).await;
+    let baseline = describe_at(&broker, 0, false, &["app", "missing"]).await;
+
+    for (version, include, assignor_name, status) in [
+        (0, false, None, 0),
+        (1, false, Some("sticky"), 0),
+        (1, true, Some("sticky"), 1),
+    ] {
+        let resp = describe_at(&broker, version, include, &["app", "missing"]).await;
+        let expected = StreamsGroupDescribeResponse {
+            groups: vec![
+                DescribedGroup {
+                    assignor_name: assignor_name.map(str::to_owned),
+                    topology_description_status: status,
+                    ..baseline.groups[0].clone()
+                },
+                error_group("missing", codes::GROUP_ID_NOT_FOUND),
+            ],
+            ..baseline.clone()
+        };
+        assert!(resp == expected, "version {version}, include {include}");
+    }
+    assert!(
+        (
+            baseline.groups[0].error_code,
+            baseline.groups[0].group_id.as_str()
+        ) == (codes::NONE, "app")
     );
     broker_handle.shutdown().await;
 }

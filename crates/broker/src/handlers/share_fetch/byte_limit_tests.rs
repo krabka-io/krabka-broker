@@ -61,6 +61,14 @@ async fn start_with_delivery_attempts(attempts: i16) -> (BrokerHandle, tempfile:
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
+    create_topic_with_partitions(broker, name, 1).await
+}
+
+async fn create_topic_with_partitions(
+    broker: &BrokerHandle,
+    name: &str,
+    partitions: i32,
+) -> WireUuid {
     let client = krabka_client_core::Client::builder()
         .bootstrap(broker.listen_addr().to_string())
         .client_id("share-fetch-byte-limit-test")
@@ -71,7 +79,7 @@ async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
         .send(CreateTopicsRequest {
             topics: vec![CreatableTopic {
                 name: name.to_string(),
-                num_partitions: 1,
+                num_partitions: partitions,
                 replication_factor: 1,
                 ..Default::default()
             }],
@@ -81,7 +89,9 @@ async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
         .await
         .expect("CreateTopics");
     assert!(response.topics[0].error_code == codes::NONE, "{response:?}");
-    broker.wait_until_partition_present(name, 0).await;
+    for index in 0..partitions {
+        broker.wait_until_partition_present(name, index).await;
+    }
     let image = broker.controller_image_for_test();
     let topic = image.topic(name).expect("created topic in the image");
     WireUuid(topic.topic_id.into_bytes())
@@ -89,51 +99,55 @@ async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
 
 /// Appends [`BATCHES`] batches of the same size, each in its own produce.
 async fn produce_batches(broker: &BrokerHandle, topic: &str) {
+    for _ in 0..BATCHES {
+        produce_batch(broker, topic, 0).await;
+    }
+}
+
+/// Appends one batch of [`RECORDS_PER_BATCH`] records to `partition`.
+async fn produce_batch(broker: &BrokerHandle, topic: &str, partition: i32) {
     let shared = broker.broker_arc_for_test();
     let user = principal("producer");
     let address = peer();
     let ctx = request_context(&user, &address, "producer-client");
-    for _ in 0..BATCHES {
-        let request = ProduceRequest {
-            acks: -1,
-            timeout_ms: 5_000,
-            topic_data: vec![TopicProduceData {
-                name: topic.to_string(),
-                partition_data: vec![PartitionProduceData {
-                    index: 0,
-                    records: Some(RecordsPayload::V2(vec![RecordBatch {
-                        last_offset_delta: i32::try_from(RECORDS_PER_BATCH - 1)
-                            .expect("small batch"),
-                        records: (0..RECORDS_PER_BATCH)
-                            .map(|delta| Record {
-                                offset_delta: i32::try_from(delta).expect("small batch"),
-                                value: Some(Bytes::from(vec![b'v'; 256])),
-                                ..Default::default()
-                            })
-                            .collect(),
-                        ..Default::default()
-                    }])),
+    let request = ProduceRequest {
+        acks: -1,
+        timeout_ms: 5_000,
+        topic_data: vec![TopicProduceData {
+            name: topic.to_string(),
+            partition_data: vec![PartitionProduceData {
+                index: partition,
+                records: Some(RecordsPayload::V2(vec![RecordBatch {
+                    last_offset_delta: i32::try_from(RECORDS_PER_BATCH - 1).expect("small batch"),
+                    records: (0..RECORDS_PER_BATCH)
+                        .map(|delta| Record {
+                            offset_delta: i32::try_from(delta).expect("small batch"),
+                            value: Some(Bytes::from(vec![b'v'; 256])),
+                            ..Default::default()
+                        })
+                        .collect(),
                     ..Default::default()
-                }],
+                }])),
                 ..Default::default()
             }],
             ..Default::default()
-        };
-        let request_bytes = encode_request(&request, PRODUCE_VERSION);
-        let response_bytes = crate::handlers::produce::handle(
-            &shared,
-            PRODUCE_VERSION,
-            7,
-            &request_bytes,
-            request_bytes.clone(),
-            &ctx,
-        )
-        .await
-        .expect("handle produce");
-        let response: ProduceResponse = decode_response(&response_bytes, PRODUCE_VERSION);
-        let partition = &response.responses[0].partition_responses[0];
-        assert!(partition.error_code == codes::NONE, "{response:?}");
-    }
+        }],
+        ..Default::default()
+    };
+    let request_bytes = encode_request(&request, PRODUCE_VERSION);
+    let response_bytes = crate::handlers::produce::handle(
+        &shared,
+        PRODUCE_VERSION,
+        7,
+        &request_bytes,
+        request_bytes.clone(),
+        &ctx,
+    )
+    .await
+    .expect("handle produce");
+    let response: ProduceResponse = decode_response(&response_bytes, PRODUCE_VERSION);
+    let row = &response.responses[0].partition_responses[0];
+    assert!(row.error_code == codes::NONE, "{response:?}");
 }
 
 /// The size in bytes of the first batch of `topic`. Every batch has this size.
@@ -159,7 +173,6 @@ async fn share_fetch(
     (max_records, max_bytes): (i32, i32),
     acknowledgements: &[(i64, i64, i8)],
 ) -> ShareFetchResponse {
-    let version = krabka_protocol::owned::share_fetch_request::MAX_VERSION;
     let request = ShareFetchRequest {
         group_id: Some(group.into()),
         member_id: Some(member.into()),
@@ -190,11 +203,19 @@ async fn share_fetch(
         }],
         ..Default::default()
     };
+    send_share_fetch(broker, &request).await
+}
+
+async fn send_share_fetch(
+    broker: &BrokerHandle,
+    request: &ShareFetchRequest,
+) -> ShareFetchResponse {
+    let version = krabka_protocol::owned::share_fetch_request::MAX_VERSION;
     let shared = broker.broker_arc_for_test();
     let user = principal("share-consumer");
     let address = peer();
     let ctx = request_context(&user, &address, "share-client");
-    let request_bytes = encode_request(&request, version);
+    let request_bytes = encode_request(request, version);
     let response = handle(&shared, version, 7, &request_bytes, &ctx)
         .await
         .expect("handle share fetch");
@@ -412,5 +433,243 @@ async fn a_record_at_the_delivery_limit_does_not_stall_the_partition() {
             acquired(&partition(&after_release))
         ) == (vec![(0, 7)], vec![(8, 15)])
     );
+    broker.shutdown().await;
+}
+
+/// A `ShareFetch` of every partition of `topic_id`, with no wait.
+fn fetch_partitions(
+    group: &str,
+    epoch: i32,
+    topic_id: WireUuid,
+    partitions: i32,
+    max_bytes: i32,
+) -> ShareFetchRequest {
+    ShareFetchRequest {
+        group_id: Some(group.into()),
+        member_id: Some("member".into()),
+        share_session_epoch: epoch,
+        max_wait_ms: 0,
+        min_bytes: 0,
+        max_bytes,
+        max_records: 500,
+        batch_size: 500,
+        topics: vec![FetchTopic {
+            topic_id,
+            partitions: (0..partitions)
+                .map(|partition_index| FetchPartition {
+                    partition_index,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+/// What a fetch over several partitions carried: how many rows held records,
+/// and how many batches they held in all.
+#[derive(Debug, PartialEq, Eq)]
+struct Spread {
+    rows_with_records: usize,
+    batches: usize,
+}
+
+fn spread(response: &ShareFetchResponse) -> Spread {
+    let batches: Vec<usize> = response
+        .responses
+        .iter()
+        .flat_map(|topic| &topic.partitions)
+        .map(|row| {
+            row.records
+                .as_ref()
+                .and_then(RecordsPayload::as_v2)
+                .map_or(0, <[RecordBatch]>::len)
+        })
+        .filter(|count| *count > 0)
+        .collect();
+    Spread {
+        rows_with_records: batches.len(),
+        batches: batches.iter().sum(),
+    }
+}
+
+/// Kafka's `ReplicaManager.readFromLog` lets only the first partition that
+/// returns records exceed the byte budget, by the one batch that its read
+/// starts with (`minOneMessage`). A later partition whose next batch does not
+/// fit what is left returns no records, so the response exceeds `MaxBytes`
+/// by at most one batch however many partitions it covers.
+#[tokio::test]
+async fn only_the_first_partition_may_exceed_the_byte_budget() {
+    const PARTITIONS: i32 = 3;
+    let (broker, _dir) = start().await;
+
+    // `(name, MaxBytes as (numerator, denominator) of one batch, expected)`.
+    let cases = [
+        (
+            "half-a-batch",
+            (1, 2),
+            Spread {
+                rows_with_records: 1,
+                batches: 1,
+            },
+        ),
+        (
+            "half-a-batch-each",
+            (3, 2),
+            Spread {
+                rows_with_records: 1,
+                batches: 1,
+            },
+        ),
+        (
+            "a-batch-each",
+            (3, 1),
+            Spread {
+                rows_with_records: 3,
+                batches: 3,
+            },
+        ),
+    ];
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (name, (numerator, denominator), want) in cases {
+        let topic = format!("spread-{name}");
+        let group = format!("group-{name}");
+        let topic_id = create_topic_with_partitions(&broker, &topic, PARTITIONS).await;
+        for partition in 0..PARTITIONS {
+            crate::test_support::initialize_share_state(
+                &broker,
+                &group,
+                uuid::Uuid::from_bytes(topic_id.0),
+                partition,
+            )
+            .await;
+        }
+        let opened = send_share_fetch(
+            &broker,
+            &fetch_partitions(&group, 0, topic_id, PARTITIONS, 1 << 20),
+        )
+        .await;
+        assert!(spread(&opened).rows_with_records == 0, "{opened:?}");
+        for partition in 0..PARTITIONS {
+            produce_batch(&broker, &topic, partition).await;
+        }
+        let size = batch_size(&broker, &topic);
+
+        let limited = send_share_fetch(
+            &broker,
+            &fetch_partitions(
+                &group,
+                1,
+                topic_id,
+                PARTITIONS,
+                size * numerator / denominator,
+            ),
+        )
+        .await;
+
+        actual.push((name, spread(&limited)));
+        expected.push((name, want));
+    }
+
+    assert!(actual == expected);
+    broker.shutdown().await;
+}
+
+/// Sends a `ShareAcknowledge` from `member` that releases `[first, last]`.
+async fn release(
+    broker: &BrokerHandle,
+    group: &str,
+    member: &str,
+    epoch: i32,
+    topic_id: WireUuid,
+    (first_offset, last_offset): (i64, i64),
+) {
+    use krabka_protocol::owned::{
+        share_acknowledge_request::{
+            AcknowledgePartition, AcknowledgeTopic, AcknowledgementBatch as AcknowledgeBatch,
+            ShareAcknowledgeRequest,
+        },
+        share_acknowledge_response::ShareAcknowledgeResponse,
+    };
+    let version = krabka_protocol::owned::share_acknowledge_request::MAX_VERSION;
+    let request = ShareAcknowledgeRequest {
+        group_id: Some(group.into()),
+        member_id: Some(member.into()),
+        share_session_epoch: epoch,
+        topics: vec![AcknowledgeTopic {
+            topic_id,
+            partitions: vec![AcknowledgePartition {
+                partition_index: 0,
+                acknowledgement_batches: vec![AcknowledgeBatch {
+                    first_offset,
+                    last_offset,
+                    acknowledge_types: vec![RELEASE],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let shared = broker.broker_arc_for_test();
+    let user = principal("share-consumer");
+    let address = peer();
+    let ctx = request_context(&user, &address, "share-client");
+    let request_bytes = encode_request(&request, version);
+    let response =
+        crate::handlers::share_acknowledge::handle(&shared, version, 7, &request_bytes, &ctx)
+            .await
+            .expect("handle share acknowledge");
+    let response: ShareAcknowledgeResponse = decode_response(&response, version);
+    let row = &response.responses[0].partitions[0];
+    assert!(
+        (response.error_code, row.error_code) == (codes::NONE, codes::NONE),
+        "{response:?}"
+    );
+}
+
+/// A pass that acquires part of a batch carries the whole batch. When
+/// `MinBytes` holds the request for a later pass, and that pass acquires the
+/// rest of the batch, its read starts inside the same batch and returns it
+/// again. Kafka reads the log once per response, so the response carries the
+/// batch once, with both acquired runs.
+#[tokio::test]
+async fn a_batch_acquired_over_two_passes_is_carried_once() {
+    let (broker, _dir) = start().await;
+    let topic_id = create_topic(&broker, "two-passes").await;
+    crate::test_support::initialize_share_state(
+        &broker,
+        "g",
+        uuid::Uuid::from_bytes(topic_id.0),
+        0,
+    )
+    .await;
+    for member in ["waiting", "other"] {
+        let opened = share_fetch(&broker, "g", member, 0, topic_id, (500, 1 << 20), &[]).await;
+        assert!(partition(&opened).error_code == codes::NONE, "{opened:?}");
+    }
+    // One batch at offsets 0-1. `other` holds it, then releases offset 0.
+    produce_batch(&broker, "two-passes", 0).await;
+    let held = share_fetch(&broker, "g", "other", 1, topic_id, (500, 1 << 20), &[]).await;
+    assert!(acquired(&partition(&held)) == vec![(0, 1)]);
+    release(&broker, "g", "other", 2, topic_id, (0, 0)).await;
+
+    // The first pass acquires offset 0 and falls short of `MinBytes`. While
+    // the request waits, `other` releases offset 1, which the last pass
+    // acquires.
+    let mut request = fetch_partitions("g", 1, topic_id, 1, 1 << 20);
+    request.member_id = Some("waiting".into());
+    request.min_bytes = 1 << 20;
+    request.max_wait_ms = 1_000;
+    let (response, ()) = tokio::join!(send_share_fetch(&broker, &request), async {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        release(&broker, "g", "other", 3, topic_id, (1, 1)).await;
+    });
+
+    let row = partition(&response);
+    assert!((acquired(&row), record_offsets(&row)) == (vec![(0, 0), (1, 1)], vec![0, 1]));
     broker.shutdown().await;
 }

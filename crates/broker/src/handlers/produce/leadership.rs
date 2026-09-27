@@ -31,15 +31,6 @@ pub(super) struct BrokerProducePolicy {
     pub(super) is_witness: bool,
 }
 
-/// The partition a Produce may append to, and the effective
-/// `min.insync.replicas` its `acks=all` completion checks the ISR against.
-pub(super) struct AdmittedPartition {
-    pub(super) partition: Arc<crate::partition::Partition>,
-    /// Kafka's `Partition.effectiveMinIsr`: the configured
-    /// `min.insync.replicas`, capped at the size of the replica assignment.
-    pub(super) effective_min_isr: usize,
-}
-
 pub(super) fn validate_partition_gate(
     topic_name: &str,
     partition_index: i32,
@@ -48,7 +39,7 @@ pub(super) fn validate_partition_gate(
     log_dir_status: &crate::log_dir_status::LogDirRegistry,
     image: &krabka_metadata::MetadataImage,
     broker_policy: BrokerProducePolicy,
-) -> Result<AdmittedPartition, PartitionGateError> {
+) -> Result<Arc<crate::partition::Partition>, PartitionGateError> {
     let BrokerProducePolicy {
         node_id: this_node_id,
         default_min_insync_replicas,
@@ -101,21 +92,67 @@ pub(super) fn validate_partition_gate(
             current_leader: None,
         });
     }
-    let configured_min_isr =
-        topic_min_insync_replicas(image, topic_name, default_min_insync_replicas);
-    let effective_min_isr = usize::try_from(configured_min_isr)
-        .unwrap_or(0)
-        .min(record.replicas.len());
+    let effective_min_isr =
+        effective_min_isr_of(image, topic_name, record, default_min_insync_replicas);
     if acks == ACKS_ALL && record.isr.len() < effective_min_isr {
         return Err(PartitionGateError {
             code: codes::NOT_ENOUGH_REPLICAS,
             current_leader: None,
         });
     }
-    Ok(AdmittedPartition {
-        partition,
-        effective_min_isr,
-    })
+    Ok(partition)
+}
+
+/// Kafka's `Partition.effectiveMinIsr`: the `min.insync.replicas` that
+/// `image` resolves for `topic`, capped at the size of `record`'s replica
+/// assignment.
+fn effective_min_isr_of(
+    image: &krabka_metadata::MetadataImage,
+    topic: &str,
+    record: &krabka_metadata::PartitionRecord,
+    default_min_insync_replicas: i32,
+) -> usize {
+    let configured_min_isr = topic_min_insync_replicas(image, topic, default_min_insync_replicas);
+    usize::try_from(configured_min_isr)
+        .unwrap_or(0)
+        .min(record.replicas.len())
+}
+
+/// The effective `min.insync.replicas` of the partition an `acks=all`
+/// append went to, as `image` holds it now, or the error code of a partition
+/// the image no longer holds.
+///
+/// An `acks=all` completion reads this when its high-watermark wait ends, as
+/// Kafka's `Partition.checkEnoughReplicasReachOffset` reads `effectiveMinIsr`
+/// then, so a `min.insync.replicas` change during the wait applies to it.
+///
+/// The partition is the one the append was admitted to only while the topic
+/// still has `admitted_topic_id`: a topic deleted and recreated under the
+/// same name is another partition. Kafka's `DelayedProduce` finds its
+/// partition through `ReplicaManager.getPartitionOrError`, and a deleted
+/// replica answers `NOT_LEADER_OR_FOLLOWER` when the metadata still names the
+/// partition, here the recreated topic's, and `UNKNOWN_TOPIC_OR_PARTITION`
+/// when it does not. A leader or partition epoch change is not a new
+/// partition: Kafka keeps the same `Partition` across both, and the partition
+/// epoch moves on every ISR change, which is what this check reads.
+pub(super) fn current_effective_min_isr(
+    image: &krabka_metadata::MetadataImage,
+    (topic, partition_index): (&str, i32),
+    admitted_topic_id: Option<uuid::Uuid>,
+    default_min_insync_replicas: i32,
+) -> Result<usize, i16> {
+    let record = image
+        .partition(topic, partition_index)
+        .ok_or(codes::UNKNOWN_TOPIC_OR_PARTITION)?;
+    if image.topic(topic).map(|topic| topic.topic_id) != admitted_topic_id {
+        return Err(codes::NOT_LEADER_OR_FOLLOWER);
+    }
+    Ok(effective_min_isr_of(
+        image,
+        topic,
+        record,
+        default_min_insync_replicas,
+    ))
 }
 
 pub(super) fn diskless_role_ready(
@@ -197,6 +234,76 @@ mod tests {
             Some(Uuid::new_v4()),
             record
         ));
+    }
+
+    /// An `acks=all` completion reads the effective minimum only for the
+    /// partition it was admitted to: a topic deleted and recreated under the
+    /// same name answers `NOT_LEADER_OR_FOLLOWER`, and a deleted one
+    /// `UNKNOWN_TOPIC_OR_PARTITION`, as Kafka's `getPartitionOrError` does.
+    /// Epoch changes of the same partition keep it.
+    #[test]
+    fn the_completion_minimum_belongs_to_the_admitted_partition() {
+        use krabka_metadata::{DeleteTopicRecord, PartitionRecord, TopicRecord};
+        let admitted = Uuid::from_u128(1);
+        let image_of = |topic_id: Option<Uuid>, leader_epoch: i32, partition_epoch: i32| {
+            let mut image = image_with_topic("orders", &[1, 2, 3]);
+            image.apply(&MetadataRecord::V1DeleteTopic(DeleteTopicRecord {
+                name: "orders".into(),
+            }));
+            if let Some(topic_id) = topic_id {
+                image.apply(&MetadataRecord::V1Topic(TopicRecord {
+                    name: "orders".into(),
+                    topic_id,
+                    partitions: 1,
+                    replication_factor: 3,
+                }));
+                image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+                    topic: "orders".into(),
+                    partition: 0,
+                    leader: krabka_audit::NodeId(1),
+                    replicas: [1, 2, 3].map(krabka_audit::NodeId).to_vec(),
+                    isr: [1, 2].map(krabka_audit::NodeId).to_vec(),
+                    leader_epoch: krabka_metadata::LeaderEpoch(leader_epoch),
+                    adding_replicas: vec![],
+                    removing_replicas: vec![],
+                    directories: vec![],
+                    partition_epoch,
+                }));
+            }
+            image
+        };
+        let cases = [
+            (
+                "the admitted partition",
+                image_of(Some(admitted), 0, 0),
+                Ok(2),
+            ),
+            (
+                "the admitted partition at later epochs",
+                image_of(Some(admitted), 4, 9),
+                Ok(2),
+            ),
+            (
+                "a topic recreated under the same name",
+                image_of(Some(Uuid::from_u128(2)), 0, 0),
+                Err(codes::NOT_LEADER_OR_FOLLOWER),
+            ),
+            (
+                "a deleted topic",
+                image_of(None, 0, 0),
+                Err(codes::UNKNOWN_TOPIC_OR_PARTITION),
+            ),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (name, image, want) in cases {
+            actual.push((
+                name,
+                current_effective_min_isr(&image, ("orders", 0), Some(admitted), 2),
+            ));
+            expected.push((name, want));
+        }
+        assert!(actual == expected);
     }
 
     #[test]

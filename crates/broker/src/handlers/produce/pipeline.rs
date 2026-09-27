@@ -16,8 +16,8 @@ use super::{
     delivery::DeliveryGate,
     framing::FramedPartition,
     leadership::{
-        AdmittedPartition, BrokerProducePolicy, current_leader_hint, diskless_role_ready,
-        replica_state_matches_image, replication_target_matches_image, validate_partition_gate,
+        BrokerProducePolicy, current_leader_hint, diskless_role_ready, replica_state_matches_image,
+        replication_target_matches_image, validate_partition_gate,
     },
     prepare::{DecodeEnv, PreparedBatch, prepare_batch},
     producer_checks::{
@@ -401,10 +401,7 @@ pub(super) async fn process_partition(
     // node id, and the response's `NodeEndpoints` carries that node's
     // advertised address: `node_endpoints::produce_node_endpoints` fills it
     // from these rows once every partition has been decided.
-    let AdmittedPartition {
-        partition: part,
-        effective_min_isr,
-    } = match validate_partition_gate(
+    let part = match validate_partition_gate(
         topic_name,
         idx,
         acks,
@@ -498,7 +495,7 @@ pub(super) async fn process_partition(
             // deduplicates against already recorded one.
             return Ok(PartitionOutcome::AwaitingHighWatermark(PendingAck::new(
                 response,
-                (Arc::clone(&part), effective_min_isr),
+                Arc::clone(&part),
                 target,
                 None,
                 transition,
@@ -558,7 +555,7 @@ pub(super) async fn process_partition(
             commit,
         } => PartitionOutcome::AwaitingHighWatermark(PendingAck::new(
             response,
-            (Arc::clone(&part), effective_min_isr),
+            Arc::clone(&part),
             target,
             commit,
             transition,

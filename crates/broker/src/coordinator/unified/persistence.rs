@@ -10,9 +10,10 @@
 //!
 //! Field layouts mirror Apache Kafka's schemas at tag `4.3.1`. The two classic
 //! families here, `OffsetCommitValue` and `GroupMetadataValue`, declare
-//! `"flexibleVersions": "4+"`, and the broker writes value versions 1 and 3 of
-//! the first and version 3 of the second, so both stay on the legacy
-//! non-flexible encoding that this module's leaf helpers implement.
+//! `"flexibleVersions": "4+"`. The broker writes value versions 1 and 4 of the
+//! first, as Kafka does, through krabka-protocol's generated codec, and version
+//! 3 of the second, which stays on the legacy non-flexible encoding that this
+//! module's leaf helpers implement.
 //!
 //! The later families do not. Every `coordinator-value` of the KIP-848,
 //! KIP-932 and KIP-1071 record types declares `"flexibleVersions": "0+"`, so
@@ -113,6 +114,10 @@ pub struct OffsetCommitValue {
     /// through `retention_time_ms`, as an absolute wall-clock millisecond.
     /// `None` means the commit takes the broker's `offsets.retention.minutes`.
     pub expire_timestamp_ms: Option<i64>,
+    /// The id of the committed topic, Kafka's `OffsetCommitValue.topicId`
+    /// (version 4, tagged field 0). `None` is Kafka's zero id: the topic was
+    /// unknown at commit time, or the record predates version 4.
+    pub topic_id: Option<uuid::Uuid>,
 }
 
 impl OffsetCommitValue {
@@ -127,57 +132,97 @@ impl OffsetCommitValue {
         buf.freeze()
     }
 
-    /// Encodes an `OffsetCommit` value.
+    /// The value version Kafka's `GroupCoordinatorRecordHelpers.
+    /// offsetCommitValueVersion` writes: version 1, the only schema with an
+    /// `expireTimestamp`, for a commit that carries a per-commit expiry, and
+    /// version 4 for every other commit.
+    #[must_use]
+    pub fn value_version(&self) -> i16 {
+        if self.expire_timestamp_ms.is_some() {
+            1
+        } else {
+            4
+        }
+    }
+
+    /// Encodes an `OffsetCommit` value at [`Self::value_version`].
     ///
-    /// The version depends on the record, exactly as Kafka's
-    /// `GroupMetadataManager.offsetCommitValue` picks it: a commit that
-    /// carries a per-commit expiry writes version 1, the newest schema with an
-    /// `expire_timestamp_ms` field, and every other commit writes version 3.
-    /// Version 1 has no `leader_epoch` field, so a per-commit expiry drops the
-    /// epoch the same way Kafka's does; a reader sees `-1`.
+    /// Version 1 has no `leader_epoch` or `topic_id`, so a per-commit expiry
+    /// drops both the same way Kafka's does; a reader sees `-1` and no id.
     #[must_use]
     pub fn encode_value(&self) -> Bytes {
-        let mut buf = BytesMut::new();
-        let Some(expire_timestamp_ms) = self.expire_timestamp_ms else {
-            buf.put_i16(3); // value version
-            buf.put_i64(self.offset.0);
-            buf.put_i32(self.leader_epoch);
-            put_string(&mut buf, &self.metadata);
-            buf.put_i64(self.commit_timestamp_ms);
-            return buf.freeze();
+        use krabka_protocol::Encode as _;
+        let version = self.value_version();
+        let wire = krabka_protocol::owned::offset_commit_value::OffsetCommitValue {
+            offset: self.offset.0,
+            leader_epoch: self.leader_epoch,
+            metadata: self.metadata.clone(),
+            commit_timestamp: self.commit_timestamp_ms,
+            expire_timestamp: self.expire_timestamp_ms.unwrap_or(-1),
+            topic_id: krabka_protocol::primitives::uuid::Uuid(
+                self.topic_id.unwrap_or_default().into_bytes(),
+            ),
+            ..Default::default()
         };
-        buf.put_i16(1); // value version
-        buf.put_i64(self.offset.0);
-        put_string(&mut buf, &self.metadata);
-        buf.put_i64(self.commit_timestamp_ms);
-        buf.put_i64(expire_timestamp_ms);
+        let mut buf = BytesMut::new();
+        buf.put_i16(version);
+        wire.encode(&mut buf, version)
+            .expect("an OffsetCommitValue encodes at versions 1 and 4");
         buf.freeze()
     }
 
+    /// Decodes an `OffsetCommit` value of any version Kafka defines, 0 to 4,
+    /// as Kafka's `OffsetAndMetadata.fromRecord` reads it: a `-1` expiry is
+    /// none, and the zero topic id is none.
     pub fn decode_value(mut buf: &[u8]) -> Result<Self, BrokerError> {
+        use krabka_protocol::Decode as _;
         let version = get_i16(&mut buf)?;
-        if !(0..=3).contains(&version) {
+        if !(krabka_protocol::owned::offset_commit_value::MIN_VERSION
+            ..=krabka_protocol::owned::offset_commit_value::MAX_VERSION)
+            .contains(&version)
+        {
             return Err(BrokerError::Protocol(
                 krabka_protocol::ProtocolError::InvalidValue("unknown OffsetCommitValue version"),
             ));
         }
-        let offset = Offset(get_i64(&mut buf)?);
-        let leader_epoch = if version >= 3 { get_i32(&mut buf)? } else { -1 };
-        let metadata = get_string(&mut buf)?;
-        let commit_timestamp_ms = get_i64(&mut buf)?;
-        // Only version 1 carries the KIP-211 per-commit expiry.
-        let expire_timestamp_ms = if version == 1 {
-            Some(get_i64(&mut buf)?)
-        } else {
-            None
-        };
+        let wire = krabka_protocol::owned::offset_commit_value::OffsetCommitValue::decode(
+            &mut buf, version,
+        )?;
+        let topic_id = uuid::Uuid::from_bytes(wire.topic_id.0);
         Ok(Self {
-            offset,
-            leader_epoch,
-            metadata,
-            commit_timestamp_ms,
-            expire_timestamp_ms,
+            offset: Offset(wire.offset),
+            leader_epoch: wire.leader_epoch,
+            metadata: wire.metadata,
+            commit_timestamp_ms: wire.commit_timestamp,
+            expire_timestamp_ms: (wire.expire_timestamp != -1).then_some(wire.expire_timestamp),
+            topic_id: (!topic_id.is_nil()).then_some(topic_id),
         })
+    }
+}
+
+impl From<OffsetCommitValue> for crate::coordinator::unified::classic_state::OffsetEntry {
+    fn from(value: OffsetCommitValue) -> Self {
+        Self {
+            offset: value.offset,
+            leader_epoch: value.leader_epoch,
+            metadata: value.metadata,
+            commit_timestamp_ms: value.commit_timestamp_ms,
+            expire_timestamp_ms: value.expire_timestamp_ms,
+            topic_id: value.topic_id,
+        }
+    }
+}
+
+impl From<&crate::coordinator::unified::classic_state::OffsetEntry> for OffsetCommitValue {
+    fn from(entry: &crate::coordinator::unified::classic_state::OffsetEntry) -> Self {
+        Self {
+            offset: entry.offset,
+            leader_epoch: entry.leader_epoch,
+            metadata: entry.metadata.clone(),
+            commit_timestamp_ms: entry.commit_timestamp_ms,
+            expire_timestamp_ms: entry.expire_timestamp_ms,
+            topic_id: entry.topic_id,
+        }
     }
 }
 
@@ -402,52 +447,135 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn offset_commit_round_trip() {
-        let v = OffsetCommitValue {
+    const TOPIC_ID: uuid::Uuid = uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
+
+    fn value(expire_timestamp_ms: Option<i64>, topic_id: Option<uuid::Uuid>) -> OffsetCommitValue {
+        OffsetCommitValue {
             offset: Offset(42),
-            leader_epoch: 0,
+            leader_epoch: 4,
             metadata: "meta".into(),
             commit_timestamp_ms: 1_000_000,
-            expire_timestamp_ms: None,
-        };
-        let encoded = v.encode_value();
-        let decoded = OffsetCommitValue::decode_value(&encoded).unwrap();
-        assert!(decoded == v);
-        assert!(decoded.offset == 42);
-        assert!(decoded.leader_epoch == 0);
-        assert!(decoded.metadata == "meta");
-        assert!(decoded.commit_timestamp_ms == 1_000_000);
+            expire_timestamp_ms,
+            topic_id,
+        }
     }
 
-    /// KIP-211 / `GroupMetadataManager.offsetCommitValue`: a commit that
-    /// carries a per-commit expiry writes value version 1, the newest schema
-    /// with an `expire_timestamp_ms` field, and everything else writes version
-    /// 3. Version 1 has no `leader_epoch`, so a reader sees `-1`.
+    /// `GroupCoordinatorRecordHelpers.newOffsetCommitRecord`: a commit with a
+    /// per-commit expiry writes version 1, which has no leader epoch and no
+    /// topic id, and every other commit writes version 4, flexible, with the
+    /// topic id in tagged field 0 unless it is the zero id.
     #[test]
-    fn offset_commit_value_version_follows_the_per_commit_expiry() {
-        let cases = [(None, 3_i16, 4_i32), (Some(9_999_999), 1_i16, -1_i32)];
-        for (expire_timestamp_ms, want_version, want_leader_epoch) in cases {
-            let value = OffsetCommitValue {
-                offset: Offset(42),
-                leader_epoch: 4,
-                metadata: "meta".into(),
-                commit_timestamp_ms: 1_000_000,
-                expire_timestamp_ms,
-            };
-            let encoded = value.encode_value();
-            assert!(i16::from_be_bytes([encoded[0], encoded[1]]) == want_version);
-
-            let decoded = OffsetCommitValue::decode_value(&encoded).unwrap();
-            let expected = OffsetCommitValue {
-                offset: Offset(42),
-                leader_epoch: want_leader_epoch,
-                metadata: "meta".into(),
-                commit_timestamp_ms: 1_000_000,
-                expire_timestamp_ms,
-            };
-            assert!(decoded == expected);
+    fn offset_commit_value_writes_kafkas_version_and_bytes() {
+        let mut v4_with_id = vec![
+            0x00, 0x04, // version
+            0, 0, 0, 0, 0, 0, 0, 42, // offset
+            0, 0, 0, 4, // leader epoch
+            5, b'm', b'e', b't', b'a', // compact metadata
+            0, 0, 0, 0, 0, 0x0f, 0x42, 0x40, // commit timestamp
+            1, 0, 16, // one tagged field: tag 0, 16 bytes
+        ];
+        v4_with_id.extend_from_slice(TOPIC_ID.as_bytes());
+        let v4_without_id = vec![
+            0x00, 0x04, 0, 0, 0, 0, 0, 0, 0, 42, 0, 0, 0, 4, 5, b'm', b'e', b't', b'a', 0, 0, 0, 0,
+            0, 0x0f, 0x42, 0x40, 0, // no tagged fields
+        ];
+        let v1 = vec![
+            0x00, 0x01, // version
+            0, 0, 0, 0, 0, 0, 0, 42, // offset
+            0, 4, b'm', b'e', b't', b'a', // metadata
+            0, 0, 0, 0, 0, 0x0f, 0x42, 0x40, // commit timestamp
+            0, 0, 0, 0, 0, 0x98, 0x96, 0x7f, // expire timestamp
+        ];
+        let cases = [
+            (
+                value(None, Some(TOPIC_ID)),
+                v4_with_id,
+                value(None, Some(TOPIC_ID)),
+            ),
+            (value(None, None), v4_without_id, value(None, None)),
+            (
+                value(Some(9_999_999), Some(TOPIC_ID)),
+                v1,
+                OffsetCommitValue {
+                    leader_epoch: -1,
+                    ..value(Some(9_999_999), None)
+                },
+            ),
+        ];
+        for (written, bytes, read) in cases {
+            let encoded = written.encode_value();
+            assert!(encoded[..] == bytes[..], "{written:?}");
+            assert!(OffsetCommitValue::decode_value(&encoded).unwrap() == read);
         }
+    }
+
+    /// Every version Kafka defines decodes, the way `OffsetAndMetadata.
+    /// fromRecord` reads it: a leader epoch only from version 3, an expiry only
+    /// at version 1 and only when it is not -1, a topic id only from version 4.
+    #[test]
+    fn offset_commit_value_reads_versions_0_to_4() {
+        use krabka_protocol::Encode as _;
+        let wire = krabka_protocol::owned::offset_commit_value::OffsetCommitValue {
+            offset: 42,
+            leader_epoch: 4,
+            metadata: "meta".into(),
+            commit_timestamp: 1_000_000,
+            expire_timestamp: 9_999_999,
+            topic_id: krabka_protocol::primitives::uuid::Uuid(TOPIC_ID.into_bytes()),
+            ..Default::default()
+        };
+        let cases = [
+            (
+                0,
+                OffsetCommitValue {
+                    leader_epoch: -1,
+                    ..value(None, None)
+                },
+            ),
+            (
+                1,
+                OffsetCommitValue {
+                    leader_epoch: -1,
+                    ..value(Some(9_999_999), None)
+                },
+            ),
+            (
+                2,
+                OffsetCommitValue {
+                    leader_epoch: -1,
+                    ..value(None, None)
+                },
+            ),
+            (3, value(None, None)),
+            (4, value(None, Some(TOPIC_ID))),
+        ];
+        for (version, want) in cases {
+            let mut buf = BytesMut::new();
+            buf.put_i16(version);
+            wire.encode(&mut buf, version).unwrap();
+            assert!(
+                OffsetCommitValue::decode_value(&buf).unwrap() == want,
+                "version {version}"
+            );
+        }
+        let mut unexpiring_v1 = BytesMut::new();
+        unexpiring_v1.put_i16(1);
+        krabka_protocol::owned::offset_commit_value::OffsetCommitValue {
+            expire_timestamp: -1,
+            ..wire.clone()
+        }
+        .encode(&mut unexpiring_v1, 1)
+        .unwrap();
+        assert!(
+            OffsetCommitValue::decode_value(&unexpiring_v1).unwrap()
+                == OffsetCommitValue {
+                    leader_epoch: -1,
+                    ..value(None, None)
+                }
+        );
+        let mut v5 = BytesMut::new();
+        v5.put_i16(5);
+        assert!(OffsetCommitValue::decode_value(&v5).is_err());
     }
 
     #[test]
