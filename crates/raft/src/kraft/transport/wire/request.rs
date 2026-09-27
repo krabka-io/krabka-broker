@@ -267,31 +267,53 @@ where
     T::decode(&mut cur, version).ok()
 }
 
-/// Decodes a `FetchSnapshot` request body (api 59) without checking its
+/// Decodes a `Fetch` request body (api 1) at `version` without checking its
 /// fields.
 #[must_use]
-pub fn decode_fetch_snapshot_request(buf: &[u8]) -> Option<FetchSnapshotRequest> {
-    decode_request(buf, FETCH_SNAPSHOT_VERSION)
+pub fn decode_fetch_request(buf: &[u8], version: i16) -> Option<FetchRequest> {
+    decode_request(buf, version)
 }
 
-/// Decodes a Vote request body (api 52) without checking its fields.
+/// Decodes a `FetchSnapshot` request body (api 59) at `version` without
+/// checking its fields.
 #[must_use]
-pub fn decode_vote_request(buf: &[u8]) -> Option<VoteRequest> {
-    decode_request(buf, VOTE_VERSION)
+pub fn decode_fetch_snapshot_request(buf: &[u8], version: i16) -> Option<FetchSnapshotRequest> {
+    decode_request(buf, version)
 }
 
-/// Decodes a `BeginQuorumEpoch` request body (api 53) without checking its
+/// Decodes a Vote request body (api 52) at `version` without checking its
 /// fields.
 #[must_use]
-pub fn decode_begin_quorum_epoch_request(buf: &[u8]) -> Option<BeginQuorumEpochRequest> {
-    decode_request(buf, QUORUM_EPOCH_VERSION)
+pub fn decode_vote_request(buf: &[u8], version: i16) -> Option<VoteRequest> {
+    decode_request(buf, version)
 }
 
-/// Decodes an `EndQuorumEpoch` request body (api 54) without checking its
-/// fields.
+/// Decodes a `BeginQuorumEpoch` request body (api 53) at `version` without
+/// checking its fields.
 #[must_use]
-pub fn decode_end_quorum_epoch_request(buf: &[u8]) -> Option<EndQuorumEpochRequest> {
-    decode_request(buf, QUORUM_EPOCH_VERSION)
+pub fn decode_begin_quorum_epoch_request(
+    buf: &[u8],
+    version: i16,
+) -> Option<BeginQuorumEpochRequest> {
+    decode_request(buf, version)
+}
+
+/// Decodes an `EndQuorumEpoch` request body (api 54) at `version` without
+/// checking its fields.
+#[must_use]
+pub fn decode_end_quorum_epoch_request(buf: &[u8], version: i16) -> Option<EndQuorumEpochRequest> {
+    decode_request(buf, version)
+}
+
+/// Kafka's `FetchRequest.replicaId`: the top-level `ReplicaId` up to v14, the
+/// `ReplicaState` from v15.
+#[must_use]
+pub fn fetch_replica_id(request: &FetchRequest, version: i16) -> i32 {
+    if version >= 15 {
+        request.replica_state.replica_id
+    } else {
+        request.replica_id
+    }
 }
 
 /// Decodes a Vote request body (api 52).

@@ -17,30 +17,37 @@ use crate::{
     },
 };
 
-/// A decoded inbound KIP-595 RPC plus a oneshot to reply on.
+/// An inbound KIP-595 RPC body, the request version its header carried, and a
+/// oneshot to reply on.
 ///
-/// The event loop decodes the body into a core [`Event`], runs it, and encodes
-/// the produced response, for example `ReplyVote`, back onto `reply`.
+/// The event loop decodes the body at `version` into a core [`Event`], runs
+/// it, and encodes the produced response at the same version back onto
+/// `reply`, as Kafka answers every request at the version it arrived at.
 #[derive(Debug)]
 pub enum Inbound {
     Vote {
         req: Bytes,
+        version: i16,
         reply: oneshot::Sender<Bytes>,
     },
     BeginQuorumEpoch {
         req: Bytes,
+        version: i16,
         reply: oneshot::Sender<Bytes>,
     },
     EndQuorumEpoch {
         req: Bytes,
+        version: i16,
         reply: oneshot::Sender<Bytes>,
     },
     Fetch {
         req: Bytes,
+        version: i16,
         reply: oneshot::Sender<Bytes>,
     },
     FetchSnapshot {
         req: Bytes,
+        version: i16,
         reply: oneshot::Sender<Bytes>,
     },
 }

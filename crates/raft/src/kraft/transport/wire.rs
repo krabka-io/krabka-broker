@@ -22,26 +22,26 @@ mod codec;
 mod request;
 mod response;
 
-/// The pinned `FetchSnapshot` wire version. Public because a broker-only
-/// observer sends this RPC itself, and the version on its request header has
-/// to be the one [`PeerRequest::FetchSnapshot`] encoded the body at.
-pub use self::codec::FETCH_SNAPSHOT_VERSION;
+/// The versions [`PeerRequest`] encodes each peer RPC at. Public because a
+/// broker-only observer sends `FetchSnapshot` itself, and the version on its
+/// request header has to be the one the body was encoded at.
+pub use self::codec::{FETCH_SNAPSHOT_VERSION, FETCH_VERSION, QUORUM_EPOCH_VERSION, VOTE_VERSION};
 pub(crate) use self::{
     codec::{
-        FETCH_VERSION, METADATA_PARTITION, METADATA_TOPIC, QUORUM_EPOCH_VERSION, VOTE_VERSION,
+        METADATA_PARTITION, METADATA_TOPIC, METADATA_TOPIC_ID, epoch_from_wire, node_from_wire,
     },
     request::parse_cluster_id,
 };
 pub use self::{
     request::{
         PeerRequest, decode_begin, decode_begin_quorum_epoch_request, decode_end,
-        decode_end_quorum_epoch_request, decode_fetch, decode_fetch_snapshot,
-        decode_fetch_snapshot_request, decode_vote, decode_vote_request,
+        decode_end_quorum_epoch_request, decode_fetch, decode_fetch_request, decode_fetch_snapshot,
+        decode_fetch_snapshot_request, decode_vote, decode_vote_request, fetch_replica_id,
     },
     response::{
         FetchAnswer, FetchSnapshotPartition, PeerResponse, QuorumLeader,
         encode_begin_quorum_epoch_response, encode_end_quorum_epoch_response,
-        encode_fetch_snapshot_answer, encode_vote_response,
+        encode_fetch_snapshot_answer, encode_fetch_top_level_error, encode_vote_response,
     },
 };
 

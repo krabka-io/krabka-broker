@@ -304,6 +304,7 @@ async fn a_replica_that_cannot_serve_a_fetch_names_the_leader_it_knows() {
         let (reply, mut response) = oneshot::channel();
 
         replica.on_inbound(Inbound::Fetch {
+            version: crate::kraft::transport::wire::FETCH_VERSION,
             req: fetch_request(NodeId(3), request_epoch),
             reply,
         });
@@ -334,6 +335,7 @@ async fn a_leader_refuses_a_fetch_from_another_epoch_and_names_itself() {
     let (reply, mut response) = oneshot::channel();
 
     leader.on_inbound(Inbound::Fetch {
+        version: crate::kraft::transport::wire::FETCH_VERSION,
         req: fetch_request(NodeId(2), i32::try_from(epoch).unwrap() - 1),
         reply,
     });
@@ -933,6 +935,7 @@ async fn a_leader_answers_a_diverging_fetch_without_truncating_its_own_log() {
 
     let (reply, mut response) = oneshot::channel();
     engine.on_inbound(Inbound::Fetch {
+        version: crate::kraft::transport::wire::FETCH_VERSION,
         req: wire::PeerRequest::Fetch {
             from: NodeId(2),
             current_leader_epoch: i32::try_from(leader_epoch).unwrap(),
@@ -999,6 +1002,7 @@ async fn quorum_state_snapshot_tracks_fetch_timestamps_and_observers() {
     tokio::time::sleep(StdDuration::from_millis(10)).await;
     let (reply, _rx) = oneshot::channel();
     engine.on_inbound(Inbound::Fetch {
+        version: crate::kraft::transport::wire::FETCH_VERSION,
         req: wire::PeerRequest::Fetch {
             from: NodeId(2),
             current_leader_epoch: i32::try_from(engine.core.quorum_state().leader_epoch).unwrap(),
@@ -1027,6 +1031,7 @@ async fn quorum_state_snapshot_tracks_fetch_timestamps_and_observers() {
     // 3. Observer (Node 99) fetches via inbound
     let (reply_obs, _rx_obs) = oneshot::channel();
     engine.on_inbound(Inbound::Fetch {
+        version: crate::kraft::transport::wire::FETCH_VERSION,
         req: wire::PeerRequest::Fetch {
             from: NodeId(99),
             current_leader_epoch: i32::try_from(engine.core.quorum_state().leader_epoch).unwrap(),
@@ -1087,6 +1092,7 @@ async fn quorum_state_snapshot_negative_timestamp_fallback() {
     // Shift clock_base back so engine.now() > 0 and progress.last_fetch / progress.last_caught_up > 0
     engine.clock_base = Instant::now() - StdDuration::from_millis(50);
     engine.on_inbound(Inbound::Fetch {
+        version: crate::kraft::transport::wire::FETCH_VERSION,
         req: wire::PeerRequest::Fetch {
             from: NodeId(2),
             current_leader_epoch: i32::try_from(engine.core.quorum_state().leader_epoch).unwrap(),

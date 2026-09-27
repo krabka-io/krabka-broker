@@ -296,6 +296,7 @@ where
                 }
                 let resp = dispatch_with_router(
                     api_key_n,
+                    api_version.get(),
                     body,
                     &engine,
                     shard_router.as_deref(),

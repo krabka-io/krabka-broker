@@ -198,6 +198,7 @@ mod tests {
         let (tx, rx) = tokio::sync::oneshot::channel();
         engine
             .deliver(crate::kraft::transport::Inbound::Fetch {
+                version: crate::kraft::transport::wire::FETCH_VERSION,
                 req: req_bytes,
                 reply: tx,
             })

@@ -262,6 +262,7 @@ mod tests {
 
         let ok_body = dispatch(
             ApiKey(API_KEY_SUBMIT_CHANGE),
+            0,
             submit_change_body(&[topic_record("submit-ok")]),
             &engine,
         )
@@ -278,6 +279,7 @@ mod tests {
         bad_req.encode_v0(&mut bad_body).unwrap();
         let err_body = dispatch(
             ApiKey(API_KEY_SUBMIT_CHANGE),
+            0,
             Bytes::from(bad_body),
             &engine,
         )
@@ -296,6 +298,7 @@ mod tests {
         let topic = topic_record("duplicate");
         let first = dispatch(
             ApiKey(API_KEY_SUBMIT_CHANGE),
+            0,
             submit_change_body(std::slice::from_ref(&topic)),
             &engine,
         )
@@ -305,6 +308,7 @@ mod tests {
 
         let duplicate = dispatch(
             ApiKey(API_KEY_SUBMIT_CHANGE),
+            0,
             submit_change_body(&[topic]),
             &engine,
         )
@@ -363,6 +367,7 @@ mod tests {
 
         let body = dispatch(
             ApiKey(API_KEY_METADATA_FETCH),
+            0,
             metadata_fetch_body(-5, -1),
             &engine,
         )
@@ -391,6 +396,7 @@ mod tests {
 
         let body = dispatch(
             ApiKey(API_KEY_METADATA_FETCH),
+            0,
             metadata_fetch_body(0, 1_048_576),
             &engine,
         )
@@ -440,6 +446,7 @@ mod tests {
 
         let resp_bytes = dispatch(
             ApiKey(crate::wire::API_KEY_DELEGATION_TOKEN_MUTATION),
+            0,
             Bytes::from(req_body),
             &engine,
         )

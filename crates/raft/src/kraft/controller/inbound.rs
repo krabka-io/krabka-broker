@@ -23,28 +23,48 @@ impl Engine {
         match inbound {
             // A body that does not decode drops `reply`, which closes the
             // connection, as Kafka's `RequestContext.parseRequest` does.
-            Inbound::Vote { req, reply } => {
-                if let Some(response) = self.answer_vote(&req) {
+            Inbound::Vote {
+                req,
+                version,
+                reply,
+            } => {
+                if let Some(response) = self.answer_vote(&req, version) {
                     let _ = reply.send(response);
                 }
             }
-            Inbound::BeginQuorumEpoch { req, reply } => {
-                if let Some(response) = self.answer_begin_quorum_epoch(&req) {
+            Inbound::BeginQuorumEpoch {
+                req,
+                version,
+                reply,
+            } => {
+                if let Some(response) = self.answer_begin_quorum_epoch(&req, version) {
                     let _ = reply.send(response);
                 }
             }
-            Inbound::EndQuorumEpoch { req, reply } => {
-                if let Some(response) = self.answer_end_quorum_epoch(&req) {
+            Inbound::EndQuorumEpoch {
+                req,
+                version,
+                reply,
+            } => {
+                if let Some(response) = self.answer_end_quorum_epoch(&req, version) {
                     let _ = reply.send(response);
                 }
             }
-            Inbound::Fetch { req, reply } => {
-                if let Some(response) = self.answer_fetch(&req) {
+            Inbound::Fetch {
+                req,
+                version,
+                reply,
+            } => {
+                if let Some(response) = self.answer_fetch(&req, version) {
                     let _ = reply.send(response);
                 }
             }
-            Inbound::FetchSnapshot { req, reply } => {
-                if let Some(response) = self.answer_fetch_snapshot(&req) {
+            Inbound::FetchSnapshot {
+                req,
+                version,
+                reply,
+            } => {
+                if let Some(response) = self.answer_fetch_snapshot(&req, version) {
                     let _ = reply.send(response);
                 }
             }
@@ -62,21 +82,18 @@ impl Engine {
     /// the epoch, and the fetcher addresses that leader by the endpoint the
     /// response names, not by the responder's address. Only the leader runs
     /// the fetch through the core and serves records.
-    fn answer_fetch(&mut self, req: &[u8]) -> Option<bytes::Bytes> {
-        let wire::PeerRequest::Fetch {
-            from,
-            current_leader_epoch,
-            fetch_epoch,
-            fetch_offset,
-            replica_directory_id,
-        } = wire::decode_fetch(req)?
-        else {
-            return None;
-        };
+    fn answer_fetch(&mut self, req: &[u8], version: i16) -> Option<bytes::Bytes> {
+        let request = wire::decode_fetch_request(req, version)?;
+        let from = wire::node_from_wire(wire::fetch_replica_id(&request, version));
+        let partition = request.topics.first()?.partitions.first()?;
+        let current_leader_epoch = partition.current_leader_epoch;
+        let fetch_epoch = wire::epoch_from_wire(partition.last_fetched_epoch);
+        let fetch_offset = partition.fetch_offset;
+        let replica_directory_id = uuid::Uuid::from_bytes(partition.replica_directory_id.0);
         let log_start = self.log.log_start_offset();
         if let Some(error_code) = self.leader_only_request_error(current_leader_epoch) {
             return Some(
-                wire::PeerResponse::Fetch(wire::FetchAnswer {
+                wire::FetchAnswer {
                     error_code,
                     leader: self.quorum_leader(),
                     diverging: None,
@@ -84,8 +101,8 @@ impl Engine {
                     hwm: -1,
                     log_start_offset: log_start.0,
                     records: bytes::Bytes::new(),
-                })
-                .encode(),
+                }
+                .encode(version),
             );
         }
         self.replica_fetch_offsets.insert(from, fetch_offset);
@@ -144,7 +161,7 @@ impl Engine {
         // Handling the fetch may have ended this leadership (a check-quorum
         // resignation), so the leader view is read again for the answer.
         Some(
-            wire::PeerResponse::Fetch(wire::FetchAnswer {
+            wire::FetchAnswer {
                 error_code: 0,
                 leader: self.quorum_leader(),
                 diverging,
@@ -152,8 +169,8 @@ impl Engine {
                 hwm: self.log.hwm().0,
                 log_start_offset: self.log.log_start_offset().0,
                 records,
-            })
-            .encode(),
+            }
+            .encode(version),
         )
     }
 

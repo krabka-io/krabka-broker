@@ -75,6 +75,80 @@ pub struct FetchAnswer {
     pub records: Bytes,
 }
 
+impl FetchAnswer {
+    /// Encodes the answer as a Fetch response body (api 1) at `version`, the
+    /// version of the request it answers.
+    #[must_use]
+    pub fn encode(&self, version: i16) -> Bytes {
+        // Kafka always sets `Records`, to `MemoryRecords.EMPTY` when
+        // there are none, and leaves `AbortedTransactions` at its
+        // generated default, an empty list: neither is null on the
+        // wire.
+        let mut partition = fetch_resp::PartitionData {
+            partition_index: METADATA_PARTITION,
+            error_code: self.error_code,
+            high_watermark: self.hwm,
+            log_start_offset: self.log_start_offset,
+            aborted_transactions: Some(Vec::new()),
+            current_leader: fetch_resp::LeaderIdAndEpoch {
+                leader_id: self.leader.leader_id_to_wire(),
+                leader_epoch: epoch_to_wire(self.leader.epoch),
+                ..Default::default()
+            },
+            records: Some(RecordsPayload::Raw(self.records.clone())),
+            ..Default::default()
+        };
+        if let Some(point) = self.diverging {
+            partition.diverging_epoch = fetch_resp::EpochEndOffset {
+                epoch: epoch_to_wire(point.epoch),
+                end_offset: point.offset,
+                ..Default::default()
+            };
+        }
+        if let Some((end_offset, epoch)) = self.snapshot_id {
+            partition.snapshot_id = fetch_resp::SnapshotId {
+                end_offset,
+                epoch,
+                ..Default::default()
+            };
+        }
+        // `RaftUtil.singletonFetchResponse`: from v16 `NodeEndpoints`
+        // names the leader when its id and endpoint are known.
+        let resp = FetchResponse {
+            responses: vec![fetch_resp::FetchableTopicResponse {
+                topic: METADATA_TOPIC.to_string(),
+                topic_id: METADATA_TOPIC_ID,
+                partitions: vec![partition],
+                ..Default::default()
+            }],
+            node_endpoints: self
+                .leader
+                .node_endpoint()
+                .map(|(node_id, host, port)| fetch_resp::NodeEndpoint {
+                    node_id,
+                    host,
+                    port: i32::from(port),
+                    ..Default::default()
+                })
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        encode_body(&resp, version)
+    }
+}
+
+/// Encodes Kafka's bare top-level Fetch error response at `version`:
+/// `new FetchResponseData().setErrorCode(error)`, with no topic.
+#[must_use]
+pub fn encode_fetch_top_level_error(error_code: i16, version: i16) -> Bytes {
+    let resp = FetchResponse {
+        error_code,
+        ..Default::default()
+    };
+    encode_body(&resp, version)
+}
+
 /// What a quorum RPC response says about the responder's view of the leader,
 /// as Kafka's `RaftUtil.singleton*Response` helpers fill it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,7 +175,8 @@ impl QuorumLeader {
     }
 }
 
-/// Encodes a Vote response body (api 52).
+/// Encodes a Vote response body (api 52) at `version`, the version of the
+/// request it answers.
 ///
 /// A `top_level_error` other than 0 is Kafka's bare error response: the code
 /// and nothing else. Otherwise the body names the metadata partition with
@@ -112,6 +187,7 @@ pub fn encode_vote_response(
     partition_error: i16,
     vote_granted: bool,
     leader: &QuorumLeader,
+    version: i16,
 ) -> Bytes {
     let resp = if top_level_error == 0 {
         VoteResponse {
@@ -145,16 +221,17 @@ pub fn encode_vote_response(
             ..Default::default()
         }
     };
-    encode_body(&resp, VOTE_VERSION)
+    encode_body(&resp, version)
 }
 
-/// Encodes a `BeginQuorumEpoch` response body (api 53), with the same shape
-/// rules as [`encode_vote_response`].
+/// Encodes a `BeginQuorumEpoch` response body (api 53) at `version`, with the
+/// same shape rules as [`encode_vote_response`].
 #[must_use]
 pub fn encode_begin_quorum_epoch_response(
     top_level_error: i16,
     partition_error: i16,
     leader: &QuorumLeader,
+    version: i16,
 ) -> Bytes {
     let resp = if top_level_error == 0 {
         BeginQuorumEpochResponse {
@@ -187,16 +264,17 @@ pub fn encode_begin_quorum_epoch_response(
             ..Default::default()
         }
     };
-    encode_body(&resp, QUORUM_EPOCH_VERSION)
+    encode_body(&resp, version)
 }
 
-/// Encodes an `EndQuorumEpoch` response body (api 54), with the same shape
-/// rules as [`encode_vote_response`].
+/// Encodes an `EndQuorumEpoch` response body (api 54) at `version`, with the
+/// same shape rules as [`encode_vote_response`].
 #[must_use]
 pub fn encode_end_quorum_epoch_response(
     top_level_error: i16,
     partition_error: i16,
     leader: &QuorumLeader,
+    version: i16,
 ) -> Bytes {
     let resp = if top_level_error == 0 {
         EndQuorumEpochResponse {
@@ -229,7 +307,7 @@ pub fn encode_end_quorum_epoch_response(
             ..Default::default()
         }
     };
-    encode_body(&resp, QUORUM_EPOCH_VERSION)
+    encode_body(&resp, version)
 }
 
 /// The one partition of a `FetchSnapshot` answer that names a partition.
@@ -249,7 +327,7 @@ pub struct FetchSnapshotPartition {
     pub chunk: Option<((i64, i32), i64, i64, Bytes)>,
 }
 
-/// Encodes a `FetchSnapshot` response body (api 59), as Kafka's
+/// Encodes a `FetchSnapshot` response body (api 59) at `version`, as Kafka's
 /// `RaftUtil.singletonFetchSnapshotResponse` builds it.
 ///
 /// `partition` `None` is Kafka's bare top-level error response,
@@ -260,13 +338,14 @@ pub fn encode_fetch_snapshot_answer(
     top_level_error: i16,
     partition: Option<FetchSnapshotPartition>,
     leader: &QuorumLeader,
+    version: i16,
 ) -> Bytes {
     let Some(partition) = partition else {
         let resp = FetchSnapshotResponse {
             error_code: top_level_error,
             ..Default::default()
         };
-        return encode_body(&resp, FETCH_SNAPSHOT_VERSION);
+        return encode_body(&resp, version);
     };
     let mut snapshot = fs_resp::PartitionSnapshot {
         index: partition.index,
@@ -309,7 +388,7 @@ pub fn encode_fetch_snapshot_answer(
             .collect(),
         ..Default::default()
     };
-    encode_body(&resp, FETCH_SNAPSHOT_VERSION)
+    encode_body(&resp, version)
 }
 
 /// Encodes a `FetchSnapshot` response body (api 59).
@@ -387,70 +466,7 @@ impl PeerResponse {
                 };
                 encode_body(&resp, QUORUM_EPOCH_VERSION)
             }
-            PeerResponse::Fetch(FetchAnswer {
-                error_code,
-                leader,
-                diverging,
-                snapshot_id,
-                hwm,
-                log_start_offset,
-                records,
-            }) => {
-                // Kafka always sets `Records`, to `MemoryRecords.EMPTY` when
-                // there are none, and leaves `AbortedTransactions` at its
-                // generated default, an empty list: neither is null on the
-                // wire.
-                let mut partition = fetch_resp::PartitionData {
-                    partition_index: METADATA_PARTITION,
-                    error_code: *error_code,
-                    high_watermark: *hwm,
-                    log_start_offset: *log_start_offset,
-                    aborted_transactions: Some(Vec::new()),
-                    current_leader: fetch_resp::LeaderIdAndEpoch {
-                        leader_id: leader.leader_id_to_wire(),
-                        leader_epoch: epoch_to_wire(leader.epoch),
-                        ..Default::default()
-                    },
-                    records: Some(RecordsPayload::Raw(records.clone())),
-                    ..Default::default()
-                };
-                if let Some(point) = diverging {
-                    partition.diverging_epoch = fetch_resp::EpochEndOffset {
-                        epoch: epoch_to_wire(point.epoch),
-                        end_offset: point.offset,
-                        ..Default::default()
-                    };
-                }
-                if let Some((end_offset, epoch)) = snapshot_id {
-                    partition.snapshot_id = fetch_resp::SnapshotId {
-                        end_offset: *end_offset,
-                        epoch: *epoch,
-                        ..Default::default()
-                    };
-                }
-                // `RaftUtil.singletonFetchResponse`: at v17 `NodeEndpoints`
-                // names the leader when its id and endpoint are known.
-                let resp = FetchResponse {
-                    responses: vec![fetch_resp::FetchableTopicResponse {
-                        topic: METADATA_TOPIC.to_string(),
-                        topic_id: METADATA_TOPIC_ID,
-                        partitions: vec![partition],
-                        ..Default::default()
-                    }],
-                    node_endpoints: leader
-                        .node_endpoint()
-                        .map(|(node_id, host, port)| fetch_resp::NodeEndpoint {
-                            node_id,
-                            host,
-                            port: i32::from(port),
-                            ..Default::default()
-                        })
-                        .into_iter()
-                        .collect(),
-                    ..Default::default()
-                };
-                encode_body(&resp, FETCH_VERSION)
-            }
+            PeerResponse::Fetch(answer) => answer.encode(FETCH_VERSION),
             PeerResponse::FetchSnapshot {
                 snapshot_id,
                 size,

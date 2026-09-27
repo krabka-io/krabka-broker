@@ -276,6 +276,7 @@ fn inbound_fetch_records_non_nil_directory_id() {
     };
     let (reply, _rx) = oneshot::channel();
     engine.on_inbound(Inbound::Fetch {
+        version: crate::kraft::transport::wire::FETCH_VERSION,
         req: req.encode(),
         reply,
     });
@@ -293,6 +294,7 @@ fn inbound_fetch_records_non_nil_directory_id() {
     };
     let (reply2, _rx2) = oneshot::channel();
     engine.on_inbound(Inbound::Fetch {
+        version: crate::kraft::transport::wire::FETCH_VERSION,
         req: nil_req.encode(),
         reply: reply2,
     });
