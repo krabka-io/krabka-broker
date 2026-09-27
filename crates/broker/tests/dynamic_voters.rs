@@ -92,13 +92,8 @@ async fn start_dynamic_cluster(n: u64) -> Vec<(BrokerHandle, TempDir)> {
 async fn auto_join_grows_quorum_to_three() {
     let cluster = start_dynamic_cluster(3).await;
 
-    let leader = cluster
-        .iter()
-        .map(|(handle, _)| handle)
-        .find(|handle| {
-            handle.controller_leader_id() == Some(krabka_broker::NodeId(handle.node_id()))
-        })
-        .expect("an elected controller leader");
+    // The last join can start an election, so a node may not lead yet.
+    let leader = wait_for_leader(&cluster).await;
 
     leader.wait_for_image(|img| img.voters().len() == 3).await;
 
