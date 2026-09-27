@@ -267,7 +267,8 @@ pub(super) fn enables_elr(
 /// config records that make it safe to turn ELR on, written in the same batch
 /// as, and ahead of, the feature record. The cluster-level
 /// `min.insync.replicas` is set to the broker's static value when it has
-/// none, and every broker-level `min.insync.replicas` is removed.
+/// none, and every broker-level `min.insync.replicas` is removed, including
+/// one left behind by a broker that has since unregistered.
 pub(super) fn elr_safety_records(
     image: &krabka_metadata::MetadataImage,
     static_min_insync_replicas: i32,
@@ -286,26 +287,31 @@ pub(super) fn elr_safety_records(
             },
         ));
     }
-    let mut nodes: Vec<krabka_metadata::NodeId> =
-        image.brokers().map(|broker| broker.node_id).collect();
+    // Every broker config resource, registered broker or not, as Kafka walks
+    // `brokersWithConfigs`: unregistering a broker leaves its configs behind.
+    // The image names those resources only through its record form.
+    let mut nodes: Vec<krabka_metadata::NodeId> = image
+        .to_records()
+        .into_iter()
+        .filter_map(|record| match record {
+            MetadataRecord::V1BrokerConfig(config)
+                if config.node_id != krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID
+                    && config.config_name == key =>
+            {
+                Some(config.node_id)
+            }
+            _ => None,
+        })
+        .collect();
     nodes.sort_unstable();
     nodes.dedup();
-    records.extend(
-        nodes
-            .into_iter()
-            .filter(|node| {
-                image
-                    .broker_config(*node)
-                    .is_some_and(|configs| configs.contains_key(key))
-            })
-            .map(|node_id| {
-                MetadataRecord::V1BrokerConfig(krabka_metadata::BrokerConfigRecord {
-                    node_id,
-                    config_name: key.into(),
-                    config_value: None,
-                })
-            }),
-    );
+    records.extend(nodes.into_iter().map(|node_id| {
+        MetadataRecord::V1BrokerConfig(krabka_metadata::BrokerConfigRecord {
+            node_id,
+            config_name: key.into(),
+            config_value: None,
+        })
+    }));
     records
 }
 

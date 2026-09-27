@@ -551,12 +551,15 @@ fn feature_rows_follow_kafka_update_feature_precedence() {
 
 /// Kafka's `maybeGenerateElrSafetyRecords`, over the starting broker configs:
 /// the cluster-level `min.insync.replicas` is kept or set to the static
-/// value, and a broker-level one is removed.
+/// value, and a broker-level one is removed, whether or not that broker is
+/// still registered: Kafka walks every broker config resource
+/// (`brokersWithConfigs`), not the registered brokers.
 #[test]
 fn enabling_elr_writes_kafkas_safety_config_records() {
     let key = crate::config_keys::MIN_INSYNC_REPLICAS;
     let cluster = krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID;
     let node = krabka_metadata::NodeId(1);
+    let unregistered = krabka_metadata::NodeId(7);
     let config = |node_id, value: Option<&str>| {
         MetadataRecord::V1BrokerConfig(krabka_metadata::BrokerConfigRecord {
             node_id,
@@ -565,27 +568,35 @@ fn enabling_elr_writes_kafkas_safety_config_records() {
         })
     };
     let cases = [
-        (None, None, 2, vec![config(cluster, Some("2"))]),
-        (Some("3"), None, 2, vec![]),
+        (None, node, None, 2, vec![config(cluster, Some("2"))]),
+        (Some("3"), node, None, 2, vec![]),
         (
             None,
+            node,
             Some("2"),
             1,
             vec![config(cluster, Some("1")), config(node, None)],
         ),
-        (Some("3"), Some("2"), 1, vec![config(node, None)]),
+        (Some("3"), node, Some("2"), 1, vec![config(node, None)]),
+        (
+            Some("3"),
+            unregistered,
+            Some("2"),
+            1,
+            vec![config(unregistered, None)],
+        ),
     ];
-    for (cluster_value, broker_value, static_value, want) in cases {
+    for (cluster_value, broker, broker_value, static_value, want) in cases {
         let mut image = image_with_directory(crate::features::METADATA_VERSION_MAX);
         if let Some(value) = cluster_value {
             image.apply(&config(cluster, Some(value)));
         }
         if let Some(value) = broker_value {
-            image.apply(&config(node, Some(value)));
+            image.apply(&config(broker, Some(value)));
         }
         assert!(
             elr_safety_records(&image, static_value) == want,
-            "{cluster_value:?} {broker_value:?} {static_value}"
+            "{cluster_value:?} {broker:?} {broker_value:?} {static_value}"
         );
     }
 
