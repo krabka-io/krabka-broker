@@ -213,28 +213,39 @@ async fn the_heartbeat_after_a_metadata_update_refreshes_the_assignment() {
     check!(answers == expected);
 }
 
-/// A group loaded from its records takes the metadata it loads against as
-/// the metadata of its target, so an update that leaves the hash as it was
-/// does not rebalance it, and one that moves the hash does.
+/// Kafka refreshes a loaded group's metadata at its first heartbeat, and a
+/// record without a `MetadataHash`, as krabka's records all are, reads as 0.
+/// So that heartbeat bumps the epoch and recomputes the target, and a topic
+/// that grew while no coordinator held the group, or after the load, reaches
+/// the member.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_loaded_group_refreshes_against_the_metadata_it_loaded_with() {
-    // (name, the metadata when the update arrives, the answer after it)
+async fn a_loaded_group_refreshes_its_metadata_at_the_first_heartbeat() {
+    // (name, the metadata when the group loads, a change after the load, the
+    // answer to the first heartbeat)
     let rows = [
         (
             "the topic is as it was",
             snapshot_of(&[("orders", 1, 2)]),
-            answer(1, None),
+            None,
+            answer(2, None),
+        ),
+        (
+            "the topic grew while no coordinator held the group",
+            snapshot_of(&[("orders", 1, 3)]),
+            None,
+            answer(2, Some(vec![(1, vec![0, 1, 2])])),
         ),
         (
             "the topic grew after the load",
-            snapshot_of(&[("orders", 1, 3)]),
+            snapshot_of(&[("orders", 1, 2)]),
+            Some(snapshot_of(&[("orders", 1, 3)])),
             answer(2, Some(vec![(1, vec![0, 1, 2])])),
         ),
     ];
 
     let mut answers = Vec::new();
     let mut expected = Vec::new();
-    for (name, after, wanted) in rows {
+    for (name, at_load, after_load, wanted) in rows {
         let metadata = SwitchableMetadata::new(snapshot_of(&[("orders", 1, 2)]));
         let previous = make_coord_with_metadata(metadata.clone());
         let previous_handle = previous.get_or_create_consumer("g");
@@ -242,6 +253,7 @@ async fn a_loaded_group_refreshes_against_the_metadata_it_loaded_with() {
         acknowledge(&previous_handle, &joined).await;
         let seed = previous.cached_seed("g").expect("the group's records");
 
+        metadata.set(at_load);
         let loaded = make_coord_with_metadata(metadata.clone());
         let handle = loaded.get_or_create_consumer("g");
         handle.tx.send(GroupActorMessage::Seed(seed)).await.unwrap();
@@ -254,8 +266,10 @@ async fn a_loaded_group_refreshes_against_the_metadata_it_loaded_with() {
             .await
             .unwrap();
         described.await.unwrap();
-        metadata.set(after);
-        metadata_update(&handle, &["orders"]).await;
+        if let Some(after) = after_load {
+            metadata.set(after);
+            metadata_update(&handle, &["orders"]).await;
+        }
         let refreshed = heartbeat(&handle, keepalive(joined.member_epoch, None)).await;
 
         answers.push((name, refreshed));

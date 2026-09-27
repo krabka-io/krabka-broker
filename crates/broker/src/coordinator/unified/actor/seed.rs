@@ -29,7 +29,7 @@ use crate::coordinator::unified::{
     consumer_state::{ClassicMemberFacade, GroupState, MemberState},
     migration::target_to_consumer_assignment,
     persistence_next_gen::{AssignedTopicPartitions, MemberAssignmentState},
-    reconciler::{self, ReconcileInput},
+    reconciler::ReconcileInput,
 };
 
 /// Everything a member still holds: the partitions it is assigned plus the
@@ -197,11 +197,16 @@ pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed, image: &Reconc
     for member_id in member_ids {
         state.track_rebalance_timeout(&member_id, now);
     }
-    // Kafka persists the metadata hash in `ConsumerGroupMetadataValue` and
-    // compares it at the first heartbeat after a load. Krabka keeps the hash
-    // in memory only, so a loaded group takes the metadata it loads against
-    // as the metadata of its target.
-    state.record_metadata_hash(reconciler::metadata_hash(state, image));
+    // Kafka persists the metadata hash in `ConsumerGroupMetadataValue`, and a
+    // loaded group refreshes its metadata at the first heartbeat, since its
+    // refresh deadline starts expired. A record without a hash reads as 0,
+    // so that heartbeat bumps the epoch and recomputes the target. Krabka
+    // does not persist the hash, so every loaded group is that case: its
+    // hash stays unknown (0) and it asks for a refresh. A subscribed topic
+    // that changed while no coordinator held the group then reaches the
+    // group's next target, instead of the stored target standing for
+    // metadata it was never computed from.
+    state.request_metadata_refresh();
     state.dirty = false;
 }
 
