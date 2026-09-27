@@ -39,12 +39,18 @@ pub fn consume_producer_quota(
     )
 }
 
+/// The token-bucket rate of a `producer_byte_rate`.
+///
+/// Kafka enforces the configured rate as a double, so a positive rate under
+/// one byte per second still throttles. The bucket counts whole bytes, so such
+/// a rate gets a bucket rate of 1; the delay is still the overage divided by
+/// the real rate.
 fn quota_rate_to_bucket_rate(rate: f64) -> Option<u64> {
-    if !rate.is_finite() || rate < 1.0 {
+    if !rate.is_finite() || rate <= 0.0 {
         return None;
     }
 
-    rate.floor().to_u64()
+    rate.floor().to_u64().map(|whole| whole.max(1))
 }
 
 #[cfg(test)]
@@ -118,5 +124,30 @@ mod tests {
         let delay = consume_producer_quota(&img, &buckets, "alice", "app", 1024 * (11 + 20));
 
         assert!(delay > secs(19) && delay <= secs(20), "{delay:?}");
+    }
+
+    /// Kafka enforces `producer_byte_rate` as a double, so a rate under one
+    /// byte per second throttles instead of leaving the producer unbounded.
+    #[test]
+    fn a_fractional_producer_byte_rate_throttles() {
+        // `(producer_byte_rate, request bytes, expected throttle)`. The
+        // one-second window gives the bucket a burst of its rate, rounded up
+        // to one whole byte.
+        let cases = [
+            (1024.0, 1024, <Time as TimeExt>::ZERO),
+            (1024.0, 2048, secs(1)),
+            (0.5, 1, <Time as TimeExt>::ZERO),
+            (0.5, 100, secs(198)),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (rate, bytes, delay) in cases {
+            let img = img_with_quota(vec![("user", Some("alice"))], rate);
+            let buckets = QuotaBuckets::with_window(secs(1));
+            let throttle = consume_producer_quota(&img, &buckets, "alice", "app", bytes);
+            actual.push((rate.to_string(), bytes, throttle.delay));
+            expected.push((rate.to_string(), bytes, delay));
+        }
+        assert!(actual == expected);
     }
 }

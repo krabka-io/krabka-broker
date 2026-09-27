@@ -40,7 +40,7 @@ pub async fn run(
 fn token_rate(quota_key: &str, rate: f64) -> u64 {
     match quota_key {
         "request_percentage" => super::request::request_percentage_token_rate(rate),
-        "connection_creation_rate" | "consumer_byte_rate" if rate > 0.0 => {
+        "connection_creation_rate" | "consumer_byte_rate" | "producer_byte_rate" if rate > 0.0 => {
             positive_f64_to_u64(rate).max(1)
         }
         _ => positive_f64_to_u64(rate),
@@ -190,19 +190,26 @@ mod tests {
     /// An image change keeps a positive `consumer_byte_rate` under one byte
     /// per second as a throttle, the way the fetch path created the bucket.
     #[test]
-    fn refresh_keeps_a_fractional_consumer_byte_rate() {
-        let cases: [(f64, u64); 3] = [(2048.0, 2048), (1.5, 1), (0.5, 1)];
+    fn refresh_keeps_a_fractional_byte_rate() {
+        let cases: [(&str, f64, u64); 6] = [
+            ("consumer_byte_rate", 2048.0, 2048),
+            ("consumer_byte_rate", 1.5, 1),
+            ("consumer_byte_rate", 0.5, 1),
+            ("producer_byte_rate", 2048.0, 2048),
+            ("producer_byte_rate", 1.5, 1),
+            ("producer_byte_rate", 0.5, 1),
+        ];
         let mut actual = Vec::new();
         let mut expected = Vec::new();
-        for (rate, want) in cases {
+        for (quota_key, rate, want) in cases {
             let buckets = Arc::new(QuotaBuckets::new());
             let key: EntityKey = vec![("user".into(), Some("alice".into()))];
-            let b = buckets.get_or_create("consumer_byte_rate", &key, "alice", "", 1024);
+            let b = buckets.get_or_create(quota_key, &key, "alice", "", 1024);
 
-            let img = img_with_quota(vec![("user", Some("alice"))], "consumer_byte_rate", rate);
+            let img = img_with_quota(vec![("user", Some("alice"))], quota_key, rate);
             refresh_buckets(&img, &buckets);
-            actual.push((rate.to_string(), b.byte_rate()));
-            expected.push((rate.to_string(), bucket_rate(want)));
+            actual.push((quota_key, rate.to_string(), b.byte_rate()));
+            expected.push((quota_key, rate.to_string(), bucket_rate(want)));
         }
         assert!(actual == expected);
     }
