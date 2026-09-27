@@ -447,6 +447,9 @@ async fn group_share_settings_override_the_broker_defaults() {
     broker.shutdown().await;
 }
 
+/// `(version, ShareAcquireMode, MaxRecords, BatchSize, acquired rows)`.
+type ShapeCase = (i16, i8, i32, i32, Vec<(i64, i64)>);
+
 /// Kafka's `ShareAcquireMode` and `BatchSize` over two three-record log
 /// batches at offsets 0 and 3, each case in a group of its own.
 #[tokio::test]
@@ -456,7 +459,7 @@ async fn the_acquire_mode_and_batch_size_shape_the_acquired_rows() {
     produce(&broker, "shaped", 0).await;
     produce(&broker, "shaped", 0).await;
     // (version, ShareAcquireMode, MaxRecords, BatchSize, acquired rows)
-    let cases: [(i16, i8, i32, i32, Vec<(i64, i64)>); 4] = [
+    let cases: [ShapeCase; 4] = [
         // batch_optimized, the only mode at v1: a whole log batch.
         (1, 0, 2, 500, vec![(0, 2)]),
         // record_limit: exactly MaxRecords.
@@ -509,5 +512,125 @@ async fn the_acquire_mode_and_batch_size_shape_the_acquired_rows() {
         expected.push((index, rows));
     }
     assert!(actual == expected);
+    broker.shutdown().await;
+}
+
+/// A `ShareFetch` with the limits of `(max_bytes, min_bytes, max_wait_ms)`
+/// over `partitions` of `topic_id`, at session epoch 0 of `group`. It returns
+/// the acquired ranges per partition, in partition order, and the time the
+/// response took.
+async fn fetch_with_limits(
+    broker: &BrokerHandle,
+    group: &str,
+    topic_id: WireUuid,
+    partitions: &[i32],
+    (max_bytes, min_bytes, max_wait_ms): (i32, i32, i32),
+) -> (Vec<(i32, Vec<(i64, i64)>)>, Duration) {
+    let request = ShareFetchRequest {
+        group_id: Some(group.into()),
+        member_id: Some("member".into()),
+        max_bytes,
+        min_bytes,
+        max_wait_ms,
+        max_records: 500,
+        batch_size: 500,
+        topics: vec![FetchTopic {
+            topic_id,
+            partitions: partitions
+                .iter()
+                .map(|&partition_index| FetchPartition {
+                    partition_index,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let shared = broker.broker_arc_for_test();
+    let user = principal("share-consumer");
+    let address = peer();
+    let ctx = request_context(&user, &address, "share-client");
+    let started = Instant::now();
+    let response = handle(
+        &shared,
+        VERSION,
+        7,
+        &encode_request(&request, VERSION),
+        &ctx,
+    )
+    .await
+    .expect("handle share fetch");
+    let took = started.elapsed();
+    let response: ShareFetchResponse = decode_response(&response, VERSION);
+    let mut rows: Vec<(i32, Vec<(i64, i64)>)> = response
+        .responses
+        .iter()
+        .flat_map(|topic| &topic.partitions)
+        .map(|row| {
+            (
+                row.partition_index,
+                row.acquired_records
+                    .iter()
+                    .map(|range| (range.first_offset, range.last_offset))
+                    .collect(),
+            )
+        })
+        .collect();
+    rows.sort_unstable();
+    (rows, took)
+}
+
+/// Kafka's `PartitionMaxBytesStrategy.UNIFORM`: `MaxBytes` is the budget of
+/// the whole response, split across the partitions. A budget of one byte
+/// reaches one of two partitions, which still gets its first batch whole.
+#[tokio::test]
+async fn max_bytes_is_split_across_the_partitions() {
+    let (broker, _dir) = start(10_000).await;
+    let topic_id = create_topic(&broker, "split", 2).await;
+    for partition in [0, 1] {
+        produce(&broker, "split", partition).await;
+        produce(&broker, "split", partition).await;
+    }
+    earliest(&broker, "tight", topic_id, 2).await;
+    earliest(&broker, "roomy", topic_id, 2).await;
+
+    let (tight, _) = fetch_with_limits(&broker, "tight", topic_id, &[0, 1], (1, 0, 0)).await;
+    let (roomy, _) = fetch_with_limits(&broker, "roomy", topic_id, &[0, 1], (1 << 20, 0, 0)).await;
+
+    assert!(
+        (tight, roomy)
+            == (
+                vec![(0, vec![(0, 2)]), (1, Vec::new())],
+                vec![(0, vec![(0, 5)]), (1, vec![(0, 5)])],
+            )
+    );
+    broker.shutdown().await;
+}
+
+/// Kafka's `DelayedShareFetch.isMinBytesSatisfied`: a response that holds
+/// fewer than `MinBytes` waits out `MaxWaitMs`, and one that holds enough
+/// answers at once.
+#[tokio::test]
+async fn min_bytes_holds_the_response_until_max_wait() {
+    let (broker, _dir) = start(10_000).await;
+    let topic_id = create_topic(&broker, "min-bytes", 1).await;
+    produce(&broker, "min-bytes", 0).await;
+    earliest(&broker, "short", topic_id, 1).await;
+    earliest(&broker, "enough", topic_id, 1).await;
+
+    let (short, short_took) =
+        fetch_with_limits(&broker, "short", topic_id, &[0], (1 << 20, 1 << 20, 300)).await;
+    let (enough, enough_took) =
+        fetch_with_limits(&broker, "enough", topic_id, &[0], (1 << 20, 1, 30_000)).await;
+
+    assert!(
+        (
+            short,
+            short_took >= Duration::from_millis(300),
+            enough,
+            enough_took < Duration::from_secs(10),
+        ) == (vec![(0, vec![(0, 2)])], true, vec![(0, vec![(0, 2)])], true)
+    );
     broker.shutdown().await;
 }

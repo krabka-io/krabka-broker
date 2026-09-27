@@ -6,13 +6,17 @@
 //! [`AcquisitionState`](crate::share_partition::state::AcquisitionState) locks,
 //! the request-wide record budget, and the retry pass behind the long poll.
 
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use krabka_log::{LogError, Offset};
+use krabka_protocol::{owned::share_fetch_response::PartitionData, records::RecordsPayload};
 
 use super::{
     acknowledge::{AckApplication, apply_acknowledgements},
-    long_poll::{arm_waits, long_poll},
+    long_poll::{LongPollOutcome, arm_waits, long_poll},
     pending::PendingPartition,
     records::{
         AcquireMode, AcquireRequest, acquire_read_records, pending_activation_ranges, read_budget,
@@ -51,7 +55,10 @@ pub(super) struct AcquireContext<'a> {
     pub(super) group: &'a str,
     pub(super) member: &'a str,
     pub(super) max_records: i32,
+    /// The byte budget of the whole response, split across the partitions.
     pub(super) max_bytes: i32,
+    /// The record bytes the response waits for, up to `max_bytes`.
+    pub(super) min_bytes: i32,
     /// `ShareAcquireMode` and `BatchSize`.
     pub(super) mode: AcquireMode,
     pub(super) renewal: super::acknowledge::Renewal,
@@ -60,24 +67,82 @@ pub(super) struct AcquireContext<'a> {
     pub(super) settings: GroupShareSettings,
 }
 
+/// What the passes of one request have taken so far.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Spent {
+    records: i64,
+    bytes: i64,
+}
+
+/// Runs acquire passes until the response holds `min_bytes` of records, the
+/// record or byte budget is spent, or `max_wait_ms` runs out.
+///
+/// This is Kafka's `DelayedShareFetch`: the request waits in purgatory until
+/// `isMinBytesSatisfied` or the wait ends. Kafka measures the bytes that the
+/// log holds past each fetch offset; this measures the bytes it acquired,
+/// which is the same for records that no other member takes first. A
+/// `min_bytes` of 0 is satisfied at once. Each later pass adds to what the
+/// earlier ones acquired.
 pub(super) async fn acquire_records(
     context: &AcquireContext<'_>,
     pending: &mut [PendingPartition],
     max_wait_ms: i32,
 ) -> Result<(), BrokerError> {
-    // Arm the long poll's waiters before the first acquire pass, so a record
-    // produced while that pass runs still wakes the park that follows it.
-    let waits = if max_wait_ms > 0 {
-        arm_waits(context.broker, pending)
-    } else {
-        Vec::new()
-    };
-    let acquired = acquire_pass(context, pending, true).await?;
-    if acquired == 0 && max_wait_ms > 0 {
-        long_poll(waits, max_wait_ms).await;
-        acquire_pass(context, pending, false).await?;
+    let wait = Duration::from_millis(u64::try_from(max_wait_ms).unwrap_or(0));
+    let deadline = Instant::now() + wait;
+    let min_bytes = i64::from(context.min_bytes.min(context.max_bytes).max(0));
+    let mut spent = Spent::default();
+    let mut first = true;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        // Arm the long poll's waiters before the pass, so a record produced
+        // while the pass runs still wakes the park that follows it.
+        let waits = if left.is_zero() {
+            Vec::new()
+        } else {
+            arm_waits(context.broker, pending)
+        };
+        spent = acquire_pass(context, pending, first, spent).await?;
+        first = false;
+        let done = spent.bytes >= min_bytes
+            || spent.records >= i64::from(context.max_records)
+            || spent.bytes >= i64::from(context.max_bytes);
+        if done || left.is_zero() {
+            return Ok(());
+        }
+        let left_ms = i32::try_from(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis(),
+        )
+        .unwrap_or(i32::MAX);
+        if long_poll(waits, left_ms).await == LongPollOutcome::NoPartitions {
+            return Ok(());
+        }
     }
-    Ok(())
+}
+
+/// Kafka's `PartitionMaxBytesStrategy.uniformPartitionMaxBytes`: the byte
+/// budget of the partition at `index` of `partitions`.
+///
+/// An even share each, with the remainder on one partition. A budget smaller
+/// than the partition count gives one byte to as many partitions as it
+/// covers and none to the rest. Kafka picks the partitions for the remainder
+/// and for the single bytes at random; this picks the first ones, which the
+/// round-robin rotation of the partitions spreads over the requests.
+fn uniform_share(budget: i64, partitions: usize, index: usize) -> i32 {
+    let (Ok(count), Ok(at)) = (i64::try_from(partitions), i64::try_from(index)) else {
+        return 0;
+    };
+    if count == 0 || budget <= 0 {
+        return 0;
+    }
+    let share = if budget >= count {
+        budget / count + if at == 0 { budget % count } else { 0 }
+    } else {
+        i64::from(at < budget)
+    };
+    i32::try_from(share).unwrap_or(i32::MAX)
 }
 
 /// Pulls freshly produced records into the acquisition window, unless the
@@ -172,7 +237,7 @@ struct GrowAndAcquireArgs<'a> {
 /// offset, and that offset can sit below the log's start offset.
 async fn grow_and_acquire(
     st: &mut crate::share_partition::state::AcquisitionState,
-    out: &mut krabka_protocol::owned::share_fetch_response::PartitionData,
+    out: &mut PartitionData,
     args: GrowAndAcquireArgs<'_>,
 ) -> Result<i64, BrokerError> {
     let GrowAndAcquireArgs {
@@ -252,7 +317,8 @@ async fn acquire_pass(
     context: &AcquireContext<'_>,
     pending: &mut [PendingPartition],
     apply_acks: bool,
-) -> Result<i64, BrokerError> {
+    spent: Spent,
+) -> Result<Spent, BrokerError> {
     let &AcquireContext {
         broker,
         manager: mgr,
@@ -263,18 +329,19 @@ async fn acquire_pass(
         mode,
         renewal,
         settings,
+        ..
     } = context;
     let now = Instant::now();
     let read_committed = settings.read_committed;
-    let mut total = 0_i64;
+    let mut total = spent;
+    let fetching = pending.iter().filter(|p| p.leadable && p.fetchable).count();
+    let byte_budget = i64::from(max_bytes) - spent.bytes;
+    let mut fetch_index = 0_usize;
 
     for p in pending.iter_mut() {
         if !p.leadable {
             continue;
         }
-        // Reset any prior pass's data for a clean re-acquire.
-        p.out.records = None;
-        p.out.acquired_records.clear();
 
         let mut has_acks = apply_acks && !p.ack_batches.is_empty();
         // Kafka's `SharePartitionManager.acknowledge` runs before the fetch,
@@ -366,8 +433,16 @@ async fn acquire_pass(
         // A released or expired record at the delivery limit is archived
         // first, so it cannot hold the window shut.
         st.archive_exhausted(settings.delivery_count_limit);
-        let remaining_records = remaining_record_budget(max_records, total);
-        let read_max_bytes = read_budget(p.partition_max_bytes, max_bytes);
+        let share = uniform_share(byte_budget, fetching, fetch_index);
+        fetch_index += 1;
+        // A partition that the byte budget does not reach acquires nothing
+        // this pass.
+        let remaining_records = if share > 0 {
+            remaining_record_budget(max_records, total.records)
+        } else {
+            0
+        };
+        let read_max_bytes = read_budget(p.partition_max_bytes, share);
         let grow_and_acquire_args = || GrowAndAcquireArgs {
             part: &part,
             upper,
@@ -378,7 +453,10 @@ async fn acquire_pass(
             mode,
             now,
         };
-        let outcome = grow_and_acquire(&mut st, &mut p.out, grow_and_acquire_args()).await;
+        // This pass's records land in `fresh`, then join what earlier passes
+        // put in the row.
+        let mut fresh = PartitionData::default();
+        let outcome = grow_and_acquire(&mut st, &mut fresh, grow_and_acquire_args()).await;
         let acquired_count = match outcome {
             Ok(count) => count,
             Err(err) if log_start_moved_past_spso(&err) => {
@@ -389,8 +467,7 @@ async fn acquire_pass(
                 // grown that far). An Acquired record below the new start
                 // stays locked until it times out.
                 st.advance_past_log_start(part.log_start_offset());
-                p.out.records = None;
-                p.out.acquired_records.clear();
+                fresh = PartitionData::default();
                 // Retry once in place, now that the SPSO/scan floor is
                 // repaired: without this, a repair that leaves readable
                 // records at the new log start would still report 0
@@ -398,15 +475,14 @@ async fn acquire_pass(
                 // WHOLE pass acquires nothing) would park for the full
                 // max_wait_ms even though a retry right now would already
                 // find them.
-                match grow_and_acquire(&mut st, &mut p.out, grow_and_acquire_args()).await {
+                match grow_and_acquire(&mut st, &mut fresh, grow_and_acquire_args()).await {
                     Ok(count) => count,
                     Err(err) if log_start_moved_past_spso(&err) => {
                         // The log start moved again between the two attempts.
                         // Report the partition as caught up with no records
                         // rather than failing the whole request.
                         st.advance_past_log_start(part.log_start_offset());
-                        p.out.records = None;
-                        p.out.acquired_records.clear();
+                        fresh = PartitionData::default();
                         0
                     }
                     Err(err) => return Err(err),
@@ -425,10 +501,33 @@ async fn acquire_pass(
             .await
         {
             Err(code) if fences_the_partition(code) => fail_partition(p, false, code),
-            _ => total += acquired_count,
+            _ => {
+                total.records += acquired_count;
+                total.bytes += append_records(&mut p.out, fresh);
+            }
         }
     }
     Ok(total)
+}
+
+/// Adds the records and the acquired rows of one pass to a partition row, and
+/// returns the record bytes it added.
+fn append_records(out: &mut PartitionData, fresh: PartitionData) -> i64 {
+    out.acquired_records.extend(fresh.acquired_records);
+    let Some(RecordsPayload::Raw(added)) = fresh.records else {
+        return 0;
+    };
+    let added_len = i64::try_from(added.len()).unwrap_or(i64::MAX);
+    out.records = Some(RecordsPayload::Raw(match out.records.take() {
+        Some(RecordsPayload::Raw(before)) if !before.is_empty() => {
+            let mut joined = bytes::BytesMut::with_capacity(before.len() + added.len());
+            joined.extend_from_slice(&before);
+            joined.extend_from_slice(&added);
+            joined.freeze()
+        }
+        _ => added,
+    }));
+    added_len
 }
 
 /// Fails one partition row with a share-partition error, and leaves it out of
@@ -576,6 +675,21 @@ mod tests {
             expected.push((row, acquired));
         }
         assert!(actual == expected);
+    }
+
+    /// Kafka's `uniformPartitionMaxBytes` with the random picks fixed to the
+    /// first partitions.
+    #[test]
+    fn the_byte_budget_splits_evenly_across_the_partitions() {
+        let shares = |budget, partitions| {
+            (0..partitions)
+                .map(|index| uniform_share(budget, partitions, index))
+                .collect::<Vec<_>>()
+        };
+        check!(shares(1 << 20, 1) == vec![1 << 20]);
+        check!(shares(10, 3) == vec![4, 3, 3]);
+        check!(shares(2, 3) == vec![1, 1, 0]);
+        check!(shares(0, 2) == vec![0, 0]);
     }
 
     #[test]
