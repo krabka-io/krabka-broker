@@ -32,13 +32,17 @@ pub async fn run(
 /// The token rate a bucket for `quota_key` runs at, in the unit its consumer
 /// meters: the same conversion the consumer used when it created the bucket.
 ///
-/// `request_percentage` meters microseconds of handler time per second, and
-/// the accept loop never lets a positive `connection_creation_rate` round down
-/// to the unlimited rate 0. The byte rates are whole bytes per second.
+/// `request_percentage` meters microseconds of handler time per second. The
+/// accept loop never lets a positive `connection_creation_rate` round down to
+/// the unlimited rate 0, and the fetch path does the same for a positive
+/// `consumer_byte_rate`, which Kafka enforces as a double. The byte rates are
+/// whole bytes per second.
 fn token_rate(quota_key: &str, rate: f64) -> u64 {
     match quota_key {
         "request_percentage" => super::request::request_percentage_token_rate(rate),
-        "connection_creation_rate" if rate > 0.0 => positive_f64_to_u64(rate).max(1),
+        "connection_creation_rate" | "consumer_byte_rate" if rate > 0.0 => {
+            positive_f64_to_u64(rate).max(1)
+        }
         _ => positive_f64_to_u64(rate),
     }
 }
@@ -181,5 +185,25 @@ mod tests {
             refresh_buckets(&img, &buckets);
             assert!(b.byte_rate() == bucket_rate(expected), "{case}");
         }
+    }
+
+    /// An image change keeps a positive `consumer_byte_rate` under one byte
+    /// per second as a throttle, the way the fetch path created the bucket.
+    #[test]
+    fn refresh_keeps_a_fractional_consumer_byte_rate() {
+        let cases: [(f64, u64); 3] = [(2048.0, 2048), (1.5, 1), (0.5, 1)];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (rate, want) in cases {
+            let buckets = Arc::new(QuotaBuckets::new());
+            let key: EntityKey = vec![("user".into(), Some("alice".into()))];
+            let b = buckets.get_or_create("consumer_byte_rate", &key, "alice", "", 1024);
+
+            let img = img_with_quota(vec![("user", Some("alice"))], "consumer_byte_rate", rate);
+            refresh_buckets(&img, &buckets);
+            actual.push((rate.to_string(), b.byte_rate()));
+            expected.push((rate.to_string(), bucket_rate(want)));
+        }
+        assert!(actual == expected);
     }
 }

@@ -218,12 +218,15 @@ fn consume_consumer_quota(
         .iter()
         .find(|(k, _)| k == "client-id")
         .and_then(|(_, v)| v.clone());
+    // Kafka enforces the quota as a double, so a positive rate under one byte
+    // per second still throttles. The bucket's whole-token rate never rounds
+    // it down to 0, which the bucket reads as no limit.
     let bucket = buckets.get_or_create(
         "consumer_byte_rate",
         &entity_key,
         principal,
         client_id,
-        rate.to_u64().unwrap_or(u64::MAX),
+        crate::quota::positive_f64_to_u64(rate).max(1),
     );
     let granted = bucket.try_consume(bytes);
     let charge = ConsumerCharge(Some((std::sync::Arc::clone(&bucket), granted)));
@@ -282,5 +285,41 @@ mod tests {
             delay_other == <Time as TimeExt>::ZERO,
             "non-matching client_id should not throttle; got {delay_other:?}"
         );
+    }
+
+    /// Kafka's `ClientQuotaManager` holds `consumer_byte_rate` as a double,
+    /// so a positive rate under one byte per second throttles a fetch like
+    /// any other rate: the overage over the rate.
+    #[test]
+    fn a_fractional_consumer_byte_rate_throttles() {
+        use krabka_metadata::{ClientQuotaRecord, MetadataImage, MetadataRecord, QuotaEntity};
+        // `(consumer_byte_rate, response bytes, expected throttle)`. The
+        // one-second window gives the bucket a burst of its rate, rounded up
+        // to one whole byte.
+        let cases = [
+            (1024.0, 1024, <Time as TimeExt>::ZERO),
+            (1024.0, 2048, secs(1)),
+            (0.5, 1, <Time as TimeExt>::ZERO),
+            (0.5, 100, secs(198)),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (rate, bytes, delay) in cases {
+            let mut img = MetadataImage::new(uuid::Uuid::nil());
+            img.apply(&MetadataRecord::V1ClientQuota(ClientQuotaRecord {
+                entity: vec![QuotaEntity {
+                    entity_type: "user".into(),
+                    entity_name: Some("alice".into()),
+                }],
+                config_key: "consumer_byte_rate".into(),
+                config_value: Some(rate),
+            }));
+            let buckets = crate::quota::QuotaBuckets::with_window(secs(1));
+            let (throttle, _) =
+                super::consume_consumer_quota(&img, &buckets, "alice", "app", bytes);
+            actual.push((rate.to_string(), bytes, throttle.delay));
+            expected.push((rate.to_string(), bytes, delay));
+        }
+        assert!(actual == expected);
     }
 }
