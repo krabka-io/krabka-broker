@@ -409,12 +409,12 @@ async fn handle_pins_the_cluster_name_and_accepts_other_principal_types() {
     broker_handle.shutdown().await;
 }
 
-/// A broker whose image has never finalized `metadata.version` at all (a
-/// pre-bootstrap or legacy image) judges a CIDR host against this binary's
-/// own highest `metadata.version`, `4.4-IV1`, which supports CIDR hosts, so
-/// the host is accepted and stored as typed.
+/// A freshly bootstrapped cluster finalizes Kafka 4.3's `4.3-IV0`, below the
+/// `4.4-IV1` CIDR host patterns need, so it refuses a CIDR host until an
+/// operator opts into 4.4-IV1. (An image with no `metadata.version` at all is
+/// judged against this binary's highest level; `features::tests` pins that.)
 #[tokio::test]
-async fn handle_accepts_cidr_host_when_metadata_version_is_unfinalized() {
+async fn handle_rejects_cidr_host_on_a_freshly_bootstrapped_cluster() {
     let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
     let broker = broker_handle.broker_arc_for_test();
     let p = principal("admin");
@@ -429,19 +429,16 @@ async fn handle_accepts_cidr_host_when_metadata_version_is_unfinalized() {
 
     let expected = CreateAclsResponse {
         throttle_time_ms: 0,
-        results: vec![committed()],
+        results: vec![AclCreationResult {
+            error_code: codes::UNSUPPORTED_VERSION,
+            error_message: Some(
+                "CIDR-based ACL host patterns require metadata version 4.4-IV1 or higher.".into(),
+            ),
+            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+        }],
         unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
     };
     assert!(resp == expected);
-    let expected_acls = vec![AclEntry {
-        resource_type: ResourceType::Topic,
-        resource_name: "topic-a".into(),
-        pattern_type: PatternType::Literal,
-        principal: "User:alice".into(),
-        host: "10.0.0.0/8".into(),
-        operation: AclOperation::Read,
-        permission_type: PermissionType::Allow,
-    }];
-    assert!(all_acls(&broker_handle) == expected_acls);
+    assert!(all_acls(&broker_handle).is_empty());
     broker_handle.shutdown().await;
 }

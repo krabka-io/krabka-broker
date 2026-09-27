@@ -152,6 +152,29 @@ mod tests {
         assert!(feature_enabled(&image, "group.version", 1)); // present at 1 → enabled
     }
 
+    /// KIP-1276's gate: an image with no `metadata.version` is judged against
+    /// this binary's highest level, 4.4-IV1, which admits CIDR hosts; a
+    /// finalized level admits them only from 4.4-IV1.
+    #[test]
+    fn cidr_hosts_supported_follows_the_finalized_metadata_version() {
+        use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
+        for (finalized, want) in [
+            (None, true),
+            (Some(LATEST_PRODUCTION_METADATA_VERSION), false),
+            (Some(CIDR_ACL_HOST_MIN_LEVEL - 1), false),
+            (Some(CIDR_ACL_HOST_MIN_LEVEL), true),
+        ] {
+            let mut image = MetadataImage::new(uuid::Uuid::nil());
+            if let Some(level) = finalized {
+                image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+                    name: METADATA_VERSION.into(),
+                    level,
+                }));
+            }
+            assert!(cidr_hosts_supported(&image) == want, "{finalized:?}");
+        }
+    }
+
     #[test]
     fn self_bootstrap_and_format_default_to_the_same_metadata_version() {
         assert!(
