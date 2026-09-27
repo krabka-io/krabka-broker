@@ -48,7 +48,20 @@ pub enum ClusterOperation {
 /// change applies to the next request of an open connection.
 pub trait ClusterGrants: Send + Sync {
     fn allows(&self, operation: ClusterOperation) -> bool;
+
+    /// The KIP-430 bitfield of the operations the principal holds on the
+    /// cluster resource: bit `code` is set for each allowed operation of
+    /// Kafka's `AclEntry.supportedOperations(CLUSTER)`, where `code` is the
+    /// operation's `AclOperation` wire code. `DescribeCluster` answers it
+    /// when the request sets `include_cluster_authorized_operations`.
+    fn cluster_authorized_operations(&self) -> i32;
 }
+
+/// The KIP-430 bitfield of every operation Kafka's
+/// `AclEntry.supportedOperations(CLUSTER)` names: `CREATE` (5), `ALTER` (7),
+/// `DESCRIBE` (8), `CLUSTER_ACTION` (9), `DESCRIBE_CONFIGS` (10),
+/// `ALTER_CONFIGS` (11) and `IDEMPOTENT_WRITE` (12).
+const ALL_CLUSTER_OPERATIONS: i32 = 1 << 5 | 1 << 7 | 1 << 8 | 1 << 9 | 1 << 10 | 1 << 11 | 1 << 12;
 
 /// The grants of a listener that installs no handshake: every operation is
 /// allowed. The broker always installs a handshake, so only a controller
@@ -59,6 +72,10 @@ pub struct AllowAllGrants;
 impl ClusterGrants for AllowAllGrants {
     fn allows(&self, _operation: ClusterOperation) -> bool {
         true
+    }
+
+    fn cluster_authorized_operations(&self) -> i32 {
+        ALL_CLUSTER_OPERATIONS
     }
 }
 
