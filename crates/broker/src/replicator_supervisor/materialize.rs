@@ -118,7 +118,7 @@ pub(super) fn materialize_partition_with_replication_target(
             producer_state.install_snapshot_before_materialization(
                 topic,
                 PartitionIndex(partition),
-                log.producer_state_snapshot(),
+                log.recovered_producers(),
             );
         }
         let owning_dir = dir

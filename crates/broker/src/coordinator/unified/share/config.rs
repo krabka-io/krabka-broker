@@ -28,6 +28,10 @@ pub struct ShareGroupConfig {
     pub backlog_poll_interval: Duration,
     pub isolation_level: ShareIsolationLevel,
     pub actor_mailbox_capacity: usize,
+    /// Kafka's internal `group.share.initialize.retry.interval.ms`: how long a
+    /// partition may stay initializing before the group asks the persister to
+    /// initialize it again.
+    pub initialize_retry_interval: Duration,
 }
 
 impl Default for ShareGroupConfig {
@@ -47,6 +51,7 @@ impl Default for ShareGroupConfig {
             backlog_poll_interval: Duration::from_secs(15),
             isolation_level: ShareIsolationLevel::ReadUncommitted,
             actor_mailbox_capacity: 64,
+            initialize_retry_interval: Duration::from_secs(30),
         }
     }
 }

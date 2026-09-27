@@ -295,7 +295,7 @@ fn refused(request: &Request) -> Response {
     }
 }
 
-fn summary(state_epoch: i32, start_offset: i64) -> Response {
+fn summary(state_epoch: i32, start_offset: i64, delivery_complete_count: i32) -> Response {
     Response::ReadSummary(every_partition!(
         ReadShareGroupStateSummaryResponse,
         ReadStateSummaryResult,
@@ -304,7 +304,7 @@ fn summary(state_epoch: i32, start_offset: i64) -> Response {
             error_code: codes::NONE,
             state_epoch,
             start_offset,
-            delivery_complete_count: 0,
+            delivery_complete_count,
             ..Default::default()
         }
     ))
@@ -416,7 +416,8 @@ async fn share_state_rpcs_need_cluster_action() {
     let steps: Vec<(&str, Request, Response)> = vec![
         ("none", Request::Initialize, refused(&Request::Initialize)),
         (CLIENT, Request::Initialize, refused(&Request::Initialize)),
-        (BROKER, Request::ReadSummary, summary(0, -1)),
+        // Kafka's uninitialized summary: start offset and count -1.
+        (BROKER, Request::ReadSummary, summary(0, -1, -1)),
         (BROKER, Request::Initialize, initialized()),
         (CLIENT, Request::Write, refused(&Request::Write)),
         (CLIENT, Request::Read, refused(&Request::Read)),
@@ -426,7 +427,7 @@ async fn share_state_rpcs_need_cluster_action() {
         (
             BROKER,
             Request::ReadSummary,
-            summary(STATE_EPOCH, INITIAL_START_OFFSET),
+            summary(STATE_EPOCH, INITIAL_START_OFFSET, 0),
         ),
         (BROKER, Request::Write, written()),
         (BROKER, Request::Read, read(WRITTEN_START_OFFSET)),

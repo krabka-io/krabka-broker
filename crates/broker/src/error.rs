@@ -135,6 +135,14 @@ pub enum BrokerError {
     #[error("transaction: {0}")]
     Txn(String),
 
+    /// No producer id could be handed out: the local block is used up and
+    /// the controller did not grant the next one. Kafka's
+    /// `RPCProducerIdManager.generateProducerId` throws
+    /// `COORDINATOR_LOAD_IN_PROGRESS` in that case, which a client retries,
+    /// so this maps to that code on the wire.
+    #[error("producer ID block unavailable: {0}")]
+    ProducerIdBlockUnavailable(String),
+
     /// A remote `WriteTxnMarkers` call answered one (topic, partition) with a
     /// non-`NONE` per-partition error code. The transaction marker fan-out
     /// classifies `code` as retriable or fatal (KIP-98's

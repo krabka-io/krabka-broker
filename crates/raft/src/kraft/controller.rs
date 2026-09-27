@@ -121,6 +121,8 @@ mod tests_downgrade;
 #[cfg(test)]
 mod tests_fetch;
 #[cfg(test)]
+mod tests_fetch_requests;
+#[cfg(test)]
 mod tests_lifecycle;
 #[cfg(test)]
 mod tests_offsets;
@@ -261,6 +263,9 @@ struct Engine {
     leader_reported_hwm: i64,
     /// At most one voter/version control operation may be uncommitted.
     pending_reconfig: Option<PendingReconfig>,
+    /// Fetches that found nothing new and wait for new records, a high
+    /// watermark change or their `MaxWaitMs`: Kafka's `fetchPurgatory`.
+    fetch_purgatory: Vec<inbound::ParkedFetch>,
 }
 
 #[derive(Clone)]

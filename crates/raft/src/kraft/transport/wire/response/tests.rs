@@ -312,7 +312,7 @@ fn fetch_snapshot_answer_with_partition_preserves_top_level_error() {
         epoch: 0,
         endpoint: None,
     };
-    let bytes = encode_fetch_snapshot_answer(7, Some(partition), &leader);
+    let bytes = encode_fetch_snapshot_answer(7, Some(partition), &leader, FETCH_SNAPSHOT_VERSION);
     let mut cur = &bytes[..];
     let raw = FetchSnapshotResponse::decode(&mut cur, FETCH_SNAPSHOT_VERSION)
         .expect("decode FetchSnapshot");

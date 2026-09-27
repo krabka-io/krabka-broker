@@ -30,16 +30,19 @@ pub(super) fn error_resp(
     base_resp(error_code, 0, config)
 }
 
+/// The success response for `member_id`. It carries the member's assignment
+/// only when `with_assignment` is set; Kafka leaves it null otherwise.
 pub(super) fn build_assignment_resp(
     state: &ShareGroupState,
     member_id: &str,
     config: &ShareGroupConfig,
+    with_assignment: bool,
 ) -> ShareGroupHeartbeatResponse {
     let m = state
         .members
         .get(member_id)
         .expect("member exists at build_assignment_resp");
-    let assignment = Some(RespAssignment {
+    let assignment = with_assignment.then(|| RespAssignment {
         topic_partitions: m
             .assigned_partitions
             .iter()

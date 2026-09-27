@@ -9,6 +9,7 @@ mod support;
 
 use krabka_protocol::owned::{
     metadata_request::MetadataRequest, unregister_broker_request::UnregisterBrokerRequest,
+    unregister_broker_response::UnregisterBrokerResponse,
 };
 
 #[tokio::test]
@@ -46,48 +47,29 @@ async fn unregister_known_broker_drops_it_from_metadata() {
     p.broker.shutdown().await;
 }
 
+/// Kafka's `ReplicationControlManager.unregisterBroker` answers an id with no
+/// registration, a negative one included, with `BROKER_ID_NOT_REGISTERED`.
 #[tokio::test]
-async fn unregister_unknown_broker_returns_invalid_request() {
+async fn unregister_unknown_broker_returns_broker_id_not_registered() {
     let p = support::start().await;
 
-    let r = p
-        .client
-        .send(UnregisterBrokerRequest {
-            broker_id: 999,
-            ..Default::default()
-        })
-        .await
-        .expect("UnregisterBroker");
-    assert!(r.error_code == 42, "expected INVALID_REQUEST (42): {r:?}");
-    assert!(
-        r.error_message
-            .as_deref()
-            .is_some_and(|m| m.contains("999") && m.contains("not registered")),
-        "error message must name the broker and say it isn't registered: {r:?}",
-    );
-
-    p.broker.shutdown().await;
-}
-
-#[tokio::test]
-async fn unregister_negative_broker_id_rejected() {
-    let p = support::start().await;
-
-    let r = p
-        .client
-        .send(UnregisterBrokerRequest {
-            broker_id: -1,
-            ..Default::default()
-        })
-        .await
-        .expect("UnregisterBroker");
-    assert!(r.error_code == 42, "expected INVALID_REQUEST (42): {r:?}");
-    assert!(
-        r.error_message
-            .as_deref()
-            .is_some_and(|m| m.contains("non-negative")),
-        "error must explain the broker_id sign requirement: {r:?}",
-    );
+    for broker_id in [999, -1] {
+        let r = p
+            .client
+            .send(UnregisterBrokerRequest {
+                broker_id,
+                ..Default::default()
+            })
+            .await
+            .expect("UnregisterBroker");
+        let expected = UnregisterBrokerResponse {
+            throttle_time_ms: 0,
+            error_code: 102,
+            error_message: Some(format!("Broker ID {broker_id} is not currently registered")),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+        };
+        assert!(r == expected);
+    }
 
     p.broker.shutdown().await;
 }
@@ -114,7 +96,7 @@ async fn unregister_is_idempotent_on_repeat_call() {
         .await;
 
     // Second call against the now-removed broker: surfaces
-    // INVALID_REQUEST (existence check fails). The image apply itself
+    // BROKER_ID_NOT_REGISTERED (existence check fails). The image apply itself
     // is idempotent so a stale concurrent re-submit wouldn't break
     // anything, but the handler's existence check makes the wire
     // contract explicit.
@@ -126,7 +108,7 @@ async fn unregister_is_idempotent_on_repeat_call() {
         })
         .await
         .expect("UnregisterBroker 2");
-    assert!(r2.error_code == 42, "{r2:?}");
+    assert!(r2.error_code == 102, "{r2:?}");
 
     p.broker.shutdown().await;
 }

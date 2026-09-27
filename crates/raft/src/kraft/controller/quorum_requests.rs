@@ -27,13 +27,13 @@ use crate::kraft::{
 };
 
 const UNKNOWN_TOPIC_OR_PARTITION: i16 = 3;
-const NOT_LEADER_OR_FOLLOWER: i16 = 6;
-const INVALID_REQUEST: i16 = 42;
+pub(super) const NOT_LEADER_OR_FOLLOWER: i16 = 6;
+pub(super) const INVALID_REQUEST: i16 = 42;
 const FENCED_LEADER_EPOCH: i16 = 74;
 const UNKNOWN_LEADER_EPOCH: i16 = 75;
 const SNAPSHOT_NOT_FOUND: i16 = 98;
 const POSITION_OUT_OF_RANGE: i16 = 99;
-const INCONSISTENT_CLUSTER_ID: i16 = 104;
+pub(super) const INCONSISTENT_CLUSTER_ID: i16 = 104;
 const INVALID_VOTER_KEY: i16 = 125;
 
 /// Kafka's `BOOTSTRAP_SNAPSHOT_ID`. The bootstrap checkpoint is not
@@ -78,8 +78,31 @@ impl Engine {
         }
     }
 
+    /// Keeps the `LeaderEndpoints` of a `BeginQuorumEpoch` or `EndQuorumEpoch`
+    /// as the address of `leader_id`, as Kafka's
+    /// `handleBeginQuorumEpochRequest` and `handleEndQuorumEpochRequest` take
+    /// them over the voter set's listeners. The endpoint named `CONTROLLER`
+    /// is taken, or else the first. The voter set's own listener for the
+    /// leader still takes precedence, so this matters while the voter set does
+    /// not name the leader, during an uncommitted KIP-853 voter change.
+    fn remember_request_leader_endpoints<'a>(
+        &self,
+        leader_id: NodeId,
+        endpoints: impl Iterator<Item = (&'a str, &'a str, u16)>,
+    ) {
+        let endpoints: Vec<_> = endpoints.collect();
+        let chosen = endpoints
+            .iter()
+            .find(|(name, _, _)| name.eq_ignore_ascii_case(CONTROLLER_LISTENER_NAME))
+            .or_else(|| endpoints.first());
+        if let Some((_, host, port)) = chosen {
+            self.peers
+                .remember_leader_endpoint(leader_id, format!("{host}:{port}"));
+        }
+    }
+
     /// Kafka's `hasValidClusterId`: an absent id is valid.
-    fn has_valid_cluster_id(&self, cluster_id: Option<&str>) -> bool {
+    pub(super) fn has_valid_cluster_id(&self, cluster_id: Option<&str>) -> bool {
         cluster_id.is_none_or(|id| {
             wire::parse_cluster_id(id) == Some(self.core.quorum_state().cluster_id)
         })
@@ -157,14 +180,15 @@ impl Engine {
     }
 
     /// Answers a `Vote` request. `None` means the body did not decode.
-    pub(super) fn answer_vote(&mut self, body: &[u8]) -> Option<Bytes> {
-        let request = wire::decode_vote_request(body)?;
+    pub(super) fn answer_vote(&mut self, body: &[u8], version: i16) -> Option<Bytes> {
+        let request = wire::decode_vote_request(body, version)?;
         let refuse = |engine: &Self, top: i16, partition: i16| {
             Some(wire::encode_vote_response(
                 top,
                 partition,
                 false,
                 &engine.quorum_leader(),
+                version,
             ))
         };
         if !self.has_valid_cluster_id(request.cluster_id.as_deref()) {
@@ -233,18 +257,20 @@ impl Engine {
             0,
             granted,
             &self.quorum_leader(),
+            version,
         ))
     }
 
     /// Answers a `BeginQuorumEpoch` request. `None` means the body did not
     /// decode.
-    pub(super) fn answer_begin_quorum_epoch(&mut self, body: &[u8]) -> Option<Bytes> {
-        let request = wire::decode_begin_quorum_epoch_request(body)?;
+    pub(super) fn answer_begin_quorum_epoch(&mut self, body: &[u8], version: i16) -> Option<Bytes> {
+        let request = wire::decode_begin_quorum_epoch_request(body, version)?;
         let respond = |engine: &Self, top: i16, partition: i16| {
             Some(wire::encode_begin_quorum_epoch_response(
                 top,
                 partition,
                 &engine.quorum_leader(),
+                version,
             ))
         };
         if !self.has_valid_cluster_id(request.cluster_id.as_deref()) {
@@ -270,6 +296,16 @@ impl Engine {
         ) else {
             return respond(self, 0, INVALID_REQUEST);
         };
+        self.remember_request_leader_endpoints(
+            NodeId(leader_id),
+            request.leader_endpoints.iter().map(|endpoint| {
+                (
+                    endpoint.name.as_str(),
+                    endpoint.host.as_str(),
+                    endpoint.port,
+                )
+            }),
+        );
         self.on_event(Event::ReceiveBeginQuorumEpoch {
             leader_id: NodeId(leader_id),
             leader_epoch,
@@ -285,13 +321,14 @@ impl Engine {
 
     /// Answers an `EndQuorumEpoch` request. `None` means the body did not
     /// decode.
-    pub(super) fn answer_end_quorum_epoch(&mut self, body: &[u8]) -> Option<Bytes> {
-        let request = wire::decode_end_quorum_epoch_request(body)?;
+    pub(super) fn answer_end_quorum_epoch(&mut self, body: &[u8], version: i16) -> Option<Bytes> {
+        let request = wire::decode_end_quorum_epoch_request(body, version)?;
         let respond = |engine: &Self, top: i16, partition: i16| {
             Some(wire::encode_end_quorum_epoch_response(
                 top,
                 partition,
                 &engine.quorum_leader(),
+                version,
             ))
         };
         if !self.has_valid_cluster_id(request.cluster_id.as_deref()) {
@@ -317,6 +354,16 @@ impl Engine {
         ) else {
             return respond(self, 0, INVALID_REQUEST);
         };
+        self.remember_request_leader_endpoints(
+            NodeId(leader_id),
+            request.leader_endpoints.iter().map(|endpoint| {
+                (
+                    endpoint.name.as_str(),
+                    endpoint.host.as_str(),
+                    endpoint.port,
+                )
+            }),
+        );
         let successor_rank = self.successor_rank(&partition.preferred_candidates);
         self.on_event(Event::ReceiveEndQuorumEpoch {
             leader_id: NodeId(leader_id),
@@ -328,13 +375,14 @@ impl Engine {
 
     /// Answers a `FetchSnapshot` request. `None` means the body did not
     /// decode.
-    pub(super) fn answer_fetch_snapshot(&mut self, body: &[u8]) -> Option<Bytes> {
-        let request = wire::decode_fetch_snapshot_request(body)?;
+    pub(super) fn answer_fetch_snapshot(&mut self, body: &[u8], version: i16) -> Option<Bytes> {
+        let request = wire::decode_fetch_snapshot_request(body, version)?;
         let top_level = |engine: &Self, error_code: i16| {
             Some(wire::encode_fetch_snapshot_answer(
                 error_code,
                 None,
                 &engine.quorum_leader(),
+                version,
             ))
         };
         let partition_error = |engine: &Self, error_code: i16| {
@@ -348,6 +396,7 @@ impl Engine {
                     chunk: None,
                 }),
                 &engine.quorum_leader(),
+                version,
             ))
         };
         if !self.has_valid_cluster_id(request.cluster_id.as_deref()) {
@@ -370,6 +419,7 @@ impl Engine {
                     chunk: None,
                 }),
                 &self.quorum_leader(),
+                version,
             ));
         }
         if let Some(error) = self.leader_only_request_error(partition.current_leader_epoch) {
@@ -421,6 +471,7 @@ impl Engine {
                 )),
             }),
             &self.quorum_leader(),
+            version,
         ))
     }
 }

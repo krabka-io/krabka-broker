@@ -384,7 +384,10 @@ impl BrokerConfig {
                 "diskless_wal_hot_tail_max_size",
                 self.diskless_wal_hot_tail_max_size,
             ),
-            ("share_recovery_read_max", self.share_recovery_read_max),
+            (
+                "share_coordinator_load_buffer_size",
+                self.share_coordinator_load_buffer_size,
+            ),
             ("barrier_recovery_read_max", self.barrier_recovery_read_max),
             ("socket_request_max", self.socket_request_max),
             ("sendfile_min", self.sendfile_min),

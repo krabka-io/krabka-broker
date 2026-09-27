@@ -47,6 +47,21 @@ impl ClusterGrants for ControllerPeerGrants {
             },
         ) == AuthorizationResult::Allow
     }
+
+    fn cluster_authorized_operations(&self) -> i32 {
+        // Before the controller handle is set the connection holds nothing.
+        let Some(controller) = self.controller.get() else {
+            return 0;
+        };
+        crate::handlers::authorized_operations::authorized_operations_bits(
+            self.authorizer.as_ref(),
+            &controller.current_image(),
+            &self.principal,
+            &self.peer,
+            ResourceType::Cluster,
+            crate::handlers::acl_wire::CLUSTER_RESOURCE_NAME,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -85,17 +100,27 @@ mod tests {
             ClusterOperation::Alter,
             ClusterOperation::Describe,
         ];
+        // The KIP-430 bitfield sets bit `code` of each allowed cluster
+        // operation: ALTER is 7, DESCRIBE 8 and CLUSTER_ACTION 9.
         let cases = [
-            ("none", [false, false, false]),
-            ("Cluster:ClusterAction", [true, false, false]),
-            ("Cluster:Alter", [false, true, false]),
-            ("Cluster:Describe", [false, false, true]),
-            ("Topic:ClusterAction+Group:Alter", [false, false, false]),
+            ("none", [false, false, false], 0),
+            ("Cluster:ClusterAction", [true, false, false], 1 << 9),
+            ("Cluster:Alter", [false, true, false], 1 << 7),
+            ("Cluster:Describe", [false, false, true], 1 << 8),
+            (
+                "Cluster:Alter+Cluster:Describe",
+                [false, true, true],
+                1 << 7 | 1 << 8,
+            ),
+            ("Topic:ClusterAction+Group:Alter", [false, false, false], 0),
         ];
-        for (name, expected) in cases {
+        for (name, expected, bits) in cases {
             let connection = grants(&bound, name);
             check!(
-                operations.map(|operation| connection.allows(operation)) == expected,
+                (
+                    operations.map(|operation| connection.allows(operation)),
+                    connection.cluster_authorized_operations(),
+                ) == (expected, bits),
                 "{name}"
             );
         }
@@ -106,6 +131,7 @@ mod tests {
             "Cluster:ClusterAction+Cluster:Alter+Cluster:Describe",
         );
         check!(operations.map(|operation| early.allows(operation)) == [false, false, false]);
+        check!(early.cluster_authorized_operations() == 0);
 
         drop(bound);
         let controller = Arc::try_unwrap(controller)

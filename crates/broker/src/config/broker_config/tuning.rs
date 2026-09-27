@@ -128,7 +128,7 @@ macro_rules! tuning_fields {
             /// Capacity of the unclean-recovery work queue.
             pub unclean_recovery_queue_capacity: usize,
             /// Maximum bytes read while recovering share state.
-            pub share_recovery_read_max: ByteSize,
+            pub share_coordinator_load_buffer_size: ByteSize,
             /// Share-session cache ceiling when group count is unlimited.
             pub share_session_cache_max_when_unlimited: usize,
             /// Maximum encoded request size accepted from a socket (matches Kafka socket.request.max.bytes).

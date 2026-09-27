@@ -36,7 +36,45 @@ pub struct ProducerSnapshotEntry {
     pub current_txn_first_offset: Option<Offset>,
 }
 
+/// Kafka's `ProducerStateEntry.NUM_BATCHES_TO_RETAIN`: the number of a
+/// producer's most recent batches whose retry answers as a duplicate.
+pub const NUM_BATCHES_TO_RETAIN: usize = 5;
+
+/// One data batch a producer appended: Kafka's `BatchMetadata`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProducerBatchMetadata {
+    pub last_sequence: i32,
+    pub last_offset: Offset,
+    pub offset_delta: i32,
+    pub timestamp: i64,
+}
+
+/// One producer's state as the log holds it: its snapshot entry, whose last
+/// batch is the producer's last one, and the batches the producer appended
+/// before that one at the same epoch, oldest first.
+///
+/// Kafka's `ProducerStateEntry` retains up to [`NUM_BATCHES_TO_RETAIN`]
+/// batches. Its `.snapshot` file stores only the last, so a reopen rebuilds
+/// the earlier ones only from the tail it replays past the snapshot, as
+/// `UnifiedLog.rebuildProducerState` does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveredProducer {
+    pub entry: ProducerSnapshotEntry,
+    pub earlier: Vec<ProducerBatchMetadata>,
+}
+
 impl ProducerSnapshotEntry {
+    /// The entry's last data batch, or `None` when it holds none.
+    #[must_use]
+    pub fn last_batch(&self) -> Option<ProducerBatchMetadata> {
+        (self.last_offset.0 >= 0).then_some(ProducerBatchMetadata {
+            last_sequence: self.last_sequence,
+            last_offset: self.last_offset,
+            offset_delta: self.offset_delta,
+            timestamp: self.timestamp,
+        })
+    }
+
     pub(crate) fn empty(producer_id: ProducerId, producer_epoch: i16) -> Self {
         Self {
             producer_id,

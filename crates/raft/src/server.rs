@@ -40,7 +40,9 @@ mod voter_admin;
 pub use self::api_versions::is_valid_client_info;
 use self::{
     api_versions::{API_KEY_API_VERSIONS, api_versions_response},
-    describe_cluster::{API_KEY_DESCRIBE_CLUSTER, describe_cluster_response_body},
+    describe_cluster::{
+        API_KEY_DESCRIBE_CLUSTER, CONTROLLER_LISTENER_NAME, describe_cluster_response_body,
+    },
     dispatch::{dispatch_with_router, is_native_raft_api},
     framing::{
         is_eof, read_one_request, write_response, write_response_frame,
@@ -223,8 +225,14 @@ where
                 // flexible body codec) and the controller's metadata image. The
                 // flexible v1 ResponseHeader is supplied by `write_response`.
                 if api_key_n == API_KEY_DESCRIBE_CLUSTER {
-                    let resp =
-                        describe_cluster_response_body(api_version.get(), &body, &engine).await?;
+                    let resp = describe_cluster_response_body(
+                        api_version.get(),
+                        &body,
+                        &engine,
+                        context.grants.as_ref(),
+                        CONTROLLER_LISTENER_NAME,
+                    )
+                    .await?;
                     write_response(&mut stream, correlation_id, resp).await?;
                     continue;
                 }
@@ -288,6 +296,7 @@ where
                 }
                 let resp = dispatch_with_router(
                     api_key_n,
+                    api_version.get(),
                     body,
                     &engine,
                     shard_router.as_deref(),

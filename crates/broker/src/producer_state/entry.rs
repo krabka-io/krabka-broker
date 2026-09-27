@@ -46,17 +46,31 @@ pub struct ProducerEntry {
     pub base_offset: LogOffset,
     /// Timestamp of the last accepted batch for this producer.
     pub last_timestamp: i64,
-    /// Wall-clock millis of the last `commit` that touched this entry.
+    /// Kafka's `ProducerStateEntry.lastTimestamp`: the max timestamp of the
+    /// producer's last data batch, or the timestamp of the transaction marker
+    /// that followed it.
     /// [`ProducerState::expire_older_than`](super::ProducerState::expire_older_than)
-    /// uses it to evict idle idempotent-producer state. This matches Kafka's
-    /// `producer.id.expiration.ms`, which expires by inactivity.
-    pub last_activity_ms: i64,
+    /// ages the entry by it, as `ProducerStateManager.isProducerExpired` does.
+    pub entry_timestamp: i64,
+    /// Kafka's `ProducerStateEntry.currentTxnFirstOffset`: the first offset
+    /// of the producer's open transaction on the partition, or `None` when
+    /// no transaction is open. A producer with an open transaction never
+    /// expires.
+    pub current_txn_first_offset: Option<LogOffset>,
     /// Up to four batches accepted before the last one, at `epoch`, oldest
     /// first. With the last batch they are Kafka's five retained batches.
     pub earlier: EarlierBatches,
 }
 
 impl ProducerEntry {
+    /// Kafka's `ProducerStateManager.isProducerExpired`: no open transaction,
+    /// and the entry's timestamp is at least `expiration_ms` behind `now_ms`.
+    #[must_use]
+    pub fn is_expired(&self, now_ms: i64, expiration_ms: i64) -> bool {
+        self.current_txn_first_offset.is_none()
+            && now_ms.saturating_sub(self.entry_timestamp) >= expiration_ms
+    }
+
     /// The last accepted batch, or `None` for a marker-only entry.
     #[must_use]
     pub fn last_batch(&self) -> Option<RetainedBatch> {

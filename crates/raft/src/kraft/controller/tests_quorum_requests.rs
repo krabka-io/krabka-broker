@@ -44,19 +44,35 @@ fn deliver(
 }
 
 fn vote(req: bytes::Bytes, reply: oneshot::Sender<bytes::Bytes>) -> Inbound {
-    Inbound::Vote { req, reply }
+    Inbound::Vote {
+        req,
+        version: VOTE_VERSION,
+        reply,
+    }
 }
 
 fn begin(req: bytes::Bytes, reply: oneshot::Sender<bytes::Bytes>) -> Inbound {
-    Inbound::BeginQuorumEpoch { req, reply }
+    Inbound::BeginQuorumEpoch {
+        req,
+        version: QUORUM_EPOCH_VERSION,
+        reply,
+    }
 }
 
 fn end(req: bytes::Bytes, reply: oneshot::Sender<bytes::Bytes>) -> Inbound {
-    Inbound::EndQuorumEpoch { req, reply }
+    Inbound::EndQuorumEpoch {
+        req,
+        version: QUORUM_EPOCH_VERSION,
+        reply,
+    }
 }
 
 fn fetch_snapshot(req: bytes::Bytes, reply: oneshot::Sender<bytes::Bytes>) -> Inbound {
-    Inbound::FetchSnapshot { req, reply }
+    Inbound::FetchSnapshot {
+        req,
+        version: FETCH_SNAPSHOT_VERSION,
+        reply,
+    }
 }
 
 fn encode<M: Encode>(message: &M, version: i16) -> bytes::Bytes {

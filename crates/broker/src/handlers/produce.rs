@@ -23,7 +23,10 @@ use self::{
     delivery::resolve_delivery_gate,
     framing::decode_produce_request,
     leadership::{BrokerProducePolicy, current_effective_min_isr},
-    pipeline::{PartitionInput, PartitionOutcome, PartitionServices, process_partition},
+    pipeline::{
+        Admission, AdmittedBatch, PartitionInput, PartitionOutcome, PartitionServices,
+        admit_partition, complete_partition, verify_admitted,
+    },
     producer_checks::TransactionRequest,
     response::build_topic_error_response,
     throttle::finish_produce_response,
@@ -67,6 +70,8 @@ mod test_support;
 mod compacted_key_tests;
 #[cfg(test)]
 mod topic_resolution_tests;
+#[cfg(test)]
+mod transaction_check_tests;
 #[cfg(test)]
 mod transactional_authorization_tests;
 
@@ -314,6 +319,26 @@ pub(crate) async fn handle(
     // topic while the waits are driven once, after every partition has
     // appended.
     let mut awaiting: Vec<PendingPartition> = Vec::new();
+    // The partitions that passed every gate before the transaction check, in
+    // request order, with the rows they reserved.
+    let mut admitted: Vec<AdmittedPartition> = Vec::new();
+    let transaction = TransactionRequest {
+        transactional_id: req.transactional_id.as_deref(),
+        version,
+        producer_id_expiration_ms: broker.config.producer_id_expiration.millis_i64(),
+    };
+    let services = PartitionServices {
+        partitions: &partitions,
+        txn_coordinator: &txn_coordinator,
+        producer_state: &producer_state,
+        log_dir_status: &log_dir_status,
+        image: &image,
+        broker_policy,
+        record_decompression_policy,
+        metrics: &broker.metrics,
+        phases: &phases,
+        schema_validator: broker.config.schema_validator.as_ref(),
+    };
 
     for topic in req.topic_data {
         // v ≤ 12 sends the topic name; v ≥ 13 sends only topic_id and
@@ -434,13 +459,15 @@ pub(crate) async fn handle(
             let idx = part_data.index;
             // Time the per-partition handler work for the rebalancer's
             // CpuUsage / CpuCapacity goals, the way the fetch read loop times
-            // its per-partition read: one `Instant` delta around the call.
+            // its per-partition read: one `Instant` delta around each stage.
             // The interval covers this partition's gates, its enqueue and the
             // writer's answer, and stops there — the `acks=-1` high-watermark
             // wait is not in it, because that wait is one wait for the whole
             // request and charging it to each partition would count it N times.
+            // The transaction coordinator call is not in it either: it is one
+            // call for the whole request too.
             let started = std::time::Instant::now();
-            let outcome = process_partition(
+            let admission = admit_partition(
                 PartitionInput {
                     part_data,
                     topic_compression,
@@ -452,53 +479,32 @@ pub(crate) async fn handle(
                     topic_name: topic_name.clone(),
                     freeze,
                     internal_topic_denied,
-                    transaction: TransactionRequest {
-                        transactional_id: req.transactional_id.as_deref(),
-                        version,
-                        producer_id_expiration_ms: broker
-                            .config
-                            .producer_id_expiration
-                            .millis_i64(),
-                    },
+                    transaction,
                     acks: req.acks,
                     timeout,
                 },
-                PartitionServices {
-                    partitions: &partitions,
-                    txn_coordinator: &txn_coordinator,
-                    producer_state: &producer_state,
-                    log_dir_status: &log_dir_status,
-                    image: &image,
-                    broker_policy,
-                    record_decompression_policy,
-                    metrics: &broker.metrics,
-                    phases: &phases,
-                    schema_validator: broker.config.schema_validator.as_ref(),
-                },
+                services,
             )
             .await?;
             let micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
-            if !topic_name.is_empty() {
-                broker
-                    .metrics
-                    .record_partition_cpu_micros(&topic_name, idx, micros);
-            }
-            match outcome {
-                PartitionOutcome::Done(out) => {
+            match admission {
+                Admission::Done(out) => {
+                    record_partition_cpu(broker, &topic_name, idx, micros);
                     record_partition_failure(broker, &topic_name, out.error_code);
                     partition_results.push(out);
                 }
-                PartitionOutcome::AwaitingHighWatermark(ack) => {
-                    // The row is decided by the wait below. Reserve its slot
-                    // with the same `UNKNOWN_LOG_APPEND_INFO` sentinel every
-                    // pre-append refusal carries, so a row is never absent
-                    // from the response even on a path that cannot reach the
-                    // overwrite.
-                    awaiting.push(PendingPartition {
+                Admission::Admitted(batch) => {
+                    // The row is decided once the coordinator has answered
+                    // and the batch has appended. Reserve its slot with the
+                    // `UNKNOWN_LOG_APPEND_INFO` sentinel every pre-append
+                    // refusal carries, so a row is never absent.
+                    admitted.push(AdmittedPartition {
                         topic_row: topic_results.len(),
                         partition_row: partition_results.len(),
                         topic_name: topic_name.clone(),
-                        ack,
+                        idx,
+                        micros,
+                        batch,
                     });
                     partition_results.push(PartitionProduceResponse {
                         index: idx,
@@ -516,6 +522,16 @@ pub(crate) async fn handle(
             ..Default::default()
         });
     }
+
+    // ── the one transaction check, then every append ────────────────
+    complete_admitted(
+        broker,
+        admitted,
+        (services, transaction),
+        &mut topic_results,
+        &mut awaiting,
+    )
+    .await?;
 
     // ── the one acks=-1 high-watermark wait ─────────────────────────
     await_durability(broker, awaiting, &mut topic_results, timeout, &phases).await;
@@ -548,6 +564,84 @@ pub(crate) async fn handle(
         topic_results,
         version,
     )
+}
+
+/// One partition of this request that passed every gate before the
+/// transaction check, and the place in the response its row belongs.
+struct AdmittedPartition {
+    topic_row: usize,
+    partition_row: usize,
+    topic_name: Arc<str>,
+    idx: i32,
+    /// The handler time the gates before the transaction check took.
+    micros: u64,
+    batch: Box<AdmittedBatch>,
+}
+
+/// Ask the transaction coordinator about every admitted partition at once,
+/// then append each one, and write its row or queue its high-watermark wait.
+///
+/// Kafka's `ReplicaManager.handleProduceAppend` asks the coordinator about
+/// every partition of the request in one `AddPartitionsToTxn` call, and
+/// appends once it has answered.
+async fn complete_admitted(
+    broker: &Broker,
+    admitted: Vec<AdmittedPartition>,
+    (services, transaction): (PartitionServices<'_>, TransactionRequest<'_>),
+    topic_results: &mut [TopicProduceResponse],
+    awaiting: &mut Vec<PendingPartition>,
+) -> Result<(), BrokerError> {
+    let answers = verify_admitted(
+        &admitted
+            .iter()
+            .map(|partition| &*partition.batch)
+            .collect::<Vec<_>>(),
+        services.txn_coordinator,
+        services.image,
+        transaction,
+    )
+    .await;
+    for (partition, answer) in admitted.into_iter().zip(answers) {
+        let AdmittedPartition {
+            topic_row,
+            partition_row,
+            topic_name,
+            idx,
+            micros,
+            batch,
+        } = partition;
+        let started = std::time::Instant::now();
+        let outcome = complete_partition(*batch, answer, services).await?;
+        let micros =
+            micros.saturating_add(u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX));
+        record_partition_cpu(broker, &topic_name, idx, micros);
+        match outcome {
+            PartitionOutcome::Done(out) => {
+                record_partition_failure(broker, &topic_name, out.error_code);
+                topic_results[topic_row].partition_responses[partition_row] = out;
+            }
+            PartitionOutcome::AwaitingHighWatermark(ack) => {
+                // The row is decided by the one high-watermark wait.
+                awaiting.push(PendingPartition {
+                    topic_row,
+                    partition_row,
+                    topic_name,
+                    ack,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Charge `micros` of handler time to one partition for the rebalancer's
+/// `CpuUsage` / `CpuCapacity` goals.
+fn record_partition_cpu(broker: &Broker, topic_name: &Arc<str>, idx: i32, micros: u64) {
+    if !topic_name.is_empty() {
+        broker
+            .metrics
+            .record_partition_cpu_micros(topic_name, idx, micros);
+    }
 }
 
 /// One partition of this request whose row is decided by the high-watermark

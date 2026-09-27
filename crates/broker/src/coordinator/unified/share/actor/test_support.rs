@@ -72,3 +72,33 @@ pub(super) async fn heartbeat(
         .unwrap();
     rx.await.unwrap()
 }
+
+/// Seeds the group behind `handle` with `partitions` of `topic` already
+/// initialized, as bootstrap replay of a `ShareGroupStatePartitionMetadata`
+/// record would.
+pub(super) async fn seed_initialized(
+    handle: &ShareGroupActorHandle,
+    topic_id: Uuid,
+    topic_name: &str,
+    partitions: Vec<i32>,
+) {
+    use crate::coordinator::unified::{
+        ShareGroupSeed,
+        share::persistence::{ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo},
+    };
+    handle
+        .tx
+        .send(ShareGroupActorMessage::Seed(ShareGroupSeed {
+            state_partition_metadata: ShareGroupStatePartitionMetadataValue {
+                initialized: vec![TopicPartitionsInfo {
+                    topic_id: uuid::Uuid::from_bytes(topic_id.0),
+                    topic_name: topic_name.to_owned(),
+                    partitions,
+                }],
+                ..ShareGroupStatePartitionMetadataValue::default()
+            },
+            ..ShareGroupSeed::default()
+        }))
+        .await
+        .unwrap();
+}

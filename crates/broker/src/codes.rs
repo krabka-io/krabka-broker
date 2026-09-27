@@ -628,6 +628,7 @@ pub fn from_broker_error(err: &crate::error::BrokerError) -> i16 {
             krabka_log::TransactionAppendRefusal::OutOfOrderSequence,
         ) => OUT_OF_ORDER_SEQUENCE_NUMBER,
         BrokerError::CoordinatorEpochFenced { .. } => TRANSACTION_COORDINATOR_FENCED,
+        BrokerError::ProducerIdBlockUnavailable(_) => COORDINATOR_LOAD_IN_PROGRESS,
         BrokerError::FencedLeaderEpoch { .. } => FENCED_LEADER_EPOCH,
         BrokerError::UnknownLeaderEpoch(_) => UNKNOWN_LEADER_EPOCH,
         BrokerError::Replication(_)

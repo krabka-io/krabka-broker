@@ -200,6 +200,7 @@ pub(super) async fn dispatch_prepared(
         base_seq: prepared.base_sequence,
         last_offset_delta: prepared.last_offset_delta,
         max_timestamp: prepared.max_timestamp,
+        is_transactional: prepared.attributes.is_transactional(),
         base_offset: Offset(INVALID_OFFSET),
     };
     let data = build_produce_data(prepared, context.leader_epoch);
@@ -248,6 +249,9 @@ pub(super) struct AppendCommit {
     base_seq: i32,
     last_offset_delta: i32,
     max_timestamp: i64,
+    /// Whether the batch is transactional: its commit opens a transaction on
+    /// the producer's tracked entry when none is open.
+    is_transactional: bool,
     base_offset: Offset,
 }
 
@@ -296,7 +300,11 @@ impl AppendCommit {
                 (self.pid, self.epoch),
                 (self.base_seq, self.last_offset_delta),
                 // Unwrap the assigned `Offset` into the dedup tracker's `i64`.
-                (self.base_offset.0, self.max_timestamp),
+                (
+                    self.base_offset.0,
+                    self.max_timestamp,
+                    self.is_transactional,
+                ),
             )
             .await;
     }

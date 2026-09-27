@@ -247,10 +247,10 @@ mod tests {
             // other half: with a router bound, a key is advertised.
             assert2::assert!(!keys.contains(&62i16));
             assert2::assert!(!keys.contains(&63i16));
-            // Vote is pinned to the one version the engine's codec speaks, so
-            // the advertised range is that version on both ends.
+            // Vote is advertised over its whole schema range, as Kafka's
+            // `ApiKeys` does.
             let vote = resp.api_keys.iter().find(|k| k.api_key == 52).unwrap();
-            assert2::assert!(vote.min_version == 2 && vote.max_version == 2);
+            assert2::assert!(vote.min_version == 0 && vote.max_version == 2);
             if req_v >= 3 {
                 let kraft = resp
                     .supported_features

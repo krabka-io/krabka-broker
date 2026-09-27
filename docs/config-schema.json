@@ -2545,6 +2545,33 @@
             "null"
           ]
         },
+        "share_cold_partition_snapshot_interval": {
+          "default": null,
+          "description": "How old the latest snapshot of a share key may get before the share\ncoordinator writes a new one, Kafka's\n`share.coordinator.cold.partition.snapshot.interval.ms`.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "share_coordinator_load_buffer_size": {
+          "default": null,
+          "description": "Maximum bytes read by one share-state recovery read, Kafka's\n`share.coordinator.load.buffer.size`.",
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "share_coordinator_write_timeout": {
+          "default": null,
+          "description": "How long an append to `__share_group_state` may take before the share\ncoordinator answers `COORDINATOR_NOT_AVAILABLE`, Kafka's\n`share.coordinator.write.timeout.ms`.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "share_group_backlog_poll_interval": {
           "default": null,
           "description": "Cadence of the share-group backlog poll.",
@@ -2622,18 +2649,18 @@
             "null"
           ]
         },
-        "share_recovery_read_max": {
-          "default": null,
-          "description": "Maximum bytes read by one share-state recovery read.",
-          "format": "byte-size",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "share_session_cache_max_when_unlimited": {
           "description": "Ceiling on the share-session cache when the group count is unlimited.",
           "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "share_snapshot_update_records_per_snapshot": {
+          "description": "Updates of one share key between two snapshots of it, Kafka's\n`share.coordinator.snapshot.update.records.per.snapshot`. At most 500.",
+          "format": "uint32",
           "minimum": 0,
           "type": [
             "integer",
@@ -2653,6 +2680,15 @@
           "format": "int32",
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "share_state_prune_interval": {
+          "default": null,
+          "description": "How often the share coordinator trims the redundant prefix of each\n`__share_group_state` partition it leads, Kafka's\n`share.coordinator.state.topic.prune.interval.ms`.",
+          "format": "duration",
+          "type": [
+            "string",
             "null"
           ]
         },

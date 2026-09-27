@@ -45,7 +45,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        coordinator::unified::share::persistence::InitializedTopic,
+        coordinator::unified::share::persistence::TopicPartitionsInfo,
         handlers::describe_share_group_offsets::test_support::image_with_topic,
     };
 
@@ -53,8 +53,8 @@ mod tests {
         topic_id: uuid::Uuid,
         topic_name: &str,
         partitions: Vec<i32>,
-    ) -> InitializedTopic {
-        InitializedTopic {
+    ) -> TopicPartitionsInfo {
+        TopicPartitionsInfo {
             topic_id,
             topic_name: topic_name.to_owned(),
             partitions,
@@ -74,6 +74,7 @@ mod tests {
             replication_factor: 1,
         }));
         let metadata = crate::coordinator::unified::share::persistence::ShareGroupStatePartitionMetadataValue {
+            initializing: Vec::new(),
             initialized: vec![
                 initialized_topic(beta_id, "beta", vec![0]),
                 initialized_topic(missing_id, "gone", vec![7]),

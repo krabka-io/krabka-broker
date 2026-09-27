@@ -1,15 +1,52 @@
 //! Service of inbound peer RPCs: each request body is decoded, run through the
 //! consensus core, and answered on its oneshot, including the leader's Fetch
-//! and `FetchSnapshot` serve paths.
+//! and `FetchSnapshot` serve paths and the Fetch long poll.
 
 use krabka_ids::Offset;
+use tokio::{sync::oneshot, time::Instant};
 
-use super::{Engine, replication::should_serve_fetch_records};
+use super::{
+    Engine,
+    quorum_requests::{INCONSISTENT_CLUSTER_ID, INVALID_REQUEST, NOT_LEADER_OR_FOLLOWER},
+    replication::should_serve_fetch_records,
+};
 use crate::kraft::{
     action::Action,
     event::Event,
     transport::{Inbound, wire},
+    types::{Epoch, LogView as _, NodeId},
 };
+
+/// The fields of one validated Fetch partition that answering it needs, kept
+/// while the request waits in the purgatory.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct FetchPartitionRequest {
+    /// Kafka's `FetchRequest.replicaId`. A negative id is a fetcher that is
+    /// not a replica, and its offset does not count.
+    replica_id: i32,
+    replica_directory_id: uuid::Uuid,
+    current_leader_epoch: i32,
+    fetch_offset: i64,
+    last_fetched_epoch: i32,
+    /// The fetcher's high watermark (v18), `i64::MAX` below v18.
+    high_watermark: i64,
+}
+
+/// A Fetch that found nothing new and waits, as in Kafka's `fetchPurgatory`,
+/// until the log grows past its offset, the high watermark moves, leadership
+/// ends or `MaxWaitMs` runs out.
+pub(super) struct ParkedFetch {
+    fetch: FetchPartitionRequest,
+    version: i16,
+    reply: oneshot::Sender<bytes::Bytes>,
+    /// The answer computed when the request arrived. Kafka sends it unchanged
+    /// when the wait runs out.
+    answer: wire::FetchAnswer,
+    /// The leader epoch and high watermark when the request was parked.
+    epoch: Epoch,
+    high_watermark: Offset,
+    deadline: Instant,
+}
 
 impl Engine {
     #[tracing::instrument(
@@ -23,36 +60,187 @@ impl Engine {
         match inbound {
             // A body that does not decode drops `reply`, which closes the
             // connection, as Kafka's `RequestContext.parseRequest` does.
-            Inbound::Vote { req, reply } => {
-                if let Some(response) = self.answer_vote(&req) {
+            Inbound::Vote {
+                req,
+                version,
+                reply,
+            } => {
+                if let Some(response) = self.answer_vote(&req, version) {
                     let _ = reply.send(response);
                 }
             }
-            Inbound::BeginQuorumEpoch { req, reply } => {
-                if let Some(response) = self.answer_begin_quorum_epoch(&req) {
+            Inbound::BeginQuorumEpoch {
+                req,
+                version,
+                reply,
+            } => {
+                if let Some(response) = self.answer_begin_quorum_epoch(&req, version) {
                     let _ = reply.send(response);
                 }
             }
-            Inbound::EndQuorumEpoch { req, reply } => {
-                if let Some(response) = self.answer_end_quorum_epoch(&req) {
+            Inbound::EndQuorumEpoch {
+                req,
+                version,
+                reply,
+            } => {
+                if let Some(response) = self.answer_end_quorum_epoch(&req, version) {
                     let _ = reply.send(response);
                 }
             }
-            Inbound::Fetch { req, reply } => {
-                if let Some(response) = self.answer_fetch(&req) {
-                    let _ = reply.send(response);
-                }
-            }
-            Inbound::FetchSnapshot { req, reply } => {
-                if let Some(response) = self.answer_fetch_snapshot(&req) {
+            Inbound::Fetch {
+                req,
+                version,
+                reply,
+            } => self.on_fetch_request(&req, version, reply),
+            Inbound::FetchSnapshot {
+                req,
+                version,
+                reply,
+            } => {
+                if let Some(response) = self.answer_fetch_snapshot(&req, version) {
                     let _ = reply.send(response);
                 }
             }
         }
     }
 
-    /// Answer one Fetch as Kafka's `KafkaRaftClient.tryCompleteFetchRequest`
-    /// does, or `None` when the body does not decode.
+    /// Kafka's `KafkaRaftClient.handleFetchRequest`: the request checks, then
+    /// `tryCompleteFetchRequest`, then the long poll.
+    ///
+    /// A `ClusterId` of another cluster is a top-level
+    /// `INCONSISTENT_CLUSTER_ID`, and a request that does not name exactly the
+    /// metadata topic id and partition 0 a top-level `INVALID_REQUEST`. A
+    /// negative `MaxWaitMs`, `FetchOffset` or `LastFetchedEpoch`, or a
+    /// `LastFetchedEpoch` above `CurrentLeaderEpoch`, is a partition
+    /// `INVALID_REQUEST`. The answer goes back at once when it carries an
+    /// error, records, a divergence or a snapshot id, when `MaxWaitMs` is 0, or
+    /// when the leader's high watermark is above the fetcher's. Otherwise the
+    /// request is parked until [`Self::complete_parked_fetches`] answers it.
+    fn on_fetch_request(&mut self, req: &[u8], version: i16, reply: oneshot::Sender<bytes::Bytes>) {
+        let Some(request) = wire::decode_fetch_request(req, version) else {
+            return;
+        };
+        if !self.has_valid_cluster_id(request.cluster_id.as_deref()) {
+            let _ = reply.send(wire::encode_fetch_top_level_error(
+                INCONSISTENT_CLUSTER_ID,
+                version,
+            ));
+            return;
+        }
+        let (Some(topic), 1) = (request.topics.first(), request.topics.len()) else {
+            let _ = reply.send(wire::encode_fetch_top_level_error(INVALID_REQUEST, version));
+            return;
+        };
+        let [partition] = topic.partitions.as_slice() else {
+            let _ = reply.send(wire::encode_fetch_top_level_error(INVALID_REQUEST, version));
+            return;
+        };
+        if topic.topic_id != wire::METADATA_TOPIC_ID
+            || partition.partition != wire::METADATA_PARTITION
+        {
+            let _ = reply.send(wire::encode_fetch_top_level_error(INVALID_REQUEST, version));
+            return;
+        }
+        if request.max_wait_ms < 0
+            || partition.fetch_offset < 0
+            || partition.last_fetched_epoch < 0
+            || partition.last_fetched_epoch > partition.current_leader_epoch
+        {
+            let _ = reply.send(self.empty_fetch_answer(INVALID_REQUEST).encode(version));
+            return;
+        }
+        let fetch = FetchPartitionRequest {
+            replica_id: wire::fetch_replica_id(&request, version),
+            replica_directory_id: uuid::Uuid::from_bytes(partition.replica_directory_id.0),
+            current_leader_epoch: partition.current_leader_epoch,
+            fetch_offset: partition.fetch_offset,
+            last_fetched_epoch: partition.last_fetched_epoch,
+            high_watermark: partition.high_watermark,
+        };
+        let answer = self.try_complete_fetch(&fetch);
+        if answer.error_code != 0
+            || !answer.records.is_empty()
+            || request.max_wait_ms == 0
+            || answer.diverging.is_some()
+            || answer.snapshot_id.is_some()
+            || fetch.high_watermark < answer.hwm
+        {
+            let _ = reply.send(answer.encode(version));
+            return;
+        }
+        let wait = std::time::Duration::from_millis(request.max_wait_ms.unsigned_abs().into());
+        self.fetch_purgatory.push(ParkedFetch {
+            fetch,
+            version,
+            reply,
+            answer,
+            epoch: self.core.quorum_state().leader_epoch,
+            high_watermark: self.log.hwm(),
+            deadline: Instant::now() + wait,
+        });
+    }
+
+    /// Answers the parked fetches that can be answered at `now`, as Kafka's
+    /// `fetchPurgatory` completes them.
+    ///
+    /// Leadership that ended or moved to another epoch answers every one with
+    /// `NOT_LEADER_OR_FOLLOWER` (`onBecomeFollower`, `transitionToResigned`).
+    /// A high watermark that moved completes every one (`completeAll`), and
+    /// a log that grew past a fetch offset completes that one
+    /// (`maybeComplete`), both through `tryCompleteFetchRequest` again. A wait
+    /// that ran out sends the answer computed when the request arrived.
+    pub(super) fn complete_parked_fetches(&mut self, now: Instant) {
+        if self.fetch_purgatory.is_empty() {
+            return;
+        }
+        let epoch = self.core.quorum_state().leader_epoch;
+        let leading = self.core.role().is_leader();
+        let high_watermark = self.log.hwm();
+        let log_end = self.log.log_end_offset();
+        for parked in std::mem::take(&mut self.fetch_purgatory) {
+            if parked.reply.is_closed() {
+                continue;
+            }
+            let answer = if !leading || parked.epoch != epoch {
+                self.empty_fetch_answer(NOT_LEADER_OR_FOLLOWER)
+            } else if parked.high_watermark != high_watermark
+                || log_end > Offset(parked.fetch.fetch_offset)
+            {
+                self.try_complete_fetch(&parked.fetch)
+            } else if now >= parked.deadline {
+                parked.answer
+            } else {
+                self.fetch_purgatory.push(parked);
+                continue;
+            };
+            let _ = parked.reply.send(answer.encode(parked.version));
+        }
+    }
+
+    /// The earliest deadline among the parked fetches.
+    pub(super) fn next_parked_fetch_deadline(&self) -> Option<Instant> {
+        self.fetch_purgatory
+            .iter()
+            .map(|parked| parked.deadline)
+            .min()
+    }
+
+    /// Kafka's `buildEmptyFetchResponse`: `error_code` beside the leader this
+    /// replica knows, no records and no high watermark.
+    fn empty_fetch_answer(&self, error_code: i16) -> wire::FetchAnswer {
+        wire::FetchAnswer {
+            error_code,
+            leader: self.quorum_leader(),
+            diverging: None,
+            snapshot_id: None,
+            hwm: -1,
+            log_start_offset: self.log.log_start_offset().0,
+            records: bytes::Bytes::new(),
+        }
+    }
+
+    /// Answer one Fetch partition as Kafka's
+    /// `KafkaRaftClient.tryCompleteFetchRequest` does.
     ///
     /// `validateLeaderOnlyRequest` runs first: a request from another epoch,
     /// or one that reaches a replica that is not the leader, is answered with
@@ -61,33 +249,72 @@ impl Engine {
     /// is asked redirects the fetcher to the real leader rather than claiming
     /// the epoch, and the fetcher addresses that leader by the endpoint the
     /// response names, not by the responder's address. Only the leader runs
-    /// the fetch through the core and serves records.
-    fn answer_fetch(&mut self, req: &[u8]) -> Option<bytes::Bytes> {
-        let wire::PeerRequest::Fetch {
-            from,
-            current_leader_epoch,
-            fetch_epoch,
-            fetch_offset,
-            replica_directory_id,
-        } = wire::decode_fetch(req)?
-        else {
-            return None;
-        };
-        let log_start = self.log.log_start_offset();
-        if let Some(error_code) = self.leader_only_request_error(current_leader_epoch) {
-            return Some(
-                wire::PeerResponse::Fetch(wire::FetchAnswer {
-                    error_code,
-                    leader: self.quorum_leader(),
-                    diverging: None,
-                    snapshot_id: None,
-                    hwm: -1,
-                    log_start_offset: log_start.0,
-                    records: bytes::Bytes::new(),
-                })
-                .encode(),
-            );
+    /// the fetch through the core and serves records. A fetcher with a
+    /// negative replica id is served, but its offset moves no replica state:
+    /// `LeaderState.updateReplicaState` ignores it.
+    fn try_complete_fetch(&mut self, fetch: &FetchPartitionRequest) -> wire::FetchAnswer {
+        if let Some(error_code) = self.leader_only_request_error(fetch.current_leader_epoch) {
+            return self.empty_fetch_answer(error_code);
         }
+        let fetch_epoch = wire::epoch_from_wire(fetch.last_fetched_epoch);
+        let fetch_offset = fetch.fetch_offset;
+        let diverging = match u64::try_from(fetch.replica_id) {
+            Ok(replica) => self.run_replica_fetch(
+                NodeId(replica),
+                fetch_epoch,
+                fetch_offset,
+                fetch.replica_directory_id,
+            ),
+            Err(_) => self.non_replica_divergence(fetch_epoch, fetch_offset),
+        };
+        // Serve the follower the batch bytes it is missing: every batch
+        // at/after its `fetch_offset` up to our log end (KRaft replicates up
+        // to the leader's log end, not just the HWM -- the HWM rides
+        // separately in the response). A divergent fetch sends none (the
+        // follower truncates first, then re-fetches). If the follower's fetch
+        // offset is below our pruned log-start, it cannot replicate from the
+        // log -- point it at the latest snapshot instead (KIP-630).
+        // `fetch_offset` arrives raw on the KIP-595 wire; wrap it into the
+        // `KraftLog` offset domain to compare against log bounds.
+        let log_start = self.log.log_start_offset();
+        let fetch_offset = Offset(fetch_offset);
+        let snapshot_id = if fetch_offset >= 0 && fetch_offset < log_start {
+            self.latest_snapshot_id()
+        } else {
+            None
+        };
+        let records = if should_serve_fetch_records(
+            snapshot_id.is_some(),
+            diverging.is_some(),
+            self.core.role().is_leader(),
+        ) {
+            self.serve_fetch_records(fetch_offset)
+        } else {
+            bytes::Bytes::new()
+        };
+        // Handling the fetch may have ended this leadership (a check-quorum
+        // resignation), so the leader view is read again for the answer.
+        wire::FetchAnswer {
+            error_code: 0,
+            leader: self.quorum_leader(),
+            diverging,
+            snapshot_id,
+            hwm: self.log.hwm().0,
+            log_start_offset: self.log.log_start_offset().0,
+            records,
+        }
+    }
+
+    /// Runs a replica's fetch through the core, which records its progress,
+    /// scores it for check-quorum and may advance the high watermark. Returns
+    /// the divergence the core found, if any.
+    fn run_replica_fetch(
+        &mut self,
+        from: NodeId,
+        fetch_epoch: Epoch,
+        fetch_offset: i64,
+        replica_directory_id: uuid::Uuid,
+    ) -> Option<crate::kraft::types::LogOffsetMetadata> {
         self.replica_fetch_offsets.insert(from, fetch_offset);
         if replica_directory_id != uuid::Uuid::nil() {
             self.replica_directory_ids
@@ -108,53 +335,28 @@ impl Engine {
         // AdvanceHighWatermark for the leader. Encode the divergence into the
         // response; apply HWM locally. The diverging epoch is a reply only:
         // the leader's log keeps its records.
-        let mut diverging = None;
-        for action in &actions {
-            if let Action::ReplyDivergingEpoch(point) = action {
-                diverging = Some(*point);
-            }
-        }
+        let diverging = actions.iter().find_map(|action| match action {
+            Action::ReplyDivergingEpoch(point) => Some(*point),
+            _ => None,
+        });
         self.execute(actions);
         self.reconcile_timers(prev_role);
         self.publish_leader();
-        // Serve the follower the batch bytes it is missing: every batch
-        // at/after its `fetch_offset` up to our log end (KRaft replicates up
-        // to the leader's log end, not just the HWM -- the HWM rides
-        // separately in the response). A divergent fetch sends none (the
-        // follower truncates first, then re-fetches). If the follower's fetch
-        // offset is below our pruned log-start, it cannot replicate from the
-        // log -- point it at the latest snapshot instead (KIP-630).
-        // `fetch_offset` arrives raw on the KIP-595 wire; wrap it into the
-        // `KraftLog` offset domain to compare against log bounds.
-        let fetch_offset = Offset(fetch_offset);
-        let snapshot_id = if fetch_offset >= 0 && fetch_offset < log_start {
-            self.latest_snapshot_id()
-        } else {
-            None
-        };
-        let records = if should_serve_fetch_records(
-            snapshot_id.is_some(),
-            diverging.is_some(),
-            self.core.role().is_leader(),
-        ) {
-            self.serve_fetch_records(fetch_offset)
-        } else {
-            bytes::Bytes::new()
-        };
-        // Handling the fetch may have ended this leadership (a check-quorum
-        // resignation), so the leader view is read again for the answer.
-        Some(
-            wire::PeerResponse::Fetch(wire::FetchAnswer {
-                error_code: 0,
-                leader: self.quorum_leader(),
-                diverging,
-                snapshot_id,
-                hwm: self.log.hwm().0,
-                log_start_offset: self.log.log_start_offset().0,
-                records,
-            })
-            .encode(),
-        )
+        diverging
+    }
+
+    /// The divergence check of Kafka's `RaftLog.validateOffsetAndEpoch` for a
+    /// fetcher that is not a replica, which the core does not track.
+    fn non_replica_divergence(
+        &self,
+        fetch_epoch: Epoch,
+        fetch_offset: i64,
+    ) -> Option<crate::kraft::types::LogOffsetMetadata> {
+        if fetch_offset <= 0 {
+            return None;
+        }
+        let end = self.log.end_offset_for_epoch(fetch_epoch);
+        (end.epoch != fetch_epoch || end.offset < fetch_offset).then_some(end)
     }
 
     /// Run an inbound `ReceiveVoteRequest` and return whether the vote was

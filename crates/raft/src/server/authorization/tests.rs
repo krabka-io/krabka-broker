@@ -419,6 +419,13 @@ impl ClusterGrants for Grants {
         };
         self.0.contains(name)
     }
+
+    fn cluster_authorized_operations(&self) -> i32 {
+        [("Alter", 7), ("Describe", 8), ("ClusterAction", 9)]
+            .into_iter()
+            .filter(|(name, _)| self.0.contains(name))
+            .fold(0, |bits, (_, code)| bits | 1 << code)
+    }
 }
 
 /// Sends one flexible-header request on `client` and returns the response

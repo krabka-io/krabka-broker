@@ -201,6 +201,7 @@ impl KraftController {
             controls,
             replica_fetch_offsets: BTreeMap::new(),
             replica_directory_ids: BTreeMap::new(),
+            fetch_purgatory: Vec::new(),
             wall_clock_base: std::time::SystemTime::now(),
             leader_reported_hwm: initial_hwm,
             pending_reconfig: None,

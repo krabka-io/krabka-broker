@@ -78,7 +78,7 @@ impl ReplicatorSupervisor {
                                     log.log_end_offset(),
                                 );
                             }
-                            Ok(log.producer_state_snapshot())
+                            Ok(log.recovered_producers())
                         },
                         |snapshot| {
                             self.producer_state.rebuild_from_snapshot(

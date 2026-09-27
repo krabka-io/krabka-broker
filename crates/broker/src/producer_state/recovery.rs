@@ -12,7 +12,7 @@ use krabka_ids::PartitionIndex;
 use krabka_log::ProducerId;
 use tokio::sync::Mutex;
 
-use super::{PartitionProducerState, ProducerEntry, ProducerState};
+use super::{PartitionProducerState, ProducerEntry, ProducerState, RetainedBatch};
 
 impl ProducerState {
     /// Replace one partition's producer sequence state with the state rebuilt
@@ -34,7 +34,7 @@ impl ProducerState {
         partition: PartitionIndex,
         log: &krabka_log::Log,
     ) -> Result<(), krabka_log::LogError> {
-        self.rebuild_from_snapshot(topic, partition, log.producer_state_snapshot())
+        self.rebuild_from_snapshot(topic, partition, log.recovered_producers())
             .await;
         Ok(())
     }
@@ -43,7 +43,7 @@ impl ProducerState {
         &self,
         topic: &str,
         partition: PartitionIndex,
-        snapshot: Vec<krabka_log::ProducerSnapshotEntry>,
+        snapshot: Vec<krabka_log::RecoveredProducer>,
     ) {
         self.handle(topic, partition).lock().await.entries = entries_from_snapshot(snapshot);
     }
@@ -61,7 +61,7 @@ impl ProducerState {
         &self,
         topic: &str,
         partition: PartitionIndex,
-        snapshot: Vec<krabka_log::ProducerSnapshotEntry>,
+        snapshot: Vec<krabka_log::RecoveredProducer>,
     ) {
         let parts = if let Some(existing) = self.by_topic.get(topic) {
             existing.value().clone()
@@ -98,11 +98,10 @@ impl ProducerState {
         if entries.is_empty() {
             return;
         }
-        let now = crate::txn::util::now_millis();
         let handle = self.handle(topic, partition);
         let mut state = handle.lock().await;
         for entry in entries {
-            let mut mirrored = entry_from_snapshot(entry, now);
+            let mut mirrored = entry_from_snapshot(entry);
             // The log keeps only the last batch. A marker that leaves the
             // producer at its epoch and its last batch (transaction version 1)
             // keeps the earlier batches too, as Kafka's retained batches do.
@@ -124,17 +123,42 @@ impl ProducerState {
 }
 
 fn entries_from_snapshot(
-    snapshot: Vec<krabka_log::ProducerSnapshotEntry>,
+    snapshot: Vec<krabka_log::RecoveredProducer>,
 ) -> HashMap<ProducerId, ProducerEntry> {
-    let recovered_at = crate::txn::util::now_millis();
     snapshot
         .into_iter()
-        .map(|entry| (entry.producer_id, entry_from_snapshot(entry, recovered_at)))
+        .map(|recovered| {
+            let mut entry = entry_from_snapshot(recovered.entry);
+            entry.earlier = earlier_from_log(&recovered.earlier);
+            (recovered.entry.producer_id, entry)
+        })
         .collect()
 }
 
+/// The tracker's earlier batches for the log's retained batches before the
+/// last one, oldest first. Kafka's `rebuildProducerState` replays each
+/// batch through `ProducerStateEntry.addBatch`, so a reopen retains the
+/// snapshot's batch and the replayed tail, up to five in all.
+fn earlier_from_log(earlier: &[krabka_log::ProducerBatchMetadata]) -> super::entry::EarlierBatches {
+    let mut slots = super::NO_EARLIER_BATCHES;
+    let skip = earlier.len().saturating_sub(slots.len());
+    for (slot, batch) in slots.iter_mut().zip(&earlier[skip..]) {
+        *slot = Some(RetainedBatch {
+            base_sequence: krabka_verified::decrement_sequence(
+                batch.last_sequence,
+                batch.offset_delta,
+            ),
+            last_sequence: batch.last_sequence,
+            base_offset: batch.last_offset.0 - i64::from(batch.offset_delta),
+            last_offset: batch.last_offset.0,
+            timestamp: batch.timestamp,
+        });
+    }
+    slots
+}
+
 /// The tracker entry for one log producer entry.
-fn entry_from_snapshot(entry: krabka_log::ProducerSnapshotEntry, now_ms: i64) -> ProducerEntry {
+fn entry_from_snapshot(entry: krabka_log::ProducerSnapshotEntry) -> ProducerEntry {
     let base_offset = if entry.last_offset >= 0 {
         entry.last_offset.0 - i64::from(entry.offset_delta)
     } else {
@@ -147,8 +171,9 @@ fn entry_from_snapshot(entry: krabka_log::ProducerSnapshotEntry, now_ms: i64) ->
         last_offset: entry.last_offset.0,
         base_offset,
         last_timestamp: entry.timestamp,
-        last_activity_ms: now_ms,
-        // The log snapshot holds one batch per producer.
+        entry_timestamp: entry.timestamp,
+        current_txn_first_offset: entry.current_txn_first_offset.map(|offset| offset.0),
+        // The caller fills the earlier batches the log retained, if any.
         earlier: super::NO_EARLIER_BATCHES,
     }
 }

@@ -13,27 +13,50 @@ use crate::share_group_harness::{
     boot, broker_config, connect, create_topic, describe, heartbeat, total_assigned,
 };
 
-/// A single member joins, gets a minted member id, advances to epoch 1, and
-/// receives every partition of the subscribed topic.
+/// A single member joins and advances to epoch 1 with an empty assignment,
+/// because Kafka assigns only partitions whose share state is initialized.
+/// The join initializes them, and a later heartbeat receives every partition
+/// of the subscribed topic at a bumped epoch.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn single_member_join_assignment() {
     let (_b, bootstrap, _d) = boot().await;
     let client = connect(&bootstrap).await;
     create_topic(&client, "t1", 4).await;
 
-    let mut req = heartbeat("g1", "", 0);
+    let member_id = uuid::Uuid::new_v4().to_string();
+    let mut req = heartbeat("g1", &member_id, 0);
     req.subscribed_topic_names = Some(vec!["t1".into()]);
     let resp = client.send(req).await.unwrap();
 
     check!(resp.error_code == 0, "join failed: {:?}", resp.error_code);
-    check!(resp.member_id.is_some(), "broker must mint a member id");
+    check!(resp.member_id.as_deref() == Some(member_id.as_str()));
     check!(
         resp.member_epoch == 1,
         "first join advances member to epoch 1, got {}",
         resp.member_epoch
     );
+    check!(resp.assignment.is_some() && total_assigned(&resp) == 0);
+
+    let assigned = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        let mut epoch = resp.member_epoch;
+        loop {
+            let resp = client
+                .send(heartbeat("g1", &member_id, epoch))
+                .await
+                .unwrap();
+            assert!(resp.error_code == 0, "heartbeat failed: {resp:?}");
+            epoch = resp.member_epoch;
+            if resp.assignment.is_some() {
+                return resp;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("the initialized partitions are assigned");
+    check!(assigned.member_epoch == 2);
     check!(
-        total_assigned(&resp) == 4,
+        total_assigned(&assigned) == 4,
         "single member must own all 4 partitions"
     );
 }
@@ -46,13 +69,13 @@ async fn two_members_then_describe() {
     let client = connect(&bootstrap).await;
     create_topic(&client, "t2", 4).await;
 
-    let mut m1 = heartbeat("g1", "", 0);
+    let mut m1 = heartbeat("g1", &uuid::Uuid::new_v4().to_string(), 0);
     m1.subscribed_topic_names = Some(vec!["t2".into()]);
     let r1 = client.send(m1).await.unwrap();
     assert!(r1.error_code == 0, "m1 join failed: {:?}", r1.error_code);
     let mid1 = r1.member_id.clone().unwrap();
 
-    let mut m2 = heartbeat("g1", "", 0);
+    let mut m2 = heartbeat("g1", &uuid::Uuid::new_v4().to_string(), 0);
     m2.subscribed_topic_names = Some(vec!["t2".into()]);
     let r2 = client.send(m2).await.unwrap();
     assert!(r2.error_code == 0, "m2 join failed: {:?}", r2.error_code);
@@ -91,7 +114,7 @@ async fn member_leave_epoch_minus_one() {
     let client = connect(&bootstrap).await;
     create_topic(&client, "t3", 2).await;
 
-    let mut join = heartbeat("g1", "", 0);
+    let mut join = heartbeat("g1", &uuid::Uuid::new_v4().to_string(), 0);
     join.subscribed_topic_names = Some(vec!["t3".into()]);
     let r = client.send(join).await.unwrap();
     assert!(r.error_code == 0, "join failed: {:?}", r.error_code);
@@ -135,7 +158,7 @@ async fn state_survives_restart() {
         let client = connect(&bootstrap).await;
         create_topic(&client, "t4", 2).await;
 
-        let mut join = heartbeat("g1", "", 0);
+        let mut join = heartbeat("g1", &uuid::Uuid::new_v4().to_string(), 0);
         join.subscribed_topic_names = Some(vec!["t4".into()]);
         let r = client.send(join).await.unwrap();
         assert!(r.error_code == 0, "join failed: {:?}", r.error_code);

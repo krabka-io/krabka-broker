@@ -36,6 +36,9 @@ pub(super) enum AppendError {
     /// The partition log refused the append.
     #[error(transparent)]
     Failed(BrokerError),
+    /// The append took longer than `share.coordinator.write.timeout.ms`.
+    #[error("__share_group_state append timed out")]
+    TimedOut,
 }
 
 impl AppendError {
@@ -52,6 +55,7 @@ impl AppendError {
                 codes::KAFKA_STORAGE_ERROR
             }
             Self::Failed(error) => codes::from_broker_error(error),
+            Self::TimedOut => codes::REQUEST_TIMED_OUT,
         };
         ShareStateError::Operation {
             code: operation_error_code(append_code),
@@ -79,6 +83,7 @@ fn append_message(append_code: ShareErrorCode) -> &'static str {
         codes::UNKNOWN_TOPIC_OR_PARTITION => message::UNKNOWN_TOPIC_OR_PARTITION,
         codes::KAFKA_STORAGE_ERROR => message::KAFKA_STORAGE_ERROR,
         codes::NOT_COORDINATOR => message::NOT_COORDINATOR,
+        codes::REQUEST_TIMED_OUT => message::REQUEST_TIMED_OUT,
         _ => message::UNKNOWN_SERVER_ERROR,
     }
 }
@@ -92,7 +97,9 @@ impl ShareCoordinator {
     /// # Errors
     ///
     /// Returns [`AppendError::NotLocal`] if the partition log is not open
-    /// locally, and [`AppendError::Failed`] if `produce_batch` fails.
+    /// locally, [`AppendError::Failed`] if `produce_batch` fails, and
+    /// [`AppendError::TimedOut`] if it does not finish within the configured
+    /// write timeout.
     pub(super) async fn persist_record(
         &self,
         state_partition: PartitionIndex,
@@ -113,7 +120,10 @@ impl ShareCoordinator {
         });
         batch.last_offset_delta = 0;
 
-        part.produce_batch(batch).await.map_err(AppendError::Failed)
+        tokio::time::timeout(self.config.write_timeout, part.produce_batch(batch))
+            .await
+            .map_err(|_| AppendError::TimedOut)?
+            .map_err(AppendError::Failed)
     }
 
     /// Prunes the log prefix of `state_partition` on a best-effort basis.
@@ -155,6 +165,37 @@ impl ShareCoordinator {
                 partition = state_partition.get(),
                 error = %e,
                 "share-state log prune failed; continuing"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::check;
+
+    use super::*;
+
+    /// Kafka's `handleOperationException` codes for each append failure,
+    /// with the message of the error before the mapping.
+    #[test]
+    fn append_errors_answer_as_kafka() {
+        let rows = [
+            (
+                AppendError::NotLocal(PartitionIndex(3)),
+                codes::COORDINATOR_NOT_AVAILABLE,
+                message::UNKNOWN_TOPIC_OR_PARTITION,
+            ),
+            (
+                AppendError::TimedOut,
+                codes::COORDINATOR_NOT_AVAILABLE,
+                message::REQUEST_TIMED_OUT,
+            ),
+        ];
+        for (error, code, message) in rows {
+            check!(
+                error.share_error() == ShareStateError::Operation { code, message },
+                "{error}"
             );
         }
     }

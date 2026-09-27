@@ -326,10 +326,11 @@ pub struct RuntimeFileConfig {
     pub diskless_wal_index_projection_timeout: Option<Time>,
     /// Capacity of the unclean-recovery work queue.
     pub unclean_recovery_queue_capacity: Option<usize>,
-    /// Maximum bytes read by one share-state recovery read.
+    /// Maximum bytes read by one share-state recovery read, Kafka's
+    /// `share.coordinator.load.buffer.size`.
     #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
-    pub share_recovery_read_max: Option<ByteSize>,
+    pub share_coordinator_load_buffer_size: Option<ByteSize>,
     /// Ceiling on the share-session cache when the group count is unlimited.
     pub share_session_cache_max_when_unlimited: Option<usize>,
     /// Cap on the initial allocation a decoded or raw segment read makes.
@@ -452,6 +453,27 @@ pub struct RuntimeFileConfig {
     /// `min.insync.replicas` of the `__share_group_state` internal topic,
     /// Kafka's `share.coordinator.state.topic.min.isr`.
     pub share_state_min_isr: Option<i32>,
+    /// Updates of one share key between two snapshots of it, Kafka's
+    /// `share.coordinator.snapshot.update.records.per.snapshot`. At most 500.
+    pub share_snapshot_update_records_per_snapshot: Option<u32>,
+    /// How long an append to `__share_group_state` may take before the share
+    /// coordinator answers `COORDINATOR_NOT_AVAILABLE`, Kafka's
+    /// `share.coordinator.write.timeout.ms`.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub share_coordinator_write_timeout: Option<Time>,
+    /// How often the share coordinator trims the redundant prefix of each
+    /// `__share_group_state` partition it leads, Kafka's
+    /// `share.coordinator.state.topic.prune.interval.ms`.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub share_state_prune_interval: Option<Time>,
+    /// How old the latest snapshot of a share key may get before the share
+    /// coordinator writes a new one, Kafka's
+    /// `share.coordinator.cold.partition.snapshot.interval.ms`.
+    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
+    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
+    pub share_cold_partition_snapshot_interval: Option<Time>,
     /// Partition count of the `__consumer_offsets` internal topic, Kafka's
     /// `offsets.topic.num.partitions`.
     pub offsets_topic_num_partitions: Option<i32>,

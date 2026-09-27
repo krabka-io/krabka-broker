@@ -17,7 +17,7 @@ use krabka_raft::{
     RaftError,
     kraft::{
         KraftController, NodeId, PeerSender,
-        transport::{Inbound, api_key},
+        transport::{Inbound, api_key, wire},
     },
 };
 use tokio::sync::oneshot;
@@ -118,11 +118,31 @@ impl PeerSender for SimNet {
         })?;
         let (reply, rx) = oneshot::channel();
         let inbound = match api_key {
-            api_key::VOTE => Inbound::Vote { req: body, reply },
-            api_key::BEGIN_QUORUM_EPOCH => Inbound::BeginQuorumEpoch { req: body, reply },
-            api_key::END_QUORUM_EPOCH => Inbound::EndQuorumEpoch { req: body, reply },
-            api_key::FETCH => Inbound::Fetch { req: body, reply },
-            api_key::FETCH_SNAPSHOT => Inbound::FetchSnapshot { req: body, reply },
+            api_key::VOTE => Inbound::Vote {
+                req: body,
+                version: wire::VOTE_VERSION,
+                reply,
+            },
+            api_key::BEGIN_QUORUM_EPOCH => Inbound::BeginQuorumEpoch {
+                req: body,
+                version: wire::QUORUM_EPOCH_VERSION,
+                reply,
+            },
+            api_key::END_QUORUM_EPOCH => Inbound::EndQuorumEpoch {
+                req: body,
+                version: wire::QUORUM_EPOCH_VERSION,
+                reply,
+            },
+            api_key::FETCH => Inbound::Fetch {
+                req: body,
+                version: wire::FETCH_VERSION,
+                reply,
+            },
+            api_key::FETCH_SNAPSHOT => Inbound::FetchSnapshot {
+                req: body,
+                version: wire::FETCH_SNAPSHOT_VERSION,
+                reply,
+            },
             other => panic!("sim: unexpected api_key {other}"),
         };
         // Deliver to the target loop (non-blocking enqueue) and await its reply.

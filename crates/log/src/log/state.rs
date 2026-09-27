@@ -198,6 +198,7 @@ impl Log {
         self.pending_stamp_ranges.clear();
         self.coordinator_epochs.clear();
         self.producer_state.clear();
+        self.earlier_batches.clear();
         self.sealed_txn_indexes.clear();
         self.stamp_indexes.clear();
         self.lso = new_active.last_offset() + 1; // = new_base (empty segment)
@@ -332,6 +333,26 @@ impl Log {
     #[must_use]
     pub fn producer_state_snapshot(&self) -> Vec<ProducerSnapshotEntry> {
         self.producer_state.values().copied().collect()
+    }
+
+    /// Every producer's state with the batches it appended before its last
+    /// one: [`Self::producer_state_snapshot`] plus the retained batches that
+    /// Kafka's `ProducerStateEntry` keeps for duplicate detection. After a
+    /// reopen they are the batches the replay past the loaded snapshot
+    /// rebuilt.
+    #[must_use]
+    pub fn recovered_producers(&self) -> Vec<crate::RecoveredProducer> {
+        self.producer_state
+            .values()
+            .map(|entry| crate::RecoveredProducer {
+                entry: *entry,
+                earlier: self
+                    .earlier_batches
+                    .get(&entry.producer_id)
+                    .map(|earlier| earlier.iter().copied().collect())
+                    .unwrap_or_default(),
+            })
+            .collect()
     }
 
     /// Close all segments, first taking a producer-state snapshot at the log

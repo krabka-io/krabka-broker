@@ -421,6 +421,45 @@ impl ShareCoordinator {
         )))
     }
 
+    /// Serves a `ReadShareGroupStateSummary` partition, as Kafka's
+    /// `ShareCoordinatorShard.readStateSummary` does.
+    ///
+    /// The checks run in Kafka's order: the state partition must be active,
+    /// then `maybeGetReadStateSummaryError` refuses a negative partition and
+    /// a topic partition that `image` does not hold. A key with no state
+    /// answers `Ok(None)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of the refused partition.
+    pub(crate) async fn read_summary_checked(
+        &self,
+        image: &MetadataImage,
+        group: &str,
+        topic_id: uuid::Uuid,
+        partition: i32,
+    ) -> Result<Option<ShareStateSummary>, ShareStateError> {
+        let state_partition = self.state_partition_for(group, &topic_id, partition);
+        let _led = self
+            .active(state_partition)
+            .await
+            .map_err(ShareStateError::inactive)?;
+        if partition < 0 {
+            return Err(invalid_request(message::NEGATIVE_PARTITION_ID));
+        }
+        check_topic_partition(image, topic_id, partition)?;
+        let Some(handle) = self.entry(group, topic_id, partition) else {
+            return Ok(None);
+        };
+        let st = handle.lock().await;
+        Ok(Some((
+            st.state_epoch,
+            st.leader_epoch,
+            st.start_offset,
+            st.delivery_complete_count,
+        )))
+    }
+
     /// Serves a `DeleteShareGroupState` partition, as Kafka's
     /// `ShareCoordinatorShard.deleteState` does.
     ///

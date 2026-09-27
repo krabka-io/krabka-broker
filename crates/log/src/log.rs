@@ -9,16 +9,21 @@
 //! submodules, as a descendant, can reach them.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, VecDeque},
     path::PathBuf,
 };
 
 use krabka_ids::{Offset, ProducerId};
 
 use crate::{
-    config::LogConfig, io::LogIo, leader_epoch_checkpoint::LeaderEpochCheckpoint,
-    producer_snapshot::ProducerSnapshotEntry, segment::Segment, stamp_index::StampIndex,
-    stamp_source::StampSource, txn_index::TxnIndex,
+    config::LogConfig,
+    io::LogIo,
+    leader_epoch_checkpoint::LeaderEpochCheckpoint,
+    producer_snapshot::{ProducerBatchMetadata, ProducerSnapshotEntry},
+    segment::Segment,
+    stamp_index::StampIndex,
+    stamp_source::StampSource,
+    txn_index::TxnIndex,
 };
 
 mod append;
@@ -161,6 +166,13 @@ pub struct Log {
     /// Producer sequence, epoch, and transaction metadata persisted in
     /// Kafka-compatible `.snapshot` files at segment boundaries.
     producer_state: HashMap<ProducerId, ProducerSnapshotEntry>,
+
+    /// Up to four data batches each producer appended before the last one
+    /// its `producer_state` entry holds, at that entry's epoch, oldest first.
+    /// With the last batch they are Kafka's retained `BatchMetadata`. No
+    /// snapshot carries them, so a reopen rebuilds them from the replayed
+    /// tail alone.
+    earlier_batches: HashMap<ProducerId, VecDeque<ProducerBatchMetadata>>,
 
     /// Active segment's `TxnIndex`. The log reopens it on segment roll.
     active_txn_index: TxnIndex,

@@ -268,6 +268,9 @@ fn inbound_fetch_records_non_nil_directory_id() {
     let current_leader_epoch = i32::try_from(engine.core.quorum_state().leader_epoch).unwrap();
     let dir_id = uuid::Uuid::from_u128(999);
     let req = PeerRequest::Fetch {
+        cluster_id: None,
+        max_wait_ms: 0,
+        high_watermark: -1,
         from: NodeId(2),
         current_leader_epoch,
         fetch_epoch: 0,
@@ -276,6 +279,7 @@ fn inbound_fetch_records_non_nil_directory_id() {
     };
     let (reply, _rx) = oneshot::channel();
     engine.on_inbound(Inbound::Fetch {
+        version: crate::kraft::transport::wire::FETCH_VERSION,
         req: req.encode(),
         reply,
     });
@@ -285,6 +289,9 @@ fn inbound_fetch_records_non_nil_directory_id() {
 
     // A fetch with nil directory ID does not overwrite the recorded ID
     let nil_req = PeerRequest::Fetch {
+        cluster_id: None,
+        max_wait_ms: 0,
+        high_watermark: -1,
         from: NodeId(2),
         current_leader_epoch,
         fetch_epoch: 0,
@@ -293,6 +300,7 @@ fn inbound_fetch_records_non_nil_directory_id() {
     };
     let (reply2, _rx2) = oneshot::channel();
     engine.on_inbound(Inbound::Fetch {
+        version: crate::kraft::transport::wire::FETCH_VERSION,
         req: nil_req.encode(),
         reply: reply2,
     });

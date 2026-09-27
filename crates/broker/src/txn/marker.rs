@@ -94,10 +94,17 @@ pub fn build_marker_batch(
         .with_transactional(true)
         .with_control(true);
 
+    // Kafka's `MemoryRecords.withEndTransactionMarker` stamps the marker
+    // with the broker's clock. The marker's timestamp becomes the producer's
+    // `ProducerStateEntry.lastTimestamp`, which `producer.id.expiration.ms`
+    // ages the producer by.
+    let now = crate::txn::util::now_millis();
     RecordBatch {
         attributes: attrs,
         base_offset: base_offset.0,
         last_offset_delta: 0,
+        base_timestamp: now,
+        max_timestamp: now,
         // Unwrap into the raw-`i64` protocol `RecordBatch` field at the wire seam.
         producer_id: producer_id.get(),
         producer_epoch,

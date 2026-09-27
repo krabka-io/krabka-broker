@@ -30,12 +30,10 @@ pub(super) fn controller_addr(voters: &VoterSet, id: NodeId) -> Option<String> {
 
 /// KIP-595 api version for each api key.
 ///
-/// A peer send has to name the version its body was encoded at, and the engine
-/// encodes every KIP-595 body at the single captured version its codec pins. So
-/// this reads those pinned constants rather than restating them: the version on
-/// the header and the version in the bytes cannot drift apart, and neither can
-/// drift from the range the controller listener advertises, which is pinned to
-/// the same constants.
+/// The engine encodes every KIP-595 body at the one version its codec names,
+/// so this reads those constants rather than restating them. A peer send
+/// negotiates down from it when the peer advertises less (`negotiation`), so
+/// the version on the header and the version in the bytes cannot drift apart.
 pub(crate) fn api_version_for(key: ApiKey) -> ApiVersion {
     ApiVersion(match key {
         ApiKey(api_key::VOTE) => VOTE_VERSION,
@@ -99,7 +97,7 @@ mod tests {
             ("begin quorum epoch", api_key::BEGIN_QUORUM_EPOCH, 1),
             ("end quorum epoch", api_key::END_QUORUM_EPOCH, 1),
             ("fetch snapshot", api_key::FETCH_SNAPSHOT, 1),
-            ("fetch", api_key::FETCH, 17),
+            ("fetch", api_key::FETCH, 18),
             ("unknown API", -123, 0),
         ] {
             assert2::assert!(api_version_for(ApiKey(key)) == want);

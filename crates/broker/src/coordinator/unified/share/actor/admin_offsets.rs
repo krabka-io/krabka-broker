@@ -31,6 +31,18 @@ pub struct DeleteTopic {
     pub topic_name: String,
 }
 
+/// What `DeleteShareGroupOffsets` did for one topic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeleteTopicOutcome {
+    /// The share state of every initialized partition was deleted.
+    Deleted,
+    /// The group has no initialized partition of the topic, Kafka's "There
+    /// is no offset information to delete." row.
+    NoState,
+    /// A partition's state could not be deleted.
+    Failed(i16),
+}
+
 /// Applies an `AlterShareGroupOffsets` batch, as Kafka's
 /// `GroupMetadataManager.alterShareGroupOffsets` does for an already-created,
 /// empty share group: bump the group epoch once for the whole batch, persist
@@ -161,7 +173,7 @@ pub(crate) async fn reset_offsets(
 
     if !newly_initialized.is_empty() {
         for (_, topic_id, partition, topic_name) in &newly_initialized {
-            state.initialized.insert((*topic_id, *partition));
+            state.mark_initialized((*topic_id, *partition));
             state
                 .topic_names
                 .entry(*topic_id)
@@ -211,7 +223,7 @@ pub(crate) async fn delete_offsets(
     state: &mut ShareGroupState,
     coordinator: &GroupCoordinator,
     requests: Vec<DeleteTopic>,
-) -> Result<Vec<i16>, i16> {
+) -> Result<Vec<DeleteTopicOutcome>, i16> {
     if !state.members.is_empty() {
         return Err(codes::NON_EMPTY_GROUP);
     }
@@ -228,6 +240,12 @@ pub(crate) async fn delete_offsets(
                 (uuid::Uuid::from_bytes(topic_id.0) == request.topic_id).then_some(*partition)
             })
             .collect();
+        // Kafka's `sharePartitionsEligibleForOffsetDeletion`: a topic with no
+        // initialized partition has nothing to delete.
+        if partitions.is_empty() {
+            results.push(DeleteTopicOutcome::NoState);
+            continue;
+        }
         let mut error_code = codes::NONE;
         for partition in partitions {
             let Some(observed_leader_epoch) =
@@ -306,7 +324,11 @@ pub(crate) async fn delete_offsets(
                 state.forget_unused_topic_names();
             }
         }
-        results.push(error_code);
+        results.push(if error_code == codes::NONE {
+            DeleteTopicOutcome::Deleted
+        } else {
+            DeleteTopicOutcome::Failed(error_code)
+        });
     }
     Ok(results)
 }

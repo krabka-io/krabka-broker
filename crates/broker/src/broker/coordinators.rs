@@ -52,7 +52,7 @@ pub(super) async fn start_coordinators(
         tracing::warn!(%error, "transaction coordinator recovery error");
     }
     let mut share_coordinator_config = (*config.share_coordinator).clone();
-    share_coordinator_config.recovery_read_max = config.share_recovery_read_max;
+    share_coordinator_config.load_buffer_size = config.share_coordinator_load_buffer_size;
     let share_coordinator = Arc::new(
         crate::share_coordinator::coordinator::ShareCoordinator::new(
             config.node_id,

@@ -20,7 +20,6 @@ use crate::{
     coordinator::unified::{
         ClientIdentity, GroupCoordinator,
         actor::MetadataProvider,
-        first_join_member_id,
         offsets_log::OffsetsLog,
         share::{
             config::ShareGroupConfig,
@@ -49,15 +48,15 @@ pub(super) async fn handle_heartbeat(
 
     // ─── First-join path ─────────────────────────────────────────
     // KIP-932 mirrors KIP-848: the client mints its own member UUID and
-    // sends it with `member_epoch == 0`. Treat epoch 0 from an unknown member
-    // as a first-join, adopting the client-supplied id; an empty id is
-    // tolerated by minting a server-side UUID. Epoch 0 from a known member is
-    // a rejoin and takes the existing-member path below.
+    // sends it with `member_epoch == 0`. Epoch 0 from an unknown member is a
+    // first join under the client's id, which the handler has checked is set
+    // (`KafkaApis.isMemberIdValid`). Epoch 0 from a known member is a rejoin
+    // and takes the existing-member path below.
     if req.member_epoch == 0 && !state.members.contains_key(&req.member_id) {
         if state.members.len() >= config.max_size {
             return Ok(error_resp(codes::GROUP_MAX_SIZE_REACHED, config));
         }
-        let new_member_id = first_join_member_id(&req.member_id);
+        let new_member_id = req.member_id.clone();
         let m = build_member(&new_member_id, req, client, now);
         state.add_or_update_member(m);
         if !reconcile(state, metadata) {
@@ -67,8 +66,8 @@ pub(super) async fn handle_heartbeat(
         state.advance_member_epoch(&new_member_id);
         let pending = snapshot_pending_after_change(state, std::slice::from_ref(&new_member_id));
         flush_pending(state, pending, offsets_log, coordinator, now_ms).await?;
-        reconcile_share_state(state, offsets_log, coordinator, now_ms).await;
-        return Ok(build_assignment_resp(state, &new_member_id, config));
+        reconcile_share_state(state, config, offsets_log, coordinator, now_ms).await;
+        return Ok(build_assignment_resp(state, &new_member_id, config, true));
     }
 
     // ─── Existing-member: validate epoch ─────────────────────────
@@ -78,6 +77,10 @@ pub(super) async fn handle_heartbeat(
     };
 
     // ─── Steady-state: update subscription / last_seen ───────────
+    let assigned_before = state
+        .members
+        .get(&req.member_id)
+        .map(|m| m.assigned_partitions.clone());
     let Some(changed) = update_member_state(state, metadata, req, client, now, cur_epoch) else {
         return Ok(error_resp(codes::INVALID_REQUEST, config));
     };
@@ -85,10 +88,24 @@ pub(super) async fn handle_heartbeat(
         let pending = snapshot_pending_after_change(state, std::slice::from_ref(&req.member_id));
         flush_pending(state, pending, offsets_log, coordinator, now_ms).await?;
     }
-    // KIP-932 lifecycle: every steady-state heartbeat re-checks the assignment
-    // and Initializes any not-yet-initialized share-states (best-effort retry).
-    reconcile_share_state(state, offsets_log, coordinator, now_ms).await;
-    Ok(build_assignment_resp(state, &req.member_id, config))
+    // KIP-932 lifecycle: every steady-state heartbeat initializes the
+    // subscribed partitions that are not initialized yet.
+    reconcile_share_state(state, config, offsets_log, coordinator, now_ms).await;
+    // Kafka sends the assignment only on a full request (a rejoin at epoch 0
+    // or a request that carries the subscription) or when it changed.
+    let assigned_changed = state
+        .members
+        .get(&req.member_id)
+        .map(|m| &m.assigned_partitions)
+        != assigned_before.as_ref();
+    let with_assignment =
+        req.member_epoch == 0 || req.subscribed_topic_names.is_some() || assigned_changed;
+    Ok(build_assignment_resp(
+        state,
+        &req.member_id,
+        config,
+        with_assignment,
+    ))
 }
 
 /// Apply steady-state member updates and run reconciliation. Returns `true`
@@ -127,7 +144,7 @@ fn update_member_state(
             }
         }
     }
-    let was_dirty = state.dirty;
+    let group_epoch_before = state.group_epoch;
     if !reconcile(state, metadata) {
         return None;
     }
@@ -135,7 +152,7 @@ fn update_member_state(
     if epoch_advanced {
         state.advance_member_epoch(&req.member_id);
     }
-    Some(member_metadata_changed || was_dirty || epoch_advanced)
+    Some(member_metadata_changed || state.group_epoch != group_epoch_before || epoch_advanced)
 }
 
 /// Handle a leave-group heartbeat (`member_epoch == -1`).
@@ -183,7 +200,7 @@ async fn handle_leave(
     flush_pending(state, pending, offsets_log, coordinator, now_ms).await?;
     // Initialize the partitions that the remaining members gained. The share
     // state of a dropped partition stays, as in Kafka.
-    reconcile_share_state(state, offsets_log, coordinator, now_ms).await;
+    reconcile_share_state(state, config, offsets_log, coordinator, now_ms).await;
     Ok(leave_resp(&req.member_id, req.member_epoch))
 }
 
@@ -225,77 +242,85 @@ mod tests {
     use crate::coordinator::unified::{
         config::NextGenConfig,
         offsets_log::fake::InMemoryOffsetsLog,
-        share::actor::test_support::{heartbeat, make_coordinator, metadata_with_topic},
+        share::actor::test_support::{
+            heartbeat, make_coordinator, metadata_with_topic, seed_initialized,
+        },
     };
 
+    /// Kafka's `shareGroupHeartbeat`: only initialized partitions are
+    /// assigned, the assignor keeps what it can when a member joins, and the
+    /// response carries the assignment only for a join, a request with a
+    /// subscription, or a changed assignment. Each row is one heartbeat and
+    /// the whole response it gets.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn single_member_join_gets_assignment() {
+    async fn heartbeat_assignments_match_kafka() {
+        use krabka_protocol::owned::{
+            common::share_group_heartbeat_response::topic_partitions::TopicPartitions,
+            share_group_heartbeat_response::Assignment,
+        };
+
         let (metadata, id) = metadata_with_topic("t", 4);
-        let (coord, _log) = make_coordinator(metadata);
-        let handle = coord.get_or_create_share("g");
-        let resp = heartbeat(
-            &handle,
-            ShareGroupHeartbeatRequest {
-                group_id: "g".into(),
-                member_id: String::new(),
-                member_epoch: 0,
-                subscribed_topic_names: Some(vec!["t".into()]),
+        let response =
+            |member: &str, epoch: i32, partitions: Option<Vec<i32>>| ShareGroupHeartbeatResponse {
+                member_id: Some(member.into()),
+                member_epoch: epoch,
+                heartbeat_interval_ms: 5_000,
+                assignment: partitions.map(|partitions| Assignment {
+                    topic_partitions: if partitions.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![TopicPartitions {
+                            topic_id: id,
+                            partitions,
+                            ..Default::default()
+                        }]
+                    },
+                    ..Default::default()
+                }),
                 ..Default::default()
-            },
-        )
-        .await;
-        assert!(resp.error_code == 0);
-        assert!(resp.member_epoch == 1, "epoch advances to group epoch 1");
-        let asg = resp.assignment.expect("assignment present");
-        let total: usize = asg
-            .topic_partitions
-            .iter()
-            .map(|tp| tp.partitions.len())
-            .sum();
-        assert!(total == 4, "one member gets all 4 partitions");
-        assert!(asg.topic_partitions[0].topic_id == id);
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn two_members_reconcile() {
-        let (metadata, _id) = metadata_with_topic("t", 4);
-        let (coord, _log) = make_coordinator(metadata);
-        let handle = coord.get_or_create_share("g");
-
-        let r1 = heartbeat(
-            &handle,
-            ShareGroupHeartbeatRequest {
-                group_id: "g".into(),
-                member_id: "m1".into(),
-                member_epoch: 0,
-                subscribed_topic_names: Some(vec!["t".into()]),
-                ..Default::default()
-            },
-        )
-        .await;
-        assert!(r1.error_code == 0);
-
-        let r2 = heartbeat(
-            &handle,
-            ShareGroupHeartbeatRequest {
-                group_id: "g".into(),
-                member_id: "m2".into(),
-                member_epoch: 0,
-                subscribed_topic_names: Some(vec!["t".into()]),
-                ..Default::default()
-            },
-        )
-        .await;
-        assert!(r2.error_code == 0);
-        // Second join recomputes: each member should now own a 2-partition slice.
-        let total2: usize = r2
-            .assignment
-            .expect("m2 assignment")
-            .topic_partitions
-            .iter()
-            .map(|tp| tp.partitions.len())
-            .sum();
-        assert!(total2 == 2, "with two members each owns 2 of 4 partitions");
+            };
+        let request = |member: &str, epoch: i32, subscribe: bool| ShareGroupHeartbeatRequest {
+            group_id: "g".into(),
+            member_id: member.into(),
+            member_epoch: epoch,
+            subscribed_topic_names: subscribe.then(|| vec!["t".into()]),
+            ..Default::default()
+        };
+        // (initialized partitions, [(request, expected response)])
+        let scenarios = [
+            (
+                None,
+                vec![
+                    (request("m1", 0, true), response("m1", 1, Some(vec![]))),
+                    (request("m1", 1, false), response("m1", 1, None)),
+                ],
+            ),
+            (
+                Some(vec![0, 1, 2, 3]),
+                vec![
+                    (
+                        request("m1", 0, true),
+                        response("m1", 1, Some(vec![0, 1, 2, 3])),
+                    ),
+                    (request("m1", 1, false), response("m1", 1, None)),
+                    (request("m2", 0, true), response("m2", 2, Some(vec![0, 1]))),
+                    (request("m1", 1, false), response("m1", 2, Some(vec![2, 3]))),
+                    (request("m1", 2, false), response("m1", 2, None)),
+                    (request("m1", 2, true), response("m1", 2, Some(vec![2, 3]))),
+                ],
+            ),
+        ];
+        for (index, (initialized, steps)) in scenarios.into_iter().enumerate() {
+            let (coord, _log) = make_coordinator(metadata.clone());
+            let handle = coord.get_or_create_share("g");
+            if let Some(partitions) = initialized {
+                seed_initialized(&handle, id, "t", partitions).await;
+            }
+            for (step, (req, expected)) in steps.into_iter().enumerate() {
+                let resp = heartbeat(&handle, req).await;
+                check!(resp == expected, "scenario {index} step {step}");
+            }
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

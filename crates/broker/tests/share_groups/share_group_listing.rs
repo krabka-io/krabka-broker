@@ -21,7 +21,7 @@ async fn list_groups_includes_share_group() {
     create_topic(&client, "t7", 2).await;
 
     // Join a share group so it is registered in the coordinator.
-    let mut join = heartbeat("g7", "", 0);
+    let mut join = heartbeat("g7", &uuid::Uuid::new_v4().to_string(), 0);
     join.subscribed_topic_names = Some(vec!["t7".into()]);
     let r = client.send(join).await.unwrap();
     assert!(r.error_code == 0, "join failed: {:?}", r.error_code);

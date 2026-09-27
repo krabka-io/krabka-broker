@@ -39,28 +39,38 @@ pub struct ShareDescribeMember {
 }
 
 impl ShareDescribeView {
-    /// Render this view into a `ShareGroupDescribe` `DescribedGroup` wire row.
-    /// `error_code` and `authorized_operations` keep their defaults, because
-    /// the handler owns the ACL outcome.
+    /// Render this view into a `ShareGroupDescribe` `DescribedGroup` wire row,
+    /// as Kafka's `ShareGroup.asDescribedGroup` does. Each assigned topic is
+    /// named from `image`, and a topic the image no longer holds is left out
+    /// (`ShareGroupMember.topicPartitionsFromMap`). Members are sorted by id,
+    /// topics by name and partitions ascending, so the answer does not depend
+    /// on map order. `authorized_operations` keeps its default, because the
+    /// handler owns the ACL outcome.
     #[must_use]
-    pub fn into_described_group(self) -> DescribedGroup {
+    pub fn into_described_group(self, image: &krabka_metadata::MetadataImage) -> DescribedGroup {
         use krabka_protocol::owned::common::share_group_describe_response::{
             assignment::Assignment, topic_partitions::TopicPartitions,
         };
 
-        let members = self
+        let mut members: Vec<DescribeMember> = self
             .members
             .into_iter()
             .map(|m| {
-                let topic_partitions = m
+                let mut topic_partitions: Vec<TopicPartitions> = m
                     .assigned_partitions
                     .into_iter()
-                    .map(|(tid, parts)| TopicPartitions {
-                        topic_id: tid,
-                        partitions: parts,
-                        ..Default::default()
+                    .filter_map(|(tid, mut parts)| {
+                        let name = image.topic_name_by_id(&uuid::Uuid::from_bytes(tid.0))?;
+                        parts.sort_unstable();
+                        Some(TopicPartitions {
+                            topic_id: tid,
+                            topic_name: name.to_string(),
+                            partitions: parts,
+                            ..Default::default()
+                        })
                     })
                     .collect();
+                topic_partitions.sort_by(|a, b| a.topic_name.cmp(&b.topic_name));
                 DescribeMember {
                     member_id: m.member_id,
                     rack_id: m.rack_id,
@@ -76,6 +86,7 @@ impl ShareDescribeView {
                 }
             })
             .collect();
+        members.sort_by(|a, b| a.member_id.cmp(&b.member_id));
         DescribedGroup {
             group_id: self.group_id,
             group_state: self.group_state,

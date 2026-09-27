@@ -12,10 +12,10 @@
 //!
 //! ## Idempotency
 //!
-//! An unknown `broker_id` returns `INVALID_REQUEST (42)` with an explanatory
-//! message. This matches the shape of the JVM
-//! `KafkaApis.handleUnregisterBroker`, which reports
-//! `BrokerIdNotRegisteredException` as `INVALID_REQUEST`.
+//! A `broker_id` with no registration, a negative one included, returns
+//! `BROKER_ID_NOT_REGISTERED (102)` with the message "Broker ID {id} is not
+//! currently registered", as Kafka's
+//! `ReplicationControlManager.unregisterBroker` does.
 //!
 //! ## KFC-9: dropping a broker needs two people
 //!
@@ -88,32 +88,25 @@ pub(crate) async fn handle(
         return encode_resp(version, &resp);
     }
 
-    // The request broker_id is signed but node ids are non-negative;
-    // refuse negatives up front rather than silently `as u64`.
-    if req.broker_id < 0 {
+    // Existence check, as `ReplicationControlManager.unregisterBroker`: an id
+    // with no registration, a negative one included, answers
+    // `BROKER_ID_NOT_REGISTERED` with Kafka's message. It runs before the
+    // break-glass gate so that a typo in the id does not spend an approval
+    // that a real unregistration still needs.
+    let Some(node_id) = u64::try_from(req.broker_id)
+        .ok()
+        .map(NodeId)
+        .filter(|id| image.broker(*id).is_some())
+    else {
         let resp = response(
-            codes::INVALID_REQUEST,
+            codes::BROKER_ID_NOT_REGISTERED,
             Some(format!(
-                "broker_id must be non-negative, got {}",
+                "Broker ID {} is not currently registered",
                 req.broker_id
             )),
         );
         return encode_resp(version, &resp);
-    }
-
-    let node_id = NodeId(u64::try_from(req.broker_id).expect("non-negative"));
-
-    // Existence check. Unknown id → INVALID_REQUEST with a clear message,
-    // matching JVM's `BrokerIdNotRegisteredException → INVALID_REQUEST`
-    // surface. It runs before the break-glass gate so that a typo in the id
-    // does not spend an approval that a real unregistration still needs.
-    if image.broker(node_id).is_none() {
-        let resp = response(
-            codes::INVALID_REQUEST,
-            Some(format!("broker {node_id} is not registered")),
-        );
-        return encode_resp(version, &resp);
-    }
+    };
 
     // KFC-9: the two-person rule, and the records it makes this append carry.
     let target = broker_target(node_id);

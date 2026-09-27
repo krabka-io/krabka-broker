@@ -195,8 +195,8 @@ pub struct RuntimeArgs {
     pub diskless_wal_index_projection_timeout: Option<Time>,
     #[arg(long, env = "KRABKA_UNCLEAN_RECOVERY_QUEUE_CAPACITY", value_parser = parse_positive_count)]
     pub unclean_recovery_queue_capacity: Option<PositiveCount>,
-    #[arg(long, env = "KRABKA_SHARE_RECOVERY_READ_MAX", value_parser = krabka_units::parse::positive_byte_size)]
-    pub share_recovery_read_max: Option<ByteSize>,
+    #[arg(long, env = "KRABKA_SHARE_COORDINATOR_LOAD_BUFFER_SIZE", value_parser = krabka_units::parse::positive_byte_size)]
+    pub share_coordinator_load_buffer_size: Option<ByteSize>,
     #[arg(long, env = "KRABKA_SHARE_SESSION_CACHE_MAX_WHEN_UNLIMITED", value_parser = parse_positive_count)]
     pub share_session_cache_max_when_unlimited: Option<PositiveCount>,
     #[arg(long, env = "KRABKA_LOG_READ_BUFFER_CAP", value_parser = krabka_units::parse::positive_byte_size)]
@@ -257,6 +257,14 @@ pub struct RuntimeArgs {
     pub share_state_segment_bytes: Option<ByteSize>,
     #[arg(long, env = "KRABKA_SHARE_STATE_MIN_ISR", value_parser = parse_positive_i32)]
     pub share_state_min_isr: Option<PositiveI32>,
+    #[arg(long, env = "KRABKA_SHARE_SNAPSHOT_UPDATE_RECORDS_PER_SNAPSHOT", value_parser = clap::value_parser!(u32).range(0..=500))]
+    pub share_snapshot_update_records_per_snapshot: Option<u32>,
+    #[arg(long, env = "KRABKA_SHARE_COORDINATOR_WRITE_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
+    pub share_coordinator_write_timeout: Option<Time>,
+    #[arg(long, env = "KRABKA_SHARE_STATE_PRUNE_INTERVAL", value_parser = krabka_units::parse::positive_time)]
+    pub share_state_prune_interval: Option<Time>,
+    #[arg(long, env = "KRABKA_SHARE_COLD_PARTITION_SNAPSHOT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
+    pub share_cold_partition_snapshot_interval: Option<Time>,
     #[arg(long, env = "KRABKA_OFFSETS_TOPIC_NUM_PARTITIONS", value_parser = parse_positive_i32)]
     pub offsets_topic_num_partitions: Option<PositiveI32>,
     #[arg(long, env = "KRABKA_OFFSETS_TOPIC_REPLICATION_FACTOR", value_parser = parse_positive_i16)]

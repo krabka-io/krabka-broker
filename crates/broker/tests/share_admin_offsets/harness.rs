@@ -267,7 +267,7 @@ pub async fn join(client: &Client, group: &str, topic: &str) -> (String, i32) {
     let resp = client
         .send(ShareGroupHeartbeatRequest {
             group_id: group.into(),
-            member_id: String::new(),
+            member_id: uuid::Uuid::new_v4().to_string(),
             member_epoch: 0,
             subscribed_topic_names: Some(vec![topic.into()]),
             ..Default::default()
@@ -275,7 +275,7 @@ pub async fn join(client: &Client, group: &str, topic: &str) -> (String, i32) {
         .await
         .expect("ShareGroupHeartbeat");
     assert!(resp.error_code == 0, "join failed: {:?}", resp.error_code);
-    let member_id = resp.member_id.expect("broker must mint a member id");
+    let member_id = resp.member_id.expect("the broker echoes the member id");
     let mut epoch = resp.member_epoch;
 
     for _ in 0..3 {

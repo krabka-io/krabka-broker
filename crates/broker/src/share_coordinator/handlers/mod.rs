@@ -76,8 +76,7 @@ pub(crate) mod test_support {
     use krabka_log::{Log, LogConfig, Offset};
 
     use crate::{
-        broker::{Broker, BrokerHandle},
-        config::BrokerConfig,
+        broker::Broker,
         partition_registry::PartitionRegistry,
         share_coordinator::{
             bootstrap, config::ShareCoordinatorConfig, coordinator::ShareCoordinator,
@@ -130,22 +129,6 @@ pub(crate) mod test_support {
             config,
             crate::share_coordinator::coordinator::test_support::manual_clock(),
         ))
-    }
-
-    pub(crate) async fn broker(dir: &Path) -> (BrokerHandle, Arc<crate::broker::Broker>) {
-        let handle = Broker::start(BrokerConfig::for_tests(dir.to_path_buf()))
-            .await
-            .expect("start broker");
-        let broker = handle.broker_arc_for_test();
-        (handle, broker)
-    }
-
-    pub(crate) async fn broker_with_led_share_coordinator(
-        dir: &Path,
-    ) -> (BrokerHandle, Arc<crate::broker::Broker>) {
-        let (handle, broker) = broker(dir).await;
-        lead_share_state_partitions(&broker).await;
-        (handle, broker)
     }
 
     /// Creates the real `__share_group_state` topic on `broker` and waits until

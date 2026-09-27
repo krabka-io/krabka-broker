@@ -30,6 +30,14 @@ use tokio::{
 // `std::sync::Mutex` is kept for `log` (sync hot-path callers);
 // `replica_state` uses `tokio::sync::Mutex` to avoid blocking worker threads.
 use crate::txn::handlers::write_txn_markers::CommittedOffsets;
+
+/// Per producer, the offset resolution a durable `__consumer_offsets` marker
+/// still owes the group actors: the marker type, the marker's offset, and
+/// the offsets the transaction wrote.
+pub(crate) type OwedMarkerResolutions = std::collections::HashMap<
+    krabka_log::ProducerId,
+    (crate::txn::marker::MarkerType, i64, CommittedOffsets),
+>;
 use crate::{delivery::DeliveryHandles, error::BrokerError, replica_state::ReplicaState};
 
 mod commands;
@@ -77,13 +85,11 @@ pub struct Partition {
     pub log_dir: Arc<ArcSwap<PathBuf>>,
     pub log: Arc<Mutex<Log>>,
     pub writer_tx: mpsc::Sender<WriterMessage>,
-    /// Serializes transaction-marker admission, append, and any committed
-    /// offset publication for this partition.
-    pub(crate) marker_materialization: Arc<
-        tokio::sync::Mutex<
-            std::collections::HashMap<krabka_log::ProducerId, (i64, CommittedOffsets)>,
-        >,
-    >,
+    /// Serializes transaction-marker admission, append, and any offset
+    /// resolution for this partition. Holds, per producer, the resolution a
+    /// durable `__consumer_offsets` marker still owes the group actors: the
+    /// marker type, its offset, and the offsets the transaction wrote.
+    pub(crate) marker_materialization: Arc<tokio::sync::Mutex<OwedMarkerResolutions>>,
     pub append_notify: Arc<Notify>,
     pub(crate) replica_state: Arc<tokio::sync::Mutex<ReplicaState>>,
     pub hw_advance_notify: Arc<Notify>,

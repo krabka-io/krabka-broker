@@ -8,8 +8,8 @@
 use super::{
     FileConfigError, RuntimeFileConfig,
     validate::{
-        kafka_int_bytes, positive_i16, positive_i32, positive_time, positive_usize,
-        whole_bytes_usize, whole_millis_i32_time, whole_millis_i64_time,
+        invalid_runtime_value, kafka_int_bytes, positive_i16, positive_i32, positive_time,
+        positive_usize, whole_bytes_usize, whole_millis_i32_time, whole_millis_i64_time,
     },
 };
 
@@ -79,6 +79,39 @@ impl RuntimeFileConfig {
             share_state_min_isr,
             cfg.share_coordinator.state_topic_min_isr
         );
+        // Kafka's `between(0, 500)`.
+        if let Some(value) = runtime.share_snapshot_update_records_per_snapshot {
+            if value > 500 {
+                return Err(invalid_runtime_value(
+                    "share_snapshot_update_records_per_snapshot",
+                    "must be within 0..=500",
+                ));
+            }
+            cfg.share_coordinator.snapshot_update_records_per_snapshot = value;
+        }
+        // Kafka's `atLeast(1)` milliseconds, as an `INT`.
+        for (name, value, target) in [
+            (
+                "share_coordinator_write_timeout",
+                runtime.share_coordinator_write_timeout,
+                &mut cfg.share_coordinator.write_timeout,
+            ),
+            (
+                "share_state_prune_interval",
+                runtime.share_state_prune_interval,
+                &mut cfg.share_coordinator.state_topic_prune_interval,
+            ),
+            (
+                "share_cold_partition_snapshot_interval",
+                runtime.share_cold_partition_snapshot_interval,
+                &mut cfg.share_coordinator.cold_partition_snapshot_interval,
+            ),
+        ] {
+            if let Some(value) = value {
+                *target =
+                    krabka_units::prelude::TimeExt::to_std(whole_millis_i32_time(name, value)?);
+            }
+        }
         set_runtime_i32!(
             runtime,
             offsets_topic_num_partitions,
@@ -248,5 +281,84 @@ barrier_max_topics_per_group = 16
 
             assert!(file.apply_to(&mut cfg).is_err(), "{case}");
         }
+    }
+
+    /// Kafka's `ShareCoordinatorConfig` defaults and bounds for the share
+    /// coordinator keys: `Some` is the applied value, `None` a refusal.
+    #[test]
+    fn share_coordinator_keys_follow_kafka_defaults_and_bounds() {
+        use std::time::Duration;
+
+        use crate::share_coordinator::config::ShareCoordinatorConfig;
+
+        let with = |f: fn(&mut ShareCoordinatorConfig)| {
+            let mut config = ShareCoordinatorConfig::default();
+            f(&mut config);
+            Some(config)
+        };
+        // (row, `[runtime]` body, expected share coordinator config)
+        let rows: [(&str, &str, Option<ShareCoordinatorConfig>); 9] = [
+            ("defaults", "", Some(ShareCoordinatorConfig::default())),
+            (
+                "snapshot cadence at its ceiling",
+                "share_snapshot_update_records_per_snapshot = 500",
+                with(|c| c.snapshot_update_records_per_snapshot = 500),
+            ),
+            (
+                "snapshot cadence of zero",
+                "share_snapshot_update_records_per_snapshot = 0",
+                with(|c| c.snapshot_update_records_per_snapshot = 0),
+            ),
+            (
+                "snapshot cadence above 500",
+                "share_snapshot_update_records_per_snapshot = 501",
+                None,
+            ),
+            (
+                "write timeout",
+                "share_coordinator_write_timeout = \"250ms\"",
+                with(|c| c.write_timeout = Duration::from_millis(250)),
+            ),
+            (
+                "zero write timeout",
+                "share_coordinator_write_timeout = \"0ms\"",
+                None,
+            ),
+            (
+                "prune interval",
+                "share_state_prune_interval = \"1s\"",
+                with(|c| c.state_topic_prune_interval = Duration::from_secs(1)),
+            ),
+            (
+                "cold snapshot interval above the INT ceiling",
+                "share_cold_partition_snapshot_interval = \"2147483648ms\"",
+                None,
+            ),
+            (
+                "load buffer size",
+                "share_coordinator_load_buffer_size = \"2MiB\"",
+                Some(ShareCoordinatorConfig::default()),
+            ),
+        ];
+        for (row, body, expected) in rows {
+            let file: crate::file_config::FileConfig =
+                toml::from_str(&format!("[runtime]\n{body}\n")).expect("parse runtime config");
+            let mut cfg = crate::config::BrokerConfig::default();
+            let applied = file
+                .apply_to(&mut cfg)
+                .ok()
+                .map(|()| *cfg.share_coordinator);
+            assert!(applied == expected, "{row}");
+        }
+        let file: crate::file_config::FileConfig =
+            toml::from_str("[runtime]\nshare_coordinator_load_buffer_size = \"2MiB\"\n")
+                .expect("parse runtime config");
+        let mut cfg = crate::config::BrokerConfig::default();
+        file.apply_to(&mut cfg).expect("apply");
+        assert!(cfg.share_coordinator_load_buffer_size == krabka_units::mebibytes(2));
+        assert!(
+            crate::config::BrokerConfig::default().share_coordinator_load_buffer_size
+                == krabka_units::mebibytes(5)
+        );
     }
 }

@@ -90,59 +90,36 @@ async fn handle_denies_cluster_alter_with_message_and_throttle() {
     broker_handle.shutdown().await;
 }
 
+/// An id with no registration, a negative one included, answers
+/// `BROKER_ID_NOT_REGISTERED` with the message of Kafka's
+/// `ReplicationControlManager.unregisterBroker`.
 #[tokio::test]
-async fn handle_rejects_negative_broker_id_before_casting() {
+async fn handle_answers_broker_id_not_registered_for_unknown_ids() {
     let version = unregister_broker_response::MAX_VERSION;
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
     let principal = principal();
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = context(&principal, &peer);
-    let req = UnregisterBrokerRequest {
-        broker_id: -1,
-        ..Default::default()
-    };
 
-    let resp = handle(&broker, version, 1, &encode_request(&req, version), &ctx)
-        .await
-        .expect("handle");
-    let resp = decode_response(&resp);
+    for broker_id in [-1, 0, 999] {
+        let req = UnregisterBrokerRequest {
+            broker_id,
+            ..Default::default()
+        };
+        let resp = handle(&broker, version, 1, &encode_request(&req, version), &ctx)
+            .await
+            .expect("handle");
+        let resp = decode_response(&resp);
 
-    let expected = UnregisterBrokerResponse {
-        throttle_time_ms: 0,
-        error_code: codes::INVALID_REQUEST,
-        error_message: Some("broker_id must be non-negative, got -1".into()),
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-    };
-    assert!(resp == expected, "{resp:?}");
-    broker_handle.shutdown().await;
-}
-
-#[tokio::test]
-async fn handle_treats_zero_as_non_negative_unknown_broker() {
-    let version = unregister_broker_response::MAX_VERSION;
-    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-    let broker = broker_handle.broker_arc_for_test();
-    let principal = principal();
-    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
-    let ctx = context(&principal, &peer);
-    let req = UnregisterBrokerRequest {
-        broker_id: 0,
-        ..Default::default()
-    };
-
-    let resp = handle(&broker, version, 1, &encode_request(&req, version), &ctx)
-        .await
-        .expect("handle");
-    let resp = decode_response(&resp);
-
-    let expected = UnregisterBrokerResponse {
-        throttle_time_ms: 0,
-        error_code: codes::INVALID_REQUEST,
-        error_message: Some("broker 0 is not registered".into()),
-        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
-    };
-    assert!(resp == expected, "{resp:?}");
+        let expected = UnregisterBrokerResponse {
+            throttle_time_ms: 0,
+            error_code: codes::BROKER_ID_NOT_REGISTERED,
+            error_message: Some(format!("Broker ID {broker_id} is not currently registered")),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
+        };
+        check!(resp == expected, "broker_id {broker_id}");
+    }
     broker_handle.shutdown().await;
 }
 

@@ -91,7 +91,12 @@ fn spawn_producer_expiry(
     shutdown: CancellationToken,
 ) {
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(scan_interval.to_std());
+        // Kafka's `UnifiedLog` schedules `PeriodicProducerExpirationCheck`
+        // with `producer.id.expiration.check.interval.ms` as both the initial
+        // delay and the period, so the first sweep runs one interval after
+        // start, not at start.
+        let period = scan_interval.to_std();
+        let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {

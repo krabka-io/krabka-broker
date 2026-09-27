@@ -21,7 +21,8 @@ use super::{
     },
     prepare::{DecodeEnv, PreparedBatch, prepare_batch},
     producer_checks::{
-        DedupOutcome, TransactionRequest, handle_duplicate, verify_transactional_produce,
+        DedupOutcome, TransactionRequest, Verification, handle_duplicate,
+        produce_verification_code, verify_transactional_produce, verify_with_coordinator,
     },
     schema::{SCHEMA_REJECTION_MESSAGE, validate_batch_schemas},
     topic_settings::TimestampPolicy,
@@ -134,6 +135,115 @@ impl PartitionOutcome {
     }
 }
 
+/// Where one partition stands once every gate before the append has passed
+/// it, except the transaction coordinator's answer.
+pub(super) enum Admission {
+    /// A gate refused the batch; the row is complete.
+    Done(PartitionProduceResponse),
+    /// The batch may append once its transaction check, if any, succeeds.
+    Admitted(Box<AdmittedBatch>),
+}
+
+/// A batch that passed every gate up to the transaction coordinator call.
+///
+/// Kafka's `ReplicaManager.handleProduceAppend` collects every such partition
+/// of the request and asks the coordinator about all of them at once
+/// ([`verify_admitted`]), then appends ([`complete_partition`]).
+pub(super) struct AdmittedBatch {
+    prepared: PreparedBatch,
+    part: Arc<crate::partition::Partition>,
+    shared_topic: Arc<str>,
+    delivery: Option<DeliveryGate>,
+    acks: i16,
+    timeout: Duration,
+    /// The request's `Produce` version.
+    version: i16,
+    /// The pre-append row, with the `UNKNOWN_LOG_APPEND_INFO` sentinel.
+    out: PartitionProduceResponse,
+    verification: Verification,
+}
+
+impl AdmittedBatch {
+    /// The producer and partition this batch asks the coordinator about, or
+    /// `None` when it needs no coordinator call.
+    fn coordinator_check(
+        &self,
+    ) -> Option<(
+        (krabka_log::ProducerId, i16),
+        crate::txn::state::TopicPartition,
+    )> {
+        let Verification::Coordinator(check) = self.verification else {
+            return None;
+        };
+        Some((
+            (check.batch.producer_id, check.batch.producer_epoch),
+            crate::txn::state::TopicPartition {
+                topic: self.shared_topic.to_string(),
+                partition: krabka_ids::PartitionIndex(self.out.index),
+            },
+        ))
+    }
+}
+
+/// The partitions one producer's coordinator call covers, each with the
+/// index of its batch.
+struct ProducerChecks {
+    producer: (krabka_log::ProducerId, i16),
+    partitions: Vec<(usize, crate::txn::state::TopicPartition)>,
+}
+
+/// The transaction coordinator's answer for each admitted batch that needs
+/// one, in `batches` order, and `None` for a batch that needs none.
+///
+/// One `AddPartitionsToTxn` call covers every partition of one producer, as
+/// Kafka's `ReplicaManager.maybeSendPartitionsToTransactionCoordinator`
+/// sends one `addOrVerifyTransaction` for the whole request.
+pub(super) async fn verify_admitted(
+    batches: &[&AdmittedBatch],
+    txn_coordinator: &Arc<crate::txn::coordinator::TxnCoordinator>,
+    image: &krabka_metadata::MetadataImage,
+    transaction: TransactionRequest<'_>,
+) -> Vec<Option<i16>> {
+    let mut answers = vec![None; batches.len()];
+    let mut producers: Vec<ProducerChecks> = Vec::new();
+    for (index, batch) in batches.iter().enumerate() {
+        let Some((producer, partition)) = batch.coordinator_check() else {
+            continue;
+        };
+        match producers
+            .iter_mut()
+            .find(|known| known.producer == producer)
+        {
+            Some(known) => known.partitions.push((index, partition)),
+            None => producers.push(ProducerChecks {
+                producer,
+                partitions: vec![(index, partition)],
+            }),
+        }
+    }
+    for ProducerChecks {
+        producer,
+        partitions,
+    } in producers
+    {
+        let answered = verify_with_coordinator(
+            txn_coordinator,
+            image,
+            transaction,
+            producer,
+            partitions
+                .iter()
+                .map(|(_, partition)| partition.clone())
+                .collect(),
+        )
+        .await;
+        for ((index, _), (_, code)) in partitions.into_iter().zip(answered) {
+            answers[index] = Some(code);
+        }
+    }
+    answers
+}
+
 async fn local_replica_is_ready(
     part: &Arc<crate::partition::Partition>,
     image: &krabka_metadata::MetadataImage,
@@ -176,14 +286,12 @@ async fn ready_transition(
 async fn verify_before_append(
     prepared: &super::prepare::PreparedBatch,
     part: &crate::partition::Partition,
-    txn_coordinator: &std::sync::Arc<crate::txn::coordinator::TxnCoordinator>,
-    topic: (&krabka_metadata::MetadataImage, &str),
     (transaction, mut refused): (TransactionRequest<'_>, PartitionProduceResponse),
-) -> Result<Option<crate::partition::ProducerAppendCheck>, Box<PartitionProduceResponse>> {
+) -> Result<Verification, Box<PartitionProduceResponse>> {
     let verified = if prepared.attributes.is_transactional() && part.diskless {
         Err((codes::INVALID_TXN_STATE, None))
     } else {
-        verify_transactional_produce(prepared, part, txn_coordinator, topic, transaction).await
+        verify_transactional_produce(prepared, part, transaction).await
     };
     verified.map_err(|(code, message)| {
         refused.error_code = code;
@@ -192,10 +300,36 @@ async fn verify_before_append(
     })
 }
 
+/// Run one partition through every stage: [`admit_partition`], the
+/// coordinator call of [`verify_admitted`], and [`complete_partition`].
+#[cfg(test)]
 pub(super) async fn process_partition(
     input: PartitionInput<'_>,
     services: PartitionServices<'_>,
 ) -> Result<PartitionOutcome, BrokerError> {
+    let transaction = input.transaction;
+    let batch = match admit_partition(input, services).await? {
+        Admission::Done(row) => return Ok(PartitionOutcome::Done(row)),
+        Admission::Admitted(batch) => batch,
+    };
+    let answer = verify_admitted(
+        &[&batch],
+        services.txn_coordinator,
+        services.image,
+        transaction,
+    )
+    .await
+    .into_iter()
+    .next()
+    .flatten();
+    complete_partition(*batch, answer, services).await
+}
+
+/// Every gate of one partition before the transaction coordinator call.
+pub(super) async fn admit_partition(
+    input: PartitionInput<'_>,
+    services: PartitionServices<'_>,
+) -> Result<Admission, BrokerError> {
     let PartitionInput {
         part_data,
         topic_compression,
@@ -218,15 +352,13 @@ pub(super) async fn process_partition(
     let topic_name: &str = &shared_topic;
     let PartitionServices {
         partitions,
-        txn_coordinator,
-        producer_state,
         log_dir_status,
         image,
         broker_policy,
         record_decompression_policy,
         metrics,
-        phases,
         schema_validator,
+        ..
     } = services;
     let idx = part_data.index;
     // Every gate below returns this row, and every one of them refuses before
@@ -258,13 +390,13 @@ pub(super) async fn process_partition(
     match freeze {
         FreezeMutationResolution::AuthorizationDenied => {
             out.error_code = codes::TOPIC_AUTHORIZATION_FAILED;
-            return Ok(PartitionOutcome::Done(out));
+            return Ok(Admission::Done(out));
         }
         FreezeMutationResolution::Frozen(entry) => {
             metrics.record_topic_freeze_rejection(topic_name);
             out.error_code = codes::POLICY_VIOLATION;
             out.error_message = Some(FreezeVerdict::from(entry).error_message());
-            return Ok(PartitionOutcome::Done(out));
+            return Ok(Admission::Done(out));
         }
         FreezeMutationResolution::Admit => {}
     }
@@ -290,7 +422,7 @@ pub(super) async fn process_partition(
     // refuse the broker's own replay of its coordinator logs.
     if internal_topic_denied {
         out.error_code = codes::INVALID_TOPIC_EXCEPTION;
-        return Ok(PartitionOutcome::Done(out));
+        return Ok(Admission::Done(out));
     }
 
     // ── max.message.bytes ────────────────────────────────────────────
@@ -315,7 +447,7 @@ pub(super) async fn process_partition(
     if part_data.payload.largest_batch_len() > max_message_bytes.bytes_usize() {
         out.error_code = codes::MESSAGE_TOO_LARGE;
         out.base_offset = INVALID_OFFSET;
-        return Ok(PartitionOutcome::Done(out));
+        return Ok(Admission::Done(out));
     }
 
     // Decide verbatim-passthrough vs owned-decode and extract the HEADER
@@ -342,7 +474,7 @@ pub(super) async fn process_partition(
         Ok(p) => p,
         Err(code) => {
             out.error_code = code;
-            return Ok(PartitionOutcome::Done(out));
+            return Ok(Admission::Done(out));
         }
     };
 
@@ -368,7 +500,7 @@ pub(super) async fn process_partition(
     {
         // `out` already carries the -1 `base_offset` sentinel.
         out.error_code = codes::MESSAGE_TOO_LARGE;
-        return Ok(PartitionOutcome::Done(out));
+        return Ok(Admission::Done(out));
     }
 
     // ── leadership gate (Kafka: only the LEADER accepts Produce) ──────
@@ -416,7 +548,7 @@ pub(super) async fn process_partition(
             if let Some(leader) = error.current_leader {
                 out.current_leader = leader;
             }
-            return Ok(PartitionOutcome::Done(out));
+            return Ok(Admission::Done(out));
         }
     };
 
@@ -424,12 +556,12 @@ pub(super) async fn process_partition(
         out.error_code = codes::NOT_LEADER_OR_FOLLOWER;
         out.current_leader =
             current_leader_hint(image.partition(topic_name, idx).expect("gate checked"));
-        return Ok(PartitionOutcome::Done(out));
+        return Ok(Admission::Done(out));
     }
 
     // ── compacted topic: Kafka's `LogValidator.validateKey` ──────────
     if let Some(refusal) = record_validation_refusal(&out, &prepared, &part, topic_name) {
-        return Ok(PartitionOutcome::Done(refusal));
+        return Ok(Admission::Done(refusal));
     }
 
     // ── KFC-7 schema validation ──────────────────────────────────────
@@ -452,22 +584,71 @@ pub(super) async fn process_partition(
         out.error_code = codes::INVALID_RECORD;
         out.error_message = Some(SCHEMA_REJECTION_MESSAGE.to_owned());
         out.record_errors = rejection;
-        return Ok(PartitionOutcome::Done(out));
+        return Ok(Admission::Done(out));
     }
 
     // KIP-890: verify before the duplicate lookup, outside the barrier (a
     // coordinator call); the log checks the guard under the append lock.
-    let producer_check = match verify_before_append(
-        &prepared,
-        &part,
-        txn_coordinator,
-        (image, topic_name),
-        (transaction, out.clone()),
-    )
-    .await
-    {
-        Ok(check) => check,
-        Err(refused) => return Ok(PartitionOutcome::Done(*refused)),
+    let verification =
+        match verify_before_append(&prepared, &part, (transaction, out.clone())).await {
+            Ok(verification) => verification,
+            Err(refused) => return Ok(Admission::Done(*refused)),
+        };
+    Ok(Admission::Admitted(Box::new(AdmittedBatch {
+        prepared,
+        part,
+        shared_topic,
+        delivery,
+        acks,
+        timeout,
+        version: transaction.version,
+        out,
+        verification,
+    })))
+}
+
+/// The coordinator's answer applied to an admitted batch, then every stage
+/// from the dedup gate to the append.
+///
+/// `coordinator_answer` is the coordinator's code for this partition from
+/// [`verify_admitted`], `None` when the batch asked for none.
+pub(super) async fn complete_partition(
+    batch: AdmittedBatch,
+    coordinator_answer: Option<i16>,
+    services: PartitionServices<'_>,
+) -> Result<PartitionOutcome, BrokerError> {
+    let AdmittedBatch {
+        prepared,
+        part,
+        shared_topic,
+        delivery,
+        acks,
+        timeout,
+        version,
+        mut out,
+        verification,
+    } = batch;
+    let PartitionServices {
+        producer_state,
+        image,
+        phases,
+        ..
+    } = services;
+    let topic_name: &str = &shared_topic;
+    let idx = out.index;
+    let producer_check = match verification {
+        Verification::Settled(check) => check,
+        Verification::Coordinator(check) => match produce_verification_code(
+            coordinator_answer.unwrap_or(codes::UNKNOWN_SERVER_ERROR),
+            version,
+        ) {
+            (codes::NONE, _) => Some(check),
+            (code, message) => {
+                out.error_code = code;
+                out.error_message = message;
+                return Ok(PartitionOutcome::Done(out));
+            }
+        },
     };
 
     // Hold the transition barrier through dedup, enqueue, append, and ack.
