@@ -153,6 +153,24 @@ fn next_after(set: &BTreeSet<usize>, cursor: Option<usize>) -> Option<usize> {
     }
 }
 
+/// The next unfilled member for `assignRemainingPartitions`: the one after
+/// `cursor`, or, when the walk ran off the end and assigned something on this
+/// pass, the first one again.
+fn next_member(
+    unfilled: &BTreeSet<usize>,
+    cursor: Option<usize>,
+    assigned_this_pass: &mut bool,
+) -> Option<usize> {
+    if let Some(member) = next_after(unfilled, cursor) {
+        return Some(member);
+    }
+    if !*assigned_this_pass {
+        return None;
+    }
+    *assigned_this_pass = false;
+    next_after(unfilled, None)
+}
+
 /// Kafka's `SimpleHomogeneousAssignmentBuilder.build`.
 fn homogeneous(
     subscribed: &BTreeSet<TopicKey>,
@@ -239,18 +257,8 @@ fn homogeneous(
         }
         let mut to_make = sharing.saturating_sub(holders.len());
         while to_make > 0 {
-            let member = match next_after(&unfilled, cursor) {
-                Some(member) => member,
-                None => {
-                    if !assigned_this_pass {
-                        break;
-                    }
-                    assigned_this_pass = false;
-                    match next_after(&unfilled, None) {
-                        Some(member) => member,
-                        None => break,
-                    }
-                }
+            let Some(member) = next_member(&unfilled, cursor, &mut assigned_this_pass) else {
+                break;
             };
             cursor = Some(member);
             if holders.contains(&member) {
@@ -360,18 +368,8 @@ fn heterogeneous(
             }
             let mut to_make = sharing.saturating_sub(holders.len());
             while to_make > 0 {
-                let member = match next_after(&unfilled, cursor) {
-                    Some(member) => member,
-                    None => {
-                        if !assigned_this_pass {
-                            break;
-                        }
-                        assigned_this_pass = false;
-                        match next_after(&unfilled, None) {
-                            Some(member) => member,
-                            None => break,
-                        }
-                    }
+                let Some(member) = next_member(&unfilled, cursor, &mut assigned_this_pass) else {
+                    break;
                 };
                 cursor = Some(member);
                 if holders.contains(&member) {
@@ -431,7 +429,10 @@ mod tests {
         }
     }
 
-    fn expected(rows: &[(&str, &[(Uuid, &[i32])])]) -> Assignment {
+    /// One member's expected topics and partitions.
+    type ExpectedMember<'a> = (&'a str, &'a [(Uuid, &'a [i32])]);
+
+    fn expected(rows: &[ExpectedMember<'_>]) -> Assignment {
         rows.iter()
             .map(|(m, parts)| {
                 (

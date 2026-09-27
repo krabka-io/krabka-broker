@@ -76,8 +76,7 @@ pub(crate) mod test_support {
     use krabka_log::{Log, LogConfig, Offset};
 
     use crate::{
-        broker::{Broker, BrokerHandle},
-        config::BrokerConfig,
+        broker::Broker,
         partition_registry::PartitionRegistry,
         share_coordinator::{
             bootstrap, config::ShareCoordinatorConfig, coordinator::ShareCoordinator,

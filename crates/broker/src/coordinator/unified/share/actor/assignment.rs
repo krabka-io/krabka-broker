@@ -182,6 +182,10 @@ mod tests {
         }
     }
 
+    /// (step, partitions in the image, partition initialized before the step,
+    /// expected group epoch, expected target of m)
+    type Step = (&'static str, i32, Option<i32>, i32, Vec<i32>);
+
     /// Kafka's share heartbeat: the epoch bumps for a join, a metadata change
     /// and newly initialized partitions, only initialized partitions are
     /// assigned, and a retry with nothing new keeps the epoch.
@@ -197,7 +201,7 @@ mod tests {
         ));
         // (step, partitions in the image, partition initialized before the
         // step, expected group epoch, expected target of m)
-        let steps: [(&str, i32, Option<i32>, i32, Vec<i32>); 6] = [
+        let steps: [Step; 6] = [
             ("join with nothing initialized", 1, None, 1, vec![]),
             ("partition 0 initialized", 1, Some(0), 2, vec![0]),
             ("retry", 1, None, 2, vec![0]),
