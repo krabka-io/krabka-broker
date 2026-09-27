@@ -62,14 +62,15 @@ pub(crate) async fn append_marker_and_materialize(
     // conflicting marker requests therefore cannot both observe the same
     // pending transaction and publish different outcomes.
     let mut materialization = partition.marker_materialization.lock().await;
-    if let Some((resolved_through, offsets)) = materialization.get(&producer_id).cloned() {
+    if let Some((owed_type, resolved_through, offsets)) = materialization.get(&producer_id).cloned()
+    {
         let coordinator = group_coordinator.ok_or_else(|| {
             BrokerError::Txn("cannot retry committed offsets without a group coordinator".into())
         })?;
         resolve_pending_offsets(
             coordinator,
             producer_id,
-            MarkerType::Commit,
+            owed_type,
             resolved_through,
             offsets,
         )
@@ -159,21 +160,44 @@ pub(crate) async fn append_marker_and_materialize(
     marker.partition_leader_epoch = partition
         .current_leader_epoch
         .load(std::sync::atomic::Ordering::Acquire);
-    let marker_offset = if let Some(stamp) = commit_stamp {
-        partition.produce_commit_marker(marker, stamp).await?
+    let append_from = partition.log_end_offset();
+    let appended = if let Some(stamp) = commit_stamp {
+        partition.produce_commit_marker(marker, stamp).await
     } else {
         // A control batch takes the control append path, which applies no
         // compression rewrite. Kafka never compresses a control batch that
         // arrived uncompressed.
-        partition.produce_control_batch(marker).await?
+        partition.produce_control_batch(marker).await
+    };
+    let marker_offset = match appended {
+        Ok(offset) => offset,
+        Err(error) => {
+            // The writer can append the marker and still lose the
+            // acknowledgement, for example when it exits right after the
+            // append. The coordinator retries the marker, and the retry finds
+            // the transaction already ended, so the offsets it wrote can no
+            // longer be scanned. Keep the resolution the landed marker owes;
+            // the retry drains it before it answers. Kafka's
+            // `GroupCoordinator.completeTransaction` writes the marker and
+            // completes the offsets in one operation, so a retried marker
+            // completes them too.
+            if let (Some(_), offsets) = &pending_offsets
+                && let Some(landed) =
+                    landed_marker_offset(partition, producer_id, producer_epoch, append_from)?
+            {
+                materialization.insert(producer_id, (marker_type, landed, offsets.clone()));
+            }
+            return Err(error);
+        }
     };
 
     if let (Some(coordinator), offsets) = pending_offsets {
-        if marker_type == MarkerType::Commit {
-            // Retain the decoded publication until the actor acknowledges it.
-            // An exact marker retry drains this entry without another append.
-            materialization.insert(producer_id, (marker_offset.get(), offsets.clone()));
-        }
+        // Retain the decoded resolution until the actor acknowledges it. An
+        // exact marker retry drains this entry without another append.
+        materialization.insert(
+            producer_id,
+            (marker_type, marker_offset.get(), offsets.clone()),
+        );
         // The marker's own log position resolves the KIP-447 marks: it is what
         // tells a group actor that a mark still on its way, for records below
         // it, belongs to the transaction this marker ends.
@@ -188,6 +212,41 @@ pub(crate) async fn append_marker_and_materialize(
         materialization.remove(&producer_id);
     }
     Ok(())
+}
+
+/// The offset of the control batch of `producer_id` at `producer_epoch` that
+/// the log holds at or after `from`, if an append whose acknowledgement was
+/// lost did land.
+fn landed_marker_offset(
+    partition: &crate::partition::Partition,
+    producer_id: krabka_log::ProducerId,
+    producer_epoch: i16,
+    from: krabka_log::Offset,
+) -> Result<Option<i64>, BrokerError> {
+    let log = partition
+        .log
+        .lock()
+        .map_err(|_| BrokerError::Txn("transaction marker log lock poisoned".into()))?;
+    let end = log.log_end_offset();
+    let mut next = from;
+    while next < end {
+        let read = log.read(next, krabka_units::mebibytes(1))?;
+        if read.batches.is_empty() {
+            break;
+        }
+        for batch in &read.batches {
+            if batch.producer_id == producer_id.get()
+                && batch.producer_epoch == producer_epoch
+                && batch.attributes.is_control_batch()
+            {
+                return Ok(Some(batch.base_offset));
+            }
+            next = next.max(krabka_log::Offset(
+                batch.base_offset + i64::from(batch.last_offset_delta) + 1,
+            ));
+        }
+    }
+    Ok(None)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -661,6 +720,141 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
+    /// A partition that shares `part`'s log and writer, but whose writer
+    /// acknowledgements never arrive: each append lands, and its caller sees
+    /// the acknowledgement dropped.
+    fn dropping_acks(part: &crate::partition::Partition) -> crate::partition::Partition {
+        use crate::partition::{ProduceJob, WriterMessage};
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<WriterMessage>(8);
+        let writer = part.writer_tx.clone();
+        tokio::spawn(async move {
+            while let Some(message) = rx.recv().await {
+                let WriterMessage::Produce(job) = message else {
+                    continue;
+                };
+                let ProduceJob {
+                    data,
+                    ack,
+                    producer_check,
+                } = job;
+                let (landed_tx, landed_rx) = tokio::sync::oneshot::channel();
+                let forwarded = writer
+                    .send(WriterMessage::Produce(ProduceJob {
+                        data,
+                        ack: landed_tx,
+                        producer_check,
+                    }))
+                    .await;
+                if forwarded.is_ok() {
+                    let _ = landed_rx.await;
+                }
+                drop(ack);
+            }
+        });
+        crate::partition::Partition {
+            writer_tx: tx,
+            ..part.clone()
+        }
+    }
+
+    /// #976: a commit marker on `__consumer_offsets` whose append landed but
+    /// whose acknowledgement was lost still publishes the transaction's
+    /// offsets when the coordinator retries it. Kafka's
+    /// `GroupCoordinator.completeTransaction` completes the offsets together
+    /// with the marker, so the retry answers `NONE` with the offsets
+    /// visible, and the log holds one marker.
+    #[tokio::test]
+    async fn a_retried_commit_marker_publishes_offsets_after_a_lost_ack() {
+        use krabka_log::Offset;
+        use krabka_protocol::records::{Attributes, Record, RecordBatch};
+
+        let (broker_handle, _dir) = start_broker().await;
+        let broker = broker_handle.broker_arc_for_test();
+        let group_id = "lost-ack-group";
+        let offsets_partition = crate::coordinator::partitioner::partition_for_group(
+            &broker.controller.current_image(),
+            group_id,
+        );
+        let part = broker
+            .partitions
+            .get(OFFSETS_TOPIC, PartitionIndex(offsets_partition))
+            .expect("local offsets partition");
+        let producer_id = krabka_log::ProducerId(704);
+        part.produce_batch(RecordBatch {
+            producer_id: producer_id.get(),
+            producer_epoch: 1,
+            base_sequence: 0,
+            attributes: Attributes::default().with_transactional(true),
+            records: vec![Record {
+                key: Some(OffsetCommitValue::encode_key(group_id, "orders", 0)),
+                value: Some(
+                    OffsetCommitValue {
+                        offset: Offset(55),
+                        leader_epoch: 1,
+                        metadata: "committed".into(),
+                        commit_timestamp_ms: 1,
+                        expire_timestamp_ms: None,
+                        topic_id: None,
+                    }
+                    .encode_value(),
+                ),
+                ..Record::default()
+            }],
+            ..RecordBatch::default()
+        })
+        .await
+        .expect("append transactional offset");
+        let marker = MarkerAppend {
+            producer_id,
+            producer_epoch: 1,
+            marker_type: MarkerType::Commit,
+            coordinator_epoch: 0,
+            commit_stamp: None,
+            transaction_version: 0,
+        };
+
+        let lost = append_marker_and_materialize(
+            &dropping_acks(&part),
+            Some(&broker.group_coordinator),
+            OFFSETS_TOPIC,
+            marker,
+        )
+        .await;
+        assert!(lost.is_err());
+        let after_marker = part.log_end_offset();
+
+        append_marker_and_materialize(
+            &part,
+            Some(&broker.group_coordinator),
+            OFFSETS_TOPIC,
+            marker,
+        )
+        .await
+        .expect("retried marker");
+        assert!(part.log_end_offset() == after_marker);
+
+        let handle = broker
+            .group_coordinator
+            .find(group_id)
+            .expect("offset home actor");
+        let (reply, result) = tokio::sync::oneshot::channel();
+        handle
+            .tx
+            .send(GroupActorMessage::FetchOffsets { reply })
+            .await
+            .expect("fetch committed request");
+        let committed = result.await.expect("fetch committed response");
+        assert!(
+            committed
+                .committed
+                .get(&("orders".into(), 0))
+                .map(|entry| (entry.offset, entry.metadata.as_str()))
+                == Some((Offset(55), "committed"))
+        );
+        broker_handle.shutdown().await;
+    }
+
     #[tokio::test]
     async fn exact_marker_retry_drains_retained_offset_publication() {
         use krabka_log::Offset;
@@ -724,10 +918,10 @@ mod tests {
                 },
             )],
         );
-        part.marker_materialization
-            .lock()
-            .await
-            .insert(producer_id, (after_marker.get() - 1, retained));
+        part.marker_materialization.lock().await.insert(
+            producer_id,
+            (MarkerType::Commit, after_marker.get() - 1, retained),
+        );
 
         append_marker_and_materialize(
             &part,
