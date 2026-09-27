@@ -41,9 +41,9 @@ use crate::{
         share_fetch::{
             AckApplication, Renewal, acknowledgement_batches_are_valid, apply_acknowledgements,
             current_leader, leader_endpoints, member_id_is_valid, names_the_leader,
-            renew_acknowledge_enabled,
         },
     },
+    share_partition::group_settings::GroupShareSettings,
 };
 
 #[tracing::instrument(
@@ -64,7 +64,6 @@ pub(crate) async fn handle(
     let req = ShareAcknowledgeRequest::decode(&mut cur, version)?;
 
     let cfg = broker.config.share_group.clone();
-    let lock_timeout_ms = i32::try_from(cfg.record_lock_duration.as_millis()).unwrap_or(i32::MAX);
 
     if !cfg.enable {
         return encode_error_response(version, codes::UNSUPPORTED_VERSION);
@@ -80,6 +79,10 @@ pub(crate) async fn handle(
     if group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &group) {
         return encode_error_response(version, codes::GROUP_AUTHORIZATION_FAILED);
     }
+    // Kafka's `ShareGroupConfigProvider`: each `share.*` group override, with
+    // the broker setting as the default.
+    let settings = GroupShareSettings::resolve(&image, &group, &cfg);
+    let lock_timeout_ms = settings.record_lock_duration_ms();
     let Some(member) = req.member_id.clone().filter(|id| member_id_is_valid(id)) else {
         return encode_error_response(version, codes::INVALID_REQUEST);
     };
@@ -99,7 +102,7 @@ pub(crate) async fn handle(
         version,
         req: &req,
         ctx,
-        cfg: &cfg,
+        settings,
         group: &group,
         member: &member,
         now,
@@ -171,7 +174,7 @@ struct AcknowledgeContext<'a> {
     version: i16,
     req: &'a ShareAcknowledgeRequest,
     ctx: &'a crate::handlers::RequestContext<'a>,
-    cfg: &'a crate::coordinator::unified::share::config::ShareGroupConfig,
+    settings: GroupShareSettings,
     group: &'a str,
     member: &'a str,
     now: Instant,
@@ -183,7 +186,7 @@ async fn process_topics(context: &AcknowledgeContext<'_>) -> Vec<ShareAcknowledg
         version,
         req,
         ctx,
-        cfg,
+        settings,
         group,
         member,
         now,
@@ -228,8 +231,8 @@ async fn process_topics(context: &AcknowledgeContext<'_>) -> Vec<ShareAcknowledg
 
         let renewal = Renewal {
             requested: req.is_renew_ack,
-            enabled: renew_acknowledge_enabled(&image, group),
-            lock_duration: cfg.record_lock_duration,
+            enabled: settings.renew_acknowledge_enabled,
+            lock_duration: settings.record_lock_duration,
         };
         let mut parts: Vec<PartitionData> = Vec::with_capacity(topic.partitions.len());
         for ap in &topic.partitions {
@@ -299,7 +302,7 @@ async fn process_topics(context: &AcknowledgeContext<'_>) -> Vec<ShareAcknowledg
                 member,
                 now,
                 renewal,
-                max_attempts: cfg.max_delivery_attempts,
+                max_attempts: settings.delivery_count_limit,
             };
             let batches = ap.acknowledgement_batches.iter().map(|batch| {
                 (

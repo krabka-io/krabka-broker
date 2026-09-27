@@ -20,8 +20,12 @@ use super::{
     },
 };
 use crate::{
-    broker::Broker, codes, error::BrokerError,
-    share_partition::manager::persistence::fences_the_partition,
+    broker::Broker,
+    codes,
+    error::BrokerError,
+    share_partition::{
+        group_settings::GroupShareSettings, manager::persistence::fences_the_partition,
+    },
 };
 
 /// KFC-1: the most not-yet-due records an acquire pass leaves in one share
@@ -49,7 +53,9 @@ pub(super) struct AcquireContext<'a> {
     pub(super) max_records: i32,
     pub(super) max_bytes: i32,
     pub(super) renewal: super::acknowledge::Renewal,
-    pub(super) config: &'a crate::coordinator::unified::share::config::ShareGroupConfig,
+    /// The group's share settings: lock duration, delivery count limit,
+    /// record lock limit and isolation level.
+    pub(super) settings: GroupShareSettings,
 }
 
 pub(super) async fn acquire_records(
@@ -146,8 +152,7 @@ fn remaining_record_budget(max_records: i32, acquired: i64) -> i32 {
 struct GrowAndAcquireArgs<'a> {
     part: &'a Arc<crate::partition::Partition>,
     upper: Offset,
-    cfg: &'a crate::coordinator::unified::share::config::ShareGroupConfig,
-    read_committed: bool,
+    settings: &'a GroupShareSettings,
     member: &'a str,
     max_bytes: i32,
     remaining_records: i32,
@@ -170,14 +175,20 @@ async fn grow_and_acquire(
     let GrowAndAcquireArgs {
         part,
         upper,
-        cfg,
-        read_committed,
+        settings,
         member,
         max_bytes,
         remaining_records,
         now,
     } = args;
-    grow_readable_window(st, part, upper, cfg.max_inflight_records, read_committed).await?;
+    grow_readable_window(
+        st,
+        part,
+        upper,
+        settings.max_record_locks,
+        settings.read_committed,
+    )
+    .await?;
     // KFC-1: re-derive the deferral from the log and this partition's own
     // clock on every pass, exactly as the control-batch ranges above are.
     // Dropping it first is what keeps a batch that has since come due from
@@ -198,8 +209,8 @@ async fn grow_and_acquire(
         max_bytes,
         upper,
         now,
-        lock_duration: cfg.record_lock_duration,
-        max_attempts: cfg.max_delivery_attempts,
+        lock_duration: settings.record_lock_duration,
+        max_attempts: settings.delivery_count_limit,
     };
     acquire_read_records(out, part, st, &request).await
 }
@@ -245,13 +256,10 @@ async fn acquire_pass(
         max_records,
         max_bytes,
         renewal,
-        config: cfg,
+        settings,
     } = context;
     let now = Instant::now();
-    let read_committed = matches!(
-        cfg.isolation_level,
-        crate::coordinator::unified::share::config::ShareIsolationLevel::ReadCommitted
-    );
+    let read_committed = settings.read_committed;
     let mut total = 0_i64;
 
     for p in pending.iter_mut() {
@@ -291,7 +299,7 @@ async fn acquire_pass(
                 member,
                 now,
                 renewal,
-                max_attempts: cfg.max_delivery_attempts,
+                max_attempts: settings.delivery_count_limit,
             };
             let batches = p
                 .ack_batches
@@ -318,7 +326,7 @@ async fn acquire_pass(
         }
 
         // Expire stale locks, materialize freshly produced records, acquire.
-        st.expire_locks(now, cfg.max_delivery_attempts);
+        st.expire_locks(now, settings.delivery_count_limit);
         let part = p.topic_name.as_deref().and_then(|name| {
             broker
                 .partitions
@@ -351,14 +359,13 @@ async fn acquire_pass(
         };
         // A released or expired record at the delivery limit is archived
         // first, so it cannot hold the window shut.
-        st.archive_exhausted(cfg.max_delivery_attempts);
+        st.archive_exhausted(settings.delivery_count_limit);
         let remaining_records = remaining_record_budget(max_records, total);
         let read_max_bytes = read_budget(p.partition_max_bytes, max_bytes);
         let grow_and_acquire_args = || GrowAndAcquireArgs {
             part: &part,
             upper,
-            cfg,
-            read_committed,
+            settings: &settings,
             member,
             max_bytes: read_max_bytes,
             remaining_records,

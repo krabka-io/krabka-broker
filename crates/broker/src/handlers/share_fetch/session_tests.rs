@@ -235,9 +235,12 @@ async fn states(broker: &BrokerHandle, group: &str, topic_id: WireUuid) -> Vec<R
         .collect()
 }
 
-/// `(partition, error_code, acknowledge_error_code, acquired ranges)` of
-/// every row of `response`.
-fn rows(response: &ShareFetchResponse) -> Vec<(i32, i16, i16, Vec<(i64, i64)>)> {
+/// `(partition, error_code, acknowledge_error_code, acquired ranges)` of one
+/// response row.
+type RowOutcome = (i32, i16, i16, Vec<(i64, i64)>);
+
+/// The [`RowOutcome`] of every row of `response`.
+fn rows(response: &ShareFetchResponse) -> Vec<RowOutcome> {
     response
         .responses
         .iter()
@@ -378,6 +381,68 @@ async fn an_incremental_response_leaves_out_partitions_without_news() {
                 vec![(1, codes::NONE, codes::NONE, vec![(0, 2)])],
                 Vec::new()
             )
+    );
+    broker.shutdown().await;
+}
+
+/// The per-group `share.*` overrides reach the share partition: the lock
+/// duration that `AcquisitionLockTimeoutMs` reports, the record lock limit of
+/// the window, and the delivery count limit at which a release archives.
+#[tokio::test]
+async fn group_share_settings_override_the_broker_defaults() {
+    const RELEASE: i8 = 2;
+    let (broker, _dir) = start(10_000).await;
+    let topic_id = create_topic(&broker, "overrides", 1).await;
+    produce(&broker, "overrides", 0).await;
+    earliest(&broker, "g", topic_id, 1).await;
+    broker
+        .broker_arc_for_test()
+        .controller
+        .submit_change(vec![MetadataRecord::V1GroupConfig(GroupConfigRecord {
+            group_id: "g".to_string(),
+            configs: maplit::btreemap! {
+                "share.auto.offset.reset".to_owned() => "earliest".to_owned(),
+                "share.record.lock.duration.ms".to_owned() => "60000".to_owned(),
+                "share.delivery.count.limit".to_owned() => "2".to_owned(),
+                "share.partition.max.record.locks".to_owned() => "2".to_owned(),
+            },
+        })])
+        .await
+        .expect("set the group config");
+    let fetch = |epoch, rows| Fetch {
+        group: "g",
+        epoch,
+        topic_id,
+        rows,
+        forgotten: &[],
+        max_wait_ms: 0,
+    };
+    let delivered = |response: &ShareFetchResponse| {
+        response
+            .responses
+            .iter()
+            .flat_map(|topic| &topic.partitions)
+            .flat_map(|row| &row.acquired_records)
+            .map(|range| (range.first_offset, range.last_offset, range.delivery_count))
+            .collect::<Vec<_>>()
+    };
+
+    let first = share_fetch(&broker, &fetch(0, &[(0, &[])])).await;
+    let second = share_fetch(&broker, &fetch(1, &[(0, &[(0, 1, &[RELEASE])])])).await;
+    let third = share_fetch(&broker, &fetch(2, &[(0, &[(0, 1, &[RELEASE])])])).await;
+
+    assert!(
+        (
+            (first.acquisition_lock_timeout_ms, delivered(&first)),
+            delivered(&second),
+            delivered(&third),
+        ) == (
+            (60_000, vec![(0, 1, 1)]),
+            vec![(0, 1, 2)],
+            // The second release reaches the limit of 2 and archives 0 and 1
+            // at once, so the window moves on to offset 2.
+            vec![(2, 2, 1)],
+        )
     );
     broker.shutdown().await;
 }

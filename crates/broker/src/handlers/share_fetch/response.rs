@@ -15,12 +15,6 @@ use krabka_protocol::owned::share_fetch_response::{
 use super::pending::PendingPartition;
 use crate::{codes, error::BrokerError};
 
-pub(super) fn acquisition_timeout_ms(
-    config: &crate::coordinator::unified::share::config::ShareGroupConfig,
-) -> i32 {
-    i32::try_from(config.record_lock_duration.as_millis()).unwrap_or(i32::MAX)
-}
-
 pub(super) fn partition_response(partition_index: i32) -> PartitionData {
     PartitionData {
         partition_index,

@@ -7,7 +7,6 @@
 use std::time::{Duration, Instant};
 
 use krabka_log::Offset;
-use krabka_metadata::MetadataImage;
 
 use crate::{
     codes,
@@ -17,29 +16,17 @@ use crate::{
 /// The KIP-1222 acknowledge type `Renew`.
 const ACK_RENEW: i8 = 4;
 
-/// The group config that allows `Renew` acknowledgements.
-const KEY_SHARE_RENEW_ACKNOWLEDGE_ENABLE: &str = "share.renew.acknowledge.enable";
-
 /// How an acknowledgement request treats the acknowledge type `Renew`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Renewal {
     /// The request set `IsRenewAck`.
     pub(crate) requested: bool,
-    /// The group allows renewals: `share.renew.acknowledge.enable`.
+    /// The group allows renewals: `share.renew.acknowledge.enable`, as
+    /// [`GroupShareSettings`](crate::share_partition::group_settings::GroupShareSettings)
+    /// resolves it.
     pub(crate) enabled: bool,
     /// The new lock length of a renewed record.
     pub(crate) lock_duration: Duration,
-}
-
-/// Whether `group` allows `Renew` acknowledgements.
-///
-/// Kafka's `GroupConfig` defines `share.renew.acknowledge.enable` as a
-/// boolean with the default `true`, and parses it without regard to case.
-pub(crate) fn renew_acknowledge_enabled(image: &MetadataImage, group: &str) -> bool {
-    image
-        .group_config(group)
-        .and_then(|configs| configs.get(KEY_SHARE_RENEW_ACKNOWLEDGE_ENABLE))
-        .is_none_or(|value| !value.eq_ignore_ascii_case("false"))
 }
 
 /// The highest acknowledge type of a request version without `Renew`:

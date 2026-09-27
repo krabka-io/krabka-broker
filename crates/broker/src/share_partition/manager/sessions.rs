@@ -9,8 +9,9 @@
 use std::collections::HashSet;
 
 use super::SharePartitionLeaderManager;
-use crate::share_partition::session::{
-    FetchPartitions, ResponseRow, ShareFetchSessionUpdate, SharePartitionKey,
+use crate::share_partition::{
+    group_settings::GroupShareSettings,
+    session::{FetchPartitions, ResponseRow, ShareFetchSessionUpdate, SharePartitionKey},
 };
 
 impl SharePartitionLeaderManager {
@@ -62,6 +63,9 @@ impl SharePartitionLeaderManager {
         member: &str,
         partitions: &HashSet<SharePartitionKey>,
     ) {
+        let limit =
+            GroupShareSettings::resolve(&self.controller.current_image(), group, &self.config)
+                .delivery_count_limit;
         for &(topic_id, partition) in partitions {
             let cell = self
                 .leaders
@@ -71,7 +75,7 @@ impl SharePartitionLeaderManager {
                 continue;
             };
             let mut state = cell.lock().await;
-            state.release_member(member, self.config.max_delivery_attempts);
+            state.release_member(member, limit);
             // Best-effort: a failed write keeps the state dirty for a retry.
             let _ = self
                 .persist_if_dirty(group, topic_id, partition, Some(&cell), &mut state)

@@ -74,7 +74,6 @@ mod topic_resolution_tests;
 pub(crate) use self::{
     acknowledge::{
         AckApplication, Renewal, acknowledgement_batches_are_valid, apply_acknowledgements,
-        renew_acknowledge_enabled,
     },
     leader_hint::{current_leader, leader_endpoints, names_the_leader},
 };
@@ -83,16 +82,17 @@ use self::{
     pending::PendingPartition,
     request::has_acknowledgements,
     resolve::{RowContext, resolve_row},
-    response::{
-        acquisition_timeout_ms, encode_error_response, encode_success_response, group_responses,
-    },
+    response::{encode_error_response, encode_success_response, group_responses},
 };
 use crate::{
     broker::Broker,
     codes,
     error::BrokerError,
     handlers::group_read_denied,
-    share_partition::session::{FetchPartitions, ResponseRow},
+    share_partition::{
+        group_settings::GroupShareSettings,
+        session::{FetchPartitions, ResponseRow},
+    },
 };
 
 /// The longest member id that Kafka accepts: a human-readable UUID.
@@ -129,7 +129,6 @@ pub(crate) async fn handle(
     let req = ShareFetchRequest::decode(&mut cur, version)?;
 
     let cfg = broker.config.share_group.clone();
-    let lock_timeout_ms = acquisition_timeout_ms(&cfg);
 
     if !cfg.enable {
         return encode_error_response(version, codes::UNSUPPORTED_VERSION);
@@ -146,6 +145,10 @@ pub(crate) async fn handle(
     if group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &group) {
         return encode_error_response(version, codes::GROUP_AUTHORIZATION_FAILED);
     }
+    // Kafka's `ShareGroupConfigProvider`: each `share.*` group override, with
+    // the broker setting as the default.
+    let settings = GroupShareSettings::resolve(&image, &group, &cfg);
+    let lock_timeout_ms = settings.record_lock_duration_ms();
     let Some(member) = req.member_id.clone().filter(|id| member_id_is_valid(id)) else {
         return encode_error_response(version, codes::INVALID_REQUEST);
     };
@@ -251,10 +254,10 @@ pub(crate) async fn handle(
         max_bytes: req.max_bytes,
         renewal: Renewal {
             requested: req.is_renew_ack,
-            enabled: renew_acknowledge_enabled(&image, &group),
-            lock_duration: cfg.record_lock_duration,
+            enabled: settings.renew_acknowledge_enabled,
+            lock_duration: settings.record_lock_duration,
         },
-        config: &cfg,
+        settings,
     };
 
     let max_wait_ms = if session.final_request || renew_only {

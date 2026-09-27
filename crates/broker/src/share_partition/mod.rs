@@ -5,6 +5,7 @@
 //! offset-range state machine that the share-partition leader drives during
 //! `ShareFetch` and `ShareAcknowledge`.
 pub(crate) mod backlog_poller;
+pub(crate) mod group_settings;
 pub mod manager;
 pub mod session;
 pub mod state;

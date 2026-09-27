@@ -189,7 +189,7 @@ async fn share_fetch(
     let response = handle(&shared, version, 7, &request_bytes, &ctx)
         .await
         .expect("handle share fetch");
-    let mut response: ShareFetchResponse = decode_response(&response, version);
+    let response: ShareFetchResponse = decode_response(&response, version);
     // An incremental response leaves out a partition with nothing new.
     response
         .responses

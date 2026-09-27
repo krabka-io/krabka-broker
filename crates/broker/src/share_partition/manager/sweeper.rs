@@ -9,13 +9,18 @@ use std::{sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
 use super::{LeaderKey, SharePartitionLeaderManager};
-use crate::share_partition::state::AcquisitionState;
+use crate::share_partition::{group_settings::GroupShareSettings, state::AcquisitionState};
 
 impl SharePartitionLeaderManager {
     /// Spawns the background acquisition-lock-timeout sweeper.
     ///
-    /// The sweeper runs every `record_lock_duration / 2`, with a minimum of
-    /// 100ms. On each run it snapshots the live cells. It clones their `Arc`s
+    /// The sweeper runs every `record_lock_duration / 2` of the broker
+    /// setting, with a minimum of 100ms. A group whose
+    /// `share.record.lock.duration.ms` is shorter still sees its locks run out
+    /// on time for every request, because each acquire pass expires locks
+    /// first; the sweeper only bounds how long an idle partition keeps them.
+    /// A lock that runs out at the group's `share.delivery.count.limit`
+    /// archives its records. On each run it snapshots the live cells. It clones their `Arc`s
     /// out of the `DashMap`, so it holds no guard across an `.await`. It then
     /// expires each timed-out lock and persists again the cells that changed.
     /// The sweeper runs detached for the lifetime of the broker.
@@ -33,9 +38,12 @@ impl SharePartitionLeaderManager {
                     .map(|e| (e.key().clone(), e.value().clone()))
                     .collect();
                 let now = std::time::Instant::now();
+                let image = mgr.controller.current_image();
                 for ((group, topic_id, partition), cell) in cells {
+                    let limit = GroupShareSettings::resolve(&image, &group, &mgr.config)
+                        .delivery_count_limit;
                     let mut st = cell.lock().await;
-                    st.expire_locks(now, mgr.config.max_delivery_attempts);
+                    st.expire_locks(now, limit);
                     if st.dirty {
                         // A failed write keeps the state dirty for the next tick.
                         let _ = mgr
