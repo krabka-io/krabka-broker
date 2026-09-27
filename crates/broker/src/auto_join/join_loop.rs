@@ -258,8 +258,11 @@ mod tests {
             .expect("bind");
         let addr = listener.local_addr().expect("addr");
 
-        let received_api_key = Arc::new(std::sync::atomic::AtomicI16::new(-1));
-        let key_clone = received_api_key.clone();
+        // The fake controller hands over the api key of the request that
+        // follows ApiVersions. The test waits for it rather than for a fixed
+        // window, so a slow runner cannot end the join loop before the
+        // RemoveRaftVoter frame has been read.
+        let (key_tx, key_rx) = tokio::sync::oneshot::channel::<i16>();
         tokio::spawn(async move {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             if let Ok((mut socket, _)) = listener.accept().await {
@@ -307,8 +310,8 @@ mod tests {
                             if socket.read_exact(&mut req_frame).await.is_ok()
                                 && req_frame.len() >= 2
                             {
-                                let key = i16::from_be_bytes([req_frame[0], req_frame[1]]);
-                                key_clone.store(key, std::sync::atomic::Ordering::Relaxed);
+                                let _ =
+                                    key_tx.send(i16::from_be_bytes([req_frame[0], req_frame[1]]));
                             }
                         }
                     }
@@ -340,9 +343,12 @@ mod tests {
             )),
         };
 
-        let _ = tokio::time::timeout(Duration::from_millis(200), run(params)).await;
-
-        let key = received_api_key.load(std::sync::atomic::Ordering::Relaxed);
+        let join = tokio::spawn(run(params));
+        let key = tokio::time::timeout(Duration::from_secs(10), key_rx)
+            .await
+            .expect("the join loop sends a request after ApiVersions within 10s")
+            .expect("the fake controller reads that request");
+        join.abort();
         assert2::assert!(key == krabka_protocol::owned::remove_raft_voter_request::API_KEY);
     }
 }
