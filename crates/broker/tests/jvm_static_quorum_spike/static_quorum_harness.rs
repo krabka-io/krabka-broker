@@ -1,6 +1,7 @@
 //! Setup shared by the two static mixed-quorum spikes: the JVM controller image
-//! name, the cluster-id encoding both implementations must agree on, and the
-//! `BrokerConfig` builder for one Krabka controller voter.
+//! name, the cluster-id encoding both implementations must agree on, the
+//! `BrokerConfig` builder for one Krabka controller voter, and the format
+//! that pins the voters to the JVM voter's release.
 //!
 //! Both spikes boot the same topology and differ only in what they do to it
 //! afterwards, so the topology lives here and each spike file holds one
@@ -48,11 +49,36 @@ pub(crate) fn krabka_controller_config(
     cfg.auto_join = false;
     cfg.bootstrap_servers = vec![];
     cfg.cluster_id = Some(cluster_id);
-    // metadata.version/group.version/transaction.version are seeded into the
-    // bootstrap log automatically (KIP-584 `bootstrap_feature_records`, fired
-    // when the static voter set is derived), so the JVM controller can build
-    // its FeaturesImage.
+    // The bootstrap log carries the feature levels `format_at_kafka_4_0`
+    // formats, so the JVM controller can build its FeaturesImage.
     cfg
+}
+
+/// Formats a Krabka voter's log directory at Kafka 4.0's `metadata.version`.
+///
+/// The JVM voter runs 4.0.0, which supports `metadata.version` only up to
+/// `4.0-IV3`. Self-bootstrapped, the Krabka voters would finalize Kafka 4.3's
+/// `4.3-IV0`, a level the JVM controller cannot replay, so they format at the
+/// release the oldest voter runs, as a Kafka operator mixing in a 4.0 node
+/// would. The formatter runs in process because a Bazel test sandbox has no
+/// Cargo working tree to spawn it from.
+pub(crate) async fn format_at_kafka_4_0(log_dir: &std::path::Path, node: &BrokerConfig) {
+    let cluster_id = node.cluster_id.expect("the spikes name their cluster id");
+    let argv = vec![
+        "krabka-format".to_string(),
+        "--log-dir".to_string(),
+        log_dir.to_str().unwrap().to_string(),
+        "--cluster-id".to_string(),
+        kafka_cluster_id_string(cluster_id),
+        "--node-id".to_string(),
+        node.node_id.0.to_string(),
+        "--directory-id".to_string(),
+        node.directory_id.to_string(),
+        "--release-version".to_string(),
+        "4.0".to_string(),
+    ];
+    let code = krabka_format::run_from_args(argv).await;
+    assert2::assert!(code == 0, "krabka-format exited {code}");
 }
 
 pub(crate) fn docker_rm(name: &str) {

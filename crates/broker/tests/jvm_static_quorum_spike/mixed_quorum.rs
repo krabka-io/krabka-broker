@@ -14,7 +14,8 @@ use uuid::Uuid;
 
 use crate::{
     static_quorum_harness::{
-        KAFKA_IMAGE, docker_rm, kafka_cluster_id_string, krabka_controller_config,
+        KAFKA_IMAGE, docker_rm, format_at_kafka_4_0, kafka_cluster_id_string,
+        krabka_controller_config,
     },
     support,
 };
@@ -72,6 +73,8 @@ async fn static_mixed_jvm_krabka_quorum() {
         cluster_id,
         dir2.path(),
     );
+    format_at_kafka_4_0(dir1.path(), &cfg1).await;
+    format_at_kafka_4_0(dir2.path(), &cfg2).await;
     let (c1, c2): (BrokerHandle, BrokerHandle) = {
         let s1 = tokio::spawn(Broker::start(cfg1));
         let s2 = tokio::spawn(Broker::start(cfg2));

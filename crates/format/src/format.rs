@@ -32,7 +32,10 @@ mod scram;
 #[cfg(test)]
 mod tests;
 
-pub use self::args::{FormatArgs, ScramSpec};
+pub use self::{
+    args::{FormatArgs, ScramSpec},
+    features::LATEST_PRODUCTION_METADATA_VERSION,
+};
 use self::{
     features::resolve_format_features,
     output::{write_bootstrap_files, write_dynamic_checkpoint, write_meta_properties},

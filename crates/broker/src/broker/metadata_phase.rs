@@ -112,7 +112,7 @@ fn prepare_initial_voters(
         .any(|record| matches!(record, krabka_metadata::MetadataRecord::V1FeatureLevel(_)))
     {
         bootstrap_records.extend(krabka_metadata::bootstrap_feature_records(
-            krabka_metadata::metadata_version::METADATA_VERSION_MAX,
+            crate::features::LATEST_PRODUCTION_METADATA_VERSION,
         ));
     }
     voters

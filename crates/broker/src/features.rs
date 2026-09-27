@@ -26,6 +26,16 @@ pub(crate) use krabka_metadata::metadata_version::SHARE_VERSION_FEATURE as SHARE
 /// with `feature_enabled`.
 pub(crate) use krabka_metadata::metadata_version::STREAMS_VERSION_FEATURE as STREAMS_VERSION;
 
+/// The `metadata.version` a self-bootstrapped cluster finalizes: Kafka 4.3's
+/// `MetadataVersion.LATEST_PRODUCTION`, `4.3-IV0`. It is the level
+/// `krabka format` picks when no release is named, and the two must agree.
+///
+/// The feature table also carries Kafka trunk's unstable `4.4-IV0` and
+/// `4.4-IV1`. A stock 4.3 node or tool does not know them, so a cluster
+/// reaches them only through `UpdateFeatures` or an explicit
+/// `krabka format --release-version`.
+pub(crate) const LATEST_PRODUCTION_METADATA_VERSION: i16 = 30;
+
 /// The `metadata.version` level at which CIDR-based ACL host patterns
 /// (KIP-1276) are accepted: upstream Kafka's `4.4-IV1`,
 /// `MetadataVersion.isCidrAclSupported`.
@@ -140,6 +150,13 @@ mod tests {
             level: 1,
         }));
         assert!(feature_enabled(&image, "group.version", 1)); // present at 1 → enabled
+    }
+
+    #[test]
+    fn self_bootstrap_and_format_default_to_the_same_metadata_version() {
+        assert!(
+            LATEST_PRODUCTION_METADATA_VERSION == krabka_format::LATEST_PRODUCTION_METADATA_VERSION
+        );
     }
 
     #[test]

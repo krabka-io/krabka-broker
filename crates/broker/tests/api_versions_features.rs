@@ -2,33 +2,33 @@
 
 //! The KIP-584 write-side surface. `ApiVersions` v3 and above expose the
 //! feature surface that the JVM admin tooling reads. `supported_features`
-//! advertises `metadata.version` over the supported range `min = 7`
-//! (`3.3-IV3`) to `max = 25` (`4.0-IV3`), from the broker-wide `features`
-//! table.
+//! advertises `metadata.version` over the range the feature table supports,
+//! `min = 7` (`3.3-IV3`) to `max = 32` (`4.4-IV1`).
 //!
-//! A standalone, self-bootstrapped broker behaves like a freshly formatted 4.0
-//! cluster. It finalizes every registered feature at its release default,
-//! which is `metadata.version = 25`, `group.version = 1`, and
-//! `transaction.version = 2`. It also reports a real `finalized_features_epoch`
-//! of `>= 0`. `UpdateFeatures` (`api_key` 57) then moves those levels.
-//! `tests/feature_finalization.rs` exercises that path.
-//! `transaction.version = 3` is advertised but remains opt-in for KIP-939.
+//! A standalone, self-bootstrapped broker behaves like a freshly formatted
+//! Kafka 4.3 cluster. It finalizes every registered feature at its release
+//! default for `metadata.version = 30` (`4.3-IV0`, Kafka 4.3's
+//! `LATEST_PRODUCTION`), not at trunk's unstable 4.4 levels, which an operator
+//! reaches only through `UpdateFeatures` or `krabka format --release-version`.
+//! At 4.3-IV0 that is `group.version = 1`, `transaction.version = 2`, and ELR,
+//! `share.version` and `streams.version` at 1. It also reports a real
+//! `finalized_features_epoch` of `>= 0`. `tests/feature_finalization.rs`
+//! exercises `UpdateFeatures`. `transaction.version = 3` is advertised but
+//! remains opt-in for KIP-939.
 //!
-//! Two shapes break every JVM admin client whose enum does not list the level:
-//! a `supported_features` entry whose `max_version` is above the connecting
-//! client's known `MetadataVersion` enum, and a finalized `metadata.version`
-//! entry with `finalized_features_epoch = 0`. Such a client throws
-//! `IllegalArgumentException` out of `MetadataVersion.fromFeatureLevel(N)` on
-//! the first handshake. That failure once broke 19 `broker-jvm-acceptance`
-//! tests.
-//!
-//! The advertised range `7` to `25`, that is `3.3-IV3` to `4.0-IV3`, tracks
-//! Kafka's own `MetadataVersion` enum. This test guards the fresh-broker
+//! A finalized `metadata.version` above the connecting JVM client's known
+//! `MetadataVersion` enum, or one with `finalized_features_epoch = 0`, makes
+//! that client throw `IllegalArgumentException` out of
+//! `MetadataVersion.fromFeatureLevel(N)`. That failure once broke 19
+//! `broker-jvm-acceptance` tests, and it is why a fresh cluster bootstraps at
+//! the latest level a released Kafka knows. This test guards the fresh-broker
 //! surface.
 
 use assert2::assert;
 mod support;
 
+use krabka_format::LATEST_PRODUCTION_METADATA_VERSION;
+use krabka_metadata::metadata_version::METADATA_VERSION_MAX;
 use krabka_protocol::owned::api_versions_request::ApiVersionsRequest;
 
 #[tokio::test]
@@ -49,7 +49,7 @@ async fn v3_response_advertises_supported_and_bootstrapped_finalized_features() 
 
     // KIP-584 write-side: supported_features advertises metadata.version over
     // the supported range; the standalone broker self-bootstraps the release
-    // defaults, so finalized_features carries metadata.version=25 and
+    // defaults, so finalized_features carries metadata.version=4.3-IV0 and
     // group.version=1 with a real (>= 0) epoch. See the module-level note for
     // the JVM compatibility rationale.
     let mv = resp
@@ -58,7 +58,7 @@ async fn v3_response_advertises_supported_and_bootstrapped_finalized_features() 
         .find(|f| f.name == "metadata.version")
         .expect("metadata.version advertised in supported_features");
     assert!(mv.min_version == 7, "{resp:?}");
-    assert!(mv.max_version == 25, "{resp:?}");
+    assert!(mv.max_version == METADATA_VERSION_MAX, "{resp:?}");
     let gv = resp
         .supported_features
         .iter()
@@ -84,7 +84,7 @@ async fn v3_response_advertises_supported_and_bootstrapped_finalized_features() 
         .find(|f| f.name == "metadata.version")
         .expect("metadata.version finalized at bootstrap");
     assert!(
-        finalized_metadata_version.max_version_level == 25,
+        finalized_metadata_version.max_version_level == LATEST_PRODUCTION_METADATA_VERSION,
         "{resp:?}"
     );
     let finalized_group_version = resp
