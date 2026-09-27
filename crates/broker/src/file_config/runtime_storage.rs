@@ -131,8 +131,8 @@ impl RuntimeFileConfig {
         );
         set_runtime_size_bytes!(
             runtime,
-            share_recovery_read_max,
-            cfg.share_recovery_read_max,
+            share_coordinator_load_buffer_size,
+            cfg.share_coordinator_load_buffer_size,
             whole_bytes_usize
         );
         set_runtime_usize!(

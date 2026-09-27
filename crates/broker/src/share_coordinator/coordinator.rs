@@ -101,6 +101,7 @@ pub(crate) mod message {
     pub(crate) const COORDINATOR_LOAD_IN_PROGRESS: &str =
         "The coordinator is loading and hence can't process requests.";
     pub(crate) const NOT_COORDINATOR: &str = "This is not the correct coordinator.";
+    pub(crate) const REQUEST_TIMED_OUT: &str = "The request timed out.";
     pub(crate) const KAFKA_STORAGE_ERROR: &str =
         "Disk error when trying to access log file on the disk.";
     pub(crate) const FENCED_LEADER_EPOCH: &str =

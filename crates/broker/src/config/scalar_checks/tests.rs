@@ -133,8 +133,8 @@ fn rejects_invalid_additional_runtime_scalars() {
         ("unclean_recovery_queue_capacity must be positive", |c| {
             c.unclean_recovery_queue_capacity = 0;
         }),
-        ("share_recovery_read_max must be positive", |c| {
-            c.share_recovery_read_max = <ByteSize as ByteSizeExt>::ZERO;
+        ("share_coordinator_load_buffer_size must be positive", |c| {
+            c.share_coordinator_load_buffer_size = <ByteSize as ByteSizeExt>::ZERO;
         }),
         ("transaction_recovery_read_max must be positive", |c| {
             c.transaction_recovery_read_max = <ByteSize as ByteSizeExt>::ZERO;

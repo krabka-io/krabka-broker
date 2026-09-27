@@ -63,7 +63,7 @@ impl ShareCoordinator {
     /// The replay reads the log on the blocking thread pool, because
     /// `Partition::read_log` takes the log mutex and reads from disk.
     pub(super) async fn load_partition(&self, state_partition: PartitionIndex, generation: u64) {
-        let read_max = self.config.recovery_read_max;
+        let read_max = self.config.load_buffer_size;
         let updates_per_snapshot = self.config.snapshot_update_records_per_snapshot;
         let replayed = match self.partitions.get(bootstrap::TOPIC, state_partition) {
             Some(part) => crate::blocking::spawn_blocking(move || {

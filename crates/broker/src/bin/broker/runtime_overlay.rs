@@ -88,13 +88,17 @@ impl RuntimeArgs {
             classic_group_min_session_timeout,
             classic_group_max_session_timeout,
             sync_group_follower_wait,
-            share_recovery_read_max,
+            share_coordinator_load_buffer_size,
             diskless_wal_flush_interval,
             diskless_wal_flush_max_size,
             diskless_wal_hot_tail_max_size,
             diskless_wal_trim_safety_lag,
             diskless_wal_index_projection_timeout,
             share_state_segment_bytes,
+            share_snapshot_update_records_per_snapshot,
+            share_coordinator_write_timeout,
+            share_state_prune_interval,
+            share_cold_partition_snapshot_interval,
         );
         copy_refined_runtime!(
             self,

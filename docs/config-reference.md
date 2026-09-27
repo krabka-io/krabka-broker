@@ -490,6 +490,9 @@ Validated operational policy loaded from `[runtime]`.
 | `self_registration_backoff_min` | string | broker default | duration | Initial delay between broker self-registration attempts. |
 | `self_registration_max_attempts` | integer (uint32) | broker default |  | Maximum self-registration attempts before startup fails. |
 | `sendfile_min` | string | broker default | byte size | Minimum response size eligible for a `sendfile` kernel drain. Smaller responses go through the `pread` and write copy. |
+| `share_cold_partition_snapshot_interval` | string | broker default | duration | How old the latest snapshot of a share key may get before the share coordinator writes a new one, Kafka's `share.coordinator.cold.partition.snapshot.interval.ms`. |
+| `share_coordinator_load_buffer_size` | string | broker default | byte size | Maximum bytes read by one share-state recovery read, Kafka's `share.coordinator.load.buffer.size`. |
+| `share_coordinator_write_timeout` | string | broker default | duration | How long an append to `__share_group_state` may take before the share coordinator answers `COORDINATOR_NOT_AVAILABLE`, Kafka's `share.coordinator.write.timeout.ms`. |
 | `share_group_backlog_poll_interval` | string | broker default | duration | Cadence of the share-group backlog poll. |
 | `share_group_enable` | boolean | broker default |  | Whether the broker serves KIP-932 share groups, Kafka's `group.share.enable`. |
 | `share_group_heartbeat_interval` | string | broker default | duration | Default share-group heartbeat interval, Kafka's `group.share.heartbeat.interval.ms`. |
@@ -499,10 +502,11 @@ Validated operational policy loaded from `[runtime]`.
 | `share_group_max_size` | integer (uint) | broker default |  | Maximum number of members in one share group, Kafka's `group.share.max.size`. |
 | `share_group_record_lock_duration` | string | broker default | duration | How long an acquired share record stays locked before it is released for redelivery, Kafka's `group.share.record.lock.duration.ms`. |
 | `share_group_session_timeout` | string | broker default | duration | Default share-group session timeout, Kafka's `group.share.session.timeout.ms`. |
-| `share_recovery_read_max` | string | broker default | byte size | Maximum bytes read by one share-state recovery read. |
 | `share_session_cache_max_when_unlimited` | integer (uint) | broker default |  | Ceiling on the share-session cache when the group count is unlimited. |
+| `share_snapshot_update_records_per_snapshot` | integer (uint32) | broker default |  | Updates of one share key between two snapshots of it, Kafka's `share.coordinator.snapshot.update.records.per.snapshot`. At most 500. |
 | `share_state_min_isr` | integer (int32) | broker default |  | `min.insync.replicas` of the `__share_group_state` internal topic, Kafka's `share.coordinator.state.topic.min.isr`. |
 | `share_state_num_partitions` | integer (int32) | broker default |  | Partition count of the `__share_group_state` internal topic, Kafka's `share.coordinator.state.topic.num.partitions`. |
+| `share_state_prune_interval` | string | broker default | duration | How often the share coordinator trims the redundant prefix of each `__share_group_state` partition it leads, Kafka's `share.coordinator.state.topic.prune.interval.ms`. |
 | `share_state_replication_factor` | integer (int16) | broker default |  | Replication factor of the `__share_group_state` internal topic, Kafka's `share.coordinator.state.topic.replication.factor`. |
 | `share_state_segment_bytes` | string | broker default | byte size | `segment.bytes` of the `__share_group_state` internal topic, Kafka's `share.coordinator.state.topic.segment.bytes`. |
 | `socket_receive_buffer` | string | broker default | byte size | Broker socket receive-buffer size, Kafka's `socket.receive.buffer.bytes`. |

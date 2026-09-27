@@ -400,7 +400,7 @@ mod tests {
             "replication_fetch_min",
             "observer_fetch_max",
             "audit_tail_read_max",
-            "share_recovery_read_max",
+            "share_coordinator_load_buffer_size",
             "socket_request_max",
             "sendfile_min",
             "socket_send_buffer",

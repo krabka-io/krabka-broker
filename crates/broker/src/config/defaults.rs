@@ -102,7 +102,7 @@ impl Default for BrokerConfig {
             diskless_wal_trim_safety_lag: DEFAULT_DISKLESS_WAL_TRIM_SAFETY_LAG,
             diskless_wal_index_projection_timeout: DEFAULT_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT,
             unclean_recovery_queue_capacity: 256,
-            share_recovery_read_max: mebibytes(1),
+            share_coordinator_load_buffer_size: mebibytes(5),
             share_session_cache_max_when_unlimited: 10_000,
             socket_request_max: mebibytes(100),
             queued_max_requests: 500,

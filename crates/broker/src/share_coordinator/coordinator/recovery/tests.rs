@@ -70,7 +70,7 @@ async fn recover_honors_nondefault_read_bound() {
         krabka_audit::NodeId(1),
         Arc::clone(&registry),
         ShareCoordinatorConfig {
-            recovery_read_max: krabka_units::bytes(700),
+            load_buffer_size: krabka_units::bytes(700),
             ..ShareCoordinatorConfig::default()
         },
     ));
@@ -81,7 +81,7 @@ async fn recover_honors_nondefault_read_bound() {
         krabka_audit::NodeId(1),
         registry,
         ShareCoordinatorConfig {
-            recovery_read_max: krabka_units::kibibytes(4),
+            load_buffer_size: krabka_units::kibibytes(4),
             ..ShareCoordinatorConfig::default()
         },
     ));
