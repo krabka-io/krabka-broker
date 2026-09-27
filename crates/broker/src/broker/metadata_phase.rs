@@ -310,8 +310,10 @@ async fn bind_ephemeral_controller_listener(
     if prebound.is_some() || !config.is_controller() || config.controller_listen_addr.port() != 0 {
         return Ok(prebound);
     }
-    let listener = TcpListener::bind(config.controller_listen_addr).await?;
-    publish_bound_controller_addr(config, listener.local_addr()?);
+    let listener = crate::platform::bind_listener(config.controller_listen_addr).await?;
+    let bound = crate::platform::Sockets::TARGET
+        .listener_address(&listener, config.controller_listen_addr)?;
+    publish_bound_controller_addr(config, bound);
     Ok(Some(listener))
 }
 

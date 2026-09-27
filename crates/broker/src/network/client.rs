@@ -170,10 +170,31 @@ impl InterBrokerClient {
     /// Tuning has to happen here: the handshakes are themselves small
     /// round-trip-bound exchanges that Nagle would stall, and once rustls owns
     /// the stream the raw socket is no longer reachable.
+    #[cfg(not(target_family = "wasm"))]
     async fn dial_tuned(&self, host: &str, port: u16) -> Result<TcpStream, std::io::Error> {
         let tcp = TcpStream::connect((unbracket_host(host), port)).await?;
         tune_outbound_socket(&tcp, self.socket_send_buffer, self.socket_receive_buffer);
         Ok(tcp)
+    }
+
+    /// Open the TCP connection every outbound inter-broker RPC rides.
+    ///
+    /// WASI preview 1 has no `connect`, so the socket comes from the
+    /// connector that the embedder installs with
+    /// [`krabka_client_core::transport::install_connector`]. The socket policy
+    /// travels with the request, but a connector socket takes none of it.
+    #[cfg(target_family = "wasm")]
+    async fn dial_tuned(&self, host: &str, port: u16) -> Result<TcpStream, std::io::Error> {
+        krabka_client_core::transport::dial(
+            unbracket_host(host),
+            port,
+            krabka_client_core::transport::SocketOptions {
+                send_buffer: Some(self.socket_send_buffer),
+                receive_buffer: Some(self.socket_receive_buffer),
+                nodelay: true,
+            },
+        )
+        .await
     }
 
     /// Dial `host:port`, do the protocol-appropriate TLS and SASL

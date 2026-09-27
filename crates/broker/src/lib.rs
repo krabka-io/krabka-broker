@@ -232,6 +232,7 @@ pub mod operator_keys;
 mod partition;
 pub(crate) mod partition_registry;
 mod partition_writer;
+pub(crate) mod platform;
 mod producer_id_manager;
 mod producer_state;
 pub mod quota;

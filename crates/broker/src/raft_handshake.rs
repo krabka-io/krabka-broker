@@ -98,10 +98,11 @@ impl RaftListenerHandshake for BrokerRaftHandshake {
         api_versions: &dyn ControllerApiVersions,
     ) -> Result<RaftConnection, RaftHandshakeError> {
         // Capture the peer address before the stream is consumed by TLS
-        // termination — it is the `host` of the authorization request.
-        let peer = stream
-            .peer_addr()
-            .map_err(|e| RaftHandshakeError::Tls(e.to_string()))?;
+        // termination — it is the `host` of the authorization request. When
+        // there is none (a socket closed mid-accept, or a platform with
+        // preopened sockets), it is the unspecified address, which no ACL
+        // host pattern matches.
+        let peer = crate::platform::Sockets::TARGET.peer_address(&stream);
 
         // 1. TLS termination (if the listener protocol requires it). A
         //    client certificate names the principal of an `SSL` connection,

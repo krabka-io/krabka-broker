@@ -3,7 +3,7 @@
 //! recovers the engine, binds the controller listener, and the on-disk state
 //! probe the broker binary shares with that validation.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -146,12 +146,11 @@ impl Controller {
         // Controller listener.
         let listener = match prebound {
             Some(l) => l,
-            None => tokio::net::TcpListener::bind(config.controller_listen_addr)
+            None => bind_controller_listener(config.controller_listen_addr)
                 .await
                 .map_err(|e| RaftError::Storage(krabka_log::LogError::Io(e)))?,
         };
-        let actual_addr = listener
-            .local_addr()
+        let actual_addr = listener_address(&listener, config.controller_listen_addr)
             .map_err(|e| RaftError::Storage(krabka_log::LogError::Io(e)))?;
         let shutdown = CancellationToken::new();
         let leader_rx = engine.watch_leader();
@@ -184,6 +183,43 @@ impl Controller {
             dialer,
             controller_bound_addr: actual_addr,
         })
+    }
+}
+
+/// Bind the controller listener on `addr`.
+#[cfg(not(target_os = "wasi"))]
+async fn bind_controller_listener(addr: SocketAddr) -> std::io::Result<tokio::net::TcpListener> {
+    tokio::net::TcpListener::bind(addr).await
+}
+
+/// WASI preview 1 has no `bind`: the embedder adopts a preopened socket and
+/// passes it to [`Controller::start_with_listener`].
+#[cfg(target_os = "wasi")]
+fn bind_controller_listener(
+    addr: SocketAddr,
+) -> std::future::Ready<std::io::Result<tokio::net::TcpListener>> {
+    std::future::ready(Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        format!(
+            "cannot bind the controller listener on {addr}: this platform has no bind; \
+             pass a preopened listener to Controller::start_with_listener"
+        ),
+    )))
+}
+
+/// The address `listener` is bound to.
+///
+/// WASI preview 1 has no `getsockname`, so there the configured address
+/// stands in. [`Controller::start_with_listener`] requires the two to be
+/// equal.
+fn listener_address(
+    listener: &tokio::net::TcpListener,
+    configured: SocketAddr,
+) -> std::io::Result<SocketAddr> {
+    if cfg!(target_os = "wasi") {
+        Ok(configured)
+    } else {
+        listener.local_addr()
     }
 }
 

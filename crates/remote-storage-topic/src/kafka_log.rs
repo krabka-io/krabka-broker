@@ -302,14 +302,18 @@ async fn resolve_bootstrap(
         }
         let lookup = tokio::time::timeout(
             options.dns_timeout.time().to_std(),
-            tokio::net::lookup_host(address),
+            krabka_client_core::transport::resolve(address),
         )
         .await
         .map_err(|_elapsed| MetadataLogError::Other(format!("DNS lookup of {address} timed out")))?
         .map_err(|error| {
             MetadataLogError::Other(format!("DNS lookup of {address} failed: {error}"))
         })?;
-        resolved.extend(lookup.map(|socket| (socket, connection_target_host(address).to_owned())));
+        resolved.extend(
+            lookup
+                .into_iter()
+                .map(|socket| (socket, connection_target_host(address).to_owned())),
+        );
     }
     if resolved.is_empty() {
         return Err(MetadataLogError::Other(format!(

@@ -26,13 +26,11 @@ pub async fn serve_connection_on_listener(
 ) {
     // Capture the peer address from the underlying TCP socket before we
     // hand the stream off to the TLS layer / framing loop. ACL
-    // handlers need this for host-based ACL matching. If `peer_addr`
-    // fails (rare — socket closed mid-accept), fall back to the
-    // unspecified address; ACL matchers treat it as a non-matching host.
-    let peer = stream.peer_addr().unwrap_or_else(|e| {
-        tracing::debug!(error = %e, "peer_addr() failed, using 0.0.0.0:0");
-        SocketAddr::from(([0u8, 0, 0, 0], 0))
-    });
+    // handlers need this for host-based ACL matching. When there is none
+    // (a socket closed mid-accept, or a platform with preopened sockets),
+    // it is the unspecified address; ACL matchers treat it as a
+    // non-matching host.
+    let peer = crate::platform::Sockets::TARGET.peer_address(&stream);
     if spec.protocol.requires_tls() {
         let acceptor = if let Some(per_tls) = spec.tls_config.as_ref() {
             match per_tls.build_server_config() {
