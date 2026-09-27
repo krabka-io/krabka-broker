@@ -72,11 +72,13 @@ async fn serve(
             ..Default::default()
         },
         Err(error) => {
+            // Kafka's `ProducerIdControlManager.generateNextProducerId` opens
+            // with `ClusterControlManager.checkBrokerEpoch`, which throws
+            // `StaleBrokerEpochException` both for a broker with no
+            // registration and for a registration at another epoch.
             let error_code = match error {
-                ProducerIdAllocationError::BrokerNotRegistered(_) => {
-                    codes::BROKER_ID_NOT_REGISTERED
-                }
-                ProducerIdAllocationError::StaleBrokerEpoch { .. } => codes::STALE_BROKER_EPOCH,
+                ProducerIdAllocationError::BrokerNotRegistered(_)
+                | ProducerIdAllocationError::StaleBrokerEpoch { .. } => codes::STALE_BROKER_EPOCH,
                 ProducerIdAllocationError::InvalidFrontier { .. }
                 | ProducerIdAllocationError::Exhausted
                 | ProducerIdAllocationError::Controller(_) => codes::UNKNOWN_SERVER_ERROR,
@@ -171,27 +173,55 @@ mod tests {
         assert!(fourth.producer_id_len == 1_000);
         assert!(broker.controller.current_image().next_producer_id() == 4_000);
 
-        let stale = decode_response(
-            &handle_allowed(&broker, 0, 5, &encode_request(&request(broker_epoch - 1)))
-                .await
-                .unwrap(),
-        );
-        assert!(stale.error_code == codes::STALE_BROKER_EPOCH);
-        assert!(stale.producer_id_start == -1);
-
-        let malformed = AllocateProducerIdsRequest {
-            broker_id: -1,
-            broker_epoch,
+        // Kafka's `ClusterControlManager.checkBrokerEpoch` answers
+        // `STALE_BROKER_EPOCH` for a mismatched epoch and for a broker id with
+        // no registration alike (#828).
+        let refused = AllocateProducerIdsResponse {
+            error_code: codes::STALE_BROKER_EPOCH,
+            producer_id_start: -1,
+            producer_id_len: 0,
             ..Default::default()
         };
-        let malformed = decode_response(
-            &handle_allowed(&broker, 0, 6, &encode_request(&malformed))
-                .await
-                .unwrap(),
-        );
-        assert!(malformed.error_code == codes::BROKER_ID_NOT_REGISTERED);
-        assert!(malformed.producer_id_start == -1);
-        assert!(malformed.producer_id_len == 0);
+        let cases = [
+            (
+                "registered broker at its epoch",
+                broker_id,
+                broker_epoch,
+                AllocateProducerIdsResponse {
+                    error_code: codes::NONE,
+                    producer_id_start: 4_000,
+                    producer_id_len: 1_000,
+                    ..Default::default()
+                },
+            ),
+            (
+                "registered broker at a stale epoch",
+                broker_id,
+                broker_epoch - 1,
+                refused.clone(),
+            ),
+            (
+                "unregistered broker id",
+                broker_id + 100,
+                broker_epoch,
+                refused.clone(),
+            ),
+            ("negative broker id", -1, broker_epoch, refused),
+        ];
+        for (label, id, epoch, expected) in cases {
+            let request = AllocateProducerIdsRequest {
+                broker_id: id,
+                broker_epoch: epoch,
+                ..Default::default()
+            };
+            let answered = decode_response(
+                &handle_allowed(&broker, 0, 5, &encode_request(&request))
+                    .await
+                    .unwrap(),
+            );
+            check!(answered == expected, "{label}");
+        }
+        assert!(broker.controller.current_image().next_producer_id() == 5_000);
 
         // Seed the last frontier that cannot fit another positive block. The
         // adapter must fail without submitting a wrapped or partial range.
