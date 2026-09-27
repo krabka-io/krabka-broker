@@ -23,6 +23,9 @@ pub(super) fn manual_cache(max_slots: usize) -> (FetchSessionCache, Arc<ManualMo
     (cache, clock)
 }
 
+/// A `Fetch` version that names topics, which the fixtures below build.
+pub(super) const NAME_FETCH_VERSION: i16 = super::FIRST_TOPIC_ID_FETCH_VERSION - 1;
+
 /// A one-nanosecond tick: the smallest advance that still gives the next
 /// allocation a strictly greater last-use stamp than the previous one.
 pub(super) const TICK: std::time::Duration = std::time::Duration::from_nanos(1);

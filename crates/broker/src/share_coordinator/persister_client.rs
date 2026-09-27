@@ -144,11 +144,20 @@ impl SharePersister {
         if self.share_coordinator.is_leader(state_partition).await {
             return self
                 .share_coordinator
-                .initialize(group, topic_id, partition, state_epoch, start_offset)
+                .initialize(
+                    &self.controller.current_image(),
+                    group,
+                    topic_id,
+                    partition,
+                    state_epoch,
+                    start_offset,
+                )
                 .await
-                .map_err(|code| {
+                .map_err(|error| {
                     BrokerError::Share(format!(
-                        "InitializeShareGroupState {group}:{topic_id}:{partition} fenced (code {code})"
+                        "InitializeShareGroupState {group}:{topic_id}:{partition} failed (code {}): {}",
+                        error.code(),
+                        error.row_message("initialize"),
                     ))
                 });
         }
@@ -189,32 +198,52 @@ impl SharePersister {
             .share_coordinator
             .state_partition_for(group, &topic_id, partition);
         self.ensure_topic_and_refresh(state_partition).await?;
-        if self.share_coordinator.is_leader(state_partition).await {
-            return self
-                .share_coordinator
-                .delete(group, topic_id, partition)
+        let result = if self.share_coordinator.is_leader(state_partition).await {
+            self.share_coordinator
+                .delete(&self.controller.current_image(), group, topic_id, partition)
                 .await
-                .map_err(|code| {
-                    BrokerError::Share(format!(
-                        "DeleteShareGroupState {group}:{topic_id}:{partition} failed (code {code})"
-                    ))
-                });
-        }
-
-        let req = DeleteShareGroupStateRequest {
-            group_id: group.to_string(),
-            topics: vec![DeleteStateData {
-                topic_id: ProtoUuid(*topic_id.as_bytes()),
-                partitions: vec![DeletePartitionData {
-                    partition,
+                .map_err(|error| {
+                    refused(
+                        "DeleteShareGroupState",
+                        partition,
+                        error.code(),
+                        &error.row_message("delete"),
+                    )
+                })
+        } else {
+            let req = DeleteShareGroupStateRequest {
+                group_id: group.to_string(),
+                topics: vec![DeleteStateData {
+                    topic_id: ProtoUuid(*topic_id.as_bytes()),
+                    partitions: vec![DeletePartitionData {
+                        partition,
+                        ..Default::default()
+                    }],
                     ..Default::default()
                 }],
                 ..Default::default()
-            }],
-            ..Default::default()
+            };
+            self.send_to_leader(state_partition, req, "DeleteShareGroupState", partition)
+                .await
         };
-        self.send_to_leader(state_partition, req, "DeleteShareGroupState", partition)
-            .await
+        // The coordinator refuses a topic that the image no longer holds, and
+        // tombstones the state of that topic itself when it sees the
+        // deletion (Kafka's `ShareCoordinatorService.handleTopicsDeletion`).
+        // The group has nothing left to delete for it.
+        match result {
+            Err(BrokerError::SharePartitionState {
+                code: crate::codes::UNKNOWN_TOPIC_OR_PARTITION,
+                ..
+            }) if self
+                .controller
+                .current_image()
+                .topic_by_id(&topic_id)
+                .is_none() =>
+            {
+                Ok(())
+            }
+            other => other,
+        }
     }
 
     /// Make sure `__share_group_state` exists, and refresh this broker's view
@@ -384,9 +413,7 @@ impl SharePersister {
                     delivery_count: b.delivery_count,
                 })
                 .collect(),
-            snapshot_epoch: 0,
-            last_snapshot_offset: Offset(0),
-            updates_since_snapshot: 0,
+            ..SharePartitionState::default()
         })
     }
 

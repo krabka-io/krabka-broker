@@ -3,7 +3,7 @@
 //! This handler drives the per-`(group, topic, partition)`
 //! [`AcquisitionState`] machine that
 //! [`crate::share_partition::manager::SharePartitionLeaderManager`] owns. It
-//! validates the share session and checks membership. Then, for every
+//! validates the group id, the member id and the share session. Then, for every
 //! requested partition that this broker leads, it applies any piggybacked
 //! acknowledgement, expires stale locks, materializes newly produced records
 //! up to the high watermark, acquires a batch of `Available` records under a
@@ -33,18 +33,25 @@ use std::collections::{HashMap, HashSet};
 use bytes::Bytes;
 use krabka_protocol::{
     Decode,
-    owned::share_fetch_request::{FetchPartition, ShareFetchRequest},
+    owned::{
+        share_fetch_request::{FetchPartition, ShareFetchRequest},
+        share_fetch_response::{LeaderIdAndEpoch, NodeEndpoint},
+    },
 };
 
 mod acknowledge;
 mod acquire;
 mod authorization;
+mod leader_hint;
 mod long_poll;
 mod pending;
 mod records;
 mod request;
+mod resolve;
 mod response;
 
+#[cfg(test)]
+mod ack_validation_tests;
 #[cfg(test)]
 mod byte_limit_tests;
 #[cfg(test)]
@@ -52,24 +59,63 @@ mod group_authorization_tests;
 #[cfg(test)]
 mod log_start_lockout_tests;
 #[cfg(test)]
+mod node_endpoints_tests;
+#[cfg(test)]
 mod persister_error_tests;
 #[cfg(test)]
 mod renew_tests;
 #[cfg(test)]
+mod request_validation_tests;
+#[cfg(test)]
+mod session_tests;
+#[cfg(test)]
 mod topic_resolution_tests;
 
-pub(crate) use self::acknowledge::{Renewal, apply_one_ack, renew_acknowledge_enabled};
+pub(crate) use self::{
+    acknowledge::{
+        AckApplication, Renewal, acknowledgement_batches_are_valid, apply_acknowledgements,
+    },
+    leader_hint::{current_leader, leader_endpoints, names_the_leader},
+};
 use self::{
     acquire::{AcquireContext, acquire_records},
-    authorization::{member_is_valid, topic_read_denied},
     pending::PendingPartition,
-    request::{collect_ack_batches, fetch_session_flags, session_release_phases},
-    response::{
-        acquisition_timeout_ms, encode_error_response, encode_success_response, group_responses,
-        not_leader_response, partition_response,
+    records::AcquireMode,
+    request::has_acknowledgements,
+    resolve::{RowContext, resolve_row},
+    response::{encode_error_response, encode_success_response, group_responses},
+};
+use crate::{
+    broker::Broker,
+    codes,
+    error::BrokerError,
+    handlers::group_read_denied,
+    share_partition::{
+        group_settings::GroupShareSettings,
+        session::{FetchPartitions, ResponseRow},
     },
 };
-use crate::{broker::Broker, codes, error::BrokerError, handlers::group_read_denied};
+
+/// The longest member id that Kafka accepts: a human-readable UUID.
+const MAX_MEMBER_ID_LEN: usize = 36;
+
+/// Kafka's `KafkaApis.isMemberIdValid`: a member id is non-empty and at most
+/// 36 characters long. The length is Java's `String.length`, that is UTF-16
+/// code units.
+pub(crate) fn member_id_is_valid(member_id: &str) -> bool {
+    !member_id.is_empty() && member_id.encode_utf16().count() <= MAX_MEMBER_ID_LEN
+}
+
+/// Kafka's `PartitionRotateStrategy.rotateRoundRobin`: from session epoch 1
+/// on, the partitions rotate left by `epoch % len`, so that a small
+/// `MaxRecords` budget reaches every partition in turn.
+fn rotate_round_robin<T>(mut partitions: Vec<T>, session_epoch: i32) -> Vec<T> {
+    if session_epoch >= 1 && partitions.len() > 1 {
+        let by = usize::try_from(session_epoch).unwrap_or(0) % partitions.len();
+        partitions.rotate_left(by);
+    }
+    partitions
+}
 
 /// Whether a renew-ack `ShareFetch` asks for no records and no wait:
 /// `MaxBytes`, `MinBytes`, `MaxRecords` and `MaxWaitMs` are all 0.
@@ -95,30 +141,29 @@ pub(crate) async fn handle(
     let req = ShareFetchRequest::decode(&mut cur, version)?;
 
     let cfg = broker.config.share_group.clone();
-    let lock_timeout_ms = acquisition_timeout_ms(&cfg);
 
     if !cfg.enable {
         return encode_error_response(version, codes::UNSUPPORTED_VERSION);
     }
-    let group = req.group_id.clone().unwrap_or_default();
-    let member = req.member_id.clone().unwrap_or_default();
+    // Kafka's `KafkaApis.handleShareFetchRequest` refuses a null group id
+    // after the feature gate, then checks `Read` on the group, then the
+    // member id format. It asks the group coordinator nothing about the
+    // member: the share session and the acquisition locks are keyed by the
+    // member id alone.
+    let Some(group) = req.group_id.clone() else {
+        return encode_error_response(version, codes::INVALID_REQUEST);
+    };
     let image = broker.controller.current_image();
-
-    // Kafka's `KafkaApis.handleShareFetchRequest` checks `Read` on the group
-    // after the feature gate, and before the member, the share session and the
-    // topic checks.
     if group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &group) {
         return encode_error_response(version, codes::GROUP_AUTHORIZATION_FAILED);
     }
-
-    // Best-effort membership check: if the group has a live share actor, the
-    // member must be present in its describe view. When no actor exists yet
-    // (e.g. the group was never joined) we are lenient and skip the check —
-    // the Task-7 tests always join via `ShareGroupHeartbeat` first, so a
-    // present actor with an absent member is the only hard failure.
-    if !member_is_valid(broker, &group, &member).await {
-        return encode_error_response(version, codes::UNKNOWN_MEMBER_ID);
-    }
+    // Kafka's `ShareGroupConfigProvider`: each `share.*` group override, with
+    // the broker setting as the default.
+    let settings = GroupShareSettings::resolve(&image, &group, &cfg);
+    let lock_timeout_ms = settings.record_lock_duration_ms();
+    let Some(member) = req.member_id.clone().filter(|id| member_id_is_valid(id)) else {
+        return encode_error_response(version, codes::INVALID_REQUEST);
+    };
 
     // KIP-1222: a renew-ack fetch renews locks and fetches no records, so
     // Kafka's `KafkaApis.handleShareFetchRequest` refuses one that asks for
@@ -133,7 +178,7 @@ pub(crate) async fn handle(
     let mut requested = HashSet::new();
     let mut requested_order = Vec::new();
     let mut request_rows: HashMap<(uuid::Uuid, i32), FetchPartition> = HashMap::new();
-    let (has_acknowledgements, final_has_additions) = fetch_session_flags(&req);
+    let has_acknowledgements = has_acknowledgements(&req);
     for topic in &req.topics {
         let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
         for partition in &topic.partitions {
@@ -157,126 +202,61 @@ pub(crate) async fn handle(
         })
         .collect();
     let session = match mgr.update_fetch_session(
-        &group,
-        &member,
+        (&group, &member),
         ctx.connection_id,
         req.share_session_epoch,
-        &requested,
-        &forgotten,
+        FetchPartitions {
+            requested: &requested_order,
+            forgotten: &forgotten,
+        },
         has_acknowledgements,
-        final_has_additions,
     ) {
         Ok(session) => session,
+        Err(codes::SHARE_SESSION_LIMIT_REACHED) => {
+            // Kafka's `createIdleShareFetchTimerTask`: the answer waits out
+            // `MaxWaitMs`, so a client that cannot get a session does not
+            // spin on the broker.
+            let wait = u64::try_from(req.max_wait_ms).unwrap_or(0);
+            tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+            return encode_error_response(version, codes::SHARE_SESSION_LIMIT_REACHED);
+        }
         Err(code) => return encode_error_response(version, code),
     };
-    let (release_before_acquire, release_after_acquire) =
-        session_release_phases(session.final_request);
-    if release_before_acquire {
-        mgr.release_session_partitions(&group, &member, &session.released)
-            .await;
-    }
 
-    let mut effective_order = requested_order;
-    let mut cached_only: Vec<_> = session
-        .partitions
-        .iter()
-        .copied()
-        .filter(|partition| !requested.contains(partition))
-        .collect();
-    cached_only.sort_unstable();
-    effective_order.extend(cached_only);
+    // The session's partitions in the session's order, then the request
+    // partitions that only acknowledge: those that a final request names and
+    // those that a request forgets.
+    let fetched: HashSet<(uuid::Uuid, i32)> = session.partitions.iter().copied().collect();
+    let mut effective_order =
+        rotate_round_robin(session.partitions.clone(), req.share_session_epoch);
+    effective_order.extend(
+        requested_order
+            .iter()
+            .copied()
+            .filter(|partition| !fetched.contains(partition)),
+    );
 
     // Resolve the complete effective session subscription plus request-only
     // acknowledgement rows into pending partitions.
-    let mut pending: Vec<PendingPartition> = Vec::new();
-    for (topic_id, partition_index) in effective_order {
-        let topic_name = mgr.topic_name_for(topic_id);
-        let request_row = request_rows.get(&(topic_id, partition_index));
-        // A renew-ack fetch acquires nothing: a fetch that took longer than
-        // the renewed lock would let the lock run out before the response
-        // arrives.
-        let fetchable = !renew_only && session.partitions.contains(&(topic_id, partition_index));
-
-        let mut out = partition_response(partition_index);
-        let ack_batches = request_row.map_or_else(Vec::new, collect_ack_batches);
-        let partition_max_bytes = request_row.map_or(0, |row| row.partition_max_bytes);
-
-        let Some(name) = topic_name.as_deref() else {
-            // Kafka's `ErroneousAndValidPartitionData` answers UNKNOWN_TOPIC_ID
-            // for every partition of the share session whose topic id does not
-            // resolve, the zero id included, before the `Read` gate. When the
-            // request carries acknowledgements,
-            // `KafkaApis.getAcknowledgeBatchesFromShareFetchRequest` also
-            // answers UNKNOWN_TOPIC_ID as the acknowledge error of every
-            // request partition of that topic.
-            if fetchable {
-                out.error_code = codes::UNKNOWN_TOPIC_ID;
-            }
-            if has_acknowledgements && request_row.is_some() {
-                out.acknowledge_error_code = codes::UNKNOWN_TOPIC_ID;
-            }
-            pending.push(PendingPartition {
-                topic_id,
-                topic_name,
-                partition_index,
-                partition_max_bytes,
-                leadable: false,
-                fetchable,
-                ack_batches,
-                out,
-            });
-            continue;
-        };
-
-        // Per-topic `Read` ACL — mirrors `fetch::handle`'s authorize call.
-        if topic_read_denied(broker, &image, ctx, name) {
-            // A renew-ack fetch runs only the acknowledgement path, so the
-            // denial is an acknowledge error.
-            if renew_only {
-                out.acknowledge_error_code = codes::TOPIC_AUTHORIZATION_FAILED;
-            } else {
-                out.error_code = codes::TOPIC_AUTHORIZATION_FAILED;
-            }
-            pending.push(PendingPartition {
-                topic_id,
-                topic_name,
-                partition_index,
-                partition_max_bytes,
-                leadable: false,
-                fetchable,
-                ack_batches,
-                out,
-            });
-            continue;
-        }
-
-        if !mgr.topic_leader_is_self(topic_id, partition_index) {
-            let (leader_id, leader_epoch) = mgr.current_leader_of(topic_id, partition_index);
-            out = not_leader_response(partition_index, leader_id, leader_epoch);
-            pending.push(PendingPartition {
-                topic_id,
-                topic_name,
-                partition_index,
-                partition_max_bytes,
-                leadable: false,
-                fetchable,
-                ack_batches,
-                out,
-            });
-            continue;
-        }
-
-        pending.push(PendingPartition {
-            topic_id,
-            topic_name,
-            partition_index,
-            partition_max_bytes,
-            leadable: true,
-            fetchable,
-            ack_batches,
-            out,
-        });
-    }
+    let row_context = RowContext {
+        broker,
+        manager: &mgr,
+        image: &image,
+        ctx,
+        has_acknowledgements,
+        supports_renew: version >= 2,
+        is_renew_ack: renew_only,
+    };
+    let mut pending: Vec<PendingPartition> = effective_order
+        .into_iter()
+        .map(|key| {
+            // A renew-ack fetch acquires nothing: a fetch that took longer
+            // than the renewed lock would let the lock run out before the
+            // response arrives.
+            let fetchable = !renew_only && fetched.contains(&key);
+            resolve_row(&row_context, key, fetchable, request_rows.get(&key))
+        })
+        .collect();
 
     let acquire = AcquireContext {
         broker,
@@ -284,13 +264,25 @@ pub(crate) async fn handle(
         group: &group,
         member: &member,
         max_records: req.max_records,
+        // Kafka's `fetchMaxBytes = min(MaxBytes, fetch.max.bytes, quota
+        // window bytes)`. The broker has neither cap yet (#869), so the
+        // request value stands.
         max_bytes: req.max_bytes,
+        min_bytes: req.min_bytes,
+        mode: AcquireMode::of(
+            if version >= 2 {
+                req.share_acquire_mode
+            } else {
+                0
+            },
+            req.batch_size,
+        ),
         renewal: Renewal {
             requested: req.is_renew_ack,
-            enabled: renew_acknowledge_enabled(&image, &group),
-            lock_duration: cfg.record_lock_duration,
+            enabled: settings.renew_acknowledge_enabled,
+            lock_duration: settings.record_lock_duration,
         },
-        config: &cfg,
+        settings,
     };
 
     let max_wait_ms = if session.final_request || renew_only {
@@ -299,21 +291,98 @@ pub(crate) async fn handle(
         req.max_wait_ms
     };
     let acquire_result = acquire_records(&acquire, &mut pending, max_wait_ms).await;
-    if release_after_acquire {
+    // Kafka's `releaseSession` runs after the final request's response is
+    // built: the member gives its records back.
+    if session.final_request {
         mgr.release_session_partitions(&group, &member, &session.released)
             .await;
     }
     acquire_result?;
 
-    // A renew-ack fetch answers only the partitions that carried
-    // acknowledgements, because Kafka runs no fetch for it.
-    if renew_only {
-        pending.retain(|p| !p.ack_batches.is_empty());
+    // Kafka answers a fetch row for each partition of the share session that
+    // it fetched, and an acknowledge row for each request partition when the
+    // request carries acknowledgements. A renew-ack fetch runs no fetch, so it
+    // answers only the acknowledge rows.
+    pending.retain(|p| p.fetchable || (p.in_request && has_acknowledgements));
+    // An incremental response carries only the session partitions that have
+    // something to say, and every acknowledge row.
+    if session.incremental {
+        let rows: Vec<ResponseRow> = pending
+            .iter()
+            .filter(|p| p.fetchable)
+            .map(|p| ResponseRow {
+                key: (p.topic_id, p.partition_index),
+                has_records: !p.out.acquired_records.is_empty(),
+                has_error: p.out.error_code != codes::NONE,
+            })
+            .collect();
+        let mut carried = mgr.prune_fetch_response(&group, &member, &rows).into_iter();
+        pending.retain(|p| {
+            let carried = !p.fetchable || carried.next().unwrap_or(true);
+            carried || (p.in_request && has_acknowledgements)
+        });
     }
+
+    // Kafka's `processShareFetchResponse`: every row that names another
+    // leader carries the current leader and its endpoint.
+    for p in &mut pending {
+        if names_the_leader(p.out.error_code) {
+            let (leader_id, leader_epoch) = current_leader(&mgr, p.topic_id, p.partition_index);
+            p.out.current_leader = LeaderIdAndEpoch {
+                leader_id,
+                leader_epoch,
+                ..Default::default()
+            };
+        }
+    }
+    let node_endpoints = leader_endpoints(
+        &image,
+        ctx.connection_listener_name,
+        &broker.config.inter_broker_listener_name,
+        pending
+            .iter()
+            .filter(|p| names_the_leader(p.out.error_code))
+            .map(|p| p.out.current_leader.leader_id),
+    )
+    .into_iter()
+    .map(|endpoint| NodeEndpoint {
+        node_id: endpoint.node_id,
+        host: endpoint.host,
+        port: endpoint.port,
+        rack: endpoint.rack,
+        ..Default::default()
+    })
+    .collect();
 
     // Group pending rows back into per-topic responses, preserving first-seen
     // topic order.
     let responses = group_responses(pending);
 
-    encode_success_response(version, lock_timeout_ms, responses)
+    encode_success_response(version, lock_timeout_ms, responses, node_endpoints)
+}
+
+#[cfg(test)]
+mod rotation_tests {
+    use assert2::assert;
+
+    use super::rotate_round_robin;
+
+    #[test]
+    fn partitions_rotate_left_by_the_session_epoch() {
+        let rotated: Vec<Vec<i32>> = [-1, 0, 1, 2, 3, 4]
+            .into_iter()
+            .map(|epoch| rotate_round_robin(vec![1, 2, 3], epoch))
+            .collect();
+        assert!(
+            rotated
+                == vec![
+                    vec![1, 2, 3],
+                    vec![1, 2, 3],
+                    vec![2, 3, 1],
+                    vec![3, 1, 2],
+                    vec![1, 2, 3],
+                    vec![2, 3, 1],
+                ]
+        );
+    }
 }

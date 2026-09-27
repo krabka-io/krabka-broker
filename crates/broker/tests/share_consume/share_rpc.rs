@@ -80,7 +80,18 @@ pub async fn share_fetch(
         "ShareFetch top-level error: {}",
         resp.error_code
     );
-    resp.responses[0].partitions[0].clone()
+    // An incremental response leaves out a partition with nothing new, which
+    // reads as an empty row.
+    resp.responses
+        .first()
+        .and_then(|topic| topic.partitions.first())
+        .cloned()
+        .unwrap_or_else(
+            || krabka_protocol::owned::share_fetch_response::PartitionData {
+                partition_index: partition,
+                ..Default::default()
+            },
+        )
 }
 
 /// A `ShareAcknowledge` carrying one batch of per-offset ack types over

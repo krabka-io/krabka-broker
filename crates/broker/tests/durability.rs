@@ -204,7 +204,7 @@ async fn produce_batch(
 /// Without the producer-state revert on truncation, the retry resolves to
 /// `Decision::Duplicate{base_offset}` and waits for `HW >= base_offset + N`.
 /// The truncated log can never reach that, so every attempt returns
-/// `NOT_ENOUGH_REPLICAS_AFTER_APPEND`, which is a permanent stall on the
+/// `REQUEST_TIMED_OUT`, which is a permanent stall on the
 /// cluster.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn idempotent_retry_reappends_after_truncation_instead_of_stalling() {
@@ -230,7 +230,7 @@ async fn idempotent_retry_reappends_after_truncation_instead_of_stalling() {
 
     // The retry of the SAME idempotent batch must re-append and complete fast,
     // not stall. A short timeout makes a regression (dedup-against-truncated
-    // stall) fail as Err(NOT_ENOUGH_REPLICAS_AFTER_APPEND) rather than hang.
+    // stall) fail as Err(REQUEST_TIMED_OUT) rather than hang.
     let retry = produce_batch(
         &bootstrap,
         "trunc",
@@ -664,7 +664,7 @@ async fn produce_every_partition(
 /// brokers, and the second one is stopped. Its replicas can never acknowledge,
 /// and the surviving broker cannot shrink the ISR either, because a two-voter
 /// quorum is gone with it. Every partition the survivor leads therefore waits
-/// out the full `timeout.ms` and answers `NOT_ENOUGH_REPLICAS_AFTER_APPEND`,
+/// out the full `timeout.ms` and answers `REQUEST_TIMED_OUT`,
 /// which is exactly the case where the difference between one wait and N of
 /// them is a wall-clock fact rather than a scheduling detail.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -708,9 +708,9 @@ async fn acks_all_waits_for_every_partition_at_once_not_one_after_another() {
     // assertion needs only that several of them waited.
     let waited = rows
         .iter()
-        // `NOT_ENOUGH_REPLICAS_AFTER_APPEND` (20): the append is on the
-        // leader's log and the high watermark never reached it.
-        .filter(|(_, code)| *code == 20)
+        // `REQUEST_TIMED_OUT` (7): the append is on the leader's log and the
+        // high watermark never reached it.
+        .filter(|(_, code)| *code == 7)
         .count();
     check!(i32::try_from(rows.len()) == Ok(OVERLAP_PARTITIONS));
     check!(

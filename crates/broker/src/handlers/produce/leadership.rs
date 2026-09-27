@@ -31,6 +31,15 @@ pub(super) struct BrokerProducePolicy {
     pub(super) is_witness: bool,
 }
 
+/// The partition a Produce may append to, and the effective
+/// `min.insync.replicas` its `acks=all` completion checks the ISR against.
+pub(super) struct AdmittedPartition {
+    pub(super) partition: Arc<crate::partition::Partition>,
+    /// Kafka's `Partition.effectiveMinIsr`: the configured
+    /// `min.insync.replicas`, capped at the size of the replica assignment.
+    pub(super) effective_min_isr: usize,
+}
+
 pub(super) fn validate_partition_gate(
     topic_name: &str,
     partition_index: i32,
@@ -39,7 +48,7 @@ pub(super) fn validate_partition_gate(
     log_dir_status: &crate::log_dir_status::LogDirRegistry,
     image: &krabka_metadata::MetadataImage,
     broker_policy: BrokerProducePolicy,
-) -> Result<(Arc<crate::partition::Partition>, i32), PartitionGateError> {
+) -> Result<AdmittedPartition, PartitionGateError> {
     let BrokerProducePolicy {
         node_id: this_node_id,
         default_min_insync_replicas,
@@ -92,22 +101,21 @@ pub(super) fn validate_partition_gate(
             current_leader: None,
         });
     }
-    if acks == ACKS_ALL {
-        let configured_min_isr =
-            topic_min_insync_replicas(image, topic_name, default_min_insync_replicas);
-        let replica_count = i32::try_from(record.replicas.len()).unwrap_or(i32::MAX);
-        let effective_min_isr = configured_min_isr.min(replica_count);
-        if i32::try_from(record.isr.len()).unwrap_or(i32::MAX) < effective_min_isr {
-            return Err(PartitionGateError {
-                code: codes::NOT_ENOUGH_REPLICAS,
-                current_leader: None,
-            });
-        }
+    let configured_min_isr =
+        topic_min_insync_replicas(image, topic_name, default_min_insync_replicas);
+    let effective_min_isr = usize::try_from(configured_min_isr)
+        .unwrap_or(0)
+        .min(record.replicas.len());
+    if acks == ACKS_ALL && record.isr.len() < effective_min_isr {
+        return Err(PartitionGateError {
+            code: codes::NOT_ENOUGH_REPLICAS,
+            current_leader: None,
+        });
     }
-    let leader_epoch = partition
-        .current_leader_epoch
-        .load(std::sync::atomic::Ordering::Acquire);
-    Ok((partition, leader_epoch))
+    Ok(AdmittedPartition {
+        partition,
+        effective_min_isr,
+    })
 }
 
 pub(super) fn diskless_role_ready(

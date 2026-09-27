@@ -242,12 +242,14 @@ pub(super) async fn handle_duplicate(
     // batch's offsets and puts the batch's timestamp in `logAppendTime`.
     let duplicate_timestamp = duplicate.map_or(super::NO_LOG_APPEND_TIME, |batch| batch.timestamp);
     // A recognized retry is an accepted produce, so its row carries the
-    // partition's real log start offset just like a fresh append's does. The
-    // two refusals below happen before any append and keep the
-    // `UNKNOWN_LOG_APPEND_INFO` sentinel. A raw `Produce v8` replayed against
-    // `apache/kafka:4.3.1` on a partition whose low watermark `DeleteRecords`
-    // had moved off 0 answered the duplicate with that same real value, not
-    // with the sentinel.
+    // partition's real log start offset just like a fresh append's does. A
+    // raw `Produce v8` replayed against `apache/kafka:4.3.1` on a partition
+    // whose low watermark `DeleteRecords` had moved off 0 answered the
+    // duplicate with that same real value. The two refusals below carry it
+    // too: Kafka raises them from `UnifiedLog.append`, and
+    // `ReplicaManager.appendToLocalLog` answers them with
+    // `unknownLogAppendInfoWithLogStartOffset`, so a client can tell a real
+    // sequence gap from producer state that a `DeleteRecords` dropped.
     let (error_code, base_offset, log_append_time_ms, log_start_offset) = match decision {
         crate::producer_state::Decision::Duplicate { base_offset } => {
             let Some(target) = durability_frontier(base_offset, batch.last_offset_delta) else {
@@ -281,13 +283,13 @@ pub(super) async fn handle_duplicate(
             codes::OUT_OF_ORDER_SEQUENCE_NUMBER,
             INVALID_OFFSET,
             super::NO_LOG_APPEND_TIME,
-            INVALID_OFFSET,
+            partition.log_start_offset().0,
         ),
         crate::producer_state::Decision::Fenced => (
             codes::INVALID_PRODUCER_EPOCH,
             INVALID_OFFSET,
             super::NO_LOG_APPEND_TIME,
-            INVALID_OFFSET,
+            partition.log_start_offset().0,
         ),
         crate::producer_state::Decision::Append => return DedupOutcome::Append,
     };
@@ -483,7 +485,7 @@ mod tests {
     ///
     /// The duplicate spans offsets 0..=2, so the durability target is 3, which
     /// is `base_offset 0 + last_offset_delta 2 + 1`. When the HW is stuck at
-    /// 2, the wait times out and gives `NOT_ENOUGH_REPLICAS_AFTER_APPEND`. The
+    /// 2, the wait times out and gives `REQUEST_TIMED_OUT`. The
     /// `+ 1` matters. A mutant that flips it to `- 1` would target offset 1,
     /// which HW 2 already satisfies, and would wrongly return `NONE`.
     #[tokio::test]
@@ -633,7 +635,7 @@ mod tests {
 
         check!(resp.base_offset == 0);
         check!(
-            resp.error_code == crate::codes::NOT_ENOUGH_REPLICAS_AFTER_APPEND,
+            resp.error_code == crate::codes::REQUEST_TIMED_OUT,
             "HW 2 < target 3 must time out; a `-1` mutant would target offset 1 and return NONE"
         );
     }
@@ -678,14 +680,15 @@ mod tests {
             .await;
         part.install_isr(&record.isr, &record.replicas, record.leader)
             .await;
+        let part_handle = Arc::clone(&part);
         partitions.insert("orders".into(), krabka_ids::PartitionIndex(0), part);
 
         // Batch `n` holds two records with sequences `2n` and `2n + 1`, and
         // the max timestamp `1000 + n`.
-        let produce = |batch_index: i32| {
+        let produce_at = |producer_epoch: i16, batch_index: i32| {
             let payload = encode_batch(&RecordBatch {
                 producer_id: PRODUCER_ID,
-                producer_epoch: 0,
+                producer_epoch,
                 base_sequence: batch_index * 2,
                 last_offset_delta: 1,
                 max_timestamp: 1000 + i64::from(batch_index),
@@ -752,6 +755,7 @@ mod tests {
                 .expect_done()
             }
         };
+        let produce = |batch_index: i32| produce_at(0, batch_index);
 
         for batch_index in 0..5 {
             let appended = produce(batch_index).await;
@@ -767,28 +771,58 @@ mod tests {
             );
         }
 
-        let duplicate = |batch_index: i32| PartitionProduceResponse {
+        let duplicate = |batch_index: i32, log_start_offset: i64| PartitionProduceResponse {
             index: 0,
             base_offset: i64::from(batch_index) * 2,
             log_append_time_ms: 1000 + i64::from(batch_index),
-            log_start_offset: 0,
+            log_start_offset,
             ..Default::default()
         };
         for batch_index in 0..5 {
             let replayed = produce(batch_index).await;
-            assert!(replayed == duplicate(batch_index), "batch {batch_index}");
+            assert!(replayed == duplicate(batch_index, 0), "batch {batch_index}");
         }
 
-        // A sixth batch pushes batch 0 out of the five.
+        // A sixth batch pushes batch 0 out of the five. The log start then
+        // moves off 0, the way a `DeleteRecords` moves it, so every row below
+        // shows it: Kafka answers the producer-state refusals with
+        // `unknownLogAppendInfoWithLogStartOffset`, not with -1.
         produce(5).await;
-        let out_of_order = PartitionProduceResponse {
+        part_handle
+            .test_set_log_start(krabka_log::Offset(4))
+            .await
+            .unwrap();
+        let refused = |error_code: i16| PartitionProduceResponse {
             index: 0,
-            error_code: crate::codes::OUT_OF_ORDER_SEQUENCE_NUMBER,
+            error_code,
             base_offset: -1,
-            log_start_offset: -1,
+            log_append_time_ms: -1,
+            log_start_offset: 4,
             ..Default::default()
         };
         let replays = [produce(0).await, produce(1).await, produce(5).await];
-        assert!(replays == [out_of_order, duplicate(1), duplicate(5)]);
+        assert!(
+            replays
+                == [
+                    refused(crate::codes::OUT_OF_ORDER_SEQUENCE_NUMBER),
+                    duplicate(1, 4),
+                    duplicate(5, 4),
+                ]
+        );
+
+        // A new epoch starts at sequence 0; the old epoch is then fenced.
+        let bumped = produce_at(1, 0).await;
+        assert!(
+            bumped
+                == PartitionProduceResponse {
+                    index: 0,
+                    base_offset: 12,
+                    log_append_time_ms: -1,
+                    log_start_offset: 4,
+                    ..Default::default()
+                }
+        );
+        let fenced = produce_at(0, 6).await;
+        assert!(fenced == refused(crate::codes::INVALID_PRODUCER_EPOCH));
     }
 }

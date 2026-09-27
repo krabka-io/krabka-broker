@@ -89,7 +89,7 @@ pub(super) struct FetchPreparation {
 
 pub(super) fn prepare_fetch(
     broker: &Broker,
-    request: &FetchRequest,
+    (request, version): (&FetchRequest, i16),
     context: &crate::handlers::RequestContext<'_>,
 ) -> Result<FetchPreparation, i16> {
     let effective_replica_id = if request.replica_id >= 0 {
@@ -98,7 +98,7 @@ pub(super) fn prepare_fetch(
         request.replica_state.replica_id
     };
     let is_follower_fetch = effective_replica_id >= 0;
-    let decision = broker.fetch_session_cache.classify(request);
+    let decision = broker.fetch_session_cache.classify(request, version);
     if let SessionDecision::Error { code } = decision {
         return Err(code);
     }

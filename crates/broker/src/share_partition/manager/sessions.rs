@@ -9,31 +9,40 @@
 use std::collections::HashSet;
 
 use super::SharePartitionLeaderManager;
-use crate::share_partition::session::{ShareFetchSessionUpdate, SharePartitionKey};
+use crate::share_partition::{
+    group_settings::GroupShareSettings,
+    session::{FetchPartitions, ResponseRow, ShareFetchSessionUpdate, SharePartitionKey},
+};
 
 impl SharePartitionLeaderManager {
-    #[allow(clippy::too_many_arguments)]
+    /// Kafka's `SharePartitionManager.newContext`: see
+    /// [`ShareSessionCache::update_fetch`](crate::share_partition::session::ShareSessionCache::update_fetch).
     pub(crate) fn update_fetch_session(
+        &self,
+        (group, member): (&str, &str),
+        connection_id: &str,
+        epoch: i32,
+        partitions: FetchPartitions<'_>,
+        has_acknowledgements: bool,
+    ) -> Result<ShareFetchSessionUpdate, i16> {
+        self.sessions.update_fetch(
+            (group, member),
+            connection_id,
+            epoch,
+            partitions,
+            has_acknowledgements,
+        )
+    }
+
+    /// Which rows an incremental `ShareFetch` response carries: see
+    /// [`ShareSessionCache::prune_response`](crate::share_partition::session::ShareSessionCache::prune_response).
+    pub(crate) fn prune_fetch_response(
         &self,
         group: &str,
         member: &str,
-        connection_id: &str,
-        epoch: i32,
-        requested: &HashSet<SharePartitionKey>,
-        forgotten: &HashSet<SharePartitionKey>,
-        has_acknowledgements: bool,
-        final_has_additions: bool,
-    ) -> Result<ShareFetchSessionUpdate, i16> {
-        self.sessions.update_fetch(
-            group,
-            member,
-            connection_id,
-            epoch,
-            requested,
-            forgotten,
-            has_acknowledgements,
-            final_has_additions,
-        )
+        rows: &[ResponseRow],
+    ) -> Vec<bool> {
+        self.sessions.prune_response(group, member, rows)
     }
 
     pub(crate) fn update_acknowledge_session(
@@ -54,6 +63,9 @@ impl SharePartitionLeaderManager {
         member: &str,
         partitions: &HashSet<SharePartitionKey>,
     ) {
+        let limit =
+            GroupShareSettings::resolve(&self.controller.current_image(), group, &self.config)
+                .delivery_count_limit;
         for &(topic_id, partition) in partitions {
             let cell = self
                 .leaders
@@ -63,7 +75,7 @@ impl SharePartitionLeaderManager {
                 continue;
             };
             let mut state = cell.lock().await;
-            state.release_member(member);
+            state.release_member(member, limit);
             // Best-effort: a failed write keeps the state dirty for a retry.
             let _ = self
                 .persist_if_dirty(group, topic_id, partition, Some(&cell), &mut state)
@@ -89,8 +101,9 @@ mod tests {
     use assert2::assert;
     use krabka_log::Offset;
 
-    use crate::share_partition::manager::test_support::{
-        LOCK, manager, manager_with_unlimited_fallback,
+    use crate::share_partition::{
+        manager::test_support::{LOCK, manager, manager_with_unlimited_fallback},
+        session::FetchPartitions,
     };
 
     #[test]
@@ -101,13 +114,13 @@ mod tests {
         assert!(
             manager
                 .update_fetch_session(
-                    "g",
-                    "m1",
+                    ("g", "m1"),
                     "connection-1",
                     0,
-                    &partitions,
-                    &partitions,
-                    false,
+                    FetchPartitions {
+                        requested: &[],
+                        forgotten: &partitions,
+                    },
                     false,
                 )
                 .is_ok()
@@ -115,26 +128,26 @@ mod tests {
         assert!(
             manager
                 .update_fetch_session(
-                    "g",
-                    "m2",
+                    ("g", "m2"),
                     "connection-2",
                     0,
-                    &partitions,
-                    &partitions,
-                    false,
+                    FetchPartitions {
+                        requested: &[],
+                        forgotten: &partitions,
+                    },
                     false,
                 )
                 .is_ok()
         );
         assert!(
             manager.update_fetch_session(
-                "g",
-                "m3",
+                ("g", "m3"),
                 "connection-3",
                 0,
-                &partitions,
-                &partitions,
-                false,
+                FetchPartitions {
+                    requested: &[],
+                    forgotten: &partitions,
+                },
                 false,
             ) == Err(crate::codes::SHARE_SESSION_LIMIT_REACHED)
         );
@@ -163,15 +176,14 @@ mod tests {
             );
             assert!(acquired.len() == 1);
         }
-        let partitions = maplit::hashset! {(tid, 0)};
         mgr.update_fetch_session(
-            "g1",
-            "m1",
+            ("g1", "m1"),
             "connection-1",
             0,
-            &partitions,
-            &HashSet::new(),
-            false,
+            FetchPartitions {
+                requested: &[(tid, 0)],
+                forgotten: &HashSet::new(),
+            },
             false,
         )
         .expect("open session");

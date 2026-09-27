@@ -24,12 +24,12 @@ const MAX_DEPTH: usize = 80;
 // considering a field -- into a failure instead of a silently smaller search
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
-pub(super) const PINNED_UNIQUE_STATES_INFLIGHT_FULL: usize = 9_736;
-pub(super) const PINNED_UNIQUE_STATES_INFLIGHT_ONE: usize = 9_694;
-pub(super) const PINNED_UNIQUE_STATES_FAILOVER: usize = 689;
-pub(super) const PINNED_UNIQUE_STATES_DEFERRAL: usize = 1_166;
-pub(super) const PINNED_UNIQUE_STATES_DEFERRAL_WIDE: usize = 7_964;
-pub(super) const PINNED_UNIQUE_STATES_LOG_START_ADVANCE: usize = 8_158;
+pub(super) const PINNED_UNIQUE_STATES_INFLIGHT_FULL: usize = 7_969;
+pub(super) const PINNED_UNIQUE_STATES_INFLIGHT_ONE: usize = 7_930;
+pub(super) const PINNED_UNIQUE_STATES_FAILOVER: usize = 623;
+pub(super) const PINNED_UNIQUE_STATES_DEFERRAL: usize = 1_118;
+pub(super) const PINNED_UNIQUE_STATES_DEFERRAL_WIDE: usize = 5_012;
+pub(super) const PINNED_UNIQUE_STATES_LOG_START_ADVANCE: usize = 6_477;
 
 /// Run one bounded config to completion. Assert that the run was exhaustive,
 /// that is, that no cap truncated it, and that all properties hold.

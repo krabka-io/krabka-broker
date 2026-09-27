@@ -2,95 +2,156 @@
 //! `read_summary`, and `delete`.
 //!
 //! These are the five operations the KIP-932 persister RPCs drive. They hold
-//! the epoch-fencing rules, the in-memory delivery-state updates, and the
-//! decision to fold a `ShareSnapshot`. They sit apart from the durable append
-//! in `persist` and the log replay in `recovery`, so that the fencing
-//! semantics read on their own.
+//! the validation and epoch-fencing rules of Kafka's `ShareCoordinatorShard`,
+//! and pick the record each operation appends. Every record goes through
+//! [`ShareCoordinator::append_state_record`], which appends it and then
+//! applies it to the in-memory state exactly as the log replay in `recovery`
+//! does.
 
 use std::sync::Arc;
 
 use krabka_log::Offset;
 use krabka_metadata::MetadataImage;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 use tracing::warn;
 
 use super::{
     LeaderEpoch, ShareCoordinator, ShareErrorCode, ShareStateError, ShareStateSummary, ShareWrite,
-    StateEpoch, message,
+    StateEpoch, UNINITIALIZED_START_OFFSET, message,
 };
 use crate::{
     codes,
     share_coordinator::{
         persistence::{
             KEY_SHARE_SNAPSHOT, KEY_SHARE_UPDATE, ShareSnapshotValue, ShareStateKey,
-            ShareUpdateValue,
+            ShareUpdateValue, StateBatch, UNKNOWN_DELIVERY_COMPLETE_COUNT,
         },
-        state::SharePartitionState,
+        state::{SharePartitionState, combine_state_batches},
     },
 };
 
-// The state-machine methods are consumed by the persister RPC handlers and
-// the group-lifecycle hook.
+#[cfg(test)]
+mod tests;
+
+/// One `__share_group_state` record value that an operation appends.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StateRecord {
+    Snapshot(ShareSnapshotValue),
+    Update(ShareUpdateValue),
+}
+
+/// The progress fields of a write, as Kafka's
+/// `WriteShareGroupStateRequestData.PartitionData` carries them into
+/// `generateShareStateRecord`.
+struct Progress<'a> {
+    leader_epoch: LeaderEpoch,
+    start_offset: Offset,
+    delivery_complete_count: i32,
+    batches: &'a [StateBatch],
+}
+
 impl ShareCoordinator {
-    /// Initializes the share state for `(group, topic_id, partition)`.
+    /// Serves an `InitializeShareGroupState` partition, as Kafka's
+    /// `ShareCoordinatorShard.initializeState` does.
     ///
-    /// The new state starts at `state_epoch` and `start_offset`. This method
-    /// fences with `FENCED_STATE_EPOCH` if a state with
-    /// `state_epoch >= new state_epoch` already exists. If not, it writes a
-    /// `ShareSnapshot` record and seeds the in-memory state.
+    /// The checks run in Kafka's order (`maybeGetInitializeStateError`): a
+    /// negative partition or state epoch, a stored state epoch above the
+    /// request, and a topic partition that `image` does not hold. A request
+    /// that repeats the stored state epoch and start offset is a no-op. Any
+    /// other request writes a `ShareSnapshot` with the next snapshot epoch
+    /// (`0` for a new key), leader epoch `0`, no batches, and a delivery
+    /// complete count of `-1` for an uninitialized start offset and `0`
+    /// otherwise.
     ///
     /// # Errors
     ///
-    /// Returns the per-partition error code on a fenced epoch. Returns
-    /// `COORDINATOR_NOT_AVAILABLE` if the persist fails. Returns
-    /// `COORDINATOR_LOAD_IN_PROGRESS` or `NOT_COORDINATOR` when the state
-    /// partition of the key is not active on this broker.
+    /// Returns [`ShareStateError::Refused`] when a check fails, and
+    /// [`ShareStateError::Operation`] when this broker is not the active
+    /// coordinator of the key or the append fails.
     pub(crate) async fn initialize(
         &self,
+        image: &MetadataImage,
         group: &str,
         topic_id: uuid::Uuid,
         partition: i32,
         state_epoch: StateEpoch,
         start_offset: Offset,
-    ) -> Result<(), ShareErrorCode> {
-        let map_key = (group.to_string(), topic_id, partition);
+    ) -> Result<(), ShareStateError> {
         let state_partition = self.state_partition_for(group, &topic_id, partition);
-        let _led = self.active(state_partition).await?;
+        let _led = self
+            .active(state_partition)
+            .await
+            .map_err(ShareStateError::inactive)?;
 
-        if let Some(existing) = self.state.get(&map_key) {
-            let cur = existing.value().clone();
-            let guard = cur.lock().await;
-            if guard.state_epoch >= state_epoch {
-                return Err(crate::codes::FENCED_STATE_EPOCH);
-            }
+        if partition < 0 {
+            return Err(invalid_request(message::NEGATIVE_PARTITION_ID));
+        }
+        if state_epoch < 0 {
+            return Err(invalid_request(message::NEGATIVE_STATE_EPOCH));
+        }
+        let entry = self.entry(group, topic_id, partition);
+        let mut stored = match &entry {
+            Some(entry) => Some(entry.lock().await),
+            None => None,
+        };
+        if stored
+            .as_ref()
+            .is_some_and(|st| st.fence_state_epoch > state_epoch)
+        {
+            return Err(ShareStateError::Refused {
+                code: codes::FENCED_STATE_EPOCH,
+                message: message::FENCED_STATE_EPOCH,
+            });
+        }
+        check_topic_partition(image, topic_id, partition)?;
+        if stored.as_ref().is_some_and(|st| {
+            st.fence_state_epoch == state_epoch && st.start_offset == start_offset
+        }) {
+            return Ok(());
         }
 
+        let now = self.now_ms();
         let snapshot = ShareSnapshotValue {
-            snapshot_epoch: 0,
+            snapshot_epoch: stored
+                .as_ref()
+                .map_or(0, |st| st.snapshot_epoch.wrapping_add(1)),
             state_epoch,
             leader_epoch: 0,
             start_offset,
-            delivery_complete_count: 0,
+            delivery_complete_count: if start_offset.0 == UNINITIALIZED_START_OFFSET {
+                UNKNOWN_DELIVERY_COMPLETE_COUNT
+            } else {
+                0
+            },
+            create_timestamp: now,
+            write_timestamp: now,
             state_batches: Vec::new(),
         };
-        let key = ShareStateKey {
-            record_type: KEY_SHARE_SNAPSHOT,
-            group_id: group.to_string(),
-            topic_id,
-            partition,
-        };
+        if let Some(st) = stored.as_mut() {
+            return self
+                .append_state_record(
+                    st,
+                    group,
+                    topic_id,
+                    partition,
+                    StateRecord::Snapshot(snapshot),
+                )
+                .await;
+        }
+        let key = state_key(KEY_SHARE_SNAPSHOT, group, topic_id, partition);
         let offset = self
             .persist_record(state_partition, key, Some(snapshot.encode()))
             .await
             .map_err(|e| {
                 warn!(error = %e, "share initialize persist failed");
-                e.share_error().code()
+                e.share_error()
             })?;
-
-        let mut st = SharePartitionState::default();
-        st.apply_snapshot(&snapshot);
-        st.last_snapshot_offset = offset;
-        self.state.insert(map_key, Arc::new(Mutex::new(st)));
+        self.state.insert(
+            (group.to_string(), topic_id, partition),
+            Arc::new(Mutex::new(SharePartitionState::from_snapshot(
+                &snapshot, offset,
+            ))),
+        );
         Ok(())
     }
 
@@ -99,14 +160,10 @@ impl ShareCoordinator {
     ///
     /// The checks run in Kafka's order (`maybeGetWriteStateError`): a
     /// negative partition, leader epoch or state epoch, an uninitialized key,
-    /// a stored leader epoch or state epoch above the request, and a topic
-    /// partition that `image` does not hold. The `ShareUpdate` record keeps
-    /// the stored state epoch and leader epoch, never lets the start offset go
-    /// back, and picks the delivery complete count as
-    /// `generateShareStateRecord` does. The in-memory state changes only after
-    /// the append succeeds. Every `snapshot_update_records_per_snapshot`
-    /// updates the method also folds a full `ShareSnapshot` and prunes the
-    /// redundant log prefix.
+    /// a recorded leader epoch or state epoch above the request, and a topic
+    /// partition that `image` does not hold. The record is the one
+    /// `generateShareStateRecord` picks: see
+    /// [`ShareCoordinator::share_state_record`].
     ///
     /// # Errors
     ///
@@ -142,13 +199,13 @@ impl ShareCoordinator {
             ));
         };
         let mut st = entry.lock().await;
-        if st.leader_epoch > request.leader_epoch {
+        if st.fence_leader_epoch > request.leader_epoch {
             return Err(ShareStateError::Refused {
                 code: codes::FENCED_LEADER_EPOCH,
                 message: message::FENCED_LEADER_EPOCH,
             });
         }
-        if st.state_epoch > request.state_epoch {
+        if st.fence_state_epoch > request.state_epoch {
             return Err(ShareStateError::Refused {
                 code: codes::FENCED_STATE_EPOCH,
                 message: message::FENCED_STATE_EPOCH,
@@ -156,40 +213,30 @@ impl ShareCoordinator {
         }
         check_topic_partition(image, topic_id, partition)?;
 
-        let update = ShareUpdateValue {
-            snapshot_epoch: st.snapshot_epoch,
-            // A write never changes the leader epoch. Only a read raises it.
-            leader_epoch: st.leader_epoch,
-            start_offset: request.start_offset.max(st.start_offset),
-            delivery_complete_count: delivery_complete_count(
-                &st,
-                request.start_offset,
-                request.delivery_complete_count,
-            ),
-            state_batches: request.batches,
-        };
-        let folded = self
-            .append_update(&mut st, group, topic_id, partition, update)
-            .await?;
-        // Release the per-key lock before pruning so the per-partition scan
-        // can lock sibling keys.
-        drop(st);
-        if folded {
-            self.maybe_prune(state_partition).await;
-        }
-        Ok(())
+        // A write never changes the leader epoch. Only a read raises it.
+        let record = self.share_state_record(
+            &st,
+            &Progress {
+                leader_epoch: st.leader_epoch,
+                start_offset: request.start_offset,
+                delivery_complete_count: request.delivery_complete_count,
+                batches: &request.batches,
+            },
+        );
+        self.append_state_record(&mut st, group, topic_id, partition, record)
+            .await
     }
 
     /// Serves a `ReadShareGroupState` partition, as Kafka's
     /// `ShareCoordinatorShard.readStateAndMaybeUpdateLeaderEpoch` does.
     ///
     /// The checks run in Kafka's order (`maybeGetReadStateError`): a negative
-    /// partition or leader epoch, an uninitialized key, a stored leader epoch
-    /// above the request, and a topic partition that `image` does not hold.
-    /// When `leader_epoch` differs from the stored leader epoch, the method
-    /// appends a `ShareUpdate` with the new leader epoch before it answers. A
-    /// later write from a share-partition leader with an older epoch is then
-    /// fenced.
+    /// partition or leader epoch, an uninitialized key, a recorded leader
+    /// epoch above the request, and a topic partition that `image` does not
+    /// hold. When `leader_epoch` differs from the recorded leader epoch, the
+    /// method appends the record of a write with the new leader epoch and the
+    /// stored progress before it answers. A later write from a
+    /// share-partition leader with an older epoch is then fenced.
     ///
     /// # Errors
     ///
@@ -218,7 +265,7 @@ impl ShareCoordinator {
             return Err(invalid_request(message::READ_UNINITIALIZED_SHARE_PARTITION));
         };
         let mut st = entry.lock().await;
-        if st.leader_epoch > leader_epoch {
+        if st.fence_leader_epoch > leader_epoch {
             return Err(ShareStateError::Refused {
                 code: codes::FENCED_LEADER_EPOCH,
                 message: message::FENCED_LEADER_EPOCH,
@@ -227,29 +274,101 @@ impl ShareCoordinator {
         check_topic_partition(image, topic_id, partition)?;
 
         let current = st.clone();
-        if st.leader_epoch == leader_epoch {
+        if st.fence_leader_epoch == leader_epoch {
             return Ok(current);
         }
-        let update = ShareUpdateValue {
-            snapshot_epoch: st.snapshot_epoch,
-            leader_epoch,
-            start_offset: st.start_offset,
-            delivery_complete_count: st.delivery_complete_count,
-            state_batches: Vec::new(),
-        };
-        let folded = self
-            .append_update(&mut st, group, topic_id, partition, update)
+        let record = self.share_state_record(
+            &st,
+            &Progress {
+                leader_epoch,
+                start_offset: st.start_offset,
+                delivery_complete_count: st.delivery_complete_count,
+                batches: &[],
+            },
+        );
+        self.append_state_record(&mut st, group, topic_id, partition, record)
             .await?;
-        drop(st);
-        if folded {
-            self.maybe_prune(state_partition).await;
-        }
         Ok(current)
+    }
+
+    /// The record of a write, as Kafka's `generateShareStateRecord` builds
+    /// it.
+    ///
+    /// The start offset never goes back, and the delivery complete count is
+    /// picked by [`delivery_complete_count`]. Once the key has had
+    /// `snapshot_update_records_per_snapshot` updates, the record is a
+    /// `ShareSnapshot` with the next snapshot epoch, the stored batches
+    /// combined with the written ones, and fresh timestamps. Otherwise it is
+    /// a `ShareUpdate` that holds only the written batches, combined among
+    /// themselves and clipped at the start offset.
+    fn share_state_record(&self, st: &SharePartitionState, progress: &Progress<'_>) -> StateRecord {
+        let start_offset = progress.start_offset.max(st.start_offset);
+        let delivery_complete_count =
+            delivery_complete_count(st, progress.start_offset, progress.delivery_complete_count);
+        if st.updates_since_snapshot >= self.config.snapshot_update_records_per_snapshot {
+            let now = self.now_ms();
+            StateRecord::Snapshot(ShareSnapshotValue {
+                snapshot_epoch: st.snapshot_epoch.wrapping_add(1),
+                state_epoch: st.state_epoch,
+                leader_epoch: progress.leader_epoch,
+                start_offset,
+                delivery_complete_count,
+                create_timestamp: now,
+                write_timestamp: now,
+                state_batches: combine_state_batches(
+                    &st.state_batches,
+                    progress.batches,
+                    start_offset,
+                ),
+            })
+        } else {
+            StateRecord::Update(ShareUpdateValue {
+                snapshot_epoch: st.snapshot_epoch,
+                leader_epoch: progress.leader_epoch,
+                start_offset,
+                delivery_complete_count,
+                state_batches: combine_state_batches(&[], progress.batches, start_offset),
+            })
+        }
+    }
+
+    /// Appends `record` for the key and applies it to `st` after the append
+    /// succeeds, as the replay of the record does.
+    pub(super) async fn append_state_record(
+        &self,
+        st: &mut MutexGuard<'_, SharePartitionState>,
+        group: &str,
+        topic_id: uuid::Uuid,
+        partition: i32,
+        record: StateRecord,
+    ) -> Result<(), ShareStateError> {
+        let state_partition = self.state_partition_for(group, &topic_id, partition);
+        let (record_type, value) = match &record {
+            StateRecord::Snapshot(snapshot) => (KEY_SHARE_SNAPSHOT, snapshot.encode()),
+            StateRecord::Update(update) => (KEY_SHARE_UPDATE, update.encode()),
+        };
+        let key = state_key(record_type, group, topic_id, partition);
+        let offset = self
+            .persist_record(state_partition, key, Some(value))
+            .await
+            .map_err(|e| {
+                warn!(error = %e, "share state persist failed");
+                e.share_error()
+            })?;
+        match &record {
+            StateRecord::Snapshot(snapshot) => st.apply_snapshot(
+                snapshot,
+                offset,
+                self.config.snapshot_update_records_per_snapshot,
+            ),
+            StateRecord::Update(update) => st.apply_update(update),
+        }
+        Ok(())
     }
 
     /// The state cell of `(group, topic_id, partition)`, when the key has
     /// state.
-    fn entry(
+    pub(super) fn entry(
         &self,
         group: &str,
         topic_id: uuid::Uuid,
@@ -258,69 +377,6 @@ impl ShareCoordinator {
         self.state
             .get(&(group.to_string(), topic_id, partition))
             .map(|entry| entry.value().clone())
-    }
-
-    /// Appends `update` and applies it to `st` after the append succeeds.
-    ///
-    /// When the update count crosses the snapshot threshold, the method also
-    /// folds a `ShareSnapshot`. It returns `true` when it folded one, so the
-    /// caller prunes the log after it releases the key lock. A failed fold
-    /// does not fail the update.
-    async fn append_update(
-        &self,
-        st: &mut tokio::sync::MutexGuard<'_, SharePartitionState>,
-        group: &str,
-        topic_id: uuid::Uuid,
-        partition: i32,
-        update: ShareUpdateValue,
-    ) -> Result<bool, ShareStateError> {
-        let state_partition = self.state_partition_for(group, &topic_id, partition);
-        let key = ShareStateKey {
-            record_type: KEY_SHARE_UPDATE,
-            group_id: group.to_string(),
-            topic_id,
-            partition,
-        };
-        self.persist_record(state_partition, key, Some(update.encode()))
-            .await
-            .map_err(|e| {
-                warn!(error = %e, "share update persist failed");
-                e.share_error()
-            })?;
-        st.apply_update(&update);
-
-        if st.updates_since_snapshot < self.config.snapshot_update_records_per_snapshot {
-            return Ok(false);
-        }
-        let Some(snapshot) = st.to_snapshot() else {
-            warn!(
-                group,
-                partition, "share snapshot skipped because its epoch is exhausted"
-            );
-            return Ok(false);
-        };
-        let snap_key = ShareStateKey {
-            record_type: KEY_SHARE_SNAPSHOT,
-            group_id: group.to_string(),
-            topic_id,
-            partition,
-        };
-        match self
-            .persist_record(state_partition, snap_key, Some(snapshot.encode()))
-            .await
-        {
-            Ok(offset) => {
-                st.apply_snapshot(&snapshot);
-                st.last_snapshot_offset = offset;
-                Ok(true)
-            }
-            Err(e) => {
-                // The update itself was durable; a missed snapshot fold is
-                // recoverable on the next threshold crossing.
-                warn!(error = %e, "share snapshot persist failed");
-                Ok(false)
-            }
-        }
     }
 
     /// Test-only: the in-memory state of a key, with no status check and no
@@ -343,7 +399,8 @@ impl ShareCoordinator {
     ///
     /// # Errors
     ///
-    /// As [`ShareCoordinator::read`].
+    /// Returns `COORDINATOR_LOAD_IN_PROGRESS` or `NOT_COORDINATOR` when the
+    /// state partition of the key is not active on this broker.
     pub(crate) async fn read_summary(
         &self,
         group: &str,
@@ -352,8 +409,7 @@ impl ShareCoordinator {
     ) -> Result<Option<ShareStateSummary>, ShareErrorCode> {
         let state_partition = self.state_partition_for(group, &topic_id, partition);
         let _led = self.active(state_partition).await?;
-        let map_key = (group.to_string(), topic_id, partition);
-        let Some(handle) = self.state.get(&map_key).map(|entry| entry.value().clone()) else {
+        let Some(handle) = self.entry(group, topic_id, partition) else {
             return Ok(None);
         };
         let st = handle.lock().await;
@@ -365,39 +421,70 @@ impl ShareCoordinator {
         )))
     }
 
-    /// Deletes the share state for `(group, topic_id, partition)`.
+    /// Serves a `DeleteShareGroupState` partition, as Kafka's
+    /// `ShareCoordinatorShard.deleteState` does.
     ///
-    /// This method writes a tombstone with the snapshot key and a null value.
-    /// It then drops the in-memory entry.
+    /// The checks run in Kafka's order (`maybeGetDeleteStateError`): a
+    /// negative partition, then a topic partition that `image` does not hold.
+    /// A key with no state is not an error, and nothing is appended for it.
+    /// Otherwise the method writes a tombstone with the snapshot key and
+    /// drops the in-memory entry.
     ///
     /// # Errors
     ///
-    /// Returns `COORDINATOR_NOT_AVAILABLE` if the tombstone persist fails, and
-    /// the codes of [`ShareCoordinator::read`] when the state partition is not
-    /// active.
+    /// As [`ShareCoordinator::initialize`].
     pub(crate) async fn delete(
         &self,
+        image: &MetadataImage,
         group: &str,
         topic_id: uuid::Uuid,
         partition: i32,
-    ) -> Result<(), ShareErrorCode> {
-        let map_key = (group.to_string(), topic_id, partition);
+    ) -> Result<(), ShareStateError> {
         let state_partition = self.state_partition_for(group, &topic_id, partition);
-        let _led = self.active(state_partition).await?;
-        let key = ShareStateKey {
-            record_type: KEY_SHARE_SNAPSHOT,
-            group_id: group.to_string(),
-            topic_id,
-            partition,
+        let _led = self
+            .active(state_partition)
+            .await
+            .map_err(ShareStateError::inactive)?;
+        if partition < 0 {
+            return Err(invalid_request(message::NEGATIVE_PARTITION_ID));
+        }
+        check_topic_partition(image, topic_id, partition)?;
+        let Some(entry) = self.entry(group, topic_id, partition) else {
+            return Ok(());
         };
+        let _st = entry.lock().await;
+        self.tombstone(state_partition, group, topic_id, partition)
+            .await
+    }
+
+    /// Appends the tombstone of a key and drops its in-memory entry. The
+    /// caller holds the key lock.
+    pub(super) async fn tombstone(
+        &self,
+        state_partition: krabka_ids::PartitionIndex,
+        group: &str,
+        topic_id: uuid::Uuid,
+        partition: i32,
+    ) -> Result<(), ShareStateError> {
+        let key = state_key(KEY_SHARE_SNAPSHOT, group, topic_id, partition);
         self.persist_record(state_partition, key, None)
             .await
             .map_err(|e| {
                 warn!(error = %e, "share delete persist failed");
-                e.share_error().code()
+                e.share_error()
             })?;
-        self.state.remove(&map_key);
+        self.state.remove(&(group.to_string(), topic_id, partition));
         Ok(())
+    }
+}
+
+/// The key of a record of `record_type` for `(group, topic_id, partition)`.
+fn state_key(record_type: i16, group: &str, topic_id: uuid::Uuid, partition: i32) -> ShareStateKey {
+    ShareStateKey {
+        record_type,
+        group_id: group.to_string(),
+        topic_id,
+        partition,
     }
 }
 
@@ -442,413 +529,5 @@ fn delivery_complete_count(
         std::cmp::Ordering::Equal => request_count.max(stored.delivery_complete_count),
         std::cmp::Ordering::Less => stored.delivery_complete_count,
         std::cmp::Ordering::Greater => request_count,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use assert2::{assert, check};
-    use tempfile::tempdir;
-
-    use super::*;
-    use crate::share_coordinator::coordinator::test_support::{
-        batch, coordinator, image_with_topic, lead_all, share_write,
-    };
-
-    const TOPIC: uuid::Uuid = uuid::Uuid::from_bytes([5; 16]);
-
-    type WriteOutcome = Result<(), ShareStateError>;
-
-    /// `(partition, (state_epoch, leader_epoch), (start_offset, dcc), drop the
-    /// state partition log, expected result, expected summary)`.
-    type WriteRow = (
-        i32,
-        (i32, i32),
-        (i64, i32),
-        bool,
-        WriteOutcome,
-        Option<ShareStateSummary>,
-    );
-
-    /// `(partition, leader_epoch, expected read as (state_epoch, start),
-    /// expected write with leader epoch 3, stored leader epoch after reload)`.
-    type ReadRow = (
-        i32,
-        i32,
-        Result<(i32, i64), ShareStateError>,
-        Option<WriteOutcome>,
-        i32,
-    );
-
-    fn refused(code: ShareErrorCode, message: &'static str) -> ShareStateError {
-        ShareStateError::Refused { code, message }
-    }
-
-    #[tokio::test]
-    async fn initialize_then_summary() {
-        let dir = tempdir().unwrap();
-        let (coord, _reg) = coordinator(dir.path());
-        lead_all(&coord).await;
-
-        coord
-            .initialize("g", TOPIC, 0, 5, Offset(100))
-            .await
-            .unwrap();
-
-        let summary = coord.read_summary("g", TOPIC, 0).await;
-        assert!(summary == Ok(Some((5, 0, Offset(100), 0))));
-    }
-
-    #[tokio::test]
-    async fn initialize_fences_stale_state_epoch() {
-        let dir = tempdir().unwrap();
-        let (coord, _reg) = coordinator(dir.path());
-        lead_all(&coord).await;
-
-        coord.initialize("g", TOPIC, 0, 5, Offset(0)).await.unwrap();
-        let err = coord
-            .initialize("g", TOPIC, 0, 5, Offset(0))
-            .await
-            .unwrap_err();
-        assert!(err == codes::FENCED_STATE_EPOCH);
-    }
-
-    #[tokio::test]
-    async fn delete_removes_state() {
-        let dir = tempdir().unwrap();
-        let (coord, _reg) = coordinator(dir.path());
-        lead_all(&coord).await;
-
-        coord.initialize("g", TOPIC, 0, 1, Offset(0)).await.unwrap();
-        assert!(coord.read_summary("g", TOPIC, 0).await.unwrap().is_some());
-        coord.delete("g", TOPIC, 0).await.unwrap();
-        assert!(coord.read_summary("g", TOPIC, 0).await.unwrap().is_none());
-    }
-
-    /// Stored state for the read and write tables, on topic `TOPIC` with two
-    /// partitions: partition 0 at state epoch 2, leader epoch 3, start offset
-    /// 10 and delivery complete count 4, and partition 2 (not in the image)
-    /// at state epoch 2.
-    async fn seeded(dir: &std::path::Path) -> (ShareCoordinator, MetadataImage) {
-        let (coord, _reg) = coordinator(dir);
-        lead_all(&coord).await;
-        let image = image_with_topic(TOPIC, 2);
-        coord
-            .initialize("g", TOPIC, 0, 2, Offset(10))
-            .await
-            .unwrap();
-        coord
-            .initialize("g", TOPIC, 2, 2, Offset(10))
-            .await
-            .unwrap();
-        coord.read(&image, "g", TOPIC, 0, 3).await.unwrap();
-        coord
-            .write(&image, "g", TOPIC, 0, share_write((2, 3), (10, 4), vec![]))
-            .await
-            .unwrap();
-        assert!(coord.read_summary("g", TOPIC, 0).await == Ok(Some((2, 3, Offset(10), 4))));
-        (coord, image)
-    }
-
-    /// `WriteShareGroupState` as Kafka's `ShareCoordinatorShard.writeState`
-    /// answers it, and the stored summary after each write.
-    #[tokio::test]
-    async fn write_matches_kafka_checks_and_record_rules() {
-        let unchanged = Some((2, 3, Offset(10), 4));
-        // (partition, (state_epoch, leader_epoch), (start_offset, dcc),
-        //  drop the state partition log, expected result, expected summary)
-        let rows: [WriteRow; 13] = [
-            (
-                0,
-                (2, 3),
-                (10, 2),
-                false,
-                Ok(()),
-                Some((2, 3, Offset(10), 4)),
-            ),
-            (
-                0,
-                (2, 3),
-                (5, 9),
-                false,
-                Ok(()),
-                Some((2, 3, Offset(10), 4)),
-            ),
-            (
-                0,
-                (2, 3),
-                (20, 1),
-                false,
-                Ok(()),
-                Some((2, 3, Offset(20), 1)),
-            ),
-            (
-                0,
-                (7, 3),
-                (10, 4),
-                false,
-                Ok(()),
-                Some((2, 3, Offset(10), 4)),
-            ),
-            (
-                0,
-                (2, 9),
-                (10, 4),
-                false,
-                Ok(()),
-                Some((2, 3, Offset(10), 4)),
-            ),
-            (
-                0,
-                (2, 3),
-                (10, -1),
-                false,
-                Ok(()),
-                Some((2, 3, Offset(10), 4)),
-            ),
-            (
-                0,
-                (1, 3),
-                (10, 4),
-                false,
-                Err(refused(
-                    codes::FENCED_STATE_EPOCH,
-                    message::FENCED_STATE_EPOCH,
-                )),
-                unchanged,
-            ),
-            (
-                0,
-                (2, 2),
-                (10, 4),
-                false,
-                Err(refused(
-                    codes::FENCED_LEADER_EPOCH,
-                    message::FENCED_LEADER_EPOCH,
-                )),
-                unchanged,
-            ),
-            (
-                1,
-                (0, 0),
-                (0, 0),
-                false,
-                Err(refused(
-                    codes::INVALID_REQUEST,
-                    message::WRITE_UNINITIALIZED_SHARE_PARTITION,
-                )),
-                None,
-            ),
-            (
-                -1,
-                (2, 3),
-                (10, 4),
-                false,
-                Err(refused(
-                    codes::INVALID_REQUEST,
-                    message::NEGATIVE_PARTITION_ID,
-                )),
-                None,
-            ),
-            (
-                0,
-                (2, -1),
-                (10, 4),
-                false,
-                Err(refused(
-                    codes::INVALID_REQUEST,
-                    message::NEGATIVE_LEADER_EPOCH,
-                )),
-                unchanged,
-            ),
-            (
-                2,
-                (2, 3),
-                (10, 4),
-                false,
-                Err(refused(
-                    codes::UNKNOWN_TOPIC_OR_PARTITION,
-                    message::UNKNOWN_TOPIC_OR_PARTITION,
-                )),
-                Some((2, 0, Offset(10), 0)),
-            ),
-            (
-                0,
-                (2, 3),
-                (30, 0),
-                true,
-                Err(ShareStateError::Operation {
-                    code: codes::COORDINATOR_NOT_AVAILABLE,
-                    message: message::UNKNOWN_TOPIC_OR_PARTITION,
-                }),
-                unchanged,
-            ),
-        ];
-
-        for (index, (partition, epochs, progress, drop_log, expected, summary)) in
-            rows.into_iter().enumerate()
-        {
-            let dir = tempdir().unwrap();
-            let (coord, image) = seeded(dir.path()).await;
-            if drop_log {
-                let state_partition = coord.state_partition_for("g", &TOPIC, partition);
-                coord
-                    .partitions
-                    .remove(crate::share_coordinator::bootstrap::TOPIC, state_partition);
-            }
-            let result = coord
-                .write(
-                    &image,
-                    "g",
-                    TOPIC,
-                    partition,
-                    share_write(epochs, progress, vec![batch(progress.0, progress.0 + 9)]),
-                )
-                .await;
-            check!(result == expected, "row {index}");
-            check!(
-                coord.read_summary("g", TOPIC, partition).await == Ok(summary),
-                "row {index}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn write_refuses_a_negative_state_epoch() {
-        let dir = tempdir().unwrap();
-        let (coord, image) = seeded(dir.path()).await;
-        let result = coord
-            .write(&image, "g", TOPIC, 0, share_write((-1, 3), (10, 4), vec![]))
-            .await;
-        assert!(
-            result
-                == Err(refused(
-                    codes::INVALID_REQUEST,
-                    message::NEGATIVE_STATE_EPOCH
-                ))
-        );
-    }
-
-    /// `ReadShareGroupState` as Kafka's
-    /// `readStateAndMaybeUpdateLeaderEpoch` answers it, then a write with
-    /// leader epoch 3, and the stored leader epoch after a reload of the log.
-    #[tokio::test]
-    async fn read_fences_and_persists_the_leader_epoch() {
-        // (partition, leader_epoch, expected read as (state_epoch, start),
-        //  expected write with leader epoch 3, stored leader epoch after
-        //  reload)
-        let rows: [ReadRow; 7] = [
-            (0, 3, Ok((2, 10)), Some(Ok(())), 3),
-            (
-                0,
-                4,
-                Ok((2, 10)),
-                Some(Err(refused(
-                    codes::FENCED_LEADER_EPOCH,
-                    message::FENCED_LEADER_EPOCH,
-                ))),
-                4,
-            ),
-            (
-                0,
-                2,
-                Err(refused(
-                    codes::FENCED_LEADER_EPOCH,
-                    message::FENCED_LEADER_EPOCH,
-                )),
-                Some(Ok(())),
-                3,
-            ),
-            (
-                1,
-                0,
-                Err(refused(
-                    codes::INVALID_REQUEST,
-                    message::READ_UNINITIALIZED_SHARE_PARTITION,
-                )),
-                None,
-                3,
-            ),
-            (
-                -1,
-                0,
-                Err(refused(
-                    codes::INVALID_REQUEST,
-                    message::NEGATIVE_PARTITION_ID,
-                )),
-                None,
-                3,
-            ),
-            (
-                0,
-                -1,
-                Err(refused(
-                    codes::INVALID_REQUEST,
-                    message::NEGATIVE_LEADER_EPOCH,
-                )),
-                None,
-                3,
-            ),
-            (
-                2,
-                0,
-                Err(refused(
-                    codes::UNKNOWN_TOPIC_OR_PARTITION,
-                    message::UNKNOWN_TOPIC_OR_PARTITION,
-                )),
-                None,
-                3,
-            ),
-        ];
-
-        for (index, (partition, leader_epoch, expected, write, reloaded_leader_epoch)) in
-            rows.into_iter().enumerate()
-        {
-            let dir = tempdir().unwrap();
-            let (coord, image) = seeded(dir.path()).await;
-            let read = coord
-                .read(&image, "g", TOPIC, partition, leader_epoch)
-                .await
-                .map(|st| (st.state_epoch, st.start_offset.0));
-            check!(read == expected, "row {index}");
-            if let Some(expected_write) = write {
-                let written = coord
-                    .write(
-                        &image,
-                        "g",
-                        TOPIC,
-                        partition,
-                        share_write((2, 3), (10, 4), vec![]),
-                    )
-                    .await;
-                check!(written == expected_write, "row {index}");
-            }
-            coord.reload_all_partitions_for_test().await;
-            let summary = coord.read_summary("g", TOPIC, 0).await;
-            check!(
-                summary.map(|s| s.map(|(_, leader, ..)| leader)) == Ok(Some(reloaded_leader_epoch)),
-                "row {index}"
-            );
-        }
-    }
-
-    /// A failed append leaves the in-memory state as it was.
-    #[tokio::test]
-    async fn failed_read_append_changes_no_state() {
-        let dir = tempdir().unwrap();
-        let (coord, image) = seeded(dir.path()).await;
-        let state_partition = coord.state_partition_for("g", &TOPIC, 0);
-        coord
-            .partitions
-            .remove(crate::share_coordinator::bootstrap::TOPIC, state_partition);
-
-        let read = coord.read(&image, "g", TOPIC, 0, 8).await;
-        assert!(
-            read == Err(ShareStateError::Operation {
-                code: codes::COORDINATOR_NOT_AVAILABLE,
-                message: message::UNKNOWN_TOPIC_OR_PARTITION,
-            })
-        );
-        assert!(coord.read_summary("g", TOPIC, 0).await == Ok(Some((2, 3, Offset(10), 4))));
     }
 }

@@ -12,7 +12,10 @@ use stateright::{Model, Property};
 
 use super::{
     config::{LOCK, ShareModel},
-    invariants::{assert_transition, lock_consistency, mutual_exclusion, window_integrity},
+    invariants::{
+        assert_transition, delivery_complete_count_is_terminal_in_window, lock_consistency,
+        mutual_exclusion, window_integrity,
+    },
     observe::{acquired_runs, deferred_offsets, offset_state},
     state::{ShareAction, ShareState},
 };
@@ -197,8 +200,11 @@ impl Model for ShareModel {
                 ack,
             } => {
                 let name = Self::member_name(member);
-                let now = self.now(state.clock);
-                if state.sm.acknowledge(&name, first, hi, ack, now).is_err() {
+                if state
+                    .sm
+                    .acknowledge(&name, first, hi, ack, self.max_attempts)
+                    .is_err()
+                {
                     return None; // inapplicable ack: no transition
                 }
             }
@@ -215,7 +221,7 @@ impl Model for ShareModel {
             }
             ShareAction::ExpireLocks => {
                 let now = self.now(state.clock);
-                state.sm.expire_locks(now);
+                state.sm.expire_locks(now, self.max_attempts);
             }
             ShareAction::Tick => {
                 if state.clock >= self.max_tick {
@@ -226,15 +232,9 @@ impl Model for ShareModel {
             ShareAction::Reload => {
                 let deferred = deferred_offsets(&state.sm);
                 let window = (state.sm.start_offset, state.sm.end_offset);
-                let (start, dcc, batches) = state.sm.to_persist_batches();
+                let (start, _, batches) = state.sm.to_persist_batches();
                 let mut fresh = AcquisitionState::new(start);
-                fresh.load_from(
-                    start,
-                    state.sm.state_epoch,
-                    state.sm.leader_epoch,
-                    dcc,
-                    &batches,
-                );
+                fresh.load_from(start, state.sm.state_epoch, state.sm.leader_epoch, &batches);
                 // KFC-1: `Deferred` persists as `Available`, so the new leader
                 // re-derives it from the log and its own clock. The model's
                 // clock has not moved, so the same offsets come back deferred,
@@ -278,6 +278,10 @@ impl Model for ShareModel {
                 lock_consistency(&s.sm)
             }),
             Property::always(
+                "delivery_complete_count_is_terminal_in_window",
+                |_, s: &ShareState| delivery_complete_count_is_terminal_in_window(&s.sm),
+            ),
+            Property::always(
                 "delivery_count_bounded",
                 |m: &ShareModel, s: &ShareState| {
                     s.sm.batches
@@ -305,6 +309,11 @@ impl Model for ShareModel {
             }),
             Property::sometimes("can_redeliver", |_, s: &ShareState| {
                 s.sm.batches.iter().any(|b| b.delivery_count >= 2)
+            }),
+            // The count invariant is not vacuous: a terminal record can sit in
+            // the window above a record that still holds the SPSO.
+            Property::sometimes("can_count_delivery_complete", |_, s: &ShareState| {
+                s.sm.delivery_complete_count > 0
             }),
         ];
         if self.allow_log_start_advance {

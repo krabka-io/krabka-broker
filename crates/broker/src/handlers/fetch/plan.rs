@@ -459,30 +459,69 @@ pub(super) struct PendingPlanContext<'a> {
     pub(super) follower_broker_epoch: i64,
 }
 
+/// Where a planned row goes in the response.
+///
+/// Kafka's `KafkaApis.handleFetchRequest` collects the rows it refuses before
+/// the read in its `erroneous` buffer and puts them after the rows
+/// `ReplicaManager` read. A consumer fetch fills that buffer in two passes:
+/// the rows whose topic id does not resolve first, then the rows refused for
+/// authorization or for a partition the metadata does not hold. A follower
+/// fetch fills it in one pass. Within a slot the rows keep request order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum ResponseSlot {
+    /// A row the read decided, refusals of the read itself included.
+    Read,
+    /// A row refused before the read, in the first pass.
+    RefusedFirst,
+    /// A row a consumer fetch refused before the read, in the second pass.
+    RefusedSecond,
+}
+
+impl ResponseSlot {
+    /// The slot of a row refused before the read with `error_code`.
+    fn refused(is_follower_fetch: bool, error_code: i16) -> Self {
+        if is_follower_fetch || error_code == codes::UNKNOWN_TOPIC_ID {
+            Self::RefusedFirst
+        } else {
+            Self::RefusedSecond
+        }
+    }
+}
+
 pub(super) async fn plan_partition_read(
     context: &PendingPlanContext<'_>,
     topic_name: &str,
     topic_id: WireUuid,
     topic_error: Option<i16>,
     request: &EffectivePartition,
-) -> PendingRead {
+) -> (ResponseSlot, PendingRead) {
+    let refused = |error_code| {
+        (
+            ResponseSlot::refused(context.mode.1, error_code),
+            PendingRead::planned(
+                topic_name,
+                topic_id,
+                request,
+                context.mode,
+                None,
+                refused_partition(request.partition, error_code),
+            ),
+        )
+    };
     // Kafka's `KafkaApis.handleFetchRequest` refuses every row of a follower
     // fetch without `ClusterAction` before it resolves any topic. So that
     // refusal comes first, and the fetch never reaches
     // `update_follower_progress`.
     if context.authorization.refuses_every_row() {
-        let output = refused_partition(request.partition, codes::TOPIC_AUTHORIZATION_FAILED);
-        return PendingRead::planned(topic_name, topic_id, request, context.mode, None, output);
+        return refused(codes::TOPIC_AUTHORIZATION_FAILED);
     }
     // A topic that does not resolve is answered before the consumer `Read`
     // gate, on the consumer path and on the follower path.
     if let Some(error_code) = topic_error {
-        let output = refused_partition(request.partition, error_code);
-        return PendingRead::planned(topic_name, topic_id, request, context.mode, None, output);
+        return refused(error_code);
     }
     if context.authorization.refuses_topic(topic_name) {
-        let output = refused_partition(request.partition, codes::TOPIC_AUTHORIZATION_FAILED);
-        return PendingRead::planned(topic_name, topic_id, request, context.mode, None, output);
+        return refused(codes::TOPIC_AUTHORIZATION_FAILED);
     }
     let mut output = PartitionData {
         partition_index: request.partition,
@@ -514,7 +553,10 @@ pub(super) async fn plan_partition_read(
                 ..Default::default()
             };
         }
-        return PendingRead::planned(topic_name, topic_id, request, context.mode, None, output);
+        return (
+            ResponseSlot::Read,
+            PendingRead::planned(topic_name, topic_id, request, context.mode, None, output),
+        );
     }
     let partition = context
         .broker
@@ -559,7 +601,10 @@ pub(super) async fn plan_partition_read(
         )
         .await
     {
-        return PendingRead::planned(topic_name, topic_id, request, context.mode, None, output);
+        return (
+            ResponseSlot::Read,
+            PendingRead::planned(topic_name, topic_id, request, context.mode, None, output),
+        );
     }
     if let Some(partition) = partition.as_ref()
         && context
@@ -578,7 +623,10 @@ pub(super) async fn plan_partition_read(
             codes::KAFKA_STORAGE_ERROR
         };
         let output = refused_read(request.partition, error_code);
-        return PendingRead::planned(topic_name, topic_id, request, context.mode, None, output);
+        return (
+            ResponseSlot::Read,
+            PendingRead::planned(topic_name, topic_id, request, context.mode, None, output),
+        );
     }
     if context.mode.1
         && let Some(partition) = partition.as_ref()
@@ -592,8 +640,23 @@ pub(super) async fn plan_partition_read(
         .await;
     }
     if partition.is_none() || topic_name.is_empty() {
-        let output = refused_partition(request.partition, codes::UNKNOWN_TOPIC_OR_PARTITION);
-        return PendingRead::planned(topic_name, topic_id, request, context.mode, None, output);
+        // Kafka refuses a partition its metadata does not hold before the
+        // read. One the metadata holds but this broker does not host is the
+        // read's own refusal, so it keeps its place among the rows read.
+        let (slot, read) = refused(codes::UNKNOWN_TOPIC_OR_PARTITION);
+        let in_metadata = !topic_name.is_empty()
+            && context
+                .image
+                .partition(topic_name, request.partition)
+                .is_some();
+        return (
+            if in_metadata {
+                ResponseSlot::Read
+            } else {
+                slot
+            },
+            read,
+        );
     }
     // Kafka's `ReplicaManager.findPreferredReadReplica` names a read replica
     // only on the leader.
@@ -631,32 +694,38 @@ pub(super) async fn plan_partition_read(
             output.records = Some(krabka_protocol::records::RecordsPayload::Raw(
                 bytes::Bytes::new(),
             ));
-            return PendingRead {
-                fetch_only_leader,
-                ..PendingRead::planned(
-                    topic_name,
-                    topic_id,
-                    request,
-                    context.mode,
-                    // No `partition`: the read loop skips both the read and
-                    // the long-poll arm for an entry with none.
-                    None,
-                    output,
-                )
-            };
+            return (
+                ResponseSlot::Read,
+                PendingRead {
+                    fetch_only_leader,
+                    ..PendingRead::planned(
+                        topic_name,
+                        topic_id,
+                        request,
+                        context.mode,
+                        // No `partition`: the read loop skips both the read and
+                        // the long-poll arm for an entry with none.
+                        None,
+                        output,
+                    )
+                },
+            );
         }
     }
-    PendingRead {
-        fetch_only_leader,
-        ..PendingRead::planned(
-            topic_name,
-            topic_id,
-            request,
-            context.mode,
-            partition,
-            output,
-        )
-    }
+    (
+        ResponseSlot::Read,
+        PendingRead {
+            fetch_only_leader,
+            ..PendingRead::planned(
+                topic_name,
+                topic_id,
+                request,
+                context.mode,
+                partition,
+                output,
+            )
+        },
+    )
 }
 
 /// The first `Fetch` version that carries client metadata, from which Kafka
@@ -688,11 +757,15 @@ fn is_assigned_follower(
             .is_some_and(|record| record.replicas.contains(&follower))
 }
 
+/// Plan every requested row, and order the plan the way Kafka orders the
+/// response: the rows read first, then the rows refused before the read (see
+/// [`ResponseSlot`]), each in request order. A refused row reads nothing, so
+/// moving it changes no read and no byte budget.
 pub(super) async fn build_pending_reads(
     context: &PendingPlanContext<'_>,
     topics: &[EffectiveTopic],
 ) -> Vec<PendingRead> {
-    let mut pending = Vec::new();
+    let mut pending: Vec<(ResponseSlot, PendingRead)> = Vec::new();
     for topic in topics {
         // Versions 12 and earlier name the topic. A name that does not resolve
         // goes on to the `Read` gate and then to the partition gate, which
@@ -726,7 +799,8 @@ pub(super) async fn build_pending_reads(
             pending.push(plan_partition_read(context, &name, id, error, partition).await);
         }
     }
-    pending
+    pending.sort_by_key(|(slot, _)| *slot);
+    pending.into_iter().map(|(_, read)| read).collect()
 }
 
 #[cfg(test)]
@@ -860,7 +934,7 @@ mod tests {
                 follower_id,
                 follower_broker_epoch: -1,
             };
-            let read =
+            let (_, read) =
                 super::plan_partition_read(&context, TOPIC, super::WireUuid::ZERO, None, &request)
                     .await;
             assert!(read.out == want, "{name}: got {:?}", read.out);
@@ -1032,7 +1106,7 @@ mod tests {
             partition_max_bytes: 1024,
         };
 
-        let read =
+        let (_, read) =
             super::plan_partition_read(&context, "orders", super::WireUuid::ZERO, None, &request)
                 .await;
 

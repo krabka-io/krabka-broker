@@ -1056,7 +1056,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/src/handlers/share_fetch/renew_tests.rs::a_renew_fetch_answers_a_denied_topic_as_an_acknowledge_error",
             "crates/broker/tests/share_consume/lock_lifetime.rs::renew_extends_lock_not_redelivered",
         ],
-        note: "IncrementalAlterConfigs does not accept share.renew.acknowledge.enable yet (#758), and the other validateAcknowledgementBatches rules are open (#724).",
+        note: "IncrementalAlterConfigs does not accept share.renew.acknowledge.enable yet (#758).",
     },
     KipAnnotation {
         key: "KIP-1242",

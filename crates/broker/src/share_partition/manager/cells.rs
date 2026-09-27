@@ -77,7 +77,6 @@ impl SharePartitionLeaderManager {
                     persisted.start_offset,
                     persisted.state_epoch,
                     leader_epoch,
-                    persisted.delivery_complete_count,
                     &persisted.state_batches,
                 );
                 st
@@ -175,6 +174,23 @@ impl SharePartitionLeaderManager {
                 }
             }
         }
+    }
+
+    /// The cached acquisition cell of `(group, topic_id, partition)`, with no
+    /// persister load.
+    ///
+    /// An acknowledgement goes only to a share partition that a fetch on this
+    /// broker loaded: Kafka's `SharePartitionManager.acknowledge` answers
+    /// `UNKNOWN_TOPIC_OR_PARTITION` for one that is not in its cache.
+    pub(crate) fn cached(
+        &self,
+        group: &str,
+        topic_id: uuid::Uuid,
+        partition: i32,
+    ) -> Option<Arc<Mutex<AcquisitionState>>> {
+        self.leaders
+            .get(&(group.to_string(), topic_id, partition))
+            .map(|cell| cell.value().clone())
     }
 
     /// Test-only: borrows the live acquisition cell without a persister load.

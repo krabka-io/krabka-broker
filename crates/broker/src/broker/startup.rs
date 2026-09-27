@@ -294,6 +294,16 @@ impl Broker {
             runtime.supervisor_shutdown.child_token(),
         );
 
+        // Tombstone the share state of every deleted topic, and run the
+        // cold-partition snapshot and the prune of `__share_group_state`, as
+        // Kafka's `ShareCoordinatorService` does.
+        crate::share_coordinator::coordinator::jobs::spawn(
+            Arc::clone(&share_coordinator),
+            controller.watch_image(),
+            config.share_group.enable,
+            runtime.supervisor_shutdown.child_token(),
+        );
+
         // KIP-211. Every broker sweeps the groups whose offsets partition it
         // leads, and the tombstones are idempotent, so the sweep needs no
         // config gate of its own.

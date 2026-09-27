@@ -11,26 +11,54 @@ use super::request::{EffectivePartition, EffectiveTopic};
 use crate::{
     broker::Broker,
     codes,
-    fetch_session::{CachedPartitionState, FetchSessionKey, INVALID_SESSION_ID, SessionDecision},
+    fetch_session::{
+        CachedPartitionState, FIRST_TOPIC_ID_FETCH_VERSION, FetchSessionKey, INVALID_SESSION_ID,
+        SessionDecision,
+    },
 };
 
-pub(super) fn finalize_fetch_session(
-    broker: &Broker,
+/// What a fetch owes the session cache once its response is final.
+///
+/// Kafka's `FetchContext` decides the rows a response carries before the
+/// quota check, and changes the cache only in `updateAndGenerateResponseData`,
+/// which a throttled fetch never reaches. The handler therefore prepares the
+/// session first and commits it only for a response it sends unthrottled.
+pub(super) enum SessionCommit {
+    /// A sessionless fetch: nothing to cache.
+    Sessionless,
+    /// A full fetch that may open a session over these rows.
+    NewSession(Vec<(FetchSessionKey, CachedPartitionState)>),
+    /// An incremental fetch on `session_id` that sent these rows.
+    Incremental {
+        session_id: i32,
+        sent: Vec<(FetchSessionKey, CachedPartitionState)>,
+    },
+}
+
+impl SessionCommit {
+    /// The session id of a throttled response. Kafka's
+    /// `IncrementalFetchContext.getThrottledResponse` keeps the session, and
+    /// every other context answers `INVALID_SESSION_ID`.
+    pub(super) const fn throttled_session_id(&self) -> i32 {
+        match self {
+            Self::Incremental { session_id, .. } => *session_id,
+            Self::Sessionless | Self::NewSession(_) => INVALID_SESSION_ID,
+        }
+    }
+}
+
+/// Decide the rows `responses` carries under the session `decision` and what
+/// the cache owes the fetch. An incremental fetch drops the rows the client
+/// already has.
+pub(super) fn prepare_fetch_session(
     decision: &SessionDecision,
     effective_topics: &[EffectiveTopic],
     responses: &mut Vec<FetchableTopicResponse>,
-    is_follower_fetch: bool,
-    principal_name: &str,
-) -> i32 {
-    let session_id = match decision {
-        SessionDecision::Sessionless => INVALID_SESSION_ID,
+) -> SessionCommit {
+    match decision {
+        SessionDecision::Sessionless => SessionCommit::Sessionless,
         SessionDecision::NewSession => {
-            let snapshot = snapshot_response_state(effective_topics, responses);
-            broker.fetch_session_cache.try_allocate(
-                is_follower_fetch,
-                principal_name.to_owned(),
-                snapshot,
-            )
+            SessionCommit::NewSession(snapshot_response_state(effective_topics, responses))
         }
         SessionDecision::Incremental {
             session_id,
@@ -39,19 +67,43 @@ pub(super) fn finalize_fetch_session(
         } => {
             let cached: std::collections::HashMap<FetchSessionKey, CachedPartitionState> =
                 partitions.iter().cloned().collect();
-            let sent = filter_incremental_response(responses, &cached);
-            broker
-                .fetch_session_cache
-                .finalize_incremental(*session_id, &sent);
-            *session_id
+            SessionCommit::Incremental {
+                session_id: *session_id,
+                sent: filter_incremental_response(responses, &cached),
+            }
         }
         SessionDecision::Error { .. } => unreachable!("returned above"),
+    }
+}
+
+/// Write a sent response's session state into the cache and return the
+/// response's session id.
+pub(super) fn commit_fetch_session(
+    broker: &Broker,
+    commit: SessionCommit,
+    (is_follower_fetch, version): (bool, i16),
+    principal_name: &str,
+) -> i32 {
+    let session_id = match commit {
+        SessionCommit::Sessionless => INVALID_SESSION_ID,
+        SessionCommit::NewSession(snapshot) => broker.fetch_session_cache.try_allocate(
+            is_follower_fetch,
+            version >= FIRST_TOPIC_ID_FETCH_VERSION,
+            principal_name.to_owned(),
+            snapshot,
+        ),
+        SessionCommit::Incremental { session_id, sent } => {
+            broker
+                .fetch_session_cache
+                .finalize_incremental(session_id, &sent);
+            session_id
+        }
     };
     refresh_fetch_session_metrics(broker);
     session_id
 }
 
-fn refresh_fetch_session_metrics(broker: &Broker) {
+pub(super) fn refresh_fetch_session_metrics(broker: &Broker) {
     broker
         .metrics
         .incremental_fetch_sessions
