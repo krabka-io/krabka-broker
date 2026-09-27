@@ -1,7 +1,7 @@
 //! Broker-side heartbeat client. It sends `BrokerHeartbeat` to the
-//! controller leader at every configured `heartbeat_interval`. It finds the
-//! current controller in the metadata image, and it retries after transient
-//! errors.
+//! controller leader at every configured `heartbeat_interval`, over one
+//! connection that it keeps across ticks. It finds the current controller in
+//! the metadata image, and it retries after transient errors.
 //!
 //! KIP-919 puts `BrokerHeartbeat` on the controller's CONTROLLER listener, so
 //! the leader's address is the one the raft transport already dials it on --
@@ -132,8 +132,69 @@ fn trigger_all_dirs_offline_shutdown(cfg: &mut Config, reason: &str) {
     cfg.supervisor_shutdown.cancel();
 }
 
+/// The controller leader, and the controller-listener endpoint the metadata
+/// names for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ControllerAddress {
+    leader: krabka_raft::NodeId,
+    host: String,
+    port: u16,
+}
+
+/// The connection the heartbeats travel on, and the controller it reaches.
+struct ControllerChannel {
+    controller: ControllerAddress,
+    connection: krabka_client_core::Connection,
+}
+
+/// Dials the controller listener of `controller`, with the TLS and SASL that
+/// the listener needs, or gives up after `rpc_timeout`.
+async fn dial(
+    cfg: &Config,
+    controller: &ControllerAddress,
+    rpc_timeout: Time,
+) -> Option<krabka_client_core::Connection> {
+    let opts = heartbeat_connection_options(cfg.broker_id, cfg.interval);
+    let dialled = tokio::time::timeout(
+        rpc_timeout.to_std(),
+        cfg.outbound_client.connect_as_connection(
+            &controller.host,
+            controller.port,
+            cfg.controller_listener_protocol,
+            &cfg.controller_server_name,
+            opts,
+        ),
+    )
+    .await;
+    match dialled {
+        Ok(Ok(connection)) => Some(connection),
+        Ok(Err(error)) => {
+            debug!(%error, "heartbeat: connect failed");
+            None
+        }
+        Err(_) => {
+            debug!(
+                rpc_timeout = %rpc_timeout.human(),
+                "heartbeat: connect timed out"
+            );
+            None
+        }
+    }
+}
+
+/// Sends a `BrokerHeartbeat` to the controller leader at every tick.
+///
+/// Every heartbeat travels on one connection, as Kafka's
+/// `BrokerLifecycleManager` sends them through one
+/// `NodeToControllerChannelManager`. Its `NodeToControllerRequestThread` keeps
+/// one `NetworkClient` connection to the active controller. That connection
+/// closes when it fails, when a heartbeat times out, and when the controller
+/// answers `NOT_CONTROLLER`. A tick that finds no open connection to the
+/// current leader dials one, so a new leader, or a new address for the same
+/// leader, gets a new connection.
 pub(crate) async fn run(mut cfg: Config) {
     let mut tick = tokio::time::interval(cfg.interval.to_std());
+    let mut channel: Option<ControllerChannel> = None;
     loop {
         tokio::select! {
             _ = tick.tick() => {},
@@ -173,38 +234,32 @@ pub(crate) async fn run(mut cfg: Config) {
             );
             continue;
         };
-        let opts = heartbeat_connection_options(cfg.broker_id, cfg.interval);
+        let controller = ControllerAddress {
+            leader: leader_id,
+            host,
+            port,
+        };
         let rpc_timeout = heartbeat_rpc_timeout(cfg.interval);
-        let client_res = tokio::time::timeout(
-            rpc_timeout.to_std(),
-            cfg.outbound_client.connect_as_connection(
-                &host,
-                port,
-                cfg.controller_listener_protocol,
-                &cfg.controller_server_name,
-                opts,
-            ),
-        )
-        .await;
-        let client = match client_res {
-            Ok(Ok(client)) => client,
-            Ok(Err(error)) => {
-                debug!(%error, "heartbeat: connect failed");
-                continue;
-            }
-            Err(_) => {
-                debug!(
-                    rpc_timeout = %rpc_timeout.human(),
-                    "heartbeat: connect timed out"
-                );
-                continue;
+        let open = match channel.take() {
+            Some(open) if open.controller == controller && !open.connection.is_closed() => open,
+            stale => {
+                if let Some(stale) = stale {
+                    stale.connection.close();
+                }
+                let Some(connection) = dial(&cfg, &controller, rpc_timeout).await else {
+                    continue;
+                };
+                ControllerChannel {
+                    controller,
+                    connection,
+                }
             }
         };
         let want_shut_down = *cfg.want_shutdown.borrow_and_update();
         let offline_log_dirs = offline_dir_uuids(&cfg.log_dir_status, &cfg.log_dir_ids);
         let resp = tokio::time::timeout(
             rpc_timeout.to_std(),
-            client.send(heartbeat_request(
+            open.connection.send(heartbeat_request(
                 cfg.broker_id,
                 broker_epoch,
                 cfg.controller.current_metadata_offset(),
@@ -215,6 +270,11 @@ pub(crate) async fn run(mut cfg: Config) {
         .await;
         match resp {
             Ok(Ok(r)) => {
+                if r.error_code == crate::codes::NOT_CONTROLLER {
+                    open.connection.close();
+                } else {
+                    channel = Some(open);
+                }
                 if r.error_code != crate::codes::NONE {
                     warn!(
                         error_code = r.error_code,
@@ -229,11 +289,17 @@ pub(crate) async fn run(mut cfg: Config) {
                     let _ = cfg.should_shutdown.send(true);
                 }
             }
-            Ok(Err(e)) => warn!(error = %e, "heartbeat send failed"),
-            Err(_) => warn!(
-                rpc_timeout = %rpc_timeout.human(),
-                "heartbeat send timed out"
-            ),
+            Ok(Err(e)) => {
+                warn!(error = %e, "heartbeat send failed");
+                open.connection.close();
+            }
+            Err(_) => {
+                warn!(
+                    rpc_timeout = %rpc_timeout.human(),
+                    "heartbeat send timed out"
+                );
+                open.connection.close();
+            }
         }
 
         // KIP-112: re-check after the heartbeat round-trip. This covers the
@@ -251,10 +317,219 @@ pub(crate) async fn run(mut cfg: Config) {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        sync::Mutex,
+        time::{Duration, Instant},
+    };
+
     use assert2::assert;
+    use bytes::BytesMut;
+    use krabka_client_core::{MockBroker, MockReply};
+    use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord};
+    use krabka_protocol::{
+        Encode as _,
+        owned::{
+            api_versions_request,
+            api_versions_response::{ApiVersion, ApiVersionsResponse},
+            broker_heartbeat_request,
+            broker_heartbeat_response::BrokerHeartbeatResponse,
+        },
+    };
     use tempfile::tempdir;
 
     use super::*;
+    use crate::test_support::FakeMetadataSource;
+
+    // How a fake controller answers a heartbeat.
+    #[derive(Debug, Clone, Copy)]
+    enum Answer {
+        // No error.
+        Accept,
+        // `NOT_CONTROLLER`, as a controller that lost the leadership answers.
+        NotController,
+        // No answer, so the heartbeat times out.
+        Silent,
+        // No answer, and the fake closes the connection.
+        Close,
+    }
+
+    #[derive(Debug)]
+    struct Seen {
+        // Every connection starts with one `ApiVersions` exchange, so this
+        // counts the connections the client dialled.
+        connections: usize,
+        heartbeats: usize,
+        next_answer: Answer,
+    }
+
+    // A controller listener that answers `ApiVersions` and `BrokerHeartbeat`.
+    struct FakeController {
+        broker: MockBroker,
+        seen: Arc<Mutex<Seen>>,
+    }
+
+    impl FakeController {
+        async fn start() -> Self {
+            let seen = Arc::new(Mutex::new(Seen {
+                connections: 0,
+                heartbeats: 0,
+                next_answer: Answer::Accept,
+            }));
+            let handled = Arc::clone(&seen);
+            let broker = MockBroker::start_with_replies(move |api_key, version, _, _| {
+                let mut seen = handled.lock().unwrap();
+                let mut body = BytesMut::new();
+                if api_key == api_versions_request::API_KEY {
+                    seen.connections += 1;
+                    ApiVersionsResponse {
+                        api_keys: vec![
+                            ApiVersion {
+                                api_key: api_versions_request::API_KEY,
+                                min_version: 0,
+                                max_version: api_versions_request::MAX_VERSION,
+                                ..Default::default()
+                            },
+                            ApiVersion {
+                                api_key: broker_heartbeat_request::API_KEY,
+                                min_version: 0,
+                                max_version: broker_heartbeat_request::MAX_VERSION,
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    }
+                    .encode(&mut body, version)
+                    .unwrap();
+                    return MockReply::Respond(body.to_vec());
+                }
+                seen.heartbeats += 1;
+                let error_code = match std::mem::replace(&mut seen.next_answer, Answer::Accept) {
+                    Answer::Accept => crate::codes::NONE,
+                    Answer::NotController => crate::codes::NOT_CONTROLLER,
+                    Answer::Silent => return MockReply::Silent,
+                    Answer::Close => return MockReply::Close,
+                };
+                // `BrokerHeartbeat` is flexible, so its response header ends
+                // with an empty tagged-field section.
+                body.extend_from_slice(&[0]);
+                BrokerHeartbeatResponse {
+                    error_code,
+                    ..Default::default()
+                }
+                .encode(&mut body, version)
+                .unwrap();
+                MockReply::Respond(body.to_vec())
+            })
+            .await;
+            Self { broker, seen }
+        }
+
+        fn connections(&self) -> usize {
+            self.seen.lock().unwrap().connections
+        }
+
+        fn heartbeats(&self) -> usize {
+            self.seen.lock().unwrap().heartbeats
+        }
+
+        fn answer_next(&self, answer: Answer) {
+            self.seen.lock().unwrap().next_answer = answer;
+        }
+
+        // Waits until the fake has seen `more` heartbeats after the ones it
+        // has seen already.
+        async fn wait_for_heartbeats(&self, more: usize) {
+            let target = self.heartbeats() + more;
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while self.heartbeats() < target {
+                assert!(Instant::now() < deadline, "no heartbeat #{target} in 10s");
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }
+    }
+
+    // Kafka's `NodeToControllerRequestThread` keeps one connection to the
+    // active controller. It closes it when it fails, when a request times out
+    // and when the controller answers `NOT_CONTROLLER`, and the next request
+    // goes to the controller the metadata names then.
+    #[tokio::test]
+    async fn heartbeats_share_one_connection_until_it_breaks_or_the_leader_moves() {
+        let first = FakeController::start().await;
+        let second = FakeController::start().await;
+        let dials = || (first.connections(), second.connections());
+        let source = Arc::new(
+            FakeMetadataSource::builder()
+                .records(&[MetadataRecord::V1BrokerRegistration(
+                    BrokerRegistrationRecord {
+                        node_id: krabka_raft::NodeId(7),
+                        broker_epoch: 11,
+                        incarnation_id: uuid::Uuid::nil(),
+                        host: "localhost".into(),
+                        port: 9092,
+                        rack: None,
+                        endpoints: vec![],
+                        log_dirs: vec![],
+                        fenced: false,
+                        in_controlled_shutdown: false,
+                        cordoned_log_dirs: None,
+                        features: std::collections::BTreeMap::new(),
+                    },
+                )])
+                .leader(Some(krabka_raft::NodeId(1)))
+                .build(),
+        );
+        let no_dirs: Vec<std::path::PathBuf> = Vec::new();
+        let (_want_shutdown, want_shutdown) = tokio::sync::watch::channel(false);
+        let shutdown = CancellationToken::new();
+        let heartbeats = tokio::spawn(run(Config {
+            broker_id: 7,
+            interval: millis(20),
+            controller: Arc::clone(&source) as Arc<dyn crate::metadata_source::MetadataSource>,
+            shutdown: shutdown.clone(),
+            outbound_client: Arc::new(crate::network::client::InterBrokerClient::new(None, None)),
+            controller_listener_protocol: ListenerProtocol::Plaintext,
+            controller_server_name: "localhost".into(),
+            controller_quorum_voters: vec![
+                (krabka_raft::NodeId(1), first.broker.addr.to_string()),
+                (krabka_raft::NodeId(2), second.broker.addr.to_string()),
+            ],
+            want_shutdown,
+            should_shutdown: Arc::new(tokio::sync::watch::channel(false).0),
+            log_dir_status: crate::log_dir_status::LogDirRegistry::probe(&no_dirs),
+            log_dir_ids: crate::log_dir_id::LogDirIds::resolve(&no_dirs),
+            all_log_dirs: no_dirs.clone(),
+            supervisor_shutdown: CancellationToken::new(),
+        }));
+
+        // The dials each fake has taken after each step, compared at the end.
+        first.wait_for_heartbeats(5).await;
+        let mut dialled = vec![("five heartbeats", dials())];
+        for (step, answer) in [
+            ("a closed connection", Answer::Close),
+            ("a heartbeat that timed out", Answer::Silent),
+            ("NOT_CONTROLLER", Answer::NotController),
+        ] {
+            first.answer_next(answer);
+            first.wait_for_heartbeats(3).await;
+            dialled.push((step, dials()));
+        }
+        source.set_leader(Some(krabka_raft::NodeId(2)));
+        second.wait_for_heartbeats(3).await;
+        dialled.push(("a new leader", dials()));
+        shutdown.cancel();
+        heartbeats.await.unwrap();
+
+        assert!(
+            dialled
+                == vec![
+                    ("five heartbeats", (1, 0)),
+                    ("a closed connection", (2, 0)),
+                    ("a heartbeat that timed out", (3, 0)),
+                    ("NOT_CONTROLLER", (4, 0)),
+                    ("a new leader", (4, 1)),
+                ]
+        );
+    }
 
     #[test]
     fn offline_dir_uuids_maps_offline_paths() {
