@@ -511,6 +511,7 @@ mod tests {
             // correctly reap the offset this test is about.
             commit_timestamp_ms: crate::time_util::now_ms(),
             expire_timestamp_ms: None,
+            topic_id: None,
         };
         part.produce_batch(RecordBatch {
             producer_id: 91,
@@ -605,6 +606,7 @@ mod tests {
                         metadata: "txn".into(),
                         commit_timestamp_ms: 123,
                         expire_timestamp_ms: None,
+                        topic_id: None,
                     }
                     .encode_value(),
                 ),
@@ -726,6 +728,7 @@ mod tests {
                     metadata: "txn".into(),
                     commit_timestamp_ms: 123,
                     expire_timestamp_ms: None,
+                    topic_id: None,
                 }
                 .encode_value(),
             ),

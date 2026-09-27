@@ -75,17 +75,10 @@ fn scan_pending_offset_entries(
                     } = parse_key(key)?
                     {
                         let value = OffsetCommitValue::decode_value(value)?;
-                        offsets.entry(group_id).or_default().push((
-                            (topic, partition),
-                            OffsetEntry {
-                                offset: value.offset,
-                                leader_epoch: value.leader_epoch,
-                                metadata: value.metadata,
-                                commit_timestamp_ms: value.commit_timestamp_ms,
-                                expire_timestamp_ms: value.expire_timestamp_ms,
-                                topic_id: None,
-                            },
-                        ));
+                        offsets
+                            .entry(group_id)
+                            .or_default()
+                            .push(((topic, partition), OffsetEntry::from(value)));
                     }
                 }
             }
@@ -262,6 +255,7 @@ mod tests {
                     metadata: String::new(),
                     commit_timestamp_ms: 0,
                     expire_timestamp_ms: None,
+                    topic_id: None,
                 }
                 .encode_value(),
             ),

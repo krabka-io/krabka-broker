@@ -79,6 +79,7 @@ pub(super) async fn append_txn_batch(
                 // version, so a transactional commit always takes the
                 // broker-wide retention.
                 expire_timestamp_ms: None,
+                topic_id: None,
             };
             batch.records.push(Record {
                 offset_delta: delta,

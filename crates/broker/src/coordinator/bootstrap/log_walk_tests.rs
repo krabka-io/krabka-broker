@@ -57,6 +57,7 @@ async fn replay_records_walks_all_batches() {
                 metadata: String::new(),
                 commit_timestamp_ms: 0,
                 expire_timestamp_ms: None,
+                topic_id: None,
             }
             .encode_value(),
         ),
@@ -135,6 +136,7 @@ fn replay_applies_only_committed_transactional_offsets() {
                 metadata: String::new(),
                 commit_timestamp_ms: 0,
                 expire_timestamp_ms: None,
+                topic_id: None,
             }
             .encode_value(),
         ),
@@ -208,6 +210,7 @@ async fn replay_carries_an_open_transactions_offsets_forward_as_pending() {
                     metadata: String::new(),
                     commit_timestamp_ms: 0,
                     expire_timestamp_ms: None,
+                    topic_id: None,
                 }
                 .encode_value(),
             ),
@@ -347,6 +350,7 @@ fn replay_honours_offset_and_group_tombstones() {
                 metadata: String::new(),
                 commit_timestamp_ms: 0,
                 expire_timestamp_ms: None,
+                topic_id: None,
             }
             .encode_value(),
         ),
@@ -464,6 +468,7 @@ async fn a_fully_reaped_group_does_not_come_back_after_replay() {
                     metadata: String::new(),
                     commit_timestamp_ms: 0,
                     expire_timestamp_ms: None,
+                    topic_id: None,
                 }
                 .encode_value(),
             ),
@@ -486,4 +491,74 @@ async fn a_fully_reaped_group_does_not_come_back_after_replay() {
 
     finalize(&coordinator, replayed).await;
     check!(coordinator.find("reaped").is_none());
+}
+
+/// #987: a replayed offset keeps the topic id its version 4 record carries,
+/// as Kafka's `OffsetAndMetadata.fromRecord` does, so a restarted coordinator
+/// still tells the offsets of a re-created topic apart. A version 1 record,
+/// written for a per-commit expiry, carries none.
+#[tokio::test]
+async fn replay_keeps_the_committed_topic_id() {
+    use krabka_log::Offset;
+    use krabka_protocol::records::Record;
+
+    use crate::coordinator::unified::{
+        GroupCoordinator, classic_state::OffsetEntry, offsets_log::fake::InMemoryOffsetsLog,
+        reconciler::ReconcileInput,
+    };
+
+    #[derive(Debug)]
+    struct EmptyMeta;
+    impl crate::coordinator::unified::actor::MetadataProvider for EmptyMeta {
+        fn snapshot(&self) -> ReconcileInput {
+            ReconcileInput::default()
+        }
+    }
+
+    let coord = Arc::new(GroupCoordinator::new(
+        crate::coordinator::unified::config::NextGenConfig::default(),
+        crate::coordinator::unified::share::config::ShareGroupConfig::default(),
+        Arc::new(EmptyMeta),
+        Arc::new(InMemoryOffsetsLog::default()),
+        crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+    ));
+    let topic_id = uuid::Uuid::from_u128(0xABCD);
+    let entry = |offset: i64, expire_timestamp_ms, topic_id| OffsetEntry {
+        offset: Offset(offset),
+        leader_epoch: -1,
+        metadata: String::new(),
+        commit_timestamp_ms: 0,
+        expire_timestamp_ms,
+        topic_id,
+    };
+    let record = |partition: i32, delta: i32, entry: &OffsetEntry| Record {
+        offset_delta: delta,
+        key: Some(OffsetCommitValue::encode_key("g", "t", partition)),
+        value: Some(OffsetCommitValue::from(entry).encode_value()),
+        ..Default::default()
+    };
+
+    let dir = tempdir().unwrap();
+    let mut log = krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();
+    let mut batch = RecordBatch {
+        last_offset_delta: 1,
+        ..RecordBatch::default()
+    };
+    batch
+        .records
+        .push(record(0, 0, &entry(10, None, Some(topic_id))));
+    batch
+        .records
+        .push(record(1, 1, &entry(11, Some(9_000), Some(topic_id))));
+    log.append(&mut batch).unwrap();
+
+    let replayed = replay_records(&log, &coord).unwrap();
+
+    check!(
+        replayed.committed.get("g")
+            == Some(&std::collections::HashMap::from([
+                (("t".to_string(), 0), entry(10, None, Some(topic_id))),
+                (("t".to_string(), 1), entry(11, Some(9_000), None)),
+            ]))
+    );
 }

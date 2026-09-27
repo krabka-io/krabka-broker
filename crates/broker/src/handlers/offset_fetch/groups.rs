@@ -209,7 +209,13 @@ fn group_named_topics(
             .iter()
             .map(|&partition| match refusal {
                 Some(error_code) => missing_offset_row(partition, error_code),
-                None => committed_row(name, partition, offsets, require_stable),
+                None => committed_row(
+                    name,
+                    partition,
+                    use_topic_ids.then(|| uuid::Uuid::from_bytes(topic.topic_id.0)),
+                    offsets,
+                    require_stable,
+                ),
             });
         let row = OffsetFetchResponseTopics {
             name: name.clone(),
@@ -250,7 +256,13 @@ fn group_fetch_all(
         by_topic
             .entry(topic.as_str())
             .or_default()
-            .push(committed_row(topic, *partition, offsets, require_stable));
+            .push(committed_row(
+                topic,
+                *partition,
+                None,
+                offsets,
+                require_stable,
+            ));
     }
     let decisions = authorize_topics(
         broker.config.authorizer.as_ref(),
@@ -281,10 +293,19 @@ fn group_fetch_all(
         .collect()
 }
 
-/// The row of one partition of an allowed topic.
+/// One partition row of a named topic, as Kafka's
+/// `OffsetMetadataManager.fetchOffsets` builds it: `UNSTABLE_OFFSET_COMMIT`
+/// under `require_stable` while a transaction holds the partition, then the
+/// committed offset, or a -1 row when there is none or when it belongs to
+/// another incarnation of the topic.
+///
+/// `requested_topic_id` is the id a v10+ request named the topic by; earlier
+/// versions name it by name only, and so does the fetch-all path, as Kafka's
+/// request carries the zero id there.
 fn committed_row(
     topic: &str,
     partition_index: i32,
+    requested_topic_id: Option<uuid::Uuid>,
     offsets: &GroupOffsets,
     require_stable: bool,
 ) -> OffsetFetchResponsePartitions {
@@ -292,17 +313,28 @@ fn committed_row(
     if require_stable && offsets.pending_txn.contains(&key) {
         return unstable::group_row(partition_index);
     }
-    offsets.committed.get(&key).map_or_else(
-        || missing_offset_row(partition_index, codes::NONE),
-        |entry| OffsetFetchResponsePartitions {
-            partition_index,
-            committed_offset: entry.offset.0,
-            committed_leader_epoch: entry.leader_epoch,
-            metadata: Some(entry.metadata.clone()),
-            error_code: codes::NONE,
-            ..Default::default()
-        },
-    )
+    offsets
+        .committed
+        .get(&key)
+        .filter(|entry| !is_mismatched_topic_id(entry.topic_id, requested_topic_id))
+        .map_or_else(
+            || missing_offset_row(partition_index, codes::NONE),
+            |entry| OffsetFetchResponsePartitions {
+                partition_index,
+                committed_offset: entry.offset.0,
+                committed_leader_epoch: entry.leader_epoch,
+                metadata: Some(entry.metadata.clone()),
+                error_code: codes::NONE,
+                ..Default::default()
+            },
+        )
+}
+
+/// Kafka's `OffsetMetadataManager.isMismatchedTopicId`: an offset stored for
+/// one topic id is not the offset of a topic named by another. A zero id on
+/// either side, `None` here, matches anything.
+fn is_mismatched_topic_id(stored: Option<uuid::Uuid>, requested: Option<uuid::Uuid>) -> bool {
+    matches!((stored, requested), (Some(stored), Some(requested)) if stored != requested)
 }
 
 /// A partition row that carries no committed offset.
@@ -320,5 +352,59 @@ fn missing_offset_row(partition_index: i32, error_code: i16) -> OffsetFetchRespo
         metadata: Some(String::new()),
         error_code,
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::check;
+
+    use super::*;
+    use crate::coordinator::unified::classic_state::OffsetEntry;
+
+    /// #987, Kafka's `isOffsetInvalid`: an `OffsetFetch` that names the topic
+    /// by an id other than the one the offset was committed under reads no
+    /// offset, as for a topic created again under the same name. A zero id on
+    /// either side, a pre-v10 request or a record from before version 4,
+    /// never mismatches.
+    #[test]
+    fn an_offset_of_another_topic_id_reads_as_absent() {
+        let committed_id = uuid::Uuid::from_u128(1);
+        let other_id = uuid::Uuid::from_u128(2);
+        let offsets = |topic_id| GroupOffsets {
+            committed: std::collections::HashMap::from([(
+                ("orders".to_string(), 0),
+                OffsetEntry {
+                    offset: krabka_log::Offset(7),
+                    leader_epoch: 3,
+                    metadata: "m".into(),
+                    commit_timestamp_ms: 0,
+                    expire_timestamp_ms: None,
+                    topic_id,
+                },
+            )]),
+            pending_txn: std::collections::HashSet::new(),
+        };
+        let found = OffsetFetchResponsePartitions {
+            partition_index: 0,
+            committed_offset: 7,
+            committed_leader_epoch: 3,
+            metadata: Some("m".into()),
+            error_code: codes::NONE,
+            ..Default::default()
+        };
+        let absent = missing_offset_row(0, codes::NONE);
+        for (stored, requested, want) in [
+            (Some(committed_id), Some(committed_id), &found),
+            (Some(committed_id), Some(other_id), &absent),
+            (Some(committed_id), None, &found),
+            (None, Some(other_id), &found),
+            (None, None, &found),
+        ] {
+            check!(
+                committed_row("orders", 0, requested, &offsets(stored), false) == *want,
+                "stored {stored:?}, requested {requested:?}"
+            );
+        }
     }
 }

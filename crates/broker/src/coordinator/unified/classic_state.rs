@@ -40,12 +40,14 @@ pub struct OffsetEntry {
     /// `offsets.retention.minutes` instead.
     pub expire_timestamp_ms: Option<i64>,
     /// The topic id the metadata image held for the topic name when the
-    /// offset was committed, as Kafka's `OffsetAndMetadata.topicId` does.
-    /// `None` when the image did not know the topic, and for an offset
-    /// replayed from the log or published by a transaction marker, which
-    /// carry no topic id. A topic deletion removes an offset whose id is
-    /// `None` or the deleted id, so an offset committed to a topic created
-    /// again with the same name survives the deletion of the old one.
+    /// offset was committed, as Kafka's `OffsetAndMetadata.topicId` does. The
+    /// `OffsetCommitValue` record carries it from version 4, so a replayed or
+    /// transaction-published offset keeps it too. `None` is Kafka's zero id:
+    /// the image did not know the topic, or the record predates version 4.
+    /// A topic deletion removes an offset whose id is `None` or the deleted
+    /// id, so an offset committed to a topic created again with the same name
+    /// survives the deletion of the old one, and an `OffsetFetch` that names
+    /// another topic id does not see it.
     pub topic_id: Option<uuid::Uuid>,
 }
 
