@@ -269,7 +269,7 @@ mod tests {
             let image = image_with_topic(TOPIC, 8);
             coordinator.lead_all_partitions_for_test().await;
             coordinator
-                .initialize("share-group", TOPIC, 4, 17, Offset(90))
+                .initialize(&image, "share-group", TOPIC, 4, 17, Offset(90))
                 .await
                 .expect("initialize state");
             coordinator

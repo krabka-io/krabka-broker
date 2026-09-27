@@ -189,8 +189,14 @@ async fn share_fetch(
     let response = handle(&shared, version, 7, &request_bytes, &ctx)
         .await
         .expect("handle share fetch");
-    let mut response: ShareFetchResponse = decode_response(&response, version);
-    response.responses.remove(0).partitions.remove(0)
+    let response: ShareFetchResponse = decode_response(&response, version);
+    // An incremental response leaves out a partition with nothing new.
+    response
+        .responses
+        .first()
+        .and_then(|topic| topic.partitions.first())
+        .cloned()
+        .unwrap_or_default()
 }
 
 /// Sends a `ShareAcknowledge` that accepts `[first, last]` on partition 0 of
@@ -299,7 +305,14 @@ async fn a_fenced_state_write_fails_the_acknowledgement_and_drops_the_partition(
             .state_epoch;
         shared
             .share_coordinator
-            .initialize(&name, topic_uuid(topic_id), 0, state_epoch + 1, Offset(0))
+            .initialize(
+                &shared.controller.current_image(),
+                &name,
+                topic_uuid(topic_id),
+                0,
+                state_epoch + 1,
+                Offset(0),
+            )
             .await
             .expect("raise the state epoch");
 
@@ -389,7 +402,10 @@ async fn state_topic_led_by_an_unknown_broker(broker: &BrokerHandle) {
 /// A state read that no coordinator can serve fails the partition with
 /// `COORDINATOR_NOT_AVAILABLE`, which is what Kafka's `fetchPersisterError`
 /// gives for the coordinator errors. The broker caches nothing, so a later
-/// request reads again. The partition never starts from a guessed offset.
+/// request reads again. The partition never starts from a guessed offset. An
+/// acknowledgement for the partition then finds nothing cached and answers
+/// `UNKNOWN_TOPIC_OR_PARTITION`, as Kafka's `SharePartitionManager.acknowledge`
+/// does, without reading the state.
 #[tokio::test]
 async fn a_failed_state_read_fails_the_partition_and_caches_nothing() {
     let (broker, _dir) = start().await;
@@ -416,7 +432,7 @@ async fn a_failed_state_read_fails_the_partition_and_caches_nothing() {
             (acknowledge, acknowledge_cached)
         ) == (
             (codes::COORDINATOR_NOT_AVAILABLE, Vec::new(), false),
-            (codes::COORDINATOR_NOT_AVAILABLE, false)
+            (codes::UNKNOWN_TOPIC_OR_PARTITION, false)
         )
     );
     broker.shutdown().await;

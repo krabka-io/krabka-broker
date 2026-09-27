@@ -7,37 +7,43 @@
 //! into a terminal state on a consumer's word, and so the only place the
 //! delivery-complete accounting grows outside an internal archive.
 
-use std::time::Instant;
-
 use krabka_log::Offset;
 
-use super::{AckType, AcquisitionState, RecordState, clamp_i32};
+use super::{AckType, AcquisitionState, RecordState, clamp_i32, window::give_back};
 
 impl AcquisitionState {
     /// Acknowledges the offset range `[first, last]` that `member` acquired
     /// earlier.
     ///
-    /// `member` must currently hold the whole range as `Acquired`. If it does
-    /// not, this method returns `Err(INVALID_RECORD_STATE)`. It splits the
-    /// range into its own batches at the boundaries, then applies the
-    /// acknowledgement. `Accept` gives Acknowledged. `Release` gives
+    /// A range below the SPSO is already done, and a range that starts below
+    /// it is cut there, as `ack_bounds` says. `member`
+    /// must currently hold the rest of the range as `Acquired`. The method
+    /// splits the range into its own batches at the boundaries, then applies
+    /// the acknowledgement. `Accept` gives Acknowledged. `Release` gives
     /// Available, clears the lock and the owner, and keeps `delivery_count`
-    /// for redelivery. `Reject` and `Gap` give Archived. The method then
-    /// advances the SPSO over any new terminal prefix and marks the state
-    /// dirty.
+    /// for redelivery, unless the count has reached `max_attempts`: then the
+    /// records are archived at once, as Kafka's `InFlightState.tryUpdateState`
+    /// does. `Reject` and `Gap` give Archived. The method then advances the
+    /// SPSO over any new terminal prefix and marks the state dirty.
+    ///
     /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
+    ///
+    /// `INVALID_REQUEST` for a range past the records ever handed out, and
+    /// `INVALID_RECORD_STATE` for a range that `member` does not hold.
     pub fn acknowledge(
         &mut self,
         member: &str,
         first: Offset,
         last: Offset,
         ack: AckType,
-        _now: Instant,
+        max_attempts: i16,
     ) -> Result<(), i16> {
         if first > last {
             return Err(crate::codes::INVALID_RECORD_STATE);
         }
+        let Some((first, last)) = self.ack_bounds(first, last)? else {
+            return Ok(());
+        };
         // Validate the entire range is Acquired by this member.
         if !self.range_acquired_by(member, first, last) {
             return Err(crate::codes::INVALID_RECORD_STATE);
@@ -61,10 +67,8 @@ impl AcquisitionState {
                     self.delivery_complete_count += n;
                 }
                 AckType::Release => {
-                    b.state = RecordState::Available;
-                    b.acquired_by = None;
-                    b.lock_deadline = None;
                     // delivery_count retained: next acquire redelivers at +1.
+                    give_back(b, max_attempts, &mut self.delivery_complete_count);
                 }
                 AckType::Reject | AckType::Gap => {
                     b.state = RecordState::Archived;
@@ -102,7 +106,7 @@ mod tests {
                 delivery_count: 1
             }]
         );
-        s.acknowledge("m1", Offset(0), Offset(4), AckType::Accept, t0())
+        s.acknowledge("m1", Offset(0), Offset(4), AckType::Accept, 5)
             .unwrap();
         assert!(s.start_offset == 5);
     }
@@ -112,7 +116,7 @@ mod tests {
         let mut s = AcquisitionState::new(Offset(0));
         s.materialize(Offset(3), 100);
         let _ = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
-        s.acknowledge("m1", Offset(0), Offset(2), AckType::Release, t0())
+        s.acknowledge("m1", Offset(0), Offset(2), AckType::Release, 5)
             .unwrap();
         let acq2 = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         assert!(acq2[0].delivery_count == 2);
@@ -127,11 +131,11 @@ mod tests {
         let acq = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         assert!(acq.len() == 1);
         // Accept only [0,3]; [4,9] remain Acquired.
-        s.acknowledge("m1", Offset(0), Offset(3), AckType::Accept, t0())
+        s.acknowledge("m1", Offset(0), Offset(3), AckType::Accept, 5)
             .unwrap();
         assert!(s.start_offset == 4);
         // The remaining acquired range can still be acknowledged.
-        s.acknowledge("m1", Offset(4), Offset(9), AckType::Accept, t0())
+        s.acknowledge("m1", Offset(4), Offset(9), AckType::Accept, 5)
             .unwrap();
         assert!(s.start_offset == 10);
     }
@@ -141,7 +145,7 @@ mod tests {
         let mut s = AcquisitionState::new(Offset(0));
         s.materialize(Offset(3), 100);
         let _ = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
-        s.acknowledge("m1", Offset(0), Offset(2), AckType::Reject, t0())
+        s.acknowledge("m1", Offset(0), Offset(2), AckType::Reject, 5)
             .unwrap();
         assert!(s.start_offset == 3); // archived prefix dropped
         let acq = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
@@ -153,12 +157,13 @@ mod tests {
         let mut s = AcquisitionState::new(Offset(0));
         s.materialize(Offset(2), 100);
         let _ = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
-        s.acknowledge("m1", Offset(0), Offset(1), AckType::Gap, t0())
+        s.acknowledge("m1", Offset(0), Offset(1), AckType::Gap, 5)
             .unwrap();
         assert!(s.start_offset == 2);
         let (_start, dcc, batches) = s.to_persist_batches();
         assert!(batches.is_empty()); // archived prefix dropped from window
-        assert!(dcc == 2); // both offsets reached a terminal state
+        // Both offsets became terminal, then left the window with the SPSO.
+        assert!(dcc == 0);
     }
 
     #[test]
@@ -166,7 +171,7 @@ mod tests {
         let mut s = AcquisitionState::new(Offset(0));
         s.materialize(Offset(3), 100);
         let _ = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
-        let err = s.acknowledge("m2", Offset(0), Offset(2), AckType::Accept, t0());
+        let err = s.acknowledge("m2", Offset(0), Offset(2), AckType::Accept, 5);
         assert!(err == Err(crate::codes::INVALID_RECORD_STATE));
     }
 }

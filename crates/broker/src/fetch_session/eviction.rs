@@ -38,6 +38,7 @@ impl FetchSessionCache {
     pub fn try_allocate(
         &self,
         privileged: bool,
+        uses_topic_ids: bool,
         creator_principal: String,
         partitions: Vec<(FetchSessionKey, CachedPartitionState)>,
     ) -> FetchSessionId {
@@ -96,6 +97,7 @@ impl FetchSessionCache {
             // allocation must carry the epoch after INITIAL (i.e. 1).
             next_epoch: next_epoch(INITIAL_EPOCH),
             privileged,
+            uses_topic_ids,
             creator_principal,
             partitions,
         };
@@ -119,14 +121,14 @@ mod tests {
     use super::*;
     use crate::fetch_session::{
         SessionDecision,
-        test_support::{TICK, manual_cache, req},
+        test_support::{NAME_FETCH_VERSION, TICK, manual_cache, req},
     };
 
     #[test]
     fn allocate_returns_nonzero_monotonic_ids() {
         let cache = FetchSessionCache::new(10);
-        let a = cache.try_allocate(false, "alice".into(), vec![]);
-        let b = cache.try_allocate(false, "alice".into(), vec![]);
+        let a = cache.try_allocate(false, false, "alice".into(), vec![]);
+        let b = cache.try_allocate(false, false, "alice".into(), vec![]);
         // Id allocation starts at 1 and increments monotonically.
         check!(a == 1);
         check!(b == 2);
@@ -138,17 +140,17 @@ mod tests {
         let cache = FetchSessionCache::new(10);
         // Force the next id to be 0 — the loop should skip and start from 1.
         cache.next_id.store(0, Ordering::Relaxed);
-        let id = cache.try_allocate(false, "alice".into(), vec![]);
+        let id = cache.try_allocate(false, false, "alice".into(), vec![]);
         assert!(id > 0);
     }
 
     #[test]
     fn allocate_skips_existing_session_id_collision() {
         let cache = FetchSessionCache::new(10);
-        let first = cache.try_allocate(false, "alice".into(), vec![]);
+        let first = cache.try_allocate(false, false, "alice".into(), vec![]);
 
         cache.next_id.store(first, Ordering::Relaxed);
-        let second = cache.try_allocate(false, "bob".into(), vec![]);
+        let second = cache.try_allocate(false, false, "bob".into(), vec![]);
 
         assert!(second == first + 1);
         assert!(cache.len() == 2);
@@ -157,20 +159,20 @@ mod tests {
     #[test]
     fn allocate_returns_zero_when_max_slots_zero() {
         let cache = FetchSessionCache::new(0);
-        let id = cache.try_allocate(false, "alice".into(), vec![]);
+        let id = cache.try_allocate(false, false, "alice".into(), vec![]);
         assert!(id == INVALID_SESSION_ID);
     }
 
     #[test]
     fn lru_eviction_drops_oldest_non_privileged() {
         let (cache, clock) = manual_cache(2);
-        let a = cache.try_allocate(false, "a".into(), vec![]);
+        let a = cache.try_allocate(false, false, "a".into(), vec![]);
         // Advance logical time so each session gets a strictly increasing
         // recency stamp, making `a` the unambiguous LRU victim — no sleep.
         clock.advance(TICK).expect("manual time moves forward");
-        let b = cache.try_allocate(false, "b".into(), vec![]);
+        let b = cache.try_allocate(false, false, "b".into(), vec![]);
         clock.advance(TICK).expect("manual time moves forward");
-        let c = cache.try_allocate(false, "c".into(), vec![]);
+        let c = cache.try_allocate(false, false, "c".into(), vec![]);
         assert!(cache.len() == 2);
         assert!(cache.evictions_total() == 1);
         // `a` (oldest) was evicted; `b` and `c` remain.
@@ -183,10 +185,10 @@ mod tests {
     #[test]
     fn non_privileged_cannot_evict_privileged() {
         let cache = FetchSessionCache::new(1);
-        let p = cache.try_allocate(true, "follower".into(), vec![]);
+        let p = cache.try_allocate(true, false, "follower".into(), vec![]);
         assert!(p > 0);
         // Cache full, only session is privileged. Consumer alloc refused.
-        let c = cache.try_allocate(false, "consumer".into(), vec![]);
+        let c = cache.try_allocate(false, false, "consumer".into(), vec![]);
         check!(c == INVALID_SESSION_ID);
         check!(cache.evictions_total() == 0);
         check!(cache.len() == 1);
@@ -195,10 +197,10 @@ mod tests {
     #[test]
     fn privileged_can_evict_privileged() {
         let (cache, clock) = manual_cache(1);
-        let p1 = cache.try_allocate(true, "f1".into(), vec![]);
+        let p1 = cache.try_allocate(true, false, "f1".into(), vec![]);
         // Advance so `f2` is strictly newer than `f1`; `f1` is the LRU victim.
         clock.advance(TICK).expect("manual time moves forward");
-        let p2 = cache.try_allocate(true, "f2".into(), vec![]);
+        let p2 = cache.try_allocate(true, false, "f2".into(), vec![]);
         // p2 gets the next monotonic id (p1 + 1) after evicting p1.
         check!(p2 == p1 + 1);
         check!(cache.len() == 1);
@@ -231,19 +233,19 @@ mod tests {
             )
         };
         let (cache, clock) = manual_cache(2);
-        let refetched = cache.try_allocate(false, "refetched".into(), vec![mk(0)]);
+        let refetched = cache.try_allocate(false, false, "refetched".into(), vec![mk(0)]);
         clock.advance(TICK).expect("manual time moves forward");
-        let idle = cache.try_allocate(false, "idle".into(), vec![mk(0)]);
+        let idle = cache.try_allocate(false, false, "idle".into(), vec![mk(0)]);
 
         clock.advance(TICK).expect("manual time moves forward");
         let incremental = req(refetched, 1, vec![], vec![]);
         assert!(matches!(
-            cache.classify(&incremental),
+            cache.classify(&incremental, NAME_FETCH_VERSION),
             SessionDecision::Incremental { .. }
         ));
 
         clock.advance(TICK).expect("manual time moves forward");
-        let newcomer = cache.try_allocate(false, "newcomer".into(), vec![]);
+        let newcomer = cache.try_allocate(false, false, "newcomer".into(), vec![]);
         check!(cache.evictions_total() == 1);
         let guard = cache.inner.lock().unwrap();
         let mut ids: Vec<i32> = guard.sessions.keys().copied().collect();
@@ -259,11 +261,11 @@ mod tests {
         let cases = [("follower is older", true), ("consumer is older", false)];
         for (label, follower_first) in cases {
             let (cache, clock) = manual_cache(2);
-            let first = cache.try_allocate(follower_first, "first".into(), vec![]);
+            let first = cache.try_allocate(follower_first, false, "first".into(), vec![]);
             clock.advance(TICK).expect("manual time moves forward");
-            let second = cache.try_allocate(!follower_first, "second".into(), vec![]);
+            let second = cache.try_allocate(!follower_first, false, "second".into(), vec![]);
             clock.advance(TICK).expect("manual time moves forward");
-            let third = cache.try_allocate(true, "follower".into(), vec![]);
+            let third = cache.try_allocate(true, false, "follower".into(), vec![]);
 
             check!(cache.evictions_total() == 1, "{label}");
             let g = cache.inner.lock().unwrap();
@@ -281,15 +283,15 @@ mod tests {
         // session as the oldest and the next allocation into a full cache
         // would go looking for a session that is no longer there.
         let (cache, clock) = manual_cache(2);
-        let closed = cache.try_allocate(false, "closed".into(), vec![]);
+        let closed = cache.try_allocate(false, false, "closed".into(), vec![]);
         clock.advance(TICK).expect("manual time moves forward");
-        let oldest_live = cache.try_allocate(false, "oldest-live".into(), vec![]);
+        let oldest_live = cache.try_allocate(false, false, "oldest-live".into(), vec![]);
         cache.close(closed);
 
         clock.advance(TICK).expect("manual time moves forward");
-        let refill = cache.try_allocate(false, "refill".into(), vec![]);
+        let refill = cache.try_allocate(false, false, "refill".into(), vec![]);
         clock.advance(TICK).expect("manual time moves forward");
-        let newcomer = cache.try_allocate(false, "newcomer".into(), vec![]);
+        let newcomer = cache.try_allocate(false, false, "newcomer".into(), vec![]);
 
         // The cache refilled to {oldest_live, refill}; `newcomer` displaced
         // `oldest_live`, the oldest session that is still there.
@@ -313,11 +315,11 @@ mod tests {
                 CachedPartitionState::default(),
             )
         };
-        cache.try_allocate(false, "a".into(), vec![mk(0), mk(1)]);
+        cache.try_allocate(false, false, "a".into(), vec![mk(0), mk(1)]);
         assert!(cache.total_partitions_cached() == 2);
         // Allocating into the full cache evicts the lone session (2 parts)
         // and inserts a fresh one (1 part).
-        cache.try_allocate(false, "b".into(), vec![mk(0)]);
+        cache.try_allocate(false, false, "b".into(), vec![mk(0)]);
         assert!(cache.len() == 1);
         assert!(cache.total_partitions_cached() == 1);
     }

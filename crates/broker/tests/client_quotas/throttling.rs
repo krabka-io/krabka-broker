@@ -427,6 +427,16 @@ async fn consumer_byte_rate_throttles_fetch() {
         "expected consumer throttle_time_ms > 0, got {}",
         fetch_resp.throttle_time_ms
     );
+    // Kafka answers a throttled consumer fetch with an empty response: no
+    // rows, no error, and no session (`FetchContext.getThrottledResponse`).
+    // The client did not get the records, so its position does not move.
+    assert!(
+        fetch_resp
+            == krabka_protocol::owned::fetch_response::FetchResponse {
+                throttle_time_ms: fetch_resp.throttle_time_ms,
+                ..Default::default()
+            }
+    );
 
     handle.shutdown().await;
 }

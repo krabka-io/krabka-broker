@@ -213,9 +213,12 @@ async fn alter_isr(broker: &Arc<Broker>, new_isr: &[i32]) {
     let principal = principal();
     let peer = peer();
     let ctx = request_context(&principal, &peer, "broker-client");
+    // The controller checks the sender's broker epoch and the row's
+    // partition epoch, as Kafka's `ReplicationControlManager` does.
+    let image = broker.controller.current_image();
     let request = AlterPartitionRequest {
         broker_id: 1,
-        broker_epoch: -1,
+        broker_epoch: image.broker_epoch(krabka_metadata::NodeId(1)).unwrap_or(-1),
         topics: vec![ReqTopicData {
             topic_id: krabka_protocol::primitives::uuid::Uuid(TOPIC_ID_BYTES),
             partitions: vec![ReqPartitionData {

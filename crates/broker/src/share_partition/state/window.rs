@@ -9,9 +9,79 @@
 
 use krabka_log::Offset;
 
-use super::{AcquisitionState, InFlightBatch, RecordState};
+use super::{AcquisitionState, InFlightBatch, RecordState, clamp_i32};
+
+/// Gives an acquired run back: Kafka's `InFlightState.tryUpdateState` to
+/// `AVAILABLE`, which archives the run instead when its delivery count has
+/// reached `max_attempts`. The owner and the lock go either way.
+///
+/// It returns whether the run was archived. An archived run has moved from a
+/// non-terminal state to a terminal one inside the window, so its offsets are
+/// added to `delivery_complete_count`, as Kafka's `releaseAcquiredRecords` and
+/// `releaseAcquisitionLockOnTimeout` add them.
+pub(super) fn give_back(
+    batch: &mut InFlightBatch,
+    max_attempts: i16,
+    delivery_complete_count: &mut i32,
+) -> bool {
+    batch.acquired_by = None;
+    batch.lock_deadline = None;
+    if batch.delivery_count >= max_attempts {
+        batch.state = RecordState::Archived;
+        *delivery_complete_count = delivery_complete_count.saturating_add(clamp_i32(batch.len()));
+        true
+    } else {
+        batch.state = RecordState::Available;
+        false
+    }
+}
 
 impl AcquisitionState {
+    /// One past the last offset that was ever handed out: the end of the last
+    /// run that is not a never-delivered `Available` or `Deferred` run.
+    ///
+    /// Kafka's `SharePartition` caches a batch only once it is acquired, so
+    /// this is where its cached state ends. The window can run further,
+    /// because materialization adds records before any member takes them.
+    fn in_flight_end(&self) -> Option<Offset> {
+        self.batches
+            .iter()
+            .rev()
+            .find(|b| {
+                !(matches!(b.state, RecordState::Available | RecordState::Deferred)
+                    && b.delivery_count == 0)
+            })
+            .map(|b| b.last_offset + 1)
+    }
+
+    /// The part of `[first, last]` that an acknowledgement applies to, as
+    /// Kafka's `SharePartition.acknowledge` and
+    /// `fetchSubMapForAcknowledgementBatch` find it.
+    ///
+    /// A range that ends below the SPSO is already done and yields `None`. A
+    /// range that starts below it is cut at the SPSO.
+    ///
+    /// # Errors
+    ///
+    /// `INVALID_RECORD_STATE` when nothing was ever handed out, and
+    /// `INVALID_REQUEST` when the range runs past the last offset that was.
+    pub(crate) fn ack_bounds(
+        &self,
+        first: Offset,
+        last: Offset,
+    ) -> Result<Option<(Offset, Offset)>, i16> {
+        if last < self.start_offset {
+            return Ok(None);
+        }
+        let end = self
+            .in_flight_end()
+            .ok_or(crate::codes::INVALID_RECORD_STATE)?;
+        if last >= end {
+            return Err(crate::codes::INVALID_REQUEST);
+        }
+        Ok(Some((first.max(self.start_offset), last)))
+    }
+
     /// True if and only if `member` currently holds every offset in
     /// `[first, last]` as Acquired.
     pub(super) fn range_acquired_by(&self, member: &str, first: Offset, last: Offset) -> bool {
@@ -74,12 +144,19 @@ impl AcquisitionState {
     /// Advances the SPSO over any terminal prefix, that is Acknowledged or
     /// Archived, and drops those batches. It then merges adjacent same-state
     /// neighbors.
+    ///
+    /// The dropped records leave the in-flight window, so they leave
+    /// `delivery_complete_count` too, as Kafka's
+    /// `maybeUpdateCachedStateAndOffsets` subtracts the terminal records that
+    /// `findLastOffsetAcknowledgedAndMetadata` counts below the new start
+    /// offset.
     pub(super) fn advance_spso(&mut self) {
         while let Some(b) = self.batches.first() {
-            if b.first_offset == self.start_offset
-                && matches!(b.state, RecordState::Acknowledged | RecordState::Archived)
-            {
+            if b.first_offset == self.start_offset && b.is_terminal() {
                 self.start_offset = b.last_offset + 1;
+                self.delivery_complete_count = self
+                    .delivery_complete_count
+                    .saturating_sub(clamp_i32(b.len()));
                 self.batches.remove(0);
             } else {
                 break;

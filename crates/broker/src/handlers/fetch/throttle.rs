@@ -2,7 +2,11 @@
 //! replication throttle on a follower fetch, and the KIP-13 consumer byte
 //! rate together with the KIP-124 request quota on a client fetch.
 
-use krabka_protocol::{owned::fetch_response::FetchableTopicResponse, records::RecordsPayload};
+use krabka_protocol::{
+    Encode as _,
+    owned::fetch_response::{FetchResponse, FetchableTopicResponse},
+    records::RecordsPayload,
+};
 use krabka_units::{Time, convert::TimeExt};
 use num_traits::ToPrimitive as _;
 
@@ -51,19 +55,66 @@ pub(super) fn throttle_follower_responses(
     }
 }
 
+/// The bytes a consumer may read in one fetch without a throttle: Kafka's
+/// `ClientQuotaManager.maxValueInQuotaWindow`, which is
+/// `consumer_byte_rate * (quota.window.num - 1) * quota.window.size.seconds`.
+/// `quota_window` is the whole `quota.window.num * quota.window.size.seconds`
+/// and `quota_throttle_max` is one `quota.window.size.seconds`. Without a
+/// `consumer_byte_rate` the read is not capped.
+pub(super) fn consumer_quota_window_bytes(
+    broker: &Broker,
+    image: &krabka_metadata::MetadataImage,
+    context: &crate::handlers::RequestContext<'_>,
+) -> usize {
+    let Some((_, rate)) = crate::quota::lookup_quota_with_key(
+        image,
+        &context.principal.name,
+        context.client_id,
+        "consumer_byte_rate",
+    ) else {
+        return usize::MAX;
+    };
+    if !rate.is_finite() || rate <= 0.0 {
+        return usize::MAX;
+    }
+    let window_secs = (broker.config.quota_window - broker.config.quota_throttle_max)
+        .secs_f64()
+        .max(0.0);
+    (rate * window_secs).to_usize().unwrap_or(usize::MAX)
+}
+
+/// The byte-rate charge a consumer fetch made, which a throttled fetch gives
+/// back.
+pub(super) struct ConsumerCharge(Option<(std::sync::Arc<crate::throttle::TokenBucket>, u64)>);
+
+impl ConsumerCharge {
+    /// Kafka's `quotas.fetch.unrecordQuotaSensor`: a throttled fetch sends
+    /// no records, so the bytes it was charged come off the quota.
+    pub(super) fn refund(self) {
+        if let Some((bucket, granted)) = self.0 {
+            bucket.refund(granted);
+        }
+    }
+}
+
+/// Charge a consumer fetch whose whole response is `response_bytes` long to
+/// its `consumer_byte_rate` and `request_percentage` quotas, as Kafka's
+/// `KafkaApis.handleFetchRequest` records both with
+/// `fetchContext.getResponseSize`. Returns the throttle the response reports,
+/// and the byte-rate charge to give back when that throttle is above zero.
 pub(super) fn apply_consumer_fetch_quota(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     context: &crate::handlers::RequestContext<'_>,
     handler_start: std::time::Instant,
-    responses: &[FetchableTopicResponse],
-) -> i32 {
-    let data_delay = consume_consumer_quota(
+    response_bytes: u64,
+) -> (i32, ConsumerCharge) {
+    let (data_delay, charge) = consume_consumer_quota(
         image,
         &broker.quota_buckets,
         &context.principal.name,
         context.client_id,
-        sum_response_bytes(responses),
+        response_bytes,
     );
     let elapsed_micros = u64::try_from(
         handler_start
@@ -91,13 +142,25 @@ pub(super) fn apply_consumer_fetch_quota(
         ],
     );
     if delay <= <Time as TimeExt>::ZERO {
-        return 0;
+        return (0, charge);
     }
     // KIP-219: the window goes back to the connection loop, which mutes the
-    // connection after the fetch plan is written. Sleeping here would delay the
-    // records the client is already waiting on.
+    // connection after the response is written.
     context.record_throttle(delay);
-    crate::quota::throttle_time_ms(delay)
+    (crate::quota::throttle_time_ms(delay), charge)
+}
+
+/// The encoded size of a whole Fetch response at `version`, which is what
+/// Kafka's `FetchContext.getResponseSize` charges to the consumer byte rate.
+pub(super) fn fetch_response_size(response: &FetchResponse, version: i16) -> u64 {
+    let size = if version < 4 {
+        let legacy: krabka_protocol::kafka_3_6_2::owned::fetch_response::FetchResponse =
+            response.clone().into();
+        legacy.encoded_len(version)
+    } else {
+        response.encoded_len(version)
+    };
+    u64::try_from(size).unwrap_or(u64::MAX)
 }
 
 /// KIP-73 leader-side throttle: walk `throttled_idxs` in order and drop
@@ -126,23 +189,11 @@ fn truncate_throttled_responses(
     }
 }
 
-/// Sum the encoded byte sizes of all record batches across all topic
-/// partitions in the assembled Fetch response.
-///
-/// The KIP-13 `consumer_byte_rate` hook uses this sum.
-fn sum_response_bytes(responses: &[FetchableTopicResponse]) -> u64 {
-    responses
-        .iter()
-        .flat_map(|t| t.partitions.iter())
-        .map(|p| p.records.as_ref().map_or(0, RecordsPayload::payload_len) as u64)
-        .sum()
-}
-
 /// KIP-13 `consumer_byte_rate` enforcement.
 ///
 /// The function looks up the matching quota for `(principal, client_id)`,
-/// takes `bytes` from the bucket, and returns the throttle delay capped at 1
-/// second. It returns `Duration::ZERO` when the config sets no quota, or when
+/// takes `bytes` from the bucket, and returns the throttle delay with the
+/// charge it made. The delay is zero when the config sets no quota, or when
 /// the bucket has enough capacity.
 fn consume_consumer_quota(
     image: &krabka_metadata::MetadataImage,
@@ -150,14 +201,14 @@ fn consume_consumer_quota(
     principal: &str,
     client_id: &str,
     bytes: u64,
-) -> crate::quota::QuotaDelay {
+) -> (crate::quota::QuotaDelay, ConsumerCharge) {
     let Some((entity_key, rate)) =
         crate::quota::lookup_quota_with_key(image, principal, client_id, "consumer_byte_rate")
     else {
-        return crate::quota::QuotaDelay::zero();
+        return (crate::quota::QuotaDelay::zero(), ConsumerCharge(None));
     };
     if !rate.is_finite() || rate <= 0.0 {
-        return crate::quota::QuotaDelay::zero();
+        return (crate::quota::QuotaDelay::zero(), ConsumerCharge(None));
     }
     let user = entity_key
         .iter()
@@ -175,15 +226,19 @@ fn consume_consumer_quota(
         rate.to_u64().unwrap_or(u64::MAX),
     );
     let granted = bucket.try_consume(bytes);
+    let charge = ConsumerCharge(Some((std::sync::Arc::clone(&bucket), granted)));
     if granted >= bytes {
-        return crate::quota::QuotaDelay::zero();
+        return (crate::quota::QuotaDelay::zero(), charge);
     }
     let overage = bytes - granted;
     let delay_secs = overage.to_f64().unwrap_or(f64::MAX) / rate;
     // Kafka's `ClientQuotaManager.throttleTime` does not bound a byte-rate
     // throttle.
     let delay = Time::from_secs_f64(delay_secs);
-    crate::quota::QuotaDelay::new(delay, user, client_id_opt)
+    (
+        crate::quota::QuotaDelay::new(delay, user, client_id_opt),
+        charge,
+    )
 }
 
 #[cfg(test)]
@@ -214,13 +269,15 @@ mod tests {
         let buckets = crate::quota::QuotaBuckets::with_window(secs(1));
         // 3072 bytes over at 1024 B/s is three seconds, reported whole: Kafka
         // does not bound a byte-rate throttle (#709).
-        let delay_match = super::consume_consumer_quota(&img, &buckets, "alice", "app-x", 4096);
+        let (delay_match, _) =
+            super::consume_consumer_quota(&img, &buckets, "alice", "app-x", 4096);
         assert!(
             delay_match > millis(2_900) && delay_match <= secs(3),
             "tuple quota match should throttle for the whole overage; got {delay_match:?}"
         );
         let buckets2 = crate::quota::QuotaBuckets::with_window(secs(1));
-        let delay_other = super::consume_consumer_quota(&img, &buckets2, "alice", "other", 4096);
+        let (delay_other, _) =
+            super::consume_consumer_quota(&img, &buckets2, "alice", "other", 4096);
         assert!(
             delay_other == <Time as TimeExt>::ZERO,
             "non-matching client_id should not throttle; got {delay_other:?}"

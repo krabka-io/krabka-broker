@@ -149,10 +149,23 @@ pub(super) async fn describe_topic(
     }
 }
 
-/// Build one response partition. It reads the SPSO from the persister. It then
-/// computes the best-effort lag (HWM − SPSO) and the leader epoch from the
-/// local data partition when that partition is materialized here, and returns
-/// `-1` for both otherwise.
+/// Kafka's `PartitionFactory.DEFAULT_LEADER_EPOCH`.
+const DEFAULT_LEADER_EPOCH: i32 = 0;
+/// Kafka's `PartitionFactory.UNINITIALIZED_DELIVERY_COMPLETE_COUNT`.
+const UNINITIALIZED_DELIVERY_COMPLETE_COUNT: i32 = -1;
+/// Kafka's `PartitionFactory.UNINITIALIZED_LAG`.
+const UNINITIALIZED_LAG: i64 = -1;
+
+/// Build one response partition from the persister's state summary, as
+/// Kafka's `GroupCoordinatorService.describeShareGroupOffsets` does.
+///
+/// The leader epoch is the one the share state stores, and
+/// [`DEFAULT_LEADER_EPOCH`] for a key with no state. The lag is Kafka's
+/// `partition end offset - start offset - delivery complete count`, computed
+/// only when both the start offset and the delivery complete count are
+/// initialized, and [`UNINITIALIZED_LAG`] otherwise. Kafka asks the partition
+/// leader for the end offset; krabka reads the high watermark of the local
+/// partition and reports [`UNINITIALIZED_LAG`] for one that is not hosted here.
 async fn describe_partition(
     broker: &Broker,
     persister: &SharePersister,
@@ -161,27 +174,38 @@ async fn describe_partition(
     topic_id: uuid::Uuid,
     p: i32,
 ) -> DescribeShareGroupOffsetsResponsePartition {
-    let (start_offset, error_code) = match persister.read_summary(gid, topic_id, p).await {
-        Ok(Some((_, _, start_offset, _))) => (start_offset.0, codes::NONE),
-        Ok(None) => (UNINITIALIZED_START_OFFSET, codes::NONE),
-        Err(_) => (UNINITIALIZED_START_OFFSET, codes::COORDINATOR_NOT_AVAILABLE),
-    };
-    let (leader_epoch, lag) = if let Some(part) = broker
+    let (start_offset, leader_epoch, delivery_complete_count, error_code) =
+        match persister.read_summary(gid, topic_id, p).await {
+            Ok(Some((_, leader_epoch, start_offset, delivery_complete_count))) => (
+                start_offset.0,
+                leader_epoch,
+                delivery_complete_count,
+                codes::NONE,
+            ),
+            Ok(None) => (
+                UNINITIALIZED_START_OFFSET,
+                DEFAULT_LEADER_EPOCH,
+                UNINITIALIZED_DELIVERY_COMPLETE_COUNT,
+                codes::NONE,
+            ),
+            Err(_) => (
+                UNINITIALIZED_START_OFFSET,
+                DEFAULT_LEADER_EPOCH,
+                UNINITIALIZED_DELIVERY_COMPLETE_COUNT,
+                codes::COORDINATOR_NOT_AVAILABLE,
+            ),
+        };
+    let lag = if start_offset == UNINITIALIZED_START_OFFSET
+        || delivery_complete_count == UNINITIALIZED_DELIVERY_COMPLETE_COUNT
+    {
+        UNINITIALIZED_LAG
+    } else if let Some(part) = broker
         .partitions
         .get(topic_name, krabka_ids::PartitionIndex(p))
     {
-        let hwm = part.high_watermark().await;
-        let le = part
-            .current_leader_epoch
-            .load(std::sync::atomic::Ordering::Acquire);
-        let lag = if start_offset >= 0 {
-            (hwm.0 - start_offset).max(0)
-        } else {
-            -1
-        };
-        (le, lag)
+        part.high_watermark().await.0 - start_offset - i64::from(delivery_complete_count)
     } else {
-        (-1, -1)
+        UNINITIALIZED_LAG
     };
     DescribeShareGroupOffsetsResponsePartition {
         partition_index: p,
@@ -203,7 +227,7 @@ mod tests {
 
     use super::*;
     use crate::handlers::describe_share_group_offsets::test_support::{
-        image_with_topic, start_broker,
+        image_with_topic, register_topic, start_broker,
     };
 
     #[tokio::test]
@@ -218,6 +242,7 @@ mod tests {
             .expect("share persister");
         let topic_id = uuid::Uuid::from_u128(0xD5C0);
         let image = image_with_topic("orders", topic_id);
+        register_topic(&broker, "orders", topic_id).await;
         persister
             .initialize("g-desc", topic_id, 0, 1, Offset(33))
             .await
@@ -243,8 +268,10 @@ mod tests {
             partitions: vec![DescribeShareGroupOffsetsResponsePartition {
                 partition_index: 0,
                 start_offset: 33,
-                leader_epoch: -1,
-                lag: -1,
+                // Kafka's initial leader epoch, and its lag over the empty
+                // log: end offset 0 - start offset 33 - delivered 0.
+                leader_epoch: 0,
+                lag: -33,
                 error_code: codes::NONE,
                 error_message: None,
                 unknown_tagged_fields: UnknownTaggedFields(Vec::new()),

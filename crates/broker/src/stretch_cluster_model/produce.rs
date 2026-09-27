@@ -24,7 +24,7 @@ impl StretchModel {
         // The high watermark covers the append only after every in-sync
         // replica takes the record. A replica outside the leader's network
         // component never takes it, and the produce times out with
-        // NOT_ENOUGH_REPLICAS_AFTER_APPEND (20).
+        // REQUEST_TIMED_OUT (7).
         let component = self.component_of(state, leader_site);
         if state
             .isr

@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use krabka_log::Offset;
 
-use super::{AcquisitionState, RecordState};
+use super::{AcquisitionState, RecordState, window::give_back};
 
 impl AcquisitionState {
     /// Renews the acquisition lock on the range `[first, last]` that `member`
@@ -36,6 +36,9 @@ impl AcquisitionState {
         if first > last {
             return Err(crate::codes::INVALID_RECORD_STATE);
         }
+        let Some((first, last)) = self.ack_bounds(first, last)? else {
+            return Ok(());
+        };
         // The entire range must be Acquired by this member.
         if !self.range_acquired_by(member, first, last) {
             return Err(crate::codes::INVALID_RECORD_STATE);
@@ -59,46 +62,46 @@ impl AcquisitionState {
 
     /// Returns any Acquired batch whose lock has expired to Available. It
     /// clears the lock and the owner but keeps `delivery_count`, so the next
-    /// acquire counts as a redelivery. It marks the state dirty when something
-    /// changed.
-    pub fn expire_locks(&mut self, now: Instant) {
+    /// acquire counts as a redelivery. A batch whose count has reached
+    /// `max_attempts` is archived at once instead, as Kafka's
+    /// `releaseAcquisitionLockOnTimeout` does. It marks the state dirty when
+    /// something changed.
+    pub fn expire_locks(&mut self, now: Instant, max_attempts: i16) {
         let mut changed = false;
         for b in &mut self.batches {
             if b.state == RecordState::Acquired
                 && let Some(deadline) = b.lock_deadline
                 && now >= deadline
             {
-                b.state = RecordState::Available;
-                b.acquired_by = None;
-                b.lock_deadline = None;
+                give_back(b, max_attempts, &mut self.delivery_complete_count);
                 changed = true;
             }
         }
         if changed {
             self.dirty = true;
-            self.coalesce();
+            self.advance_spso();
         }
     }
 
     /// Releases every record currently acquired by `member` back to
-    /// `Available`. The delivery count is retained for the next delivery.
+    /// `Available`. The delivery count is retained for the next delivery, and
+    /// a record whose count has reached `max_attempts` is archived instead,
+    /// as Kafka's `SharePartition.releaseAcquiredRecords` does.
     ///
     /// Session close and connection disconnect call this method so records do
     /// not remain locked until their timeout after the consumer is gone.
-    pub fn release_member(&mut self, member: &str) {
+    pub fn release_member(&mut self, member: &str, max_attempts: i16) {
         let mut changed = false;
         for batch in &mut self.batches {
             if batch.state == RecordState::Acquired && batch.acquired_by.as_deref() == Some(member)
             {
-                batch.state = RecordState::Available;
-                batch.acquired_by = None;
-                batch.lock_deadline = None;
+                give_back(batch, max_attempts, &mut self.delivery_complete_count);
                 changed = true;
             }
         }
         if changed {
             self.dirty = true;
-            self.coalesce();
+            self.advance_spso();
         }
     }
 }
@@ -120,7 +123,7 @@ mod tests {
         let _ = state.acquire("m1", 2, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         let _ = state.acquire("m2", 2, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
 
-        state.release_member("m1");
+        state.release_member("m1", 5);
 
         let reacquired = state.acquire("m3", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         assert!(reacquired.len() == 1);
@@ -137,7 +140,7 @@ mod tests {
         // Before expiry: re-acquire finds nothing (all Acquired).
         let none = s.acquire("m2", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         assert!(none.is_empty());
-        s.expire_locks(t0() + Duration::from_secs(31));
+        s.expire_locks(t0() + Duration::from_secs(31), 5);
         // Now another member can acquire; redelivery bumps the count.
         let acq = s.acquire(
             "m2",
@@ -176,7 +179,7 @@ mod tests {
         assert!(s.dirty);
 
         // Sweeping at the original deadline must NOT release the renewed lock.
-        s.expire_locks(original_deadline);
+        s.expire_locks(original_deadline, 5);
         // Still Acquired by m1 -> a different member acquires nothing.
         let none = s.acquire(
             "m2",
@@ -188,14 +191,8 @@ mod tests {
         );
         assert!(none.is_empty());
         // And m1 can still acknowledge it (proves it stayed Acquired by m1).
-        s.acknowledge(
-            "m1",
-            Offset(0),
-            Offset(3),
-            AckType::Accept,
-            original_deadline,
-        )
-        .unwrap();
+        s.acknowledge("m1", Offset(0), Offset(3), AckType::Accept, 5)
+            .unwrap();
         assert!(s.start_offset == 4);
     }
 
@@ -210,7 +207,7 @@ mod tests {
         assert!(err == Err(crate::codes::INVALID_RECORD_STATE));
 
         // Non-Acquired range: release [0,2] back to Available, then renew fails.
-        s.acknowledge("m1", Offset(0), Offset(2), AckType::Release, t0)
+        s.acknowledge("m1", Offset(0), Offset(2), AckType::Release, 5)
             .unwrap();
         let err2 = s.renew("m1", Offset(0), Offset(2), t0, LOCK);
         assert!(err2 == Err(crate::codes::INVALID_RECORD_STATE));

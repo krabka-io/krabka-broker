@@ -31,7 +31,10 @@
 //! (any other epoch) with an unknown id -- id `0` included, which is never
 //! allocated -- returns `FETCH_SESSION_ID_NOT_FOUND`; one with a known id but
 //! a mismatched epoch returns `INVALID_FETCH_SESSION_EPOCH`. Both are
-//! top-level response codes. An incremental fetch that forgets its last
+//! top-level response codes. So is `FETCH_SESSION_TOPIC_ID_ERROR`, for an
+//! incremental fetch whose version does not match the topic-id use of the
+//! request that created its session (v13 and later name topics by id). An
+//! incremental fetch that forgets its last
 //! cached partitions and adds none is dropped, and the response reports
 //! `session_id = 0`.
 //!
@@ -69,8 +72,8 @@ pub use self::{
     cache::{FetchSession, FetchSessionCache},
     classify::SessionDecision,
     epoch::{
-        FINAL_EPOCH, FetchSessionEpoch, FetchSessionId, INITIAL_EPOCH, INVALID_SESSION_ID,
-        next_epoch,
+        FINAL_EPOCH, FIRST_TOPIC_ID_FETCH_VERSION, FetchSessionEpoch, FetchSessionId,
+        INITIAL_EPOCH, INVALID_SESSION_ID, next_epoch,
     },
     state::{CachedPartitionState, FetchSessionKey},
 };

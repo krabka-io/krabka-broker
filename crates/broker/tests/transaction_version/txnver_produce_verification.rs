@@ -101,6 +101,11 @@ struct Case {
     expected_code: i16,
     expected_message: Option<&'static str>,
     appends: bool,
+    /// The log itself refused the batch, after the transaction check passed.
+    /// Kafka answers that refusal with the partition's real log start offset
+    /// (`ReplicaManager.processFailedRecord`), and a refusal before the
+    /// append with -1.
+    refused_by_log: bool,
 }
 
 fn batch(producer: Producer, epoch: i16, base_sequence: i32, transactional: bool) -> RecordBatch {
@@ -320,6 +325,7 @@ async fn a_transactional_produce_needs_a_verified_transaction() {
             expected_code: INVALID_TXN_STATE,
             expected_message: Some("Partition was not added to the transaction"),
             appends: false,
+            refused_by_log: false,
         },
         Case {
             name: "v11-partition-not-added",
@@ -328,6 +334,7 @@ async fn a_transactional_produce_needs_a_verified_transaction() {
             expected_code: TRANSACTION_ABORTABLE,
             expected_message: None,
             appends: false,
+            refused_by_log: false,
         },
         Case {
             name: "v11-partition-added",
@@ -336,6 +343,7 @@ async fn a_transactional_produce_needs_a_verified_transaction() {
             expected_code: 0,
             expected_message: None,
             appends: true,
+            refused_by_log: false,
         },
         Case {
             name: "v12-partition-not-added",
@@ -344,6 +352,7 @@ async fn a_transactional_produce_needs_a_verified_transaction() {
             expected_code: 0,
             expected_message: None,
             appends: true,
+            refused_by_log: false,
         },
         // This is the #694 hijack path: a transactional batch with no
         // request-level transactional_id must be refused by the
@@ -360,6 +369,7 @@ async fn a_transactional_produce_needs_a_verified_transaction() {
             expected_code: TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
             expected_message: None,
             appends: false,
+            refused_by_log: false,
         },
         Case {
             name: "open-transaction-stale-epoch",
@@ -371,6 +381,7 @@ async fn a_transactional_produce_needs_a_verified_transaction() {
             expected_code: INVALID_PRODUCER_EPOCH,
             expected_message: None,
             appends: false,
+            refused_by_log: false,
         },
         Case {
             name: "open-transaction-non-transactional-batch",
@@ -379,6 +390,7 @@ async fn a_transactional_produce_needs_a_verified_transaction() {
             expected_code: INVALID_TXN_STATE,
             expected_message: None,
             appends: false,
+            refused_by_log: true,
         },
         // The broker runs at transaction version 2, so the commit marker
         // bumped the producer epoch. A replay at the old epoch is stale.
@@ -389,6 +401,7 @@ async fn a_transactional_produce_needs_a_verified_transaction() {
             expected_code: INVALID_PRODUCER_EPOCH,
             expected_message: None,
             appends: false,
+            refused_by_log: false,
         },
     ];
 
@@ -421,7 +434,11 @@ async fn a_transactional_produce_needs_a_verified_transaction() {
                 error_code: case.expected_code,
                 base_offset: if case.appends { before } else { -1 },
                 log_append_time_ms: -1,
-                log_start_offset: if case.appends { 0 } else { -1 },
+                log_start_offset: if case.appends || case.refused_by_log {
+                    0
+                } else {
+                    -1
+                },
                 error_message: case.expected_message.map(str::to_owned),
                 ..Default::default()
             },

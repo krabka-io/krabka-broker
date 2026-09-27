@@ -83,6 +83,9 @@ pub(super) enum AppendOutcome {
 pub(super) struct PendingAck {
     response: PartitionProduceResponse,
     partition: Arc<Partition>,
+    /// The effective `min.insync.replicas` the leadership gate read. The ISR
+    /// must still hold that many replicas when the high watermark arrives.
+    effective_min_isr: usize,
     target: Offset,
     commit: Option<AppendCommit>,
     /// The transition barrier this produce took at the leadership gate. A
@@ -99,7 +102,7 @@ impl PendingAck {
     /// watermark yet.
     pub(super) fn new(
         response: PartitionProduceResponse,
-        partition: Arc<Partition>,
+        (partition, effective_min_isr): (Arc<Partition>, usize),
         target: Offset,
         commit: Option<AppendCommit>,
         transition: ProduceTransition,
@@ -107,6 +110,7 @@ impl PendingAck {
         Self {
             response,
             partition,
+            effective_min_isr,
             target,
             commit,
             _transition: transition,
@@ -120,21 +124,20 @@ impl PendingAck {
     /// so N partitions of one `acks=-1` request wait out one `timeout.ms`
     /// between them rather than N of them in turn.
     ///
-    /// The behavior per path, unchanged from when the wait ran inline:
-    ///   * HW reaches the target: NONE, then commit;
-    ///   * the gate times out: `NOT_ENOUGH_REPLICAS_AFTER_APPEND`, then
-    ///     commit. The append is durable on the leader, so the idempotent
-    ///     tracker must advance either way. A retry is then recognized as a
-    ///     duplicate rather than as out-of-order.
+    /// The code is [`ack_completion_code`]'s. Every path commits
+    /// afterwards: the append is durable on the leader, so the idempotent
+    /// tracker must advance either way, and a retry is then recognized as a
+    /// duplicate rather than as out-of-order.
     pub(super) async fn finish(mut self, deadline: std::time::Instant) -> PartitionProduceResponse {
         let gate = self
             .partition
             .await_hw_at_least(self.target, deadline)
             .await;
-        self.response.error_code = match gate {
-            Ok(()) => codes::NONE,
-            Err(_timeout) => codes::NOT_ENOUGH_REPLICAS_AFTER_APPEND,
+        let isr_size = match gate {
+            Ok(()) => Some(self.partition.replica_state.lock().await.isr.len()),
+            Err(_timeout) => None,
         };
+        self.response.error_code = ack_completion_code(isr_size, self.effective_min_isr);
         // The row's log start offset is read after the gate on both paths, the
         // way it was when the gate ran inline.
         self.response.log_start_offset = stamp_log_start(&self.partition);
@@ -142,6 +145,22 @@ impl PendingAck {
             commit.record(&self.partition, self.target).await;
         }
         self.response
+    }
+}
+
+/// The row code of an `acks=all` append once its high-watermark wait ends.
+///
+/// `isr_size` is the ISR size when the high watermark reached the append, or
+/// `None` when the wait expired first. Kafka's `DelayedProduce` starts every
+/// partition at `REQUEST_TIMED_OUT` and leaves it there on expiration;
+/// `Partition.checkEnoughReplicasReachOffset` answers
+/// `NOT_ENOUGH_REPLICAS_AFTER_APPEND` when the high watermark reached the
+/// offset but the ISR has shrunk below the effective `min.insync.replicas`.
+pub(super) fn ack_completion_code(isr_size: Option<usize>, effective_min_isr: usize) -> i16 {
+    match isr_size {
+        None => codes::REQUEST_TIMED_OUT,
+        Some(size) if size < effective_min_isr => codes::NOT_ENOUGH_REPLICAS_AFTER_APPEND,
+        Some(_) => codes::NONE,
     }
 }
 
@@ -153,8 +172,9 @@ pub(super) async fn dispatch_prepared(
     // No offset is assigned until the writer answers with one. Every failure
     // below — the writer channel gone, the append itself erroring, the ack
     // timing out — leaves the row without an append, which Kafka answers with
-    // `UNKNOWN_LOG_APPEND_INFO`, whose `firstOffset` and `logStartOffset` are
-    // both -1. `finalize_ack` overwrites both on the one path that appends.
+    // `firstOffset` -1. `logStartOffset` stays -1 too, except on the refusals
+    // `failed_append_log_start` names. `finalize_ack` overwrites both on the
+    // one path that appends.
     let mut response = PartitionProduceResponse {
         index: context.partition_index,
         base_offset: INVALID_OFFSET,
@@ -191,7 +211,11 @@ pub(super) async fn dispatch_prepared(
     context.phases.add_local(local_started.elapsed());
     match acked {
         Ok(Ok(Ok(appended))) => return Ok(finalize_ack(response, context, appended, commit).await),
-        Ok(Ok(Err(error))) => response.error_code = codes::from_broker_error(&error),
+        Ok(Ok(Err(error))) => {
+            response.error_code = codes::from_broker_error(&error);
+            response.log_start_offset =
+                failed_append_log_start(response.error_code, context.partition);
+        }
         Ok(Err(_)) => response.error_code = codes::NOT_LEADER_OR_FOLLOWER,
         Err(_) => response.error_code = codes::REQUEST_TIMED_OUT,
     }
@@ -282,6 +306,25 @@ impl AppendCommit {
 /// `log_end_offset()` takes.
 fn stamp_log_start(part: &Partition) -> i64 {
     part.log_start_offset().0
+}
+
+/// The log start offset of a row whose append the log refused.
+///
+/// Kafka's `ReplicaManager.appendToLocalLog` answers the refusals it catches
+/// in its generic `Throwable` arm with
+/// `LogAppendInfo.unknownLogAppendInfoWithLogStartOffset`, which carries the
+/// partition's real log start offset from `processFailedRecord`. That arm
+/// takes `OutOfOrderSequenceException`, `InvalidProducerEpochException`,
+/// `InvalidTxnStateException`, the three producer-state refusals a writer
+/// answers. The storage and routing refusals keep the `-1` of
+/// `UNKNOWN_LOG_APPEND_INFO`.
+fn failed_append_log_start(error_code: i16, part: &Partition) -> i64 {
+    match error_code {
+        codes::OUT_OF_ORDER_SEQUENCE_NUMBER
+        | codes::INVALID_PRODUCER_EPOCH
+        | codes::INVALID_TXN_STATE => stamp_log_start(part),
+        _ => INVALID_OFFSET,
+    }
 }
 
 /// Finalize a successful writer append.
@@ -379,6 +422,109 @@ pub(super) fn build_produce_data(prepared: PreparedBatch, leader_epoch: i32) -> 
             // the owned batch carries it as a struct field instead.
             batch.partition_leader_epoch = leader_epoch;
             ProduceData::Owned(batch)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use assert2::assert;
+    use krabka_log::Offset;
+    use krabka_protocol::owned::produce_response::PartitionProduceResponse;
+    use krabka_raft::NodeId;
+
+    use super::PendingAck;
+    use crate::codes;
+
+    /// Kafka's `acks=all` completion: `DelayedProduce` leaves an expired wait
+    /// at `REQUEST_TIMED_OUT`, and `Partition.checkEnoughReplicasReachOffset`
+    /// answers `NOT_ENOUGH_REPLICAS_AFTER_APPEND` when the high watermark
+    /// arrived but the ISR is below the effective `min.insync.replicas`.
+    #[tokio::test]
+    async fn an_acks_all_wait_ends_with_kafkas_completion_code() {
+        struct Case {
+            name: &'static str,
+            /// The frontier the high watermark has to reach. The log is
+            /// empty, so the high watermark is 0: target 0 is reached, target
+            /// 1 never is.
+            target: i64,
+            isr: &'static [u64],
+            effective_min_isr: usize,
+            error_code: i16,
+        }
+        let cases = [
+            Case {
+                name: "reached with a full ISR",
+                target: 0,
+                isr: &[1, 2, 3],
+                effective_min_isr: 2,
+                error_code: codes::NONE,
+            },
+            Case {
+                name: "reached with the ISR at the minimum",
+                target: 0,
+                isr: &[1, 2],
+                effective_min_isr: 2,
+                error_code: codes::NONE,
+            },
+            Case {
+                name: "reached after the ISR shrank below the minimum",
+                target: 0,
+                isr: &[1],
+                effective_min_isr: 2,
+                error_code: codes::NOT_ENOUGH_REPLICAS_AFTER_APPEND,
+            },
+            Case {
+                name: "expired",
+                target: 1,
+                isr: &[1, 2, 3],
+                effective_min_isr: 2,
+                error_code: codes::REQUEST_TIMED_OUT,
+            },
+        ];
+        for case in cases {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let part_dir = crate::log_dir::partition_dir(dir.path(), "orders", 0);
+            std::fs::create_dir_all(&part_dir).expect("partition dir");
+            let partition = crate::broker::spawn_partition(
+                "orders".into(),
+                krabka_ids::PartitionIndex(0),
+                dir.path().to_path_buf(),
+                krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).expect("log"),
+                crate::log_dir_status::LogDirRegistry::default(),
+                Arc::new(crate::producer_state::ProducerState::new()),
+                false,
+            );
+            let isr: Vec<NodeId> = case.isr.iter().copied().map(NodeId).collect();
+            partition
+                .install_isr(&isr, &[NodeId(1), NodeId(2), NodeId(3)], NodeId(1))
+                .await;
+            let transition = partition.lock_produce_transition().await;
+            let pending = PendingAck::new(
+                PartitionProduceResponse {
+                    index: 0,
+                    base_offset: 0,
+                    ..Default::default()
+                },
+                (Arc::clone(&partition), case.effective_min_isr),
+                Offset(case.target),
+                None,
+                transition,
+            );
+            let row = pending.finish(std::time::Instant::now()).await;
+            assert!(
+                row == PartitionProduceResponse {
+                    index: 0,
+                    error_code: case.error_code,
+                    base_offset: 0,
+                    log_start_offset: 0,
+                    ..Default::default()
+                },
+                "{}",
+                case.name
+            );
         }
     }
 }

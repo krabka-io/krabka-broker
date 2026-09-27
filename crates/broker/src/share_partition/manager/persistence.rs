@@ -269,7 +269,7 @@ mod tests {
 
         let accepted = mgr
             .apply_durably("g1", tid, 0, &cell, &mut st, |st| {
-                st.acknowledge("m1", Offset(0), Offset(3), AckType::Accept, Instant::now())
+                st.acknowledge("m1", Offset(0), Offset(3), AckType::Accept, 5)
                     .err()
                     .unwrap_or(codes::NONE)
             })
@@ -277,7 +277,7 @@ mod tests {
         let rolled_back = st == before;
         let refused = mgr
             .apply_durably("g1", tid, 0, &cell, &mut st, |st| {
-                st.acknowledge("m2", Offset(0), Offset(3), AckType::Accept, Instant::now())
+                st.acknowledge("m2", Offset(0), Offset(3), AckType::Accept, 5)
                     .err()
                     .unwrap_or(codes::NONE)
             })
@@ -291,5 +291,48 @@ mod tests {
                     codes::INVALID_RECORD_STATE
                 )
         );
+    }
+
+    /// A failed write takes back the records that the acknowledgement made
+    /// terminal, as Kafka's `rollbackOrProcessStateUpdates` subtracts them from
+    /// `deliveryCompleteCount`, and leaves the terminal records that were
+    /// counted before it alone.
+    #[tokio::test]
+    async fn a_failed_write_rolls_the_delivery_complete_count_back() {
+        // (acknowledge type, max attempts, count before the failed write)
+        let cases = [
+            (AckType::Accept, 5, 1),
+            (AckType::Reject, 5, 1),
+            (AckType::Release, 1, 1),
+        ];
+        let mgr = manager();
+        let tid = uuid::Uuid::from_bytes([27; 16]);
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (ack, max_attempts, counted) in cases {
+            // [0] held alone, [1,4] held together, and [4] already accepted, so
+            // the SPSO stays at 0 and a count of 1 is in place before the write.
+            let mut st = AcquisitionState::new(Offset(0));
+            st.materialize(Offset(5), 100);
+            let _ = st.acquire("m1", 1, Offset(i64::MAX), Instant::now(), LOCK, 5);
+            let _ = st.acquire("m1", 10, Offset(i64::MAX), Instant::now(), LOCK, 5);
+            st.acknowledge("m1", Offset(4), Offset(4), AckType::Accept, 5)
+                .unwrap();
+            let before = st.delivery_complete_count();
+            // A cell that the cache does not hold: the write fails without fencing.
+            let cell = Arc::new(Mutex::new(st.clone()));
+
+            let code = mgr
+                .apply_durably("g1", tid, 0, &cell, &mut st, |st| {
+                    st.acknowledge("m1", Offset(1), Offset(3), ack, max_attempts)
+                        .err()
+                        .unwrap_or(codes::NONE)
+                })
+                .await;
+
+            actual.push((ack, before, code, st.delivery_complete_count()));
+            expected.push((ack, counted, codes::COORDINATOR_NOT_AVAILABLE, counted));
+        }
+        assert!(actual == expected);
     }
 }

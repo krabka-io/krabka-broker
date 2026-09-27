@@ -9,17 +9,11 @@
 
 use bytes::Bytes;
 use krabka_protocol::owned::share_fetch_response::{
-    LeaderIdAndEpoch, PartitionData, ShareFetchResponse, ShareFetchableTopicResponse,
+    LeaderIdAndEpoch, NodeEndpoint, PartitionData, ShareFetchResponse, ShareFetchableTopicResponse,
 };
 
 use super::pending::PendingPartition;
 use crate::{codes, error::BrokerError};
-
-pub(super) fn acquisition_timeout_ms(
-    config: &crate::coordinator::unified::share::config::ShareGroupConfig,
-) -> i32 {
-    i32::try_from(config.record_lock_duration.as_millis()).unwrap_or(i32::MAX)
-}
 
 pub(super) fn partition_response(partition_index: i32) -> PartitionData {
     PartitionData {
@@ -72,6 +66,7 @@ pub(super) fn encode_success_response(
     version: i16,
     lock_timeout_ms: i32,
     responses: Vec<ShareFetchableTopicResponse>,
+    node_endpoints: Vec<NodeEndpoint>,
 ) -> Result<Bytes, BrokerError> {
     let response = ShareFetchResponse {
         throttle_time_ms: 0,
@@ -79,6 +74,7 @@ pub(super) fn encode_success_response(
         error_message: None,
         acquisition_lock_timeout_ms: lock_timeout_ms,
         responses,
+        node_endpoints,
         ..Default::default()
     };
     crate::handlers::encode_response(&response, version)
@@ -163,6 +159,7 @@ mod tests {
                 partition_max_bytes: 0,
                 leadable: false,
                 fetchable: false,
+                in_request: true,
                 ack_batches: Vec::new(),
                 out: PartitionData {
                     partition_index: 0,
@@ -189,6 +186,7 @@ mod tests {
                 partition_max_bytes: 0,
                 leadable: false,
                 fetchable: false,
+                in_request: true,
                 ack_batches: Vec::new(),
                 out: PartitionData {
                     partition_index: 3,
@@ -208,6 +206,7 @@ mod tests {
                 partition_max_bytes: 0,
                 leadable: false,
                 fetchable: false,
+                in_request: true,
                 ack_batches: Vec::new(),
                 out: PartitionData {
                     partition_index: 1,

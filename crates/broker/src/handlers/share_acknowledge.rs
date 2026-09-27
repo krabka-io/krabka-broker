@@ -25,7 +25,7 @@ use krabka_protocol::{
     owned::{
         share_acknowledge_request::ShareAcknowledgeRequest,
         share_acknowledge_response::{
-            LeaderIdAndEpoch, PartitionData, ShareAcknowledgeResponse,
+            LeaderIdAndEpoch, NodeEndpoint, PartitionData, ShareAcknowledgeResponse,
             ShareAcknowledgeTopicResponse,
         },
     },
@@ -38,8 +38,12 @@ use crate::{
     error::BrokerError,
     handlers::{
         group_read_denied,
-        share_fetch::{Renewal, apply_one_ack, renew_acknowledge_enabled},
+        share_fetch::{
+            AckApplication, Renewal, acknowledgement_batches_are_valid, apply_acknowledgements,
+            current_leader, leader_endpoints, member_id_is_valid, names_the_leader,
+        },
     },
+    share_partition::group_settings::GroupShareSettings,
 };
 
 #[tracing::instrument(
@@ -60,22 +64,28 @@ pub(crate) async fn handle(
     let req = ShareAcknowledgeRequest::decode(&mut cur, version)?;
 
     let cfg = broker.config.share_group.clone();
-    let lock_timeout_ms = i32::try_from(cfg.record_lock_duration.as_millis()).unwrap_or(i32::MAX);
 
     if !cfg.enable {
         return encode_error_response(version, codes::UNSUPPORTED_VERSION);
     }
 
-    let group = req.group_id.clone().unwrap_or_default();
-    let member = req.member_id.clone().unwrap_or_default();
-
-    // Kafka's `KafkaApis.handleShareAcknowledgeRequest` checks `Read` on the
-    // group after the feature gate, and before the member, the share session
-    // and the topic checks.
+    // Kafka's `KafkaApis.handleShareAcknowledgeRequest` refuses a null group
+    // id after the feature gate, then checks `Read` on the group, then the
+    // member id format, all before the share session and the topic checks.
+    let Some(group) = req.group_id.clone() else {
+        return encode_error_response(version, codes::INVALID_REQUEST);
+    };
     let image = broker.controller.current_image();
     if group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &group) {
         return encode_error_response(version, codes::GROUP_AUTHORIZATION_FAILED);
     }
+    // Kafka's `ShareGroupConfigProvider`: each `share.*` group override, with
+    // the broker setting as the default.
+    let settings = GroupShareSettings::resolve(&image, &group, &cfg);
+    let lock_timeout_ms = settings.record_lock_duration_ms();
+    let Some(member) = req.member_id.clone().filter(|id| member_id_is_valid(id)) else {
+        return encode_error_response(version, codes::INVALID_REQUEST);
+    };
 
     let released = match broker.share_partition_leaders.update_acknowledge_session(
         &group,
@@ -87,32 +97,100 @@ pub(crate) async fn handle(
     };
 
     let now = Instant::now();
-    let responses = process_topics(broker, &req, ctx, &cfg, &group, &member, now).await;
+    let mut responses = process_topics(&AcknowledgeContext {
+        broker,
+        version,
+        req: &req,
+        ctx,
+        settings,
+        group: &group,
+        member: &member,
+        now,
+    })
+    .await;
     broker
         .share_partition_leaders
         .release_session_partitions(&group, &member, &released)
         .await;
 
+    let node_endpoints = hint_current_leaders(broker, ctx, &mut responses);
     let resp = ShareAcknowledgeResponse {
         throttle_time_ms: 0,
         error_code: codes::NONE,
         error_message: None,
         acquisition_lock_timeout_ms: lock_timeout_ms,
         responses,
+        node_endpoints,
         ..Default::default()
     };
     crate::handlers::encode_response(&resp, version)
 }
 
-async fn process_topics(
+/// Kafka's `processShareAcknowledgeResponse`: sets the current leader on
+/// every row whose error names another leader, and returns the endpoint of
+/// each such leader on the request's listener.
+fn hint_current_leaders(
     broker: &Broker,
-    req: &ShareAcknowledgeRequest,
     ctx: &crate::handlers::RequestContext<'_>,
-    cfg: &crate::coordinator::unified::share::config::ShareGroupConfig,
-    group: &str,
-    member: &str,
+    responses: &mut [ShareAcknowledgeTopicResponse],
+) -> Vec<NodeEndpoint> {
+    let mgr = &broker.share_partition_leaders;
+    let mut leader_ids = Vec::new();
+    for topic in responses.iter_mut() {
+        let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
+        for partition in &mut topic.partitions {
+            if names_the_leader(partition.error_code) {
+                let (leader_id, leader_epoch) =
+                    current_leader(mgr, topic_id, partition.partition_index);
+                partition.current_leader = LeaderIdAndEpoch {
+                    leader_id,
+                    leader_epoch,
+                    ..Default::default()
+                };
+                leader_ids.push(leader_id);
+            }
+        }
+    }
+    leader_endpoints(
+        &broker.controller.current_image(),
+        ctx.connection_listener_name,
+        &broker.config.inter_broker_listener_name,
+        leader_ids,
+    )
+    .into_iter()
+    .map(|endpoint| NodeEndpoint {
+        node_id: endpoint.node_id,
+        host: endpoint.host,
+        port: endpoint.port,
+        rack: endpoint.rack,
+        ..Default::default()
+    })
+    .collect()
+}
+
+/// The request-wide inputs of [`process_topics`].
+struct AcknowledgeContext<'a> {
+    broker: &'a Broker,
+    version: i16,
+    req: &'a ShareAcknowledgeRequest,
+    ctx: &'a crate::handlers::RequestContext<'a>,
+    settings: GroupShareSettings,
+    group: &'a str,
+    member: &'a str,
     now: Instant,
-) -> Vec<ShareAcknowledgeTopicResponse> {
+}
+
+async fn process_topics(context: &AcknowledgeContext<'_>) -> Vec<ShareAcknowledgeTopicResponse> {
+    let &AcknowledgeContext {
+        broker,
+        version,
+        req,
+        ctx,
+        settings,
+        group,
+        member,
+        now,
+    } = context;
     let mgr = &broker.share_partition_leaders;
     let image = broker.controller.current_image();
     let mut responses = Vec::with_capacity(req.topics.len());
@@ -153,8 +231,8 @@ async fn process_topics(
 
         let renewal = Renewal {
             requested: req.is_renew_ack,
-            enabled: renew_acknowledge_enabled(&image, group),
-            lock_duration: cfg.record_lock_duration,
+            enabled: settings.renew_acknowledge_enabled,
+            lock_duration: settings.record_lock_duration,
         };
         let mut parts: Vec<PartitionData> = Vec::with_capacity(topic.partitions.len());
         for ap in &topic.partitions {
@@ -163,8 +241,34 @@ async fn process_topics(
                 ..Default::default()
             };
 
-            if denied {
-                out.error_code = codes::TOPIC_AUTHORIZATION_FAILED;
+            // Kafka's `KafkaApis.handleAcknowledgements` validates the batches
+            // first, then checks the topic `Read`, then asks the metadata
+            // cache for the partition. A partition with no batch then answers
+            // NONE without reaching the share partition.
+            let batches_are_valid = acknowledgement_batches_are_valid(
+                ap.acknowledgement_batches.iter().map(|batch| {
+                    (
+                        batch.first_offset,
+                        batch.last_offset,
+                        batch.acknowledge_types.as_slice(),
+                    )
+                }),
+                version >= 2,
+                req.is_renew_ack,
+            );
+            let error = if !batches_are_valid {
+                Some(codes::INVALID_REQUEST)
+            } else if denied {
+                Some(codes::TOPIC_AUTHORIZATION_FAILED)
+            } else if image.partition(&topic_name, ap.partition_index).is_none() {
+                Some(codes::UNKNOWN_TOPIC_OR_PARTITION)
+            } else if ap.acknowledgement_batches.is_empty() {
+                Some(codes::NONE)
+            } else {
+                None
+            };
+            if let Some(code) = error {
+                out.error_code = code;
                 parts.push(out);
                 continue;
             }
@@ -181,36 +285,35 @@ async fn process_topics(
                 continue;
             }
 
-            // A failed state read fails the partition and caches nothing.
-            let cell = match mgr.get_or_load(group, topic_id, ap.partition_index).await {
-                Ok(cell) => cell,
-                Err(code) => {
-                    out.error_code = code;
-                    parts.push(out);
-                    continue;
-                }
+            // Kafka's `SharePartitionManager.acknowledge` answers
+            // UNKNOWN_TOPIC_OR_PARTITION for a share partition that no fetch on
+            // this broker loaded, and reads no state for it.
+            let Some(cell) = mgr.cached(group, topic_id, ap.partition_index) else {
+                out.error_code = codes::UNKNOWN_TOPIC_OR_PARTITION;
+                parts.push(out);
+                continue;
             };
             let mut st = cell.lock().await;
-            // The acknowledgement is durable before the answer, or it is rolled
-            // back and the write error is the partition error, as Kafka's
+            // The batches apply as one unit. The acknowledgement is durable
+            // before the answer, or it is rolled back and the write error is
+            // the partition error, as Kafka's
             // `SharePartition.rollbackOrProcessStateUpdates` does.
+            let application = AckApplication {
+                member,
+                now,
+                renewal,
+                max_attempts: settings.delivery_count_limit,
+            };
+            let batches = ap.acknowledgement_batches.iter().map(|batch| {
+                (
+                    batch.first_offset,
+                    batch.last_offset,
+                    batch.acknowledge_types.as_slice(),
+                )
+            });
             out.error_code = mgr
                 .apply_durably(group, topic_id, ap.partition_index, &cell, &mut st, |st| {
-                    let mut err = codes::NONE;
-                    for batch in &ap.acknowledgement_batches {
-                        if let Err(code) = apply_one_ack(
-                            st,
-                            member,
-                            batch.first_offset,
-                            batch.last_offset,
-                            &batch.acknowledge_types,
-                            now,
-                            renewal,
-                        ) {
-                            err = code;
-                        }
-                    }
-                    err
+                    apply_acknowledgements(st, &application, batches)
                 })
                 .await;
             parts.push(out);
@@ -426,13 +529,13 @@ mod tests {
         shared
             .share_partition_leaders
             .update_fetch_session(
-                "g1",
-                member,
+                ("g1", member),
                 ctx.connection_id,
                 0,
-                &maplit::hashset! {(id, 0)},
-                &std::collections::HashSet::new(),
-                false,
+                crate::share_partition::session::FetchPartitions {
+                    requested: &[(id, 0)],
+                    forgotten: &std::collections::HashSet::new(),
+                },
                 false,
             )
             .expect("open share session");

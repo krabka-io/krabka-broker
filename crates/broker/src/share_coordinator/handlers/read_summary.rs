@@ -185,13 +185,13 @@ mod tests {
             super::super::test_support::broker_with_led_share_coordinator(dir.path()).await;
         let topic_id = uuid::Uuid::from_bytes([41; 16]);
         let wire_topic_id = ProtoUuid(*topic_id.as_bytes());
-        broker
-            .share_coordinator
-            .initialize("share-group", topic_id, 4, 17, Offset(90))
-            .await
-            .expect("initialize state");
         let image =
             crate::share_coordinator::coordinator::test_support::image_with_topic(topic_id, 5);
+        broker
+            .share_coordinator
+            .initialize(&image, "share-group", topic_id, 4, 17, Offset(90))
+            .await
+            .expect("initialize state");
         broker
             .share_coordinator
             .read(&image, "share-group", topic_id, 4, 3)

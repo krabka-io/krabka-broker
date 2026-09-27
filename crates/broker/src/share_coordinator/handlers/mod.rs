@@ -85,8 +85,6 @@ pub(crate) mod test_support {
         },
     };
 
-    pub(crate) const VERSION: i16 = 0;
-
     pub(crate) fn batch(first_offset: i64, last_offset: i64) -> StateBatch {
         StateBatch {
             first_offset: Offset(first_offset),
@@ -126,7 +124,12 @@ pub(crate) mod test_support {
         let registry = Arc::new(PartitionRegistry::new());
         let config = ShareCoordinatorConfig::default();
         open_all_state_partitions(&registry, log_dir, config.state_topic_num_partitions);
-        Arc::new(ShareCoordinator::new(NodeId(1), registry, config))
+        Arc::new(ShareCoordinator::with_wall_clock(
+            NodeId(1),
+            registry,
+            config,
+            crate::share_coordinator::coordinator::test_support::manual_clock(),
+        ))
     }
 
     pub(crate) async fn broker(dir: &Path) -> (BrokerHandle, Arc<crate::broker::Broker>) {

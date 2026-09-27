@@ -39,8 +39,10 @@ use dashmap::DashMap;
 use krabka_ids::PartitionIndex;
 use krabka_log::Offset;
 use krabka_metadata::MetadataImage;
+use qubit_clock::WallClock;
 use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
 
+pub(crate) mod jobs;
 mod persist;
 mod recovery;
 mod state_machine;
@@ -239,6 +241,9 @@ pub(crate) struct ShareCoordinator {
     /// Source of [`LedPartition::generation`].
     next_generation: AtomicU64,
     config: ShareCoordinatorConfig,
+    /// The clock of the snapshot timestamps and of the cold-partition
+    /// snapshot, Kafka's `time`.
+    wall_clock: Arc<dyn WallClock>,
 }
 
 impl ShareCoordinator {
@@ -247,6 +252,21 @@ impl ShareCoordinator {
         partitions: Arc<PartitionRegistry>,
         config: ShareCoordinatorConfig,
     ) -> Self {
+        Self::with_wall_clock(
+            node_id,
+            partitions,
+            config,
+            Arc::new(qubit_clock::StdWallClock::new()),
+        )
+    }
+
+    /// [`ShareCoordinator::new`] with the wall clock injected.
+    pub(crate) fn with_wall_clock(
+        node_id: krabka_metadata::NodeId,
+        partitions: Arc<PartitionRegistry>,
+        config: ShareCoordinatorConfig,
+        wall_clock: Arc<dyn WallClock>,
+    ) -> Self {
         Self {
             node_id,
             partitions,
@@ -254,7 +274,13 @@ impl ShareCoordinator {
             leader_partitions: RwLock::new(HashMap::new()),
             next_generation: AtomicU64::new(0),
             config,
+            wall_clock,
         }
+    }
+
+    /// The current time in milliseconds since the epoch.
+    fn now_ms(&self) -> i64 {
+        crate::time_util::epoch_millis(self.wall_clock.now())
     }
 
     /// Applies the leadership of `image` to the led partitions.

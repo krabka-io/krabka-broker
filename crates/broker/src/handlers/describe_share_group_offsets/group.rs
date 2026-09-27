@@ -158,7 +158,9 @@ mod tests {
         coordinator::unified::share::persistence::{
             InitializedTopic, ShareGroupMetadataValue, ShareGroupStatePartitionMetadataValue,
         },
-        handlers::describe_share_group_offsets::test_support::{image_with_topic, start_broker},
+        handlers::describe_share_group_offsets::test_support::{
+            image_with_topic, register_topic, start_broker,
+        },
     };
 
     /// Denies topic `Describe` on one named topic, and allows every other
@@ -203,6 +205,10 @@ mod tests {
         }
     }
 
+    /// A row read from initialized share state over an empty log: Kafka's
+    /// initial leader epoch 0, and the lag `0 - start offset - 0`, since
+    /// initialize sets the delivery complete count to 0 for a start offset it
+    /// is given.
     fn normal_partition(
         index: i32,
         start_offset: i64,
@@ -210,8 +216,8 @@ mod tests {
         DescribeShareGroupOffsetsResponsePartition {
             partition_index: index,
             start_offset,
-            leader_epoch: -1,
-            lag: -1,
+            leader_epoch: 0,
+            lag: -start_offset,
             error_code: codes::NONE,
             error_message: None,
             unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
@@ -254,6 +260,7 @@ mod tests {
             .share_persister()
             .cloned()
             .expect("share persister");
+        register_topic(&broker, "orders", orders_id).await;
         persister
             .initialize("g3", orders_id, 0, 1, Offset(5))
             .await
@@ -363,6 +370,7 @@ mod tests {
                 .cloned()
                 .expect("share persister");
             let image = image_with_topic("orders", topic_id);
+            register_topic(&broker, "orders", topic_id).await;
             persister
                 .initialize("g1", topic_id, 0, 1, Offset(33))
                 .await
@@ -439,10 +447,12 @@ mod tests {
                 partitions: 1,
                 replication_factor: 1,
             }));
+            register_topic(&broker, "orders", orders_id).await;
             persister
                 .initialize("g2", orders_id, 0, 1, Offset(7))
                 .await
                 .expect("seed orders state");
+            register_topic(&broker, "secret", secret_id).await;
             persister
                 .initialize("g2", secret_id, 0, 1, Offset(9))
                 .await

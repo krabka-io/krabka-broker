@@ -23,8 +23,12 @@ pub(super) struct PendingPartition {
     /// A forgotten or final-request row can still carry acknowledgements, but
     /// must not acquire more records.
     pub(super) fetchable: bool,
-    /// Acknowledgement batches piggybacked on this fetch. The handler applies
-    /// them before the acquire pass.
+    /// Whether the request named this partition. When the request carries
+    /// acknowledgements, every request partition gets an acknowledge result.
+    pub(super) in_request: bool,
+    /// Acknowledgement batches piggybacked on this fetch that passed every
+    /// check, so the acquire pass applies them. It is empty for a row whose
+    /// acknowledge half already failed.
     pub(super) ack_batches: Vec<AckBatch>,
     pub(super) out: PartitionData,
 }

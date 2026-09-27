@@ -105,6 +105,22 @@ mod tests {
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         image.apply(&topic("orders", topic_id));
         image.apply(&reg(NodeId(1)));
+        // The image has moved on to partition epoch 3; the request still
+        // carries the epoch of the committed ISR the proposal was built from.
+        image.apply(&krabka_metadata::MetadataRecord::V1Partition(
+            krabka_metadata::PartitionRecord {
+                topic: "orders".into(),
+                partition: 6,
+                leader: NodeId(4),
+                replicas: vec![NodeId(4), NodeId(1), NodeId(9)],
+                isr: vec![NodeId(4), NodeId(1), NodeId(9)],
+                leader_epoch: krabka_metadata::LeaderEpoch(12),
+                adding_replicas: vec![],
+                removing_replicas: vec![],
+                directories: vec![],
+                partition_epoch: 3,
+            },
+        ));
 
         let req = build_alter_partition_request(
             &image,

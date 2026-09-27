@@ -87,8 +87,9 @@
 //! partition. The leader maintains each follower's LEO from
 //! their Fetch requests and caches HW = `min(LEO over ISR)`. `acks=-1`
 //! Produces gate on `Partition::await_hw_at_least` before they respond.
-//! On timeout the producer gets per-partition
-//! `NOT_ENOUGH_REPLICAS_AFTER_APPEND` (code 20). Consumer Fetches
+//! On timeout the producer gets per-partition `REQUEST_TIMED_OUT` (code 7),
+//! and `NOT_ENOUGH_REPLICAS_AFTER_APPEND` (code 20) when the HW arrived but
+//! the ISR had shrunk below `min.insync.replicas`. Consumer Fetches
 //! (`replica_id == -1`) clamp visible batches and `last_stable_offset`
 //! at HW. The `read_committed` LSO becomes `Log::last_stable_offset(HW)`.
 //!

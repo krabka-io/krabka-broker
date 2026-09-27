@@ -212,6 +212,30 @@ impl Log {
         // batch at a mismatched base offset and the follower loops forever on
         // append_at — a phantom ISR member that pins the high-watermark.
         self.epoch_checkpoint.clear()?;
+        // Kafka's `truncateFullyAndStartAt` rebuilds the (now empty) producer
+        // state and takes a snapshot at the new base: its
+        // `ProducerStateManager.truncateFullyAndStartAt` resets the last
+        // snapshot offset to 0, so `takeSnapshot` writes one at any base above
+        // 0.
+        if new_base.0 > 0 {
+            producer_snapshot::write(&*self.io, &self.dir, new_base, &self.producer_state)?;
+        }
+        Ok(())
+    }
+
+    /// Kafka's `ProducerStateManager.takeSnapshot`: write the producer state at
+    /// the log end offset, so a reopen restores it from the snapshot and
+    /// replays nothing. A snapshot already at that offset is kept, and none is
+    /// written at or below the log start, which Kafka takes as the last
+    /// snapshot offset when no snapshot survives a reload.
+    ///
+    /// # Errors
+    /// Returns an error when the snapshot cannot be written.
+    pub fn take_producer_snapshot(&mut self) -> Result<(), LogError> {
+        let log_end = self.log_end_offset();
+        if log_end.0 > self.producer_reload_range(log_end).log_start {
+            producer_snapshot::write(&*self.io, &self.dir, log_end, &self.producer_state)?;
+        }
         Ok(())
     }
 
@@ -310,9 +334,17 @@ impl Log {
         self.producer_state.values().copied().collect()
     }
 
-    /// Close all segments. Drop runs automatically when `self` moves;
-    /// this method just names the operation explicitly.
-    pub fn close(self) {
+    /// Close all segments, first taking a producer-state snapshot at the log
+    /// end as Kafka's `UnifiedLog.close` does. A snapshot that cannot be
+    /// written is not an error: the next open replays the log instead.
+    pub fn close(mut self) {
+        if let Err(error) = self.take_producer_snapshot() {
+            tracing::warn!(
+                dir = %self.dir.display(),
+                %error,
+                "producer-state snapshot on close failed; the next open replays the log"
+            );
+        }
         drop(self);
     }
 

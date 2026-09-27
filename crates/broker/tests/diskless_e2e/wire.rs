@@ -87,8 +87,8 @@ pub(crate) fn value_at(index: usize) -> Bytes {
 /// quorum round, so `count` acknowledgements mean `count` committed quorum
 /// rounds rather than one.
 ///
-/// A `NOT_ENOUGH_REPLICAS_AFTER_APPEND` is **not** retried. It means the
-/// append landed but the quorum never committed it, which is the failure this
+/// A `REQUEST_TIMED_OUT` is **not** retried. It means the append landed
+/// but the quorum never committed it, which is the failure this
 /// suite exists to catch, so it fails the test instead of being papered over.
 pub(crate) async fn produce_all(client: &Client, topic_id: WireUuid, values: &[Bytes]) {
     for (index, value) in values.iter().enumerate() {

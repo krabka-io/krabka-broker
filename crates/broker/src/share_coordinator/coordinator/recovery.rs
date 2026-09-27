@@ -64,9 +64,10 @@ impl ShareCoordinator {
     /// `Partition::read_log` takes the log mutex and reads from disk.
     pub(super) async fn load_partition(&self, state_partition: PartitionIndex, generation: u64) {
         let read_max = self.config.recovery_read_max;
+        let updates_per_snapshot = self.config.snapshot_update_records_per_snapshot;
         let replayed = match self.partitions.get(bootstrap::TOPIC, state_partition) {
             Some(part) => tokio::task::spawn_blocking(move || {
-                replay_partition(&part, state_partition, read_max)
+                replay_partition(&part, state_partition, read_max, updates_per_snapshot)
             })
             .await
             .unwrap_or_else(|error| {
@@ -142,6 +143,7 @@ fn replay_partition(
     part: &Partition,
     state_partition: PartitionIndex,
     read_max: krabka_units::ByteSize,
+    updates_per_snapshot: u32,
 ) -> Result<HashMap<ShareStateKey3, SharePartitionState>, BrokerError> {
     let mut replayed = HashMap::new();
     let mut offset = part.log_start_offset();
@@ -177,8 +179,14 @@ fn replay_partition(
                     continue;
                 };
 
-                let st = replayed.entry(map_key).or_default();
-                replay_value(st, &key, value, rec_offset, state_partition);
+                replay_value(
+                    &mut replayed,
+                    map_key,
+                    &key,
+                    value,
+                    (rec_offset, updates_per_snapshot),
+                    state_partition,
+                );
             }
             offset = Offset(batch.base_offset + i64::from(batch.last_offset_delta) + 1);
         }
@@ -186,23 +194,32 @@ fn replay_partition(
     Ok(replayed)
 }
 
-/// Folds one replayed record value into `st`.
+/// Folds one replayed record value into the state of `map_key`, as Kafka's
+/// `handleShareSnapshot` and `handleShareUpdate` do.
 ///
-/// A snapshot record resets the state and records `last_snapshot_offset`. An
-/// update record applies a delta.
+/// A snapshot record replaces the state and records `last_snapshot_offset`.
+/// An update record merges into the state, or starts it when the key has
+/// none. `position` is the record offset and the snapshot threshold.
 fn replay_value(
-    st: &mut SharePartitionState,
+    replayed: &mut HashMap<ShareStateKey3, SharePartitionState>,
+    map_key: ShareStateKey3,
     key: &ShareStateKey,
     value: &Bytes,
-    rec_offset: Offset,
+    position: (Offset, u32),
     partition: PartitionIndex,
 ) {
+    let (rec_offset, updates_per_snapshot) = position;
     match key.record_type {
         KEY_SHARE_SNAPSHOT => match ShareSnapshotValue::decode(value) {
-            Ok(snap) => {
-                st.apply_snapshot(&snap);
-                st.last_snapshot_offset = rec_offset;
-            }
+            Ok(snap) => match replayed.get_mut(&map_key) {
+                Some(st) => st.apply_snapshot(&snap, rec_offset, updates_per_snapshot),
+                None => {
+                    replayed.insert(
+                        map_key,
+                        SharePartitionState::from_snapshot(&snap, rec_offset),
+                    );
+                }
+            },
             Err(e) => warn!(
                 partition = partition.get(),
                 error = %e,
@@ -210,7 +227,12 @@ fn replay_value(
             ),
         },
         KEY_SHARE_UPDATE => match ShareUpdateValue::decode(value) {
-            Ok(upd) => st.apply_update(&upd),
+            Ok(upd) => match replayed.get_mut(&map_key) {
+                Some(st) => st.apply_update(&upd),
+                None => {
+                    replayed.insert(map_key, SharePartitionState::from_update(&upd));
+                }
+            },
             Err(e) => warn!(
                 partition = partition.get(),
                 error = %e,

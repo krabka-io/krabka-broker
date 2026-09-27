@@ -14,6 +14,27 @@ use krabka_log::Offset;
 
 use super::{AcquiredRange, AcquisitionState, InFlightBatch, RecordState, clamp_i32};
 
+/// The smallest delivery count at which Kafka throttles a run:
+/// `SharePartition.MINIMUM_THROTTLE_RECORDS_DELIVERY_LIMIT`.
+const MINIMUM_THROTTLE_LIMIT: i16 = 2;
+
+/// Kafka's `SharePartition.throttleRecordsDeliveryLimit`:
+/// `max(2, ceil(max_attempts / 2))`.
+fn throttle_limit(max_attempts: i16) -> i16 {
+    MINIMUM_THROTTLE_LIMIT.max(max_attempts / 2 + max_attempts % 2)
+}
+
+/// How much one [`AcquisitionState::acquire_shaped`] pass may take.
+#[derive(Debug, Clone, Copy)]
+pub struct AcquireShape<'a> {
+    /// The records the pass may take: a hard limit in `record_limit` mode and
+    /// a soft one in `batch_optimized` mode.
+    pub max_records: i32,
+    /// The last offset of each log batch that the read returned, ascending.
+    /// `Some` selects `batch_optimized` mode.
+    pub batch_ends: Option<&'a [Offset]>,
+}
+
 impl AcquisitionState {
     /// Extends the live window with newly produced records.
     ///
@@ -223,12 +244,48 @@ impl AcquisitionState {
         lock_dur: Duration,
         max_attempts: i16,
     ) -> Vec<AcquiredRange> {
+        self.acquire_shaped(
+            member,
+            AcquireShape {
+                max_records,
+                batch_ends: None,
+            },
+            last_offset,
+            (now, lock_dur),
+            max_attempts,
+        )
+    }
+
+    /// [`AcquisitionState::acquire`] with Kafka's acquire mode.
+    ///
+    /// With `batch_ends`, the `batch_optimized` mode: `max_records` is a soft
+    /// limit, and a run that it cuts is cut at the end of the log batch that
+    /// holds the cut, so a whole batch goes out, as Kafka's
+    /// `lastOffsetFromBatchWithRequestOffset` does. Without it, the
+    /// `record_limit` mode: at most `max_records` records.
+    ///
+    /// Either way, Kafka's delivery throttle applies to a run whose delivery
+    /// count has reached `max(2, ceil(max_attempts / 2))`
+    /// (`SharePartition.throttleRecordsDeliveryLimit`): it goes out only as
+    /// the first thing of a pass, a part of it whose size halves with each
+    /// further delivery, and a single record on its last attempt, so one bad
+    /// record does not take a whole batch to the delivery limit. Nothing is
+    /// acquired after it.
+    pub fn acquire_shaped(
+        &mut self,
+        member: &str,
+        shape: AcquireShape<'_>,
+        last_offset: Offset,
+        (now, lock_dur): (Instant, Duration),
+        max_attempts: i16,
+    ) -> Vec<AcquiredRange> {
+        let throttle_limit = throttle_limit(max_attempts);
         let mut acquired = Vec::new();
-        let mut remaining = i64::from(max_records.max(0));
+        let mut remaining = i64::from(shape.max_records.max(0));
         let mut i = 0;
         let mut any_change = false;
         while i < self.batches.len() {
-            if remaining == 0 {
+            if remaining <= 0 {
                 break;
             }
             if self.batches[i].first_offset > last_offset {
@@ -249,10 +306,30 @@ impl AcquisitionState {
                 i += 1;
                 continue;
             }
-            // Split if the Available run exceeds the remaining budget or
-            // crosses the last offset that the log read returned.
-            let split_at = (self.batches[i].first_offset + remaining)
-                .min(Offset(last_offset.0.saturating_add(1)));
+            let first = self.batches[i].first_offset;
+            let delivery_count = self.batches[i].delivery_count;
+            let throttled = delivery_count >= throttle_limit;
+            if throttled && !acquired.is_empty() {
+                break;
+            }
+            let take = if throttled {
+                let halvings = u32::try_from(delivery_count - throttle_limit + 1).unwrap_or(63);
+                let portion = (self.batches[i].len() >> halvings.min(63)).max(1);
+                let alone = max_attempts > 2 && delivery_count == max_attempts - 1;
+                if alone { 1 } else { portion.min(remaining) }
+            } else {
+                remaining
+            };
+            // Split where the budget ends, or at the end of the log batch that
+            // holds that point, and never past the last offset of the read.
+            let mut split_at = first + take;
+            if !throttled && let Some(ends) = shape.batch_ends {
+                let cut = split_at - 1;
+                if let Some(end) = ends.iter().copied().find(|end| *end >= cut) {
+                    split_at = end + 1;
+                }
+            }
+            let split_at = split_at.min(Offset(last_offset.0.saturating_add(1)));
             self.split_at(i, split_at);
             let b = &mut self.batches[i];
             b.state = RecordState::Acquired;
@@ -267,6 +344,9 @@ impl AcquisitionState {
             remaining -= b.len();
             any_change = true;
             i += 1;
+            if throttled {
+                break;
+            }
         }
         if any_change {
             self.dirty = true;
@@ -290,7 +370,7 @@ mod tests {
         for _ in 0..2 {
             // max_attempts = 2
             let _ = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 2);
-            s.expire_locks(t0() + Duration::from_secs(31));
+            s.expire_locks(t0() + Duration::from_secs(31), 2);
         }
         let acq = s.acquire(
             "m1",
@@ -485,5 +565,78 @@ mod tests {
         // The remaining [4,9] is still Available.
         let acq2 = s.acquire("m2", 100, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         assert!(acq2[0].first == 4 && acq2[0].last == 9);
+    }
+
+    /// Kafka's delivery throttle and acquire modes, over one ten-record run.
+    #[test]
+    fn acquire_follows_the_throttle_and_the_acquire_mode() {
+        // (delivery count of the run, max attempts, batch ends, max records,
+        // acquired ranges)
+        type Row = (i16, i16, Option<&'static [Offset]>, i32, Vec<(i64, i64)>);
+        let rows: Vec<Row> = vec![
+            // record_limit cuts at the budget.
+            (0, 5, None, 3, vec![(0, 2)]),
+            // batch_optimized rounds the cut up to the end of its log batch.
+            (0, 5, Some(&[Offset(4), Offset(9)]), 3, vec![(0, 4)]),
+            // Under the throttle limit of 3 the whole run goes out.
+            (2, 5, None, 10, vec![(0, 9)]),
+            // At the limit, half of the run.
+            (3, 5, None, 10, vec![(0, 4)]),
+            // On the last attempt, one record alone.
+            (4, 5, None, 10, vec![(0, 0)]),
+            // A limit of 2 throttles nothing before archiving.
+            (1, 2, None, 10, vec![(0, 9)]),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (delivery_count, max_attempts, batch_ends, max_records, want) in rows {
+            let mut s = AcquisitionState::new(Offset(0));
+            s.materialize(Offset(10), 100);
+            s.batches[0].delivery_count = delivery_count;
+            let got: Vec<_> = s
+                .acquire_shaped(
+                    "m",
+                    AcquireShape {
+                        max_records,
+                        batch_ends,
+                    },
+                    Offset(i64::MAX),
+                    (t0(), LOCK),
+                    max_attempts,
+                )
+                .into_iter()
+                .map(|range| (range.first.0, range.last.0))
+                .collect();
+            actual.push((delivery_count, max_attempts, max_records, got));
+            expected.push((delivery_count, max_attempts, max_records, want));
+        }
+        assert!(actual == expected);
+    }
+
+    /// A throttled run goes out only as the first thing of a pass.
+    #[test]
+    fn a_throttled_run_waits_behind_records_already_acquired() {
+        let mut s = AcquisitionState::new(Offset(0));
+        s.materialize(Offset(10), 100);
+        s.split_at(0, Offset(5));
+        s.batches[1].delivery_count = 3;
+        let first = s.acquire("m", 100, Offset(i64::MAX), t0(), LOCK, 5);
+        let second = s.acquire("m", 100, Offset(i64::MAX), t0(), LOCK, 5);
+        check!(
+            first
+                == vec![AcquiredRange {
+                    first: Offset(0),
+                    last: Offset(4),
+                    delivery_count: 1,
+                }]
+        );
+        check!(
+            second
+                == vec![AcquiredRange {
+                    first: Offset(5),
+                    last: Offset(6),
+                    delivery_count: 4,
+                }]
+        );
     }
 }

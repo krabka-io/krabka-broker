@@ -241,6 +241,159 @@ mod tests {
         PartitionFixture, bs, image_with, image_with_partition,
     };
 
+    /// Kafka's `ReplicationControlManager.validateAlterPartitionData`, in its
+    /// order. The partition has leader 2, replicas `[2, 4, 6]`, leader epoch 9
+    /// and partition epoch 11. Each row changes one input of an otherwise
+    /// valid request, or two where the order between two checks is the point.
+    #[test]
+    fn a_row_is_validated_in_kafkas_order_with_kafkas_codes() {
+        struct Case {
+            name: &'static str,
+            broker_id: i32,
+            leader_epoch: i32,
+            partition_epoch: i32,
+            isr: &'static [i32],
+            error_code: i16,
+        }
+        let valid = Case {
+            name: "valid",
+            broker_id: 2,
+            leader_epoch: 9,
+            partition_epoch: 11,
+            isr: &[2, 4],
+            error_code: codes::NONE,
+        };
+        let cases = [
+            Case {
+                name: "leader epoch above the controller's",
+                leader_epoch: 10,
+                error_code: codes::NOT_CONTROLLER,
+                ..valid
+            },
+            Case {
+                name: "partition epoch above the controller's",
+                partition_epoch: 12,
+                error_code: codes::NOT_CONTROLLER,
+                ..valid
+            },
+            Case {
+                name: "higher partition epoch wins over a lower leader epoch",
+                leader_epoch: 8,
+                partition_epoch: 12,
+                error_code: codes::NOT_CONTROLLER,
+                ..valid
+            },
+            Case {
+                name: "leader epoch below the controller's",
+                leader_epoch: 8,
+                error_code: codes::FENCED_LEADER_EPOCH,
+                ..valid
+            },
+            Case {
+                name: "fenced epoch wins over a sender that does not lead",
+                broker_id: 4,
+                leader_epoch: 8,
+                error_code: codes::FENCED_LEADER_EPOCH,
+                ..valid
+            },
+            Case {
+                name: "sender is not the leader",
+                broker_id: 4,
+                error_code: codes::INVALID_REQUEST,
+                ..valid
+            },
+            Case {
+                name: "partition epoch below the controller's",
+                partition_epoch: 10,
+                error_code: codes::INVALID_UPDATE_VERSION,
+                ..valid
+            },
+            Case {
+                name: "stale partition epoch wins over an invalid ISR",
+                partition_epoch: 10,
+                isr: &[4, 4],
+                error_code: codes::INVALID_UPDATE_VERSION,
+                ..valid
+            },
+            Case {
+                name: "duplicate ISR member",
+                isr: &[2, 4, 4],
+                error_code: codes::INVALID_REQUEST,
+                ..valid
+            },
+            Case {
+                name: "ISR member outside the replicas",
+                isr: &[2, 5],
+                error_code: codes::INVALID_REQUEST,
+                ..valid
+            },
+            Case {
+                name: "ISR without the leader",
+                isr: &[4, 6],
+                error_code: codes::INVALID_REQUEST,
+                ..valid
+            },
+            Case {
+                name: "empty ISR",
+                isr: &[],
+                error_code: codes::INVALID_REQUEST,
+                ..valid
+            },
+            Case { ..valid },
+        ];
+        let image = image_with_partition(
+            &PartitionFixture {
+                partition: 7,
+                leader: 2,
+                replicas: &[2, 4, 6],
+                isr: &[2, 4],
+                leader_epoch: 9,
+                partition_epoch: 11,
+            },
+            &[(2, 20), (4, 40), (6, 60)],
+        );
+        let active = image.brokers().map(|broker| broker.node_id.0).collect();
+        for case in cases {
+            let mut changes = Vec::new();
+            let response = handle_partition_with_recovery(
+                &image,
+                &active,
+                case.broker_id,
+                "t",
+                &ReqPartitionData {
+                    partition_index: 7,
+                    leader_epoch: case.leader_epoch,
+                    partition_epoch: case.partition_epoch,
+                    new_isr: case.isr.to_vec(),
+                    ..Default::default()
+                },
+                &mut changes,
+            );
+            let expected = if case.error_code == codes::NONE {
+                RespPartitionData {
+                    partition_index: 7,
+                    leader_id: 2,
+                    leader_epoch: 9,
+                    isr: case.isr.to_vec(),
+                    partition_epoch: 12,
+                    ..Default::default()
+                }
+            } else {
+                RespPartitionData {
+                    partition_index: 7,
+                    error_code: case.error_code,
+                    ..Default::default()
+                }
+            };
+            assert2::check!(response == expected, "{}", case.name);
+            assert2::check!(
+                changes.len() == usize::from(case.error_code == codes::NONE),
+                "{}",
+                case.name
+            );
+        }
+    }
+
     #[test]
     fn matching_epochs_succeed() {
         let image = image_with(&[(1, 10), (2, 20), (3, 30)]);
