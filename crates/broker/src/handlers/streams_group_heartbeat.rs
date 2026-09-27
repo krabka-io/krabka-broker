@@ -816,6 +816,77 @@ mod tests {
         .expect("streams.version visible");
     }
 
+    /// `StreamsGroupHeartbeat` v1 changes only the response. Trunk's
+    /// `GroupMetadataManager` sets the int64 `AcceptableRecoveryLag` from the
+    /// group config and leaves the v0 int32 legacy field at 0, and KIP-1331's
+    /// `TopologyDescriptionRequired` stays false while no topology-description
+    /// plugin is configured, which krabka never has. The same join at v0 and
+    /// at v1 therefore answers the same response apart from the lag, which v0
+    /// does not carry. A refused v1 heartbeat answers the generated defaults,
+    /// as Kafka's `getErrorResponse` does: -1 for the lag, false for the flag.
+    #[tokio::test]
+    async fn handle_answers_v1_with_the_recovery_lag_and_no_topology_description_request() {
+        use crate::coordinator::unified::streams::actor::response::error_resp;
+
+        const LAG: i64 = 4_321;
+        let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+            cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
+            cfg.streams_group.acceptable_recovery_lag = LAG;
+        })
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        finalize_streams_version(&broker).await;
+        let principal = principal();
+        let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+        let ctx = context(&principal, &peer);
+        let heartbeat = |req: &StreamsGroupHeartbeatRequest, version: i16| {
+            let bytes = crate::test_support::encode_request(req, version);
+            let broker = &broker;
+            let ctx = &ctx;
+            async move {
+                let resp = handle(broker, version, 1, &bytes, ctx)
+                    .await
+                    .expect("handle");
+                crate::test_support::decode_response::<StreamsGroupHeartbeatResponse>(
+                    &resp, version,
+                )
+            }
+        };
+
+        let v0 = heartbeat(&request("streams-app-v0"), 0).await;
+        let v1 = heartbeat(&request("streams-app-v1"), 1).await;
+
+        assert!(v1.error_code == codes::NONE, "{v1:?}");
+        assert!(
+            v1 == StreamsGroupHeartbeatResponse {
+                acceptable_recovery_lag: LAG,
+                topology_description_required: false,
+                ..v0.clone()
+            }
+        );
+        assert!(v0.acceptable_recovery_lag == -1 && v0.acceptable_recovery_lag_legacy == 0);
+
+        let refused = heartbeat(
+            &StreamsGroupHeartbeatRequest {
+                group_id: "streams-app-absent".into(),
+                member_id: "m1".into(),
+                member_epoch: 3,
+                ..Default::default()
+            },
+            1,
+        )
+        .await;
+        assert!(
+            refused
+                == error_resp(
+                    codes::GROUP_ID_NOT_FOUND,
+                    Some("Streams group streams-app-absent not found.".into()),
+                )
+        );
+        assert!(refused.acceptable_recovery_lag == -1 && !refused.topology_description_required);
+        broker_handle.shutdown().await;
+    }
+
     #[tokio::test]
     async fn handle_unfinalized_feature_returns_unsupported_version_with_read_allowed() {
         let version = streams_group_heartbeat_response::MAX_VERSION;
