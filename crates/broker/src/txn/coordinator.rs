@@ -76,10 +76,21 @@ pub(crate) struct TxnCoordinator {
     /// `pending_completions`.
     completion_requested: Notify,
     marker_transport: Option<MarkerTransport>,
+    /// The open connection to each remote transaction coordinator that a
+    /// `Produce` transaction check reached, reused for the next check.
+    verification_connections:
+        Mutex<std::collections::HashMap<krabka_metadata::NodeId, VerificationConnection>>,
     group_coordinator: Option<Arc<crate::coordinator::GroupCoordinator>>,
     /// Test gate in front of every transaction-marker fan-out.
     #[cfg(any(test, feature = "test-helpers"))]
     pub(crate) marker_fanout_gate: fanout_gate::MarkerFanoutGate,
+}
+
+/// A connection a transaction check keeps open to a remote coordinator, and
+/// the endpoint it was dialed at.
+struct VerificationConnection {
+    address: (String, u16),
+    connection: krabka_client_core::Connection,
 }
 
 struct MarkerTransport {
@@ -116,6 +127,7 @@ impl TxnCoordinator {
             pending_completions: StdMutex::new(BTreeSet::new()),
             completion_requested: Notify::new(),
             marker_transport: None,
+            verification_connections: Mutex::new(std::collections::HashMap::new()),
             group_coordinator: None,
             #[cfg(any(test, feature = "test-helpers"))]
             marker_fanout_gate: fanout_gate::MarkerFanoutGate::default(),

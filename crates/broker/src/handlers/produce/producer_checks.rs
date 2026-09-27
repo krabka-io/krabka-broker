@@ -57,20 +57,33 @@ const CONCURRENT_TRANSACTIONS_BACKOFF: std::time::Duration = std::time::Duration
 /// `CONCURRENT_TRANSACTIONS`.
 const CONCURRENT_TRANSACTIONS_RETRY: std::time::Duration = std::time::Duration::from_millis(100);
 
-/// KIP-890 part 1: verify that a batch belongs to a transaction the
-/// coordinator knows, and return the check the log runs before the append.
+/// Where the KIP-890 check of one batch stands before the coordinator call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Verification {
+    /// The append runs this check, and no coordinator call is needed.
+    Settled(Option<crate::partition::ProducerAppendCheck>),
+    /// The coordinator of the request's `transactional_id` has to add or
+    /// verify the partition first. The check holds the guard the log
+    /// started.
+    Coordinator(crate::partition::ProducerAppendCheck),
+}
+
+/// KIP-890 part 1: find out whether a batch starts a transaction the
+/// coordinator has to know about, and the check the log runs before the
+/// append.
 ///
-/// This is Kafka's `ReplicaManager.handleProduceAppend` up to the append:
+/// This is Kafka's `ReplicaManager.handleProduceAppend` up to the coordinator
+/// call:
 ///
 /// - A transactional batch whose producer has no open transaction at the
 ///   batch epoch starts a verification on the log. The coordinator of the
 ///   request's `transactional_id` then verifies the partition (`Produce`
-///   below v12) or adds it (v12 and later). A request without a
-///   `transactional_id` skips the call, and the append then refuses the batch.
+///   below v12) or adds it (v12 and later), in one call for every such
+///   partition of the request: [`verify_with_coordinator`]. A request without
+///   a `transactional_id` skips the call, and the append then refuses the
+///   batch.
 /// - A batch at an epoch below the producer's epoch answers
 ///   `INVALID_PRODUCER_EPOCH`.
-/// - A coordinator error answers the code Kafka's
-///   `postVerificationCallback` puts in the produce row.
 ///
 /// Every batch with a producer id gets a check, so the append also refuses a
 /// non-transactional batch from a producer with an open transaction.
@@ -82,16 +95,14 @@ const CONCURRENT_TRANSACTIONS_RETRY: std::time::Duration = std::time::Duration::
 pub(super) async fn verify_transactional_produce(
     batch: &PreparedBatch,
     partition: &crate::partition::Partition,
-    coordinator: &std::sync::Arc<crate::txn::coordinator::TxnCoordinator>,
-    (image, topic_name): (&krabka_metadata::MetadataImage, &str),
     request: TransactionRequest<'_>,
-) -> Result<Option<crate::partition::ProducerAppendCheck>, (i16, Option<String>)> {
+) -> Result<Verification, (i16, Option<String>)> {
     let is_transactional = batch.attributes.is_transactional();
     if batch.producer_id < 0 {
         return if is_transactional {
             Err((codes::INVALID_PRODUCER_ID_MAPPING, None))
         } else {
-            Ok(None)
+            Ok(Verification::Settled(None))
         };
     }
     let transactional_batch = krabka_log::TransactionalBatch {
@@ -106,7 +117,7 @@ pub(super) async fn verify_transactional_produce(
         guard: krabka_log::VerificationGuard::SENTINEL,
     };
     if !is_transactional {
-        return Ok(Some(unverified));
+        return Ok(Verification::Settled(Some(unverified)));
     }
     let supports_epoch_bump = request.version >= FIRST_ADD_PARTITION_PRODUCE_VERSION;
     let guard = partition
@@ -125,49 +136,71 @@ pub(super) async fn verify_transactional_produce(
                 None,
             )
         })?;
-    if guard == krabka_log::VerificationGuard::SENTINEL {
-        return Ok(Some(unverified));
-    }
-    let Some(transactional_id) = request.transactional_id else {
+    if guard == krabka_log::VerificationGuard::SENTINEL || request.transactional_id.is_none() {
         // Kafka skips the coordinator call without a transactional id, and
         // the append then refuses the batch with INVALID_TXN_STATE.
-        return Ok(Some(unverified));
-    };
-    let check = crate::txn::coordinator::produce_verification::PartitionCheck {
-        transactional_id,
-        producer_id: transactional_batch.producer_id,
-        producer_epoch: batch.producer_epoch,
-        partition: crate::txn::state::TopicPartition {
-            topic: topic_name.to_string(),
-            partition: partition.index,
+        return Ok(Verification::Settled(Some(unverified)));
+    }
+    Ok(Verification::Coordinator(
+        crate::partition::ProducerAppendCheck {
+            batch: transactional_batch,
+            guard,
         },
+    ))
+}
+
+/// Ask the coordinator of the request's `transactional_id` about every
+/// partition of the request that starts a transaction for one producer, in
+/// one `AddPartitionsToTxn` call, and return its answer per partition.
+///
+/// This is Kafka's `ReplicaManager.maybeSendPartitionsToTransactionCoordinator`
+/// with `AddPartitionsToTxnManager.addOrVerifyTransaction`. At transaction
+/// version 2 (`Produce` v12 and later) a `CONCURRENT_TRANSACTIONS` answer for
+/// any partition resends the whole set after
+/// `add.partitions.to.txn.retry.backoff.ms`, until
+/// `add.partitions.to.txn.retry.backoff.max.ms` has passed, as
+/// `maybeRetryOnConcurrentTransactions` does.
+pub(super) async fn verify_with_coordinator(
+    coordinator: &std::sync::Arc<crate::txn::coordinator::TxnCoordinator>,
+    image: &krabka_metadata::MetadataImage,
+    request: TransactionRequest<'_>,
+    (producer_id, producer_epoch): (krabka_log::ProducerId, i16),
+    partitions: Vec<crate::txn::state::TopicPartition>,
+) -> Vec<(crate::txn::state::TopicPartition, i16)> {
+    let Some(transactional_id) = request.transactional_id else {
+        return partitions
+            .into_iter()
+            .map(|partition| (partition, codes::INVALID_TXN_STATE))
+            .collect();
+    };
+    let supports_epoch_bump = request.version >= FIRST_ADD_PARTITION_PRODUCE_VERSION;
+    let check = crate::txn::coordinator::produce_verification::TransactionCheck {
+        transactional_id,
+        producer_id,
+        producer_epoch,
+        partitions,
         verify_only: !supports_epoch_bump,
     };
     let txnv = crate::txn::version::resolve_txn_version(image);
     let retry_until = std::time::Instant::now() + CONCURRENT_TRANSACTIONS_RETRY;
-    let code = loop {
-        let code = coordinator
-            .add_or_verify_partition(
+    loop {
+        let answers = coordinator
+            .add_or_verify_partitions(
                 check.clone(),
                 txnv,
                 crate::txn::coordinator::produce_verification::INTERNAL_REGISTRATION_VERSION,
             )
             .await;
-        if code == codes::CONCURRENT_TRANSACTIONS
-            && supports_epoch_bump
+        if supports_epoch_bump
+            && answers
+                .iter()
+                .any(|(_, code)| *code == codes::CONCURRENT_TRANSACTIONS)
             && std::time::Instant::now() < retry_until
         {
             tokio::time::sleep(CONCURRENT_TRANSACTIONS_BACKOFF).await;
             continue;
         }
-        break code;
-    };
-    match produce_verification_code(code, request.version) {
-        (codes::NONE, _) => Ok(Some(crate::partition::ProducerAppendCheck {
-            batch: transactional_batch,
-            guard,
-        })),
-        refused => Err(refused),
+        return answers;
     }
 }
 
@@ -344,14 +377,6 @@ mod tests {
     #[tokio::test]
     async fn transactional_produce_rejects_malformed_producers() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let coordinator = Arc::new(crate::txn::coordinator::TxnCoordinator::new(
-            krabka_audit::NodeId(1),
-            Arc::new(crate::partition_registry::PartitionRegistry::new()),
-            Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
-            1,
-            krabka_units::mebibytes(1),
-        ));
-        let image = krabka_metadata::MetadataImage::new(Uuid::nil());
         let partition = crate::broker::spawn_partition(
             "orders".to_string(),
             krabka_ids::PartitionIndex(0),
@@ -367,8 +392,6 @@ mod tests {
             let refused = verify_transactional_produce(
                 &transactional_batch(producer_id, 0),
                 &partition,
-                &coordinator,
-                (&image, "orders"),
                 super::TransactionRequest {
                     transactional_id: Some("tid"),
                     version: 11,

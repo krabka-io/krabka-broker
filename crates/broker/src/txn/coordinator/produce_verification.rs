@@ -34,35 +34,55 @@ use crate::{
 /// the legacy `INVALID_PRODUCER_EPOCH` downgrade below that version.
 pub(crate) const INTERNAL_REGISTRATION_VERSION: i16 = 2;
 
-/// One partition check for one transactional producer.
+/// The partitions one transactional producer asks its coordinator to add or
+/// verify: Kafka's `AddPartitionsToTxnTransaction`.
 #[derive(Debug, Clone)]
-pub(crate) struct PartitionCheck<'a> {
+pub(crate) struct TransactionCheck<'a> {
     pub(crate) transactional_id: &'a str,
     pub(crate) producer_id: ProducerId,
     pub(crate) producer_epoch: i16,
-    pub(crate) partition: TopicPartition,
-    /// `true` asks only whether the partition is in the transaction. `false`
-    /// adds it.
+    pub(crate) partitions: Vec<TopicPartition>,
+    /// `true` asks only whether the partitions are in the transaction.
+    /// `false` adds them.
     pub(crate) verify_only: bool,
 }
 
 impl TxnCoordinator {
-    /// Ask the coordinator of `check.transactional_id` to add or verify one
-    /// partition, and return the coordinator's answer for that partition.
+    /// Ask the coordinator of `check.transactional_id` to add or verify every
+    /// partition of `check` in one `AddPartitionsToTxn` call, and return the
+    /// coordinator's answer for each partition, in `check.partitions` order.
     ///
-    /// The answer is the partition error code of the `AddPartitionsToTxn`
-    /// response, or the top-level error code when the response has one. A
-    /// coordinator this broker cannot find answers `COORDINATOR_NOT_AVAILABLE`,
-    /// and a call that does not complete answers `NETWORK_EXCEPTION`, as
-    /// Kafka's `AddPartitionsToTxnManager` reports them.
-    pub(crate) async fn add_or_verify_partition(
+    /// This is Kafka's `AddPartitionsToTxnManager.addOrVerifyTransaction`:
+    /// one request per coordinator for all the partitions a `Produce` starts a
+    /// transaction on. A partition's answer is its partition error code, or
+    /// the top-level error code when the response has one. A coordinator this
+    /// broker cannot find answers `COORDINATOR_NOT_AVAILABLE`, and a call that
+    /// does not complete answers `NETWORK_EXCEPTION`, for every partition.
+    pub(crate) async fn add_or_verify_partitions(
         self: &std::sync::Arc<Self>,
-        check: PartitionCheck<'_>,
+        check: TransactionCheck<'_>,
         txnv: TxnVersion,
         version: i16,
-    ) -> i16 {
+    ) -> Vec<(TopicPartition, i16)> {
+        let code = match self.add_or_verify_remote(&check).await {
+            Remote::Local => return self.add_or_verify_locally(check, txnv, version).await,
+            Remote::Answered(answers) => return answers,
+            Remote::Failed(code) => code,
+        };
+        check
+            .partitions
+            .into_iter()
+            .map(|partition| (partition, code))
+            .collect()
+    }
+
+    /// The remote half of [`Self::add_or_verify_partitions`].
+    async fn add_or_verify_remote(
+        self: &std::sync::Arc<Self>,
+        check: &TransactionCheck<'_>,
+    ) -> Remote {
         let Some(transport) = &self.marker_transport else {
-            return self.add_or_verify_locally(check, txnv, version).await;
+            return Remote::Local;
         };
         let image = transport.controller.current_image();
         drop(self.refresh_leader_partitions(&image).await);
@@ -71,13 +91,13 @@ impl TxnCoordinator {
             .partition(bootstrap::TOPIC, coordinator_partition.get())
             .map(|partition| partition.leader)
         else {
-            return codes::COORDINATOR_NOT_AVAILABLE;
+            return Remote::Failed(codes::COORDINATOR_NOT_AVAILABLE);
         };
         if leader == self.node_id {
-            return self.add_or_verify_locally(check, txnv, version).await;
+            return Remote::Local;
         }
         let Some(broker) = image.broker(leader) else {
-            return codes::COORDINATOR_NOT_AVAILABLE;
+            return Remote::Failed(codes::COORDINATOR_NOT_AVAILABLE);
         };
         let (host, port) = broker
             .endpoints
@@ -87,34 +107,108 @@ impl TxnCoordinator {
                 || (broker.host.clone(), broker.port),
                 |endpoint| (endpoint.host.clone(), endpoint.port),
             );
-        let topic = AddPartitionsToTxnTopic {
-            name: check.partition.topic.clone(),
-            partitions: vec![check.partition.partition.get()],
-            ..Default::default()
-        };
+        let mut topics: Vec<AddPartitionsToTxnTopic> = Vec::new();
+        for partition in &check.partitions {
+            match topics
+                .iter_mut()
+                .find(|topic| topic.name == partition.topic)
+            {
+                Some(topic) => topic.partitions.push(partition.partition.get()),
+                None => topics.push(AddPartitionsToTxnTopic {
+                    name: partition.topic.clone(),
+                    partitions: vec![partition.partition.get()],
+                    ..Default::default()
+                }),
+            }
+        }
         let request = AddPartitionsToTxnRequest {
             transactions: vec![AddPartitionsToTxnTransaction {
                 transactional_id: check.transactional_id.to_string(),
                 producer_id: check.producer_id.get(),
                 producer_epoch: check.producer_epoch,
-                topics: vec![topic.clone()],
+                topics: topics.clone(),
                 verify_only: check.verify_only,
                 ..Default::default()
             }],
             v3_and_below_transactional_id: check.transactional_id.to_string(),
             v3_and_below_producer_id: check.producer_id.get(),
             v3_and_below_producer_epoch: check.producer_epoch,
-            v3_and_below_topics: vec![topic],
+            v3_and_below_topics: topics,
             ..Default::default()
         };
+        let Some(connection) = self
+            .verification_connection(transport, leader, (&host, port))
+            .await
+        else {
+            return Remote::Failed(codes::NETWORK_EXCEPTION);
+        };
+        let response = match connection.send(request).await {
+            Ok(response) => response,
+            Err(error) => {
+                self.drop_verification_connection(leader).await;
+                tracing::warn!(%error, %host, port, "transaction partition check failed");
+                return Remote::Failed(codes::NETWORK_EXCEPTION);
+            }
+        };
+        if response.error_code != codes::NONE {
+            return Remote::Failed(response.error_code);
+        }
+        let transaction = response
+            .results_by_transaction
+            .iter()
+            .find(|transaction| transaction.transactional_id == check.transactional_id);
+        Remote::Answered(
+            check
+                .partitions
+                .iter()
+                .map(|partition| {
+                    let code = transaction
+                        .and_then(|transaction| {
+                            transaction
+                                .topic_results
+                                .iter()
+                                .find(|topic| topic.name == partition.topic)
+                        })
+                        .and_then(|topic| {
+                            topic
+                                .results_by_partition
+                                .iter()
+                                .find(|answer| answer.partition_index == partition.partition.get())
+                        })
+                        .map_or(codes::UNKNOWN_SERVER_ERROR, |answer| {
+                            answer.partition_error_code
+                        });
+                    (partition.clone(), code)
+                })
+                .collect(),
+        )
+    }
+
+    /// The open connection to the coordinator on `leader`, dialed on first
+    /// use and kept for the next check, as Kafka's `AddPartitionsToTxnManager`
+    /// keeps its `NetworkClient` connection. `None` when the dial fails.
+    async fn verification_connection(
+        &self,
+        transport: &super::MarkerTransport,
+        leader: krabka_metadata::NodeId,
+        (host, port): (&str, u16),
+    ) -> Option<krabka_client_core::Connection> {
+        let mut connections = self.verification_connections.lock().await;
+        if let Some(cached) = connections.get(&leader)
+            && cached.address.0 == host
+            && cached.address.1 == port
+            && !cached.connection.is_closed()
+        {
+            return Some(cached.connection.clone());
+        }
         let options = krabka_client_core::ConnectionOptions {
             client_id: format!("krabka-broker-txn-{}", self.node_id),
             ..Default::default()
         };
-        let connection = match transport
+        match transport
             .inter_broker_client
             .connect_as_connection(
-                &host,
+                host,
                 port,
                 transport.protocol,
                 &transport.server_name,
@@ -122,69 +216,73 @@ impl TxnCoordinator {
             )
             .await
         {
-            Ok(connection) => connection,
+            Ok(connection) => {
+                if let Some(stale) = connections.insert(
+                    leader,
+                    super::VerificationConnection {
+                        address: (host.to_string(), port),
+                        connection: connection.clone(),
+                    },
+                ) {
+                    stale.connection.close();
+                }
+                Some(connection)
+            }
             Err(error) => {
                 tracing::warn!(%error, %host, port, "transaction partition check connect failed");
-                return codes::NETWORK_EXCEPTION;
+                None
             }
-        };
-        let response = match connection.send(request).await {
-            Ok(response) => response,
-            Err(error) => {
-                connection.close();
-                tracing::warn!(%error, %host, port, "transaction partition check failed");
-                return codes::NETWORK_EXCEPTION;
-            }
-        };
-        connection.close();
-        if response.error_code != codes::NONE {
-            return response.error_code;
         }
-        response
-            .results_by_transaction
-            .iter()
-            .find(|transaction| transaction.transactional_id == check.transactional_id)
-            .and_then(|transaction| {
-                transaction
-                    .topic_results
-                    .iter()
-                    .find(|topic| topic.name == check.partition.topic)
-            })
-            .and_then(|topic| {
-                topic
-                    .results_by_partition
-                    .iter()
-                    .find(|partition| partition.partition_index == check.partition.partition.get())
-            })
-            .map_or(codes::UNKNOWN_SERVER_ERROR, |partition| {
-                partition.partition_error_code
-            })
+    }
+
+    /// Forget and close the connection to `leader` after a failed call.
+    async fn drop_verification_connection(&self, leader: krabka_metadata::NodeId) {
+        if let Some(stale) = self.verification_connections.lock().await.remove(&leader) {
+            stale.connection.close();
+        }
     }
 
     async fn add_or_verify_locally(
         &self,
-        check: PartitionCheck<'_>,
+        check: TransactionCheck<'_>,
         txnv: TxnVersion,
         version: i16,
-    ) -> i16 {
+    ) -> Vec<(TopicPartition, i16)> {
         if check.verify_only {
-            self.verify_partition_in_transaction(&check).await
+            let mut answers = Vec::with_capacity(check.partitions.len());
+            for partition in &check.partitions {
+                let code = self
+                    .verify_partition_in_transaction(&check, partition)
+                    .await;
+                answers.push((partition.clone(), code));
+            }
+            answers
         } else {
-            self.register_partitions(
-                check.transactional_id,
-                check.producer_id,
-                check.producer_epoch,
-                vec![check.partition],
-                txnv,
-                version,
-            )
-            .await
+            let code = self
+                .register_partitions(
+                    check.transactional_id,
+                    check.producer_id,
+                    check.producer_epoch,
+                    check.partitions.clone(),
+                    txnv,
+                    version,
+                )
+                .await;
+            check
+                .partitions
+                .into_iter()
+                .map(|partition| (partition, code))
+                .collect()
         }
     }
 
     /// Whether the partition is in the producer's transaction. Kafka's
     /// `TransactionCoordinator.handleVerifyPartitionsInTransaction`.
-    pub(crate) async fn verify_partition_in_transaction(&self, check: &PartitionCheck<'_>) -> i16 {
+    async fn verify_partition_in_transaction(
+        &self,
+        check: &TransactionCheck<'_>,
+        partition: &TopicPartition,
+    ) -> i16 {
         if let Some(code) = self.coordinator_error(check.transactional_id).await {
             return code;
         }
@@ -194,10 +292,20 @@ impl TxnCoordinator {
         let entry = entry.lock().await;
         verification_code(
             (entry.producer_id, entry.producer_epoch, entry.state),
-            entry.partitions.contains(&check.partition),
+            entry.partitions.contains(partition),
             (check.producer_id, check.producer_epoch),
         )
     }
+}
+
+/// How the remote half of a check ended.
+enum Remote {
+    /// This broker is the coordinator, or has no inter-broker transport.
+    Local,
+    /// The coordinator answered each partition.
+    Answered(Vec<(TopicPartition, i16)>),
+    /// Every partition gets this code.
+    Failed(i16),
 }
 
 /// The verify-only answer for one partition, from the transaction's identity,

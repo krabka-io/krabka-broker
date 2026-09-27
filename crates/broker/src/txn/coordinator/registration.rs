@@ -175,21 +175,23 @@ impl TxnCoordinator {
         txnv: TxnVersion,
     ) -> i16 {
         let code = self
-            .add_or_verify_partition(
-                super::produce_verification::PartitionCheck {
+            .add_or_verify_partitions(
+                super::produce_verification::TransactionCheck {
                     transactional_id: tid,
                     producer_id,
                     producer_epoch,
-                    partition: crate::txn::state::TopicPartition {
+                    partitions: vec![crate::txn::state::TopicPartition {
                         topic: OFFSETS_TOPIC.to_string(),
                         partition: offsets_partition,
-                    },
+                    }],
                     verify_only: false,
                 },
                 txnv,
                 INTERNAL_REGISTRATION_VERSION,
             )
-            .await;
+            .await
+            .first()
+            .map_or(crate::codes::UNKNOWN_SERVER_ERROR, |(_, code)| *code);
         // `TxnOffsetCommit` has answered a coordinator it cannot reach with
         // COORDINATOR_NOT_AVAILABLE, which its clients retry.
         if code == crate::codes::NETWORK_EXCEPTION {
