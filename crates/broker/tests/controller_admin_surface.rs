@@ -911,8 +911,9 @@ async fn controller_listener_registers_a_restarted_broker_as_kafka_does() {
 /// Kafka's `UNKNOWN_TOPIC_ID`.
 const UNKNOWN_TOPIC_ID: i16 = 100;
 
-/// Kafka's `BROKER_ID_NOT_REGISTERED`.
-const BROKER_ID_NOT_REGISTERED: i16 = 102;
+/// Kafka's `STALE_BROKER_EPOCH`: `ClusterControlManager.checkBrokerEpoch`
+/// answers it for a broker with no registration, too.
+const STALE_BROKER_EPOCH: i16 = 77;
 
 /// Kafka's `ILLEGAL_SASL_STATE`.
 const ILLEGAL_SASL_STATE: i16 = 34;
@@ -988,7 +989,7 @@ async fn controller_listener_serves_the_inter_broker_and_sasl_apis() {
     check!(
         allocate
             == AllocateProducerIdsResponse {
-                error_code: BROKER_ID_NOT_REGISTERED,
+                error_code: STALE_BROKER_EPOCH,
                 producer_id_start: -1,
                 producer_id_len: 0,
                 ..Default::default()
