@@ -258,6 +258,9 @@ mod tests {
             .controller
             .submit_change(vec![MetadataRecord::V1BrokerRegistration(
                 BrokerRegistrationRecord {
+                    fenced: false,
+                    in_controlled_shutdown: false,
+                    cordoned_log_dirs: None,
                     node_id: NodeId(42),
                     broker_epoch: 7,
                     incarnation_id: uuid::Uuid::nil(),
@@ -631,6 +634,9 @@ mod tests {
 
     fn registration(node_id: u64, listeners: &[&str]) -> BrokerRegistrationRecord {
         BrokerRegistrationRecord {
+            fenced: false,
+            in_controlled_shutdown: false,
+            cordoned_log_dirs: None,
             node_id: NodeId(node_id),
             broker_epoch: 7,
             incarnation_id: uuid::Uuid::nil(),

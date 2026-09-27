@@ -100,6 +100,12 @@ pub(crate) fn start_broker_with_super_users(
     for user in super_users {
         cfg.super_users.insert((*user).to_string());
     }
+    // Act-as is gated by KIP-373's `CreateTokens` ACL. With no ACL authorizer
+    // Kafka allows every operation, so the gate is exercised against the ACL
+    // authorizer, which grants the super users everything.
+    cfg.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
+        cfg.super_users.iter().cloned().collect(),
+    ));
     // Inter-broker auth uses PLAIN as the first listed user. `BrokerConfig::
     // validate` requires inter-broker credentials when the inter-broker
     // listener is SASL, even though a single-broker cluster never opens an

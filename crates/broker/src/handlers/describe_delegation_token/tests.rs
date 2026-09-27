@@ -138,6 +138,15 @@ async fn seed_token(
         .expect("seed token");
 }
 
+/// A request with a null `owners` list, which is Kafka's "no filter". The
+/// schema default is an empty list, which is `ownersListEmpty`: show nothing.
+fn no_owner_filter() -> DescribeDelegationTokenRequest {
+    DescribeDelegationTokenRequest {
+        owners: None,
+        ..Default::default()
+    }
+}
+
 fn token_ids(
     resp: &krabka_protocol::owned::describe_delegation_token_response::DescribeDelegationTokenResponse,
 ) -> std::collections::HashSet<&str> {
@@ -148,7 +157,7 @@ fn token_ids(
 async fn returns_auth_disabled_when_no_secret_key() {
     let dir = TempDir::new().unwrap();
     let controller = test_controller(dir.path().into()).await;
-    let req = DescribeDelegationTokenRequest::default();
+    let req = no_owner_filter();
     let resp = handle(
         &req,
         &authed("alice"),
@@ -169,7 +178,7 @@ async fn anonymous_caller_is_rejected_without_exposing_token_hmacs() {
     seed_token(&controller, "t-a", kp("alice"), vec![]).await;
 
     let resp = handle(
-        &DescribeDelegationTokenRequest::default(),
+        &no_owner_filter(),
         &anonymous(),
         Some(&secret),
         &*controller,
@@ -198,7 +207,7 @@ async fn token_authed_caller_is_refused_entirely() {
     seed_token(&controller, "t-b", kp("alice"), vec![]).await;
 
     let resp = handle(
-        &DescribeDelegationTokenRequest::default(),
+        &no_owner_filter(),
         &authed_with_token("alice", true),
         Some(&secret),
         &*controller,
@@ -224,7 +233,7 @@ async fn token_authed_caller_gets_request_not_allowed_before_auth_disabled() {
     let controller = test_controller(dir.path().into()).await;
 
     let resp = handle(
-        &DescribeDelegationTokenRequest::default(),
+        &no_owner_filter(),
         &authed_with_token("alice", true),
         None,
         &*controller,
@@ -309,7 +318,7 @@ async fn filter_token_matches_owner_renewer_or_token_id_acl() {
         }
 
         let resp = handle(
-            &DescribeDelegationTokenRequest::default(),
+            &no_owner_filter(),
             &authed("alice"),
             Some(&secret),
             &*controller,
@@ -384,7 +393,7 @@ async fn describe_acl_on_token_id_grants_exactly_that_token() {
     seed_acl(&controller, describe_token_acl("t-a", "bob")).await;
 
     let resp = handle(
-        &DescribeDelegationTokenRequest::default(),
+        &no_owner_filter(),
         &authed("bob"),
         Some(&secret),
         &*controller,
@@ -400,6 +409,43 @@ async fn describe_acl_on_token_id_grants_exactly_that_token() {
     controller.cancel().await;
 }
 
+/// KIP-373: `DescribeTokens` on `User:<owner>` grants every token that owner
+/// holds, and nothing of another owner's (Kafka's `authorizeRequester`).
+#[tokio::test]
+async fn describe_tokens_acl_on_the_owner_grants_all_of_their_tokens() {
+    let dir = TempDir::new().unwrap();
+    let controller = test_controller(dir.path().into()).await;
+    let secret = SecretBytes::new(b"k".to_vec());
+    seed_token(&controller, "t-a1", kp("alice"), vec![]).await;
+    seed_token(&controller, "t-a2", kp("alice"), vec![]).await;
+    seed_token(&controller, "t-c", kp("carol"), vec![]).await;
+    seed_acl(
+        &controller,
+        AclEntry {
+            resource_type: ResourceType::User,
+            resource_name: "User:alice".into(),
+            pattern_type: PatternType::Literal,
+            principal: "User:bob".into(),
+            host: "*".into(),
+            operation: AclOperation::DescribeTokens,
+            permission_type: PermissionType::Allow,
+        },
+    )
+    .await;
+
+    let resp = handle(
+        &no_owner_filter(),
+        &authed("bob"),
+        Some(&secret),
+        &*controller,
+        &peer(),
+        &simple_authz(),
+    );
+    assert!(resp.error_code == 0);
+    assert!(token_ids(&resp) == std::collections::HashSet::from(["t-a1", "t-a2"]));
+    controller.cancel().await;
+}
+
 /// A caller with no owner/renewer relationship and no matching ACL sees
 /// nothing — pure token possession (proven by nothing here, since the
 /// handler never inspects HMACs) grants no visibility on its own.
@@ -411,7 +457,7 @@ async fn unrelated_caller_sees_nothing() {
     seed_token(&controller, "t-a", kp("alice"), vec![]).await;
 
     let resp = handle(
-        &DescribeDelegationTokenRequest::default(),
+        &no_owner_filter(),
         &authed("eve"),
         Some(&secret),
         &*controller,

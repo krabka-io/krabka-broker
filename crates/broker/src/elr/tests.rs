@@ -110,6 +110,9 @@ fn seed_records_with_min_isr(min_isr: &str) -> Vec<MetadataRecord> {
 /// new rather than as one that has come back.
 fn registration_record(incarnation: u128) -> MetadataRecord {
     MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
+        fenced: false,
+        in_controlled_shutdown: false,
+        cordoned_log_dirs: None,
         node_id: NodeId(3),
         broker_epoch: 0,
         incarnation_id: uuid::Uuid::from_u128(incarnation),
@@ -173,6 +176,9 @@ async fn activate_followers(broker: &Broker) {
                 .iter()
                 .map(|&node| {
                     MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
+                        fenced: false,
+                        in_controlled_shutdown: false,
+                        cordoned_log_dirs: None,
                         node_id: NodeId(node),
                         broker_epoch: 0,
                         incarnation_id: uuid::Uuid::from_u128(u128::from(node)),

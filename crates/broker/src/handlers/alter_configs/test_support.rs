@@ -41,6 +41,9 @@ pub(super) fn image_with_broker(node_id: u64) -> krabka_metadata::MetadataImage 
     let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
     image.apply(&MetadataRecord::V1BrokerRegistration(
         krabka_metadata::BrokerRegistrationRecord {
+            fenced: false,
+            in_controlled_shutdown: false,
+            cordoned_log_dirs: None,
             node_id: krabka_metadata::NodeId(node_id),
             broker_epoch: 0,
             incarnation_id: uuid::Uuid::nil(),

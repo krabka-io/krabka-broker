@@ -178,10 +178,13 @@ pub(crate) fn handle(
         });
     }
 
+    // Kafka answers from `ClientQuotasImage.describe`, which fills a bare
+    // `new DescribeClientQuotasResponseData()`: the message keeps its
+    // generated default, the empty string, not null.
     let resp = DescribeClientQuotasResponse {
         throttle_time_ms: 0,
         error_code: NONE,
-        error_message: None,
+        error_message: Some(String::new()),
         entries: Some(entries),
         ..Default::default()
     };
@@ -375,7 +378,7 @@ mod tests {
         let allowed = DescribeClientQuotasResponse {
             throttle_time_ms: 0,
             error_code: NONE,
-            error_message: None,
+            error_message: Some(String::new()),
             entries: Some(vec![EntryData {
                 entity: vec![EntityData {
                     entity_type: "user".into(),
@@ -474,7 +477,7 @@ mod tests {
 
         check!(resp.throttle_time_ms == 0, "{resp:?}");
         check!(resp.error_code == 0, "{resp:?}");
-        check!(resp.error_message == None, "{resp:?}");
+        check!(resp.error_message.as_deref() == Some(""), "{resp:?}");
         let entries = resp.entries.expect("entries");
         assert!(entries.len() == 1, "{entries:?}");
         let entry = &entries[0];
@@ -536,7 +539,7 @@ mod tests {
         let found = |name: Option<&str>, value: f64| DescribeClientQuotasResponse {
             throttle_time_ms: 0,
             error_code: NONE,
-            error_message: None,
+            error_message: Some(String::new()),
             entries: Some(vec![EntryData {
                 entity: vec![EntityData {
                     entity_type: "user".into(),
@@ -686,7 +689,7 @@ mod tests {
         let expected = DescribeClientQuotasResponse {
             throttle_time_ms: 0,
             error_code: 0,
-            error_message: None,
+            error_message: Some(String::new()),
             entries: Some(Vec::new()),
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };

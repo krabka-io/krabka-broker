@@ -508,6 +508,9 @@ fn image_of(
     let broker = krabka_audit::NodeId(1);
     let mut records = vec![MetadataRecord::V1BrokerRegistration(
         BrokerRegistrationRecord {
+            fenced: false,
+            in_controlled_shutdown: false,
+            cordoned_log_dirs: None,
             node_id: broker,
             broker_epoch: 0,
             incarnation_id: uuid::Uuid::nil(),

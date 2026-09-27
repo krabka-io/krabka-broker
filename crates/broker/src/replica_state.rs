@@ -1083,6 +1083,9 @@ mod tests {
         };
         let register = |node: u64, broker_epoch: i64| {
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
+                fenced: false,
+                in_controlled_shutdown: false,
+                cordoned_log_dirs: None,
                 node_id: NodeId(node),
                 broker_epoch,
                 incarnation_id: uuid::Uuid::nil(),

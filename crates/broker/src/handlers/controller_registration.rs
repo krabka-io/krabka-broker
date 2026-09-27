@@ -115,14 +115,14 @@ pub(crate) async fn handle(
         features,
     };
     if image.controller(node_id) == Some(&record) {
-        return response(version, 0, None);
+        return success(version);
     }
     match broker
         .controller
         .submit_change(vec![MetadataRecord::V1ControllerRegistration(record)])
         .await
     {
-        Ok(_) => response(version, 0, None),
+        Ok(_) => success(version),
         Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
             response(version, codes::NOT_CONTROLLER, None)
         }
@@ -173,6 +173,15 @@ fn decode_listeners(
         .collect()
 }
 
+/// A registration the controller accepted.
+///
+/// Kafka's `ControllerApis.handleControllerRegistration` answers success with a
+/// bare `ControllerRegistrationResponseData`, so `ErrorMessage` goes out as the
+/// generated default: the empty string, not null.
+fn success(version: i16) -> Result<Bytes, BrokerError> {
+    response(version, 0, Some(String::new()))
+}
+
 fn response(
     version: i16,
     error_code: i16,
@@ -180,9 +189,10 @@ fn response(
 ) -> Result<Bytes, BrokerError> {
     crate::handlers::encode_response(
         &ControllerRegistrationResponse {
+            throttle_time_ms: 0,
             error_code,
             error_message,
-            ..Default::default()
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
         },
         version,
     )
@@ -257,7 +267,13 @@ mod tests {
             .expect("an answer");
 
         assert2::check!(
-            decode_response(&answer, version) == ControllerRegistrationResponse::default()
+            decode_response(&answer, version)
+                == ControllerRegistrationResponse {
+                    throttle_time_ms: 0,
+                    error_code: 0,
+                    error_message: Some(String::new()),
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+                }
         );
         assert2::check!(
             broker

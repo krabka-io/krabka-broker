@@ -86,13 +86,16 @@ pub(super) async fn controller_registration(
         features,
     };
     if engine.current_image().controller(node_id) == Some(&record) {
-        return controller_registration_response(version, SUCCESS, None);
+        // Kafka's `ControllerApis.handleControllerRegistration` answers a
+        // success with a bare response, whose `ErrorMessage` keeps the
+        // generated default: the empty string.
+        return controller_registration_response(version, SUCCESS, Some(String::new()));
     }
     let result = engine
         .submit_change(vec![MetadataRecord::V1ControllerRegistration(record)])
         .await;
     match result {
-        Ok(_) => controller_registration_response(version, SUCCESS, None),
+        Ok(_) => controller_registration_response(version, SUCCESS, Some(String::new())),
         Err(error) => controller_registration_response(
             version,
             raft_error_code(&error),

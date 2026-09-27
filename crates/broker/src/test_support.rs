@@ -189,6 +189,9 @@ pub(crate) async fn seed_remote_broker(handle: &BrokerHandle, node_id: u64) {
         .controller
         .submit_change(vec![MetadataRecord::V1BrokerRegistration(
             krabka_metadata::BrokerRegistrationRecord {
+                fenced: false,
+                in_controlled_shutdown: false,
+                cordoned_log_dirs: None,
                 node_id: krabka_raft::NodeId(node_id),
                 broker_epoch: 0,
                 incarnation_id: uuid::Uuid::nil(),

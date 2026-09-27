@@ -187,6 +187,9 @@ impl Cluster {
         wait_for_leader(&broker).await;
         let registration = |node: u64| {
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
+                fenced: false,
+                in_controlled_shutdown: false,
+                cordoned_log_dirs: None,
                 node_id: NodeId(node),
                 broker_epoch: 0,
                 incarnation_id: uuid::Uuid::from_u128(u128::from(node)),

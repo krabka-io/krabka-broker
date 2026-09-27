@@ -25,6 +25,9 @@ const TOPIC_ID_BYTES: [u8; 16] = [7; 16];
 
 fn reg(node_id: u64, epoch: i64) -> MetadataRecord {
     MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
+        fenced: false,
+        in_controlled_shutdown: false,
+        cordoned_log_dirs: None,
         node_id: krabka_metadata::NodeId(node_id),
         broker_epoch: epoch,
         incarnation_id: uuid::Uuid::nil(),

@@ -82,6 +82,9 @@ pub(super) fn partition_record(
 
 pub(super) fn broker_record(node_id: NodeId) -> BrokerRegistrationRecord {
     BrokerRegistrationRecord {
+        fenced: false,
+        in_controlled_shutdown: false,
+        cordoned_log_dirs: None,
         node_id,
         broker_epoch: 0,
         incarnation_id: Uuid::new_v4(),

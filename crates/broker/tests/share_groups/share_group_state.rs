@@ -503,6 +503,8 @@ async fn new_partitions_of_a_known_topic_start_at_offset_zero() {
             topics: vec![CreatePartitionsTopic {
                 name: "t-grow".into(),
                 count: 4,
+                // No manual assignment: Kafka's admin client sends null.
+                assignments: None,
                 ..Default::default()
             }],
             timeout_ms: 5_000,

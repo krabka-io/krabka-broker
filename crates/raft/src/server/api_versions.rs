@@ -263,7 +263,8 @@ mod tests {
                     .iter()
                     .find(|feature| feature.name == "metadata.version")
                     .expect("metadata.version support");
-                assert2::assert!((metadata.min_version, metadata.max_version) == (7, 25));
+                // 3.3-IV3 through 4.4-IV1.
+                assert2::assert!((metadata.min_version, metadata.max_version) == (7, 32));
                 let finalized_metadata = resp
                     .finalized_features
                     .iter()

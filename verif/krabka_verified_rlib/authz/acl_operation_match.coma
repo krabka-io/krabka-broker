@@ -1,17 +1,17 @@
-(* #"/workspace/crates/verified/src/authz.rs" 112 0 116 9 *)
+(* #"/workspace/crates/verified/src/authz.rs" 116 0 120 9 *)
 
-let%span sauthz = "/workspace/crates/verified/src/authz.rs" 136 12 137 87
-let%span sauthz'0 = "/workspace/crates/verified/src/authz.rs" 137 19 137 87
-let%span sauthz'1 = "/workspace/crates/verified/src/authz.rs" 132 12 133 80
-let%span sauthz'2 = "/workspace/crates/verified/src/authz.rs" 133 19 133 80
-let%span sauthz'3 = "/workspace/crates/verified/src/authz.rs" 128 12 129 80
-let%span sauthz'4 = "/workspace/crates/verified/src/authz.rs" 129 19 129 80
-let%span sauthz'5 = "/workspace/crates/verified/src/authz.rs" 124 12 125 80
-let%span sauthz'6 = "/workspace/crates/verified/src/authz.rs" 125 19 125 80
-let%span sauthz'7 = "/workspace/crates/verified/src/authz.rs" 120 12 121 80
-let%span sauthz'8 = "/workspace/crates/verified/src/authz.rs" 121 19 121 80
-let%span sauthz'9 = "/workspace/crates/verified/src/authz.rs" 118 33 118 37
-let%span sauthz'10 = "/workspace/crates/verified/src/authz.rs" 102 10 110 59
+let%span sauthz = "/workspace/crates/verified/src/authz.rs" 140 12 141 87
+let%span sauthz'0 = "/workspace/crates/verified/src/authz.rs" 141 19 141 87
+let%span sauthz'1 = "/workspace/crates/verified/src/authz.rs" 136 12 137 80
+let%span sauthz'2 = "/workspace/crates/verified/src/authz.rs" 137 19 137 80
+let%span sauthz'3 = "/workspace/crates/verified/src/authz.rs" 132 12 133 80
+let%span sauthz'4 = "/workspace/crates/verified/src/authz.rs" 133 19 133 80
+let%span sauthz'5 = "/workspace/crates/verified/src/authz.rs" 128 12 129 80
+let%span sauthz'6 = "/workspace/crates/verified/src/authz.rs" 129 19 129 80
+let%span sauthz'7 = "/workspace/crates/verified/src/authz.rs" 124 12 125 80
+let%span sauthz'8 = "/workspace/crates/verified/src/authz.rs" 125 19 125 80
+let%span sauthz'9 = "/workspace/crates/verified/src/authz.rs" 122 33 122 37
+let%span sauthz'10 = "/workspace/crates/verified/src/authz.rs" 106 10 114 59
 
 use creusot.prelude.Any
 
@@ -28,287 +28,357 @@ type t_AclOperationKind =
   | AlterConfigs
   | IdempotentWrite
   | TwoPhaseCommit
+  | CreateTokens
+  | DescribeTokens
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let acl_operation_match [#"/workspace/crates/verified/src/authz.rs" 112 0 116 9] (stored: t_AclOperationKind)
+let acl_operation_match [#"/workspace/crates/verified/src/authz.rs" 116 0 120 9] (stored: t_AclOperationKind)
   (requested: t_AclOperationKind) (is_allow: bool) (return (x: bool)) = (! bb0
   [ bb0 = any
-    [ br0 -> {stored = All} (! bb24)
-    | br1 -> {stored = Read} (! bb23)
-    | br2 -> {stored = Write} (! bb22)
-    | br3 -> {stored = Create} (! bb18)
-    | br4 -> {stored = Delete} (! bb21)
-    | br5 -> {stored = Alter} (! bb20)
-    | br6 -> {stored = Describe} (! bb17)
-    | br7 -> {stored = ClusterAction} (! bb16)
-    | br8 -> {stored = DescribeConfigs} (! bb15)
-    | br9 -> {stored = AlterConfigs} (! bb19)
-    | br10 -> {stored = IdempotentWrite} (! bb14)
-    | br11 -> {stored = TwoPhaseCommit} (! bb13) ]
-  | bb13 = any
-    [ br0 -> {requested = All} (! bb105)
-    | br1 -> {requested = Read} (! bb105)
-    | br2 -> {requested = Write} (! bb105)
-    | br3 -> {requested = Create} (! bb105)
-    | br4 -> {requested = Delete} (! bb105)
-    | br5 -> {requested = Alter} (! bb105)
-    | br6 -> {requested = Describe} (! bb105)
-    | br7 -> {requested = ClusterAction} (! bb105)
-    | br8 -> {requested = DescribeConfigs} (! bb105)
-    | br9 -> {requested = AlterConfigs} (! bb105)
-    | br10 -> {requested = IdempotentWrite} (! bb105)
-    | br11 -> {requested = TwoPhaseCommit} (! bb107) ]
-  | bb105 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
-  | bb107 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
-  | bb14 = any
-    [ br0 -> {requested = All} (! bb102)
-    | br1 -> {requested = Read} (! bb102)
-    | br2 -> {requested = Write} (! bb102)
-    | br3 -> {requested = Create} (! bb102)
-    | br4 -> {requested = Delete} (! bb102)
-    | br5 -> {requested = Alter} (! bb102)
-    | br6 -> {requested = Describe} (! bb102)
-    | br7 -> {requested = ClusterAction} (! bb102)
-    | br8 -> {requested = DescribeConfigs} (! bb102)
-    | br9 -> {requested = AlterConfigs} (! bb102)
-    | br10 -> {requested = IdempotentWrite} (! bb104)
-    | br11 -> {requested = TwoPhaseCommit} (! bb102) ]
-  | bb102 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
-  | bb104 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
-  | bb19 = any
-    [ br0 -> {requested = All} (! bb77)
-    | br1 -> {requested = Read} (! bb77)
-    | br2 -> {requested = Write} (! bb77)
-    | br3 -> {requested = Create} (! bb77)
-    | br4 -> {requested = Delete} (! bb77)
-    | br5 -> {requested = Alter} (! bb77)
-    | br6 -> {requested = Describe} (! bb77)
-    | br7 -> {requested = ClusterAction} (! bb77)
-    | br8 -> {requested = DescribeConfigs} (! bb77)
-    | br9 -> {requested = AlterConfigs} (! bb79)
-    | br10 -> {requested = IdempotentWrite} (! bb77)
-    | br11 -> {requested = TwoPhaseCommit} (! bb77) ]
-  | bb77 = s0 [ s0 = [ &_25 <- false ] s1 | s1 = bb80 ]
-  | bb79 = s0 [ s0 = [ &_25 <- true ] s1 | s1 = bb80 ]
-  | bb80 = any [ br0 -> {_25 = false} (! bb82) | br1 -> {_25} (! bb81) ]
-  | bb81 = s0 [ s0 = [ &_ret <- [%#sauthz] true ] s1 | s1 = return {_ret} ]
-  | bb82 = any [ br0 -> {is_allow = false} (! bb84) | br1 -> {is_allow} (! bb83) ]
-  | bb83 = any
-    [ br0 -> {requested = All} (! bb85)
-    | br1 -> {requested = Read} (! bb85)
-    | br2 -> {requested = Write} (! bb85)
-    | br3 -> {requested = Create} (! bb85)
-    | br4 -> {requested = Delete} (! bb85)
-    | br5 -> {requested = Alter} (! bb85)
-    | br6 -> {requested = Describe} (! bb85)
-    | br7 -> {requested = ClusterAction} (! bb85)
-    | br8 -> {requested = DescribeConfigs} (! bb87)
-    | br9 -> {requested = AlterConfigs} (! bb85)
-    | br10 -> {requested = IdempotentWrite} (! bb85)
-    | br11 -> {requested = TwoPhaseCommit} (! bb85) ]
-  | bb85 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
-  | bb87 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
-  | bb84 = s0 [ s0 = [ &_ret <- [%#sauthz'0] false ] s1 | s1 = return {_ret} ]
+    [ br0 -> {stored = All} (! bb28)
+    | br1 -> {stored = Read} (! bb27)
+    | br2 -> {stored = Write} (! bb26)
+    | br3 -> {stored = Create} (! bb22)
+    | br4 -> {stored = Delete} (! bb25)
+    | br5 -> {stored = Alter} (! bb24)
+    | br6 -> {stored = Describe} (! bb21)
+    | br7 -> {stored = ClusterAction} (! bb20)
+    | br8 -> {stored = DescribeConfigs} (! bb19)
+    | br9 -> {stored = AlterConfigs} (! bb23)
+    | br10 -> {stored = IdempotentWrite} (! bb18)
+    | br11 -> {stored = TwoPhaseCommit} (! bb17)
+    | br12 -> {stored = CreateTokens} (! bb16)
+    | br13 -> {stored = DescribeTokens} (! bb15) ]
   | bb15 = any
-    [ br0 -> {requested = All} (! bb99)
-    | br1 -> {requested = Read} (! bb99)
-    | br2 -> {requested = Write} (! bb99)
-    | br3 -> {requested = Create} (! bb99)
-    | br4 -> {requested = Delete} (! bb99)
-    | br5 -> {requested = Alter} (! bb99)
-    | br6 -> {requested = Describe} (! bb99)
-    | br7 -> {requested = ClusterAction} (! bb99)
-    | br8 -> {requested = DescribeConfigs} (! bb101)
-    | br9 -> {requested = AlterConfigs} (! bb99)
-    | br10 -> {requested = IdempotentWrite} (! bb99)
-    | br11 -> {requested = TwoPhaseCommit} (! bb99) ]
-  | bb99 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
-  | bb101 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
+    [ br0 -> {requested = All} (! bb115)
+    | br1 -> {requested = Read} (! bb115)
+    | br2 -> {requested = Write} (! bb115)
+    | br3 -> {requested = Create} (! bb115)
+    | br4 -> {requested = Delete} (! bb115)
+    | br5 -> {requested = Alter} (! bb115)
+    | br6 -> {requested = Describe} (! bb115)
+    | br7 -> {requested = ClusterAction} (! bb115)
+    | br8 -> {requested = DescribeConfigs} (! bb115)
+    | br9 -> {requested = AlterConfigs} (! bb115)
+    | br10 -> {requested = IdempotentWrite} (! bb115)
+    | br11 -> {requested = TwoPhaseCommit} (! bb115)
+    | br12 -> {requested = CreateTokens} (! bb115)
+    | br13 -> {requested = DescribeTokens} (! bb117) ]
+  | bb115 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
+  | bb117 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
   | bb16 = any
-    [ br0 -> {requested = All} (! bb96)
-    | br1 -> {requested = Read} (! bb96)
-    | br2 -> {requested = Write} (! bb96)
-    | br3 -> {requested = Create} (! bb96)
-    | br4 -> {requested = Delete} (! bb96)
-    | br5 -> {requested = Alter} (! bb96)
-    | br6 -> {requested = Describe} (! bb96)
-    | br7 -> {requested = ClusterAction} (! bb98)
-    | br8 -> {requested = DescribeConfigs} (! bb96)
-    | br9 -> {requested = AlterConfigs} (! bb96)
-    | br10 -> {requested = IdempotentWrite} (! bb96)
-    | br11 -> {requested = TwoPhaseCommit} (! bb96) ]
-  | bb96 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
-  | bb98 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
+    [ br0 -> {requested = All} (! bb112)
+    | br1 -> {requested = Read} (! bb112)
+    | br2 -> {requested = Write} (! bb112)
+    | br3 -> {requested = Create} (! bb112)
+    | br4 -> {requested = Delete} (! bb112)
+    | br5 -> {requested = Alter} (! bb112)
+    | br6 -> {requested = Describe} (! bb112)
+    | br7 -> {requested = ClusterAction} (! bb112)
+    | br8 -> {requested = DescribeConfigs} (! bb112)
+    | br9 -> {requested = AlterConfigs} (! bb112)
+    | br10 -> {requested = IdempotentWrite} (! bb112)
+    | br11 -> {requested = TwoPhaseCommit} (! bb112)
+    | br12 -> {requested = CreateTokens} (! bb114)
+    | br13 -> {requested = DescribeTokens} (! bb112) ]
+  | bb112 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
+  | bb114 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
   | bb17 = any
-    [ br0 -> {requested = All} (! bb93)
-    | br1 -> {requested = Read} (! bb93)
-    | br2 -> {requested = Write} (! bb93)
-    | br3 -> {requested = Create} (! bb93)
-    | br4 -> {requested = Delete} (! bb93)
-    | br5 -> {requested = Alter} (! bb93)
-    | br6 -> {requested = Describe} (! bb95)
-    | br7 -> {requested = ClusterAction} (! bb93)
-    | br8 -> {requested = DescribeConfigs} (! bb93)
-    | br9 -> {requested = AlterConfigs} (! bb93)
-    | br10 -> {requested = IdempotentWrite} (! bb93)
-    | br11 -> {requested = TwoPhaseCommit} (! bb93) ]
-  | bb93 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
-  | bb95 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
-  | bb20 = any
-    [ br0 -> {requested = All} (! bb64)
-    | br1 -> {requested = Read} (! bb64)
-    | br2 -> {requested = Write} (! bb64)
-    | br3 -> {requested = Create} (! bb64)
-    | br4 -> {requested = Delete} (! bb64)
-    | br5 -> {requested = Alter} (! bb66)
-    | br6 -> {requested = Describe} (! bb64)
-    | br7 -> {requested = ClusterAction} (! bb64)
-    | br8 -> {requested = DescribeConfigs} (! bb64)
-    | br9 -> {requested = AlterConfigs} (! bb64)
-    | br10 -> {requested = IdempotentWrite} (! bb64)
-    | br11 -> {requested = TwoPhaseCommit} (! bb64) ]
-  | bb64 = s0 [ s0 = [ &_21 <- false ] s1 | s1 = bb67 ]
-  | bb66 = s0 [ s0 = [ &_21 <- true ] s1 | s1 = bb67 ]
-  | bb67 = any [ br0 -> {_21 = false} (! bb69) | br1 -> {_21} (! bb68) ]
-  | bb68 = s0 [ s0 = [ &_ret <- [%#sauthz'1] true ] s1 | s1 = return {_ret} ]
-  | bb69 = any [ br0 -> {is_allow = false} (! bb71) | br1 -> {is_allow} (! bb70) ]
-  | bb70 = any
-    [ br0 -> {requested = All} (! bb72)
-    | br1 -> {requested = Read} (! bb72)
-    | br2 -> {requested = Write} (! bb72)
-    | br3 -> {requested = Create} (! bb72)
-    | br4 -> {requested = Delete} (! bb72)
-    | br5 -> {requested = Alter} (! bb72)
-    | br6 -> {requested = Describe} (! bb74)
-    | br7 -> {requested = ClusterAction} (! bb72)
-    | br8 -> {requested = DescribeConfigs} (! bb72)
-    | br9 -> {requested = AlterConfigs} (! bb72)
-    | br10 -> {requested = IdempotentWrite} (! bb72)
-    | br11 -> {requested = TwoPhaseCommit} (! bb72) ]
-  | bb72 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
-  | bb74 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
-  | bb71 = s0 [ s0 = [ &_ret <- [%#sauthz'2] false ] s1 | s1 = return {_ret} ]
-  | bb21 = any
-    [ br0 -> {requested = All} (! bb51)
-    | br1 -> {requested = Read} (! bb51)
-    | br2 -> {requested = Write} (! bb51)
-    | br3 -> {requested = Create} (! bb51)
-    | br4 -> {requested = Delete} (! bb53)
-    | br5 -> {requested = Alter} (! bb51)
-    | br6 -> {requested = Describe} (! bb51)
-    | br7 -> {requested = ClusterAction} (! bb51)
-    | br8 -> {requested = DescribeConfigs} (! bb51)
-    | br9 -> {requested = AlterConfigs} (! bb51)
-    | br10 -> {requested = IdempotentWrite} (! bb51)
-    | br11 -> {requested = TwoPhaseCommit} (! bb51) ]
-  | bb51 = s0 [ s0 = [ &_17 <- false ] s1 | s1 = bb54 ]
-  | bb53 = s0 [ s0 = [ &_17 <- true ] s1 | s1 = bb54 ]
-  | bb54 = any [ br0 -> {_17 = false} (! bb56) | br1 -> {_17} (! bb55) ]
-  | bb55 = s0 [ s0 = [ &_ret <- [%#sauthz'3] true ] s1 | s1 = return {_ret} ]
-  | bb56 = any [ br0 -> {is_allow = false} (! bb58) | br1 -> {is_allow} (! bb57) ]
-  | bb57 = any
-    [ br0 -> {requested = All} (! bb59)
-    | br1 -> {requested = Read} (! bb59)
-    | br2 -> {requested = Write} (! bb59)
-    | br3 -> {requested = Create} (! bb59)
-    | br4 -> {requested = Delete} (! bb59)
-    | br5 -> {requested = Alter} (! bb59)
-    | br6 -> {requested = Describe} (! bb61)
-    | br7 -> {requested = ClusterAction} (! bb59)
-    | br8 -> {requested = DescribeConfigs} (! bb59)
-    | br9 -> {requested = AlterConfigs} (! bb59)
-    | br10 -> {requested = IdempotentWrite} (! bb59)
-    | br11 -> {requested = TwoPhaseCommit} (! bb59) ]
-  | bb59 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
-  | bb61 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
-  | bb58 = s0 [ s0 = [ &_ret <- [%#sauthz'4] false ] s1 | s1 = return {_ret} ]
+    [ br0 -> {requested = All} (! bb109)
+    | br1 -> {requested = Read} (! bb109)
+    | br2 -> {requested = Write} (! bb109)
+    | br3 -> {requested = Create} (! bb109)
+    | br4 -> {requested = Delete} (! bb109)
+    | br5 -> {requested = Alter} (! bb109)
+    | br6 -> {requested = Describe} (! bb109)
+    | br7 -> {requested = ClusterAction} (! bb109)
+    | br8 -> {requested = DescribeConfigs} (! bb109)
+    | br9 -> {requested = AlterConfigs} (! bb109)
+    | br10 -> {requested = IdempotentWrite} (! bb109)
+    | br11 -> {requested = TwoPhaseCommit} (! bb111)
+    | br12 -> {requested = CreateTokens} (! bb109)
+    | br13 -> {requested = DescribeTokens} (! bb109) ]
+  | bb109 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
+  | bb111 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
   | bb18 = any
-    [ br0 -> {requested = All} (! bb90)
-    | br1 -> {requested = Read} (! bb90)
-    | br2 -> {requested = Write} (! bb90)
-    | br3 -> {requested = Create} (! bb92)
-    | br4 -> {requested = Delete} (! bb90)
-    | br5 -> {requested = Alter} (! bb90)
-    | br6 -> {requested = Describe} (! bb90)
-    | br7 -> {requested = ClusterAction} (! bb90)
-    | br8 -> {requested = DescribeConfigs} (! bb90)
-    | br9 -> {requested = AlterConfigs} (! bb90)
-    | br10 -> {requested = IdempotentWrite} (! bb90)
-    | br11 -> {requested = TwoPhaseCommit} (! bb90) ]
-  | bb90 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
-  | bb92 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
-  | bb22 = any
-    [ br0 -> {requested = All} (! bb38)
-    | br1 -> {requested = Read} (! bb38)
-    | br2 -> {requested = Write} (! bb40)
-    | br3 -> {requested = Create} (! bb38)
-    | br4 -> {requested = Delete} (! bb38)
-    | br5 -> {requested = Alter} (! bb38)
-    | br6 -> {requested = Describe} (! bb38)
-    | br7 -> {requested = ClusterAction} (! bb38)
-    | br8 -> {requested = DescribeConfigs} (! bb38)
-    | br9 -> {requested = AlterConfigs} (! bb38)
-    | br10 -> {requested = IdempotentWrite} (! bb38)
-    | br11 -> {requested = TwoPhaseCommit} (! bb38) ]
-  | bb38 = s0 [ s0 = [ &_13 <- false ] s1 | s1 = bb41 ]
-  | bb40 = s0 [ s0 = [ &_13 <- true ] s1 | s1 = bb41 ]
-  | bb41 = any [ br0 -> {_13 = false} (! bb43) | br1 -> {_13} (! bb42) ]
-  | bb42 = s0 [ s0 = [ &_ret <- [%#sauthz'5] true ] s1 | s1 = return {_ret} ]
-  | bb43 = any [ br0 -> {is_allow = false} (! bb45) | br1 -> {is_allow} (! bb44) ]
-  | bb44 = any
-    [ br0 -> {requested = All} (! bb46)
-    | br1 -> {requested = Read} (! bb46)
-    | br2 -> {requested = Write} (! bb46)
-    | br3 -> {requested = Create} (! bb46)
-    | br4 -> {requested = Delete} (! bb46)
-    | br5 -> {requested = Alter} (! bb46)
-    | br6 -> {requested = Describe} (! bb48)
-    | br7 -> {requested = ClusterAction} (! bb46)
-    | br8 -> {requested = DescribeConfigs} (! bb46)
-    | br9 -> {requested = AlterConfigs} (! bb46)
-    | br10 -> {requested = IdempotentWrite} (! bb46)
-    | br11 -> {requested = TwoPhaseCommit} (! bb46) ]
-  | bb46 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
-  | bb48 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
-  | bb45 = s0 [ s0 = [ &_ret <- [%#sauthz'6] false ] s1 | s1 = return {_ret} ]
+    [ br0 -> {requested = All} (! bb106)
+    | br1 -> {requested = Read} (! bb106)
+    | br2 -> {requested = Write} (! bb106)
+    | br3 -> {requested = Create} (! bb106)
+    | br4 -> {requested = Delete} (! bb106)
+    | br5 -> {requested = Alter} (! bb106)
+    | br6 -> {requested = Describe} (! bb106)
+    | br7 -> {requested = ClusterAction} (! bb106)
+    | br8 -> {requested = DescribeConfigs} (! bb106)
+    | br9 -> {requested = AlterConfigs} (! bb106)
+    | br10 -> {requested = IdempotentWrite} (! bb108)
+    | br11 -> {requested = TwoPhaseCommit} (! bb106)
+    | br12 -> {requested = CreateTokens} (! bb106)
+    | br13 -> {requested = DescribeTokens} (! bb106) ]
+  | bb106 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
+  | bb108 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
   | bb23 = any
-    [ br0 -> {requested = All} (! bb25)
-    | br1 -> {requested = Read} (! bb27)
-    | br2 -> {requested = Write} (! bb25)
-    | br3 -> {requested = Create} (! bb25)
-    | br4 -> {requested = Delete} (! bb25)
-    | br5 -> {requested = Alter} (! bb25)
-    | br6 -> {requested = Describe} (! bb25)
-    | br7 -> {requested = ClusterAction} (! bb25)
-    | br8 -> {requested = DescribeConfigs} (! bb25)
-    | br9 -> {requested = AlterConfigs} (! bb25)
-    | br10 -> {requested = IdempotentWrite} (! bb25)
-    | br11 -> {requested = TwoPhaseCommit} (! bb25) ]
-  | bb25 = s0 [ s0 = [ &_9 <- false ] s1 | s1 = bb28 ]
-  | bb27 = s0 [ s0 = [ &_9 <- true ] s1 | s1 = bb28 ]
-  | bb28 = any [ br0 -> {_9 = false} (! bb30) | br1 -> {_9} (! bb29) ]
-  | bb29 = s0 [ s0 = [ &_ret <- [%#sauthz'7] true ] s1 | s1 = return {_ret} ]
-  | bb30 = any [ br0 -> {is_allow = false} (! bb32) | br1 -> {is_allow} (! bb31) ]
-  | bb31 = any
-    [ br0 -> {requested = All} (! bb33)
-    | br1 -> {requested = Read} (! bb33)
-    | br2 -> {requested = Write} (! bb33)
-    | br3 -> {requested = Create} (! bb33)
-    | br4 -> {requested = Delete} (! bb33)
-    | br5 -> {requested = Alter} (! bb33)
-    | br6 -> {requested = Describe} (! bb35)
-    | br7 -> {requested = ClusterAction} (! bb33)
-    | br8 -> {requested = DescribeConfigs} (! bb33)
-    | br9 -> {requested = AlterConfigs} (! bb33)
-    | br10 -> {requested = IdempotentWrite} (! bb33)
-    | br11 -> {requested = TwoPhaseCommit} (! bb33) ]
-  | bb33 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
-  | bb35 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
-  | bb32 = s0 [ s0 = [ &_ret <- [%#sauthz'8] false ] s1 | s1 = return {_ret} ]
-  | bb24 = s0 [ s0 = [ &_ret <- [%#sauthz'9] true ] s1 | s1 = return {_ret} ] ]
+    [ br0 -> {requested = All} (! bb81)
+    | br1 -> {requested = Read} (! bb81)
+    | br2 -> {requested = Write} (! bb81)
+    | br3 -> {requested = Create} (! bb81)
+    | br4 -> {requested = Delete} (! bb81)
+    | br5 -> {requested = Alter} (! bb81)
+    | br6 -> {requested = Describe} (! bb81)
+    | br7 -> {requested = ClusterAction} (! bb81)
+    | br8 -> {requested = DescribeConfigs} (! bb81)
+    | br9 -> {requested = AlterConfigs} (! bb83)
+    | br10 -> {requested = IdempotentWrite} (! bb81)
+    | br11 -> {requested = TwoPhaseCommit} (! bb81)
+    | br12 -> {requested = CreateTokens} (! bb81)
+    | br13 -> {requested = DescribeTokens} (! bb81) ]
+  | bb81 = s0 [ s0 = [ &_25 <- false ] s1 | s1 = bb84 ]
+  | bb83 = s0 [ s0 = [ &_25 <- true ] s1 | s1 = bb84 ]
+  | bb84 = any [ br0 -> {_25 = false} (! bb86) | br1 -> {_25} (! bb85) ]
+  | bb85 = s0 [ s0 = [ &_ret <- [%#sauthz] true ] s1 | s1 = return {_ret} ]
+  | bb86 = any [ br0 -> {is_allow = false} (! bb88) | br1 -> {is_allow} (! bb87) ]
+  | bb87 = any
+    [ br0 -> {requested = All} (! bb89)
+    | br1 -> {requested = Read} (! bb89)
+    | br2 -> {requested = Write} (! bb89)
+    | br3 -> {requested = Create} (! bb89)
+    | br4 -> {requested = Delete} (! bb89)
+    | br5 -> {requested = Alter} (! bb89)
+    | br6 -> {requested = Describe} (! bb89)
+    | br7 -> {requested = ClusterAction} (! bb89)
+    | br8 -> {requested = DescribeConfigs} (! bb91)
+    | br9 -> {requested = AlterConfigs} (! bb89)
+    | br10 -> {requested = IdempotentWrite} (! bb89)
+    | br11 -> {requested = TwoPhaseCommit} (! bb89)
+    | br12 -> {requested = CreateTokens} (! bb89)
+    | br13 -> {requested = DescribeTokens} (! bb89) ]
+  | bb89 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
+  | bb91 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
+  | bb88 = s0 [ s0 = [ &_ret <- [%#sauthz'0] false ] s1 | s1 = return {_ret} ]
+  | bb19 = any
+    [ br0 -> {requested = All} (! bb103)
+    | br1 -> {requested = Read} (! bb103)
+    | br2 -> {requested = Write} (! bb103)
+    | br3 -> {requested = Create} (! bb103)
+    | br4 -> {requested = Delete} (! bb103)
+    | br5 -> {requested = Alter} (! bb103)
+    | br6 -> {requested = Describe} (! bb103)
+    | br7 -> {requested = ClusterAction} (! bb103)
+    | br8 -> {requested = DescribeConfigs} (! bb105)
+    | br9 -> {requested = AlterConfigs} (! bb103)
+    | br10 -> {requested = IdempotentWrite} (! bb103)
+    | br11 -> {requested = TwoPhaseCommit} (! bb103)
+    | br12 -> {requested = CreateTokens} (! bb103)
+    | br13 -> {requested = DescribeTokens} (! bb103) ]
+  | bb103 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
+  | bb105 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
+  | bb20 = any
+    [ br0 -> {requested = All} (! bb100)
+    | br1 -> {requested = Read} (! bb100)
+    | br2 -> {requested = Write} (! bb100)
+    | br3 -> {requested = Create} (! bb100)
+    | br4 -> {requested = Delete} (! bb100)
+    | br5 -> {requested = Alter} (! bb100)
+    | br6 -> {requested = Describe} (! bb100)
+    | br7 -> {requested = ClusterAction} (! bb102)
+    | br8 -> {requested = DescribeConfigs} (! bb100)
+    | br9 -> {requested = AlterConfigs} (! bb100)
+    | br10 -> {requested = IdempotentWrite} (! bb100)
+    | br11 -> {requested = TwoPhaseCommit} (! bb100)
+    | br12 -> {requested = CreateTokens} (! bb100)
+    | br13 -> {requested = DescribeTokens} (! bb100) ]
+  | bb100 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
+  | bb102 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
+  | bb21 = any
+    [ br0 -> {requested = All} (! bb97)
+    | br1 -> {requested = Read} (! bb97)
+    | br2 -> {requested = Write} (! bb97)
+    | br3 -> {requested = Create} (! bb97)
+    | br4 -> {requested = Delete} (! bb97)
+    | br5 -> {requested = Alter} (! bb97)
+    | br6 -> {requested = Describe} (! bb99)
+    | br7 -> {requested = ClusterAction} (! bb97)
+    | br8 -> {requested = DescribeConfigs} (! bb97)
+    | br9 -> {requested = AlterConfigs} (! bb97)
+    | br10 -> {requested = IdempotentWrite} (! bb97)
+    | br11 -> {requested = TwoPhaseCommit} (! bb97)
+    | br12 -> {requested = CreateTokens} (! bb97)
+    | br13 -> {requested = DescribeTokens} (! bb97) ]
+  | bb97 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
+  | bb99 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
+  | bb24 = any
+    [ br0 -> {requested = All} (! bb68)
+    | br1 -> {requested = Read} (! bb68)
+    | br2 -> {requested = Write} (! bb68)
+    | br3 -> {requested = Create} (! bb68)
+    | br4 -> {requested = Delete} (! bb68)
+    | br5 -> {requested = Alter} (! bb70)
+    | br6 -> {requested = Describe} (! bb68)
+    | br7 -> {requested = ClusterAction} (! bb68)
+    | br8 -> {requested = DescribeConfigs} (! bb68)
+    | br9 -> {requested = AlterConfigs} (! bb68)
+    | br10 -> {requested = IdempotentWrite} (! bb68)
+    | br11 -> {requested = TwoPhaseCommit} (! bb68)
+    | br12 -> {requested = CreateTokens} (! bb68)
+    | br13 -> {requested = DescribeTokens} (! bb68) ]
+  | bb68 = s0 [ s0 = [ &_21 <- false ] s1 | s1 = bb71 ]
+  | bb70 = s0 [ s0 = [ &_21 <- true ] s1 | s1 = bb71 ]
+  | bb71 = any [ br0 -> {_21 = false} (! bb73) | br1 -> {_21} (! bb72) ]
+  | bb72 = s0 [ s0 = [ &_ret <- [%#sauthz'1] true ] s1 | s1 = return {_ret} ]
+  | bb73 = any [ br0 -> {is_allow = false} (! bb75) | br1 -> {is_allow} (! bb74) ]
+  | bb74 = any
+    [ br0 -> {requested = All} (! bb76)
+    | br1 -> {requested = Read} (! bb76)
+    | br2 -> {requested = Write} (! bb76)
+    | br3 -> {requested = Create} (! bb76)
+    | br4 -> {requested = Delete} (! bb76)
+    | br5 -> {requested = Alter} (! bb76)
+    | br6 -> {requested = Describe} (! bb78)
+    | br7 -> {requested = ClusterAction} (! bb76)
+    | br8 -> {requested = DescribeConfigs} (! bb76)
+    | br9 -> {requested = AlterConfigs} (! bb76)
+    | br10 -> {requested = IdempotentWrite} (! bb76)
+    | br11 -> {requested = TwoPhaseCommit} (! bb76)
+    | br12 -> {requested = CreateTokens} (! bb76)
+    | br13 -> {requested = DescribeTokens} (! bb76) ]
+  | bb76 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
+  | bb78 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
+  | bb75 = s0 [ s0 = [ &_ret <- [%#sauthz'2] false ] s1 | s1 = return {_ret} ]
+  | bb25 = any
+    [ br0 -> {requested = All} (! bb55)
+    | br1 -> {requested = Read} (! bb55)
+    | br2 -> {requested = Write} (! bb55)
+    | br3 -> {requested = Create} (! bb55)
+    | br4 -> {requested = Delete} (! bb57)
+    | br5 -> {requested = Alter} (! bb55)
+    | br6 -> {requested = Describe} (! bb55)
+    | br7 -> {requested = ClusterAction} (! bb55)
+    | br8 -> {requested = DescribeConfigs} (! bb55)
+    | br9 -> {requested = AlterConfigs} (! bb55)
+    | br10 -> {requested = IdempotentWrite} (! bb55)
+    | br11 -> {requested = TwoPhaseCommit} (! bb55)
+    | br12 -> {requested = CreateTokens} (! bb55)
+    | br13 -> {requested = DescribeTokens} (! bb55) ]
+  | bb55 = s0 [ s0 = [ &_17 <- false ] s1 | s1 = bb58 ]
+  | bb57 = s0 [ s0 = [ &_17 <- true ] s1 | s1 = bb58 ]
+  | bb58 = any [ br0 -> {_17 = false} (! bb60) | br1 -> {_17} (! bb59) ]
+  | bb59 = s0 [ s0 = [ &_ret <- [%#sauthz'3] true ] s1 | s1 = return {_ret} ]
+  | bb60 = any [ br0 -> {is_allow = false} (! bb62) | br1 -> {is_allow} (! bb61) ]
+  | bb61 = any
+    [ br0 -> {requested = All} (! bb63)
+    | br1 -> {requested = Read} (! bb63)
+    | br2 -> {requested = Write} (! bb63)
+    | br3 -> {requested = Create} (! bb63)
+    | br4 -> {requested = Delete} (! bb63)
+    | br5 -> {requested = Alter} (! bb63)
+    | br6 -> {requested = Describe} (! bb65)
+    | br7 -> {requested = ClusterAction} (! bb63)
+    | br8 -> {requested = DescribeConfigs} (! bb63)
+    | br9 -> {requested = AlterConfigs} (! bb63)
+    | br10 -> {requested = IdempotentWrite} (! bb63)
+    | br11 -> {requested = TwoPhaseCommit} (! bb63)
+    | br12 -> {requested = CreateTokens} (! bb63)
+    | br13 -> {requested = DescribeTokens} (! bb63) ]
+  | bb63 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
+  | bb65 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
+  | bb62 = s0 [ s0 = [ &_ret <- [%#sauthz'4] false ] s1 | s1 = return {_ret} ]
+  | bb22 = any
+    [ br0 -> {requested = All} (! bb94)
+    | br1 -> {requested = Read} (! bb94)
+    | br2 -> {requested = Write} (! bb94)
+    | br3 -> {requested = Create} (! bb96)
+    | br4 -> {requested = Delete} (! bb94)
+    | br5 -> {requested = Alter} (! bb94)
+    | br6 -> {requested = Describe} (! bb94)
+    | br7 -> {requested = ClusterAction} (! bb94)
+    | br8 -> {requested = DescribeConfigs} (! bb94)
+    | br9 -> {requested = AlterConfigs} (! bb94)
+    | br10 -> {requested = IdempotentWrite} (! bb94)
+    | br11 -> {requested = TwoPhaseCommit} (! bb94)
+    | br12 -> {requested = CreateTokens} (! bb94)
+    | br13 -> {requested = DescribeTokens} (! bb94) ]
+  | bb94 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
+  | bb96 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
+  | bb26 = any
+    [ br0 -> {requested = All} (! bb42)
+    | br1 -> {requested = Read} (! bb42)
+    | br2 -> {requested = Write} (! bb44)
+    | br3 -> {requested = Create} (! bb42)
+    | br4 -> {requested = Delete} (! bb42)
+    | br5 -> {requested = Alter} (! bb42)
+    | br6 -> {requested = Describe} (! bb42)
+    | br7 -> {requested = ClusterAction} (! bb42)
+    | br8 -> {requested = DescribeConfigs} (! bb42)
+    | br9 -> {requested = AlterConfigs} (! bb42)
+    | br10 -> {requested = IdempotentWrite} (! bb42)
+    | br11 -> {requested = TwoPhaseCommit} (! bb42)
+    | br12 -> {requested = CreateTokens} (! bb42)
+    | br13 -> {requested = DescribeTokens} (! bb42) ]
+  | bb42 = s0 [ s0 = [ &_13 <- false ] s1 | s1 = bb45 ]
+  | bb44 = s0 [ s0 = [ &_13 <- true ] s1 | s1 = bb45 ]
+  | bb45 = any [ br0 -> {_13 = false} (! bb47) | br1 -> {_13} (! bb46) ]
+  | bb46 = s0 [ s0 = [ &_ret <- [%#sauthz'5] true ] s1 | s1 = return {_ret} ]
+  | bb47 = any [ br0 -> {is_allow = false} (! bb49) | br1 -> {is_allow} (! bb48) ]
+  | bb48 = any
+    [ br0 -> {requested = All} (! bb50)
+    | br1 -> {requested = Read} (! bb50)
+    | br2 -> {requested = Write} (! bb50)
+    | br3 -> {requested = Create} (! bb50)
+    | br4 -> {requested = Delete} (! bb50)
+    | br5 -> {requested = Alter} (! bb50)
+    | br6 -> {requested = Describe} (! bb52)
+    | br7 -> {requested = ClusterAction} (! bb50)
+    | br8 -> {requested = DescribeConfigs} (! bb50)
+    | br9 -> {requested = AlterConfigs} (! bb50)
+    | br10 -> {requested = IdempotentWrite} (! bb50)
+    | br11 -> {requested = TwoPhaseCommit} (! bb50)
+    | br12 -> {requested = CreateTokens} (! bb50)
+    | br13 -> {requested = DescribeTokens} (! bb50) ]
+  | bb50 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
+  | bb52 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
+  | bb49 = s0 [ s0 = [ &_ret <- [%#sauthz'6] false ] s1 | s1 = return {_ret} ]
+  | bb27 = any
+    [ br0 -> {requested = All} (! bb29)
+    | br1 -> {requested = Read} (! bb31)
+    | br2 -> {requested = Write} (! bb29)
+    | br3 -> {requested = Create} (! bb29)
+    | br4 -> {requested = Delete} (! bb29)
+    | br5 -> {requested = Alter} (! bb29)
+    | br6 -> {requested = Describe} (! bb29)
+    | br7 -> {requested = ClusterAction} (! bb29)
+    | br8 -> {requested = DescribeConfigs} (! bb29)
+    | br9 -> {requested = AlterConfigs} (! bb29)
+    | br10 -> {requested = IdempotentWrite} (! bb29)
+    | br11 -> {requested = TwoPhaseCommit} (! bb29)
+    | br12 -> {requested = CreateTokens} (! bb29)
+    | br13 -> {requested = DescribeTokens} (! bb29) ]
+  | bb29 = s0 [ s0 = [ &_9 <- false ] s1 | s1 = bb32 ]
+  | bb31 = s0 [ s0 = [ &_9 <- true ] s1 | s1 = bb32 ]
+  | bb32 = any [ br0 -> {_9 = false} (! bb34) | br1 -> {_9} (! bb33) ]
+  | bb33 = s0 [ s0 = [ &_ret <- [%#sauthz'7] true ] s1 | s1 = return {_ret} ]
+  | bb34 = any [ br0 -> {is_allow = false} (! bb36) | br1 -> {is_allow} (! bb35) ]
+  | bb35 = any
+    [ br0 -> {requested = All} (! bb37)
+    | br1 -> {requested = Read} (! bb37)
+    | br2 -> {requested = Write} (! bb37)
+    | br3 -> {requested = Create} (! bb37)
+    | br4 -> {requested = Delete} (! bb37)
+    | br5 -> {requested = Alter} (! bb37)
+    | br6 -> {requested = Describe} (! bb39)
+    | br7 -> {requested = ClusterAction} (! bb37)
+    | br8 -> {requested = DescribeConfigs} (! bb37)
+    | br9 -> {requested = AlterConfigs} (! bb37)
+    | br10 -> {requested = IdempotentWrite} (! bb37)
+    | br11 -> {requested = TwoPhaseCommit} (! bb37)
+    | br12 -> {requested = CreateTokens} (! bb37)
+    | br13 -> {requested = DescribeTokens} (! bb37) ]
+  | bb37 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
+  | bb39 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
+  | bb36 = s0 [ s0 = [ &_ret <- [%#sauthz'8] false ] s1 | s1 = return {_ret} ]
+  | bb28 = s0 [ s0 = [ &_ret <- [%#sauthz'9] true ] s1 | s1 = return {_ret} ] ]
   [ & _ret: bool = Any.any_l ()
   | & stored: t_AclOperationKind = stored
   | & requested: t_AclOperationKind = requested

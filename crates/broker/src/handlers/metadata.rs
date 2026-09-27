@@ -599,6 +599,9 @@ mod tests {
         endpoints: Vec<krabka_metadata::BrokerEndpoint>,
     ) -> krabka_metadata::BrokerRegistrationRecord {
         krabka_metadata::BrokerRegistrationRecord {
+            fenced: false,
+            in_controlled_shutdown: false,
+            cordoned_log_dirs: None,
             node_id: krabka_metadata::NodeId(7),
             broker_epoch: 0,
             incarnation_id: uuid::Uuid::nil(),

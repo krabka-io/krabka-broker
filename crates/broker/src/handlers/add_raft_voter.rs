@@ -74,10 +74,15 @@ pub(crate) async fn handle(
     // The request checks, their order and their codes are the controller
     // listener's own (`krabka_raft::voter_requests`).
     let Some(quorum) = broker.controller.quorum_snapshot() else {
+        // Kafka's `KafkaRaftClient.handleAddVoterRequest` answers a failed
+        // `validateLeaderOnlyRequest` with only the error code set, so the
+        // nullable message stays at the generated empty-string default, not
+        // null and not `Errors.message()`.
         return encode_resp(
             version,
             &AddRaftVoterResponse {
                 error_code: voter_requests::NOT_LEADER_OR_FOLLOWER,
+                error_message: Some(String::new()),
                 ..Default::default()
             },
         );

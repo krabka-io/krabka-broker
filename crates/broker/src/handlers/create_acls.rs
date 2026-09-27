@@ -30,7 +30,10 @@ mod tests;
 
 use self::{
     audit::{audit_created_acls, created_acl_resources},
-    response::{acl_error_result, apply_submit_error, create_acls_response, encode_response},
+    response::{
+        acl_error_result, acl_success_result, apply_submit_error, create_acls_response,
+        encode_response,
+    },
     validate::{has_filter_only_element, has_unknown_element, validate},
 };
 use super::acl_wire::{CLUSTER_RESOURCE_NAME, NO_AUTHORIZER_MESSAGE};
@@ -107,6 +110,7 @@ pub(crate) async fn handle(
             .iter()
             .map(|_| AclCreationResult {
                 error_code: codes::UNKNOWN_SERVER_ERROR,
+                error_message: None,
                 ..Default::default()
             })
             .collect();
@@ -117,9 +121,9 @@ pub(crate) async fn handle(
     // per request rather than per binding, the way
     // `AclControlManager.createAcls` resolves `metadataVersion.isCidrAclSupported()`
     // a single time and passes it into `validateNewAcl` for every creation.
-    // `require_feature` is deliberately not used here: it is permissive on an
-    // unfinalized metadata.version, which would let a pre-bootstrap or legacy
-    // image create CIDR ACLs no real cluster can finalize yet.
+    // `require_feature` is deliberately not used here: it passes any
+    // unfinalized metadata.version, whereas `cidr_hosts_supported` compares
+    // this binary's own highest level against the CIDR floor.
     let cidr_hosts_supported = crate::features::cidr_hosts_supported(&image);
 
     let mut results: Vec<AclCreationResult> = Vec::with_capacity(req.creations.len());
@@ -134,7 +138,7 @@ pub(crate) async fn handle(
         ) {
             Ok(entry) => {
                 let idx = results.len();
-                results.push(AclCreationResult::default());
+                results.push(acl_success_result());
                 to_submit.push((idx, MetadataRecord::V1AccessControlEntry(entry)));
             }
             Err((code, msg)) => {

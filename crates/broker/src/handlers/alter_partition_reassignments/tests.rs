@@ -49,6 +49,9 @@ async fn seed_reassignable_partition(broker: &Broker) {
         .controller
         .submit_change(vec![
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
+                fenced: false,
+                in_controlled_shutdown: false,
+                cordoned_log_dirs: None,
                 node_id: NodeId(1),
                 broker_epoch: 1,
                 incarnation_id: uuid::Uuid::nil(),
@@ -60,6 +63,9 @@ async fn seed_reassignable_partition(broker: &Broker) {
                 features: std::collections::BTreeMap::new(),
             }),
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
+                fenced: false,
+                in_controlled_shutdown: false,
+                cordoned_log_dirs: None,
                 node_id: NodeId(2),
                 broker_epoch: 1,
                 incarnation_id: uuid::Uuid::nil(),
@@ -101,6 +107,9 @@ async fn seed_cancellable_partition(broker: &Broker) {
     let mut records: Vec<MetadataRecord> = (1..=3u64)
         .map(|node| {
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
+                fenced: false,
+                in_controlled_shutdown: false,
+                cordoned_log_dirs: None,
                 node_id: NodeId(node),
                 broker_epoch: 1,
                 incarnation_id: uuid::Uuid::nil(),

@@ -24,6 +24,9 @@ pub(super) fn img(
     for n in 1..=6u64 {
         img.apply(&MetadataRecord::V1BrokerRegistration(
             BrokerRegistrationRecord {
+                fenced: false,
+                in_controlled_shutdown: false,
+                cordoned_log_dirs: None,
                 node_id: NodeId(n),
                 broker_epoch: 0,
                 incarnation_id: Uuid::nil(),
@@ -87,6 +90,9 @@ pub(super) fn img_with_dirs(
     for n in 1..=6u64 {
         image.apply(&MetadataRecord::V1BrokerRegistration(
             BrokerRegistrationRecord {
+                fenced: false,
+                in_controlled_shutdown: false,
+                cordoned_log_dirs: None,
                 node_id: NodeId(n),
                 broker_epoch: 0,
                 incarnation_id: Uuid::nil(),

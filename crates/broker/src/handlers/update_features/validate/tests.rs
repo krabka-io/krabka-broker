@@ -27,6 +27,9 @@ fn image_with_directory(metadata_version: i16) -> krabka_metadata::MetadataImage
     }));
     image.apply(&MetadataRecord::V1BrokerRegistration(
         krabka_metadata::BrokerRegistrationRecord {
+            fenced: false,
+            in_controlled_shutdown: false,
+            cordoned_log_dirs: None,
             node_id: krabka_metadata::NodeId(1),
             broker_epoch: 9,
             incarnation_id: uuid::Uuid::from_u128(1),
@@ -79,6 +82,9 @@ fn unsafe_metadata_downgrade_cleans_lossy_fields_before_version_record() {
     assert!(unsafe_results[0].error_code == codes::NONE);
     let expected = vec![
         MetadataRecord::V1BrokerRegistration(krabka_metadata::BrokerRegistrationRecord {
+            fenced: false,
+            in_controlled_shutdown: false,
+            cordoned_log_dirs: None,
             node_id: krabka_metadata::NodeId(1),
             broker_epoch: 9,
             incarnation_id: uuid::Uuid::from_u128(1),
@@ -179,6 +185,9 @@ fn metadata_downgrade_rejects_registered_nodes_without_capability() {
     let registrations = [
         (
             MetadataRecord::V1BrokerRegistration(krabka_metadata::BrokerRegistrationRecord {
+                fenced: false,
+                in_controlled_shutdown: false,
+                cordoned_log_dirs: None,
                 node_id: krabka_metadata::NodeId(2),
                 broker_epoch: 0,
                 incarnation_id: uuid::Uuid::nil(),
@@ -246,6 +255,9 @@ fn metadata_update_checks_every_capable_registered_node_supports_target() {
     let registrations = [
         (
             MetadataRecord::V1BrokerRegistration(krabka_metadata::BrokerRegistrationRecord {
+                fenced: false,
+                in_controlled_shutdown: false,
+                cordoned_log_dirs: None,
                 node_id: krabka_metadata::NodeId(2),
                 broker_epoch: 0,
                 incarnation_id: uuid::Uuid::nil(),
@@ -496,6 +508,9 @@ fn image_with_elr_unaware_broker(elr_level: Option<i16>) -> krabka_metadata::Met
     features.remove(crate::features::ELR_VERSION);
     image.apply(&MetadataRecord::V1BrokerRegistration(
         krabka_metadata::BrokerRegistrationRecord {
+            fenced: false,
+            in_controlled_shutdown: false,
+            cordoned_log_dirs: None,
             node_id: krabka_metadata::NodeId(2),
             broker_epoch: 0,
             incarnation_id: uuid::Uuid::nil(),

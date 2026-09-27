@@ -171,22 +171,22 @@ krabka-units = "0.4.0"
 # against crates.io above and in the member manifests; the patch below is
 # the single place a sibling revision is bumped.
 [patch.crates-io]
-# The schema-registry service used by M19's acceptance test consumes these two
-# broker crates as published dependencies. They are not published yet, so use
-# the registry repository's own tested broker revision.
-krabka-authz = { git = "https://github.com/krabka-io/krabka-broker", rev = "32dd555ec1b7bf9d82b4b7bcdb0c9332f7029617" }
-krabka-audit = { git = "https://github.com/krabka-io/krabka-broker", rev = "32dd555ec1b7bf9d82b4b7bcdb0c9332f7029617" }
-krabka-telemetry = { git = "https://github.com/krabka-io/krabka-broker", rev = "32dd555ec1b7bf9d82b4b7bcdb0c9332f7029617" }
-krabka-client-admin = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "c4c113c74f0ef9774698734aee1ba90fc3785eca" }
-krabka-client-consumer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "c4c113c74f0ef9774698734aee1ba90fc3785eca" }
-krabka-client-core = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "c4c113c74f0ef9774698734aee1ba90fc3785eca" }
-krabka-client-producer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "c4c113c74f0ef9774698734aee1ba90fc3785eca" }
-krabka-compression = { git = "https://github.com/krabka-io/krabka-protocol", rev = "05e3e32d9a0b832453b0c0de144f138c3bab735b" }
-krabka-ids = { git = "https://github.com/krabka-io/krabka-protocol", rev = "05e3e32d9a0b832453b0c0de144f138c3bab735b" }
-krabka-metadata = { git = "https://github.com/krabka-io/krabka-protocol", rev = "05e3e32d9a0b832453b0c0de144f138c3bab735b" }
-krabka-protocol = { git = "https://github.com/krabka-io/krabka-protocol", rev = "05e3e32d9a0b832453b0c0de144f138c3bab735b" }
-krabka-security = { git = "https://github.com/krabka-io/krabka-protocol", rev = "05e3e32d9a0b832453b0c0de144f138c3bab735b" }
-krabka-trace-context = { git = "https://github.com/krabka-io/krabka-protocol", rev = "05e3e32d9a0b832453b0c0de144f138c3bab735b" }
-krabka-units = { git = "https://github.com/krabka-io/krabka-protocol", rev = "05e3e32d9a0b832453b0c0de144f138c3bab735b" }
-krabka-voters = { git = "https://github.com/krabka-io/krabka-protocol", rev = "05e3e32d9a0b832453b0c0de144f138c3bab735b" }
-krabka-schema-serde = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "ba727e31ca113f8acae0af719984fef5fcbbec4c" }
+# The schema-registry service used by M19's acceptance test consumes these
+# broker crates as published dependencies. They are not published, and this
+# workspace builds them, so the registry uses these very copies.
+krabka-authz = { path = "crates/authz" }
+krabka-audit = { path = "crates/audit" }
+krabka-telemetry = { path = "crates/telemetry" }
+krabka-client-admin = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "58773b0444a642e02f6cbc0a8e301f11d76dc39a" }
+krabka-client-consumer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "58773b0444a642e02f6cbc0a8e301f11d76dc39a" }
+krabka-client-core = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "58773b0444a642e02f6cbc0a8e301f11d76dc39a" }
+krabka-client-producer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "58773b0444a642e02f6cbc0a8e301f11d76dc39a" }
+krabka-compression = { git = "https://github.com/krabka-io/krabka-protocol", rev = "d4e2fe530c70e7459825ea51cc24c638623c5d23" }
+krabka-ids = { git = "https://github.com/krabka-io/krabka-protocol", rev = "d4e2fe530c70e7459825ea51cc24c638623c5d23" }
+krabka-metadata = { git = "https://github.com/krabka-io/krabka-protocol", rev = "d4e2fe530c70e7459825ea51cc24c638623c5d23" }
+krabka-protocol = { git = "https://github.com/krabka-io/krabka-protocol", rev = "d4e2fe530c70e7459825ea51cc24c638623c5d23" }
+krabka-security = { git = "https://github.com/krabka-io/krabka-protocol", rev = "d4e2fe530c70e7459825ea51cc24c638623c5d23" }
+krabka-trace-context = { git = "https://github.com/krabka-io/krabka-protocol", rev = "d4e2fe530c70e7459825ea51cc24c638623c5d23" }
+krabka-units = { git = "https://github.com/krabka-io/krabka-protocol", rev = "d4e2fe530c70e7459825ea51cc24c638623c5d23" }
+krabka-voters = { git = "https://github.com/krabka-io/krabka-protocol", rev = "d4e2fe530c70e7459825ea51cc24c638623c5d23" }
+krabka-schema-serde = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "bebac316a49d9fd7cf6df403ed0c341464ad5da6" }

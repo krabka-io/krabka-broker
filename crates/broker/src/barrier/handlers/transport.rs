@@ -263,6 +263,9 @@ mod tests {
 
     fn registration(endpoints: Vec<BrokerEndpoint>) -> BrokerRegistrationRecord {
         BrokerRegistrationRecord {
+            fenced: false,
+            in_controlled_shutdown: false,
+            cordoned_log_dirs: None,
             node_id: NodeId(2),
             broker_epoch: 0,
             incarnation_id: uuid::Uuid::nil(),

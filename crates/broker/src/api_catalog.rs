@@ -1131,10 +1131,16 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
 
 macro_rules! v {
     ($mod:ident) => {
+        v!($mod, max = krabka_protocol::owned::$mod::MAX_VERSION)
+    };
+    // The protocol crate vendors Kafka trunk's schemas, which can run ahead of
+    // what the latest Kafka release, and this broker, implement. An explicit
+    // maximum advertises only the versions the handler serves.
+    ($mod:ident,max = $max:expr) => {
         ApiVersion {
             api_key: krabka_protocol::owned::$mod::API_KEY,
             min_version: krabka_protocol::owned::$mod::MIN_VERSION,
-            max_version: krabka_protocol::owned::$mod::MAX_VERSION,
+            max_version: $max,
             ..Default::default()
         }
     };
@@ -1368,7 +1374,8 @@ fn admin_apis() -> Vec<ApiVersion> {
         v!(add_offsets_to_txn_request),
         v!(end_txn_request),
         v!(write_txn_markers_request),
-        v!(txn_offset_commit_request),
+        // v6 (topic ids) is Kafka trunk's; Kafka 4.3 serves up to v5.
+        v!(txn_offset_commit_request, max = 5),
         v!(describe_configs_request),
         v!(alter_replica_log_dirs_request),
         v!(describe_log_dirs_request),
@@ -1447,8 +1454,9 @@ fn admin_apis() -> Vec<ApiVersion> {
         v!(share_group_heartbeat_request),
         v!(share_group_describe_request),
         // KIP-1071 streams-group rebalance protocol.
-        v!(streams_group_heartbeat_request),
-        v!(streams_group_describe_request),
+        // v1 is Kafka trunk's; Kafka 4.3 serves v0.
+        v!(streams_group_heartbeat_request, max = 0),
+        v!(streams_group_describe_request, max = 0),
         // KIP-932 ShareFetch / ShareAcknowledge data-plane RPCs.
         v!(share_fetch_request),
         v!(share_acknowledge_request),

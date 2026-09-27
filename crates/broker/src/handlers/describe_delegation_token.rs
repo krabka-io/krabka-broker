@@ -16,11 +16,12 @@
 //!   - `filterToken` keeps a token only when the (possibly absent) owner
 //!     filter matches it — matching a filter entry against the token's
 //!     owner OR a listed renewer, not the owner alone — AND the caller is
-//!     that token's owner, a listed renewer, or holds a `Describe` ACL on
-//!     `DelegationToken:<token_id>`. The ACL resource name is the token's
-//!     own id, matching what Kafka's tooling (and its own authorizer call)
-//!     writes; it is not the owner's principal string, which would let one
-//!     ACL grant every token of that owner instead of just this one.
+//!     that token's owner, a listed renewer, holds a `Describe` ACL on
+//!     `DelegationToken:<token_id>`, or holds KIP-373's `DescribeTokens` ACL
+//!     on `User:<owner>`. The `Describe` grant is named by the token's own
+//!     id, so it covers exactly one token; the `DescribeTokens` grant is
+//!     named by the owner's principal string and covers every token that
+//!     owner holds.
 //!
 //! [`krabka_verified::delegation_token::token_api_admission`] and
 //! [`token_describe_visible`] are the two verified kernels this handler
@@ -110,22 +111,33 @@ pub(crate) fn handle(
             });
             let caller_is_owner = t.owner == caller;
             let caller_is_renewer = t.renewers.contains(&caller);
-            // The resource name is the token's own id (Kafka:
-            // `authHelper.authorize(..., DESCRIBE, DELEGATION_TOKEN, tokenId)`),
-            // so a `Describe` ACL grants exactly one token, not every token
-            // of its owner. Skipped when the owner filter already excludes
-            // the token, since `token_describe_visible` ANDs it in anyway.
-            let acl_allows = owner_filter_matches
-                && authorizer.authorize(
+            let allowed = |resource_type, resource_name: &str, operation| {
+                authorizer.authorize(
                     &*image,
                     &AuthorizationRequest {
                         principal,
                         host: peer,
-                        resource_type: ResourceType::DelegationToken,
-                        resource_name: &t.token_id,
-                        operation: AclOperation::Describe,
+                        resource_type,
+                        resource_name,
+                        operation,
                     },
-                ) == AuthorizationResult::Allow;
+                ) == AuthorizationResult::Allow
+            };
+            // Kafka's `authorizeToken` then `authorizeRequester`: `Describe`
+            // on `DelegationToken:<token id>` grants this one token, and
+            // KIP-373's `DescribeTokens` on `User:<owner>` grants every token
+            // of that owner. Skipped when the owner filter already excludes
+            // the token, since `token_describe_visible` ANDs it in anyway.
+            let acl_allows = owner_filter_matches
+                && (allowed(
+                    ResourceType::DelegationToken,
+                    &t.token_id,
+                    AclOperation::Describe,
+                ) || allowed(
+                    ResourceType::User,
+                    &t.owner.to_string(),
+                    AclOperation::DescribeTokens,
+                ));
             token_describe_visible(
                 owner_filter_matches,
                 caller_is_owner,

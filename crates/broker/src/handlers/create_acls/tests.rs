@@ -31,6 +31,17 @@ use crate::{
     },
 };
 
+/// The row Kafka's `AclApis.handleCreateAcls` sends for a committed
+/// creation: a bare `AclCreationResult`, whose generated `ErrorMessage`
+/// default is the empty string.
+fn committed() -> AclCreationResult {
+    AclCreationResult {
+        error_code: codes::NONE,
+        error_message: Some(String::new()),
+        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+    }
+}
+
 #[tokio::test]
 async fn handle_honors_configured_acl_input_limits() {
     const PRINCIPAL_LIMIT: usize = 10;
@@ -56,7 +67,7 @@ async fn handle_honors_configured_acl_input_limits() {
             "r".repeat(RESOURCE_NAME_LIMIT),
             "User:a".to_string(),
             codes::NONE,
-            None,
+            Some(""),
         ),
         (
             "r".repeat(RESOURCE_NAME_LIMIT + 1),
@@ -68,7 +79,7 @@ async fn handle_honors_configured_acl_input_limits() {
             "r".to_string(),
             format!("User:{}", "a".repeat(PRINCIPAL_LIMIT - "User:".len())),
             codes::NONE,
-            None,
+            Some(""),
         ),
         (
             "r".to_string(),
@@ -148,11 +159,7 @@ async fn handle_submits_valid_creations_and_reports_invalid_creations_in_order()
     let expected = CreateAclsResponse {
         throttle_time_ms: 0,
         results: vec![
-            AclCreationResult {
-                error_code: 0,
-                error_message: None,
-                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-            },
+            committed(),
             AclCreationResult {
                 error_code: codes::INVALID_REQUEST,
                 error_message: Some("Invalid empty resource name".into()),
@@ -213,11 +220,10 @@ async fn handle_answers_security_disabled_for_each_creation_when_no_authorizer_i
 
 /// #652 / KIP-1276: a CIDR host is accepted, and stored as the literal text
 /// the operator typed, once `metadata.version` reaches
-/// [`crate::features::CIDR_ACL_HOST_MIN_LEVEL`]. The gate cannot be reached
-/// through a real `UpdateFeatures` negotiation yet -- see the constant's own
-/// doc comment -- so the test seeds it with a raw controller submit, the same
-/// way the `alter_user_scram_credentials` and `create_delegation_token` gate
-/// tests seed their own metadata-version floors.
+/// [`crate::features::CIDR_ACL_HOST_MIN_LEVEL`]. The test seeds that level
+/// with a raw controller submit, the same way the
+/// `alter_user_scram_credentials` and `create_delegation_token` gate tests
+/// seed their own metadata-version floors.
 #[tokio::test]
 async fn handle_accepts_cidr_host_at_the_cidr_metadata_version() {
     let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
@@ -242,7 +248,7 @@ async fn handle_accepts_cidr_host_at_the_cidr_metadata_version() {
 
     let expected = CreateAclsResponse {
         throttle_time_ms: 0,
-        results: vec![AclCreationResult::default()],
+        results: vec![committed()],
         unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
     };
     assert!(resp == expected);
@@ -385,7 +391,7 @@ async fn handle_pins_the_cluster_name_and_accepts_other_principal_types() {
                 ),
                 unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
             },
-            AclCreationResult::default(),
+            committed(),
         ],
         unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
     };
@@ -404,11 +410,11 @@ async fn handle_pins_the_cluster_name_and_accepts_other_principal_types() {
 }
 
 /// A broker whose image has never finalized `metadata.version` at all (a
-/// pre-bootstrap or legacy image) must still reject a CIDR host, not treat
-/// the absent level as a pass. `require_feature`'s permissive-on-absence
-/// default would wrongly accept this; `cidr_hosts_supported` must not.
+/// pre-bootstrap or legacy image) judges a CIDR host against this binary's
+/// own highest `metadata.version`, `4.4-IV1`, which supports CIDR hosts, so
+/// the host is accepted and stored as typed.
 #[tokio::test]
-async fn handle_rejects_cidr_host_when_metadata_version_is_unfinalized() {
+async fn handle_accepts_cidr_host_when_metadata_version_is_unfinalized() {
     let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
     let broker = broker_handle.broker_arc_for_test();
     let p = principal("admin");
@@ -423,16 +429,19 @@ async fn handle_rejects_cidr_host_when_metadata_version_is_unfinalized() {
 
     let expected = CreateAclsResponse {
         throttle_time_ms: 0,
-        results: vec![AclCreationResult {
-            error_code: codes::UNSUPPORTED_VERSION,
-            error_message: Some(
-                "CIDR-based ACL host patterns require metadata version 4.4-IV1 or higher.".into(),
-            ),
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-        }],
+        results: vec![committed()],
         unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
     };
     assert!(resp == expected);
-    assert!(all_acls(&broker_handle).is_empty());
+    let expected_acls = vec![AclEntry {
+        resource_type: ResourceType::Topic,
+        resource_name: "topic-a".into(),
+        pattern_type: PatternType::Literal,
+        principal: "User:alice".into(),
+        host: "10.0.0.0/8".into(),
+        operation: AclOperation::Read,
+        permission_type: PermissionType::Allow,
+    }];
+    assert!(all_acls(&broker_handle) == expected_acls);
     broker_handle.shutdown().await;
 }
