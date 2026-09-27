@@ -177,7 +177,7 @@ mod tests {
         // The next leader reads back Available over the whole window and
         // re-derives the deferral against its own clock. No offset is lost.
         let mut reloaded = AcquisitionState::new(Offset(0));
-        reloaded.load_from(start, 0, 0, dcc, &batches);
+        reloaded.load_from(start, 0, 0, &batches);
         check!(reloaded.start_offset == 0);
         check!(reloaded.end_offset == 4);
         check!(reloaded.deferred_records() == 0);

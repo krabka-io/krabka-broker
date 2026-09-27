@@ -11,6 +11,7 @@ use krabka_log::Offset;
 
 use super::{
     AcquisitionState, DS_ACKNOWLEDGED, DS_ARCHIVED, DS_AVAILABLE, InFlightBatch, RecordState,
+    clamp_i32,
 };
 use crate::share_coordinator::persistence::StateBatch;
 
@@ -48,11 +49,10 @@ impl AcquisitionState {
         (self.start_offset, self.delivery_complete_count, out)
     }
 
-    /// Cumulative count of offsets that have reached a terminal state,
-    /// Acknowledged or Archived. This is the persister's
-    /// `delivery_complete_count`. Only the state-machine tests read this
-    /// method today. The value also leaves through
-    /// [`Self::to_persist_batches`].
+    /// Number of terminal records, Acknowledged or Archived, in the window at
+    /// or above the SPSO. This is the persister's `delivery_complete_count`.
+    /// Only the state-machine tests read this method today. The value also
+    /// leaves through [`Self::to_persist_batches`].
     #[cfg(test)]
     #[must_use]
     pub(crate) fn delivery_complete_count(&self) -> i32 {
@@ -74,25 +74,28 @@ impl AcquisitionState {
 
     /// Rebuilds the machine from persisted state.
     ///
-    /// It restores the SPSO to `start_offset`. It restores the cumulative
-    /// `delivery_complete_count`, so the consumer-lag accounting survives a
-    /// leader change. It rebuilds the batches, and maps a persisted
-    /// `Acquired(1)` to `Available`, because a lock does not survive a leader
-    /// change. It sets `end_offset` to `max(last_offset)+1`, or to
-    /// `start_offset` when the batch list is empty.
+    /// It restores the SPSO to `start_offset`. It rebuilds the batches, and
+    /// maps a persisted `Acquired(1)` to `Available`, because a lock does not
+    /// survive a leader change. It sets `end_offset` to `max(last_offset)+1`,
+    /// or to `start_offset` when the batch list is empty.
+    ///
+    /// The delivery complete count is not read back. As Kafka's
+    /// `SharePartition.maybeInitialize` does, it is the number of records in
+    /// the Acknowledged and Archived batches, and the SPSO then moves past a
+    /// terminal prefix (`maybeUpdateCachedStateAndOffsets`), which takes those
+    /// records out of the count again. That move is not written back until
+    /// the next change, as in Kafka.
     pub fn load_from(
         &mut self,
         start_offset: Offset,
         state_epoch: i32,
         leader_epoch: i32,
-        delivery_complete_count: i32,
         batches: &[StateBatch],
     ) {
         self.start_offset = start_offset;
         self.state_epoch = state_epoch;
         self.leader_epoch = leader_epoch;
         self.dirty = false;
-        self.delivery_complete_count = delivery_complete_count;
         self.batches = batches
             .iter()
             .map(|sb| {
@@ -120,7 +123,12 @@ impl AcquisitionState {
             .max()
             .unwrap_or(start_offset)
             .max(start_offset);
-        self.coalesce();
+        self.delivery_complete_count = self
+            .batches
+            .iter()
+            .filter(|b| b.is_terminal())
+            .fold(0, |count: i32, b| count.saturating_add(clamp_i32(b.len())));
+        self.advance_spso();
     }
 }
 
@@ -166,7 +174,7 @@ mod tests {
         assert!(start == 4);
 
         let mut reloaded = AcquisitionState::new(Offset(0));
-        reloaded.load_from(start, 7, 3, 0, &batches);
+        reloaded.load_from(start, 7, 3, &batches);
         check!(reloaded.start_offset == 4);
         check!(reloaded.end_offset == 10);
         check!(reloaded.state_epoch == 7);
@@ -183,15 +191,177 @@ mod tests {
         );
     }
 
+    fn persisted(first: i64, last: i64, delivery_state: i8, delivery_count: i16) -> StateBatch {
+        StateBatch {
+            first_offset: Offset(first),
+            last_offset: Offset(last),
+            delivery_state,
+            delivery_count,
+        }
+    }
+
+    /// Five records, `[0]` acquired alone and `[1,4]` acquired together by
+    /// `m1`, so a terminal run at `[2,3]` sits behind a record that still
+    /// holds the SPSO at 0.
+    fn five_acquired_in_two_runs(s: &mut AcquisitionState) {
+        s.materialize(Offset(5), 100);
+        let _ = s.acquire("m1", 1, Offset(i64::MAX), t0(), LOCK, 5);
+        let _ = s.acquire("m1", 10, Offset(i64::MAX), t0(), LOCK, 5);
+    }
+
+    /// Kafka's `SharePartition.deliveryCompleteCount`: the number of
+    /// Acknowledged and Archived records in the window at or above the SPSO.
+    /// A record adds to it when it becomes terminal, and leaves it when the
+    /// SPSO moves past it.
     #[test]
-    fn load_from_restores_delivery_complete_count() {
-        // F3: the cumulative delivery-complete count must survive a reload so
-        // consumer-lag accounting is preserved across a leader change.
-        let mut s = AcquisitionState::new(Offset(4));
-        s.load_from(Offset(4), 0, 0, 5, &[]);
-        assert!(s.delivery_complete_count() == 5);
-        // It round-trips back out through the persist projection.
-        let (_start, dcc, _batches) = s.to_persist_batches();
-        assert!(dcc == 5);
+    fn delivery_complete_count_counts_the_terminal_records_in_the_window() {
+        type Setup = fn(&mut AcquisitionState);
+        // (name, setup, expected (SPSO, SPEO, delivery complete count))
+        let cases: [(&str, Setup, (i64, i64, i32)); 13] = [
+            (
+                "accept counts the acknowledged records",
+                |s| {
+                    five_acquired_in_two_runs(s);
+                    s.acknowledge("m1", Offset(2), Offset(3), AckType::Accept, 5)
+                        .unwrap();
+                },
+                (0, 5, 2),
+            ),
+            (
+                "reject counts the archived records",
+                |s| {
+                    five_acquired_in_two_runs(s);
+                    s.acknowledge("m1", Offset(2), Offset(3), AckType::Reject, 5)
+                        .unwrap();
+                },
+                (0, 5, 2),
+            ),
+            (
+                "release is not terminal and does not count",
+                |s| {
+                    five_acquired_in_two_runs(s);
+                    s.acknowledge("m1", Offset(2), Offset(3), AckType::Release, 5)
+                        .unwrap();
+                },
+                (0, 5, 0),
+            ),
+            (
+                "release at the delivery limit archives and counts",
+                |s| {
+                    five_acquired_in_two_runs(s);
+                    s.acknowledge("m1", Offset(2), Offset(3), AckType::Release, 1)
+                        .unwrap();
+                },
+                (0, 5, 2),
+            ),
+            (
+                "a lock that expires at the delivery limit archives and counts",
+                |s| {
+                    s.materialize(Offset(5), 100);
+                    let _ = s.acquire("m1", 1, Offset(i64::MAX), t0(), LOCK, 5);
+                    s.renew("m1", Offset(0), Offset(0), t0(), LOCK * 100)
+                        .unwrap();
+                    let _ = s.acquire("m1", 10, Offset(i64::MAX), t0(), LOCK, 5);
+                    s.expire_locks(t0() + LOCK * 2, 1);
+                },
+                (0, 5, 4),
+            ),
+            (
+                "acquire archives an available run at the delivery limit and counts it",
+                |s| {
+                    five_acquired_in_two_runs(s);
+                    s.acknowledge("m1", Offset(1), Offset(4), AckType::Release, 5)
+                        .unwrap();
+                    let _ = s.acquire("m2", 10, Offset(i64::MAX), t0(), LOCK, 1);
+                },
+                (0, 5, 4),
+            ),
+            (
+                "an archived internal offset counts",
+                |s| {
+                    s.materialize(Offset(5), 100);
+                    s.archive_internal(Offset(2), Offset(2));
+                },
+                (0, 5, 1),
+            ),
+            (
+                "the SPSO moving past terminal records takes them out",
+                |s| {
+                    s.materialize(Offset(3), 100);
+                    let _ = s.acquire("m1", 10, Offset(i64::MAX), t0(), LOCK, 5);
+                    s.acknowledge("m1", Offset(0), Offset(2), AckType::Accept, 5)
+                        .unwrap();
+                },
+                (3, 3, 0),
+            ),
+            (
+                "a partial SPSO move keeps the terminal records above it",
+                |s| {
+                    five_acquired_in_two_runs(s);
+                    s.acknowledge("m1", Offset(2), Offset(3), AckType::Accept, 5)
+                        .unwrap();
+                    s.acknowledge("m1", Offset(0), Offset(0), AckType::Accept, 5)
+                        .unwrap();
+                },
+                (1, 5, 2),
+            ),
+            (
+                "the log start moving past the window archives without counting",
+                |s| {
+                    s.materialize(Offset(5), 100);
+                    s.advance_past_log_start(Offset(3));
+                },
+                (3, 5, 0),
+            ),
+            (
+                "initialization counts the persisted terminal batches",
+                |s| {
+                    s.load_from(
+                        Offset(2),
+                        1,
+                        0,
+                        &[
+                            persisted(2, 3, DS_AVAILABLE, 1),
+                            persisted(4, 5, DS_ACKNOWLEDGED, 1),
+                            persisted(6, 6, DS_ARCHIVED, 2),
+                        ],
+                    );
+                },
+                (2, 7, 3),
+            ),
+            (
+                "initialization moves the SPSO past a terminal prefix",
+                |s| {
+                    s.load_from(
+                        Offset(0),
+                        1,
+                        0,
+                        &[
+                            persisted(0, 1, DS_ACKNOWLEDGED, 1),
+                            persisted(2, 3, DS_AVAILABLE, 1),
+                            persisted(4, 4, DS_ARCHIVED, 1),
+                        ],
+                    );
+                },
+                (2, 5, 1),
+            ),
+            (
+                "initialization of an all-terminal window empties it",
+                |s| {
+                    s.load_from(Offset(0), 1, 0, &[persisted(0, 3, DS_ACKNOWLEDGED, 1)]);
+                },
+                (4, 4, 0),
+            ),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (name, setup, want) in cases {
+            let mut s = AcquisitionState::new(Offset(0));
+            setup(&mut s);
+            let (start, dcc, _) = s.to_persist_batches();
+            actual.push((name, (start.0, s.end_offset.0, dcc)));
+            expected.push((name, want));
+        }
+        assert!(actual == expected);
     }
 }

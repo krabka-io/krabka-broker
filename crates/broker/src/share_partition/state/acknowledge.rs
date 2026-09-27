@@ -162,7 +162,8 @@ mod tests {
         assert!(s.start_offset == 2);
         let (_start, dcc, batches) = s.to_persist_batches();
         assert!(batches.is_empty()); // archived prefix dropped from window
-        assert!(dcc == 2); // both offsets reached a terminal state
+        // Both offsets became terminal, then left the window with the SPSO.
+        assert!(dcc == 0);
     }
 
     #[test]

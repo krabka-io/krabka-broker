@@ -14,7 +14,7 @@ use super::{
     observe::{offset_dc, offset_state},
     state::ShareAction,
 };
-use crate::share_partition::state::{AcquisitionState, RecordState};
+use crate::share_partition::state::{AcquisitionState, InFlightBatch, RecordState};
 
 // ---- state-level invariants (Property::always predicates) ------------------
 
@@ -57,6 +57,21 @@ pub(super) fn lock_consistency(sm: &AcquisitionState) -> bool {
     })
 }
 
+/// The delivery complete count is Kafka's: the number of Acknowledged and
+/// Archived records in the window, all of which sit at or above the SPSO
+/// (`SharePartition.deliveryCompleteCount`). It is not a cumulative counter,
+/// so it shrinks when the SPSO moves past terminal records, and
+/// `end - start - count` is the lag that `DescribeShareGroupOffsets` reports.
+pub(super) fn delivery_complete_count_is_terminal_in_window(sm: &AcquisitionState) -> bool {
+    let terminal: i64 = sm
+        .batches
+        .iter()
+        .filter(|b| b.first_offset >= sm.start_offset && b.is_terminal())
+        .map(InFlightBatch::len)
+        .sum();
+    i64::from(sm.delivery_complete_count) == terminal
+}
+
 // ---- transition-level invariants (asserted in next_state) ------------------
 
 /// Compare a parent machine to its child after one operation, and panic on any
@@ -88,12 +103,6 @@ pub(super) fn assert_transition(
         "SPSO regressed: {} -> {}",
         parent.start_offset,
         child.start_offset
-    );
-    assert!(
-        child.delivery_complete_count >= parent.delivery_complete_count,
-        "delivery_complete_count regressed: {} -> {}",
-        parent.delivery_complete_count,
-        child.delivery_complete_count
     );
     // Per-offset delivery_count never regresses for offsets live in both.
     for raw in child.start_offset.0..child.end_offset.0 {

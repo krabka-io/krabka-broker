@@ -15,8 +15,10 @@ use super::{AcquisitionState, InFlightBatch, RecordState, clamp_i32};
 /// `AVAILABLE`, which archives the run instead when its delivery count has
 /// reached `max_attempts`. The owner and the lock go either way.
 ///
-/// It returns whether the run was archived, and counts the archived offsets
-/// into `delivery_complete_count`.
+/// It returns whether the run was archived. An archived run has moved from a
+/// non-terminal state to a terminal one inside the window, so its offsets are
+/// added to `delivery_complete_count`, as Kafka's `releaseAcquiredRecords` and
+/// `releaseAcquisitionLockOnTimeout` add them.
 pub(super) fn give_back(
     batch: &mut InFlightBatch,
     max_attempts: i16,
@@ -142,12 +144,19 @@ impl AcquisitionState {
     /// Advances the SPSO over any terminal prefix, that is Acknowledged or
     /// Archived, and drops those batches. It then merges adjacent same-state
     /// neighbors.
+    ///
+    /// The dropped records leave the in-flight window, so they leave
+    /// `delivery_complete_count` too, as Kafka's
+    /// `maybeUpdateCachedStateAndOffsets` subtracts the terminal records that
+    /// `findLastOffsetAcknowledgedAndMetadata` counts below the new start
+    /// offset.
     pub(super) fn advance_spso(&mut self) {
         while let Some(b) = self.batches.first() {
-            if b.first_offset == self.start_offset
-                && matches!(b.state, RecordState::Acknowledged | RecordState::Archived)
-            {
+            if b.first_offset == self.start_offset && b.is_terminal() {
                 self.start_offset = b.last_offset + 1;
+                self.delivery_complete_count = self
+                    .delivery_complete_count
+                    .saturating_sub(clamp_i32(b.len()));
                 self.batches.remove(0);
             } else {
                 break;

@@ -77,7 +77,6 @@ impl SharePartitionLeaderManager {
                     persisted.start_offset,
                     persisted.state_epoch,
                     leader_epoch,
-                    persisted.delivery_complete_count,
                     &persisted.state_batches,
                 );
                 st

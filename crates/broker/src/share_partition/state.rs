@@ -108,6 +108,14 @@ impl InFlightBatch {
     fn len(&self) -> i64 {
         self.last_offset.0 - self.first_offset.0 + 1
     }
+
+    /// Kafka's `SharePartition.isStateTerminal`: Acknowledged or Archived.
+    fn is_terminal(&self) -> bool {
+        matches!(
+            self.state,
+            RecordState::Acknowledged | RecordState::Archived
+        )
+    }
 }
 
 /// The in-memory acquisition state for one share partition.
@@ -122,9 +130,17 @@ pub struct AcquisitionState {
     pub state_epoch: i32,
     pub leader_epoch: i32,
     pub dirty: bool,
-    /// Count of offsets that have reached a terminal state, Acknowledged or
-    /// Archived, since `new` or `load_from`. This is the persister's
-    /// `delivery_complete_count`.
+    /// Number of terminal records, Acknowledged or Archived, in the in-flight
+    /// window at or above the SPSO: Kafka's
+    /// `SharePartition.deliveryCompleteCount`, and the persister's
+    /// `delivery_complete_count`. It is not a cumulative counter. It grows
+    /// when a record in the window becomes terminal and shrinks when the SPSO
+    /// moves past terminal records, so `end - start - count` is the lag that
+    /// `DescribeShareGroupOffsets` reports.
+    ///
+    /// The window never keeps a record below the SPSO, so none of the special
+    /// cases Kafka has for records below a start offset that the log start
+    /// moved past (`numInFlightRecordsInBatch`) arise here.
     delivery_complete_count: i32,
     batches: Vec<InFlightBatch>,
 }
