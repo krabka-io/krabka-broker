@@ -100,7 +100,8 @@ impl HostEntry {
             last_offset: last.last_offset,
             base_offset: last.base_offset,
             last_timestamp: 0,
-            last_activity_ms: 0,
+            entry_timestamp: 0,
+            current_txn_first_offset: None,
             earlier: self.earlier.map(|slot| slot.map(Range::batch)),
         }
     }

@@ -212,7 +212,8 @@ mod fuzz {
                             last_offset: next_offset,
                             base_offset: next_offset,
                             last_timestamp: 0,
-                            last_activity_ms: 0,
+                            entry_timestamp: 0,
+                            current_txn_first_offset: None,
                             earlier: super::super::NO_EARLIER_BATCHES,
                         });
                         next_offset += 1;

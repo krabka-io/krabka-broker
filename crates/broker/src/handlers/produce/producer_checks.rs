@@ -557,7 +557,7 @@ mod tests {
                 krabka_ids::PartitionIndex(0),
                 (pid, 0),
                 (0, 2),
-                (0, 0),
+                (0, 0, false),
             )
             .await;
 

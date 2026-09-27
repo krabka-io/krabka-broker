@@ -89,7 +89,7 @@ async fn run_steps(partition: &crate::partition::Partition, state: &ProducerStat
                         PARTITION,
                         (PRODUCER_ID, epoch),
                         (base_sequence, records - 1),
-                        (offset.get(), timestamp),
+                        (offset.get(), timestamp, transactional),
                     )
                     .await;
             }

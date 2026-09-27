@@ -1,5 +1,5 @@
-//! The `commit!` test macro, which spells one `ProducerState::commit` call as
-//! flat positional arguments.
+//! The `commit!` test macro, which spells one `ProducerState::commit` call for
+//! an idempotent (non-transactional) batch as flat positional arguments.
 //!
 //! `macro_rules!` is in scope only after its definition, so the root declares
 //! this module `#[macro_use]` ahead of every module whose tests expand the
@@ -13,7 +13,7 @@ macro_rules! commit {
             $partition,
             ($pid, $epoch),
             ($base, $delta),
-            ($offset, $timestamp),
+            ($offset, $timestamp, false),
         )
     };
 }

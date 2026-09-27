@@ -101,28 +101,13 @@ mod tests {
     async fn nondefault_ttl_controls_producer_compaction_snapshot() {
         let state = ProducerState::new();
         state
-            .commit("t", PartitionIndex(0), (7, 0), (0, 0), (12, 0))
+            .commit("t", PartitionIndex(0), (7, 0), (0, 0), (12, 100, false))
             .await;
-        let last_activity_ms = state.snapshot("t", PartitionIndex(0)).await[0]
-            .1
-            .last_activity_ms;
 
-        let expired = active_producers_for_compaction(
-            &state,
-            "t",
-            PartitionIndex(0),
-            last_activity_ms + 2,
-            millis(1),
-        )
-        .await;
-        let active = active_producers_for_compaction(
-            &state,
-            "t",
-            PartitionIndex(0),
-            last_activity_ms + 2,
-            millis(2),
-        )
-        .await;
+        let expired =
+            active_producers_for_compaction(&state, "t", PartitionIndex(0), 102, millis(2)).await;
+        let active =
+            active_producers_for_compaction(&state, "t", PartitionIndex(0), 102, millis(3)).await;
 
         assert!(expired.is_empty());
         assert!(

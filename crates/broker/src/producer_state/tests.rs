@@ -325,8 +325,6 @@ async fn snapshot_reports_committed_entries() {
     let s = ProducerState::new();
     commit!(s, "t", PartitionIndex(3), 1000, 0, 0, 4, 7, 1).await;
     let snap = s.snapshot("t", PartitionIndex(3)).await;
-    // `last_activity_ms` is wall-clock; copy it from the actual entry so
-    // the comparison stays deterministic.
     let expected = vec![(
         1000,
         ProducerEntry {
@@ -335,7 +333,8 @@ async fn snapshot_reports_committed_entries() {
             last_offset: 11,
             base_offset: 7,
             last_timestamp: 1,
-            last_activity_ms: snap[0].1.last_activity_ms,
+            entry_timestamp: 1,
+            current_txn_first_offset: None,
             earlier: crate::producer_state::NO_EARLIER_BATCHES,
         },
     )];

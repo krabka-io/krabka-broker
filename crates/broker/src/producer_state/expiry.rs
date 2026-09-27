@@ -18,10 +18,10 @@ impl ProducerState {
     /// Snapshot of currently-active producers on `(topic, partition)`.
     ///
     /// The map holds `producer_id` → that producer's last-accepted-batch
-    /// `base_offset`. A producer is "active" when
-    /// `now_ms - last_activity_ms <= expiration_ms`. That is Kafka's
-    /// `producer.id.expiration.ms` inactivity window. This function excludes
-    /// expired producers.
+    /// `base_offset`. A producer is "active" unless
+    /// [`ProducerEntry::is_expired`](super::ProducerEntry::is_expired) holds,
+    /// the predicate Kafka's `producer.id.expiration.ms` sweep uses. This
+    /// function excludes expired producers.
     ///
     /// The cleaner calls it to build a `CompactionContext`. The cleaner must
     /// keep an active producer's last batch with `RETAIN_EMPTY` even when
@@ -59,20 +59,19 @@ impl ProducerState {
         state
             .entries
             .iter()
-            .filter(|(_pid, e)| {
-                now_ms.saturating_sub(e.last_activity_ms) <= expiration.millis_i64()
-            })
+            .filter(|(_pid, e)| !e.is_expired(now_ms, expiration.millis_i64()))
             .map(|(pid, e)| (pid.get(), e.base_offset))
             .collect()
     }
 
-    /// Evict idempotent-producer entries whose last activity is older
-    /// than `ttl` relative to `now_ms`.
+    /// Evict idempotent-producer entries that are expired at `now_ms`.
     ///
-    /// This mirrors Kafka's `producer.id.expiration.ms`, whose default is
-    /// `86_400_000` ms = 24h. Kafka expires by *inactivity*. An entry that
-    /// keeps receiving produces stays. An entry that has gone quiet past the
-    /// window goes, so the map does not grow unbounded.
+    /// This is Kafka's `ProducerStateManager.removeExpiredProducers` for
+    /// `producer.id.expiration.ms`, whose default is `86_400_000` ms = 24h.
+    /// Kafka's `isProducerExpired` ages an entry by its `lastTimestamp`, the
+    /// max timestamp of its last batch (or of the marker after it), not by
+    /// the broker clock at the append, and never expires a producer whose
+    /// transaction on the partition is still open.
     ///
     /// This function removes empty partition maps and empty topic maps once
     /// their last entry expires, so stale `(topic, partition)` keys do not
@@ -100,7 +99,7 @@ impl ProducerState {
                 let before = state.entries.len();
                 state
                     .entries
-                    .retain(|_pid, entry| now_ms.saturating_sub(entry.last_activity_ms) < ttl_ms);
+                    .retain(|_pid, entry| !entry.is_expired(now_ms, ttl_ms));
                 evicted += before - state.entries.len();
                 let now_empty = state.entries.is_empty();
                 drop(state);
@@ -129,84 +128,107 @@ mod tests {
     use super::*;
     use crate::producer_state::Decision;
 
-    #[tokio::test]
-    async fn expire_evicts_only_idle_entries() {
-        let s = ProducerState::new();
-        // Two producers on the same partition with controlled activity
-        // timestamps: we commit, then overwrite last_activity_ms directly
-        // to simulate age without sleeping.
-        commit!(s, "t", PartitionIndex(0), 1, 0, 0, 0, 0, 0).await;
-        commit!(s, "t", PartitionIndex(0), 2, 0, 0, 0, 0, 0).await;
-        {
-            let h = s.handle("t", PartitionIndex(0));
-            let mut st = h.lock().await;
-            st.entries.get_mut(&ProducerId(1)).unwrap().last_activity_ms = 1_000; // old
-            st.entries.get_mut(&ProducerId(2)).unwrap().last_activity_ms = 9_000; // recent
-        }
-        // now = 10_000, ttl = 5_000 → pid 1 (age 9_000) expires, pid 2
-        // (age 1_000) survives.
-        let evicted = s.expire_older_than(10_000, secs(5)).await;
-        assert!(evicted == 1);
-        let snap = s.snapshot("t", PartitionIndex(0)).await;
-        assert!(snap.len() == 1);
-        assert!(snap[0].0 == 2, "only the recently-active producer survives");
+    /// How a row's producer reaches the sweep.
+    #[derive(Clone, Copy, Debug)]
+    enum History {
+        /// One idempotent batch.
+        Idempotent,
+        /// One transactional batch, with no marker yet.
+        OpenTransaction,
+        /// One transactional batch, then its commit marker at the batch's
+        /// timestamp.
+        ClosedTransaction,
     }
 
+    /// #908: Kafka's `ProducerStateManager.isProducerExpired` ages an entry by
+    /// the timestamp of its last batch (or marker), never by the broker's
+    /// clock at the append, and never expires a producer whose transaction on
+    /// the partition is still open. The expiry window is 5 s and every batch
+    /// carries timestamp `t0`; the append itself happens now, on the wall
+    /// clock, long after `t0`.
     #[tokio::test]
-    async fn expire_evicts_entry_at_exact_ttl_boundary() {
-        let s = ProducerState::new();
-        commit!(s, "t", PartitionIndex(0), 1, 0, 0, 0, 0, 0).await;
-        {
-            let h = s.handle("t", PartitionIndex(0));
-            h.lock()
-                .await
-                .entries
-                .get_mut(&ProducerId(1))
-                .unwrap()
-                .last_activity_ms = 5_000;
+    async fn expiry_ages_by_the_batch_timestamp_and_spares_open_transactions() {
+        const T0: i64 = 1_000;
+        const EXPIRY_MS: i64 = 5_000;
+        let cases = [
+            (
+                "idle for the whole window",
+                History::Idempotent,
+                T0 + EXPIRY_MS,
+                1,
+            ),
+            (
+                "one millisecond short",
+                History::Idempotent,
+                T0 + EXPIRY_MS - 1,
+                0,
+            ),
+            (
+                "open transaction, ten windows later",
+                History::OpenTransaction,
+                T0 + 10 * EXPIRY_MS,
+                0,
+            ),
+            (
+                "committed transaction, one window later",
+                History::ClosedTransaction,
+                T0 + EXPIRY_MS,
+                1,
+            ),
+        ];
+        for (label, history, now_ms, evicted) in cases {
+            let s = ProducerState::new();
+            let transactional = !matches!(history, History::Idempotent);
+            s.commit(
+                "t",
+                PartitionIndex(0),
+                (7, 0),
+                (0, 0),
+                (0, T0, transactional),
+            )
+            .await;
+            if matches!(history, History::ClosedTransaction) {
+                s.mirror_log_entries(
+                    "t",
+                    PartitionIndex(0),
+                    vec![krabka_log::ProducerSnapshotEntry {
+                        producer_id: ProducerId(7),
+                        producer_epoch: 0,
+                        last_sequence: 0,
+                        last_offset: krabka_log::Offset(0),
+                        offset_delta: 0,
+                        timestamp: T0,
+                        coordinator_epoch: 0,
+                        current_txn_first_offset: None,
+                    }],
+                )
+                .await;
+            }
+            let survivors: Vec<i64> = if evicted == 0 { vec![7] } else { vec![] };
+            check!(
+                (
+                    s.expire_older_than(now_ms, Time::from_millis(EXPIRY_MS))
+                        .await,
+                    s.snapshot("t", PartitionIndex(0))
+                        .await
+                        .into_iter()
+                        .map(|(pid, _)| pid)
+                        .collect::<Vec<_>>(),
+                ) == (evicted, survivors),
+                "{label}"
+            );
         }
-
-        let evicted = s.expire_older_than(10_000, secs(5)).await;
-        assert!(evicted == 1);
-        assert!(s.snapshot("t", PartitionIndex(0)).await.is_empty());
     }
 
     #[tokio::test]
     async fn active_snapshot_excludes_expired_includes_active() {
         let s = ProducerState::new();
-        // pid 1: last batch base_offset 10; pid 2: base_offset 20.
-        commit!(
-            s,
-            "t",
-            PartitionIndex(0),
-            1,
-            0,
-            0,
-            0,
-            /* base_offset */ 10,
-            0,
-        )
-        .await;
-        commit!(
-            s,
-            "t",
-            PartitionIndex(0),
-            2,
-            0,
-            0,
-            0,
-            /* base_offset */ 20,
-            0,
-        )
-        .await;
-        {
-            let h = s.handle("t", PartitionIndex(0));
-            let mut st = h.lock().await;
-            st.entries.get_mut(&ProducerId(1)).unwrap().last_activity_ms = 1_000; // old
-            st.entries.get_mut(&ProducerId(2)).unwrap().last_activity_ms = 9_500; // recent
-        }
-        // now = 10_000, expiration = 5_000 → pid 1 (age 9_000 > 5_000)
-        // excluded; pid 2 (age 500 <= 5_000) included with its base_offset.
+        // pid 1: last batch base_offset 10 at t=1_000; pid 2: base_offset 20
+        // at t=9_500.
+        commit!(s, "t", PartitionIndex(0), 1, 0, 0, 0, 10, 1_000).await;
+        commit!(s, "t", PartitionIndex(0), 2, 0, 0, 0, 20, 9_500).await;
+        // now = 10_000, expiration = 5_000 → pid 1 (age 9_000) excluded;
+        // pid 2 (age 500) included with its base_offset.
         let snap = s
             .active_snapshot("t", PartitionIndex(0), 10_000, secs(5))
             .await;
@@ -225,15 +247,6 @@ mod tests {
     async fn expire_drops_empty_partition_and_topic_slots() {
         let s = ProducerState::new();
         commit!(s, "t", PartitionIndex(0), 1, 0, 0, 0, 0, 0).await;
-        {
-            let h = s.handle("t", PartitionIndex(0));
-            h.lock()
-                .await
-                .entries
-                .get_mut(&ProducerId(1))
-                .unwrap()
-                .last_activity_ms = 0;
-        }
         let evicted = s.expire_older_than(1_000_000, millis(1)).await;
         // The empty partition and topic maps are pruned (the empty topic slot
         // must be removed), and a subsequent produce still works after pruning.

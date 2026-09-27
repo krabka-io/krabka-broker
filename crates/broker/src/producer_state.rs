@@ -67,17 +67,24 @@ impl ProducerState {
     /// would put the pre-marker epoch back, undoing the fence. This is
     /// Kafka's own invariant: `ProducerAppendInfo.checkProducerEpoch` never
     /// lets a producer's tracked epoch move backward.
+    ///
+    /// `append` is the batch's base offset, its max timestamp and whether it
+    /// is transactional. A transactional batch opens a transaction when none
+    /// is open, as Kafka's `ProducerAppendInfo.appendDataBatch` does. A
+    /// commit that resolves after the tracked entry already holds a later
+    /// position of the same epoch reopens nothing: the marker mirrored in
+    /// between may have closed that batch's transaction.
     pub async fn commit(
         &self,
         topic: &str,
         partition: PartitionIndex,
         producer: (i64, i16),
         sequence: (i32, i32),
-        append: (LogOffset, i64),
+        append: (LogOffset, i64, bool),
     ) {
         let (producer_id, producer_epoch) = producer;
         let (base_sequence, last_offset_delta) = sequence;
-        let (base_offset, last_timestamp) = append;
+        let (base_offset, last_timestamp, is_transactional) = append;
         let handle = self.handle(topic, partition);
         let mut s = handle.lock().await;
         let existing = s.entries.get(&ProducerId(producer_id)).copied();
@@ -89,6 +96,17 @@ impl ProducerState {
         });
         let last_sequence = increment_sequence(base_sequence, last_offset_delta);
         let last_offset = base_offset + i64::from(last_offset_delta);
+        let current_txn_first_offset = match existing {
+            Some(existing) if existing.current_txn_first_offset.is_some() => {
+                existing.current_txn_first_offset
+            }
+            Some(existing)
+                if existing.epoch == producer_epoch && existing.last_offset >= last_offset =>
+            {
+                None
+            }
+            _ => is_transactional.then_some(base_offset),
+        };
         s.entries.insert(
             ProducerId(producer_id),
             ProducerEntry {
@@ -97,7 +115,8 @@ impl ProducerState {
                 last_offset,
                 base_offset,
                 last_timestamp,
-                last_activity_ms: crate::txn::util::now_millis(),
+                entry_timestamp: last_timestamp,
+                current_txn_first_offset,
                 earlier,
             },
         );
