@@ -444,7 +444,10 @@ mod tests {
         assert!(!rules[1].pattern.is_match("java-1").unwrap());
         let quoted = parse_match_rules("client_id=\\Qa.b\\E").unwrap();
         for (input, expected) in [("a.b", true), ("axb", false)] {
-            check!(quoted[0].pattern.is_match(input).unwrap() == expected, "{input}");
+            check!(
+                quoted[0].pattern.is_match(input).unwrap() == expected,
+                "{input}"
+            );
         }
     }
 
