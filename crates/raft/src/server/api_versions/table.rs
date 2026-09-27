@@ -229,6 +229,10 @@ mod tests {
                 "begin quorum epoch",
                 api_key::BEGIN_QUORUM_EPOCH,
                 PeerRequest::BeginQuorumEpoch {
+                    cluster_id: None,
+                    voter_id: NodeId(2),
+                    voter_directory_id: uuid::Uuid::nil(),
+                    leader_endpoints: Vec::new(),
                     leader_id: NodeId(1),
                     leader_epoch: 4,
                 },
@@ -238,6 +242,7 @@ mod tests {
                 "end quorum epoch",
                 api_key::END_QUORUM_EPOCH,
                 PeerRequest::EndQuorumEpoch {
+                    cluster_id: None,
                     leader_id: NodeId(1),
                     leader_epoch: 4,
                     preferred_candidates: Vec::new(),

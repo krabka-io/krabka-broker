@@ -46,10 +46,35 @@ pub(crate) fn convert_request(key: i16, body: &[u8], from: i16, to: i16) -> Opti
         api_key::FETCH => convert::<FetchRequest>(body, from, to),
         api_key::VOTE => convert::<VoteRequest>(body, from, to),
         api_key::BEGIN_QUORUM_EPOCH => convert::<BeginQuorumEpochRequest>(body, from, to),
-        api_key::END_QUORUM_EPOCH => convert::<EndQuorumEpochRequest>(body, from, to),
+        api_key::END_QUORUM_EPOCH => convert_end_quorum_epoch(body, from, to),
         api_key::FETCH_SNAPSHOT => convert::<FetchSnapshotRequest>(body, from, to),
         _ => None,
     }
+}
+
+/// `EndQuorumEpoch` names the successors in `PreferredSuccessors` at v0 and
+/// in `PreferredCandidates` from v1. Kafka's
+/// `RaftUtil.singletonEndQuorumEpochRequest` fills both, so a body decoded at
+/// v1 gets its successor ids back before it is encoded at v0.
+fn convert_end_quorum_epoch(body: &[u8], from: i16, to: i16) -> Option<Bytes> {
+    let mut cur = body;
+    let mut message = EndQuorumEpochRequest::decode(&mut cur, from).ok()?;
+    for partition in message
+        .topics
+        .iter_mut()
+        .flat_map(|topic| &mut topic.partitions)
+    {
+        if partition.preferred_successors.is_empty() {
+            partition.preferred_successors = partition
+                .preferred_candidates
+                .iter()
+                .map(|candidate| candidate.candidate_id)
+                .collect();
+        }
+    }
+    let mut out = BytesMut::new();
+    message.encode(&mut out, to).ok()?;
+    Some(out.freeze())
 }
 
 /// Re-encodes a response body for `key` from version `from` to version `to`.

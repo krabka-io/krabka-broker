@@ -247,6 +247,10 @@ mod tests {
         ));
 
         let begin = PeerRequest::BeginQuorumEpoch {
+            cluster_id: None,
+            voter_id: NodeId(2),
+            voter_directory_id: uuid::Uuid::nil(),
+            leader_endpoints: Vec::new(),
             leader_id: NodeId(1),
             leader_epoch: 1,
         }
@@ -262,6 +266,7 @@ mod tests {
         assert2::assert!(!begin_resp.is_empty());
 
         let end = PeerRequest::EndQuorumEpoch {
+            cluster_id: None,
             leader_id: NodeId(1),
             leader_epoch: 1,
             preferred_candidates: Vec::new(),

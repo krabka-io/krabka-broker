@@ -362,6 +362,8 @@ async fn a_leader_refuses_a_fetch_from_another_epoch_and_names_itself() {
     assert!(!leader.replica_fetch_offsets.contains_key(&NodeId(2)));
 }
 
+/// Kafka's `buildEndQuorumEpochRequest`: every other voter gets the cluster
+/// id and the successors in the core's order.
 #[tokio::test]
 async fn broadcast_end_quorum_epoch_sends_to_every_other_voter() {
     let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
@@ -373,28 +375,176 @@ async fn broadcast_end_quorum_epoch_sends_to_every_other_voter() {
     for _ in 0..2 {
         let send = recv_peer_send(&mut sends).await;
         assert2::assert!(send.api_key == api_key::END_QUORUM_EPOCH);
-        match wire::decode_end(&send.body) {
-            Some(wire::PeerRequest::EndQuorumEpoch {
-                leader_id,
-                leader_epoch,
-                preferred_candidates,
-            }) => {
-                assert2::assert!(leader_id == NodeId(1));
-                assert2::assert!(leader_epoch == 4);
-                assert2::assert!(
-                    preferred_candidates
-                        == vec![
-                            (NodeId(3), uuid::Uuid::nil()),
-                            (NodeId(2), uuid::Uuid::nil())
-                        ]
-                );
-            }
-            other => panic!("unexpected end quorum request: {other:?}"),
-        }
+        assert2::assert!(
+            wire::decode_end(&send.body)
+                == Some(wire::PeerRequest::EndQuorumEpoch {
+                    cluster_id: Some(uuid::Uuid::nil()),
+                    leader_id: NodeId(1),
+                    leader_epoch: 4,
+                    preferred_candidates: vec![
+                        (NodeId(3), uuid::Uuid::nil()),
+                        (NodeId(2), uuid::Uuid::nil())
+                    ],
+                })
+        );
         peers.push(send.peer);
     }
     peers.sort_unstable();
     assert2::assert!(peers == vec![NodeId(2), NodeId(3)]);
+}
+
+/// Kafka's `buildBeginQuorumEpochRequest`: each other voter gets the cluster
+/// id, its own voter key, and the leader's listeners in `LeaderEndpoints`.
+#[tokio::test]
+async fn broadcast_begin_quorum_epoch_names_each_recipient_and_the_leader_endpoints() {
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    let mut sends = record_peer_sends(&mut engine, wire::PeerResponse::Ack { epoch: 4 }.encode());
+
+    engine.broadcast_begin_quorum_epoch(4);
+
+    let mut requests = Vec::new();
+    for _ in 0..2 {
+        let send = recv_peer_send(&mut sends).await;
+        assert2::assert!(send.api_key == api_key::BEGIN_QUORUM_EPOCH);
+        requests.push((send.peer, wire::decode_begin(&send.body)));
+    }
+    requests.sort_unstable_by_key(|(peer, _)| *peer);
+    let expected = |voter: NodeId| {
+        Some(wire::PeerRequest::BeginQuorumEpoch {
+            cluster_id: Some(uuid::Uuid::nil()),
+            voter_id: voter,
+            voter_directory_id: uuid::Uuid::nil(),
+            leader_id: NodeId(1),
+            leader_epoch: 4,
+            leader_endpoints: vec![("CONTROLLER".into(), "127.0.0.1".into(), 9_093)],
+        })
+    };
+    assert2::assert!(
+        requests
+            == vec![
+                (NodeId(2), expected(NodeId(2))),
+                (NodeId(3), expected(NodeId(3)))
+            ]
+    );
+}
+
+/// Kafka's `handleBeginQuorumEpochRequest` and `handleEndQuorumEpochRequest`
+/// take the leader's address from `LeaderEndpoints` when the request carries
+/// them: a replica whose voter set does not name the leader, as during an
+/// uncommitted KIP-853 voter change, still learns where to fetch from.
+#[tokio::test]
+async fn quorum_epoch_requests_teach_the_leader_endpoints() {
+    use krabka_protocol::{
+        Encode,
+        owned::{
+            begin_quorum_epoch_request::{self as bqe, BeginQuorumEpochRequest},
+            end_quorum_epoch_request::{self as eqe, EndQuorumEpochRequest},
+        },
+    };
+
+    let endpoints = || {
+        vec![
+            ("REPLICATION", "r4.example", 9_094),
+            ("CONTROLLER", "c4.example", 9_093),
+        ]
+    };
+    let mut begin = BeginQuorumEpochRequest {
+        voter_id: 1,
+        topics: vec![bqe::TopicData {
+            topic_name: wire::METADATA_TOPIC.into(),
+            partitions: vec![bqe::PartitionData {
+                leader_id: 4,
+                leader_epoch: 3,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        leader_endpoints: endpoints()
+            .into_iter()
+            .map(|(name, host, port)| bqe::LeaderEndpoint {
+                name: name.into(),
+                host: host.into(),
+                port,
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let end = EndQuorumEpochRequest {
+        topics: vec![eqe::TopicData {
+            topic_name: wire::METADATA_TOPIC.into(),
+            partitions: vec![eqe::PartitionData {
+                leader_id: 4,
+                leader_epoch: 3,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        leader_endpoints: endpoints()
+            .into_iter()
+            .map(|(name, host, port)| eqe::LeaderEndpoint {
+                name: name.into(),
+                host: host.into(),
+                port,
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let encode = |message: &dyn Fn(&mut bytes::BytesMut)| {
+        let mut body = bytes::BytesMut::new();
+        message(&mut body);
+        body.freeze()
+    };
+    let begin_body = encode(&|body| begin.encode(body, 1).expect("encode"));
+    let end_body = encode(&|body| end.encode(body, 1).expect("encode"));
+    begin.leader_endpoints.clear();
+    let bare_begin_body = encode(&|body| begin.encode(body, 1).expect("encode"));
+
+    let learned = vec![(NodeId(4), "c4.example:9093".to_string())];
+    for (name, api, body, remembered) in [
+        (
+            "BeginQuorumEpoch",
+            api_key::BEGIN_QUORUM_EPOCH,
+            begin_body,
+            learned.clone(),
+        ),
+        (
+            "EndQuorumEpoch",
+            api_key::END_QUORUM_EPOCH,
+            end_body,
+            learned,
+        ),
+        (
+            "BeginQuorumEpoch without endpoints",
+            api_key::BEGIN_QUORUM_EPOCH,
+            bare_begin_body,
+            Vec::new(),
+        ),
+    ] {
+        let (mut replica, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+        let recorder = std::sync::Arc::new(EndpointRecorder::default());
+        replica.peers = recorder.clone();
+        let (reply, mut answer) = oneshot::channel();
+        replica.on_inbound(if api == api_key::BEGIN_QUORUM_EPOCH {
+            Inbound::BeginQuorumEpoch {
+                req: body,
+                version: 1,
+                reply,
+            }
+        } else {
+            Inbound::EndQuorumEpoch {
+                req: body,
+                version: 1,
+                reply,
+            }
+        });
+        assert2::assert!(answer.try_recv().is_ok(), "{name}");
+        assert2::assert!(
+            *recorder.endpoints.lock().expect("endpoint lock") == remembered,
+            "{name}"
+        );
+    }
 }
 
 #[tokio::test]

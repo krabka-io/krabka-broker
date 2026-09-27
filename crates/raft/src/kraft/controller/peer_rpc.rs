@@ -84,25 +84,52 @@ impl Engine {
         }
     }
 
+    /// Sends `BeginQuorumEpoch` to each other voter, as Kafka's
+    /// `buildBeginQuorumEpochRequest` builds it: the cluster id, the
+    /// recipient's voter key, and this leader's own listeners in
+    /// `LeaderEndpoints`, so a recipient whose voter set does not name this
+    /// leader still reaches it.
     #[tracing::instrument(level = "debug", skip_all, fields(node = self.me.0, epoch))]
     pub fn broadcast_begin_quorum_epoch(&self, epoch: Epoch) {
-        let body = wire::PeerRequest::BeginQuorumEpoch {
-            leader_id: self.me,
-            leader_epoch: epoch,
-        }
-        .encode();
+        let state = self.core.quorum_state();
+        let leader_endpoints: Vec<(String, String, u16)> = state
+            .voters
+            .get(self.me)
+            .map(|voter| {
+                voter
+                    .endpoints
+                    .iter()
+                    .map(|endpoint| (endpoint.name.clone(), endpoint.host.clone(), endpoint.port))
+                    .collect()
+            })
+            .unwrap_or_default();
         for peer in self.other_voters() {
-            self.spawn_send(peer, api_key::BEGIN_QUORUM_EPOCH, body.clone());
+            let body = wire::PeerRequest::BeginQuorumEpoch {
+                cluster_id: Some(state.cluster_id),
+                voter_id: peer,
+                voter_directory_id: state
+                    .voters
+                    .get(peer)
+                    .map_or(uuid::Uuid::nil(), |voter| voter.directory_id),
+                leader_id: self.me,
+                leader_epoch: epoch,
+                leader_endpoints: leader_endpoints.clone(),
+            }
+            .encode();
+            self.spawn_send(peer, api_key::BEGIN_QUORUM_EPOCH, body);
         }
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(node = self.me.0, epoch))]
-    /// Sends `EndQuorumEpoch` to the other voters. `preferred_successors` is
-    /// the core's ranking of them, most caught up first. Each goes into
+    /// Sends `EndQuorumEpoch` to the other voters, as Kafka's
+    /// `buildEndQuorumEpochRequest` builds it. `preferred_successors` is the
+    /// core's ranking of them, most caught up first. Each goes into
     /// `PreferredCandidates` with its directory id from the voter set.
     pub fn broadcast_end_quorum_epoch(&self, epoch: Epoch, preferred_successors: &[NodeId]) {
-        let voters = &self.core.quorum_state().voters;
+        let state = self.core.quorum_state();
+        let voters = &state.voters;
         let body = wire::PeerRequest::EndQuorumEpoch {
+            cluster_id: Some(state.cluster_id),
             leader_id: self.me,
             leader_epoch: epoch,
             preferred_candidates: preferred_successors

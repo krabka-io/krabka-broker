@@ -201,11 +201,16 @@ fn encoded_vote_request_carries_target_voter_and_empty_cluster_id() {
 #[test]
 fn begin_end_round_trip() {
     let begin = PeerRequest::BeginQuorumEpoch {
+        cluster_id: Some(uuid::Uuid::from_u128(9)),
+        voter_id: NodeId(2),
+        voter_directory_id: uuid::Uuid::from_u128(2),
         leader_id: NodeId(5),
         leader_epoch: 9,
+        leader_endpoints: vec![("CONTROLLER".into(), "c5".into(), 9093)],
     };
     assert2::assert!(decode_begin(&begin.encode()) == Some(begin));
     let end = PeerRequest::EndQuorumEpoch {
+        cluster_id: Some(uuid::Uuid::from_u128(9)),
         leader_id: NodeId(1),
         leader_epoch: 4,
         preferred_candidates: vec![
@@ -216,47 +221,95 @@ fn begin_end_round_trip() {
     assert2::assert!(decode_end(&end.encode()) == Some(end));
 }
 
+/// The requests are Kafka's `RaftUtil.singletonBeginQuorumEpochRequest` and
+/// `singletonEndQuorumEpochRequest`: the cluster id, the recipient voter key
+/// and the leader's endpoints for `BeginQuorumEpoch`, and the successors in
+/// both of `EndQuorumEpoch`'s lists.
 #[test]
-fn encoded_begin_and_end_requests_carry_quorum_defaults_and_leader() {
-    use krabka_protocol::Decode;
+fn encoded_begin_and_end_requests_are_kafkas_singleton_requests() {
+    use krabka_protocol::{
+        Decode,
+        owned::{begin_quorum_epoch_request as bqe, end_quorum_epoch_request as eqe},
+        primitives::uuid::Uuid as WireUuid,
+    };
 
     let begin = PeerRequest::BeginQuorumEpoch {
+        cluster_id: Some(uuid::Uuid::from_u128(9)),
+        voter_id: NodeId(2),
+        voter_directory_id: uuid::Uuid::from_u128(2),
         leader_id: NodeId(5),
         leader_epoch: 9,
+        leader_endpoints: vec![("CONTROLLER".into(), "c5".into(), 9093)],
     };
-    let mut begin_cur = &begin.encode()[..];
-    let raw_begin = BeginQuorumEpochRequest::decode(&mut begin_cur, QUORUM_EPOCH_VERSION)
+    let raw_begin = BeginQuorumEpochRequest::decode(&mut &begin.encode()[..], QUORUM_EPOCH_VERSION)
         .expect("decode begin request");
-    let begin_partition = &raw_begin.topics[0].partitions[0];
-    assert2::assert!(raw_begin.cluster_id.as_ref() == None);
-    assert2::assert!(raw_begin.voter_id == -1);
-    assert2::assert!(begin_partition.leader_id == 5);
-    assert2::assert!(begin_partition.leader_epoch == 9);
+    let expected_begin = BeginQuorumEpochRequest {
+        cluster_id: Some("AAAAAAAAAAAAAAAAAAAACQ".into()),
+        voter_id: 2,
+        topics: vec![bqe::TopicData {
+            topic_name: METADATA_TOPIC.into(),
+            partitions: vec![bqe::PartitionData {
+                partition_index: 0,
+                voter_directory_id: WireUuid(*uuid::Uuid::from_u128(2).as_bytes()),
+                leader_id: 5,
+                leader_epoch: 9,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        leader_endpoints: vec![bqe::LeaderEndpoint {
+            name: "CONTROLLER".into(),
+            host: "c5".into(),
+            port: 9093,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    assert2::check!(raw_begin == expected_begin);
 
     let end = PeerRequest::EndQuorumEpoch {
+        cluster_id: Some(uuid::Uuid::from_u128(9)),
         leader_id: NodeId(1),
         leader_epoch: 4,
         preferred_candidates: vec![(NodeId(2), uuid::Uuid::from_u128(2))],
     };
-    let mut end_cur = &end.encode()[..];
-    let raw_end = EndQuorumEpochRequest::decode(&mut end_cur, QUORUM_EPOCH_VERSION)
+    let expected_end = |version: i16| EndQuorumEpochRequest {
+        cluster_id: Some("AAAAAAAAAAAAAAAAAAAACQ".into()),
+        topics: vec![eqe::TopicData {
+            topic_name: METADATA_TOPIC.into(),
+            partitions: vec![eqe::PartitionData {
+                partition_index: 0,
+                leader_id: 1,
+                leader_epoch: 4,
+                preferred_successors: if version == 0 { vec![2] } else { Vec::new() },
+                preferred_candidates: if version == 0 {
+                    Vec::new()
+                } else {
+                    vec![eqe::ReplicaInfo {
+                        candidate_id: 2,
+                        candidate_directory_id: WireUuid(*uuid::Uuid::from_u128(2).as_bytes()),
+                        ..Default::default()
+                    }]
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let raw_end = EndQuorumEpochRequest::decode(&mut &end.encode()[..], QUORUM_EPOCH_VERSION)
         .expect("decode end request");
-    let end_partition = &raw_end.topics[0].partitions[0];
-    assert2::assert!(raw_end.cluster_id.as_ref() == None);
-    assert2::assert!(end_partition.leader_id == 1);
-    assert2::assert!(end_partition.leader_epoch == 4);
-    assert2::assert!(
-        end_partition.preferred_candidates
-            == vec![
-                krabka_protocol::owned::end_quorum_epoch_request::ReplicaInfo {
-                    candidate_id: 2,
-                    candidate_directory_id: krabka_protocol::primitives::uuid::Uuid(
-                        *uuid::Uuid::from_u128(2).as_bytes()
-                    ),
-                    ..Default::default()
-                }
-            ]
-    );
+    assert2::check!(raw_end == expected_end(QUORUM_EPOCH_VERSION));
+    // At v0 the successors travel in `PreferredSuccessors`.
+    let v0 = crate::network::negotiation::convert_request(
+        crate::kraft::transport::api_key::END_QUORUM_EPOCH,
+        &end.encode(),
+        QUORUM_EPOCH_VERSION,
+        0,
+    )
+    .expect("convert to v0");
+    let raw_v0 = EndQuorumEpochRequest::decode(&mut &v0[..], 0).expect("decode v0");
+    assert2::check!(raw_v0 == expected_end(0));
 }
 
 #[test]

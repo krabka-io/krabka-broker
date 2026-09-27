@@ -78,6 +78,29 @@ impl Engine {
         }
     }
 
+    /// Keeps the `LeaderEndpoints` of a `BeginQuorumEpoch` or `EndQuorumEpoch`
+    /// as the address of `leader_id`, as Kafka's
+    /// `handleBeginQuorumEpochRequest` and `handleEndQuorumEpochRequest` take
+    /// them over the voter set's listeners. The endpoint named `CONTROLLER`
+    /// is taken, or else the first. The voter set's own listener for the
+    /// leader still takes precedence, so this matters while the voter set does
+    /// not name the leader, during an uncommitted KIP-853 voter change.
+    fn remember_request_leader_endpoints<'a>(
+        &self,
+        leader_id: NodeId,
+        endpoints: impl Iterator<Item = (&'a str, &'a str, u16)>,
+    ) {
+        let endpoints: Vec<_> = endpoints.collect();
+        let chosen = endpoints
+            .iter()
+            .find(|(name, _, _)| name.eq_ignore_ascii_case(CONTROLLER_LISTENER_NAME))
+            .or_else(|| endpoints.first());
+        if let Some((_, host, port)) = chosen {
+            self.peers
+                .remember_leader_endpoint(leader_id, format!("{host}:{port}"));
+        }
+    }
+
     /// Kafka's `hasValidClusterId`: an absent id is valid.
     pub(super) fn has_valid_cluster_id(&self, cluster_id: Option<&str>) -> bool {
         cluster_id.is_none_or(|id| {
@@ -273,6 +296,16 @@ impl Engine {
         ) else {
             return respond(self, 0, INVALID_REQUEST);
         };
+        self.remember_request_leader_endpoints(
+            NodeId(leader_id),
+            request.leader_endpoints.iter().map(|endpoint| {
+                (
+                    endpoint.name.as_str(),
+                    endpoint.host.as_str(),
+                    endpoint.port,
+                )
+            }),
+        );
         self.on_event(Event::ReceiveBeginQuorumEpoch {
             leader_id: NodeId(leader_id),
             leader_epoch,
@@ -321,6 +354,16 @@ impl Engine {
         ) else {
             return respond(self, 0, INVALID_REQUEST);
         };
+        self.remember_request_leader_endpoints(
+            NodeId(leader_id),
+            request.leader_endpoints.iter().map(|endpoint| {
+                (
+                    endpoint.name.as_str(),
+                    endpoint.host.as_str(),
+                    endpoint.port,
+                )
+            }),
+        );
         let successor_rank = self.successor_rank(&partition.preferred_candidates);
         self.on_event(Event::ReceiveEndQuorumEpoch {
             leader_id: NodeId(leader_id),
