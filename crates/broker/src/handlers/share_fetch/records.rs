@@ -109,11 +109,7 @@ pub(super) async fn acquire_read_records(
     let Some(read) = read_raw(partition, from, request.upper, request.max_bytes).await? else {
         return Ok(0);
     };
-    let read_bytes = if request.min_one_batch {
-        read.bytes
-    } else {
-        batches_within(&read.bytes, request.max_bytes)?
-    };
+    let read_bytes = batches_within(&read.bytes, request.max_bytes, request.min_one_batch)?;
     let bounds = batch_bounds(&read_bytes)?;
     let Some(&(_, read_last)) = bounds.last() else {
         return Ok(0);
@@ -274,19 +270,29 @@ fn batches_holding(bytes: &Bytes, acquired: &[AcquiredRange]) -> Result<Bytes, B
 
 /// The leading whole batches of `bytes` that fit in `max_bytes`.
 ///
-/// This is Kafka's `ReplicaManager.readFromLog` with `minOneMessage` off:
-/// only the first partition of a response that returns records may exceed
-/// its byte budget, by the one batch that its read starts with. A later
+/// `Log::read_raw` can return one batch past the budget: a read that crosses
+/// a segment boundary takes the next segment's first batch whole. Only
+/// Kafka's `minOneMessage` lets a read exceed its budget, and only by the
+/// first batch when no batch fits (`LogSegment.read` raises the size to that
+/// one batch, and `LocalLog.read` reads a single segment). So with
+/// `min_one_batch` the result is the batches that fit, or the first batch
+/// alone when none does; without it, only the batches that fit, so a later
 /// partition whose first batch does not fit returns no records.
-/// `Log::read_raw` always returns at least one whole batch, so the caller
-/// applies the budget here.
-fn batches_within(bytes: &Bytes, max_bytes: i32) -> Result<Bytes, BrokerError> {
+fn batches_within(
+    bytes: &Bytes,
+    max_bytes: i32,
+    min_one_batch: bool,
+) -> Result<Bytes, BrokerError> {
     let budget = usize::try_from(max_bytes.max(0)).unwrap_or(usize::MAX);
-    let kept: Vec<_> = batch_spans(bytes)?
-        .into_iter()
-        .map(|span| span.bytes)
+    let spans = batch_spans(bytes)?;
+    let mut kept: Vec<_> = spans
+        .iter()
+        .map(|span| span.bytes.clone())
         .take_while(|range| range.end <= budget)
         .collect();
+    if kept.is_empty() && min_one_batch {
+        kept.extend(spans.into_iter().next().map(|span| span.bytes));
+    }
     Ok(gather(bytes, &kept))
 }
 
@@ -542,6 +548,59 @@ mod tests {
             .await
             .expect("scan the schedule");
         assert!(none == Vec::new());
+    }
+
+    /// Three one-record batches of equal size at offsets 0, 1 and 2, whole
+    /// and one by one.
+    fn three_batches() -> (Bytes, Vec<Bytes>) {
+        let batches: Vec<Bytes> = (0..3)
+            .map(|base| {
+                let mut one = BytesMut::new();
+                krabka_protocol::records::RecordBatch {
+                    base_offset: base,
+                    records: vec![krabka_protocol::records::Record {
+                        value: Some(Bytes::from(vec![0_u8; 32])),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }
+                .encode(&mut one)
+                .expect("encode a batch");
+                one.freeze()
+            })
+            .collect();
+        (batches.concat().into(), batches)
+    }
+
+    /// Kafka's `minOneMessage` lets a read exceed its budget only by its
+    /// first batch, and only when no batch fits: a read that crossed a
+    /// segment boundary and brought back a later batch past the budget keeps
+    /// just the batches that fit.
+    #[test]
+    fn only_the_first_batch_may_exceed_the_budget() {
+        let (read, batches) = three_batches();
+        let size = i32::try_from(batches[0].len()).expect("a small batch");
+        let first = batches[0].clone();
+        let first_two: Bytes = [batches[0].clone(), batches[1].clone()].concat().into();
+        // (budget, min_one_batch, kept)
+        let cases = [
+            (size, true, first.clone()),
+            (size + size / 2, true, first.clone()),
+            (size / 2, true, first.clone()),
+            (0, true, first.clone()),
+            (2 * size, true, first_two.clone()),
+            (size / 2, false, Bytes::new()),
+            (size + size / 2, false, first),
+            (3 * size, false, read.clone()),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (budget, min_one_batch, want) in cases {
+            let kept = batches_within(&read, budget, min_one_batch).expect("whole batches");
+            actual.push((budget, min_one_batch, kept));
+            expected.push((budget, min_one_batch, want));
+        }
+        assert!(actual == expected);
     }
 
     /// Kafka's `createBatches` over log batches of five records at 0, 5, 10
