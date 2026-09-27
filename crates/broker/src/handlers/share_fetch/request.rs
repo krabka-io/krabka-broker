@@ -12,22 +12,13 @@ use krabka_protocol::owned::share_fetch_request::{FetchPartition, ShareFetchRequ
 /// `(first_offset, last_offset, per-offset acknowledge_types)`.
 pub(super) type AckBatch = (i64, i64, Vec<i8>);
 
-pub(super) fn fetch_session_flags(req: &ShareFetchRequest) -> (bool, bool) {
-    let has_acknowledgements = req
-        .topics
+/// Whether any request partition carries acknowledgement batches: Kafka's
+/// `isAcknowledgeDataPresentInFetchRequest`.
+pub(super) fn has_acknowledgements(req: &ShareFetchRequest) -> bool {
+    req.topics
         .iter()
         .flat_map(|topic| &topic.partitions)
-        .any(|partition| !partition.acknowledgement_batches.is_empty());
-    let has_additions = req
-        .topics
-        .iter()
-        .flat_map(|topic| &topic.partitions)
-        .any(|partition| partition.acknowledgement_batches.is_empty());
-    (has_acknowledgements, has_additions)
-}
-
-pub(super) fn session_release_phases(final_request: bool) -> (bool, bool) {
-    (!final_request, final_request)
+        .any(|partition| !partition.acknowledgement_batches.is_empty())
 }
 
 /// Collects the piggybacked acknowledgement batches from a request partition
@@ -73,7 +64,7 @@ mod tests {
     }
 
     #[test]
-    fn fetch_session_flags_distinguish_additions_and_acknowledgements() {
+    fn acknowledgements_are_present_when_any_partition_carries_a_batch() {
         let request = |partitions| ShareFetchRequest {
             topics: vec![FetchTopic {
                 partitions,
@@ -91,15 +82,13 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(fetch_session_flags(&ShareFetchRequest::default()) == (false, false));
-        assert!(fetch_session_flags(&request(vec![addition.clone()])) == (false, true));
-        assert!(fetch_session_flags(&request(vec![acknowledgement.clone()])) == (true, false));
-        assert!(fetch_session_flags(&request(vec![addition, acknowledgement])) == (true, true));
-    }
-
-    #[test]
-    fn session_release_surrounds_acquisition_at_the_required_phase() {
-        assert!(session_release_phases(false) == (true, false));
-        assert!(session_release_phases(true) == (false, true));
+        assert!(
+            [
+                has_acknowledgements(&ShareFetchRequest::default()),
+                has_acknowledgements(&request(vec![addition.clone()])),
+                has_acknowledgements(&request(vec![acknowledgement.clone()])),
+                has_acknowledgements(&request(vec![addition, acknowledgement])),
+            ] == [false, false, true, true]
+        );
     }
 }

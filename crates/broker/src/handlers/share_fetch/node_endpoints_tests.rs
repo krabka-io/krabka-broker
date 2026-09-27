@@ -275,13 +275,13 @@ async fn share_acknowledge_sends_the_endpoint_of_each_remote_leader_once() {
     shared
         .share_partition_leaders
         .update_fetch_session(
-            GROUP,
-            "member",
+            (GROUP, "member"),
             ctx.connection_id,
             0,
-            &std::collections::HashSet::new(),
-            &std::collections::HashSet::new(),
-            false,
+            crate::share_partition::session::FetchPartitions {
+                requested: &[],
+                forgotten: &std::collections::HashSet::new(),
+            },
             false,
         )
         .expect("open the share session");

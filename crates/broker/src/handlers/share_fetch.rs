@@ -67,6 +67,8 @@ mod renew_tests;
 #[cfg(test)]
 mod request_validation_tests;
 #[cfg(test)]
+mod session_tests;
+#[cfg(test)]
 mod topic_resolution_tests;
 
 pub(crate) use self::{
@@ -79,13 +81,19 @@ pub(crate) use self::{
 use self::{
     acquire::{AcquireContext, acquire_records},
     pending::PendingPartition,
-    request::{fetch_session_flags, session_release_phases},
+    request::has_acknowledgements,
     resolve::{RowContext, resolve_row},
     response::{
         acquisition_timeout_ms, encode_error_response, encode_success_response, group_responses,
     },
 };
-use crate::{broker::Broker, codes, error::BrokerError, handlers::group_read_denied};
+use crate::{
+    broker::Broker,
+    codes,
+    error::BrokerError,
+    handlers::group_read_denied,
+    share_partition::session::{FetchPartitions, ResponseRow},
+};
 
 /// The longest member id that Kafka accepts: a human-readable UUID.
 const MAX_MEMBER_ID_LEN: usize = 36;
@@ -155,7 +163,7 @@ pub(crate) async fn handle(
     let mut requested = HashSet::new();
     let mut requested_order = Vec::new();
     let mut request_rows: HashMap<(uuid::Uuid, i32), FetchPartition> = HashMap::new();
-    let (has_acknowledgements, final_has_additions) = fetch_session_flags(&req);
+    let has_acknowledgements = has_acknowledgements(&req);
     for topic in &req.topics {
         let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
         for partition in &topic.partitions {
@@ -179,34 +187,38 @@ pub(crate) async fn handle(
         })
         .collect();
     let session = match mgr.update_fetch_session(
-        &group,
-        &member,
+        (&group, &member),
         ctx.connection_id,
         req.share_session_epoch,
-        &requested,
-        &forgotten,
+        FetchPartitions {
+            requested: &requested_order,
+            forgotten: &forgotten,
+        },
         has_acknowledgements,
-        final_has_additions,
     ) {
         Ok(session) => session,
+        Err(codes::SHARE_SESSION_LIMIT_REACHED) => {
+            // Kafka's `createIdleShareFetchTimerTask`: the answer waits out
+            // `MaxWaitMs`, so a client that cannot get a session does not
+            // spin on the broker.
+            let wait = u64::try_from(req.max_wait_ms).unwrap_or(0);
+            tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+            return encode_error_response(version, codes::SHARE_SESSION_LIMIT_REACHED);
+        }
         Err(code) => return encode_error_response(version, code),
     };
-    let (release_before_acquire, release_after_acquire) =
-        session_release_phases(session.final_request);
-    if release_before_acquire {
-        mgr.release_session_partitions(&group, &member, &session.released)
-            .await;
-    }
 
-    let mut effective_order = requested_order;
-    let mut cached_only: Vec<_> = session
-        .partitions
-        .iter()
-        .copied()
-        .filter(|partition| !requested.contains(partition))
-        .collect();
-    cached_only.sort_unstable();
-    effective_order.extend(cached_only);
+    // The session's partitions in the session's order, then the request
+    // partitions that only acknowledge: those that a final request names and
+    // those that a request forgets.
+    let fetched: HashSet<(uuid::Uuid, i32)> = session.partitions.iter().copied().collect();
+    let mut effective_order = session.partitions.clone();
+    effective_order.extend(
+        requested_order
+            .iter()
+            .copied()
+            .filter(|partition| !fetched.contains(partition)),
+    );
 
     // Resolve the complete effective session subscription plus request-only
     // acknowledgement rows into pending partitions.
@@ -225,7 +237,7 @@ pub(crate) async fn handle(
             // A renew-ack fetch acquires nothing: a fetch that took longer
             // than the renewed lock would let the lock run out before the
             // response arrives.
-            let fetchable = !renew_only && session.partitions.contains(&key);
+            let fetchable = !renew_only && fetched.contains(&key);
             resolve_row(&row_context, key, fetchable, request_rows.get(&key))
         })
         .collect();
@@ -251,7 +263,9 @@ pub(crate) async fn handle(
         req.max_wait_ms
     };
     let acquire_result = acquire_records(&acquire, &mut pending, max_wait_ms).await;
-    if release_after_acquire {
+    // Kafka's `releaseSession` runs after the final request's response is
+    // built: the member gives its records back.
+    if session.final_request {
         mgr.release_session_partitions(&group, &member, &session.released)
             .await;
     }
@@ -262,6 +276,24 @@ pub(crate) async fn handle(
     // request carries acknowledgements. A renew-ack fetch runs no fetch, so it
     // answers only the acknowledge rows.
     pending.retain(|p| p.fetchable || (p.in_request && has_acknowledgements));
+    // An incremental response carries only the session partitions that have
+    // something to say, and every acknowledge row.
+    if session.incremental {
+        let rows: Vec<ResponseRow> = pending
+            .iter()
+            .filter(|p| p.fetchable)
+            .map(|p| ResponseRow {
+                key: (p.topic_id, p.partition_index),
+                has_records: !p.out.acquired_records.is_empty(),
+                has_error: p.out.error_code != codes::NONE,
+            })
+            .collect();
+        let mut carried = mgr.prune_fetch_response(&group, &member, &rows).into_iter();
+        pending.retain(|p| {
+            let carried = !p.fetchable || carried.next().unwrap_or(true);
+            carried || (p.in_request && has_acknowledgements)
+        });
+    }
 
     // Kafka's `processShareFetchResponse`: every row that names another
     // leader carries the current leader and its endpoint.

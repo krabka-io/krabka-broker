@@ -219,7 +219,12 @@ async fn share_fetch_rows_with_max_records(
         .await
         .expect("handle share fetch");
     let response: ShareFetchResponse = decode_response(&response, version);
-    response.responses[0].partitions.clone()
+    // An incremental response leaves out a partition with nothing new.
+    response
+        .responses
+        .first()
+        .map(|topic| topic.partitions.clone())
+        .unwrap_or_default()
 }
 
 async fn share_fetch_rows(
@@ -241,7 +246,12 @@ async fn share_fetch_one(
 ) -> PartitionData {
     share_fetch_rows(broker, group, epoch, topic_id, &[partition_index])
         .await
-        .remove(0)
+        .into_iter()
+        .next()
+        .unwrap_or(PartitionData {
+            partition_index,
+            ..Default::default()
+        })
 }
 
 fn acquired(row: &PartitionData) -> Vec<(i64, i64)> {

@@ -526,13 +526,13 @@ mod tests {
         shared
             .share_partition_leaders
             .update_fetch_session(
-                "g1",
-                member,
+                ("g1", member),
                 ctx.connection_id,
                 0,
-                &maplit::hashset! {(id, 0)},
-                &std::collections::HashSet::new(),
-                false,
+                crate::share_partition::session::FetchPartitions {
+                    requested: &[(id, 0)],
+                    forgotten: &std::collections::HashSet::new(),
+                },
                 false,
             )
             .expect("open share session");

@@ -190,7 +190,13 @@ async fn share_fetch(
         .await
         .expect("handle share fetch");
     let mut response: ShareFetchResponse = decode_response(&response, version);
-    response.responses.remove(0).partitions.remove(0)
+    // An incremental response leaves out a partition with nothing new.
+    response
+        .responses
+        .first()
+        .and_then(|topic| topic.partitions.first())
+        .cloned()
+        .unwrap_or_default()
 }
 
 /// Sends a `ShareAcknowledge` that accepts `[first, last]` on partition 0 of

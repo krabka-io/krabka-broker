@@ -282,13 +282,13 @@ async fn share_acknowledge_checks_group_read_before_topic_read() {
             shared
                 .share_partition_leaders
                 .update_fetch_session(
-                    GROUP,
-                    &member,
+                    (GROUP, &member),
                     ctx.connection_id,
                     0,
-                    &std::iter::once((topic, 0)).collect(),
-                    &std::collections::HashSet::new(),
-                    false,
+                    crate::share_partition::session::FetchPartitions {
+                        requested: &[(topic, 0)],
+                        forgotten: &std::collections::HashSet::new(),
+                    },
                     false,
                 )
                 .expect("open share session");

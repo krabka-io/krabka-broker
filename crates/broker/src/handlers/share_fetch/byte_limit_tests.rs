@@ -201,8 +201,15 @@ async fn share_fetch(
     decode_response(&response, version)
 }
 
-fn partition(response: &ShareFetchResponse) -> &PartitionData {
-    &response.responses[0].partitions[0]
+/// The one partition row of `response`. An incremental response leaves out a
+/// partition with nothing new, which reads as an empty row.
+fn partition(response: &ShareFetchResponse) -> PartitionData {
+    response
+        .responses
+        .first()
+        .and_then(|topic| topic.partitions.first())
+        .cloned()
+        .unwrap_or_default()
 }
 
 /// The `(first, last)` offsets of every acquired row.
@@ -349,9 +356,9 @@ async fn every_acquired_offset_has_its_record_in_the_response() {
         actual.push((
             case.name,
             Outcome {
-                acquired: acquired(partition(&limited)),
-                records: record_offsets(partition(&limited)),
-                remainder: acquired(partition(&rest)),
+                acquired: acquired(&partition(&limited)),
+                records: record_offsets(&partition(&limited)),
+                remainder: acquired(&partition(&rest)),
             },
         ));
         expected.push((case.name, case.expected));
@@ -399,8 +406,8 @@ async fn a_record_at_the_delivery_limit_does_not_stall_the_partition() {
 
     assert!(
         (
-            acquired(partition(&first)),
-            acquired(partition(&after_release))
+            acquired(&partition(&first)),
+            acquired(&partition(&after_release))
         ) == (vec![(0, 7)], vec![(8, 15)])
     );
     broker.shutdown().await;
