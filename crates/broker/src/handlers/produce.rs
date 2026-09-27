@@ -591,11 +591,11 @@ async fn await_durability(
     let started = std::time::Instant::now();
     let deadline = started + timeout;
     let default_min_insync_replicas = broker.config.default_min_insync_replicas;
-    let current_min_isr = |partition: &crate::partition::Partition| {
+    let current_min_isr = |partition: &crate::partition::Partition, admitted_topic_id| {
         current_effective_min_isr(
             &broker.controller.current_image(),
-            &partition.topic,
-            partition.index.0,
+            (&partition.topic, partition.index.0),
+            admitted_topic_id,
             default_min_insync_replicas,
         )
     };

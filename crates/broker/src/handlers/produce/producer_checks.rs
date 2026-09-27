@@ -627,7 +627,14 @@ mod tests {
             crate::handlers::produce::pipeline::PartitionOutcome::AwaitingHighWatermark(ack) => {
                 ack.finish(
                     std::time::Instant::now() + Duration::from_millis(50),
-                    |_| None,
+                    |partition, admitted_topic_id| {
+                        crate::handlers::produce::leadership::current_effective_min_isr(
+                            &image,
+                            (&partition.topic, partition.index.0),
+                            admitted_topic_id,
+                            1,
+                        )
+                    },
                 )
                 .await
             }
