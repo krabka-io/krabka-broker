@@ -222,6 +222,7 @@ struct GrowAndAcquireArgs<'a> {
     settings: &'a GroupShareSettings,
     member: &'a str,
     max_bytes: i32,
+    min_one_batch: bool,
     remaining_records: i32,
     mode: AcquireMode,
     now: Instant,
@@ -246,6 +247,7 @@ async fn grow_and_acquire(
         settings,
         member,
         max_bytes,
+        min_one_batch,
         remaining_records,
         mode,
         now,
@@ -276,6 +278,7 @@ async fn grow_and_acquire(
         member,
         max_records: remaining_records,
         max_bytes,
+        min_one_batch,
         upper,
         now,
         lock_duration: settings.record_lock_duration,
@@ -442,13 +445,22 @@ async fn acquire_pass(
         } else {
             0
         };
-        let read_max_bytes = read_budget(p.partition_max_bytes, share);
+        // Kafka's `ReplicaManager.readFromLog`: each read is capped at what
+        // the response has left, and only a read made while the response
+        // still holds no record may exceed its cap, by the one batch that it
+        // starts with. Without that, each partition whose next batch is
+        // larger than its share would add one oversized batch.
+        let response_left = i64::from(max_bytes).saturating_sub(total.bytes).max(0);
+        let read_max_bytes = read_budget(p.partition_max_bytes, share)
+            .min(i32::try_from(response_left).unwrap_or(i32::MAX));
+        let min_one_batch = total.bytes == 0;
         let grow_and_acquire_args = || GrowAndAcquireArgs {
             part: &part,
             upper,
             settings: &settings,
             member,
             max_bytes: read_max_bytes,
+            min_one_batch,
             remaining_records,
             mode,
             now,
