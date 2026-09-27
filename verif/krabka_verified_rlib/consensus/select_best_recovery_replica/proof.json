@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_len_RecoveryCandidate": { "prover": "alt-ergo", "time": 0.044 },
+      "vc_len_RecoveryCandidate": { "prover": "alt-ergo", "time": 0.015 },
       "vc_select_best_recovery_replica": {
         "prover": "alt-ergo",
         "time": 0.247

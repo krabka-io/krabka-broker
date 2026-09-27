@@ -6,7 +6,7 @@
       "vc_elim_Some": { "prover": "alt-ergo", "time": 0.022 },
       "vc_scheduled_delivery_visible": {
         "prover": "alt-ergo",
-        "time": 0.015
+        "time": 0.032
       }
     }
   }

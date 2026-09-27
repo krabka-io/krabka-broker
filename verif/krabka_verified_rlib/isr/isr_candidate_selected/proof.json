@@ -2,9 +2,9 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.029 },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.011 },
       "vc_isr_candidate_selected": { "prover": "alt-ergo", "time": 0.059 },
-      "vc_replica_isr_eligible": { "prover": "alt-ergo", "time": 0.028 }
+      "vc_replica_isr_eligible": { "prover": "alt-ergo", "time": 0.013 }
     }
   }
 }

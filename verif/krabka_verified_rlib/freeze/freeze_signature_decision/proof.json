@@ -5,7 +5,7 @@
       "vc_freeze_signature_decision": { "prover": "alt-ergo", "time": 0.03 },
       "vc_freeze_timestamp_in_window": {
         "prover": "alt-ergo",
-        "time": 0.004
+        "time": 0.026
       }
     }
   }

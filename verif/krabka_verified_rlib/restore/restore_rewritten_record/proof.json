@@ -6,7 +6,7 @@
         "prover": "alt-ergo",
         "time": 0.024
       },
-      "vc_closure0": { "prover": "alt-ergo", "time": 0.005 },
+      "vc_closure0": { "prover": "alt-ergo", "time": 0.025 },
       "vc_elim_Break": { "prover": "alt-ergo", "time": 0.031 },
       "vc_elim_Continue": { "prover": "alt-ergo", "time": 0.028 },
       "vc_from_residual_Option_tup2_i64_i64": {

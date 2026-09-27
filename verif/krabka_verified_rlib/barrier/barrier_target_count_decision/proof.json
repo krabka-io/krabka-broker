@@ -8,7 +8,7 @@
       },
       "vc_checked_add": { "prover": "alt-ergo", "time": 0.022 },
       "vc_elim_Some": { "prover": "alt-ergo", "time": 0.021 },
-      "vc_from_i64": { "prover": "alt-ergo", "time": 0.024 }
+      "vc_from_i64": { "prover": "alt-ergo", "time": 0.012 }
     }
   }
 }

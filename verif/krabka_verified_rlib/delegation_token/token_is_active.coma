@@ -1,10 +1,10 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 188 0 188 92 *)
+(* #"/workspace/crates/verified/src/delegation_token.rs" 440 0 440 92 *)
 
-let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sdelegation_token = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 189 14 189 15
-let%span sdelegation_token'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 189 4 192 50
-let%span sdelegation_token'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 181 10 186 1
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sdelegation_token = "/workspace/crates/verified/src/delegation_token.rs" 441 14 441 15
+let%span sdelegation_token'0 = "/workspace/crates/verified/src/delegation_token.rs" 441 4 444 50
+let%span sdelegation_token'1 = "/workspace/crates/verified/src/delegation_token.rs" 433 10 438 1
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -22,8 +22,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let token_is_active [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/delegation_token.rs" 188 0 188 92]
-  (now_ms: Int64.t) (expiry_timestamp_ms: Int64.t) (max_timestamp_ms: Int64.t) (return (x: bool)) = (! bb0
+let token_is_active [#"/workspace/crates/verified/src/delegation_token.rs" 440 0 440 92] (now_ms: Int64.t)
+  (expiry_timestamp_ms: Int64.t) (max_timestamp_ms: Int64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_8 <- Int64.ge now_ms ([%#sdelegation_token] (0: Int64.t)) ] s1
     | s1 = any [ br0 -> {_8 = false} (! bb7) | br1 -> {_8} (! bb1) ] ]

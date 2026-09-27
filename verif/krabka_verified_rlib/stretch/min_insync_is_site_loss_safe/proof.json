@@ -23,7 +23,7 @@
           }
         ]
       },
-      "vc_site_loss_survivors": { "prover": "alt-ergo", "time": 0.034 }
+      "vc_site_loss_survivors": { "prover": "alt-ergo", "time": 0.017 }
     }
   }
 }

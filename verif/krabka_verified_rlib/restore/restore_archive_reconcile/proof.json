@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_restore_archive_reconcile": { "prover": "alt-ergo", "time": 0.013 }
+      "vc_restore_archive_reconcile": { "prover": "alt-ergo", "time": 0.026 }
     }
   }
 }

@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_compute_horizon": { "prover": "alt-ergo", "time": 0.026 },
+      "vc_compute_horizon": { "prover": "alt-ergo", "time": 0.01 },
       "vc_elim_Some": { "prover": "alt-ergo", "time": 0.023 },
       "vc_retain_decision": { "prover": "alt-ergo", "time": 0.086 }
     }

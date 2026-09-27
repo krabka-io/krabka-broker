@@ -1,7 +1,7 @@
 //! Commit-stamp range-index decisions.
 
 #[cfg(creusot)]
-use creusot_std::prelude::{Int, Seq, invariant, logic, pearlite};
+use creusot_std::prelude::{Int, Seq, invariant, logic};
 use creusot_std::prelude::{ensures, requires};
 
 /// Parallel inclusive ranges `[bases[i], lasts[i]]`, each ordered and each
