@@ -285,8 +285,9 @@ impl Broker {
             runtime.supervisor_shutdown.child_token(),
         );
 
-        // Tombstone the committed offsets of every deleted topic, as Kafka's
-        // `GroupCoordinatorService.onMetadataUpdate` does.
+        // Refresh the metadata of the groups that subscribe to a changed
+        // topic, and tombstone the committed offsets of every deleted topic,
+        // as Kafka's `GroupCoordinatorService.onMetadataUpdate` does.
         crate::coordinator::topic_deletion::spawn(
             config.node_id,
             Arc::clone(&controller),

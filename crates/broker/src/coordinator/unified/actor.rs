@@ -29,6 +29,7 @@ mod downgrade;
 mod heartbeat;
 mod member_state;
 mod messages;
+mod metadata_update;
 mod offset_delete;
 mod pending_records;
 mod persistence;

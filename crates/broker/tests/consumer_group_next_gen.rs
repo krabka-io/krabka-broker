@@ -1,16 +1,22 @@
 //! Raw-RPC integration tests for KIP-848 next-gen consumer groups,
 //! driven against an in-process Krabka broker through `krabka-client-core`.
 
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use assert2::{assert, check};
 use krabka_broker::{Broker, BrokerConfig};
 use krabka_client_core::Client;
 use krabka_protocol::owned::{
+    common::consumer_group_heartbeat_response::topic_partitions::TopicPartitions,
     consumer_group_describe_request::ConsumerGroupDescribeRequest,
     consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
+    consumer_group_heartbeat_response::{Assignment, ConsumerGroupHeartbeatResponse},
     create_topics_request::{CreatableTopic, CreateTopicsRequest},
     list_groups_request::ListGroupsRequest,
+    metadata_request::{MetadataRequest, MetadataRequestTopic},
 };
 
 async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
@@ -517,4 +523,73 @@ async fn an_invalid_subscribed_topic_regex_fails_the_heartbeat() {
     let resp = client.send(good).await.unwrap();
     assert!(resp.error_code == 0, "valid pattern: {resp:?}");
     assert!(resp.member_epoch == 1);
+}
+
+/// Kafka's `GroupMetadataManager.onMetadataUpdate`: a member that subscribed
+/// to a topic before the topic existed gets its partitions, with a new member
+/// epoch, at its first heartbeat after the broker applies the topic. It waits
+/// neither for a periodic refresh nor for a session to time out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_topic_created_after_the_member_joined_reaches_its_next_heartbeat() {
+    let (_b, bootstrap, _d) = boot().await;
+    let client = Client::builder()
+        .bootstrap(bootstrap.as_str())
+        .client_id("c-late")
+        .build()
+        .await
+        .unwrap();
+    let mut join = heartbeat("g-late", "", 0);
+    join.subscribed_topic_names = Some(vec!["late".into()]);
+    let joined = client.send(join).await.unwrap();
+    let member_id = joined.member_id.clone().expect("member id");
+    check!(joined.error_code == 0);
+    check!(joined.member_epoch == 1);
+    check!(joined.assignment == Some(Assignment::default()));
+
+    create_topic(&client, "late", 3).await;
+    let metadata = client
+        .send(MetadataRequest {
+            topics: Some(vec![MetadataRequestTopic {
+                name: Some("late".into()),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        })
+        .await
+        .expect("Metadata");
+    let topic_id = metadata.topics[0].topic_id;
+
+    // The broker refreshes the group when its metadata image holds the topic,
+    // which can be a moment after `CreateTopics` answers. The member keeps
+    // heartbeating at its epoch, as a consumer does, for far less than the
+    // 45 s session timeout.
+    let created = Instant::now();
+    let refreshed = loop {
+        let answer = client
+            .send(heartbeat("g-late", &member_id, 1))
+            .await
+            .unwrap();
+        if answer.assignment.is_some() || created.elapsed() > Duration::from_secs(10) {
+            break answer;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+
+    check!(
+        refreshed
+            == ConsumerGroupHeartbeatResponse {
+                member_id: Some(member_id),
+                member_epoch: 2,
+                heartbeat_interval_ms: 5_000,
+                assignment: Some(Assignment {
+                    topic_partitions: vec![TopicPartitions {
+                        topic_id,
+                        partitions: vec![0, 1, 2],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }
+    );
 }

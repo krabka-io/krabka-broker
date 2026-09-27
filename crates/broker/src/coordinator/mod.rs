@@ -8,6 +8,7 @@
 
 pub(crate) mod bootstrap;
 pub(crate) mod leadership;
+pub(crate) mod metadata_update;
 pub(crate) mod partitioner;
 pub(crate) mod retention;
 pub(crate) mod topic_deletion;

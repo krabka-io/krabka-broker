@@ -34,6 +34,14 @@ pub struct GroupState {
     /// so until the member's next heartbeat carrying the pattern the group
     /// cannot tell which topics the regex subscribes it to.
     unresolved_regex_members: HashSet<String>,
+    /// Kafka's `ModernGroup.metadataHash`: the hash of the subscribed topics'
+    /// metadata that the current target assignment was computed from. See
+    /// `reconciler::metadata_hash`.
+    metadata_hash: u64,
+    /// Kafka's `ModernGroup.metadataRefreshDeadline` set to
+    /// `DeadlineAndEpoch.EMPTY`: a subscribed topic changed, so the next
+    /// heartbeat computes the metadata hash again.
+    metadata_refresh_requested: bool,
 }
 
 impl GroupState {
@@ -47,6 +55,8 @@ impl GroupState {
             dirty: false,
             rebalance_deadlines: HashMap::new(),
             unresolved_regex_members: HashSet::new(),
+            metadata_hash: 0,
+            metadata_refresh_requested: false,
         }
     }
 
@@ -137,6 +147,56 @@ impl GroupState {
                 .get(member_id)
                 .is_some_and(|member| member.subscribed_topic_regex.is_some())
         })
+    }
+
+    /// `true` when a member subscribes to one of `topics`, by name or through
+    /// a regex that resolved to it. This is Kafka's
+    /// `GroupMetadataManager.groupsSubscribedToTopic`, asked about this group.
+    ///
+    /// A regex resolves to the topics that the member's last heartbeat found
+    /// matching and authorized, `MemberState::regex_authorized_topics`. A new
+    /// topic that a regex matches is not resolved yet. The member's next
+    /// heartbeat resolves it, as Kafka's regex refresh does.
+    #[must_use]
+    pub fn subscribes_to_any(&self, topics: &[String]) -> bool {
+        self.members.values().any(|member| {
+            topics.iter().any(|topic| {
+                member.subscribed_topic_names.contains(topic)
+                    || member.regex_authorized_topics.contains(topic)
+            })
+        })
+    }
+
+    /// Kafka's `ModernGroup.requestMetadataRefresh`: the next heartbeat
+    /// computes the metadata hash of the subscribed topics again.
+    pub fn request_metadata_refresh(&mut self) {
+        self.metadata_refresh_requested = true;
+    }
+
+    /// Kafka's `ModernGroup.hasMetadataExpired`: `true` from a
+    /// [`Self::request_metadata_refresh`] until the group records a metadata
+    /// hash again.
+    ///
+    /// Kafka 4.3.1 has no periodic refresh. Its
+    /// `GroupMetadataManager.METADATA_REFRESH_INTERVAL_MS` is
+    /// `Integer.MAX_VALUE`, so only a request makes the metadata expire.
+    #[must_use]
+    pub fn metadata_refresh_requested(&self) -> bool {
+        self.metadata_refresh_requested
+    }
+
+    /// The metadata hash that the group recorded last.
+    #[must_use]
+    pub fn metadata_hash(&self) -> u64 {
+        self.metadata_hash
+    }
+
+    /// Records `hash` as the metadata of the current target and ends a
+    /// requested refresh. Kafka's `updateSubscriptionMetadata` also sets the
+    /// hash and the next refresh deadline together.
+    pub fn record_metadata_hash(&mut self, hash: u64) {
+        self.metadata_hash = hash;
+        self.metadata_refresh_requested = false;
     }
 
     pub fn evict_expired(&mut self, now: Instant, session_timeout: Duration) -> Vec<String> {

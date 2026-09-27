@@ -59,6 +59,56 @@ impl MetadataProvider for ImageMetadatalessProvider {
     }
 }
 
+/// A metadata provider whose snapshot a test replaces, as the controller
+/// replaces the metadata image.
+#[derive(Debug, Default)]
+pub(crate) struct SwitchableMetadata(std::sync::Mutex<reconciler::ReconcileInput>);
+
+impl SwitchableMetadata {
+    pub(crate) fn new(input: reconciler::ReconcileInput) -> Arc<Self> {
+        Arc::new(Self(std::sync::Mutex::new(input)))
+    }
+
+    pub(crate) fn set(&self, input: reconciler::ReconcileInput) {
+        *self.0.lock().expect("metadata lock") = input;
+    }
+}
+
+impl MetadataProvider for SwitchableMetadata {
+    fn snapshot(&self) -> reconciler::ReconcileInput {
+        self.0.lock().expect("metadata lock").clone()
+    }
+}
+
+/// A snapshot of `topics`, each a name, the byte its topic id repeats and a
+/// partition count.
+pub(crate) fn snapshot_of(topics: &[(&str, u8, i32)]) -> reconciler::ReconcileInput {
+    reconciler::ReconcileInput {
+        topic_id_by_name: topics
+            .iter()
+            .map(|(name, id, _)| ((*name).to_string(), proto_uuid(*id)))
+            .collect(),
+        partitions_per_topic: topics
+            .iter()
+            .map(|(_, id, partitions)| (proto_uuid(*id), *partitions))
+            .collect(),
+        ..reconciler::ReconcileInput::default()
+    }
+}
+
+/// A coordinator whose group actors read `metadata`.
+pub(crate) fn make_coord_with_metadata(
+    metadata: Arc<dyn MetadataProvider>,
+) -> Arc<GroupCoordinator> {
+    Arc::new(GroupCoordinator::new(
+        NextGenConfig::default(),
+        ShareGroupConfig::default(),
+        metadata,
+        Arc::new(crate::coordinator::unified::offsets_log::fake::InMemoryOffsetsLog::default()),
+        StreamsGroupConfig::default(),
+    ))
+}
+
 /// A metadata source over `image`, with node 1 reported as the controller
 /// leader.
 pub(super) fn fixed_source(

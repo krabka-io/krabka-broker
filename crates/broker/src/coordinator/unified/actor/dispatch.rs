@@ -19,6 +19,7 @@ use super::{
     commit_validation::validate_commit_message,
     heartbeat::handle_actor_heartbeat,
     messages::{LeaveResult, classic_leave_result},
+    metadata_update::on_metadata_update,
     offset_delete::offset_delete_guard,
     retention::handle_reap_message,
     seed::apply_seed,
@@ -217,6 +218,10 @@ pub(super) async fn handle_actor_message(
         }
         GroupActorMessage::DeleteTopicOffsets { topics, reply } => {
             reply_delete_topic_offsets(group, services.offsets_log, &topics, reply).await
+        }
+        GroupActorMessage::MetadataUpdate { topics } => {
+            on_metadata_update(group, &topics);
+            true
         }
         GroupActorMessage::AddPendingTxnOffsets {
             producer_id,

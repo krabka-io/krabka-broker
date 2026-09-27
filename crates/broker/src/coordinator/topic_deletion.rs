@@ -11,6 +11,11 @@
 //! actor decides which of its offsets to tombstone and appends the batch in
 //! its own turn, so a concurrent commit cannot race the tombstone.
 //!
+//! The same watcher gives every created, changed and deleted topic to
+//! `coordinator::metadata_update`, so that the groups that subscribe to one of
+//! them refresh their metadata. `GroupCoordinatorService.onMetadataUpdate`
+//! does both too, the refresh first.
+//!
 //! # Only the coordinator writes
 //!
 //! Every broker watches the image, but a broker tombstones only the groups
@@ -24,7 +29,10 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use super::{
-    GroupCoordinator, partitioner::local_partition_for_group, unified::actor::GroupActorMessage,
+    GroupCoordinator,
+    metadata_update::{changed_topics, on_metadata_update},
+    partitioner::local_partition_for_group,
+    unified::actor::GroupActorMessage,
 };
 use crate::metadata_source::MetadataSource;
 
@@ -50,12 +58,16 @@ pub(crate) fn spawn(
                         return;
                     }
                     let image = images.borrow_and_update().clone();
+                    let owned = |group_id: &str| {
+                        local_partition_for_group(&image, node_id, group_id).is_ok()
+                    };
+                    let changed = changed_topics(&previous, &image);
+                    if !changed.is_empty() {
+                        on_metadata_update(&coordinator, owned, &changed).await;
+                    }
                     let deleted = deleted_topics(&previous, &image);
                     if !deleted.is_empty() {
                         remember_deletions(&coordinator, &deleted);
-                        let owned = |group_id: &str| {
-                            local_partition_for_group(&image, node_id, group_id).is_ok()
-                        };
                         on_topics_deleted(&coordinator, owned, &deleted).await;
                     }
                     previous = image;
