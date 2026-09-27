@@ -374,12 +374,14 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
     KipAnnotation {
         key: "KIP-373",
         claim: "Delegation tokens for other users: the `USER` resource type and the `CREATE_TOKENS` and `DESCRIBE_TOKENS` operations",
-        status: KipStatus::Partial,
-        module: "crates/broker/src/handlers/acl_wire/binding_filter.rs",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/create_delegation_token.rs",
         tests: &[
-            "crates/broker/src/handlers/acl_wire/binding_filter/tests.rs::unstorable_and_unknown_axes_match_nothing",
+            "crates/broker/src/handlers/create_delegation_token/tests.rs::create_tokens_acl_admits_minting_for_that_owner_only",
+            "crates/broker/src/handlers/describe_delegation_token/tests.rs::describe_tokens_acl_on_the_owner_grants_all_of_their_tokens",
+            "crates/broker/src/handlers/acl_wire/binding_filter/tests.rs::exact_user_token_filter_matches_the_stored_binding",
         ],
-        note: "DescribeAcls and DeleteAcls accept the KIP-373 wire values in a filter, but they match nothing: the ACL metadata model has no `USER` resource type and no token operations, so no such ACL can be stored (#769). CreateDelegationToken for another owner is granted only to super users, not to a holder of `CREATE_TOKENS` on `User:<owner>` (#765).",
+        note: "",
     },
     KipAnnotation {
         key: "KIP-382",

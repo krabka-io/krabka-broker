@@ -15,12 +15,6 @@
 //!   enum axis fails the request at parse, which closes the connection.
 //! - `ResourceType.fromCode` and its siblings: any other byte Kafka does not
 //!   define becomes `UNKNOWN` after parsing and matches no binding.
-//!
-//! Kafka also defines values that krabka's metadata cannot store yet: the
-//! KIP-373 `USER` resource type and the `CREATE_TOKENS` and `DESCRIBE_TOKENS`
-//! operations. A filter may name them. No stored binding carries them, so
-//! such a filter matches nothing, which is what Kafka answers for a cluster
-//! that has no such ACL.
 
 use krabka_metadata::{AclEntry, AclOperation, PatternType, PermissionType, ResourceType};
 
@@ -32,13 +26,6 @@ use super::{
 /// Kafka's `ResourcePattern.WILDCARD_RESOURCE`, the `LITERAL` name that
 /// applies to every resource of its type.
 const WILDCARD_RESOURCE: &str = "*";
-
-/// Wire byte for the KIP-373 `USER` resource type.
-const WIRE_RESOURCE_USER: i8 = 7;
-/// Wire byte for the KIP-373 `CREATE_TOKENS` operation.
-const WIRE_OPERATION_CREATE_TOKENS: i8 = 13;
-/// Wire byte for the KIP-373 `DESCRIBE_TOKENS` operation.
-const WIRE_OPERATION_DESCRIBE_TOKENS: i8 = 14;
 
 /// The error message Kafka's `AclControlManager.validateFilter` gives a
 /// `DeleteAcls` filter whose resource or pattern type is `UNKNOWN`.
@@ -52,11 +39,8 @@ pub const UNKNOWN_ENTRY_FILTER_MESSAGE: &str = "Unknown entryFilter.";
 pub enum AxisFilter<T> {
     /// `ANY`: every value matches.
     Any,
-    /// A value krabka's metadata stores. Only that value matches.
+    /// A concrete value. Only that value matches.
     Exact(T),
-    /// A value Kafka defines but krabka's metadata cannot store. No stored
-    /// binding carries it, so nothing matches.
-    Unstorable,
     /// A byte that Kafka's `fromCode` maps to `UNKNOWN`. Nothing matches.
     Unknown,
 }
@@ -66,7 +50,7 @@ impl<T: PartialEq> AxisFilter<T> {
         match self {
             Self::Any => true,
             Self::Exact(want) => want == value,
-            Self::Unstorable | Self::Unknown => false,
+            Self::Unknown => false,
         }
     }
 
@@ -210,7 +194,6 @@ impl AclBindingFilter {
 fn resource_type_axis(b: i8) -> AxisFilter<ResourceType> {
     match b {
         WIRE_ANY => AxisFilter::Any,
-        WIRE_RESOURCE_USER => AxisFilter::Unstorable,
         _ => resource_type_concrete(b).map_or(AxisFilter::Unknown, AxisFilter::Exact),
     }
 }
@@ -226,7 +209,6 @@ fn pattern_type_axis(b: i8) -> PatternTypeFilter {
 fn operation_axis(b: i8) -> AxisFilter<AclOperation> {
     match b {
         WIRE_ANY => AxisFilter::Any,
-        WIRE_OPERATION_CREATE_TOKENS | WIRE_OPERATION_DESCRIBE_TOKENS => AxisFilter::Unstorable,
         _ => operation_concrete(b).map_or(AxisFilter::Unknown, AxisFilter::Exact),
     }
 }
