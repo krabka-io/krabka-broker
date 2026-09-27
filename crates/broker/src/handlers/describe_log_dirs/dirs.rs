@@ -20,14 +20,15 @@ pub(super) fn offline_result(dir: &std::path::Path) -> DescribeLogDirsResult {
     }
 }
 
-/// Best-effort absolute path string for a log dir.
-///
-/// The result matches the "absolute log directory path" contract of Kafka. The
-/// function falls back to the lexical path when the canonicalization fails, for
-/// example after another process removes the dir.
+/// The absolute path string for a log dir, as Kafka's
+/// `Paths.get(logDir).toAbsolutePath` gives it: relative to the working
+/// directory, without resolving symbolic links, and with the redundant
+/// separators `Paths.get` drops.
 pub(super) fn absolute_path(dir: &std::path::Path) -> String {
-    std::fs::canonicalize(dir)
+    std::path::absolute(dir)
         .unwrap_or_else(|_| dir.to_path_buf())
+        .components()
+        .collect::<std::path::PathBuf>()
         .display()
         .to_string()
 }
@@ -113,5 +114,25 @@ mod tests {
     fn log_dir_capacity_returns_minus_one_for_missing_path() {
         let phantom = std::path::Path::new("/nonexistent/krabka/test/dir/should/not/exist");
         assert!(log_dir_capacity(phantom) == (-1, -1));
+    }
+
+    /// `Paths.get(logDir).toAbsolutePath` keeps a symbolic link and drops a
+    /// trailing separator; it does not resolve the link as `canonicalize`
+    /// does.
+    #[test]
+    fn absolute_path_keeps_the_configured_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("real");
+        std::fs::create_dir(&target).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let with_slash = format!("{}/", link.display());
+
+        for configured in [link.display().to_string(), with_slash] {
+            check!(
+                absolute_path(std::path::Path::new(&configured)) == link.display().to_string(),
+                "{configured}"
+            );
+        }
     }
 }
