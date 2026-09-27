@@ -1,0 +1,302 @@
+//! Tests for the metadata refresh that a metadata update asks of a consumer
+//! group, through the group actor's mailbox.
+
+use std::{collections::HashSet, sync::Arc};
+
+use assert2::{assert, check};
+use krabka_protocol::owned::{
+    common::consumer_group_heartbeat_response::topic_partitions::TopicPartitions as AssignedTopic,
+    consumer_group_heartbeat_request::{
+        ConsumerGroupHeartbeatRequest, TopicPartitions as OwnedTopic,
+    },
+    consumer_group_heartbeat_response::{Assignment, ConsumerGroupHeartbeatResponse},
+    consumer_protocol_assignment::{ConsumerProtocolAssignment, TopicPartition},
+};
+
+use crate::coordinator::unified::{
+    GroupCoordinator,
+    actor::{
+        GroupActorHandle, GroupActorMessage,
+        test_support::{decode_assignment, rpc, seed_and_upgrade},
+    },
+    config::{ConsumerGroupMigrationPolicy, NextGenConfig},
+    offsets_log::fake::InMemoryOffsetsLog,
+    reconciler::ReconcileInput,
+    share::config::ShareGroupConfig,
+    streams::config::StreamsGroupConfig,
+    test_support::{SwitchableMetadata, make_coord_with_metadata, proto_uuid, snapshot_of},
+};
+
+async fn heartbeat(
+    handle: &GroupActorHandle,
+    request: ConsumerGroupHeartbeatRequest,
+) -> ConsumerGroupHeartbeatResponse {
+    let (reply, response) = tokio::sync::oneshot::channel();
+    handle
+        .tx
+        .send(GroupActorMessage::Heartbeat {
+            request,
+            client_id: "client".into(),
+            client_host: "host".into(),
+            regex_authorized_topics: HashSet::new(),
+            reply,
+        })
+        .await
+        .unwrap();
+    response.await.unwrap()
+}
+
+async fn metadata_update(handle: &GroupActorHandle, topics: &[&str]) {
+    handle
+        .tx
+        .send(GroupActorMessage::MetadataUpdate {
+            topics: topics.iter().map(|topic| (*topic).to_string()).collect(),
+        })
+        .await
+        .unwrap();
+}
+
+/// The first heartbeat of member `m1`, which subscribes to `orders`.
+fn join() -> ConsumerGroupHeartbeatRequest {
+    ConsumerGroupHeartbeatRequest {
+        group_id: "g".into(),
+        member_id: "m1".into(),
+        member_epoch: 0,
+        rebalance_timeout_ms: 60_000,
+        subscribed_topic_names: Some(vec!["orders".into()]),
+        topic_partitions: Some(vec![]),
+        ..Default::default()
+    }
+}
+
+/// A later heartbeat of `m1`, which sends only what changed, as Kafka's
+/// consumer does: the partitions it owns when it acknowledges them, else
+/// nothing.
+fn keepalive(member_epoch: i32, owned: Option<Vec<OwnedTopic>>) -> ConsumerGroupHeartbeatRequest {
+    ConsumerGroupHeartbeatRequest {
+        group_id: "g".into(),
+        member_id: "m1".into(),
+        member_epoch,
+        rebalance_timeout_ms: -1,
+        topic_partitions: owned,
+        ..Default::default()
+    }
+}
+
+/// Acknowledges the partitions of `joined`, so that `m1` owns them.
+async fn acknowledge(handle: &GroupActorHandle, joined: &ConsumerGroupHeartbeatResponse) {
+    let owned: Vec<OwnedTopic> = joined
+        .assignment
+        .iter()
+        .flat_map(|assignment| &assignment.topic_partitions)
+        .map(|topic| OwnedTopic {
+            topic_id: topic.topic_id,
+            partitions: topic.partitions.clone(),
+            ..Default::default()
+        })
+        .collect();
+    if !owned.is_empty() {
+        let acknowledged = heartbeat(handle, keepalive(joined.member_epoch, Some(owned))).await;
+        assert!(acknowledged.error_code == 0, "{acknowledged:?}");
+    }
+}
+
+/// The answer to `m1` at `member_epoch`. `assignment` names each topic by the
+/// byte that its topic id repeats.
+fn answer(
+    member_epoch: i32,
+    assignment: Option<Vec<(u8, Vec<i32>)>>,
+) -> ConsumerGroupHeartbeatResponse {
+    ConsumerGroupHeartbeatResponse {
+        member_id: Some("m1".into()),
+        member_epoch,
+        heartbeat_interval_ms: 5_000,
+        assignment: assignment.map(|topics| Assignment {
+            topic_partitions: topics
+                .into_iter()
+                .map(|(topic_id, partitions)| AssignedTopic {
+                    topic_id: proto_uuid(topic_id),
+                    partitions,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+struct Row {
+    name: &'static str,
+    /// The metadata when `m1` joins.
+    before: ReconcileInput,
+    /// The metadata when the update arrives.
+    after: ReconcileInput,
+    /// The topics that the update names.
+    update: &'static [&'static str],
+    /// The answer to the first heartbeat after the update.
+    expected: ConsumerGroupHeartbeatResponse,
+}
+
+/// Kafka's `GroupMetadataManager.onMetadataUpdate` requests a metadata
+/// refresh of every group that subscribes to a created, changed or deleted
+/// topic. The next heartbeat of the group computes the metadata hash again
+/// (`hasMetadataExpired`, `updateSubscriptionMetadata`), and a new hash bumps
+/// the group epoch and brings a new target assignment. No clock moves between
+/// the heartbeats: Kafka 4.3.1 has no refresh interval to wait out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_heartbeat_after_a_metadata_update_refreshes_the_assignment() {
+    let rows = [
+        Row {
+            name: "the subscribed topic is created",
+            before: snapshot_of(&[]),
+            after: snapshot_of(&[("orders", 1, 3)]),
+            update: &["orders"],
+            expected: answer(2, Some(vec![(1, vec![0, 1, 2])])),
+        },
+        Row {
+            name: "the subscribed topic grows",
+            before: snapshot_of(&[("orders", 1, 1)]),
+            after: snapshot_of(&[("orders", 1, 3)]),
+            update: &["orders"],
+            expected: answer(2, Some(vec![(1, vec![0, 1, 2])])),
+        },
+        // The target loses the partitions. Krabka moves the member to the new
+        // epoch at once. Kafka's `CurrentAssignmentBuilder` keeps it at epoch
+        // 1 until the member acknowledges the revocation, which is outside the
+        // refresh.
+        Row {
+            name: "the subscribed topic is deleted",
+            before: snapshot_of(&[("orders", 1, 2)]),
+            after: snapshot_of(&[]),
+            update: &["orders"],
+            expected: answer(2, Some(vec![])),
+        },
+        // The update names `payments` only. The group does not read the
+        // metadata again, so it does not see that `orders` grew in the same
+        // image either. Kafka also refreshes only the groups that
+        // `groupsSubscribedToTopic` names.
+        Row {
+            name: "only a topic that the group does not subscribe to changes",
+            before: snapshot_of(&[("orders", 1, 1)]),
+            after: snapshot_of(&[("orders", 1, 2), ("payments", 2, 1)]),
+            update: &["payments"],
+            expected: answer(1, None),
+        },
+        // A new partition leader changes the topic but not its hash, and Kafka
+        // bumps the group epoch only for a new hash.
+        Row {
+            name: "the subscribed topic changes and keeps its hash",
+            before: snapshot_of(&[("orders", 1, 2)]),
+            after: snapshot_of(&[("orders", 1, 2)]),
+            update: &["orders"],
+            expected: answer(1, None),
+        },
+    ];
+
+    let mut answers = Vec::new();
+    let mut expected = Vec::new();
+    for row in rows {
+        let metadata = SwitchableMetadata::new(row.before);
+        let coordinator = make_coord_with_metadata(metadata.clone());
+        let handle = coordinator.get_or_create_consumer("g");
+        let joined = heartbeat(&handle, join()).await;
+        acknowledge(&handle, &joined).await;
+
+        metadata.set(row.after);
+        metadata_update(&handle, row.update).await;
+        let refreshed = heartbeat(&handle, keepalive(joined.member_epoch, None)).await;
+
+        answers.push((row.name, refreshed));
+        expected.push((row.name, row.expected));
+    }
+    check!(answers == expected);
+}
+
+/// A group loaded from its records takes the metadata it loads against as
+/// the metadata of its target, so an update that leaves the hash as it was
+/// does not rebalance it, and one that moves the hash does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_loaded_group_refreshes_against_the_metadata_it_loaded_with() {
+    // (name, the metadata when the update arrives, the answer after it)
+    let rows = [
+        (
+            "the topic is as it was",
+            snapshot_of(&[("orders", 1, 2)]),
+            answer(1, None),
+        ),
+        (
+            "the topic grew after the load",
+            snapshot_of(&[("orders", 1, 3)]),
+            answer(2, Some(vec![(1, vec![0, 1, 2])])),
+        ),
+    ];
+
+    let mut answers = Vec::new();
+    let mut expected = Vec::new();
+    for (name, after, wanted) in rows {
+        let metadata = SwitchableMetadata::new(snapshot_of(&[("orders", 1, 2)]));
+        let previous = make_coord_with_metadata(metadata.clone());
+        let previous_handle = previous.get_or_create_consumer("g");
+        let joined = heartbeat(&previous_handle, join()).await;
+        acknowledge(&previous_handle, &joined).await;
+        let seed = previous.cached_seed("g").expect("the group's records");
+
+        let loaded = make_coord_with_metadata(metadata.clone());
+        let handle = loaded.get_or_create_consumer("g");
+        handle.tx.send(GroupActorMessage::Seed(seed)).await.unwrap();
+        // The actor reads the metadata when it applies the seed, so wait for
+        // that before the metadata changes.
+        let (reply, described) = tokio::sync::oneshot::channel();
+        handle
+            .tx
+            .send(GroupActorMessage::Describe { reply })
+            .await
+            .unwrap();
+        described.await.unwrap();
+        metadata.set(after);
+        metadata_update(&handle, &["orders"]).await;
+        let refreshed = heartbeat(&handle, keepalive(joined.member_epoch, None)).await;
+
+        answers.push((name, refreshed));
+        expected.push((name, wanted));
+    }
+    check!(answers == expected);
+}
+
+/// Kafka's `classicGroupJoinToConsumerGroup` refreshes the metadata as the
+/// consumer heartbeat does, so a classic member that a consumer group hosts
+/// gets the partitions of a created topic when it joins again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_hosted_classic_member_gets_a_created_topic_when_it_joins_again() {
+    let metadata = SwitchableMetadata::new(snapshot_of(&[]));
+    let coordinator = Arc::new(GroupCoordinator::new(
+        NextGenConfig {
+            migration_policy: ConsumerGroupMigrationPolicy::Upgrade,
+            ..NextGenConfig::default()
+        },
+        ShareGroupConfig::default(),
+        metadata.clone(),
+        Arc::new(InMemoryOffsetsLog::default()),
+        StreamsGroupConfig::default(),
+    ));
+    let handle = seed_and_upgrade(&coordinator, "orders").await;
+
+    metadata.set(snapshot_of(&[("orders", 1, 2)]));
+    metadata_update(&handle, &["orders"]).await;
+    let joined = rpc::classic_join(&handle, "m-classic", "orders").await;
+    let synced = rpc::classic_sync(&handle, "m-classic", joined.generation_id).await;
+
+    check!(synced.error_code == 0);
+    check!(
+        decode_assignment(&synced.assignment)
+            == ConsumerProtocolAssignment {
+                assigned_partitions: vec![TopicPartition {
+                    topic: "orders".into(),
+                    partitions: vec![0, 1],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }
+    );
+}

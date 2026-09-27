@@ -161,6 +161,7 @@ pub(super) fn update_member_state(
     if became_dirty {
         state.dirty = true;
     }
+    refresh_expired_metadata(state, metadata);
     let was_dirty = state.dirty;
     run_reconcile(state, config, metadata);
     let epoch_advanced = state.target.epoch > cur_epoch;
@@ -183,6 +184,20 @@ pub(super) fn update_member_state(
     };
     let assignment_changed = state.reconcile_member(&req.member_id, &owned);
     Ok(member_metadata_changed || was_dirty || epoch_advanced || assignment_changed)
+}
+
+/// Kafka's `group.hasMetadataExpired(currentTimeMs)` check in
+/// `consumerGroupHeartbeat` and `classicGroupJoinToConsumerGroup`: a group
+/// whose subscribed topics changed computes its metadata hash again, and a new
+/// hash marks it dirty.
+///
+/// A dirty group skips the check, because its reconcile computes the target
+/// and the hash from the current metadata anyway.
+pub(super) fn refresh_expired_metadata(state: &mut GroupState, metadata: &dyn MetadataProvider) {
+    if state.dirty || !state.metadata_refresh_requested() {
+        return;
+    }
+    reconciler::refresh_metadata(state, &metadata.snapshot());
 }
 
 pub(super) fn run_reconcile(

@@ -15,7 +15,7 @@ use tokio::sync::oneshot;
 use super::{
     ActorServices, FALLBACK_REBALANCE_TIMEOUT_MS, FALLBACK_SESSION_TIMEOUT_MS, JoinResult,
     MetadataProvider, ParkedWaiters, chrono_now_ms,
-    member_state::run_reconcile,
+    member_state::{refresh_expired_metadata, run_reconcile},
     persistence::{flush_classic_metadata, flush_pending, snapshot_pending_after_change},
     waiters::{complete_classic_rebalance, drain_followers_with, fence_replaced_classic_member},
 };
@@ -264,6 +264,7 @@ async fn classic_join_hosted(
             instance_id: req.group_instance_id.clone(),
         },
     );
+    refresh_expired_metadata(state, metadata);
     if state.dirty {
         run_reconcile(state, config, metadata);
         state.advance_member_epoch(&req.member_id);

@@ -178,6 +178,15 @@ pub enum GroupActorMessage {
         topics: Vec<(String, uuid::Uuid)>,
         reply: oneshot::Sender<Vec<(String, i32)>>,
     },
+    /// Kafka's `GroupMetadataManager.onMetadataUpdate` for this group: the
+    /// metadata image created, changed or deleted `topics`. A consumer group
+    /// that subscribes to one of them computes its metadata hash again at its
+    /// next heartbeat. A classic group ignores the message, as Kafka's
+    /// `ClassicGroup.requestMetadataRefresh` does nothing.
+    MetadataUpdate {
+        /// The names of the created, changed and deleted topics.
+        topics: std::sync::Arc<[String]>,
+    },
 
     // ── in-flight transactional offsets (KIP-447) ──
     /// Record that `producer_id`'s open transaction has durably written

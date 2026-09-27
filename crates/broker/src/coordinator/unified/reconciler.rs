@@ -1,8 +1,11 @@
 //! Trigger-driven reconciler. It runs at the next heartbeat after a dirty
-//! signal: a subscription change, a member add or leave, a metadata change, or
-//! an assignor selection change.
+//! signal: a subscription change, a member add or leave, a metadata change that
+//! [`refresh_metadata`] found, or an assignor selection change.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{BTreeSet, HashMap, HashSet},
+    hash::{DefaultHasher, Hash, Hasher},
+};
 
 use krabka_protocol::primitives::uuid::Uuid;
 
@@ -73,8 +76,72 @@ pub fn reconcile_if_dirty(
         return ReconcileOutcome::EpochExhausted;
     }
     group.install_target(assignment);
+    group.record_metadata_hash(metadata_hash(group, input));
     group.dirty = false;
     ReconcileOutcome::Recomputed
+}
+
+/// Kafka's `ModernGroup.computeMetadataHash`: one number over the metadata of
+/// every topic that the group subscribes to and `input` holds.
+///
+/// A member subscribes to its topic names and to the topics that its regex
+/// resolved to. Kafka's `Utils.computeTopicHash` hashes the id, the name, the
+/// partition count and the partition racks of a topic, and
+/// `Utils.computeGroupHash` combines the topic hashes in name order, or gives
+/// `0` when no subscribed topic exists. This hash reads the same fields from
+/// the reconcile snapshot, in the same order, and it is also `0` for no topic.
+/// The snapshot names each rack of a partition once, where Kafka lists the
+/// rack of each replica.
+///
+/// The hash stays in memory, so it does not need Kafka's bytes: the group
+/// only compares it with the hash that its current target was computed from.
+#[must_use]
+pub fn metadata_hash(group: &GroupState, input: &ReconcileInput) -> u64 {
+    let mut topics: BTreeSet<&str> = BTreeSet::new();
+    for member in group.members.values() {
+        topics.extend(member.subscribed_topic_names.iter().map(String::as_str));
+        topics.extend(regex_topic_names(member, &input.topic_id_by_name));
+    }
+    let mut hasher = DefaultHasher::new();
+    let mut any_topic = false;
+    for name in topics {
+        let Some(topic_id) = input.topic_id_by_name.get(name) else {
+            continue;
+        };
+        any_topic = true;
+        let partitions = input
+            .partitions_per_topic
+            .get(topic_id)
+            .copied()
+            .unwrap_or(0);
+        (name, topic_id, partitions).hash(&mut hasher);
+        for partition in 0..partitions {
+            input
+                .partition_racks
+                .get(&(*topic_id, partition))
+                .hash(&mut hasher);
+        }
+    }
+    if any_topic { hasher.finish() } else { 0 }
+}
+
+/// Computes the metadata hash again for a group whose metadata expired, as
+/// Kafka's `consumerGroupHeartbeat` and `classicGroupJoinToConsumerGroup` do
+/// when `hasMetadataExpired` holds.
+///
+/// A new hash marks the group dirty. The reconcile that follows then bumps the
+/// group epoch, computes a new target and records the hash, as Kafka's
+/// `updateSubscriptionMetadata` does. An unchanged hash only ends the refresh:
+/// Kafka bumps the group epoch for a new hash only, so a change that leaves the
+/// assignor's input as it was, such as a new partition leader, does not
+/// rebalance the group.
+pub fn refresh_metadata(group: &mut GroupState, input: &ReconcileInput) {
+    let hash = metadata_hash(group, input);
+    if hash == group.metadata_hash() {
+        group.record_metadata_hash(hash);
+    } else {
+        group.dirty = true;
+    }
 }
 
 /// Insert into `out` every topic-id that a member subscribes to, both by exact
@@ -420,6 +487,112 @@ mod tests {
         let outcome = reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
         assert!(outcome == ReconcileOutcome::Recomputed);
         assert!(g.group_epoch > epoch_before);
+    }
+
+    /// Kafka's metadata hash covers the id, the name, the partition count and
+    /// the partition racks of every topic that the group subscribes to, by
+    /// name or through a resolved regex, and nothing else.
+    #[test]
+    fn the_metadata_hash_moves_with_the_subscribed_topics_only() {
+        let snapshot = |topics: &[(&str, u8, i32)], racks: &[(u8, i32, &str)]| ReconcileInput {
+            topic_id_by_name: topics
+                .iter()
+                .map(|(name, id, _)| ((*name).to_string(), Uuid([*id; 16])))
+                .collect(),
+            partitions_per_topic: topics
+                .iter()
+                .map(|(_, id, partitions)| (Uuid([*id; 16]), *partitions))
+                .collect(),
+            partition_racks: racks
+                .iter()
+                .map(|(id, partition, rack)| ((Uuid([*id; 16]), *partition), vec![(*rack).into()]))
+                .collect(),
+        };
+        let base: &[(&str, u8, i32)] = &[
+            ("orders", 1, 2),
+            ("payments", 2, 1),
+            ("payouts", 3, 1),
+            ("audit", 4, 1),
+        ];
+        let mut g = GroupState::new("g");
+        g.add_or_update_member(fresh_member("m1", "orders"));
+        g.add_or_update_member(member_with_regex("m2", &[], Some("^pay.*"), &["payments"]));
+        let before = metadata_hash(&g, &snapshot(base, &[(1, 0, "rack-a")]));
+
+        // (name, the snapshot after, whether the hash moves)
+        let rows = [
+            (
+                "nothing changes",
+                snapshot(base, &[(1, 0, "rack-a")]),
+                false,
+            ),
+            (
+                "an unsubscribed topic is created",
+                snapshot(
+                    &[base, &[("refunds", 5, 1)][..]].concat(),
+                    &[(1, 0, "rack-a")],
+                ),
+                false,
+            ),
+            (
+                "an unsubscribed topic grows",
+                snapshot(
+                    &[&base[..3], &[("audit", 4, 2)][..]].concat(),
+                    &[(1, 0, "rack-a")],
+                ),
+                false,
+            ),
+            (
+                "a topic that the regex matches without authorization grows",
+                snapshot(
+                    &[&base[..2], &[("payouts", 3, 2), ("audit", 4, 1)][..]].concat(),
+                    &[(1, 0, "rack-a")],
+                ),
+                false,
+            ),
+            (
+                "a subscribed topic grows",
+                snapshot(
+                    &[&[("orders", 1, 3)][..], &base[1..]].concat(),
+                    &[(1, 0, "rack-a")],
+                ),
+                true,
+            ),
+            (
+                "a subscribed topic is deleted",
+                snapshot(&base[1..], &[]),
+                true,
+            ),
+            (
+                "a subscribed topic is created again with a new id",
+                snapshot(
+                    &[&[("orders", 9, 2)][..], &base[1..]].concat(),
+                    &[(9, 0, "rack-a")],
+                ),
+                true,
+            ),
+            (
+                "a partition of a subscribed topic moves to another rack",
+                snapshot(base, &[(1, 0, "rack-b")]),
+                true,
+            ),
+            (
+                "a topic that the regex resolved to grows",
+                snapshot(
+                    &[&base[..1], &[("payments", 2, 2)][..], &base[2..]].concat(),
+                    &[(1, 0, "rack-a")],
+                ),
+                true,
+            ),
+        ];
+        let mut found = Vec::new();
+        let mut expected = Vec::new();
+        for (name, after, moves) in rows {
+            found.push((name, metadata_hash(&g, &after) != before));
+            expected.push((name, moves));
+        }
+        check!(found == expected);
+        check!(metadata_hash(&g, &ReconcileInput::default()) == 0);
     }
 
     #[test]
