@@ -414,13 +414,7 @@ jobs:
 
       - name: clippy
         run: >-
-          cargo clippy --target wasm32-wasip1 --lib
-          -p krabka-broker -p krabka-format -p krabka-raft -p krabka-log
-          -p krabka-audit -p krabka-authz -p krabka-kraft-core -p krabka-logfmt
-          -p krabka-object-store -p krabka-records-legacy -p krabka-remote-storage
-          -p krabka-remote-storage-topic -p krabka-telemetry -p krabka-throttle
-          -p krabka-verified
-          -- -D warnings
+          cargo clippy --target wasm32-wasip1 --lib -p krabka-broker -p krabka-format -p krabka-raft -p krabka-log -p krabka-audit -p krabka-authz -p krabka-kraft-core -p krabka-logfmt -p krabka-object-store -p krabka-records-legacy -p krabka-remote-storage -p krabka-remote-storage-topic -p krabka-telemetry -p krabka-throttle -p krabka-verified -- -D warnings
 
   # The repository's cheap checks, in one job.
   #
