@@ -1662,24 +1662,21 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    // The producer/consumer build step makes a real TCP connection to
-    // "broker:9092" before checking STATE_STOP.  On Linux the OS returns
-    // ECONNREFUSED immediately; on Windows DNS for "broker" triggers
-    // LLMNR/NetBIOS probes that take minutes to time out, hanging the test.
-    #[cfg_attr(
-        windows,
-        ignore = "broker DNS hangs on Windows; skip-note logic is OS-independent"
-    )]
     async fn failover_request_without_rf3_records_skip_note() {
         // Scenario asks for failover, but RF=1 + 1 broker → driver must
-        // record a skip note. A zero duration and warmup mean the
-        // producer/consumer build loops exit immediately, so this is
-        // safe to run without a live broker.
+        // record a skip note. The scenario has no producers or consumers, so
+        // the run builds no client and needs no broker. A consumer pointed at
+        // the unresolvable "broker:9092" retries its startup for five minutes
+        // and looks the name up again on every attempt: the paused clock makes
+        // the backoff free, but each lookup takes real time, a few
+        // milliseconds on one machine and far longer on another.
         let mut s = scenario(1);
         s.failover = Some(FailoverSpec {
             kill_after: secs(1),
             target: "partition0_leader".into(),
         });
+        s.producers = 0;
+        s.consumers = 0;
         s.warmup = Time::ZERO;
         s.duration = Time::ZERO;
         let out = run(s, cfg(1)).await.expect("run returned");

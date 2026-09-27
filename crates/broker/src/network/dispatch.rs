@@ -223,7 +223,10 @@ fn begin_request(
 ) -> (std::time::Instant, InFlightGuard) {
     let started = std::time::Instant::now();
     broker.metrics.record_api_request(parsed.api_key);
-    tracing::info!(
+    // Kafka's `RequestChannel` logs each request at DEBUG on
+    // `kafka.request.logger`, which its default log4j configuration keeps at
+    // WARN, so a request is never an INFO line.
+    tracing::debug!(
         api_key = parsed.api_key,
         api_version = parsed.api_version,
         correlation_id = parsed.correlation_id,
@@ -367,7 +370,9 @@ async fn serve_connection_stream<S>(
         peer,
         metrics: broker.metrics.clone(),
     };
-    tracing::info!(listener = %spec.name, sasl = is_sasl_listener, "connection opened");
+    // Kafka's `SocketServer` `Acceptor` and `Processor` log a new connection
+    // at DEBUG, and its `Selector` logs a close at DEBUG, as this loop does.
+    tracing::debug!(listener = %spec.name, sasl = is_sasl_listener, "connection opened");
 
     // KIP-714 client software identity, populated by the first ApiVersions v3+ request.
     // so `GetTelemetrySubscriptions` can be served even on connections that
@@ -453,7 +458,8 @@ async fn serve_connection_stream<S>(
         // exchange runs, and ends the connection on anything else.
         if is_sasl_listener && auth.expired_for_request(parsed.api_key, crate::time_util::now_ms())
         {
-            tracing::info!(
+            // Kafka's `Processor.processCompletedReceives` logs this at DEBUG.
+            tracing::debug!(
                 api_key = parsed.api_key,
                 principal = ?auth.principal().map(|p| p.name.as_str()),
                 listener = %spec.name,
@@ -599,5 +605,5 @@ async fn serve_connection_stream<S>(
         .share_partition_leaders
         .release_connection(&connection_id)
         .await;
-    tracing::info!("connection closed");
+    tracing::debug!("connection closed");
 }

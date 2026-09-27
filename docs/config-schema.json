@@ -63,7 +63,7 @@
               "type": "null"
             }
           ],
-          "description": "Checkpoint emission cadence. `None` → use defaults."
+          "description": "Checkpoint emission cadence. An absent table keeps the current\ncadence, which starts at the defaults."
         },
         "enabled": {
           "default": true,
@@ -83,7 +83,7 @@
               "type": "null"
             }
           ],
-          "description": "Ed25519 checkpoint signing key. `None` → chaining only, no checkpoints."
+          "description": "Ed25519 checkpoint signing key. An absent table keeps the current key.\nThe broker has none by default: chaining only, no checkpoints."
         },
         "spool": {
           "anyOf": [
@@ -94,7 +94,7 @@
               "type": "null"
             }
           ],
-          "description": "Durable spool for the AU-5 degraded path. `None` → use defaults."
+          "description": "Durable spool for the AU-5 degraded path. An absent table keeps the\ncurrent spool settings, which start at the defaults."
         },
         "topic": {
           "default": "__krabka_audit",

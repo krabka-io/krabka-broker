@@ -1,9 +1,10 @@
 //! The `[audit]` TOML shapes for the `FedRAMP` 20x MLA audit subsystem.
 //!
-//! [`FileAuditConfig`] and its three subtables — signing, checkpoint cadence,
-//! and the durable spool for the AU-5 degraded path — all default to the
-//! secure setting, so a broker with no `[audit]` block still audits to the
-//! standard internal topic.
+//! [`FileAuditConfig`] has three subtables: signing, checkpoint cadence, and
+//! the durable spool for the AU-5 degraded path. An absent `[audit]` table
+//! or subtable keeps the broker's current settings, as other absent tables do.
+//! The broker's own defaults are the secure settings, so a broker with no
+//! `[audit]` block still audits to the standard internal topic.
 
 use std::num::NonZeroU64;
 
@@ -28,11 +29,14 @@ pub struct FileAuditConfig {
     /// first of the two.
     #[serde(default = "default_audit_topic")]
     pub topic: String,
-    /// Ed25519 checkpoint signing key. `None` → chaining only, no checkpoints.
+    /// Ed25519 checkpoint signing key. An absent table keeps the current key.
+    /// The broker has none by default: chaining only, no checkpoints.
     pub signing: Option<FileAuditSigningConfig>,
-    /// Checkpoint emission cadence. `None` → use defaults.
+    /// Checkpoint emission cadence. An absent table keeps the current
+    /// cadence, which starts at the defaults.
     pub checkpoint: Option<FileAuditCheckpointConfig>,
-    /// Durable spool for the AU-5 degraded path. `None` → use defaults.
+    /// Durable spool for the AU-5 degraded path. An absent table keeps the
+    /// current spool settings, which start at the defaults.
     pub spool: Option<FileAuditSpoolConfig>,
 }
 
@@ -143,9 +147,133 @@ fn default_audit_topic() -> String {
 
 #[cfg(test)]
 mod tests {
-    use krabka_units::secs;
+    use std::{num::NonZeroU64, path::PathBuf};
 
-    use crate::file_config::FileConfig;
+    use krabka_units::{ByteSize, Time, kibibytes, secs};
+
+    use crate::{config::BrokerConfig, file_config::FileConfig};
+
+    // Every audit setting of a `BrokerConfig`, so a test compares them as one
+    // value.
+    #[derive(Debug, Clone, PartialEq)]
+    struct AuditSettings {
+        enabled: bool,
+        failure_mode: krabka_audit::AuditMode,
+        topic: String,
+        signing_key_path: Option<PathBuf>,
+        signing_key_id: Option<String>,
+        checkpoint_every_n: u64,
+        checkpoint_every: Time,
+        spool_dir: PathBuf,
+        spool_max: ByteSize,
+        spool_sync_every_n: NonZeroU64,
+    }
+
+    impl AuditSettings {
+        fn of(cfg: &BrokerConfig) -> Self {
+            Self {
+                enabled: cfg.audit_enabled,
+                failure_mode: cfg.audit_failure_mode,
+                topic: cfg.audit_topic.clone(),
+                signing_key_path: cfg.audit_signing_key_path.clone(),
+                signing_key_id: cfg.audit_signing_key_id.clone(),
+                checkpoint_every_n: cfg.audit_checkpoint_every_n,
+                checkpoint_every: cfg.audit_checkpoint_every,
+                spool_dir: cfg.audit_spool_dir.clone(),
+                spool_max: cfg.audit_spool_max,
+                spool_sync_every_n: cfg.audit_spool_sync_every_n,
+            }
+        }
+
+        fn broker_config(&self) -> BrokerConfig {
+            BrokerConfig {
+                audit_enabled: self.enabled,
+                audit_failure_mode: self.failure_mode,
+                audit_topic: self.topic.clone(),
+                audit_signing_key_path: self.signing_key_path.clone(),
+                audit_signing_key_id: self.signing_key_id.clone(),
+                audit_checkpoint_every_n: self.checkpoint_every_n,
+                audit_checkpoint_every: self.checkpoint_every,
+                audit_spool_dir: self.spool_dir.clone(),
+                audit_spool_max: self.spool_max,
+                audit_spool_sync_every_n: self.spool_sync_every_n,
+                ..BrokerConfig::for_tests(PathBuf::from("/tmp/x"))
+            }
+        }
+    }
+
+    // An absent `[audit]` table, like any other absent table, keeps what the
+    // broker config already holds, and so does an absent subtable of a
+    // present one. A present table and its subtables still apply.
+    #[test]
+    fn apply_keeps_the_audit_settings_the_file_leaves_out() {
+        let embedded = AuditSettings {
+            enabled: false,
+            failure_mode: krabka_audit::AuditMode::FailClosed,
+            topic: "__lab_audit".into(),
+            signing_key_path: Some(PathBuf::from("/lab/audit.pk8")),
+            signing_key_id: Some("lab-key".into()),
+            checkpoint_every_n: 7,
+            checkpoint_every: secs(9),
+            spool_dir: PathBuf::from("/lab/spool"),
+            spool_max: kibibytes(64),
+            spool_sync_every_n: NonZeroU64::new(3).unwrap(),
+        };
+        let cases = [
+            ("no [audit] table", "", embedded.clone()),
+            (
+                "an [audit] table with no subtables",
+                "[audit]\nenabled = true\n",
+                AuditSettings {
+                    enabled: true,
+                    failure_mode: krabka_audit::AuditMode::FailOpen,
+                    topic: "__krabka_audit".into(),
+                    ..embedded.clone()
+                },
+            ),
+            (
+                "an [audit] table with every subtable",
+                r#"
+                    [audit]
+                    enabled = true
+                    failure_mode = "fail-open"
+                    topic = "__file_audit"
+                    [audit.signing]
+                    key_path = "/etc/krabka/audit.pk8"
+                    key_id = "audit-2026"
+                    [audit.checkpoint]
+                    every_n = 500
+                    every_secs = 30
+                    [audit.spool]
+                    dir = "/var/lib/krabka/audit-spool"
+                    max_bytes = 2048
+                    sync_every_n = 5
+                "#,
+                AuditSettings {
+                    enabled: true,
+                    failure_mode: krabka_audit::AuditMode::FailOpen,
+                    topic: "__file_audit".into(),
+                    signing_key_path: Some(PathBuf::from("/etc/krabka/audit.pk8")),
+                    signing_key_id: Some("audit-2026".into()),
+                    checkpoint_every_n: 500,
+                    checkpoint_every: secs(30),
+                    spool_dir: PathBuf::from("/var/lib/krabka/audit-spool"),
+                    spool_max: kibibytes(2),
+                    spool_sync_every_n: NonZeroU64::new(5).unwrap(),
+                },
+            ),
+        ];
+        let mut applied_rows = Vec::new();
+        let mut expected_rows = Vec::new();
+        for (name, toml, expected) in cases {
+            let file: FileConfig = toml::from_str(toml).expect("parse");
+            let mut cfg = embedded.broker_config();
+            file.apply_to(&mut cfg).expect("apply");
+            applied_rows.push((name, AuditSettings::of(&cfg)));
+            expected_rows.push((name, expected));
+        }
+        assert2::assert!(applied_rows == expected_rows);
+    }
 
     #[test]
     fn audit_section_parses_and_applies() {

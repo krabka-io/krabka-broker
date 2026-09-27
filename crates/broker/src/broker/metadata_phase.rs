@@ -37,7 +37,11 @@ fn prepare_raft_transport(
 ) -> RaftTransport {
     let controller_cell = Arc::new(tokio::sync::OnceCell::new());
     let audit_cell: crate::raft_handshake::AuditLogArc = Arc::new(tokio::sync::OnceCell::new());
-    if config.controller_listener_protocol == krabka_security::ListenerProtocol::Plaintext {
+    // Only a controller binds the controller listener. A broker-only node
+    // reads the quorum as an observer and has no such listener to warn about.
+    if config.is_controller()
+        && config.controller_listener_protocol == krabka_security::ListenerProtocol::Plaintext
+    {
         tracing::warn!(
             "controller listener is PLAINTEXT: every peer is ANONYMOUS, and each \
              controller RPC is authorized for that principal"
@@ -380,8 +384,59 @@ pub(super) async fn start_metadata_phase(
 mod tests {
     use assert2::assert;
     use krabka_raft::NodeId;
+    use krabka_security::ListenerProtocol;
+    use tracing::Level;
 
     use super::*;
+    use crate::{config::NodeRole, test_support::LogCapture};
+
+    // A node warns that its controller listener is PLAINTEXT only when it has
+    // one, which only a node with the controller role binds.
+    #[test]
+    fn only_a_controller_warns_about_a_plaintext_controller_listener() {
+        let client = Arc::new(crate::network::client::InterBrokerClient::new(None, None));
+        let warning = (
+            Level::WARN,
+            "controller listener is PLAINTEXT: every peer is ANONYMOUS, and each controller RPC \
+             is authorized for that principal"
+                .to_string(),
+        );
+        let combined = vec![NodeRole::Broker, NodeRole::Controller];
+        let cases = [
+            (
+                combined.clone(),
+                ListenerProtocol::Plaintext,
+                vec![warning.clone()],
+            ),
+            (
+                vec![NodeRole::Controller],
+                ListenerProtocol::Plaintext,
+                vec![warning],
+            ),
+            (vec![NodeRole::Broker], ListenerProtocol::Plaintext, vec![]),
+            (combined, ListenerProtocol::Ssl, vec![]),
+        ];
+        let mut warned_rows = Vec::new();
+        let mut expected_rows = Vec::new();
+        for (roles, protocol, expected) in cases {
+            let mut config = BrokerConfig::for_tests(std::path::PathBuf::new());
+            config.roles.clone_from(&roles);
+            config.controller_listener_protocol = protocol;
+            let capture = LogCapture::default();
+            tracing::dispatcher::with_default(&capture.dispatch(), || {
+                LogCapture::span().in_scope(|| prepare_raft_transport(&config, None, &client));
+            });
+            let warned: Vec<(Level, String)> = capture
+                .events()
+                .into_iter()
+                .filter(|event| event.level <= Level::WARN)
+                .map(|event| (event.level, event.message))
+                .collect();
+            warned_rows.push((roles.clone(), protocol, warned));
+            expected_rows.push((roles, protocol, expected));
+        }
+        assert!(warned_rows == expected_rows);
+    }
 
     #[test]
     fn the_bound_port_replaces_only_this_nodes_port_zero_endpoint() {

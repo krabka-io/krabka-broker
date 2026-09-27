@@ -151,7 +151,9 @@ where
     let frame_result = tokio::select! {
         biased;
         () = sleep_until_some(idle_deadline) => {
-            tracing::info!(
+            // Kafka's `Selector.maybeCloseOldestConnection` logs an idle close
+            // at TRACE. DEBUG keeps it with the other lines of the connection.
+            tracing::debug!(
                 principal = principal_or_anonymous(auth).name.as_str(),
                 peer = %policy.peer,
                 idle_ms = policy.idle.unwrap_or_default().as_millis(),

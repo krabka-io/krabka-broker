@@ -208,7 +208,18 @@ pub(super) fn apply_config_tail(
     if tail.controller_server_name.is_some() {
         cfg.controller_server_name = tail.controller_server_name;
     }
-    let audit = tail.audit.unwrap_or_default();
+    if let Some(audit) = tail.audit {
+        apply_audit(audit, cfg);
+    }
+    Ok(())
+}
+
+/// Apply a present `[audit]` table.
+///
+/// Its keys replace the broker's audit settings. An absent `[audit.signing]`,
+/// `[audit.checkpoint]` or `[audit.spool]` subtable keeps the settings it
+/// covers, as an absent `[audit]` table keeps all of them.
+fn apply_audit(audit: FileAuditConfig, cfg: &mut crate::config::BrokerConfig) {
     cfg.audit_enabled = audit.enabled;
     cfg.audit_failure_mode = audit.failure_mode;
     cfg.audit_topic = audit.topic;
@@ -216,15 +227,16 @@ pub(super) fn apply_config_tail(
         cfg.audit_signing_key_path = Some(signing.key_path.into());
         cfg.audit_signing_key_id = Some(signing.key_id);
     }
-    let checkpoint = audit.checkpoint.unwrap_or_default();
-    cfg.audit_checkpoint_every_n = checkpoint.every_n;
-    cfg.audit_checkpoint_every =
-        Time::from_secs(i64::try_from(checkpoint.every_secs).unwrap_or(i64::MAX));
-    let spool = audit.spool.unwrap_or_default();
-    cfg.audit_spool_dir = spool.dir.into();
-    cfg.audit_spool_max = ByteSize::from_bytes(spool.max_bytes);
-    cfg.audit_spool_sync_every_n = spool.sync_every_n;
-    Ok(())
+    if let Some(checkpoint) = audit.checkpoint {
+        cfg.audit_checkpoint_every_n = checkpoint.every_n;
+        cfg.audit_checkpoint_every =
+            Time::from_secs(i64::try_from(checkpoint.every_secs).unwrap_or(i64::MAX));
+    }
+    if let Some(spool) = audit.spool {
+        cfg.audit_spool_dir = spool.dir.into();
+        cfg.audit_spool_max = ByteSize::from_bytes(spool.max_bytes);
+        cfg.audit_spool_sync_every_n = spool.sync_every_n;
+    }
 }
 
 /// Resolve the `[gssapi]` section into the accept-path configuration.

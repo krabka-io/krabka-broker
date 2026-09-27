@@ -309,7 +309,9 @@ impl GroupMetadataValue {
             };
             let client_id = get_string(&mut buf)?;
             let client_host = get_string(&mut buf)?;
-            let rebalance_timeout_ms = if version >= 1 { get_i32(&mut buf)? } else { 0 };
+            // Version 0 has no rebalance timeout, and Kafka's schema default
+            // is -1: replay then takes the session timeout instead.
+            let rebalance_timeout_ms = if version >= 1 { get_i32(&mut buf)? } else { -1 };
             let session_timeout_ms = get_i32(&mut buf)?;
             let subscription = get_bytes(&mut buf)?;
             let assignment = get_bytes(&mut buf)?;
@@ -600,6 +602,77 @@ mod tests {
         let encoded = v.encode_value();
         let decoded = GroupMetadataValue::decode_value(&encoded).unwrap();
         assert!(decoded == v);
+    }
+
+    // Kafka's `GroupMetadataValue` schema adds `rebalanceTimeout` in version
+    // 1, `currentStateTimestamp` in version 2 and `groupInstanceId` in version
+    // 3, with the defaults -1, -1 and null. An older value decodes to them.
+    #[test]
+    fn group_metadata_value_decodes_older_versions_to_the_schema_defaults() {
+        fn encode_at(version: i16) -> Bytes {
+            let mut buf = BytesMut::new();
+            buf.put_i16(version);
+            put_string(&mut buf, "consumer");
+            buf.put_i32(5);
+            put_nullable_string(&mut buf, Some("range"));
+            put_nullable_string(&mut buf, Some("m1"));
+            if version >= 2 {
+                buf.put_i64(12_345);
+            }
+            buf.put_i32(1);
+            put_string(&mut buf, "m1");
+            if version >= 3 {
+                put_nullable_string(&mut buf, Some("inst"));
+            }
+            put_string(&mut buf, "c");
+            put_string(&mut buf, "h");
+            if version >= 1 {
+                buf.put_i32(60_000);
+            }
+            buf.put_i32(30_000);
+            put_bytes(&mut buf, &Bytes::from_static(b"sub"));
+            put_bytes(&mut buf, &Bytes::from_static(b"asn"));
+            buf.freeze()
+        }
+
+        // (version, rebalance timeout, group instance id, state timestamp)
+        let cases = [
+            (0, -1, None, -1),
+            (1, 60_000, None, -1),
+            (2, 60_000, None, 12_345),
+            (3, 60_000, Some("inst"), 12_345),
+        ];
+        let mut decoded_rows = Vec::new();
+        let mut expected_rows = Vec::new();
+        for (version, rebalance_timeout_ms, group_instance_id, current_state_timestamp_ms) in cases
+        {
+            let decoded = GroupMetadataValue::decode_value(&encode_at(version)).unwrap();
+            decoded_rows.push((version, decoded));
+            expected_rows.push((
+                version,
+                GroupMetadataValue {
+                    protocol_type: "consumer".into(),
+                    generation: 5,
+                    protocol_name: Some("range".into()),
+                    leader: Some("m1".into()),
+                    current_state_timestamp_ms,
+                    members: vec![MemberMetadata {
+                        member_id: "m1".into(),
+                        group_instance_id: group_instance_id.map(str::to_string),
+                        client_id: "c".into(),
+                        client_host: "h".into(),
+                        rebalance_timeout_ms,
+                        session_timeout_ms: 30_000,
+                        subscription: Bytes::from_static(b"sub"),
+                        assignment: Bytes::from_static(b"asn"),
+                    }],
+                },
+            ));
+        }
+        assert!(decoded_rows == expected_rows);
+        // The hand-built version 3 is what the broker itself writes.
+        let current = GroupMetadataValue::decode_value(&encode_at(3)).unwrap();
+        assert!(current.encode_value() == encode_at(3));
     }
 
     #[test]
