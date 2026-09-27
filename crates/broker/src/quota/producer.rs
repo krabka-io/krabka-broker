@@ -2,16 +2,16 @@
 
 use krabka_metadata::MetadataImage;
 use krabka_units::{Time, convert::TimeExt as _};
-use num_traits::cast::ToPrimitive as _;
 
-use super::{QuotaConsumption, buckets::QuotaBuckets, consume_configured_quota, u64_to_f64};
+use super::{QuotaConsumption, buckets::QuotaBuckets, consume_configured_quota};
 
 /// Charges `bytes` to the `producer_byte_rate` bucket of the quota entity
 /// that `(principal, client_id)` resolves to.
 ///
 /// Kafka keeps one bandwidth sensor per quota entity
 /// (`ClientQuotaManager.getOrCreateQuotaSensors`), so every topic a producer
-/// writes draws on the same bucket.
+/// writes draws on the same bucket. The sensor's quota is a double, so the
+/// bucket runs at the configured rate, fractional part included.
 #[must_use]
 pub fn consume_producer_quota(
     image: &MetadataImage,
@@ -29,28 +29,11 @@ pub fn consume_producer_quota(
             quota_key: "producer_byte_rate",
             amount: bytes,
         },
-        quota_rate_to_bucket_rate,
-        |overage, rate, _| {
-            let overage = u64_to_f64(overage);
-            // Kafka's `ClientQuotaManager.throttleTime` does not bound a
-            // byte-rate throttle.
-            Time::from_secs_f64(overage / rate)
-        },
+        |rate| rate,
+        // Kafka's `ClientQuotaManager.throttleTime` does not bound a
+        // byte-rate throttle.
+        |overage, rate, _| Time::from_secs_f64(overage / rate),
     )
-}
-
-/// The token-bucket rate of a `producer_byte_rate`.
-///
-/// Kafka enforces the configured rate as a double, so a positive rate under
-/// one byte per second still throttles. The bucket counts whole bytes, so such
-/// a rate gets a bucket rate of 1; the delay is still the overage divided by
-/// the real rate.
-fn quota_rate_to_bucket_rate(rate: f64) -> Option<u64> {
-    if !rate.is_finite() || rate <= 0.0 {
-        return None;
-    }
-
-    rate.floor().to_u64().map(|whole| whole.max(1))
 }
 
 #[cfg(test)]
@@ -126,18 +109,22 @@ mod tests {
         assert!(delay > secs(19) && delay <= secs(20), "{delay:?}");
     }
 
-    /// Kafka enforces `producer_byte_rate` as a double, so a rate under one
-    /// byte per second throttles instead of leaving the producer unbounded.
+    /// Kafka enforces `producer_byte_rate` as a double, so a fractional rate
+    /// throttles at that rate: neither unbounded nor rounded to a whole byte
+    /// per second.
     #[test]
     fn a_fractional_producer_byte_rate_throttles() {
         // `(producer_byte_rate, request bytes, expected throttle)`. The
-        // one-second window gives the bucket a burst of its rate, rounded up
-        // to one whole byte.
+        // one-second window gives the bucket a burst of exactly its rate, and
+        // the throttle is the shortfall over the rate.
         let cases = [
             (1024.0, 1024, <Time as TimeExt>::ZERO),
             (1024.0, 2048, secs(1)),
-            (0.5, 1, <Time as TimeExt>::ZERO),
-            (0.5, 100, secs(198)),
+            (0.5, 1, secs(1)),
+            (0.5, 100, secs(199)),
+            (0.25, 1, secs(3)),
+            (1.5, 1, <Time as TimeExt>::ZERO),
+            (1.5, 3, secs(1)),
         ];
         let mut actual = Vec::new();
         let mut expected = Vec::new();

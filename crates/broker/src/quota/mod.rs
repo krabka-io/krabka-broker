@@ -100,10 +100,17 @@ struct QuotaConsumption<'a> {
     amount: u64,
 }
 
+/// Charges `request.amount` tokens to the bucket of the quota entity the
+/// request resolves to, and returns the throttle for the part the bucket could
+/// not cover.
+///
+/// `token_rate` turns the configured rate into the bucket's tokens per second,
+/// fractional or not. `delay_for_overage` gets the tokens the bucket could not
+/// cover, part token included, the configured rate, and the token rate.
 fn consume_configured_quota(
     request: QuotaConsumption<'_>,
-    initial_rate: impl FnOnce(f64) -> Option<u64>,
-    delay_for_overage: impl FnOnce(u64, f64, u64) -> Time,
+    token_rate: impl FnOnce(f64) -> f64,
+    delay_for_overage: impl FnOnce(f64, f64, f64) -> Time,
 ) -> QuotaDelay {
     if request.amount == 0 {
         return QuotaDelay::zero();
@@ -119,9 +126,7 @@ fn consume_configured_quota(
     if !rate.is_finite() || rate <= 0.0 {
         return QuotaDelay::zero();
     }
-    let Some(initial_rate) = initial_rate(rate) else {
-        return QuotaDelay::zero();
-    };
+    let token_rate = token_rate(rate);
     let user = entity_key
         .iter()
         .find(|(k, _)| k == "user")
@@ -136,17 +141,30 @@ fn consume_configured_quota(
         &entity_key,
         request.principal,
         request.client_id,
-        initial_rate,
+        token_rate,
     );
-    let granted = bucket.try_consume(request.amount);
-    if granted >= request.amount {
+    // Kafka holds the quota as a double, so the bucket grants a part token
+    // too and the overage is the exact shortfall under a fractional rate.
+    let granted_micros = bucket.try_consume_micros(request.amount);
+    let Some(overage) = overage_tokens(request.amount, granted_micros) else {
         return QuotaDelay::zero();
-    }
+    };
     // Kafka bounds only the request quota's throttle (`ClientRequestQuotaManager`
     // takes `boundedThrottleTime`), so the bound, where there is one, is the
     // caller's.
-    let delay = delay_for_overage(request.amount - granted, rate, initial_rate);
+    let delay = delay_for_overage(overage, rate, token_rate);
     QuotaDelay::new(delay, user, client_id)
+}
+
+/// The part of a `requested`-token charge that a grant of `granted_micros`
+/// micro-tokens did not cover, in tokens with its fractional part, or `None`
+/// when the grant covered it all.
+pub(crate) fn overage_tokens(requested: u64, granted_micros: u64) -> Option<f64> {
+    let micros_per_token = crate::throttle::MICROS_PER_TOKEN;
+    // The bucket's micro-token grant saturates the same way.
+    let requested_micros = requested.saturating_mul(micros_per_token);
+    let short = requested_micros.checked_sub(granted_micros)?;
+    (short > 0).then(|| u64_to_f64(short) / u64_to_f64(micros_per_token))
 }
 
 /// A quota delay as Kafka's `throttle_time_ms` wire field.
@@ -162,14 +180,14 @@ pub(crate) fn throttle_time_ms(delay: Time) -> i32 {
 }
 
 /// A raw quota rate as the [`TokenBucket`](crate::throttle::TokenBucket)'s
-/// [`ByteRate`].
+/// [`ByteRate`], fractional part included.
 ///
 /// The bucket is byte-dimensioned, but Kafka drives `request_percentage` and
 /// `controller_mutation_rate` through the same token arithmetic, and those are
 /// not byte throughputs. Their raw magnitudes therefore cross into the
 /// bucket's dimension here, in one place, instead of at each call site.
-pub(crate) fn bucket_rate(raw: u64) -> ByteRate {
-    ByteRate::from_bytes_per_sec(i64::try_from(raw).unwrap_or(i64::MAX))
+pub(crate) fn bucket_rate(raw: f64) -> ByteRate {
+    ByteRate::from_bytes_per_sec_f64(raw)
 }
 
 /// A configured rate as a whole token count, truncated toward zero.
@@ -292,13 +310,25 @@ mod tests {
         }
     }
 
-    /// Truncating a configured rate agrees with the producer path's former
-    /// floor-and-parse, and also on the sub-one rates that it rejects.
+    /// The overage keeps the part token a micro-token grant leaves short, and
+    /// a grant that covers the request leaves none.
     #[test]
-    fn rate_truncation_agrees_with_the_former_producer_copy() {
-        for rate in [1.0_f64, 1.9, 1024.0, 9.007_199_254_740_99e15, f64::MAX] {
-            let former: Option<u64> = rate.floor().to_string().parse().ok();
-            check!(rate.floor().to_u64() == former);
+    fn overage_tokens_is_the_exact_shortfall() {
+        let m = crate::throttle::MICROS_PER_TOKEN;
+        let cases = [
+            (0, 0, None),
+            (1, m, None),
+            (1, 2 * m, None),
+            (1, m / 2, Some(0.5)),
+            (1, 0, Some(1.0)),
+            (100, m / 2, Some(99.5)),
+            (3, 2 * m + m / 4, Some(0.75)),
+        ];
+        for (requested, granted_micros, want) in cases {
+            check!(
+                overage_tokens(requested, granted_micros) == want,
+                "{requested} tokens, {granted_micros} micro-tokens granted"
+            );
         }
     }
 
@@ -322,7 +352,7 @@ mod tests {
                 let called = Arc::clone(&initial_rate_called);
                 move |_| {
                     called.store(true, Ordering::Relaxed);
-                    Some(100)
+                    100.0
                 }
             },
             {
@@ -360,7 +390,7 @@ mod tests {
                     let called = Arc::clone(&initial_rate_called);
                     move |_| {
                         called.store(true, Ordering::Relaxed);
-                        Some(1)
+                        1.0
                     }
                 },
                 |_, _, _| secs(1),
@@ -370,32 +400,6 @@ mod tests {
             check!(buckets.is_empty());
             assert!(!initial_rate_called.load(Ordering::Relaxed));
         }
-    }
-
-    #[test]
-    fn consume_configured_quota_skips_unrepresentable_initial_rate() {
-        let image = image_with_quota(
-            vec![("user", Some("alice"))],
-            "controller_mutation_rate",
-            0.5,
-        );
-        let buckets = QuotaBuckets::new();
-
-        let delay = consume_configured_quota(
-            QuotaConsumption {
-                image: &image,
-                buckets: &buckets,
-                principal: "alice",
-                client_id: "",
-                quota_key: "controller_mutation_rate",
-                amount: 1,
-            },
-            |_| None,
-            |_, _, _| secs(1),
-        );
-
-        check!(delay == <Time as TimeExt>::ZERO);
-        assert!(buckets.is_empty());
     }
 
     #[test]
@@ -414,11 +418,9 @@ mod tests {
                 quota_key: "producer_byte_rate",
                 amount: 10,
             },
-            |_| Some(1),
-            |overage, rate, initial_rate| {
-                check!(overage == 9);
-                check!((rate - 1.0).abs() < f64::EPSILON);
-                check!(initial_rate == 1);
+            |rate| rate,
+            |overage, rate, token_rate| {
+                check!((overage, rate, token_rate) == (9.0, 1.0, 1.0));
                 secs(10)
             },
         );

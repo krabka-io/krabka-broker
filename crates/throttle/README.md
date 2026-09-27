@@ -18,7 +18,11 @@ follower-in replica traffic (KIP-73), and intra-broker log directory moves
 ## Features
 
 - Byte, event, and plain token rates, each with an optional burst capacity.
-- A `try_consume` that grants at most the request. Each consume and each rate
+  The bucket counts micro-tokens, so a fractional byte rate such as Kafka's
+  `consumer_byte_rate = 0.5` is enforced as configured.
+- A `try_consume` that grants at most the request in whole tokens, and a
+  `try_consume_micros` that also grants a part token, for a quota caller that
+  turns the rest into an exact throttle delay. Each consume and each rate
   reset is one critical section, so a consume never straddles a reset and
   never loses the refill it claimed. An unthrottled bucket grants without the
   lock.

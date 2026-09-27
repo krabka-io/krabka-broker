@@ -38,7 +38,7 @@ fn an_inactive_bucket_and_its_metric_series_are_both_dropped() {
         &key("alice", "app"),
         "alice",
         "app",
-        1024,
+        1024.0,
     ));
     drop(
         metrics
@@ -68,7 +68,7 @@ fn a_bucket_inside_the_window_keeps_its_series() {
         &key("alice", "app"),
         "alice",
         "app",
-        1024,
+        1024.0,
     ));
     drop(
         metrics

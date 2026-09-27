@@ -4001,6 +4001,7 @@ dependencies = [
  "assert2",
  "krabka-units",
  "krabka-verified",
+ "num-traits",
  "qubit-clock",
  "stateright",
 ]
