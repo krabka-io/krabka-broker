@@ -188,8 +188,9 @@ impl Model for IsrModel {
         }
 
         // ISR changes: every subset of replicas that contains the leader and
-        // differs from the current ISR. Expansion only admits caught-up
-        // followers (per_follower.leo >= hw) — the controller's real rule;
+        // differs from the current ISR. Expansion only admits followers whose
+        // log end reached the HW (per_follower.leo >= hw) — the high-watermark
+        // half of the leader's rule, Kafka's `Partition.isFollowerInSync`;
         // without it the model would report a false data-loss violation.
         let cur_isr: HashSet<NodeId> = state.rs.isr.clone();
         let follower_vec: Vec<NodeId> = self.followers().collect();
@@ -255,7 +256,8 @@ impl Model for IsrModel {
             }),
             // No-committed-data-loss: every ISR member holds every committed
             // record. A missing per_follower entry for an ISR member counts as a
-            // violation (compute_hw skips entryless members).
+            // violation, although compute_hw reads one as log end -1 and holds
+            // the HW for it.
             Property::always("no_data_loss", |m: &IsrModel, s: &IsrState| {
                 let leader = m.leader();
                 s.rs.isr

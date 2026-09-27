@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/isr.rs" 11 27 11 32 *)
+
+(* <isr::ProposedIsr as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_ProposedIsr = Invalid | WithoutLeader | Valid
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_ProposedIsr [#"/workspace/crates/verified/src/isr.rs" 11 27 11 32] (self: t_ProposedIsr)
+  (return (x: t_ProposedIsr)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ProposedIsr = Any.any_l () | & self: t_ProposedIsr = self ])
+  [ return (result: t_ProposedIsr) -> (! return {result}) ]

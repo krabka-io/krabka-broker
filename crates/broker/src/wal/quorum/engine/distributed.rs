@@ -149,13 +149,19 @@ impl WalShardEngine {
         if offset.cmp(&previous).is_gt() {
             quorum.durable_offsets.insert(from, offset);
         }
-        let follower_ends = quorum
+        // Every voter votes with the offset it has fsynced, the leader
+        // included. The leader's log end is not a vote: a follower fetches
+        // the leader's unsynced tail, fsyncs it, and acknowledges it before
+        // the leader's own fsync returns, and counting the leader's log end
+        // there would commit a record that only one broker holds on disk.
+        // The leader's own durable offset is what `replicate_and_sync`
+        // records after its fsync, and what promotion adopts.
+        let voter_durable_ends = quorum
             .voters
             .iter()
-            .filter(|voter| **voter != quorum.me)
             .map(|voter| {
-                // A remembered follower offset can outlive the leadership
-                // that produced it. Clamp it into the verified kernel's
+                // A remembered offset can outlive the leadership that
+                // produced it. Clamp it into the verified kernel's
                 // precondition domain for the current leader.
                 quorum
                     .durable_offsets
@@ -167,16 +173,23 @@ impl WalShardEngine {
             })
             .collect::<Vec<_>>();
         let current = self.durable_watermark();
-        let verified_current = current.0.min(leader_end.0);
-        // A log normally has start <= end. Keep that kernel precondition local
-        // even if this internal boundary receives an inconsistent range.
-        let durable = Offset(krabka_verified::recompute_high_watermark(
+        // The kernel's floor is the current watermark, raised to the log start:
+        // an offset below the log start names nothing this shard still holds.
+        // It is clamped to the leader end, the kernel's precondition, even
+        // if this internal boundary receives an inconsistent range. The
+        // result is then the greatest of the current watermark, the log
+        // start, and the voters' durable majority frontier, and it advances
+        // the watermark only when it passes `current`. `leader_counts` is
+        // `false` because the leader already votes in `voter_durable_ends`
+        // with its durable offset; the leader end is only the bound.
+        let floor = current.0.max(log_start.0).min(leader_end.0);
+        let durable = Offset(krabka_verified::consensus::recompute_high_watermark(
             leader_end.0,
-            &follower_ends,
+            &voter_durable_ends,
             strict_majority(quorum.voters.len()),
-            verified_current,
-            log_start.0.min(leader_end.0),
-            true,
+            floor,
+            floor,
+            false,
         ));
         let offset_changed = offset > previous;
         if durable <= current {
@@ -202,6 +215,7 @@ mod tests {
     use krabka_log::{Log, LogConfig};
 
     use super::*;
+    use crate::wal::quorum::test_support::batch;
 
     #[test]
     fn bounds_verified_watermark_inputs_to_the_leader_end() {
@@ -210,16 +224,76 @@ mod tests {
         let engine = WalShardEngine::new_distributed(Arc::new(Mutex::new(log)), 3).unwrap();
         engine.configure_distributed(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
 
-        assert!(engine.record_durable_offset(NodeId(2), Offset(2), Offset(0), Offset(1),));
-        assert!(!engine.record_durable_offset(NodeId(3), Offset(2), Offset(0), Offset(1),));
+        assert!(!engine.record_durable_offset(NodeId(1), Offset(1), Offset(0), Offset(1)));
+        assert!(engine.record_durable_offset(NodeId(2), Offset(2), Offset(0), Offset(1)));
+        assert!(!engine.record_durable_offset(NodeId(3), Offset(2), Offset(0), Offset(1)));
         assert!(engine.durable_watermark() == Offset(1));
-        assert!(!engine.record_durable_offset(NodeId(2), Offset(2), Offset(2), Offset(1),));
+        assert!(!engine.record_durable_offset(NodeId(2), Offset(2), Offset(2), Offset(1)));
         assert!(engine.durable_watermark() == Offset(1));
 
         engine
             .durable_watermark
             .store(Offset(2).0, Ordering::Release);
-        assert!(!engine.record_durable_offset(NodeId(3), Offset(1), Offset(0), Offset(1),));
+        assert!(!engine.record_durable_offset(NodeId(3), Offset(1), Offset(0), Offset(1)));
         assert!(engine.durable_watermark() == Offset(2));
+    }
+
+    /// A follower fetches the leader's tail before the leader's fsync of it
+    /// returns. One follower's fsync of that tail is one durable copy of
+    /// three, so the watermark must wait for the leader's own fsync (or a
+    /// second follower's); the leader's log end is not a vote.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn leader_log_end_does_not_vote_before_the_leader_fsyncs() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = Arc::new(Mutex::new(
+            Log::open(dir.path().join("source"), LogConfig::default()).unwrap(),
+        ));
+        let engine = WalShardEngine::new_distributed(Arc::clone(&source), 3).unwrap();
+        engine.configure_distributed(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+        source.lock().unwrap().append(&mut batch(3)).unwrap();
+
+        assert!(!engine.record_follower_ack(NodeId(2), Offset(3)));
+        assert!(engine.durable_watermark() == Offset(0));
+
+        let acknowledged = engine.replicate_and_sync(&source, Offset(3)).await;
+
+        assert!(acknowledged.ok() == Some(Offset(3)));
+        assert!(engine.durable_watermark() == Offset(3));
+    }
+
+    #[test]
+    fn two_follower_fsyncs_commit_without_the_leader() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = Arc::new(Mutex::new(
+            Log::open(dir.path().join("source"), LogConfig::default()).unwrap(),
+        ));
+        let engine = WalShardEngine::new_distributed(Arc::clone(&source), 3).unwrap();
+        engine.configure_distributed(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+        source.lock().unwrap().append(&mut batch(3)).unwrap();
+
+        assert!(!engine.record_follower_ack(NodeId(2), Offset(3)));
+        assert!(engine.record_follower_ack(NodeId(3), Offset(3)));
+        assert!(engine.durable_watermark() == Offset(3));
+    }
+
+    /// An append that arrives before the metadata placement is refused, but
+    /// its local fsync still counts: the placement that arrives next records
+    /// the leader's durable offset and commits the append without another
+    /// replication call.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_placement_that_arrives_after_the_append_commits_its_fsync() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = Arc::new(Mutex::new(
+            Log::open(dir.path().join("source"), LogConfig::default()).unwrap(),
+        ));
+        let engine = WalShardEngine::new_distributed(Arc::clone(&source), 1).unwrap();
+        engine.configure_distributed(NodeId(1), &[]);
+        source.lock().unwrap().append(&mut batch(3)).unwrap();
+
+        let refused = engine.replicate_and_sync(&source, Offset(3)).await;
+        engine.configure_distributed(NodeId(1), &[NodeId(1)]);
+
+        assert!(refused.is_err());
+        assert!(engine.durable_watermark() == Offset(3));
     }
 }

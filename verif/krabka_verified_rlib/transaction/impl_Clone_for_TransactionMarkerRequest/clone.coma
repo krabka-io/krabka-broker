@@ -1,0 +1,25 @@
+(* #"/workspace/crates/verified/src/transaction.rs" 32 27 32 32 *)
+
+(* <transaction::TransactionMarkerRequest as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.int.Int16
+use creusot.int.Int32
+use creusot.prelude.Any
+
+type t_TransactionMarkerRequest = {
+  producer_id: Int64.t;
+  producer_epoch: Int16.t;
+  coordinator_epoch: Int32.t;
+  is_commit: bool;
+  is_offsets_partition: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_TransactionMarkerRequest [#"/workspace/crates/verified/src/transaction.rs" 32 27 32 32]
+  (self: t_TransactionMarkerRequest) (return (x: t_TransactionMarkerRequest)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_TransactionMarkerRequest = Any.any_l () | & self: t_TransactionMarkerRequest = self ])
+  [ return (result: t_TransactionMarkerRequest) -> (! return {result}) ]

@@ -1,4 +1,4 @@
-(* #"/proof-work-235/crates/verified/src/storage.rs" 9 27 9 32 *)
+(* #"/workspace/crates/verified/src/storage.rs" 9 27 9 32 *)
 
 (* <storage::LocalTruncationPlan as std::clone::Clone> *)
 
@@ -11,8 +11,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_LocalTruncationPlan [#"/proof-work-235/crates/verified/src/storage.rs" 9 27 9 32]
-  (self: t_LocalTruncationPlan) (return (x: t_LocalTruncationPlan)) = (! bb0
+let clone_LocalTruncationPlan [#"/workspace/crates/verified/src/storage.rs" 9 27 9 32] (self: t_LocalTruncationPlan)
+  (return (x: t_LocalTruncationPlan)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_LocalTruncationPlan = Any.any_l () | & self: t_LocalTruncationPlan = self ])
   [ return (result: t_LocalTruncationPlan) -> (! return {result}) ]

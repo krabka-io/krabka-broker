@@ -1,20 +1,19 @@
 //! The rate and burst side of [`TokenBucket`]: the typed setters, the
-//! accessors that read the configuration back, and the seqlock write section
-//! that publishes the `{rate, burst, available, last_refill}` group as one
-//! unit.
+//! accessors that read the configuration back, and the reset that publishes
+//! the `{rate, burst, available, last_refill}` group as one unit.
 //!
 //! The bucket stores raw tokens, so every dimensioned quantity narrows here.
 //! The byte pair and the event pair stay separate because a token means a
 //! different thing in each.
 
-use std::sync::atomic::{Ordering, Ordering::Relaxed};
+use std::sync::atomic::Ordering::Relaxed;
 
 use krabka_units::prelude::{
     ByteRate, ByteRateExt as _, ByteSize, ByteSizeExt as _, Frequency, FrequencyExt as _, Time,
     secs,
 };
 
-use super::TokenBucket;
+use super::{BucketState, TokenBucket};
 
 /// The time window that [`TokenBucket::set_byte_rate`] uses for the burst
 /// capacity when the caller does not give one. The burst is the throughput of
@@ -54,42 +53,34 @@ impl TokenBucket {
 
     /// Updates the rate and the independent burst capacity, both in raw tokens.
     ///
-    /// This method publishes the `{rate, burst, available, last_refill}` group
-    /// as one seqlock critical section. It moves `generation` to an odd value
-    /// before the stores and to the next even value after them. A concurrent
-    /// `try_consume` that straddles the reset must thus try again, and it
-    /// cannot clobber the new `available` with a stale CAS.
+    /// This method refills the bucket to `burst` and restarts the refill clock.
+    /// It stores the whole `{rate, burst, available, last_refill}` group in one
+    /// critical section, so a concurrent [`Self::try_consume`] runs either
+    /// wholly before the reset or wholly after it. No consume can commit a
+    /// balance it computed under the old configuration.
     pub fn set_token_rate_with_burst(&self, new_rate: u64, burst: u64) {
-        let _writer = self
-            .writer
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Enter the write section (generation becomes odd).
-        let gen_start = self.generation.fetch_add(1, Relaxed);
-        // Release fence so the group stores below cannot be reordered before the
-        // odd-generation publish (pairs with the consumer's Acquire fence).
-        std::sync::atomic::fence(Ordering::Release);
+        let mut state = self.lock_state();
+        let now = self.now_nanos();
+        *state = BucketState {
+            rate_per_sec: new_rate,
+            burst,
+            available: burst,
+            last_refill_nanos: now,
+        };
         self.rate_per_sec.store(new_rate, Relaxed);
-        self.burst.store(burst, Relaxed);
-        self.available.store(burst, Relaxed);
-        self.last_refill_nanos.store(self.now_nanos(), Relaxed);
-        std::sync::atomic::fence(Ordering::Release);
-        // Leave the write section (generation becomes even again, advanced by 2
-        // total so any straddling reader sees a changed generation).
-        self.generation.store(gen_start.wrapping_add(2), Relaxed);
     }
 
     /// The configured rate in raw tokens per second. `0` means no limit.
     #[must_use]
     pub fn token_rate(&self) -> u64 {
-        self.rate_per_sec.load(Relaxed)
+        self.fast_path_rate()
     }
 
     /// The configured burst capacity in raw tokens. This is the most the bucket
     /// holds.
     #[must_use]
     pub fn token_burst(&self) -> u64 {
-        self.burst.load(Relaxed)
+        self.lock_state().burst
     }
 
     /// Updates a byte throughput and bursts one second's worth.

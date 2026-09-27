@@ -19,6 +19,7 @@ use std::{collections::HashSet, sync::Arc};
 use async_trait::async_trait;
 use krabka_metadata::{MetadataImage, MetadataRecord};
 use krabka_units::{Time, convert::TimeExt as _};
+use krabka_verified::broker::PreferredLeaderChange;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -76,8 +77,8 @@ pub(crate) async fn rebalance_tick(
 ) {
     let image = controller.current_image();
     let mut to_submit: Vec<MetadataRecord> = Vec::new();
+    let mut changes: Vec<PreferredLeaderChange> = Vec::new();
     let mut selected_keys = HashSet::new();
-    let mut total: u64 = 0;
     // Witness nodes never lead. Build the set once per tick, not once per
     // partition, so the tick stays a single walk over the image.
     let witnesses = crate::config_keys::witness_node_ids(&image);
@@ -86,11 +87,6 @@ pub(crate) async fn rebalance_tick(
     let alive = liveness.alive_snapshot().await;
     // Single O(P) walk over every partition.
     for pr in image.all_partitions() {
-        let Some(next_total) = total.checked_add(1) else {
-            warn!("auto-rebalance: partition count overflow; skipping tick");
-            return;
-        };
-        total = next_total;
         if let Ok(new_pr) = select_new_leader_for_partition(
             &image,
             &alive,
@@ -109,6 +105,15 @@ pub(crate) async fn rebalance_tick(
                 );
                 return;
             }
+            // Read off the change itself, so the admission below checks what
+            // the election produced rather than trusting it.
+            changes.push(PreferredLeaderChange {
+                new_leader: new_pr.leader.0,
+                preferred_replica: new_pr.replicas.first().map(|replica| replica.0),
+                leader_in_isr: new_pr.isr.contains(&new_pr.leader),
+                leader_alive: alive.contains(&new_pr.leader.0),
+                leader_is_witness: witnesses.contains(&new_pr.leader),
+            });
             to_submit.push(MetadataRecord::V1Partition(new_pr));
             if to_submit.len() >= MAX_ELECTIONS_PER_TICK {
                 debug!(
@@ -119,14 +124,9 @@ pub(crate) async fn rebalance_tick(
             }
         }
     }
-    let imbalanced = u64::try_from(to_submit.len()).unwrap_or(u64::MAX);
-    if !krabka_verified::preferred_rebalance_admission(
-        total,
-        imbalanced,
-        selected_keys.len() == to_submit.len(),
-        true,
-    ) {
-        debug!(imbalanced, total, "auto-rebalance: batch admission denied");
+    let imbalanced = to_submit.len();
+    if !krabka_verified::preferred_rebalance_admission(&changes, MAX_ELECTIONS_PER_TICK) {
+        debug!(imbalanced, "auto-rebalance: batch admission denied");
         return;
     }
     info!(count = imbalanced, "auto-rebalance: submitting elections");

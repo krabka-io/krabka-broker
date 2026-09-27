@@ -1,20 +1,31 @@
-(* #"/proof-work-229/crates/verified/src/reassignment.rs" 56 0 64 9 *)
+(* #"/workspace/crates/verified/src/reassignment.rs" 52 0 56 9 *)
 
-let%span sreassignment = "/proof-work-229/crates/verified/src/reassignment.rs" 68 12 68 49
-let%span sreassignment'0 = "/proof-work-229/crates/verified/src/reassignment.rs" 70 12 70 68
-let%span sreassignment'1 = "/proof-work-229/crates/verified/src/reassignment.rs" 65 4 71 9
-let%span sreassignment'2 = "/proof-work-229/crates/verified/src/reassignment.rs" 42 10 50 1
+let%span sreassignment = "/workspace/crates/verified/src/reassignment.rs" 63 12 63 49
+let%span sreassignment'0 = "/workspace/crates/verified/src/reassignment.rs" 65 12 65 68
+let%span sreassignment'1 = "/workspace/crates/verified/src/reassignment.rs" 60 4 66 9
+let%span sreassignment'2 = "/workspace/crates/verified/src/reassignment.rs" 42 10 50 1
 
 use creusot.prelude.Any
+
+type tup3_bool_bool_bool = { f0: bool; f1: bool; f2: bool }
+
+type tup2_bool_bool = { f0'0: bool; f1'0: bool }
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let reassignment_plan_admission [#"/proof-work-229/crates/verified/src/reassignment.rs" 56 0 64 9] (is_cancel: bool)
-  (target_nonempty_unique_registered: bool) (rf_policy_satisfied: bool) (cancel_approved: bool)
-  (cancel_in_progress: bool) (leader_eligible: bool) (epoch_available: bool) (return (x: bool)) = (! bb0
-  [ bb0 = any [ br0 -> {leader_eligible = false} (! bb3) | br1 -> {leader_eligible} (! bb1) ]
+let reassignment_plan_admission [#"/workspace/crates/verified/src/reassignment.rs" 52 0 56 9]
+  (mode: tup3_bool_bool_bool) (start: tup2_bool_bool) (readiness: tup2_bool_bool) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &is_cancel <- mode.f0 ] s1
+    | s1 = [ &cancel_approved <- mode.f1 ] s2
+    | s2 = [ &cancel_in_progress <- mode.f2 ] s3
+    | s3 = [ &target_nonempty_unique_registered <- start.f0'0 ] s4
+    | s4 = [ &rf_policy_satisfied <- start.f1'0 ] s5
+    | s5 = [ &leader_eligible <- readiness.f0'0 ] s6
+    | s6 = [ &epoch_available <- readiness.f1'0 ] s7
+    | s7 = any [ br0 -> {leader_eligible = false} (! bb3) | br1 -> {leader_eligible} (! bb1) ] ]
   | bb1 = any [ br0 -> {epoch_available = false} (! bb3) | br1 -> {epoch_available} (! bb2) ]
   | bb2 = any [ br0 -> {is_cancel = false} (! bb8) | br1 -> {is_cancel} (! bb4) ]
   | bb4 = any [ br0 -> {cancel_approved = false} (! bb6) | br1 -> {cancel_approved} (! bb5) ]
@@ -26,19 +37,16 @@ let reassignment_plan_admission [#"/proof-work-229/crates/verified/src/reassignm
   | bb10 = s0 [ s0 = [ &_ret <- [%#sreassignment'0] false ] s1 | s1 = return {_ret} ]
   | bb3 = s0 [ s0 = [ &_ret <- [%#sreassignment'1] false ] s1 | s1 = return {_ret} ] ]
   [ & _ret: bool = Any.any_l ()
-  | & is_cancel: bool = is_cancel
-  | & target_nonempty_unique_registered: bool = target_nonempty_unique_registered
-  | & rf_policy_satisfied: bool = rf_policy_satisfied
-  | & cancel_approved: bool = cancel_approved
-  | & cancel_in_progress: bool = cancel_in_progress
-  | & leader_eligible: bool = leader_eligible
-  | & epoch_available: bool = epoch_available ])
+  | & mode: tup3_bool_bool_bool = mode
+  | & start: tup2_bool_bool = start
+  | & readiness: tup2_bool_bool = readiness
+  | & is_cancel: bool = Any.any_l ()
+  | & cancel_approved: bool = Any.any_l ()
+  | & cancel_in_progress: bool = Any.any_l ()
+  | & target_nonempty_unique_registered: bool = Any.any_l ()
+  | & rf_policy_satisfied: bool = Any.any_l ()
+  | & leader_eligible: bool = Any.any_l ()
+  | & epoch_available: bool = Any.any_l () ])
   [ return (result: bool) -> {[@stop_split] [@expl:reassignment_plan_admission ensures] [%#sreassignment'2] result
-    = (leader_eligible
-    /\ epoch_available
-    /\ (if is_cancel then
-      cancel_approved /\ cancel_in_progress
-    else
-      target_nonempty_unique_registered /\ rf_policy_satisfied
-    ))}
+    = (readiness.f0'0 /\ readiness.f1'0 /\ (if mode.f0 then mode.f1 /\ mode.f2 else start.f0'0 /\ start.f1'0))}
     (! return {result}) ]

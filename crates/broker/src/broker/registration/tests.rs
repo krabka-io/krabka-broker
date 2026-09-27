@@ -540,6 +540,14 @@ mod unclean_restart {
                 partitions: vec![ReqPartitionData {
                     partition_index: 0,
                     leader_epoch: LEADER_EPOCH,
+                    // The controller refuses a stale partition epoch with
+                    // INVALID_UPDATE_VERSION, as Kafka does.
+                    partition_epoch: broker
+                        .controller
+                        .current_image()
+                        .partition(TOPIC, 0)
+                        .expect("partition")
+                        .partition_epoch,
                     new_isr: new_isr.to_vec(),
                     ..Default::default()
                 }],

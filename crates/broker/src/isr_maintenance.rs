@@ -1,6 +1,16 @@
-//! Per-leader-partition ISR maintenance. It compares each follower's
-//! last-fetch time against `replica_lag_time_max` and proposes an
-//! `AlterPartition` shrink or expand to the controller leader.
+//! Per-leader-partition ISR maintenance. It compares each in-sync follower's
+//! last-caught-up time against `replica_lag_time_max`, as Kafka's
+//! `Partition.maybeShrinkIsr` does, admits each out-of-sync follower that
+//! Kafka's `Partition.needsExpandIsr` would, and proposes the resulting
+//! `AlterPartition` shrink or expand, stamped with the committed partition
+//! epoch, to the controller leader.
+//!
+//! Each pass also hands the partition the [`LeaderPolicy`] its metadata image
+//! implies -- `min.insync.replicas`, the lag bound and every replica's
+//! fencing and broker epoch -- which the leader's high watermark reads
+//! between passes.
+//!
+//! [`LeaderPolicy`]: crate::replica_state::LeaderPolicy
 
 use std::sync::Arc;
 
@@ -17,7 +27,11 @@ mod request_builder;
 #[cfg(test)]
 mod test_support;
 
-use self::{alter_partition::send_alter_partition, proposal::compute_proposal};
+use self::{
+    alter_partition::{ControllerLink, send_alter_partition},
+    proposal::compute_proposal,
+    request_builder::IsrChange,
+};
 
 pub(crate) struct Config {
     pub outbound_client: Arc<crate::network::client::InterBrokerClient>,
@@ -28,6 +42,9 @@ pub(crate) struct Config {
     pub partitions: Arc<PartitionRegistry>,
     pub controller: Arc<dyn crate::metadata_source::MetadataSource>,
     pub replica_lag_time_max: Time,
+    /// This broker's static `min.insync.replicas`, the last resort when the
+    /// image names no value for a topic.
+    pub default_min_insync_replicas: i32,
     pub broker_id: i32,
     pub shutdown: CancellationToken,
     /// Bumped on each proposed shrink or expand.
@@ -58,11 +75,20 @@ pub(crate) async fn run(cfg: Config) {
             {
                 continue;
             }
-            let proposal = compute_proposal(&part, cfg.replica_lag_time_max.to_std()).await;
             let image = cfg.controller.current_image();
+            let Some(record) = image.partition(&part.topic, part.index.get()) else {
+                continue;
+            };
+            let policy = crate::replica_state::LeaderPolicy::from_image(
+                &image,
+                record,
+                cfg.replica_lag_time_max.to_std(),
+                cfg.default_min_insync_replicas,
+            );
+            let proposal = compute_proposal(&part, record, policy).await;
             let recovering = image.leader_recovery_state(&part.topic, part.index.get())
                 == krabka_metadata::LeaderRecoveryState::Recovering;
-            let (new_isr, leader_epoch) = match proposal {
+            let (new_isr, leader_epoch, partition_epoch) = match proposal {
                 Some(proposal) => {
                     // Classify the proposal as shrink/expand using the ISRs captured
                     // inside `compute_proposal`'s single lock scope. `compute_proposal`
@@ -80,33 +106,34 @@ pub(crate) async fn run(cfg: Config) {
                     if next_isr.difference(&prev_isr).next().is_some() {
                         cfg.metrics.isr_expands_total.inc();
                     }
-                    (proposal.new_isr, proposal.leader_epoch.0)
-                }
-                None if recovering => {
-                    let Some(metadata_partition) = image.partition(&part.topic, part.index.get())
-                    else {
-                        continue;
-                    };
                     (
-                        metadata_partition.isr.clone(),
-                        metadata_partition.leader_epoch.0,
+                        proposal.new_isr,
+                        proposal.leader_epoch.0,
+                        proposal.partition_epoch,
                     )
                 }
+                None if recovering => (
+                    record.isr.clone(),
+                    record.leader_epoch.0,
+                    record.partition_epoch,
+                ),
                 None => continue,
             };
-            if let Err(e) = send_alter_partition(
-                &cfg.controller,
-                cfg.broker_id,
-                &part.topic,
-                part.index.get(),
+            let link = ControllerLink {
+                controller: &cfg.controller,
+                broker_id: cfg.broker_id,
+                outbound_client: &cfg.outbound_client,
+                listener_protocol: cfg.listener_protocol,
+                server_name: &cfg.server_name,
+            };
+            let change = IsrChange {
+                topic: &part.topic,
+                partition: part.index.get(),
                 new_isr,
                 leader_epoch,
-                &cfg.outbound_client,
-                cfg.listener_protocol,
-                &cfg.server_name,
-            )
-            .await
-            {
+                partition_epoch,
+            };
+            if let Err(e) = send_alter_partition(&link, &change).await {
                 warn!(topic = %part.topic, partition = part.index.get(), error = %e,
                     "AlterPartition propose failed");
             }
@@ -124,10 +151,13 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::isr_maintenance::test_support::{fake_source, fixture_partition, set_replica_state};
+    use crate::isr_maintenance::test_support::{
+        fake_source, fixture_partition, partition, set_replica_state, topic,
+    };
 
-    /// One scan of a leader partition whose only follower is lagging must
-    /// classify the proposal as exactly one shrink and zero expands.
+    /// One scan of a leader partition whose only follower last caught up
+    /// 30 s ago, and has not fetched since, must classify the proposal as
+    /// exactly one shrink and zero expands.
     ///
     /// `scan_interval` is an hour on purpose. `tokio::time::interval` fires
     /// its first tick immediately, so the loop performs exactly one scan and
@@ -147,14 +177,24 @@ mod tests {
             &[NodeId(1), NodeId(2)],
             NodeId(1),
             10,
-            &[(NodeId(2), Duration::from_secs(30), Duration::from_secs(30))],
+            &[(NodeId(2), Duration::from_secs(30))],
         )
         .await;
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        image.apply(&topic("t", uuid::Uuid::from_u128(1)));
+        image.apply(&partition(
+            "t",
+            &[NodeId(1), NodeId(2)],
+            &[NodeId(1), NodeId(2)],
+            NodeId(1),
+            10,
+            4,
+        ));
 
         let partitions = Arc::new(PartitionRegistry::new());
         partitions.insert("t".into(), PartitionIndex(0), part);
         let controller: Arc<dyn crate::metadata_source::MetadataSource> =
-            Arc::new(fake_source(MetadataImage::new(uuid::Uuid::nil()), None));
+            Arc::new(fake_source(image, None));
         let metrics = crate::metrics::BrokerMetrics::default();
         let shutdown = CancellationToken::new();
         let task = tokio::spawn(run(Config {
@@ -166,6 +206,7 @@ mod tests {
             partitions,
             controller,
             replica_lag_time_max: secs(5),
+            default_min_insync_replicas: 1,
             broker_id: 1,
             shutdown: shutdown.clone(),
             metrics: metrics.clone(),

@@ -86,6 +86,9 @@ const KAFKA_TRANSACTIONS: &str = "/opt/kafka/bin/kafka-transactions.sh";
 /// deliberately far longer than the operation needs.
 const SETTLE_DEADLINE: Duration = Duration::from_secs(60);
 
+/// Kafka's `COORDINATOR_LOAD_IN_PROGRESS`.
+const COORDINATOR_LOAD_IN_PROGRESS: i16 = 14;
+
 /// The metric series that must stay absent: a 4.x client on `TV_2` registers
 /// partitions through Produce, not through `AddPartitionsToTxn`.
 const ADD_PARTITIONS_SERIES: &str =
@@ -286,10 +289,8 @@ async fn a_kafka_4x_client_runs_transactions_without_add_partitions_to_txn() {
 /// the comparisons are what carry the parity claim, not the flow around them.
 async fn assert_the_tool_agrees_with_the_broker(bootstrap: &str, admin: &Client) -> ProducerState {
     let expected = describe_transaction(admin, OPEN_TID).await;
-    let listed = admin
-        .send(ListTransactionsRequest::default())
+    let listed = list_transactions(admin)
         .await
-        .expect("ListTransactions")
         .transaction_states
         .into_iter()
         .find(|row| row.transactional_id == OPEN_TID)
@@ -749,6 +750,30 @@ async fn wait_for_transaction_state(admin: &Client, tid: &str, state: &str) {
             "{tid} never reached {state}: {described:?}",
         );
         tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// `ListTransactions`, retried while the coordinator loads its state
+/// partitions. Kafka answers `COORDINATOR_LOAD_IN_PROGRESS` until every
+/// partition it leads is loaded, and its admin client retries; the other
+/// state partitions can still be loading when the open transaction's is done.
+async fn list_transactions(
+    admin: &Client,
+) -> krabka_protocol::owned::list_transactions_response::ListTransactionsResponse {
+    let deadline = Instant::now() + SETTLE_DEADLINE;
+    loop {
+        let listed = admin
+            .send(ListTransactionsRequest::default())
+            .await
+            .expect("ListTransactions");
+        if listed.error_code != COORDINATOR_LOAD_IN_PROGRESS {
+            return listed;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "the coordinator never finished loading: {listed:?}",
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 

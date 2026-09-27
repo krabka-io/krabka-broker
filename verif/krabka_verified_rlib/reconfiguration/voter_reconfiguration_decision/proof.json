@@ -2,11 +2,13 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_checked_add": { "prover": "alt-ergo", "time": 0.011 },
-      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.011 },
+      "vc_add_decision": { "prover": "alt-ergo", "time": 0.021 },
+      "vc_finalize_decision": { "prover": "alt-ergo", "time": 0.024 },
+      "vc_remove_decision": { "prover": "alt-ergo", "time": 0.026 },
+      "vc_update_decision": { "prover": "alt-ergo", "time": 0.022 },
       "vc_voter_reconfiguration_decision": {
         "prover": "alt-ergo",
-        "time": 0.019
+        "time": 0.503
       }
     }
   }

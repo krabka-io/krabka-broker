@@ -1,15 +1,20 @@
-(* #"/proof-work-245/crates/verified/src/restore_sidecar.rs" 91 0 98 9 *)
+(* #"/workspace/crates/verified/src/restore_sidecar.rs" 139 0 143 9 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span srestore_sidecar = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 99 19 99 20
-let%span srestore_sidecar'0 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 100 27 100 28
-let%span srestore_sidecar'1 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 106 20 106 24
-let%span srestore_sidecar'2 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 99 4 107 9
-let%span srestore_sidecar'3 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 81 10 89 6
+let%span srestore_sidecar = "/workspace/crates/verified/src/restore_sidecar.rs" 144 25 144 26
+let%span srestore_sidecar'0 = "/workspace/crates/verified/src/restore_sidecar.rs" 145 34 145 35
+let%span srestore_sidecar'1 = "/workspace/crates/verified/src/restore_sidecar.rs" 146 33 146 34
+let%span srestore_sidecar'2 = "/workspace/crates/verified/src/restore_sidecar.rs" 152 20 152 24
+let%span srestore_sidecar'3 = "/workspace/crates/verified/src/restore_sidecar.rs" 144 4 153 9
+let%span srestore_sidecar'4 = "/workspace/crates/verified/src/restore_sidecar.rs" 128 10 137 6
 
 use creusot.int.Int64
 use creusot.prelude.Any
 use int.Int
+
+type t_RestoreAbortedTxn = { producer_id: Int64.t; start_offset: Int64.t; last_offset: Int64.t }
+
+type t_RestoreSegmentExtent = { base_offset'0: Int64.t; last_offset'0: Int64.t }
 
 type t_Option_i64 = None | Some Int64.t
 
@@ -29,52 +34,54 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let restore_txn_index_entry_valid [#"/proof-work-245/crates/verified/src/restore_sidecar.rs" 91 0 98 9]
-  (previous_start: t_Option_i64) (start_offset: Int64.t) (last_offset: Int64.t) (producer_id: Int64.t)
-  (segment_base: Int64.t) (segment_end: Int64.t) (return (x: bool)) = (! bb0
+let restore_txn_index_entry_valid [#"/workspace/crates/verified/src/restore_sidecar.rs" 139 0 143 9]
+  (previous_last: t_Option_i64) (entry: t_RestoreAbortedTxn) (segment: t_RestoreSegmentExtent) (return (x: bool)) =
+(! bb0
   [ bb0 = s0
-    [ s0 = [ &_14 <- Int64.ge producer_id ([%#srestore_sidecar] (0: Int64.t)) ] s1
-    | s1 = any [ br0 -> {_14 = false} (! bb11) | br1 -> {_14} (! bb1) ] ]
+    [ s0 = [ &_11 <- Int64.ge entry.producer_id ([%#srestore_sidecar] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_11 = false} (! bb13) | br1 -> {_11} (! bb1) ] ]
   | bb1 = s0
-    [ s0 = [ &_16 <- Int64.ge segment_base ([%#srestore_sidecar'0] (0: Int64.t)) ] s1
-    | s1 = any [ br0 -> {_16 = false} (! bb11) | br1 -> {_16} (! bb2) ] ]
+    [ s0 = [ &_13 <- Int64.ge segment.base_offset'0 ([%#srestore_sidecar'0] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_13 = false} (! bb13) | br1 -> {_13} (! bb2) ] ]
   | bb2 = s0
-    [ s0 = [ &_18 <- Int64.le segment_base start_offset ] s1
-    | s1 = any [ br0 -> {_18 = false} (! bb11) | br1 -> {_18} (! bb3) ] ]
+    [ s0 = [ &_15 <- Int64.ge entry.start_offset ([%#srestore_sidecar'1] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_15 = false} (! bb13) | br1 -> {_15} (! bb3) ] ]
   | bb3 = s0
-    [ s0 = [ &_21 <- Int64.le start_offset last_offset ] s1
-    | s1 = any [ br0 -> {_21 = false} (! bb11) | br1 -> {_21} (! bb4) ] ]
+    [ s0 = [ &_17 <- Int64.le entry.start_offset entry.last_offset ] s1
+    | s1 = any [ br0 -> {_17 = false} (! bb13) | br1 -> {_17} (! bb4) ] ]
   | bb4 = s0
-    [ s0 = [ &_24 <- Int64.le last_offset segment_end ] s1
-    | s1 = any [ br0 -> {_24 = false} (! bb11) | br1 -> {_24} (! bb5) ] ]
-  | bb5 = any [ br0 -> {previous_start = None} (! bb14) | br1 (x0: Int64.t) -> {previous_start = Some x0} (! bb15) ]
-  | bb15 = s0
-    [ s0 = elim_Some {previous_start} (fun (r0: Int64.t) -> [ &previous <- r0 ] s1)
-    | s1 = [ &_ret <- Int64.lt previous start_offset ] s2
+    [ s0 = [ &_20 <- Int64.le segment.base_offset'0 entry.last_offset ] s1
+    | s1 = any [ br0 -> {_20 = false} (! bb13) | br1 -> {_20} (! bb5) ] ]
+  | bb5 = s0
+    [ s0 = [ &_23 <- Int64.le entry.last_offset segment.last_offset'0 ] s1
+    | s1 = any [ br0 -> {_23 = false} (! bb13) | br1 -> {_23} (! bb6) ] ]
+  | bb6 = any [ br0 -> {previous_last = None} (! bb16) | br1 (x0: Int64.t) -> {previous_last = Some x0} (! bb17) ]
+  | bb17 = s0
+    [ s0 = elim_Some {previous_last} (fun (r0: Int64.t) -> [ &previous <- r0 ] s1)
+    | s1 = [ &_ret <- Int64.lt previous entry.last_offset ] s2
     | s2 = return {_ret} ]
-  | bb14 = s0 [ s0 = [ &_ret <- [%#srestore_sidecar'1] true ] s1 | s1 = return {_ret} ]
-  | bb11 = s0 [ s0 = [ &_ret <- [%#srestore_sidecar'2] false ] s1 | s1 = return {_ret} ] ]
+  | bb16 = s0 [ s0 = [ &_ret <- [%#srestore_sidecar'2] true ] s1 | s1 = return {_ret} ]
+  | bb13 = s0 [ s0 = [ &_ret <- [%#srestore_sidecar'3] false ] s1 | s1 = return {_ret} ] ]
   [ & _ret: bool = Any.any_l ()
-  | & previous_start: t_Option_i64 = previous_start
-  | & start_offset: Int64.t = start_offset
-  | & last_offset: Int64.t = last_offset
-  | & producer_id: Int64.t = producer_id
-  | & segment_base: Int64.t = segment_base
-  | & segment_end: Int64.t = segment_end
-  | & _14: bool = Any.any_l ()
-  | & _16: bool = Any.any_l ()
-  | & _18: bool = Any.any_l ()
-  | & _21: bool = Any.any_l ()
-  | & _24: bool = Any.any_l ()
+  | & previous_last: t_Option_i64 = previous_last
+  | & entry: t_RestoreAbortedTxn = entry
+  | & segment: t_RestoreSegmentExtent = segment
+  | & _11: bool = Any.any_l ()
+  | & _13: bool = Any.any_l ()
+  | & _15: bool = Any.any_l ()
+  | & _17: bool = Any.any_l ()
+  | & _20: bool = Any.any_l ()
+  | & _23: bool = Any.any_l ()
   | & previous: Int64.t = Any.any_l () ])
-  [ return (result: bool) -> {[@stop_split] [@expl:restore_txn_index_entry_valid ensures] [%#srestore_sidecar'3] result
-    = (ge_log_Int (Int64.to_int producer_id) 0
-    /\ ge_log_Int (Int64.to_int segment_base) 0
-    /\ Int64.to_int segment_base <= Int64.to_int start_offset
-    /\ Int64.to_int start_offset <= Int64.to_int last_offset
-    /\ Int64.to_int last_offset <= Int64.to_int segment_end
-    /\ match previous_start with
-      | Some previous -> Int64.to_int previous < Int64.to_int start_offset
+  [ return (result: bool) -> {[@stop_split] [@expl:restore_txn_index_entry_valid ensures] [%#srestore_sidecar'4] result
+    = (ge_log_Int (Int64.to_int entry.producer_id) 0
+    /\ ge_log_Int (Int64.to_int segment.base_offset'0) 0
+    /\ ge_log_Int (Int64.to_int entry.start_offset) 0
+    /\ Int64.to_int entry.start_offset <= Int64.to_int entry.last_offset
+    /\ Int64.to_int segment.base_offset'0 <= Int64.to_int entry.last_offset
+    /\ Int64.to_int entry.last_offset <= Int64.to_int segment.last_offset'0
+    /\ match previous_last with
+      | Some previous -> Int64.to_int previous < Int64.to_int entry.last_offset
       | None -> true
       end)}
     (! return {result}) ]

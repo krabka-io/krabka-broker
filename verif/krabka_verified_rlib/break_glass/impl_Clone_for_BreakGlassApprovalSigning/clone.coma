@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/break_glass.rs" 30 27 30 32 *)
+
+(* <break_glass::BreakGlassApprovalSigning as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_BreakGlassApprovalSigning = AllSigned | NotAllSigned
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_BreakGlassApprovalSigning [#"/workspace/crates/verified/src/break_glass.rs" 30 27 30 32]
+  (self: t_BreakGlassApprovalSigning) (return (x: t_BreakGlassApprovalSigning)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_BreakGlassApprovalSigning = Any.any_l () | & self: t_BreakGlassApprovalSigning = self ])
+  [ return (result: t_BreakGlassApprovalSigning) -> (! return {result}) ]

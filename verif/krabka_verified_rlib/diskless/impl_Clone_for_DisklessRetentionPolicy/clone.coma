@@ -1,0 +1,27 @@
+(* #"/workspace/crates/verified/src/diskless.rs" 28 27 28 32 *)
+
+(* <diskless::DisklessRetentionPolicy as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.int.UInt64
+use creusot.prelude.Any
+
+type t_Option_i64 = None | Some Int64.t
+
+type t_Option_u64 = None'0 | Some'0 UInt64.t
+
+type t_DisklessRetentionPolicy = {
+  retention_ms: t_Option_i64;
+  retention_bytes: t_Option_u64;
+  log_start_offset: Int64.t;
+  now_ms: Int64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_DisklessRetentionPolicy [#"/workspace/crates/verified/src/diskless.rs" 28 27 28 32]
+  (self: t_DisklessRetentionPolicy) (return (x: t_DisklessRetentionPolicy)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_DisklessRetentionPolicy = Any.any_l () | & self: t_DisklessRetentionPolicy = self ])
+  [ return (result: t_DisklessRetentionPolicy) -> (! return {result}) ]

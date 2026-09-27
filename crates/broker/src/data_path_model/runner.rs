@@ -20,10 +20,20 @@ const MAX_DEPTH: usize = 70;
 // considering a field -- into a failure instead of a silently smaller search
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
-pub(super) const PINNED_UNIQUE_STATES_CLEAN: usize = 521_626;
-pub(super) const PINNED_UNIQUE_STATES_UNCLEAN: usize = 1_255_681;
-pub(super) const PINNED_UNIQUE_STATES_ELR: usize = 3_271_184;
-pub(super) const PINNED_UNIQUE_STATES_DISKLESS: usize = 120;
+// CLEAN moved from 521,626, UNCLEAN from 1,255,681 and ELR from 2,795,492
+// when the leader's high watermark took Kafka's rule and the model's ISR
+// expansion took the real `isr_candidate_selected` kernel. The watermark now
+// never falls within a leadership and a new leader keeps the one it inherited
+// (it used to be recomputed from scratch and could drop back), which splits
+// states the old model merged, so CLEAN and UNCLEAN grew. It also stands still
+// while the ISR is under `min.insync.replicas`, and a follower rejoins only
+// once its log reaches the start of the leader's epoch, which removes the
+// under-min-ISR commits and the early re-admissions ELR used to enumerate, so
+// ELR shrank.
+pub(super) const PINNED_UNIQUE_STATES_CLEAN: usize = 762_237;
+pub(super) const PINNED_UNIQUE_STATES_UNCLEAN: usize = 1_471_603;
+pub(super) const PINNED_UNIQUE_STATES_ELR: usize = 898_023;
+pub(super) const PINNED_UNIQUE_STATES_DISKLESS: usize = 450;
 
 pub(super) fn run(model: DpModel, label: &str, pinned_unique_states: usize) {
     let checker = model

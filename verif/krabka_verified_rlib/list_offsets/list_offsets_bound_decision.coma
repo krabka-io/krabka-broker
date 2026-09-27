@@ -1,16 +1,16 @@
-(* #"/workspace/crates/verified/src/list_offsets.rs" 126 0 126 98 *)
+(* #"/workspace/crates/verified/src/list_offsets.rs" 129 0 129 98 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span slist_offsets = "/workspace/crates/verified/src/list_offsets.rs" 127 28 127 30
-let%span slist_offsets'0 = "/workspace/crates/verified/src/list_offsets.rs" 127 50 127 51
-let%span slist_offsets'1 = "/workspace/crates/verified/src/list_offsets.rs" 128 32 128 34
-let%span slist_offsets'2 = "/workspace/crates/verified/src/list_offsets.rs" 128 61 128 62
-let%span slist_offsets'3 = "/workspace/crates/verified/src/list_offsets.rs" 129 32 129 34
-let%span slist_offsets'4 = "/workspace/crates/verified/src/list_offsets.rs" 129 63 129 64
-let%span slist_offsets'5 = "/workspace/crates/verified/src/list_offsets.rs" 129 88 129 89
-let%span slist_offsets'6 = "/workspace/crates/verified/src/list_offsets.rs" 133 40 133 42
-let%span slist_offsets'7 = "/workspace/crates/verified/src/list_offsets.rs" 135 39 135 40
-let%span slist_offsets'8 = "/workspace/crates/verified/src/list_offsets.rs" 109 10 125 1
+let%span slist_offsets = "/workspace/crates/verified/src/list_offsets.rs" 130 28 130 30
+let%span slist_offsets'0 = "/workspace/crates/verified/src/list_offsets.rs" 130 50 130 51
+let%span slist_offsets'1 = "/workspace/crates/verified/src/list_offsets.rs" 131 32 131 34
+let%span slist_offsets'2 = "/workspace/crates/verified/src/list_offsets.rs" 131 61 131 62
+let%span slist_offsets'3 = "/workspace/crates/verified/src/list_offsets.rs" 132 32 132 34
+let%span slist_offsets'4 = "/workspace/crates/verified/src/list_offsets.rs" 132 63 132 64
+let%span slist_offsets'5 = "/workspace/crates/verified/src/list_offsets.rs" 132 88 132 89
+let%span slist_offsets'6 = "/workspace/crates/verified/src/list_offsets.rs" 136 40 136 42
+let%span slist_offsets'7 = "/workspace/crates/verified/src/list_offsets.rs" 138 39 138 40
+let%span slist_offsets'8 = "/workspace/crates/verified/src/list_offsets.rs" 109 10 128 1
 
 use creusot.int.Int32
 use creusot.int.Int8
@@ -35,7 +35,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let list_offsets_bound_decision [#"/workspace/crates/verified/src/list_offsets.rs" 126 0 126 98]
+let list_offsets_bound_decision [#"/workspace/crates/verified/src/list_offsets.rs" 129 0 129 98]
   (facts: t_ListOffsetsBoundFacts) (return (x: t_ListOffsetsBoundDecision)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_9 <- facts.replica_id <> ([%#slist_offsets] (-1: Int32.t)) ] s1
@@ -97,7 +97,11 @@ let list_offsets_bound_decision [#"/workspace/crates/verified/src/list_offsets.r
       /\ (Int32.to_int facts.replica_id = - 1 /\ Int8.to_int facts.isolation_level <> 1
         -> Int64.to_int offset = Int64.to_int facts.high_watermark)
       /\ (Int32.to_int facts.replica_id = - 1 /\ Int8.to_int facts.isolation_level = 1
-      -> Int64.to_int offset <= Int64.to_int facts.high_watermark
-      /\ Int64.to_int offset <= Int64.to_int facts.last_stable)
+      -> Int64.to_int offset
+      = (if Int64.to_int facts.last_stable < Int64.to_int facts.high_watermark then
+        Int64.to_int facts.last_stable
+      else
+        Int64.to_int facts.high_watermark
+      ))
       end}
     (! return {result}) ]

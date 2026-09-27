@@ -163,8 +163,8 @@ async fn mark(
 
 /// The code that refuses a partition, or `None` when this broker may mark it.
 /// `expected_leader_epoch` is the epoch the coordinator resolved when it froze
-/// the target set. A value below zero says it had none, and this broker does
-/// not fence on it.
+/// the target set. A value below zero names no generation, so the kernel
+/// classifies it `Malformed` and this broker fences it.
 fn leadership_fault(
     partition: &Partition,
     image: &MetadataImage,

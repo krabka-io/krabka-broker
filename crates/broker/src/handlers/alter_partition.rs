@@ -1,9 +1,9 @@
 //! `AlterPartition` (`api_key=56`). Controller-side ISR update handler.
 //!
 //! The handler validates that this broker is the openraft leader, and returns
-//! `NOT_CONTROLLER` if it is not. It then checks leader-epoch fencing for each
-//! partition, validates that the proposed ISR is a non-empty subset of the
-//! partition's replicas, and submits the updated `PartitionRecord` through
+//! `NOT_CONTROLLER` if it is not. It then validates each partition row in the
+//! order of Kafka's `ReplicationControlManager.validateAlterPartitionData`
+//! (see `isr_update`), and submits the updated `PartitionRecord` through
 //! `controller.submit_change`.
 
 use bytes::Bytes;
@@ -128,6 +128,7 @@ pub(crate) async fn handle(
                         handle_partition_with_recovery(
                             &image,
                             &active,
+                            req.broker_id,
                             topic_name,
                             req_part,
                             &mut changes,

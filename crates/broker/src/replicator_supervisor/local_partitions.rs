@@ -98,6 +98,25 @@ impl ReplicatorSupervisor {
                     );
                     continue;
                 }
+            } else if !part.diskless && part_record.leader == self.node_id {
+                // Kafka's `Partition.makeLeader`: the new leader epoch is
+                // recorded at the log end before the role is published.
+                if let Err(error) = part
+                    .install_local_leadership(
+                        topic_id,
+                        part_record.leader.0,
+                        part_record.leader_epoch.0,
+                    )
+                    .await
+                {
+                    warn!(
+                        topic = %key.0,
+                        partition = key.1,
+                        error = %error,
+                        "failed to record the leader epoch start offset"
+                    );
+                    continue;
+                }
             } else {
                 let losing_leadership = part.diskless
                     && part_record.leader != self.node_id
@@ -222,6 +241,57 @@ mod tests {
         );
         let state = part.replica_state.lock().await;
         assert!(state.isr == [NodeId(1), NodeId(2), NodeId(3)].into_iter().collect());
+    }
+
+    /// Kafka's `Partition.makeLeader` records the new leader epoch at the log
+    /// end: here after two follower-era records at epoch 3, and again (a
+    /// no-op) on a reconcile that changes nothing.
+    #[tokio::test]
+    async fn reconcile_records_a_promoted_leader_epoch_at_the_log_end() {
+        let replicas = vec![NodeId(1), NodeId(2)];
+        let topic = topic_record("t", 1);
+        let as_follower = image_with(&[
+            topic.clone(),
+            partition_record("t", 0, NodeId(1), replicas.clone(), 3),
+        ]);
+        let as_leader = image_with(&[topic, partition_record("t", 0, NodeId(2), replicas, 7)]);
+        let (supervisor, partitions, _reporter, _dir) = supervisor_fixture(as_follower.clone());
+        supervisor.reconcile(&as_follower).await;
+        let part = partitions
+            .get("t", PartitionIndex(0))
+            .expect("local follower materialized");
+        for _ in 0..2 {
+            let mut batch = krabka_protocol::records::RecordBatch {
+                partition_leader_epoch: 3,
+                records: vec![krabka_protocol::records::Record::default()],
+                ..Default::default()
+            };
+            part.log.lock().unwrap().append(&mut batch).unwrap();
+        }
+        let history = || -> Vec<(i32, i64)> {
+            part.log
+                .lock()
+                .unwrap()
+                .epoch_checkpoint()
+                .entries()
+                .iter()
+                .map(|entry| (entry.epoch.0, entry.start_offset.0))
+                .collect()
+        };
+        assert!(
+            history() == [(3, 0)],
+            "a follower records only what it wrote"
+        );
+
+        for pass in ["promotion", "unchanged reconcile"] {
+            supervisor.reconcile(&as_leader).await;
+            assert!(history() == [(3, 0), (7, 2)], "{pass}");
+            assert!(part.current_leader.load(Ordering::Acquire) == 2, "{pass}");
+            assert!(
+                part.current_leader_epoch.load(Ordering::Acquire) == 7,
+                "{pass}"
+            );
+        }
     }
 
     #[tokio::test]

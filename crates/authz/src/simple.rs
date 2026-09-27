@@ -17,7 +17,10 @@ use std::{collections::HashSet, net::SocketAddr};
 
 use krabka_metadata::{AclOperation, PermissionType, ResourceType};
 use krabka_security::Principal;
-use krabka_verified::{AclDecision, acl_decision};
+use krabka_verified::{
+    AclDecision, acl_decision,
+    authz::{AclDefault, AclFacts},
+};
 
 mod matching;
 #[cfg(test)]
@@ -110,8 +113,17 @@ impl Authorizer for SimpleAclAuthorizer {
                 }
             }
         }
-        let default_allow = self.allow_everyone_if_no_acl_found && !has_resource_acls;
-        let decision = acl_decision((super_user, saw_allow, saw_deny, default_allow));
+        let default_decision = if self.allow_everyone_if_no_acl_found && !has_resource_acls {
+            AclDefault::Allow
+        } else {
+            AclDefault::Deny
+        };
+        let decision = acl_decision(AclFacts {
+            super_user,
+            saw_allow,
+            saw_deny,
+            default_decision,
+        });
 
         let (label, result) = match decision {
             AclDecision::AllowSuperuser => ("allow-superuser", AuthorizationResult::Allow),

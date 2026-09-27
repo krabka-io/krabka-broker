@@ -8,10 +8,25 @@
 
 use krabka_ids::PartitionIndex;
 use krabka_log::ProducerId;
-pub use krabka_verified::ProducerDecision as Decision;
-use krabka_verified::{ProducerBatch, increment_sequence, producer_decision};
+use krabka_verified::{
+    ProducerDecision, ProducerEntryFacts, RetainedSequenceRange, producer_decision,
+};
 
-use super::{ProducerEntry, ProducerState, RetainedBatch};
+use super::{ProducerEntry, ProducerState, RetainedBatch, entry::NUM_BATCHES_TO_RETAIN};
+use crate::partition::LogOffset;
+
+/// How the tracker answers one idempotent-producer batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decision {
+    /// Append the batch.
+    Append,
+    /// The batch repeats a retained batch that starts at `base_offset`.
+    Duplicate { base_offset: LogOffset },
+    /// Kafka's `OUT_OF_ORDER_SEQUENCE_NUMBER`.
+    OutOfOrder,
+    /// Kafka's `INVALID_PRODUCER_EPOCH`: the batch's epoch is stale.
+    Fenced,
+}
 
 /// The decision for one batch, and for a duplicate the batch it repeats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,8 +41,7 @@ pub struct Checked {
 ///
 /// The async `check` is a thin lock-acquiring wrapper over this function. The
 /// decision is a separate function so that the tests can exhaustively test and
-/// property-test it in isolation. The caller has already validated that the
-/// two sequence fields are non-negative. See `producer_state_model.rs`.
+/// property-test it in isolation. See `producer_state_model.rs`.
 #[cfg(test)]
 pub(crate) fn check_pure(
     entry: Option<&ProducerEntry>,
@@ -40,43 +54,53 @@ pub(crate) fn check_pure(
 
 /// [`check_pure`], with the batch a duplicate repeats.
 ///
-/// Kafka's `UnifiedLog.analyzeAndValidateProducerState` looks a batch up in
-/// the producer's five retained batches first (`findDuplicateBatch`), and
-/// only a batch that is not one of them goes on to the sequence check against
-/// the last batch. So a retry of any retained batch is a duplicate with that
-/// batch's offsets, and only a sequence outside the retained batches is out
-/// of order.
+/// The whole classification, including Kafka's search of the producer's five
+/// retained batches (`ProducerStateEntry.findDuplicateBatch`) ahead of the
+/// sequence check, is the proved [`producer_decision`]. This function only
+/// hands it the entry's epoch, last sequence and retained sequence ranges,
+/// and maps a duplicate's index back to the retained batch it names.
 pub(crate) fn check_retained(
     entry: Option<&ProducerEntry>,
     producer_epoch: i16,
     base_sequence: i32,
     last_offset_delta: i32,
 ) -> Checked {
-    let last_sequence = increment_sequence(base_sequence, last_offset_delta);
-    if let Some(batch) =
-        entry.and_then(|entry| entry.duplicate_of(producer_epoch, base_sequence, last_sequence))
-    {
-        return Checked {
-            decision: Decision::Duplicate {
-                base_offset: batch.base_offset,
-            },
-            duplicate: Some(batch),
-        };
-    }
-    let decision = producer_decision(
-        entry.map(|entry| ProducerBatch {
-            epoch: entry.epoch,
-            last_sequence: entry.last_sequence,
-            last_offset_delta: entry
-                .last_offset
-                .checked_sub(entry.base_offset)
-                .and_then(|delta| i32::try_from(delta).ok()),
-            base_offset: entry.base_offset,
-        }),
+    let batches: [Option<RetainedBatch>; NUM_BATCHES_TO_RETAIN] = entry.map_or(
+        [None; NUM_BATCHES_TO_RETAIN],
+        ProducerEntry::retained_batches,
+    );
+    let ranges = batches.map(|slot| {
+        slot.map(|batch| RetainedSequenceRange {
+            base_sequence: batch.base_sequence,
+            last_sequence: batch.last_sequence,
+        })
+    });
+    let facts = entry.map(|entry| ProducerEntryFacts {
+        epoch: entry.epoch,
+        last_sequence: entry.last_sequence,
+    });
+    let decision = match producer_decision(
+        facts,
+        &ranges,
         producer_epoch,
         base_sequence,
         last_offset_delta,
-    );
+    ) {
+        ProducerDecision::Append => Decision::Append,
+        ProducerDecision::Duplicate { retained } => {
+            let batch = batches.get(retained).copied().flatten().expect(
+                "producer_decision proves a duplicate index names an occupied retained slot",
+            );
+            return Checked {
+                decision: Decision::Duplicate {
+                    base_offset: batch.base_offset,
+                },
+                duplicate: Some(batch),
+            };
+        }
+        ProducerDecision::OutOfOrder => Decision::OutOfOrder,
+        ProducerDecision::Fenced => Decision::Fenced,
+    };
     Checked {
         decision,
         duplicate: None,

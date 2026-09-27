@@ -930,6 +930,7 @@ async fn strict_create_topics_rejects_after_quota_exhaustion() {
     let peer = peer();
     let req = request(vec![topic("throttled", 5, 1)]);
 
+    let charged_no_earlier_than = std::time::Instant::now();
     let resp = drive(&broker, &req, &p, &peer).await;
 
     assert!(resp.topics.len() == 1);
@@ -953,11 +954,16 @@ async fn strict_create_topics_rejects_after_quota_exhaustion() {
 
     let rejected = drive(&broker, &request(vec![topic("rejected", 1, 1)]), &p, &peer).await;
     // Five mutations against a two-mutation burst at 2/sec leave three of
-    // debt: 1.5 s to refill, less what refilled since. Kafka reports the
-    // whole refill time, with no cap (#709).
+    // debt: 1.5 s to refill, less what refilled since the first request was
+    // charged. Kafka reports the whole refill time, with no cap (#709). The
+    // refill since the charge is at most the time since just before it, plus
+    // the millisecond that truncating both durations can lose.
+    let refilled_at_most = i32::try_from(charged_no_earlier_than.elapsed().as_millis())
+        .expect("the test runs for well under i32::MAX ms")
+        + 1;
     check!(
-        (1_400..=1_500).contains(&rejected.throttle_time_ms),
-        "{rejected:?}"
+        (1_500 - refilled_at_most..=1_500).contains(&rejected.throttle_time_ms),
+        "{rejected:?} after {refilled_at_most} ms"
     );
     let expected = CreateTopicsResponse {
         throttle_time_ms: rejected.throttle_time_ms,

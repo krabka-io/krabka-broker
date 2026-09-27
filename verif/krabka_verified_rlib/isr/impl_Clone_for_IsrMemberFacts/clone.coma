@@ -1,0 +1,23 @@
+(* #"/workspace/crates/verified/src/isr.rs" 206 27 206 32 *)
+
+(* <isr::IsrMemberFacts as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_IsrMemberRole = Unassigned | Leader | InSyncFollower | OutOfSyncFollower
+
+type t_IsrMemberFacts = {
+  role: t_IsrMemberRole;
+  log_end_matches_leader: bool;
+  caught_up_within_lag: bool;
+  fetch_within_lag: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_IsrMemberFacts [#"/workspace/crates/verified/src/isr.rs" 206 27 206 32] (self: t_IsrMemberFacts)
+  (return (x: t_IsrMemberFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_IsrMemberFacts = Any.any_l () | & self: t_IsrMemberFacts = self ])
+  [ return (result: t_IsrMemberFacts) -> (! return {result}) ]

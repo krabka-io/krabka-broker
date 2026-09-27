@@ -6,6 +6,10 @@
 //! separate from the per-segment one in
 //! [`RemoteLogSegmentState`](crate::metadata::RemoteLogSegmentState).
 
+use krabka_verified::storage::{
+    RemotePartitionDeleteLifecycle, remote_partition_delete_transition,
+};
+
 use crate::metadata::TopicIdPartition;
 
 /// Lifecycle state of a remote *partition* deletion.
@@ -27,20 +31,20 @@ pub enum RemotePartitionDeleteState {
 impl RemotePartitionDeleteState {
     /// `true` if a partition currently in `from` may transition to `target`.
     ///
-    /// A `from` of `None` means the partition was never marked.
+    /// A `from` of `None` means the partition was never marked. This is
+    /// Kafka's `RemotePartitionDeleteState.isValidTransition`, so a same-state
+    /// transition is valid: Kafka admits it to keep retries and failover
+    /// idempotent.
     #[must_use]
     pub fn is_valid_transition(from: Option<Self>, target: Self) -> bool {
-        krabka_verified::remote_partition_delete_transition(
-            from.map_or(0, Self::proof_tag),
-            target.proof_tag(),
-        )
+        remote_partition_delete_transition(from.map(Self::lifecycle), target.lifecycle())
     }
 
-    const fn proof_tag(self) -> u8 {
+    const fn lifecycle(self) -> RemotePartitionDeleteLifecycle {
         match self {
-            Self::DeletePartitionMarked => 1,
-            Self::DeletePartitionStarted => 2,
-            Self::DeletePartitionFinished => 3,
+            Self::DeletePartitionMarked => RemotePartitionDeleteLifecycle::Marked,
+            Self::DeletePartitionStarted => RemotePartitionDeleteLifecycle::Started,
+            Self::DeletePartitionFinished => RemotePartitionDeleteLifecycle::Finished,
         }
     }
 }
@@ -80,11 +84,13 @@ mod tests {
             DeletePartitionStarted,
             DeletePartitionFinished,
         ];
+        // Kafka's `RemotePartitionDeleteState.isValidTransition`, row =
+        // source, the first row being no prior state.
         let expected = [
             [true, false, false],
-            [false, true, false],
+            [true, true, false],
+            [false, true, true],
             [false, false, true],
-            [false, false, false],
         ];
         for (from_index, from) in from_states.into_iter().enumerate() {
             for (to_index, to) in targets.into_iter().enumerate() {

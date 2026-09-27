@@ -1,19 +1,40 @@
-//! Bounded crash/failover model for the three-voter WAL shard engine.
+//! Bounded crash/failover model for the in-process three-replica WAL harness.
 //!
 //! Bounds: three voters, two one-record batches, three leader epochs, eight
 //! ordered operations, and fewer than 20,000 generated states. Every append, quorum
-//! acknowledgement, retry, and crash recovery reconstructs real `Log`
-//! instances and drives `Log::append`, `WalShardEngine::replicate_and_sync`,
-//! or `WalShardEngine::new(OpenMode::Recover)`. Recovery performs the real
-//! tail truncation and repair. Stateright enumerates node failures, retries,
-//! stale-epoch attempts, and clean leader changes around those operations.
+//! acknowledgement, and crash recovery reconstructs real `Log` instances and
+//! drives `Log::append`, `WalShardEngine::replicate_and_sync`, or
+//! `WalShardEngine::new(OpenMode::Recover)`. Recovery performs the real tail
+//! truncation and repair. Stateright enumerates replica failures and
+//! revivals, and clean leader changes, around those operations.
 //!
-//! DRIVEN: record-batch append, exact-range replica sync, quorum
-//! acknowledgement/HWM advancement, and byte-agreement recovery/truncation.
-//! MODELED: `KRaft` supplies a monotonically increasing leader epoch and elects
-//! only a live replica that contains the already acknowledged prefix. Process
-//! crashes preserve each modelled disk exactly. Filesystem calls are assumed
-//! atomic at the successful operation boundaries exposed by `krabka-log`.
+//! Scope: this is the in-process replica harness, the `#[cfg(test)]`
+//! `WalShardEngine::new` and the local-replica branch of `replicate_and_sync`.
+//! The production diskless path, where remote voters fetch the leader's tail
+//! and report durable offsets (`record_follower_ack`, `serve_fetch`), is not
+//! driven here; its unit tests in `engine/distributed.rs`, `engine.rs`, and
+//! `follower.rs` cover it.
+//!
+//! DRIVEN: record-batch append, exact-range replica sync with byte
+//! verification of each replica's whole retained log, quorum acknowledgement
+//! and watermark advancement, and byte-agreement recovery and truncation.
+//! Each acknowledgement is checked against its rule: it succeeds exactly when
+//! at least two live voters (the leader among them) hold no record that
+//! disagrees with the leader's log up to the target. Each recovery must
+//! succeed; a recovery error fails the run instead of pruning the edge.
+//!
+//! MODELED: `KRaft` supplies a monotonically increasing leader epoch and
+//! elects a new leader only when the current one is down. The model does
+//! not derive leader completeness; it assumes it. `Elect(v)` is enabled only
+//! when `v` is live and its log starts with the whole acknowledged prefix
+//! (`has_committed_prefix`), which is what KIP-595's vote rule (a voter grants
+//! only to a candidate whose log is at least as up to date) and quorum
+//! intersection guarantee in production. Appends are the leader's own; a
+//! deposed leader's append is fenced outside this engine (the registry
+//! checks the leader epoch before it reaches a shard), so the model does not
+//! enumerate one. Process crashes preserve each modelled disk exactly.
+//! Filesystem calls are assumed atomic at the successful operation boundaries
+//! exposed by `krabka-log`.
 
 use std::sync::{Arc, Mutex};
 
@@ -32,6 +53,12 @@ const MAX_EPOCH: u8 = 2;
 const MAX_STEPS: u8 = 8;
 const MAX_DEPTH: usize = 10;
 const MAX_STATES: usize = 20_000;
+// The exact unique-state count of the exhaustive BFS. A changed count is a
+// changed reachable set -- a dropped action, a `next_state` arm that stops
+// firing, a state field that stops being hashed -- and fails the run rather
+// than silently shrinking the search. The generated count is not pinned: it
+// depends on dedupe timing across the BFS worker threads.
+const PINNED_UNIQUE_STATES: usize = 2_996;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct WalState {
@@ -43,11 +70,12 @@ struct WalState {
     hwm: usize,
     committed: Vec<u8>,
     last_ack_failed: bool,
+    recovered: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum Action {
-    Append(u8),
+    Append,
     Acknowledge,
     Fail(usize),
     Revive(usize),
@@ -72,6 +100,7 @@ impl Model for WalModel {
             hwm: 0,
             committed: Vec::new(),
             last_ack_failed: false,
+            recovered: false,
         }]
     }
 
@@ -81,10 +110,7 @@ impl Model for WalModel {
         }
         if is_live(state, state.leader) {
             if state.logs[state.leader].len() < MAX_RECORDS {
-                actions.push(Action::Append(state.leader_epoch));
-                if state.leader_epoch > 0 {
-                    actions.push(Action::Append(state.leader_epoch - 1));
-                }
+                actions.push(Action::Append);
             }
             if state.logs[state.leader].len() > state.hwm {
                 actions.push(Action::Acknowledge);
@@ -113,15 +139,17 @@ impl Model for WalModel {
         let mut state = last.clone();
         state.steps += 1;
         match action {
-            Action::Append(epoch) if epoch != state.leader_epoch => {
-                state.last_ack_failed = false;
-            }
-            Action::Append(_) => {
+            Action::Append => {
                 state.logs = drive_append(&state);
                 state.last_ack_failed = false;
             }
             Action::Acknowledge => {
+                let expected_success = ack_has_a_majority(&state);
                 let (logs, result) = drive_ack(&state);
+                assert2::assert!(
+                    result.is_ok() == expected_success,
+                    "an acknowledgement succeeds exactly when a majority can hold the leader's log"
+                );
                 state.logs = logs;
                 match result {
                     Ok(hwm) => {
@@ -151,7 +179,7 @@ impl Model for WalModel {
                 state.last_ack_failed = false;
             }
             Action::CrashRecover => {
-                let (logs, hwm) = drive_recovery(&state)?;
+                let (logs, hwm) = drive_recovery(&state);
                 state.logs = logs;
                 assert2::assert!(hwm >= state.committed.len());
                 assert2::assert!(
@@ -160,6 +188,7 @@ impl Model for WalModel {
                 state.hwm = hwm;
                 state.committed = state.logs[state.leader][..hwm].to_vec();
                 state.last_ack_failed = false;
+                state.recovered = true;
             }
         }
         Some(state)
@@ -183,8 +212,13 @@ impl Model for WalModel {
             }),
             Property::sometimes("quorum_acknowledges", |_, state: &WalState| state.hwm > 0),
             Property::sometimes("minority_ack_fails", |_, state: &WalState| {
-                state.last_ack_failed
+                state.last_ack_failed && state.live.count_ones() < 2
             }),
+            Property::sometimes(
+                "divergent_ack_fails_with_a_live_majority",
+                |_, state: &WalState| state.last_ack_failed && state.live.count_ones() >= 2,
+            ),
+            Property::sometimes("recovery_runs", |_, state: &WalState| state.recovered),
             Property::sometimes("leader_changes", |_, state: &WalState| state.leader != 0),
             Property::sometimes("replicas_diverge", |_, state: &WalState| {
                 state.logs.iter().any(|log| log != &state.logs[0])
@@ -199,6 +233,23 @@ fn is_live(state: &WalState, voter: usize) -> bool {
 
 fn has_committed_prefix(state: &WalState, voter: usize) -> bool {
     state.logs[voter].len() >= state.hwm && state.logs[voter][..state.hwm] == state.committed[..]
+}
+
+/// The rule an acknowledgement follows: a live voter can hold the leader's
+/// records up to the target exactly when its log agrees with the leader's
+/// wherever both have a record, and the acknowledgement succeeds when at
+/// least two voters can.
+fn ack_has_a_majority(state: &WalState) -> bool {
+    let leader_log = &state.logs[state.leader];
+    (0..VOTERS)
+        .filter(|voter| is_live(state, *voter))
+        .filter(|voter| {
+            let log = &state.logs[*voter];
+            let shared = log.len().min(leader_log.len());
+            log[..shared] == leader_log[..shared]
+        })
+        .count()
+        >= 2
 }
 
 fn drive_append(state: &WalState) -> [Vec<u8>; VOTERS] {
@@ -234,12 +285,13 @@ fn drive_ack(state: &WalState) -> ([Vec<u8>; VOTERS], Result<usize, ()>) {
     (observe(&logs), result)
 }
 
-fn drive_recovery(state: &WalState) -> Option<([Vec<u8>; VOTERS], usize)> {
+fn drive_recovery(state: &WalState) -> ([Vec<u8>; VOTERS], usize) {
     let (_directory, logs) = materialize(state);
     let replicas = ordered_replicas(state.leader, &logs);
-    let engine = WalShardEngine::new(replicas, OpenMode::Recover).ok()?;
+    let engine = WalShardEngine::new(replicas, OpenMode::Recover)
+        .expect("WAL recovery opens every reachable replica set");
     let hwm = model_index(engine.durable_watermark().0);
-    Some((observe(&logs), hwm))
+    (observe(&logs), hwm)
 }
 
 fn materialize(state: &WalState) -> (tempfile::TempDir, [Arc<Mutex<Log>>; VOTERS]) {
@@ -318,5 +370,9 @@ fn quorum_wal_append_ack_and_recovery_model() {
     );
     assert2::assert!(checker.max_depth() < MAX_DEPTH, "depth cap hit");
     assert2::assert!(checker.state_count() < MAX_STATES, "state cap hit");
+    assert2::assert!(
+        checker.unique_state_count() == PINNED_UNIQUE_STATES,
+        "unique-state count moved: the reachable set of this model changed"
+    );
     checker.assert_properties();
 }

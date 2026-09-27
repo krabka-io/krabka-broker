@@ -5,7 +5,11 @@
 //! is persisted, so the whole decision is kept in one place next to the
 //! log-recency comparison it depends on.
 
-use krabka_verified::{VoteAdmissionDecision, vote_admission_decision};
+use krabka_verified::{
+    VoteAdmissionDecision,
+    vote::{VoteMembership, VoteTarget},
+    vote_admission_decision,
+};
 
 use super::{QuorumStateMachine, VoteRequest};
 use crate::{
@@ -62,14 +66,17 @@ impl QuorumStateMachine {
         // The wire adapter rejects signed sentinels before conversion. The pure
         // classifier then requires the exact target and both membership checks;
         // the candidate can be in either side of one adjacent KIP-853 transition.
-        match vote_admission_decision(
-            voter_id.0,
-            self.me.0,
-            self.local_voter_directory_matches(voter_directory_id),
-            cluster_id.is_none_or(|id| id == self.state.cluster_id),
-            self.is_voter(),
-            self.current_or_adjacent_voter_key(candidate_key),
-        ) {
+        let target = VoteTarget {
+            voter_id: voter_id.0,
+            local_id: self.me.0,
+            directory_matches: self.local_voter_directory_matches(voter_directory_id),
+        };
+        let membership = VoteMembership {
+            cluster_matches: cluster_id.is_none_or(|id| id == self.state.cluster_id),
+            local_is_voter: self.is_voter(),
+            candidate_is_voter: self.current_or_adjacent_voter_key(candidate_key),
+        };
+        match vote_admission_decision(target, membership) {
             VoteAdmissionDecision::IgnoreWrongTarget => {
                 tracing::warn!(
                     addressed_to = voter_id.0,

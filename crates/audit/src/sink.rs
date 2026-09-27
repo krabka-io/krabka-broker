@@ -24,21 +24,15 @@ pub struct AuditRecord {
 
 impl AuditRecord {
     /// Build the chained meta-record that declares fail-open audit loss.
+    ///
+    /// `generation` is the persisted loss-state generation the marker settles;
+    /// the verifier requires it to advance strictly across a partition.
     #[must_use]
-    pub fn records_lost(count: u64) -> Self {
-        Self::records_lost_value(format!(r#"{{"records_lost":{count}}}"#))
-    }
-
-    pub(crate) fn records_lost_with_generation(count: u64, generation: u64) -> Self {
-        Self::records_lost_value(format!(
-            r#"{{"records_lost":{count},"loss_generation":{generation}}}"#
-        ))
-    }
-
-    fn records_lost_value(value: String) -> Self {
+    pub fn records_lost(count: u64, generation: u64) -> Self {
         Self {
             class: AuditEventClass::RecordsLost,
-            value: value.into_bytes(),
+            value: format!(r#"{{"records_lost":{count},"loss_generation":{generation}}}"#)
+                .into_bytes(),
             headers: vec![(
                 "event_class".to_string(),
                 AuditEventClass::RecordsLost.as_header().as_bytes().to_vec(),
@@ -180,17 +174,13 @@ mod tests {
 
     #[test]
     fn records_lost_is_a_distinct_meta_record() {
-        let record = AuditRecord::records_lost(3);
         check!(
-            (
-                record.class,
-                record.value.as_slice(),
-                hdr(&record, "event_class")
-            ) == (
-                AuditEventClass::RecordsLost,
-                br#"{"records_lost":3}"#.as_slice(),
-                Some("records_lost".into()),
-            )
+            AuditRecord::records_lost(3, 7)
+                == AuditRecord {
+                    class: AuditEventClass::RecordsLost,
+                    value: br#"{"records_lost":3,"loss_generation":7}"#.to_vec(),
+                    headers: vec![("event_class".to_string(), b"records_lost".to_vec())],
+                }
         );
     }
 

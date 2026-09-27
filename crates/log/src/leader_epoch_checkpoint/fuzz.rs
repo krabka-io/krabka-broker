@@ -1,94 +1,43 @@
-//! Property-based coverage of the KIP-101/320 truncation contract at a scale
-//! the exhaustive `leader_epoch_model` cannot reach.
+//! Property-based coverage of KIP-101/279/320 reconciliation at a scale the
+//! exhaustive `leader_epoch_model` cannot reach. It drives the model's own
+//! step function -- the production lookup and truncation underneath -- over
+//! random schedules of elections, writes and follower fetches.
 
-use krabka_ids::{LeaderEpoch, Offset};
 use proptest::prelude::*;
 
-use super::{EpochEntry, UNDEFINED_EPOCH, append_to, epoch_and_offset_for_entries};
+use super::leader_epoch_model::{Action, Cluster, Violations};
 
-/// Fold random `(epoch_gap, offset_jump)` steps into a strictly-increasing
-/// leader epoch-history. Gaps are allowed, as they are when `append` builds
-/// one.
-fn leader_history(steps: &[(i32, i64)]) -> Vec<EpochEntry> {
-    let mut v: Vec<EpochEntry> = vec![];
-    let (mut le, mut lo) = (-1i32, -1i64);
-    for &(de, doff) in steps {
-        let e = le + 1 + de.rem_euclid(3); // epoch gap 1..=3
-        let o = lo + 1 + doff.rem_euclid(1000); // offset jump 1..=1000
-        append_to(&mut v, LeaderEpoch(e), Offset(o));
-        le = e;
-        lo = o;
+const REPLICAS: usize = 4;
+const MAX_LOG: usize = 40;
+
+/// Decode one random `(kind, replica)` pair into an action that is legal in
+/// `cluster`.
+fn action(cluster: &Cluster, kind: u8, replica: usize) -> Action {
+    let replica = replica % REPLICAS;
+    match kind % 8 {
+        0 => Action::Elect(replica),
+        1..=3 if cluster.replicas[cluster.leader].log.len() < MAX_LOG => Action::Write,
+        _ if replica == cluster.leader => Action::Fetch((replica + 1) % REPLICAS),
+        _ => Action::Fetch(replica),
     }
-    v
 }
 
 proptest! {
-    /// Large-N randomized leader epoch-histories, requested epoch, and
-    /// follower log-end. The test asserts the same KIP-101/320 truncation
-    /// contract that the exhaustive `leader_epoch_model` checks, at a scale
-    /// the BFS cannot reach: histories up to 20 entries, epochs to about
-    /// 60, and offsets to about 20000.
+    /// After every step of a random schedule: a follower the leader accepted
+    /// is a prefix of the leader's log, no truncation dropped an agreed record,
+    /// every divergence made progress, the leader always placed the
+    /// follower's epoch, and every checkpoint stays strictly increasing.
     #[test]
-    fn truncation_contract_holds(
-        steps in proptest::collection::vec((0i32..10, 0i64..1000), 0..20usize),
-        requested in -1i32..70,
-        dleo in 0i64..2000,
+    fn reconciliation_holds_on_random_schedules(
+        schedule in proptest::collection::vec((0u8..8, 0usize..REPLICAS), 0..400usize),
     ) {
-        // `requested` is generated as a raw `i32` (the KIP-320 wire type);
-        // wrap it into the domain newtype for the call and every comparison.
-        let requested = LeaderEpoch(requested);
-        let leader = leader_history(&steps);
-        let last_off: i64 = leader.last().map_or(0, |e| e.start_offset.0);
-        // Follower log end is at or past the last epoch boundary.
-        let leo = last_off + 1 + dleo;
-        let (found, trunc) = epoch_and_offset_for_entries(&leader, requested, Offset(leo));
-        let latest = leader.iter().map(|e| e.epoch).max();
-
-        // Always a valid truncation target.
-        prop_assert!(trunc >= 0, "truncation target {} < 0", trunc);
-        // The resolved epoch never exceeds the requested epoch.
-        prop_assert!(
-            found <= requested,
-            "found_epoch {} > requested {}",
-            found,
-            requested
-        );
-
-        if let Some(entry) = leader.iter().find(|e| e.epoch == requested) {
-            // Committed-prefix-preserved: never truncate below the start of
-            // an epoch the leader and follower agree on.
-            prop_assert!(
-                trunc >= entry.start_offset,
-                "truncation {} dropped agreed epoch {} (starts at {})",
-                trunc,
-                requested,
-                entry.start_offset
-            );
-            if latest == Some(requested) {
-                // Current epoch → keep up to the follower's log end.
-                prop_assert_eq!(found, requested);
-                prop_assert_eq!(trunc, Offset(leo), "latest epoch keeps up to log end");
-            } else {
-                // Older agreed epoch → truncate to the next leader epoch's
-                // start, dropping the divergent higher-epoch suffix.
-                let next_start = leader
-                    .iter()
-                    .filter(|e| e.epoch > requested)
-                    .map(|e| e.start_offset)
-                    .min()
-                    .expect("a non-latest recorded epoch has a higher epoch");
-                prop_assert_eq!(found, requested);
-                prop_assert_eq!(
-                    trunc,
-                    next_start,
-                    "older epoch truncates to next epoch start"
-                );
-                prop_assert!(trunc <= leo, "truncation {} above log end {}", trunc, leo);
-            }
-        } else if requested == UNDEFINED_EPOCH {
-            // No last epoch → no truncation this round.
-            prop_assert_eq!(found, UNDEFINED_EPOCH);
-            prop_assert_eq!(trunc, Offset(leo));
+        let mut cluster = Cluster::new(REPLICAS, true);
+        for (kind, replica) in schedule {
+            let step = action(&cluster, kind, replica);
+            cluster.step(step, true);
+            prop_assert!(cluster.follower_prefix_holds(), "{step:?}: {cluster:?}");
+            prop_assert_eq!(cluster.violations, Violations::default(), "{:?}: {:?}", step, cluster);
+            prop_assert!(cluster.checkpoints_hold(), "{step:?}: {cluster:?}");
         }
     }
 }

@@ -15,7 +15,7 @@ use krabka_protocol::{
 use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 use tokio::runtime::{Handle, RuntimeFlavor};
 
-use super::{FetchWatermarks, VisibilityWindow, compute_visibility_window};
+use super::{FetchWatermarks, VisibilityWindow, compute_visibility_window, plan::refused_read};
 use crate::{codes, error::BrokerError, partition::Partition};
 
 /// Hold the partition's log mutex for a short time to read the offsets, and
@@ -31,18 +31,20 @@ use crate::{codes, error::BrokerError, partition::Partition};
 /// - there is NO server-side batch filtering. Aborted batches and control
 ///   batches stay in the byte stream, and the consumer drops them on the
 ///   client side with the list below
-/// - `out.last_stable_offset` is set to `min(lso, hw)`
 /// - `out.aborted_transactions` comes from the partition's `.txnindex` files
 ///
 /// When `is_follower_fetch` is `true`:
 /// - the raw bytes go up to LEO, with no HW clamp
-/// - `out.high_watermark` and `out.last_stable_offset` are set to `log_end`
 ///
 /// When `read_committed` is `false` and `is_follower_fetch` is `false`, on a
 /// consumer fetch in `read_uncommitted`:
 /// - the raw bytes are clamped at HW, so `base_offset < hw`
-/// - `out.high_watermark` and `out.last_stable_offset` are set to `hw`
 /// - `out.aborted_transactions` is `None`
+///
+/// In every case `out.high_watermark` is `hw` and `out.last_stable_offset` is
+/// `min(lso, hw)`, the values Kafka's `Partition.readRecords` reports to every
+/// fetcher. A follower therefore adopts the leader's committed bound, never
+/// its log end.
 enum ReadPlan {
     OffsetOutOfRange,
     Empty,
@@ -393,6 +395,41 @@ fn finish_read(
     bytes
 }
 
+/// The bounds a partition row reports beside records a cold tier served.
+///
+/// A local `OFFSET_OUT_OF_RANGE` row carries Kafka's all -1 offsets (see
+/// `plan_read`), so a read that goes on to serve the offset from another tier
+/// has to put the live bounds back. They are the values the local read path
+/// reports: the global log start, the high watermark, and the last stable
+/// offset capped at it. Kafka's `ReplicaManager.handleOffsetOutOfRangeError`
+/// reads the same three off the `UnifiedLog` for the remote band.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LiveOffsets {
+    pub(crate) log_start: Offset,
+    pub(crate) high_watermark: Offset,
+    pub(crate) last_stable_offset: Offset,
+}
+
+impl LiveOffsets {
+    /// Reads the bounds off `part` now.
+    pub(crate) async fn of(part: &Partition) -> Self {
+        let high_watermark = part.high_watermark().await;
+        let mut log = part.log.lock().expect("log mutex poisoned");
+        Self {
+            log_start: log.log_start_offset(),
+            high_watermark,
+            last_stable_offset: log.last_stable_offset(high_watermark),
+        }
+    }
+
+    /// Writes all three bounds into `response`.
+    pub(crate) fn report(self, response: &mut PartitionData) {
+        response.log_start_offset = self.log_start.0;
+        response.high_watermark = self.high_watermark.0;
+        response.last_stable_offset = self.last_stable_offset.0;
+    }
+}
+
 /// KFC-1's delivery watermark for this fetch, capped at the high watermark.
 ///
 /// The value is recomputed here, under the log mutex the fetch already holds,
@@ -402,16 +439,15 @@ fn finish_read(
 /// after a truncation, serves one that has not. The delivery scheduler exists
 /// for liveness; this call is what makes a fetch correct.
 ///
-/// The clamp is the precondition the verified kernel asks of its caller, and it
-/// is a real bound as well: the window may never expose beyond the high
-/// watermark. The lower end needs no clamp, because
-/// [`Log::advance_delivery_watermark`] already answers inside
-/// `[log_start_offset(), log_end_offset()]`.
+/// The clamp keeps the value inside the window it belongs to: the window may
+/// never expose beyond the high watermark. The verified kernel takes the same
+/// minimum itself and has no precondition, so a value outside that range can
+/// only narrow what a consumer reads.
 ///
 /// A follower fetch is never gated, so it does no work here. A scheduled record
 /// replicates, and counts toward the ISR and the high watermark, long before
-/// any consumer may see it. The high watermark is what the kernel wants in that
-/// case: the kernel ignores the value, and this keeps its precondition true.
+/// any consumer may see it. The kernel ignores the value for a follower, and
+/// the high watermark is simply the neutral one.
 ///
 /// A topic that delivers immediately answers the log end offset before it reads
 /// a single batch header, so the clamp gives the high watermark straight back
@@ -472,10 +508,14 @@ fn plan_read(
         fetch_offset,
     );
     let plan = if window.out_of_range {
-        response.error_code = codes::OFFSET_OUT_OF_RANGE;
-        response.log_start_offset = log_start.0;
-        response.high_watermark = window.response_hw.0;
-        response.last_stable_offset = window.response_lso.0;
+        // Kafka's `Partition.readRecords` throws `OffsetOutOfRangeException`
+        // here, and outside the remote band the non-tiered branch of
+        // `ReplicaManager.handleOffsetOutOfRangeError` answers it with
+        // `LogReadResult(Errors)`: every offset -1 and no records, not the
+        // live bounds. A tiered partition's remote band is answered afresh by
+        // `try_remote_read`, which writes the live bounds itself on the
+        // branches where Kafka reports them.
+        *response = refused_read(response.partition_index, codes::OFFSET_OUT_OF_RANGE);
         ReadPlan::OffsetOutOfRange
     } else if window.empty {
         ReadPlan::Empty
@@ -957,8 +997,13 @@ mod tests {
 
     /// The one plan shape that serves nothing and still reports an error: a
     /// fetch below the log start, which is where a consumer resuming from an
-    /// offset retention has already deleted lands. The response carries the
-    /// bounds the consumer needs to reset itself, and no records.
+    /// offset retention has already deleted lands. Kafka answers it with
+    /// `LogReadResult(Errors)` on a partition with no remote tier, so every
+    /// offset in the row is -1 and the records are empty, whether the reader
+    /// is a consumer or a follower: the consumer resets through
+    /// `auto.offset.reset` and a follower through `ListOffsets`, and neither
+    /// reads a bound out of this row. The whole row is replaced, so a stale
+    /// value the caller left in it cannot leak out either.
     #[tokio::test]
     async fn do_read_reports_a_fetch_below_the_log_start_out_of_range() {
         let (partition, _dir) =
@@ -981,21 +1026,112 @@ mod tests {
         };
         partition.replica_state.lock().await.hw = limit;
 
-        let mut out = PartitionData::default();
-        let bytes = super::do_read(&partition, consumer_request(0), &mut out)
+        let refused = PartitionData {
+            partition_index: 3,
+            ..super::refused_read(3, crate::codes::OFFSET_OUT_OF_RANGE)
+        };
+        let cases = [
+            ("read_uncommitted consumer", consumer_request(0)),
+            (
+                "read_committed consumer",
+                super::ReadRequest {
+                    read_committed: true,
+                    ..consumer_request(0)
+                },
+            ),
+            (
+                "follower",
+                super::ReadRequest {
+                    is_follower_fetch: true,
+                    ..consumer_request(0)
+                },
+            ),
+        ];
+        for (name, request) in cases {
+            let mut out = PartitionData {
+                partition_index: 3,
+                high_watermark: 77,
+                last_stable_offset: 77,
+                log_start_offset: 7,
+                aborted_transactions: Some(Vec::new()),
+                ..PartitionData::default()
+            };
+            let bytes = super::do_read(&partition, request, &mut out)
+                .await
+                .expect("the read succeeds");
+
+            assert!(bytes == 0, "{name}");
+            assert!(out == refused, "{name}");
+        }
+        assert!(
+            refused
+                == PartitionData {
+                    partition_index: 3,
+                    error_code: crate::codes::OFFSET_OUT_OF_RANGE,
+                    high_watermark: -1,
+                    last_stable_offset: -1,
+                    log_start_offset: -1,
+                    preferred_read_replica: -1,
+                    aborted_transactions: None,
+                    records: Some(RecordsPayload::Raw(Bytes::new())),
+                    ..PartitionData::default()
+                },
+            "the refused row is Kafka's LogReadResult(Errors)"
+        );
+    }
+
+    /// [`super::LiveOffsets`] reports what a successful local read reports for
+    /// the same partition: a cold tier that serves an offset the local log
+    /// refused must put back exactly the bounds the local path would have
+    /// written, including the last stable offset held at an open
+    /// transaction.
+    #[tokio::test]
+    async fn live_offsets_report_the_bounds_a_local_read_reports() {
+        let (partition, _dir) =
+            crate::partition::test_support::test_partition(Arc::new(tokio::sync::Notify::new()));
+        {
+            let mut log = partition.log.lock().expect("log mutex poisoned");
+            log.append(&mut RecordBatch {
+                records: vec![Record {
+                    offset_delta: 0,
+                    value: Some(Bytes::from_static(b"before")),
+                    ..Record::default()
+                }],
+                ..RecordBatch::default()
+            })
+            .expect("append the record before the transaction"); // offset 0
+            log.append(&mut transactional_batch(PID))
+                .expect("append the open transaction"); // offset 1
+        }
+        partition.replica_state.lock().await.hw = Offset(2);
+
+        let mut local = PartitionData::default();
+        super::do_read(&partition, consumer_request(0), &mut local)
             .await
             .expect("the read succeeds");
+        let mut reported = PartitionData::default();
+        super::LiveOffsets::of(&partition)
+            .await
+            .report(&mut reported);
 
-        assert!(bytes == 0);
         assert!(
-            out == PartitionData {
-                error_code: crate::codes::OFFSET_OUT_OF_RANGE,
-                high_watermark: limit.0,
-                last_stable_offset: limit.0,
-                log_start_offset: limit.0,
-                records: None,
-                ..PartitionData::default()
-            }
+            super::LiveOffsets::of(&partition).await
+                == super::LiveOffsets {
+                    log_start: Offset(0),
+                    high_watermark: Offset(2),
+                    last_stable_offset: Offset(1),
+                }
+        );
+        assert!(
+            (
+                reported.log_start_offset,
+                reported.high_watermark,
+                reported.last_stable_offset
+            ) == (
+                local.log_start_offset,
+                local.high_watermark,
+                local.last_stable_offset
+            )
         );
     }
 

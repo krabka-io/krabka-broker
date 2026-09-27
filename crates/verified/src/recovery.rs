@@ -5,27 +5,52 @@ use std::clone::Clone;
 
 use creusot_std::prelude::*;
 
+/// Whether controller recovery replays one metadata record.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
 pub enum ReplayRecordDecision {
+    /// Apply the record, which sits at this absolute offset.
     Apply(i64),
+    /// Skip the record.
     Skip,
 }
 
+/// A record is replayed iff its absolute offset `batch_base + record_delta`
+/// lies in the half-open replay window `[from, end)` and its batch is of the
+/// kind this pass replays: data batches for the metadata image, control
+/// batches for the voter and quorum state.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub fn replay_record_admitted(
+    batch_base: i64,
+    record_delta: i32,
+    from: i64,
+    end: i64,
+    control_batch: bool,
+    replay_control: bool,
+) -> bool {
+    pearlite! {
+        record_delta@ >= 0
+            && control_batch == replay_control
+            && from@ <= batch_base@ + record_delta@
+            && batch_base@ + record_delta@ < end@
+    }
+}
+
+/// Decide whether controller recovery replays one decoded metadata record,
+/// and at which absolute offset.
+///
+/// A negative delta is malformed and skipped. Because an admitted offset is
+/// below `end`, it is always representable, so no overflow case needs a rule
+/// of its own.
 #[ensures(match result {
-    ReplayRecordDecision::Apply(offset) => record_delta@ >= 0
-        && batch_base@ < end@
-        && control_batch == replay_control
-        && batch_base@ <= i64::MAX@ - record_delta@
-        && offset@ == batch_base@ + record_delta@
-        && from@ <= offset@
-        && offset@ < end@,
-    ReplayRecordDecision::Skip => !(record_delta@ >= 0
-        && batch_base@ < end@
-        && control_batch == replay_control
-        && batch_base@ <= i64::MAX@ - record_delta@
-        && from@ <= batch_base@ + record_delta@
-        && batch_base@ + record_delta@ < end@),
+    ReplayRecordDecision::Apply(offset) =>
+        replay_record_admitted(batch_base, record_delta, from, end, control_batch, replay_control)
+            && offset@ == batch_base@ + record_delta@,
+    ReplayRecordDecision::Skip =>
+        !replay_record_admitted(batch_base, record_delta, from, end, control_batch, replay_control),
 })]
 #[must_use]
 pub fn replay_record_decision(
@@ -51,10 +76,13 @@ pub fn replay_record_decision(
     }
 }
 
+/// Whether a replay loop advances its cursor, and to where.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
 pub enum ReplayCursorDecision {
+    /// Continue replay from this exclusive next offset.
     Advance(i64),
+    /// End replay.
     Stop,
 }
 
@@ -174,6 +202,22 @@ pub fn barrier_recovery_fold_action(
 /// coordinator epoch and at least one valid target partition. The recovery
 /// adapter supplies no observed marker offsets, so this decision can only
 /// authorize a partial cut.
+#[ensures((result == BarrierRecoveryFinalizeDecision::NoPending) == !has_pending)]
+#[ensures((result == BarrierRecoveryFinalizeDecision::MalformedPending)
+    == (has_pending && (frozen_coordinator_epoch@ < 0 || !targets_valid)))]
+#[ensures((result == BarrierRecoveryFinalizeDecision::UnknownCoordinator)
+    == (has_pending
+        && frozen_coordinator_epoch@ >= 0
+        && targets_valid
+        && current_coordinator_epoch == None))]
+#[ensures((result == BarrierRecoveryFinalizeDecision::FencedCoordinator)
+    == (has_pending
+        && frozen_coordinator_epoch@ >= 0
+        && targets_valid
+        && match current_coordinator_epoch {
+            Some(current) => current@ < frozen_coordinator_epoch@,
+            None => false,
+        }))]
 #[ensures((result == BarrierRecoveryFinalizeDecision::FinalizePartial)
     == (has_pending
         && frozen_coordinator_epoch@ >= 0
@@ -205,6 +249,9 @@ pub fn barrier_recovery_finalize_decision(
     }
 }
 
+/// Advance a replay cursor to the next batch offset the reader reported, and
+/// stop when there is none or it would not move the cursor forward, so a
+/// replay loop always terminates.
 #[ensures(match result {
     ReplayCursorDecision::Advance(next_offset) => next == Some(next_offset)
         && next_offset@ > cursor@,
@@ -233,8 +280,7 @@ pub fn replay_cursor_decision(cursor: i64, next: Option<i64>) -> ReplayCursorDec
             && base@ >= cursor@
             && next_offset@ == base@ + last_delta@ + 1
             && next_offset@ > cursor@
-            && next_offset@ <= end@
-            && next_offset@ <= i64::MAX@,
+            && next_offset@ <= end@,
         None => false,
     },
     ReplayCursorDecision::Stop => match batch {
@@ -268,6 +314,8 @@ pub fn replay_batch_cursor_decision(
     }
 }
 
+/// Capture a metadata-version downgrade snapshot only for the first downgrade
+/// replay meets; a later downgrade never replaces the pending one.
 #[ensures(result == (!pending_exists && is_downgrade))]
 #[must_use]
 pub const fn should_capture_first_downgrade(pending_exists: bool, is_downgrade: bool) -> bool {
@@ -339,12 +387,47 @@ mod tests {
     fn record_replay_is_bounded_and_type_separated() {
         use ReplayRecordDecision::{Apply, Skip};
 
-        assert2::assert!(replay_record_decision(10, 1, 10, 12, false, false) == Apply(11));
-        assert2::assert!(replay_record_decision(10, 2, 10, 12, false, false) == Skip);
-        assert2::assert!(replay_record_decision(10, -1, 0, 12, false, false) == Skip);
-        assert2::assert!(replay_record_decision(i64::MAX, 1, 0, i64::MAX, false, false) == Skip);
-        assert2::assert!(replay_record_decision(10, 0, 10, 12, true, false) == Skip);
-        assert2::assert!(replay_record_decision(10, 0, 10, 12, true, true) == Apply(10));
+        for (case, (batch_base, delta, from, end, control, replay_control), expected) in [
+            (
+                "inside the window",
+                (10, 1, 10, 12, false, false),
+                Apply(11),
+            ),
+            (
+                "first offset of the window",
+                (10, 0, 10, 12, false, false),
+                Apply(10),
+            ),
+            ("below the window start", (8, 1, 10, 12, false, false), Skip),
+            ("at the exclusive end", (10, 2, 10, 12, false, false), Skip),
+            ("negative delta", (10, -1, 0, 12, false, false), Skip),
+            (
+                "unrepresentable offset",
+                (i64::MAX, 1, 0, i64::MAX, false, false),
+                Skip,
+            ),
+            (
+                "control record on the data pass",
+                (10, 0, 10, 12, true, false),
+                Skip,
+            ),
+            (
+                "data record on the control pass",
+                (10, 0, 10, 12, false, true),
+                Skip,
+            ),
+            (
+                "control record on the control pass",
+                (10, 0, 10, 12, true, true),
+                Apply(10),
+            ),
+        ] {
+            assert2::check!(
+                replay_record_decision(batch_base, delta, from, end, control, replay_control)
+                    == expected,
+                "{case}"
+            );
+        }
     }
 
     #[test]

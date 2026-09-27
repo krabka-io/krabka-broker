@@ -2,11 +2,10 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_from_i64": { "prover": "alt-ergo", "time": 0.01 },
-      "vc_truncation_relative_offset": {
-        "prover": "alt-ergo",
-        "time": 0.014
-      }
+      "vc_abs_diff'0": { "prover": "alt-ergo", "time": 0.025 },
+      "vc_from_u64": { "prover": "alt-ergo", "time": 0.031 },
+      "vc_min_u64": { "prover": "alt-ergo", "time": 0.026 },
+      "vc_truncation_relative_offset": { "prover": "alt-ergo", "time": 0.03 }
     }
   }
 }

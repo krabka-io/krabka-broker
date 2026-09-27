@@ -1,0 +1,19 @@
+(* #"/workspace/crates/verified/src/authz.rs" 199 27 199 32 *)
+
+(* <authz::AclFacts as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_AclDefault = Deny | Allow
+
+type t_AclFacts = { super_user: bool; saw_allow: bool; saw_deny: bool; default_decision: t_AclDefault }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_AclFacts [#"/workspace/crates/verified/src/authz.rs" 199 27 199 32] (self: t_AclFacts)
+  (return (x: t_AclFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_AclFacts = Any.any_l () | & self: t_AclFacts = self ])
+  [ return (result: t_AclFacts) -> (! return {result}) ]

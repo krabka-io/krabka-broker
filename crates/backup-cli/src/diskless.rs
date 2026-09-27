@@ -104,7 +104,6 @@ async fn project_committed_index(
         }
         read.map_err(|error| error.to_string())?;
     }
-    projection.finish_legacy_replay();
     Ok((projection, cutoffs))
 }
 

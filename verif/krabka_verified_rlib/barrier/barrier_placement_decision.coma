@@ -1,8 +1,8 @@
-(* #"/workspace/crates/verified/src/barrier.rs" 107 0 107 91 *)
+(* #"/workspace/crates/verified/src/barrier.rs" 131 0 131 91 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sbarrier = "/workspace/crates/verified/src/barrier.rs" 108 30 108 31
-let%span sbarrier'0 = "/workspace/crates/verified/src/barrier.rs" 105 10 105 85
+let%span sbarrier = "/workspace/crates/verified/src/barrier.rs" 132 30 132 31
+let%span sbarrier'0 = "/workspace/crates/verified/src/barrier.rs" 129 10 129 85
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -18,7 +18,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let barrier_placement_decision [#"/workspace/crates/verified/src/barrier.rs" 107 0 107 91] (requested: bool)
+let barrier_placement_decision [#"/workspace/crates/verified/src/barrier.rs" 131 0 131 91] (requested: bool)
   (offset: Int64.t) (return (x: t_BarrierPlacementDecision)) = (! bb0
   [ bb0 = any [ br0 -> {requested = false} (! bb4) | br1 -> {requested} (! bb1) ]
   | bb1 = s0

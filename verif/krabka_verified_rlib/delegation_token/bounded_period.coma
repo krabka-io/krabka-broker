@@ -1,0 +1,70 @@
+(* #"/workspace/crates/verified/src/delegation_token.rs" 339 0 339 60 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 76 26 76 66
+let%span scmp'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 77 26 77 63
+let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
+let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
+let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
+let%span sdelegation_token = "/workspace/crates/verified/src/delegation_token.rs" 340 22 340 23
+let%span sdelegation_token'0 = "/workspace/crates/verified/src/delegation_token.rs" 341 8 341 36
+let%span sdelegation_token'1 = "/workspace/crates/verified/src/delegation_token.rs" 336 11 336 26
+let%span sdelegation_token'2 = "/workspace/crates/verified/src/delegation_token.rs" 337 10 337 67
+let%span sdelegation_token'3 = "/workspace/crates/verified/src/delegation_token.rs" 338 10 338 21
+let%span sdelegation_token'4 = "/workspace/crates/verified/src/delegation_token.rs" 309 8 309 98
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+function deep_model_i64 [@inline:trivial] (self: Int64.t) : int = [%#snum] Int64.to_int self
+
+meta "rewrite_def" function deep_model_i64
+
+let min_i64 (self_: Int64.t) (o: Int64.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:min_i64 ensures] ([@stop_split] [@expl:min ensures #0] [%#scmp] deep_model_i64 result
+      <= deep_model_i64 self_)
+    /\ ([@stop_split] [@expl:min ensures #1] [%#scmp'0] deep_model_i64 result <= deep_model_i64 o)
+    /\ ([@stop_split] [@expl:min ensures #2] [%#scmp'1] result = self_ \/ result = o)
+    /\ ([@stop_split] [@expl:min ensures #3] [%#scmp'2] deep_model_i64 self_ < deep_model_i64 o -> result = self_)
+    /\ ([@stop_split] [@expl:min ensures #4] [%#scmp'3] deep_model_i64 o <= deep_model_i64 self_ -> result = o)}
+    (! return {result}) ]
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+function bounded_period_model [#"/workspace/crates/verified/src/delegation_token.rs" 307 0 307 66] (requested_ms: Int64.t) (default_ms: Int64.t) : int
+ = [%#sdelegation_token'4] if gt_log_Int (Int64.to_int requested_ms) 0
+  /\ Int64.to_int requested_ms < Int64.to_int default_ms then
+    Int64.to_int requested_ms
+  else
+    Int64.to_int default_ms
+
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let bounded_period [#"/workspace/crates/verified/src/delegation_token.rs" 339 0 339 60] (requested_ms: Int64.t)
+  (default_ms: Int64.t) (return (x: Int64.t)) =
+{[@stop_split] [@expl:bounded_period requires] [%#sdelegation_token'1] gt_log_Int (Int64.to_int default_ms) 0}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_9 <- Int64.gt requested_ms ([%#sdelegation_token] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_9 = false} (! bb3) | br1 -> {_9} (! bb1) ] ]
+  | bb1 = s0
+    [ s0 = min_i64 [%#sdelegation_token'0] {requested_ms} {default_ms} (fun (_x: Int64.t) -> [ &_ret <- _x ] s1)
+    | s1 = return {_ret} ]
+  | bb3 = s0 [ s0 = [ &_ret <- default_ms ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: Int64.t = Any.any_l ()
+  | & requested_ms: Int64.t = requested_ms
+  | & default_ms: Int64.t = default_ms
+  | & _9: bool = Any.any_l () ])
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:bounded_period ensures] ([@stop_split] [@expl:bounded_period ensures #0] [%#sdelegation_token'2] Int64.to_int result
+      = bounded_period_model requested_ms default_ms)
+    /\ ([@stop_split] [@expl:bounded_period ensures #1] [%#sdelegation_token'3] gt_log_Int (Int64.to_int result) 0)}
+    (! return {result}) ]

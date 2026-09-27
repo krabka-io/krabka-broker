@@ -1,0 +1,32 @@
+(* #"/workspace/crates/verified/src/stretch.rs" 143 0 143 67 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sstretch = "/workspace/crates/verified/src/stretch.rs" 141 11 141 81
+let%span sstretch'0 = "/workspace/crates/verified/src/stretch.rs" 142 10 142 64
+
+use int.ComputerDivision
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+constant divisor : int
+
+constant quotient : int
+
+constant remainder : int
+
+function lemma_div_exact [#"/workspace/crates/verified/src/stretch.rs" 143 0 143 67] (divisor: int) (quotient: int) (remainder: int) : ()
+
+goal vc_lemma_div_exact: ([%#sstretch] ge_log_Int divisor 1
+    /\ ge_log_Int quotient 0 /\ 0 <= remainder /\ remainder < divisor)
+  -> ComputerDivision.div (divisor * quotient + remainder) divisor = quotient + ComputerDivision.div remainder divisor
+  && ComputerDivision.div remainder divisor = 0
+  && ([@stop_split] [@expl:lemma_div_exact ensures] [%#sstretch'0] ComputerDivision.div (divisor * quotient
+    + remainder) divisor
+  = quotient)

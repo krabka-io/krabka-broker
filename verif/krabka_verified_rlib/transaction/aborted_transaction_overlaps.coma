@@ -1,8 +1,8 @@
-(* #"/proof-work-240/crates/verified/src/transaction.rs" 97 0 102 9 *)
+(* #"/workspace/crates/verified/src/transaction.rs" 607 0 612 9 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span stransaction = "/proof-work-240/crates/verified/src/transaction.rs" 103 4 106 36
-let%span stransaction'0 = "/proof-work-240/crates/verified/src/transaction.rs" 92 10 95 35
+let%span stransaction = "/workspace/crates/verified/src/transaction.rs" 613 4 616 36
+let%span stransaction'0 = "/workspace/crates/verified/src/transaction.rs" 602 10 605 35
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -16,8 +16,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let aborted_transaction_overlaps [#"/proof-work-240/crates/verified/src/transaction.rs" 97 0 102 9]
-  (entry_start: Int64.t) (entry_last: Int64.t) (query_start: Int64.t) (query_end: Int64.t) (return (x: bool)) = (! bb0
+let aborted_transaction_overlaps [#"/workspace/crates/verified/src/transaction.rs" 607 0 612 9] (entry_start: Int64.t)
+  (entry_last: Int64.t) (query_start: Int64.t) (query_end: Int64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_10 <- Int64.le entry_start entry_last ] s1
     | s1 = any [ br0 -> {_10 = false} (! bb7) | br1 -> {_10} (! bb1) ] ]

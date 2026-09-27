@@ -1,0 +1,27 @@
+(* #"/workspace/crates/verified/src/producer_snapshot.rs" 228 27 228 32 *)
+
+(* <producer_snapshot::ProducerSnapshotEntryFacts as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.int.Int16
+use creusot.int.Int32
+use creusot.prelude.Any
+
+type t_ProducerSnapshotEntryFacts = {
+  producer_id: Int64.t;
+  producer_epoch: Int16.t;
+  last_sequence: Int32.t;
+  last_offset: Int64.t;
+  offset_delta: Int32.t;
+  coordinator_epoch: Int32.t;
+  current_txn_first_offset: Int64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_ProducerSnapshotEntryFacts [#"/workspace/crates/verified/src/producer_snapshot.rs" 228 27 228 32]
+  (self: t_ProducerSnapshotEntryFacts) (return (x: t_ProducerSnapshotEntryFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ProducerSnapshotEntryFacts = Any.any_l () | & self: t_ProducerSnapshotEntryFacts = self ])
+  [ return (result: t_ProducerSnapshotEntryFacts) -> (! return {result}) ]

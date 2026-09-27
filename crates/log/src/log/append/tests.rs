@@ -164,88 +164,89 @@ fn sync_failure_rolls_back_leo_producer_and_transaction_state() {
     assert!(recovered.pending_transaction_start(producer) == None);
 }
 
-/// A leader-epoch transition is recorded only when the epoch is known and
-/// only when it advances past the one already recorded.
+/// Every append path hands every appended batch's leader epoch to Kafka's
+/// `LeaderEpochFileCache.assign`, as `UnifiedLog.append` does, and the whole
+/// resulting epoch history is compared.
 ///
-/// Four append paths carry the same two-part guard, and each half is silent
-/// on its own: joined with `||` an unknown epoch gets recorded, and relaxed
-/// from `>` to `>=` the same epoch is recorded twice. Neither shows up in
-/// the appended data -- only in the epoch checkpoint.
+/// Batch `i` of a row lands at offset `i`. The `-1` "no epoch" sentinel
+/// records nothing. The latest epoch again is a no-op. A batch stamped with
+/// an older epoch than the latest is still assigned, and drops every trailing
+/// entry it does not strictly follow: a gate that only records advances would
+/// leave the newer epoch in place.
+/// One way of appending a batch to a log: the append path's name and the
+/// call that appends at `(log, position, leader_epoch)`.
+type AppendPath<'a> = Box<dyn Fn(&mut Log, usize, i32) + 'a>;
+
 #[test]
-fn an_epoch_transition_is_recorded_once_and_only_when_it_advances() {
-    // Offered in order. -1 is KIP-320's "unknown"; 5 repeats; 6 advances.
-    const OFFERED: [i32; 5] = [-1, 5, 5, 6, -1];
-    // Only the two advances belong in the checkpoint.
-    const RECORDED: [i32; 2] = [5, 6];
+fn every_appended_batch_is_assigned_its_leader_epoch() {
+    let entry = |epoch, start_offset| EpochEntry {
+        epoch: LeaderEpoch(epoch),
+        start_offset: Offset(start_offset),
+    };
+    let rows: [(&str, &[i32], Vec<EpochEntry>); 3] = [
+        (
+            "unknown epochs record nothing and a repeat is a no-op",
+            &[-1, 5, 5, 6, -1],
+            vec![entry(5, 1), entry(6, 3)],
+        ),
+        (
+            "an older epoch truncates the entries it does not follow",
+            &[1, 3, 2],
+            vec![entry(1, 0), entry(2, 2)],
+        ),
+        (
+            "an epoch older than every entry replaces them all",
+            &[4, 6, 3],
+            vec![entry(3, 2)],
+        ),
+    ];
 
-    fn recorded(log: &Log) -> Vec<i32> {
-        log.epoch_checkpoint
-            .entries()
-            .iter()
-            .map(|e| e.epoch.0)
-            .collect()
-    }
-
-    // `append`: the log assigns the base offset.
-    {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
-        for epoch in OFFERED {
-            let mut batch = sample_batch(1);
-            batch.partition_leader_epoch = epoch;
-            log.append(&mut batch).expect("append");
+    for (name, offered, expected) in rows {
+        let at = |i: usize| Offset(i64::try_from(i).unwrap());
+        let paths: [(&str, AppendPath<'_>); 4] = [
+            (
+                "append",
+                Box::new(|log, _, epoch| {
+                    let mut batch = sample_batch(1);
+                    batch.partition_leader_epoch = epoch;
+                    log.append(&mut batch).expect("append");
+                }),
+            ),
+            (
+                "append_at",
+                Box::new(|log, i, epoch| {
+                    let mut batch = sample_batch(1);
+                    batch.partition_leader_epoch = epoch;
+                    log.append_at(&mut batch, at(i)).expect("append_at");
+                }),
+            ),
+            (
+                "append_verbatim",
+                Box::new(|log, _, epoch| {
+                    let (_wire, vb) = verbatim_from(&test_batch_at(0), LeaderEpoch(epoch));
+                    log.append_verbatim(&vb).expect("append_verbatim");
+                }),
+            ),
+            (
+                "append_verbatim_at",
+                Box::new(|log, i, epoch| {
+                    let (_wire, vb) = verbatim_from(&test_batch_at(0), LeaderEpoch(epoch));
+                    log.append_verbatim_at(&vb, at(i))
+                        .expect("append_verbatim_at");
+                }),
+            ),
+        ];
+        for (path, append) in &paths {
+            let dir = tempdir().unwrap();
+            let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+            for (i, epoch) in offered.iter().enumerate() {
+                append(&mut log, i, *epoch);
+            }
+            check!(
+                log.epoch_checkpoint().entries() == &expected[..],
+                "{path}: {name}"
+            );
         }
-        check!(recorded(&log) == RECORDED, "append: {:?}", recorded(&log));
-    }
-
-    // `append_at`: the caller supplies the offset.
-    {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
-        for (i, epoch) in OFFERED.iter().enumerate() {
-            let mut batch = sample_batch(1);
-            batch.partition_leader_epoch = *epoch;
-            log.append_at(&mut batch, Offset(i64::try_from(i).unwrap()))
-                .expect("append_at");
-        }
-        check!(
-            recorded(&log) == RECORDED,
-            "append_at: {:?}",
-            recorded(&log)
-        );
-    }
-
-    // `append_verbatim`: producer-supplied bytes, log-assigned offset.
-    {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
-        for epoch in OFFERED {
-            let producer = test_batch_at(0);
-            let (_wire, vb) = verbatim_from(&producer, LeaderEpoch(epoch));
-            log.append_verbatim(&vb).expect("append_verbatim");
-        }
-        check!(
-            recorded(&log) == RECORDED,
-            "append_verbatim: {:?}",
-            recorded(&log)
-        );
-    }
-
-    // `append_verbatim_at`: producer-supplied bytes and offset.
-    {
-        let dir = tempdir().unwrap();
-        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
-        for (i, epoch) in OFFERED.iter().enumerate() {
-            let producer = test_batch_at(0);
-            let (_wire, vb) = verbatim_from(&producer, LeaderEpoch(*epoch));
-            log.append_verbatim_at(&vb, Offset(i64::try_from(i).unwrap()))
-                .expect("append_verbatim_at");
-        }
-        check!(
-            recorded(&log) == RECORDED,
-            "append_verbatim_at: {:?}",
-            recorded(&log)
-        );
     }
 }
 

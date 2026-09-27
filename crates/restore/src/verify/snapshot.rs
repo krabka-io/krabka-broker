@@ -5,6 +5,7 @@
 //! where that contract is stated once.
 
 use crc32c::crc32c;
+use krabka_verified::producer_snapshot::ProducerSnapshotEntryFacts;
 use object_store::path::Path;
 
 use super::offset_as_u64;
@@ -112,9 +113,15 @@ pub(super) fn validate_producer_snapshot(
 
         if !krabka_verified::producer_snapshot_entry_valid(
             snapshot_offset,
-            (producer_id, producer_epoch),
-            (last_sequence, last_offset, offset_delta),
-            (coordinator_epoch, transaction_first_offset),
+            ProducerSnapshotEntryFacts {
+                producer_id,
+                producer_epoch,
+                last_sequence,
+                last_offset,
+                offset_delta,
+                coordinator_epoch,
+                current_txn_first_offset: transaction_first_offset,
+            },
         ) {
             return Err(snapshot_entry_error(
                 key,

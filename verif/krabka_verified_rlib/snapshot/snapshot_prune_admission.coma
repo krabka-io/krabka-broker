@@ -1,9 +1,9 @@
-(* #"/proof-work-223/crates/verified/src/snapshot.rs" 62 0 62 78 *)
+(* #"/workspace/crates/verified/src/snapshot.rs" 64 0 64 78 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span ssnapshot = "/proof-work-223/crates/verified/src/snapshot.rs" 63 20 63 21
-let%span ssnapshot'0 = "/proof-work-223/crates/verified/src/snapshot.rs" 63 4 63 54
-let%span ssnapshot'1 = "/proof-work-223/crates/verified/src/snapshot.rs" 60 10 60 75
+let%span ssnapshot = "/workspace/crates/verified/src/snapshot.rs" 65 20 65 21
+let%span ssnapshot'0 = "/workspace/crates/verified/src/snapshot.rs" 65 4 65 54
+let%span ssnapshot'1 = "/workspace/crates/verified/src/snapshot.rs" 62 10 62 75
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -17,7 +17,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let snapshot_prune_admission [#"/proof-work-223/crates/verified/src/snapshot.rs" 62 0 62 78] (snapshot_end: Int64.t)
+let snapshot_prune_admission [#"/workspace/crates/verified/src/snapshot.rs" 64 0 64 78] (snapshot_end: Int64.t)
   (committed_end: Int64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_6 <- Int64.ge snapshot_end ([%#ssnapshot] (0: Int64.t)) ] s1

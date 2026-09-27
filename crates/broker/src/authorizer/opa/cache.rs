@@ -1,7 +1,7 @@
 //! Key and entry types for the OPA decision cache. They live apart from the
 //! authorizer itself because they are pure data: the cache key is the tuple
 //! that identifies one authorization question, and the entry is the answer
-//! plus the wall-clock stamp at which it goes stale.
+//! plus the monotonic-clock stamp, in milliseconds, at which it goes stale.
 
 use std::net::IpAddr;
 

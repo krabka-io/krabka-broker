@@ -1,0 +1,208 @@
+(* #"/workspace/crates/verified/src/producer_snapshot.rs" 145 0 145 94 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sproducer_snapshot = "/workspace/crates/verified/src/producer_snapshot.rs" 146 17 146 33
+let%span sproducer_snapshot'0 = "/workspace/crates/verified/src/producer_snapshot.rs" 147 22 147 27
+let%span sproducer_snapshot'1 = "/workspace/crates/verified/src/producer_snapshot.rs" 148 31 148 35
+let%span sproducer_snapshot'2 = "/workspace/crates/verified/src/producer_snapshot.rs" 149 16 149 22
+let%span sproducer_snapshot'3 = "/workspace/crates/verified/src/producer_snapshot.rs" 154 14 154 39
+let%span sproducer_snapshot'4 = "/workspace/crates/verified/src/producer_snapshot.rs" 155 14 155 33
+let%span sproducer_snapshot'5 = "/workspace/crates/verified/src/producer_snapshot.rs" 152 16 153 40
+let%span sproducer_snapshot'6 = "/workspace/crates/verified/src/producer_snapshot.rs" 151 16 151 91
+let%span sproducer_snapshot'7 = "/workspace/crates/verified/src/producer_snapshot.rs" 150 16 150 42
+let%span sproducer_snapshot'8 = "/workspace/crates/verified/src/producer_snapshot.rs" 156 11 156 27
+let%span sproducer_snapshot'9 = "/workspace/crates/verified/src/producer_snapshot.rs" 157 22 157 26
+let%span sproducer_snapshot'10 = "/workspace/crates/verified/src/producer_snapshot.rs" 159 11 159 27
+let%span sproducer_snapshot'11 = "/workspace/crates/verified/src/producer_snapshot.rs" 160 31 160 36
+let%span sproducer_snapshot'12 = "/workspace/crates/verified/src/producer_snapshot.rs" 162 13 162 14
+let%span sproducer_snapshot'13 = "/workspace/crates/verified/src/producer_snapshot.rs" 162 8 162 14
+let%span sproducer_snapshot'14 = "/workspace/crates/verified/src/producer_snapshot.rs" 164 21 164 25
+let%span sproducer_snapshot'15 = "/workspace/crates/verified/src/producer_snapshot.rs" 165 16 165 22
+let%span sproducer_snapshot'16 = "/workspace/crates/verified/src/producer_snapshot.rs" 168 14 168 35
+let%span sproducer_snapshot'17 = "/workspace/crates/verified/src/producer_snapshot.rs" 169 14 169 29
+let%span sproducer_snapshot'18 = "/workspace/crates/verified/src/producer_snapshot.rs" 167 16 167 87
+let%span sproducer_snapshot'19 = "/workspace/crates/verified/src/producer_snapshot.rs" 166 16 166 38
+let%span sproducer_snapshot'20 = "/workspace/crates/verified/src/producer_snapshot.rs" 170 11 170 23
+let%span sproducer_snapshot'21 = "/workspace/crates/verified/src/producer_snapshot.rs" 171 21 171 26
+let%span sproducer_snapshot'22 = "/workspace/crates/verified/src/producer_snapshot.rs" 173 13 173 14
+let%span sproducer_snapshot'23 = "/workspace/crates/verified/src/producer_snapshot.rs" 173 8 173 14
+let%span sproducer_snapshot'24 = "/workspace/crates/verified/src/producer_snapshot.rs" 175 5 175 46
+let%span sproducer_snapshot'25 = "/workspace/crates/verified/src/producer_snapshot.rs" 175 17 175 45
+let%span sproducer_snapshot'26 = "/workspace/crates/verified/src/producer_snapshot.rs" 142 11 142 36
+let%span sproducer_snapshot'27 = "/workspace/crates/verified/src/producer_snapshot.rs" 143 10 143 75
+let%span sproducer_snapshot'28 = "/workspace/crates/verified/src/producer_snapshot.rs" 70 8 74 55
+let%span sproducer_snapshot'29 = "/workspace/crates/verified/src/producer_snapshot.rs" 53 16 53 79
+
+use creusot.slice.Slice64
+use creusot.int.UInt64
+use creusot.int.Int64
+use seq.Seq
+use creusot.prelude.Any
+use int.Int
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+let len_i64 (self_: Slice64.slice Int64.t) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#sslice] Seq.length (Slice64.view self_)
+    = UInt64.t'int result}
+    (! return {result}) ]
+
+predicate is_segment_base [#"/workspace/crates/verified/src/producer_snapshot.rs" 52 0 52 60] (bases: Seq.seq Int64.t) (offset: int) =
+  [%#sproducer_snapshot'29] exists j: int. 0 <= j /\ j < Seq.length bases /\ Int64.to_int (Seq.get bases j) = offset
+
+predicate kafka_stray_removed [#"/workspace/crates/verified/src/producer_snapshot.rs" 68 0 68 84] (snapshots: Seq.seq Int64.t) (index: int) (bases: Seq.seq Int64.t) =
+  [%#sproducer_snapshot'28] not is_segment_base bases (Int64.to_int (Seq.get snapshots index))
+  /\ not ((forall j: int. 0 <= j /\ j < Seq.length snapshots
+      -> Int64.to_int (Seq.get snapshots j) <= Int64.to_int (Seq.get snapshots index))
+  /\ (forall j: int. 0 <= j /\ j < Seq.length bases
+    -> Int64.to_int (Seq.get bases j) < Int64.to_int (Seq.get snapshots index)))
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let producer_snapshot_stray [#"/workspace/crates/verified/src/producer_snapshot.rs" 145 0 145 94]
+  (snapshots: Slice64.slice Int64.t) (index: UInt64.t) (segment_bases: Slice64.slice Int64.t) (return (x: bool)) =
+{[@stop_split] [@expl:producer_snapshot_stray requires] [%#sproducer_snapshot'26] UInt64.t'int index
+  < Seq.length (Slice64.view snapshots)}
+  (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_12 <- index ] s1
+    | s1 = [ &_13 <- Slice64.length snapshots ] s2
+    | s2 = [ &_14 <- UInt64.lt _12 _13 ] s3
+    | s3 = {[@expl:index in bounds] [%#sproducer_snapshot] _14} s4
+    | s4 = Slice64.get [%#sproducer_snapshot] <Int64.t> {snapshots} {_12} (fun (r: Int64.t) -> [ &offset <- r ] s5)
+    | s5 = [ &is_base <- [%#sproducer_snapshot'0] false ] s6
+    | s6 = [ &above_every_base <- [%#sproducer_snapshot'1] true ] s7
+    | s7 = [ &i <- [%#sproducer_snapshot'2] (0: UInt64.t) ] s8
+    | s8 = bb2 ]
+  | bb2 = bb2invariant
+    [ bb2 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb2 ([%#sproducer_snapshot'3] Seq.length (Slice64.view segment_bases)
+      - UInt64.t'int i)}
+      bb2invariant
+    | bb2invariant = {[@expl:loop invariant #0] [%#sproducer_snapshot'7] UInt64.t'int i
+      <= Seq.length (Slice64.view segment_bases)}
+      {[@expl:loop invariant #1] [%#sproducer_snapshot'6] is_base
+      = (exists j: int. 0 <= j
+        /\ j < UInt64.t'int i /\ Int64.to_int (Seq.get (Slice64.view segment_bases) j) = Int64.to_int offset)}
+      {[@expl:loop invariant #2] [%#sproducer_snapshot'5] above_every_base
+      = (forall j: int. 0 <= j /\ j < UInt64.t'int i
+        -> Int64.to_int (Seq.get (Slice64.view segment_bases) j) < Int64.to_int offset)}
+      (! [ &variant_old_bb2 <- [%#sproducer_snapshot'3] Seq.length (Slice64.view segment_bases) - UInt64.t'int i ] s0)
+      [ s0 = len_i64 [%#sproducer_snapshot'4] {segment_bases} (fun (_x: UInt64.t) -> [ &_39 <- _x ] s1)
+      | s1 = [ &_37 <- UInt64.lt i _39 ] s2
+      | s2 = any [ br0 -> {_37 = false} (! bb14) | br1 -> {_37} (! bb5) ] ]
+      [ bb5 = s0
+        [ s0 = [ &_44 <- i ] s1
+        | s1 = [ &_45 <- Slice64.length segment_bases ] s2
+        | s2 = [ &_46 <- UInt64.lt _44 _45 ] s3
+        | s3 = {[@expl:index in bounds] [%#sproducer_snapshot'8] _46} s4
+        | s4 = Slice64.get [%#sproducer_snapshot'8] <Int64.t> {segment_bases} {_44}
+            (fun (r: Int64.t) -> [ &_43 <- r ] s5)
+        | s5 = [ &_42 <- _43 = offset ] s6
+        | s6 = any [ br0 -> {_42 = false} (! bb9) | br1 -> {_42} (! bb7) ] ]
+      | bb7 = s0 [ s0 = [ &is_base <- [%#sproducer_snapshot'9] true ] s1 | s1 = bb9 ]
+      | bb9 = s0
+        [ s0 = [ &_51 <- i ] s1
+        | s1 = [ &_52 <- Slice64.length segment_bases ] s2
+        | s2 = [ &_53 <- UInt64.lt _51 _52 ] s3
+        | s3 = {[@expl:index in bounds] [%#sproducer_snapshot'10] _53} s4
+        | s4 = Slice64.get [%#sproducer_snapshot'10] <Int64.t> {segment_bases} {_51}
+            (fun (r: Int64.t) -> [ &_50 <- r ] s5)
+        | s5 = [ &_49 <- Int64.ge _50 offset ] s6
+        | s6 = any [ br0 -> {_49 = false} (! bb13) | br1 -> {_49} (! bb11) ] ]
+      | bb11 = s0 [ s0 = [ &above_every_base <- [%#sproducer_snapshot'11] false ] s1 | s1 = bb13 ]
+      | bb13 = s0
+        [ s0 = UInt64.add [%#sproducer_snapshot'13] {i} {[%#sproducer_snapshot'12] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &i <- _x ] s1)
+        | s1 = bb2 ] ] ]
+  | bb14 = s0
+    [ s0 = [ &newest <- [%#sproducer_snapshot'14] true ] s1
+    | s1 = [ &k <- [%#sproducer_snapshot'15] (0: UInt64.t) ] s2
+    | s2 = bb15 ]
+  | bb15 = bb15invariant
+    [ bb15 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb15 ([%#sproducer_snapshot'16] Seq.length (Slice64.view snapshots)
+      - UInt64.t'int k)}
+      bb15invariant
+    | bb15invariant = {[@expl:loop invariant #0] [%#sproducer_snapshot'19] UInt64.t'int k
+      <= Seq.length (Slice64.view snapshots)}
+      {[@expl:loop invariant #1] [%#sproducer_snapshot'18] newest
+      = (forall j: int. 0 <= j /\ j < UInt64.t'int k
+        -> Int64.to_int (Seq.get (Slice64.view snapshots) j) <= Int64.to_int offset)}
+      (! [ &variant_old_bb15 <- [%#sproducer_snapshot'16] Seq.length (Slice64.view snapshots) - UInt64.t'int k ] s0)
+      [ s0 = len_i64 [%#sproducer_snapshot'17] {snapshots} (fun (_x: UInt64.t) -> [ &_73 <- _x ] s1)
+      | s1 = [ &_71 <- UInt64.lt k _73 ] s2
+      | s2 = any [ br0 -> {_71 = false} (! bb23) | br1 -> {_71} (! bb18) ] ]
+      [ bb18 = s0
+        [ s0 = [ &_78 <- k ] s1
+        | s1 = [ &_79 <- Slice64.length snapshots ] s2
+        | s2 = [ &_80 <- UInt64.lt _78 _79 ] s3
+        | s3 = {[@expl:index in bounds] [%#sproducer_snapshot'20] _80} s4
+        | s4 = Slice64.get [%#sproducer_snapshot'20] <Int64.t> {snapshots} {_78} (fun (r: Int64.t) -> [ &_77 <- r ] s5)
+        | s5 = [ &_76 <- Int64.gt _77 offset ] s6
+        | s6 = any [ br0 -> {_76 = false} (! bb22) | br1 -> {_76} (! bb20) ] ]
+      | bb20 = s0 [ s0 = [ &newest <- [%#sproducer_snapshot'21] false ] s1 | s1 = bb22 ]
+      | bb22 = s0
+        [ s0 = UInt64.add [%#sproducer_snapshot'23] {k} {[%#sproducer_snapshot'22] (1: UInt64.t)}
+            (fun (_x: UInt64.t) -> [ &k <- _x ] s1)
+        | s1 = bb15 ] ] ]
+  | bb23 = any [ br0 -> {is_base = false} (! bb25) | br1 -> {is_base} (! bb24) ]
+  | bb24 = s0 [ s0 = [ &_83 <- [%#sproducer_snapshot'24] true ] s1 | s1 = bb29 ]
+  | bb25 = any [ br0 -> {newest = false} (! bb27) | br1 -> {newest} (! bb26) ]
+  | bb26 = s0 [ s0 = [ &_83 <- above_every_base ] s1 | s1 = bb29 ]
+  | bb27 = s0 [ s0 = [ &_83 <- [%#sproducer_snapshot'25] false ] s1 | s1 = bb29 ]
+  | bb29 = s0 [ s0 = [ &_ret <- not _83 ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & snapshots: Slice64.slice Int64.t = snapshots
+  | & index: UInt64.t = index
+  | & segment_bases: Slice64.slice Int64.t = segment_bases
+  | & offset: Int64.t = Any.any_l ()
+  | & _12: UInt64.t = Any.any_l ()
+  | & _13: UInt64.t = Any.any_l ()
+  | & _14: bool = Any.any_l ()
+  | & is_base: bool = Any.any_l ()
+  | & above_every_base: bool = Any.any_l ()
+  | & i: UInt64.t = Any.any_l ()
+  | & _37: bool = Any.any_l ()
+  | & _39: UInt64.t = Any.any_l ()
+  | & _42: bool = Any.any_l ()
+  | & _43: Int64.t = Any.any_l ()
+  | & _44: UInt64.t = Any.any_l ()
+  | & _45: UInt64.t = Any.any_l ()
+  | & _46: bool = Any.any_l ()
+  | & _49: bool = Any.any_l ()
+  | & _50: Int64.t = Any.any_l ()
+  | & _51: UInt64.t = Any.any_l ()
+  | & _52: UInt64.t = Any.any_l ()
+  | & _53: bool = Any.any_l ()
+  | & newest: bool = Any.any_l ()
+  | & k: UInt64.t = Any.any_l ()
+  | & _71: bool = Any.any_l ()
+  | & _73: UInt64.t = Any.any_l ()
+  | & _76: bool = Any.any_l ()
+  | & _77: Int64.t = Any.any_l ()
+  | & _78: UInt64.t = Any.any_l ()
+  | & _79: UInt64.t = Any.any_l ()
+  | & _80: bool = Any.any_l ()
+  | & _83: bool = Any.any_l ()
+  | & variant_old_bb2: int = Any.any_l ()
+  | & variant_old_bb15: int = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:producer_snapshot_stray ensures] [%#sproducer_snapshot'27] result
+    = kafka_stray_removed (Slice64.view snapshots) (UInt64.t'int index) (Slice64.view segment_bases)}
+    (! return {result}) ]

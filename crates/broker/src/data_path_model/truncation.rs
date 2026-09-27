@@ -31,11 +31,18 @@ fn epoch_entries(log: &[u8]) -> Vec<EpochEntry> {
 pub(super) fn real_truncation_offset(follower_log: &[u8], leader_log: &[u8]) -> i64 {
     let leader_entries = epoch_entries(leader_log);
     let follower_latest = follower_log.last().map_or(-1, |&e| i32::from(e));
+    let leader_end = model_offset(leader_log.len());
     let (_, end) = epoch_and_offset_for_entries(
         &leader_entries,
         krabka_log::LeaderEpoch(follower_latest),
-        Offset(model_offset(leader_log.len())),
+        Offset(leader_end),
     );
+    // Kafka's `endOffsetFor` answers `UNDEFINED_EPOCH_OFFSET` (-1) when it
+    // cannot place the follower's epoch: no epoch at all, or one past every
+    // leader epoch. The follower then falls back to the leader's log end, as
+    // `AbstractFetcherThread.fetchOffsetAndTruncate` does on the
+    // `OFFSET_OUT_OF_RANGE` the leader answers with.
+    let end = if end.0 < 0 { leader_end } else { end.0 };
     // Unwrap the log-layer `Offset` into this model's `i64` world at the seam.
-    end.0.min(model_offset(follower_log.len()))
+    end.min(model_offset(follower_log.len()))
 }

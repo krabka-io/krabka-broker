@@ -1,0 +1,22 @@
+(* #"/workspace/crates/verified/src/transaction.rs" 46 27 46 32 *)
+
+(* <transaction::TransactionMarkerPartitionState as std::clone::Clone> *)
+
+use creusot.int.Int16
+use creusot.int.Int32
+use creusot.prelude.Any
+
+type t_TransactionMarkerPartitionState = {
+  producer_epoch: Int16.t;
+  coordinator_epoch: Int32.t;
+  has_pending_transaction: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_TransactionMarkerPartitionState [#"/workspace/crates/verified/src/transaction.rs" 46 27 46 32]
+  (self: t_TransactionMarkerPartitionState) (return (x: t_TransactionMarkerPartitionState)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_TransactionMarkerPartitionState = Any.any_l () | & self: t_TransactionMarkerPartitionState = self ])
+  [ return (result: t_TransactionMarkerPartitionState) -> (! return {result}) ]

@@ -1,6 +1,7 @@
 //! Scheduled-delivery visibility kernels.
 
 #[cfg(creusot)]
+use creusot_std::prelude::{Int, logic};
 use creusot_std::prelude::{ensures, requires};
 
 /// Decide whether a record batch may be exposed at the supplied clock reading.
@@ -8,9 +9,9 @@ use creusot_std::prelude::{ensures, requires};
 /// A negative uncertainty is invalid and fails closed for scheduled delivery.
 /// A deadline that cannot be represented also fails closed instead of becoming
 /// visible early through saturating arithmetic.
-#[cfg_attr(creusot, ensures(result == (!scheduled || (uncertainty_ms@ >= 0
+#[ensures(result == (!scheduled || (uncertainty_ms@ >= 0
     && activation_ms@ + uncertainty_ms@ <= i64::MAX@
-    && activation_ms@ + uncertainty_ms@ <= now_ms@))))]
+    && activation_ms@ + uncertainty_ms@ <= now_ms@)))]
 #[must_use]
 pub fn scheduled_delivery_visible(
     scheduled: bool,
@@ -30,20 +31,23 @@ pub fn scheduled_delivery_visible(
     deadline_ms <= now_ms
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+fn clamp_to(value: Int, low: Int, high: Int) -> Int {
+    pearlite! { if value < low { low } else if value > high { high } else { value } }
+}
+
 /// Bound one scheduled-delivery watermark step to the live log range.
 ///
-/// The current watermark is first clamped after retention or truncation. A
-/// normal scan may then advance it, but can never move it backwards or past the
-/// current log end.
-#[cfg_attr(creusot, requires(log_start@ <= log_end@))]
-#[cfg_attr(creusot, ensures(log_start@ <= result@ && result@ <= log_end@))]
-#[cfg_attr(creusot, ensures(result@ >= if current@ < log_start@ {
-    log_start@
-} else if current@ > log_end@ {
-    log_end@
-} else {
-    current@
-}))]
+/// The current watermark is first clamped into `[log_start, log_end]` after
+/// retention or truncation. The step then moves it to the candidate when the
+/// candidate is ahead, capped at the log end:
+/// `min(max(candidate, clamped current), log_end)`. It never moves the clamped
+/// watermark backwards or past the log end.
+#[requires(log_start@ <= log_end@)]
+#[ensures(result@ == candidate@.max(clamp_to(current@, log_start@, log_end@)).min(log_end@))]
 #[must_use]
 pub fn delivery_watermark_advance(
     log_start: i64,
@@ -72,9 +76,9 @@ pub fn delivery_watermark_advance(
 ///
 /// The comparison is expressed without overflowing `last_high + 1` at
 /// `i64::MAX`.
-#[cfg_attr(creusot, ensures(result.0 == (low@ <= last_high@ + 1)))]
-#[cfg_attr(creusot, ensures(result.1@ >= last_high@ && result.1@ >= high@))]
-#[cfg_attr(creusot, ensures(result.1@ == last_high@ || result.1@ == high@))]
+#[ensures(result.0 == (low@ <= last_high@ + 1))]
+#[ensures(result.1@ >= last_high@ && result.1@ >= high@)]
+#[ensures(result.1@ == last_high@ || result.1@ == high@)]
 #[must_use]
 pub fn coalesce_delivery_range(last_high: i64, low: i64, high: i64) -> (bool, i64) {
     let merge = if low <= last_high {

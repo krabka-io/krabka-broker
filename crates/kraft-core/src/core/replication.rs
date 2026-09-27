@@ -285,7 +285,14 @@ impl QuorumStateMachine {
     ///
     /// A diverging hint means that we must truncate, to the offset Kafka's
     /// `RaftLog.truncateToEndOffset` picks from the hint and our own log.
-    /// Without a hint, we re-arm the fetch timer and fetch again.
+    /// Either way the answer is a successful fetch: we re-arm the fetch timer
+    /// and fetch again at once, from the truncated log end after a hint. Kafka's
+    /// `KafkaRaftClient.handleFetchResponse` truncates and then calls
+    /// `FollowerState.resetFetchTimeoutForSuccessfulFetch` on the diverging
+    /// path as on the append path, and the next `pollFollowerAsVoter` sends the
+    /// next Fetch through `maybeSendFetchToBestNode` with no backoff. Without
+    /// that Fetch a truncated voter would sit idle until its fetch timer
+    /// started an election.
     #[tracing::instrument(
         level = "debug",
         skip_all,
@@ -299,20 +306,26 @@ impl QuorumStateMachine {
         diverging: Option<LogOffsetMetadata>,
         now: SimInstant,
     ) -> Vec<Action> {
-        if let Some(point) = diverging {
-            return vec![Action::TruncateTo(LogOffsetMetadata {
-                offset: point.follower_truncation_offset(log),
-                epoch: point.epoch,
-            })];
-        }
+        // The truncation comes first: the Fetch after it is built from the
+        // truncated log end, as executors apply actions in order.
+        let mut actions: Vec<Action> = diverging
+            .map(|point| {
+                Action::TruncateTo(LogOffsetMetadata {
+                    offset: point.follower_truncation_offset(log),
+                    epoch: point.epoch,
+                })
+            })
+            .into_iter()
+            .collect();
         let fetch_deadline = now.saturating_add_ms(self.election_timeout_ms);
-        vec![
+        actions.extend([
             Action::SendFetch { leader_id },
             Action::ResetTimer {
                 kind: TimerKind::Fetch,
                 deadline: fetch_deadline,
             },
-        ]
+        ]);
+        actions
     }
 
     /// The fetch timer fired: a follower or observer lost contact with the leader.

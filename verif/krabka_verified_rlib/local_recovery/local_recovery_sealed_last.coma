@@ -1,11 +1,11 @@
-(* #"/proof-work-243/crates/verified/src/local_recovery.rs" 79 0 79 75 *)
+(* #"/workspace/crates/verified/src/local_recovery.rs" 139 0 139 75 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span slocal_recovery = "/proof-work-243/crates/verified/src/local_recovery.rs" 80 14 80 15
-let%span slocal_recovery'0 = "/proof-work-243/crates/verified/src/local_recovery.rs" 83 25 83 26
-let%span slocal_recovery'1 = "/proof-work-243/crates/verified/src/local_recovery.rs" 83 13 83 26
-let%span slocal_recovery'2 = "/proof-work-243/crates/verified/src/local_recovery.rs" 74 10 77 1
+let%span slocal_recovery = "/workspace/crates/verified/src/local_recovery.rs" 140 14 140 15
+let%span slocal_recovery'0 = "/workspace/crates/verified/src/local_recovery.rs" 143 25 143 26
+let%span slocal_recovery'1 = "/workspace/crates/verified/src/local_recovery.rs" 143 13 143 26
+let%span slocal_recovery'2 = "/workspace/crates/verified/src/local_recovery.rs" 134 10 137 1
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -25,7 +25,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let local_recovery_sealed_last [#"/proof-work-243/crates/verified/src/local_recovery.rs" 79 0 79 75] (base: Int64.t)
+let local_recovery_sealed_last [#"/workspace/crates/verified/src/local_recovery.rs" 139 0 139 75] (base: Int64.t)
   (next_base: Int64.t) (return (x: t_Option_i64)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_6 <- Int64.lt base ([%#slocal_recovery] (0: Int64.t)) ] s1

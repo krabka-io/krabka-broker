@@ -4,9 +4,12 @@
 //! the single rule that decides which move is legal, so every metadata update
 //! is checked against one place.
 
+use krabka_verified::storage::{RemoteSegmentLifecycle, remote_segment_transition};
+
 /// Lifecycle state of a remote log segment.
 ///
-/// Valid transitions (see [`RemoteLogSegmentState::is_valid_transition`]):
+/// Valid transitions (see [`RemoteLogSegmentState::is_valid_transition`]),
+/// plus every self transition:
 ///
 /// ```text
 /// CopySegmentStarted ──► CopySegmentFinished ──► DeleteSegmentStarted ──► DeleteSegmentFinished
@@ -29,19 +32,21 @@ pub enum RemoteLogSegmentState {
 impl RemoteLogSegmentState {
     /// `true` if a segment currently in `self` may transition to `target`.
     ///
-    /// A same-state "transition" is not valid. Callers treat it as a no-op
-    /// or a duplicate, not as an advance.
+    /// This is Kafka's `RemoteLogSegmentState.isValidTransition`, so a
+    /// same-state transition is valid: Kafka admits it to keep retries and
+    /// failover idempotent.
     #[must_use]
     pub fn is_valid_transition(self, target: Self) -> bool {
-        krabka_verified::remote_segment_transition(self.proof_tag(), target.proof_tag())
+        remote_segment_transition(self.lifecycle(), target.lifecycle())
     }
 
-    const fn proof_tag(self) -> u8 {
+    /// The proof kernels' view of this state.
+    pub(crate) const fn lifecycle(self) -> RemoteSegmentLifecycle {
         match self {
-            Self::CopySegmentStarted => 0,
-            Self::CopySegmentFinished => 1,
-            Self::DeleteSegmentStarted => 2,
-            Self::DeleteSegmentFinished => 3,
+            Self::CopySegmentStarted => RemoteSegmentLifecycle::CopyStarted,
+            Self::CopySegmentFinished => RemoteSegmentLifecycle::CopyFinished,
+            Self::DeleteSegmentStarted => RemoteSegmentLifecycle::DeleteStarted,
+            Self::DeleteSegmentFinished => RemoteSegmentLifecycle::DeleteFinished,
         }
     }
 }
@@ -63,11 +68,12 @@ mod tests {
             DeleteSegmentStarted,
             DeleteSegmentFinished,
         ];
+        // Kafka's `RemoteLogSegmentState.isValidTransition`, row = source.
         let expected = [
+            [true, true, true, false],
             [false, true, true, false],
-            [false, false, true, false],
+            [false, false, true, true],
             [false, false, false, true],
-            [false, false, false, false],
         ];
         for (from_index, from) in states.into_iter().enumerate() {
             for (to_index, to) in states.into_iter().enumerate() {

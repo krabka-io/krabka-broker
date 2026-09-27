@@ -1,15 +1,19 @@
-(* #"/proof-work-217c/crates/verified/src/snapshot.rs" 62 0 70 26 *)
+(* #"/workspace/crates/verified/src/snapshot.rs" 109 0 117 26 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 76 8 82 9
 let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
 let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
-let%span ssnapshot = "/proof-work-217c/crates/verified/src/snapshot.rs" 72 22 72 23
-let%span ssnapshot'0 = "/proof-work-217c/crates/verified/src/snapshot.rs" 73 23 73 24
-let%span ssnapshot'1 = "/proof-work-217c/crates/verified/src/snapshot.rs" 74 22 74 23
-let%span ssnapshot'2 = "/proof-work-217c/crates/verified/src/snapshot.rs" 75 27 75 28
-let%span ssnapshot'3 = "/proof-work-217c/crates/verified/src/snapshot.rs" 86 30 86 61
-let%span ssnapshot'4 = "/proof-work-217c/crates/verified/src/snapshot.rs" 22 10 60 1
+let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 27 28 27 33
+let%span scmp = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 184 18 184 77
+let%span ssnapshot = "/workspace/crates/verified/src/snapshot.rs" 119 22 119 23
+let%span ssnapshot'0 = "/workspace/crates/verified/src/snapshot.rs" 120 23 120 24
+let%span ssnapshot'1 = "/workspace/crates/verified/src/snapshot.rs" 121 22 121 23
+let%span ssnapshot'2 = "/workspace/crates/verified/src/snapshot.rs" 122 27 122 28
+let%span ssnapshot'3 = "/workspace/crates/verified/src/snapshot.rs" 133 30 133 61
+let%span ssnapshot'4 = "/workspace/crates/verified/src/snapshot.rs" 136 10 136 43
+let%span ssnapshot'5 = "/workspace/crates/verified/src/snapshot.rs" 69 10 107 1
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -44,6 +48,23 @@ let checked_add (self_: Int64.t) (rhs: Int64.t) (return (x: t_Option_i64)) = any
       -> Int64.to_int r = Int64.to_int self_ + Int64.to_int rhs)}
     (! return {result}) ]
 
+type t_Ordering = Less | Equal | Greater
+
+function cmp_log_Int (self: int) (other: int) : t_Ordering = [%#sord'1] if self = other then
+    Equal
+  else
+    if self < other then Less else Greater
+
+
+function deep_model_i64 [@inline:trivial] (self: Int64.t) : int = [%#snum'1] Int64.to_int self
+
+meta "rewrite_def" function deep_model_i64
+
+let cmp_i64 (self_: Int64.t) (rhs: Int64.t) (return (x: t_Ordering)) = any
+  [ return (result: t_Ordering) -> {[@stop_split] [@expl:cmp ensures] [%#scmp] result
+    = cmp_log_Int (deep_model_i64 self_) (deep_model_i64 rhs)}
+    (! return {result}) ]
+
 predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
 
 meta "rewrite_def" predicate ge_log_Int
@@ -52,7 +73,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let snapshot_chunk_admission [#"/proof-work-217c/crates/verified/src/snapshot.rs" 62 0 70 26] (identity_matches: bool)
+let snapshot_chunk_admission [#"/workspace/crates/verified/src/snapshot.rs" 109 0 117 26] (identity_matches: bool)
   (fixed_size: t_Option_i64) (received: Int64.t) (declared_size: Int64.t) (position: Int64.t) (chunk_len: Int64.t)
   (max_size: Int64.t) (return (x: t_SnapshotChunkDecision)) = (! bb0
   [ bb0 = any [ br0 -> {identity_matches = false} (! bb13) | br1 -> {identity_matches} (! bb1) ]
@@ -85,14 +106,12 @@ let snapshot_chunk_admission [#"/proof-work-217c/crates/verified/src/snapshot.rs
   | bb23 = s0 [ s0 = [ &_ret <- Restart ] s1 | s1 = return {_ret} ]
   | bb22 = s0
     [ s0 = elim_Some {_42} (fun (r0: Int64.t) -> [ &next_position <- r0 ] s1)
-    | s1 = [ &_46 <- Int64.gt next_position declared_size ] s2
-    | s2 = any [ br0 -> {_46 = false} (! bb25) | br1 -> {_46} (! bb24) ] ]
-  | bb24 = s0 [ s0 = [ &_ret <- Restart ] s1 | s1 = return {_ret} ]
-  | bb25 = s0
-    [ s0 = [ &_49 <- next_position = declared_size ] s1
-    | s1 = any [ br0 -> {_49 = false} (! bb27) | br1 -> {_49} (! bb26) ] ]
-  | bb26 = s0 [ s0 = [ &_ret <- Complete ] s1 | s1 = return {_ret} ]
-  | bb27 = s0 [ s0 = [ &_ret <- Continue next_position ] s1 | s1 = return {_ret} ]
+    | s1 = [ &_49 <- declared_size ] s2
+    | s2 = cmp_i64 [%#ssnapshot'4] {next_position} {_49} (fun (_x: t_Ordering) -> [ &_46 <- _x ] s3)
+    | s3 = any [ br0 -> {_46 = Less} (! bb28) | br1 -> {_46 = Equal} (! bb29) | br2 -> {_46 = Greater} (! bb30) ] ]
+  | bb30 = s0 [ s0 = [ &_ret <- Restart ] s1 | s1 = return {_ret} ]
+  | bb29 = s0 [ s0 = [ &_ret <- Complete ] s1 | s1 = return {_ret} ]
+  | bb28 = s0 [ s0 = [ &_ret <- Continue next_position ] s1 | s1 = return {_ret} ]
   | bb13 = s0 [ s0 = [ &_ret <- Restart ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_SnapshotChunkDecision = Any.any_l ()
   | & identity_matches: bool = identity_matches
@@ -112,10 +131,10 @@ let snapshot_chunk_admission [#"/proof-work-217c/crates/verified/src/snapshot.rs
   | & _36: bool = Any.any_l ()
   | & next_position: Int64.t = Any.any_l ()
   | & _42: t_Option_i64 = Any.any_l ()
-  | & _46: bool = Any.any_l ()
-  | & _49: bool = Any.any_l () ])
+  | & _46: t_Ordering = Any.any_l ()
+  | & _49: Int64.t = Any.any_l () ])
   [ return (result: t_SnapshotChunkDecision) ->
-  {[@stop_split] [@expl:snapshot_chunk_admission ensures] [%#ssnapshot'4] match result with
+  {[@stop_split] [@expl:snapshot_chunk_admission ensures] [%#ssnapshot'5] match result with
       | Restart -> not identity_matches
       \/ Int64.to_int received < 0
       \/ Int64.to_int chunk_len < 0

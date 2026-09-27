@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use super::{Assignment, Assignor, MemberSubscription, TopicMetadata};
+use super::{Assignment, Assignor, GroupSpec, TopicMetadata};
 
 #[derive(Debug)]
 pub struct RangeAssignor;
@@ -15,7 +15,8 @@ impl Assignor for RangeAssignor {
         "range"
     }
 
-    fn assign(&self, members: &[MemberSubscription], topics: &TopicMetadata) -> Assignment {
+    fn assign(&self, group: &GroupSpec, topics: &TopicMetadata) -> Assignment {
+        let members = &group.members;
         let mut out: Assignment = HashMap::new();
         for m in members {
             out.insert(m.member_id.clone(), HashMap::new());
@@ -60,6 +61,7 @@ mod tests {
     use krabka_protocol::primitives::uuid::Uuid;
 
     use super::*;
+    use crate::coordinator::unified::assignor::{MemberSubscription, SubscriptionType};
 
     fn tid(b: u8) -> Uuid {
         Uuid([b; 16])
@@ -69,6 +71,14 @@ mod tests {
             member_id: id.into(),
             rack_id: None,
             subscribed_topic_ids: topics.to_vec(),
+            assigned_partitions: HashMap::new(),
+        }
+    }
+
+    fn group(members: Vec<MemberSubscription>) -> GroupSpec {
+        GroupSpec {
+            members,
+            subscription_type: SubscriptionType::Heterogeneous,
         }
     }
 
@@ -79,7 +89,10 @@ mod tests {
             partitions_per_topic: [(t, 6)].into(),
             ..Default::default()
         };
-        let a = RangeAssignor.assign(&[member("m1", &[t]), member("m2", &[t])], &topics);
+        let a = RangeAssignor.assign(
+            &group(vec![member("m1", &[t]), member("m2", &[t])]),
+            &topics,
+        );
         assert!(a["m1"][&t] == vec![0, 1, 2]);
         assert!(a["m2"][&t] == vec![3, 4, 5]);
     }
@@ -92,7 +105,11 @@ mod tests {
             ..Default::default()
         };
         let a = RangeAssignor.assign(
-            &[member("m1", &[t]), member("m2", &[t]), member("m3", &[t])],
+            &group(vec![
+                member("m1", &[t]),
+                member("m2", &[t]),
+                member("m3", &[t]),
+            ]),
             &topics,
         );
         for (m, want) in [
@@ -112,7 +129,10 @@ mod tests {
             partitions_per_topic: [(t1, 4), (t2, 4)].into(),
             ..Default::default()
         };
-        let a = RangeAssignor.assign(&[member("m1", &[t1, t2]), member("m2", &[t1, t2])], &topics);
+        let a = RangeAssignor.assign(
+            &group(vec![member("m1", &[t1, t2]), member("m2", &[t1, t2])]),
+            &topics,
+        );
         for (m, topic, want) in [
             ("m1", t1, vec![0, 1]),
             ("m1", t2, vec![0, 1]),
@@ -131,7 +151,11 @@ mod tests {
             ..Default::default()
         };
         let a = RangeAssignor.assign(
-            &[member("m1", &[t]), member("m2", &[t]), member("m3", &[t])],
+            &group(vec![
+                member("m1", &[t]),
+                member("m2", &[t]),
+                member("m3", &[t]),
+            ]),
             &topics,
         );
         for (m, want) in [("m1", vec![0]), ("m2", vec![1])] {
@@ -147,7 +171,7 @@ mod tests {
             partitions_per_topic: [(t, 4)].into(),
             ..Default::default()
         };
-        let a = RangeAssignor.assign(&[member("m1", &[t]), member("m2", &[])], &topics);
+        let a = RangeAssignor.assign(&group(vec![member("m1", &[t]), member("m2", &[])]), &topics);
         assert!(a["m1"][&t] == vec![0, 1, 2, 3]);
     }
 
@@ -158,8 +182,14 @@ mod tests {
             partitions_per_topic: [(t, 6)].into(),
             ..Default::default()
         };
-        let a1 = RangeAssignor.assign(&[member("m1", &[t]), member("m2", &[t])], &topics);
-        let a2 = RangeAssignor.assign(&[member("m2", &[t]), member("m1", &[t])], &topics);
+        let a1 = RangeAssignor.assign(
+            &group(vec![member("m1", &[t]), member("m2", &[t])]),
+            &topics,
+        );
+        let a2 = RangeAssignor.assign(
+            &group(vec![member("m2", &[t]), member("m1", &[t])]),
+            &topics,
+        );
         assert!(a1 == a2);
     }
 }

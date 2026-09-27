@@ -1,6 +1,6 @@
-(* #"/proof-work-244/crates/verified/src/restore.rs" 66 0 66 93 *)
+(* #"/workspace/crates/verified/src/restore.rs" 92 0 92 93 *)
 
-let%span srestore = "/proof-work-244/crates/verified/src/restore.rs" 60 10 64 1
+let%span srestore = "/workspace/crates/verified/src/restore.rs" 86 10 90 1
 
 use creusot.prelude.Any
 
@@ -10,7 +10,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let restore_batch_filter_decision [#"/proof-work-244/crates/verified/src/restore.rs" 66 0 66 93] (saw_keep: bool)
+let restore_batch_filter_decision [#"/workspace/crates/verified/src/restore.rs" 92 0 92 93] (saw_keep: bool)
   (saw_drop: bool) (return (x: t_RestoreFilterDecision)) = (! bb0
   [ bb0 = any [ br0 -> {saw_keep = false} (! bb3) | br1 -> {saw_keep} (! bb1) ]
   | bb1 = any [ br0 -> {saw_drop = false} (! bb3) | br1 -> {saw_drop} (! bb2) ]

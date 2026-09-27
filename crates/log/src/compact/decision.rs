@@ -70,10 +70,9 @@ pub(crate) fn should_index_key(key: Option<&[u8]>, is_control_batch: bool) -> bo
 /// Reinterpret the per-record `i64` timestamp deltas when a delete horizon
 /// goes into `base_timestamp`. Each record keeps its absolute timestamp.
 ///
-/// `core_tests` and the planned stateright and proptest model exercise this
-/// function. The production rewrite path delegates the same arithmetic to
-/// `RecordBatch::with_delete_horizon`, so the function is `dead_code` outside
-/// tests.
+/// Only `core_tests` exercises this function. The production rewrite path
+/// delegates the same arithmetic to `RecordBatch::with_delete_horizon`, so the
+/// function is `dead_code` outside tests.
 #[cfg(test)]
 pub(crate) fn rewrite_batch_horizon(
     base_timestamp: i64,
@@ -93,8 +92,8 @@ pub(crate) fn rewrite_batch_horizon(
 ///
 /// The production rewrite path uses
 /// [`CleanedTransactionMetadata::txn_state`], which folds this check in. This
-/// standalone form exists for `core_tests` and the planned stateright and
-/// proptest model.
+/// standalone form exists for `core_tests` only; the stateright model in
+/// `compact_model.rs` derives the same fact from its abstract log.
 #[cfg(test)]
 pub(crate) fn txn_data_fully_gone(
     producer_id: ProducerId,

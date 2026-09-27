@@ -1,0 +1,9 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_abs_diff'0": { "prover": "alt-ergo", "time": 0.024 },
+      "vc_java_int_image": { "prover": "alt-ergo", "time": 0.048 }
+    }
+  }
+}

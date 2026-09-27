@@ -3,13 +3,14 @@
   "proofs": {
     "Coma": {
       "vc_checked_sub": { "prover": "alt-ergo", "time": 0.013 },
-      "vc_diskless_retention_prefix": { "prover": "z3", "time": 0.024 },
-      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.015 },
-      "vc_elim_Some'0": { "prover": "alt-ergo", "time": 0.012 },
+      "vc_checked_sub'0": { "prover": "alt-ergo", "time": 0.017 },
+      "vc_diskless_retention_prefix": { "prover": "z3", "time": 0.095 },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.032 },
+      "vc_elim_Some'0": { "prover": "alt-ergo", "time": 0.035 },
+      "vc_elim_Some'1": { "prover": "alt-ergo", "time": 0.012 },
+      "vc_from_u128": { "prover": "alt-ergo", "time": 0.03 },
       "vc_len_i64": { "prover": "alt-ergo", "time": 0.012 },
-      "vc_len_u64": { "prover": "alt-ergo", "time": 0.011 },
-      "vc_saturating_add": { "prover": "alt-ergo", "time": 0.018 },
-      "vc_saturating_sub": { "prover": "alt-ergo", "time": 0.012 }
+      "vc_len_u64": { "prover": "alt-ergo", "time": 0.033 }
     }
   }
 }

@@ -164,6 +164,11 @@ pub(crate) async fn try_diskless_read(
     };
     broker.metrics.diskless_wal_cold_read_hits_total.inc();
     let bytes_est = records.len();
+    // The row may carry the refused out-of-range answer (all -1); a served read
+    // reports the partition's live bounds, as a local read does.
+    crate::handlers::fetch::LiveOffsets::of(part)
+        .await
+        .report(&mut p.out);
     p.out.error_code = codes::NONE;
     if p.read_committed && !p.is_follower_fetch {
         p.out.aborted_transactions = Some(Vec::new());
@@ -537,9 +542,12 @@ mod tests {
         assert!(
             round_trip_partition(wire_topic_id, pending.out.clone())
                 == PartitionData {
+                    // A served read reports the partition's live bounds, not
+                    // the refused row's; this partition is at HW 0, start 0.
                     error_code: codes::NONE,
-                    high_watermark: 7,
-                    log_start_offset: 3,
+                    high_watermark: 0,
+                    last_stable_offset: 0,
+                    log_start_offset: 0,
                     records: Some(first_batch.into()),
                     ..Default::default()
                 }

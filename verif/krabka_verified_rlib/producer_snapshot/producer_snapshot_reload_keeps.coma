@@ -1,0 +1,34 @@
+(* #"/workspace/crates/verified/src/producer_snapshot.rs" 135 0 135 92 *)
+
+let%span sproducer_snapshot = "/workspace/crates/verified/src/producer_snapshot.rs" 136 4 136 55
+let%span sproducer_snapshot'0 = "/workspace/crates/verified/src/producer_snapshot.rs" 133 10 133 81
+let%span sproducer_snapshot'1 = "/workspace/crates/verified/src/producer_snapshot.rs" 44 16 44 55
+
+use creusot.int.Int64
+use creusot.prelude.Any
+use int.Int
+
+type t_ProducerReloadRange = { log_start: Int64.t; local_start: Int64.t; log_end: Int64.t }
+
+predicate kafka_reload_keeps [#"/workspace/crates/verified/src/producer_snapshot.rs" 43 0 43 76] (offset: int) (log_start'0: int) (log_end'0: int) =
+  [%#sproducer_snapshot'1] log_start'0 < offset /\ offset <= log_end'0
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let producer_snapshot_reload_keeps [#"/workspace/crates/verified/src/producer_snapshot.rs" 135 0 135 92]
+  (offset: Int64.t) (range: t_ProducerReloadRange) (return (x: bool)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_7 <- Int64.lt range.log_start offset ] s1
+    | s1 = any [ br0 -> {_7 = false} (! bb2) | br1 -> {_7} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- Int64.le offset range.log_end ] s1 | s1 = return {_ret} ]
+  | bb2 = s0 [ s0 = [ &_ret <- [%#sproducer_snapshot] false ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: bool = Any.any_l ()
+  | & offset: Int64.t = offset
+  | & range: t_ProducerReloadRange = range
+  | & _7: bool = Any.any_l () ])
+  [ return (result: bool) ->
+  {[@stop_split] [@expl:producer_snapshot_reload_keeps ensures] [%#sproducer_snapshot'0] result
+    = kafka_reload_keeps (Int64.to_int offset) (Int64.to_int range.log_start) (Int64.to_int range.log_end)}
+    (! return {result}) ]

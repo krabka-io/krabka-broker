@@ -3,6 +3,7 @@
 //! each pass through a check here before the follower acts on them.
 
 use krabka_ids::Offset;
+use krabka_kraft_core::LogOffsetMetadata;
 use krabka_protocol::owned::fetch_response::{FetchResponse, PartitionData};
 
 use crate::wal::quorum::registry::ShardId;
@@ -41,6 +42,27 @@ pub(super) fn validate_reset_offset(partition: &PartitionData) -> Result<Offset,
         return Err("leader returned invalid WAL reset offset".into());
     };
     Ok(start)
+}
+
+/// The diverging epoch a response names, or `None` when it names none.
+///
+/// Kafka's `FetchResponseData.EpochEndOffset` defaults to epoch `-1` and end
+/// offset `-1`, and a leader leaves it at that default for a consistent
+/// fetch, so a negative end offset means "no divergence". A named divergence
+/// must carry a real epoch.
+pub(super) fn validate_diverging_epoch(
+    partition: &PartitionData,
+) -> Result<Option<LogOffsetMetadata>, String> {
+    let diverging = &partition.diverging_epoch;
+    if diverging.end_offset < 0 {
+        return Ok(None);
+    }
+    let epoch = u32::try_from(diverging.epoch)
+        .map_err(|_| String::from("leader returned an invalid WAL diverging epoch"))?;
+    Ok(Some(LogOffsetMetadata {
+        offset: diverging.end_offset,
+        epoch,
+    }))
 }
 
 pub(super) fn fetch_progress(requested: Offset, appended: Offset) -> Result<FetchProgress, String> {
@@ -105,6 +127,48 @@ mod tests {
         assert!(validate_reset_offset(&frontiers(5, 5, 7)) == Ok(Offset(5)));
         for invalid in [frontiers(-1, 0, 7), frontiers(8, 8, 7), frontiers(0, 0, -1)] {
             assert!(validate_reset_offset(&invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn diverging_epoch_is_absent_at_the_kafka_default_and_needs_a_real_epoch() {
+        for (name, epoch, end_offset, expected) in [
+            ("kafka default", -1, -1, Ok(None)),
+            ("negative end offset", 3, -1, Ok(None)),
+            (
+                "named divergence",
+                3,
+                10,
+                Ok(Some(LogOffsetMetadata {
+                    offset: 10,
+                    epoch: 3,
+                })),
+            ),
+            (
+                "epoch zero",
+                0,
+                0,
+                Ok(Some(LogOffsetMetadata {
+                    offset: 0,
+                    epoch: 0,
+                })),
+            ),
+            (
+                "negative epoch",
+                -1,
+                10,
+                Err(String::from(
+                    "leader returned an invalid WAL diverging epoch",
+                )),
+            ),
+        ] {
+            let mut partition = frontiers(0, 0, 10);
+            partition.diverging_epoch.epoch = epoch;
+            partition.diverging_epoch.end_offset = end_offset;
+            assert!(
+                validate_diverging_epoch(&partition) == expected,
+                "case {name}"
+            );
         }
     }
 

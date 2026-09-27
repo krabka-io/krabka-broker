@@ -13,7 +13,7 @@ use std::{
 
 use krabka_ids::{Offset, ProducerId};
 use krabka_protocol::records::RecordBatch;
-use krabka_verified::increment_sequence;
+use krabka_verified::{ProducerReloadRange, increment_sequence};
 use tracing::instrument;
 
 use super::{
@@ -102,10 +102,11 @@ impl Log {
                 let last = krabka_verified::local_recovery_sealed_last(*base, base_offsets[i + 1])
                     .ok_or_else(|| LogError::Corrupt("invalid sealed segment boundary".into()))?;
                 seg.seal_at(Offset(last));
-                // `Segment::open` also leaves `max_timestamp` unknown, and
-                // `retention::time_based_evict` reads it as "older than any
-                // cutoff". Without this the first tick after a restart deletes
-                // every sealed segment.
+                // `Segment::open` also leaves `max_timestamp` unknown. Without
+                // this restore, retention would age every reopened segment by
+                // its file's modification time -- Kafka's `largestTimestamp()`
+                // fallback for a segment with no record timestamp -- instead
+                // of by its newest record.
                 seg.restore_max_timestamp()?;
                 segments.push(seg);
             } else {
@@ -187,11 +188,6 @@ impl Log {
             delivery_watermark: Offset(0),
             delivery_pending_ms: None,
         };
-        // Producer-state replay walks whole batches, so it must start from the
-        // segment-derived floor, which is always a batch boundary. Restoring
-        // the checkpoint first would start it mid-batch on a trim that landed
-        // inside one.
-        log.rebuild_producer_and_transaction_state()?;
         // Restore a log start that the segment names cannot express: a trim
         // that landed inside a segment left its records on disk, and only the
         // checkpoint says they are gone.
@@ -222,17 +218,57 @@ impl Log {
                 // the stale value back in range and hide live records.
                 log_start_offset_checkpoint::write(&*log.io, &log.dir, effective)?;
             }
+            // Kafka's `LogLoader.load` → `truncateFromStart(logStartOffsetCheckpoint)`:
+            // a crash can land between a start increment and the epoch-cache
+            // rewrite that followed it, so the reload trims the cache again.
+            log.epoch_checkpoint.truncate_from_start(effective)?;
         }
+        // Kafka's `LogLoader.load` first drops every snapshot no segment
+        // accounts for, then reloads against the log start it just restored,
+        // so producer state is rebuilt only after the checkpoint is applied.
+        let segment_bases: Vec<i64> = log
+            .segments
+            .iter()
+            .chain(log.active.iter())
+            .map(|segment| segment.base_offset().0)
+            .collect();
+        producer_snapshot::remove_strays(&log.dir, &segment_bases)?;
+        log.rebuild_producer_and_transaction_state()?;
         // Recovery needs no durable watermark: the schedule is in the records,
         // so the first advance rebuilds it from the log start.
         log.delivery_watermark = log.log_start_offset();
         Ok(log)
     }
 
-    /// Restore the latest valid producer snapshot, then replay the uncovered
-    /// log tail. Missing boundary snapshots are created during the replay so
-    /// every sealed segment can be copied to remote storage with its matching
-    /// producer state.
+    /// The range a producer-state reload up to `log_end` runs against.
+    ///
+    /// The log start is the one Kafka's `LogLoader.load` hands
+    /// `truncateAndReload`: on a tiered partition (KIP-405) the checkpointed
+    /// floor, read as 0 when nobody established one, and otherwise the
+    /// greater of that floor and the oldest local segment's base.
+    pub(super) fn producer_reload_range(&self, log_end: Offset) -> ProducerReloadRange {
+        let local_start = self.local_log_start_offset();
+        ProducerReloadRange {
+            log_start: krabka_verified::producer_snapshot_reload_log_start(
+                self.config.read().unwrap().remote_storage_enable,
+                self.established_log_start().map(|start| start.0),
+                local_start.0,
+            ),
+            local_start: local_start.0,
+            log_end: log_end.0,
+        }
+    }
+
+    /// Rebuild producer state the way Kafka's
+    /// `UnifiedLog.rebuildProducerState` does: reload the newest snapshot in
+    /// `(log start, log end]`, deleting every snapshot outside that range,
+    /// then replay the log tail the snapshot does not cover.
+    ///
+    /// A producer whose last batch lies below the log start is kept only when
+    /// a surviving snapshot carries it, exactly as in Kafka. Missing boundary
+    /// snapshots are created during the replay so every sealed segment can be
+    /// copied to remote storage with its matching producer state, and a
+    /// snapshot is taken at the log end once the replay is done.
     pub(super) fn rebuild_producer_and_transaction_state(&mut self) -> Result<(), LogError> {
         self.pending.clear();
         self.verification_states.clear();
@@ -241,8 +277,8 @@ impl Log {
         self.coordinator_epochs.clear();
         self.producer_state.clear();
         let end = self.log_end_offset();
-        let log_start = self.log_start_offset();
-        let snapshot = producer_snapshot::latest_at_or_before(&self.dir, end)?;
+        let range = self.producer_reload_range(end);
+        let snapshot = producer_snapshot::reload(&self.dir, range)?;
         let snapshot_offset = snapshot.as_ref().map(|(offset, _)| offset.0);
         if let Some((_, entries)) = snapshot {
             self.producer_state = entries;
@@ -256,12 +292,9 @@ impl Log {
                 }
             }
         }
-        let mut next =
-            krabka_verified::producer_snapshot_replay_start(log_start.0, end.0, snapshot_offset)
-                .map(Offset)
-                .ok_or_else(|| {
-                    LogError::Corrupt("invalid producer snapshot replay frontier".into())
-                })?;
+        let mut next = krabka_verified::producer_snapshot_replay_start(range, snapshot_offset)
+            .map(Offset)
+            .ok_or_else(|| LogError::Corrupt("invalid producer snapshot replay frontier".into()))?;
 
         let mut boundaries: BTreeSet<Offset> = self
             .segments
@@ -272,6 +305,7 @@ impl Log {
             .collect();
         let mut boundaries = boundaries.split_off(&next);
         let _ = boundaries.remove(&next);
+        let mut first_read = true;
         while next < end {
             let read = self.read(next, krabka_units::mebibytes(1))?;
             if read.batches.is_empty() {
@@ -280,8 +314,9 @@ impl Log {
                 )));
             }
             let mut advanced_to = next;
-            for batch in &read.batches {
-                (_, advanced_to) = Self::recovered_batch_offsets(advanced_to, end, batch)?;
+            for (index, batch) in read.batches.iter().enumerate() {
+                let cursor = Self::replay_cursor(first_read && index == 0, advanced_to, batch);
+                (_, advanced_to) = Self::recovered_batch_offsets(cursor, end, batch)?;
                 self.apply_recovered_batch_state(batch)?;
                 let covered: Vec<_> = boundaries.range(..=advanced_to).copied().collect();
                 for boundary in covered {
@@ -295,10 +330,34 @@ impl Log {
                 )));
             }
             next = advanced_to;
+            first_read = false;
+        }
+        // Kafka's `rebuildProducerState` ends with `updateMapEndOffset(lastOffset)`
+        // and `takeSnapshot()`, which writes a snapshot at the log end unless
+        // the map end is no further than the last snapshot taken. The next
+        // reload then starts from here instead of replaying the tail again.
+        // `write` keeps a snapshot already at `end`, which a replay boundary
+        // or the loaded snapshot put there with this same state.
+        if end.0 > range.log_start {
+            producer_snapshot::write(&*self.io, &self.dir, end, &self.producer_state)?;
         }
         self.rebuild_pending_stamp_ranges()?;
         self.refresh_lso()?;
         Ok(())
+    }
+
+    /// The cursor a replayed batch must start at or after.
+    ///
+    /// The replay can start inside a batch, where a trim left the log start.
+    /// Kafka's `LogSegment.read(startOffset, ..)` then begins with the batch
+    /// that holds `startOffset`, so the first batch of a replay may start
+    /// below the cursor. Every later batch must start at or after it.
+    fn replay_cursor(first: bool, cursor: Offset, batch: &RecordBatch) -> Offset {
+        if first {
+            cursor.min(Offset(batch.base_offset))
+        } else {
+            cursor
+        }
     }
 
     fn apply_recovered_batch_state(&mut self, batch: &RecordBatch) -> Result<(), LogError> {
@@ -353,8 +412,9 @@ impl Log {
         if self.pending.is_empty() {
             return Ok(());
         }
-        let mut next = self.log_start_offset();
+        let mut next = self.local_log_start_offset();
         let end = self.log_end_offset();
+        let mut first_read = true;
         while next < end {
             let read = self.read(next, krabka_units::mebibytes(1))?;
             if read.batches.is_empty() {
@@ -362,9 +422,10 @@ impl Log {
                     "transaction-stamp recovery made no progress at offset {next}"
                 )));
             }
-            for batch in &read.batches {
+            for (index, batch) in read.batches.iter().enumerate() {
                 let producer_id = ProducerId(batch.producer_id);
-                let (last, advanced_to) = Self::recovered_batch_offsets(next, end, batch)?;
+                let cursor = Self::replay_cursor(first_read && index == 0, next, batch);
+                let (last, advanced_to) = Self::recovered_batch_offsets(cursor, end, batch)?;
                 match control_batch_kind(batch) {
                     // A barrier marker closes no transaction, so it clears no
                     // stamp range. The append path reaches the same result.
@@ -383,6 +444,7 @@ impl Log {
                 }
                 next = advanced_to;
             }
+            first_read = false;
         }
         Ok(())
     }

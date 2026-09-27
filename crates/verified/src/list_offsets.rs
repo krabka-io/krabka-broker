@@ -3,9 +3,9 @@
 #[cfg(creusot)]
 use std::clone::Clone;
 
-#[cfg(creusot)]
-use creusot_std::prelude::DeepModel;
 use creusot_std::prelude::ensures;
+#[cfg(creusot)]
+use creusot_std::prelude::{DeepModel, logic};
 
 /// The meaning of one `ListOffsets` request timestamp at its wire version.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
@@ -119,8 +119,11 @@ pub enum ListOffsetsBoundDecision {
             && (facts.replica_id@ == -1 && facts.isolation_level@ != 1
                 ==> offset@ == facts.high_watermark@)
             && (facts.replica_id@ == -1 && facts.isolation_level@ == 1
-                ==> offset@ <= facts.high_watermark@
-                    && offset@ <= facts.last_stable@)
+                ==> offset@ == if facts.last_stable@ < facts.high_watermark@ {
+                    facts.last_stable@
+                } else {
+                    facts.high_watermark@
+                })
     }
 })]
 pub const fn list_offsets_bound_decision(facts: ListOffsetsBoundFacts) -> ListOffsetsBoundDecision {
@@ -215,45 +218,68 @@ pub enum ListOffsetsSelectionDecision {
     },
 }
 
-/// Apply the common final clamp after any local, diskless, or remote lookup.
+/// The Kafka rule for one partition row's final `ListOffsets` value.
 ///
-/// Earliest sentinels are starts and remain unmeasured. Latest is the lower of
-/// its candidate and the isolation bound. Every record-derived result must be
-/// strictly below that bound.
-#[must_use]
-#[ensures(match result {
-    ListOffsetsSelectionDecision::RejectMalformed => {
-        facts.kind == ListOffsetsKind::Unsupported
+/// A malformed input fails closed, and a lookup that found nothing (`-1`) is
+/// unknown. `EARLIEST` and `EARLIEST_LOCAL` answer a log start, which Kafka
+/// returns whatever the isolation bound, so they resolve to the candidate
+/// unclamped. `LATEST` answers the isolation bound itself, so it resolves to
+/// the lower of the candidate and `last_fetchable`. Every other kind is
+/// record-derived and, as in `Partition.fetchOffsetForTimestamp`, resolves
+/// only when its offset is strictly below `last_fetchable`; otherwise it is
+/// unknown. A resolved row carries the candidate's timestamp and leader epoch.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub fn list_offsets_selection_model(
+    facts: ListOffsetsSelectionFacts,
+) -> ListOffsetsSelectionDecision {
+    pearlite! {
+        if facts.kind == ListOffsetsKind::Unsupported
             || facts.candidate_offset@ < -1
             || facts.candidate_epoch@ < -1
             || facts.last_fetchable@ < 0
+        {
+            ListOffsetsSelectionDecision::RejectMalformed
+        } else if facts.candidate_offset@ == -1 {
+            ListOffsetsSelectionDecision::Unknown
+        } else if facts.kind == ListOffsetsKind::Earliest
+            || facts.kind == ListOffsetsKind::EarliestLocal
+        {
+            ListOffsetsSelectionDecision::Resolved {
+                offset: facts.candidate_offset,
+                timestamp: facts.candidate_timestamp,
+                leader_epoch: facts.candidate_epoch,
+            }
+        } else if facts.kind == ListOffsetsKind::Latest {
+            ListOffsetsSelectionDecision::Resolved {
+                offset: if facts.last_fetchable@ < facts.candidate_offset@ {
+                    facts.last_fetchable
+                } else {
+                    facts.candidate_offset
+                },
+                timestamp: facts.candidate_timestamp,
+                leader_epoch: facts.candidate_epoch,
+            }
+        } else if facts.candidate_offset@ < facts.last_fetchable@ {
+            ListOffsetsSelectionDecision::Resolved {
+                offset: facts.candidate_offset,
+                timestamp: facts.candidate_timestamp,
+                leader_epoch: facts.candidate_epoch,
+            }
+        } else {
+            ListOffsetsSelectionDecision::Unknown
+        }
     }
-    ListOffsetsSelectionDecision::Unknown => {
-        facts.kind != ListOffsetsKind::Unsupported
-            && facts.candidate_offset@ >= -1
-            && facts.candidate_epoch@ >= -1
-            && facts.last_fetchable@ >= 0
-            && (facts.candidate_offset@ == -1
-                || (facts.kind != ListOffsetsKind::Earliest
-                    && facts.kind != ListOffsetsKind::EarliestLocal
-                    && facts.kind != ListOffsetsKind::Latest
-                    && facts.candidate_offset@ >= facts.last_fetchable@))
-    }
-    ListOffsetsSelectionDecision::Resolved { offset, timestamp, leader_epoch } => {
-        facts.kind != ListOffsetsKind::Unsupported
-            && facts.candidate_offset@ >= 0
-            && facts.candidate_epoch@ >= -1
-            && facts.last_fetchable@ >= 0
-            && offset@ >= 0
-            && timestamp@ == facts.candidate_timestamp@
-            && leader_epoch@ == facts.candidate_epoch@
-            && (facts.kind == ListOffsetsKind::Earliest
-                || facts.kind == ListOffsetsKind::EarliestLocal
-                || offset@ < facts.last_fetchable@
-                || (facts.kind == ListOffsetsKind::Latest
-                    && offset@ == facts.last_fetchable@))
-    }
-})]
+}
+
+/// Apply the common final clamp after any local, diskless, or remote lookup.
+///
+/// The contract pins every variant to the rule `list_offsets_selection_model`
+/// states.
+#[must_use]
+#[ensures(result == list_offsets_selection_model(facts))]
 pub const fn list_offsets_selection_decision(
     facts: ListOffsetsSelectionFacts,
 ) -> ListOffsetsSelectionDecision {

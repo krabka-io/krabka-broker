@@ -1,25 +1,25 @@
-(* #"/proof-work-212/crates/verified/src/raft.rs" 133 0 133 72 *)
+(* #"/workspace/crates/verified/src/raft.rs" 204 0 204 72 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 62 16 62 28
-let%span sraft = "/proof-work-212/crates/verified/src/raft.rs" 134 17 134 23
-let%span sraft'0 = "/proof-work-212/crates/verified/src/raft.rs" 135 17 135 30
-let%span sraft'1 = "/proof-work-212/crates/verified/src/raft.rs" 141 32 141 39
-let%span sraft'2 = "/proof-work-212/crates/verified/src/raft.rs" 139 34 140 68
-let%span sraft'3 = "/proof-work-212/crates/verified/src/raft.rs" 137 34 138 54
-let%span sraft'4 = "/proof-work-212/crates/verified/src/raft.rs" 136 34 136 69
-let%span sraft'5 = "/proof-work-212/crates/verified/src/raft.rs" 143 23 143 32
-let%span sraft'6 = "/proof-work-212/crates/verified/src/raft.rs" 143 35 143 36
-let%span sraft'7 = "/proof-work-212/crates/verified/src/raft.rs" 143 23 143 36
-let%span sraft'8 = "/proof-work-212/crates/verified/src/raft.rs" 143 18 143 36
-let%span sraft'9 = "/proof-work-212/crates/verified/src/raft.rs" 144 11 144 23
-let%span sraft'10 = "/proof-work-212/crates/verified/src/raft.rs" 145 23 145 24
-let%span sraft'11 = "/proof-work-212/crates/verified/src/raft.rs" 145 12 145 24
-let%span sraft'12 = "/proof-work-212/crates/verified/src/raft.rs" 125 29 126 73
-let%span sraft'13 = "/proof-work-212/crates/verified/src/raft.rs" 127 28 127 53
-let%span sraft'14 = "/proof-work-212/crates/verified/src/raft.rs" 128 28 129 54
-let%span sraft'15 = "/proof-work-212/crates/verified/src/raft.rs" 130 28 131 68
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span sraft = "/workspace/crates/verified/src/raft.rs" 205 17 205 23
+let%span sraft'0 = "/workspace/crates/verified/src/raft.rs" 206 17 206 30
+let%span sraft'1 = "/workspace/crates/verified/src/raft.rs" 212 32 212 39
+let%span sraft'2 = "/workspace/crates/verified/src/raft.rs" 210 34 211 68
+let%span sraft'3 = "/workspace/crates/verified/src/raft.rs" 208 34 209 54
+let%span sraft'4 = "/workspace/crates/verified/src/raft.rs" 207 34 207 69
+let%span sraft'5 = "/workspace/crates/verified/src/raft.rs" 214 23 214 32
+let%span sraft'6 = "/workspace/crates/verified/src/raft.rs" 214 35 214 36
+let%span sraft'7 = "/workspace/crates/verified/src/raft.rs" 214 23 214 36
+let%span sraft'8 = "/workspace/crates/verified/src/raft.rs" 214 18 214 36
+let%span sraft'9 = "/workspace/crates/verified/src/raft.rs" 215 11 215 23
+let%span sraft'10 = "/workspace/crates/verified/src/raft.rs" 216 23 216 24
+let%span sraft'11 = "/workspace/crates/verified/src/raft.rs" 216 12 216 24
+let%span sraft'12 = "/workspace/crates/verified/src/raft.rs" 196 29 197 73
+let%span sraft'13 = "/workspace/crates/verified/src/raft.rs" 198 28 198 53
+let%span sraft'14 = "/workspace/crates/verified/src/raft.rs" 199 28 200 54
+let%span sraft'15 = "/workspace/crates/verified/src/raft.rs" 201 28 202 68
 
 use creusot.int.UInt64
 use creusot.slice.Slice64
@@ -46,8 +46,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let control_history_frontier [#"/proof-work-212/crates/verified/src/raft.rs" 133 0 133 72]
-  (offsets: Slice64.slice Int64.t) (frontier: Int64.t) (return (x: UInt64.t)) =
+let control_history_frontier [#"/workspace/crates/verified/src/raft.rs" 204 0 204 72] (offsets: Slice64.slice Int64.t)
+  (frontier: Int64.t) (return (x: UInt64.t)) =
 {[@stop_split] [@expl:control_history_frontier requires] [%#sraft'12] forall i: int, j: int. 0 <= i
       /\ i < j /\ j < Seq.length (Slice64.view offsets)
     -> Int64.to_int (Seq.get (Slice64.view offsets) i) < Int64.to_int (Seq.get (Slice64.view offsets) j)}

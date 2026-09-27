@@ -1,11 +1,11 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 221 0 226 29 *)
+(* #"/workspace/crates/verified/src/broker.rs" 584 0 589 29 *)
 
-let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sbroker = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 232 27 232 28
-let%span sbroker'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 201 10 205 1
-let%span sbroker'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 206 10 210 1
-let%span sbroker'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 211 10 217 1
-let%span sbroker'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 218 10 219 58
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sbroker = "/workspace/crates/verified/src/broker.rs" 595 27 595 28
+let%span sbroker'0 = "/workspace/crates/verified/src/broker.rs" 564 10 568 1
+let%span sbroker'1 = "/workspace/crates/verified/src/broker.rs" 569 10 573 1
+let%span sbroker'2 = "/workspace/crates/verified/src/broker.rs" 574 10 580 1
+let%span sbroker'3 = "/workspace/crates/verified/src/broker.rs" 581 10 582 58
 
 use creusot.int.Int8
 use creusot.int.Int16
@@ -29,9 +29,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let find_coordinator_admission [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 221 0 226 29]
-  (api_version: Int16.t) (key_type: Int8.t) (acl_allowed: bool) (share_key_valid: bool)
-  (return (x: t_FindCoordinatorAdmission)) = (! bb0
+let find_coordinator_admission [#"/workspace/crates/verified/src/broker.rs" 584 0 589 29] (api_version: Int16.t)
+  (key_type: Int8.t) (acl_allowed: bool) (share_key_valid: bool) (return (x: t_FindCoordinatorAdmission)) = (! bb0
   [ bb0 = any
     [ br0 -> {key_type = (0: Int8.t)} (! bb15)
     | br1 -> {key_type = (1: Int8.t)} (! bb13)

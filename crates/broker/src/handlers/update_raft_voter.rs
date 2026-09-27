@@ -359,6 +359,10 @@ mod tests {
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let mut named = request(2);
+        // Kafka's `UpdateVoterHandler` checks the voter's kraft.version range
+        // against the cluster's before it looks the voter up, so the range
+        // covers the cluster's version for the lookup to be reached.
+        named.k_raft_version_feature.min_supported_version = 0;
         named.cluster_id = Some(broker.controller.current_image().cluster_id().to_string());
         named.current_leader_epoch =
             i32::try_from(broker.controller.quorum_state().current_term).unwrap_or(i32::MAX);
@@ -517,6 +521,9 @@ mod tests {
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
         let mut request = request(2);
+        // The range covers the cluster's kraft.version, so Kafka's handler
+        // reaches the voter lookup.
+        request.k_raft_version_feature.min_supported_version = 0;
         request.cluster_id = Some(broker.controller.current_image().cluster_id().to_string());
         request.current_leader_epoch =
             i32::try_from(broker.controller.quorum_state().current_term).unwrap_or(i32::MAX);

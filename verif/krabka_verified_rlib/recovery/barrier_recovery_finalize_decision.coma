@@ -1,8 +1,12 @@
-(* #"/workspace/crates/verified/src/recovery.rs" 186 0 191 36 *)
+(* #"/workspace/crates/verified/src/recovery.rs" 230 0 235 36 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span srecovery = "/workspace/crates/verified/src/recovery.rs" 195 34 195 35
-let%span srecovery'0 = "/workspace/crates/verified/src/recovery.rs" 177 10 184 10
+let%span srecovery = "/workspace/crates/verified/src/recovery.rs" 239 34 239 35
+let%span srecovery'0 = "/workspace/crates/verified/src/recovery.rs" 205 10 205 80
+let%span srecovery'1 = "/workspace/crates/verified/src/recovery.rs" 206 10 207 73
+let%span srecovery'2 = "/workspace/crates/verified/src/recovery.rs" 208 10 212 45
+let%span srecovery'3 = "/workspace/crates/verified/src/recovery.rs" 213 10 220 10
+let%span srecovery'4 = "/workspace/crates/verified/src/recovery.rs" 221 10 228 10
 
 use creusot.int.Int32
 use creusot.prelude.Any
@@ -33,13 +37,13 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let barrier_recovery_finalize_decision [#"/workspace/crates/verified/src/recovery.rs" 186 0 191 36] (has_pending: bool)
+let barrier_recovery_finalize_decision [#"/workspace/crates/verified/src/recovery.rs" 230 0 235 36] (has_pending: bool)
   (current_coordinator_epoch: t_Option_i32) (frozen_coordinator_epoch: Int32.t) (targets_valid: bool)
   (return (x: t_BarrierRecoveryFinalizeDecision)) = (! bb0
   [ bb0 = any [ br0 -> {has_pending = false} (! bb1) | br1 -> {has_pending} (! bb2) ]
   | bb2 = s0
-    [ s0 = [ &_14 <- Int32.lt frozen_coordinator_epoch ([%#srecovery] (0: Int32.t)) ] s1
-    | s1 = any [ br0 -> {_14 = false} (! bb4) | br1 -> {_14} (! bb6) ] ]
+    [ s0 = [ &_30 <- Int32.lt frozen_coordinator_epoch ([%#srecovery] (0: Int32.t)) ] s1
+    | s1 = any [ br0 -> {_30 = false} (! bb4) | br1 -> {_30} (! bb6) ] ]
   | bb4 = any [ br0 -> {targets_valid = false} (! bb6) | br1 -> {targets_valid} (! bb5) ]
   | bb5 = any
     [ br0 -> {current_coordinator_epoch = None} (! bb7)
@@ -47,8 +51,8 @@ let barrier_recovery_finalize_decision [#"/workspace/crates/verified/src/recover
   | bb7 = s0 [ s0 = [ &_ret <- UnknownCoordinator ] s1 | s1 = return {_ret} ]
   | bb9 = s0
     [ s0 = elim_Some {current_coordinator_epoch} (fun (r0: Int32.t) -> [ &current' <- r0 ] s1)
-    | s1 = [ &_21 <- Int32.lt current' frozen_coordinator_epoch ] s2
-    | s2 = any [ br0 -> {_21 = false} (! bb11) | br1 -> {_21} (! bb10) ] ]
+    | s1 = [ &_37 <- Int32.lt current' frozen_coordinator_epoch ] s2
+    | s2 = any [ br0 -> {_37 = false} (! bb11) | br1 -> {_37} (! bb10) ] ]
   | bb10 = s0 [ s0 = [ &_ret <- FencedCoordinator ] s1 | s1 = return {_ret} ]
   | bb11 = s0 [ s0 = [ &_ret <- FinalizePartial ] s1 | s1 = return {_ret} ]
   | bb6 = s0 [ s0 = [ &_ret <- MalformedPending ] s1 | s1 = return {_ret} ]
@@ -58,16 +62,33 @@ let barrier_recovery_finalize_decision [#"/workspace/crates/verified/src/recover
   | & current_coordinator_epoch: t_Option_i32 = current_coordinator_epoch
   | & frozen_coordinator_epoch: Int32.t = frozen_coordinator_epoch
   | & targets_valid: bool = targets_valid
-  | & _14: bool = Any.any_l ()
+  | & _30: bool = Any.any_l ()
   | & current': Int32.t = Any.any_l ()
-  | & _21: bool = Any.any_l () ])
+  | & _37: bool = Any.any_l () ])
   [ return (result: t_BarrierRecoveryFinalizeDecision) ->
-  {[@stop_split] [@expl:barrier_recovery_finalize_decision ensures] [%#srecovery'0] (result = FinalizePartial)
+  {[@stop_split] [@expl:barrier_recovery_finalize_decision ensures] ([@stop_split] [@expl:barrier_recovery_finalize_decision ensures #0] [%#srecovery'0] (result
+        = NoPending)
+      = (not has_pending))
+    /\ ([@stop_split] [@expl:barrier_recovery_finalize_decision ensures #1] [%#srecovery'1] (result = MalformedPending)
+      = (has_pending /\ (Int32.to_int frozen_coordinator_epoch < 0 \/ not targets_valid)))
+    /\ ([@stop_split] [@expl:barrier_recovery_finalize_decision ensures #2] [%#srecovery'2] (result
+        = UnknownCoordinator)
+      = (has_pending
+      /\ ge_log_Int (Int32.to_int frozen_coordinator_epoch) 0 /\ targets_valid /\ current_coordinator_epoch = None))
+    /\ ([@stop_split] [@expl:barrier_recovery_finalize_decision ensures #3] [%#srecovery'3] (result = FencedCoordinator)
+      = (has_pending
+      /\ ge_log_Int (Int32.to_int frozen_coordinator_epoch) 0
+      /\ targets_valid
+      /\ match current_coordinator_epoch with
+        | Some current' -> Int32.to_int current' < Int32.to_int frozen_coordinator_epoch
+        | None -> false
+        end))
+    /\ ([@stop_split] [@expl:barrier_recovery_finalize_decision ensures #4] [%#srecovery'4] (result = FinalizePartial)
     = (has_pending
     /\ ge_log_Int (Int32.to_int frozen_coordinator_epoch) 0
     /\ targets_valid
     /\ match current_coordinator_epoch with
       | Some current' -> ge_log_Int (Int32.to_int current') (Int32.to_int frozen_coordinator_epoch)
       | None -> false
-      end)}
+      end))}
     (! return {result}) ]

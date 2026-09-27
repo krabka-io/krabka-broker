@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/group_migration.rs" 22 27 22 32 *)
+(* #"/workspace/crates/verified/src/group_migration.rs" 24 27 24 32 *)
 
 (* <group_migration::GroupMigrationRecordPlan as std::clone::Clone> *)
 
@@ -20,7 +20,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_GroupMigrationRecordPlan [#"/workspace/crates/verified/src/group_migration.rs" 22 27 22 32]
+let clone_GroupMigrationRecordPlan [#"/workspace/crates/verified/src/group_migration.rs" 24 27 24 32]
   (self: t_GroupMigrationRecordPlan) (return (x: t_GroupMigrationRecordPlan)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_GroupMigrationRecordPlan = Any.any_l () | & self: t_GroupMigrationRecordPlan = self ])

@@ -189,6 +189,7 @@ mod tests {
         // Deliver Inbound::Fetch from observer so partition.observers is non-empty
         let req = crate::kraft::transport::wire::PeerRequest::Fetch {
             from: crate::NodeId(99),
+            current_leader_epoch: partition.leader_epoch,
             fetch_epoch: partition.leader_epoch.cast_unsigned(),
             fetch_offset: 0,
             replica_directory_id: Uuid::from_u128(99),
@@ -266,12 +267,18 @@ mod tests {
                 .expect("RemoveRaftVoter");
         let mut response_bytes = response_body.as_ref();
         let response = RemoveRaftVoterResponse::decode(&mut response_bytes, 0).unwrap();
-        assert2::assert!(response.error_code == 42);
-        assert2::assert!(
+        // `VoterSet.removeVoter` refuses to empty the set, and
+        // `RemoveVoterHandler` answers that with VOTER_NOT_FOUND (127).
+        check!(
             response
-                .error_message
-                .as_deref()
-                .is_some_and(|message| message.contains("last voter"))
+                == RemoveRaftVoterResponse {
+                    error_code: crate::voter_requests::VOTER_NOT_FOUND,
+                    error_message: Some(format!(
+                        "Cannot remove voter {} from the set of voters",
+                        crate::voter_requests::replica_key(1, remove.voter_directory_id)
+                    )),
+                    ..Default::default()
+                }
         );
 
         engine.shutdown().await;

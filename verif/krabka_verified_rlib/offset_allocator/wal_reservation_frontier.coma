@@ -1,13 +1,13 @@
-(* #"/proof-work-246/crates/verified/src/offset_allocator.rs" 31 0 35 16 *)
+(* #"/workspace/crates/verified/src/offset_allocator.rs" 31 0 35 16 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
 let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
-let%span soffset_allocator = "/proof-work-246/crates/verified/src/offset_allocator.rs" 36 17 36 18
-let%span soffset_allocator'0 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 36 66 36 67
-let%span soffset_allocator'1 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 39 4 39 38
-let%span soffset_allocator'2 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 19 10 29 1
+let%span soffset_allocator = "/workspace/crates/verified/src/offset_allocator.rs" 36 17 36 18
+let%span soffset_allocator'0 = "/workspace/crates/verified/src/offset_allocator.rs" 36 66 36 67
+let%span soffset_allocator'1 = "/workspace/crates/verified/src/offset_allocator.rs" 39 4 39 38
+let%span soffset_allocator'2 = "/workspace/crates/verified/src/offset_allocator.rs" 19 10 29 1
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -40,7 +40,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let wal_reservation_frontier [#"/proof-work-246/crates/verified/src/offset_allocator.rs" 31 0 35 16] (current': Int64.t)
+let wal_reservation_frontier [#"/workspace/crates/verified/src/offset_allocator.rs" 31 0 35 16] (current': Int64.t)
   (pending_base: Int64.t) (pending_count: Int64.t) (return (x: t_Option_i64)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_9 <- Int64.lt current' ([%#soffset_allocator] (0: Int64.t)) ] s1

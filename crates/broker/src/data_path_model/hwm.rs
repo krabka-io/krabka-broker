@@ -9,7 +9,7 @@
 //! the replicated answer is sound, since a follower that has not reconciled a
 //! divergence must not count toward the watermark.
 
-use std::time::Instant;
+use std::{collections::HashMap, time::Instant};
 
 use krabka_log::Offset;
 
@@ -17,7 +17,7 @@ use super::{
     bounds::{NB_U8, has, node},
     state::DpState,
 };
-use crate::replica_state::ReplicaState;
+use crate::replica_state::{LeaderPolicy, ReplicaState};
 
 /// The follower's effective LEO *as seen by the leader*. It is the length of
 /// the longest epoch-consistent common prefix with the leader's log. A real
@@ -26,7 +26,7 @@ use crate::replica_state::ReplicaState;
 /// follower data and never advances the HWM over it. A raw `len()` here would
 /// let the HWM commit data that a divergent follower has not reconciled. That
 /// is the bug this composition surfaced.
-fn consistent_leo(follower_log: &[u8], leader_log: &[u8]) -> i64 {
+pub(super) fn consistent_leo(follower_log: &[u8], leader_log: &[u8]) -> i64 {
     follower_log
         .iter()
         .zip(leader_log.iter())
@@ -37,9 +37,17 @@ fn consistent_leo(follower_log: &[u8], leader_log: &[u8]) -> i64 {
 }
 
 /// Drive the REAL HWM core. It reconstructs a `ReplicaState` from the model's
-/// ISR and the consistent per-follower LEOs, then returns the recomputed HWM.
-/// That HWM is the minimum ISR LEO, clamped to the leader LEO.
-pub(super) fn real_hwm(s: &DpState, base: Instant) -> i64 {
+/// ISR, the consistent per-follower LEOs, the watermark the leader already
+/// holds and the topic's `min.insync.replicas`, then returns the recomputed
+/// HWM: unchanged while the ISR is under `min_isr`, otherwise the minimum ISR
+/// LEO if that is higher.
+///
+/// Only ISR members report progress here. The real core also waits for a
+/// caught-up eligible follower outside the ISR (Kafka's
+/// `shouldWaitForReplicaToJoinIsr`), which can only hold the watermark lower,
+/// so the model's watermark is never below the real one and its `committed`
+/// obligation is never smaller.
+pub(super) fn real_hwm(s: &DpState, base: Instant, min_isr: usize) -> i64 {
     let leader = s.leader;
     let leader_leo = s.leader_leo();
     let leader_log = &s.log[usize::from(leader)];
@@ -56,6 +64,12 @@ pub(super) fn real_hwm(s: &DpState, base: Instant) -> i64 {
         krabka_audit::NodeId(node(leader)),
         base,
     );
+    rs.set_policy(LeaderPolicy {
+        effective_min_isr: min_isr,
+        replica_lag_time_max: std::time::Duration::ZERO,
+        brokers: HashMap::new(),
+    });
+    rs.hw = Offset(s.hwm);
     for b in 0..NB_U8 {
         if b != leader && has(s.isr, b) {
             let leo = consistent_leo(&s.log[usize::from(b)], leader_log);

@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/freeze.rs" 278 0 282 27 *)
+(* #"/workspace/crates/verified/src/freeze.rs" 282 0 286 27 *)
 
-let%span sfreeze = "/workspace/crates/verified/src/freeze.rs" 285 24 285 44
-let%span sfreeze'0 = "/workspace/crates/verified/src/freeze.rs" 270 10 270 80
-let%span sfreeze'1 = "/workspace/crates/verified/src/freeze.rs" 271 10 273 1
-let%span sfreeze'2 = "/workspace/crates/verified/src/freeze.rs" 274 10 276 1
-let%span sfreeze'3 = "/workspace/crates/verified/src/freeze.rs" 227 10 227 46
-let%span sfreeze'4 = "/workspace/crates/verified/src/freeze.rs" 251 4 265 5
+let%span sfreeze = "/workspace/crates/verified/src/freeze.rs" 289 24 289 44
+let%span sfreeze'0 = "/workspace/crates/verified/src/freeze.rs" 274 10 274 80
+let%span sfreeze'1 = "/workspace/crates/verified/src/freeze.rs" 275 10 277 1
+let%span sfreeze'2 = "/workspace/crates/verified/src/freeze.rs" 278 10 280 1
+let%span sfreeze'3 = "/workspace/crates/verified/src/freeze.rs" 229 10 229 46
+let%span sfreeze'4 = "/workspace/crates/verified/src/freeze.rs" 255 4 269 5
 
 use creusot.prelude.Any
 
@@ -24,7 +24,7 @@ type t_FreezeMutationKind =
   | BarrierMarker
   | TieringCopy
 
-predicate freeze_refusal_model [#"/workspace/crates/verified/src/freeze.rs" 250 0 250 57] (kind: t_FreezeMutationKind) =
+predicate freeze_refusal_model [#"/workspace/crates/verified/src/freeze.rs" 254 0 254 57] (kind: t_FreezeMutationKind) =
   [%#sfreeze'4] match kind with
     | Produce | TransactionEnlistment | DeleteRecords | DeleteTopic | ReassignmentAlter | Compaction | Retention -> true
     | TransactionCompletion | ReassignmentCompletion | OffsetCommit | Replication | BarrierMarker | TieringCopy -> false
@@ -41,7 +41,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let freeze_mutation_decision [#"/workspace/crates/verified/src/freeze.rs" 278 0 282 27] (authorized: bool)
+let freeze_mutation_decision [#"/workspace/crates/verified/src/freeze.rs" 282 0 286 27] (authorized: bool)
   (frozen: bool) (kind: t_FreezeMutationKind) (return (x: t_FreezeMutationDecision)) = (! bb0
   [ bb0 = any [ br0 -> {authorized = false} (! bb1) | br1 -> {authorized} (! bb2) ]
   | bb2 = any [ br0 -> {frozen = false} (! bb7) | br1 -> {frozen} (! bb3) ]

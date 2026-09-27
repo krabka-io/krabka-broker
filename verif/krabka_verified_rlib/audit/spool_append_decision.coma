@@ -1,24 +1,24 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 35 0 41 24 *)
+(* #"/workspace/crates/verified/src/audit.rs" 178 0 184 24 *)
 
-let%span saudit = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 42 50 42 75
-let%span saudit'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 44 22 44 27
-let%span saudit'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 46 18 46 23
-let%span saudit'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 51 35 51 36
-let%span saudit'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 51 24 51 36
-let%span saudit'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 55 19 55 46
-let%span saudit'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 57 33 57 34
-let%span saudit'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 54 18 54 22
-let%span saudit'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 19 11 19 26
-let%span saudit'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 20 11 20 34
-let%span saudit'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 21 10 22 84
-let%span saudit'10 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 23 10 23 80
-let%span saudit'11 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 24 10 24 61
-let%span saudit'12 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 25 10 25 66
-let%span saudit'13 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 26 10 27 56
-let%span saudit'14 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 28 10 28 45
-let%span saudit'15 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 29 10 33 1
-let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span saudit = "/workspace/crates/verified/src/audit.rs" 185 50 185 75
+let%span saudit'0 = "/workspace/crates/verified/src/audit.rs" 187 22 187 27
+let%span saudit'1 = "/workspace/crates/verified/src/audit.rs" 189 18 189 23
+let%span saudit'2 = "/workspace/crates/verified/src/audit.rs" 194 35 194 36
+let%span saudit'3 = "/workspace/crates/verified/src/audit.rs" 194 24 194 36
+let%span saudit'4 = "/workspace/crates/verified/src/audit.rs" 198 19 198 46
+let%span saudit'5 = "/workspace/crates/verified/src/audit.rs" 200 33 200 34
+let%span saudit'6 = "/workspace/crates/verified/src/audit.rs" 197 18 197 22
+let%span saudit'7 = "/workspace/crates/verified/src/audit.rs" 162 11 162 26
+let%span saudit'8 = "/workspace/crates/verified/src/audit.rs" 163 11 163 34
+let%span saudit'9 = "/workspace/crates/verified/src/audit.rs" 164 10 165 84
+let%span saudit'10 = "/workspace/crates/verified/src/audit.rs" 166 10 166 80
+let%span saudit'11 = "/workspace/crates/verified/src/audit.rs" 167 10 167 61
+let%span saudit'12 = "/workspace/crates/verified/src/audit.rs" 168 10 168 66
+let%span saudit'13 = "/workspace/crates/verified/src/audit.rs" 169 10 170 56
+let%span saudit'14 = "/workspace/crates/verified/src/audit.rs" 171 10 171 45
+let%span saudit'15 = "/workspace/crates/verified/src/audit.rs" 172 10 176 1
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 
 use creusot.int.UInt64
 use creusot.prelude.Any
@@ -38,8 +38,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let spool_append_decision [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/audit.rs" 35 0 41 24]
-  (current_bytes: UInt64.t) (frame_bytes: UInt64.t) (max_bytes: UInt64.t) (unsynced: UInt64.t) (sync_every: UInt64.t)
+let spool_append_decision [#"/workspace/crates/verified/src/audit.rs" 178 0 184 24] (current_bytes: UInt64.t)
+  (frame_bytes: UInt64.t) (max_bytes: UInt64.t) (unsynced: UInt64.t) (sync_every: UInt64.t)
   (return (x: t_SpoolAppendDecision)) =
 {[@stop_split] [@expl:spool_append_decision requires] ([@stop_split] [@expl:spool_append_decision requires #0] [%#saudit'7] gt_log_Int (UInt64.t'int sync_every) 0)
   /\ ([@stop_split] [@expl:spool_append_decision requires #1] [%#saudit'8] UInt64.t'int unsynced

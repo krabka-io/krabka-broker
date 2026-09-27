@@ -1,10 +1,10 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 12 0 12 55 *)
+(* #"/workspace/crates/verified/src/consensus.rs" 15 0 15 55 *)
 
-let%span sconsensus = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 13 18 13 19
-let%span sconsensus'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 13 4 13 19
-let%span sconsensus'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 13 22 13 23
-let%span sconsensus'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 13 4 13 23
-let%span sconsensus'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 10 10 10 41
+let%span sconsensus = "/workspace/crates/verified/src/consensus.rs" 16 18 16 19
+let%span sconsensus'0 = "/workspace/crates/verified/src/consensus.rs" 16 4 16 19
+let%span sconsensus'1 = "/workspace/crates/verified/src/consensus.rs" 16 22 16 23
+let%span sconsensus'2 = "/workspace/crates/verified/src/consensus.rs" 16 4 16 23
+let%span sconsensus'3 = "/workspace/crates/verified/src/consensus.rs" 13 10 13 41
 
 use creusot.int.UInt64
 use creusot.prelude.Any
@@ -15,8 +15,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let majority_size [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/consensus.rs" 12 0 12 55]
-  (voter_count: UInt64.t) (return (x: UInt64.t)) = (! bb0
+let majority_size [#"/workspace/crates/verified/src/consensus.rs" 15 0 15 55] (voter_count: UInt64.t)
+  (return (x: UInt64.t)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_6 <- ([%#sconsensus] (2: UInt64.t)) = ([%#sconsensus'0] (0: UInt64.t)) ] s1
     | s1 = {[@expl:division by zero] [%#sconsensus'0] not _6} s2

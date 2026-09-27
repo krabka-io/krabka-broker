@@ -1,15 +1,35 @@
 //! The stateright [`Model`] implementation for [`CompactModel`]: the initial
 //! state, the action alphabet, the transition relation that runs one
-//! [`compact_pass`], and the non-vacuity properties. The block lives alone in
-//! this file because a trait implementation cannot be split across modules.
+//! [`compact_pass`], the pass rules as `always` properties, and the
+//! non-vacuity witnesses. The block lives alone in this file because a trait
+//! implementation cannot be split across modules.
 
 use stateright::{Model, Property};
 
 use super::{
+    invariants::{Invariant, live_keys},
     pass::compact_pass,
-    state::{CompactAction, CompactModel, CompactState, Entry, EntryKind},
+    state::{Cleaner, CompactAction, CompactModel, CompactState, Entry, EntryKind},
 };
-use crate::compact::retain_decision;
+
+impl CompactState {
+    /// Whether `rule` holds for the pass that produced this state. A state
+    /// that no pass produced holds every rule.
+    fn pass_obeys(&self, rule: Invariant) -> bool {
+        self.last_pass
+            .as_ref()
+            .is_none_or(|input| rule.holds(input, &self.log, self.clock))
+    }
+
+    /// Whether the pass that produced this state deleted an entry that
+    /// `select` picks out.
+    fn pass_removed(&self, select: fn(&Entry) -> bool) -> bool {
+        self.last_pass.as_ref().is_some_and(|input| {
+            input.iter().filter(|e| select(e)).count()
+                > self.log.iter().filter(|e| select(e)).count()
+        })
+    }
+}
 
 impl Model for CompactModel {
     type State = CompactState;
@@ -19,6 +39,7 @@ impl Model for CompactModel {
         vec![CompactState {
             log: vec![],
             clock: 0,
+            last_pass: None,
         }]
     }
 
@@ -29,9 +50,9 @@ impl Model for CompactModel {
         // byte or commit/abort, so we fix the data value to 0 and emit a single
         // marker kind per producer. Collapsing those two provably-irrelevant
         // dimensions cuts the alphabet 10 → 6 symbols (the dominant state-space
-        // driver) with zero loss of decision coverage. (`EntryKind::Marker.commit`
-        // stays in the type for clarity / the legacy RED witness, but only the
-        // commit variant is enumerated.)
+        // driver) with zero loss of decision coverage. Commit and abort markers
+        // carry different control keys, so two commit markers are exactly the
+        // pair a control-key dedup would collapse.
         if s.log.len() < self.max_len {
             for key in 0u8..=1 {
                 actions.push(CompactAction::AppendData(key, 0));
@@ -50,75 +71,64 @@ impl Model for CompactModel {
     }
 
     fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
+        let mut s = CompactState {
+            last_pass: None,
+            ..last.clone()
+        };
         match action {
-            CompactAction::AppendData(key, value) => {
-                let mut s = last.clone();
-                s.log.push(Entry {
-                    key: Some(key),
-                    kind: EntryKind::Data { value: Some(value) },
-                    horizon: None,
-                });
-                Some(s)
-            }
-            CompactAction::AppendTombstone(key) => {
-                let mut s = last.clone();
-                s.log.push(Entry {
-                    key: Some(key),
-                    kind: EntryKind::Data { value: None },
-                    horizon: None,
-                });
-                Some(s)
-            }
-            CompactAction::AppendCommit(pid) => {
-                let mut s = last.clone();
-                s.log.push(Entry {
-                    key: None,
-                    kind: EntryKind::Marker {
-                        producer_id: pid,
-                        commit: true,
-                    },
-                    horizon: None,
-                });
-                Some(s)
-            }
-            CompactAction::Tick(dt) => {
-                let mut s = last.clone();
-                s.clock += dt;
-                Some(s)
-            }
+            CompactAction::AppendData(key, value) => s.log.push(Entry {
+                key: Some(key),
+                kind: EntryKind::Data { value: Some(value) },
+                horizon: None,
+            }),
+            CompactAction::AppendTombstone(key) => s.log.push(Entry {
+                key: Some(key),
+                kind: EntryKind::Data { value: None },
+                horizon: None,
+            }),
+            CompactAction::AppendCommit(pid) => s.log.push(Entry {
+                key: None,
+                kind: EntryKind::Marker {
+                    producer_id: pid,
+                    commit: true,
+                },
+                horizon: None,
+            }),
+            CompactAction::Tick(dt) => s.clock += dt,
             CompactAction::Compact => {
-                let next_log = compact_pass(&last.log, last.clock, retain_decision);
-                let mut s = last.clone();
-                s.log = next_log;
-                Some(s)
+                s.log = compact_pass(&last.log, last.clock, self.cleaner);
+                s.last_pass = Some(last.log.clone());
             }
         }
+        Some(s)
     }
 
     fn properties(&self) -> Vec<Property<Self>> {
         vec![
-            // Structural invariant: compaction never introduces a key that was
-            // not present in the input — output keys ⊆ input keys is preserved
-            // because Compact only ever carries entries forward (never invents).
-            // We assert the always-true form: a surviving data entry's horizon
-            // is non-decreasing relative to itself (never un-stamped), captured
-            // by idempotent-stamp; here we assert the simplest structural fact:
-            // the log never contains a marker that is both committed and
-            // aborted for the same slot (entries are immutable once appended).
-            Property::always("entries_well_formed", |_, s: &CompactState| {
-                s.log.iter().all(|e| match &e.kind {
-                    EntryKind::Data { .. } => true,
-                    EntryKind::Marker { .. } => e.key.is_none(),
-                })
+            // ---- Safety: the five pass rules (see `invariants.rs`). ----
+            Property::always("control_not_deduped", |_, s: &CompactState| {
+                s.pass_obeys(Invariant::ControlNotDeduped)
             }),
-            // A delete-horizon was stamped and the entry retained (some log entry
-            // carries a horizon).
+            Property::always("marker_data_precedence", |_, s: &CompactState| {
+                s.pass_obeys(Invariant::MarkerDataPrecedence)
+            }),
+            Property::always("tombstone_aging", |_, s: &CompactState| {
+                s.pass_obeys(Invariant::TombstoneAging)
+            }),
+            Property::always("idempotent_stamp", |_, s: &CompactState| {
+                s.pass_obeys(Invariant::IdempotentStamp)
+            }),
+            Property::always("no_data_loss", |_, s: &CompactState| {
+                s.pass_obeys(Invariant::NoDataLoss)
+            }),
+            // ---- Non-vacuity witnesses. ----
+            // A delete-horizon was stamped and the entry retained.
             Property::sometimes("horizon_stamped", |_, s: &CompactState| {
                 s.log.iter().any(|e| e.horizon.is_some())
             }),
-            // Two markers coexist in one log — proof markers are never key-deduped
-            // against each other (the bug would have collapsed them to one).
-            Property::sometimes("control_not_deduped", |_, s: &CompactState| {
+            // Two markers coexist in one log, the pair a control-key dedup
+            // would have collapsed to one.
+            Property::sometimes("two_markers_coexist", |_, s: &CompactState| {
                 s.log
                     .iter()
                     .filter(|e| matches!(e.kind, EntryKind::Marker { .. }))
@@ -127,28 +137,48 @@ impl Model for CompactModel {
             }),
             // A marker is retained because its producer's transaction data
             // survives this compaction.
-            Property::sometimes("marker_retained_for_live_data", |_, s: &CompactState| {
-                let om = CompactModel::offset_map(&s.log);
-                let ds = CompactModel::data_survives(&s.log, &om);
-                s.log.iter().any(|e| {
-                    matches!(&e.kind, EntryKind::Marker { producer_id, .. } if ds.contains(producer_id))
-                })
+            Property::sometimes(
+                "marker_retained_for_live_data",
+                |m: &CompactModel, s: &CompactState| {
+                    let om = m.cleaner.offset_map(&s.log);
+                    let ds = Cleaner::data_survives(&s.log, &om);
+                    s.log.iter().any(|e| {
+                        matches!(&e.kind, EntryKind::Marker { producer_id, .. } if ds.contains(producer_id))
+                    })
+                },
+            ),
+            // A marker whose horizon has elapsed is kept by a pass because its
+            // producer's data is live: the case `marker_data_precedence`
+            // exists for.
+            Property::sometimes("aged_marker_kept_for_live_data", |_, s: &CompactState| {
+                let live = live_keys(&s.log);
+                s.last_pass.is_some()
+                    && s.log.iter().any(|e| {
+                        matches!(e.kind, EntryKind::Marker { producer_id, .. } if live.contains(&producer_id))
+                            && e.horizon_elapsed(s.clock)
+                    })
             }),
-            // A retained tombstone reaches an elapsed horizon (the next compaction
-            // ages it out) — proves the tombstone-aging path is reachable.
+            // A retained tombstone reaches an elapsed horizon.
             Property::sometimes("tombstone_horizon_elapsed", |_, s: &CompactState| {
                 s.log.iter().any(|e| {
-                    matches!(e.kind, EntryKind::Data { value: None })
-                        && e.horizon.is_some_and(|h| s.clock >= h)
+                    matches!(e.kind, EntryKind::Data { value: None }) && e.horizon_elapsed(s.clock)
                 })
             }),
-            // A retained marker reaches an elapsed horizon (data gone + grace
-            // window elapsed) — proves the marker-aging path is reachable.
+            // A retained marker reaches an elapsed horizon.
             Property::sometimes("marker_horizon_elapsed", |_, s: &CompactState| {
                 s.log.iter().any(|e| {
-                    matches!(e.kind, EntryKind::Marker { .. })
-                        && e.horizon.is_some_and(|h| s.clock >= h)
+                    matches!(e.kind, EntryKind::Marker { .. }) && e.horizon_elapsed(s.clock)
                 })
+            }),
+            // A pass ages a tombstone out, so `tombstone_aging` is exercised on
+            // a deletion and not only on retentions.
+            Property::sometimes("pass_ages_out_tombstone", |_, s: &CompactState| {
+                s.pass_removed(|e| matches!(e.kind, EntryKind::Data { value: None }))
+            }),
+            // A pass ages a marker out, so `control_not_deduped` is exercised
+            // on a deletion and not only on retentions.
+            Property::sometimes("pass_ages_out_marker", |_, s: &CompactState| {
+                s.pass_removed(|e| matches!(e.kind, EntryKind::Marker { .. }))
             }),
         ]
     }

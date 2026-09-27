@@ -1,0 +1,26 @@
+(* #"/workspace/crates/verified/src/restore.rs" 221 27 221 32 *)
+
+(* <restore::RestoreBatchFrame as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.int.Int32
+use creusot.prelude.Any
+
+type t_RestoreTimestampType = CreateTime | LogAppendTime
+
+type t_RestoreBatchFrame = {
+  base_offset: Int64.t;
+  last_offset_delta: Int32.t;
+  timestamp_type: t_RestoreTimestampType;
+  base_timestamp: Int64.t;
+  max_timestamp: Int64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_RestoreBatchFrame [#"/workspace/crates/verified/src/restore.rs" 221 27 221 32] (self: t_RestoreBatchFrame)
+  (return (x: t_RestoreBatchFrame)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_RestoreBatchFrame = Any.any_l () | & self: t_RestoreBatchFrame = self ])
+  [ return (result: t_RestoreBatchFrame) -> (! return {result}) ]

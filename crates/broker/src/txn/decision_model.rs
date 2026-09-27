@@ -1,33 +1,83 @@
 //! Exhaustive stateright model of the KIP-98/EOS `EndTxn` decision core.
 //!
-//! The model drives the real `decide_phase1_transition` /
-//! `decide_end_txn_completion` and `TxnState::can_transition_to` over one
-//! transactional-id. It models the `EndTxn` Phase1 → marker-window → Phase3
-//! split, so a concurrent `InitProducerId` can interleave in the window and
-//! fence the in-flight transaction. `InitProducerId` bumps the producer epoch.
-//! Design:
+//! The model runs one transactional-id through every interleaving of an
+//! `EndTxn` handler split at its marker window (Phase 1, then Phase 3 after the
+//! lock is dropped for the fan-out), `InitProducerId`, `AddPartitionsToTxn`,
+//! and the completion task that finishes a durable `Prepare*` record. Design:
 //! `crates/broker/docs/transaction-coordinator-design.md`.
 //!
-//! Headline safety: a producer fenced by an epoch bump during the window can
-//! never finalize. The transaction of a given producer epoch is finalized at
-//! most once, and never both committed and aborted.
+//! Headline safety, each an `always` property with a counterexample trace:
 //!
-//! NOTE: the model omits the partition set, which does not affect the fencing
-//! or atomicity properties. It models the txn-start as `BeginTxn`, the
-//! `→ Ongoing` transition. It tracks terminal outcomes as ghost per-epoch sets,
-//! not lifetime flags. So a tid that legitimately commits one generation and
-//! aborts the next is not a false violation.
+//! - `fenced_end_txn_never_finalizes`: an `EndTxn` whose Phase 3 finds the
+//!   entry no longer holding the identity, state and generation its Phase 1
+//!   prepared never writes `Complete*`.
+//! - `finalized_at_most_once`: each transaction generation reaches `Complete*`
+//!   at most once, so it is never both committed and aborted, however the
+//!   `EndTxn` Phase 3 and the completion task race.
+//! - `init_never_overwrites_prepared`: `InitProducerId` never moves a
+//!   transaction out of `Prepare*`. Kafka's `prepareInitProducerIdTransit`
+//!   answers `CONCURRENT_TRANSACTIONS` there, because the markers for that
+//!   decision may already sit on some partitions.
+//!
+//! A producer is fenced inside the window only through legal transitions: the
+//! completion task finishes the prepared transaction, and then an
+//! `InitProducerId` bump, a fence-abort, or a new transaction moves the entry
+//! on while the original `EndTxn` still waits for its Phase 3. The
+//! `fence_in_window` witness shows that this state is reached.
+//!
+//! What is DRIVEN (production code on every transition):
+//!
+//! - `EndTxn` Phase 1: `decide_phase1_transition` and
+//!   `prepare_completion_identities_with_fresh`, and the completion identity
+//!   from `completion_producer_identity`.
+//! - `EndTxn` Phase 3: `decide_end_txn_completion`.
+//! - `InitProducerId`: the `Prepare*` gate of `pending_completion_response`,
+//!   which is `completion_for(entry.state)`; the epoch bump
+//!   `krabka_verified::transaction::next_producer_identity`; and, for the
+//!   fence of an `Ongoing` transaction, `prepare_completion_identities_with_fresh`.
+//! - Completion task: `completion_for`, `completion_decision` and
+//!   `apply_completion` with `completion_producer_identity`.
+//! - `AddPartitionsToTxn`: `TxnState::can_transition_to(Ongoing)`.
+//!
+//! What is MODELED (hand-written, mirroring the handler):
+//!
+//! - The `InitProducerId` request names no producer identity, so the KIP-360
+//!   `is_fenced` / retry classification is not exercised, and a `Prepare*`
+//!   entry always answers `CONCURRENT_TRANSACTIONS`, never `PRODUCER_FENCED`.
+//!   The `keepPreparedTxn` (KIP-939 recovery) branch is not modeled.
+//! - The fence of an `Ongoing` transaction (`prepareFenceProducerEpoch`: the
+//!   epoch `+ 1` and the `PrepareAbort` state) is the handler's inline code.
+//!   Its `CompleteAbort` is the same completion the completion task performs,
+//!   so the model finishes it through the `Complete` action.
+//! - The `EndTxn` state table (`end_txn_decision`), including the
+//!   transaction-version-2 abort of a transaction with no partition, is not
+//!   modeled: Phase 1 runs only from `Ongoing` at the entry's live identity.
+//! - One `EndTxn` handler is in flight at a time; partitions and timestamps
+//!   are omitted because no decision here reads them. The producer ID is fixed
+//!   and the epoch cap stays far below the rotation boundary, so no staged
+//!   identity arises and the projection loses nothing.
+//!
+//! Terminal outcomes are ghost records keyed by generation, the producer epoch
+//! at which `AddPartitionsToTxn` opened the transaction. So a tid that commits
+//! one generation and aborts the next is not a false violation.
 //!
 //! Memory safety: stateright BFS keeps every visited unique state resident, so
 //! this module fences each run with `within_boundary` + `target_state_count`.
 //! You MUST run each config under the host memory watchdog while you tune the
 //! bounds.
 
+use std::collections::BTreeSet;
+
 use krabka_log::ProducerId;
+use krabka_verified::transaction::TransactionReaperCompletionDecision;
 use stateright::{Checker, Model, Property};
 
 use super::{
     super::{
+        coordinator::completion::{apply_completion, completion_decision, completion_for},
+        handlers::end_txn::{
+            completion_producer_identity, prepare_completion_identities_with_fresh,
+        },
         state::{TxnEntry, TxnState},
         version::TxnVersion,
     },
@@ -44,71 +94,245 @@ const MAX_DEPTH: usize = 60;
 // considering a field -- into a failure instead of a silently smaller search
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
-const PINNED_UNIQUE_STATES_BASIC: usize = 129;
-const PINNED_UNIQUE_STATES_WIDE: usize = 3_636;
+const PINNED_UNIQUE_STATES_BASIC: usize = 192;
+const PINNED_UNIQUE_STATES_WIDE: usize = 5_812;
 
-const PID: ProducerId = ProducerId(1000); // fixed; epoch is the fencing dimension
+const PID: ProducerId = ProducerId(1000);
 
 struct TxnModel {
     max_epoch: i16,
 }
 
-/// In-flight `EndTxn` captured at Phase 1. It waits for Phase 3, the marker
-/// window.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+/// In-flight `EndTxn` captured at Phase 1. It waits for Phase 3 across the
+/// marker window.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 struct PendingEnd {
-    generation_epoch: i16,
+    /// Ghost: the generation Phase 1 prepared.
+    generation: i16,
+    /// The identity of the persisted `Prepare*` snapshot.
+    expected_pid: i64,
     expected_epoch: i16,
+    /// The completion identity persisted with the `Prepare*` record.
+    completion_pid: i64,
+    completion_epoch: i16,
     prepare: i8, // TxnState::to_kafka_status()
     complete: i8,
+}
+
+/// One ghost terminal outcome.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+struct Finalized {
+    generation: i16,
     committed: bool,
+}
+
+/// Ghost violations. The transition that commits one records it, and an
+/// `always` property requires it to be absent, so the checker reports the
+/// trace that led there.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+enum Violation {
+    /// Phase 3 wrote `Complete*` although the entry was not the snapshot its
+    /// Phase 1 prepared.
+    FencedEndTxnFinalized,
+    /// Phase 3 rejected although the entry was still exactly its snapshot.
+    UnjustifiedReject,
+    /// A transition lowered the producer epoch.
+    EpochRegressed,
+    /// `InitProducerId` moved a `Prepare*` transaction.
+    InitOverwrotePrepared,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 struct TxnProj {
+    pid: i64,
     epoch: i16,
     state: i8, // TxnState::to_kafka_status()
+    /// Ghost: the producer epoch at which the live transaction was opened.
+    generation: i16,
     pending: Option<PendingEnd>,
-    /// Ghost: producer epochs whose transaction finalized as commit / abort.
-    /// Sorted, distinct. The invariants assert that these never overlap and
-    /// never record the same epoch twice. This enforces single-finalize per
-    /// generation.
-    committed: Vec<i16>,
-    aborted: Vec<i16>,
+    /// Ghost: every finalization, sorted, duplicates kept so that
+    /// `finalized_at_most_once` can see a second one.
+    finalized: Vec<Finalized>,
+    violations: BTreeSet<Violation>,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum TxnAction {
-    Init,               // InitProducerId: bump epoch (aborts an in-flight txn)
-    BeginTxn,           // AddPartitionsToTxn: → Ongoing
-    EndTxnPhase1(bool), // committed? → Prepare; opens the window
-    EndTxnPhase3,       // re-validate → Complete or fenced-reject
+    /// `InitProducerId` naming no producer identity.
+    Init,
+    /// `AddPartitionsToTxn`: → `Ongoing`.
+    BeginTxn,
+    /// `EndTxn` Phase 1 (`committed?`): → `Prepare*`, opens the window.
+    EndTxnPhase1(bool),
+    /// `EndTxn` Phase 3: revalidate, then `Complete*` or reject.
+    EndTxnPhase3,
+    /// The completion task (or the inline completion of an `InitProducerId`
+    /// fence) finishes a durable `Prepare*` record.
+    Complete,
 }
 
 fn st(id: i8) -> TxnState {
     TxnState::from_kafka_status(id).expect("valid TxnState id in model")
 }
 
-/// Reconstructs a real `TxnEntry` from the projection, so the real decision fns
-/// behave the same as in a live run. Partitions and timestamps do not affect the
-/// decision, so this function leaves them empty or constant.
+/// Reconstructs the real `TxnEntry` from the projection, so the real decision
+/// fns behave as in a live run.
 fn rebuild(s: &TxnProj) -> TxnEntry {
-    let mut e = TxnEntry::new_empty("tid".to_string(), PID, s.epoch, 60_000, 1);
+    let mut e = TxnEntry::new_empty("tid".to_string(), ProducerId(s.pid), s.epoch, 60_000, 1);
     e.state = st(s.state);
     e
 }
 
-/// Records a terminal outcome for `epoch`. Asserts that the epoch has not
-/// already finalized in either direction. This enforces single-finalize and
-/// no-commit-and-abort per generation.
-fn record(committed: &mut Vec<i16>, aborted: &mut Vec<i16>, epoch: i16, is_commit: bool) {
-    assert2::assert!(
-        !committed.contains(&epoch) && !aborted.contains(&epoch),
-        "epoch {epoch} finalized twice (commit={is_commit}); committed={committed:?} aborted={aborted:?}"
-    );
-    let v = if is_commit { committed } else { aborted };
-    v.push(epoch);
-    v.sort_unstable();
+/// Writes the persisted fields of `entry` back into the projection.
+fn project(s: &mut TxnProj, entry: &TxnEntry) {
+    s.pid = entry.producer_id.get();
+    s.epoch = entry.producer_epoch;
+    s.state = entry.state.to_kafka_status();
+}
+
+fn finalize(s: &mut TxnProj, generation: i16, complete: TxnState) {
+    s.finalized.push(Finalized {
+        generation,
+        committed: complete == TxnState::CompleteCommit,
+    });
+    s.finalized.sort_unstable();
+}
+
+fn is_prepared(state: TxnState) -> bool {
+    matches!(state, TxnState::PrepareCommit | TxnState::PrepareAbort)
+}
+
+impl TxnModel {
+    /// `InitProducerId` over the live entry, in the handler's order.
+    fn init(s: &mut TxnProj) -> Option<()> {
+        let mut entry = rebuild(s);
+        // `pending_completion_response`: a durable `Prepare*` answers
+        // `CONCURRENT_TRANSACTIONS` to a request that names no identity, and
+        // nothing is written.
+        if completion_for(entry.state).is_some() {
+            return None;
+        }
+        if entry.state == TxnState::Ongoing {
+            // `prepareFenceProducerEpoch`: raise the epoch, then prepare the
+            // abort with its completion identity. The client is answered
+            // `CONCURRENT_TRANSACTIONS` and retries after the completion.
+            entry.state = TxnState::PrepareAbort;
+            entry.producer_epoch += 1;
+            prepare_completion_identities_with_fresh(&mut entry, TxnVersion::Verified, None)
+                .expect("model epochs never reach the rotation boundary");
+        } else {
+            // `prepareIncrementProducerEpoch` on a terminal or empty entry.
+            let (pid, epoch) = krabka_verified::transaction::next_producer_identity(
+                true,
+                false,
+                entry.producer_id.get(),
+                entry.producer_epoch,
+                None,
+            )
+            .expect("model epochs never reach the rotation boundary");
+            entry = TxnEntry::new_empty("tid".to_string(), ProducerId(pid), epoch, 60_000, 1);
+        }
+        project(s, &entry);
+        Some(())
+    }
+
+    fn begin(s: &mut TxnProj) -> Option<()> {
+        let prior = st(s.state);
+        if !prior.can_transition_to(TxnState::Ongoing) {
+            return None;
+        }
+        if prior != TxnState::Ongoing {
+            s.generation = s.epoch;
+        }
+        s.state = TxnState::Ongoing.to_kafka_status();
+        Some(())
+    }
+
+    fn end_txn_phase1(s: &mut TxnProj, committed: bool) -> Option<()> {
+        if s.pending.is_some() {
+            return None;
+        }
+        let mut entry = rebuild(s);
+        let (prepare, complete) = decide_phase1_transition(&mut entry, committed).ok()?;
+        prepare_completion_identities_with_fresh(&mut entry, TxnVersion::Verified, None)
+            .expect("model epochs never reach the rotation boundary");
+        let (completion_pid, completion_epoch) = completion_producer_identity(&entry);
+        s.pending = Some(PendingEnd {
+            generation: s.generation,
+            expected_pid: entry.producer_id.get(),
+            expected_epoch: entry.producer_epoch,
+            completion_pid: completion_pid.get(),
+            completion_epoch,
+            prepare: prepare.to_kafka_status(),
+            complete: complete.to_kafka_status(),
+        });
+        project(s, &entry);
+        Some(())
+    }
+
+    fn end_txn_phase3(s: &mut TxnProj) -> Option<()> {
+        let p = s.pending.take()?;
+        let entry = rebuild(s);
+        // Independent of the decision core: is the entry still exactly the
+        // snapshot Phase 1 persisted, for the generation it prepared?
+        let still_prepared = s.pid == p.expected_pid
+            && s.epoch == p.expected_epoch
+            && s.state == p.prepare
+            && s.generation == p.generation;
+        match decide_end_txn_completion(
+            &entry,
+            ProducerId(p.expected_pid),
+            p.expected_epoch,
+            ProducerId(p.completion_pid),
+            p.completion_epoch,
+            st(p.prepare),
+            st(p.complete),
+        ) {
+            CompletionDecision::Proceed {
+                next_state,
+                response_pid,
+                response_epoch,
+            } => {
+                if !still_prepared {
+                    s.violations.insert(Violation::FencedEndTxnFinalized);
+                }
+                finalize(s, p.generation, next_state);
+                s.pid = response_pid.get();
+                s.epoch = response_epoch;
+                s.state = next_state.to_kafka_status();
+            }
+            // Idempotent retry or a lost race with the completion task: the
+            // handler answers success and writes nothing.
+            CompletionDecision::AlreadyComplete { .. } => {}
+            CompletionDecision::Reject(_) => {
+                if still_prepared {
+                    s.violations.insert(Violation::UnjustifiedReject);
+                }
+            }
+        }
+        Some(())
+    }
+
+    fn complete(s: &mut TxnProj) -> Option<()> {
+        let entry = rebuild(s);
+        let (_, complete) = completion_for(entry.state)?;
+        // The model's completion runs atomically, so the prepared snapshot is
+        // the live entry.
+        match completion_decision(&entry, &entry, (entry.state, complete)) {
+            TransactionReaperCompletionDecision::Proceed => {
+                let mut completed = entry.clone();
+                let identity = completion_producer_identity(&completed);
+                apply_completion(&mut completed, complete, identity, 1);
+                finalize(s, s.generation, complete);
+                project(s, &completed);
+                Some(())
+            }
+            TransactionReaperCompletionDecision::AlreadyComplete
+            | TransactionReaperCompletionDecision::RejectMalformed
+            | TransactionReaperCompletionDecision::RejectStaleIdentity
+            | TransactionReaperCompletionDecision::RejectChangedPreparedState => None,
+        }
+    }
 }
 
 impl Model for TxnModel {
@@ -118,179 +342,84 @@ impl Model for TxnModel {
     fn init_states(&self) -> Vec<Self::State> {
         // A tid that has completed its first InitProducerId: epoch 0, Empty.
         vec![TxnProj {
+            pid: PID.get(),
             epoch: 0,
             state: TxnState::Empty.to_kafka_status(),
+            generation: 0,
             pending: None,
-            committed: vec![],
-            aborted: vec![],
+            finalized: vec![],
+            violations: BTreeSet::new(),
         }]
     }
 
-    fn actions(&self, s: &Self::State, actions: &mut Vec<Self::Action>) {
-        let under_cap = s.epoch < self.max_epoch;
-        // Init bumps the epoch → epoch-advancing, gated.
-        if under_cap {
-            actions.push(TxnAction::Init);
-        }
-        // BeginTxn: legal `→ Ongoing` and no EndTxn in flight.
-        if s.pending.is_none() && st(s.state).can_transition_to(TxnState::Ongoing) {
-            actions.push(TxnAction::BeginTxn);
-        }
-        // EndTxnPhase1: only from Ongoing, no EndTxn in flight.
-        if s.pending.is_none() && s.state == TxnState::Ongoing.to_kafka_status() {
-            actions.push(TxnAction::EndTxnPhase1(true));
-            actions.push(TxnAction::EndTxnPhase1(false));
-        }
-        // EndTxnPhase3: only with an in-flight EndTxn.
-        if s.pending.is_some() {
-            actions.push(TxnAction::EndTxnPhase3);
-        }
+    fn actions(&self, _: &Self::State, actions: &mut Vec<Self::Action>) {
+        // Every action is offered in every state; the production decisions
+        // in `next_state` refuse the ones that do not apply.
+        actions.extend([
+            TxnAction::Init,
+            TxnAction::BeginTxn,
+            TxnAction::EndTxnPhase1(true),
+            TxnAction::EndTxnPhase1(false),
+            TxnAction::EndTxnPhase3,
+            TxnAction::Complete,
+        ]);
     }
 
     fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
         let mut s = last.clone();
         match action {
-            TxnAction::Init => {
-                if s.epoch >= self.max_epoch {
-                    return None;
-                }
-                // InitProducerId aborts an in-flight transaction (Ongoing or
-                // mid-EndTxn Prepare*) before bumping the epoch. Record that
-                // abort for the CURRENT generation; the bump then fences any
-                // pending EndTxn (its expected_epoch < the new epoch).
-                let cur = st(s.state);
-                if matches!(
-                    cur,
-                    TxnState::Ongoing | TxnState::PrepareCommit | TxnState::PrepareAbort
-                ) {
-                    let generation_epoch = s
-                        .pending
-                        .as_ref()
-                        .map_or(s.epoch, |pending| pending.generation_epoch);
-                    record(&mut s.committed, &mut s.aborted, generation_epoch, false);
-                }
-                s.epoch += 1;
-                s.state = TxnState::Empty.to_kafka_status();
-                // `pending` is intentionally retained: a pending EndTxn from the
-                // old epoch must still run Phase 3 and be REJECTED (fenced).
-                assert2::assert!(s.epoch >= last.epoch, "epoch regressed on Init");
-                Some(s)
-            }
-            TxnAction::BeginTxn => {
-                if !st(s.state).can_transition_to(TxnState::Ongoing) {
-                    return None;
-                }
-                s.state = TxnState::Ongoing.to_kafka_status();
-                Some(s)
-            }
-            TxnAction::EndTxnPhase1(committed) => {
-                if s.pending.is_some() {
-                    return None;
-                }
-                let mut entry = rebuild(&s);
-                let generation_epoch = s.epoch;
-                match decide_phase1_transition(&mut entry, committed) {
-                    Ok((prepare, complete)) => {
-                        crate::txn::handlers::end_txn::prepare_completion_identities_with_fresh(
-                            &mut entry,
-                            TxnVersion::Verified,
-                            None,
-                        )
-                        .expect("model epochs never reach the rotation boundary");
-                        s.state = prepare.to_kafka_status();
-                        s.epoch = entry.producer_epoch;
-                        s.pending = Some(PendingEnd {
-                            generation_epoch,
-                            expected_epoch: entry.producer_epoch,
-                            prepare: prepare.to_kafka_status(),
-                            complete: complete.to_kafka_status(),
-                            committed,
-                        });
-                        Some(s)
-                    }
-                    Err(_) => None, // illegal transition: no-op edge
-                }
-            }
-            TxnAction::EndTxnPhase3 => {
-                let p = s.pending.clone()?;
-                let entry = rebuild(&s);
-                match decide_end_txn_completion(
-                    &entry,
-                    PID,
-                    p.expected_epoch,
-                    PID,
-                    p.expected_epoch,
-                    st(p.prepare),
-                    st(p.complete),
-                ) {
-                    CompletionDecision::Proceed {
-                        next_state,
-                        response_epoch,
-                        ..
-                    } => {
-                        // HEADLINE: a Proceed must NOT be a fenced producer — the
-                        // current epoch must still match what Phase 1 captured.
-                        assert2::assert!(
-                            p.expected_epoch == s.epoch,
-                            "fenced producer finalized: expected_epoch={} current_epoch={}",
-                            p.expected_epoch,
-                            s.epoch
-                        );
-                        record(
-                            &mut s.committed,
-                            &mut s.aborted,
-                            p.generation_epoch,
-                            p.committed,
-                        );
-                        s.state = next_state.to_kafka_status();
-                        s.epoch = response_epoch; // TV_2 bumps on completion
-                        s.pending = None;
-                        assert2::assert!(s.epoch >= last.epoch, "epoch regressed on completion");
-                        Some(s)
-                    }
-                    CompletionDecision::AlreadyComplete { .. } => {
-                        // Idempotent retry / lost race: clear pending, no re-finalize.
-                        s.pending = None;
-                        Some(s)
-                    }
-                    CompletionDecision::Reject(_) => {
-                        // Fenced or state advanced: must NOT finalize. Assert the
-                        // reject is justified (producer was fenced).
-                        assert2::assert!(
-                            p.expected_epoch != s.epoch || s.state != p.prepare,
-                            "EndTxn rejected without a fencing/state reason"
-                        );
-                        s.pending = None;
-                        Some(s)
-                    }
-                }
-            }
+            TxnAction::Init => Self::init(&mut s)?,
+            TxnAction::BeginTxn => Self::begin(&mut s)?,
+            TxnAction::EndTxnPhase1(committed) => Self::end_txn_phase1(&mut s, committed)?,
+            TxnAction::EndTxnPhase3 => Self::end_txn_phase3(&mut s)?,
+            TxnAction::Complete => Self::complete(&mut s)?,
         }
+        if action == TxnAction::Init && is_prepared(st(last.state)) {
+            s.violations.insert(Violation::InitOverwrotePrepared);
+        }
+        if s.epoch < last.epoch {
+            s.violations.insert(Violation::EpochRegressed);
+        }
+        Some(s)
     }
 
     fn properties(&self) -> Vec<Property<Self>> {
         vec![
-            // HEADLINE: a producer epoch's transaction is never both committed and
-            // aborted (atomicity + single-finalize across all interleavings).
-            Property::always("no_commit_and_abort", |_, s: &TxnProj| {
-                s.committed.iter().all(|e| !s.aborted.contains(e))
+            // HEADLINE: a fenced or overtaken EndTxn never writes Complete*.
+            Property::always("fenced_end_txn_never_finalizes", |_, s: &TxnProj| {
+                !s.violations.contains(&Violation::FencedEndTxnFinalized)
             }),
-            // A pending EndTxn was captured at an epoch no greater than the
-            // current one (the epoch only grows; epoch monotonicity itself is a
-            // `next_state` assertion).
-            Property::always("pending_epoch_not_future", |_, s: &TxnProj| {
-                s.pending
-                    .as_ref()
-                    .is_none_or(|p| p.expected_epoch <= s.epoch)
+            // HEADLINE: each generation finalizes at most once, so it is never
+            // both committed and aborted.
+            Property::always("finalized_at_most_once", |_, s: &TxnProj| {
+                s.finalized
+                    .windows(2)
+                    .all(|pair| pair[0].generation != pair[1].generation)
             }),
-            // Non-vacuity: a commit can complete.
-            Property::sometimes("can_commit", |_, s: &TxnProj| !s.committed.is_empty()),
-            // Non-vacuity: a producer is fenced while its EndTxn is pending (the
-            // pending's epoch lags the current epoch — the zombie window).
+            // HEADLINE: InitProducerId answers CONCURRENT_TRANSACTIONS to a
+            // prepared transaction instead of moving it.
+            Property::always("init_never_overwrites_prepared", |_, s: &TxnProj| {
+                !s.violations.contains(&Violation::InitOverwrotePrepared)
+            }),
+            // Phase 3 rejects only an entry that moved underneath it.
+            Property::always("reject_is_justified", |_, s: &TxnProj| {
+                !s.violations.contains(&Violation::UnjustifiedReject)
+            }),
+            Property::always("epoch_never_regresses", |_, s: &TxnProj| {
+                !s.violations.contains(&Violation::EpochRegressed)
+            }),
+            // Non-vacuity: an EndTxn commit and an InitProducerId fence-abort
+            // both finalize.
+            Property::sometimes("can_commit", |_, s: &TxnProj| {
+                s.finalized.iter().any(|f| f.committed)
+            }),
+            Property::sometimes("can_abort", |_, s: &TxnProj| {
+                s.finalized.iter().any(|f| !f.committed)
+            }),
+            // Non-vacuity: the entry's epoch moves past a pending EndTxn's
+            // prepared epoch while it waits for Phase 3 -- the zombie window.
             Property::sometimes("fence_in_window", |_, s: &TxnProj| {
-                s.pending
-                    .as_ref()
-                    .is_some_and(|p| p.expected_epoch < s.epoch)
+                s.pending.is_some_and(|p| p.expected_epoch < s.epoch)
             }),
         ]
     }
@@ -321,18 +450,18 @@ fn run(model: TxnModel, label: &str, pinned_unique_states: usize) {
         checker.state_count() < MAX_STATES,
         "[{label}] hit state cap {MAX_STATES}: truncated, not exhaustive"
     );
+    checker.assert_properties();
     // Pin: a changed count is a changed model, not a retuning knob.
     assert2::assert!(
         checker.unique_state_count() == pinned_unique_states,
         "[{label}] unique-state count moved: the reachable set of this model changed"
     );
-    checker.assert_properties();
 }
 
 #[test]
 fn txn_basic() {
     // One tid, epoch 0..=3: every interleaving of Init / BeginTxn / EndTxn
-    // Phase1 / Phase3, including a fencing Init inside the marker window.
+    // Phase1 / Phase3 / Complete, including an overtaken EndTxn in the window.
     run(
         TxnModel { max_epoch: 3 },
         "txn_basic",
@@ -348,4 +477,64 @@ fn txn_wide() {
         "txn_wide",
         PINNED_UNIQUE_STATES_WIDE,
     );
+}
+
+/// `InitProducerId` against each state of the live entry: the `Prepare*`
+/// states refuse (Kafka's `CONCURRENT_TRANSACTIONS`), `Ongoing` is fenced and
+/// prepared for abort, and the rest bump the epoch into `Empty`.
+#[test]
+fn init_producer_id_by_state() {
+    let at = |state: TxnState| TxnProj {
+        pid: PID.get(),
+        epoch: 2,
+        state: state.to_kafka_status(),
+        generation: 2,
+        pending: None,
+        finalized: vec![],
+        violations: BTreeSet::new(),
+    };
+    let rows = [
+        (TxnState::PrepareCommit, None),
+        (TxnState::PrepareAbort, None),
+        (
+            TxnState::Ongoing,
+            Some(TxnProj {
+                // The fence raises 2 → 3, and the prepared abort's marker
+                // epoch raises it to 4.
+                epoch: 4,
+                state: TxnState::PrepareAbort.to_kafka_status(),
+                ..at(TxnState::Ongoing)
+            }),
+        ),
+        (
+            TxnState::Empty,
+            Some(TxnProj {
+                epoch: 3,
+                ..at(TxnState::Empty)
+            }),
+        ),
+        (
+            TxnState::CompleteCommit,
+            Some(TxnProj {
+                epoch: 3,
+                state: TxnState::Empty.to_kafka_status(),
+                ..at(TxnState::CompleteCommit)
+            }),
+        ),
+        (
+            TxnState::CompleteAbort,
+            Some(TxnProj {
+                epoch: 3,
+                state: TxnState::Empty.to_kafka_status(),
+                ..at(TxnState::CompleteAbort)
+            }),
+        ),
+    ];
+    let model = TxnModel { max_epoch: 6 };
+    for (state, expected) in rows {
+        assert2::assert!(
+            model.next_state(&at(state), TxnAction::Init) == expected,
+            "{state:?}"
+        );
+    }
 }

@@ -234,8 +234,7 @@ impl AuditWriter {
         if let Some(spool) = &mut self.spool {
             let pending_losses = Arc::clone(&self.pending_losses);
             let marker = pending_losses.persist_with(|batch| {
-                let mut marker =
-                    AuditRecord::records_lost_with_generation(batch.count, batch.generation);
+                let mut marker = AuditRecord::records_lost(batch.count, batch.generation);
                 marker.push_chain_headers(self.chain.next_seq(), &self.chain.head());
                 spool.append_loss_marker(&marker)?;
                 Ok(marker)
@@ -253,7 +252,7 @@ impl AuditWriter {
         let Some(batch) = self.pending_losses.snapshot() else {
             return Ok(());
         };
-        let mut marker = AuditRecord::records_lost_with_generation(batch.count, batch.generation);
+        let mut marker = AuditRecord::records_lost(batch.count, batch.generation);
         let seq = self.chain.next_seq();
         let prev = self.chain.head();
         marker.push_chain_headers(seq, &prev);

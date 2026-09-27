@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use krabka_remote_storage::{PartitionDump, RemoteLogSegmentMetadata, RemoteLogSegmentState};
 use krabka_remote_storage_topic::Snapshot;
+use krabka_verified::{RestoreReconcileDecision, RestoreSnapshotState};
 use uuid::Uuid;
 
 #[cfg(test)]
@@ -113,7 +114,8 @@ fn reconcile_with_snapshot_policy(
             continue;
         }
         if dump.segments.iter().any(|segment| {
-            reconcile_decision(false, Some(segment.state()), retain_deleted_objects).is_none()
+            reconcile_decision(false, Some(segment.state()), retain_deleted_objects)
+                == RestoreReconcileDecision::Disagree
         }) {
             return Err(RestoreError::MetadataDisagreement {
                 topic: dump.topic_id_partition.topic.clone(),
@@ -128,18 +130,14 @@ fn reconcile_with_snapshot_policy(
     Ok(())
 }
 
-fn snapshot_state_tag(state: Option<RemoteLogSegmentState>) -> u8 {
+fn snapshot_state(state: Option<RemoteLogSegmentState>) -> RestoreSnapshotState {
     match state {
-        None => krabka_verified::RESTORE_SNAPSHOT_MISSING,
+        None => RestoreSnapshotState::Missing,
         Some(
             RemoteLogSegmentState::CopySegmentStarted | RemoteLogSegmentState::CopySegmentFinished,
-        ) => krabka_verified::RESTORE_SNAPSHOT_LIVE,
-        Some(RemoteLogSegmentState::DeleteSegmentStarted) => {
-            krabka_verified::RESTORE_SNAPSHOT_DELETE_STARTED
-        }
-        Some(RemoteLogSegmentState::DeleteSegmentFinished) => {
-            krabka_verified::RESTORE_SNAPSHOT_DELETE_FINISHED
-        }
+        ) => RestoreSnapshotState::Live,
+        Some(RemoteLogSegmentState::DeleteSegmentStarted) => RestoreSnapshotState::DeleteStarted,
+        Some(RemoteLogSegmentState::DeleteSegmentFinished) => RestoreSnapshotState::DeleteFinished,
     }
 }
 
@@ -147,14 +145,14 @@ fn reconcile_decision(
     scanned: bool,
     state: Option<RemoteLogSegmentState>,
     retain_deleted_objects: bool,
-) -> Option<bool> {
+) -> RestoreReconcileDecision {
     if retain_deleted_objects
         && scanned
         && state == Some(RemoteLogSegmentState::DeleteSegmentFinished)
     {
-        return Some(false);
+        return RestoreReconcileDecision::Exclude;
     }
-    krabka_verified::restore_archive_reconcile(scanned, snapshot_state_tag(state))
+    krabka_verified::restore_archive_reconcile(scanned, snapshot_state(state))
 }
 
 /// Reconcile one partition's scanned segments against its snapshot entry, if
@@ -183,8 +181,7 @@ fn reconcile_partition(
                 .get(&(segment.segment_id, segment.base_offset.get()))
                 .copied(),
             retain_deleted_objects,
-        )
-        .is_none()
+        ) == RestoreReconcileDecision::Disagree
     });
     let snapshot_disagrees =
         dump.into_iter()
@@ -198,8 +195,7 @@ fn reconcile_partition(
                     scanned,
                     Some(snapshot_segment.state()),
                     retain_deleted_objects,
-                )
-                .is_none()
+                ) == RestoreReconcileDecision::Disagree
             });
 
     if duplicate_snapshot_key || scan_disagrees || snapshot_disagrees {
@@ -218,7 +214,7 @@ fn reconcile_partition(
                 .get(&(segment.segment_id, segment.base_offset.get()))
                 .copied(),
             retain_deleted_objects,
-        ) == Some(true)
+        ) == RestoreReconcileDecision::Keep
     });
     Ok(())
 }

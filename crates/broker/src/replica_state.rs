@@ -1,25 +1,181 @@
 //! Per-partition replica progress tracking, lives on the partition leader.
 //!
 //! `ReplicaState` records each follower's last-fetched offset, which is the
-//! follower's persisted LEO from the leader's perspective, and it caches
-//! the High Watermark = min LEO over the ISR. ISR-lag
-//! tracking in `FollowerStats` (`last_fetch`, `last_caught_up`) lets
-//! the `isr_maintenance` task shrink and expand the ISR.
+//! follower's persisted LEO from the leader's perspective, and it caches the
+//! high watermark that Kafka's `Partition.maybeIncrementLeaderHW` would hold:
+//! frozen while the ISR is below `min.insync.replicas`, otherwise the lowest
+//! log end among the leader, the ISR and every caught-up ISR-eligible replica,
+//! and never lower than before. ISR-lag tracking in `FollowerStats`
+//! (`last_fetch`, `last_caught_up`) follows Kafka's
+//! `Replica.updateFetchStateOrThrow` and lets the `isr_maintenance` task
+//! shrink and expand the ISR.
 
 use std::{
     collections::{HashMap, HashSet},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use krabka_ids::LeaderEpoch;
 use krabka_log::Offset;
 use krabka_raft::NodeId;
+use krabka_verified::isr::{
+    CaughtUpCredit, HighWatermarkFacts, HwmReplica, IsrEligibilityFacts, leader_high_watermark,
+};
 
+/// What the leader knows of one follower's progress, Kafka's `ReplicaState`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct FollowerStats {
+    /// The follower's fetch offset, clamped to the leader's log end offset.
     pub(crate) leo: Offset,
-    pub(crate) last_fetch: Instant,
-    pub(crate) last_caught_up: Instant,
+    /// Kafka's `lastFetchTimeMs`: when the leader received the follower's
+    /// last Fetch. `None` until the follower fetches from this leader.
+    pub(crate) last_fetch: Option<Instant>,
+    /// Kafka's `lastFetchLeaderLogEndOffset`: the highest leader log end
+    /// offset seen at any of the follower's fetches, -1 before the first.
+    pub(crate) last_fetch_leader_leo: Offset,
+    /// Kafka's `lastCaughtUpTimeMs`: the latest time at which the follower's
+    /// fetch offset was known to reach the leader's log end offset. `None`
+    /// means never, Kafka's 0.
+    pub(crate) last_caught_up: Option<Instant>,
+    /// Kafka's `ReplicaState.brokerEpoch`: the broker epoch the follower's
+    /// last Fetch carried (KIP-841), -1 for a Fetch that carried none, `None`
+    /// until one is recorded.
+    pub(crate) broker_epoch: Option<i64>,
+}
+
+impl FollowerStats {
+    /// A follower this leader has heard nothing from, Kafka's
+    /// `ReplicaState.EMPTY`.
+    const UNKNOWN: Self = Self {
+        leo: Offset(0),
+        last_fetch: None,
+        last_fetch_leader_leo: Offset(-1),
+        last_caught_up: None,
+        broker_epoch: None,
+    };
+
+    /// An ISR member when this broker installs the ISR: Kafka's
+    /// `Replica.resetReplicaState` for a follower in sync, caught up as of
+    /// `now` but not yet fetched from this leader.
+    fn in_sync_at(now: Instant) -> Self {
+        Self {
+            last_caught_up: Some(now),
+            ..Self::UNKNOWN
+        }
+    }
+
+    /// Kafka's `ReplicaState.logEndOffset`: the follower's last fetch offset,
+    /// or -1, Kafka's `UNKNOWN_OFFSET`, before it fetched from this leader.
+    pub(crate) fn log_end(&self) -> i64 {
+        if self.last_fetch.is_some() {
+            self.leo.0
+        } else {
+            -1
+        }
+    }
+
+    /// Kafka's `Replica.updateFetchStateOrThrow` for a fetch at `fetch_offset`
+    /// received at `now`, while the leader's log ended at `leader_leo`.
+    fn record_fetch(&mut self, fetch_offset: Offset, leader_leo: Offset, now: Instant) {
+        let credited = match krabka_verified::isr::follower_caught_up_credit(
+            fetch_offset.0,
+            leader_leo.0,
+            self.last_fetch_leader_leo.0,
+        ) {
+            CaughtUpCredit::ThisFetch => Some(now),
+            CaughtUpCredit::PreviousFetch => self.last_fetch,
+            CaughtUpCredit::Unchanged => None,
+        };
+        self.last_caught_up = self.last_caught_up.max(credited);
+        self.leo = fetch_offset.min(leader_leo);
+        self.last_fetch_leader_leo = self.last_fetch_leader_leo.max(leader_leo);
+        self.last_fetch = Some(now);
+    }
+}
+
+/// One replica's standing in the leader's metadata image, the metadata-cache
+/// half of Kafka's `Partition.isReplicaIsrEligible`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BrokerStanding {
+    /// The controller has published the broker as fenced.
+    pub(crate) fenced: bool,
+    /// Kafka's `metadataCache.getAliveBrokerEpoch`: the registered broker
+    /// epoch of a registered, unfenced broker.
+    pub(crate) alive_epoch: Option<i64>,
+}
+
+/// What the leader's high-watermark and ISR rules read from outside the
+/// partition. The ISR maintenance scan refreshes it from the metadata image
+/// on every pass over a partition this broker leads.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct LeaderPolicy {
+    /// Kafka's `Partition.effectiveMinIsr`: `min.insync.replicas` capped by
+    /// the replica count.
+    pub(crate) effective_min_isr: usize,
+    /// `replica.lag.time.max.ms`.
+    pub(crate) replica_lag_time_max: Duration,
+    /// The image's standing of every assigned replica. A replica with no entry
+    /// is not ISR-eligible.
+    pub(crate) brokers: HashMap<NodeId, BrokerStanding>,
+}
+
+impl LeaderPolicy {
+    /// The policy before the first scan: Kafka's default `min.insync.replicas`
+    /// of 1, and no replica known to be eligible, so only the ISR holds the
+    /// high watermark back.
+    fn unscanned() -> Self {
+        Self {
+            effective_min_isr: 1,
+            replica_lag_time_max: Duration::ZERO,
+            brokers: HashMap::new(),
+        }
+    }
+
+    /// The policy `image` gives partition `record`.
+    ///
+    /// `min.insync.replicas` resolves as Kafka's `Partition.effectiveMinIsr`
+    /// reads it out of the log config: the topic override, then the cluster's
+    /// dynamic default
+    /// ([`configured_min_insync_replicas`](crate::config_keys::configured_min_insync_replicas),
+    /// the lookup the
+    /// controller maintains the KIP-966 eligible-leader set against), then
+    /// `default_min_insync_replicas`, this broker's static value, capped by
+    /// the replica count. It is the value the produce gate admits `acks=all`
+    /// against, so a write admitted under it is never committed below it. The
+    /// image carries no controlled
+    /// shutdown state; the controller's `AlterPartition` check refuses a
+    /// broker in controlled shutdown as `INELIGIBLE_REPLICA`.
+    pub(crate) fn from_image(
+        image: &krabka_metadata::MetadataImage,
+        record: &krabka_metadata::PartitionRecord,
+        replica_lag_time_max: Duration,
+        default_min_insync_replicas: i32,
+    ) -> Self {
+        let brokers = record
+            .replicas
+            .iter()
+            .map(|&replica| {
+                let fenced = crate::config_keys::resolve_broker_fenced(image, replica);
+                let alive_epoch = image.broker_epoch(replica).filter(|_| !fenced);
+                (
+                    replica,
+                    BrokerStanding {
+                        fenced,
+                        alive_epoch,
+                    },
+                )
+            })
+            .collect();
+        let configured = crate::config_keys::configured_min_insync_replicas(image, &record.topic)
+            .unwrap_or(default_min_insync_replicas);
+        Self {
+            effective_min_isr: usize::try_from(configured)
+                .unwrap_or(1)
+                .min(record.replicas.len()),
+            replica_lag_time_max,
+            brokers,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -35,6 +191,7 @@ pub(crate) struct ReplicaState {
     pub(crate) hw: Offset,
     pub(crate) current_leader_epoch: LeaderEpoch,
     leader: Option<NodeId>,
+    policy: LeaderPolicy,
 }
 
 impl ReplicaState {
@@ -47,6 +204,7 @@ impl ReplicaState {
             hw: Offset(0),
             current_leader_epoch: LeaderEpoch(0),
             leader: None,
+            policy: LeaderPolicy::unscanned(),
         }
     }
 
@@ -60,11 +218,16 @@ impl ReplicaState {
     /// the leader, and not by the ISR. A replica that the ISR shrank out,
     /// or that has not yet rejoined after a restart, still catches up
     /// through follower-fetch, and `isr_maintenance` reads exactly its
-    /// fetch-driven `last_caught_up` to expand it back in. A key on the
+    /// fetch-driven log end to expand it back in. A key on the
     /// ISR instead would discard that progress on every
     /// metadata-image reconcile and starve ISR re-admission under image
     /// churn. This method drops only nodes that are no longer in the
     /// replica set, for example after a reassignment removed them.
+    ///
+    /// A newly seeded ISR member is caught up as of `now` and has not
+    /// fetched, as Kafka's `Replica.resetReplicaState` leaves a follower in
+    /// sync: it stays in the ISR for `replica.lag.time.max.ms` to prove
+    /// itself.
     pub(crate) fn install_isr(
         &mut self,
         isr: &[NodeId],
@@ -76,16 +239,15 @@ impl ReplicaState {
         self.isr = isr.iter().copied().collect();
         self.replicas = replicas.iter().copied().collect();
         self.per_follower.remove(&leader);
-        // Seed only ISR members: seeding a non-ISR replica with
-        // `last_caught_up = now` would let `isr_maintenance` falsely
-        // re-admit a replica that has not actually fetched up to the LEO.
+        // Seed only ISR members, as Kafka's `Replica.resetReplicaState` does:
+        // seeding a non-ISR replica with `last_caught_up = now` would count
+        // it as caught up and let it hold the high watermark back before it
+        // fetched anything.
         for &r in isr {
             if r != leader {
-                self.per_follower.entry(r).or_insert(FollowerStats {
-                    leo: Offset(0),
-                    last_fetch: now,
-                    last_caught_up: now,
-                });
+                self.per_follower
+                    .entry(r)
+                    .or_insert_with(|| FollowerStats::in_sync_at(now));
             }
         }
         self.per_follower.retain(|k, _| self.replicas.contains(k));
@@ -106,6 +268,46 @@ impl ReplicaState {
         if self.leader != Some(follower) {
             self.follower_log_start.insert(follower, log_start);
         }
+    }
+
+    /// Record the broker epoch a follower's Fetch carried in
+    /// `ReplicaState.ReplicaEpoch`, -1 when it carried none, as Kafka's
+    /// `Replica.updateFetchStateOrThrow` does. The fetch path records it
+    /// before [`Self::update_follower_leo`], whose watermark step reads it.
+    pub(crate) fn record_follower_broker_epoch(&mut self, follower: NodeId, broker_epoch: i64) {
+        if self.leader != Some(follower) {
+            self.per_follower
+                .entry(follower)
+                .or_insert(FollowerStats::UNKNOWN)
+                .broker_epoch = Some(broker_epoch);
+        }
+    }
+
+    /// Replace what the high-watermark and ISR rules read from the metadata
+    /// image and the broker's configuration.
+    pub(crate) fn set_policy(&mut self, policy: LeaderPolicy) {
+        self.policy = policy;
+    }
+
+    /// Kafka's `Partition.isReplicaIsrEligible` facts for `replica`.
+    pub(crate) fn eligibility(&self, replica: NodeId) -> IsrEligibilityFacts {
+        let standing = self.policy.brokers.get(&replica);
+        IsrEligibilityFacts {
+            fenced: standing.is_some_and(|standing| standing.fenced),
+            // The metadata image carries no controlled-shutdown state; see
+            // `LeaderPolicy::from_image`.
+            shutting_down: false,
+            fetch_broker_epoch: self
+                .per_follower
+                .get(&replica)
+                .and_then(|stats| stats.broker_epoch),
+            alive_broker_epoch: standing.and_then(|standing| standing.alive_epoch),
+        }
+    }
+
+    /// Whether `at` lies within `replica.lag.time.max.ms` of `now`.
+    pub(crate) fn within_lag(&self, at: Option<Instant>, now: Instant) -> bool {
+        at.is_some_and(|at| now.saturating_duration_since(at) <= self.policy.replica_lag_time_max)
     }
 
     /// Kafka's `Partition.lowWatermarkIfLeader`: the lowest log start offset
@@ -165,13 +367,14 @@ impl ReplicaState {
         leo >= fetch_offset && log_start <= fetch_offset
     }
 
-    // cargo-mutants: deleting the `!` (ISR-vs-non-ISR branch select) is equivalent: both
-    // branch bodies set identical follower stats (leo=min, last_fetch, and
-    // last_caught_up under the same `>= leader_leo` guard) and both end by
-    // recomputing `self.hw = compute_hw(leader_leo)`. Since `compute_hw` keys
-    // the min purely on `self.isr` membership (unchanged by which branch ran),
-    // both paths leave identical observable state for every input.
-    #[cfg_attr(test, mutants::skip)]
+    /// Record one follower Fetch at `follower_leo` (its fetch offset),
+    /// received at `now` while the leader's log ended at `leader_leo`, and
+    /// recompute the high watermark.
+    ///
+    /// ISR members and replicas outside the ISR are tracked alike: the
+    /// former so `isr_maintenance` can shrink them out when they stop
+    /// catching up, the latter so it can expand them back in. A replica with
+    /// no entry starts from Kafka's empty state, never caught up.
     pub(crate) fn update_follower_leo(
         &mut self,
         follower: NodeId,
@@ -179,37 +382,23 @@ impl ReplicaState {
         leader_leo: Offset,
         now: Instant,
     ) -> Offset {
-        if !self.isr.contains(&follower) {
-            // Track stats so isr_maintenance can expand back when caught up.
-            let stats = self.per_follower.entry(follower).or_insert(FollowerStats {
-                leo: Offset(0),
-                last_fetch: now,
-                last_caught_up: now,
-            });
-            stats.last_fetch = now;
-            stats.leo = follower_leo.min(leader_leo);
-            if stats.leo >= leader_leo {
-                stats.last_caught_up = now;
-            }
-            return self.recompute_hw_for_leader_append(leader_leo);
-        }
-        let clamped = follower_leo.min(leader_leo);
-        let stats = self.per_follower.entry(follower).or_insert(FollowerStats {
-            leo: Offset(0),
-            last_fetch: now,
-            last_caught_up: now,
-        });
-        stats.leo = clamped;
-        stats.last_fetch = now;
-        if clamped >= leader_leo {
-            stats.last_caught_up = now;
-        }
-        self.hw = self.compute_hw(leader_leo);
-        self.hw
+        self.per_follower
+            .entry(follower)
+            .or_insert(FollowerStats::UNKNOWN)
+            .record_fetch(follower_leo, leader_leo, now);
+        self.recompute_hw_at(leader_leo, now)
     }
 
+    /// Recompute the high watermark after the leader's log end moved to
+    /// `leader_leo`, as of now.
     pub(crate) fn recompute_hw_for_leader_append(&mut self, leader_leo: Offset) -> Offset {
-        self.hw = self.compute_hw(leader_leo);
+        self.recompute_hw_at(leader_leo, Instant::now())
+    }
+
+    /// Recompute the high watermark with the leader's log ending at
+    /// `leader_leo`, reading every lag bound at `now`.
+    pub(crate) fn recompute_hw_at(&mut self, leader_leo: Offset, now: Instant) -> Offset {
+        self.hw = self.compute_hw(leader_leo, now);
         self.hw
     }
 
@@ -226,24 +415,45 @@ impl ReplicaState {
         self.hw
     }
 
-    // cargo-mutants: `< min_leo` vs `<= min_leo` is equivalent: the only effect is `min_leo =
-    // stats.leo`, a no-op when the values are already equal, so both operators
-    // compute the same minimum. No test can distinguish them.
-    #[cfg_attr(test, mutants::skip)]
-    fn compute_hw(&self, leader_leo: Offset) -> Offset {
-        let isr_follower_leos = self
-            .isr
-            .iter()
+    /// Kafka's `partitionState.isr.size`. Kafka's ISR always holds its leader;
+    /// a state that has installed no ISR yet is this broker leading alone, so
+    /// the leader counts once whether or not an installed ISR names it.
+    fn isr_size(&self) -> usize {
+        let leader_listed = self.leader.is_some_and(|leader| self.isr.contains(&leader));
+        self.isr.len() + usize::from(!leader_listed)
+    }
+
+    /// Kafka's `Partition.maybeIncrementLeaderHW` over every remote replica
+    /// and ISR member. The committed ISR stands in for Kafka's maximal ISR: an
+    /// expansion this leader proposed is not tracked until it commits, and the
+    /// replica it adds is caught up and eligible, so it holds the watermark
+    /// back either way.
+    fn compute_hw(&self, leader_leo: Offset, now: Instant) -> Offset {
+        let remotes = self
+            .replicas
+            .union(&self.isr)
             .filter(|replica| self.leader != Some(**replica))
             .map(|replica| {
-                self.per_follower
-                    .get(replica)
-                    .map_or(0, |stats| stats.leo.0)
+                let stats = self.per_follower.get(replica);
+                HwmReplica {
+                    log_end: stats.map_or(-1, FollowerStats::log_end),
+                    in_isr: self.isr.contains(replica),
+                    caught_up_within_lag: self
+                        .within_lag(stats.and_then(|stats| stats.last_caught_up), now),
+                    eligibility: self.eligibility(*replica),
+                }
             })
             .collect::<Vec<_>>();
-        Offset(krabka_verified::isr::isr_high_watermark(
-            leader_leo.0,
-            &isr_follower_leos,
+        Offset(leader_high_watermark(
+            HighWatermarkFacts {
+                // Kafka's `UnifiedLog.truncateTo` lowers the high watermark
+                // with the log end; krabka's truncation leaves it here.
+                current: self.hw.0.min(leader_leo.0),
+                leader_log_end: leader_leo.0,
+                isr_size: self.isr_size(),
+                effective_min_isr: self.policy.effective_min_isr,
+            },
+            &remotes,
         ))
     }
 }
@@ -252,7 +462,7 @@ impl ReplicaState {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use assert2::assert;
+    use assert2::{assert, check};
 
     use super::*;
 
@@ -280,6 +490,7 @@ mod tests {
             hw: Offset(0),
             current_leader_epoch: LeaderEpoch(0),
             leader: None,
+            policy: LeaderPolicy::unscanned(),
         };
         assert!(s == expected);
     }
@@ -311,8 +522,10 @@ mod tests {
         );
         let seeded = FollowerStats {
             leo: Offset(0),
-            last_fetch: t,
-            last_caught_up: t,
+            last_fetch: None,
+            last_fetch_leader_leo: Offset(-1),
+            last_caught_up: Some(t),
+            broker_epoch: None,
         };
         // Only the non-leader followers (2 and 3) are seeded; the leader (1)
         // gets no per_follower entry.
@@ -326,6 +539,7 @@ mod tests {
             hw: Offset(0),
             current_leader_epoch: LeaderEpoch(0),
             leader: Some(NodeId(1)),
+            policy: LeaderPolicy::unscanned(),
         };
         assert!(s == expected);
     }
@@ -440,8 +654,8 @@ mod tests {
             now(),
         );
         // Node 3 is not in ISR. Its progress is tracked for possible
-        // re-admission, but it is excluded from HW; per_follower[2] = 0 from
-        // install, so HW = min(100, 0) = 0.
+        // re-admission, but it is excluded from HW; follower 2 has not
+        // fetched from this leader, so HW stays where it was.
         let hw = s.update_follower_leo(NodeId(3), o(999), o(100), now());
         assert!(hw == o(0));
         assert!(s.hw == o(0));
@@ -524,6 +738,10 @@ mod tests {
         assert!(s.recompute_hw_for_leader_append(o(100)) == o(0));
     }
 
+    /// A new leadership neither lowers the watermark it inherited nor raises
+    /// it before the ISR fetches: Kafka's `Replica.resetReplicaState` leaves
+    /// each follower's log end unknown, and `maybeIncrementHighWatermark`
+    /// only ever raises it.
     #[test]
     fn leadership_change_gap_pins_high_watermark() {
         let mut s = fresh();
@@ -537,85 +755,120 @@ mod tests {
 
         s.reset_for_leader(NodeId(2));
 
-        assert!(s.recompute_hw_for_leader_append(o(100)) == o(0));
+        assert!(s.recompute_hw_for_leader_append(o(100)) == o(30));
     }
 
+    /// Kafka's `Replica.updateFetchStateOrThrow`, fetch by fetch, for
+    /// follower 2 of an ISR installed at `t0`. Each step is a fetch at
+    /// `t0 + ms`: the follower's fetch offset, the leader's log end offset
+    /// when it arrived, and the whole follower state it leaves.
     #[test]
-    fn update_follower_leo_advances_last_fetch_time() {
-        // Deterministic: pass explicit ordered instants instead of sleeping.
-        let mut s = fresh();
+    fn follower_fetches_update_state_as_kafka_does() {
         let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let stats = |leo, last_fetch, last_fetch_leader_leo, last_caught_up| FollowerStats {
+            leo: o(leo),
+            last_fetch: Some(at(last_fetch)),
+            last_fetch_leader_leo: o(last_fetch_leader_leo),
+            last_caught_up,
+            broker_epoch: None,
+        };
+        let mut s = fresh();
         s.install_isr(
             &[NodeId(1), NodeId(2)],
             &[NodeId(1), NodeId(2)],
             NodeId(1),
             t0,
         );
-        let t_install = s.per_follower.get(&NodeId(2)).unwrap().last_fetch;
-        let t1 = t0 + Duration::from_millis(10);
-        s.update_follower_leo(NodeId(2), o(5), o(10), t1);
-        let t_after = s.per_follower.get(&NodeId(2)).unwrap().last_fetch;
-        assert!(t_after > t_install);
+        let steps = [
+            (
+                "the first fetch cannot credit a fetch this leader never saw",
+                100,
+                5,
+                10,
+                stats(5, 100, 10, Some(t0)),
+            ),
+            (
+                "a fetch short of the previous fetch's log end credits nothing",
+                200,
+                9,
+                20,
+                stats(9, 200, 20, Some(t0)),
+            ),
+            (
+                "a fetch reaching the previous fetch's log end credits that fetch",
+                300,
+                20,
+                30,
+                stats(20, 300, 30, Some(at(200))),
+            ),
+            (
+                "a fetch reaching the current log end credits itself",
+                400,
+                30,
+                30,
+                stats(30, 400, 30, Some(at(400))),
+            ),
+            (
+                "a later short fetch keeps the latest caught-up time",
+                500,
+                25,
+                40,
+                stats(25, 500, 40, Some(at(400))),
+            ),
+            (
+                "an overshooting fetch clamps to the leader's log end",
+                600,
+                99,
+                40,
+                stats(40, 600, 40, Some(at(600))),
+            ),
+        ];
+        for (label, ms, fetch_offset, leader_leo, expected) in steps {
+            s.update_follower_leo(NodeId(2), o(fetch_offset), o(leader_leo), at(ms));
+            check!(s.per_follower.get(&NodeId(2)) == Some(&expected), "{label}");
+        }
     }
 
+    /// A replica outside the ISR that this leader has not heard from starts
+    /// from Kafka's empty state: its first fetch proves nothing unless it
+    /// reaches the leader's log end, so it cannot be re-admitted on progress
+    /// it never made.
     #[test]
-    fn last_caught_up_set_when_leo_reaches_leader_leo() {
-        // Deterministic: pass explicit ordered instants instead of sleeping.
-        let mut s = fresh();
+    fn a_replica_outside_the_isr_is_never_caught_up_until_it_reaches_the_log_end() {
         let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let mut s = fresh();
         s.install_isr(
             &[NodeId(1), NodeId(2)],
-            &[NodeId(1), NodeId(2)],
+            &[NodeId(1), NodeId(2), NodeId(3)],
             NodeId(1),
             t0,
         );
-        let t1 = t0 + Duration::from_millis(10);
-        s.update_follower_leo(NodeId(2), o(5), o(10), t1);
-        let lag = s.per_follower.get(&NodeId(2)).unwrap().last_caught_up;
-        let lag_fetch = s
-            .per_follower
-            .get(&NodeId(2))
-            .map(|f| f.last_fetch)
-            .unwrap();
-        // Not yet caught up — last_caught_up is the install time (t0), which is
-        // strictly before the most recent fetch time (t1).
-        assert!(lag <= lag_fetch);
-        let t2 = t1 + Duration::from_millis(10);
-        s.update_follower_leo(NodeId(2), o(10), o(10), t2);
-        let lag2 = s.per_follower.get(&NodeId(2)).unwrap().last_caught_up;
-        assert!(lag2 > lag);
-    }
 
-    #[test]
-    fn non_isr_follower_refreshes_last_caught_up_only_when_caught_up() {
-        let mut s = fresh();
-        let t0 = Instant::now();
-        s.install_isr(
-            &[NodeId(1), NodeId(2), NodeId(3)],
-            &[NodeId(1), NodeId(2), NodeId(3)],
-            NodeId(1),
-            t0,
+        s.update_follower_leo(NodeId(3), o(0), o(10), at(100));
+        check!(
+            s.per_follower.get(&NodeId(3))
+                == Some(&FollowerStats {
+                    leo: o(0),
+                    last_fetch: Some(at(100)),
+                    last_fetch_leader_leo: o(10),
+                    last_caught_up: None,
+                    broker_epoch: None,
+                })
         );
 
-        let t_caught_in_isr = t0 + Duration::from_millis(10);
-        s.update_follower_leo(NodeId(3), o(10), o(10), t_caught_in_isr);
-        assert!(s.per_follower.get(&NodeId(3)).unwrap().last_caught_up == t_caught_in_isr);
-
-        s.install_isr(
-            &[NodeId(1), NodeId(2)],
-            &[NodeId(1), NodeId(2), NodeId(3)],
-            NodeId(1),
-            t_caught_in_isr,
+        s.update_follower_leo(NodeId(3), o(10), o(10), at(200));
+        check!(
+            s.per_follower.get(&NodeId(3))
+                == Some(&FollowerStats {
+                    leo: o(10),
+                    last_fetch: Some(at(200)),
+                    last_fetch_leader_leo: o(10),
+                    last_caught_up: Some(at(200)),
+                    broker_epoch: None,
+                })
         );
-        let t_lagging = t_caught_in_isr + Duration::from_millis(10);
-        s.update_follower_leo(NodeId(3), o(9), o(10), t_lagging);
-        let lagging = s.per_follower.get(&NodeId(3)).unwrap();
-        assert!(lagging.last_fetch == t_lagging);
-        assert!(lagging.last_caught_up == t_caught_in_isr);
-
-        let t_caught_out_of_isr = t_lagging + Duration::from_millis(10);
-        s.update_follower_leo(NodeId(3), o(10), o(10), t_caught_out_of_isr);
-        assert!(s.per_follower.get(&NodeId(3)).unwrap().last_caught_up == t_caught_out_of_isr);
     }
 
     /// Kafka's `Partition.lowWatermarkIfLeader` over a leader at log start
@@ -676,6 +929,258 @@ mod tests {
 
         s.reset_for_leader(NodeId(1));
         assert2::check!(s.low_watermark(NodeId(1), o(50), &assignment, &alive) == o(-1));
+    }
+    /// Replicas 1, 2 and 3 led by 1, each registered and unfenced at broker
+    /// epoch 7, with a 1 s `replica.lag.time.max.ms`.
+    fn policy(effective_min_isr: usize) -> LeaderPolicy {
+        LeaderPolicy {
+            effective_min_isr,
+            replica_lag_time_max: Duration::from_secs(1),
+            brokers: [1, 2, 3]
+                .into_iter()
+                .map(|node| {
+                    (
+                        NodeId(node),
+                        BrokerStanding {
+                            fenced: false,
+                            alive_epoch: Some(7),
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    /// Kafka's `Partition.maybeIncrementLeaderHW` returns early while
+    /// `isUnderMinIsr`: with `min.insync.replicas` 2, a leader left alone in
+    /// its ISR keeps appending but its high watermark stays put until the ISR
+    /// is back at two, even while a follower outside it has every record.
+    #[test]
+    fn the_high_watermark_freezes_while_the_isr_is_under_min_isr() {
+        let t0 = Instant::now();
+        let replicas = [NodeId(1), NodeId(2), NodeId(3)];
+        let mut s = fresh();
+        s.install_isr(&replicas, &replicas, NodeId(1), t0);
+        s.set_policy(policy(2));
+        for follower in [NodeId(2), NodeId(3)] {
+            s.record_follower_broker_epoch(follower, 7);
+            s.update_follower_leo(follower, o(10), o(10), t0);
+        }
+        check!(s.hw == o(10), "the full ISR commits the first ten records");
+
+        // Both followers stop fetching; two seconds later the controller has
+        // shrunk the ISR to the leader alone.
+        let later = t0 + Duration::from_secs(2);
+        s.install_isr(&[NodeId(1)], &replicas, NodeId(1), later);
+        check!(
+            s.recompute_hw_at(o(20), later) == o(10),
+            "an append under min ISR does not move the watermark"
+        );
+        check!(
+            s.update_follower_leo(NodeId(2), o(20), o(20), later) == o(10),
+            "nor does a caught-up follower outside the ISR"
+        );
+
+        s.install_isr(&[NodeId(1), NodeId(2)], &replicas, NodeId(1), later);
+        check!(
+            s.recompute_hw_at(o(20), later) == o(20),
+            "the ISR back at min ISR releases the watermark"
+        );
+    }
+
+    /// Kafka's `shouldWaitForReplicaToJoinIsr`: a follower outside the ISR
+    /// that is caught up and ISR-eligible holds the watermark back, so the
+    /// watermark does not run away from a follower about to rejoin. The ISR
+    /// is {1, 2}; follower 3 caught up at offset 10 and the leader has since
+    /// appended to 12, which follower 2 already has.
+    #[test]
+    fn a_caught_up_eligible_follower_outside_the_isr_holds_the_watermark_back() {
+        let t0 = Instant::now();
+        let replicas = [NodeId(1), NodeId(2), NodeId(3)];
+        for (label, fetch_epoch, standing, expected) in [
+            ("an eligible follower holds it", Some(7), policy(1), 10),
+            (
+                "a follower whose fetch carried no epoch holds it",
+                Some(-1),
+                policy(1),
+                10,
+            ),
+            (
+                "a follower whose fetch carried a stale epoch does not",
+                Some(6),
+                policy(1),
+                12,
+            ),
+            (
+                "a follower with no recorded fetch epoch does not",
+                None,
+                policy(1),
+                12,
+            ),
+            (
+                "a fenced follower does not",
+                Some(7),
+                LeaderPolicy {
+                    brokers: [(
+                        NodeId(3),
+                        BrokerStanding {
+                            fenced: true,
+                            alive_epoch: None,
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                    ..policy(1)
+                },
+                12,
+            ),
+        ] {
+            let mut s = fresh();
+            s.install_isr(&[NodeId(1), NodeId(2)], &replicas, NodeId(1), t0);
+            s.set_policy(standing);
+            if let Some(epoch) = fetch_epoch {
+                s.record_follower_broker_epoch(NodeId(3), epoch);
+            }
+            s.update_follower_leo(NodeId(3), o(10), o(10), t0);
+            let hw = s.update_follower_leo(NodeId(2), o(12), o(12), t0);
+            check!(hw == o(expected), "{label}");
+        }
+    }
+
+    /// A leader's own broker epoch is never recorded as a follower's.
+    #[test]
+    fn a_fetch_epoch_is_recorded_for_followers_only() {
+        let mut s = fresh();
+        s.install_isr(
+            &[NodeId(1), NodeId(2)],
+            &[NodeId(1), NodeId(2)],
+            NodeId(1),
+            now(),
+        );
+        s.set_policy(policy(1));
+        s.record_follower_broker_epoch(NodeId(1), 7);
+        s.record_follower_broker_epoch(NodeId(2), 7);
+        check!(!s.per_follower.contains_key(&NodeId(1)));
+        check!(
+            s.eligibility(NodeId(2))
+                == IsrEligibilityFacts {
+                    fenced: false,
+                    shutting_down: false,
+                    fetch_broker_epoch: Some(7),
+                    alive_broker_epoch: Some(7),
+                }
+        );
+    }
+
+    /// The policy the ISR scan reads out of the metadata image: the topic's
+    /// `min.insync.replicas` capped by the replica count, and each replica's
+    /// fencing and registered epoch.
+    #[test]
+    fn a_policy_reads_min_isr_and_broker_standing_from_the_image() {
+        use krabka_metadata::{
+            BrokerConfigRecord, BrokerRegistrationRecord, MetadataImage, MetadataRecord,
+            PartitionRecord, TopicConfigRecord, TopicRecord,
+        };
+        let register = |node: u64, broker_epoch: i64| {
+            MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
+                node_id: NodeId(node),
+                broker_epoch,
+                incarnation_id: uuid::Uuid::nil(),
+                host: "localhost".to_string(),
+                port: 9092,
+                rack: None,
+                log_dirs: vec![],
+                endpoints: vec![],
+                features: std::collections::BTreeMap::new(),
+            })
+        };
+        let record = |replicas: &[u64]| PartitionRecord {
+            topic: "t".into(),
+            partition: 0,
+            leader: NodeId(1),
+            replicas: replicas.iter().copied().map(NodeId).collect(),
+            isr: replicas.iter().copied().map(NodeId).collect(),
+            ..Default::default()
+        };
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        image.apply(&MetadataRecord::V1Topic(TopicRecord {
+            name: "t".into(),
+            topic_id: uuid::Uuid::from_u128(1),
+            partitions: 1,
+            replication_factor: 3,
+        }));
+        image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: "t".into(),
+            overrides: [(
+                crate::config_keys::MIN_INSYNC_REPLICAS.to_string(),
+                "2".to_string(),
+            )]
+            .into_iter()
+            .collect(),
+        }));
+        image.apply(&register(1, 11));
+        image.apply(&register(2, 12));
+        image.apply(&register(3, 13));
+        image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+            node_id: NodeId(3),
+            config_name: crate::config_keys::BROKER_FENCED.to_string(),
+            config_value: Some(crate::config_keys::FENCED_TRUE.to_string()),
+        }));
+        let standing = |fenced, alive_epoch| BrokerStanding {
+            fenced,
+            alive_epoch,
+        };
+        let lag = Duration::from_secs(30);
+        check!(
+            LeaderPolicy::from_image(&image, &record(&[1, 2, 3, 4]), lag, 1)
+                == LeaderPolicy {
+                    effective_min_isr: 2,
+                    replica_lag_time_max: lag,
+                    brokers: [
+                        (NodeId(1), standing(false, Some(11))),
+                        (NodeId(2), standing(false, Some(12))),
+                        (NodeId(3), standing(true, None)),
+                        (NodeId(4), standing(false, None)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                }
+        );
+        check!(
+            LeaderPolicy::from_image(&image, &record(&[1]), lag, 1).effective_min_isr == 1,
+            "a single replica caps min ISR at one"
+        );
+    }
+
+    /// With no topic override and no cluster default in the image, the
+    /// broker's static `min.insync.replicas` decides, capped by the replica
+    /// count, as the produce gate resolves it.
+    #[test]
+    fn a_policy_falls_back_to_the_static_min_isr() {
+        use krabka_metadata::{MetadataImage, MetadataRecord, PartitionRecord, TopicRecord};
+        let record = |replicas: &[u64]| PartitionRecord {
+            topic: "t".into(),
+            partition: 0,
+            leader: NodeId(1),
+            replicas: replicas.iter().copied().map(NodeId).collect(),
+            isr: replicas.iter().copied().map(NodeId).collect(),
+            ..Default::default()
+        };
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        image.apply(&MetadataRecord::V1Topic(TopicRecord {
+            name: "t".into(),
+            topic_id: uuid::Uuid::from_u128(1),
+            partitions: 1,
+            replication_factor: 3,
+        }));
+        let lag = Duration::from_secs(30);
+        let min_isr = |replicas: &[u64], static_default| {
+            LeaderPolicy::from_image(&image, &record(replicas), lag, static_default)
+                .effective_min_isr
+        };
+        check!(min_isr(&[1, 2, 3], 2) == 2);
+        check!(min_isr(&[1, 2, 3], 1) == 1);
+        check!(min_isr(&[1], 2) == 1, "the replica count still caps it");
     }
 }
 

@@ -1,0 +1,139 @@
+(* #"/workspace/crates/verified/src/raft.rs" 239 0 239 77 *)
+
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sraft = "/workspace/crates/verified/src/raft.rs" 241 29 241 40
+let%span sraft'0 = "/workspace/crates/verified/src/raft.rs" 242 23 242 24
+let%span sraft'1 = "/workspace/crates/verified/src/raft.rs" 245 21 245 53
+let%span sraft'2 = "/workspace/crates/verified/src/raft.rs" 246 16 246 17
+let%span sraft'3 = "/workspace/crates/verified/src/raft.rs" 246 4 246 18
+let%span sraft'4 = "/workspace/crates/verified/src/raft.rs" 247 24 247 25
+let%span sraft'5 = "/workspace/crates/verified/src/raft.rs" 252 32 252 61
+let%span sraft'6 = "/workspace/crates/verified/src/raft.rs" 253 10 253 22
+let%span sraft'7 = "/workspace/crates/verified/src/raft.rs" 250 34 251 56
+let%span sraft'8 = "/workspace/crates/verified/src/raft.rs" 249 34 249 60
+let%span sraft'9 = "/workspace/crates/verified/src/raft.rs" 248 34 248 86
+let%span sraft'10 = "/workspace/crates/verified/src/raft.rs" 255 16 255 17
+let%span sraft'11 = "/workspace/crates/verified/src/raft.rs" 255 8 255 17
+let%span sraft'12 = "/workspace/crates/verified/src/raft.rs" 256 8 256 25
+let%span sraft'13 = "/workspace/crates/verified/src/raft.rs" 232 28 238 1
+let%span svec = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 108 18 108 36
+let%span svec'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 118 18 118 48
+let%span svec'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 18 14 18 41
+let%span svec'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/vec.rs" 114 18 114 40
+
+use creusot.int.UInt64
+use seq.Seq
+use creusot.int.Int32
+use creusot.prelude.MutBorrow
+use creusot.prelude.Any
+use int.Int
+
+type t_Vec_i32_Global
+
+type t_Option_Vec_i32_Global = None | Some t_Vec_i32_Global
+
+constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
+
+function view_Vec_i32_Global (self: t_Vec_i32_Global) : Seq.seq Int32.t
+
+axiom view_Vec_i32_Global_spec:
+  forall self: t_Vec_i32_Global [view_Vec_i32_Global self]. [%#svec'1] Seq.length (view_Vec_i32_Global self)
+    <= UInt64.t'int const_MAX
+
+let with_capacity_i32 (capacity: UInt64.t) (return (x: t_Vec_i32_Global)) = any
+  [ return (result: t_Vec_i32_Global) ->
+  {[@stop_split] [@expl:with_capacity ensures] [%#svec] Seq.length (view_Vec_i32_Global result) = 0}
+    (! return {result}) ]
+
+let push_i32 (self_: MutBorrow.t t_Vec_i32_Global) (v: Int32.t) (return (x: ())) = any
+  [ return (result: ()) -> {[@stop_split] [@expl:push ensures] [%#svec'0] view_Vec_i32_Global self_.final
+    = Seq.snoc (view_Vec_i32_Global self_.current) v}
+    (! return {result}) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+predicate well_founded_relation_Int [@inline:trivial] (self: int) (other: int) =
+  [%#swell_founded] ge_log_Int self 0 /\ gt_log_Int self other
+
+meta "rewrite_def" predicate well_founded_relation_Int
+
+let len_i32 (self_: t_Vec_i32_Global) (return (x: UInt64.t)) = any
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:len ensures] [%#svec'2] UInt64.t'int result
+    = Seq.length (view_Vec_i32_Global self_)}
+    (! return {result}) ]
+
+constant const_MAX'0: Int32.t = (2147483647: Int32.t)
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let metadata_record_offset_deltas [#"/workspace/crates/verified/src/raft.rs" 239 0 239 77] (record_count: UInt64.t)
+  (return (x: t_Option_Vec_i32_Global)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &max_records <- [%#sraft] (2147483648: UInt64.t) ] s1
+    | s1 = [ &_6 <- record_count = ([%#sraft'0] (0: UInt64.t)) ] s2
+    | s2 = any [ br0 -> {_6 = false} (! bb2) | br1 -> {_6} (! bb4) ] ]
+  | bb2 = s0
+    [ s0 = [ &_8 <- UInt64.gt record_count max_records ] s1
+    | s1 = any [ br0 -> {_8 = false} (! bb5) | br1 -> {_8} (! bb4) ] ]
+  | bb4 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = with_capacity_i32 [%#sraft'1] {record_count} (fun (_x: t_Vec_i32_Global) -> [ &deltas <- _x ] s1)
+    | s1 = MutBorrow.borrow_mut <t_Vec_i32_Global> {deltas}
+        (fun (_bor: MutBorrow.t t_Vec_i32_Global) -> [ &_15 <- _bor ] [ &deltas <- _bor.final ] s2)
+    | s2 = push_i32 [%#sraft'3] {_15} {[%#sraft'2] (0: Int32.t)} (fun (_x: ()) -> [ &_14 <- _x ] s3)
+    | s3 = [ &last <- [%#sraft'4] (0: Int32.t) ] s4
+    | s4 = bb8 ]
+  | bb8 = bb8invariant
+    [ bb8 = {[@expl:loop variant] well_founded_relation_Int variant_old_bb8 ([%#sraft'5] UInt64.t'int record_count
+      - Seq.length (view_Vec_i32_Global deltas))}
+      bb8invariant
+    | bb8invariant = {[@expl:loop invariant #0] [%#sraft'9] 1 <= Seq.length (view_Vec_i32_Global deltas)
+      /\ Seq.length (view_Vec_i32_Global deltas) <= UInt64.t'int record_count}
+      {[@expl:loop invariant #1] [%#sraft'8] Int32.to_int last = Seq.length (view_Vec_i32_Global deltas) - 1}
+      {[@expl:loop invariant #2] [%#sraft'7] forall i: int. 0 <= i /\ i < Seq.length (view_Vec_i32_Global deltas)
+        -> Int32.to_int (Seq.get (view_Vec_i32_Global deltas) i) = i}
+      (! [ &variant_old_bb8 <- [%#sraft'5] UInt64.t'int record_count - Seq.length (view_Vec_i32_Global deltas) ] s0)
+      [ s0 = len_i32 [%#sraft'6] {deltas} (fun (_x: UInt64.t) -> [ &_32 <- _x ] s1)
+      | s1 = [ &_31 <- UInt64.lt _32 record_count ] s2
+      | s2 = any [ br0 -> {_31 = false} (! bb13) | br1 -> {_31} (! bb11) ] ]
+      [ bb11 = s0
+        [ s0 = Int32.add [%#sraft'11] {last} {[%#sraft'10] (1: Int32.t)} (fun (_x: Int32.t) -> [ &last <- _x ] s1)
+        | s1 = MutBorrow.borrow_mut <t_Vec_i32_Global> {deltas}
+            (fun (_bor: MutBorrow.t t_Vec_i32_Global) -> [ &_36 <- _bor ] [ &deltas <- _bor.final ] s2)
+        | s2 = push_i32 [%#sraft'12] {_36} {last} (fun (_x: ()) -> [ &_35 <- _x ] s3)
+        | s3 = bb8 ] ] ]
+  | bb13 = s0 [ s0 = [ &_ret <- Some deltas ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_Vec_i32_Global = Any.any_l ()
+  | & record_count: UInt64.t = record_count
+  | & max_records: UInt64.t = Any.any_l ()
+  | & _6: bool = Any.any_l ()
+  | & _8: bool = Any.any_l ()
+  | & deltas: t_Vec_i32_Global = Any.any_l ()
+  | & _14: () = Any.any_l ()
+  | & _15: MutBorrow.t t_Vec_i32_Global = Any.any_l ()
+  | & last: Int32.t = Any.any_l ()
+  | & _31: bool = Any.any_l ()
+  | & _32: UInt64.t = Any.any_l ()
+  | & _35: () = Any.any_l ()
+  | & _36: MutBorrow.t t_Vec_i32_Global = Any.any_l ()
+  | & variant_old_bb8: int = Any.any_l () ])
+  [ return (result: t_Option_Vec_i32_Global) ->
+  {[@stop_split] [@expl:metadata_record_offset_deltas ensures] [%#sraft'13] match result with
+      | Some deltas -> gt_log_Int (UInt64.t'int record_count) 0
+      /\ UInt64.t'int record_count <= Int32.to_int const_MAX'0 + 1
+      /\ Seq.length (view_Vec_i32_Global deltas) = UInt64.t'int record_count
+      /\ (forall i: int. 0 <= i /\ i < Seq.length (view_Vec_i32_Global deltas)
+        -> Int32.to_int (Seq.get (view_Vec_i32_Global deltas) i) = i)
+      | None -> UInt64.t'int record_count = 0 \/ gt_log_Int (UInt64.t'int record_count) (Int32.to_int const_MAX'0 + 1)
+      end}
+    (! return {result}) ]

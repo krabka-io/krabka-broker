@@ -6,7 +6,9 @@ use std::collections::{HashMap, HashSet};
 
 use krabka_protocol::primitives::uuid::Uuid;
 
-use super::assignor::{Assignor, MemberSubscription, TopicMetadata};
+use super::assignor::{
+    Assignor, GroupSpec, MemberSubscription, SubscriptionShape, TopicMetadata, subscription_type,
+};
 use crate::coordinator::unified::consumer_state::{GroupState, MemberState};
 
 #[derive(Debug, Clone, Default)]
@@ -15,7 +17,7 @@ pub struct ReconcileInput {
     pub partitions_per_topic: HashMap<Uuid, i32>,
     /// Per-`(topic_id, partition_index)` set of replica racks.
     /// An empty or missing entry means there is no rack data for that
-    /// partition. `UniformAssignor` then falls back to its non-rack-aware path.
+    /// partition. The built-in assignors do not read it, as in Kafka.
     pub partition_racks: HashMap<(Uuid, i32), Vec<String>>,
 }
 
@@ -41,13 +43,32 @@ pub fn reconcile_if_dirty(
             member_id: m.member_id.clone(),
             rack_id: m.rack_id.clone(),
             subscribed_topic_ids: resolve_subscribed_topic_ids(m, &input.topic_id_by_name),
+            assigned_partitions: group
+                .target
+                .per_member
+                .get(&m.member_id)
+                .cloned()
+                .unwrap_or_default(),
         })
         .collect();
+    let shapes: Vec<SubscriptionShape<'_>> = group
+        .members
+        .values()
+        .map(|m| SubscriptionShape {
+            topic_names: &m.subscribed_topic_names,
+            topic_regex: m.subscribed_topic_regex.as_deref(),
+            regex_topic_names: regex_topic_names(m, &input.topic_id_by_name),
+        })
+        .collect();
+    let spec = GroupSpec {
+        members: subscriptions,
+        subscription_type: subscription_type(&shapes),
+    };
     let topics = TopicMetadata {
         partitions_per_topic: input.partitions_per_topic.clone(),
         partition_racks: input.partition_racks.clone(),
     };
-    let assignment = assignor.assign(&subscriptions, &topics);
+    let assignment = assignor.assign(&spec, &topics);
     if !group.bump_epoch() {
         return ReconcileOutcome::EpochExhausted;
     }
@@ -85,6 +106,21 @@ fn collect_subscribed_topic_ids(
             }
         }
     }
+}
+
+/// The existing topic names that a member's regex subscription resolves to,
+/// for Kafka's subscription-type rule.
+fn regex_topic_names<'a>(
+    member: &MemberState,
+    topic_id_by_name: &'a HashMap<String, Uuid>,
+) -> Vec<&'a str> {
+    member.compiled_regex().map_or_else(Vec::new, |re| {
+        topic_id_by_name
+            .keys()
+            .filter(|name| re.is_match(name) && member.regex_authorized_topics.contains(*name))
+            .map(String::as_str)
+            .collect()
+    })
 }
 
 /// Resolve a member's effective topic-id subscription as a vector.

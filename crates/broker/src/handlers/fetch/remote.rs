@@ -4,12 +4,17 @@
 
 use krabka_log::{DeliveryPolicy, LeaderEpoch, Offset};
 use krabka_protocol::{
-    Encode, owned::fetch_response::AbortedTransaction, primitives::uuid::Uuid as WireUuid,
+    Encode,
+    owned::fetch_response::{AbortedTransaction, PartitionData},
+    primitives::uuid::Uuid as WireUuid,
     records::RecordBatch,
 };
 use krabka_units::convert::TimeExt as _;
 
-use super::plan::PendingRead;
+use super::{
+    plan::{PendingRead, refused_read},
+    read::LiveOffsets,
+};
 use crate::{broker::Broker, codes, partition::Partition};
 
 /// Whether a batch the remote tier returned may go out to a consumer now.
@@ -75,19 +80,16 @@ impl Drop for ReadTimer<'_> {
 /// A transient brownout of the object store, or an RLMM still catching up
 /// after a restart, must not cost a consumer its offset.
 ///
-/// The other pointers `do_read` wrote -- log start, high watermark, LSO --
-/// stay as they are, and the rest of the request is unaffected. The
-/// read-committed case also gets an empty aborted-transaction list, because a
-/// `None` there means "read uncommitted" rather than "no aborts".
+/// The row is Kafka's `LogReadResult(Errors)`, which is what
+/// `DelayedRemoteFetch.onComplete` builds for a remote read that ended in an
+/// exception: every offset -1, empty records and no aborted-transaction list,
+/// exactly the local path's `refused_read`. The rest of the request is
+/// unaffected.
 ///
 /// Returns zero served bytes, because the partition carries an error and no
 /// records.
 fn fail_partition(p: &mut PendingRead) -> usize {
-    p.out.error_code = codes::UNKNOWN_SERVER_ERROR;
-    p.out.records = None;
-    if p.read_committed {
-        p.out.aborted_transactions = Some(Vec::new());
-    }
+    p.out = refused_read(p.partition_index, codes::UNKNOWN_SERVER_ERROR);
     0
 }
 
@@ -157,14 +159,15 @@ fn reject_saturated(p: &mut PendingRead) -> usize {
 /// `ReplicaManager.handleOffsetOutOfRangeError` does for
 /// `params.isFromFollower`.
 ///
-/// The pointers `do_read` wrote -- the global log start, the high watermark,
-/// the LSO -- stay as they are: they are what tell the follower which band it
-/// asked into, and Kafka's `createLogReadResult` sends the same three beside
-/// this error. The aborted-transaction list is untouched as well, because a
-/// follower fetch is never read-committed.
+/// The row is Kafka's `ReplicaManager.createLogReadResult(highWatermark,
+/// leaderLogStartOffset, leaderLogEndOffset, e)`: the live high watermark and
+/// global log start, which tell the follower which band it asked into, and
+/// otherwise the refused row -- empty records, no aborted-transaction list,
+/// and a last stable offset of -1, because that constructor passes
+/// `OptionalLong.empty()` and `KafkaApis` sends an absent LSO as -1.
 ///
 /// Returns zero served bytes: the partition carries an error and no records.
-fn moved_to_tiered_storage(p: &mut PendingRead, local_log_start: i64) -> usize {
+fn moved_to_tiered_storage(p: &mut PendingRead, live: LiveOffsets, local_log_start: i64) -> usize {
     tracing::debug!(
         topic = %p.topic_name,
         partition = p.partition_index,
@@ -173,8 +176,11 @@ fn moved_to_tiered_storage(p: &mut PendingRead, local_log_start: i64) -> usize {
         "remote-reader: follower fetched below the local log start; \
          answering OFFSET_MOVED_TO_TIERED_STORAGE"
     );
-    p.out.error_code = codes::OFFSET_MOVED_TO_TIERED_STORAGE;
-    p.out.records = None;
+    p.out = PartitionData {
+        high_watermark: live.high_watermark.0,
+        log_start_offset: live.log_start.0,
+        ..refused_read(p.partition_index, codes::OFFSET_MOVED_TO_TIERED_STORAGE)
+    };
     0
 }
 
@@ -182,13 +188,18 @@ fn moved_to_tiered_storage(p: &mut PendingRead, local_log_start: i64) -> usize {
 /// local log returned `OFFSET_OUT_OF_RANGE` and the topic has
 /// `remote.storage.enable=true`.
 ///
-/// On success the function replaces the partition's error and records, and
-/// returns the encoded batch size. On a genuine miss -- an offset below the
-/// established log start, or one no remote segment holds -- and for a
-/// non-tiered topic, it leaves `p.out` untouched and returns `None`, so the
-/// `OFFSET_OUT_OF_RANGE` the local read set stands. When the tier itself
-/// fails, the partition is answered `UNKNOWN_SERVER_ERROR` instead: see
-/// [`fail_partition`].
+/// On success the function replaces the partition's error and records,
+/// reports the live bounds beside them (see [`LiveOffsets`]), and returns the
+/// encoded batch size. On a genuine miss -- an offset below the established
+/// log start, or one no remote segment holds -- and for a non-tiered topic, it
+/// leaves `p.out` untouched and returns `None`, so the `OFFSET_OUT_OF_RANGE`
+/// row the local read set, with Kafka's all -1 offsets, stands. That is
+/// Kafka's answer to both: the non-tiered branch of
+/// `ReplicaManager.handleOffsetOutOfRangeError` for the first, and
+/// `DelayedRemoteFetch.onComplete` turning `RemoteLogManager.read`'s
+/// `OffsetOutOfRangeException` into `LogReadResult(Errors)` for the second.
+/// When the tier itself fails, the partition is answered
+/// `UNKNOWN_SERVER_ERROR` instead: see [`fail_partition`].
 ///
 /// A *follower* never reads the tier at all: it is answered
 /// `OFFSET_MOVED_TO_TIERED_STORAGE` and rebuilds its log at the leader's local
@@ -252,13 +263,16 @@ pub(super) async fn try_remote_read(
     if matches!(log_start, Some(floor) if p.fetch_offset < floor.0) {
         return None;
     }
+    // Kafka reads the bounds it reports for the remote band here, once the
+    // offset is known to lie above the global floor.
+    let live = LiveOffsets::of(part).await;
     // KIP-405: a follower in the remote band is redirected, never served.
     // Checked after the floor above, because an offset below the global floor
     // is gone from every tier and stays `OFFSET_OUT_OF_RANGE` for a follower
     // exactly as it does for a consumer -- Kafka guards the same way, with
     // `logStartOffset <= offset` before `offset < localLogStartOffset`.
     if p.is_follower_fetch && p.fetch_offset < local_log_start.0 {
-        return Some(moved_to_tiered_storage(p, local_log_start.0));
+        return Some(moved_to_tiered_storage(p, live, local_log_start.0));
     }
     if p.topic_id == WireUuid::ZERO {
         // Without a topic_id we can't build `TopicIdPartition` keyed the
@@ -330,15 +344,14 @@ pub(super) async fn try_remote_read(
                     "remote-reader: batch is not due yet; holding it back"
                 );
                 p.out.error_code = codes::NONE;
+                live.report(&mut p.out);
+                p.out.records = None;
                 if p.read_committed {
                     p.out.aborted_transactions = Some(Vec::new());
                 }
                 return Some(0);
             }
             let bytes_est = <RecordBatch as Encode>::encoded_len(&batch, 0);
-            // `log_start_offset` / HW / LSO stay at whatever `do_read`
-            // wrote out (the local view); the remote tier doesn't change
-            // those pointers.
 
             // KIP-405 read-committed: surface the aborted-transaction list
             // from the segment's `.txnindex` so the consumer drops aborted
@@ -379,7 +392,10 @@ pub(super) async fn try_remote_read(
                 );
             }
 
+            // `DelayedRemoteFetch.onComplete`: the remote records beside the
+            // bounds the local read result carried for the remote band.
             p.out.error_code = codes::NONE;
+            live.report(&mut p.out);
             p.out.records = Some(batch.into());
             // KIP-405's `RemoteFetchBytesPerSec`: what the tier actually
             // served, which is the batch that is about to go out.
@@ -421,12 +437,10 @@ mod tests {
     /// arrives with the reader pool's queue already full is answered with an
     /// error for that partition rather than parked behind the running reads.
     /// Kafka's executor throws `RejectedExecutionException`, which
-    /// `Errors.forException` does not map, so the row goes out as
-    /// `UNKNOWN_SERVER_ERROR`.
-    ///
-    /// The read-committed case also gets an empty aborted-transaction list,
-    /// because a read-committed consumer reads that field and a `None` there
-    /// means "read uncommitted", not "no aborts".
+    /// `Errors.forException` does not map, and `DelayedRemoteFetch` answers
+    /// the exception with `LogReadResult(Errors)`: `UNKNOWN_SERVER_ERROR`, every
+    /// offset -1, empty records and no aborted-transaction list, whatever the
+    /// isolation level.
     #[test]
     fn a_refused_cold_read_answers_the_partition_with_an_error_and_no_records() {
         for read_committed in [false, true] {
@@ -438,9 +452,7 @@ mod tests {
             let served = super::reject_saturated(&mut pending);
 
             check!(served == 0);
-            check!(pending.out.error_code == crate::codes::UNKNOWN_SERVER_ERROR);
-            check!(pending.out.records.is_none());
-            check!(pending.out.aborted_transactions.is_some() == read_committed);
+            check!(pending.out == super::refused_read(0, crate::codes::UNKNOWN_SERVER_ERROR));
         }
     }
 
@@ -553,8 +565,36 @@ mod tests {
         (handle, dir, remote_dir)
     }
 
+    /// The high watermark `tiered_partition` installs: the end of the 24
+    /// records it appends, so every bound the remote path reports is distinct
+    /// from the -1 of a refused row.
+    const TIERED_HIGH_WATERMARK: i64 = 24;
+
+    /// Installs [`TIERED_HIGH_WATERMARK`] on `part`, as the leader's ISR would
+    /// once every replica had caught up.
+    async fn commit_everything(part: &crate::partition::Partition) {
+        part.replica_state.lock().await.hw = krabka_log::Offset(TIERED_HIGH_WATERMARK);
+    }
+
+    /// The row the remote path reports beside records it served: the live
+    /// bounds, which on `tiered_partition` are the global log start, and the
+    /// high watermark doubling as the last stable offset because the partition
+    /// holds no transaction.
+    fn served_bounds(log_start: i64) -> (i64, i64, i64) {
+        (log_start, TIERED_HIGH_WATERMARK, TIERED_HIGH_WATERMARK)
+    }
+
+    /// The three bounds `out` reports, in [`served_bounds`] order.
+    fn bounds(out: &krabka_protocol::owned::fetch_response::PartitionData) -> (i64, i64, i64) {
+        (
+            out.log_start_offset,
+            out.high_watermark,
+            out.last_stable_offset,
+        )
+    }
+
     /// A `PendingRead` for offset 0 that the local log has already answered
-    /// `OFFSET_OUT_OF_RANGE`.
+    /// `OFFSET_OUT_OF_RANGE`, with the all -1 row `do_read` leaves behind.
     fn out_of_range_at(
         part: &std::sync::Arc<crate::partition::Partition>,
         fetch_offset: i64,
@@ -575,10 +615,7 @@ mod tests {
             is_follower_fetch: false,
             fetch_only_leader: false,
             partition: Some(std::sync::Arc::clone(part)),
-            out: krabka_protocol::owned::fetch_response::PartitionData {
-                error_code: codes::OFFSET_OUT_OF_RANGE,
-                ..Default::default()
-            },
+            out: super::refused_read(0, codes::OFFSET_OUT_OF_RANGE),
             cpu_micros: 0,
         }
     }
@@ -592,6 +629,7 @@ mod tests {
         let (broker_handle, dir, _remote_dir) = tiered_broker().await;
         let broker = broker_handle.broker_arc_for_test();
         let part = tiered_partition(&broker, dir.path(), false).await;
+        commit_everything(&part).await;
 
         let out_of_range = || out_of_range_at(&part, 0);
         // The floor has not moved, so offset 0 is the remote tier's to serve.
@@ -599,6 +637,7 @@ mod tests {
         let bytes_served = super::try_remote_read(&broker, &mut served, &part).await;
         check!(bytes_served.is_some_and(|n| n > 0), "the tier answers");
         check!(served.out.error_code == codes::NONE);
+        check!(bounds(&served.out) == served_bounds(0));
 
         // `DeleteRecords` to offset 5. The remote segment that holds offset 0
         // is still listed in the RLMM and still in the archive, and it must
@@ -612,13 +651,14 @@ mod tests {
         let mut refused = out_of_range();
         let bytes_served = super::try_remote_read(&broker, &mut refused, &part).await;
         check!(bytes_served == None, "no tier answers below the floor");
-        check!(refused.out.error_code == codes::OFFSET_OUT_OF_RANGE);
-        check!(refused.out.records.is_none());
+        check!(refused.out == super::refused_read(0, codes::OFFSET_OUT_OF_RANGE));
 
-        // The floor itself still reads: the band above it is the tier's.
+        // The floor itself still reads: the band above it is the tier's, and
+        // the row reports the floor that moved.
         let mut at_floor = out_of_range_at(&part, 5);
         let bytes_served = super::try_remote_read(&broker, &mut at_floor, &part).await;
         check!(bytes_served.is_some_and(|n| n > 0), "the floor is readable");
+        check!(bounds(&at_floor.out) == served_bounds(5));
 
         broker_handle.shutdown().await;
     }
@@ -639,15 +679,22 @@ mod tests {
     /// longer exists; and an offset above the leader's log is not in the tier
     /// either, so it stays `OFFSET_OUT_OF_RANGE` and the follower truncates
     /// instead of restarting.
+    ///
+    /// The redirect carries Kafka's `createLogReadResult` row: the live high
+    /// watermark and log start, a last stable offset of -1, and empty records.
+    /// The consumer's served row carries all three live bounds, as
+    /// `DelayedRemoteFetch.onComplete` copies them off the local read result.
     #[tokio::test]
     async fn a_follower_below_the_local_log_start_is_redirected_and_a_consumer_is_served() {
         use krabka_log::Offset;
+        use krabka_protocol::owned::fetch_response::PartitionData;
 
         use crate::codes;
 
         let (broker_handle, dir, _remote_dir) = tiered_broker().await;
         let broker = broker_handle.broker_arc_for_test();
         let part = tiered_partition(&broker, dir.path(), false).await;
+        commit_everything(&part).await;
 
         let follower_at = |fetch_offset| super::PendingRead {
             is_follower_fetch: true,
@@ -660,8 +707,14 @@ mod tests {
             served == Some(0),
             "the follower is served no archived bytes"
         );
-        check!(follower.out.error_code == codes::OFFSET_MOVED_TO_TIERED_STORAGE);
-        check!(follower.out.records.is_none());
+        check!(
+            follower.out
+                == PartitionData {
+                    high_watermark: TIERED_HIGH_WATERMARK,
+                    log_start_offset: 0,
+                    ..super::refused_read(0, codes::OFFSET_MOVED_TO_TIERED_STORAGE)
+                }
+        );
 
         // A consumer at the very same offset still reads the archive.
         let mut consumer = out_of_range_at(&part, 0);
@@ -671,13 +724,21 @@ mod tests {
             "the tier answers the consumer"
         );
         check!(consumer.out.error_code == codes::NONE);
-        check!(consumer.out.records.is_some());
+        check!(bounds(&consumer.out) == served_bounds(0));
+        check!(consumer.out.aborted_transactions == None);
+        check!(
+            consumer
+                .out
+                .records
+                .as_ref()
+                .is_some_and(|records| records.payload_len() > 0)
+        );
 
         // Above the leader's log there is no tiered band to redirect into.
         let mut ahead = follower_at(10_000);
         let served = super::try_remote_read(&broker, &mut ahead, &part).await;
         check!(served == None, "no segment holds offset 10_000");
-        check!(ahead.out.error_code == codes::OFFSET_OUT_OF_RANGE);
+        check!(ahead.out == super::refused_read(0, codes::OFFSET_OUT_OF_RANGE));
 
         // Below the global floor the offset is gone from every tier.
         part.log
@@ -688,8 +749,7 @@ mod tests {
         let mut deleted = follower_at(0);
         let served = super::try_remote_read(&broker, &mut deleted, &part).await;
         check!(served == None, "nothing serves an offset below the floor");
-        check!(deleted.out.error_code == codes::OFFSET_OUT_OF_RANGE);
-        check!(deleted.out.records.is_none());
+        check!(deleted.out == super::refused_read(0, codes::OFFSET_OUT_OF_RANGE));
 
         broker_handle.shutdown().await;
     }
@@ -718,28 +778,6 @@ mod tests {
         check!(served.out.error_code == codes::NONE);
 
         broker_handle.shutdown().await;
-    }
-
-    /// The partition data a local read leaves behind when it answers
-    /// `OFFSET_OUT_OF_RANGE` for an offset the local log has evicted: the
-    /// pointers are the live local view, and they are not the remote tier's
-    /// to change.
-    fn local_out_of_range(read_committed: bool) -> super::PendingRead {
-        super::PendingRead {
-            read_committed,
-            out: krabka_protocol::owned::fetch_response::PartitionData {
-                partition_index: 0,
-                error_code: crate::codes::OFFSET_OUT_OF_RANGE,
-                high_watermark: 900,
-                last_stable_offset: 900,
-                log_start_offset: 100,
-                records: Some(krabka_protocol::records::RecordsPayload::Raw(
-                    bytes::Bytes::from_static(b"stale"),
-                )),
-                ..Default::default()
-            },
-            ..out_of_range_at_unattached(7)
-        }
     }
 
     /// A `PendingRead` with no partition attached, for the cases that never
@@ -775,10 +813,11 @@ mod tests {
     ///
     /// Every failure the tier can raise is answered the same way, including
     /// the RLMM's `NotReady`: a metadata partition that has not caught up
-    /// after a restart knows nothing about the offset either way. The
-    /// pointers the local read wrote survive, because the tier does not move
-    /// them, and the read-committed case gets an empty aborted-transaction
-    /// list rather than the `None` that means "read uncommitted".
+    /// after a restart knows nothing about the offset either way. The row is
+    /// `DelayedRemoteFetch.onComplete`'s `LogReadResult(Errors)` for a remote
+    /// read that threw: every offset -1, empty records, and no
+    /// aborted-transaction list for either isolation level. Whatever the row
+    /// held before is replaced, so a stale value cannot leak out.
     #[test]
     fn every_failed_cold_read_answers_the_partition_with_unknown_server_error() {
         use krabka_remote_storage::RemoteStorageError;
@@ -790,7 +829,21 @@ mod tests {
             RemoteStorageError::Io(std::io::Error::other("connection reset by peer")),
         ] {
             for read_committed in [false, true] {
-                let mut pending = local_out_of_range(read_committed);
+                let mut pending = super::PendingRead {
+                    read_committed,
+                    out: krabka_protocol::owned::fetch_response::PartitionData {
+                        partition_index: 0,
+                        error_code: crate::codes::OFFSET_OUT_OF_RANGE,
+                        high_watermark: 900,
+                        last_stable_offset: 900,
+                        log_start_offset: 100,
+                        records: Some(krabka_protocol::records::RecordsPayload::Raw(
+                            bytes::Bytes::from_static(b"stale"),
+                        )),
+                        ..Default::default()
+                    },
+                    ..out_of_range_at_unattached(7)
+                };
 
                 let served = super::fail_remote_read(&metrics, &mut pending, &error);
 
@@ -800,11 +853,14 @@ mod tests {
                         == krabka_protocol::owned::fetch_response::PartitionData {
                             partition_index: 0,
                             error_code: crate::codes::UNKNOWN_SERVER_ERROR,
-                            high_watermark: 900,
-                            last_stable_offset: 900,
-                            log_start_offset: 100,
-                            records: None,
-                            aborted_transactions: read_committed.then(Vec::new),
+                            high_watermark: -1,
+                            last_stable_offset: -1,
+                            log_start_offset: -1,
+                            preferred_read_replica: -1,
+                            records: Some(krabka_protocol::records::RecordsPayload::Raw(
+                                bytes::Bytes::new(),
+                            )),
+                            aborted_transactions: None,
                             ..Default::default()
                         },
                     "{error}"
@@ -830,8 +886,7 @@ mod tests {
         let mut missing = out_of_range_at(&part, 10_000);
         let bytes_served = super::try_remote_read(&broker, &mut missing, &part).await;
         check!(bytes_served == None, "no segment holds offset 10_000");
-        check!(missing.out.error_code == codes::OFFSET_OUT_OF_RANGE);
-        check!(missing.out.records.is_none());
+        check!(missing.out == super::refused_read(0, codes::OFFSET_OUT_OF_RANGE));
 
         // Now take the archive away under the reader, leaving the RLMM still
         // listing every segment: exactly an object-store brownout.
@@ -840,8 +895,7 @@ mod tests {
         let mut failed = out_of_range_at(&part, 0);
         let bytes_served = super::try_remote_read(&broker, &mut failed, &part).await;
         check!(bytes_served == Some(0), "a failed read serves no bytes");
-        check!(failed.out.error_code == codes::UNKNOWN_SERVER_ERROR);
-        check!(failed.out.records.is_none());
+        check!(failed.out == super::refused_read(0, codes::UNKNOWN_SERVER_ERROR));
 
         broker_handle.shutdown().await;
     }

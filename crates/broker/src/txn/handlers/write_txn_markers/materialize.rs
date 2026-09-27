@@ -8,7 +8,10 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use krabka_verified::transaction::TransactionMarkerMaterializationDecision as Decision;
+use krabka_verified::transaction::{
+    TransactionMarkerMaterializationDecision as Decision, TransactionMarkerPartitionState,
+    TransactionMarkerRequest,
+};
 
 use super::offsets::{pending_offset_entries, resolve_pending_offsets};
 use crate::{
@@ -91,13 +94,18 @@ pub(crate) async fn append_marker_and_materialize(
         });
     }
     let decision = krabka_verified::transaction_marker_materialization_decision(
-        (producer_id.get(), producer_epoch, coordinator_epoch),
-        (
-            current_producer_epoch,
-            current_coordinator_epoch,
+        TransactionMarkerRequest {
+            producer_id: producer_id.get(),
+            producer_epoch,
+            coordinator_epoch,
+            is_commit: marker_type == MarkerType::Commit,
+            is_offsets_partition: topic == OFFSETS_TOPIC,
+        },
+        TransactionMarkerPartitionState {
+            producer_epoch: current_producer_epoch,
+            coordinator_epoch: current_coordinator_epoch,
             has_pending_transaction,
-        ),
-        (marker_type == MarkerType::Commit, topic == OFFSETS_TOPIC),
+        },
     );
     match decision {
         Decision::RejectMalformed => {

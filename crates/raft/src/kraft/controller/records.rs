@@ -25,32 +25,20 @@ pub fn metadata_record_batch(
         });
     }
 
+    let deltas = krabka_verified::metadata_record_offset_deltas(blobs.len()).ok_or_else(|| {
+        RaftError::ChangeRejected("metadata batch offset deltas exceed i32".to_string())
+    })?;
+    // The kernel returns one delta per record, so the batch is non-empty.
+    let last_offset_delta = deltas.last().copied().unwrap_or_default();
     let records: Vec<Record> = blobs
         .iter()
-        .enumerate()
-        .map(|(index, blob)| {
-            let (offset_delta, _) =
-                krabka_verified::metadata_record_coordinates(blobs.len(), index).ok_or_else(
-                    || {
-                        RaftError::ChangeRejected(
-                            "metadata batch record coordinates exceed i32".to_string(),
-                        )
-                    },
-                )?;
-            Ok(Record {
-                offset_delta,
-                value: Some(blob.clone()),
-                ..Default::default()
-            })
+        .zip(deltas)
+        .map(|(blob, offset_delta)| Record {
+            offset_delta,
+            value: Some(blob.clone()),
+            ..Default::default()
         })
-        .collect::<Result<_, RaftError>>()?;
-    let (_, last_offset_delta) = krabka_verified::metadata_record_coordinates(
-        blobs.len(),
-        blobs.len() - 1,
-    )
-    .ok_or_else(|| {
-        RaftError::ChangeRejected("metadata batch record coordinates exceed i32".to_string())
-    })?;
+        .collect();
 
     Ok(RecordBatch {
         partition_leader_epoch: i32::try_from(leader_epoch).unwrap_or(i32::MAX),
@@ -208,7 +196,7 @@ mod metadata_record_batch_tests {
     use super::*;
 
     #[test]
-    fn metadata_record_coordinates_cover_empty_single_and_multiple_batches() {
+    fn metadata_record_offset_deltas_cover_empty_single_and_multiple_batches() {
         let empty = metadata_record_batch(5, &[]).expect("empty batch");
         check!(empty.records.is_empty());
         check!(empty.last_offset_delta == 0);

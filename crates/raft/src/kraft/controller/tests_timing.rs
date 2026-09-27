@@ -257,12 +257,19 @@ async fn sleep_until_opt_completes_for_past_deadline() {
 
 #[test]
 fn inbound_fetch_records_non_nil_directory_id() {
-    use crate::kraft::{controller::test_support::build_engine_only, transport::wire::PeerRequest};
+    use crate::kraft::{
+        controller::test_support::{build_engine_only, elect_single_voter_engine},
+        transport::wire::PeerRequest,
+    };
 
+    // Only the leader records a fetcher (Kafka's `updateReplicaState`).
     let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
+    elect_single_voter_engine(&mut engine);
+    let current_leader_epoch = i32::try_from(engine.core.quorum_state().leader_epoch).unwrap();
     let dir_id = uuid::Uuid::from_u128(999);
     let req = PeerRequest::Fetch {
         from: NodeId(2),
+        current_leader_epoch,
         fetch_epoch: 0,
         fetch_offset: 0,
         replica_directory_id: dir_id,
@@ -279,6 +286,7 @@ fn inbound_fetch_records_non_nil_directory_id() {
     // A fetch with nil directory ID does not overwrite the recorded ID
     let nil_req = PeerRequest::Fetch {
         from: NodeId(2),
+        current_leader_epoch,
         fetch_epoch: 0,
         fetch_offset: 0,
         replica_directory_id: uuid::Uuid::nil(),

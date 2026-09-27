@@ -24,100 +24,98 @@ pub enum DisklessBatchStep {
     Stop,
 }
 
-/// Mutation selected by one WAL-index replay event.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+/// One diskless partition's retention configuration and floor, read at `now_ms`.
+#[cfg_attr(creusot, derive(Clone, Copy))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum DisklessWalReplayAction {
-    Ignore,
-    Store,
-    Remove,
+pub struct DisklessRetentionPolicy {
+    /// `retention.ms`, or `None` for Kafka's unlimited sentinel.
+    pub retention_ms: Option<i64>,
+    /// `retention.bytes`, or `None` for Kafka's unlimited sentinel.
+    pub retention_bytes: Option<u64>,
+    /// The `DeleteRecords` floor.
+    pub log_start_offset: i64,
+    pub now_ms: i64,
 }
 
-/// One WAL-index replay step and its dominance markers.
-#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
-#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct DisklessWalReplayDecision {
-    pub action: DisklessWalReplayAction,
-    pub keyed_range: bool,
-    pub replay_tombstone: bool,
+/// The bytes of the oldest `count` ranges.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+#[variant(count)]
+pub fn indexed_bytes(byte_lens: Seq<u64>, count: Int) -> Int {
+    pearlite! {
+        if count <= 0 {
+            0
+        } else {
+            indexed_bytes(byte_lens, count - 1) + byte_lens[count - 1]@
+        }
+    }
 }
 
-/// Classify one WAL-index replay event.
+/// Kafka's `diff` when the size walk reaches range `i`: the index's bytes
+/// over `retention.bytes`, less the ranges already expired before `i`. It is
+/// negative when the index fits the budget.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+pub fn size_debt_before(byte_lens: Seq<u64>, budget: u64, i: Int) -> Int {
+    pearlite! {
+        indexed_bytes(byte_lens, byte_lens.len()) - budget@ - indexed_bytes(byte_lens, i)
+    }
+}
+
+/// Whether Kafka's `UnifiedLog.deleteOldSegments` lets range `i` expire,
+/// given that every older range expires first.
 ///
-/// Event tags are `0 = legacy value`, `1 = keyed value`, and
-/// `2 = keyed tombstone`. Keyed values and tombstones dominate legacy values
-/// while the cross-partition legacy replay is active. A keyed value may follow
-/// a tombstone because equal Kafka keys share a partition and retain order.
-#[ensures(result.action == if event@ == 1
-    || (event@ == 0 && !current_keyed && !current_tombstone) {
-    DisklessWalReplayAction::Store
-} else if event@ == 2 {
-    DisklessWalReplayAction::Remove
-} else {
-    DisklessWalReplayAction::Ignore
-})]
-#[ensures(result.keyed_range == if event@ == 1 {
-    true
-} else if event@ == 2 {
-    false
-} else {
-    current_keyed
-})]
-#[ensures(result.replay_tombstone == if event@ == 1 {
-    false
-} else if event@ == 2 {
-    !legacy_replay_finished
-} else {
-    current_tombstone
-})]
-#[must_use]
-pub const fn diskless_wal_replay_decision(
-    event: u8,
-    current_keyed: bool,
-    current_tombstone: bool,
-    legacy_replay_finished: bool,
-) -> DisklessWalReplayDecision {
-    match event {
-        0 => DisklessWalReplayDecision {
-            action: if current_keyed || current_tombstone {
-                DisklessWalReplayAction::Ignore
-            } else {
-                DisklessWalReplayAction::Store
-            },
-            keyed_range: current_keyed,
-            replay_tombstone: current_tombstone,
-        },
-        1 => DisklessWalReplayDecision {
-            action: DisklessWalReplayAction::Store,
-            keyed_range: true,
-            replay_tombstone: false,
-        },
-        2 => DisklessWalReplayDecision {
-            action: DisklessWalReplayAction::Remove,
-            keyed_range: false,
-            replay_tombstone: !legacy_replay_finished,
-        },
-        _ => DisklessWalReplayDecision {
-            action: DisklessWalReplayAction::Ignore,
-            keyed_range: current_keyed,
-            replay_tombstone: current_tombstone,
-        },
+/// - `deleteLogStartOffsetBreachedSegments`: the range ends below the
+///   `DeleteRecords` floor.
+/// - `deleteRetentionSizeBreachedSegments`: `diff - segmentSize >= 0`, so
+///   `retention.bytes` never deletes past its own budget.
+/// - `deleteRetentionMsBreachedSegments`: `now - largestTimestamp >
+///   retention.ms`, with a horizon `now - retention.ms` that `i64` cannot
+///   represent expiring nothing.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+pub fn expirable(
+    max_timestamps: Seq<i64>,
+    byte_lens: Seq<u64>,
+    last_offsets: Seq<i64>,
+    policy: DisklessRetentionPolicy,
+    i: Int,
+) -> bool {
+    pearlite! {
+        last_offsets[i]@ < policy.log_start_offset@
+            || match policy.retention_bytes {
+                Some(budget) => size_debt_before(byte_lens, budget, i) - byte_lens[i]@ >= 0,
+                None => false,
+            }
+            || match policy.retention_ms {
+                Some(retention) => i64::MIN@ <= policy.now_ms@ - retention@
+                    && policy.now_ms@ - retention@ <= i64::MAX@
+                    && max_timestamps[i]@ < policy.now_ms@ - retention@,
+                None => false,
+            }
     }
 }
 
 /// Select the oldest contiguous prefix of one diskless partition's committed
 /// WAL index ranges that retention allows to expire.
 ///
-/// The three predicates are Kafka's, from `UnifiedLog.deleteOldSegments`: a
-/// range whose newest record is older than `retention.ms`, an oldest range the
-/// `retention.bytes` budget cannot keep, and a range that ends below the
-/// `DeleteRecords` floor. Kafka walks oldest first and stops at the first
-/// segment it must keep, so this returns a prefix length rather than a set.
+/// Kafka runs three walks oldest first, each stopping at the first segment it
+/// must keep: the log-start-offset walk, then the size walk over what is left,
+/// then the time walk over what is left after that. The first two predicates
+/// only ever hold on a prefix (the size one because sizes are nonnegative, the
+/// floor one because the host supplies ranges in offset order), so the three
+/// walks together expire exactly the longest prefix on which one of the three
+/// holds at every range. That prefix is what this returns, capped one short of
+/// the newest range; see `expirable`.
 ///
 /// The ranges arrive oldest first, one entry per index range, and the three
-/// slices are parallel. `retention_ms` and `retention_bytes` are `None` for
-/// Kafka's unlimited sentinel, and a `now_ms - retention_ms` that cannot be
-/// represented expires nothing by time.
+/// slices are parallel.
 ///
 /// The newest range never expires. Kafka keeps the active segment for the same
 /// reason, and here it is also what keeps the flusher's `flushed_frontier`
@@ -128,70 +126,77 @@ pub const fn diskless_wal_replay_decision(
 #[ensures(result@ <= max_timestamps@.len())]
 #[ensures(max_timestamps@.len() > 0 ==> result@ < max_timestamps@.len())]
 #[ensures(forall<i: Int> 0 <= i && i < result@ ==>
-    last_offsets@[i]@ < log_start_offset@
-    || retention_bytes != None
-    || match retention_ms {
-        Some(retention) => now_ms@ - retention@ >= i64::MIN@
-            && max_timestamps@[i]@ < now_ms@ - retention@,
-        None => false,
-    })]
+    expirable(max_timestamps@, byte_lens@, last_offsets@, policy, i))]
+#[ensures(result@ + 1 < max_timestamps@.len() ==>
+    !expirable(max_timestamps@, byte_lens@, last_offsets@, policy, result@))]
 #[must_use]
 pub fn diskless_retention_prefix(
     max_timestamps: &[i64],
     byte_lens: &[u64],
     last_offsets: &[i64],
-    retention_ms: Option<i64>,
-    retention_bytes: Option<u64>,
-    log_start_offset: i64,
-    now_ms: i64,
+    policy: DisklessRetentionPolicy,
 ) -> usize {
     if matches!(max_timestamps.len(), 0) {
         return 0;
     }
     let max_expire = max_timestamps.len() - 1;
-    let horizon = match retention_ms {
-        Some(retention) => now_ms.checked_sub(retention),
+    let horizon = match policy.retention_ms {
+        Some(retention) => policy.now_ms.checked_sub(retention),
         None => None,
     };
-    let mut indexed_bytes = 0u64;
-    let mut scanned = 0usize;
-    #[invariant(scanned@ <= byte_lens@.len())]
-    #[variant(byte_lens@.len() - scanned@)]
-    while scanned < byte_lens.len() {
-        indexed_bytes = indexed_bytes.saturating_add(byte_lens[scanned]);
-        scanned += 1;
-    }
-    let mut size_debt = match retention_bytes {
-        Some(budget) => indexed_bytes.saturating_sub(budget),
-        None => 0,
+    // Kafka's `diff`, `None` once it is negative. A `u128` holds the sum of
+    // any slice of `u64` lengths without overflow.
+    let mut debt: Option<u128> = match policy.retention_bytes {
+        Some(budget) => {
+            let mut indexed = 0u128;
+            let mut scanned = 0usize;
+            #[invariant(scanned@ <= byte_lens@.len())]
+            #[invariant(indexed@ == indexed_bytes(byte_lens@, scanned@))]
+            #[invariant(indexed@ <= scanned@ * u64::MAX@)]
+            #[variant(byte_lens@.len() - scanned@)]
+            while scanned < byte_lens.len() {
+                proof_assert!(indexed_bytes(byte_lens@, scanned@ + 1)
+                    == indexed_bytes(byte_lens@, scanned@) + byte_lens@[scanned@]@);
+                indexed += u128::from(byte_lens[scanned]);
+                scanned += 1;
+            }
+            indexed.checked_sub(u128::from(budget))
+        }
+        None => None,
     };
 
     let mut len = 0usize;
     #[invariant(len@ <= max_expire@)]
-    #[invariant(size_debt@ > 0 ==> retention_bytes != None)]
+    #[invariant(match policy.retention_bytes {
+        Some(budget) => match debt {
+            Some(debt) => debt@ == size_debt_before(byte_lens@, budget, len@),
+            None => size_debt_before(byte_lens@, budget, len@) < 0,
+        },
+        None => debt == None,
+    })]
     #[invariant(forall<i: Int> 0 <= i && i < len@ ==>
-        last_offsets@[i]@ < log_start_offset@
-        || retention_bytes != None
-        || match retention_ms {
-            Some(retention) => now_ms@ - retention@ >= i64::MIN@
-                && max_timestamps@[i]@ < now_ms@ - retention@,
-            None => false,
-        })]
+        expirable(max_timestamps@, byte_lens@, last_offsets@, policy, i))]
     #[variant(max_expire@ - len@)]
     while len < max_expire {
-        let below_floor = last_offsets[len] < log_start_offset;
+        proof_assert!(indexed_bytes(byte_lens@, len@ + 1)
+            == indexed_bytes(byte_lens@, len@) + byte_lens@[len@]@);
+        let below_floor = last_offsets[len] < policy.log_start_offset;
         let aged_out = match horizon {
             Some(horizon) => max_timestamps[len] < horizon,
             None => false,
         };
-        // Kafka subtracts the segment size only while the remainder stays
-        // non-negative, so `retention.bytes` never deletes past its own
-        // budget.
-        let over_budget = size_debt > 0 && size_debt >= byte_lens[len];
+        let size = u128::from(byte_lens[len]);
+        let over_budget = match debt {
+            Some(debt) => debt >= size,
+            None => false,
+        };
         if !below_floor && !aged_out && !over_budget {
             break;
         }
-        size_debt = size_debt.saturating_sub(byte_lens[len]);
+        debt = match debt {
+            Some(debt) => debt.checked_sub(size),
+            None => None,
+        };
         len += 1;
     }
     len
@@ -251,12 +256,17 @@ pub fn diskless_logical_range(entries: &[(i64, i64)], requested: i64) -> Option<
 }
 
 /// Extend an object byte span only across a contiguous whole indexed range.
+///
+/// The span extends exactly when the next range sits in the same object,
+/// starts where the span ends, and the grown span stays within `max_bytes`.
 #[ensures(match result {
     Some(total) => same_object
         && current_start@ + current_len@ == next_start@
         && total@ == current_len@ + next_len@
         && total@ <= max_bytes@,
-    None => true,
+    None => !same_object
+        || current_start@ + current_len@ != next_start@
+        || current_len@ + next_len@ > max_bytes@,
 })]
 #[must_use]
 pub fn diskless_span_extension(
@@ -274,7 +284,42 @@ pub fn diskless_span_extension(
     (total <= max_bytes).then_some(total)
 }
 
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+fn batch_step_valid(
+    selected_start: Option<usize>,
+    batch_start: usize,
+    encoded_len: usize,
+    base_offset: i64,
+    last_offset_delta: i32,
+) -> bool {
+    pearlite! {
+        encoded_len@ > 0
+            && last_offset_delta@ >= 0
+            && batch_start@ + encoded_len@ <= usize::MAX@
+            && base_offset@ + last_offset_delta@ <= i64::MAX@
+            && match selected_start {
+                Some(start) => start@ <= batch_start@,
+                None => true,
+            }
+    }
+}
+
 /// Classify one decoded batch without splitting it or overflowing coordinates.
+///
+/// A batch is `Invalid` exactly when it is empty, has a negative last offset
+/// delta, ends past `usize` or `i64`, or starts before the selected run. Every
+/// valid batch lands in exactly one of the other four steps, so each valid
+/// input advances the read by the batch's encoded length or stops it.
+#[ensures((result == DisklessBatchStep::Invalid) == !batch_step_valid(
+    selected_start,
+    batch_start,
+    encoded_len,
+    base_offset,
+    last_offset_delta,
+))]
 #[ensures(match result {
     DisklessBatchStep::Skip(next) => selected_start == None
         && next@ == batch_start@ + encoded_len@
@@ -293,6 +338,7 @@ pub fn diskless_span_extension(
             && batch_start@ + encoded_len@ - start@ > max_bytes@,
         None => false,
     },
+    // Pinned by the `Invalid` iff above.
     DisklessBatchStep::Invalid => true,
 })]
 #[must_use]
@@ -413,34 +459,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wal_replay_dominance_and_reclaim_are_total() {
-        use DisklessWalReplayAction::{Ignore, Remove, Store};
-
-        for keyed in [false, true] {
-            for tombstone in [false, true] {
-                let legacy = diskless_wal_replay_decision(0, keyed, tombstone, false);
-                check!(legacy.action == if keyed || tombstone { Ignore } else { Store });
-                check!(legacy.keyed_range == keyed);
-                check!(legacy.replay_tombstone == tombstone);
-
-                let keyed_value = diskless_wal_replay_decision(1, keyed, tombstone, false);
-                check!(keyed_value.action == Store);
-                check!(keyed_value.keyed_range);
-                check!(!keyed_value.replay_tombstone);
-
-                let tombstone_event = diskless_wal_replay_decision(2, keyed, tombstone, false);
-                check!(tombstone_event.action == Remove);
-                check!(!tombstone_event.keyed_range);
-                check!(tombstone_event.replay_tombstone);
-
-                let invalid = diskless_wal_replay_decision(u8::MAX, keyed, tombstone, false);
-                check!(invalid.action == Ignore);
-                check!(invalid.keyed_range == keyed);
-                check!(invalid.replay_tombstone == tombstone);
-            }
-        }
-
-        check!(!diskless_wal_replay_decision(2, true, false, true).replay_tombstone);
+    fn reclaim_needs_the_grace_period_and_no_reference() {
         check!(diskless_object_reclaimable(false, true));
         check!(!diskless_object_reclaimable(true, true));
         check!(!diskless_object_reclaimable(false, false));
@@ -462,13 +481,27 @@ mod tests {
             (0, 0, 0, 0, (false, 0)),
         ] {
             let decision = diskless_trim_decision(frontier, high_watermark, lag, current);
-            check!(decision.should_trim == expected.0);
-            check!(decision.target == expected.1);
-            check!(decision.target >= current);
-            if decision.should_trim {
-                check!(decision.target <= frontier);
-                check!(decision.target <= high_watermark - lag.max(0));
-            }
+            check!(
+                decision
+                    == DisklessTrimDecision {
+                        should_trim: expected.0,
+                        target: expected.1,
+                    }
+            );
+        }
+    }
+
+    fn policy(
+        retention_ms: Option<i64>,
+        retention_bytes: Option<u64>,
+        log_start_offset: i64,
+        now_ms: i64,
+    ) -> DisklessRetentionPolicy {
+        DisklessRetentionPolicy {
+            retention_ms,
+            retention_bytes,
+            log_start_offset,
+            now_ms,
         }
     }
 
@@ -509,8 +542,16 @@ mod tests {
                 0,
                 2,
             ),
-            // The 150-byte debt over a 150-byte budget is paid down to 50 by
-            // the first range, which the second cannot cover.
+            (
+                "time stops at the first range it must keep",
+                [100, 900, 100],
+                Some(500),
+                None,
+                0,
+                1,
+            ),
+            // Kafka's `diff` is 150: the first range leaves 50, which the
+            // second cannot cover.
             (
                 "bytes expires the oldest range only",
                 [10, 20, 30],
@@ -518,6 +559,24 @@ mod tests {
                 Some(150),
                 0,
                 1,
+            ),
+            // `diff` is 100, and `100 - 100 >= 0` is Kafka's delete rule.
+            (
+                "bytes expires a range that pays the debt off exactly",
+                [10, 20, 30],
+                None,
+                Some(200),
+                0,
+                1,
+            ),
+            // `diff` is 50, and no range fits inside it.
+            (
+                "bytes never deletes past its own budget",
+                [10, 20, 30],
+                None,
+                Some(250),
+                0,
+                0,
             ),
             (
                 "a budget the index already fits expires nothing",
@@ -553,97 +612,237 @@ mod tests {
                 5,
                 2,
             ),
+            // Time clears the first range, which pays `diff` 150 down to 50;
+            // the second range needs 100.
+            (
+                "a range time expires still pays the size debt",
+                [100, 900, 900],
+                Some(500),
+                Some(150),
+                0,
+                1,
+            ),
         ] {
             let prefix = diskless_retention_prefix(
                 &max_timestamps,
                 &BYTE_LENS,
                 &LAST_OFFSETS,
-                retention_ms,
-                retention_bytes,
-                floor,
-                NOW_MS,
+                policy(retention_ms, retention_bytes, floor, NOW_MS),
             );
             check!(prefix == expired, "{what}");
-            check!(prefix < max_timestamps.len(), "{what}");
         }
     }
 
     #[test]
-    fn retention_prefix_is_total_on_short_inputs_and_unrepresentable_windows() {
-        // A window `now_ms - retention_ms` cannot represent expires nothing.
-        check!(
-            diskless_retention_prefix(
-                &[10, 20, 30],
-                &[100, 100, 100],
-                &[4, 9, 14],
-                Some(-1),
-                None,
+    fn retention_prefix_boundaries_follow_kafkas_strict_and_inclusive_comparisons() {
+        // `(what, max timestamps, byte lens, last offsets, policy, expired)`.
+        for (what, max_timestamps, byte_lens, last_offsets, policy, expired) in [
+            (
+                "a floor equal to the last offset keeps the range",
+                &[100, 200][..],
+                &[10, 10][..],
+                &[10, 20][..],
+                policy(None, None, 10, 1_000),
                 0,
-                i64::MIN,
-            ) == 0
-        );
-        // One range is the newest range, whatever retention says.
-        check!(diskless_retention_prefix(&[10], &[100], &[4], Some(1), Some(0), 99, 1_000) == 0);
-        check!(diskless_retention_prefix(&[], &[], &[], Some(1), Some(0), 99, 1_000) == 0);
+            ),
+            (
+                "a max timestamp equal to the horizon keeps the range",
+                &[500, 900][..],
+                &[10, 10][..],
+                &[10, 20][..],
+                policy(Some(500), None, 0, 1_000),
+                0,
+            ),
+            // `diff` is 0 and `0 - 0 >= 0`.
+            (
+                "a zero diff still expires a zero-byte range",
+                &[100, 200][..],
+                &[0, 10][..],
+                &[10, 20][..],
+                policy(None, Some(10), 0, 1_000),
+                1,
+            ),
+            (
+                "a horizon below i64::MIN expires nothing",
+                &[10, 20, 30][..],
+                &[100, 100, 100][..],
+                &[4, 9, 14][..],
+                policy(Some(1), None, 0, i64::MIN),
+                0,
+            ),
+            (
+                "a horizon above i64::MAX expires nothing",
+                &[10, 20, 30][..],
+                &[100, 100, 100][..],
+                &[4, 9, 14][..],
+                policy(Some(-1), None, 0, i64::MAX),
+                0,
+            ),
+            (
+                "u64::MAX ranges do not overflow the size sum",
+                &[10, 20, 30][..],
+                &[u64::MAX, u64::MAX, u64::MAX][..],
+                &[4, 9, 14][..],
+                policy(None, Some(u64::MAX), 0, 1_000),
+                2,
+            ),
+            (
+                "one range is the newest range, whatever retention says",
+                &[10][..],
+                &[100][..],
+                &[4][..],
+                policy(Some(1), Some(0), 99, 1_000),
+                0,
+            ),
+            (
+                "an empty index expires nothing",
+                &[][..],
+                &[][..],
+                &[][..],
+                policy(Some(1), Some(0), 99, 1_000),
+                0,
+            ),
+        ] {
+            check!(
+                diskless_retention_prefix(max_timestamps, byte_lens, last_offsets, policy)
+                    == expired,
+                "{what}"
+            );
+        }
     }
 
     #[test]
-    fn cold_read_decisions_cover_boundaries_gaps_caps_and_limits() {
+    fn logical_range_selects_the_cover_or_the_successor_after_a_gap() {
         let entries = [(0, 4), (7, 9), (12, 15)];
-        assert2::assert!(diskless_logical_range(&entries, -1).is_none());
-        assert2::assert!(diskless_logical_range(&entries, 0) == Some(0));
-        assert2::assert!(diskless_logical_range(&entries, 5) == Some(1));
-        assert2::assert!(diskless_logical_range(&entries, 15) == Some(2));
-        assert2::assert!(diskless_logical_range(&entries, 16).is_none());
+        for (requested, expected) in [
+            (-1, None),
+            (0, Some(0)),
+            (5, Some(1)),
+            (15, Some(2)),
+            (16, None),
+        ] {
+            check!(diskless_logical_range(&entries, requested) == expected);
+        }
+    }
 
-        assert2::assert!(diskless_span_extension(10, 5, 15, 7, true, 12) == Some(12));
-        assert2::assert!(diskless_span_extension(10, 5, 16, 7, true, 12).is_none());
-        assert2::assert!(diskless_span_extension(10, 5, 15, 7, false, 12).is_none());
-        assert2::assert!(diskless_span_extension(u64::MAX, 1, 0, 1, true, 2).is_none());
+    #[test]
+    fn span_extends_only_across_a_contiguous_range_of_the_same_object() {
+        // `(what, current start, current len, next start, next len, same
+        // object, max bytes, extended span)`.
+        for (what, start, len, next_start, next_len, same_object, max_bytes, expected) in [
+            (
+                "contiguous and within the cap",
+                10,
+                5,
+                15,
+                7,
+                true,
+                12,
+                Some(12),
+            ),
+            ("contiguous and over the cap", 10, 5, 15, 7, true, 11, None),
+            ("a gap", 10, 5, 16, 7, true, 12, None),
+            ("another object", 10, 5, 15, 7, false, 12, None),
+            ("an end past u64::MAX", u64::MAX, 1, 0, 1, true, 2, None),
+            (
+                "a total past u64::MAX",
+                0,
+                u64::MAX,
+                u64::MAX,
+                1,
+                true,
+                u64::MAX,
+                None,
+            ),
+        ] {
+            check!(
+                diskless_span_extension(start, len, next_start, next_len, same_object, max_bytes)
+                    == expected,
+                "{what}"
+            );
+        }
+    }
 
-        // Boundary tests for retention prefix:
-        check!(
-            diskless_retention_prefix(&[100, 200], &[10, 10], &[10, 20], None, None, 10, 1_000,)
-                == 0,
-            "floor equal to last_offset does not delete"
-        );
-        check!(
-            diskless_retention_prefix(&[500, 900], &[10, 10], &[10, 20], Some(500), None, 0, 1_000,)
-                == 0,
-            "horizon equal to max_timestamp does not delete"
-        );
-        check!(
-            diskless_retention_prefix(&[100, 200], &[0, 10], &[10, 20], None, Some(10), 0, 1_000,)
-                == 0,
-            "zero size debt with zero byte len does not delete"
-        );
+    #[test]
+    fn batch_steps_advance_by_the_encoded_length_or_stop() {
+        use DisklessBatchStep::{Continue, Invalid, Skip, Start, Stop};
 
-        assert2::assert!(
-            diskless_batch_step(None, 0, 10, 0, 0, 1, 5) == DisklessBatchStep::Skip(10)
-        );
-        assert2::assert!(
-            diskless_batch_step(None, 10, 10, 1, 0, 1, 5) == DisklessBatchStep::Start(20)
-        );
-        assert2::assert!(
-            diskless_batch_step(Some(10), 20, 10, 2, 0, 1, 20) == DisklessBatchStep::Continue(30)
-        );
-        assert2::assert!(
-            diskless_batch_step(Some(20), 20, 10, 2, 0, 1, 20) == DisklessBatchStep::Continue(30)
-        );
-        assert2::assert!(
-            diskless_batch_step(Some(10), 20, 10, 2, 0, 1, 19) == DisklessBatchStep::Stop
-        );
-        assert2::assert!(diskless_batch_step(None, 0, 0, 0, 0, 1, 5) == DisklessBatchStep::Invalid);
-        assert2::assert!(
-            diskless_batch_step(None, 0, 10, 0, -1, 1, 5) == DisklessBatchStep::Invalid
-        );
-        assert2::assert!(
-            diskless_batch_step(None, usize::MAX, 1, 0, 0, 0, usize::MAX)
-                == DisklessBatchStep::Invalid
-        );
-        assert2::assert!(
-            diskless_batch_step(None, 0, 1, i64::MAX, 1, 0, usize::MAX)
-                == DisklessBatchStep::Invalid
-        );
+        // `(what, selected start, batch start, encoded len, base offset,
+        // last offset delta, floor, max bytes, step)`.
+        for (what, selected, batch_start, encoded_len, base, delta, floor, max_bytes, expected) in [
+            ("below the floor", None, 0, 10, 0, 0, 1, 5, Skip(10)),
+            ("at the floor", None, 10, 10, 1, 0, 1, 5, Start(20)),
+            (
+                "within the cap",
+                Some(10),
+                20,
+                10,
+                2,
+                0,
+                1,
+                20,
+                Continue(30),
+            ),
+            (
+                "the first batch",
+                Some(20),
+                20,
+                10,
+                2,
+                0,
+                1,
+                20,
+                Continue(30),
+            ),
+            ("over the cap", Some(10), 20, 10, 2, 0, 1, 19, Stop),
+            ("empty", None, 0, 0, 0, 0, 1, 5, Invalid),
+            ("a negative delta", None, 0, 10, 0, -1, 1, 5, Invalid),
+            (
+                "an end past usize::MAX",
+                None,
+                usize::MAX,
+                1,
+                0,
+                0,
+                0,
+                usize::MAX,
+                Invalid,
+            ),
+            (
+                "a last offset past i64::MAX",
+                None,
+                0,
+                1,
+                i64::MAX,
+                1,
+                0,
+                usize::MAX,
+                Invalid,
+            ),
+            (
+                "a run that starts later",
+                Some(21),
+                20,
+                10,
+                2,
+                0,
+                1,
+                20,
+                Invalid,
+            ),
+        ] {
+            check!(
+                diskless_batch_step(
+                    selected,
+                    batch_start,
+                    encoded_len,
+                    base,
+                    delta,
+                    floor,
+                    max_bytes
+                ) == expected,
+                "{what}"
+            );
+        }
     }
 }

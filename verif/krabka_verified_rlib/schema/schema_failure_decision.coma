@@ -1,6 +1,6 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/schema.rs" 37 0 40 26 *)
+(* #"/workspace/crates/verified/src/schema.rs" 37 0 40 26 *)
 
-let%span sschema = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/schema.rs" 34 10 35 61
+let%span sschema = "/workspace/crates/verified/src/schema.rs" 34 10 35 61
 
 use creusot.prelude.Any
 
@@ -12,8 +12,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let schema_failure_decision [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/schema.rs" 37 0 40 26]
-  (fail_open: bool) (failure: t_SchemaFailureKind) (return (x: t_SchemaFailureDecision)) = (! bb0
+let schema_failure_decision [#"/workspace/crates/verified/src/schema.rs" 37 0 40 26] (fail_open: bool)
+  (failure: t_SchemaFailureKind) (return (x: t_SchemaFailureDecision)) = (! bb0
   [ bb0 = any
     [ br0 -> {failure = Unknown} (! bb1)
     | br1 -> {failure = Transient} (! bb3)

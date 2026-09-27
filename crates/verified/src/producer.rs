@@ -5,15 +5,23 @@ use std::clone::Clone;
 
 use creusot_std::prelude::*;
 
-/// The last accepted batch for one producer.
+/// The sequence range of one batch a producer's entry retains: Kafka's
+/// `BatchMetadata` `firstSeq` and `lastSeq`.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub struct ProducerBatch {
-    pub epoch: i16,
+pub struct RetainedSequenceRange {
+    pub base_sequence: i32,
     pub last_sequence: i32,
-    /// The batch's offset delta, if the host state can represent it as `i32`.
-    pub last_offset_delta: Option<i32>,
-    pub base_offset: i64,
+}
+
+/// The fields of one producer's tracked entry that the sequence check reads.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct ProducerEntryFacts {
+    /// The entry's producer epoch.
+    pub epoch: i16,
+    /// The last sequence the entry accepted.
+    pub last_sequence: i32,
 }
 
 /// Result of classifying an idempotent-producer batch.
@@ -21,7 +29,11 @@ pub struct ProducerBatch {
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
 pub enum ProducerDecision {
     Append,
-    Duplicate { base_offset: i64 },
+    /// The batch repeats the retained batch at this index of the slice the
+    /// caller passed.
+    Duplicate {
+        retained: usize,
+    },
     OutOfOrder,
     Fenced,
 }
@@ -30,118 +42,206 @@ pub enum ProducerDecision {
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
 #[logic]
-fn increment_sequence_model(sequence: i32, increment: i32) -> i32 {
-    pearlite! { (sequence + increment) & i32::MAX }
+fn sequence_modulo_2_31(sequence: Int) -> Int {
+    pearlite! { sequence.rem_euclid(2147483648) }
 }
 
 /// Advance a Kafka producer sequence modulo `2^31`.
-#[cfg_attr(creusot, ensures(result == increment_sequence_model(sequence, increment)))]
+///
+/// The result is `sequence + increment` reduced modulo `2^31`. For the
+/// nonnegative operands Kafka uses, that is exactly
+/// `DefaultRecordBatch.incrementSequence`: the sum when it fits in an `i32`,
+/// otherwise the sum minus `2^31`.
+#[ensures(result@ == sequence_modulo_2_31(sequence@ + increment@))]
 #[must_use]
 pub fn increment_sequence(sequence: i32, increment: i32) -> i32 {
-    sequence.wrapping_add(increment) & i32::MAX
-}
-
-// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
-#[cfg(creusot)]
-#[cfg_attr(test, mutants::skip)]
-#[logic]
-fn decrement_sequence_model(sequence: i32, decrement: i32) -> i32 {
-    pearlite! { (sequence - decrement) & i32::MAX }
+    // Reduce the sum into `[0, 2^31)` without leaving `i32`: adding `2^31` is
+    // subtracting `i32::MIN`, and subtracting `2^31` is adding it.
+    match sequence.checked_add(increment) {
+        Some(sum) if sum >= 0 => sum,
+        Some(sum) => sum - i32::MIN,
+        // The sum passed `i32::MAX`, so both operands are positive.
+        None if increment > 0 => sequence + (increment + i32::MIN),
+        // The sum fell below `i32::MIN`, so both operands are negative.
+        None => (sequence - i32::MIN) + (increment - i32::MIN),
+    }
 }
 
 /// Move a Kafka producer sequence backwards modulo `2^31`.
-#[cfg_attr(creusot, ensures(result == decrement_sequence_model(sequence, decrement)))]
+///
+/// The result is `sequence - decrement` reduced modulo `2^31`. For the
+/// nonnegative operands Kafka uses, that is exactly
+/// `DefaultRecordBatch.decrementSequence`: the difference when it is not
+/// negative, otherwise the difference plus `2^31`.
+#[ensures(result@ == sequence_modulo_2_31(sequence@ - decrement@))]
 #[must_use]
 pub fn decrement_sequence(sequence: i32, decrement: i32) -> i32 {
-    sequence.wrapping_sub(decrement) & i32::MAX
+    // The same reduction as `increment_sequence`, for a difference.
+    match sequence.checked_sub(decrement) {
+        Some(difference) if difference >= 0 => difference,
+        Some(difference) => difference - i32::MIN,
+        // The difference passed `i32::MAX`: `sequence >= 0 > decrement`.
+        None if decrement < 0 => sequence + (i32::MIN - decrement),
+        // The difference fell below `i32::MIN`: `sequence < 0 < decrement`.
+        None => (sequence - i32::MIN) - (decrement + i32::MIN),
+    }
 }
 
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
 #[logic]
-fn matches_last_batch_model(
-    last: ProducerBatch,
+fn retained_matches(
+    slot: Option<RetainedSequenceRange>,
     base_sequence: i32,
     last_offset_delta: i32,
 ) -> bool {
     pearlite! {
-        exists<committed_delta: i32>
-            last.last_offset_delta == Some(committed_delta)
-            && base_sequence == decrement_sequence_model(last.last_sequence, committed_delta)
-            && increment_sequence_model(base_sequence, last_offset_delta) == last.last_sequence
+        match slot {
+            Some(range) => range.base_sequence@ == base_sequence@
+                && range.last_sequence@
+                    == sequence_modulo_2_31(base_sequence@ + last_offset_delta@),
+            None => false,
+        }
     }
 }
 
-#[cfg_attr(
-    creusot,
-    ensures(result == matches_last_batch_model(last, base_sequence, last_offset_delta))
-)]
-fn matches_last_batch(last: ProducerBatch, base_sequence: i32, last_offset_delta: i32) -> bool {
-    let Some(committed_delta) = last.last_offset_delta else {
-        return false;
-    };
-    base_sequence == decrement_sequence(last.last_sequence, committed_delta)
-        && increment_sequence(base_sequence, last_offset_delta) == last.last_sequence
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+fn retained_duplicate_exists(
+    entry: Option<ProducerEntryFacts>,
+    retained: Seq<Option<RetainedSequenceRange>>,
+    producer_epoch: i16,
+    base_sequence: i32,
+    last_offset_delta: i32,
+) -> bool {
+    pearlite! {
+        match entry {
+            Some(tracked) => tracked.epoch@ == producer_epoch@
+                && exists<i: Int> 0 <= i && i < retained.len()
+                    && retained_matches(retained[i], base_sequence, last_offset_delta),
+            None => false,
+        }
+    }
 }
 
-/// Classify an incoming batch against the last accepted producer batch.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+fn first_retained_duplicate(
+    entry: Option<ProducerEntryFacts>,
+    retained: Seq<Option<RetainedSequenceRange>>,
+    producer_epoch: i16,
+    base_sequence: i32,
+    last_offset_delta: i32,
+    index: Int,
+) -> bool {
+    pearlite! {
+        match entry {
+            Some(tracked) => tracked.epoch@ == producer_epoch@
+                && 0 <= index && index < retained.len()
+                && retained_matches(retained[index], base_sequence, last_offset_delta)
+                && forall<j: Int> 0 <= j && j < index
+                    ==> !retained_matches(retained[j], base_sequence, last_offset_delta),
+            None => false,
+        }
+    }
+}
+
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+fn sequence_decision(
+    entry: Option<ProducerEntryFacts>,
+    producer_epoch: i16,
+    base_sequence: i32,
+) -> ProducerDecision {
+    pearlite! {
+        match entry {
+            None => ProducerDecision::Append,
+            Some(tracked) => if producer_epoch@ < tracked.epoch@ {
+                ProducerDecision::Fenced
+            } else if producer_epoch@ > tracked.epoch@ {
+                if base_sequence@ == 0 { ProducerDecision::Append } else { ProducerDecision::OutOfOrder }
+            } else if base_sequence@ == sequence_modulo_2_31(tracked.last_sequence@ + 1) {
+                ProducerDecision::Append
+            } else {
+                ProducerDecision::OutOfOrder
+            },
+        }
+    }
+}
+
+/// Classify an incoming batch against a producer's tracked entry and the
+/// sequence ranges of the batches it retains.
 ///
-/// A batch at a higher epoch than `last` must start at sequence 0. Any other
-/// first sequence is out of order. This is Kafka's
-/// `ProducerAppendInfo.checkSequence`, which throws
-/// `OutOfOrderSequenceException` when the epoch changes and the first
-/// sequence is not 0. A producer with no entry can start at any sequence.
-#[cfg_attr(creusot, ensures(last == None ==> result == ProducerDecision::Append))]
-#[cfg_attr(creusot, ensures(forall<accepted: ProducerBatch>
-    last == Some(accepted) && producer_epoch@ < accepted.epoch@
-        ==> result == ProducerDecision::Fenced))]
-#[cfg_attr(creusot, ensures(forall<accepted: ProducerBatch>
-    last == Some(accepted) && producer_epoch@ > accepted.epoch@ && base_sequence == 0i32
-        ==> result == ProducerDecision::Append))]
-#[cfg_attr(creusot, ensures(forall<accepted: ProducerBatch>
-    last == Some(accepted) && producer_epoch@ > accepted.epoch@ && base_sequence != 0i32
-        ==> result == ProducerDecision::OutOfOrder))]
-#[cfg_attr(creusot, ensures(forall<accepted: ProducerBatch>
-    last == Some(accepted) && producer_epoch@ == accepted.epoch@
-        && base_sequence == increment_sequence_model(accepted.last_sequence, 1i32)
-        ==> result == ProducerDecision::Append))]
-#[cfg_attr(creusot, ensures(forall<accepted: ProducerBatch>
-    last == Some(accepted) && producer_epoch@ == accepted.epoch@
-        && base_sequence != increment_sequence_model(accepted.last_sequence, 1i32)
-        && matches_last_batch_model(accepted, base_sequence, last_offset_delta)
-        ==> result == ProducerDecision::Duplicate { base_offset: accepted.base_offset }))]
-#[cfg_attr(creusot, ensures(forall<accepted: ProducerBatch>
-    last == Some(accepted) && producer_epoch@ == accepted.epoch@
-        && base_sequence != increment_sequence_model(accepted.last_sequence, 1i32)
-        && !matches_last_batch_model(accepted, base_sequence, last_offset_delta)
-        ==> result == ProducerDecision::OutOfOrder))]
+/// This is Kafka's `UnifiedLog.analyzeAndValidateProducerState` for a client
+/// append. It first looks the batch up among the retained batches
+/// (`ProducerStateEntry.findDuplicateBatch`): at the entry's epoch, a batch
+/// whose base sequence and last sequence (`base_sequence + last_offset_delta`
+/// modulo `2^31`) equal a retained batch's is a duplicate of the first such
+/// batch. `None` slots never match. Only a batch that repeats no retained
+/// batch goes on to `ProducerAppendInfo.checkProducerEpoch` and
+/// `checkSequence`:
+///
+/// - a producer with no entry can start at any sequence;
+/// - a lower epoch is fenced;
+/// - a higher epoch must start at sequence 0 and is otherwise out of order;
+/// - the same epoch must continue at the last sequence plus one modulo `2^31`
+///   and is otherwise out of order.
+///
+/// The host supplies the retained batches at the entry's epoch; a batch at
+/// any other epoch never matches them.
+#[ensures(match result {
+    ProducerDecision::Duplicate { retained: index } => first_retained_duplicate(
+        entry, retained@, producer_epoch, base_sequence, last_offset_delta, index@),
+    _ => !retained_duplicate_exists(
+            entry, retained@, producer_epoch, base_sequence, last_offset_delta)
+        && result == sequence_decision(entry, producer_epoch, base_sequence),
+})]
 #[must_use]
 pub fn producer_decision(
-    last: Option<ProducerBatch>,
+    entry: Option<ProducerEntryFacts>,
+    retained: &[Option<RetainedSequenceRange>],
     producer_epoch: i16,
     base_sequence: i32,
     last_offset_delta: i32,
 ) -> ProducerDecision {
-    let Some(last) = last else {
+    let Some(tracked) = entry else {
         return ProducerDecision::Append;
     };
-    if producer_epoch < last.epoch {
+    if producer_epoch == tracked.epoch {
+        let last_sequence = increment_sequence(base_sequence, last_offset_delta);
+        let mut i = 0usize;
+        #[invariant(i@ <= retained@.len())]
+        #[invariant(forall<j: Int> 0 <= j && j < i@
+            ==> !retained_matches(retained@[j], base_sequence, last_offset_delta))]
+        #[variant(retained@.len() - i@)]
+        while i < retained.len() {
+            if let Some(range) = retained[i]
+                && range.base_sequence == base_sequence
+                && range.last_sequence == last_sequence
+            {
+                return ProducerDecision::Duplicate { retained: i };
+            }
+            i += 1;
+        }
+    }
+    if producer_epoch < tracked.epoch {
         return ProducerDecision::Fenced;
     }
-    if producer_epoch > last.epoch {
+    if producer_epoch > tracked.epoch {
         if base_sequence == 0 {
             return ProducerDecision::Append;
         }
         return ProducerDecision::OutOfOrder;
     }
-    if base_sequence == increment_sequence(last.last_sequence, 1) {
+    if base_sequence == increment_sequence(tracked.last_sequence, 1) {
         return ProducerDecision::Append;
-    }
-    if matches_last_batch(last, base_sequence, last_offset_delta) {
-        return ProducerDecision::Duplicate {
-            base_offset: last.base_offset,
-        };
     }
     ProducerDecision::OutOfOrder
 }
@@ -153,21 +253,62 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sequence_arithmetic_wraps_at_signed_maximum() {
-        assert!(increment_sequence(i32::MAX, 1) == 0);
-        assert!(increment_sequence(i32::MAX - 1, 3) == 1);
-        assert!(decrement_sequence(0, 1) == i32::MAX);
+    fn sequence_arithmetic_matches_kafka_wraparound() {
+        // (sequence, step, incremented, decremented), from Kafka's
+        // `DefaultRecordBatch.incrementSequence` / `decrementSequence`.
+        let cases = [
+            (0, 0, 0, 0),
+            (5, 3, 8, 2),
+            (i32::MAX, 1, 0, i32::MAX - 1),
+            (i32::MAX - 1, 3, 1, i32::MAX - 4),
+            (0, 1, 1, i32::MAX),
+            (2, 5, 7, i32::MAX - 2),
+            (i32::MAX, i32::MAX, i32::MAX - 1, 0),
+            // Outside Kafka's nonnegative domain the result is still the
+            // exact value modulo `2^31`, so a `-1` (no sequence) advances to 0.
+            (-1, 1, 0, i32::MAX - 1),
+            (i32::MIN, -1, i32::MAX, 1),
+            (i32::MIN, i32::MIN, 0, 0),
+            (5, i32::MIN, 5, 5),
+            (-3, i32::MAX, i32::MAX - 3, i32::MAX - 1),
+        ];
+        for (sequence, step, incremented, decremented) in cases {
+            assert!(increment_sequence(sequence, step) == incremented);
+            assert!(decrement_sequence(sequence, step) == decremented);
+        }
     }
+
+    const ENTRY: ProducerEntryFacts = ProducerEntryFacts {
+        epoch: 2,
+        last_sequence: 6,
+    };
+
+    /// Kafka's five retained batches for a producer that sent sequences
+    /// 0..=6 at epoch 2 in batches `[0]`, `[1, 2]`, `[3]`, `[4, 5, 6]`, with
+    /// one slot unused.
+    const RETAINED: [Option<RetainedSequenceRange>; 5] = [
+        None,
+        Some(RetainedSequenceRange {
+            base_sequence: 0,
+            last_sequence: 0,
+        }),
+        Some(RetainedSequenceRange {
+            base_sequence: 1,
+            last_sequence: 2,
+        }),
+        Some(RetainedSequenceRange {
+            base_sequence: 3,
+            last_sequence: 3,
+        }),
+        Some(RetainedSequenceRange {
+            base_sequence: 4,
+            last_sequence: 6,
+        }),
+    ];
 
     #[test]
     fn producer_decision_covers_all_outcomes() {
-        let last = ProducerBatch {
-            epoch: 2,
-            last_sequence: 6,
-            last_offset_delta: Some(2),
-            base_offset: 10,
-        };
-        // (label, last, epoch, base sequence, last offset delta, decision)
+        // (label, entry, epoch, base sequence, last offset delta, decision)
         let cases = [
             (
                 "no entry, any sequence",
@@ -177,10 +318,17 @@ mod tests {
                 0,
                 ProducerDecision::Append,
             ),
-            ("lower epoch", Some(last), 1, 4, 2, ProducerDecision::Fenced),
+            (
+                "lower epoch",
+                Some(ENTRY),
+                1,
+                4,
+                2,
+                ProducerDecision::Fenced,
+            ),
             (
                 "higher epoch at 0",
-                Some(last),
+                Some(ENTRY),
                 3,
                 0,
                 0,
@@ -188,7 +336,7 @@ mod tests {
             ),
             (
                 "higher epoch continues the sequence",
-                Some(last),
+                Some(ENTRY),
                 3,
                 7,
                 0,
@@ -196,7 +344,7 @@ mod tests {
             ),
             (
                 "higher epoch repeats the last batch",
-                Some(last),
+                Some(ENTRY),
                 3,
                 4,
                 2,
@@ -204,7 +352,7 @@ mod tests {
             ),
             (
                 "same epoch, next sequence",
-                Some(last),
+                Some(ENTRY),
                 2,
                 7,
                 0,
@@ -212,34 +360,78 @@ mod tests {
             ),
             (
                 "same epoch, last batch again",
-                Some(last),
+                Some(ENTRY),
                 2,
                 4,
                 2,
-                ProducerDecision::Duplicate { base_offset: 10 },
+                ProducerDecision::Duplicate { retained: 4 },
+            ),
+            (
+                "same epoch, an earlier retained batch again",
+                Some(ENTRY),
+                2,
+                1,
+                1,
+                ProducerDecision::Duplicate { retained: 2 },
+            ),
+            (
+                "same epoch, the oldest retained batch again",
+                Some(ENTRY),
+                2,
+                0,
+                0,
+                ProducerDecision::Duplicate { retained: 1 },
+            ),
+            (
+                "same epoch, a sub-range of a retained batch",
+                Some(ENTRY),
+                2,
+                1,
+                0,
+                ProducerDecision::OutOfOrder,
             ),
             (
                 "same epoch, gap",
-                Some(last),
+                Some(ENTRY),
                 2,
-                5,
-                2,
+                9,
+                0,
                 ProducerDecision::OutOfOrder,
             ),
             (
                 "same epoch, same base sequence but different delta",
-                Some(last),
+                Some(ENTRY),
                 2,
                 4,
                 3,
                 ProducerDecision::OutOfOrder,
             ),
         ];
-        for (label, last, epoch, base_sequence, delta, expected) in cases {
+        for (label, entry, epoch, base_sequence, delta, expected) in cases {
             assert!(
-                producer_decision(last, epoch, base_sequence, delta) == expected,
+                producer_decision(entry, &RETAINED, epoch, base_sequence, delta) == expected,
                 "case: {label}"
             );
         }
+    }
+
+    #[test]
+    fn sequence_continues_across_wraparound() {
+        let entry = ProducerEntryFacts {
+            epoch: 0,
+            last_sequence: i32::MAX,
+        };
+        let retained = [Some(RetainedSequenceRange {
+            base_sequence: i32::MAX - 1,
+            last_sequence: i32::MAX,
+        })];
+        assert!(producer_decision(Some(entry), &retained, 0, 0, 3) == ProducerDecision::Append);
+        assert!(
+            producer_decision(Some(entry), &retained, 0, i32::MAX - 1, 1)
+                == ProducerDecision::Duplicate { retained: 0 }
+        );
+        assert!(
+            producer_decision(Some(entry), &[], 0, i32::MAX - 1, 1) == ProducerDecision::OutOfOrder
+        );
     }
 }

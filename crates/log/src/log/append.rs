@@ -56,19 +56,41 @@ impl Log {
         batch.base_offset = assigned_base.0;
         let log_append_time_ms = self.stamp_owned_log_append_time(batch);
         self.append_preserving_offset(batch, None)?;
-        // Record epoch transition when the epoch is valid and exceeds the
-        // previously recorded epoch (or no epoch has been recorded yet).
-        if leader_epoch.is_known()
-            && self
-                .epoch_checkpoint
-                .latest_epoch()
-                .is_none_or(|e| leader_epoch > e)
-            && let Err(error) = self.epoch_checkpoint.append(leader_epoch, assigned_base)
-        {
-            self.rollback_failed_append(assigned_base)?;
+        self.assign_appended_epoch(leader_epoch, assigned_base)?;
+        Ok((assigned_base, log_append_time_ms))
+    }
+
+    /// Record the leader epoch stamped on a batch just appended at `base`:
+    /// Kafka's `UnifiedLog.append`, which calls
+    /// `assignEpochStartOffset(batch.partitionLeaderEpoch, batch.baseOffset)`
+    /// for every appended batch.
+    ///
+    /// [`LeaderEpochCheckpoint::assign`](crate::LeaderEpochCheckpoint::assign)
+    /// decides what that changes: nothing for the latest epoch at or after
+    /// its start, and otherwise a new entry that first drops every trailing
+    /// entry it does not strictly follow. That also replaces an entry no
+    /// record backs, such as a leader epoch recorded at the log end by a
+    /// promotion that never wrote.
+    ///
+    /// Kafka stamps every batch it appends with a real epoch. This log also
+    /// takes internal and test writes that carry the `-1` "no epoch"
+    /// sentinel, and those record nothing, where Kafka's `assign` would throw.
+    ///
+    /// A checkpoint that cannot be written rolls the batch back, so the log
+    /// never holds a batch its epoch history does not account for.
+    pub(super) fn assign_appended_epoch(
+        &mut self,
+        leader_epoch: LeaderEpoch,
+        base: Offset,
+    ) -> Result<(), LogError> {
+        if !leader_epoch.is_known() {
+            return Ok(());
+        }
+        if let Err(error) = self.epoch_checkpoint.assign(leader_epoch, base) {
+            self.rollback_failed_append(base)?;
             return Err(error);
         }
-        Ok((assigned_base, log_append_time_ms))
+        Ok(())
     }
 
     /// Refuse a batch that would make a scheduled partition's schedule run
@@ -183,6 +205,7 @@ impl Log {
         // well as its data batches.
         self.stamp_owned_log_append_time(batch);
         self.append_preserving_offset(batch, Some(stamp))?;
+        self.assign_appended_epoch(LeaderEpoch(batch.partition_leader_epoch), assigned_base)?;
         self.observe_stamp(stamp);
         Ok(assigned_base)
     }
@@ -221,19 +244,8 @@ impl Log {
         let leader_epoch = LeaderEpoch(batch.partition_leader_epoch);
         batch.base_offset = offset.0;
         self.append_preserving_offset(batch, None)?;
-        // Mirror the leader-side epoch bookkeeping in [`Log::append`]: record the
-        // batch's leader epoch when it advances past the latest recorded epoch,
-        // so a follower's leader-epoch checkpoint tracks replicated epochs.
-        if leader_epoch.is_known()
-            && self
-                .epoch_checkpoint
-                .latest_epoch()
-                .is_none_or(|e| leader_epoch > e)
-            && let Err(error) = self.epoch_checkpoint.append(leader_epoch, offset)
-        {
-            self.rollback_failed_append(offset)?;
-            return Err(error);
-        }
+        // The follower records replicated epochs exactly as the leader does.
+        self.assign_appended_epoch(leader_epoch, offset)?;
         Ok(())
     }
 
@@ -260,6 +272,7 @@ impl Log {
         self.validate_commit_stamp_batch(batch)?;
         batch.base_offset = offset.0;
         self.append_preserving_offset(batch, Some(stamp))?;
+        self.assign_appended_epoch(LeaderEpoch(batch.partition_leader_epoch), offset)?;
         self.observe_stamp(stamp);
         Ok(())
     }

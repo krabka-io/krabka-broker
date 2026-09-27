@@ -119,7 +119,9 @@ async fn durable_advance_waits_for_an_offset_strictly_after_the_observation() {
     let (_results, first) = append_source(&store, 1).await;
     let syncing = Arc::clone(&store);
     let sync = tokio::spawn(async move { syncing.sync_durable(first).await });
-    assert!(store.engine.record_follower_ack(NodeId(2), first));
+    // The spawned sync has not run, so the leader has not fsynced `first`:
+    // one follower's fsync alone is not a majority of durable copies.
+    assert!(!store.engine.record_follower_ack(NodeId(2), first));
     assert!(sync.await.unwrap().unwrap() == first);
 
     let engine = Arc::clone(&store.engine);
@@ -138,7 +140,7 @@ async fn durable_advance_waits_for_an_offset_strictly_after_the_observation() {
             .engine
             .record_follower_ack(NodeId(2), Offset(first.0 - 1))
     );
-    assert!(store.engine.record_follower_ack(NodeId(2), second));
+    assert!(!store.engine.record_follower_ack(NodeId(2), second));
 
     assert!(sync.await.unwrap().unwrap() == second);
     assert!(waiting.await.unwrap() == second);
@@ -195,7 +197,11 @@ async fn distributed_wal_reconfiguration_replaces_the_remote_voter_set() {
         .configure_distributed(NodeId(1), &[NodeId(1), NodeId(3), NodeId(4)]);
 
     assert!(!store.engine.record_follower_ack(NodeId(2), leo));
-    assert!(store.engine.record_follower_ack(NodeId(3), leo));
+    // Voter 3 is a remote voter of the new set, but the leader has not
+    // fsynced `leo` yet, so its acknowledgement alone commits nothing.
+    assert!(!store.engine.record_follower_ack(NodeId(3), leo));
+    assert!(store.engine.durable_watermark() == Offset(0));
+    assert!(store.sync_durable(leo).await.unwrap() == leo);
     assert!(store.engine.durable_watermark() == leo);
 }
 

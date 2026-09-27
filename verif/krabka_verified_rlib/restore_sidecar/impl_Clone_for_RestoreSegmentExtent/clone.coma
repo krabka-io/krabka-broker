@@ -1,0 +1,18 @@
+(* #"/workspace/crates/verified/src/restore_sidecar.rs" 110 27 110 32 *)
+
+(* <restore_sidecar::RestoreSegmentExtent as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_RestoreSegmentExtent = { base_offset: Int64.t; last_offset: Int64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_RestoreSegmentExtent [#"/workspace/crates/verified/src/restore_sidecar.rs" 110 27 110 32]
+  (self: t_RestoreSegmentExtent) (return (x: t_RestoreSegmentExtent)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_RestoreSegmentExtent = Any.any_l () | & self: t_RestoreSegmentExtent = self ])
+  [ return (result: t_RestoreSegmentExtent) -> (! return {result}) ]

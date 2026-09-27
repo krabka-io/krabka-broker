@@ -1,12 +1,12 @@
-(* #"/proof-work-209/crates/verified/src/delivery.rs" 79 0 79 82 *)
+(* #"/workspace/crates/verified/src/delivery.rs" 83 0 83 82 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sdelivery = "/proof-work-209/crates/verified/src/delivery.rs" 81 8 81 12
-let%span sdelivery'0 = "/proof-work-209/crates/verified/src/delivery.rs" 84 27 84 28
-let%span sdelivery'1 = "/proof-work-209/crates/verified/src/delivery.rs" 84 15 84 28
-let%span sdelivery'2 = "/proof-work-209/crates/verified/src/delivery.rs" 75 28 75 64
-let%span sdelivery'3 = "/proof-work-209/crates/verified/src/delivery.rs" 76 28 76 73
-let%span sdelivery'4 = "/proof-work-209/crates/verified/src/delivery.rs" 77 28 77 73
+let%span sdelivery = "/workspace/crates/verified/src/delivery.rs" 85 8 85 12
+let%span sdelivery'0 = "/workspace/crates/verified/src/delivery.rs" 88 27 88 28
+let%span sdelivery'1 = "/workspace/crates/verified/src/delivery.rs" 88 15 88 28
+let%span sdelivery'2 = "/workspace/crates/verified/src/delivery.rs" 79 10 79 46
+let%span sdelivery'3 = "/workspace/crates/verified/src/delivery.rs" 80 10 80 55
+let%span sdelivery'4 = "/workspace/crates/verified/src/delivery.rs" 81 10 81 55
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -22,7 +22,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let coalesce_delivery_range [#"/proof-work-209/crates/verified/src/delivery.rs" 79 0 79 82] (last_high: Int64.t)
+let coalesce_delivery_range [#"/workspace/crates/verified/src/delivery.rs" 83 0 83 82] (last_high: Int64.t)
   (low: Int64.t) (high: Int64.t) (return (x: tup2_bool_i64)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_14 <- Int64.le low last_high ] s1 | s1 = any [ br0 -> {_14 = false} (! bb2) | br1 -> {_14} (! bb1) ] ]

@@ -1,0 +1,18 @@
+(* #"/workspace/crates/verified/src/producer_snapshot.rs" 23 27 23 32 *)
+
+(* <producer_snapshot::ProducerReloadRange as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_ProducerReloadRange = { log_start: Int64.t; local_start: Int64.t; log_end: Int64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_ProducerReloadRange [#"/workspace/crates/verified/src/producer_snapshot.rs" 23 27 23 32]
+  (self: t_ProducerReloadRange) (return (x: t_ProducerReloadRange)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_ProducerReloadRange = Any.any_l () | & self: t_ProducerReloadRange = self ])
+  [ return (result: t_ProducerReloadRange) -> (! return {result}) ]

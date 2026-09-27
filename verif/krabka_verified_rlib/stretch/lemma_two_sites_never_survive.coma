@@ -1,16 +1,16 @@
-(* #"/home/user/krabka-broker/crates/verified/src/stretch.rs" 69 0 69 61 *)
+(* #"/workspace/crates/verified/src/stretch.rs" 89 0 89 61 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sstretch = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 70 18 70 73
-let%span sstretch'0 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 71 18 71 90
-let%span sstretch'1 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 72 18 73 95
-let%span sstretch'2 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 74 18 75 95
-let%span sstretch'3 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 65 11 65 38
-let%span sstretch'4 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 66 11 66 71
-let%span sstretch'5 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 67 10 68 90
-let%span sstretch'6 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 20 10 20 15
-let%span sstretch'7 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 23 8 27 9
-let%span sstretch'8 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 35 16 35 38
+let%span sstretch = "/workspace/crates/verified/src/stretch.rs" 90 18 90 73
+let%span sstretch'0 = "/workspace/crates/verified/src/stretch.rs" 91 18 91 90
+let%span sstretch'1 = "/workspace/crates/verified/src/stretch.rs" 92 18 93 95
+let%span sstretch'2 = "/workspace/crates/verified/src/stretch.rs" 94 18 95 95
+let%span sstretch'3 = "/workspace/crates/verified/src/stretch.rs" 85 11 85 38
+let%span sstretch'4 = "/workspace/crates/verified/src/stretch.rs" 86 11 86 71
+let%span sstretch'5 = "/workspace/crates/verified/src/stretch.rs" 87 10 88 90
+let%span sstretch'6 = "/workspace/crates/verified/src/stretch.rs" 29 10 29 15
+let%span sstretch'7 = "/workspace/crates/verified/src/stretch.rs" 32 8 36 9
+let%span sstretch'8 = "/workspace/crates/verified/src/stretch.rs" 46 16 46 38
 
 use creusot.int.Int64
 use seq.Seq
@@ -18,12 +18,12 @@ use creusot.slice.Slice64
 use creusot.prelude.Any
 use int.Int
 
-function sum_prefix [#"/home/user/krabka-broker/crates/verified/src/stretch.rs" 21 0 21 49] (s: Seq.seq Int64.t) (limit: int) : int
+function sum_prefix [#"/workspace/crates/verified/src/stretch.rs" 30 0 30 49] (s: Seq.seq Int64.t) (limit: int) : int
 
 axiom sum_prefix_def: forall s: Seq.seq Int64.t, limit: int [sum_prefix s limit]. sum_prefix s limit
     = ([%#sstretch'7] if limit <= 0 then 0 else sum_prefix s (limit - 1) + Int64.to_int (Seq.get s (limit - 1)))
 
-function sum_all [#"/home/user/krabka-broker/crates/verified/src/stretch.rs" 34 0 34 34] (s: Seq.seq Int64.t) : int =
+function sum_all [#"/workspace/crates/verified/src/stretch.rs" 45 0 45 34] (s: Seq.seq Int64.t) : int =
   [%#sstretch'8] sum_prefix s (Seq.length s)
 
 predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
@@ -34,7 +34,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let lemma_two_sites_never_survive [#"/home/user/krabka-broker/crates/verified/src/stretch.rs" 69 0 69 61]
+let lemma_two_sites_never_survive [#"/workspace/crates/verified/src/stretch.rs" 89 0 89 61]
   (voters_per_site: Slice64.slice Int64.t) (return (x: ())) =
 {[@stop_split] [@expl:lemma_two_sites_never_survive requires] ([@stop_split] [@expl:lemma_two_sites_never_survive requires #0] [%#sstretch'3] Seq.length (Slice64.view voters_per_site)
     = 2)

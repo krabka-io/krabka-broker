@@ -97,29 +97,8 @@ pub const fn compaction_decode_step(
     }
 }
 
-/// Decide whether retention may evict one oldest-prefix segment.
-///
-/// The host classifies whether the segment timestamp is known and whether its
-/// native retention duration comparison has expired. An unknown timestamp
-/// fails closed for time pressure. Size pressure remains independent and may
-/// still evict it.
-#[ensures(result == (by_size || (timestamp_known && time_expired)))]
-#[ensures(by_size ==> result)]
-#[ensures(!timestamp_known && !by_size ==> !result)]
-#[ensures(!by_size && result ==> timestamp_known && time_expired)]
-#[must_use]
-pub const fn retention_segment_evict(
-    timestamp_known: bool,
-    time_expired: bool,
-    by_size: bool,
-) -> bool {
-    by_size || (timestamp_known && time_expired)
-}
-
-/// Compute the delete horizon timestamp: `now + delete.retention.ms`.
-///
-/// The tombstone or marker is retained until the wall clock reaches this
-/// value.
+/// The delete horizon timestamp as an unbounded integer: `now +
+/// delete.retention.ms`, clamped to the `i64` range.
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
@@ -136,14 +115,12 @@ pub fn compute_horizon_model(now_ms: i64, delete_retention_ms: i64) -> Int {
     }
 }
 
+/// Compute the delete horizon timestamp: `now + delete.retention.ms`,
+/// saturated at the `i64` bounds.
+///
+/// The tombstone or marker is retained until the wall clock reaches this
+/// value.
 #[ensures(result@ == compute_horizon_model(now_ms, delete_retention_ms))]
-#[ensures(result@ == if now_ms@ + delete_retention_ms@ > 9223372036854775807 {
-    9223372036854775807
-} else if now_ms@ + delete_retention_ms@ < -9223372036854775807 - 1 {
-    -9223372036854775807 - 1
-} else {
-    now_ms@ + delete_retention_ms@
-})]
 #[must_use]
 pub const fn compute_horizon(now_ms: i64, delete_retention_ms: i64) -> i64 {
     now_ms.saturating_add(delete_retention_ms)
@@ -236,20 +213,6 @@ mod tests {
             ("lower saturation", i64::MIN + 1, -50, i64::MIN),
         ] {
             assert2::assert!(compute_horizon(timestamp, lag) == expected);
-        }
-    }
-
-    #[test]
-    fn retention_admission_fails_closed_without_losing_size_pressure() {
-        for timestamp_known in [false, true] {
-            for time_expired in [false, true] {
-                for by_size in [false, true] {
-                    assert2::assert!(
-                        retention_segment_evict(timestamp_known, time_expired, by_size)
-                            == (by_size || (timestamp_known && time_expired))
-                    );
-                }
-            }
         }
     }
 

@@ -3,35 +3,48 @@
 //! This is the second end-to-end model, after the data-path composition. It
 //! runs over a single partition with >= 2 interleaving transactional producers
 //! and an advancing HWM. It verifies that what a `read_committed` consumer may
-//! see is EXACTLY the committed records. That set is every offset below
-//! `effective_lso = min(lso, hw)`, minus aborted batches. No aborted record
-//! ever leaks. The visible set never holds a still-open-transaction record,
-//! and it never holds anything above the HWM.
+//! see is EXACTLY the committed records below `min(lso, hw)`:
+//!
+//! - `only_committed_visible`: every visible batch belongs to a committed
+//!   transaction, so no open and no aborted record is visible.
+//! - `window_is_min_lso_hw`: the window the real `compute_visibility_window`
+//!   returns equals `min(first unstable offset, hw)`, with the first unstable
+//!   offset recomputed from each producer's control markers, not from `lso()`.
+//! - `committed_prefix_complete`: every committed Data batch below that
+//!   independent window is visible.
+//! - `nothing_visible_above_hw`: no visible offset is at or above the HWM.
+//! - `no_visible_aborted`: no visible offset lies in an aborted range as
+//!   Kafka's aborted-transaction index derives it from the Abort markers,
+//!   independently of the abort filter in `visible()`.
+//! - `hw_within_log` and `no_transition_violation`: the HWM stays within the
+//!   log, the HWM and the LSO never regress, and every `End` Proceeds.
 //!
 //! Concurrent producers' batches interleave at the offset level. So a
 //! committed txn can sit partly above the LSO, behind an older open txn, or
 //! above the HWM. The guarantee is prefix-correctness, not whole-txn snapshot
 //! atomicity.
 //!
-//! Scope: what is DRIVEN and what is MODELED. An adversarial faithfulness
-//! review flagged the original framing as over-claiming.
-//!   - DRIVEN (real code): the EndTxn decision cores `decide_phase1_transition`
-//!     and `decide_end_txn_completion` on their Proceed path.
-//!     `decision_model.rs` (#523) exercises the fencing and retry arms. A guard
-//!     `unreachable!`s if they ever fire here. Also DRIVEN: the real
-//!     `read_committed` clamp of `compute_visibility_window`
-//!     (`effective_lso = lso.min(hw)`). That clamp bites non-trivially when an
-//!     open txn's records sit above the HWM. The witness is `hwm_clamp_active`.
-//!   - MODELED (faithful abstraction, NOT driving real code): the LSO rule and
-//!     the abort filter. The LSO rule is Kafka's first-unstable-offset.
-//!     `Log::lso()`'s incremental maintenance is stored state, not a pure fn.
-//!     The abort filter hides a Data batch if and only if its txn aborted. That
-//!     is equivalent to the client-side `poll.rs` /
-//!     `TxnIndex::aborted_in_range` range filtering ONLY under the
-//!     one-in-flight-txn-per-producer invariant this model enforces.
-//!   - NOT covered, and left to the per-slice log / txn-index / fetch models:
-//!     the `Log::lso()` maintenance internals, `TxnIndex::aborted_in_range`
-//!     overlap arithmetic, and the consumer `aborted_pids` state machine.
+//! Scope: what is DRIVEN and what is MODELED.
+//!
+//! - DRIVEN (real code): the EndTxn decision cores `decide_phase1_transition`,
+//!   `prepare_completion_identities_with_fresh` and
+//!   `decide_end_txn_completion` on their Proceed path. `decision_model.rs`
+//!   exercises the fencing and retry arms; a ghost flag fails
+//!   `no_transition_violation` if they ever fire here. Also DRIVEN: the real
+//!   `read_committed` clamp of `compute_visibility_window`
+//!   (`effective_lso = lso.min(hw)`). That clamp bites non-trivially when an
+//!   open txn's records sit above the HWM. The witness is `hwm_clamp_active`.
+//! - MODELED (faithful abstraction, NOT driving real code): the LSO rule
+//!   `lso()` and the abort filter in `visible()`. The LSO rule is Kafka's
+//!   first-unstable-offset; `Log::lso()`'s incremental maintenance is stored
+//!   state, not a pure fn. The filter hides a Data batch if and only if its
+//!   txn aborted, which matches the consumer's range filtering only under the
+//!   one-in-flight-txn-per-producer invariant this model enforces. The
+//!   properties check both against oracles derived by producer and marker
+//!   rather than by generation tag.
+//! - NOT covered, and left to the per-slice log / txn-index / fetch models:
+//!   the `Log::lso()` maintenance internals, `TxnIndex::aborted_in_range`
+//!   overlap arithmetic, and the consumer `aborted_pids` state machine.
 //!
 //! See the design spec.
 
@@ -57,7 +70,7 @@ const MAX_DEPTH: usize = 50;
 // that still passes the upper bound. The *generated* count is deliberately not
 // pinned: it depends on dedupe timing across the BFS worker threads.
 const PINNED_UNIQUE_STATES_BASIC: usize = 1_228;
-const PINNED_UNIQUE_STATES_WIDE: usize = 193_205;
+const PINNED_UNIQUE_STATES_WIDE: usize = 58_524;
 
 const PID0: i64 = 1000; // base producer id; per-producer pid = PID0 + producer index
 
@@ -104,6 +117,22 @@ struct EosState {
     /// push the LSO ABOVE the HWM. The real `compute_visibility_window` clamp
     /// `effective_lso = lso.min(hw)` then bites and returns `hw`.
     hw: Offset,
+    violations: Violations,
+}
+
+/// Ghost transition-violation flags. The transition that commits a violation
+/// sets its flag, and `no_transition_violation` requires every flag to stay
+/// `false`, so the checker reports the trace instead of panicking mid-search.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+struct Violations {
+    /// The HWM moved backwards.
+    hw_regressed: bool,
+    /// The LSO moved backwards.
+    lso_regressed: bool,
+    /// An `End` did not Proceed. The no-window `End` path never has its epoch
+    /// bumped underneath it, so only a changed decision core reaches this;
+    /// `decision_model` exercises the fencing and retry arms.
+    end_not_proceed: bool,
 }
 
 struct EosModel {
@@ -205,6 +234,44 @@ fn visible(log: &[Batch], hw: Offset) -> Vec<i64> {
         .collect()
 }
 
+// ----- independent oracles (by producer and marker, never by generation) -----
+
+/// Kafka's first unstable offset, derived without the generation tags `lso()`
+/// reads: the smallest offset of a Data batch whose producer has written no
+/// control marker after it, else the log end.
+fn first_unstable_offset(log: &[Batch]) -> Offset {
+    let open = log.iter().enumerate().position(|(off, b)| {
+        b.kind == Kind::Data
+            && !log[off + 1..]
+                .iter()
+                .any(|later| later.producer == b.producer && later.kind != Kind::Data)
+    });
+    Offset(model_offset(open.unwrap_or(log.len())))
+}
+
+/// The Data offsets a `read_committed` consumer drops as aborted, derived the
+/// way Kafka's aborted-transaction index and consumer do: each Abort marker of
+/// producer `p` at offset `m` aborts every Data batch of `p` after `p`'s
+/// previous control marker and before `m`.
+fn aborted_by_markers(log: &[Batch]) -> Vec<i64> {
+    let mut aborted = Vec::new();
+    for (m, marker) in log.iter().enumerate() {
+        if marker.kind != Kind::Abort {
+            continue;
+        }
+        for (off, b) in log[..m].iter().enumerate().rev() {
+            if b.producer != marker.producer {
+                continue;
+            }
+            if b.kind != Kind::Data {
+                break;
+            }
+            aborted.push(model_offset(off));
+        }
+    }
+    aborted
+}
+
 // ----- model -----
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -230,6 +297,7 @@ impl Model for EosModel {
                 })
                 .collect(),
             hw: Offset(0),
+            violations: Violations::default(),
         }]
     }
 
@@ -243,7 +311,12 @@ impl Model for EosModel {
         }
         for p in 0..self.producers {
             let pr = s.prod[usize::from(p)];
-            if pr.generation < self.max_gen && tstate(pr.state).can_transition_to(TxnState::Ongoing)
+            // `AddPartitionsToTxn` opens a NEW transaction only from a state
+            // that is not already `Ongoing`; on an `Ongoing` one it extends
+            // the open transaction, which `Append` covers.
+            if pr.generation < self.max_gen
+                && pr.state != TxnState::Ongoing.to_kafka_status()
+                && tstate(pr.state).can_transition_to(TxnState::Ongoing)
             {
                 acts.push(Act::Begin(p));
             }
@@ -271,7 +344,9 @@ impl Model for EosModel {
         match a {
             Act::Begin(p) => {
                 let pr = &mut s.prod[usize::from(p)];
-                if !tstate(pr.state).can_transition_to(TxnState::Ongoing) {
+                if pr.state == TxnState::Ongoing.to_kafka_status()
+                    || !tstate(pr.state).can_transition_to(TxnState::Ongoing)
+                {
                     return None;
                 }
                 pr.generation += 1;
@@ -322,26 +397,23 @@ impl Model for EosModel {
                         np.state = next_state.to_kafka_status();
                         np.epoch = response_epoch; // TV_2 bumps the epoch on completion
                     }
-                    // This no-window single-`End` path always Proceeds (the epoch
-                    // is never bumped underneath it); the fencing / idempotent-retry
-                    // arms are exercised by `decision_model.rs` (#523). Guard so a
-                    // future change that makes them reachable surfaces loudly
-                    // rather than silently shrinking what GREEN means.
-                    other => unreachable!("no-window End must Proceed, got {other:?}"),
+                    CompletionDecision::AlreadyComplete { .. } | CompletionDecision::Reject(_) => {
+                        s.violations.end_not_proceed = true;
+                    }
                 }
             }
             Act::Ack => {
                 s.hw += 1; // a follower replicated one more offset
             }
         }
-        // HWM never regresses and never passes the log end.
-        assert2::assert!(
-            s.hw >= last.hw && s.hw <= model_offset(s.log.len()),
-            "HWM out of range"
-        );
-        // LSO is monotonic across every transition (offsets only grow; the
-        // oldest-open base only advances). Assert it (cheap regression guard).
-        assert2::assert!(lso(&s.log) >= lso(&last.log), "LSO regressed");
+        // The HWM and the LSO never regress: offsets only grow, and the
+        // oldest open transaction's base only advances.
+        if s.hw < last.hw {
+            s.violations.hw_regressed = true;
+        }
+        if lso(&s.log) < lso(&last.log) {
+            s.violations.lso_regressed = true;
+        }
         Some(s)
     }
 
@@ -357,26 +429,46 @@ impl Model for EosModel {
                     txn_outcome(&s.log, b.producer, b.generation) == Some(Kind::Commit)
                 })
             }),
-            // Every committed Data batch below the effective LSO (= min(lso, hw))
-            // IS visible — no committed, durable, stable record is wrongly hidden.
-            // Catches effective_lso BELOW min(lso, hw). With the headline:
-            // visible = exactly committed-below-effective-LSO.
+            // The read_committed window is exactly min(first unstable offset,
+            // HWM), with the first unstable offset recomputed here from the
+            // log's markers, not from `lso()`. Catches a window above OR
+            // below min(lso, hw), and an `lso()` that drifts from Kafka's rule.
+            Property::always("window_is_min_lso_hw", |_, s: &EosState| {
+                effective_lso(&s.log, s.hw) == first_unstable_offset(&s.log).min(s.hw)
+            }),
+            // Every committed Data batch below min(first unstable offset, HWM)
+            // is visible: no committed, durable, stable record is hidden.
             Property::always("committed_prefix_complete", |_, s: &EosState| {
                 let v = visible(&s.log, s.hw);
-                let eff = effective_lso(&s.log, s.hw);
+                let window = first_unstable_offset(&s.log).min(s.hw);
                 s.log.iter().enumerate().all(|(off, b)| {
                     !(b.kind == Kind::Data
-                        && (model_offset(off)) < eff
+                        && model_offset(off) < window
                         && txn_outcome(&s.log, b.producer, b.generation) == Some(Kind::Commit))
-                        || v.contains(&(model_offset(off)))
+                        || v.contains(&model_offset(off))
                 })
             }),
-            // No aborted batch is ever visible (the abort-side all-or-nothing).
+            // Nothing at or above the HWM is visible.
+            Property::always("nothing_visible_above_hw", |_, s: &EosState| {
+                visible(&s.log, s.hw).into_iter().all(|off| off < s.hw)
+            }),
+            // No visible offset lies in an aborted range as Kafka's consumer
+            // derives it from the Abort markers alone (see
+            // `aborted_by_markers`), independently of `visible()`'s filter.
             Property::always("no_visible_aborted", |_, s: &EosState| {
-                visible(&s.log, s.hw).into_iter().all(|off| {
-                    let b = s.log[model_index(off)];
-                    txn_outcome(&s.log, b.producer, b.generation) != Some(Kind::Abort)
-                })
+                let aborted = aborted_by_markers(&s.log);
+                visible(&s.log, s.hw)
+                    .into_iter()
+                    .all(|off| !aborted.contains(&off))
+            }),
+            // The HWM stays within the log.
+            Property::always("hw_within_log", |_, s: &EosState| {
+                s.hw <= model_offset(s.log.len())
+            }),
+            // Every transition keeps the LSO and the HWM from regressing, and
+            // every End drives the decision cores to Proceed.
+            Property::always("no_transition_violation", |_, s: &EosState| {
+                s.violations == Violations::default()
             }),
             // ----- non-vacuity witnesses -----
             Property::sometimes("committed_visible", |_, s: &EosState| {
@@ -438,12 +530,12 @@ fn run(model: EosModel, label: &str, pinned_unique_states: usize) {
         "[{label}] unique bound exceeded ({})",
         checker.unique_state_count()
     );
+    checker.assert_properties();
     // Pin: a changed count is a changed model, not a retuning knob.
     assert2::assert!(
         checker.unique_state_count() == pinned_unique_states,
         "[{label}] unique-state count moved: the reachable set of this model changed"
     );
-    checker.assert_properties();
 }
 
 #[test]

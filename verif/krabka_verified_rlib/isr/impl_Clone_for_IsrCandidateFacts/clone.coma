@@ -1,0 +1,35 @@
+(* #"/workspace/crates/verified/src/isr.rs" 325 27 325 32 *)
+
+(* <isr::IsrCandidateFacts as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_IsrMemberRole = Unassigned | Leader | InSyncFollower | OutOfSyncFollower
+
+type t_Option_i64 = None | Some Int64.t
+
+type t_IsrEligibilityFacts = {
+  fenced: bool;
+  shutting_down: bool;
+  fetch_broker_epoch: t_Option_i64;
+  alive_broker_epoch: t_Option_i64 }
+
+type t_IsrCandidateFacts = {
+  role: t_IsrMemberRole;
+  follower_log_end: Int64.t;
+  leader_log_end: Int64.t;
+  leader_high_watermark: Int64.t;
+  leader_epoch_start: t_Option_i64;
+  caught_up_within_lag: bool;
+  eligibility: t_IsrEligibilityFacts }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_IsrCandidateFacts [#"/workspace/crates/verified/src/isr.rs" 325 27 325 32] (self: t_IsrCandidateFacts)
+  (return (x: t_IsrCandidateFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_IsrCandidateFacts = Any.any_l () | & self: t_IsrCandidateFacts = self ])
+  [ return (result: t_IsrCandidateFacts) -> (! return {result}) ]

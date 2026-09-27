@@ -1,4 +1,4 @@
-(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/reconfiguration.rs" 29 27 29 32 *)
+(* #"/workspace/crates/verified/src/reconfiguration.rs" 99 27 99 32 *)
 
 (* <reconfiguration::VoterReconfigurationDecision as std::clone::Clone> *)
 
@@ -24,7 +24,6 @@ type t_VoterReconfigurationDecision =
   | VoterNotCaughtUp
   | VoterNotFound
   | DirectoryMismatch
-  | LastVoter
   | InvalidVersionTransition
   | Admit t_VoterReconfigurationPlan
 
@@ -32,7 +31,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_VoterReconfigurationDecision [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/reconfiguration.rs" 29 27 29 32]
+let clone_VoterReconfigurationDecision [#"/workspace/crates/verified/src/reconfiguration.rs" 99 27 99 32]
   (self: t_VoterReconfigurationDecision) (return (x: t_VoterReconfigurationDecision)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_VoterReconfigurationDecision = Any.any_l () | & self: t_VoterReconfigurationDecision = self ])

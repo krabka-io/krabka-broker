@@ -66,9 +66,11 @@ pub struct NewAvailable(pub u64);
 
 /// `min(available + refill, burst)` in unbounded integers.
 ///
-/// This is equal to the executable
-/// `available.saturating_add(refill).min(burst)` when the saturating sum would
-/// exceed `burst`, which is the only case that matters.
+/// This equals the executable `available.saturating_add(refill).min(burst)`
+/// for every `u64` input. Without overflow the saturating sum is the exact
+/// sum. With overflow the exact sum exceeds `u64::MAX`, which is at least
+/// `burst`, so both sides are `burst`. [`plan_consume`] proves this equality
+/// for its own inputs.
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
 #[cfg(creusot)]
 #[cfg_attr(test, mutants::skip)]
@@ -97,9 +99,10 @@ pub fn plan_consume(
     burst: BurstCapacity,
     requested: RequestedTokens,
 ) -> (GrantedTokens, NewAvailable) {
-    let capped = available.0.saturating_add(refill.0).min(burst.0);
-    let grant = requested.0.min(capped);
-    (GrantedTokens(grant), NewAvailable(capped - grant))
+    let total = available.0.saturating_add(refill.0).min(burst.0);
+    proof_assert!(total@ == capped(available.0@, refill.0@, burst.0@));
+    let grant = requested.0.min(total);
+    (GrantedTokens(grant), NewAvailable(total - grant))
 }
 
 #[cfg(test)]

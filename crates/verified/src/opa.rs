@@ -1,4 +1,8 @@
 //! OPA authorization-cache admission and error policy.
+//!
+//! All deadlines here are milliseconds on the host's monotonic clock. The
+//! kernels compare and add them; that the clock never steps backwards is a
+//! host responsibility, discharged by reading a `MonotonicClock`.
 
 #[cfg(creusot)]
 use std::clone::Clone;
@@ -31,30 +35,37 @@ pub enum OpaCacheExpiry {
     CacheUntil { expires_at_ms: i128 },
 }
 
-/// Reuse only an unexpired entry for the complete authorization context.
+/// Reuse an entry's decision only while its deadline is strictly in the
+/// future.
+///
+/// The caller passes only an entry found under the complete authorization
+/// key; the host's hash-map lookup on that key is what makes it an exact
+/// match. The exact deadline is already stale.
 #[ensures(match result {
-    OpaCacheAdmission::Miss => !complete_key_match || expires_at_ms@ <= now_ms@,
-    OpaCacheAdmission::Hit(decision) => complete_key_match
-        && expires_at_ms@ > now_ms@
+    OpaCacheAdmission::Miss => expires_at_ms@ <= now_ms@,
+    OpaCacheAdmission::Hit(decision) => expires_at_ms@ > now_ms@
         && decision == cached_decision,
 })]
 #[must_use]
 pub fn opa_cache_admission(
-    complete_key_match: bool,
     now_ms: i128,
     expires_at_ms: i128,
     cached_decision: OpaAuthorizationDecision,
 ) -> OpaCacheAdmission {
-    if complete_key_match && expires_at_ms > now_ms {
+    if expires_at_ms > now_ms {
         OpaCacheAdmission::Hit(cached_decision)
     } else {
         OpaCacheAdmission::Miss
     }
 }
 
-/// Compute a positive, exactly representable deadline on a monotonic clock.
+/// Compute a deadline `ttl_ms` after `now_ms`.
+///
+/// A decision is cached exactly when the TTL is positive and the deadline is
+/// representable: `DoNotCache` iff `ttl_ms <= 0` or `now_ms + ttl_ms`
+/// overflows `i128`.
 #[ensures(match result {
-    OpaCacheExpiry::DoNotCache => true,
+    OpaCacheExpiry::DoNotCache => ttl_ms@ <= 0 || now_ms@ + ttl_ms@ > i128::MAX@,
     OpaCacheExpiry::CacheUntil { expires_at_ms } => ttl_ms@ > 0
         && expires_at_ms@ == now_ms@ + ttl_ms@,
 })]
@@ -88,14 +99,17 @@ mod tests {
     };
 
     #[test]
-    fn cache_requires_the_complete_key_and_strict_freshness() {
+    fn cache_requires_strict_freshness() {
         let allow = OpaAuthorizationDecision::Allow;
         let deny = OpaAuthorizationDecision::Deny;
-        assert2::check!(opa_cache_admission(true, 9, 10, allow) == OpaCacheAdmission::Hit(allow));
-        assert2::check!(opa_cache_admission(true, 9, 10, deny) == OpaCacheAdmission::Hit(deny));
-        assert2::check!(opa_cache_admission(false, 9, 10, allow) == OpaCacheAdmission::Miss);
-        assert2::check!(opa_cache_admission(true, 10, 10, allow) == OpaCacheAdmission::Miss);
-        assert2::check!(opa_cache_admission(true, 11, 10, allow) == OpaCacheAdmission::Miss);
+        for (now_ms, expires_at_ms, cached, expected) in [
+            (9, 10, allow, OpaCacheAdmission::Hit(allow)),
+            (9, 10, deny, OpaCacheAdmission::Hit(deny)),
+            (10, 10, allow, OpaCacheAdmission::Miss),
+            (11, 10, deny, OpaCacheAdmission::Miss),
+        ] {
+            assert2::check!(opa_cache_admission(now_ms, expires_at_ms, cached) == expected);
+        }
     }
 
     #[test]
@@ -105,6 +119,12 @@ mod tests {
         );
         assert2::check!(opa_cache_expiry(10, 0) == OpaCacheExpiry::DoNotCache);
         assert2::check!(opa_cache_expiry(10, -1) == OpaCacheExpiry::DoNotCache);
+        assert2::check!(
+            opa_cache_expiry(i128::MAX - 1, 1)
+                == OpaCacheExpiry::CacheUntil {
+                    expires_at_ms: i128::MAX
+                }
+        );
         assert2::check!(opa_cache_expiry(i128::MAX, 1) == OpaCacheExpiry::DoNotCache);
         assert2::check!(
             opa_error_decision(false) == OpaAuthorizationDecision::Deny

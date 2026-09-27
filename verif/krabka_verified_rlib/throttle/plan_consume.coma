@@ -1,14 +1,7 @@
-(* #"/home/user/krabka-broker/crates/verified/src/throttle.rs" 92 0 97 34 *)
+(* #"/workspace/crates/verified/src/throttle.rs" 96 0 101 34 *)
 
-let%span slib = "/home/user/krabka-broker/crates/verified/src/throttle.rs" 98 17 98 53
-let%span slib'0 = "/home/user/krabka-broker/crates/verified/src/throttle.rs" 98 17 98 66
-let%span slib'1 = "/home/user/krabka-broker/crates/verified/src/throttle.rs" 99 16 99 39
-let%span slib'2 = "/home/user/krabka-broker/crates/verified/src/throttle.rs" 100 40 100 54
-let%span slib'3 = "/home/user/krabka-broker/crates/verified/src/throttle.rs" 83 10 83 37
-let%span slib'4 = "/home/user/krabka-broker/crates/verified/src/throttle.rs" 84 10 84 33
-let%span slib'5 = "/home/user/krabka-broker/crates/verified/src/throttle.rs" 85 10 85 80
-let%span slib'6 = "/home/user/krabka-broker/crates/verified/src/throttle.rs" 86 10 90 1
-let%span slib'7 = "/home/user/krabka-broker/crates/verified/src/throttle.rs" 75 4 79 5
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
 let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
 let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
@@ -18,8 +11,16 @@ let%span scmp'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cr
 let%span scmp'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 78 36 78 40
 let%span scmp'2 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 79 26 79 79
 let%span scmp'3 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/cmp.rs" 80 26 80 77
-let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sthrottle = "/workspace/crates/verified/src/throttle.rs" 102 16 102 52
+let%span sthrottle'0 = "/workspace/crates/verified/src/throttle.rs" 102 16 102 65
+let%span sthrottle'1 = "/workspace/crates/verified/src/throttle.rs" 103 18 103 69
+let%span sthrottle'2 = "/workspace/crates/verified/src/throttle.rs" 104 16 104 38
+let%span sthrottle'3 = "/workspace/crates/verified/src/throttle.rs" 105 40 105 53
+let%span sthrottle'4 = "/workspace/crates/verified/src/throttle.rs" 87 10 87 37
+let%span sthrottle'5 = "/workspace/crates/verified/src/throttle.rs" 88 10 88 33
+let%span sthrottle'6 = "/workspace/crates/verified/src/throttle.rs" 89 10 89 80
+let%span sthrottle'7 = "/workspace/crates/verified/src/throttle.rs" 90 10 94 1
+let%span sthrottle'8 = "/workspace/crates/verified/src/throttle.rs" 79 4 83 5
 
 use creusot.int.UInt64
 use creusot.prelude.Any
@@ -69,6 +70,9 @@ let min_u64 (self_: UInt64.t) (o: UInt64.t) (return (x: UInt64.t)) = any
     /\ ([@stop_split] [@expl:min ensures #4] [%#scmp'3] deep_model_u64 o <= deep_model_u64 self_ -> result = o)}
     (! return {result}) ]
 
+function capped [#"/workspace/crates/verified/src/throttle.rs" 78 0 78 61] (available: int) (refill: int) (burst: int) : int
+ = [%#sthrottle'8] if available + refill <= burst then available + refill else burst
+
 type t_RequestedTokens = { f0'2: UInt64.t }
 
 type t_GrantedTokens = { f0'3: UInt64.t }
@@ -77,45 +81,45 @@ type t_NewAvailable = { f0'4: UInt64.t }
 
 type tup2_GrantedTokens_NewAvailable = { f0'5: t_GrantedTokens; f1'5: t_NewAvailable }
 
-function capped [#"/home/user/krabka-broker/crates/verified/src/throttle.rs" 74 0 74 61] (available: int) (refill: int) (burst: int) : int
- = [%#slib'7] if available + refill <= burst then available + refill else burst
-
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let plan_consume [#"/home/user/krabka-broker/crates/verified/src/throttle.rs" 92 0 97 34] (available: t_AvailableTokens)
+let plan_consume [#"/workspace/crates/verified/src/throttle.rs" 96 0 101 34] (available: t_AvailableTokens)
   (refill: t_RefillTokens) (burst: t_BurstCapacity) (requested: t_RequestedTokens)
   (return (x: tup2_GrantedTokens_NewAvailable)) = (! bb0
   [ bb0 = s0
-    [ s0 = saturating_add [%#slib] {available.f0} {refill.f0'0} (fun (_x: UInt64.t) -> [ &_19 <- _x ] s1)
-    | s1 = min_u64 [%#slib'0] {_19} {burst.f0'1} (fun (_x: UInt64.t) -> [ &capped'0 <- _x ] s2)
-    | s2 = min_u64 [%#slib'1] {requested.f0'2} {capped'0} (fun (_x: UInt64.t) -> [ &grant <- _x ] s3)
-    | s3 = [ &_26 <- { f0'3 = grant } ] s4
-    | s4 = UInt64.sub [%#slib'2] {capped'0} {grant} (fun (_x: UInt64.t) -> [ &_29 <- _x ] s5)
-    | s5 = [ &_28 <- { f0'4 = _29 } ] s6
-    | s6 = [ &_ret <- { f0'5 = _26; f1'5 = _28 } ] s7
-    | s7 = return {_ret} ] ]
+    [ s0 = saturating_add [%#sthrottle] {available.f0} {refill.f0'0} (fun (_x: UInt64.t) -> [ &_19 <- _x ] s1)
+    | s1 = min_u64 [%#sthrottle'0] {_19} {burst.f0'1} (fun (_x: UInt64.t) -> [ &total <- _x ] s2)
+    | s2 = {[@expl:assertion] [%#sthrottle'1] UInt64.t'int total
+      = capped (UInt64.t'int available.f0) (UInt64.t'int refill.f0'0) (UInt64.t'int burst.f0'1)}
+      s3
+    | s3 = min_u64 [%#sthrottle'2] {requested.f0'2} {total} (fun (_x: UInt64.t) -> [ &grant <- _x ] s4)
+    | s4 = [ &_32 <- { f0'3 = grant } ] s5
+    | s5 = UInt64.sub [%#sthrottle'3] {total} {grant} (fun (_x: UInt64.t) -> [ &_35 <- _x ] s6)
+    | s6 = [ &_34 <- { f0'4 = _35 } ] s7
+    | s7 = [ &_ret <- { f0'5 = _32; f1'5 = _34 } ] s8
+    | s8 = return {_ret} ] ]
   [ & _ret: tup2_GrantedTokens_NewAvailable = Any.any_l ()
   | & available: t_AvailableTokens = available
   | & refill: t_RefillTokens = refill
   | & burst: t_BurstCapacity = burst
   | & requested: t_RequestedTokens = requested
-  | & capped'0: UInt64.t = Any.any_l ()
+  | & total: UInt64.t = Any.any_l ()
   | & _19: UInt64.t = Any.any_l ()
   | & grant: UInt64.t = Any.any_l ()
-  | & _26: t_GrantedTokens = Any.any_l ()
-  | & _28: t_NewAvailable = Any.any_l ()
-  | & _29: UInt64.t = Any.any_l () ])
+  | & _32: t_GrantedTokens = Any.any_l ()
+  | & _34: t_NewAvailable = Any.any_l ()
+  | & _35: UInt64.t = Any.any_l () ])
   [ return (result: tup2_GrantedTokens_NewAvailable) ->
-  {[@stop_split] [@expl:plan_consume ensures] ([@stop_split] [@expl:plan_consume ensures #0] [%#slib'3] UInt64.t'int result.f0'5.f0'3
+  {[@stop_split] [@expl:plan_consume ensures] ([@stop_split] [@expl:plan_consume ensures #0] [%#sthrottle'4] UInt64.t'int result.f0'5.f0'3
       <= UInt64.t'int requested.f0'2)
-    /\ ([@stop_split] [@expl:plan_consume ensures #1] [%#slib'4] UInt64.t'int result.f1'5.f0'4
+    /\ ([@stop_split] [@expl:plan_consume ensures #1] [%#sthrottle'5] UInt64.t'int result.f1'5.f0'4
       <= UInt64.t'int burst.f0'1)
-    /\ ([@stop_split] [@expl:plan_consume ensures #2] [%#slib'5] UInt64.t'int result.f0'5.f0'3
+    /\ ([@stop_split] [@expl:plan_consume ensures #2] [%#sthrottle'6] UInt64.t'int result.f0'5.f0'3
         + UInt64.t'int result.f1'5.f0'4
       = capped (UInt64.t'int available.f0) (UInt64.t'int refill.f0'0) (UInt64.t'int burst.f0'1))
-    /\ ([@stop_split] [@expl:plan_consume ensures #3] [%#slib'6] UInt64.t'int result.f0'5.f0'3
+    /\ ([@stop_split] [@expl:plan_consume ensures #3] [%#sthrottle'7] UInt64.t'int result.f0'5.f0'3
     = (if UInt64.t'int requested.f0'2
     <= capped (UInt64.t'int available.f0) (UInt64.t'int refill.f0'0) (UInt64.t'int burst.f0'1) then
       UInt64.t'int requested.f0'2

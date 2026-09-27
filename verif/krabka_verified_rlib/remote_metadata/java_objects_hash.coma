@@ -1,93 +1,121 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 44 0 44 64 *)
+(* #"/workspace/crates/verified/src/remote_metadata.rs" 68 0 68 64 *)
 
-let%span snum = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 338 26 338 48
-let%span snum'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 338 26 338 48
-let%span sremote_metadata = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 45 45 45 47
-let%span sremote_metadata'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 45 32 45 48
-let%span sremote_metadata'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 48 19 48 24
-let%span sremote_metadata'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 50 22 50 24
-let%span sremote_metadata'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 49 11 50 25
-let%span sremote_metadata'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 51 22 51 60
-let%span sremote_metadata'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 49 11 51 61
-let%span sremote_metadata'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 53 22 53 24
-let%span sremote_metadata'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 52 11 53 25
-let%span sremote_metadata'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 54 22 54 59
-let%span sremote_metadata'9 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 52 11 54 60
-let%span sremote_metadata'10 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 55 22 55 24
-let%span sremote_metadata'11 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 55 4 55 25
-let%span sremote_metadata'12 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 55 4 55 54
-let%span sremote_metadata'13 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 38 12 38 71
-let%span sremote_metadata'14 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 14 28 14 64
-let%span sremote_metadata'15 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 28 8 28 63
-let%span sremote_metadata'16 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 11 16 11 47
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 338 26 338 48
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 338 26 338 48
+let%span sremote_metadata = "/workspace/crates/verified/src/remote_metadata.rs" 69 45 69 47
+let%span sremote_metadata'0 = "/workspace/crates/verified/src/remote_metadata.rs" 69 32 69 48
+let%span sremote_metadata'1 = "/workspace/crates/verified/src/remote_metadata.rs" 70 45 70 66
+let%span sremote_metadata'2 = "/workspace/crates/verified/src/remote_metadata.rs" 72 19 72 24
+let%span sremote_metadata'3 = "/workspace/crates/verified/src/remote_metadata.rs" 74 22 74 24
+let%span sremote_metadata'4 = "/workspace/crates/verified/src/remote_metadata.rs" 73 11 74 25
+let%span sremote_metadata'5 = "/workspace/crates/verified/src/remote_metadata.rs" 75 22 75 60
+let%span sremote_metadata'6 = "/workspace/crates/verified/src/remote_metadata.rs" 73 11 75 61
+let%span sremote_metadata'7 = "/workspace/crates/verified/src/remote_metadata.rs" 77 22 77 24
+let%span sremote_metadata'8 = "/workspace/crates/verified/src/remote_metadata.rs" 76 11 77 25
+let%span sremote_metadata'9 = "/workspace/crates/verified/src/remote_metadata.rs" 78 22 78 59
+let%span sremote_metadata'10 = "/workspace/crates/verified/src/remote_metadata.rs" 76 11 78 60
+let%span sremote_metadata'11 = "/workspace/crates/verified/src/remote_metadata.rs" 79 22 79 24
+let%span sremote_metadata'12 = "/workspace/crates/verified/src/remote_metadata.rs" 79 4 79 25
+let%span sremote_metadata'13 = "/workspace/crates/verified/src/remote_metadata.rs" 80 22 80 52
+let%span sremote_metadata'14 = "/workspace/crates/verified/src/remote_metadata.rs" 79 4 80 53
+let%span sremote_metadata'15 = "/workspace/crates/verified/src/remote_metadata.rs" 66 12 66 71
+let%span sremote_metadata'16 = "/workspace/crates/verified/src/remote_metadata.rs" 21 28 21 64
+let%span sremote_metadata'17 = "/workspace/crates/verified/src/remote_metadata.rs" 38 28 38 65
+let%span sremote_metadata'18 = "/workspace/crates/verified/src/remote_metadata.rs" 56 8 56 63
+let%span sremote_metadata'19 = "/workspace/crates/verified/src/remote_metadata.rs" 18 16 18 66
+let%span sremote_metadata'20 = "/workspace/crates/verified/src/remote_metadata.rs" 34 8 34 82
 
 use creusot.int.Int32
 use creusot.int.UInt128
 use creusot.int.UInt64
 use creusot.int.UInt32
 use creusot.prelude.Any
+use int.Int
 
-let wrapping_mul (self_: Int32.t) (rhs: Int32.t) (return (x: Int32.t)) = any
-  [ return (result: Int32.t) -> {[@stop_split] [@expl:wrapping_mul ensures] [%#snum] result = Int32.mul self_ rhs}
+let wrapping_mul (self_: UInt32.t) (rhs: UInt32.t) (return (x: UInt32.t)) = any
+  [ return (result: UInt32.t) -> {[@stop_split] [@expl:wrapping_mul ensures] [%#snum] result = UInt32.mul self_ rhs}
     (! return {result}) ]
 
-function java_long_hash_model [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 10 0 10 41] (bits: UInt64.t) : Int32.t
+function java_long_hash_model [#"/workspace/crates/verified/src/remote_metadata.rs" 17 0 17 41] (bits: UInt64.t) : UInt32.t
  =
-  [%#sremote_metadata'16] Int32.of_int (UInt64.t'int (UInt64.bw_xor bits (UInt64.shr bits (UInt64.of_int (UInt32.t'int (32: UInt32.t))))))
+  [%#sremote_metadata'19] UInt32.of_int (UInt64.t'int (UInt64.bw_and (UInt64.bw_xor bits (UInt64.shr bits (UInt64.of_int (UInt32.t'int (32: UInt32.t))))) (4294967295: UInt64.t)))
 
-let java_long_hash (bits: UInt64.t) (return (x: Int32.t)) = any
-  [ return (result: Int32.t) -> {[@stop_split] [@expl:java_long_hash ensures] [%#sremote_metadata'14] result
+let java_long_hash (bits: UInt64.t) (return (x: UInt32.t)) = any
+  [ return (result: UInt32.t) -> {[@stop_split] [@expl:java_long_hash ensures] [%#sremote_metadata'16] result
     = java_long_hash_model bits}
     (! return {result}) ]
 
-let wrapping_add (self_: Int32.t) (rhs: Int32.t) (return (x: Int32.t)) = any
-  [ return (result: Int32.t) -> {[@stop_split] [@expl:wrapping_add ensures] [%#snum'0] result = Int32.add self_ rhs}
+let wrapping_add (self_: UInt32.t) (rhs: UInt32.t) (return (x: UInt32.t)) = any
+  [ return (result: UInt32.t) -> {[@stop_split] [@expl:wrapping_add ensures] [%#snum'0] result = UInt32.add self_ rhs}
     (! return {result}) ]
 
-function java_objects_hash_model [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 26 0 26 70] (topic_id: UInt128.t) (user_partition: Int32.t) : Int32.t
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
+
+constant const_MAX: UInt32.t = (4294967295: UInt32.t)
+
+function java_int_image_model [#"/workspace/crates/verified/src/remote_metadata.rs" 32 0 32 42] (value: Int32.t) : UInt32.t
+ = [%#sremote_metadata'20] if ge_log_Int (Int32.to_int value) 0 then
+    UInt32.of_int (Int32.to_int value)
+  else
+    UInt32.sub const_MAX (UInt32.of_int (Int32.to_int (Int32.sub (Int32.neg (1: Int32.t)) value)))
+
+
+let java_int_image (value: Int32.t) (return (x: UInt32.t)) = any
+  [ return (result: UInt32.t) -> {[@stop_split] [@expl:java_int_image ensures] [%#sremote_metadata'17] result
+    = java_int_image_model value}
+    (! return {result}) ]
+
+function java_objects_hash_model [#"/workspace/crates/verified/src/remote_metadata.rs" 54 0 54 70] (topic_id: UInt128.t) (user_partition: Int32.t) : UInt32.t
  =
-  [%#sremote_metadata'15] let most_significant_bits = UInt64.of_int (UInt128.t'int (UInt128.shr topic_id (UInt128.of_int (UInt32.t'int (64: UInt32.t))))) in let least_significant_bits = UInt64.of_int (UInt128.t'int topic_id) in let first = Int32.add (Int32.mul (1: Int32.t) (31: Int32.t)) (java_long_hash_model least_significant_bits) in let second = Int32.add (Int32.mul first (31: Int32.t)) (java_long_hash_model most_significant_bits) in Int32.add (Int32.mul second (31: Int32.t)) user_partition
+  [%#sremote_metadata'18] let most_significant_bits = UInt64.of_int (UInt128.t'int (UInt128.shr topic_id (UInt128.of_int (UInt32.t'int (64: UInt32.t))))) in let least_significant_bits = UInt64.of_int (UInt128.t'int (UInt128.bw_and topic_id (18446744073709551615: UInt128.t))) in let first = UInt32.add (UInt32.mul (1: UInt32.t) (31: UInt32.t)) (java_long_hash_model least_significant_bits) in let second = UInt32.add (UInt32.mul first (31: UInt32.t)) (java_long_hash_model most_significant_bits) in UInt32.add (UInt32.mul second (31: UInt32.t)) (java_int_image_model user_partition)
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let java_objects_hash [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_metadata.rs" 44 0 44 64]
-  (topic_id: UInt128.t) (user_partition: Int32.t) (return (x: Int32.t)) = (! bb0
+let java_objects_hash [#"/workspace/crates/verified/src/remote_metadata.rs" 68 0 68 64] (topic_id: UInt128.t)
+  (user_partition: Int32.t) (return (x: UInt32.t)) = (! bb0
   [ bb0 = s0
     [ s0 = UInt128.shr [%#sremote_metadata'0] {topic_id} {Int32.to_int ([%#sremote_metadata] (64: Int32.t))}
         (fun (_x: UInt128.t) -> [ &_7 <- _x ] s1)
     | s1 = [ &most_significant_bits <- UInt64.of_int (UInt128.t'int _7) ] s2
-    | s2 = [ &least_significant_bits <- UInt64.of_int (UInt128.t'int topic_id) ] s3
-    | s3 = [ &hash <- [%#sremote_metadata'1] (1: Int32.t) ] s4
-    | s4 = wrapping_mul [%#sremote_metadata'3] {hash} {[%#sremote_metadata'2] (31: Int32.t)}
-        (fun (_x: Int32.t) -> [ &_13 <- _x ] s5)
-    | s5 = java_long_hash [%#sremote_metadata'4] {least_significant_bits} (fun (_x: Int32.t) -> [ &_15 <- _x ] s6)
-    | s6 = wrapping_add [%#sremote_metadata'5] {_13} {_15} (fun (_x: Int32.t) -> [ &_12 <- _x ] s7)
-    | s7 = [ &hash <- _12 ] s8
-    | s8 = wrapping_mul [%#sremote_metadata'7] {hash} {[%#sremote_metadata'6] (31: Int32.t)}
-        (fun (_x: Int32.t) -> [ &_18 <- _x ] s9)
-    | s9 = java_long_hash [%#sremote_metadata'8] {most_significant_bits} (fun (_x: Int32.t) -> [ &_20 <- _x ] s10)
-    | s10 = wrapping_add [%#sremote_metadata'9] {_18} {_20} (fun (_x: Int32.t) -> [ &_17 <- _x ] s11)
-    | s11 = [ &hash <- _17 ] s12
-    | s12 = wrapping_mul [%#sremote_metadata'11] {hash} {[%#sremote_metadata'10] (31: Int32.t)}
-        (fun (_x: Int32.t) -> [ &_22 <- _x ] s13)
-    | s13 = wrapping_add [%#sremote_metadata'12] {_22} {user_partition} (fun (_x: Int32.t) -> [ &_ret <- _x ] s14)
-    | s14 = return {_ret} ] ]
-  [ & _ret: Int32.t = Any.any_l ()
+    | s2 = [ &_10 <- UInt128.bw_and topic_id ([%#sremote_metadata'1] (18446744073709551615: UInt128.t)) ] s3
+    | s3 = [ &least_significant_bits <- UInt64.of_int (UInt128.t'int _10) ] s4
+    | s4 = [ &hash <- [%#sremote_metadata'2] (1: UInt32.t) ] s5
+    | s5 = wrapping_mul [%#sremote_metadata'4] {hash} {[%#sremote_metadata'3] (31: UInt32.t)}
+        (fun (_x: UInt32.t) -> [ &_14 <- _x ] s6)
+    | s6 = java_long_hash [%#sremote_metadata'5] {least_significant_bits} (fun (_x: UInt32.t) -> [ &_16 <- _x ] s7)
+    | s7 = wrapping_add [%#sremote_metadata'6] {_14} {_16} (fun (_x: UInt32.t) -> [ &_13 <- _x ] s8)
+    | s8 = [ &hash <- _13 ] s9
+    | s9 = wrapping_mul [%#sremote_metadata'8] {hash} {[%#sremote_metadata'7] (31: UInt32.t)}
+        (fun (_x: UInt32.t) -> [ &_19 <- _x ] s10)
+    | s10 = java_long_hash [%#sremote_metadata'9] {most_significant_bits} (fun (_x: UInt32.t) -> [ &_21 <- _x ] s11)
+    | s11 = wrapping_add [%#sremote_metadata'10] {_19} {_21} (fun (_x: UInt32.t) -> [ &_18 <- _x ] s12)
+    | s12 = [ &hash <- _18 ] s13
+    | s13 = wrapping_mul [%#sremote_metadata'12] {hash} {[%#sremote_metadata'11] (31: UInt32.t)}
+        (fun (_x: UInt32.t) -> [ &_23 <- _x ] s14)
+    | s14 = java_int_image [%#sremote_metadata'13] {user_partition} (fun (_x: UInt32.t) -> [ &_25 <- _x ] s15)
+    | s15 = wrapping_add [%#sremote_metadata'14] {_23} {_25} (fun (_x: UInt32.t) -> [ &_ret <- _x ] s16)
+    | s16 = return {_ret} ] ]
+  [ & _ret: UInt32.t = Any.any_l ()
   | & topic_id: UInt128.t = topic_id
   | & user_partition: Int32.t = user_partition
   | & most_significant_bits: UInt64.t = Any.any_l ()
   | & _7: UInt128.t = Any.any_l ()
   | & least_significant_bits: UInt64.t = Any.any_l ()
-  | & hash: Int32.t = Any.any_l ()
-  | & _12: Int32.t = Any.any_l ()
-  | & _13: Int32.t = Any.any_l ()
-  | & _15: Int32.t = Any.any_l ()
-  | & _17: Int32.t = Any.any_l ()
-  | & _18: Int32.t = Any.any_l ()
-  | & _20: Int32.t = Any.any_l ()
-  | & _22: Int32.t = Any.any_l () ])
-  [ return (result: Int32.t) -> {[@stop_split] [@expl:java_objects_hash ensures] [%#sremote_metadata'13] result
+  | & _10: UInt128.t = Any.any_l ()
+  | & hash: UInt32.t = Any.any_l ()
+  | & _13: UInt32.t = Any.any_l ()
+  | & _14: UInt32.t = Any.any_l ()
+  | & _16: UInt32.t = Any.any_l ()
+  | & _18: UInt32.t = Any.any_l ()
+  | & _19: UInt32.t = Any.any_l ()
+  | & _21: UInt32.t = Any.any_l ()
+  | & _23: UInt32.t = Any.any_l ()
+  | & _25: UInt32.t = Any.any_l () ])
+  [ return (result: UInt32.t) -> {[@stop_split] [@expl:java_objects_hash ensures] [%#sremote_metadata'15] result
     = java_objects_hash_model topic_id user_partition}
     (! return {result}) ]

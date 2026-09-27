@@ -1,10 +1,10 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_txn.rs" 34 0 39 29 *)
+(* #"/workspace/crates/verified/src/remote_txn.rs" 34 0 39 29 *)
 
-let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sremote_txn = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_txn.rs" 22 10 23 62
-let%span sremote_txn'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_txn.rs" 24 10 28 38
-let%span sremote_txn'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_txn.rs" 29 10 32 67
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sremote_txn = "/workspace/crates/verified/src/remote_txn.rs" 22 10 23 62
+let%span sremote_txn'0 = "/workspace/crates/verified/src/remote_txn.rs" 24 10 28 38
+let%span sremote_txn'1 = "/workspace/crates/verified/src/remote_txn.rs" 29 10 32 67
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -24,9 +24,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let remote_txn_overlap_decision [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/remote_txn.rs" 34 0 39 29]
-  (entry_start: Int64.t) (entry_last: Int64.t) (query_from: Int64.t) (query_to: Int64.t)
-  (return (x: t_RemoteTxnOverlapDecision)) = (! bb0
+let remote_txn_overlap_decision [#"/workspace/crates/verified/src/remote_txn.rs" 34 0 39 29] (entry_start: Int64.t)
+  (entry_last: Int64.t) (query_from: Int64.t) (query_to: Int64.t) (return (x: t_RemoteTxnOverlapDecision)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_20 <- Int64.gt entry_start entry_last ] s1
     | s1 = any [ br0 -> {_20 = false} (! bb2) | br1 -> {_20} (! bb4) ] ]

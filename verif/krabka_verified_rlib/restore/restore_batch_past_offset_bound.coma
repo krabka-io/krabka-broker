@@ -1,12 +1,22 @@
-(* #"/proof-work-244/crates/verified/src/restore.rs" 80 0 84 9 *)
+(* #"/workspace/crates/verified/src/restore.rs" 109 0 109 90 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span srestore = "/proof-work-244/crates/verified/src/restore.rs" 85 4 85 53
-let%span srestore'0 = "/proof-work-244/crates/verified/src/restore.rs" 78 10 78 73
+let%span srestore = "/workspace/crates/verified/src/restore.rs" 112 16 112 21
+let%span srestore'0 = "/workspace/crates/verified/src/restore.rs" 104 10 107 1
 
 use creusot.int.Int64
 use creusot.prelude.Any
 use int.Int
+
+type t_Option_i64 = None | Some Int64.t
+
+let elim_Some (_x: t_Option_i64) (return (f0: Int64.t)) = any
+  [ _k (f0: Int64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
 
 predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
 
@@ -16,15 +26,21 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let restore_batch_past_offset_bound [#"/proof-work-244/crates/verified/src/restore.rs" 80 0 84 9] (batch_base: Int64.t)
-  (offset_bound_applies: bool) (offset_bound: Int64.t) (return (x: bool)) = (! bb0
-  [ bb0 = any [ br0 -> {offset_bound_applies = false} (! bb2) | br1 -> {offset_bound_applies} (! bb1) ]
-  | bb1 = s0 [ s0 = [ &_ret <- Int64.gt batch_base offset_bound ] s1 | s1 = return {_ret} ]
-  | bb2 = s0 [ s0 = [ &_ret <- [%#srestore] false ] s1 | s1 = return {_ret} ] ]
+let restore_batch_past_offset_bound [#"/workspace/crates/verified/src/restore.rs" 109 0 109 90] (batch_base: Int64.t)
+  (offset_bound: t_Option_i64) (return (x: bool)) = (! bb0
+  [ bb0 = any [ br0 -> {offset_bound = None} (! bb3) | br1 (x0: Int64.t) -> {offset_bound = Some x0} (! bb4) ]
+  | bb4 = s0
+    [ s0 = elim_Some {offset_bound} (fun (r0: Int64.t) -> [ &bound <- r0 ] s1)
+    | s1 = [ &_ret <- Int64.gt batch_base bound ] s2
+    | s2 = return {_ret} ]
+  | bb3 = s0 [ s0 = [ &_ret <- [%#srestore] false ] s1 | s1 = return {_ret} ] ]
   [ & _ret: bool = Any.any_l ()
   | & batch_base: Int64.t = batch_base
-  | & offset_bound_applies: bool = offset_bound_applies
-  | & offset_bound: Int64.t = offset_bound ])
+  | & offset_bound: t_Option_i64 = offset_bound
+  | & bound: Int64.t = Any.any_l () ])
   [ return (result: bool) -> {[@stop_split] [@expl:restore_batch_past_offset_bound ensures] [%#srestore'0] result
-    = (offset_bound_applies /\ gt_log_Int (Int64.to_int batch_base) (Int64.to_int offset_bound))}
+    = match offset_bound with
+      | Some bound -> gt_log_Int (Int64.to_int batch_base) (Int64.to_int bound)
+      | None -> false
+      end}
     (! return {result}) ]

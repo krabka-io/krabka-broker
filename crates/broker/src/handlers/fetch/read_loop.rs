@@ -337,7 +337,7 @@ async fn long_poll_then_reread(
     let max_wait = Duration::from_millis(u64::from(u32::try_from(state.max_wait_ms).unwrap_or(0)));
     let deadline = tokio::time::Instant::now() + max_wait;
     loop {
-        if revalidate_epochs(broker, pending)
+        if revalidate_epochs(broker, pending).await
             || has_read_error(pending)
             || state.total() >= state.min_bytes
         {
@@ -376,7 +376,7 @@ async fn long_poll_then_reread(
 /// an epoch that moved while the fetch was parked completes the fetch whatever
 /// the accumulated byte count is. A partition that still passes keeps the
 /// records its last read gave it.
-fn revalidate_epochs(broker: &Broker, pending: &mut [PendingRead]) -> bool {
+async fn revalidate_epochs(broker: &Broker, pending: &mut [PendingRead]) -> bool {
     let image = broker.controller.current_image();
     let mut fenced = false;
     for read in pending.iter_mut() {
@@ -414,7 +414,9 @@ fn revalidate_epochs(broker: &Broker, pending: &mut [PendingRead]) -> bool {
                 log_dir_offline: broker.log_dir_status.is_offline(&part.log_dir.load()),
             },
             &mut fresh,
-        ) {
+        )
+        .await
+        {
             read.out = fresh;
             fenced = true;
         }

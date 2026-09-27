@@ -8,8 +8,9 @@ written in Rust.
 ## Overview
 
 `TokenBucket` is the concurrent runtime around the pure `plan_consume`
-arithmetic in [`krabka-verified`](../verified/README.md). It holds the atomics,
-a seqlock generation that guards rate changes, and an injected monotonic clock.
+arithmetic in [`krabka-verified`](../verified/README.md). It holds the bucket
+state behind one lock, a lock-free copy of the rate for the unthrottled fast
+path, and an injected monotonic clock.
 `ThrottleState` bundles the three buckets the broker meters: leader-out and
 follower-in replica traffic (KIP-73), and intra-broker log directory moves
 (KIP-113).
@@ -17,13 +18,16 @@ follower-in replica traffic (KIP-73), and intra-broker log directory moves
 ## Features
 
 - Byte, event, and plain token rates, each with an optional burst capacity.
-- A lock-free `try_consume` that grants at most the request and never applies a
-  concurrent rate reset non-atomically.
+- A `try_consume` that grants at most the request. Each consume and each rate
+  reset is one critical section, so a consume never straddles a reset and
+  never loses the refill it claimed. An unthrottled bucket grants without the
+  lock.
 - A caller-injected clock, so a test drives refills with
   `qubit_clock::ManualMonotonicClock` rather than sleeping.
 - The refill arithmetic is the Creusot-proved `plan_consume` kernel. A
-  Stateright model in `tests/bucket_model.rs` checks the seqlock under
-  concurrent consumers and resets.
+  Stateright model in `tests/bucket_model.rs` checks the locking under
+  concurrent consumers and resets, and shows the lock-free design it replaced
+  breaking both properties.
 
 ## Usage
 

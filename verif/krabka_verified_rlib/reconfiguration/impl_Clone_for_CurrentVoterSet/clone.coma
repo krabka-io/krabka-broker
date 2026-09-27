@@ -1,0 +1,23 @@
+(* #"/workspace/crates/verified/src/reconfiguration.rs" 39 27 39 32 *)
+
+(* <reconfiguration::CurrentVoterSet as std::clone::Clone> *)
+
+use creusot.int.UInt64
+use creusot.int.UInt16
+use creusot.prelude.Any
+
+type t_CurrentVoterSet = {
+  voter_count: UInt64.t;
+  kraft_version: UInt16.t;
+  latest_controls_committed: bool;
+  all_voters_support_requested: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_CurrentVoterSet [#"/workspace/crates/verified/src/reconfiguration.rs" 39 27 39 32] (self: t_CurrentVoterSet)
+  (return (x: t_CurrentVoterSet)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_CurrentVoterSet = Any.any_l () | & self: t_CurrentVoterSet = self ])
+  [ return (result: t_CurrentVoterSet) -> (! return {result}) ]

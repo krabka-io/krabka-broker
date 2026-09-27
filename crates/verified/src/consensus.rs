@@ -45,132 +45,189 @@ pub enum FailoverAction {
     NoChange,
 }
 
-/// Select the only safe failover class, preserving clean-election precedence.
+/// What the live members of the partition's ISR can do once the leader is
+/// gone. Every live ISR member holds every committed record; a witness is a
+/// live member that never leads.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum LiveIsr {
+    /// No ISR member is live.
+    Empty,
+    /// Every live ISR member is a witness, so none can lead.
+    WitnessesOnly,
+    /// A live ISR member that is not a witness can lead.
+    Electable,
+}
+
+/// The out-of-ISR options, consulted only when no ISR member is live.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct OutOfIsrFacts {
+    /// A live KIP-966 eligible leader replica can lead.
+    pub has_electable_elr: bool,
+    /// The topic's resolved offset-aware recovery strategy.
+    pub recovery: FailoverRecovery,
+    /// The KIP-841 out-of-ISR election is both permitted by
+    /// `unclean.leader.election.enable` and has a live replica to elect.
+    pub unclean_election_available: bool,
+}
+
+/// What the host established about one partition before the failover
+/// decision. The kernel does not see replica sets; every field is the host's
+/// classification of them.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct FailoverFacts {
+    /// The partition's leader is the replica that went away.
+    pub leader_dead: bool,
+    /// The live ISR is smaller than the recorded ISR.
+    pub isr_shrunk: bool,
+    /// What the live ISR members can do.
+    pub live_isr: LiveIsr,
+    /// The options left when no ISR member is live.
+    pub out_of_isr: OutOfIsrFacts,
+}
+
+/// Select the failover action class by a fixed precedence ladder.
 ///
-/// `has_electable_elr` is the KIP-966 rung between the clean election and
-/// everything that risks data: a replica that left the ISR while the partition
-/// still held `min.insync.replicas` members holds every committed record, so
-/// electing it is lossless and neither the `unclean.leader.election.enable`
-/// toggle nor `unclean.recovery.strategy` gates it. It is reachable only once
-/// the live ISR is empty, which is the same guard Apache Kafka's
-/// `isValidNewLeader` puts on its `targetElr` disjunct.
+/// What the contract proves is the ladder, and only the ladder. For a dead
+/// leader it picks, in order: a clean election when a live ISR member can
+/// lead; otherwise, and only when no ISR member is live, an election from the
+/// eligible leader replicas; otherwise the configured offset-aware recovery;
+/// otherwise the KIP-841 election when it is available; otherwise the
+/// partition stays unavailable. A live ISR of witnesses only stops the ladder
+/// at unavailable. For a live leader it only shrinks the ISR or leaves it
+/// alone. Each outcome is pinned to exactly one combination of
+/// [`FailoverFacts`].
 ///
-/// `unclean_election_available` is the KIP-841 out-of-ISR election being both
-/// permitted and possible. The two halves -- the topic's toggle, and a replica
-/// that can serve -- are one fact here because the classification never
-/// separates them: an election that is allowed with nobody to elect and one
-/// that has a candidate and no permission are the same unavailable partition.
+/// Why each rung is safe is not part of the proof. It rests on the host's
+/// classification and on Kafka's semantics: an ISR member holds every
+/// committed record; a KIP-966 eligible leader replica left the ISR while the
+/// partition still held `min.insync.replicas` members, so it holds every
+/// committed record too, and neither the `unclean.leader.election.enable`
+/// toggle nor `unclean.recovery.strategy` gates it. Its rung is reachable only
+/// once the live ISR is empty, the same guard Apache Kafka's
+/// `PartitionChangeBuilder.isValidNewLeader` puts on its `targetElr` disjunct.
+///
+/// `unclean_election_available` joins the KIP-841 toggle and the existence of
+/// a replica that can serve, because the ladder never separates them: an
+/// election that is allowed with nobody to elect and one that has a candidate
+/// and no permission are the same unavailable partition.
 #[ensures(match result {
-    FailoverAction::ElectClean => leader_dead && has_electable_isr,
-    FailoverAction::ElectFromElr => leader_dead
-        && !has_electable_isr
-        && alive_isr_empty
-        && has_electable_elr,
-    FailoverAction::Recover(selected) => leader_dead
-        && !has_electable_isr
-        && alive_isr_empty
-        && !has_electable_elr
-        && recovery != FailoverRecovery::None
-        && selected == recovery,
-    FailoverAction::ElectUnclean => leader_dead
-        && !has_electable_isr
-        && alive_isr_empty
-        && !has_electable_elr
-        && recovery == FailoverRecovery::None
-        && unclean_election_available,
-    FailoverAction::Unavailable => leader_dead
-        && !has_electable_isr
-        && (!alive_isr_empty
-            || (!has_electable_elr
-                && recovery == FailoverRecovery::None
-                && !unclean_election_available)),
-    FailoverAction::ShrinkIsr => !leader_dead && isr_shrunk,
-    FailoverAction::NoChange => !leader_dead && !isr_shrunk,
+    FailoverAction::ElectClean => facts.leader_dead && facts.live_isr == LiveIsr::Electable,
+    FailoverAction::ElectFromElr => facts.leader_dead
+        && facts.live_isr == LiveIsr::Empty
+        && facts.out_of_isr.has_electable_elr,
+    FailoverAction::Recover(selected) => facts.leader_dead
+        && facts.live_isr == LiveIsr::Empty
+        && !facts.out_of_isr.has_electable_elr
+        && facts.out_of_isr.recovery != FailoverRecovery::None
+        && selected == facts.out_of_isr.recovery,
+    FailoverAction::ElectUnclean => facts.leader_dead
+        && facts.live_isr == LiveIsr::Empty
+        && !facts.out_of_isr.has_electable_elr
+        && facts.out_of_isr.recovery == FailoverRecovery::None
+        && facts.out_of_isr.unclean_election_available,
+    FailoverAction::Unavailable => facts.leader_dead
+        && (facts.live_isr == LiveIsr::WitnessesOnly
+            || (facts.live_isr == LiveIsr::Empty
+                && !facts.out_of_isr.has_electable_elr
+                && facts.out_of_isr.recovery == FailoverRecovery::None
+                && !facts.out_of_isr.unclean_election_available)),
+    FailoverAction::ShrinkIsr => !facts.leader_dead && facts.isr_shrunk,
+    FailoverAction::NoChange => !facts.leader_dead && !facts.isr_shrunk,
 })]
-#[allow(
-    clippy::fn_params_excessive_bools,
-    reason = "the proof classifies independent failover facts supplied by the host"
-)]
 #[must_use]
-pub fn failover_action(
-    leader_dead: bool,
-    has_electable_isr: bool,
-    alive_isr_empty: bool,
-    has_electable_elr: bool,
-    recovery: FailoverRecovery,
-    unclean_election_available: bool,
-    isr_shrunk: bool,
-) -> FailoverAction {
-    if !leader_dead {
-        return if isr_shrunk {
+pub fn failover_action(facts: FailoverFacts) -> FailoverAction {
+    if !facts.leader_dead {
+        return if facts.isr_shrunk {
             FailoverAction::ShrinkIsr
         } else {
             FailoverAction::NoChange
         };
     }
-    if has_electable_isr {
-        return FailoverAction::ElectClean;
+    match facts.live_isr {
+        LiveIsr::Electable => return FailoverAction::ElectClean,
+        LiveIsr::WitnessesOnly => return FailoverAction::Unavailable,
+        LiveIsr::Empty => {}
     }
-    if !alive_isr_empty {
-        return FailoverAction::Unavailable;
-    }
-    if has_electable_elr {
+    let out_of_isr = facts.out_of_isr;
+    if out_of_isr.has_electable_elr {
         return FailoverAction::ElectFromElr;
     }
-    match recovery {
+    match out_of_isr.recovery {
         FailoverRecovery::Balanced | FailoverRecovery::Aggressive => {
-            FailoverAction::Recover(recovery)
+            FailoverAction::Recover(out_of_isr.recovery)
         }
-        FailoverRecovery::None if unclean_election_available => FailoverAction::ElectUnclean,
+        FailoverRecovery::None if out_of_isr.unclean_election_available => {
+            FailoverAction::ElectUnclean
+        }
         FailoverRecovery::None => FailoverAction::Unavailable,
+    }
+}
+
+/// One surviving replica's log as KIP-966 unclean recovery ranks it, from its
+/// `GetReplicaLogInfo` answer.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct RecoveryCandidate {
+    /// The leader epoch of the last record the replica wrote.
+    pub last_epoch: i32,
+    /// The offset one past the replica's last record.
+    pub log_end_offset: i64,
+    /// The replica's broker id, which breaks a tie deterministically.
+    pub broker_id: u64,
+}
+
+/// `a` ranks at or above `b` as a KIP-966 recovery candidate: the higher last
+/// written leader epoch first, then the higher log end offset, then the lower
+/// broker ID.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+pub fn ranks_ge(a: RecoveryCandidate, b: RecoveryCandidate) -> bool {
+    pearlite! {
+        a.last_epoch@ > b.last_epoch@
+            || (a.last_epoch@ == b.last_epoch@
+                && (a.log_end_offset@ > b.log_end_offset@
+                    || (a.log_end_offset@ == b.log_end_offset@ && a.broker_id@ <= b.broker_id@)))
     }
 }
 
 /// Select the replica with highest `(last leader epoch, log end offset)` and
 /// lowest broker ID as the deterministic tie-breaker.
-#[ensures((result == None) == (candidates@.len() == 0))]
+///
+/// The contract states that ranking once, as `ranks_ge`: the returned index
+/// ranks at or above every candidate. `None` is returned exactly for an empty
+/// slice.
 #[ensures(match result {
-    None => true,
-    Some(index) => index@ < candidates@.len()
-        && (forall<j: Int> 0 <= j && j < candidates@.len() ==>
-            candidates@[j].0@ <= candidates@[index@].0@)
-        && (forall<j: Int> 0 <= j && j < candidates@.len()
-            && candidates@[j].0@ == candidates@[index@].0@ ==>
-            candidates@[j].1@ <= candidates@[index@].1@)
-        && (forall<j: Int> 0 <= j && j < candidates@.len()
-            && candidates@[j].0@ == candidates@[index@].0@
-            && candidates@[j].1@ == candidates@[index@].1@ ==>
-            candidates@[index@].2@ <= candidates@[j].2@),
+    None => candidates@.len() == 0,
+    Some(best) => best@ < candidates@.len()
+        && forall<j: Int> 0 <= j && j < candidates@.len()
+            ==> ranks_ge(candidates@[best@], candidates@[j]),
 })]
-#[allow(
-    clippy::len_zero,
-    reason = "Creusot 0.13 has no contract for slice::is_empty"
-)]
 #[must_use]
-pub fn select_best_recovery_replica(candidates: &[(i32, i64, u64)]) -> Option<usize> {
-    if candidates.len() == 0 {
+pub fn select_best_recovery_replica(candidates: &[RecoveryCandidate]) -> Option<usize> {
+    let n = candidates.len();
+    if n == 0 {
         return None;
     }
     let mut best = 0usize;
     let mut i = 1usize;
-    #[invariant(1 <= i@ && i@ <= candidates@.len())]
+    #[invariant(1 <= i@ && i@ <= n@)]
     #[invariant(best@ < i@)]
-    #[invariant(forall<j: Int> 0 <= j && j < i@ ==>
-        candidates@[j].0@ <= candidates@[best@].0@)]
-    #[invariant(forall<j: Int> 0 <= j && j < i@
-        && candidates@[j].0@ == candidates@[best@].0@ ==>
-        candidates@[j].1@ <= candidates@[best@].1@)]
-    #[invariant(forall<j: Int> 0 <= j && j < i@
-        && candidates@[j].0@ == candidates@[best@].0@
-        && candidates@[j].1@ == candidates@[best@].1@ ==>
-        candidates@[best@].2@ <= candidates@[j].2@)]
-    #[variant(candidates@.len() - i@)]
-    while i < candidates.len() {
+    #[invariant(forall<j: Int> 0 <= j && j < i@ ==> ranks_ge(candidates@[best@], candidates@[j]))]
+    #[variant(n@ - i@)]
+    while i < n {
         let candidate = candidates[i];
         let current = candidates[best];
-        if candidate.0 > current.0
-            || (candidate.0 == current.0 && candidate.1 > current.1)
-            || (candidate.0 == current.0 && candidate.1 == current.1 && candidate.2 < current.2)
+        if candidate.last_epoch > current.last_epoch
+            || (candidate.last_epoch == current.last_epoch
+                && candidate.log_end_offset > current.log_end_offset)
+            || (candidate.last_epoch == current.last_epoch
+                && candidate.log_end_offset == current.log_end_offset
+                && candidate.broker_id < current.broker_id)
         {
             best = i;
         }
@@ -276,6 +333,8 @@ pub fn least_hwm_member_ge_index(
     limit: Int,
     leader_counts: bool,
 ) -> Int {
+    // Every step below unfolds `count_ge_prefix` once at `limit`, where the
+    // last member always counts because `limit > 1` puts it past the leader.
     if limit <= 1 {
         0
     } else {
@@ -288,6 +347,8 @@ pub fn least_hwm_member_ge_index(
                     least_hwm_member_ge_index(log_end, s, v, last_index, leader_counts);
                 let previous_member = hwm_member_at(log_end, s, previous_index);
                 if last_member <= previous_member {
+                    // The last member is the smaller witness. Monotonicity
+                    // carries the earlier witness's count down to it.
                     lemma_count_ge_prefix_monotone(
                         log_end,
                         s,
@@ -296,47 +357,16 @@ pub fn least_hwm_member_ge_index(
                         last_index,
                         leader_counts,
                     );
-                    proof_assert!(
-                        count_ge_prefix(log_end, s, last_member, last_index, leader_counts)
-                            >= count_ge_prefix(log_end, s, v, last_index, leader_counts)
-                    );
-                    proof_assert!(
-                        count_ge_prefix(log_end, s, last_member, limit, leader_counts)
-                            == count_ge_prefix(log_end, s, last_member, last_index, leader_counts)
-                                + 1
-                    );
-                    proof_assert!(
-                        count_ge_prefix(log_end, s, v, limit, leader_counts)
-                            == count_ge_prefix(log_end, s, v, last_index, leader_counts) + 1
-                    );
-                    proof_assert!(
-                        count_ge_prefix(log_end, s, last_member, limit, leader_counts)
-                            >= count_ge_prefix(log_end, s, v, limit, leader_counts)
-                    );
                     last_index
                 } else {
-                    proof_assert!(previous_member <= last_member);
-                    proof_assert!(
-                        count_ge_prefix(log_end, s, previous_member, limit, leader_counts)
-                            == count_ge_prefix(
-                                log_end,
-                                s,
-                                previous_member,
-                                last_index,
-                                leader_counts
-                            ) + 1
-                    );
-                    proof_assert!(
-                        count_ge_prefix(log_end, s, v, limit, leader_counts)
-                            == count_ge_prefix(log_end, s, v, last_index, leader_counts) + 1
-                    );
-                    proof_assert!(
-                        count_ge_prefix(log_end, s, previous_member, limit, leader_counts)
-                            >= count_ge_prefix(log_end, s, v, limit, leader_counts)
-                    );
+                    // The earlier witness stays smaller; the last member
+                    // reaches it, so both counts gain exactly one at `limit`.
                     previous_index
                 }
             } else {
+                // No earlier member reaches `v`, so `v`'s count at `limit` is
+                // exactly the last member's one, and the last member's own
+                // count is at least that.
                 lemma_count_ge_prefix_nonnegative(log_end, s, v, last_index, leader_counts);
                 lemma_count_ge_prefix_nonnegative(
                     log_end,
@@ -345,30 +375,10 @@ pub fn least_hwm_member_ge_index(
                     last_index,
                     leader_counts,
                 );
-                proof_assert!(previous_count <= 0);
-                proof_assert!(previous_count == 0);
-                proof_assert!(
-                    count_ge_prefix(log_end, s, last_member, limit, leader_counts)
-                        == count_ge_prefix(log_end, s, last_member, last_index, leader_counts) + 1
-                );
-                proof_assert!(count_ge_prefix(log_end, s, last_member, limit, leader_counts) >= 1);
-                proof_assert!(
-                    count_ge_prefix(log_end, s, v, limit, leader_counts)
-                        == count_ge_prefix(log_end, s, v, last_index, leader_counts) + 1
-                );
-                proof_assert!(count_ge_prefix(log_end, s, v, limit, leader_counts) <= 1);
-                proof_assert!(count_ge_prefix(log_end, s, last_member, limit, leader_counts) >= 1
-                    && count_ge_prefix(log_end, s, v, limit, leader_counts) <= 1
-                    ==> count_ge_prefix(log_end, s, last_member, limit, leader_counts)
-                        >= count_ge_prefix(log_end, s, v, limit, leader_counts));
-                proof_assert!(
-                    count_ge_prefix(log_end, s, last_member, limit, leader_counts)
-                        >= count_ge_prefix(log_end, s, v, limit, leader_counts)
-                );
                 last_index
             }
         } else {
-            proof_assert!(count_ge_prefix(log_end, s, v, last_index, leader_counts) >= 1);
+            // The last member misses `v`, so the witness is an earlier one.
             least_hwm_member_ge_index(log_end, s, v, last_index, leader_counts)
         }
     }
@@ -416,10 +426,12 @@ pub fn lemma_hwm_member_maximal(
 /// Deterministic per-`(node, epoch)` election-timeout jitter in `[0, base_ms)`.
 ///
 /// This is Raft's randomized backoff, made reproducible for the deterministic
-/// sims. Different nodes get different spreads, and the same node gets a
-/// different spread in each re-election epoch. Closely-synchronized voters thus
-/// do not arm their election timers in lockstep and do not split the vote
-/// indefinitely.
+/// sims: the jitter is a fixed hash of the node ID and the epoch, so the same
+/// run replays the same way. The contract proves only the range, `0` for a
+/// zero base and below `base_ms` otherwise. It does not prove that two nodes,
+/// or two epochs of one node, get different values; the hash usually spreads
+/// them, and the unit tests pin a few spread values, but a collision is
+/// possible and nothing here rules it out.
 #[ensures(base_ms@ == 0 ==> result@ == 0)]
 #[ensures(base_ms@ > 0 ==> result@ < base_ms@)]
 #[must_use]
@@ -491,6 +503,10 @@ fn candidate_has_majority(
 /// HWM may only advance once the majority offset is strictly past
 /// `epoch_start_offset`. The HWM never regresses below `current_hwm`.
 ///
+/// When `leader_counts` is `false` (a leader that its own `VotersRecord`
+/// removed), the followers alone must be able to reach `majority`, which is
+/// the second precondition.
+///
 /// The function computes the majority-th largest by its definition, and not by
 /// a sort. That definition is the greatest member m of
 /// `{log_end} U follower_offsets` with at least `majority` members >= m. Voter
@@ -558,19 +574,35 @@ pub fn recompute_high_watermark(
     gated.max(current_hwm)
 }
 
-/// Monotonic handoff from a previous visible diskless high watermark to a newly
-/// observed WAL-quorum frontier. A broker that becomes read-capable must never
-/// lower visibility during a leader handoff or a member handoff.
-#[ensures(result@ >= previous_hw@)]
-#[ensures(result@ >= quorum_frontier@)]
-#[ensures(result@ == previous_hw@ || result@ == quorum_frontier@)]
+/// The watermark a majority has acknowledged, never below `current`.
+///
+/// This is [`recompute_high_watermark`] with the leader's log end always
+/// counted and no leader-epoch gate. The result is the greater of `current`
+/// and the majority frontier: the greatest member of
+/// `{log_end} U follower_offsets` that at least `majority` members reach.
+/// Passing `current` as both the gate and the floor is what makes it that: the
+/// frontier is taken only when it passes `current`, and `current` otherwise.
+///
+/// A caller that needs Raft's current-term rule, the gate on the leader's
+/// first record of its own epoch, uses [`recompute_high_watermark`] instead.
+#[requires(1 <= majority@ && majority@ <= follower_offsets@.len() + 1)]
+#[requires(current@ <= log_end@)]
+#[requires(forall<k: Int> 0 <= k && k < follower_offsets@.len()
+    ==> follower_offsets@[k]@ <= log_end@)]
+#[ensures(result@ >= current@)]
+#[ensures(result@ <= log_end@)]
+#[ensures(forall<v: Int> count_ge(log_end@, follower_offsets@, v, true) >= majority@
+    ==> v <= result@)]
+#[ensures(result@ > current@
+    ==> count_ge(log_end@, follower_offsets@, result@, true) >= majority@)]
 #[must_use]
-pub const fn handoff_high_watermark(previous_hw: i64, quorum_frontier: i64) -> i64 {
-    if previous_hw >= quorum_frontier {
-        previous_hw
-    } else {
-        quorum_frontier
-    }
+pub fn majority_watermark(
+    log_end: i64,
+    follower_offsets: &[i64],
+    majority: usize,
+    current: i64,
+) -> i64 {
+    recompute_high_watermark(log_end, follower_offsets, majority, current, current, true)
 }
 
 #[cfg(test)]
@@ -740,16 +772,30 @@ mod tests {
         }
     }
 
+    /// A three-voter WAL quorum: the leader's log end is one vote and a
+    /// majority is two, so the watermark is the higher follower ack once it
+    /// passes the current watermark, and the current watermark otherwise.
+    #[test]
+    fn majority_watermark_follows_the_second_highest_ack() {
+        for (name, log_end, followers, current, expected) in [
+            ("no follower has acked", 10, &[0, 0][..], 0, 0),
+            ("one follower ack makes a majority", 10, &[7, 0][..], 0, 7),
+            ("the higher of two acks wins", 10, &[4, 9][..], 0, 9),
+            ("an ack at the leader end", 10, &[10, 3][..], 5, 10),
+            ("a stale ack never lowers it", 10, &[3, 2][..], 5, 5),
+            ("an empty log", 0, &[0, 0][..], 0, 0),
+        ] {
+            check!(
+                majority_watermark(log_end, followers, 2, current) == expected,
+                "case {name}"
+            );
+        }
+    }
+
     #[test]
     fn hwm_can_exclude_a_removed_leader() {
         check!(recompute_high_watermark(10, &[9, 4], 2, 0, 0, true) == 9);
         check!(recompute_high_watermark(10, &[9, 4], 2, 0, 0, false) == 4);
-    }
-
-    #[test]
-    fn handoff_high_watermark_is_monotonic() {
-        check!(handoff_high_watermark(7, 5) == 7);
-        check!(handoff_high_watermark(7, 9) == 9);
     }
 
     #[test]
@@ -758,77 +804,117 @@ mod tests {
             ElectClean, ElectFromElr, ElectUnclean, NoChange, Recover, ShrinkIsr, Unavailable,
         };
         use FailoverRecovery::{Aggressive, Balanced, None};
+        use LiveIsr::{Electable, Empty, WitnessesOnly};
 
-        // (leader_dead, has_electable_isr, alive_isr_empty, has_electable_elr,
-        //  recovery, unclean_election_available, isr_shrunk) -> action.
-        for (dead, isr, empty, elr, recovery, unclean, shrunk, expected) in [
-            (true, true, false, false, None, false, true, ElectClean),
+        let dead =
+            |live_isr, has_electable_elr, recovery, unclean_election_available| FailoverFacts {
+                leader_dead: true,
+                isr_shrunk: true,
+                live_isr,
+                out_of_isr: OutOfIsrFacts {
+                    has_electable_elr,
+                    recovery,
+                    unclean_election_available,
+                },
+            };
+        let alive = |isr_shrunk| FailoverFacts {
+            leader_dead: false,
+            isr_shrunk,
+            live_isr: Electable,
+            out_of_isr: OutOfIsrFacts {
+                has_electable_elr: false,
+                recovery: None,
+                unclean_election_available: false,
+            },
+        };
+        for (name, facts, expected) in [
+            (
+                "a live ISR member leads, whatever the out-of-ISR options",
+                dead(Electable, true, Aggressive, true),
+                ElectClean,
+            ),
             // An electable ELR member outranks every offset-aware strategy and
             // the KIP-841 election, and never reaches either.
-            (true, false, true, true, None, false, false, ElectFromElr),
-            (true, false, true, true, None, true, false, ElectFromElr),
+            ("ELR alone", dead(Empty, true, None, false), ElectFromElr),
             (
-                true,
-                false,
-                true,
-                true,
-                Balanced,
-                false,
-                false,
+                "ELR over the unclean election",
+                dead(Empty, true, None, true),
                 ElectFromElr,
             ),
             (
-                true,
-                false,
-                true,
-                false,
-                Balanced,
-                false,
-                false,
+                "ELR over offset-aware recovery",
+                dead(Empty, true, Balanced, false),
+                ElectFromElr,
+            ),
+            (
+                "balanced recovery",
+                dead(Empty, false, Balanced, false),
                 Recover(Balanced),
             ),
             (
-                true,
-                false,
-                true,
-                false,
-                Aggressive,
-                true,
-                false,
+                "aggressive recovery over the unclean election",
+                dead(Empty, false, Aggressive, true),
                 Recover(Aggressive),
             ),
-            (true, false, true, false, None, true, false, ElectUnclean),
-            (true, false, true, false, None, false, false, Unavailable),
             (
-                true,
-                false,
-                false,
-                false,
-                Balanced,
-                true,
-                false,
+                "KIP-841 unclean election",
+                dead(Empty, false, None, true),
+                ElectUnclean,
+            ),
+            (
+                "nothing to elect",
+                dead(Empty, false, None, false),
                 Unavailable,
             ),
-            // A live ISR that holds nothing electable is unavailable even with
-            // an ELR: the ELR rung is guarded on an empty ISR.
-            (true, false, false, true, Balanced, true, false, Unavailable),
-            (false, false, false, false, None, false, true, ShrinkIsr),
-            (false, false, false, false, None, false, false, NoChange),
+            // A live ISR that holds only witnesses is unavailable even with an
+            // ELR, a recovery strategy, and an unclean election: every
+            // out-of-ISR rung is guarded on an empty ISR.
+            (
+                "witness-only ISR",
+                dead(WitnessesOnly, true, Balanced, true),
+                Unavailable,
+            ),
+            ("a follower left the ISR", alive(true), ShrinkIsr),
+            ("nothing changed", alive(false), NoChange),
         ] {
-            check!(failover_action(dead, isr, empty, elr, recovery, unclean, shrunk) == expected);
+            check!(failover_action(facts) == expected, "case {name}");
         }
     }
 
     #[test]
     fn recovery_replica_ranking_is_epoch_then_offset_then_lowest_node() {
-        for (candidates, expected) in [
-            (&[][..], None),
-            (&[(4, 100, 2), (5, 10, 3)][..], Some(1)),
-            (&[(5, 90, 2), (5, 120, 3)][..], Some(1)),
-            (&[(5, 100, 3), (5, 100, 1), (5, 100, 2)][..], Some(1)),
-            (&[(5, 100, 1), (5, 100, 1)][..], Some(0)),
+        let at = |last_epoch, log_end_offset, broker_id| RecoveryCandidate {
+            last_epoch,
+            log_end_offset,
+            broker_id,
+        };
+        for (name, candidates, expected) in [
+            ("nobody answered", std::vec![], None),
+            (
+                "a newer epoch beats a longer log",
+                std::vec![at(4, 100, 2), at(5, 10, 3)],
+                Some(1),
+            ),
+            (
+                "the longer log wins within an epoch",
+                std::vec![at(5, 90, 2), at(5, 120, 3)],
+                Some(1),
+            ),
+            (
+                "the lowest broker id breaks a full tie",
+                std::vec![at(5, 100, 3), at(5, 100, 1), at(5, 100, 2)],
+                Some(1),
+            ),
+            (
+                "identical answers keep the first",
+                std::vec![at(5, 100, 1), at(5, 100, 1)],
+                Some(0),
+            ),
         ] {
-            check!(select_best_recovery_replica(candidates) == expected);
+            check!(
+                select_best_recovery_replica(&candidates) == expected,
+                "case {name}"
+            );
         }
     }
 }

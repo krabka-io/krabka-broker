@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/share.rs" 67 0 72 32 *)
+(* #"/workspace/crates/verified/src/share.rs" 69 0 74 32 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
 let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
-let%span sshare = "/workspace/crates/verified/src/share.rs" 91 34 91 35
-let%span sshare'0 = "/workspace/crates/verified/src/share.rs" 91 10 91 36
-let%span sshare'1 = "/workspace/crates/verified/src/share.rs" 39 10 66 1
+let%span sshare = "/workspace/crates/verified/src/share.rs" 93 34 93 35
+let%span sshare'0 = "/workspace/crates/verified/src/share.rs" 93 10 93 36
+let%span sshare'1 = "/workspace/crates/verified/src/share.rs" 41 10 68 1
 
 use creusot.int.Int32
 use creusot.prelude.Any
@@ -61,7 +61,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let share_offset_mutation_decision [#"/workspace/crates/verified/src/share.rs" 67 0 72 32]
+let share_offset_mutation_decision [#"/workspace/crates/verified/src/share.rs" 69 0 74 32]
   (gate: t_ShareOffsetMutationGate) (observed_leader_epoch: Int32.t) (current_leader_epoch: Int32.t)
   (state_epoch: Int32.t) (return (x: t_ShareOffsetMutationDecision)) = (! bb0
   [ bb0 = any

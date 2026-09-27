@@ -17,27 +17,41 @@ use krabka_protocol::{
 use krabka_raft::NodeId;
 use tracing::{debug, warn};
 
-use super::request_builder::build_alter_partition_request;
+use super::request_builder::{IsrChange, build_alter_partition_request};
+
+/// Who sends an ISR proposal, and how it reaches the controller quorum.
+pub(super) struct ControllerLink<'a> {
+    pub(super) controller: &'a Arc<dyn crate::metadata_source::MetadataSource>,
+    pub(super) broker_id: i32,
+    pub(super) outbound_client: &'a crate::network::client::InterBrokerClient,
+    pub(super) listener_protocol: krabka_security::ListenerProtocol,
+    pub(super) server_name: &'a str,
+}
 
 #[tracing::instrument(
     name = "isr_send_alter_partition",
     level = "info",
     skip_all,
-    fields(topic = %topic, partition, leader_epoch, new_isr_len = new_isr.len()),
+    fields(
+        topic = %change.topic,
+        partition = change.partition,
+        leader_epoch = change.leader_epoch,
+        partition_epoch = change.partition_epoch,
+        new_isr_len = change.new_isr.len(),
+    ),
     err,
 )]
-#[allow(clippy::too_many_arguments)] // Keeps controller identity and transport inputs explicit.
 pub(super) async fn send_alter_partition(
-    controller: &Arc<dyn crate::metadata_source::MetadataSource>,
-    broker_id: i32,
-    topic: &str,
-    partition: i32,
-    new_isr: Vec<NodeId>,
-    leader_epoch: i32,
-    outbound_client: &crate::network::client::InterBrokerClient,
-    listener_protocol: krabka_security::ListenerProtocol,
-    server_name: &str,
+    link: &ControllerLink<'_>,
+    change: &IsrChange<'_>,
 ) -> Result<(), String> {
+    let ControllerLink {
+        controller,
+        broker_id,
+        outbound_client,
+        listener_protocol,
+        server_name,
+    } = *link;
     let image = controller.current_image();
     let leader_id = *controller.watch_leader().borrow();
     let targets = alter_partition_targets(&image, leader_id);
@@ -48,8 +62,7 @@ pub(super) async fn send_alter_partition(
         };
     }
 
-    let req =
-        build_alter_partition_request(&image, broker_id, topic, partition, &new_isr, leader_epoch);
+    let req = build_alter_partition_request(&image, broker_id, change);
     let mut last_err = String::new();
     for (target_id, addr) in targets {
         let Some((host, port)) = crate::host_port::parse_host_port(&addr) else {
@@ -243,16 +256,22 @@ mod tests {
         let controller: Arc<dyn crate::metadata_source::MetadataSource> =
             Arc::new(fake_source(MetadataImage::new(uuid::Uuid::nil()), None));
 
+        let client = plaintext_client();
         let err = send_alter_partition(
-            &controller,
-            1,
-            "orders",
-            0,
-            vec![NodeId(1)],
-            3,
-            &plaintext_client(),
-            krabka_security::ListenerProtocol::Plaintext,
-            "localhost",
+            &ControllerLink {
+                controller: &controller,
+                broker_id: 1,
+                outbound_client: &client,
+                listener_protocol: krabka_security::ListenerProtocol::Plaintext,
+                server_name: "localhost",
+            },
+            &IsrChange {
+                topic: "orders",
+                partition: 0,
+                new_isr: vec![NodeId(1)],
+                leader_epoch: 3,
+                partition_epoch: 0,
+            },
         )
         .await
         .expect_err("missing controller leader should reject the send");

@@ -1,15 +1,15 @@
-(* #"/proof-work-209/crates/verified/src/delivery.rs" 15 0 20 9 *)
+(* #"/workspace/crates/verified/src/delivery.rs" 16 0 21 9 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
 let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
-let%span sdelivery = "/proof-work-209/crates/verified/src/delivery.rs" 24 24 24 25
-let%span sdelivery'0 = "/proof-work-209/crates/verified/src/delivery.rs" 25 15 25 20
-let%span sdelivery'1 = "/proof-work-209/crates/verified/src/delivery.rs" 27 28 27 69
-let%span sdelivery'2 = "/proof-work-209/crates/verified/src/delivery.rs" 28 15 28 20
-let%span sdelivery'3 = "/proof-work-209/crates/verified/src/delivery.rs" 22 15 22 19
-let%span sdelivery'4 = "/proof-work-209/crates/verified/src/delivery.rs" 11 28 13 52
+let%span sdelivery = "/workspace/crates/verified/src/delivery.rs" 25 24 25 25
+let%span sdelivery'0 = "/workspace/crates/verified/src/delivery.rs" 26 15 26 20
+let%span sdelivery'1 = "/workspace/crates/verified/src/delivery.rs" 28 28 28 69
+let%span sdelivery'2 = "/workspace/crates/verified/src/delivery.rs" 29 15 29 20
+let%span sdelivery'3 = "/workspace/crates/verified/src/delivery.rs" 23 15 23 19
+let%span sdelivery'4 = "/workspace/crates/verified/src/delivery.rs" 12 10 14 52
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -50,7 +50,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let scheduled_delivery_visible [#"/proof-work-209/crates/verified/src/delivery.rs" 15 0 20 9] (scheduled: bool)
+let scheduled_delivery_visible [#"/workspace/crates/verified/src/delivery.rs" 16 0 21 9] (scheduled: bool)
   (uncertainty_ms: Int64.t) (activation_ms: Int64.t) (now_ms: Int64.t) (return (x: bool)) = (! bb0
   [ bb0 = any [ br0 -> {scheduled = false} (! bb1) | br1 -> {scheduled} (! bb2) ]
   | bb2 = s0

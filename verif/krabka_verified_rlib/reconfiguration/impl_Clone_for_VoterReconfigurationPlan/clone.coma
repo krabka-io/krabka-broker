@@ -1,4 +1,4 @@
-(* #"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/reconfiguration.rs" 19 27 19 32 *)
+(* #"/workspace/crates/verified/src/reconfiguration.rs" 89 27 89 32 *)
 
 (* <reconfiguration::VoterReconfigurationPlan as std::clone::Clone> *)
 
@@ -17,7 +17,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_VoterReconfigurationPlan [#"/home/matt/.cache/krabka-fx/w3-txncoord/repo/crates/verified/src/reconfiguration.rs" 19 27 19 32]
+let clone_VoterReconfigurationPlan [#"/workspace/crates/verified/src/reconfiguration.rs" 89 27 89 32]
   (self: t_VoterReconfigurationPlan) (return (x: t_VoterReconfigurationPlan)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_VoterReconfigurationPlan = Any.any_l () | & self: t_VoterReconfigurationPlan = self ])

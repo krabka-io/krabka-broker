@@ -92,7 +92,7 @@ fn retries_tombstones_and_delete_floors_capture_only_committed_live_state() {
 }
 
 #[test]
-fn keyed_values_and_tombstones_dominate_legacy_replay() {
+fn keyed_values_replace_and_tombstones_remove_their_range() {
     let mut projection = WalCaptureProjection::default();
     let live = entry(0, 3);
     let deleted = entry(4, 7);
@@ -100,22 +100,15 @@ fn keyed_values_and_tombstones_dominate_legacy_replay() {
     let deleted_key = WalIndexKey::from(&deleted).to_bytes();
 
     projection
-        .apply(None, Some(&value("legacy-first", live.clone())))
+        .apply(Some(&live_key), Some(&value("first", live.clone())))
         .unwrap();
     projection
-        .apply(Some(&live_key), Some(&value("keyed", live.clone())))
+        .apply(Some(&live_key), Some(&value("keyed", live)))
         .unwrap();
     projection
-        .apply(None, Some(&value("legacy-last", live)))
-        .unwrap();
-    projection
-        .apply(Some(&deleted_key), Some(&value("deleted", deleted.clone())))
+        .apply(Some(&deleted_key), Some(&value("deleted", deleted)))
         .unwrap();
     projection.apply(Some(&deleted_key), None).unwrap();
-    projection
-        .apply(None, Some(&value("legacy-resurrected", deleted)))
-        .unwrap();
-    projection.finish_legacy_replay();
 
     let capture = projection
         .capture(
@@ -126,6 +119,20 @@ fn keyed_values_and_tombstones_dominate_legacy_replay() {
         .unwrap();
     check!(capture.partitions[0].ranges.len() == 1);
     check!(capture.partitions[0].ranges[0].object_key == "keyed");
+}
+
+#[test]
+fn an_unkeyed_index_record_is_rejected() {
+    let mut projection = WalCaptureProjection::default();
+    let range = entry(0, 3);
+
+    check!(
+        projection
+            .apply(None, Some(&value("unkeyed", range)))
+            .unwrap_err()
+            == "diskless WAL index record has no key"
+    );
+    check!(projection.apply(None, None).unwrap_err() == "diskless WAL index record has no key");
 }
 
 #[test]

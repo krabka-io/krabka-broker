@@ -17,102 +17,157 @@ pub enum BreakGlassAdmission {
     Usable,
 }
 
-/// Apply the break-glass lifecycle and approval checks in reporting order.
-#[ensures((result == BreakGlassAdmission::Withdrawn) == withdrawn)]
-#[ensures((result == BreakGlassAdmission::Consumed) == (!withdrawn && consumed))]
-#[ensures((result == BreakGlassAdmission::Expired) == (!withdrawn && !consumed && expired))]
+/// Whether the configured policy requires signed approvals for the action.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum BreakGlassSignaturePolicy {
+    Optional,
+    Required,
+}
+
+/// Whether the proposal carries at least one approval and every approval
+/// carries a key id and a signature.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum BreakGlassApprovalSigning {
+    AllSigned,
+    NotAllSigned,
+}
+
+/// The independent lifecycle and approval facts of one covering proposal.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct BreakGlassProposalFacts {
+    pub withdrawn: bool,
+    pub consumed: bool,
+    pub expired: bool,
+    /// Distinct approving principals.
+    pub held_approvals: usize,
+    pub required_approvals: usize,
+    pub signature_policy: BreakGlassSignaturePolicy,
+    pub signing: BreakGlassApprovalSigning,
+}
+
+/// Apply the break-glass lifecycle and approval checks in reporting order:
+/// each variant holds exactly when its check fails and every earlier one
+/// passes.
+#[ensures((result == BreakGlassAdmission::Withdrawn) == facts.withdrawn)]
+#[ensures((result == BreakGlassAdmission::Consumed) == (!facts.withdrawn && facts.consumed))]
+#[ensures((result == BreakGlassAdmission::Expired) ==
+    (!facts.withdrawn && !facts.consumed && facts.expired))]
 #[ensures((result == BreakGlassAdmission::NotEnoughApprovals) ==
-    (!withdrawn && !consumed && !expired && held@ < required@))]
+    (!facts.withdrawn && !facts.consumed && !facts.expired
+        && facts.held_approvals@ < facts.required_approvals@))]
 #[ensures((result == BreakGlassAdmission::Unsigned) ==
-    (!withdrawn && !consumed && !expired && held@ >= required@
-        && signature_required && !all_signed))]
+    (!facts.withdrawn && !facts.consumed && !facts.expired
+        && facts.held_approvals@ >= facts.required_approvals@
+        && facts.signature_policy == BreakGlassSignaturePolicy::Required
+        && facts.signing == BreakGlassApprovalSigning::NotAllSigned))]
 #[ensures((result == BreakGlassAdmission::Usable) ==
-    (!withdrawn && !consumed && !expired && held@ >= required@
-        && (!signature_required || all_signed)))]
-#[allow(
-    clippy::fn_params_excessive_bools,
-    reason = "the proof classifies independent proposal lifecycle facts"
-)]
+    (!facts.withdrawn && !facts.consumed && !facts.expired
+        && facts.held_approvals@ >= facts.required_approvals@
+        && (facts.signature_policy == BreakGlassSignaturePolicy::Optional
+            || facts.signing == BreakGlassApprovalSigning::AllSigned)))]
 #[must_use]
-pub fn break_glass_admission(
-    withdrawn: bool,
-    consumed: bool,
-    expired: bool,
-    held: usize,
-    required: usize,
-    signature_required: bool,
-    all_signed: bool,
-) -> BreakGlassAdmission {
-    if withdrawn {
+pub fn break_glass_admission(facts: BreakGlassProposalFacts) -> BreakGlassAdmission {
+    if facts.withdrawn {
         BreakGlassAdmission::Withdrawn
-    } else if consumed {
+    } else if facts.consumed {
         BreakGlassAdmission::Consumed
-    } else if expired {
+    } else if facts.expired {
         BreakGlassAdmission::Expired
-    } else if held < required {
+    } else if facts.held_approvals < facts.required_approvals {
         BreakGlassAdmission::NotEnoughApprovals
-    } else if signature_required && !all_signed {
+    } else if let (BreakGlassSignaturePolicy::Required, BreakGlassApprovalSigning::NotAllSigned) =
+        (facts.signature_policy, facts.signing)
+    {
         BreakGlassAdmission::Unsigned
     } else {
         BreakGlassAdmission::Usable
     }
 }
 
-/// Select the earliest `(expiry, UUID high bits, UUID low bits)` key.
-#[ensures((result == None) == (candidates@.len() == 0))]
+/// Lexicographic `<=` on `(expiry, UUID high bits, UUID low bits)` keys.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+pub fn lex_le(a: (i64, u64, u64), b: (i64, u64, u64)) -> bool {
+    pearlite! {
+        a.0@ < b.0@
+            || (a.0@ == b.0@ && (a.1@ < b.1@ || (a.1@ == b.1@ && a.2@ <= b.2@)))
+    }
+}
+
+/// `best` is the first index of a lexicographically minimal key among the
+/// first `len` keys: no key is smaller, and every earlier key is strictly
+/// greater.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+pub fn is_min_by(keys: Seq<(i64, u64, u64)>, best: Int, len: Int) -> bool {
+    pearlite! {
+        0 <= best && best < len && len <= keys.len()
+            && (forall<j: Int> 0 <= j && j < len ==> lex_le(keys[best], keys[j]))
+            && (forall<j: Int> 0 <= j && j < best ==> !lex_le(keys[j], keys[best]))
+    }
+}
+
+/// Select the earliest `(expiry, UUID high bits, UUID low bits)` key; on an
+/// exact duplicate key, the first index wins.
 #[ensures(match result {
-    None => true,
-    Some(index) => index@ < candidates@.len()
-        && (forall<j: Int> 0 <= j && j < candidates@.len() ==>
-            candidates@[index@].0@ <= candidates@[j].0@)
-        && (forall<j: Int> 0 <= j && j < candidates@.len()
-            && candidates@[index@].0@ == candidates@[j].0@ ==>
-            candidates@[index@].1@ <= candidates@[j].1@)
-        && (forall<j: Int> 0 <= j && j < candidates@.len()
-            && candidates@[index@].0@ == candidates@[j].0@
-            && candidates@[index@].1@ == candidates@[j].1@ ==>
-            candidates@[index@].2@ <= candidates@[j].2@),
+    None => candidates@.len() == 0,
+    Some(index) => is_min_by(candidates@, index@, candidates@.len()),
 })]
-#[allow(
-    clippy::len_zero,
-    reason = "Creusot 0.13 has no contract for slice::is_empty"
-)]
 #[must_use]
 pub fn select_break_glass_candidate(candidates: &[(i64, u64, u64)]) -> Option<usize> {
-    if candidates.len() == 0 {
-        return None;
-    }
-    let mut best = 0usize;
-    let mut i = 1usize;
-    #[invariant(1 <= i@ && i@ <= candidates@.len())]
-    #[invariant(best@ < i@)]
-    #[invariant(forall<j: Int> 0 <= j && j < i@ ==>
-        candidates@[best@].0@ <= candidates@[j].0@)]
-    #[invariant(forall<j: Int> 0 <= j && j < i@
-        && candidates@[best@].0@ == candidates@[j].0@ ==>
-        candidates@[best@].1@ <= candidates@[j].1@)]
-    #[invariant(forall<j: Int> 0 <= j && j < i@
-        && candidates@[best@].0@ == candidates@[j].0@
-        && candidates@[best@].1@ == candidates@[j].1@ ==>
-        candidates@[best@].2@ <= candidates@[j].2@)]
+    let mut best: Option<usize> = None;
+    let mut i = 0usize;
+    #[invariant(i@ <= candidates@.len())]
+    #[invariant(match best {
+        None => i@ == 0,
+        Some(b) => is_min_by(candidates@, b@, i@),
+    })]
     #[variant(candidates@.len() - i@)]
     while i < candidates.len() {
         let candidate = candidates[i];
-        let current = candidates[best];
-        if candidate.0 < current.0
-            || (candidate.0 == current.0 && candidate.1 < current.1)
-            || (candidate.0 == current.0 && candidate.1 == current.1 && candidate.2 < current.2)
-        {
-            best = i;
-        }
+        best = match best {
+            None => Some(i),
+            Some(b) => {
+                let current = candidates[b];
+                if candidate.0 < current.0
+                    || (candidate.0 == current.0 && candidate.1 < current.1)
+                    || (candidate.0 == current.0
+                        && candidate.1 == current.1
+                        && candidate.2 < current.2)
+                {
+                    Some(i)
+                } else {
+                    Some(b)
+                }
+            }
+        };
         i += 1;
     }
-    Some(best)
+    best
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn usable() -> BreakGlassProposalFacts {
+        BreakGlassProposalFacts {
+            withdrawn: false,
+            consumed: false,
+            expired: false,
+            held_approvals: 2,
+            required_approvals: 2,
+            signature_policy: BreakGlassSignaturePolicy::Required,
+            signing: BreakGlassApprovalSigning::AllSigned,
+        }
+    }
 
     #[test]
     fn break_glass_checks_are_ordered_and_fail_closed() {
@@ -120,25 +175,81 @@ mod tests {
             Consumed, Expired, NotEnoughApprovals, Unsigned, Usable, Withdrawn,
         };
 
-        assert2::assert!(break_glass_admission(true, true, true, 0, 2, true, false) == Withdrawn);
-        assert2::assert!(break_glass_admission(false, true, true, 0, 2, true, false) == Consumed);
-        assert2::assert!(break_glass_admission(false, false, true, 0, 2, true, false) == Expired);
-        assert2::assert!(
-            break_glass_admission(false, false, false, 1, 2, true, true) == NotEnoughApprovals
-        );
-        assert2::assert!(break_glass_admission(false, false, false, 2, 2, true, false) == Unsigned);
-        assert2::assert!(break_glass_admission(false, false, false, 2, 2, true, true) == Usable);
+        let all_failing = BreakGlassProposalFacts {
+            withdrawn: true,
+            consumed: true,
+            expired: true,
+            held_approvals: 0,
+            signing: BreakGlassApprovalSigning::NotAllSigned,
+            ..usable()
+        };
+        for (facts, expected) in [
+            (all_failing, Withdrawn),
+            (
+                BreakGlassProposalFacts {
+                    withdrawn: false,
+                    ..all_failing
+                },
+                Consumed,
+            ),
+            (
+                BreakGlassProposalFacts {
+                    withdrawn: false,
+                    consumed: false,
+                    ..all_failing
+                },
+                Expired,
+            ),
+            (
+                BreakGlassProposalFacts {
+                    held_approvals: 1,
+                    ..usable()
+                },
+                NotEnoughApprovals,
+            ),
+            (
+                BreakGlassProposalFacts {
+                    signing: BreakGlassApprovalSigning::NotAllSigned,
+                    ..usable()
+                },
+                Unsigned,
+            ),
+            (
+                BreakGlassProposalFacts {
+                    signature_policy: BreakGlassSignaturePolicy::Optional,
+                    signing: BreakGlassApprovalSigning::NotAllSigned,
+                    ..usable()
+                },
+                Usable,
+            ),
+            (usable(), Usable),
+            (
+                BreakGlassProposalFacts {
+                    held_approvals: 3,
+                    ..usable()
+                },
+                Usable,
+            ),
+        ] {
+            assert2::assert!(break_glass_admission(facts) == expected);
+        }
     }
 
     #[test]
-    fn proposal_selection_uses_expiry_then_uuid() {
-        assert2::assert!(select_break_glass_candidate(&[]) == None);
-        assert2::assert!(select_break_glass_candidate(&[(20, 0, 0), (10, 9, 9)]) == Some(1));
-        assert2::assert!(select_break_glass_candidate(&[(10, 4, 9), (10, 3, 99)]) == Some(1));
-        assert2::assert!(select_break_glass_candidate(&[(10, 3, 9), (10, 3, 8)]) == Some(1));
-        assert2::assert!(select_break_glass_candidate(&[(10, 3, 8), (10, 3, 8)]) == Some(0));
-        assert2::assert!(select_break_glass_candidate(&[(10, 3, 9), (20, 2, 8)]) == Some(0));
-        assert2::assert!(select_break_glass_candidate(&[(10, 3, 9), (20, 3, 2)]) == Some(0));
-        assert2::assert!(select_break_glass_candidate(&[(10, 3, 9), (10, 4, 2)]) == Some(0));
+    fn proposal_selection_uses_expiry_then_uuid_then_first_index() {
+        for (candidates, expected) in [
+            (&[][..], None),
+            (&[(20, 0, 0), (10, 9, 9)][..], Some(1)),
+            (&[(10, 4, 9), (10, 3, 99)][..], Some(1)),
+            (&[(10, 3, 9), (10, 3, 8)][..], Some(1)),
+            (&[(10, 3, 9), (20, 2, 8)][..], Some(0)),
+            (&[(10, 3, 9), (20, 3, 2)][..], Some(0)),
+            (&[(10, 3, 9), (10, 4, 2)][..], Some(0)),
+            // An exact duplicate key keeps the first index.
+            (&[(10, 3, 8), (10, 3, 8)][..], Some(0)),
+            (&[(30, 0, 0), (10, 3, 8), (10, 3, 8)][..], Some(1)),
+        ] {
+            assert2::assert!(select_break_glass_candidate(candidates) == expected);
+        }
     }
 }

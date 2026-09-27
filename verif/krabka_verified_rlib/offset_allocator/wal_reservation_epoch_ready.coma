@@ -1,7 +1,7 @@
-(* #"/proof-work-246/crates/verified/src/offset_allocator.rs" 11 0 11 88 *)
+(* #"/workspace/crates/verified/src/offset_allocator.rs" 11 0 11 88 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span soffset_allocator = "/proof-work-246/crates/verified/src/offset_allocator.rs" 9 10 9 59
+let%span soffset_allocator = "/workspace/crates/verified/src/offset_allocator.rs" 9 10 9 59
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -15,7 +15,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let wal_reservation_epoch_ready [#"/proof-work-246/crates/verified/src/offset_allocator.rs" 11 0 11 88]
+let wal_reservation_epoch_ready [#"/workspace/crates/verified/src/offset_allocator.rs" 11 0 11 88]
   (high_watermark: Int64.t) (epoch_start_offset: Int64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- Int64.gt high_watermark epoch_start_offset ] s1 | s1 = return {_ret} ] ]
   [ & _ret: bool = Any.any_l ()

@@ -1,0 +1,17 @@
+(* #"/workspace/crates/verified/src/local_recovery.rs" 26 27 26 32 *)
+
+(* <local_recovery::LocalRecoverySwapFacts as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_LocalRecoverySwapFacts = { log_cleaned_exists: bool; log_swap_exists: bool; final_log_exists: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_LocalRecoverySwapFacts [#"/workspace/crates/verified/src/local_recovery.rs" 26 27 26 32]
+  (self: t_LocalRecoverySwapFacts) (return (x: t_LocalRecoverySwapFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_LocalRecoverySwapFacts = Any.any_l () | & self: t_LocalRecoverySwapFacts = self ])
+  [ return (result: t_LocalRecoverySwapFacts) -> (! return {result}) ]

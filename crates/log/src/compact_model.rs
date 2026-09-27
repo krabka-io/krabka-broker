@@ -32,30 +32,36 @@
 //!
 //! # What this model checks
 //!
-//! The state is an abstract log `Vec<Entry>`. `Compact` runs the same pure
-//! cores that the production rewrite path uses, builds the `next` log, and
-//! asserts the five safety invariants below directly in `next_state`. A
-//! violation panics, and that shows up as a stateright counterexample or a test
-//! failure.
+//! The state is an abstract log `Vec<Entry>` and a clock. `Compact` runs one
+//! pass of a [`state::Cleaner`], the production cores by default, and records
+//! the log it compacted in the next state. Five `always` properties then check
+//! the pass's output against its input. Each is a rule stated from the two logs
+//! alone, in `invariants.rs`, so a violation comes back as a stateright
+//! counterexample path.
 //!
-//!   1. **control-not-deduped** — every distinct input marker that the pass
-//!      keeps or horizon-stamps appears exactly once in the output. Two markers
-//!      are never merged, and neither is ever dropped against the other.
-//!   2. **marker-data-precedence** — if a producer has surviving data in the
-//!      output, that producer's marker survives too, unless it has aged out.
-//!   3. **tombstone-aging** — no surviving tombstone has an elapsed horizon.
-//!   4. **idempotent-stamp** — once a horizon is `Some(_)`, nothing ever stamps
-//!      it to a different value.
-//!   5. **no-data-loss** — every key with a newest live `Data(value=Some)` in
-//!      the input has a live entry in the output.
+//!   1. **control-not-deduped** — a marker leaves the log only through its
+//!      delete horizon: every input marker whose horizon has not elapsed is in
+//!      the output.
+//!   2. **marker-data-precedence** — a marker never leaves the log while its
+//!      producer has live data in the output, elapsed horizon or not.
+//!   3. **tombstone-aging** — no surviving tombstone has an elapsed horizon,
+//!      and a newest-for-key tombstone that has not reached its horizon
+//!      survives.
+//!   4. **idempotent-stamp** — the output is the input with entries deleted
+//!      and unstamped horizons stamped to `now + delete.retention.ms`, nothing
+//!      else: no existing horizon changes.
+//!   5. **no-data-loss** — the set of keys whose newest value is live is
+//!      unchanged: nothing is lost, and nothing superseded is resurrected.
 //!
-//! A deliberately-broken [`legacy_retain`] reproduces the old control-dedup bug.
-//! A `#[should_panic]` test proves that the control-not-deduped assert fires
-//! against it. This is the RED witness.
+//! The legacy cleaner in `legacy.rs` indexes control keys and dedups markers
+//! by them. Run through the same pass and the same checker, it breaks rules 1
+//! and 2 and nothing else. That is the RED witness.
 
 // `compact_model.rs` is pulled in with `#[path]`, which makes rustc treat it as
 // a `mod.rs`: a bare `mod state;` here would look for `src/state.rs`. Each
 // child therefore names its file explicitly.
+#[path = "compact_model/invariants.rs"]
+mod invariants;
 #[path = "compact_model/legacy.rs"]
 mod legacy;
 #[path = "compact_model/model.rs"]

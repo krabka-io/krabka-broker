@@ -263,6 +263,7 @@ fn encoded_begin_and_end_requests_carry_quorum_defaults_and_leader() {
 fn fetch_request_round_trips() {
     let req = PeerRequest::Fetch {
         from: NodeId(2),
+        current_leader_epoch: 3,
         fetch_epoch: 1,
         fetch_offset: 11,
         replica_directory_id: uuid::Uuid::from_u128(42),
@@ -277,6 +278,7 @@ fn encoded_fetch_request_carries_replica_state_epoch_sentinel() {
     let dir_id = uuid::Uuid::from_u128(42);
     let req = PeerRequest::Fetch {
         from: NodeId(2),
+        current_leader_epoch: 4,
         fetch_epoch: 1,
         fetch_offset: 11,
         replica_directory_id: dir_id,
@@ -292,7 +294,7 @@ fn encoded_fetch_request_carries_replica_state_epoch_sentinel() {
             partition.last_fetched_epoch,
             partition.fetch_offset,
             partition.replica_directory_id.0,
-        ) == (2, -1, 1, 1, 11, *dir_id.as_bytes())
+        ) == (2, -1, 4, 1, 11, *dir_id.as_bytes())
     );
 }
 
@@ -344,6 +346,7 @@ fn fetch_request_wire_encoding_fields() {
 
     let req = PeerRequest::Fetch {
         from: NodeId(1),
+        current_leader_epoch: 2,
         fetch_epoch: 2,
         fetch_offset: 10,
         replica_directory_id: uuid::Uuid::from_u128(123),

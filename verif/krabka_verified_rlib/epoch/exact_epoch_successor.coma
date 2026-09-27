@@ -1,9 +1,9 @@
-(* #"/proof-work-214/crates/verified/src/epoch.rs" 18 0 18 77 *)
+(* #"/workspace/crates/verified/src/epoch.rs" 18 0 18 77 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sepoch = "/proof-work-214/crates/verified/src/epoch.rs" 20 23 20 24
-let%span sepoch'0 = "/proof-work-214/crates/verified/src/epoch.rs" 20 13 20 24
-let%span sepoch'1 = "/proof-work-214/crates/verified/src/epoch.rs" 13 12 16 5
+let%span sepoch = "/workspace/crates/verified/src/epoch.rs" 20 23 20 24
+let%span sepoch'0 = "/workspace/crates/verified/src/epoch.rs" 20 13 20 24
+let%span sepoch'1 = "/workspace/crates/verified/src/epoch.rs" 13 12 16 5
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -19,8 +19,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let exact_epoch_successor [#"/proof-work-214/crates/verified/src/epoch.rs" 18 0 18 77] (current': Int64.t)
-  (maximum: Int64.t) (return (x: t_Option_i64)) = (! bb0
+let exact_epoch_successor [#"/workspace/crates/verified/src/epoch.rs" 18 0 18 77] (current': Int64.t) (maximum: Int64.t)
+  (return (x: t_Option_i64)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_6 <- Int64.lt current' maximum ] s1 | s1 = any [ br0 -> {_6 = false} (! bb2) | br1 -> {_6} (! bb1) ] ]
   | bb1 = s0

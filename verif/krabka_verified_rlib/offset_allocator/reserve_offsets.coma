@@ -1,69 +1,90 @@
-(* #"/proof-work-246/crates/verified/src/offset_allocator.rs" 96 0 96 65 *)
+(* #"/workspace/crates/verified/src/offset_allocator.rs" 98 0 98 73 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 347 20 348 51
-let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 351 26 351 83
-let%span snum'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 352 26 352 83
-let%span soffset_allocator = "/proof-work-246/crates/verified/src/offset_allocator.rs" 97 11 97 37
-let%span soffset_allocator'0 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 91 29 91 39
-let%span soffset_allocator'1 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 92 29 92 39
-let%span soffset_allocator'2 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 93 29 93 56
-let%span soffset_allocator'3 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 94 28 94 46
-let%span soffset_allocator'4 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 95 28 95 55
+let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
+let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
+let%span soffset_allocator = "/workspace/crates/verified/src/offset_allocator.rs" 99 14 99 15
+let%span soffset_allocator'0 = "/workspace/crates/verified/src/offset_allocator.rs" 99 28 99 29
+let%span soffset_allocator'1 = "/workspace/crates/verified/src/offset_allocator.rs" 102 10 102 33
+let%span soffset_allocator'2 = "/workspace/crates/verified/src/offset_allocator.rs" 94 10 94 87
+let%span soffset_allocator'3 = "/workspace/crates/verified/src/offset_allocator.rs" 95 10 96 55
 
 use creusot.int.Int64
 use creusot.prelude.Any
 use int.Int
 
-predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
 
-meta "rewrite_def" predicate ge_log_Int
+type t_Option_tup2_i64_i64 = None | Some tup2_i64_i64
+
+type t_Option_i64 = None'0 | Some'0 Int64.t
 
 constant const_MIN: Int64.t = (-9223372036854775808: Int64.t)
-
-constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
 
 predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
 
 meta "rewrite_def" predicate gt_log_Int
 
-let saturating_add (self_: Int64.t) (rhs: Int64.t) (return (x: Int64.t)) = any
-  [ return (result: Int64.t) ->
-  {[@stop_split] [@expl:saturating_add ensures] ([@stop_split] [@expl:saturating_add ensures #0] [%#snum] ge_log_Int (Int64.to_int self_
-          + Int64.to_int rhs) (Int64.to_int const_MIN)
-        /\ Int64.to_int self_ + Int64.to_int rhs <= Int64.to_int const_MAX
-      -> Int64.to_int result = Int64.to_int self_ + Int64.to_int rhs)
-    /\ ([@stop_split] [@expl:saturating_add ensures #1] [%#snum'0] Int64.to_int self_ + Int64.to_int rhs
-        < Int64.to_int const_MIN -> Int64.to_int result = Int64.to_int const_MIN)
-    /\ ([@stop_split] [@expl:saturating_add ensures #2] [%#snum'1] gt_log_Int (Int64.to_int self_
-      + Int64.to_int rhs) (Int64.to_int const_MAX) -> Int64.to_int result = Int64.to_int const_MAX)}
+constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
+
+let checked_add (self_: Int64.t) (rhs: Int64.t) (return (x: t_Option_i64)) = any
+  [ return (result: t_Option_i64) ->
+  {[@stop_split] [@expl:checked_add ensures] ([@stop_split] [@expl:checked_add ensures #0] [%#snum] (result = None'0)
+      = (Int64.to_int self_ + Int64.to_int rhs < Int64.to_int const_MIN
+      \/ gt_log_Int (Int64.to_int self_ + Int64.to_int rhs) (Int64.to_int const_MAX)))
+    /\ ([@stop_split] [@expl:checked_add ensures #1] [%#snum'0] forall r: Int64.t. result = Some'0 r
+      -> Int64.to_int r = Int64.to_int self_ + Int64.to_int rhs)}
     (! return {result}) ]
 
-type tup2_i64_i64 = { f0: Int64.t; f1: Int64.t }
+let elim_Some (_x: t_Option_i64) (return (f0'0: Int64.t)) = any
+  [ _k (f0'0: Int64.t) -> {Some'0 f0'0 = _x} (! return {f0'0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some'0 _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other <= self
+
+meta "rewrite_def" predicate ge_log_Int
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let reserve_offsets [#"/proof-work-246/crates/verified/src/offset_allocator.rs" 96 0 96 65] (next: Int64.t)
-  (count: Int64.t) (return (x: tup2_i64_i64)) =
-{[@stop_split] [@expl:reserve_offsets requires] ([@stop_split] [@expl:reserve_offsets requires #0] [%#soffset_allocator'0] ge_log_Int (Int64.to_int next) 0)
-  /\ ([@stop_split] [@expl:reserve_offsets requires #1] [%#soffset_allocator'1] gt_log_Int (Int64.to_int count) 0)
-  /\ ([@stop_split] [@expl:reserve_offsets requires #2] [%#soffset_allocator'2] Int64.to_int next + Int64.to_int count
-  <= Int64.to_int const_MAX)}
-  (! bb0
+let reserve_offsets [#"/workspace/crates/verified/src/offset_allocator.rs" 98 0 98 73] (next: Int64.t) (count: Int64.t)
+  (return (x: t_Option_tup2_i64_i64)) = (! bb0
   [ bb0 = s0
-    [ s0 = saturating_add [%#soffset_allocator] {next} {count} (fun (_x: Int64.t) -> [ &_16 <- _x ] s1)
-    | s1 = [ &_ret <- { f0 = next; f1 = _16 } ] s2
-    | s2 = return {_ret} ] ]
-  [ & _ret: tup2_i64_i64 = Any.any_l ()
+    [ s0 = [ &_10 <- Int64.lt next ([%#soffset_allocator] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_10 = false} (! bb2) | br1 -> {_10} (! bb4) ] ]
+  | bb2 = s0
+    [ s0 = [ &_12 <- Int64.le count ([%#soffset_allocator'0] (0: Int64.t)) ] s1
+    | s1 = any [ br0 -> {_12 = false} (! bb5) | br1 -> {_12} (! bb4) ] ]
+  | bb4 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ]
+  | bb5 = s0
+    [ s0 = checked_add [%#soffset_allocator'1] {next} {count} (fun (_x: t_Option_i64) -> [ &_15 <- _x ] s1)
+    | s1 = any [ br0 -> {_15 = None'0} (! bb9) | br1 (x0: Int64.t) -> {_15 = Some'0 x0} (! bb10) ] ]
+  | bb10 = s0
+    [ s0 = elim_Some {_15} (fun (r0: Int64.t) -> [ &next_after <- r0 ] s1)
+    | s1 = [ &_20 <- { f0 = next; f1 = next_after } ] s2
+    | s2 = [ &_ret <- Some _20 ] s3
+    | s3 = return {_ret} ]
+  | bb9 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_Option_tup2_i64_i64 = Any.any_l ()
   | & next: Int64.t = next
   | & count: Int64.t = count
-  | & _16: Int64.t = Any.any_l () ])
-  [ return (result: tup2_i64_i64) ->
-  {[@stop_split] [@expl:reserve_offsets ensures] ([@stop_split] [@expl:reserve_offsets ensures #0] [%#soffset_allocator'3] Int64.to_int result.f0
-      = Int64.to_int next)
-    /\ ([@stop_split] [@expl:reserve_offsets ensures #1] [%#soffset_allocator'4] Int64.to_int result.f1
-    = Int64.to_int next + Int64.to_int count)}
+  | & _10: bool = Any.any_l ()
+  | & _12: bool = Any.any_l ()
+  | & _15: t_Option_i64 = Any.any_l ()
+  | & next_after: Int64.t = Any.any_l ()
+  | & _20: tup2_i64_i64 = Any.any_l () ])
+  [ return (result: t_Option_tup2_i64_i64) ->
+  {[@stop_split] [@expl:reserve_offsets ensures] ([@stop_split] [@expl:reserve_offsets ensures #0] [%#soffset_allocator'2] (result
+        <> None)
+      = (ge_log_Int (Int64.to_int next) 0
+      /\ gt_log_Int (Int64.to_int count) 0 /\ Int64.to_int next + Int64.to_int count <= Int64.to_int const_MAX))
+    /\ ([@stop_split] [@expl:reserve_offsets ensures #1] [%#soffset_allocator'3] forall base: Int64.t, next_after: Int64.t. result
+        = Some { f0 = base; f1 = next_after }
+      -> Int64.to_int base = Int64.to_int next /\ Int64.to_int next_after = Int64.to_int next + Int64.to_int count)}
     (! return {result}) ]

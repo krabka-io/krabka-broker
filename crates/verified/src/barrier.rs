@@ -3,9 +3,9 @@
 #[cfg(creusot)]
 use std::clone::Clone;
 
-#[cfg(creusot)]
-use creusot_std::prelude::DeepModel;
 use creusot_std::prelude::ensures;
+#[cfg(creusot)]
+use creusot_std::prelude::{DeepModel, logic};
 
 /// The result of adding one topic's partitions to a frozen target count.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
@@ -63,18 +63,42 @@ pub enum BarrierMarkerFenceDecision {
     Append,
 }
 
+/// The marker fence, in the order its refusals rank: facts that name no
+/// leadership generation at all (no image entry, or a negative epoch) are
+/// `Malformed`; a leader other than the expected one in the image or in the
+/// installed partition is `NotLeader`; a matching leader at another epoch is
+/// `FencedEpoch`; and only an exact match of all three is `Append`.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+fn barrier_marker_fence_model(facts: BarrierMarkerFenceFacts) -> BarrierMarkerFenceDecision {
+    pearlite! {
+        if !facts.image_present
+            || facts.expected_epoch@ < 0
+            || facts.image_epoch@ < 0
+            || facts.current_epoch@ < 0
+        {
+            BarrierMarkerFenceDecision::Malformed
+        } else if facts.image_leader != facts.expected_leader
+            || facts.current_leader != facts.expected_leader
+        {
+            BarrierMarkerFenceDecision::NotLeader
+        } else if facts.image_epoch != facts.expected_epoch
+            || facts.current_epoch != facts.expected_epoch
+        {
+            BarrierMarkerFenceDecision::FencedEpoch
+        } else {
+            BarrierMarkerFenceDecision::Append
+        }
+    }
+}
+
 /// Require the metadata image and installed partition to name exactly the
-/// expected leader generation.
-#[ensures((result == BarrierMarkerFenceDecision::Append) == (
-    facts.image_present
-        && facts.expected_epoch@ >= 0
-        && facts.image_epoch@ >= 0
-        && facts.current_epoch@ >= 0
-        && facts.image_leader@ == facts.expected_leader@
-        && facts.current_leader@ == facts.expected_leader@
-        && facts.image_epoch@ == facts.expected_epoch@
-        && facts.current_epoch@ == facts.expected_epoch@
-))]
+/// expected leader generation; see `barrier_marker_fence_model` for which
+/// refusal each mismatch gets. The host maps the refusals to different wire
+/// codes, so every variant is pinned.
+#[ensures(result == barrier_marker_fence_model(facts))]
 #[must_use]
 pub fn barrier_marker_fence_decision(facts: BarrierMarkerFenceFacts) -> BarrierMarkerFenceDecision {
     if !facts.image_present
@@ -152,7 +176,9 @@ mod tests {
     }
 
     #[test]
-    fn marker_fencing_requires_one_exact_leadership_generation() {
+    fn marker_fencing_ranks_malformed_then_leader_then_epoch() {
+        use BarrierMarkerFenceDecision::{Append, FencedEpoch, Malformed, NotLeader};
+
         let admitted = BarrierMarkerFenceFacts {
             image_present: true,
             expected_leader: 2,
@@ -162,56 +188,102 @@ mod tests {
             current_leader: 2,
             current_epoch: 7,
         };
-        assert2::check!(
-            barrier_marker_fence_decision(admitted) == BarrierMarkerFenceDecision::Append
-        );
-        let admitted_zero = BarrierMarkerFenceFacts {
-            image_present: true,
-            expected_leader: 2,
-            expected_epoch: 0,
-            image_leader: 2,
-            image_epoch: 0,
-            current_leader: 2,
-            current_epoch: 0,
-        };
-        assert2::check!(
-            barrier_marker_fence_decision(admitted_zero) == BarrierMarkerFenceDecision::Append
-        );
-        for malformed in [
-            BarrierMarkerFenceFacts {
-                expected_epoch: -1,
-                ..admitted
-            },
-            BarrierMarkerFenceFacts {
-                image_epoch: -1,
-                ..admitted
-            },
-            BarrierMarkerFenceFacts {
-                current_epoch: -1,
-                ..admitted
-            },
-            BarrierMarkerFenceFacts {
-                image_present: false,
-                ..admitted
-            },
+        for (what, facts, expected) in [
+            ("one exact generation", admitted, Append),
+            (
+                "epoch zero is a generation",
+                BarrierMarkerFenceFacts {
+                    expected_epoch: 0,
+                    image_epoch: 0,
+                    current_epoch: 0,
+                    ..admitted
+                },
+                Append,
+            ),
+            (
+                "no image entry",
+                BarrierMarkerFenceFacts {
+                    image_present: false,
+                    ..admitted
+                },
+                Malformed,
+            ),
+            (
+                "a negative expected epoch",
+                BarrierMarkerFenceFacts {
+                    expected_epoch: -1,
+                    ..admitted
+                },
+                Malformed,
+            ),
+            (
+                "a negative image epoch",
+                BarrierMarkerFenceFacts {
+                    image_epoch: -1,
+                    ..admitted
+                },
+                Malformed,
+            ),
+            (
+                "a negative installed epoch",
+                BarrierMarkerFenceFacts {
+                    current_epoch: -1,
+                    ..admitted
+                },
+                Malformed,
+            ),
+            (
+                "a malformed epoch outranks another leader",
+                BarrierMarkerFenceFacts {
+                    current_epoch: -1,
+                    image_leader: 3,
+                    ..admitted
+                },
+                Malformed,
+            ),
+            (
+                "the image names another leader",
+                BarrierMarkerFenceFacts {
+                    image_leader: 3,
+                    ..admitted
+                },
+                NotLeader,
+            ),
+            (
+                "another leader is installed",
+                BarrierMarkerFenceFacts {
+                    current_leader: 3,
+                    ..admitted
+                },
+                NotLeader,
+            ),
+            (
+                "another leader outranks another epoch",
+                BarrierMarkerFenceFacts {
+                    current_leader: 3,
+                    current_epoch: 8,
+                    ..admitted
+                },
+                NotLeader,
+            ),
+            (
+                "the image is at another epoch",
+                BarrierMarkerFenceFacts {
+                    image_epoch: 8,
+                    ..admitted
+                },
+                FencedEpoch,
+            ),
+            (
+                "the installed partition is at another epoch",
+                BarrierMarkerFenceFacts {
+                    current_epoch: 6,
+                    ..admitted
+                },
+                FencedEpoch,
+            ),
         ] {
-            assert2::check!(
-                barrier_marker_fence_decision(malformed) == BarrierMarkerFenceDecision::Malformed
-            );
-        }
-        for rejected in [
-            BarrierMarkerFenceFacts {
-                image_leader: 3,
-                ..admitted
-            },
-            BarrierMarkerFenceFacts {
-                current_epoch: 8,
-                ..admitted
-            },
-        ] {
-            assert2::check!(
-                barrier_marker_fence_decision(rejected) != BarrierMarkerFenceDecision::Append
-            );
+            assert2::check!(barrier_marker_fence_decision(facts) == expected, "{what}");
         }
     }
 

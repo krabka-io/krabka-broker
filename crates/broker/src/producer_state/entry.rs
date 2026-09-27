@@ -70,27 +70,14 @@ impl ProducerEntry {
         })
     }
 
-    /// The retained batch with exactly this sequence range, as Kafka's
-    /// `ProducerStateEntry.findDuplicateBatch` looks it up. A batch at another
-    /// epoch is never a duplicate.
+    /// Kafka's retained batches for this entry: the earlier batches, oldest
+    /// first, then the last batch. Every occupied slot is at `epoch`.
     #[must_use]
-    pub fn duplicate_of(
-        &self,
-        producer_epoch: i16,
-        base_sequence: i32,
-        last_sequence: i32,
-    ) -> Option<RetainedBatch> {
-        if producer_epoch != self.epoch {
-            return None;
-        }
-        self.earlier
-            .iter()
-            .flatten()
-            .copied()
-            .chain(self.last_batch())
-            .find(|batch| {
-                batch.base_sequence == base_sequence && batch.last_sequence == last_sequence
-            })
+    pub fn retained_batches(&self) -> [Option<RetainedBatch>; NUM_BATCHES_TO_RETAIN] {
+        let mut retained = [None; NUM_BATCHES_TO_RETAIN];
+        retained[..NUM_BATCHES_TO_RETAIN - 1].copy_from_slice(&self.earlier);
+        retained[NUM_BATCHES_TO_RETAIN - 1] = self.last_batch();
+        retained
     }
 
     /// The earlier batches after `self` accepts one more batch at `epoch`:

@@ -1,8 +1,8 @@
-(* #"/proof-work-235/crates/verified/src/storage.rs" 90 0 90 68 *)
+(* #"/workspace/crates/verified/src/storage.rs" 121 0 121 68 *)
 
-let%span sstorage = "/proof-work-235/crates/verified/src/storage.rs" 86 10 86 30
-let%span sstorage'0 = "/proof-work-235/crates/verified/src/storage.rs" 87 10 87 29
-let%span sstorage'1 = "/proof-work-235/crates/verified/src/storage.rs" 88 10 88 53
+let%span sstorage = "/workspace/crates/verified/src/storage.rs" 117 10 117 30
+let%span sstorage'0 = "/workspace/crates/verified/src/storage.rs" 118 10 118 29
+let%span sstorage'1 = "/workspace/crates/verified/src/storage.rs" 119 10 119 53
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -12,7 +12,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let truncation_frontier [#"/proof-work-235/crates/verified/src/storage.rs" 90 0 90 68] (frontier: Int64.t)
+let truncation_frontier [#"/workspace/crates/verified/src/storage.rs" 121 0 121 68] (frontier: Int64.t)
   (new_end: Int64.t) (return (x: Int64.t)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_10 <- Int64.lt frontier new_end ] s1 | s1 = any [ br0 -> {_10 = false} (! bb2) | br1 -> {_10} (! bb1) ] ]

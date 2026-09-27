@@ -43,6 +43,18 @@ async fn an_unreachable_leader_stops_acknowledging_acks_all_and_recovers_on_heal
 
     cluster.cut(NODE_A);
 
+    // A write after the cut lands in the leader's log and nowhere else, so it
+    // must not be acknowledged. It also moves the leader's log end past the
+    // replicas': Kafka keeps a follower whose log end equals the leader's in
+    // sync however long ago it fetched (`ReplicaState.isCaughtUp`), so only
+    // a record the replicas lack lets their lag clock run out.
+    let leader = client_at(&leader_addr).await;
+    let stranded = produce_once(&leader, topic_id, 3_000).await;
+    check!(
+        stranded != codes::NONE,
+        "a write only the unreachable leader holds must not be acknowledged"
+    );
+
     // The replicas stop fetching, so the leader drops them: the in-sync set
     // becomes itself alone. Waiting for that is what makes the refusal below
     // deterministic, and it is the observable proof that the cut reached the
@@ -55,7 +67,6 @@ async fn an_unreachable_leader_stops_acknowledging_acks_all_and_recovers_on_heal
     )
     .await;
 
-    let leader = client_at(&leader_addr).await;
     let code = produce_once(&leader, topic_id, 3_000).await;
     check!(
         code == codes::NOT_ENOUGH_REPLICAS,

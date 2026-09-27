@@ -4,29 +4,40 @@
 //!
 //! A write-once archive evicts nothing, so the pass ends before it lists.
 
-use krabka_log::{LogConfig, Offset};
+use krabka_log::{LogConfig, Offset, SegmentExport};
 use krabka_remote_storage::{RemoteLogSegmentMetadata, RemoteLogSegmentState, TopicIdPartition};
 use krabka_units::{
     ByteSize, Time,
     convert::{ByteSizeExt as _, TimeExt as _},
 };
+use krabka_verified::retention::{RemoteRetentionSegment, remote_retention_prefix};
 use tracing::warn;
 
 use super::{NO_BYTES, archive::ArchiveMode, delete::delete_one_segment};
 use crate::metrics::RemoteTierPath;
 
 /// KIP-405: compute the set of finished remote segments the topic no longer
-/// keeps, in oldest-first order. Mirrors
-/// [`local_retention_target`](super::local_retention::local_retention_target)'s
-/// walk. It **stops at
-/// the first non-deletable segment**, so the remaining remote prefix stays
-/// contiguous. This matches Kafka.
+/// keeps, in oldest-first order. The walk **stops at the first segment it
+/// keeps**, so the remaining remote prefix stays contiguous.
 ///
-/// A segment is deletable when any of:
-/// - `md.end_offset() < deleted_below`, the log-start breach, or
-/// - `now_ms - md.max_timestamp_ms > retention`, or
-/// - the running sum of sizes from the oldest forward must exceed
-///   `total - retention_size` (greedy size eviction).
+/// The rule is Kafka's `RemoteLogManager.cleanupExpiredRemoteLogSegments`,
+/// proved in [`krabka_verified::retention::remote_retention_prefix`]. Each
+/// segment in turn goes when any of these holds, checked in this order:
+/// - `md.end_offset() < deleted_below`, the log-start breach. It leaves the
+///   size debt alone.
+/// - `md.max_timestamp_ms < now_ms - retention`, Kafka's
+///   `isSegmentBreachedByRetentionTime` against `cleanupUntilMs`; Kafka runs
+///   no time axis while `now_ms - retention` is negative. It lowers the size
+///   debt by the segment's size, but not below zero.
+/// - The size debt, `total - retention_size`, is positive and still covers
+///   the whole segment (`isSegmentBreachedByRetentionSize`). It lowers the
+///   debt by the segment's size.
+///
+/// `total` is Kafka's `buildRetentionSizeData` total: the finished remote
+/// segments' bytes plus `only_local_size`, the local bytes the remote tier
+/// does not hold yet (see [`LocalLogFootprint::only_local_size`]). So
+/// `retention.bytes` bounds the partition's whole footprint, and local data
+/// waiting to be copied pushes the oldest remote segments out.
 ///
 /// A `None` setting disables its axis; the log-start breach has no retention
 /// setting to disable and evicts whatever falls below the floor even when both
@@ -56,47 +67,87 @@ pub(crate) fn remote_retention_eviction_set(
     retention_size: Option<ByteSize>,
     deleted_below: Option<Offset>,
     now_ms: i64,
+    only_local_size: ByteSize,
 ) -> Vec<RemoteLogSegmentMetadata> {
     let total: ByteSize = finished
         .iter()
         .map(segment_size)
-        .fold(NO_BYTES, |acc, size| acc + size);
-    let size_to_reclaim = retention_size.map_or(NO_BYTES, |budget| (total - budget).max(NO_BYTES));
-    // The verified walk knows two axes: one flag per segment that makes it
-    // deletable on its own, and a running size budget. A segment wholly below
-    // the log start is deletable on its own, so it joins the flag the time
-    // window sets. The walk's contiguous-prefix rule then holds over the
-    // union, which is what Kafka's expiration task produces too.
-    let expired: Vec<bool> = finished
+        .fold(only_local_size, |acc, size| acc + size);
+    // Kafka's `remainingBreachedSize`: zero when `retention.bytes` is unset
+    // or not exceeded.
+    let size_debt = retention_size.map_or(NO_BYTES, |budget| (total - budget).max(NO_BYTES));
+    // Kafka's `RetentionTimeData` exists only while `cleanupUntilMs = now -
+    // retention.ms` is non-negative, and a segment breaches it when
+    // `maxTimestampMs < cleanupUntilMs`, which is `now - maxTimestampMs >
+    // retention.ms`. Both sides are compared as `Time`, so a window at the top
+    // of the range converts the same way on either side.
+    let window = retention.filter(|window| Time::from_millis(now_ms) >= *window);
+    let facts: Vec<RemoteRetentionSegment> = finished
         .iter()
-        .map(|md| {
-            let max_timestamp_ms = md.max_timestamp_ms();
-            let age = Time::from_millis(now_ms.saturating_sub(max_timestamp_ms));
-            let time_expired =
-                max_timestamp_ms != -1 && matches!(retention, Some(window) if age > window);
-            let below_floor = matches!(deleted_below, Some(floor) if md.end_offset() < floor.0);
-            time_expired || below_floor
+        .map(|md| RemoteRetentionSegment {
+            log_start_breached: matches!(
+                deleted_below,
+                Some(floor) if md.end_offset() < floor.0
+            ),
+            time_expired: window.is_some_and(|window| {
+                Time::from_millis(now_ms.saturating_sub(md.max_timestamp_ms())) > window
+            }),
+            size: segment_size(md).bytes_u64(),
         })
         .collect();
-    let sizes: Vec<u64> = finished
-        .iter()
-        .map(|md| segment_size(md).bytes_u64())
-        .collect();
-    let finished_flags = vec![true; finished.len()];
-    let prefix = krabka_verified::retention::retention_prefix(
+    let len = remote_retention_prefix(
         archive != ArchiveMode::WriteOnce,
-        &finished_flags,
-        &expired,
-        &sizes,
-        size_to_reclaim.bytes_u64(),
+        &facts,
+        size_debt.bytes_u64(),
     );
-    finished.iter().take(prefix.len).cloned().collect()
+    finished.iter().take(len).cloned().collect()
 }
 
 /// The remote metadata's `segment_size_in_bytes` (a wire `int32`) as a
 /// quantity. Negative sizes are impossible but cheap to clamp.
 fn segment_size(md: &RemoteLogSegmentMetadata) -> ByteSize {
     ByteSize::from_bytes_i64(i64::from(md.segment_size_in_bytes().max(0)))
+}
+
+/// The local log as Kafka's `UnifiedLog.onlyLocalLogSegmentsSize()` reads
+/// it: the sealed local segments, and the whole local size with the active
+/// segment in it. The tick reads both under one hold of the log lock.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LocalLogFootprint<'a> {
+    /// Every sealed local segment, oldest first, including any below the
+    /// global log start.
+    pub sealed: &'a [SegmentExport],
+    /// The whole local log's size, active segment included.
+    pub size: ByteSize,
+}
+
+impl LocalLogFootprint<'_> {
+    /// A partition with no local bytes.
+    #[cfg(test)]
+    pub(crate) const EMPTY: LocalLogFootprint<'static> = LocalLogFootprint {
+        sealed: &[],
+        size: NO_BYTES,
+    };
+
+    /// Kafka's `onlyLocalLogSegmentsSize()`: the bytes of every local segment
+    /// whose base offset is above `highest_offset_in_remote_storage` (`None`
+    /// is Kafka's `-1`, a tier that holds nothing). The active segment is
+    /// never copied and always counts, so this is the whole local size less
+    /// the sealed segments that start at or below the highest remote offset.
+    pub(crate) fn only_local_size(
+        &self,
+        highest_offset_in_remote_storage: Option<i64>,
+    ) -> ByteSize {
+        let copied = self
+            .sealed
+            .iter()
+            .filter(|export| {
+                highest_offset_in_remote_storage
+                    .is_some_and(|highest| export.base_offset.0 <= highest)
+            })
+            .fold(NO_BYTES, |total, export| total + export.size);
+        (self.size - copied).max(NO_BYTES)
+    }
 }
 
 /// The partition facts one [`remote_retention_pass`] measures its segments
@@ -115,6 +166,9 @@ pub(crate) struct RemoteRetentionBounds<'a> {
     /// See [`remote_retention_eviction_set`].
     pub deleted_below: Option<Offset>,
     pub now_ms: i64,
+    /// The local log whose not-yet-copied bytes count toward
+    /// `retention.bytes`.
+    pub local: LocalLogFootprint<'a>,
 }
 
 /// What one [`remote_retention_pass`] did to a partition.
@@ -159,6 +213,7 @@ pub(crate) async fn remote_retention_pass(
         log_start_offset,
         deleted_below,
         now_ms,
+        local,
     } = bounds;
     // The archive mode comes from the tier and not from the bounds: a tier
     // that refuses deletes and a bounds struct that says it accepts them
@@ -191,6 +246,12 @@ pub(crate) async fn remote_retention_pass(
         }
     };
     finished.sort_by_key(RemoteLogSegmentMetadata::start_offset);
+    // Kafka's `highestOffsetInRemoteStorage`: the last offset the finished
+    // copies reach.
+    let highest_offset_in_remote_storage = finished
+        .iter()
+        .map(RemoteLogSegmentMetadata::end_offset)
+        .max();
 
     let evict = remote_retention_eviction_set(
         archive,
@@ -199,6 +260,7 @@ pub(crate) async fn remote_retention_pass(
         retention_size,
         deleted_below,
         now_ms,
+        local.only_local_size(highest_offset_in_remote_storage),
     );
     // KIP-405's `RemoteDeleteLagSegments` / `RemoteDeleteLagBytes`, recorded
     // before the round the way `RLMExpirationTask` does: the remote segments

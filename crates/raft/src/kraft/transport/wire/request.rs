@@ -65,6 +65,12 @@ pub enum PeerRequest {
     },
     Fetch {
         from: NodeId,
+        /// The epoch the sender is in: `CurrentLeaderEpoch`, which the
+        /// responder checks in `validateLeaderOnlyRequest`. Raw, as for
+        /// `FetchSnapshot`, so a negative epoch stays fenced.
+        current_leader_epoch: i32,
+        /// The epoch of the sender's last fetched record: `LastFetchedEpoch`,
+        /// which the leader checks for divergence.
         fetch_epoch: Epoch,
         fetch_offset: i64,
         replica_directory_id: uuid::Uuid,
@@ -192,6 +198,7 @@ impl PeerRequest {
             }
             PeerRequest::Fetch {
                 from,
+                current_leader_epoch,
                 fetch_epoch,
                 fetch_offset,
                 replica_directory_id,
@@ -209,7 +216,7 @@ impl PeerRequest {
                         topic_id: METADATA_TOPIC_ID,
                         partitions: vec![fetch_req::FetchPartition {
                             partition: METADATA_PARTITION,
-                            current_leader_epoch: epoch_to_wire(fetch_epoch),
+                            current_leader_epoch,
                             fetch_offset,
                             last_fetched_epoch: epoch_to_wire(fetch_epoch),
                             replica_directory_id: krabka_protocol::primitives::uuid::Uuid(
@@ -379,6 +386,7 @@ pub fn decode_fetch(buf: &[u8]) -> Option<PeerRequest> {
     let replica_directory_id = uuid::Uuid::from_bytes(p.replica_directory_id.0);
     Some(PeerRequest::Fetch {
         from,
+        current_leader_epoch: p.current_leader_epoch,
         fetch_epoch: epoch_from_wire(p.last_fetched_epoch),
         fetch_offset: p.fetch_offset,
         replica_directory_id,

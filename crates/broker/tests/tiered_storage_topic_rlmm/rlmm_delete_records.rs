@@ -104,7 +104,8 @@ async fn delete_records_puts_the_tiered_prefix_out_of_range_and_frees_it_case() 
         "offset 0 should be OFFSET_OUT_OF_RANGE after DeleteRecords, got {}",
         refused.error_code
     );
-    check!(refused.log_start_offset == DELETE_THROUGH);
+    // Kafka's non-tiered OFFSET_OUT_OF_RANGE row carries -1 offsets.
+    check!(refused.log_start_offset == -1);
     // The floor is not a wall across the whole partition: what is left above
     // it still reads.
     let above = await_fetch_records(&client, topic_id, DELETE_THROUGH).await;

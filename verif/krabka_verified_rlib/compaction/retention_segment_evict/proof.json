@@ -1,8 +1,0 @@
-{
-  "profile": [],
-  "proofs": {
-    "Coma": {
-      "vc_retention_segment_evict": { "prover": "alt-ergo", "time": 0.015 }
-    }
-  }
-}

@@ -24,7 +24,10 @@ use krabka_units::{
     fmt::Human as _,
     prelude::{ByteSize, ByteSizeExt as _},
 };
-use krabka_verified::spool_append_decision;
+use krabka_verified::{
+    audit::{AuditLosses, settle_loss_batch},
+    spool_append_decision,
+};
 
 use self::codec::{decode_record, encode_frame};
 use crate::{
@@ -46,18 +49,6 @@ const REPLAY_OFFSET_FILE: &str = "audit.replay-offset";
 const REPLAY_OFFSET_TMP: &str = "audit.replay-offset.tmp";
 const REPLAY_POISON_FILE: &str = "audit.replay-poison";
 const REPLAY_POISON_TMP: &str = "audit.replay-poison.tmp";
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct LossBatch {
-    pub(crate) generation: u64,
-    pub(crate) count: u64,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-struct LossState {
-    generation: u64,
-    count: u64,
-}
 
 pub(crate) fn add_loss_state(generation: u64, count: u64, added: u64) -> (u64, u64) {
     let generation = if count == 0 {
@@ -89,14 +80,14 @@ pub(crate) fn replay_recovery(
 /// Writer-persisted count of fail-open records awaiting a chain marker.
 #[derive(Debug)]
 pub(crate) struct PendingLosses {
-    state: Mutex<LossState>,
+    state: Mutex<AuditLosses>,
     path: Option<PathBuf>,
 }
 
 impl PendingLosses {
     pub(crate) fn memory() -> Arc<Self> {
         Arc::new(Self {
-            state: Mutex::new(LossState::default()),
+            state: Mutex::new(AuditLosses::default()),
             path: None,
         })
     }
@@ -111,12 +102,12 @@ impl PendingLosses {
                     bytes.len()
                 )));
             }
-            LossState {
+            AuditLosses {
                 generation: u64::from_be_bytes(bytes[..8].try_into().unwrap()),
                 count: u64::from_be_bytes(bytes[8..].try_into().unwrap()),
             }
         } else {
-            let state = LossState::default();
+            let state = AuditLosses::default();
             persist_loss_state(&path, state)?;
             state
         };
@@ -142,18 +133,25 @@ impl PendingLosses {
             .count
     }
 
-    pub(crate) fn snapshot(&self) -> Option<LossBatch> {
+    #[cfg(test)]
+    fn state(&self) -> AuditLosses {
+        *self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub(crate) fn snapshot(&self) -> Option<AuditLosses> {
         let state = *self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        (state.count > 0).then_some(LossBatch {
-            generation: state.generation,
-            count: state.count,
-        })
+        (state.count > 0).then_some(state)
     }
 
-    pub(crate) fn commit(&self, batch: LossBatch) {
+    /// Settle `batch` once its marker is durable. Losses added since the
+    /// snapshot stay pending in a fresh generation (`settle_loss_batch`).
+    pub(crate) fn commit(&self, batch: AuditLosses) {
         let state = {
             let mut state = self
                 .state
@@ -162,7 +160,7 @@ impl PendingLosses {
             if state.generation != batch.generation {
                 return;
             }
-            state.count = state.count.saturating_sub(batch.count);
+            *state = settle_loss_batch(*state, batch);
             *state
         };
         self.persist_or_warn(state);
@@ -181,7 +179,7 @@ impl PendingLosses {
 
     pub(crate) fn persist_with<T>(
         &self,
-        write_marker: impl FnOnce(LossBatch) -> Result<T, AuditError>,
+        write_marker: impl FnOnce(AuditLosses) -> Result<T, AuditError>,
     ) -> Result<Option<T>, AuditError> {
         let Some(batch) = self.snapshot() else {
             return Ok(None);
@@ -192,30 +190,33 @@ impl PendingLosses {
         Ok(Some(result))
     }
 
+    /// Settle the persisted pending losses against the durable marker of
+    /// their generation, if the spool holds one: a crash fell between the
+    /// marker's sync and the commit's sidecar write. The marker settles only
+    /// the count it reports (`settle_loss_batch`).
     fn reconcile(&self, records: &[AuditRecord]) {
         let state = {
             let mut state = self
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if state.count == 0
-                || !records.iter().any(|record| {
-                    record.class == crate::event::AuditEventClass::RecordsLost
-                        && serde_json::from_slice::<serde_json::Value>(&record.value)
-                            .ok()
-                            .and_then(|value| value.get("loss_generation")?.as_u64())
-                            == Some(state.generation)
-                })
-            {
+            if state.count == 0 {
                 return;
             }
-            state.count = 0;
+            let Some(batch) = records
+                .iter()
+                .filter_map(loss_marker_batch)
+                .find(|batch| batch.generation == state.generation)
+            else {
+                return;
+            };
+            *state = settle_loss_batch(*state, batch);
             *state
         };
         self.persist_or_warn(state);
     }
 
-    fn persist_or_warn(&self, state: LossState) {
+    fn persist_or_warn(&self, state: AuditLosses) {
         if let Some(path) = &self.path
             && let Err(error) = persist_loss_state(path, state)
         {
@@ -224,11 +225,23 @@ impl PendingLosses {
     }
 }
 
+/// The losses a records-lost marker reports, or `None` for any other record.
+fn loss_marker_batch(record: &AuditRecord) -> Option<AuditLosses> {
+    if record.class != crate::event::AuditEventClass::RecordsLost {
+        return None;
+    }
+    let value = serde_json::from_slice::<serde_json::Value>(&record.value).ok()?;
+    Some(AuditLosses {
+        generation: value.get("loss_generation")?.as_u64()?,
+        count: value.get("records_lost")?.as_u64()?,
+    })
+}
+
 fn io<E: std::fmt::Display>(e: E) -> AuditError {
     AuditError::Io(e.to_string())
 }
 
-fn persist_loss_state(path: &Path, state: LossState) -> Result<(), AuditError> {
+fn persist_loss_state(path: &Path, state: AuditLosses) -> Result<(), AuditError> {
     let mut bytes = [0_u8; LOSS_STATE_LEN];
     bytes[..8].copy_from_slice(&state.generation.to_be_bytes());
     bytes[8..].copy_from_slice(&state.count.to_be_bytes());
@@ -1007,7 +1020,7 @@ mod tests {
 
         let mut reopened = Spool::open(dir.path(), ByteSize::from_bytes(0)).unwrap();
         check!(reopened.pending_losses().count() == 3);
-        let mut marker = AuditRecord::records_lost_with_generation(batch.count, batch.generation);
+        let mut marker = AuditRecord::records_lost(batch.count, batch.generation);
         marker.push_chain_headers(0, &GENESIS_HEAD);
         check!(reopened.append_loss_marker(&marker).is_err());
         check!(reopened.size() == ByteSize::ZERO);
@@ -1051,7 +1064,7 @@ mod tests {
         losses.add(5);
         losses.persist().unwrap();
         let batch = losses.snapshot().unwrap();
-        let wrong_batch = LossBatch {
+        let wrong_batch = AuditLosses {
             generation: batch.generation + 1,
             count: batch.count,
         };
@@ -1081,13 +1094,78 @@ mod tests {
         losses.reconcile(&[app_event]);
         check!(losses.count() == 4);
 
-        let wrong_gen_marker = AuditRecord::records_lost_with_generation(4, generation + 1);
+        let wrong_gen_marker = AuditRecord::records_lost(4, generation + 1);
         losses.reconcile(&[wrong_gen_marker]);
         check!(losses.count() == 4);
 
-        let matching_marker = AuditRecord::records_lost_with_generation(4, generation);
+        let matching_marker = AuditRecord::records_lost(4, generation);
         losses.reconcile(&[matching_marker]);
         check!(losses.count() == 0);
+    }
+
+    /// A loss `AuditHandle::emit` adds while the writer's marker is in flight
+    /// is neither settled by that marker nor left in its generation.
+    #[test]
+    fn commit_carries_a_concurrent_loss_into_a_fresh_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        let losses = spool.pending_losses();
+        losses.add(3);
+        let batch = losses.persist_with(Ok).unwrap().unwrap();
+        check!(
+            losses.state()
+                == AuditLosses {
+                    generation: batch.generation,
+                    count: 0,
+                }
+        );
+
+        losses.add(2);
+        let batch = losses.snapshot().unwrap();
+        losses.persist().unwrap();
+        losses.add(1);
+        losses.commit(batch);
+        let carried = AuditLosses {
+            generation: batch.generation + 1,
+            count: 1,
+        };
+        check!(losses.state() == carried);
+        check!(losses.snapshot() == Some(carried));
+
+        drop(losses);
+        drop(spool);
+        let reopened = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        check!(reopened.pending_losses().state() == carried);
+    }
+
+    /// Crash between the marker's fsync and the commit, with a concurrent loss
+    /// already in the sidecar: reconciliation settles the marker's count only,
+    /// and a later reopen does not settle the remainder a second time.
+    #[test]
+    fn reconcile_settles_only_the_markers_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        let losses = spool.pending_losses();
+        losses.add(3);
+        let batch = losses.snapshot().unwrap();
+        losses.persist().unwrap();
+        losses.add(1);
+        losses.persist().unwrap();
+        let mut marker = AuditRecord::records_lost(batch.count, batch.generation);
+        marker.push_chain_headers(0, &GENESIS_HEAD);
+        spool.append_loss_marker(&marker).unwrap();
+        drop(losses);
+        drop(spool);
+
+        let carried = AuditLosses {
+            generation: batch.generation + 1,
+            count: 1,
+        };
+        for _ in 0..2 {
+            let reopened = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+            check!(reopened.pending_losses().state() == carried);
+            check!(reopened.read_all().unwrap() == vec![marker.clone()]);
+        }
     }
 
     #[cfg(unix)]

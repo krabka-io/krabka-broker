@@ -1,0 +1,75 @@
+(* #"/workspace/crates/verified/src/audit.rs" 141 0 141 79 *)
+
+let%span saudit = "/workspace/crates/verified/src/audit.rs" 148 19 148 20
+let%span saudit'0 = "/workspace/crates/verified/src/audit.rs" 152 42 152 50
+let%span saudit'1 = "/workspace/crates/verified/src/audit.rs" 153 31 153 32
+let%span saudit'2 = "/workspace/crates/verified/src/audit.rs" 153 12 153 32
+let%span saudit'3 = "/workspace/crates/verified/src/audit.rs" 157 15 157 40
+let%span saudit'4 = "/workspace/crates/verified/src/audit.rs" 129 10 130 76
+let%span saudit'5 = "/workspace/crates/verified/src/audit.rs" 131 10 132 52
+let%span saudit'6 = "/workspace/crates/verified/src/audit.rs" 133 10 134 26
+let%span saudit'7 = "/workspace/crates/verified/src/audit.rs" 135 10 137 63
+let%span saudit'8 = "/workspace/crates/verified/src/audit.rs" 138 10 139 51
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+use int.Int
+
+type t_AuditLosses = { generation: UInt64.t; count: UInt64.t }
+
+constant const_MAX: UInt64.t = (18446744073709551615: UInt64.t)
+
+predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other < self
+
+meta "rewrite_def" predicate gt_log_Int
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let settle_loss_batch [#"/workspace/crates/verified/src/audit.rs" 141 0 141 79] (state: t_AuditLosses)
+  (batch: t_AuditLosses) (return (x: t_AuditLosses)) = (! bb0
+  [ bb0 = s0
+    [ s0 = [ &_23 <- state.generation <> batch.generation ] s1
+    | s1 = any [ br0 -> {_23 = false} (! bb2) | br1 -> {_23} (! bb1) ] ]
+  | bb1 = s0 [ s0 = [ &_ret <- state ] s1 | s1 = return {_ret} ]
+  | bb2 = s0
+    [ s0 = [ &_28 <- UInt64.ge batch.count state.count ] s1
+    | s1 = any [ br0 -> {_28 = false} (! bb4) | br1 -> {_28} (! bb3) ] ]
+  | bb3 = s0
+    [ s0 = [ &_ret <- { generation = state.generation; count = ([%#saudit] (0: UInt64.t)) } ] s1 | s1 = return {_ret} ]
+  | bb4 = s0
+    [ s0 = [ &_34 <- UInt64.lt state.generation ([%#saudit'0] const_MAX) ] s1
+    | s1 = any [ br0 -> {_34 = false} (! bb6) | br1 -> {_34} (! bb5) ] ]
+  | bb5 = s0
+    [ s0 = UInt64.add [%#saudit'2] {state.generation} {[%#saudit'1] (1: UInt64.t)}
+        (fun (_x: UInt64.t) -> [ &_33 <- _x ] s1)
+    | s1 = bb7 ]
+  | bb6 = s0 [ s0 = [ &_33 <- state.generation ] s1 | s1 = bb7 ]
+  | bb7 = s0
+    [ s0 = UInt64.sub [%#saudit'3] {state.count} {batch.count} (fun (_x: UInt64.t) -> [ &_37 <- _x ] s1)
+    | s1 = [ &_ret <- { generation = _33; count = _37 } ] s2
+    | s2 = return {_ret} ] ]
+  [ & _ret: t_AuditLosses = Any.any_l ()
+  | & state: t_AuditLosses = state
+  | & batch: t_AuditLosses = batch
+  | & _23: bool = Any.any_l ()
+  | & _28: bool = Any.any_l ()
+  | & _33: UInt64.t = Any.any_l ()
+  | & _34: bool = Any.any_l ()
+  | & _37: UInt64.t = Any.any_l () ])
+  [ return (result: t_AuditLosses) ->
+  {[@stop_split] [@expl:settle_loss_batch ensures] ([@stop_split] [@expl:settle_loss_batch ensures #0] [%#saudit'4] state.generation
+        <> batch.generation -> result.generation = state.generation /\ result.count = state.count)
+    /\ ([@stop_split] [@expl:settle_loss_batch ensures #1] [%#saudit'5] state.generation = batch.generation
+        /\ UInt64.t'int batch.count <= UInt64.t'int state.count
+      -> UInt64.t'int result.count + UInt64.t'int batch.count = UInt64.t'int state.count)
+    /\ ([@stop_split] [@expl:settle_loss_batch ensures #2] [%#saudit'6] state.generation = batch.generation
+        /\ gt_log_Int (UInt64.t'int batch.count) (UInt64.t'int state.count) -> UInt64.t'int result.count = 0)
+    /\ ([@stop_split] [@expl:settle_loss_batch ensures #3] [%#saudit'7] state.generation = batch.generation
+      -> (result.generation <> state.generation)
+      = (gt_log_Int (UInt64.t'int result.count) 0 /\ UInt64.t'int state.generation < UInt64.t'int const_MAX))
+    /\ ([@stop_split] [@expl:settle_loss_batch ensures #4] [%#saudit'8] result.generation <> state.generation
+    -> UInt64.t'int result.generation = UInt64.t'int state.generation + 1)}
+    (! return {result}) ]

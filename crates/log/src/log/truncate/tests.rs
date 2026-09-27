@@ -371,6 +371,33 @@ fn truncate_to_drops_stale_epoch_checkpoint_entries() {
     );
 }
 
+/// Kafka's `UnifiedLog.truncateTo` no-effect branch: a replica that took a
+/// leader epoch at its log end and lost leadership before writing drops that
+/// unbacked entry on any truncation at or past its log end, so the next
+/// leader's epoch can be recorded at the same offset.
+#[test]
+fn a_no_op_truncation_still_drops_an_epoch_no_record_backs() {
+    let entry = |epoch, start_offset| crate::leader_epoch_checkpoint::EpochEntry {
+        epoch: LeaderEpoch(epoch),
+        start_offset: Offset(start_offset),
+    };
+    for (name, target) in [("at the log end", 3), ("past the log end", 9)] {
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        log.append(&mut sample_batch_with_epoch(3, 1)).unwrap();
+        log.assign_epoch_start_offset(LeaderEpoch(5), Offset(3))
+            .unwrap();
+
+        log.truncate_to(Offset(target)).unwrap();
+
+        check!(log.log_end_offset() == Offset(3), "{name}");
+        check!(
+            log.epoch_checkpoint().entries() == &[entry(1, 0)][..],
+            "{name}"
+        );
+    }
+}
+
 #[test]
 fn trim_to_offset_drops_old_segments() {
     let dir = tempdir().expect("tempdir");
@@ -436,4 +463,63 @@ fn trim_to_offset_idempotent_at_or_below_log_start() {
     // Trim to 0 on a fresh log → no change.
     let r = log.trim_to_offset(Offset(0)).expect("trim");
     assert2::assert!(r == log.log_start_offset());
+}
+
+/// Kafka's `truncateAndReload(logStartOffset, cut, _)` on a truncation:
+/// every snapshot outside `(log start, cut]` is deleted -- one above the cut
+/// and one at or below the log start alike -- and the newest one left loads.
+/// A producer whose batches are all below the log start survives because
+/// the loaded snapshot carries it.
+#[test]
+fn truncation_reloads_from_the_newest_snapshot_between_log_start_and_cut() {
+    for (log_start, cut, snapshots, producers) in [
+        // Truncation at a snapshot: it is kept and loaded.
+        (0, 3, vec![1, 2, 3], vec![1, 2, 3]),
+        // Truncation below a snapshot: it is deleted.
+        (0, 2, vec![1, 2], vec![1, 2]),
+        // The snapshot at the log start is deleted; the one at 2 still
+        // carries producer 1, whose only record is below the log start.
+        (1, 2, vec![2], vec![1, 2]),
+        // Truncation to the log start leaves no snapshot and no producer.
+        (2, 2, vec![], vec![]),
+    ] {
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(
+            dir.path(),
+            LogConfig {
+                segment_size: bytes(1),
+                ..LogConfig::default()
+            },
+        )
+        .unwrap();
+        // One record per producer and per segment: segments at 0..=3 and a
+        // snapshot at every roll, 1..=3.
+        for producer_id in 1..=4 {
+            let mut batch = sample_batch(1);
+            batch.producer_id = producer_id;
+            batch.producer_epoch = 0;
+            batch.base_sequence = 0;
+            log.append(&mut batch).unwrap();
+        }
+        log.set_log_start_offset(Offset(log_start)).unwrap();
+
+        log.truncate_to(Offset(cut)).unwrap();
+
+        let mut reloaded: Vec<i64> = log
+            .producer_state_snapshot()
+            .into_iter()
+            .map(|entry| entry.producer_id.get())
+            .collect();
+        reloaded.sort_unstable();
+        check!(reloaded == producers, "log start {log_start}, cut {cut}");
+        check!(
+            producer_snapshot::list(dir.path())
+                .unwrap()
+                .into_iter()
+                .map(|(offset, _)| offset.0)
+                .collect::<Vec<_>>()
+                == snapshots,
+            "log start {log_start}, cut {cut}"
+        );
+    }
 }

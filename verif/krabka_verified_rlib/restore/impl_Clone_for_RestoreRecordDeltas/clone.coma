@@ -1,0 +1,19 @@
+(* #"/workspace/crates/verified/src/restore.rs" 232 27 232 32 *)
+
+(* <restore::RestoreRecordDeltas as std::clone::Clone> *)
+
+use creusot.int.Int32
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_RestoreRecordDeltas = { offset_delta: Int32.t; timestamp_delta: Int64.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_RestoreRecordDeltas [#"/workspace/crates/verified/src/restore.rs" 232 27 232 32] (self: t_RestoreRecordDeltas)
+  (return (x: t_RestoreRecordDeltas)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_RestoreRecordDeltas = Any.any_l () | & self: t_RestoreRecordDeltas = self ])
+  [ return (result: t_RestoreRecordDeltas) -> (! return {result}) ]

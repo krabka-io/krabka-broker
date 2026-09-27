@@ -1,12 +1,11 @@
-(* #"/workspace/crates/verified/src/delegation_token.rs" 231 0 231 82 *)
+(* #"/workspace/crates/verified/src/delegation_token.rs" 239 0 239 82 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sdelegation_token = "/workspace/crates/verified/src/delegation_token.rs" 270 31 270 32
-let%span sdelegation_token'0 = "/workspace/crates/verified/src/delegation_token.rs" 274 47 274 48
-let%span sdelegation_token'1 = "/workspace/crates/verified/src/delegation_token.rs" 252 30 252 31
-let%span sdelegation_token'2 = "/workspace/crates/verified/src/delegation_token.rs" 202 10 221 9
-let%span sdelegation_token'3 = "/workspace/crates/verified/src/delegation_token.rs" 222 10 229 75
+let%span sdelegation_token = "/workspace/crates/verified/src/delegation_token.rs" 278 31 278 32
+let%span sdelegation_token'0 = "/workspace/crates/verified/src/delegation_token.rs" 282 47 282 48
+let%span sdelegation_token'1 = "/workspace/crates/verified/src/delegation_token.rs" 260 30 260 31
+let%span sdelegation_token'2 = "/workspace/crates/verified/src/delegation_token.rs" 209 10 229 9
+let%span sdelegation_token'3 = "/workspace/crates/verified/src/delegation_token.rs" 230 10 237 75
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -31,15 +30,11 @@ predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate ge_log_Int
 
-predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
-
-meta "rewrite_def" predicate gt_log_Int
-
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let token_mutation_decision [#"/workspace/crates/verified/src/delegation_token.rs" 231 0 231 82]
+let token_mutation_decision [#"/workspace/crates/verified/src/delegation_token.rs" 239 0 239 82]
   (facts: t_TokenMutationFacts) (return (x: t_TokenMutationDecision)) = (! bb0
   [ bb0 = any [ br0 -> {facts.uncommitted_tail = false} (! bb2) | br1 -> {facts.uncommitted_tail} (! bb1) ]
   | bb1 = s0 [ s0 = [ &_ret <- Reject ] s1 | s1 = return {_ret} ]
@@ -59,10 +54,10 @@ let token_mutation_decision [#"/workspace/crates/verified/src/delegation_token.r
     [ s0 = [ &_48 <- Int64.ge facts.now_ms ([%#sdelegation_token] (0: Int64.t)) ] s1
     | s1 = any [ br0 -> {_48 = false} (! bb51) | br1 -> {_48} (! bb39) ] ]
   | bb39 = s0
-    [ s0 = [ &_50 <- Int64.gt facts.expected_expiry_ms facts.now_ms ] s1
+    [ s0 = [ &_50 <- Int64.ge facts.expected_expiry_ms facts.now_ms ] s1
     | s1 = any [ br0 -> {_50 = false} (! bb51) | br1 -> {_50} (! bb40) ] ]
   | bb40 = s0
-    [ s0 = [ &_53 <- Int64.gt facts.max_timestamp_ms facts.now_ms ] s1
+    [ s0 = [ &_53 <- Int64.ge facts.max_timestamp_ms facts.now_ms ] s1
     | s1 = any [ br0 -> {_53 = false} (! bb51) | br1 -> {_53} (! bb41) ] ]
   | bb41 = s0
     [ s0 = [ &_56 <- Int64.le facts.expected_expiry_ms facts.max_timestamp_ms ] s1
@@ -79,10 +74,10 @@ let token_mutation_decision [#"/workspace/crates/verified/src/delegation_token.r
     [ s0 = [ &_27 <- Int64.lt facts.now_ms ([%#sdelegation_token'1] (0: Int64.t)) ] s1
     | s1 = any [ br0 -> {_27 = false} (! bb22) | br1 -> {_27} (! bb28) ] ]
   | bb22 = s0
-    [ s0 = [ &_29 <- Int64.le facts.expected_expiry_ms facts.now_ms ] s1
+    [ s0 = [ &_29 <- Int64.lt facts.expected_expiry_ms facts.now_ms ] s1
     | s1 = any [ br0 -> {_29 = false} (! bb24) | br1 -> {_29} (! bb28) ] ]
   | bb24 = s0
-    [ s0 = [ &_32 <- Int64.le facts.max_timestamp_ms facts.now_ms ] s1
+    [ s0 = [ &_32 <- Int64.lt facts.max_timestamp_ms facts.now_ms ] s1
     | s1 = any [ br0 -> {_32 = false} (! bb26) | br1 -> {_32} (! bb28) ] ]
   | bb26 = s0
     [ s0 = [ &_35 <- Int64.gt facts.expected_expiry_ms facts.max_timestamp_ms ] s1
@@ -93,7 +88,7 @@ let token_mutation_decision [#"/workspace/crates/verified/src/delegation_token.r
     | s1 = any [ br0 -> {_39 = false} (! bb31) | br1 -> {_39} (! bb30) ] ]
   | bb30 = s0 [ s0 = [ &_ret <- Retry ] s1 | s1 = return {_ret} ]
   | bb31 = s0
-    [ s0 = [ &_42 <- Int64.gt facts.incoming_expiry_ms facts.expected_expiry_ms ] s1
+    [ s0 = [ &_42 <- Int64.ge facts.incoming_expiry_ms facts.now_ms ] s1
     | s1 = any [ br0 -> {_42 = false} (! bb36) | br1 -> {_42} (! bb32) ] ]
   | bb32 = s0
     [ s0 = [ &_45 <- Int64.le facts.incoming_expiry_ms facts.max_timestamp_ms ] s1
@@ -129,14 +124,15 @@ let token_mutation_decision [#"/workspace/crates/verified/src/delegation_token.r
       /\ match facts.kind with
         | Delete -> true
         | Renew -> ge_log_Int (Int64.to_int facts.now_ms) 0
-        /\ gt_log_Int (Int64.to_int facts.expected_expiry_ms) (Int64.to_int facts.now_ms)
-        /\ gt_log_Int (Int64.to_int facts.max_timestamp_ms) (Int64.to_int facts.now_ms)
+        /\ ge_log_Int (Int64.to_int facts.expected_expiry_ms) (Int64.to_int facts.now_ms)
+        /\ ge_log_Int (Int64.to_int facts.max_timestamp_ms) (Int64.to_int facts.now_ms)
         /\ Int64.to_int facts.expected_expiry_ms <= Int64.to_int facts.max_timestamp_ms
-        /\ gt_log_Int (Int64.to_int facts.incoming_expiry_ms) (Int64.to_int facts.expected_expiry_ms)
+        /\ Int64.to_int facts.incoming_expiry_ms <> Int64.to_int facts.expected_expiry_ms
+        /\ ge_log_Int (Int64.to_int facts.incoming_expiry_ms) (Int64.to_int facts.now_ms)
         /\ Int64.to_int facts.incoming_expiry_ms <= Int64.to_int facts.max_timestamp_ms
         | Expire -> ge_log_Int (Int64.to_int facts.now_ms) 0
-        /\ gt_log_Int (Int64.to_int facts.expected_expiry_ms) (Int64.to_int facts.now_ms)
-        /\ gt_log_Int (Int64.to_int facts.max_timestamp_ms) (Int64.to_int facts.now_ms)
+        /\ ge_log_Int (Int64.to_int facts.expected_expiry_ms) (Int64.to_int facts.now_ms)
+        /\ ge_log_Int (Int64.to_int facts.max_timestamp_ms) (Int64.to_int facts.now_ms)
         /\ Int64.to_int facts.expected_expiry_ms <= Int64.to_int facts.max_timestamp_ms
         /\ ge_log_Int (Int64.to_int facts.incoming_expiry_ms) 0
         /\ Int64.to_int facts.incoming_expiry_ms <= Int64.to_int facts.max_timestamp_ms

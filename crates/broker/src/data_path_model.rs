@@ -1,12 +1,16 @@
 //! COMPOSITIONAL end-to-end data-path model. It is the first model beyond the
 //! per-slice ones. It composes the four real seam cores over a tiny cluster of
-//! 3 brokers and 1 partition: HWM/ISR (`ReplicaState`), leader-epoch truncation
+//! 3 brokers and 1 partition: HWM/ISR (`ReplicaState`'s high watermark, which
+//! stands still under `min.insync.replicas`, and the leader's ISR expansion
+//! kernel `isr_candidate_selected`), leader-epoch truncation
 //! (`epoch_and_offset_for_entries`), failover selection (`failover_one` and
 //! `select_leader`), KIP-966 ELR maintenance (`next_partition_elr`), and fetch
 //! visibility (`compute_visibility_window`). It verifies the canonical broker
 //! guarantee end-to-end. An `acks=all` record is never lost across clean leader
-//! changes, every consumer read is consistent, and unclean-election loss is
-//! exactly characterized.
+//! changes, ELR elections included, every consumer read is consistent, and
+//! unclean-election loss is exactly characterized. The diskless configuration
+//! also drives the controller's offset reservation (`reserve_offsets` over the
+//! image's `PartitionOffsetAdvance` counter).
 //!
 //! Each per-broker log is a `Vec<u8>` of leader epochs, where offset = index
 //! and value ≡ offset. A ghost `committed` tracks durability, with one epoch
@@ -22,10 +26,12 @@
 //! one. The KIP-966 rule that runs ahead of it makes a claim: a surviving
 //! member of the published eligible-leader set is elected over a strictly
 //! longer log, and the election reports itself as losing nothing, on the
-//! strength of how the controller maintained that set. `data_elr` is the
-//! configuration that checks it — see [`elr`] for why the model has to run the
-//! real maintenance rule rather than stipulate a set, and [`election`] for the
-//! two durability obligations that the claim is and is not about.
+//! strength of how the controller maintained that set. `failover_one` makes
+//! that election first, from the published set, the moment the live ISR
+//! empties; `select_leader` would make it again inside a recovery. `data_elr`
+//! is the configuration that checks it — see [`elr`] for why the model has to
+//! run the real maintenance rule rather than stipulate a set, and [`election`]
+//! for the two durability obligations that the claim is and is not about.
 //!
 //! # Module layout
 //!
@@ -82,8 +88,10 @@ fn data_unclean() {
 /// DPC-4. `min.insync.replicas` of 2 on a 3-replica partition is the smallest
 /// configuration in which a replica can leave an ISR that is about to fall
 /// below min ISR, which is the only way KIP-966 puts one in the
-/// eligible-leader set. The unclean strategy is what then reaches the election
-/// that reads it.
+/// eligible-leader set. `failover_one` reads that set once the live ISR
+/// empties and elects a surviving member cleanly; the unclean strategy is what
+/// covers the partition when no member survives, through the offset-aware
+/// recovery.
 ///
 /// The ELR bookkeeping makes each state larger and the search wider, so this
 /// configuration runs at a log length of 3 rather than 4. Three records is one
@@ -99,20 +107,15 @@ fn data_elr() {
     );
 }
 
+/// The diskless WAL path. One exhaustive run checks every diskless property
+/// together: an fsync-acknowledged record is never lost, the HWM is released
+/// by the WAL sync alone, and the offsets the controller reserves through the
+/// real reservation kernel and image advance are gap-free and unique.
 #[test]
-fn data_diskless_wal_acked_never_lost() {
+fn data_diskless() {
     run(
         DpModel::config(Instant::now(), false, true, NO_ELR, LONG_LOG),
-        "data_diskless_wal_acked_never_lost",
-        PINNED_UNIQUE_STATES_DISKLESS,
-    );
-}
-
-#[test]
-fn data_diskless_offsets_gap_free_and_unique() {
-    run(
-        DpModel::config(Instant::now(), false, true, NO_ELR, LONG_LOG),
-        "data_diskless_offsets_gap_free_and_unique",
+        "data_diskless",
         PINNED_UNIQUE_STATES_DISKLESS,
     );
 }

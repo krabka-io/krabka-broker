@@ -1,4 +1,4 @@
-(* #"/proof-work-246/crates/verified/src/offset_allocator.rs" 67 0 74 16 *)
+(* #"/workspace/crates/verified/src/offset_allocator.rs" 67 0 74 16 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
@@ -6,15 +6,15 @@ let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creu
 let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
 let%span soption = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 193 19 193 79
 let%span soption'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/option.rs" 194 18 197 9
-let%span soffset_allocator = "/proof-work-246/crates/verified/src/offset_allocator.rs" 75 44 75 45
-let%span soffset_allocator'0 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 78 24 78 26
-let%span soffset_allocator'1 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 79 28 79 29
-let%span soffset_allocator'2 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 83 14 83 15
-let%span soffset_allocator'3 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 83 28 83 29
-let%span soffset_allocator'4 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 86 4 86 27
-let%span soffset_allocator'5 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 86 4 86 41
-let%span soffset_allocator'6 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 45 10 65 1
-let%span soffset_allocator'7 = "/proof-work-246/crates/verified/src/offset_allocator.rs" 86 32 86 35
+let%span soffset_allocator = "/workspace/crates/verified/src/offset_allocator.rs" 75 44 75 45
+let%span soffset_allocator'0 = "/workspace/crates/verified/src/offset_allocator.rs" 78 24 78 26
+let%span soffset_allocator'1 = "/workspace/crates/verified/src/offset_allocator.rs" 79 28 79 29
+let%span soffset_allocator'2 = "/workspace/crates/verified/src/offset_allocator.rs" 83 14 83 15
+let%span soffset_allocator'3 = "/workspace/crates/verified/src/offset_allocator.rs" 83 28 83 29
+let%span soffset_allocator'4 = "/workspace/crates/verified/src/offset_allocator.rs" 86 4 86 27
+let%span soffset_allocator'5 = "/workspace/crates/verified/src/offset_allocator.rs" 86 4 86 41
+let%span soffset_allocator'6 = "/workspace/crates/verified/src/offset_allocator.rs" 45 10 65 1
+let%span soffset_allocator'7 = "/workspace/crates/verified/src/offset_allocator.rs" 86 32 86 35
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -41,7 +41,7 @@ let checked_add (self_: Int64.t) (rhs: Int64.t) (return (x: t_Option_i64)) = any
 
 type closure0 = { c0: Int64.t }
 
-let closure0 [#"/proof-work-246/crates/verified/src/offset_allocator.rs" 86 32 86 35] [@coma:extspec] (self: closure0)
+let closure0 [#"/workspace/crates/verified/src/offset_allocator.rs" 86 32 86 35] [@coma:extspec] (self: closure0)
   (_0: Int64.t) (return (x: Int64.t)) = bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self.c0 ] s1 | s1 = return {_ret} ] ]
   [ & _ret: Int64.t = Any.any_l () | & self: closure0 = self ] [ return (result: Int64.t) -> return {result} ]
@@ -84,9 +84,9 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let wal_reservation_response [#"/proof-work-246/crates/verified/src/offset_allocator.rs" 67 0 74 16]
-  (request_matches: bool) (request_epoch: Int64.t) (observed_epoch: Int64.t) (response_epoch: Int64.t) (base: Int64.t)
-  (count: Int64.t) (return (x: t_Option_i64)) = (! bb0
+let wal_reservation_response [#"/workspace/crates/verified/src/offset_allocator.rs" 67 0 74 16] (request_matches: bool)
+  (request_epoch: Int64.t) (observed_epoch: Int64.t) (response_epoch: Int64.t) (base: Int64.t) (count: Int64.t)
+  (return (x: t_Option_i64)) = (! bb0
   [ bb0 = any [ br0 -> {request_matches = false} (! bb3) | br1 -> {request_matches} (! bb1) ]
   | bb1 = s0
     [ s0 = [ &_16 <- Int64.lt response_epoch ([%#soffset_allocator] (0: Int64.t)) ] s1

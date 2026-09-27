@@ -350,6 +350,15 @@ impl WalShardEngine {
         }
 
         if self.distributed_required.load(Ordering::Acquire) {
+            // The local fsync comes first, placement or not: the leader votes
+            // with the offset it has fsynced, and `configure_distributed`
+            // records that offset when a placement arrives after this call
+            // has already returned.
+            if let Err(error) = sync_replica(source.clone(), &[]).await {
+                self.record_quorum_loss(target, &error);
+                return Err(error);
+            }
+            self.local_durable.fetch_max(target.0, Ordering::AcqRel);
             let configured = self
                 .distributed
                 .lock()
@@ -362,11 +371,6 @@ impl WalShardEngine {
                 self.record_quorum_loss(target, &error);
                 return Err(error);
             }
-            if let Err(error) = sync_replica(source.clone(), &[]).await {
-                self.record_quorum_loss(target, &error);
-                return Err(error);
-            }
-            self.local_durable.fetch_max(target.0, Ordering::AcqRel);
             let Some(me) = self
                 .distributed
                 .lock()
@@ -411,7 +415,12 @@ impl WalShardEngine {
             if !replica.alive.load(Ordering::Acquire) {
                 continue;
             }
-            let sync_start = committed.min(replica_end_offset(replica)).max(source_start);
+            // Verify the replica's whole retained log against the source, not
+            // only the records past the committed offset: a replica that
+            // led an epoch nobody acknowledged can hold a different record
+            // below that offset, and counting it would acknowledge a prefix
+            // that fewer than a majority hold.
+            let sync_start = replica_start_offset(replica).max(source_start);
             let Ok(batches) = read_batches_exact(&source, sync_start, target) else {
                 continue;
             };
@@ -449,14 +458,9 @@ impl WalShardEngine {
         let log_start_offset = log.log_start_offset();
         let log_end_offset = log.log_end_offset();
         let offset_out_of_range = fetch_offset < log_start_offset || fetch_offset > log_end_offset;
-        let diverging_epoch = (last_fetched_epoch >= 0)
-            .then(|| {
-                log.epoch_checkpoint()
-                    .epoch_and_offset_for(LeaderEpoch(last_fetched_epoch), log_end_offset)
-            })
-            .filter(|(found_epoch, end_offset)| {
-                found_epoch.0 < last_fetched_epoch || *end_offset < fetch_offset
-            });
+        let diverging_epoch = u32::try_from(last_fetched_epoch)
+            .ok()
+            .and_then(|epoch| fetch_divergence(&log, epoch, fetch_offset));
         let records = if diverging_epoch.is_some()
             || offset_out_of_range
             || fetch_offset == log_end_offset
@@ -516,11 +520,44 @@ impl WalShardEngine {
     }
 }
 
+/// The diverging epoch a WAL leader answers a follower Fetch with, or `None`
+/// when the fetch is consistent with `log`.
+///
+/// This is KIP-595's `KafkaMetadataLog.validateOffsetAndEpoch`: the fetch is
+/// consistent only when the leader holds `last_fetched_epoch` itself and that
+/// epoch reaches `fetch_offset`. The lookup is
+/// `KafkaMetadataLog.endOffsetForEpoch`, shared with the `KRaft` log through
+/// [`krabka_raft::kraft::log::end_offset_for_epoch_in`]: an epoch the leader
+/// cannot place, because it is newer than every epoch in the leader's log,
+/// answers the leader's log end with its latest epoch. That answer is always
+/// usable; the follower truncates to the end of its own copy of that epoch
+/// (`KafkaMetadataLog.truncateToEndOffset`) and fetches again. The raw
+/// `LeaderEpochFileCache.endOffsetFor` answer, `(-1, -1)`, would instead reach
+/// the follower as "no divergence" and stall it at its own log end.
+fn fetch_divergence(
+    log: &Log,
+    last_fetched_epoch: u32,
+    fetch_offset: Offset,
+) -> Option<(LeaderEpoch, Offset)> {
+    let end = krabka_raft::kraft::log::end_offset_for_epoch_in(
+        log.epoch_checkpoint(),
+        log.log_end_offset(),
+        last_fetched_epoch,
+    );
+    if end.epoch == last_fetched_epoch && end.offset >= fetch_offset.0 {
+        return None;
+    }
+    // Checkpoint epochs are `i32`s, so `end.epoch`, which is one of them or
+    // the requested epoch that came from an `i32`, always fits.
+    let epoch = i32::try_from(end.epoch).unwrap_or(i32::MAX);
+    Some((LeaderEpoch(epoch), Offset(end.offset)))
+}
+
+#[cfg(test)]
 fn replica_end_offset(replica: &WalReplica) -> Offset {
     Offset(replica.log.end_offset())
 }
 
-#[cfg(test)]
 fn replica_start_offset(replica: &WalReplica) -> Offset {
     replica.log.lock().log_start_offset()
 }
@@ -582,7 +619,9 @@ mod tests {
             ("non-voter", NodeId(9), 10, 0, None),
             ("below log start", NodeId(2), 4, 5, None),
             ("at log start", NodeId(2), 5, 5, None),
-            ("past log start", NodeId(2), 6, 6, Some(6)),
+            // One voter past the log start is not a majority: the leader
+            // votes with its own durable offset, still the log start.
+            ("past log start", NodeId(2), 6, 5, Some(6)),
         ] {
             let dir = tempfile::tempdir().unwrap();
             let engine = configured_engine(dir.path());
@@ -703,46 +742,91 @@ mod tests {
         }
     }
 
+    /// Equal lengths are not agreement. Recovery keeps the longest prefix a
+    /// byte-identical majority holds, drops the rest as unacknowledged, and
+    /// opens rather than refusing.
     #[test]
-    fn recovery_fails_without_a_byte_identical_majority() {
-        let dir = tempfile::tempdir().unwrap();
-        let replicas = [b"a".as_slice(), b"b".as_slice(), b"c".as_slice()]
-            .into_iter()
-            .enumerate()
-            .map(|(index, value)| {
-                WalReplica::for_test(
-                    NodeId(u64::try_from(index).unwrap()),
-                    log_with_values(&dir.path().join(format!("replica-{index}")), &[value]),
-                )
-            })
-            .collect();
+    fn recovery_keeps_the_longest_byte_identical_majority_prefix() {
+        let three_ways: [&[&'static [u8]]; 3] = [&[b"a"], &[b"b"], &[b"c"]];
+        let split_tail: [&[&'static [u8]]; 3] = [&[b"a", b"x"], &[b"a", b"y"], &[b"b"]];
+        for (name, values, expected) in [
+            ("three-way disagreement", three_ways, 0),
+            ("majority agrees only on the first record", split_tail, 1),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let replicas = values
+                .into_iter()
+                .enumerate()
+                .map(|(index, values)| {
+                    WalReplica::for_test(
+                        NodeId(u64::try_from(index).unwrap()),
+                        log_with_values(&dir.path().join(format!("replica-{index}")), values),
+                    )
+                })
+                .collect();
 
-        let error = WalShardEngine::new(replicas, OpenMode::Recover).unwrap_err();
+            let engine = WalShardEngine::new(replicas, OpenMode::Recover).unwrap();
 
-        assert!(error.to_string().contains("no byte-identical majority"));
+            assert!(
+                engine.durable_watermark() == Offset(expected),
+                "case {name}"
+            );
+            assert!(
+                engine.replica_end_offsets() == vec![Offset(expected); 3],
+                "case {name}"
+            );
+        }
     }
 
+    /// A live replica that disagrees with the leader is not a synced copy,
+    /// whether it disagrees past the committed offset or below it.
     #[tokio::test]
-    async fn acknowledgement_rejects_equal_length_divergence() {
-        let dir = tempfile::tempdir().unwrap();
-        let leader = log_with_values(&dir.path().join("leader"), &[b"leader"]);
-        let divergent = log_with_values(&dir.path().join("divergent"), &[b"stale"]);
-        let unavailable = log_with_values(&dir.path().join("unavailable"), &[]);
-        let replicas = vec![
-            WalReplica::for_test(NodeId(1), Arc::clone(&leader)),
-            WalReplica::for_test(NodeId(2), divergent),
-            WalReplica::for_test(NodeId(3), unavailable),
+    async fn acknowledgement_rejects_a_divergent_replica() {
+        type Values = &'static [&'static [u8]];
+        let cases: [(&str, Values, Values, Values, i64); 2] = [
+            (
+                "equal-length divergence past the committed offset",
+                &[b"leader"],
+                &[b"stale"],
+                &[],
+                0,
+            ),
+            (
+                "divergence below the committed offset",
+                &[b"committed", b"next"],
+                &[b"stale"],
+                &[b"committed"],
+                1,
+            ),
         ];
-        let engine = WalShardEngine::for_model(replicas, Offset(0));
-        engine.set_replica_alive(NodeId(3), false);
+        for (name, leader_values, divergent_values, unavailable_values, committed) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let leader = log_with_values(&dir.path().join("leader"), leader_values);
+            let divergent = log_with_values(&dir.path().join("divergent"), divergent_values);
+            let unavailable = log_with_values(&dir.path().join("unavailable"), unavailable_values);
+            let target = Offset(leader.lock().unwrap().log_end_offset().0);
+            let replicas = vec![
+                WalReplica::for_test(NodeId(1), Arc::clone(&leader)),
+                WalReplica::for_test(NodeId(2), divergent),
+                WalReplica::for_test(NodeId(3), unavailable),
+            ];
+            let engine = WalShardEngine::for_model(replicas, Offset(committed));
+            engine.set_replica_alive(NodeId(3), false);
 
-        let error = engine
-            .replicate_and_sync(&leader, Offset(1))
-            .await
-            .unwrap_err();
+            let error = engine
+                .replicate_and_sync(&leader, target)
+                .await
+                .unwrap_err();
 
-        assert!(error.to_string().contains("has 1 synced replicas"));
-        assert!(engine.durable_watermark() == Offset(0));
+            assert!(
+                error.to_string().contains("has 1 synced replicas"),
+                "case {name}"
+            );
+            assert!(
+                engine.durable_watermark() == Offset(committed),
+                "case {name}"
+            );
+        }
     }
 
     #[test]

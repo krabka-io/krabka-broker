@@ -1,0 +1,25 @@
+(* #"/workspace/crates/verified/src/restore.rs" 309 27 309 32 *)
+
+(* <restore::RestoreProducer as std::clone::Clone> *)
+
+use creusot.int.Int64
+use creusot.int.Int16
+use creusot.int.Int32
+use creusot.prelude.Any
+
+type t_RestoreProducer = {
+  control: bool;
+  transactional: bool;
+  producer_id: Int64.t;
+  producer_epoch: Int16.t;
+  base_sequence: Int32.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_RestoreProducer [#"/workspace/crates/verified/src/restore.rs" 309 27 309 32] (self: t_RestoreProducer)
+  (return (x: t_RestoreProducer)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_RestoreProducer = Any.any_l () | & self: t_RestoreProducer = self ])
+  [ return (result: t_RestoreProducer) -> (! return {result}) ]

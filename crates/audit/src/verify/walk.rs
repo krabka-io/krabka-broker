@@ -197,13 +197,11 @@ pub(super) fn check_records_lost(
         header_matches,
         fields.field_count,
         fields.count,
-        fields.generation.is_some(),
-        fields.generation.unwrap_or(0),
+        fields.generation,
         state.last_loss_generation,
     ) {
-        AuditLossMarkerAdmission::AdmitLegacy => {}
-        AuditLossMarkerAdmission::AdmitPersisted => {
-            state.last_loss_generation = fields.generation.unwrap_or(0);
+        AuditLossMarkerAdmission::Admit { generation } => {
+            state.last_loss_generation = generation;
         }
         AuditLossMarkerAdmission::Reject => {
             return Err(broke(
@@ -224,10 +222,10 @@ pub(super) fn check_records_lost(
     Ok(())
 }
 
-/// Return the declared loss count for either supported reserved marker body.
+/// The fields of a reserved records-lost marker body.
 ///
-/// The legacy shape contains only `records_lost`. Persisted loss state adds a
-/// positive `loss_generation`; no other fields are part of the reserved shape.
+/// The marker shape is exactly `records_lost` and `loss_generation`; the
+/// kernel rejects any other field count or a missing generation.
 struct LossMarkerFields {
     field_count: u64,
     count: u64,

@@ -1,19 +1,21 @@
-(* #"/home/user/krabka-broker/crates/verified/src/stretch.rs" 141 0 141 81 *)
+(* #"/workspace/crates/verified/src/stretch.rs" 300 0 300 81 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sstretch = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 142 20 142 50
-let%span sstretch'0 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 145 23 145 37
-let%span sstretch'1 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 146 4 146 56
-let%span sstretch'2 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 136 11 136 34
-let%span sstretch'3 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 137 11 137 40
-let%span sstretch'4 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 138 10 139 56
-let%span sstretch'5 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 89 11 89 34
-let%span sstretch'6 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 90 11 90 40
-let%span sstretch'7 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 91 10 91 54
-let%span sstretch'8 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 92 10 92 22
-let%span sstretch'9 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 93 10 93 23
-let%span sstretch'10 = "/home/user/krabka-broker/crates/verified/src/stretch.rs" 94 10 94 38
+let%span sstretch = "/workspace/crates/verified/src/stretch.rs" 301 20 301 50
+let%span sstretch'0 = "/workspace/crates/verified/src/stretch.rs" 304 23 304 37
+let%span sstretch'1 = "/workspace/crates/verified/src/stretch.rs" 305 4 305 56
+let%span sstretch'2 = "/workspace/crates/verified/src/stretch.rs" 291 11 291 34
+let%span sstretch'3 = "/workspace/crates/verified/src/stretch.rs" 292 11 292 40
+let%span sstretch'4 = "/workspace/crates/verified/src/stretch.rs" 293 10 298 1
+let%span sstretch'5 = "/workspace/crates/verified/src/stretch.rs" 228 11 228 34
+let%span sstretch'6 = "/workspace/crates/verified/src/stretch.rs" 229 11 229 40
+let%span sstretch'7 = "/workspace/crates/verified/src/stretch.rs" 230 10 230 59
+let%span sstretch'8 = "/workspace/crates/verified/src/stretch.rs" 231 10 232 60
+let%span sstretch'9 = "/workspace/crates/verified/src/stretch.rs" 233 10 233 22
+let%span sstretch'10 = "/workspace/crates/verified/src/stretch.rs" 234 10 234 23
+let%span sstretch'11 = "/workspace/crates/verified/src/stretch.rs" 235 10 235 38
+let%span sstretch'12 = "/workspace/crates/verified/src/stretch.rs" 106 10 106 12
+let%span sstretch'13 = "/workspace/crates/verified/src/stretch.rs" 109 8 114 9
 
 use creusot.int.Int64
 use int.ComputerDivision
@@ -24,6 +26,16 @@ predicate ge_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord] other
 
 meta "rewrite_def" predicate ge_log_Int
 
+function round_robin_load [#"/workspace/crates/verified/src/stretch.rs" 107 0 107 62] (rf: int) (sites: int) (site: int) : int
+
+axiom round_robin_load_def:
+  forall rf: int, sites: int, site: int [round_robin_load rf sites site]. round_robin_load rf sites site
+    = ([%#sstretch'13] if rf <= 0 then
+      0
+    else
+      round_robin_load (rf - 1) sites site + (if ComputerDivision.mod (rf - 1) sites = site then 1 else 0)
+    )
+
 let site_loss_survivors (rf: Int64.t) (sites: Int64.t) (return (x: Int64.t)) =
 {[@stop_split] [@expl:site_loss_survivors requires] ([@stop_split] [@expl:site_loss_survivors requires #0] [%#sstretch'5] ge_log_Int (Int64.to_int rf) 1
     /\ Int64.to_int rf <= 1024)
@@ -32,22 +44,22 @@ let site_loss_survivors (rf: Int64.t) (sites: Int64.t) (return (x: Int64.t)) =
   any
   [ return (result: Int64.t) ->
   {[@stop_split] [@expl:site_loss_survivors ensures] ([@stop_split] [@expl:site_loss_survivors ensures #0] [%#sstretch'7] Int64.to_int result
-      = Int64.to_int rf - ComputerDivision.div (Int64.to_int rf + Int64.to_int sites - 1) (Int64.to_int sites))
-    /\ ([@stop_split] [@expl:site_loss_survivors ensures #1] [%#sstretch'8] ge_log_Int (Int64.to_int result) 0)
-    /\ ([@stop_split] [@expl:site_loss_survivors ensures #2] [%#sstretch'9] Int64.to_int result < Int64.to_int rf)
-    /\ ([@stop_split] [@expl:site_loss_survivors ensures #3] [%#sstretch'10] Int64.to_int sites = 1
+      = Int64.to_int rf - round_robin_load (Int64.to_int rf) (Int64.to_int sites) 0)
+    /\ ([@stop_split] [@expl:site_loss_survivors ensures #1] [%#sstretch'8] forall site: int. 0 <= site
+          /\ site < Int64.to_int sites
+        -> ge_log_Int (Int64.to_int rf
+        - round_robin_load (Int64.to_int rf) (Int64.to_int sites) site) (Int64.to_int result))
+    /\ ([@stop_split] [@expl:site_loss_survivors ensures #2] [%#sstretch'9] ge_log_Int (Int64.to_int result) 0)
+    /\ ([@stop_split] [@expl:site_loss_survivors ensures #3] [%#sstretch'10] Int64.to_int result < Int64.to_int rf)
+    /\ ([@stop_split] [@expl:site_loss_survivors ensures #4] [%#sstretch'11] Int64.to_int sites = 1
     -> Int64.to_int result = 0)}
     (! return {result}) ]
-
-predicate gt_log_Int [@inline:trivial] (self: int) (other: int) = [%#sord'0] other < self
-
-meta "rewrite_def" predicate gt_log_Int
 
 meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let min_insync_is_site_loss_safe [#"/home/user/krabka-broker/crates/verified/src/stretch.rs" 141 0 141 81] (rf: Int64.t)
+let min_insync_is_site_loss_safe [#"/workspace/crates/verified/src/stretch.rs" 300 0 300 81] (rf: Int64.t)
   (sites: Int64.t) (min_insync: Int64.t) (return (x: bool)) =
 {[@stop_split] [@expl:min_insync_is_site_loss_safe requires] ([@stop_split] [@expl:min_insync_is_site_loss_safe requires #0] [%#sstretch'2] ge_log_Int (Int64.to_int rf) 1
     /\ Int64.to_int rf <= 1024)
@@ -69,8 +81,9 @@ let min_insync_is_site_loss_safe [#"/home/user/krabka-broker/crates/verified/src
   | & largest_site: Int64.t = Any.any_l ()
   | & _18: bool = Any.any_l () ])
   [ return (result: bool) -> {[@stop_split] [@expl:min_insync_is_site_loss_safe ensures] [%#sstretch'4] result
-    = (gt_log_Int (Int64.to_int min_insync) (ComputerDivision.div (Int64.to_int rf + Int64.to_int sites
-      - 1) (Int64.to_int sites))
-    /\ Int64.to_int min_insync
-    <= Int64.to_int rf - ComputerDivision.div (Int64.to_int rf + Int64.to_int sites - 1) (Int64.to_int sites))}
+    = ((forall site: int. 0 <= site /\ site < Int64.to_int sites
+        -> round_robin_load (Int64.to_int rf) (Int64.to_int sites) site < Int64.to_int min_insync)
+    /\ (forall site: int. 0 <= site /\ site < Int64.to_int sites
+      -> ge_log_Int (Int64.to_int rf
+      - round_robin_load (Int64.to_int rf) (Int64.to_int sites) site) (Int64.to_int min_insync)))}
     (! return {result}) ]

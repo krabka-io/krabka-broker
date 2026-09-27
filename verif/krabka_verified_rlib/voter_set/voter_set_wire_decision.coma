@@ -1,12 +1,12 @@
-(* #"/proof-work-226/crates/verified/src/voter_set.rs" 87 0 91 25 *)
+(* #"/workspace/crates/verified/src/voter_set.rs" 89 0 93 25 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span svoter_set = "/proof-work-226/crates/verified/src/voter_set.rs" 92 25 92 26
-let%span svoter_set'0 = "/proof-work-226/crates/verified/src/voter_set.rs" 94 29 94 30
-let%span svoter_set'1 = "/proof-work-226/crates/verified/src/voter_set.rs" 76 10 77 29
-let%span svoter_set'2 = "/proof-work-226/crates/verified/src/voter_set.rs" 78 10 79 50
-let%span svoter_set'3 = "/proof-work-226/crates/verified/src/voter_set.rs" 80 10 82 1
-let%span svoter_set'4 = "/proof-work-226/crates/verified/src/voter_set.rs" 83 10 85 1
+let%span svoter_set = "/workspace/crates/verified/src/voter_set.rs" 94 25 94 26
+let%span svoter_set'0 = "/workspace/crates/verified/src/voter_set.rs" 96 29 96 30
+let%span svoter_set'1 = "/workspace/crates/verified/src/voter_set.rs" 78 10 79 29
+let%span svoter_set'2 = "/workspace/crates/verified/src/voter_set.rs" 80 10 81 50
+let%span svoter_set'3 = "/workspace/crates/verified/src/voter_set.rs" 82 10 84 1
+let%span svoter_set'4 = "/workspace/crates/verified/src/voter_set.rs" 85 10 87 1
 
 use creusot.int.Int16
 use creusot.int.UInt64
@@ -23,7 +23,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let voter_set_wire_decision [#"/proof-work-226/crates/verified/src/voter_set.rs" 87 0 91 25] (record_version: Int16.t)
+let voter_set_wire_decision [#"/workspace/crates/verified/src/voter_set.rs" 89 0 93 25] (record_version: Int16.t)
   (voter_count: UInt64.t) (voter_ids_unique: bool) (return (x: t_VoterSetWireDecision)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_17 <- record_version <> ([%#svoter_set] (0: Int16.t)) ] s1

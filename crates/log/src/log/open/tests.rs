@@ -8,8 +8,11 @@ use krabka_units::prelude::bytes;
 use tempfile::tempdir;
 
 use super::*;
-use crate::log::test_support::{
-    NO_LIMIT, commit_marker, sample_batch, sample_batch_with_epoch, transactional_batch,
+use crate::{
+    io::FileIo,
+    log::test_support::{
+        NO_LIMIT, commit_marker, sample_batch, sample_batch_with_epoch, transactional_batch,
+    },
 };
 
 #[test]
@@ -103,11 +106,15 @@ fn open_truncates_epoch_checkpoint_to_recovered_leo() {
     assert!(reopened.epoch_checkpoint().latest_epoch() == Some(LeaderEpoch(1)));
 }
 
+/// On a tiered partition (KIP-405) the log start stays below the local
+/// segments, so the snapshot at the first local base is above it and Kafka's
+/// `truncateAndReload` keeps and loads it.
 #[test]
 fn producer_snapshot_survives_local_segment_deletion_and_restart() {
     let dir = tempdir().unwrap();
     let config = LogConfig {
         segment_size: bytes(1),
+        remote_storage_enable: true,
         ..LogConfig::default()
     };
     let mut log = Log::open(dir.path(), config.clone()).unwrap();
@@ -202,7 +209,12 @@ fn recovery_recreates_missing_producer_snapshot_at_segment_boundary() {
 
     let reopened = Log::open(dir.path(), config).unwrap();
     check!(missing.exists());
-    let (_, boundary_state) = producer_snapshot::latest_at_or_before(dir.path(), Offset(4))
+    let range = krabka_verified::ProducerReloadRange {
+        log_start: 0,
+        local_start: 0,
+        log_end: 4,
+    };
+    let (_, boundary_state) = producer_snapshot::reload(dir.path(), range)
         .unwrap()
         .unwrap();
     let boundary = boundary_state.get(&ProducerId(42)).unwrap();
@@ -582,4 +594,141 @@ fn reset_to_drops_the_checkpoint_so_a_reopen_starts_at_the_new_base() {
 
     assert!(log.log_start_offset() == Offset(100));
     assert!(log.log_end_offset() == Offset(100));
+}
+
+/// A two-record batch from producer `producer_id`, sequence 0.
+fn producer_batch(producer_id: i64) -> RecordBatch {
+    let mut batch = sample_batch(2);
+    batch.producer_id = producer_id;
+    batch.producer_epoch = 0;
+    batch.base_sequence = 0;
+    batch
+}
+
+/// Producers 1, 2 and 3 each append two records, one segment each: the
+/// segments start at 0, 2 and 4, and each roll leaves a snapshot at the new
+/// base, so there are snapshots at 2 (producer 1) and 4 (producers 1 and 2).
+fn three_producer_log(dir: &Path) -> Log {
+    let config = LogConfig {
+        segment_size: bytes(1),
+        ..LogConfig::default()
+    };
+    let mut log = Log::open(dir, config).unwrap();
+    for producer_id in [1, 2, 3] {
+        log.append(&mut producer_batch(producer_id)).unwrap();
+    }
+    log
+}
+
+fn producer_ids(log: &Log) -> Vec<i64> {
+    let mut ids: Vec<i64> = log
+        .producer_state_snapshot()
+        .into_iter()
+        .map(|entry| entry.producer_id.get())
+        .collect();
+    ids.sort_unstable();
+    ids
+}
+
+fn snapshot_offsets(dir: &Path) -> Vec<i64> {
+    producer_snapshot::list(dir)
+        .unwrap()
+        .into_iter()
+        .map(|(offset, _)| offset.0)
+        .collect()
+}
+
+/// Reopening reloads against the trimmed log start the way Kafka's
+/// `truncateAndReload` does: every snapshot at or below the log start is
+/// deleted, the newest one above it loads, and the replay starts at that
+/// snapshot or, with none, at the log start -- inside a batch if the trim
+/// landed inside one, replaying that whole batch.
+///
+/// Advancing the log start never evicts a producer from memory
+/// (`onLogStartOffsetIncremented`); only the reload can lose one whose last
+/// batch is below the log start and whom no surviving snapshot carries.
+/// Every reload ends with a snapshot at the log end, 6, as Kafka's
+/// `rebuildProducerState` ends with `takeSnapshot()`.
+#[test]
+fn reopen_reloads_producer_state_against_the_trimmed_log_start() {
+    for (log_start, snapshots_after_trim, snapshots_after_reopen, reloaded) in [
+        // Snapshots at 2 and 4 are both above the log start: 4 loads.
+        (1, vec![2, 4], vec![2, 4, 6], vec![1, 2, 3]),
+        // The snapshot at the log start is deleted, and the replay from the
+        // log start finds only producer 3.
+        (4, vec![4], vec![6], vec![3]),
+        // The snapshot below the log start is deleted, and the replay starts
+        // inside producer 3's batch at 4..=5.
+        (5, vec![4], vec![6], vec![3]),
+    ] {
+        let dir = tempdir().unwrap();
+        let mut log = three_producer_log(dir.path());
+        check!(snapshot_offsets(dir.path()) == vec![2, 4]);
+
+        check!(log.trim_to_offset(Offset(log_start)).unwrap() == Offset(log_start));
+        check!(producer_ids(&log) == vec![1, 2, 3], "log start {log_start}");
+        check!(
+            snapshot_offsets(dir.path()) == snapshots_after_trim,
+            "log start {log_start}"
+        );
+        let config = log.config.read().unwrap().clone();
+        drop(log);
+
+        let reopened = Log::open(dir.path(), config).unwrap();
+        check!(reopened.log_start_offset() == Offset(log_start));
+        check!(producer_ids(&reopened) == reloaded, "log start {log_start}");
+        check!(
+            snapshot_offsets(dir.path()) == snapshots_after_reopen,
+            "log start {log_start}"
+        );
+    }
+}
+
+/// Kafka's `rebuildProducerState` ends with `updateMapEndOffset(logEnd)` and
+/// `takeSnapshot()`: an open that rebuilt producer state leaves a snapshot at
+/// the log end, and one with nothing past the log start to cover takes none:
+/// an empty log, or one trimmed to its end.
+#[test]
+fn a_reload_takes_a_snapshot_at_the_log_end() {
+    for (name, batches, trim_to, expected) in [
+        ("an empty log takes none", 0, None, vec![]),
+        ("a log with records takes one at its end", 3, None, vec![6]),
+        ("a log trimmed to its end takes none", 3, Some(6), vec![]),
+    ] {
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+        for _ in 0..batches {
+            log.append(&mut sample_batch(2)).unwrap();
+        }
+        if let Some(target) = trim_to {
+            log.trim_to_offset(Offset(target)).unwrap();
+        }
+        drop(log);
+
+        let reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
+        check!(snapshot_offsets(dir.path()) == expected, "{name}");
+        drop(reopened);
+    }
+}
+
+/// Kafka's `removeStraySnapshots` runs before the reload: a snapshot no
+/// segment starts at is deleted, unless it is the newest and above every
+/// segment -- the snapshot a clean shutdown leaves at the log end, which the
+/// reload then loads with nothing left to replay.
+#[test]
+fn reopen_removes_stray_snapshots_and_loads_one_at_the_log_end() {
+    let dir = tempdir().unwrap();
+    let log = three_producer_log(dir.path());
+    let config = log.config.read().unwrap().clone();
+    drop(log);
+    let shutdown = ProducerSnapshotEntry::empty(ProducerId(99), 0);
+    let shutdown_state = HashMap::from([(shutdown.producer_id, shutdown)]);
+    for offset in [3, 6] {
+        producer_snapshot::write(&FileIo, dir.path(), Offset(offset), &shutdown_state).unwrap();
+    }
+
+    let reopened = Log::open(dir.path(), config).unwrap();
+
+    check!(snapshot_offsets(dir.path()) == vec![2, 4, 6]);
+    check!(reopened.producer_state_snapshot() == vec![shutdown]);
 }

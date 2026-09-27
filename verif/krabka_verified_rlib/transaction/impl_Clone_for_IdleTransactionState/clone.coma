@@ -1,4 +1,4 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 22 27 22 32 *)
+(* #"/workspace/crates/verified/src/transaction.rs" 620 27 620 32 *)
 
 (* <transaction::IdleTransactionState as std::clone::Clone> *)
 
@@ -10,7 +10,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_IdleTransactionState [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/transaction.rs" 22 27 22 32]
+let clone_IdleTransactionState [#"/workspace/crates/verified/src/transaction.rs" 620 27 620 32]
   (self: t_IdleTransactionState) (return (x: t_IdleTransactionState)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_IdleTransactionState = Any.any_l () | & self: t_IdleTransactionState = self ])

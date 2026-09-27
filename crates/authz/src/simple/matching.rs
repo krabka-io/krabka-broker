@@ -12,6 +12,7 @@ use std::net::IpAddr;
 use krabka_metadata::{AclEntry, AclOperation, PatternType, PermissionType, ResourceType};
 use krabka_verified::{
     AclOperationKind, AclPatternKind, acl_identity_match, acl_operation_match, acl_resource_match,
+    authz::{AclResourceFacts, AclResourceTypeMatch},
 };
 
 use crate::cidr::Cidr;
@@ -43,12 +44,16 @@ pub(super) fn matches_resource(entry: &AclEntry, resource_type: ResourceType, na
     };
     acl_resource_match(
         pattern,
-        (
-            entry.resource_type == resource_type,
-            entry.resource_name == name,
-            entry.resource_name == "*",
-            name.starts_with(entry.resource_name.as_str()),
-        ),
+        AclResourceFacts {
+            resource_type: if entry.resource_type == resource_type {
+                AclResourceTypeMatch::Same
+            } else {
+                AclResourceTypeMatch::Different
+            },
+            exact_name: entry.resource_name == name,
+            wildcard_name: entry.resource_name == "*",
+            name_has_prefix: name.starts_with(entry.resource_name.as_str()),
+        },
     )
 }
 

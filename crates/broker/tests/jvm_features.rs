@@ -438,9 +438,11 @@ async fn kafka_features_describe_and_round_trip() {
         !remove.status.success(),
         "removing the last voter must fail"
     );
+    // Kafka's `VoterSet.removeVoter` yields no new set when only one voter
+    // remains, and `RemoveVoterHandler` answers that with `VOTER_NOT_FOUND`.
     let remove_error = String::from_utf8_lossy(&remove.stderr);
     assert!(
-        remove_error.contains("last voter") || remove_error.contains("INVALID_REQUEST"),
+        remove_error.contains("VoterNotFoundException"),
         "unexpected remove-controller error: {remove_error}"
     );
 

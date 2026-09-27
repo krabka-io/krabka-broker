@@ -285,6 +285,38 @@ fn delete_local_segments_through_drops_sealed_below_target() {
     assert2::assert!(log.log_end_offset() == active_base_before);
 }
 
+/// Kafka's `deleteSegments` → `deleteProducerSnapshots`: a local eviction
+/// removes the producer snapshot at each evicted segment's base and keeps
+/// every other one, the snapshot at the first surviving base included.
+#[test]
+fn delete_local_segments_through_removes_the_evicted_bases_snapshots() {
+    let dir = tempdir().unwrap();
+    let mut log = rolled_log(dir.path(), &LogConfig::default());
+    let exports = log.tierable_segments();
+    let snapshots = |dir: &std::path::Path| -> Vec<Offset> {
+        producer_snapshot::list(dir)
+            .unwrap()
+            .into_iter()
+            .map(|(offset, _)| offset)
+            .collect()
+    };
+    let before = snapshots(dir.path());
+    let target = exports[1].last_offset + 1;
+    check!(
+        before.contains(&exports[1].base_offset),
+        "fixture: {before:?}"
+    );
+    check!(before.contains(&target), "fixture: {before:?}");
+
+    log.delete_local_segments_through(target).unwrap();
+
+    let expected: Vec<Offset> = before
+        .into_iter()
+        .filter(|offset| *offset != exports[0].base_offset && *offset != exports[1].base_offset)
+        .collect();
+    check!(snapshots(dir.path()) == expected);
+}
+
 #[test]
 fn delete_local_segments_through_keeps_active_segment() {
     let dir = tempdir().unwrap();

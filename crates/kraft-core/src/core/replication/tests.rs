@@ -339,6 +339,10 @@ fn a_fetch_at_an_epoch_the_leader_lacks_does_not_raise_the_high_watermark() {
 /// to 130. The leader answers `(4, 120)`. Truncating to 120 keeps ten epoch 5
 /// records, and the next fetch at epoch 5 diverges at the same point for
 /// ever. Its own epoch 4 ends at 110, so that is where it truncates.
+///
+/// Then it fetches again at once, as Kafka's follower does after it truncates
+/// on a diverging epoch: before, it sent nothing more and sat idle until its
+/// fetch timer started an election.
 #[test]
 fn a_follower_truncates_to_where_both_logs_still_hold_the_epoch() {
     struct Case {
@@ -389,12 +393,23 @@ fn a_follower_truncates_to_where_both_logs_still_hold_the_epoch() {
             &log,
             SimInstant(11),
         );
+        // Truncated, it fetches again at once from the new log end and
+        // re-arms its fetch timer: a diverging answer is a successful fetch.
         assert2::check!(
             actions
-                == vec![Action::TruncateTo(LogOffsetMetadata {
-                    offset: case.truncate_to,
-                    epoch: case.hint.epoch,
-                })],
+                == vec![
+                    Action::TruncateTo(LogOffsetMetadata {
+                        offset: case.truncate_to,
+                        epoch: case.hint.epoch,
+                    }),
+                    Action::SendFetch {
+                        leader_id: NodeId(2)
+                    },
+                    Action::ResetTimer {
+                        kind: TimerKind::Fetch,
+                        deadline: SimInstant(11).saturating_add_ms(m.election_timeout_ms),
+                    },
+                ],
             "{}",
             case.what
         );

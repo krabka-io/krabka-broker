@@ -239,7 +239,10 @@ mod tests {
                     error_code: codes::NONE,
                     timestamp: 1_600,
                     offset: 2,
-                    leader_epoch: -1,
+                    // The partition's leader recorded epoch 0 at promotion,
+                    // and the remote segment's epoch index agrees: epoch 0
+                    // covers offset 2.
+                    leader_epoch: 0,
                     ..Default::default()
                 }
         );

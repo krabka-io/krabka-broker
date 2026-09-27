@@ -8,7 +8,7 @@
           {
             "tactic": "split_vc",
             "children": [
-              { "prover": "alt-ergo", "time": 0.011 },
+              { "prover": "alt-ergo", "time": 0.022 },
               { "prover": "alt-ergo", "time": 0.027 },
               { "prover": "alt-ergo", "time": 0.046 },
               { "prover": "alt-ergo", "time": 0.029 },
@@ -18,7 +18,7 @@
               { "prover": "alt-ergo", "time": 0.041 },
               { "prover": "alt-ergo", "time": 0.037 },
               { "prover": "alt-ergo", "time": 0.029 },
-              { "prover": "alt-ergo", "time": 0.041 },
+              { "prover": "alt-ergo", "time": 0.019 },
               { "prover": "alt-ergo", "time": 0.078 },
               { "prover": "alt-ergo", "time": 0.033 }
             ]

@@ -1,28 +1,28 @@
-(* #"/home/user/krabka-broker/crates/verified/src/log_index.rs" 96 0 96 92 *)
+(* #"/workspace/crates/verified/src/log_index.rs" 96 0 96 92 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 62 16 62 28
 let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span slog_index = "/home/user/krabka-broker/crates/verified/src/log_index.rs" 97 17 97 23
-let%span slog_index'0 = "/home/user/krabka-broker/crates/verified/src/log_index.rs" 98 17 98 30
-let%span slog_index'1 = "/home/user/krabka-broker/crates/verified/src/log_index.rs" 102 14 102 21
-let%span slog_index'2 = "/home/user/krabka-broker/crates/verified/src/log_index.rs" 101 16 101 91
-let%span slog_index'3 = "/home/user/krabka-broker/crates/verified/src/log_index.rs" 100 16 100 77
-let%span slog_index'4 = "/home/user/krabka-broker/crates/verified/src/log_index.rs" 99 16 99 51
-let%span slog_index'5 = "/home/user/krabka-broker/crates/verified/src/log_index.rs" 104 23 104 32
-let%span slog_index'6 = "/home/user/krabka-broker/crates/verified/src/log_index.rs" 104 35 104 36
-let%span slog_index'7 = "/home/user/krabka-broker/crates/verified/src/log_index.rs" 104 23 104 36
-let%span slog_index'8 = "/home/user/krabka-broker/crates/verified/src/log_index.rs" 104 18 104 36
-let%span slog_index'9 = "/home/user/krabka-broker/crates/verified/src/log_index.rs" 105 11 105 23
-let%span slog_index'10 = "/home/user/krabka-broker/crates/verified/src/log_index.rs" 105 11 105 25
-let%span slog_index'11 = "/home/user/krabka-broker/crates/verified/src/log_index.rs" 106 23 106 24
-let%span slog_index'12 = "/home/user/krabka-broker/crates/verified/src/log_index.rs" 106 12 106 24
-let%span slog_index'13 = "/home/user/krabka-broker/crates/verified/src/log_index.rs" 111 13 111 26
-let%span slog_index'14 = "/home/user/krabka-broker/crates/verified/src/log_index.rs" 114 13 114 24
-let%span slog_index'15 = "/home/user/krabka-broker/crates/verified/src/log_index.rs" 114 13 114 26
-let%span slog_index'16 = "/home/user/krabka-broker/crates/verified/src/log_index.rs" 86 11 87 39
-let%span slog_index'17 = "/home/user/krabka-broker/crates/verified/src/log_index.rs" 88 10 92 72
-let%span slog_index'18 = "/home/user/krabka-broker/crates/verified/src/log_index.rs" 93 10 94 22
+let%span slog_index = "/workspace/crates/verified/src/log_index.rs" 97 17 97 23
+let%span slog_index'0 = "/workspace/crates/verified/src/log_index.rs" 98 17 98 30
+let%span slog_index'1 = "/workspace/crates/verified/src/log_index.rs" 102 14 102 21
+let%span slog_index'2 = "/workspace/crates/verified/src/log_index.rs" 101 16 101 91
+let%span slog_index'3 = "/workspace/crates/verified/src/log_index.rs" 100 16 100 77
+let%span slog_index'4 = "/workspace/crates/verified/src/log_index.rs" 99 16 99 51
+let%span slog_index'5 = "/workspace/crates/verified/src/log_index.rs" 104 23 104 32
+let%span slog_index'6 = "/workspace/crates/verified/src/log_index.rs" 104 35 104 36
+let%span slog_index'7 = "/workspace/crates/verified/src/log_index.rs" 104 23 104 36
+let%span slog_index'8 = "/workspace/crates/verified/src/log_index.rs" 104 18 104 36
+let%span slog_index'9 = "/workspace/crates/verified/src/log_index.rs" 105 11 105 23
+let%span slog_index'10 = "/workspace/crates/verified/src/log_index.rs" 105 11 105 25
+let%span slog_index'11 = "/workspace/crates/verified/src/log_index.rs" 106 23 106 24
+let%span slog_index'12 = "/workspace/crates/verified/src/log_index.rs" 106 12 106 24
+let%span slog_index'13 = "/workspace/crates/verified/src/log_index.rs" 111 13 111 26
+let%span slog_index'14 = "/workspace/crates/verified/src/log_index.rs" 114 13 114 24
+let%span slog_index'15 = "/workspace/crates/verified/src/log_index.rs" 114 13 114 26
+let%span slog_index'16 = "/workspace/crates/verified/src/log_index.rs" 86 11 87 39
+let%span slog_index'17 = "/workspace/crates/verified/src/log_index.rs" 88 10 92 72
+let%span slog_index'18 = "/workspace/crates/verified/src/log_index.rs" 93 10 94 22
 
 use creusot.int.UInt64
 use creusot.slice.Slice64
@@ -53,7 +53,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let offset_index_position_at_or_after [#"/home/user/krabka-broker/crates/verified/src/log_index.rs" 96 0 96 92]
+let offset_index_position_at_or_after [#"/workspace/crates/verified/src/log_index.rs" 96 0 96 92]
   (entries: Slice64.slice tup2_u32_u32) (target: UInt32.t) (return (x: t_Option_u32)) =
 {[@stop_split] [@expl:offset_index_position_at_or_after requires] [%#slog_index'16] forall i: int, j: int. 0 <= i
       /\ i < j /\ j < Seq.length (Slice64.view entries)

@@ -1,0 +1,23 @@
+(* #"/workspace/crates/verified/src/authz.rs" 63 27 63 32 *)
+
+(* <authz::AclResourceFacts as std::clone::Clone> *)
+
+use creusot.prelude.Any
+
+type t_AclResourceTypeMatch = Same | Different
+
+type t_AclResourceFacts = {
+  resource_type: t_AclResourceTypeMatch;
+  exact_name: bool;
+  wildcard_name: bool;
+  name_has_prefix: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_AclResourceFacts [#"/workspace/crates/verified/src/authz.rs" 63 27 63 32] (self: t_AclResourceFacts)
+  (return (x: t_AclResourceFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_AclResourceFacts = Any.any_l () | & self: t_AclResourceFacts = self ])
+  [ return (result: t_AclResourceFacts) -> (! return {result}) ]

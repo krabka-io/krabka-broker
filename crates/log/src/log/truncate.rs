@@ -33,7 +33,13 @@ impl Log {
                 .as_ref()
                 .is_some_and(|active| active.base_offset() == offset);
         if offset > log_end || (offset == log_end && !empty_rolled_active_at_cut) {
-            return Ok(()); // nothing to truncate
+            // No record to discard, but Kafka's `UnifiedLog.truncateTo` still
+            // trims the epoch cache at the log end: a replica that took a
+            // leader epoch (`assign_epoch_start_offset` at its log end) and
+            // lost leadership before writing keeps an entry no record backs,
+            // which would otherwise conflict with the new leader's epoch.
+            self.epoch_checkpoint.truncate_from_end(log_end)?;
+            return Ok(());
         }
         // The discarded tail may hold the batch that stopped the last
         // activation walk, so what that walk learned about this offset and
@@ -46,9 +52,11 @@ impl Log {
             });
         }
 
-        if !self.segments.is_empty() {
-            producer_snapshot::remove_after(&self.dir, offset)?;
-        }
+        // Kafka's `truncateAndReload` deletes every snapshot outside
+        // `(log start, cut]` on every truncation. Delete them before any
+        // segment goes, so a snapshot of the discarded tail can never stand
+        // in for the one the next roll at the same offset writes.
+        producer_snapshot::retain_reload_range(&self.dir, self.producer_reload_range(offset))?;
 
         let sealed_bases: Vec<i64> = self
             .segments
@@ -138,7 +146,10 @@ impl Log {
                 index.truncate_from(offset)?;
             }
         }
-        if !self.producer_state.is_empty() {
+        // Kafka's `rebuildProducerState` skips the replay when there were no
+        // producers and no unreplicated transactions before the truncation:
+        // cutting the log cannot create any.
+        if !self.producer_state.is_empty() || !self.unreplicated.is_empty() {
             self.rebuild_producer_and_transaction_state()?;
         }
         // A verification started against the discarded tail proves nothing
@@ -222,6 +233,11 @@ impl Log {
             .retain(|base, _| !drop_set.contains(base));
         for base in &to_drop {
             let _ = retention::delete_segment_files(&*self.io, &self.dir, *base);
+            // Kafka's `deleteProducerSnapshots` removes the snapshot at every
+            // deleted segment's base. The snapshot at the next surviving base
+            // stays, and in-memory producer state is untouched, as in
+            // `ProducerStateManager.onLogStartOffsetIncremented`.
+            producer_snapshot::remove_at(&self.dir, *base)?;
         }
 
         // Every dropped segment ended below `target`, so the first offset

@@ -1,4 +1,4 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 28 27 28 32 *)
+(* #"/workspace/crates/verified/src/broker.rs" 28 27 28 32 *)
 
 (* <broker::FetchWatermarks as std::clone::Clone> *)
 
@@ -11,8 +11,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_FetchWatermarks [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/broker.rs" 28 27 28 32]
-  (self: t_FetchWatermarks) (return (x: t_FetchWatermarks)) = (! bb0
+let clone_FetchWatermarks [#"/workspace/crates/verified/src/broker.rs" 28 27 28 32] (self: t_FetchWatermarks)
+  (return (x: t_FetchWatermarks)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_FetchWatermarks = Any.any_l () | & self: t_FetchWatermarks = self ])
   [ return (result: t_FetchWatermarks) -> (! return {result}) ]

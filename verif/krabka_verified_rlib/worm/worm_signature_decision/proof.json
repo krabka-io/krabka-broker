@@ -2,7 +2,7 @@
   "profile": [],
   "proofs": {
     "Coma": {
-      "vc_worm_signature_decision": { "prover": "alt-ergo", "time": 0.004 }
+      "vc_worm_signature_decision": { "prover": "alt-ergo", "time": 0.012 }
     }
   }
 }

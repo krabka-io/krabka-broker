@@ -28,86 +28,98 @@ pub enum TransactionMarkerMaterializationDecision {
     AppendAndPublishOffsets,
 }
 
-/// Whether the idle reaper may publish one prepared abort completion.
+/// One transaction marker as it reaches one data partition.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
-pub enum TransactionReaperCompletionDecision {
-    RejectMalformed,
-    RejectStaleIdentity,
-    RejectChangedPreparedState,
-    AlreadyComplete,
-    Proceed,
+pub struct TransactionMarkerRequest {
+    pub producer_id: i64,
+    pub producer_epoch: i16,
+    /// The sending coordinator's epoch; `-1` names no coordinator generation.
+    pub coordinator_epoch: i32,
+    /// The marker is a COMMIT rather than an ABORT.
+    pub is_commit: bool,
+    /// The partition is a `__consumer_offsets` partition.
+    pub is_offsets_partition: bool,
 }
 
-/// Recheck the exact prepared snapshot after abort-marker dispatch.
-///
-/// `exact_prepared_snapshot` is supplied by the host from equality over the
-/// complete persisted transaction entry, including its staged identity,
-/// partition set, timeout, and timestamps.
-#[ensures((result == TransactionReaperCompletionDecision::RejectMalformed)
-    == (current.0@ < 0
-        || current.1@ < 0
-        || prepared.0@ < 0
-        || prepared.1@ < 0
-        || completion.0@ < 0
-        || completion.1@ < 0
-        || prepared.2 == completion.2))]
-#[ensures((result == TransactionReaperCompletionDecision::AlreadyComplete)
-    == (current.0@ >= 0
-        && current.1@ >= 0
-        && prepared.0@ >= 0
-        && prepared.1@ >= 0
-        && completion.0@ >= 0
-        && completion.1@ >= 0
-        && prepared.2 != completion.2
-        && current.0@ == completion.0@
-        && current.1@ == completion.1@
-        && current.2 == completion.2))]
-#[ensures((result == TransactionReaperCompletionDecision::Proceed)
-    == (current.0@ >= 0
-        && current.1@ >= 0
-        && prepared.0@ >= 0
-        && prepared.1@ >= 0
-        && completion.0@ >= 0
-        && completion.1@ >= 0
-        && prepared.2 != completion.2
-        && !(current.0@ == completion.0@
-            && current.1@ == completion.1@
-            && current.2 == completion.2)
-        && current.0@ == prepared.0@
-        && current.1@ == prepared.1@
-        && current.2 == prepared.2
-        && exact_prepared_snapshot))]
-#[must_use]
-pub fn transaction_reaper_completion_decision(
-    current: (i64, i16, i8),
-    prepared: (i64, i16, i8),
-    completion: (i64, i16, i8),
-    exact_prepared_snapshot: bool,
-) -> TransactionReaperCompletionDecision {
-    let (current_pid, current_epoch, current_state) = current;
-    let (prepared_pid, prepared_epoch, prepare_state) = prepared;
-    let (completion_pid, completion_epoch, complete_state) = completion;
-    if current_pid < 0
-        || current_epoch < 0
-        || prepared_pid < 0
-        || prepared_epoch < 0
-        || completion_pid < 0
-        || completion_epoch < 0
-        || prepare_state == complete_state
-    {
-        TransactionReaperCompletionDecision::RejectMalformed
-    } else if current_pid == completion_pid
-        && current_epoch == completion_epoch
-        && current_state == complete_state
-    {
-        TransactionReaperCompletionDecision::AlreadyComplete
-    } else if current_pid != prepared_pid || current_epoch != prepared_epoch {
-        TransactionReaperCompletionDecision::RejectStaleIdentity
-    } else if current_state != prepare_state || !exact_prepared_snapshot {
-        TransactionReaperCompletionDecision::RejectChangedPreparedState
-    } else {
-        TransactionReaperCompletionDecision::Proceed
+/// The partition's latest producer state for the marker's producer ID.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub struct TransactionMarkerPartitionState {
+    /// The latest producer epoch, or `-1` when the partition has none.
+    pub producer_epoch: i16,
+    /// The latest coordinator epoch, or `-1` when the partition has none.
+    pub coordinator_epoch: i32,
+    /// The producer has an open transaction on this partition.
+    pub has_pending_transaction: bool,
+}
+
+/// The marker names a nonnegative producer identity, every epoch is at least
+/// the `-1` sentinel, and a pending transaction has a real producer epoch.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub fn marker_well_formed(
+    request: TransactionMarkerRequest,
+    current: TransactionMarkerPartitionState,
+) -> bool {
+    pearlite! {
+        request.producer_id@ >= 0
+            && request.producer_epoch@ >= 0
+            && request.coordinator_epoch@ >= -1
+            && current.producer_epoch@ >= -1
+            && current.coordinator_epoch@ >= -1
+            && (!current.has_pending_transaction || current.producer_epoch@ >= 0)
+    }
+}
+
+/// Neither the producer nor the coordinator generation of the marker is
+/// older than the partition's (`ProducerAppendInfo.checkProducerEpoch` and
+/// `appendEndTxnMarker`'s coordinator-epoch check).
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub fn marker_generation_current(
+    request: TransactionMarkerRequest,
+    current: TransactionMarkerPartitionState,
+) -> bool {
+    pearlite! {
+        request.producer_epoch@ >= current.producer_epoch@
+            && request.coordinator_epoch@ >= current.coordinator_epoch@
+    }
+}
+
+/// The marker repeats the exact generation that already closed the
+/// producer's transaction on this partition.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub fn marker_completed_retry(
+    request: TransactionMarkerRequest,
+    current: TransactionMarkerPartitionState,
+) -> bool {
+    pearlite! {
+        !current.has_pending_transaction
+            && request.producer_epoch@ == current.producer_epoch@
+            && request.coordinator_epoch@ == current.coordinator_epoch@
+    }
+}
+
+/// Only a COMMIT that closes a pending transaction on `__consumer_offsets`
+/// publishes the transaction's offset commits.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub fn marker_publishes_offsets(
+    request: TransactionMarkerRequest,
+    current: TransactionMarkerPartitionState,
+) -> bool {
+    pearlite! {
+        current.has_pending_transaction && request.is_commit && request.is_offsets_partition
     }
 }
 
@@ -115,95 +127,181 @@ pub fn transaction_reaper_completion_decision(
 /// coordinator generations, suppress an exact completed retry, and publish
 /// offsets only for a pending commit on `__consumer_offsets`.
 #[ensures((result == TransactionMarkerMaterializationDecision::RejectMalformed)
-    == (request.0@ < 0
-        || request.1@ < 0
-        || request.2@ < -1
-        || current.0@ < -1
-        || current.1@ < -1
-        || (current.2 && current.0@ == -1)))]
+    == !marker_well_formed(request, current))]
 #[ensures((result == TransactionMarkerMaterializationDecision::RejectProducerEpoch)
-    == (request.0@ >= 0
-        && request.1@ >= 0
-        && request.2@ >= -1
-        && current.0@ >= -1
-        && current.1@ >= -1
-        && (!current.2 || current.0@ >= 0)
-        && request.1@ < current.0@))]
+    == (marker_well_formed(request, current)
+        && request.producer_epoch@ < current.producer_epoch@))]
 #[ensures((result == TransactionMarkerMaterializationDecision::RejectCoordinatorEpoch)
-    == (request.0@ >= 0
-        && request.1@ >= 0
-        && request.2@ >= -1
-        && current.0@ >= -1
-        && current.1@ >= -1
-        && (!current.2 || current.0@ >= 0)
-        && request.1@ >= current.0@
-        && request.2@ < current.1@))]
+    == (marker_well_formed(request, current)
+        && request.producer_epoch@ >= current.producer_epoch@
+        && request.coordinator_epoch@ < current.coordinator_epoch@))]
 #[ensures((result == TransactionMarkerMaterializationDecision::Retry)
-    == (request.0@ >= 0
-        && request.1@ >= 0
-        && request.2@ >= -1
-        && request.1@ >= current.0@
-        && request.2@ >= current.1@
-        && current.0@ >= -1
-        && current.1@ >= -1
-        && !current.2
-        && request.1@ == current.0@
-        && request.2@ == current.1@))]
+    == (marker_well_formed(request, current) && marker_completed_retry(request, current)))]
 #[ensures((result == TransactionMarkerMaterializationDecision::AppendAndPublishOffsets)
-    == (request.0@ >= 0
-        && request.1@ >= 0
-        && request.2@ >= -1
-        && current.0@ >= -1
-        && current.1@ >= -1
-        && (!current.2 || current.0@ >= 0)
-        && request.1@ >= current.0@
-        && request.2@ >= current.1@
-        && current.2
-        && marker.0
-        && marker.1))]
+    == (marker_well_formed(request, current)
+        && marker_generation_current(request, current)
+        && marker_publishes_offsets(request, current)))]
 #[ensures((result == TransactionMarkerMaterializationDecision::AppendWithoutOffsetPublication)
-    == (request.0@ >= 0
-        && request.1@ >= 0
-        && request.2@ >= -1
-        && current.0@ >= -1
-        && current.1@ >= -1
-        && (!current.2 || current.0@ >= 0)
-        && request.1@ >= current.0@
-        && request.2@ >= current.1@
-        && !(!current.2
-            && request.1@ == current.0@
-            && request.2@ == current.1@)
-        && !(current.2 && marker.0 && marker.1)))]
+    == (marker_well_formed(request, current)
+        && marker_generation_current(request, current)
+        && !marker_completed_retry(request, current)
+        && !marker_publishes_offsets(request, current)))]
 #[must_use]
 pub fn transaction_marker_materialization_decision(
-    request: (i64, i16, i32),
-    current: (i16, i32, bool),
-    marker: (bool, bool),
+    request: TransactionMarkerRequest,
+    current: TransactionMarkerPartitionState,
 ) -> TransactionMarkerMaterializationDecision {
-    let (producer_id, producer_epoch, coordinator_epoch) = request;
-    let (current_producer_epoch, current_coordinator_epoch, has_pending_transaction) = current;
-    let (is_commit, is_offsets_partition) = marker;
-    if producer_id < 0
-        || producer_epoch < 0
-        || coordinator_epoch < -1
-        || current_producer_epoch < -1
-        || current_coordinator_epoch < -1
-        || (has_pending_transaction && current_producer_epoch == -1)
+    if request.producer_id < 0
+        || request.producer_epoch < 0
+        || request.coordinator_epoch < -1
+        || current.producer_epoch < -1
+        || current.coordinator_epoch < -1
+        || (current.has_pending_transaction && current.producer_epoch == -1)
     {
         TransactionMarkerMaterializationDecision::RejectMalformed
-    } else if producer_epoch < current_producer_epoch {
+    } else if request.producer_epoch < current.producer_epoch {
         TransactionMarkerMaterializationDecision::RejectProducerEpoch
-    } else if coordinator_epoch < current_coordinator_epoch {
+    } else if request.coordinator_epoch < current.coordinator_epoch {
         TransactionMarkerMaterializationDecision::RejectCoordinatorEpoch
-    } else if !has_pending_transaction
-        && producer_epoch == current_producer_epoch
-        && coordinator_epoch == current_coordinator_epoch
+    } else if !current.has_pending_transaction
+        && request.producer_epoch == current.producer_epoch
+        && request.coordinator_epoch == current.coordinator_epoch
     {
         TransactionMarkerMaterializationDecision::Retry
-    } else if has_pending_transaction && is_commit && is_offsets_partition {
+    } else if current.has_pending_transaction && request.is_commit && request.is_offsets_partition {
         TransactionMarkerMaterializationDecision::AppendAndPublishOffsets
     } else {
         TransactionMarkerMaterializationDecision::AppendWithoutOffsetPublication
+    }
+}
+
+/// Whether the idle reaper or the completion task may publish one prepared
+/// completion.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
+pub enum TransactionReaperCompletionDecision {
+    /// A snapshot names a negative producer ID or epoch.
+    RejectMalformed,
+    /// The live entry no longer holds the prepared producer identity.
+    RejectStaleIdentity,
+    /// The live entry holds the prepared identity but is no longer the exact
+    /// prepared snapshot.
+    RejectChangedPreparedState,
+    /// The live entry already holds the intended completion.
+    AlreadyComplete,
+    /// The live entry is the exact prepared snapshot.
+    Proceed,
+}
+
+/// `snapshot` names a producer identity: its PID and epoch are nonnegative.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub fn is_identity(snapshot: TransactionSnapshot) -> bool {
+    pearlite! { snapshot.pid@ >= 0 && snapshot.epoch@ >= 0 }
+}
+
+/// `snapshot` holds the producer identity `identity`.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub fn has_identity(snapshot: TransactionSnapshot, identity: TransactionIdentity) -> bool {
+    pearlite! { snapshot.pid == identity.pid && snapshot.epoch == identity.epoch }
+}
+
+/// Two snapshots agree on producer identity and state.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic(open)]
+pub fn snapshot_eq(left: TransactionSnapshot, right: TransactionSnapshot) -> bool {
+    pearlite! {
+        left.pid == right.pid && left.epoch == right.epoch && left.state == right.state
+    }
+}
+
+/// Recheck a prepared snapshot after the abort- or commit-marker fan-out.
+///
+/// This is [`transaction_completion_decision`] with two additions: every
+/// snapshot must name a nonnegative producer identity, because the live entry
+/// and the prepared one come from the replayed transaction log; and
+/// `exact_prepared_snapshot` must hold for `Proceed`. The host computes it
+/// from equality over the complete persisted transaction entry, including its
+/// staged identity, partition set, timeout, and timestamps, so a registration
+/// or recovery that kept the identity and state still blocks the completion.
+///
+/// `prepared.state` and `completion.state` are the prepare and complete tags
+/// of one Kafka completion, which the host takes from a fixed
+/// `Prepare* -> Complete*` pairing, so they differ.
+#[requires(prepared.state != completion.state)]
+#[ensures((result == TransactionReaperCompletionDecision::RejectMalformed)
+    == !(is_identity(current) && is_identity(prepared) && is_identity(completion)))]
+#[ensures((result == TransactionReaperCompletionDecision::AlreadyComplete)
+    == (is_identity(current)
+        && is_identity(prepared)
+        && is_identity(completion)
+        && snapshot_eq(current, completion)))]
+#[ensures((result == TransactionReaperCompletionDecision::RejectStaleIdentity)
+    == (is_identity(current)
+        && is_identity(prepared)
+        && is_identity(completion)
+        && !snapshot_eq(current, completion)
+        && !(current.pid == prepared.pid && current.epoch == prepared.epoch)))]
+#[ensures((result == TransactionReaperCompletionDecision::RejectChangedPreparedState)
+    == (is_identity(current)
+        && is_identity(prepared)
+        && is_identity(completion)
+        && !snapshot_eq(current, completion)
+        && current.pid == prepared.pid
+        && current.epoch == prepared.epoch
+        && !(current.state == prepared.state && exact_prepared_snapshot)))]
+#[ensures((result == TransactionReaperCompletionDecision::Proceed)
+    == (is_identity(current)
+        && is_identity(prepared)
+        && is_identity(completion)
+        && snapshot_eq(current, prepared)
+        && exact_prepared_snapshot))]
+#[must_use]
+pub fn transaction_reaper_completion_decision(
+    current: TransactionSnapshot,
+    prepared: TransactionSnapshot,
+    completion: TransactionSnapshot,
+    exact_prepared_snapshot: bool,
+) -> TransactionReaperCompletionDecision {
+    if current.pid < 0
+        || current.epoch < 0
+        || prepared.pid < 0
+        || prepared.epoch < 0
+        || completion.pid < 0
+        || completion.epoch < 0
+    {
+        return TransactionReaperCompletionDecision::RejectMalformed;
+    }
+    match transaction_completion_decision(
+        current,
+        prepared.identity(),
+        completion.identity(),
+        prepared.state,
+        completion.state,
+    ) {
+        TransactionCompletionDecision::AlreadyComplete => {
+            TransactionReaperCompletionDecision::AlreadyComplete
+        }
+        TransactionCompletionDecision::RejectStaleIdentity => {
+            TransactionReaperCompletionDecision::RejectStaleIdentity
+        }
+        TransactionCompletionDecision::RejectState => {
+            TransactionReaperCompletionDecision::RejectChangedPreparedState
+        }
+        TransactionCompletionDecision::Proceed => {
+            if exact_prepared_snapshot {
+                TransactionReaperCompletionDecision::Proceed
+            } else {
+                TransactionReaperCompletionDecision::RejectChangedPreparedState
+            }
+        }
     }
 }
 
@@ -428,8 +526,12 @@ pub const NO_TRANSACTION_TIMEOUT_MS: i32 = i32::MAX;
 
 /// Select the first unstable transaction offset, or the log end when no
 /// transaction is open. A pending start beyond the log end is rejected.
+///
+/// `Some` and `None` partition the inputs: the result is `Some` exactly when
+/// every start is at or below the log end.
 #[ensures(match result {
     Some(lso) => lso@ <= log_end@
+        && (forall<i: Int> 0 <= i && i < starts@.len() ==> starts@[i]@ <= log_end@)
         && ((starts@.len() == 0 && lso@ == log_end@)
             || (starts@.len() > 0
                 && (exists<i: Int> 0 <= i && i < starts@.len() && lso@ == starts@[i]@)
@@ -523,15 +625,28 @@ pub enum IdleTransactionState {
 }
 
 /// Whether the idle reaper may abort one persisted transaction.
-#[requires(0 < txn_timeout_ms@)]
-#[ensures(state != IdleTransactionState::Ongoing ==> !result)]
-#[ensures(txn_timeout_ms@ == i32::MAX@ ==> !result)]
-#[ensures(result ==> state == IdleTransactionState::Ongoing
-    && txn_timeout_ms@ != i32::MAX@
-    && now_ms@ - start_ms@ >= txn_timeout_ms@)]
-#[ensures(state == IdleTransactionState::Ongoing
-    && txn_timeout_ms@ != i32::MAX@
-    && now_ms@ - start_ms@ >= txn_timeout_ms@ ==> result)]
+///
+/// This is Kafka's `TransactionStateManager.timedOutTransactions`: the
+/// transaction is `ONGOING`, it is not a KIP-939 two-phase-commit transaction
+/// (`TransactionMetadata.isDistributedTwoPhaseCommitTxn`, a timeout of
+/// `Integer.MAX_VALUE`), and `txnStartTimestamp + txnTimeoutMs < now`. The
+/// comparison is strict, so a transaction is reapable only once its timeout
+/// has passed, not when it is reached. Kafka evaluates the sum in a Java
+/// `long`; the kernel compares exactly, without overflow.
+///
+/// The decision is total over every persisted timeout. Kafka's
+/// `TransactionLog.read` accepts any `TransactionTimeoutMs`, and
+/// `InitProducerId` refuses a timeout that is not positive
+/// (`validateTransactionTimeoutMs`), so a zero or negative timeout reaches the
+/// reaper only from a transaction-log record another writer produced. Kafka
+/// treats that timeout arithmetically, and so does this kernel.
+///
+/// A backwards clock never aborts a transaction with a nonnegative timeout,
+/// which is every timeout `InitProducerId` persists.
+#[ensures(result == (state == IdleTransactionState::Ongoing
+    && txn_timeout_ms@ != NO_TRANSACTION_TIMEOUT_MS@
+    && start_ms@ + txn_timeout_ms@ < now_ms@))]
+#[ensures(now_ms@ <= start_ms@ && txn_timeout_ms@ >= 0 ==> !result)]
 #[must_use]
 pub fn should_abort_idle_transaction(
     state: IdleTransactionState,
@@ -543,10 +658,11 @@ pub fn should_abort_idle_transaction(
         IdleTransactionState::Ongoing => true,
         IdleTransactionState::Other => false,
     };
-    if !ongoing || txn_timeout_ms == NO_TRANSACTION_TIMEOUT_MS || now_ms < start_ms {
-        return false;
-    }
-    now_ms.saturating_sub(start_ms) >= i64::from(txn_timeout_ms)
+    // Saturation keeps the order against any `i32` timeout: an elapsed time
+    // above `i64::MAX` exceeds it, and one below `i64::MIN` does not.
+    ongoing
+        && txn_timeout_ms != NO_TRANSACTION_TIMEOUT_MS
+        && now_ms.saturating_sub(start_ms) > i64::from(txn_timeout_ms)
 }
 
 /// The persisted identity and state observed after marker fan-out.
@@ -566,47 +682,41 @@ pub struct TransactionIdentity {
     pub epoch: i16,
 }
 
+impl TransactionSnapshot {
+    /// The producer identity this snapshot holds.
+    #[ensures(result.pid == self.pid && result.epoch == self.epoch)]
+    #[must_use]
+    pub fn identity(self) -> TransactionIdentity {
+        TransactionIdentity {
+            pid: self.pid,
+            epoch: self.epoch,
+        }
+    }
+}
+
 /// Choose the producer identity exposed after transaction completion.
 ///
 /// Verified normal completion reserves `i16::MAX` for the transaction marker,
 /// while a staged recovery identity may use that epoch once before rotating.
-#[cfg_attr(creusot, ensures(!verified ==> result == Some((pid, epoch))))]
-#[cfg_attr(
-    creusot,
-    ensures(
-        verified && !recovery && epoch@ < i16::MAX@ - 1 ==>
-            match result {
-                Some((result_pid, result_epoch)) =>
-                    result_pid == pid && result_epoch@ == epoch@ + 1,
-                None => false,
-            }
-    )
-)]
-#[cfg_attr(
-    creusot,
-    ensures(
-        verified && recovery && epoch@ < i16::MAX@ ==>
-            match result {
-                Some((result_pid, result_epoch)) =>
-                    result_pid == pid && result_epoch@ == epoch@ + 1,
-                None => false,
-            }
-    )
-)]
-#[cfg_attr(
-    creusot,
-    ensures(
-        verified
-            && ((!recovery && epoch@ >= i16::MAX@ - 1)
-                || (recovery && epoch@ >= i16::MAX@)) ==>
-            match (result, fresh) {
-                (Some((result_pid, result_epoch)), Some(fresh_pid)) =>
-                    result_pid == fresh_pid && result_epoch@ == 0,
-                (None, None) => true,
-                _ => false,
-            }
-    )
-)]
+#[ensures(!verified ==> result == Some((pid, epoch)))]
+#[ensures(verified && !recovery && epoch@ < i16::MAX@ - 1 ==>
+    match result {
+        Some((result_pid, result_epoch)) => result_pid == pid && result_epoch@ == epoch@ + 1,
+        None => false,
+    })]
+#[ensures(verified && recovery && epoch@ < i16::MAX@ ==>
+    match result {
+        Some((result_pid, result_epoch)) => result_pid == pid && result_epoch@ == epoch@ + 1,
+        None => false,
+    })]
+#[ensures(verified
+    && ((!recovery && epoch@ >= i16::MAX@ - 1) || (recovery && epoch@ >= i16::MAX@)) ==>
+    match (result, fresh) {
+        (Some((result_pid, result_epoch)), Some(fresh_pid)) =>
+            result_pid == fresh_pid && result_epoch@ == 0,
+        (None, None) => true,
+        _ => false,
+    })]
 #[must_use]
 pub fn next_producer_identity(
     verified: bool,
@@ -671,6 +781,18 @@ pub const EXHAUSTED_PRODUCER_EPOCH: i16 = i16::MAX - 1;
 /// The retry rule also covers a failed epoch fence: that path records the
 /// epoch the producer still holds as the last epoch, so the producer that
 /// owns the transaction is the one the rule admits.
+///
+/// Kafka's `isValidProducerId` has a third admission clause, which this
+/// kernel does not model: `txnMetadata.producerEpoch ==
+/// RecordBatch.NO_PRODUCER_EPOCH` admits every supplied identity, and
+/// `prepareIncrementProducerEpoch` then bumps. Only the metadata that
+/// `handleInitProducerId` has just created for an unknown transactional ID
+/// carries that epoch. The host covers the clause: it answers a transactional
+/// ID with no entry by allocating a fresh identity without calling this
+/// kernel, and every entry it does pass here has a nonnegative epoch, because
+/// allocation hands out nonnegative epochs and
+/// [`transaction_pid_install_decision`] rejects a replayed entry with a
+/// negative current or staged epoch.
 #[ensures((result == InitProducerIdIdentityDecision::BumpWithoutIdentity)
     == (request_pid@ == -1))]
 #[ensures((result == InitProducerIdIdentityDecision::Bump)
@@ -718,90 +840,27 @@ pub fn init_producer_id_identity_decision(
 }
 
 /// Revalidate the transaction entry after the marker fan-out released its lock.
-#[cfg_attr(creusot, requires(prepare_state != complete_state))]
-#[cfg_attr(
-    creusot,
-    ensures(
-        current.pid == completion.pid
-            && current.epoch == completion.epoch
-            && current.state == complete_state
-            ==> result == TransactionCompletionDecision::AlreadyComplete
-    )
-)]
-#[cfg_attr(
-    creusot,
-    ensures(
-        result == TransactionCompletionDecision::AlreadyComplete
-            ==> current.pid == completion.pid
-                && current.epoch == completion.epoch
-                && current.state == complete_state
-    )
-)]
-#[cfg_attr(
-    creusot,
-    ensures(
-        current.pid == expected.pid
-            && current.epoch == expected.epoch
-            && current.state == prepare_state
-            ==> result == TransactionCompletionDecision::Proceed
-    )
-)]
-#[cfg_attr(
-    creusot,
-    ensures(
-        result == TransactionCompletionDecision::Proceed
-            ==> current.pid == expected.pid
-                && current.epoch == expected.epoch
-                && current.state == prepare_state
-                && !(current.pid == completion.pid
-                    && current.epoch == completion.epoch
-                    && current.state == complete_state)
-    )
-)]
-#[cfg_attr(
-    creusot,
-    ensures(
-        !(current.pid == completion.pid
-            && current.epoch == completion.epoch
-            && current.state == complete_state)
-            && (current.pid != expected.pid || current.epoch != expected.epoch)
-            ==> result == TransactionCompletionDecision::RejectStaleIdentity
-    )
-)]
-#[cfg_attr(
-    creusot,
-    ensures(
-        result == TransactionCompletionDecision::RejectStaleIdentity
-            ==> !(current.pid == completion.pid
-                && current.epoch == completion.epoch
-                && current.state == complete_state)
-                && (current.pid != expected.pid || current.epoch != expected.epoch)
-    )
-)]
-#[cfg_attr(
-    creusot,
-    ensures(
-        current.pid == expected.pid
-            && current.epoch == expected.epoch
-            && current.state != prepare_state
-            && !(current.pid == completion.pid
-                && current.epoch == completion.epoch
-                && current.state == complete_state)
-            ==> result == TransactionCompletionDecision::RejectState
-    )
-)]
-#[cfg_attr(
-    creusot,
-    ensures(
-        result == TransactionCompletionDecision::RejectState
-            ==> current.pid == expected.pid
-                && current.epoch == expected.epoch
-                && current.state != prepare_state
-                && !(current.pid == completion.pid
-                    && current.epoch == completion.epoch
-                    && current.state == complete_state)
-    )
-)]
+///
+/// `expected` and `prepare_state` are what the caller prepared; `completion`
+/// and `complete_state` are the completion it intends to write. The live entry
+/// already holding that completion is an idempotent success; otherwise the
+/// entry must still hold the prepared identity (else it was fenced) and the
+/// prepared state (else another caller moved it).
+///
+/// The two state tags are one Kafka `Prepare* -> Complete*` pairing, which the
+/// host takes from a fixed mapping, so they differ.
+#[requires(prepare_state != complete_state)]
+#[ensures((result == TransactionCompletionDecision::AlreadyComplete)
+    == (has_identity(current, completion) && current.state == complete_state))]
+#[ensures((result == TransactionCompletionDecision::RejectStaleIdentity)
+    == (!(has_identity(current, completion) && current.state == complete_state)
+        && !has_identity(current, expected)))]
+#[ensures((result == TransactionCompletionDecision::RejectState)
+    == (!(has_identity(current, completion) && current.state == complete_state)
+        && has_identity(current, expected)
+        && current.state != prepare_state))]
+#[ensures((result == TransactionCompletionDecision::Proceed)
+    == (has_identity(current, expected) && current.state == prepare_state))]
 #[must_use]
 pub fn transaction_completion_decision(
     current: TransactionSnapshot,
@@ -832,8 +891,12 @@ mod tests {
 
     use super::*;
 
+    // Kafka `TransactionState` ids.
+    const ONGOING: i8 = 1;
     const PREPARE_COMMIT: i8 = 2;
+    const PREPARE_ABORT: i8 = 3;
     const COMPLETE_COMMIT: i8 = 4;
+    const COMPLETE_ABORT: i8 = 5;
 
     #[test]
     fn pid_install_rejects_malformed_misplaced_and_colliding_records() {
@@ -869,6 +932,35 @@ mod tests {
         }
     }
 
+    fn marker(
+        producer_epoch: i16,
+        coordinator_epoch: i32,
+        is_commit: bool,
+        is_offsets_partition: bool,
+    ) -> TransactionMarkerRequest {
+        TransactionMarkerRequest {
+            producer_id: 1,
+            producer_epoch,
+            coordinator_epoch,
+            is_commit,
+            is_offsets_partition,
+        }
+    }
+
+    fn partition(
+        producer_epoch: i16,
+        coordinator_epoch: i32,
+        has_pending_transaction: bool,
+    ) -> TransactionMarkerPartitionState {
+        TransactionMarkerPartitionState {
+            producer_epoch,
+            coordinator_epoch,
+            has_pending_transaction,
+        }
+    }
+
+    /// Kafka `ProducerStateManager`'s `appendEndTxnMarker` fencing, plus the
+    /// exact-retry and offset-publication rules.
     #[test]
     fn marker_materialization_fences_retries_and_offset_publication() {
         use TransactionMarkerMaterializationDecision::{
@@ -876,66 +968,106 @@ mod tests {
             RejectMalformed, RejectProducerEpoch, Retry,
         };
 
-        assert!(
-            transaction_marker_materialization_decision((-1, 0, 0), (-1, -1, true), (true, true))
-                == RejectMalformed
-        );
-        assert!(
-            transaction_marker_materialization_decision((0, -1, 0), (-1, -1, true), (true, true))
-                == RejectMalformed
-        );
-        assert!(
-            transaction_marker_materialization_decision((0, -1, 0), (0, 0, true), (true, true))
-                == RejectMalformed
-        );
-        assert!(
-            transaction_marker_materialization_decision((0, 0, 0), (0, 0, false), (true, true))
-                == Retry
-        );
-        assert!(
-            transaction_marker_materialization_decision((0, 0, 0), (-1, 0, false), (true, true))
-                == AppendWithoutOffsetPublication
-        );
-        assert!(
-            transaction_marker_materialization_decision((0, 0, 0), (-1, 0, true), (true, true))
-                == RejectMalformed
-        );
-        assert!(
-            transaction_marker_materialization_decision((1, 0, 0), (-2, -1, true), (true, true))
-                == RejectMalformed
-        );
-        assert!(
-            transaction_marker_materialization_decision((1, 0, -2), (0, -1, true), (false, false))
-                == RejectMalformed
-        );
-        assert!(
-            transaction_marker_materialization_decision((1, 0, -1), (0, -1, true), (false, false))
-                == AppendWithoutOffsetPublication
-        );
-        assert!(
-            transaction_marker_materialization_decision((1, 2, 9), (3, 8, true), (true, true))
-                == RejectProducerEpoch
-        );
-        assert!(
-            transaction_marker_materialization_decision((1, 3, 7), (3, 8, true), (true, true))
-                == RejectCoordinatorEpoch
-        );
-        assert!(
-            transaction_marker_materialization_decision((1, 3, 8), (3, 8, false), (true, true))
-                == Retry
-        );
-        assert!(
-            transaction_marker_materialization_decision((1, 3, 8), (3, 7, true), (true, true))
-                == AppendAndPublishOffsets
-        );
-        assert!(
-            transaction_marker_materialization_decision((1, 3, 8), (3, 7, true), (false, true))
-                == AppendWithoutOffsetPublication
-        );
-        assert!(
-            transaction_marker_materialization_decision((1, 4, 9), (3, 8, false), (true, true))
-                == AppendWithoutOffsetPublication
-        );
+        let cases = [
+            // A negative producer ID names no producer.
+            (
+                TransactionMarkerRequest {
+                    producer_id: -1,
+                    ..marker(0, 0, true, true)
+                },
+                partition(-1, -1, true),
+                RejectMalformed,
+            ),
+            // A negative marker epoch.
+            (
+                marker(-1, 0, true, true),
+                partition(0, 0, true),
+                RejectMalformed,
+            ),
+            // A coordinator epoch below the `-1` sentinel.
+            (
+                marker(0, -2, false, false),
+                partition(0, -1, true),
+                RejectMalformed,
+            ),
+            // Partition state below the sentinels.
+            (
+                marker(0, 0, true, true),
+                partition(-2, -1, true),
+                RejectMalformed,
+            ),
+            (
+                marker(0, 0, true, true),
+                partition(0, -2, false),
+                RejectMalformed,
+            ),
+            // A pending transaction without a producer epoch.
+            (
+                marker(0, 0, true, true),
+                partition(-1, 0, true),
+                RejectMalformed,
+            ),
+            // `ProducerFencedException`: the marker's epoch is older.
+            (
+                marker(2, 9, true, true),
+                partition(3, 8, true),
+                RejectProducerEpoch,
+            ),
+            // `TransactionCoordinatorFencedException`: an older coordinator.
+            (
+                marker(3, 7, true, true),
+                partition(3, 8, true),
+                RejectCoordinatorEpoch,
+            ),
+            // The same generation already closed the transaction: append
+            // nothing.
+            (marker(3, 8, true, true), partition(3, 8, false), Retry),
+            (marker(0, 0, true, true), partition(0, 0, false), Retry),
+            // A pending COMMIT on `__consumer_offsets` publishes its offsets.
+            (
+                marker(3, 8, true, true),
+                partition(3, 7, true),
+                AppendAndPublishOffsets,
+            ),
+            // An ABORT, a data partition, or no pending transaction appends
+            // without publishing.
+            (
+                marker(3, 8, false, true),
+                partition(3, 7, true),
+                AppendWithoutOffsetPublication,
+            ),
+            (
+                marker(3, 8, true, false),
+                partition(3, 7, true),
+                AppendWithoutOffsetPublication,
+            ),
+            (
+                marker(0, -1, false, false),
+                partition(0, -1, true),
+                AppendWithoutOffsetPublication,
+            ),
+            // A newer generation than the closed one is not a retry.
+            (
+                marker(4, 9, true, true),
+                partition(3, 8, false),
+                AppendWithoutOffsetPublication,
+            ),
+            (
+                marker(0, 0, true, true),
+                partition(-1, 0, false),
+                AppendWithoutOffsetPublication,
+            ),
+        ];
+        for (request, current, expected) in cases {
+            assert!(
+                transaction_marker_materialization_decision(request, current) == expected,
+                "request={request:?}, current={current:?}"
+            );
+        }
+    }
+
+    fn snapshot(pid: i64, epoch: i16, state: i8) -> TransactionSnapshot {
+        TransactionSnapshot { pid, epoch, state }
     }
 
     #[test]
@@ -945,42 +1077,114 @@ mod tests {
             RejectStaleIdentity,
         };
 
-        assert!(
-            transaction_reaper_completion_decision((0, 0, 3), (0, 0, 3), (0, 0, 5), true)
-                == Proceed
-        );
-        assert!(
-            transaction_reaper_completion_decision((0, 0, 3), (0, 0, 3), (0, 1, 5), true)
-                == Proceed
-        );
-        assert!(
-            transaction_reaper_completion_decision((7, 3, 3), (7, 3, 3), (7, 4, 5), true)
-                == Proceed
-        );
-        assert!(
-            transaction_reaper_completion_decision((7, 3, 3), (7, 3, 3), (7, 4, 5), false)
-                == RejectChangedPreparedState
-        );
-        assert!(
-            transaction_reaper_completion_decision((7, 4, 3), (7, 3, 3), (7, 4, 5), false)
-                == RejectStaleIdentity
-        );
-        assert!(
-            transaction_reaper_completion_decision((7, 4, 5), (7, 3, 3), (7, 4, 5), false)
-                == AlreadyComplete
-        );
-        for malformed in [
-            ((-1, 0, 3), (0, 0, 3), (0, 1, 5)),
-            ((0, -1, 3), (0, 0, 3), (0, 1, 5)),
-            ((0, 0, 3), (-1, 0, 3), (0, 1, 5)),
-            ((0, 0, 3), (0, -1, 3), (0, 1, 5)),
-            ((0, 0, 3), (0, 0, 3), (-1, 1, 5)),
-            ((0, 0, 3), (0, 0, 3), (0, -1, 5)),
-            ((0, 0, 3), (0, 0, 3), (0, 1, 3)),
-        ] {
+        let prepared = snapshot(7, 3, PREPARE_ABORT);
+        let completion = snapshot(7, 4, COMPLETE_ABORT);
+        // (current, prepared, completion, exact snapshot, expected).
+        let cases = [
+            // The entry is exactly as the reaper prepared it.
+            (prepared, prepared, completion, true, Proceed),
+            (
+                snapshot(0, 0, PREPARE_ABORT),
+                snapshot(0, 0, PREPARE_ABORT),
+                snapshot(0, 1, COMPLETE_ABORT),
+                true,
+                Proceed,
+            ),
+            // Same identity and state, but another field of the entry moved,
+            // such as a late partition registration.
+            (
+                prepared,
+                prepared,
+                completion,
+                false,
+                RejectChangedPreparedState,
+            ),
+            // Same identity, different state: another caller moved it.
+            (
+                snapshot(7, 3, ONGOING),
+                prepared,
+                completion,
+                true,
+                RejectChangedPreparedState,
+            ),
+            // An `InitProducerId` bumped the epoch or rotated the PID.
+            (
+                snapshot(7, 5, PREPARE_ABORT),
+                prepared,
+                completion,
+                true,
+                RejectStaleIdentity,
+            ),
+            (
+                snapshot(9, 3, PREPARE_ABORT),
+                prepared,
+                completion,
+                false,
+                RejectStaleIdentity,
+            ),
+            // The completion identity at the prepare state is not the
+            // completion.
+            (
+                snapshot(7, 4, PREPARE_ABORT),
+                prepared,
+                completion,
+                true,
+                RejectStaleIdentity,
+            ),
+            // The intended completion is already durable, whatever the
+            // snapshot comparison says.
+            (completion, prepared, completion, false, AlreadyComplete),
+            (completion, prepared, completion, true, AlreadyComplete),
+            // A negative PID or epoch in any snapshot.
+            (
+                snapshot(-1, 3, PREPARE_ABORT),
+                prepared,
+                completion,
+                true,
+                RejectMalformed,
+            ),
+            (
+                snapshot(7, -1, PREPARE_ABORT),
+                prepared,
+                completion,
+                true,
+                RejectMalformed,
+            ),
+            (
+                prepared,
+                snapshot(-1, 3, PREPARE_ABORT),
+                completion,
+                true,
+                RejectMalformed,
+            ),
+            (
+                prepared,
+                snapshot(7, -1, PREPARE_ABORT),
+                completion,
+                true,
+                RejectMalformed,
+            ),
+            (
+                prepared,
+                prepared,
+                snapshot(-1, 4, COMPLETE_ABORT),
+                true,
+                RejectMalformed,
+            ),
+            (
+                prepared,
+                prepared,
+                snapshot(7, -1, COMPLETE_ABORT),
+                true,
+                RejectMalformed,
+            ),
+        ];
+        for (current, prepared, completion, exact, expected) in cases {
             assert!(
-                transaction_reaper_completion_decision(malformed.0, malformed.1, malformed.2, true)
-                    == RejectMalformed
+                transaction_reaper_completion_decision(current, prepared, completion, exact)
+                    == expected,
+                "current={current:?}, prepared={prepared:?}, completion={completion:?}, \
+                 exact={exact}"
             );
         }
     }
@@ -1069,6 +1273,8 @@ mod tests {
         assert2::assert!(first_unstable_offset(&[20], 20) == Some(20));
         assert2::assert!(first_unstable_offset(&[9, 3, 14], 20) == Some(3));
         assert2::assert!(first_unstable_offset(&[9, 21], 20).is_none());
+        // A start beyond the log end rejects even behind a lower start.
+        assert2::assert!(first_unstable_offset(&[5, 30], 20).is_none());
         assert2::assert!(transaction_marker_closes(true, false, true));
         assert2::assert!(!transaction_marker_closes(false, false, true));
         assert2::assert!(!transaction_marker_closes(true, false, false));
@@ -1084,56 +1290,50 @@ mod tests {
         assert2::assert!(!aborted_transaction_overlaps(10, 14, 12, 12));
     }
 
+    /// Kafka `TransactionStateManager.timedOutTransactions`.
     #[test]
-    fn idle_transaction_reaper_is_fail_closed() {
-        assert2::assert!(!should_abort_idle_transaction(
-            IdleTransactionState::Ongoing,
-            i32::MAX,
-            0,
-            i64::MAX,
-        ));
-        assert2::assert!(!should_abort_idle_transaction(
-            IdleTransactionState::Other,
-            1,
-            0,
-            i64::MAX,
-        ));
-        assert2::assert!(!should_abort_idle_transaction(
-            IdleTransactionState::Ongoing,
-            1,
-            10,
-            9,
-        ));
-        assert2::assert!(!should_abort_idle_transaction(
-            IdleTransactionState::Ongoing,
-            0,
-            10,
-            9,
-        ));
-        assert2::assert!(should_abort_idle_transaction(
-            IdleTransactionState::Ongoing,
-            0,
-            10,
-            10,
-        ));
-        assert2::assert!(!should_abort_idle_transaction(
-            IdleTransactionState::Ongoing,
-            10,
-            10,
-            10,
-        ));
-        assert2::assert!(should_abort_idle_transaction(
-            IdleTransactionState::Ongoing,
-            10,
-            10,
-            20,
-        ));
-        assert2::assert!(should_abort_idle_transaction(
-            IdleTransactionState::Ongoing,
-            1,
-            10,
-            11,
-        ));
+    fn idle_transaction_reaper_matches_kafka_timed_out_transactions() {
+        use IdleTransactionState::{Ongoing, Other};
+
+        // (state, timeout, start, now, expected).
+        let cases = [
+            // `txnStartTimestamp + txnTimeoutMs < now` is strict.
+            (Ongoing, 60_000, 0, 60_001, true),
+            (Ongoing, 60_000, 0, 60_000, false),
+            (Ongoing, 60_000, 0, 59_999, false),
+            (Ongoing, 1, 10, 11, false),
+            (Ongoing, 1, 10, 12, true),
+            // Only an ONGOING transaction times out.
+            (Other, 1, 0, i64::MAX, false),
+            // KIP-939: a two-phase-commit transaction never times out.
+            (Ongoing, NO_TRANSACTION_TIMEOUT_MS, 0, i64::MAX, false),
+            (
+                Ongoing,
+                NO_TRANSACTION_TIMEOUT_MS,
+                i64::MIN,
+                i64::MAX,
+                false,
+            ),
+            // A backwards clock never aborts a nonnegative timeout.
+            (Ongoing, 60_000, 100_000, 0, false),
+            (Ongoing, 0, 10, 9, false),
+            (Ongoing, 0, 10, 10, false),
+            (Ongoing, 0, i64::MAX, i64::MIN, false),
+            // A zero timeout expires one millisecond after the start.
+            (Ongoing, 0, 10, 11, true),
+            // A negative timeout from a foreign log record is arithmetic too.
+            (Ongoing, -5, 10, 6, true),
+            (Ongoing, -5, 10, 5, false),
+            // The elapsed time does not wrap at the `i64` edges.
+            (Ongoing, 60_000, i64::MIN, i64::MAX, true),
+            (Ongoing, i32::MAX - 1, i64::MAX, i64::MIN, false),
+        ];
+        for (state, timeout, start, now, expected) in cases {
+            assert!(
+                should_abort_idle_transaction(state, timeout, start, now) == expected,
+                "state={state:?}, timeout={timeout}, start={start}, now={now}"
+            );
+        }
     }
 
     #[test]
@@ -1245,7 +1445,7 @@ mod tests {
                 TransactionSnapshot {
                     pid: 7,
                     epoch: 3,
-                    state: 1,
+                    state: ONGOING,
                 },
                 TransactionIdentity { pid: 7, epoch: 3 },
                 TransactionIdentity { pid: 7, epoch: 4 },

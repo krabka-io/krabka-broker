@@ -1,11 +1,11 @@
-(* #"/workspace/crates/verified/src/group_migration.rs" 43 0 47 16 *)
+(* #"/workspace/crates/verified/src/group_migration.rs" 45 0 49 16 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sgroup_migration = "/workspace/crates/verified/src/group_migration.rs" 51 25 51 26
-let%span sgroup_migration'0 = "/workspace/crates/verified/src/group_migration.rs" 51 29 51 30
-let%span sgroup_migration'1 = "/workspace/crates/verified/src/group_migration.rs" 37 10 37 81
-let%span sgroup_migration'2 = "/workspace/crates/verified/src/group_migration.rs" 38 10 38 66
-let%span sgroup_migration'3 = "/workspace/crates/verified/src/group_migration.rs" 39 10 41 43
+let%span sgroup_migration = "/workspace/crates/verified/src/group_migration.rs" 53 25 53 26
+let%span sgroup_migration'0 = "/workspace/crates/verified/src/group_migration.rs" 53 29 53 30
+let%span sgroup_migration'1 = "/workspace/crates/verified/src/group_migration.rs" 39 10 39 81
+let%span sgroup_migration'2 = "/workspace/crates/verified/src/group_migration.rs" 40 10 40 66
+let%span sgroup_migration'3 = "/workspace/crates/verified/src/group_migration.rs" 41 10 43 43
 
 use creusot.int.Int32
 use creusot.prelude.Any
@@ -21,7 +21,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let classic_upgrade_epoch [#"/workspace/crates/verified/src/group_migration.rs" 43 0 47 16] (consumer_protocol: bool)
+let classic_upgrade_epoch [#"/workspace/crates/verified/src/group_migration.rs" 45 0 49 16] (consumer_protocol: bool)
   (every_subscription_decodable: bool) (generation: Int32.t) (return (x: t_Option_i32)) = (! bb0
   [ bb0 = any [ br0 -> {consumer_protocol = false} (! bb2) | br1 -> {consumer_protocol} (! bb1) ]
   | bb1 = any [ br0 -> {every_subscription_decodable = false} (! bb2) | br1 -> {every_subscription_decodable} (! bb3) ]

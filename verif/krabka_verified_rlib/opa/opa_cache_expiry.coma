@@ -1,13 +1,13 @@
-(* #"/workspace/crates/verified/src/opa.rs" 62 0 62 68 *)
+(* #"/workspace/crates/verified/src/opa.rs" 73 0 73 68 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
 let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
 let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
-let%span sopa = "/workspace/crates/verified/src/opa.rs" 63 17 63 18
-let%span sopa'0 = "/workspace/crates/verified/src/opa.rs" 66 29 66 47
-let%span sopa'1 = "/workspace/crates/verified/src/opa.rs" 66 10 66 48
-let%span sopa'2 = "/workspace/crates/verified/src/opa.rs" 56 10 60 1
+let%span sopa = "/workspace/crates/verified/src/opa.rs" 74 17 74 18
+let%span sopa'0 = "/workspace/crates/verified/src/opa.rs" 77 29 77 47
+let%span sopa'1 = "/workspace/crates/verified/src/opa.rs" 77 10 77 48
+let%span sopa'2 = "/workspace/crates/verified/src/opa.rs" 67 10 71 1
 
 use creusot.int.Int64
 use creusot.int.Int128
@@ -52,7 +52,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let opa_cache_expiry [#"/workspace/crates/verified/src/opa.rs" 62 0 62 68] (now_ms: Int128.t) (ttl_ms: Int64.t)
+let opa_cache_expiry [#"/workspace/crates/verified/src/opa.rs" 73 0 73 68] (now_ms: Int128.t) (ttl_ms: Int64.t)
   (return (x: t_OpaCacheExpiry)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_7 <- Int64.le ttl_ms ([%#sopa] (0: Int64.t)) ] s1
@@ -75,7 +75,8 @@ let opa_cache_expiry [#"/workspace/crates/verified/src/opa.rs" 62 0 62 68] (now_
   | & _12: Int128.t = Any.any_l ()
   | & expires_at_ms: Int128.t = Any.any_l () ])
   [ return (result: t_OpaCacheExpiry) -> {[@stop_split] [@expl:opa_cache_expiry ensures] [%#sopa'2] match result with
-      | DoNotCache -> true
+      | DoNotCache -> Int64.to_int ttl_ms <= 0
+      \/ gt_log_Int (Int128.to_int now_ms + Int64.to_int ttl_ms) (Int128.to_int const_MAX)
       | CacheUntil expires_at_ms -> gt_log_Int (Int64.to_int ttl_ms) 0
       /\ Int128.to_int expires_at_ms = Int128.to_int now_ms + Int64.to_int ttl_ms
       end}

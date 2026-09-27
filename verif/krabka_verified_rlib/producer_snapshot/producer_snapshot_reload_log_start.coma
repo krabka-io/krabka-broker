@@ -1,0 +1,48 @@
+(* #"/workspace/crates/verified/src/producer_snapshot.rs" 116 0 120 8 *)
+
+let%span sproducer_snapshot = "/workspace/crates/verified/src/producer_snapshot.rs" 124 20 124 21
+let%span sproducer_snapshot'0 = "/workspace/crates/verified/src/producer_snapshot.rs" 107 10 114 1
+
+use creusot.int.Int64
+use creusot.prelude.Any
+
+type t_Option_i64 = None | Some Int64.t
+
+let elim_Some (_x: t_Option_i64) (return (f0: Int64.t)) = any
+  [ _k (f0: Int64.t) -> {Some f0 = _x} (! return {f0})
+  | _chk -> (! {[@expl:elim Some] match _x with
+      | Some _ -> true
+      | _ -> false
+      end}
+    any) ]
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let producer_snapshot_reload_log_start [#"/workspace/crates/verified/src/producer_snapshot.rs" 116 0 120 8]
+  (remote_storage_enable: bool) (established: t_Option_i64) (local_log_start: Int64.t) (return (x: Int64.t)) = (! bb0
+  [ bb0 = any [ br0 -> {remote_storage_enable = false} (! bb6) | br1 -> {remote_storage_enable} (! bb1) ]
+  | bb1 = any [ br0 -> {established = None} (! bb4) | br1 (x0: Int64.t) -> {established = Some x0} (! bb5) ]
+  | bb5 = s0
+    [ s0 = elim_Some {established} (fun (r0: Int64.t) -> [ &start <- r0 ] s1)
+    | s1 = [ &_ret <- start ] s2
+    | s2 = return {_ret} ]
+  | bb4 = s0 [ s0 = [ &_ret <- [%#sproducer_snapshot] (0: Int64.t) ] s1 | s1 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &_ret <- local_log_start ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: Int64.t = Any.any_l ()
+  | & remote_storage_enable: bool = remote_storage_enable
+  | & established: t_Option_i64 = established
+  | & local_log_start: Int64.t = local_log_start
+  | & start: Int64.t = Any.any_l () ])
+  [ return (result: Int64.t) ->
+  {[@stop_split] [@expl:producer_snapshot_reload_log_start ensures] [%#sproducer_snapshot'0] result
+    = (if remote_storage_enable then
+      match established with
+        | Some start -> start
+        | None -> (0: Int64.t)
+        end
+    else
+      local_log_start
+    )}
+    (! return {result}) ]

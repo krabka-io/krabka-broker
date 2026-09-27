@@ -321,15 +321,39 @@ pub enum FreezeReplacementDecision {
     Append,
 }
 
-/// Admit only a new freeze or a strictly newer exact-key replacement, with no
-/// uncommitted metadata tail.
-#[ensures((result == FreezeReplacementDecision::Append) == (
-    !facts.uncommitted_tail
-        && match facts.stored {
+/// The replacement rule. A thaw of a scope with no committed freeze is
+/// `Missing`, and a record no newer than the committed one at its exact key is
+/// `Stale`; both are permanent refusals the committed image decides alone. An
+/// admissible record behind an uncommitted metadata tail is `InFlight`, the
+/// one refusal that clears once the tail commits, and otherwise it is
+/// `Append`.
+// cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
+#[cfg(creusot)]
+#[cfg_attr(test, mutants::skip)]
+#[logic]
+fn freeze_replacement_model(facts: FreezeReplacementFacts) -> FreezeReplacementDecision {
+    pearlite! {
+        let admissible = match facts.stored {
             FreezeStoredState::Missing => facts.incoming_frozen,
             FreezeStoredState::Present { set_at_ms } => facts.incoming_set_at_ms@ > set_at_ms@,
+        };
+        if !admissible {
+            match facts.stored {
+                FreezeStoredState::Missing => FreezeReplacementDecision::Missing,
+                FreezeStoredState::Present { .. } => FreezeReplacementDecision::Stale,
+            }
+        } else if facts.uncommitted_tail {
+            FreezeReplacementDecision::InFlight
+        } else {
+            FreezeReplacementDecision::Append
         }
-))]
+    }
+}
+
+/// Admit only a new freeze or a strictly newer exact-key replacement, with no
+/// uncommitted metadata tail; see `freeze_replacement_model`. The
+/// controller retries only `InFlight`, so every variant is pinned.
+#[ensures(result == freeze_replacement_model(facts))]
 #[must_use]
 pub fn freeze_replacement_decision(facts: FreezeReplacementFacts) -> FreezeReplacementDecision {
     match facts.stored {
@@ -550,6 +574,33 @@ mod tests {
                     ..valid
                 },
                 FreezeReplacementDecision::Append,
+            ),
+            // A permanent refusal outranks the transient tail, so the
+            // controller never retries a record that can never append.
+            (
+                FreezeReplacementFacts {
+                    stored: FreezeStoredState::Missing,
+                    incoming_frozen: false,
+                    uncommitted_tail: true,
+                    ..valid
+                },
+                FreezeReplacementDecision::Missing,
+            ),
+            (
+                FreezeReplacementFacts {
+                    incoming_set_at_ms: 8,
+                    uncommitted_tail: true,
+                    ..valid
+                },
+                FreezeReplacementDecision::Stale,
+            ),
+            (
+                FreezeReplacementFacts {
+                    stored: FreezeStoredState::Missing,
+                    uncommitted_tail: true,
+                    ..valid
+                },
+                FreezeReplacementDecision::InFlight,
             ),
         ] {
             assert2::check!(freeze_replacement_decision(facts) == expected);

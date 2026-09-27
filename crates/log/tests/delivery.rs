@@ -360,8 +360,10 @@ fn size_retention_on_an_unscheduled_topic_is_untouched_by_the_guard() {
     let now = SystemTime::UNIX_EPOCH + Duration::from_millis(u64::try_from(NOW_MS).unwrap());
     log.tick(now, Offset(i64::MAX)).unwrap();
 
-    // Only the active segment survives.
-    check!(log.log_start_offset() == Offset(4));
+    // Kafka's `deleteSegments`: with every byte over budget and the whole log
+    // replicated, every segment goes, the active one after a roll, and the
+    // log starts at its end.
+    check!(log.log_start_offset() == log.log_end_offset());
 }
 
 /// A truncation can remove the batch the last walk stopped on. The cached

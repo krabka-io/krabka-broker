@@ -1,37 +1,36 @@
-(* #"/proof-work-208e/crates/verified/src/wal.rs" 47 0 47 91 *)
+(* #"/workspace/crates/verified/src/wal.rs" 48 0 48 91 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
-let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
 let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
 let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
-let%span swal = "/proof-work-208e/crates/verified/src/wal.rs" 48 7 48 18
-let%span swal'0 = "/proof-work-208e/crates/verified/src/wal.rs" 48 22 48 33
-let%span swal'1 = "/proof-work-208e/crates/verified/src/wal.rs" 49 15 49 20
-let%span swal'2 = "/proof-work-208e/crates/verified/src/wal.rs" 52 15 52 26
-let%span swal'3 = "/proof-work-208e/crates/verified/src/wal.rs" 52 30 52 31
-let%span swal'4 = "/proof-work-208e/crates/verified/src/wal.rs" 56 16 56 22
-let%span swal'5 = "/proof-work-208e/crates/verified/src/wal.rs" 61 32 61 49
-let%span swal'6 = "/proof-work-208e/crates/verified/src/wal.rs" 62 14 62 25
-let%span swal'7 = "/proof-work-208e/crates/verified/src/wal.rs" 59 34 60 73
-let%span swal'8 = "/proof-work-208e/crates/verified/src/wal.rs" 58 34 58 62
-let%span swal'9 = "/proof-work-208e/crates/verified/src/wal.rs" 57 34 57 52
-let%span swal'10 = "/proof-work-208e/crates/verified/src/wal.rs" 63 11 63 19
-let%span swal'11 = "/proof-work-208e/crates/verified/src/wal.rs" 63 35 63 43
-let%span swal'12 = "/proof-work-208e/crates/verified/src/wal.rs" 63 46 63 54
-let%span swal'13 = "/proof-work-208e/crates/verified/src/wal.rs" 66 25 66 33
-let%span swal'14 = "/proof-work-208e/crates/verified/src/wal.rs" 66 46 66 47
-let%span swal'15 = "/proof-work-208e/crates/verified/src/wal.rs" 66 25 66 48
-let%span swal'16 = "/proof-work-208e/crates/verified/src/wal.rs" 70 13 70 14
-let%span swal'17 = "/proof-work-208e/crates/verified/src/wal.rs" 70 8 70 14
-let%span swal'18 = "/proof-work-208e/crates/verified/src/wal.rs" 64 19 64 24
-let%span swal'19 = "/proof-work-208e/crates/verified/src/wal.rs" 67 19 67 24
-let%span swal'20 = "/proof-work-208e/crates/verified/src/wal.rs" 39 28 44 6
-let%span swal'21 = "/proof-work-208e/crates/verified/src/wal.rs" 12 10 12 29
-let%span swal'22 = "/proof-work-208e/crates/verified/src/wal.rs" 10 11 10 37
-let%span swal'23 = "/proof-work-208e/crates/verified/src/wal.rs" 11 11 11 45
-let%span swal'24 = "/proof-work-208e/crates/verified/src/wal.rs" 21 8 34 9
+let%span swell_founded = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/well_founded.rs" 43 8 43 33
+let%span sslice = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/slice.rs" 331 18 331 22
+let%span swal = "/workspace/crates/verified/src/wal.rs" 49 7 49 18
+let%span swal'0 = "/workspace/crates/verified/src/wal.rs" 49 22 49 33
+let%span swal'1 = "/workspace/crates/verified/src/wal.rs" 50 15 50 20
+let%span swal'2 = "/workspace/crates/verified/src/wal.rs" 53 24 53 35
+let%span swal'3 = "/workspace/crates/verified/src/wal.rs" 57 16 57 22
+let%span swal'4 = "/workspace/crates/verified/src/wal.rs" 62 32 62 49
+let%span swal'5 = "/workspace/crates/verified/src/wal.rs" 63 14 63 25
+let%span swal'6 = "/workspace/crates/verified/src/wal.rs" 60 34 61 73
+let%span swal'7 = "/workspace/crates/verified/src/wal.rs" 59 34 59 62
+let%span swal'8 = "/workspace/crates/verified/src/wal.rs" 58 34 58 52
+let%span swal'9 = "/workspace/crates/verified/src/wal.rs" 64 11 64 19
+let%span swal'10 = "/workspace/crates/verified/src/wal.rs" 64 35 64 43
+let%span swal'11 = "/workspace/crates/verified/src/wal.rs" 64 46 64 54
+let%span swal'12 = "/workspace/crates/verified/src/wal.rs" 67 25 67 33
+let%span swal'13 = "/workspace/crates/verified/src/wal.rs" 67 46 67 47
+let%span swal'14 = "/workspace/crates/verified/src/wal.rs" 67 25 67 48
+let%span swal'15 = "/workspace/crates/verified/src/wal.rs" 71 13 71 14
+let%span swal'16 = "/workspace/crates/verified/src/wal.rs" 71 8 71 14
+let%span swal'17 = "/workspace/crates/verified/src/wal.rs" 65 19 65 24
+let%span swal'18 = "/workspace/crates/verified/src/wal.rs" 68 19 68 24
+let%span swal'19 = "/workspace/crates/verified/src/wal.rs" 41 28 46 6
+let%span swal'20 = "/workspace/crates/verified/src/wal.rs" 14 10 14 29
+let%span swal'21 = "/workspace/crates/verified/src/wal.rs" 12 11 12 37
+let%span swal'22 = "/workspace/crates/verified/src/wal.rs" 13 11 13 45
+let%span swal'23 = "/workspace/crates/verified/src/wal.rs" 23 8 36 9
 
 use creusot.slice.Slice64
 use creusot.int.Int64
@@ -60,14 +59,14 @@ meta "rewrite_def" predicate well_founded_relation_Int
 
 constant const_MAX: Int64.t = (9223372036854775807: Int64.t)
 
-predicate exact_wal_batch_suffix [#"/proof-work-208e/crates/verified/src/wal.rs" 13 0 19 9] (bases: Seq.seq Int64.t) (lasts: Seq.seq Int64.t) (index: int) (expected: int) (target: int)
+predicate exact_wal_batch_suffix [#"/workspace/crates/verified/src/wal.rs" 15 0 21 9] (bases: Seq.seq Int64.t) (lasts: Seq.seq Int64.t) (index: int) (expected: int) (target: int)
 
 axiom exact_wal_batch_suffix_def:
-  forall bases: Seq.seq Int64.t, lasts: Seq.seq Int64.t, index: int, expected: int, target: int [exact_wal_batch_suffix bases lasts index expected target]. ([%#swal'22] Seq.length bases
+  forall bases: Seq.seq Int64.t, lasts: Seq.seq Int64.t, index: int, expected: int, target: int [exact_wal_batch_suffix bases lasts index expected target]. ([%#swal'21] Seq.length bases
       = Seq.length lasts)
-    -> ([%#swal'23] 0 <= index /\ index <= Seq.length bases)
+    -> ([%#swal'22] 0 <= index /\ index <= Seq.length bases)
     -> exact_wal_batch_suffix bases lasts index expected target
-    = ([%#swal'24] if index = Seq.length bases then
+    = ([%#swal'23] if index = Seq.length bases then
       expected = target
     else
       Int64.to_int (Seq.get bases index) = expected
@@ -101,7 +100,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let exact_wal_batch_range [#"/proof-work-208e/crates/verified/src/wal.rs" 47 0 47 91] (bases: Slice64.slice Int64.t)
+let exact_wal_batch_range [#"/workspace/crates/verified/src/wal.rs" 48 0 48 91] (bases: Slice64.slice Int64.t)
   (lasts: Slice64.slice Int64.t) (start: Int64.t) (target: Int64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = len_i64 [%#swal] {bases} (fun (_x: UInt64.t) -> [ &_12 <- _x ] s1)
@@ -112,58 +111,60 @@ let exact_wal_batch_range [#"/proof-work-208e/crates/verified/src/wal.rs" 47 0 4
   | bb4 = s0 [ s0 = [ &_18 <- start = target ] s1 | s1 = any [ br0 -> {_18 = false} (! bb6) | br1 -> {_18} (! bb5) ] ]
   | bb5 = s0
     [ s0 = len_i64 [%#swal'2] {bases} (fun (_x: UInt64.t) -> [ &_22 <- _x ] s1)
-    | s1 = [ &_ret <- _22 = ([%#swal'3] (0: UInt64.t)) ] s2
-    | s2 = return {_ret} ]
-  | bb6 = s0 [ s0 = [ &expected <- start ] s1 | s1 = [ &i <- [%#swal'4] (0: UInt64.t) ] s2 | s2 = bb8 ]
-  | bb8 = bb8invariant
-    [ bb8 = {[@expl:loop variant] well_founded_relation_Int variant_old_bb8 ([%#swal'5] Seq.length (Slice64.view bases)
+    | s1 = any [ br0 -> {_22 = (0: UInt64.t)} (! bb10) | default -> -{_22 <> (0: UInt64.t)}- (! bb8) ] ]
+  | bb8 = s0 [ s0 = [ &_ret <- false ] s1 | s1 = return {_ret} ]
+  | bb10 = s0 [ s0 = [ &_ret <- true ] s1 | s1 = return {_ret} ]
+  | bb6 = s0 [ s0 = [ &expected <- start ] s1 | s1 = [ &i <- [%#swal'3] (0: UInt64.t) ] s2 | s2 = bb11 ]
+  | bb11 = bb11invariant
+    [ bb11 =
+      {[@expl:loop variant] well_founded_relation_Int variant_old_bb11 ([%#swal'4] Seq.length (Slice64.view bases)
       - UInt64.t'int i)}
-      bb8invariant
-    | bb8invariant = {[@expl:loop invariant #0] [%#swal'9] UInt64.t'int i <= Seq.length (Slice64.view bases)}
-      {[@expl:loop invariant #1] [%#swal'8] Seq.length (Slice64.view bases) = Seq.length (Slice64.view lasts)}
-      {[@expl:loop invariant #2] [%#swal'7] exact_wal_batch_suffix (Slice64.view bases) (Slice64.view lasts) 0 (Int64.to_int start) (Int64.to_int target)
+      bb11invariant
+    | bb11invariant = {[@expl:loop invariant #0] [%#swal'8] UInt64.t'int i <= Seq.length (Slice64.view bases)}
+      {[@expl:loop invariant #1] [%#swal'7] Seq.length (Slice64.view bases) = Seq.length (Slice64.view lasts)}
+      {[@expl:loop invariant #2] [%#swal'6] exact_wal_batch_suffix (Slice64.view bases) (Slice64.view lasts) 0 (Int64.to_int start) (Int64.to_int target)
       = exact_wal_batch_suffix (Slice64.view bases) (Slice64.view lasts) (UInt64.t'int i) (Int64.to_int expected) (Int64.to_int target)}
-      (! [ &variant_old_bb8 <- [%#swal'5] Seq.length (Slice64.view bases) - UInt64.t'int i ] s0)
-      [ s0 = len_i64 [%#swal'6] {bases} (fun (_x: UInt64.t) -> [ &_47 <- _x ] s1)
+      (! [ &variant_old_bb11 <- [%#swal'4] Seq.length (Slice64.view bases) - UInt64.t'int i ] s0)
+      [ s0 = len_i64 [%#swal'5] {bases} (fun (_x: UInt64.t) -> [ &_47 <- _x ] s1)
       | s1 = [ &_45 <- UInt64.lt i _47 ] s2
-      | s2 = any [ br0 -> {_45 = false} (! bb25) | br1 -> {_45} (! bb11) ] ]
-      [ bb11 = s0
+      | s2 = any [ br0 -> {_45 = false} (! bb28) | br1 -> {_45} (! bb14) ] ]
+      [ bb14 = s0
         [ s0 = [ &_52 <- i ] s1
         | s1 = [ &_53 <- Slice64.length bases ] s2
         | s2 = [ &_54 <- UInt64.lt _52 _53 ] s3
-        | s3 = {[@expl:index in bounds] [%#swal'10] _54} s4
-        | s4 = Slice64.get [%#swal'10] <Int64.t> {bases} {_52} (fun (r: Int64.t) -> [ &_51 <- r ] s5)
+        | s3 = {[@expl:index in bounds] [%#swal'9] _54} s4
+        | s4 = Slice64.get [%#swal'9] <Int64.t> {bases} {_52} (fun (r: Int64.t) -> [ &_51 <- r ] s5)
         | s5 = [ &_50 <- _51 <> expected ] s6
-        | s6 = any [ br0 -> {_50 = false} (! bb14) | br1 -> {_50} (! bb18) ] ]
-      | bb14 = s0
+        | s6 = any [ br0 -> {_50 = false} (! bb17) | br1 -> {_50} (! bb21) ] ]
+      | bb17 = s0
         [ s0 = [ &_58 <- i ] s1
         | s1 = [ &_59 <- Slice64.length bases ] s2
         | s2 = [ &_60 <- UInt64.lt _58 _59 ] s3
-        | s3 = {[@expl:index in bounds] [%#swal'11] _60} s4
-        | s4 = Slice64.get [%#swal'11] <Int64.t> {bases} {_58} (fun (r: Int64.t) -> [ &_57 <- r ] s5)
+        | s3 = {[@expl:index in bounds] [%#swal'10] _60} s4
+        | s4 = Slice64.get [%#swal'10] <Int64.t> {bases} {_58} (fun (r: Int64.t) -> [ &_57 <- r ] s5)
         | s5 = [ &_62 <- i ] s6
         | s6 = [ &_63 <- Slice64.length lasts ] s7
         | s7 = [ &_64 <- UInt64.lt _62 _63 ] s8
-        | s8 = {[@expl:index in bounds] [%#swal'12] _64} s9
-        | s9 = Slice64.get [%#swal'12] <Int64.t> {lasts} {_62} (fun (r: Int64.t) -> [ &_61 <- r ] s10)
+        | s8 = {[@expl:index in bounds] [%#swal'11] _64} s9
+        | s9 = Slice64.get [%#swal'11] <Int64.t> {lasts} {_62} (fun (r: Int64.t) -> [ &_61 <- r ] s10)
         | s10 = [ &_56 <- Int64.gt _57 _61 ] s11
-        | s11 = any [ br0 -> {_56 = false} (! bb19) | br1 -> {_56} (! bb18) ] ]
-      | bb19 = s0
+        | s11 = any [ br0 -> {_56 = false} (! bb22) | br1 -> {_56} (! bb21) ] ]
+      | bb22 = s0
         [ s0 = [ &_70 <- i ] s1
         | s1 = [ &_71 <- Slice64.length lasts ] s2
         | s2 = [ &_72 <- UInt64.lt _70 _71 ] s3
-        | s3 = {[@expl:index in bounds] [%#swal'13] _72} s4
-        | s4 = Slice64.get [%#swal'13] <Int64.t> {lasts} {_70} (fun (r: Int64.t) -> [ &_69 <- r ] s5)
-        | s5 = checked_add [%#swal'15] {_69} {[%#swal'14] (1: Int64.t)} (fun (_x: t_Option_i64) -> [ &_68 <- _x ] s6)
-        | s6 = any [ br0 -> {_68 = None} (! bb24) | br1 (x0: Int64.t) -> {_68 = Some x0} (! bb23) ] ]
-      | bb23 = s0
+        | s3 = {[@expl:index in bounds] [%#swal'12] _72} s4
+        | s4 = Slice64.get [%#swal'12] <Int64.t> {lasts} {_70} (fun (r: Int64.t) -> [ &_69 <- r ] s5)
+        | s5 = checked_add [%#swal'14] {_69} {[%#swal'13] (1: Int64.t)} (fun (_x: t_Option_i64) -> [ &_68 <- _x ] s6)
+        | s6 = any [ br0 -> {_68 = None} (! bb27) | br1 (x0: Int64.t) -> {_68 = Some x0} (! bb26) ] ]
+      | bb26 = s0
         [ s0 = elim_Some {_68} (fun (r0: Int64.t) -> [ &next <- r0 ] s1)
         | s1 = [ &expected <- next ] s2
-        | s2 = UInt64.add [%#swal'17] {i} {[%#swal'16] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &i <- _x ] s3)
-        | s3 = bb8 ] ] ]
-  | bb18 = s0 [ s0 = [ &_ret <- [%#swal'18] false ] s1 | s1 = return {_ret} ]
-  | bb24 = s0 [ s0 = [ &_ret <- [%#swal'19] false ] s1 | s1 = return {_ret} ]
-  | bb25 = s0 [ s0 = [ &_ret <- expected = target ] s1 | s1 = return {_ret} ] ]
+        | s2 = UInt64.add [%#swal'16] {i} {[%#swal'15] (1: UInt64.t)} (fun (_x: UInt64.t) -> [ &i <- _x ] s3)
+        | s3 = bb11 ] ] ]
+  | bb21 = s0 [ s0 = [ &_ret <- [%#swal'17] false ] s1 | s1 = return {_ret} ]
+  | bb27 = s0 [ s0 = [ &_ret <- [%#swal'18] false ] s1 | s1 = return {_ret} ]
+  | bb28 = s0 [ s0 = [ &_ret <- expected = target ] s1 | s1 = return {_ret} ] ]
   [ & _ret: bool = Any.any_l ()
   | & bases: Slice64.slice Int64.t = bases
   | & lasts: Slice64.slice Int64.t = lasts
@@ -198,8 +199,8 @@ let exact_wal_batch_range [#"/proof-work-208e/crates/verified/src/wal.rs" 47 0 4
   | & _70: UInt64.t = Any.any_l ()
   | & _71: UInt64.t = Any.any_l ()
   | & _72: bool = Any.any_l ()
-  | & variant_old_bb8: int = Any.any_l () ])
-  [ return (result: bool) -> {[@stop_split] [@expl:exact_wal_batch_range ensures] [%#swal'20] result
+  | & variant_old_bb11: int = Any.any_l () ])
+  [ return (result: bool) -> {[@stop_split] [@expl:exact_wal_batch_range ensures] [%#swal'19] result
     = (Seq.length (Slice64.view bases) = Seq.length (Slice64.view lasts)
     /\ (if Int64.to_int start = Int64.to_int target then
       Seq.length (Slice64.view bases) = 0

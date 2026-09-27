@@ -46,8 +46,10 @@ pub trait PeerSender: Send + Sync {
         Vec::new()
     }
 
-    /// Associate a leader id with the endpoint used for its discovery reply.
-    fn remember_peer(&self, _source: NodeId, _actual: NodeId) {}
+    /// Address `leader` at `address`, the `host:port` it announced in a
+    /// response's `NodeEndpoints`. A voter-set listener for the same node
+    /// takes precedence.
+    fn remember_leader_endpoint(&self, _leader: NodeId, _address: String) {}
 }
 
 /// A no-op `PeerSender` for single-voter and no-network tests. Every send fails

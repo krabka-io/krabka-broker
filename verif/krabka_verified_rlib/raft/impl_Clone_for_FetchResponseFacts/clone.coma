@@ -1,0 +1,21 @@
+(* #"/workspace/crates/verified/src/raft.rs" 40 27 40 32 *)
+
+(* <raft::FetchResponseFacts as std::clone::Clone> *)
+
+use creusot.int.UInt64
+use creusot.int.UInt32
+use creusot.prelude.Any
+
+type t_Option_u64 = None | Some UInt64.t
+
+type t_FetchResponseFacts = { from: UInt64.t; leader: t_Option_u64; epoch: UInt32.t; error_none: bool }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_FetchResponseFacts [#"/workspace/crates/verified/src/raft.rs" 40 27 40 32] (self: t_FetchResponseFacts)
+  (return (x: t_FetchResponseFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_FetchResponseFacts = Any.any_l () | & self: t_FetchResponseFacts = self ])
+  [ return (result: t_FetchResponseFacts) -> (! return {result}) ]

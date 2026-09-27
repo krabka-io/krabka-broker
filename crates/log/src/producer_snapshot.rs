@@ -8,6 +8,7 @@ use std::{
 
 use bytes::{BufMut as _, BytesMut};
 use krabka_ids::{Offset, ProducerId};
+use krabka_verified::producer_snapshot::{self as kernel, ProducerReloadRange};
 
 use crate::{
     LogError,
@@ -76,25 +77,22 @@ pub(crate) fn list(dir: &Path) -> Result<Vec<(Offset, PathBuf)>, LogError> {
     Ok(snapshots)
 }
 
-pub(crate) fn latest_at_or_before(
+/// Reload producer state the way Kafka's
+/// `ProducerStateManager.truncateAndReload` does.
+///
+/// Every snapshot outside `(range.log_start, range.log_end]` is deleted
+/// first. The newest one left is then loaded; a corrupt one is deleted and
+/// the next older one tried, as Kafka's `loadFromSnapshot` does.
+pub(crate) fn reload(
     dir: &Path,
-    end: Offset,
+    range: ProducerReloadRange,
 ) -> Result<Option<LoadedSnapshot>, LogError> {
-    let mut eligible = Vec::new();
-    for (offset, path) in list(dir)? {
-        if krabka_verified::producer_snapshot_retained(offset.0, end.0) {
-            eligible.push((offset, path));
-        } else {
-            fs::remove_file(path)?;
-        }
-    }
-
+    let mut eligible = retain_reload_range(dir, range)?;
     while !eligible.is_empty() {
         let offsets: Vec<i64> = eligible.iter().map(|(offset, _)| offset.0).collect();
-        let Some(selected) = krabka_verified::producer_snapshot_latest_index(&offsets, end.0)
-        else {
+        let Some(selected) = kernel::producer_snapshot_latest_index(&offsets, range) else {
             return Err(LogError::Corrupt(
-                "eligible producer snapshots have no valid offset".into(),
+                "retained producer snapshots have no reloadable offset".into(),
             ));
         };
         let (offset, path) = eligible.swap_remove(selected);
@@ -111,13 +109,45 @@ pub(crate) fn latest_at_or_before(
     Ok(None)
 }
 
-pub(crate) fn remove_after(dir: &Path, offset: Offset) -> Result<(), LogError> {
-    for (snapshot_offset, path) in list(dir)? {
-        if !krabka_verified::producer_snapshot_retained(snapshot_offset.0, offset.0) {
+/// Delete every snapshot Kafka's `truncateAndReload` deletes: those at or
+/// below `range.log_start` and those above `range.log_end`. Returns the
+/// snapshots left, oldest first.
+pub(crate) fn retain_reload_range(
+    dir: &Path,
+    range: ProducerReloadRange,
+) -> Result<Vec<(Offset, PathBuf)>, LogError> {
+    let mut retained = Vec::new();
+    for (offset, path) in list(dir)? {
+        if kernel::producer_snapshot_reload_keeps(offset.0, range) {
+            retained.push((offset, path));
+        } else {
+            fs::remove_file(path)?;
+        }
+    }
+    Ok(retained)
+}
+
+/// Delete every snapshot Kafka's `removeStraySnapshots` deletes, given the
+/// base offset of every local segment: each one no segment starts at, except
+/// the newest snapshot when it lies above every segment.
+pub(crate) fn remove_strays(dir: &Path, segment_bases: &[i64]) -> Result<(), LogError> {
+    let snapshots = list(dir)?;
+    let offsets: Vec<i64> = snapshots.iter().map(|(offset, _)| offset.0).collect();
+    for (index, (_, path)) in snapshots.into_iter().enumerate() {
+        if kernel::producer_snapshot_stray(&offsets, index, segment_bases) {
             fs::remove_file(path)?;
         }
     }
     Ok(())
+}
+
+/// Delete the snapshot at a deleted segment's base offset, as Kafka's
+/// `UnifiedLog.deleteProducerSnapshots` does for every segment it deletes.
+pub(crate) fn remove_at(dir: &Path, offset: Offset) -> Result<(), LogError> {
+    match fs::remove_file(path(dir, offset)) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
+        _ => Ok(()),
+    }
 }
 
 pub(crate) fn remove_all(dir: &Path) -> Result<(), LogError> {
@@ -217,11 +247,17 @@ fn read(
         let timestamp = take_i64(&bytes, &mut cursor);
         let coordinator_epoch = take_i32(&bytes, &mut cursor);
         let txn_offset = take_i64(&bytes, &mut cursor);
-        if !krabka_verified::producer_snapshot_entry_valid(
+        if !kernel::producer_snapshot_entry_valid(
             snapshot_offset.0,
-            (producer_id.get(), producer_epoch),
-            (last_sequence, last_offset.0, offset_delta),
-            (coordinator_epoch, txn_offset),
+            kernel::ProducerSnapshotEntryFacts {
+                producer_id: producer_id.get(),
+                producer_epoch,
+                last_sequence,
+                last_offset: last_offset.0,
+                offset_delta,
+                coordinator_epoch,
+                current_txn_first_offset: txn_offset,
+            },
         ) {
             return Err(corrupt(path, "entry contains an invalid producer state"));
         }
@@ -406,21 +442,55 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn latest_snapshot_honors_inclusive_end_and_removes_future_files() {
-        let dir = tempfile::tempdir().unwrap();
-        for offset in [102, 103, 104] {
-            write(&FileIo, dir.path(), Offset(offset), &sample()).unwrap();
+    fn range(log_start: i64, log_end: i64) -> ProducerReloadRange {
+        ProducerReloadRange {
+            log_start,
+            local_start: log_start,
+            log_end,
         }
+    }
 
-        let (offset, entries) = latest_at_or_before(dir.path(), Offset(103))
+    fn offsets(dir: &Path) -> Vec<i64> {
+        list(dir)
             .unwrap()
-            .unwrap();
-        assert2::assert!(offset == Offset(103));
-        assert2::assert!(entries == sample());
-        assert2::assert!(path(dir.path(), Offset(102)).exists());
-        assert2::assert!(path(dir.path(), Offset(103)).exists());
-        assert2::assert!(!path(dir.path(), Offset(104)).exists());
+            .into_iter()
+            .map(|(offset, _)| offset.0)
+            .collect()
+    }
+
+    /// Kafka's `truncateAndReload` deletes every snapshot outside
+    /// `(logStartOffset, logEndOffset]` -- the one at the log start included
+    /// -- and `loadFromSnapshot` loads the newest one left.
+    #[test]
+    fn reload_deletes_snapshots_outside_the_range_and_loads_the_newest_left() {
+        let on_disk = [100, 101, 102, 103, 104];
+        for (log_start, log_end, loaded, left) in [
+            // Log start below every snapshot, log end inside: 104 is future.
+            (0, 103, Some(103), vec![100, 101, 102, 103]),
+            // A snapshot below the log start is deleted, never loaded.
+            (100, 103, Some(103), vec![101, 102, 103]),
+            // A snapshot at the log start is deleted too.
+            (102, 104, Some(104), vec![103, 104]),
+            // One snapshot between the log start and the log end.
+            (102, 103, Some(103), vec![103]),
+            // Only the snapshot at the log start is in reach: nothing loads.
+            (103, 103, None, vec![]),
+            // Every snapshot is at or below the log start.
+            (104, 110, None, vec![]),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            for offset in on_disk {
+                write(&FileIo, dir.path(), Offset(offset), &sample()).unwrap();
+            }
+
+            let reloaded = reload(dir.path(), range(log_start, log_end)).unwrap();
+
+            assert2::check!(
+                reloaded == loaded.map(|offset| (Offset(offset), sample())),
+                "({log_start}, {log_end}]"
+            );
+            assert2::check!(offsets(dir.path()) == left, "({log_start}, {log_end}]");
+        }
     }
 
     #[test]
@@ -430,9 +500,7 @@ mod tests {
         let corrupt = write(&FileIo, dir.path(), Offset(103), &sample()).unwrap();
         fs::write(&corrupt, b"broken").unwrap();
 
-        let (offset, entries) = latest_at_or_before(dir.path(), Offset(103))
-            .unwrap()
-            .unwrap();
+        let (offset, entries) = reload(dir.path(), range(0, 103)).unwrap().unwrap();
         assert2::assert!(offset == Offset(102));
         assert2::assert!(entries == sample());
         assert2::assert!(previous.exists());
@@ -450,9 +518,7 @@ mod tests {
         bytes[2..6].copy_from_slice(&crc.to_be_bytes());
         fs::write(&future_state, bytes).unwrap();
 
-        let (offset, entries) = latest_at_or_before(dir.path(), Offset(103))
-            .unwrap()
-            .unwrap();
+        let (offset, entries) = reload(dir.path(), range(0, 103)).unwrap().unwrap();
         assert2::assert!(offset == Offset(102));
         assert2::assert!(entries == sample());
         assert2::assert!(previous.exists());
@@ -493,22 +559,56 @@ mod tests {
         fs::create_dir(path(dir.path(), Offset(102))).unwrap();
 
         assert2::assert!(matches!(
-            latest_at_or_before(dir.path(), Offset(102)),
+            reload(dir.path(), range(0, 102)),
             Err(LogError::Io(_))
         ));
     }
 
     #[test]
-    fn remove_after_keeps_the_inclusive_boundary() {
+    fn retain_reload_range_keeps_the_log_end_and_drops_the_log_start() {
         let dir = tempfile::tempdir().unwrap();
         for offset in [1, 2, 3] {
             write(&FileIo, dir.path(), Offset(offset), &sample()).unwrap();
         }
 
-        remove_after(dir.path(), Offset(2)).unwrap();
-        assert2::assert!(path(dir.path(), Offset(1)).exists());
-        assert2::assert!(path(dir.path(), Offset(2)).exists());
-        assert2::assert!(!path(dir.path(), Offset(3)).exists());
+        let retained = retain_reload_range(dir.path(), range(1, 2)).unwrap();
+
+        assert2::check!(retained == vec![(Offset(2), path(dir.path(), Offset(2)))]);
+        assert2::check!(offsets(dir.path()) == vec![2]);
+    }
+
+    /// Kafka's `removeStraySnapshots`, run at log load with every local
+    /// segment's base offset.
+    #[test]
+    fn remove_strays_keeps_segment_bases_and_the_newest_snapshot_above_them() {
+        for (on_disk, bases, left) in [
+            (vec![0, 4, 8], vec![0, 4, 8], vec![0, 4, 8]),
+            (vec![2, 4, 6], vec![0, 4, 8], vec![4]),
+            (vec![4, 9, 11], vec![0, 4, 8], vec![4, 11]),
+            (vec![3, 7], vec![], vec![7]),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            for offset in &on_disk {
+                write(&FileIo, dir.path(), Offset(*offset), &sample()).unwrap();
+            }
+
+            remove_strays(dir.path(), &bases).unwrap();
+
+            assert2::check!(offsets(dir.path()) == left, "{on_disk:?} {bases:?}");
+        }
+    }
+
+    #[test]
+    fn remove_at_deletes_one_snapshot_and_tolerates_a_missing_one() {
+        let dir = tempfile::tempdir().unwrap();
+        for offset in [1, 2] {
+            write(&FileIo, dir.path(), Offset(offset), &sample()).unwrap();
+        }
+
+        remove_at(dir.path(), Offset(1)).unwrap();
+        remove_at(dir.path(), Offset(5)).unwrap();
+
+        assert2::check!(offsets(dir.path()) == vec![2]);
     }
 
     #[test]

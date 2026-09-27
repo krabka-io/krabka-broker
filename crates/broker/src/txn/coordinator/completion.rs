@@ -14,7 +14,9 @@
 //! here, and [`crate::txn::completion`] retries it until it completes.
 
 use krabka_log::ProducerId;
-use krabka_verified::transaction::TransactionReaperCompletionDecision as CompletionDecision;
+use krabka_verified::transaction::{
+    TransactionReaperCompletionDecision as CompletionDecision, TransactionSnapshot,
+};
 use tracing::{info, warn};
 
 use super::TxnCoordinator;
@@ -76,6 +78,9 @@ pub(crate) fn apply_completion(
 /// Recheck the complete prepared snapshot after the marker fan-out. Comparing
 /// every persisted field prevents a concurrent registration, recovery-identity
 /// change, timeout change, or generation change from being overwritten.
+///
+/// `(prepare, complete)` must be a pairing [`completion_for`] returns; the
+/// verified kernel requires the two states to differ.
 pub(crate) fn completion_decision(
     entry: &TxnEntry,
     prepared: &TxnEntry,
@@ -83,21 +88,21 @@ pub(crate) fn completion_decision(
 ) -> CompletionDecision {
     let (completion_pid, completion_epoch) = completion_producer_identity(prepared);
     krabka_verified::transaction_reaper_completion_decision(
-        (
-            entry.producer_id.get(),
-            entry.producer_epoch,
-            entry.state.to_kafka_status(),
-        ),
-        (
-            prepared.producer_id.get(),
-            prepared.producer_epoch,
-            prepare.to_kafka_status(),
-        ),
-        (
-            completion_pid.get(),
-            completion_epoch,
-            complete.to_kafka_status(),
-        ),
+        TransactionSnapshot {
+            pid: entry.producer_id.get(),
+            epoch: entry.producer_epoch,
+            state: entry.state.to_kafka_status(),
+        },
+        TransactionSnapshot {
+            pid: prepared.producer_id.get(),
+            epoch: prepared.producer_epoch,
+            state: prepare.to_kafka_status(),
+        },
+        TransactionSnapshot {
+            pid: completion_pid.get(),
+            epoch: completion_epoch,
+            state: complete.to_kafka_status(),
+        },
         entry == prepared,
     )
 }

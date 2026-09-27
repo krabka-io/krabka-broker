@@ -1,0 +1,29 @@
+(* #"/workspace/crates/verified/src/break_glass.rs" 38 27 38 32 *)
+
+(* <break_glass::BreakGlassProposalFacts as std::clone::Clone> *)
+
+use creusot.int.UInt64
+use creusot.prelude.Any
+
+type t_BreakGlassSignaturePolicy = Optional | Required
+
+type t_BreakGlassApprovalSigning = AllSigned | NotAllSigned
+
+type t_BreakGlassProposalFacts = {
+  withdrawn: bool;
+  consumed: bool;
+  expired: bool;
+  held_approvals: UInt64.t;
+  required_approvals: UInt64.t;
+  signature_policy: t_BreakGlassSignaturePolicy;
+  signing: t_BreakGlassApprovalSigning }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let clone_BreakGlassProposalFacts [#"/workspace/crates/verified/src/break_glass.rs" 38 27 38 32]
+  (self: t_BreakGlassProposalFacts) (return (x: t_BreakGlassProposalFacts)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_BreakGlassProposalFacts = Any.any_l () | & self: t_BreakGlassProposalFacts = self ])
+  [ return (result: t_BreakGlassProposalFacts) -> (! return {result}) ]

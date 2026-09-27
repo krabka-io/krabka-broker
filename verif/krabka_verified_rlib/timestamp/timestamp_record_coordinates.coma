@@ -1,18 +1,18 @@
-(* #"/proof-work-238/crates/verified/src/timestamp.rs" 73 0 78 23 *)
+(* #"/workspace/crates/verified/src/timestamp.rs" 71 0 76 23 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
 let%span snum = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 328 20 329 89
 let%span snum'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/num.rs" 332 26 332 87
-let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
 let%span sops = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 688 18 691 9
 let%span sops'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 702 25 702 33
 let%span sops'1 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/ops.rs" 701 18 701 32
-let%span stimestamp = "/proof-work-238/crates/verified/src/timestamp.rs" 80 31 80 54
-let%span stimestamp'0 = "/proof-work-238/crates/verified/src/timestamp.rs" 80 8 80 55
-let%span stimestamp'1 = "/proof-work-238/crates/verified/src/timestamp.rs" 80 8 80 56
-let%span stimestamp'2 = "/proof-work-238/crates/verified/src/timestamp.rs" 81 8 81 52
-let%span stimestamp'3 = "/proof-work-238/crates/verified/src/timestamp.rs" 81 8 81 53
-let%span stimestamp'4 = "/proof-work-238/crates/verified/src/timestamp.rs" 64 10 71 1
+let%span stimestamp = "/workspace/crates/verified/src/timestamp.rs" 78 31 78 54
+let%span stimestamp'0 = "/workspace/crates/verified/src/timestamp.rs" 78 8 78 55
+let%span stimestamp'1 = "/workspace/crates/verified/src/timestamp.rs" 78 8 78 56
+let%span stimestamp'2 = "/workspace/crates/verified/src/timestamp.rs" 79 8 79 52
+let%span stimestamp'3 = "/workspace/crates/verified/src/timestamp.rs" 79 8 79 53
+let%span stimestamp'4 = "/workspace/crates/verified/src/timestamp.rs" 62 10 69 1
 
 use creusot.int.Int32
 use creusot.int.Int64
@@ -107,7 +107,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let timestamp_record_coordinates [#"/proof-work-238/crates/verified/src/timestamp.rs" 73 0 78 23] (batch_base: Int64.t)
+let timestamp_record_coordinates [#"/workspace/crates/verified/src/timestamp.rs" 71 0 76 23] (batch_base: Int64.t)
   (offset_delta: Int32.t) (batch_timestamp: Int64.t) (timestamp_delta: Int64.t) (return (x: t_Option_tup2_i64_i64)) =
 (! bb0
   [ bb0 = s0

@@ -124,8 +124,8 @@ mod tests {
     use assert2::{assert, check};
 
     use super::{
-        GroupMigrationDirection, GroupMigrationRecordAction, classic_upgrade_epoch,
-        consumer_downgrade_epoch, group_migration_record_plan,
+        GroupMigrationDirection, GroupMigrationRecordAction, GroupMigrationRecordPlan,
+        classic_upgrade_epoch, consumer_downgrade_epoch, group_migration_record_plan,
     };
 
     #[test]
@@ -144,22 +144,37 @@ mod tests {
     fn record_plans_flip_every_key_family() {
         use GroupMigrationRecordAction::{Tombstone, Write};
 
-        let upgrade = group_migration_record_plan(GroupMigrationDirection::Upgrade, 2);
-        check!(upgrade.classic_group == Tombstone);
-        check!(upgrade.next_gen_group == Write);
-        check!(upgrade.next_gen_target == Write);
-        check!(upgrade.member_metadata == Write);
-        check!(upgrade.target_member == Write);
-        check!(upgrade.current_member == Write);
-        check!(upgrade.member_count == 2);
-
-        let downgrade = group_migration_record_plan(GroupMigrationDirection::Downgrade, usize::MAX);
-        check!(downgrade.classic_group == Write);
-        check!(downgrade.next_gen_group == Tombstone);
-        check!(downgrade.next_gen_target == Tombstone);
-        check!(downgrade.member_metadata == Tombstone);
-        check!(downgrade.target_member == Tombstone);
-        check!(downgrade.current_member == Tombstone);
-        assert!(downgrade.member_count == usize::MAX);
+        // (direction, member count, plan)
+        let cases = [
+            (
+                GroupMigrationDirection::Upgrade,
+                2,
+                GroupMigrationRecordPlan {
+                    classic_group: Tombstone,
+                    next_gen_group: Write,
+                    next_gen_target: Write,
+                    member_metadata: Write,
+                    target_member: Write,
+                    current_member: Write,
+                    member_count: 2,
+                },
+            ),
+            (
+                GroupMigrationDirection::Downgrade,
+                usize::MAX,
+                GroupMigrationRecordPlan {
+                    classic_group: Write,
+                    next_gen_group: Tombstone,
+                    next_gen_target: Tombstone,
+                    member_metadata: Tombstone,
+                    target_member: Tombstone,
+                    current_member: Tombstone,
+                    member_count: usize::MAX,
+                },
+            ),
+        ];
+        for (direction, member_count, plan) in cases {
+            check!(group_migration_record_plan(direction, member_count) == plan);
+        }
     }
 }

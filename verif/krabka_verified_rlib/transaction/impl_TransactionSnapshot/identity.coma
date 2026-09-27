@@ -1,0 +1,27 @@
+(* #"/workspace/crates/verified/src/transaction.rs" 689 4 689 48 *)
+
+(* transaction::TransactionSnapshot *)
+
+let%span stransaction = "/workspace/crates/verified/src/transaction.rs" 687 14 687 66
+
+use creusot.int.Int64
+use creusot.int.Int16
+use creusot.int.Int8
+use creusot.prelude.Any
+
+type t_TransactionSnapshot = { pid: Int64.t; epoch: Int16.t; state: Int8.t }
+
+type t_TransactionIdentity = { pid'0: Int64.t; epoch'0: Int16.t }
+
+meta "compute_max_steps" 1000000
+
+meta "select_lsinst" "all"
+
+let identity [#"/workspace/crates/verified/src/transaction.rs" 689 4 689 48] (self: t_TransactionSnapshot)
+  (return (x: t_TransactionIdentity)) = (! bb0
+  [ bb0 = s0 [ s0 = [ &_ret <- { pid'0 = self.pid; epoch'0 = self.epoch } ] s1 | s1 = return {_ret} ] ]
+  [ & _ret: t_TransactionIdentity = Any.any_l () | & self: t_TransactionSnapshot = self ])
+  [ return (result: t_TransactionIdentity) -> {[@stop_split] [@expl:identity ensures] [%#stransaction] result.pid'0
+      = self.pid
+    /\ result.epoch'0 = self.epoch}
+    (! return {result}) ]

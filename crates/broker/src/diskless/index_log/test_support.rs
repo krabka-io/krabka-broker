@@ -88,14 +88,21 @@ impl MetadataEventLog for PacedReplayLog {
 /// record; one read after cannot.
 pub(crate) struct RacingAppendLog {
     inner: Arc<dyn MetadataEventLog>,
-    racing: StdMutex<Option<(i32, Bytes)>>,
+    racing: StdMutex<Option<(i32, Bytes, Bytes)>>,
 }
 
 impl RacingAppendLog {
-    pub(crate) fn new(inner: Arc<dyn MetadataEventLog>, partition: i32, event: Bytes) -> Arc<Self> {
+    /// Race the keyed record `(key, event)` onto `partition`, as the flusher
+    /// publishes every index record.
+    pub(crate) fn new(
+        inner: Arc<dyn MetadataEventLog>,
+        partition: i32,
+        key: Bytes,
+        event: Bytes,
+    ) -> Arc<Self> {
         Arc::new(Self {
             inner,
-            racing: StdMutex::new(Some((partition, event))),
+            racing: StdMutex::new(Some((partition, key, event))),
         })
     }
 }
@@ -128,12 +135,12 @@ impl MetadataEventLog for RacingAppendLog {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
-        if let Some((partition, event)) = racing {
+        if let Some((partition, key, event)) = racing {
             // `subscribe` is synchronous, so this drives the append to
-            // completion in one poll. The in-process fixture's `publish`
+            // completion in one poll. The in-process fixture's `publish_keyed`
             // never yields, so it always finishes on the first.
             self.inner
-                .publish(partition, event)
+                .publish_keyed(partition, key, Some(event))
                 .now_or_never()
                 .expect("the in-process fixture publishes without yielding")
                 .expect("racing append");

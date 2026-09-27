@@ -10,15 +10,15 @@
 use std::time::Instant;
 
 use krabka_log::Offset;
-use krabka_metadata::MetadataImage;
+use krabka_metadata::{MetadataImage, MetadataRecord, PartitionOffsetAdvanceRecord};
 use stateright::{Model, Property};
 
 use super::{
     bounds::{MAX_EPOCH, MAX_LEN, NB, NB_U8, has, model_index, model_offset},
     election::do_failover,
     elr,
-    hwm::{real_hwm, real_wal_hwm},
-    state::{Act, DpState, ELR_BEAT_LONGER_LOG, ELR_DROPPED_GUARDED, ELR_ELECTED, isr_eligible},
+    hwm::{consistent_leo, real_hwm, real_wal_hwm},
+    state::{Act, DpState, ELR_BEAT_LONGER_LOG, ELR_DROPPED_COMMITTED, ELR_ELECTED, isr_eligible},
     truncation::real_truncation_offset,
 };
 use crate::handlers::fetch::{FetchWatermarks, compute_visibility_window};
@@ -29,8 +29,7 @@ pub(super) struct DpModel {
     pub(super) diskless: bool, // true drives the WAL durability path instead of ISR-HWM
     /// The metadata image the real controller rules read. It carries the
     /// topic's `min.insync.replicas`, which is what decides both when the ELR
-    /// rule clears the set and which committed records the set is a claim
-    /// about.
+    /// rule clears the set and when the leader's high watermark stops.
     image: MetadataImage,
     /// `min.insync.replicas` as [`effective_min_insync_replicas`] resolves it
     /// out of [`Self::image`], not a second copy of the number.
@@ -63,7 +62,7 @@ impl DpModel {
         );
         assert2::assert!(
             min_isr == 1 || (unclean && !diskless),
-            "only the unclean replicated configuration reaches an ELR election"
+            "only the unclean replicated configuration is configured with an ELR"
         );
         let image = elr::image(min_isr);
         let min_isr = elr::min_insync_replicas(&image);
@@ -81,13 +80,52 @@ impl DpModel {
     ///
     /// At Kafka's default `min.insync.replicas` of 1 the rule clears the set
     /// on every change a live partition can make, so the other configurations
-    /// would carry an always-empty set and an always-equal second durability
-    /// obligation through every state they enumerate -- state identity they
-    /// pay for in the search and get nothing back from. They leave both at
-    /// their empty value instead, and the ELR properties are stated only here,
-    /// where a `sometimes` property has states that can witness it.
+    /// would carry an always-empty set through every state they enumerate --
+    /// state identity they pay for in the search and get nothing back from.
+    /// They leave it empty instead, and the ELR properties are stated only
+    /// here, where a `sometimes` property has states that can witness it.
     fn tracks_elr(&self) -> bool {
         self.min_isr > 1
+    }
+
+    /// Reserve `count` diskless offsets the way the controller does, over a
+    /// partition whose committed next offset is `committed_next`.
+    ///
+    /// The controller's `submit_change` takes the base from the image's
+    /// `partition_next_offset`, reserves the range with the proved
+    /// [`reserve_offsets`](krabka_verified::reserve_offsets), and commits a
+    /// `PartitionOffsetAdvance` whose replay bumps the image's next offset.
+    /// This runs those three production pieces in that order and returns the
+    /// reserved base and the next offset the image holds afterwards, so
+    /// `offsets_contiguous_and_unique` checks what they compute rather than
+    /// what the model wrote down.
+    ///
+    /// The image the state stands for is rebuilt from its one number: every
+    /// advance adds to the same counter, so a single advance of
+    /// `committed_next` replays to the same image as the history that reached
+    /// it.
+    fn reserve(&self, committed_next: i64, count: i64) -> (i64, i64) {
+        let advance = |count| {
+            MetadataRecord::V1PartitionOffsetAdvance(PartitionOffsetAdvanceRecord {
+                topic: elr::TOPIC.to_string(),
+                partition: elr::PARTITION,
+                count,
+            })
+        };
+        let mut image = self.image.clone();
+        if committed_next > 0 {
+            image.apply(&advance(committed_next));
+        }
+        let next_offset = image
+            .partition_next_offset(elr::TOPIC, elr::PARTITION)
+            .unwrap_or(0);
+        let (base, _) = krabka_verified::reserve_offsets(next_offset, count)
+            .expect("a bounded model reservation is representable");
+        image.apply(&advance(count));
+        let next = image
+            .partition_next_offset(elr::TOPIC, elr::PARTITION)
+            .expect("the advance just applied");
+        (base, next)
     }
 }
 
@@ -111,7 +149,6 @@ impl Model for DpModel {
             // and every configuration starts with a full ISR.
             elr: 0,
             committed: vec![],
-            guarded: vec![],
             wal_acked: vec![],
             seq_next: 0,
             assigned: vec![],
@@ -128,6 +165,7 @@ impl Model for DpModel {
                 acts.push(Act::Produce);
                 if self.diskless && s.assigned.len() < 3 {
                     acts.push(Act::Assign(1));
+                    acts.push(Act::Assign(2));
                 }
             }
             if self.diskless && s.wal_acked.len() < s.log[s.leader as usize].len() {
@@ -175,13 +213,14 @@ impl Model for DpModel {
                     acts.push(Act::Failover(b));
                 }
             }
-            // Re-admit a follower to the ISR only once it is genuinely in-sync:
-            // an epoch-consistent prefix of the leader's log (it has truncated +
-            // replicated any divergence via the real protocol) AND caught up to
-            // the HWM. Checking LEO alone would admit a stale, divergent follower
-            // that hasn't reconciled — which is unreachable in real Kafka, where
-            // the follower fetch/OffsetForLeaderEpoch loop truncates before its
-            // reported progress can make it eligible.
+            // Re-admit a follower to the ISR only once the leader's real
+            // expansion rule admits it: an epoch-consistent prefix of the
+            // leader's log (it has truncated + replicated any divergence via
+            // the real protocol) whose log end reaches the HWM and the start of
+            // the leader's epoch. Checking LEO alone would admit a stale,
+            // divergent follower that hasn't reconciled — which is unreachable
+            // in real Kafka, where the follower fetch/OffsetForLeaderEpoch loop
+            // truncates before its reported progress can make it eligible.
             if !self.diskless
                 && has(s.live, b)
                 && b != s.leader
@@ -200,10 +239,9 @@ impl Model for DpModel {
                 s.log[usize::from(s.leader)].push(s.leader_epoch);
             }
             Act::Assign(count) => {
-                let start = s.seq_next;
-                let end = start + i64::from(count);
-                s.assigned.push((start, end));
-                s.seq_next = end;
+                let (base, next) = self.reserve(s.seq_next, i64::from(count));
+                s.assigned.push((base, base + i64::from(count)));
+                s.seq_next = next;
             }
             Act::Replicate(b) => {
                 let leader_log = s.log[usize::from(s.leader)].clone();
@@ -216,32 +254,18 @@ impl Model for DpModel {
                 }
             }
             Act::AdvanceHwm => {
-                // HWM = min ISR LEO (real core). Monotonic within a leader epoch
-                // by construction (ISR expansion is gated on `leo >= hwm`, shrink
-                // only raises the min), but it may legitimately REGRESS on a leader
-                // change (KIP-207 — the new leader recomputes from its own ISR's
-                // LEOs). So no monotonicity assert: durability is the
-                // `committed_durable` property, not HWM monotonicity.
-                s.hwm = real_hwm(&s, self.base);
+                // The real core: frozen while the ISR is under min ISR (Kafka's
+                // `Partition.maybeIncrementLeaderHW`), otherwise the minimum ISR
+                // LEO if that is higher. It never falls within one leadership;
+                // only an election that drops records lowers it, in
+                // `apply_elect`. Every record it passes therefore reached the
+                // HWM with at least min ISR replicas holding it, which is the
+                // obligation KIP-966's eligible-leader set is a claim about.
+                s.hwm = real_hwm(&s, self.base, self.min_isr);
                 let leader_log = &s.log[usize::from(s.leader)];
                 while model_offset(s.committed.len()) < s.hwm {
                     let off = s.committed.len();
                     s.committed.push(leader_log[off]);
-                }
-                // KIP-966's obligation, and the one an ELR election may not
-                // drop: the HWM prefix that got there while the ISR met min
-                // ISR, which is exactly what an `acks=all` produce was
-                // acknowledged for. Under min ISR the gate refuses `acks=all`,
-                // the HWM still advances over `acks=1` writes, and this stops.
-                if self.tracks_elr()
-                    && usize::try_from(u32::from(s.isr).count_ones())
-                        .expect("a bitmask over three brokers counts low")
-                        >= self.min_isr
-                {
-                    while model_offset(s.guarded.len()) < s.hwm {
-                        let off = s.guarded.len();
-                        s.guarded.push(leader_log[off]);
-                    }
                 }
             }
             Act::WalSync => {
@@ -387,40 +411,46 @@ impl Model for DpModel {
         }
         if self.tracks_elr() {
             props.extend([
-                // `guarded` is the min-ISR-backed prefix of `committed`, so it
-                // is a prefix of it in the literal sense too. Both properties
-                // below read one and reason about the other, and rest on this.
-                Property::always("guarded_is_a_committed_prefix", |_, s: &DpState| {
-                    s.guarded.len() <= s.committed.len()
-                        && s.guarded
-                            .iter()
-                            .enumerate()
-                            .all(|(off, &e)| s.committed[off] == e)
-                }),
-                // THE CLAIM. `select_leader` elects a surviving eligible
-                // leader replica ahead of a longer log and reports that
-                // election as losing nothing -- the unclean-election counter
-                // does not count it, the audit reason says no committed record
-                // is lost, and KFC-9's `require` gate lets it through. All of
-                // that rests on the published set naming only replicas that
-                // hold every record the partition acknowledged while it met
-                // min ISR. This is that, stated over a set the model did not
-                // choose but computed with the real maintenance rule.
-                Property::always("elr_holds_every_guarded_record", |_, s: &DpState| {
+                // THE CLAIM. `failover_one` and `select_leader` elect a
+                // surviving eligible leader replica ahead of a longer log and
+                // report that election as losing nothing -- the
+                // unclean-election counter does not count it, the audit reason
+                // says no committed record is lost, and KFC-9's `require` gate
+                // lets it through. All of that rests on the published set
+                // naming only replicas that hold every committed record, which
+                // KIP-966 gets from the leader's high watermark standing still
+                // while the ISR is under min ISR. This is that, stated over a
+                // set the model did not choose but computed with the real
+                // maintenance rule, and over a watermark the real core moved.
+                Property::always("elr_holds_every_committed_record", |_, s: &DpState| {
                     (0..NB_U8).filter(|&b| has(s.elr, b)).all(|b| {
                         let log = &s.log[usize::from(b)];
-                        s.guarded
+                        s.committed
                             .iter()
                             .enumerate()
                             .all(|(off, &e)| log.get(off) == Some(&e))
                     })
                 }),
                 // The same claim at the moment it is cashed in: the election
-                // that took the ELR rule did not drop a guarded record.
+                // that took the ELR rule did not drop a committed record.
                 Property::always(
-                    "elr_election_keeps_every_guarded_record",
-                    |_, s: &DpState| s.elr_trace & ELR_DROPPED_GUARDED == 0,
+                    "elr_election_keeps_every_committed_record",
+                    |_, s: &DpState| s.elr_trace & ELR_DROPPED_COMMITTED == 0,
                 ),
+                // Anti-vacuity for the rule the claim rests on: a state in
+                // which every ISR member holds a record past the HWM, so a
+                // watermark that ignored min ISR would have committed it, but
+                // the ISR is under min ISR and the watermark stayed.
+                Property::sometimes("hwm_held_by_min_isr", |m: &DpModel, s: &DpState| {
+                    let leader_log = &s.log[usize::from(s.leader)];
+                    has(s.isr, s.leader)
+                        && usize::try_from(u32::from(s.isr).count_ones())
+                            .expect("a bitmask over three brokers counts low")
+                            < m.min_isr
+                        && (0..NB_U8)
+                            .filter(|&b| has(s.isr, b))
+                            .all(|b| consistent_leo(&s.log[usize::from(b)], leader_log) > s.hwm)
+                }),
                 // Anti-vacuity. Without these three the two `always`
                 // properties above would pass on a model that never publishes
                 // an ELR, never elects out of one, or only ever elects the

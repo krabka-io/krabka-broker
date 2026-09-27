@@ -1,16 +1,16 @@
-(* #"/proof-work-221/crates/verified/src/retention.rs" 17 0 17 93 *)
+(* #"/workspace/crates/verified/src/retention.rs" 25 0 25 93 *)
 
 let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
 let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
 let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span sretention = "/proof-work-221/crates/verified/src/retention.rs" 18 24 18 25
-let%span sretention'0 = "/proof-work-221/crates/verified/src/retention.rs" 19 15 19 20
-let%span sretention'1 = "/proof-work-221/crates/verified/src/retention.rs" 21 24 21 48
-let%span sretention'2 = "/proof-work-221/crates/verified/src/retention.rs" 22 25 22 33
-let%span sretention'3 = "/proof-work-221/crates/verified/src/retention.rs" 22 25 22 49
-let%span sretention'4 = "/proof-work-221/crates/verified/src/retention.rs" 23 15 23 20
-let%span sretention'5 = "/proof-work-221/crates/verified/src/retention.rs" 25 18 25 49
-let%span sretention'6 = "/proof-work-221/crates/verified/src/retention.rs" 13 10 15 56
+let%span sretention = "/workspace/crates/verified/src/retention.rs" 26 24 26 25
+let%span sretention'0 = "/workspace/crates/verified/src/retention.rs" 27 15 27 20
+let%span sretention'1 = "/workspace/crates/verified/src/retention.rs" 29 24 29 48
+let%span sretention'2 = "/workspace/crates/verified/src/retention.rs" 30 25 30 33
+let%span sretention'3 = "/workspace/crates/verified/src/retention.rs" 30 25 30 49
+let%span sretention'4 = "/workspace/crates/verified/src/retention.rs" 31 15 31 20
+let%span sretention'5 = "/workspace/crates/verified/src/retention.rs" 33 18 33 49
+let%span sretention'6 = "/workspace/crates/verified/src/retention.rs" 21 10 23 56
 
 use creusot.int.Int32
 use creusot.int.Int64
@@ -36,7 +36,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let barrier_cut_expired [#"/proof-work-221/crates/verified/src/retention.rs" 17 0 17 93] (published_epoch: Int64.t)
+let barrier_cut_expired [#"/workspace/crates/verified/src/retention.rs" 25 0 25 93] (published_epoch: Int64.t)
   (retained_cuts: Int32.t) (held_epoch: Int64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_9 <- Int32.le retained_cuts ([%#sretention] (0: Int32.t)) ] s1

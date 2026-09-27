@@ -150,19 +150,26 @@ impl DisklessIndexLog {
                             });
                         }
                         Ok((None, Some(record))) => {
-                            let mut cache = pump_cache.lock().await;
-                            match event.key.as_deref() {
-                                Some(bytes) => {
-                                    if let Some(key) = WalIndexKey::from_bytes(bytes) {
-                                        cache.apply_keyed(key, &record);
-                                    }
+                            // Every index record is keyed (`publish_flush`);
+                            // an unkeyed one has no range it is the latest
+                            // for, so the projection can no longer be trusted.
+                            if let Some(bytes) = event.key.as_deref() {
+                                if let Some(key) = WalIndexKey::from_bytes(bytes) {
+                                    pump_cache.lock().await.apply_keyed(key, &record);
                                 }
-                                None => cache.apply(&record),
+                                applied_tx.send_modify(|generation| {
+                                    *generation = generation.wrapping_add(1);
+                                });
+                            } else {
+                                metrics.diskless_wal_index_decode_failures_total.inc();
+                                pump_valid.store(false, Ordering::Release);
+                                progress_tx.send_modify(|progress| progress.invalid = true);
+                                tracing::error!(
+                                    partition = event.partition,
+                                    offset = event.offset,
+                                    "unkeyed diskless WAL index record; projection is unsafe"
+                                );
                             }
-                            drop(cache);
-                            applied_tx.send_modify(|generation| {
-                                *generation = generation.wrapping_add(1);
-                            });
                         }
                         Err(error) => {
                             metrics.diskless_wal_index_decode_failures_total.inc();
@@ -226,7 +233,6 @@ impl DisklessIndexLog {
                 return false;
             }
             if state.caught_up {
-                self.cache.lock().await.finish_legacy_replay();
                 return true;
             }
             match tokio::time::timeout(stall_timeout, progress.changed()).await {
@@ -570,6 +576,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_unkeyed_index_record_fails_replay_and_increments_metric() {
+        let event_log = InProcessMetadataEventLog::new(1);
+        let record = flush_record("unkeyed", Uuid::from_u128(7), 0, 3);
+        event_log
+            .publish(0, record.to_bytes().unwrap())
+            .await
+            .unwrap();
+
+        let metrics = crate::metrics::BrokerMetrics::new();
+        let failures = metrics.diskless_wal_index_decode_failures_total.clone();
+        let cache = Arc::new(Mutex::new(WalIndexCache::default()));
+        let index = DisklessIndexLog::start_with_cache(event_log, cache.clone(), metrics)
+            .await
+            .unwrap();
+
+        assert!(!index.wait_until_caught_up(Duration::from_secs(1)).await);
+        assert!(!index.is_valid());
+        assert!(failures.get() == 1);
+        assert!(
+            cache
+                .lock()
+                .await
+                .lookup(Uuid::from_u128(7), 0, 0)
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
     async fn catch_up_resolves_immediately_for_an_empty_index_topic() {
         let index = DisklessIndexLog::start(InProcessMetadataEventLog::new(2))
             .await
@@ -638,11 +672,13 @@ mod tests {
         // The previous leader's in-flight flush lands while this projection is
         // subscribing. Pacing the replay keeps the assertion off the pump's
         // heels, so a gate that stopped one record short stays caught short.
-        let racing = flush_record("object-b", topic_id, 4, 7).to_bytes().unwrap();
+        let racing = flush_record("object-b", topic_id, 4, 7);
+        let racing_key = WalIndexKey::from(&racing.entries[0]).to_bytes();
         let restarted = DisklessIndexLog::start(RacingAppendLog::new(
             PacedReplayLog::new(event_log, ReplayPace::OneEvery(Duration::from_millis(40))),
             0,
-            racing,
+            racing_key,
+            racing.to_bytes().unwrap(),
         ))
         .await
         .unwrap();
@@ -758,7 +794,7 @@ mod tests {
     async fn startup_surfaces_a_replay_fence_publish_failure() {
         let inner = InProcessMetadataEventLog::new(1);
         inner
-            .publish(0, Bytes::from_static(b"legacy"))
+            .publish(0, Bytes::from_static(b"record"))
             .await
             .unwrap();
 

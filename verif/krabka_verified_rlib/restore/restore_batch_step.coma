@@ -1,18 +1,18 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 22 0 22 87 *)
+(* #"/workspace/crates/verified/src/restore.rs" 198 0 198 87 *)
 
-let%span sord = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
-let%span sord'0 = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
-let%span sconvert = "/home/matt/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span srestore = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 23 20 23 21
-let%span srestore'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 27 16 27 37
-let%span srestore'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 28 14 28 22
-let%span srestore'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 28 14 28 30
-let%span srestore'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 28 33 28 34
-let%span srestore'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 28 14 28 34
-let%span srestore'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 31 13 31 25
-let%span srestore'6 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 31 28 31 29
-let%span srestore'7 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 31 13 31 29
-let%span srestore'8 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 11 10 20 1
+let%span sord = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 34 8 34 21
+let%span sord'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/logic/ord.rs" 22 8 22 20
+let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span srestore = "/workspace/crates/verified/src/restore.rs" 199 20 199 21
+let%span srestore'0 = "/workspace/crates/verified/src/restore.rs" 203 16 203 37
+let%span srestore'1 = "/workspace/crates/verified/src/restore.rs" 204 14 204 22
+let%span srestore'2 = "/workspace/crates/verified/src/restore.rs" 204 14 204 30
+let%span srestore'3 = "/workspace/crates/verified/src/restore.rs" 204 33 204 34
+let%span srestore'4 = "/workspace/crates/verified/src/restore.rs" 204 14 204 34
+let%span srestore'5 = "/workspace/crates/verified/src/restore.rs" 207 13 207 25
+let%span srestore'6 = "/workspace/crates/verified/src/restore.rs" 207 28 207 29
+let%span srestore'7 = "/workspace/crates/verified/src/restore.rs" 207 13 207 29
+let%span srestore'8 = "/workspace/crates/verified/src/restore.rs" 187 10 196 1
 
 use creusot.int.Int32
 use creusot.int.Int64
@@ -40,8 +40,8 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let restore_batch_step [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/restore.rs" 22 0 22 87]
-  (minimum_base: Int64.t) (base: Int64.t) (last_delta: Int32.t) (return (x: t_Option_i64)) = (! bb0
+let restore_batch_step [#"/workspace/crates/verified/src/restore.rs" 198 0 198 87] (minimum_base: Int64.t)
+  (base: Int64.t) (last_delta: Int32.t) (return (x: t_Option_i64)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_9 <- Int32.lt last_delta ([%#srestore] (0: Int32.t)) ] s1
     | s1 = any [ br0 -> {_9 = false} (! bb2) | br1 -> {_9} (! bb4) ] ]

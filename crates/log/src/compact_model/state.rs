@@ -1,11 +1,13 @@
 //! The abstract state the compaction model enumerates: a log [`Entry`], the
 //! [`CompactState`] the checker fingerprints, the [`CompactAction`] alphabet,
-//! and the [`CompactModel`] bounds together with the three derivations that the
-//! transition relation and the safety asserts both need.
+//! the [`Cleaner`] a pass runs, and the [`CompactModel`] bounds together with
+//! the derivations that a compaction pass needs.
 
 use std::collections::{HashMap, HashSet};
 
-use crate::compact::{TxnDataState, should_index_key};
+use crate::compact::{
+    BatchMeta, RecordMeta, RetainDecision, TxnDataState, retain_decision, should_index_key,
+};
 
 /// What a log entry carries downstream of the compaction decision.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -26,16 +28,46 @@ pub(super) struct Entry {
     pub(super) horizon: Option<i64>,
 }
 
+impl Entry {
+    /// Whether this entry carries a delete horizon that `clock` has reached.
+    pub(super) fn horizon_elapsed(&self, clock: i64) -> bool {
+        self.horizon.is_some_and(|h| clock >= h)
+    }
+
+    /// The key this entry offers the cleaner's dedup filter, if any.
+    fn map_key(&self) -> Option<MapKey> {
+        match self.kind {
+            EntryKind::Data { .. } => self.key.map(MapKey::Data),
+            EntryKind::Marker { commit, .. } => Some(MapKey::Control { commit }),
+        }
+    }
+}
+
+/// A key in the cleaner's key→newest-offset dedup map. Data keys and control
+/// keys are different byte strings, so they never collide.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(super) enum MapKey {
+    Data(u8),
+    Control { commit: bool },
+}
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub(super) struct CompactState {
     pub(super) log: Vec<Entry>,
     /// Abstract wall clock in ms. Entries hold horizons as absolute stamp
     /// values, and the model compares them against this clock. The state does
-    /// NOT hold the non-vacuity witnesses. [`Model::properties`] derives them
-    /// from `(log, clock)`. The fingerprint therefore stays free of the
-    /// monotonic witness bools, which would otherwise multiply the reachable
-    /// state space by about 32.
+    /// NOT hold latched non-vacuity witnesses. [`stateright::Model::properties`]
+    /// derives them from `(log, clock, last_pass)`, which keeps the monotonic
+    /// witness bools out of the fingerprint. Those would otherwise multiply
+    /// the reachable state space by about 32.
     pub(super) clock: i64,
+    /// The log that the transition into this state compacted, when that
+    /// transition was a `Compact`, and `None` after any other transition.
+    ///
+    /// It is what lets the pass invariants be `always` properties over the
+    /// pair `(last_pass, log)`, so that a violation comes back from the checker
+    /// as a counterexample path rather than a panic inside `next_state`.
+    pub(super) last_pass: Option<Vec<Entry>>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -47,60 +79,85 @@ pub(super) enum CompactAction {
     Compact,
 }
 
-pub(super) struct CompactModel {
-    /// Maximum log length the actions generator and `within_boundary` enforce.
-    pub(super) max_len: usize,
-    /// Maximum value `clock` may reach.
-    pub(super) max_clock: i64,
+/// The dedup-map filter signature: [`should_index_key`]'s.
+pub(super) type IndexKeyFn = fn(Option<&[u8]>, bool) -> bool;
+
+/// The retain-decision signature: [`retain_decision`]'s.
+pub(super) type RetainFn =
+    fn(RecordMeta, BatchMeta, bool, TxnDataState, i64, i64) -> RetainDecision;
+
+/// The two decisions a cleaner makes: which records enter the dedup map, and
+/// what happens to each record given the map. The model is generic over them so
+/// that the same checker runs against the production cores and against the
+/// deliberately-broken legacy pair in `legacy.rs`.
+#[derive(Clone, Copy)]
+pub(super) struct Cleaner {
+    pub(super) index_key: IndexKeyFn,
+    pub(super) retain: RetainFn,
 }
 
-impl CompactModel {
-    /// Build the key→newest-index dedup map over data entries that have a
-    /// key. It uses the production [`should_index_key`] filter, so control
-    /// entries are never indexed. Later positions overwrite earlier ones, so
-    /// the newest wins.
-    pub(super) fn offset_map(log: &[Entry]) -> HashMap<u8, usize> {
-        let mut map: HashMap<u8, usize> = HashMap::new();
+impl Cleaner {
+    /// The production cores the log cleaner's rewrite path runs.
+    pub(super) const PRODUCTION: Self = Self {
+        index_key: should_index_key,
+        retain: retain_decision,
+    };
+
+    /// Build the key→newest-index dedup map over the entries this cleaner's
+    /// filter admits. Later positions overwrite earlier ones, so the newest
+    /// wins.
+    pub(super) fn offset_map(self, log: &[Entry]) -> HashMap<MapKey, usize> {
+        let mut map: HashMap<MapKey, usize> = HashMap::new();
         for (idx, entry) in log.iter().enumerate() {
-            if !matches!(entry.kind, EntryKind::Data { .. }) {
-                continue;
-            }
-            let Some(k) = entry.key else { continue };
-            // Data entries are never control batches.
-            if should_index_key(Some(&[k]), false) {
-                map.insert(k, idx);
+            if let Some(map_key) = entry.map_key()
+                && self.admits(map_key)
+            {
+                map.insert(map_key, idx);
             }
         }
         map
     }
 
-    /// Producers whose newest-for-key data entry would be Kept, that is,
-    /// producers whose transactional data survives this compaction.
+    /// Whether this cleaner's filter lets `map_key` into the dedup map. A data
+    /// record offers its own key bytes. A control record always carries the
+    /// `ControlRecordType` key: version `0` and then type `COMMIT = 1` or
+    /// `ABORT = 0`, each a big-endian `int16`.
+    fn admits(self, map_key: MapKey) -> bool {
+        match map_key {
+            MapKey::Data(k) => (self.index_key)(Some(&[k]), false),
+            MapKey::Control { commit } => {
+                (self.index_key)(Some(&[0, 0, 0, u8::from(commit)]), true)
+            }
+        }
+    }
+
+    /// Whether `log[idx]` is the entry the dedup map holds for its key.
+    pub(super) fn is_newest(
+        log: &[Entry],
+        offset_map: &HashMap<MapKey, usize>,
+        idx: usize,
+    ) -> bool {
+        log[idx]
+            .map_key()
+            .is_some_and(|map_key| offset_map.get(&map_key).copied() == Some(idx))
+    }
+
+    /// Producers whose transactional data survives this compaction: those with
+    /// a keyed live data entry, one with `value=Some`, that is the newest for
+    /// its key.
     ///
-    /// A data entry belongs to a producer only if it carries a producer id. In
-    /// this abstract model data entries are anonymous, so survival depends only
-    /// on whether *any* keyed live data entry, one with `value=Some`, is
-    /// newest-for-key. Markers reference producers by id, and a producer's data
-    /// "survives" if and only if at least one surviving keyed live data entry
-    /// has a key that maps to that producer.
-    ///
-    /// The model associates producers with data by key. Marker `pid` goes with
-    /// the data entries under key `pid`. The alphabet is small: `pid ∈ {0,1}`
-    /// and `key ∈ {0,1}`. The abstraction stays faithful, because a marker's
-    /// data survives if and only if key == pid has a surviving live data
-    /// entry.
-    pub(super) fn data_survives(log: &[Entry], offset_map: &HashMap<u8, usize>) -> HashSet<u8> {
+    /// Data entries in this abstract model are anonymous, so the model
+    /// associates producers with data by key: marker `pid` goes with the data
+    /// entries under key `pid`. The alphabet is small, `pid ∈ {0,1}` and
+    /// `key ∈ {0,1}`, so a marker's data survives if and only if key == pid has
+    /// a surviving live data entry.
+    pub(super) fn data_survives(log: &[Entry], offset_map: &HashMap<MapKey, usize>) -> HashSet<u8> {
         let mut survivors: HashSet<u8> = HashSet::new();
         for (idx, entry) in log.iter().enumerate() {
-            let EntryKind::Data { value } = entry.kind else {
-                continue;
-            };
-            let Some(k) = entry.key else { continue };
-            if value.is_none() {
-                continue; // tombstones do not constitute surviving data
-            }
-            if offset_map.get(&k).copied() == Some(idx) {
-                // This live data entry survives; associate it with producer `k`.
+            if let EntryKind::Data { value: Some(_) } = entry.kind
+                && let Some(k) = entry.key
+                && offset_map.get(&MapKey::Data(k)).copied() == Some(idx)
+            {
                 survivors.insert(k);
             }
         }
@@ -115,4 +172,13 @@ impl CompactModel {
             TxnDataState::DataFullyGone
         }
     }
+}
+
+pub(super) struct CompactModel {
+    /// Maximum log length the actions generator and `within_boundary` enforce.
+    pub(super) max_len: usize,
+    /// Maximum value `clock` may reach.
+    pub(super) max_clock: i64,
+    /// The cleaner every `Compact` transition runs.
+    pub(super) cleaner: Cleaner,
 }

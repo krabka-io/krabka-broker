@@ -23,9 +23,11 @@ use krabka_units::{
     ByteSize, Time,
     convert::{ByteSizeExt as _, TimeExt as _},
 };
+use krabka_verified::retention::{
+    LocalRetentionSegment, local_retention_prefix, retention_delete_target,
+};
 use tracing::{debug, warn};
 
-use super::NO_BYTES;
 use crate::partition::Partition;
 
 /// The offset through which the remote tier holds an unbroken copy of this
@@ -69,57 +71,72 @@ pub(crate) fn remote_covered_through(finished: &[(i64, i64)], local_start: i64) 
 
 /// Compute the highest `target` to pass to
 /// [`krabka_log::Log::delete_local_segments_through`] given the
-/// partition's local sealed-segment exports and the per-topic
-/// local-retention settings. Returns `None` when nothing is deletable.
+/// partition's local sealed-segment exports, the size of its whole local log
+/// (active segment included), and the per-topic local-retention settings.
+/// Returns `None` when nothing is deletable.
 ///
-/// A segment is eligible if and only if the remote tier covers it whole, that
-/// is, its `last_offset` is at or below `covered_through` (see
-/// [`remote_covered_through`]), AND it meets either time-based eviction
-/// (`now_ms - seg.max_timestamp > effective_local`) or size-based eviction
-/// (oldest-first until the sealed total fits `effective_local_size`). The walk
-/// stops at the first segment the remote tier does not cover, so the local
-/// prefix stays contiguous. This matches Kafka.
+/// The rule is Kafka's `UnifiedLog.deleteOldSegments` on a tiered log,
+/// proved in [`krabka_verified::retention::local_retention_prefix`]. A
+/// segment can go only when the remote tier covers it whole, that is, its
+/// `last_offset` is at or below `covered_through` (see
+/// [`remote_covered_through`]); the walk stops at the first segment the tier
+/// does not cover, so the local prefix stays contiguous. Kafka runs
+/// `local.retention.bytes` first: it deletes an oldest segment only while
+/// the local log's bytes over the budget still cover the whole segment, and
+/// only when the local log is at least its budget. Then
+/// `local.retention.ms` deletes the prefix with
+/// `now_ms - anchor > effective_local`, where the anchor is the segment's
+/// `largestTimestamp()` ([`SegmentExport::max_timestamp`]) or, when that lies
+/// in the future, its file's `lastModified()`: Kafka's tiered
+/// `deleteRetentionMsBreachedSegments` ages a segment whose records claim a
+/// future timestamp by when it was written rather than holding it forever.
 ///
-/// Size-based eviction ignores the active segment. Operators set
-/// local.retention.bytes in MB or GB ranges, where the active segment,
-/// bounded by `segment.bytes`, is negligible.
+/// Kafka's walk ends at the active segment, which is never in the remote
+/// tier and so never eligible (`isSegmentEligibleForDeletion`); the walk here
+/// ends there too. Kafka also rolls that active segment when it breaches the
+/// time or size predicate, so the next copy can upload it. This host does not:
+/// an active segment waits for `segment.bytes` or `segment.ms` to roll it.
 pub(crate) fn local_retention_target(
     exports: &[SegmentExport],
     covered_through: Option<i64>,
     effective_local: Option<Time>,
     effective_local_size: Option<ByteSize>,
+    local_log_size: ByteSize,
     now_ms: i64,
 ) -> Option<i64> {
-    let sealed_total: ByteSize = exports
-        .iter()
-        .map(|e| e.size)
-        .fold(NO_BYTES, |acc, size| acc + size);
-    let deletable_size_remaining =
-        effective_local_size.map_or(NO_BYTES, |budget| (sealed_total - budget).max(NO_BYTES));
-    let finished: Vec<bool> = exports
-        .iter()
-        .map(|ex| matches!(covered_through, Some(through) if ex.last_offset.0 <= through))
-        .collect();
-    let time_expired: Vec<bool> = exports
+    let size_debt = effective_local_size
+        .and_then(|budget| local_log_size.bytes_u64().checked_sub(budget.bytes_u64()));
+    let mut facts: Vec<LocalRetentionSegment> = exports
         .iter()
         .map(|ex| {
-            let age = Time::from_millis(now_ms.saturating_sub(ex.max_timestamp));
-            ex.max_timestamp != -1 && matches!(effective_local, Some(retention) if age > retention)
+            let anchor = if now_ms < ex.max_timestamp {
+                ex.last_modified_ms
+            } else {
+                ex.max_timestamp
+            };
+            let age = Time::from_millis(now_ms.saturating_sub(anchor));
+            LocalRetentionSegment {
+                blocked: !matches!(covered_through, Some(through) if ex.last_offset.0 <= through),
+                expired: matches!(effective_local, Some(retention) if age > retention),
+                size: ex.size.bytes_u64(),
+            }
         })
         .collect();
-    let sizes: Vec<u64> = exports.iter().map(|ex| ex.size.bytes_u64()).collect();
-    let prefix = krabka_verified::retention::retention_prefix(
-        true,
-        &finished,
-        &time_expired,
-        &sizes,
-        deletable_size_remaining.bytes_u64(),
-    );
-    let last_offset = prefix
-        .len
-        .checked_sub(1)
-        .map(|index| exports[index].last_offset.0);
-    krabka_verified::retention::retention_delete_target(last_offset)
+    // The active segment ends the walk: the remote tier never holds it, and
+    // `delete_local_segments_through` never removes it.
+    let sealed_size = exports
+        .iter()
+        .fold(ByteSize::from_bytes(0), |total, ex| total + ex.size);
+    facts.push(LocalRetentionSegment {
+        blocked: true,
+        expired: false,
+        size: local_log_size
+            .bytes_u64()
+            .saturating_sub(sealed_size.bytes_u64()),
+    });
+    let len = local_retention_prefix(&facts, size_debt);
+    let last_offset = len.checked_sub(1).map(|index| exports[index].last_offset.0);
+    retention_delete_target(last_offset)
 }
 
 /// After the copy pass, drop local sealed segments whose
@@ -162,19 +179,19 @@ pub(crate) fn local_retention_pass(
     };
     let covered_through = remote_covered_through(&finished, local_start);
 
-    let Some(target) = local_retention_target(
-        exports,
-        covered_through,
-        effective_local,
-        effective_local_size,
-        now_ms,
-    ) else {
-        return 0;
-    };
-
-    let result = {
+    let (target, result) = {
         let mut log = partition.log.lock().expect("log mutex poisoned");
-        log.delete_local_segments_through(Offset(target))
+        let Some(target) = local_retention_target(
+            exports,
+            covered_through,
+            effective_local,
+            effective_local_size,
+            log.size(),
+            now_ms,
+        ) else {
+            return 0;
+        };
+        (target, log.delete_local_segments_through(Offset(target)))
     };
     match result {
         Ok(n) => {
@@ -213,18 +230,49 @@ mod tests {
         let exports = vec![synth_export(0, 9, 100, 64), synth_export(10, 19, 200, 64)];
         // Big enough time-pressure to delete everything, but the remote tier
         // covers nothing.
-        assert!(local_retention_target(&exports, None, Some(millis(1)), None, 10_000) == None);
+        assert!(
+            local_retention_target(&exports, None, Some(millis(1)), None, bytes(128), 10_000)
+                == None
+        );
     }
 
+    /// Kafka's tiered `deleteRetentionMsBreachedSegments` ages a segment by its
+    /// `largestTimestamp()`, and by its file's `lastModified()` instead when
+    /// that timestamp lies in the future. `now` is 10 000 ms and the window
+    /// 1 ms; the segment is fully copied.
     #[test]
-    fn unknown_timestamp_needs_size_pressure_for_local_eviction() {
-        let exports = vec![synth_export(0, 9, -1, 100)];
-
-        check!(local_retention_target(&exports, Some(9), Some(millis(1)), None, 10_000) == None);
-        check!(
-            local_retention_target(&exports, Some(9), Some(millis(1)), Some(bytes(0)), 10_000,)
-                == Some(10)
-        );
+    fn a_future_timestamp_is_aged_by_the_file() {
+        for (name, max_timestamp, last_modified_ms, expected) in [
+            ("a past timestamp ages the segment", 100, 100, Some(10)),
+            (
+                "a future timestamp with an old file goes",
+                20_000,
+                100,
+                Some(10),
+            ),
+            (
+                "a future timestamp with a young file stays",
+                20_000,
+                9_999,
+                None,
+            ),
+        ] {
+            let exports = vec![SegmentExport {
+                last_modified_ms,
+                ..synth_export(0, 9, max_timestamp, 100)
+            }];
+            check!(
+                local_retention_target(
+                    &exports,
+                    Some(9),
+                    Some(millis(1)),
+                    None,
+                    bytes(100),
+                    10_000
+                ) == expected,
+                "{name}"
+            );
+        }
     }
 
     #[test]
@@ -237,6 +285,7 @@ mod tests {
                 Some(9),
                 Some(Time::from_millis(i64::MAX)),
                 None,
+                bytes(100),
                 i64::MAX,
             ) == None
         );
@@ -251,10 +300,22 @@ mod tests {
         ];
         // now=1000, retention=500ms → segs with max_ts<500 are deletable.
         // Only seg0 (max_ts=100) and seg1 (max_ts=200) qualify; seg2 stops it.
-        let target = local_retention_target(&exports, Some(29), Some(millis(500)), None, 1_000);
+        let target = local_retention_target(
+            &exports,
+            Some(29),
+            Some(millis(500)),
+            None,
+            bytes(192),
+            1_000,
+        );
         assert!(target == Some(20));
     }
 
+    /// Kafka's `deleteRetentionSizeBreachedSegments` on a tiered log: an oldest
+    /// segment goes only while the local log's bytes over
+    /// `local.retention.bytes` still cover the whole segment, and the active
+    /// segment counts toward the local log's size. Three 100-byte sealed
+    /// segments and a 50-byte active segment make a 350-byte local log.
     #[test]
     fn local_retention_target_size_based_eviction() {
         let exports = vec![
@@ -263,28 +324,32 @@ mod tests {
             synth_export(20, 29, 300, 100),
         ];
         let cases = [
-            // Total = 300; budget = 150 → must evict 150 bytes → oldest two go.
-            (Some(bytes(150)), Some(20)),
-            // Budget tighter than one segment: still only the oldest, because
-            // after evicting 100B the remaining is 100 (>budget? no, 200>150,
-            // wait: total=300, budget=150 → need to evict 150; after dropping
-            // first 100B we still need 50 more → second segment also drops.
-            // Test with budget = 50: need to evict 250 → all three? but the
-            // walk stops since segments 0..=2 all become deletable.
-            (Some(bytes(50)), Some(30)),
-            // Budget larger than total → nothing deletable.
-            (Some(bytes(10_000)), None),
+            ("200 over deletes two", bytes(150), Some(20)),
+            ("150 over deletes one, not two", bytes(200), Some(10)),
+            ("the active segment's bytes count", bytes(250), Some(10)),
+            ("50 over deletes nothing", bytes(300), None),
+            ("exactly at budget deletes nothing", bytes(350), None),
+            ("300 over deletes all three", bytes(50), Some(30)),
+            ("under budget deletes nothing", bytes(10_000), None),
         ];
-        for (budget, expected) in cases {
-            let target = local_retention_target(&exports, Some(29), None, budget, 1_000);
-            assert!(target == expected, "budget: {budget:?}");
+        for (name, budget, expected) in cases {
+            let target =
+                local_retention_target(&exports, Some(29), None, Some(budget), bytes(350), 1_000);
+            check!(target == expected, "{name}");
         }
     }
 
     #[test]
     fn local_retention_target_equal_size_budget_keeps_all_segments() {
         let exports = vec![synth_export(0, 9, 100, 100), synth_export(10, 19, 200, 100)];
-        let target = local_retention_target(&exports, Some(19), None, Some(bytes(200)), 1_000);
+        let target = local_retention_target(
+            &exports,
+            Some(19),
+            None,
+            Some(bytes(200)),
+            bytes(200),
+            1_000,
+        );
         assert!(target == None);
     }
 
@@ -299,7 +364,8 @@ mod tests {
         // cover ends at 9 and the walk stops at seg1.
         let covered = remote_covered_through(&[(0, 9), (20, 29)], 0);
         assert!(covered == Some(9));
-        let target = local_retention_target(&exports, covered, Some(millis(1)), None, 10_000);
+        let target =
+            local_retention_target(&exports, covered, Some(millis(1)), None, bytes(192), 10_000);
         assert!(
             target == Some(10),
             "only seg0 deletable; walk stops at seg1"
@@ -377,14 +443,18 @@ mod tests {
         ];
         let covered = remote_covered_through(&[(0, 99)], 0);
         check!(covered == Some(99));
-        check!(local_retention_target(&exports, covered, Some(millis(1)), None, 10_000) == None);
+        check!(
+            local_retention_target(&exports, covered, Some(millis(1)), None, bytes(128), 10_000)
+                == None
+        );
 
         // Once the leader copies 100..=199 too, the follower's first segment is
         // covered whole and goes.
         let covered = remote_covered_through(&[(0, 99), (100, 199)], 0);
         check!(covered == Some(199));
         check!(
-            local_retention_target(&exports, covered, Some(millis(1)), None, 10_000) == Some(200)
+            local_retention_target(&exports, covered, Some(millis(1)), None, bytes(128), 10_000)
+                == Some(200)
         );
     }
 
@@ -393,7 +463,14 @@ mod tests {
         let exports = vec![synth_export(0, i64::MAX, 100, 64)];
 
         assert!(
-            local_retention_target(&exports, Some(i64::MAX), Some(millis(1)), None, 10_000) == None
+            local_retention_target(
+                &exports,
+                Some(i64::MAX),
+                Some(millis(1)),
+                None,
+                bytes(64),
+                10_000
+            ) == None
         );
     }
 
@@ -405,7 +482,14 @@ mod tests {
         // same set as if `local_retention` had been set directly.
         let exports = vec![synth_export(0, 9, 100, 64), synth_export(10, 19, 200, 64)];
         // Caller resolved effective_local = retention = 250ms; now=1000.
-        let target = local_retention_target(&exports, Some(19), Some(millis(250)), None, 1_000);
+        let target = local_retention_target(
+            &exports,
+            Some(19),
+            Some(millis(250)),
+            None,
+            bytes(128),
+            1_000,
+        );
         assert!(target == Some(20));
     }
 
@@ -431,6 +515,7 @@ mod tests {
             remote_covered_through(finished, local_start),
             effective_local,
             effective_local_size,
+            log.size(),
             now_ms,
         ) else {
             return 0;

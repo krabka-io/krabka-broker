@@ -354,7 +354,7 @@ async fn tick_all_accounts_a_failed_compaction_and_takes_the_log_dir_offline() {
         compactable_partition_in_registry(&dir, "orders", NodeId(7), status.clone()).await;
     let before = record_count(&partition);
     registry.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));
-    // A directory where the rewrite must create its `.swap` file: the open
+    // A directory where the rewrite must create its `.cleaned` file: the open
     // fails with EISDIR, which is a storage error the filesystem raises.
     let blocked = block_compaction_swap(&dir, "orders");
 

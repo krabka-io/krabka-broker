@@ -87,14 +87,22 @@ pub fn wal_reservation_response(
 }
 
 /// Reserve `count` offsets from `next`, returning `(base, next_after)`.
+///
+/// Admits exactly a nonnegative frontier, a positive count, and a range whose
+/// end fits `i64`; the reservation then starts at `next` and the frontier
+/// moves to `next + count`. Anything else is `None`.
+#[ensures((result != None) == (next@ >= 0 && count@ > 0 && next@ + count@ <= i64::MAX@))]
+#[ensures(forall<base: i64, next_after: i64> result == Some((base, next_after))
+    ==> base@ == next@ && next_after@ == next@ + count@)]
 #[must_use]
-#[cfg_attr(creusot, requires(next@ >= 0))]
-#[cfg_attr(creusot, requires(count@ > 0))]
-#[cfg_attr(creusot, requires(next@ + count@ <= i64::MAX@))]
-#[cfg_attr(creusot, ensures(result.0@ == next@))]
-#[cfg_attr(creusot, ensures(result.1@ == next@ + count@))]
-pub const fn reserve_offsets(next: i64, count: i64) -> (i64, i64) {
-    (next, next.saturating_add(count))
+pub const fn reserve_offsets(next: i64, count: i64) -> Option<(i64, i64)> {
+    if next < 0 || count <= 0 {
+        return None;
+    }
+    match next.checked_add(count) {
+        Some(next_after) => Some((next, next_after)),
+        None => None,
+    }
 }
 
 #[cfg(test)]
@@ -104,13 +112,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reserve_offsets_returns_base_and_advanced_next() {
-        assert!(reserve_offsets(11, 3) == (11, 14));
-    }
-
-    #[test]
-    fn reserve_offsets_saturates_on_overflow() {
-        assert!(reserve_offsets(i64::MAX - 1, 3) == (i64::MAX - 1, i64::MAX));
+    fn reserve_offsets_admits_exactly_representable_ranges() {
+        // (next, count, reservation)
+        let cases = [
+            (0, 1, Some((0, 1))),
+            (11, 3, Some((11, 14))),
+            (i64::MAX - 3, 3, Some((i64::MAX - 3, i64::MAX))),
+            (i64::MAX - 1, 3, None),
+            (11, 0, None),
+            (11, -1, None),
+            (-1, 3, None),
+        ];
+        for (next, count, reservation) in cases {
+            assert!(reserve_offsets(next, count) == reservation);
+        }
     }
 
     #[test]

@@ -264,7 +264,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::coordinator::unified::assignor::{Assignment, MemberSubscription, TopicMetadata};
+    use crate::coordinator::unified::assignor::{Assignment, GroupSpec, TopicMetadata};
 
     #[derive(Debug)]
     struct TestAssignor(&'static str);
@@ -272,7 +272,7 @@ mod tests {
         fn name(&self) -> &'static str {
             self.0
         }
-        fn assign(&self, _members: &[MemberSubscription], _topics: &TopicMetadata) -> Assignment {
+        fn assign(&self, _group: &GroupSpec, _topics: &TopicMetadata) -> Assignment {
             HashMap::new()
         }
     }

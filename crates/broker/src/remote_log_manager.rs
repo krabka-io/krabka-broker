@@ -138,7 +138,7 @@ pub(crate) use self::{
     copy::copy_eligible,
     delete::cascade_remote_partition_delete,
     local_retention::local_retention_pass,
-    remote_retention::{RemoteRetentionBounds, remote_retention_pass},
+    remote_retention::{LocalLogFootprint, RemoteRetentionBounds, remote_retention_pass},
 };
 
 /// Default cadence of the tiered-storage sweep (copy and retention passes).
@@ -379,7 +379,7 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
     // measures a segment against them, and a value read under a second
     // lock could describe a different `DeleteRecords` than the segment
     // list does.
-    let (log_config, log_start_offset, deleted_below, exports) = {
+    let (log_config, log_start_offset, deleted_below, local_exports, local_log_size) = {
         let log = partition.log.lock().expect("log mutex poisoned");
         let cfg = log.config_snapshot();
         (
@@ -387,6 +387,7 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
             log.log_start_offset(),
             log.established_log_start(),
             log.tierable_segments(),
+            log.size(),
         )
     };
     if !log_config.remote_storage_enable {
@@ -416,9 +417,10 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
     // delete the remote copy, the next tick would upload it again off the
     // local file, and the two would cycle for as long as the file sat
     // there.
-    let exports: Vec<krabka_log::SegmentExport> = exports
-        .into_iter()
+    let exports: Vec<krabka_log::SegmentExport> = local_exports
+        .iter()
         .filter(|export| export.last_offset >= log_start_offset)
+        .cloned()
         .collect();
     let Some(topic_id) = image.topic(&partition.topic).map(|t| t.topic_id) else {
         // Topic vanished from the metadata image between snapshots; skip.
@@ -471,6 +473,10 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
             log_config: &log_config,
             log_start_offset,
             deleted_below,
+            local: LocalLogFootprint {
+                sealed: &local_exports,
+                size: local_log_size,
+            },
             is_leader,
             broker_id,
         },
@@ -489,6 +495,7 @@ struct RetentionPasses<'a> {
     log_config: &'a krabka_log::LogConfig,
     log_start_offset: krabka_log::Offset,
     deleted_below: Option<krabka_log::Offset>,
+    local: LocalLogFootprint<'a>,
     is_leader: bool,
     broker_id: i32,
 }
@@ -502,6 +509,7 @@ async fn retention_passes(pass: RetentionPasses<'_>, tier: &RemoteTier<'_>) {
         log_config,
         log_start_offset,
         deleted_below,
+        local,
         is_leader,
         broker_id,
     } = pass;
@@ -520,6 +528,7 @@ async fn retention_passes(pass: RetentionPasses<'_>, tier: &RemoteTier<'_>) {
             log_start_offset,
             deleted_below,
             now_ms: now_ms(),
+            local,
         },
         tier,
     )

@@ -34,6 +34,7 @@ pub(super) fn spawn_storage_security_maintenance(
             partitions: Arc::clone(partitions),
             controller: Arc::clone(controller),
             replica_lag_time_max: config.replica_lag_time_max,
+            default_min_insync_replicas: config.default_min_insync_replicas,
             scan_interval: config.isr_scan_interval,
             broker_id: config.broker_id,
             shutdown: shutdown.child_token(),

@@ -19,30 +19,34 @@ pub(super) fn has_offline_log_dirs(req: &BrokerHeartbeatRequest) -> bool {
     !req.offline_log_dirs.is_empty()
 }
 
+/// A heartbeat whose broker epoch matches the broker's registration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct CurrentRegistration {
+    /// The broker has replayed its own registration record. The controller's
+    /// heartbeat state machine decides fencing and shutdown from it.
+    pub(super) caught_up: bool,
+}
+
 pub(super) fn validate_registration(
     image: &MetadataImage,
     req: &BrokerHeartbeatRequest,
-) -> Result<(u64, krabka_verified::BrokerHeartbeatDecision), i16> {
+) -> Result<(u64, CurrentRegistration), i16> {
     // Kafka's `ClusterControlManager.checkBrokerEpoch` answers a broker id
     // with no registration as a stale epoch, as it answers a mismatched one.
     let broker_id = u64::try_from(req.broker_id).map_err(|_| codes::STALE_BROKER_EPOCH)?;
-    let decision = krabka_verified::broker_heartbeat_decision(
+    match krabka_verified::broker_heartbeat_decision(
         image
             .broker(NodeId(broker_id))
             .map(|registration| registration.broker_epoch),
         req.broker_epoch,
         req.current_metadata_offset,
-        req.want_fence,
-        req.want_shut_down,
-    );
-    match decision.registration {
-        krabka_verified::BrokerHeartbeatRegistration::Missing
-        | krabka_verified::BrokerHeartbeatRegistration::Stale => {
-            return Err(codes::STALE_BROKER_EPOCH);
+    ) {
+        krabka_verified::BrokerHeartbeatDecision::Missing
+        | krabka_verified::BrokerHeartbeatDecision::Stale => Err(codes::STALE_BROKER_EPOCH),
+        krabka_verified::BrokerHeartbeatDecision::Current { caught_up } => {
+            Ok((broker_id, CurrentRegistration { caught_up }))
         }
-        krabka_verified::BrokerHeartbeatRegistration::Current => {}
     }
-    Ok((broker_id, decision))
 }
 
 #[cfg(test)]
@@ -123,11 +127,14 @@ mod tests {
             ..Default::default()
         };
 
-        let (_, decision) = validate_registration(&image, &req).expect("registered broker");
-        assert!(!decision.caught_up && decision.fenced);
+        assert!(
+            validate_registration(&image, &req)
+                == Ok((7, CurrentRegistration { caught_up: false }))
+        );
         req.current_metadata_offset = 42;
-        let (_, decision) = validate_registration(&image, &req).expect("registered broker");
-        assert!(decision.caught_up && !decision.fenced);
+        assert!(
+            validate_registration(&image, &req) == Ok((7, CurrentRegistration { caught_up: true }))
+        );
     }
 
     #[test]

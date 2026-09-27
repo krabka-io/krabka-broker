@@ -1,19 +1,27 @@
-(* #"/proof-work-245/crates/verified/src/restore_sidecar.rs" 39 0 45 9 *)
+(* #"/workspace/crates/verified/src/restore_sidecar.rs" 49 0 55 9 *)
 
 let%span sconvert = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
-let%span srestore_sidecar = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 47 11 47 30
-let%span srestore_sidecar'0 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 50 16 50 83
-let%span srestore_sidecar'1 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 52 20 52 24
-let%span srestore_sidecar'2 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 46 4 53 9
-let%span srestore_sidecar'3 = "/proof-work-245/crates/verified/src/restore_sidecar.rs" 31 10 37 6
+let%span sconvert'0 = "/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/creusot-std-0.13.0/src/std/convert.rs" 274 26 274 51
+let%span srestore_sidecar = "/workspace/crates/verified/src/restore_sidecar.rs" 56 4 56 30
+let%span srestore_sidecar'0 = "/workspace/crates/verified/src/restore_sidecar.rs" 57 11 57 30
+let%span srestore_sidecar'1 = "/workspace/crates/verified/src/restore_sidecar.rs" 60 16 60 83
+let%span srestore_sidecar'2 = "/workspace/crates/verified/src/restore_sidecar.rs" 62 20 62 24
+let%span srestore_sidecar'3 = "/workspace/crates/verified/src/restore_sidecar.rs" 56 4 63 9
+let%span srestore_sidecar'4 = "/workspace/crates/verified/src/restore_sidecar.rs" 41 10 47 6
 
 use creusot.int.UInt32
+use creusot.int.Int64
 use creusot.int.UInt64
 use creusot.prelude.Any
 use int.Int
 
+let from_i64 (small: UInt32.t) (return (x: Int64.t)) = any
+  [ return (result: Int64.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert] result
+    = Int64.of_int (UInt32.t'int small)}
+    (! return {result}) ]
+
 let from_u64 (small: UInt32.t) (return (x: UInt64.t)) = any
-  [ return (result: UInt64.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert] result
+  [ return (result: UInt64.t) -> {[@stop_split] [@expl:from ensures] [%#sconvert'0] result
     = UInt64.of_int (UInt32.t'int small)}
     (! return {result}) ]
 
@@ -33,41 +41,43 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let restore_offset_index_entry_valid [#"/proof-work-245/crates/verified/src/restore_sidecar.rs" 39 0 45 9]
-  (previous: t_Option_tup2_u32_u32) (relative_offset: UInt32.t) (position: UInt32.t) (max_relative: UInt32.t)
+let restore_offset_index_entry_valid [#"/workspace/crates/verified/src/restore_sidecar.rs" 49 0 55 9]
+  (previous: t_Option_tup2_u32_u32) (relative_offset: UInt32.t) (position: UInt32.t) (max_relative: Int64.t)
   (log_bytes: UInt64.t) (return (x: bool)) = (! bb0
   [ bb0 = s0
-    [ s0 = [ &_12 <- UInt32.le relative_offset max_relative ] s1
-    | s1 = any [ br0 -> {_12 = false} (! bb6) | br1 -> {_12} (! bb1) ] ]
-  | bb1 = s0
-    [ s0 = from_u64 [%#srestore_sidecar] {position} (fun (_x: UInt64.t) -> [ &_16 <- _x ] s1)
-    | s1 = [ &_15 <- UInt64.lt _16 log_bytes ] s2
-    | s2 = any [ br0 -> {_15 = false} (! bb6) | br1 -> {_15} (! bb3) ] ]
-  | bb3 = any [ br0 -> {previous = None} (! bb9) | br1 (x0: tup2_u32_u32) -> {previous = Some x0} (! bb10) ]
-  | bb10 = s0
+    [ s0 = from_i64 [%#srestore_sidecar] {relative_offset} (fun (_x: Int64.t) -> [ &_13 <- _x ] s1)
+    | s1 = [ &_12 <- Int64.le _13 max_relative ] s2
+    | s2 = any [ br0 -> {_12 = false} (! bb7) | br1 -> {_12} (! bb2) ] ]
+  | bb2 = s0
+    [ s0 = from_u64 [%#srestore_sidecar'0] {position} (fun (_x: UInt64.t) -> [ &_17 <- _x ] s1)
+    | s1 = [ &_16 <- UInt64.lt _17 log_bytes ] s2
+    | s2 = any [ br0 -> {_16 = false} (! bb7) | br1 -> {_16} (! bb4) ] ]
+  | bb4 = any [ br0 -> {previous = None} (! bb10) | br1 (x0: tup2_u32_u32) -> {previous = Some x0} (! bb11) ]
+  | bb11 = s0
     [ s0 = elim_Some {previous} (fun (r0: tup2_u32_u32) -> [ &previous_relative <- r0.f0 ] s1)
     | s1 = elim_Some {previous} (fun (r0: tup2_u32_u32) -> [ &previous_position <- r0.f1 ] s2)
-    | s2 = [ &_22 <- UInt32.lt previous_relative relative_offset ] s3
-    | s3 = any [ br0 -> {_22 = false} (! bb12) | br1 -> {_22} (! bb11) ] ]
-  | bb11 = s0 [ s0 = [ &_ret <- UInt32.lt previous_position position ] s1 | s1 = return {_ret} ]
-  | bb12 = s0 [ s0 = [ &_ret <- [%#srestore_sidecar'0] false ] s1 | s1 = return {_ret} ]
-  | bb9 = s0 [ s0 = [ &_ret <- [%#srestore_sidecar'1] true ] s1 | s1 = return {_ret} ]
-  | bb6 = s0 [ s0 = [ &_ret <- [%#srestore_sidecar'2] false ] s1 | s1 = return {_ret} ] ]
+    | s2 = [ &_23 <- UInt32.lt previous_relative relative_offset ] s3
+    | s3 = any [ br0 -> {_23 = false} (! bb13) | br1 -> {_23} (! bb12) ] ]
+  | bb12 = s0 [ s0 = [ &_ret <- UInt32.lt previous_position position ] s1 | s1 = return {_ret} ]
+  | bb13 = s0 [ s0 = [ &_ret <- [%#srestore_sidecar'1] false ] s1 | s1 = return {_ret} ]
+  | bb10 = s0 [ s0 = [ &_ret <- [%#srestore_sidecar'2] true ] s1 | s1 = return {_ret} ]
+  | bb7 = s0 [ s0 = [ &_ret <- [%#srestore_sidecar'3] false ] s1 | s1 = return {_ret} ] ]
   [ & _ret: bool = Any.any_l ()
   | & previous: t_Option_tup2_u32_u32 = previous
   | & relative_offset: UInt32.t = relative_offset
   | & position: UInt32.t = position
-  | & max_relative: UInt32.t = max_relative
+  | & max_relative: Int64.t = max_relative
   | & log_bytes: UInt64.t = log_bytes
   | & _12: bool = Any.any_l ()
-  | & _15: bool = Any.any_l ()
-  | & _16: UInt64.t = Any.any_l ()
+  | & _13: Int64.t = Any.any_l ()
+  | & _16: bool = Any.any_l ()
+  | & _17: UInt64.t = Any.any_l ()
   | & previous_relative: UInt32.t = Any.any_l ()
   | & previous_position: UInt32.t = Any.any_l ()
-  | & _22: bool = Any.any_l () ])
+  | & _23: bool = Any.any_l () ])
   [ return (result: bool) ->
-  {[@stop_split] [@expl:restore_offset_index_entry_valid ensures] [%#srestore_sidecar'3] result
-    = (UInt32.t'int relative_offset <= UInt32.t'int max_relative
+  {[@stop_split] [@expl:restore_offset_index_entry_valid ensures] [%#srestore_sidecar'4] result
+    = (UInt32.t'int relative_offset <= Int64.to_int max_relative
     /\ UInt32.t'int position < UInt64.t'int log_bytes
     /\ match previous with
       | Some {f0 = previous_relative; f1 = previous_position} -> UInt32.t'int previous_relative

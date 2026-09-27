@@ -25,13 +25,25 @@ pub enum AuditCheckpointAdmission {
     RejectSequence,
 }
 
-/// Admission result for the two supported records-lost marker shapes.
+/// Admission result for a records-lost marker.
 #[cfg_attr(creusot, derive(DeepModel))]
 #[cfg_attr(not(creusot), derive(Debug, Clone, Copy, PartialEq, Eq))]
 pub enum AuditLossMarkerAdmission {
-    AdmitLegacy,
-    AdmitPersisted,
+    /// The marker is accepted and `generation` becomes the last accepted one.
+    Admit {
+        generation: u64,
+    },
     Reject,
+}
+
+/// Fail-open audit losses: the pending count `PendingLosses` holds, or the
+/// batch a durable records-lost marker reports. `generation` is the
+/// `loss_generation` a marker for these losses names.
+#[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
+#[cfg_attr(not(creusot), derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash))]
+pub struct AuditLosses {
+    pub generation: u64,
+    pub count: u64,
 }
 
 /// Bind a verified checkpoint to the exact nonempty chain position and head.
@@ -62,35 +74,87 @@ pub fn audit_checkpoint_admission(
     }
 }
 
-/// Admit exactly a positive legacy marker or a positive, strictly newer
-/// persisted-generation marker.
-#[ensures((result == AuditLossMarkerAdmission::AdmitLegacy) == (
-    header_matches && field_count@ == 1 && count@ > 0 && !generation_present))]
-#[ensures((result == AuditLossMarkerAdmission::AdmitPersisted) == (
-    header_matches && field_count@ == 2 && count@ > 0 && generation_present
-        && generation@ > previous_generation@))]
-#[ensures((result == AuditLossMarkerAdmission::Reject) == !(
-    header_matches && (
-        (field_count@ == 1 && count@ > 0 && !generation_present)
-        || (field_count@ == 2 && count@ > 0 && generation_present
-            && generation@ > previous_generation@))))]
+/// Admit exactly a marker whose body is the two-field
+/// `{records_lost, loss_generation}` shape with a positive count and a
+/// generation strictly newer than the last accepted one.
+#[ensures(match result {
+    AuditLossMarkerAdmission::Admit { generation: admitted } => header_matches
+        && field_count@ == 2
+        && count@ > 0
+        && generation == Some(admitted)
+        && admitted@ > previous_generation@,
+    AuditLossMarkerAdmission::Reject => !(header_matches && field_count@ == 2 && count@ > 0
+        && match generation {
+            Some(generation) => generation@ > previous_generation@,
+            None => false,
+        }),
+})]
 #[must_use]
 pub fn audit_loss_marker_admission(
     header_matches: bool,
     field_count: u64,
     count: u64,
-    generation_present: bool,
-    generation: u64,
+    generation: Option<u64>,
     previous_generation: u64,
 ) -> AuditLossMarkerAdmission {
-    if !header_matches || count == 0 {
-        AuditLossMarkerAdmission::Reject
-    } else if field_count == 1 && !generation_present {
-        AuditLossMarkerAdmission::AdmitLegacy
-    } else if field_count == 2 && generation_present && generation > previous_generation {
-        AuditLossMarkerAdmission::AdmitPersisted
-    } else {
-        AuditLossMarkerAdmission::Reject
+    match generation {
+        Some(generation)
+            if header_matches
+                && field_count == 2
+                && count > 0
+                && generation > previous_generation =>
+        {
+            AuditLossMarkerAdmission::Admit { generation }
+        }
+        _ => AuditLossMarkerAdmission::Reject,
+    }
+}
+
+/// Settle the pending losses `state` against a durable marker that reports
+/// `batch`, at the writer's commit and at open-time reconciliation alike.
+///
+/// A marker settles only its own generation, and only the count it reports.
+/// Losses that `AuditHandle::emit` added after the writer's snapshot stay
+/// pending, and move to the next generation. The host only ever moves a
+/// generation forward, so no marker already in the spool names that one: no
+/// later reconciliation settles them a second time, and the next marker names
+/// a generation newer than the last, as [`audit_loss_marker_admission`]
+/// requires. A marker of another generation settles nothing.
+///
+/// A batch larger than the pending count settles it to zero. The host never
+/// produces one -- a batch is a snapshot of the pending count, which only grows
+/// within a generation until settled -- so that case is clamped, not
+/// conserved. At `u64::MAX` the generation saturates rather than bumps; that
+/// takes 2^64 settlements and is the host's to rule out.
+#[ensures(state.generation != batch.generation
+    ==> result.generation == state.generation && result.count == state.count)]
+#[ensures(state.generation == batch.generation && batch.count@ <= state.count@
+    ==> result.count@ + batch.count@ == state.count@)]
+#[ensures(state.generation == batch.generation && batch.count@ > state.count@
+    ==> result.count@ == 0)]
+#[ensures(state.generation == batch.generation
+    ==> (result.generation != state.generation)
+        == (result.count@ > 0 && state.generation@ < u64::MAX@))]
+#[ensures(result.generation != state.generation
+    ==> result.generation@ == state.generation@ + 1)]
+#[must_use]
+pub fn settle_loss_batch(state: AuditLosses, batch: AuditLosses) -> AuditLosses {
+    if state.generation != batch.generation {
+        return state;
+    }
+    if batch.count >= state.count {
+        return AuditLosses {
+            generation: state.generation,
+            count: 0,
+        };
+    }
+    AuditLosses {
+        generation: if state.generation < u64::MAX {
+            state.generation + 1
+        } else {
+            state.generation
+        },
+        count: state.count - batch.count,
     }
 }
 
@@ -163,8 +227,55 @@ mod tests {
                     next_unsynced: 2,
                 }
         );
-        let at_cadence = spool_append_decision(0, 0, 0, u64::MAX - 1, u64::MAX);
-        check!(at_cadence.sync && at_cadence.next_unsynced == 0);
+        check!(
+            spool_append_decision(0, 0, 0, u64::MAX - 1, u64::MAX)
+                == SpoolAppendDecision {
+                    accepted: true,
+                    new_bytes: 0,
+                    sync: true,
+                    next_unsynced: 0,
+                }
+        );
+    }
+
+    #[test]
+    fn loss_settlement_keeps_later_losses_in_a_fresh_generation() {
+        let losses = |generation, count| AuditLosses { generation, count };
+        // (case, pending, marker's batch, pending after settlement)
+        for (case, state, batch, expected) in [
+            (
+                "the marker reports every pending loss",
+                losses(4, 2),
+                losses(4, 2),
+                losses(4, 0),
+            ),
+            (
+                "a loss emitted after the snapshot moves to a fresh generation",
+                losses(4, 3),
+                losses(4, 2),
+                losses(5, 1),
+            ),
+            (
+                "another generation's marker settles nothing",
+                losses(5, 1),
+                losses(4, 2),
+                losses(5, 1),
+            ),
+            (
+                "an over-reporting batch clamps to zero",
+                losses(4, 1),
+                losses(4, 2),
+                losses(4, 0),
+            ),
+            (
+                "the last generation saturates",
+                losses(u64::MAX, 3),
+                losses(u64::MAX, 1),
+                losses(u64::MAX, 2),
+            ),
+        ] {
+            check!(settle_loss_batch(state, batch) == expected, "{case}");
+        }
     }
 
     #[test]
@@ -180,13 +291,25 @@ mod tests {
 
     #[test]
     fn loss_marker_shape_count_and_generation_are_exact() {
-        use AuditLossMarkerAdmission::{AdmitLegacy, AdmitPersisted, Reject};
+        use AuditLossMarkerAdmission::{Admit, Reject};
 
-        check!(audit_loss_marker_admission(true, 1, 3, false, 0, 0) == AdmitLegacy);
-        check!(audit_loss_marker_admission(true, 1, 3, true, 0, 0) == Reject);
-        check!(audit_loss_marker_admission(true, 2, 3, true, 2, 1) == AdmitPersisted);
-        check!(audit_loss_marker_admission(true, 2, 0, true, 2, 1) == Reject);
-        check!(audit_loss_marker_admission(true, 2, 3, true, 1, 1) == Reject);
-        check!(audit_loss_marker_admission(true, 2, 3, true, u64::MAX, u64::MAX) == Reject);
+        // (header matches, field count, count, generation, previous, expected)
+        for (header, fields, count, generation, previous, expected) in [
+            (true, 2, 3, Some(2), 1, Admit { generation: 2 }),
+            (true, 2, 3, Some(1), 0, Admit { generation: 1 }),
+            // A one-field body without a generation is not a marker.
+            (true, 1, 3, None, 0, Reject),
+            (true, 2, 3, None, 0, Reject),
+            (true, 3, 3, Some(2), 1, Reject),
+            (false, 2, 3, Some(2), 1, Reject),
+            (true, 2, 0, Some(2), 1, Reject),
+            (true, 2, 3, Some(1), 1, Reject),
+            (true, 2, 3, Some(u64::MAX), u64::MAX, Reject),
+        ] {
+            check!(
+                audit_loss_marker_admission(header, fields, count, generation, previous)
+                    == expected
+            );
+        }
     }
 }

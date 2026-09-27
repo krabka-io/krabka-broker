@@ -1,12 +1,9 @@
-(* #"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 78 0 78 71 *)
+(* #"/workspace/crates/verified/src/retention.rs" 280 0 280 71 *)
 
-let%span sretention = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 80 29 80 37
-let%span sretention'0 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 80 53 80 54
-let%span sretention'1 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 80 46 80 54
-let%span sretention'2 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 64 10 64 48
-let%span sretention'3 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 65 10 68 1
-let%span sretention'4 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 69 10 72 1
-let%span sretention'5 = "/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 73 10 76 1
+let%span sretention = "/workspace/crates/verified/src/retention.rs" 282 29 282 37
+let%span sretention'0 = "/workspace/crates/verified/src/retention.rs" 282 53 282 54
+let%span sretention'1 = "/workspace/crates/verified/src/retention.rs" 282 46 282 54
+let%span sretention'2 = "/workspace/crates/verified/src/retention.rs" 274 10 278 1
 
 use creusot.int.Int64
 use creusot.prelude.Any
@@ -30,39 +27,30 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let retention_delete_target [#"/home/matt/.codex/worktrees/e9db/krabka-broker/crates/verified/src/retention.rs" 78 0 78 71]
-  (last_offset: t_Option_i64) (return (x: t_Option_i64)) = (! bb0
+let retention_delete_target [#"/workspace/crates/verified/src/retention.rs" 280 0 280 71] (last_offset: t_Option_i64)
+  (return (x: t_Option_i64)) = (! bb0
   [ bb0 = any [ br0 -> {last_offset = None} (! bb3) | br1 (x0: Int64.t) -> {last_offset = Some x0} (! bb4) ]
   | bb4 = s0
     [ s0 = elim_Some {last_offset} (fun (r0: Int64.t) -> [ &last'0 <- r0 ] s1)
-    | s1 = [ &_14 <- Int64.lt last'0 ([%#sretention] const_MAX) ] s2
-    | s2 = any [ br0 -> {_14 = false} (! bb3) | br1 -> {_14} (! bb5) ] ]
+    | s1 = [ &_8 <- Int64.lt last'0 ([%#sretention] const_MAX) ] s2
+    | s2 = any [ br0 -> {_8 = false} (! bb3) | br1 -> {_8} (! bb5) ] ]
   | bb5 = s0
     [ s0 = elim_Some {last_offset} (fun (r0: Int64.t) -> [ &last <- r0 ] s1)
-    | s1 = Int64.add [%#sretention'1] {last} {[%#sretention'0] (1: Int64.t)} (fun (_x: Int64.t) -> [ &_16 <- _x ] s2)
-    | s2 = [ &_ret <- Some _16 ] s3
+    | s1 = Int64.add [%#sretention'1] {last} {[%#sretention'0] (1: Int64.t)} (fun (_x: Int64.t) -> [ &_10 <- _x ] s2)
+    | s2 = [ &_ret <- Some _10 ] s3
     | s3 = return {_ret} ]
   | bb3 = s0 [ s0 = [ &_ret <- None ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_Option_i64 = Any.any_l ()
   | & last_offset: t_Option_i64 = last_offset
   | & last: Int64.t = Any.any_l ()
   | & last'0: Int64.t = Any.any_l ()
-  | & _14: bool = Any.any_l ()
-  | & _16: Int64.t = Any.any_l () ])
+  | & _8: bool = Any.any_l ()
+  | & _10: Int64.t = Any.any_l () ])
   [ return (result: t_Option_i64) ->
-  {[@stop_split] [@expl:retention_delete_target ensures] ([@stop_split] [@expl:retention_delete_target ensures #0] [%#sretention'2] last_offset
-        = None -> result = None)
-    /\ ([@stop_split] [@expl:retention_delete_target ensures #1] [%#sretention'3] match last_offset with
-        | None -> true
-        | Some last -> Int64.to_int last = Int64.to_int const_MAX -> result = None
-        end)
-    /\ ([@stop_split] [@expl:retention_delete_target ensures #2] [%#sretention'4] match last_offset with
-        | None -> true
-        | Some last -> Int64.to_int last < Int64.to_int const_MAX -> result <> None
-        end)
-    /\ ([@stop_split] [@expl:retention_delete_target ensures #3] [%#sretention'5] match { f0 = last_offset;
-                                                                                          f1 = result } with
-      | {f0 = Some last; f1 = Some target} -> Int64.to_int target = Int64.to_int last + 1
-      | _ -> true
-      end)}
+  {[@stop_split] [@expl:retention_delete_target ensures] [%#sretention'2] match { f0 = last_offset; f1 = result } with
+      | {f0 = None; f1 = result'0} -> result'0 = None
+      | {f0 = Some last; f1 = None} -> Int64.to_int last = Int64.to_int const_MAX
+      | {f0 = Some last; f1 = Some target} -> Int64.to_int last < Int64.to_int const_MAX
+      /\ Int64.to_int target = Int64.to_int last + 1
+      end}
     (! return {result}) ]

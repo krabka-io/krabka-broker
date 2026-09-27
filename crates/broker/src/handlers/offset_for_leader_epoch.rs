@@ -157,9 +157,12 @@ pub(crate) fn handle(
             let mut parts_out: Vec<EpochEndOffset> = Vec::with_capacity(topic.partitions.len());
 
             for part in &topic.partitions {
+                // `ReplicaManager.lastOffsetForLeaderEpoch` builds every error
+                // row from `new EpochEndOffset()`, whose schema defaults put
+                // -1 in both `leader_epoch` and `end_offset`.
                 let mut out = EpochEndOffset {
                     partition: part.partition,
-                    leader_epoch: part.leader_epoch,
+                    leader_epoch: -1,
                     end_offset: -1,
                     ..Default::default()
                 };
@@ -200,36 +203,21 @@ pub(crate) fn handle(
                     continue;
                 }
 
-                // Compute end_offset via the epoch checkpoint.
-                // `end_offset_for_epoch` returns log_end_offset when
-                // leader_epoch == the partition's current epoch (the epoch is
-                // still open), the start-offset of the next epoch (the
-                // truncation point) for an older epoch the checkpoint
-                // tracked, or the `UNDEFINED_OFFSET` sentinel (`-1`) when the
-                // checkpoint has no entry for the requested epoch at all --
-                // which includes a requested epoch above the current one,
-                // exactly like `LeaderEpochFileCache.endOffsetFor` answering
-                // an epoch past the latest tracked one. No error either way:
-                // Kafka's hosting checks above are what set an error code,
-                // not this KIP-101 lookup.
+                // `Partition.lastOffsetForLeaderEpoch`: Kafka's
+                // `LeaderEpochFileCache.endOffsetFor` pair, verbatim. An epoch
+                // the checkpoint cannot place answers `(-1, -1)`, which is
+                // also what `UnifiedLog.endOffsetForEpoch`'s `None` leaves in
+                // the row. No error either way: the hosting checks above are
+                // what set an error code, not this KIP-101 lookup.
                 let log = p.log.lock().expect("log mutex poisoned");
                 let leo = log.log_end_offset();
-                // Wrap the raw wire `requested_epoch` for the log-crate seam.
-                let end_offset = log
+                let (found_epoch, end_offset) = log
                     .epoch_checkpoint()
-                    .end_offset_for_epoch(krabka_log::LeaderEpoch(part.leader_epoch), leo);
+                    .epoch_and_offset_for(krabka_log::LeaderEpoch(part.leader_epoch), leo);
                 drop(log);
                 out.error_code = codes::NONE;
-                // Unwrap the log-layer `Offset` into the wire `i64` field.
+                out.leader_epoch = found_epoch.0;
                 out.end_offset = end_offset.0;
-                // Report the leader's view of the epoch: the requested one
-                // when the checkpoint found it, or `UNDEFINED_EPOCH` (-1)
-                // alongside the `UNDEFINED_OFFSET` end_offset when it did not.
-                out.leader_epoch = if end_offset.0 == -1 {
-                    -1
-                } else {
-                    part.leader_epoch
-                };
 
                 parts_out.push(out);
             }
@@ -339,15 +327,16 @@ mod tests {
     }
 
     /// The row a topic that isn't hosted anywhere on this broker gets, once
-    /// it clears authorization: `UNKNOWN_TOPIC_OR_PARTITION`, with the
-    /// requested `leader_epoch` echoed back (Kafka does not reset it for
-    /// this error) and `end_offset = -1`.
+    /// it clears authorization: `UNKNOWN_TOPIC_OR_PARTITION`, built by
+    /// `ReplicaManager.lastOffsetForLeaderEpoch` from `new EpochEndOffset()`,
+    /// so the schema defaults put `-1` in both `leader_epoch` and
+    /// `end_offset`.
     fn unknown_topic_row(topic: &str) -> OffsetForLeaderTopicResult {
         OffsetForLeaderTopicResult {
             topic: topic.into(),
             partitions: vec![EpochEndOffset {
                 partition: 0,
-                leader_epoch: 7,
+                leader_epoch: -1,
                 end_offset: -1,
                 error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
                 ..Default::default()
@@ -511,7 +500,7 @@ mod tests {
 
     /// Create `topic` with replicas 1 and 2, led by `leader`, wait until this
     /// broker (node 1) holds the partition in that role, and append two
-    /// records under `leader_epoch` so `end_offset_for_epoch` has an entry
+    /// records under `leader_epoch` so `epoch_and_offset_for` has an entry
     /// for that epoch to answer -- the leader-epoch checkpoint only learns
     /// an epoch from a batch actually carrying it (`Log::append`), so the
     /// appended `partition_leader_epoch` has to agree with the partition's
@@ -688,11 +677,19 @@ mod tests {
             ),
             (
                 "a requested leader_epoch above the checkpoint's latest is UNDEFINED_EPOCH/-1, not an error -- \
-                 LeaderEpochFileCache.endOffsetFor answers it exactly like an untracked older epoch",
+                 LeaderEpochFileCache.endOffsetFor finds no higherEntry",
                 "ofle-leader",
                 5,
                 -1,
                 resolved(-1, -1),
+            ),
+            (
+                "a requested leader_epoch below every recorded epoch answers that epoch and the first \
+                 recorded start, as endOffsetFor does when there is no floorEntry",
+                "ofle-epoch",
+                1,
+                -1,
+                resolved(1, 0),
             ),
             (
                 "follower is refused",
@@ -747,16 +744,15 @@ mod tests {
         }
 
         // Unknown partition: the fence and leader-only gate never run, since
-        // the partition lookup answers first. Its wire default echoes the
-        // requested `leader_epoch` back (unrelated to KIP-320), unlike every
-        // fenced or refused row above.
+        // the partition lookup answers first. Like every refused row above it
+        // carries the schema defaults, -1 for both offsets.
         let unknown = ofle(&broker, VERSION, &ofle_request("ofle-missing", 5, -1));
         assert!(
             unknown
                 == EpochEndOffset {
                     partition: 0,
                     error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                    leader_epoch: 5,
+                    leader_epoch: -1,
                     end_offset: -1,
                     ..Default::default()
                 }

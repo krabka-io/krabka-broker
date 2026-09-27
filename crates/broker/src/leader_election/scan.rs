@@ -216,10 +216,12 @@ pub(crate) async fn compute_failover_changes(
 /// does, and the broker's `offline_log_dirs` heartbeat drives it.
 ///
 /// For each affected partition:
-/// - if `broker` is the leader, elect a new leader from the alive ISR minus
+/// - if `broker` is the leader, elect a new leader from the ISR minus
 ///   `broker`, drop `broker` from ISR, and bump epoch. The clean / KIP-966 /
 ///   KIP-841 policy is the same as [`compute_failover_changes`].
-/// - if `broker` is a non-leader ISR member, drop it from ISR. No epoch bump.
+/// - if `broker` is a non-leader ISR member, drop it from ISR. No epoch bump,
+///   unless the leader is itself down, in which case the same policy elects
+///   its replacement, as Kafka's `handleDirectoriesOffline` does.
 ///
 /// Pure and idempotent. After the change `broker` is neither leader nor in
 /// ISR, so a repeat yields an empty plan.

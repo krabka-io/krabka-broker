@@ -1,10 +1,9 @@
 //! Shared diskless-WAL object, index, and disaster-recovery capture codecs.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 use bytes::{BufMut, Bytes, BytesMut};
 use krabka_audit::FileEd25519Signer;
-use krabka_verified::{DisklessWalReplayAction, diskless_wal_replay_decision};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -513,9 +512,6 @@ fn valid_topic_name(name: &str) -> bool {
 pub struct WalCaptureProjection {
     ranges: HashMap<WalIndexKey, CapturedWalRange>,
     floors: HashMap<(Uuid, i32), i64>,
-    keyed_ranges: HashSet<WalIndexKey>,
-    replay_tombstones: HashSet<WalIndexKey>,
-    legacy_replay_finished: bool,
 }
 
 impl WalCaptureProjection {
@@ -524,25 +520,10 @@ impl WalCaptureProjection {
     /// # Errors
     /// Returns an error for malformed keys, values, or inconsistent records.
     pub fn apply(&mut self, key: Option<&[u8]>, value: Option<&[u8]>) -> Result<(), String> {
-        let Some(key) = key else {
-            let value =
-                value.ok_or_else(|| "legacy diskless WAL tombstone has no key".to_owned())?;
-            let record = WalFlushRecord::from_bytes(value)?;
-            for entry in record.entries {
-                Self::validate_range(&entry)?;
-                let range_key = WalIndexKey::from(&entry);
-                let decision = diskless_wal_replay_decision(
-                    0,
-                    self.keyed_ranges.contains(&range_key),
-                    self.replay_tombstones.contains(&range_key),
-                    self.legacy_replay_finished,
-                );
-                if decision.action == DisklessWalReplayAction::Store {
-                    self.store_range(range_key, record.object_key.clone(), entry);
-                }
-            }
-            return Ok(());
-        };
+        // Every index record is keyed: the flusher publishes one keyed record
+        // per range, and compaction keeps only the latest per key. An
+        // unkeyed record has no range it could be the latest for.
+        let key = key.ok_or_else(|| "diskless WAL index record has no key".to_owned())?;
         if let Some(floor_key) = WalDeleteFloorKey::from_bytes(key) {
             if let Some(value) = value {
                 let record = WalDeleteFloorRecord::from_bytes(value)?;
@@ -566,16 +547,7 @@ impl WalCaptureProjection {
         let range_key = WalIndexKey::from_bytes(key)
             .ok_or_else(|| "invalid diskless WAL index key".to_owned())?;
         let Some(value) = value else {
-            let decision = diskless_wal_replay_decision(
-                2,
-                self.keyed_ranges.contains(&range_key),
-                self.replay_tombstones.contains(&range_key),
-                self.legacy_replay_finished,
-            );
-            self.set_replay_markers(range_key, decision.keyed_range, decision.replay_tombstone);
-            if decision.action == DisklessWalReplayAction::Remove {
-                self.ranges.remove(&range_key);
-            }
+            self.ranges.remove(&range_key);
             return Ok(());
         };
         let record = WalFlushRecord::from_bytes(value)?;
@@ -585,13 +557,6 @@ impl WalCaptureProjection {
             .find(|entry| WalIndexKey::from(entry) == range_key)
             .ok_or_else(|| "diskless WAL index key/value mismatch".to_owned())?;
         Self::validate_range(&entry)?;
-        let decision = diskless_wal_replay_decision(
-            1,
-            self.keyed_ranges.contains(&range_key),
-            self.replay_tombstones.contains(&range_key),
-            self.legacy_replay_finished,
-        );
-        self.set_replay_markers(range_key, decision.keyed_range, decision.replay_tombstone);
         self.store_range(range_key, record.object_key, entry);
         Ok(())
     }
@@ -603,28 +568,9 @@ impl WalCaptureProjection {
         Ok(())
     }
 
-    fn set_replay_markers(&mut self, key: WalIndexKey, keyed: bool, tombstone: bool) {
-        if keyed {
-            self.keyed_ranges.insert(key);
-        } else {
-            self.keyed_ranges.remove(&key);
-        }
-        if tombstone {
-            self.replay_tombstones.insert(key);
-        } else {
-            self.replay_tombstones.remove(&key);
-        }
-    }
-
     fn store_range(&mut self, key: WalIndexKey, object_key: String, entry: WalIndexEntry) {
         self.ranges
             .insert(key, CapturedWalRange { object_key, entry });
-    }
-
-    /// Stop accepting legacy records after every replay partition reaches its fence.
-    pub fn finish_legacy_replay(&mut self) {
-        self.replay_tombstones.clear();
-        self.legacy_replay_finished = true;
     }
 
     /// Freeze the projection into a deterministic portable capture.
