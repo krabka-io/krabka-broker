@@ -576,3 +576,100 @@ async fn only_the_first_partition_may_exceed_the_byte_budget() {
     assert!(actual == expected);
     broker.shutdown().await;
 }
+
+/// Sends a `ShareAcknowledge` from `member` that releases `[first, last]`.
+async fn release(
+    broker: &BrokerHandle,
+    group: &str,
+    member: &str,
+    epoch: i32,
+    topic_id: WireUuid,
+    (first_offset, last_offset): (i64, i64),
+) {
+    use krabka_protocol::owned::{
+        share_acknowledge_request::{
+            AcknowledgePartition, AcknowledgeTopic, AcknowledgementBatch as AcknowledgeBatch,
+            ShareAcknowledgeRequest,
+        },
+        share_acknowledge_response::ShareAcknowledgeResponse,
+    };
+    let version = krabka_protocol::owned::share_acknowledge_request::MAX_VERSION;
+    let request = ShareAcknowledgeRequest {
+        group_id: Some(group.into()),
+        member_id: Some(member.into()),
+        share_session_epoch: epoch,
+        topics: vec![AcknowledgeTopic {
+            topic_id,
+            partitions: vec![AcknowledgePartition {
+                partition_index: 0,
+                acknowledgement_batches: vec![AcknowledgeBatch {
+                    first_offset,
+                    last_offset,
+                    acknowledge_types: vec![RELEASE],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let shared = broker.broker_arc_for_test();
+    let user = principal("share-consumer");
+    let address = peer();
+    let ctx = request_context(&user, &address, "share-client");
+    let request_bytes = encode_request(&request, version);
+    let response =
+        crate::handlers::share_acknowledge::handle(&shared, version, 7, &request_bytes, &ctx)
+            .await
+            .expect("handle share acknowledge");
+    let response: ShareAcknowledgeResponse = decode_response(&response, version);
+    let row = &response.responses[0].partitions[0];
+    assert!(
+        (response.error_code, row.error_code) == (codes::NONE, codes::NONE),
+        "{response:?}"
+    );
+}
+
+/// A pass that acquires part of a batch carries the whole batch. When
+/// `MinBytes` holds the request for a later pass, and that pass acquires the
+/// rest of the batch, its read starts inside the same batch and returns it
+/// again. Kafka reads the log once per response, so the response carries the
+/// batch once, with both acquired runs.
+#[tokio::test]
+async fn a_batch_acquired_over_two_passes_is_carried_once() {
+    let (broker, _dir) = start().await;
+    let topic_id = create_topic(&broker, "two-passes").await;
+    crate::test_support::initialize_share_state(
+        &broker,
+        "g",
+        uuid::Uuid::from_bytes(topic_id.0),
+        0,
+    )
+    .await;
+    for member in ["waiting", "other"] {
+        let opened = share_fetch(&broker, "g", member, 0, topic_id, (500, 1 << 20), &[]).await;
+        assert!(partition(&opened).error_code == codes::NONE, "{opened:?}");
+    }
+    // One batch at offsets 0-1. `other` holds it, then releases offset 0.
+    produce_batch(&broker, "two-passes", 0).await;
+    let held = share_fetch(&broker, "g", "other", 1, topic_id, (500, 1 << 20), &[]).await;
+    assert!(acquired(&partition(&held)) == vec![(0, 1)]);
+    release(&broker, "g", "other", 2, topic_id, (0, 0)).await;
+
+    // The first pass acquires offset 0 and falls short of `MinBytes`. While
+    // the request waits, `other` releases offset 1, which the last pass
+    // acquires.
+    let mut request = fetch_partitions("g", 1, topic_id, 1, 1 << 20);
+    request.member_id = Some("waiting".into());
+    request.min_bytes = 1 << 20;
+    request.max_wait_ms = 1_000;
+    let (response, ()) = tokio::join!(send_share_fetch(&broker, &request), async {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        release(&broker, "g", "other", 3, topic_id, (1, 1)).await;
+    });
+
+    let row = partition(&response);
+    assert!((acquired(&row), record_offsets(&row)) == (vec![(0, 0), (1, 1)], vec![0, 1]));
+    broker.shutdown().await;
+}

@@ -290,6 +290,48 @@ fn batches_within(bytes: &Bytes, max_bytes: i32) -> Result<Bytes, BrokerError> {
     Ok(gather(bytes, &kept))
 }
 
+/// Joins the batches that a later acquire pass read onto the batches that
+/// the earlier passes of the same response already carry, and returns the
+/// joined records with the number of bytes that the join added.
+///
+/// Two passes can read the same batch: a pass that acquires part of a batch
+/// leaves the rest of it to a later pass, and the later read starts inside
+/// that batch, so `Log::read_raw` returns the whole batch again. Kafka reads
+/// the log once per response, so its records never hold a batch twice. This
+/// keeps one copy of each batch, by base offset, in log order.
+pub(super) fn merge_batches(before: &Bytes, added: &Bytes) -> Result<(Bytes, i64), BrokerError> {
+    let held = batch_spans(before)?;
+    let fresh: Vec<BatchSpan> = batch_spans(added)?
+        .into_iter()
+        .filter(|span| held.iter().all(|kept| kept.base != span.base))
+        .collect();
+    let added_len =
+        i64::try_from(fresh.iter().map(|span| span.bytes.len()).sum::<usize>()).unwrap_or(i64::MAX);
+    if fresh.is_empty() {
+        return Ok((before.clone(), 0));
+    }
+    if held.is_empty() {
+        return Ok((
+            gather(
+                added,
+                &fresh.into_iter().map(|span| span.bytes).collect::<Vec<_>>(),
+            ),
+            added_len,
+        ));
+    }
+    let mut all: Vec<(i64, &Bytes, std::ops::Range<usize>)> = held
+        .into_iter()
+        .map(|span| (span.base, before, span.bytes))
+        .chain(fresh.into_iter().map(|span| (span.base, added, span.bytes)))
+        .collect();
+    all.sort_by_key(|(base, _, _)| *base);
+    let mut blob = BytesMut::with_capacity(all.iter().map(|(_, _, range)| range.len()).sum());
+    for (_, source, range) in all {
+        blob.extend_from_slice(&source[range]);
+    }
+    Ok((blob.freeze(), added_len))
+}
+
 /// The bytes of a v2 batch in front of its `batch_length` field: the base
 /// offset (8) and the length itself (4).
 const LOG_OVERHEAD: usize = 12;

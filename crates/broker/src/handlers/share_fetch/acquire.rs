@@ -19,8 +19,8 @@ use super::{
     long_poll::{LongPollOutcome, arm_waits, long_poll},
     pending::PendingPartition,
     records::{
-        AcquireMode, AcquireRequest, acquire_read_records, pending_activation_ranges, read_budget,
-        unreadable_batch_ranges,
+        AcquireMode, AcquireRequest, acquire_read_records, merge_batches,
+        pending_activation_ranges, read_budget, unreadable_batch_ranges,
     },
 };
 use crate::{
@@ -515,7 +515,7 @@ async fn acquire_pass(
             Err(code) if fences_the_partition(code) => fail_partition(p, false, code),
             _ => {
                 total.records += acquired_count;
-                total.bytes += append_records(&mut p.out, fresh);
+                total.bytes += append_records(&mut p.out, fresh)?;
             }
         }
     }
@@ -524,22 +524,23 @@ async fn acquire_pass(
 
 /// Adds the records and the acquired rows of one pass to a partition row, and
 /// returns the record bytes it added.
-fn append_records(out: &mut PartitionData, fresh: PartitionData) -> i64 {
+///
+/// A batch that an earlier pass already put in the row is not added again:
+/// see [`merge_batches`].
+fn append_records(out: &mut PartitionData, fresh: PartitionData) -> Result<i64, BrokerError> {
     out.acquired_records.extend(fresh.acquired_records);
     let Some(RecordsPayload::Raw(added)) = fresh.records else {
-        return 0;
+        return Ok(0);
     };
-    let added_len = i64::try_from(added.len()).unwrap_or(i64::MAX);
-    out.records = Some(RecordsPayload::Raw(match out.records.take() {
-        Some(RecordsPayload::Raw(before)) if !before.is_empty() => {
-            let mut joined = bytes::BytesMut::with_capacity(before.len() + added.len());
-            joined.extend_from_slice(&before);
-            joined.extend_from_slice(&added);
-            joined.freeze()
+    let (joined, added_len) = match out.records.take() {
+        Some(RecordsPayload::Raw(before)) if !before.is_empty() => merge_batches(&before, &added)?,
+        _ => {
+            let added_len = i64::try_from(added.len()).unwrap_or(i64::MAX);
+            (added, added_len)
         }
-        _ => added,
-    }));
-    added_len
+    };
+    out.records = Some(RecordsPayload::Raw(joined));
+    Ok(added_len)
 }
 
 /// Fails one partition row with a share-partition error, and leaves it out of
