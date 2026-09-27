@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 
+use apache_avro::reader::datum::{GenericDatumReader, GenericDatumReaderBuilder};
 use krabka_schema_serde::{
     error::SchemaSerdeError,
     format::validate::{validate_body, validate_protobuf_with_references},
@@ -150,13 +151,11 @@ fn validate_body_with_references(
             let (writer, schemas) = apache_avro::Schema::parse_str_with_list(schema, sources)
                 .map_err(|error| SchemaSerdeError::Schema(error.to_string()))?;
             let mut cursor = body;
-            apache_avro::from_avro_datum_schemata(
-                &writer,
-                schemas.iter().collect(),
-                &mut cursor,
-                None,
-            )
-            .map_err(|error| SchemaSerdeError::Deserialize(format!("avro body: {error}")))?;
+            GenericDatumReader::builder(&writer)
+                .writer_schemata(schemas.iter().collect())
+                .and_then(GenericDatumReaderBuilder::build)
+                .and_then(|reader| reader.read_value(&mut cursor))
+                .map_err(|error| SchemaSerdeError::Deserialize(format!("avro body: {error}")))?;
             if cursor.is_empty() {
                 Ok(())
             } else {
