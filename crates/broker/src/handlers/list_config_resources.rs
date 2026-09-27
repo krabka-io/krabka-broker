@@ -105,7 +105,12 @@ pub(crate) fn handle(
         return crate::handlers::encode_response(&resp, version);
     }
 
-    let resources = collect_resources(&image, version, &req.resource_types);
+    let resources = collect_resources(
+        &image,
+        version,
+        &req.resource_types,
+        ctx.connection_listener_name,
+    );
 
     let resp = ListConfigResourcesResponse {
         throttle_time_ms: 0,
@@ -124,77 +129,82 @@ fn is_supported_type(rt: i8) -> bool {
 }
 
 /// Resolve the effective filter and enumerate each requested type from the
-/// image. v0 gives client-metrics only. v1 with an empty list gives the
-/// default set. v1 with explicit types gives the caller's filter. The function
-/// is pure, so a test can call it without a broker. The output is sorted by
-/// `(resource_type, resource_name)`, so the wire payload is deterministic
-/// whatever the underlying iteration order in `MetadataImage` is. Callers at
-/// v1 must have already rejected any unsupported requested type with
-/// `UNSUPPORTED_VERSION`; this function assumes every entry in `requested` is
-/// one `collect_resources` knows how to enumerate.
+/// image, as Kafka's `KafkaApis.handleListConfigResources` does. v0 gives
+/// client-metrics only. v1 with an empty list gives every supported type. v1
+/// with explicit types gives the caller's filter, tested by membership, so a
+/// repeated type lists its resources once. The rows follow Kafka's fixed type
+/// order: `GROUP`, `CLIENT_METRICS`, `BROKER_LOGGER`, `BROKER`, then `TOPIC`.
+/// `BROKER` and `BROKER_LOGGER` list only the brokers with an endpoint on
+/// `listener` (`KRaftMetadataCache.getBrokerNodes(listenerName)`). Within one
+/// type the rows are sorted (names lexicographically, broker ids numerically)
+/// so the wire payload does not depend on `MetadataImage`'s hash order. Callers
+/// at v1 must have already rejected any unsupported requested type with
+/// `UNSUPPORTED_VERSION`.
 fn collect_resources(
     image: &krabka_metadata::MetadataImage,
     version: i16,
     requested: &[i8],
+    listener: &str,
 ) -> Vec<ConfigResource> {
-    let types: &[i8] = if version < 1 {
-        // v0 (legacy ListClientMetricsResources): always client metrics.
-        &[RESOURCE_TYPE_CLIENT_METRICS]
-    } else if requested.is_empty() {
-        &DEFAULT_RESOURCE_TYPES
-    } else {
-        requested
+    let wants = |rt: i8| {
+        if version < 1 {
+            // v0 (legacy ListClientMetricsResources): always client metrics.
+            rt == RESOURCE_TYPE_CLIENT_METRICS
+        } else {
+            requested.is_empty() || requested.contains(&rt)
+        }
+    };
+    let rows = |resource_type: i8, mut names: Vec<String>| {
+        names.sort();
+        names.into_iter().map(move |resource_name| ConfigResource {
+            resource_name,
+            resource_type,
+            ..Default::default()
+        })
+    };
+
+    let mut broker_ids: Vec<u64> = image
+        .brokers()
+        .filter(|b| b.endpoints.iter().any(|endpoint| endpoint.name == listener))
+        .map(|b| b.node_id.0)
+        .collect();
+    broker_ids.sort_unstable();
+    let broker_rows = |resource_type: i8| {
+        broker_ids.iter().map(move |id| ConfigResource {
+            resource_name: id.to_string(),
+            resource_type,
+            ..Default::default()
+        })
     };
 
     let mut out: Vec<ConfigResource> = Vec::new();
-    for &rt in types {
-        match rt {
-            RESOURCE_TYPE_TOPIC => {
-                for t in image.topics() {
-                    out.push(ConfigResource {
-                        resource_name: t.name.clone(),
-                        resource_type: RESOURCE_TYPE_TOPIC,
-                        ..Default::default()
-                    });
-                }
-            }
-            RESOURCE_TYPE_BROKER | RESOURCE_TYPE_BROKER_LOGGER => {
-                for b in image.brokers() {
-                    out.push(ConfigResource {
-                        resource_name: b.node_id.to_string(),
-                        resource_type: rt,
-                        ..Default::default()
-                    });
-                }
-            }
-            RESOURCE_TYPE_CLIENT_METRICS => {
-                for (name, _cfgs) in image.client_metrics_subscriptions() {
-                    out.push(ConfigResource {
-                        resource_name: name.clone(),
-                        resource_type: RESOURCE_TYPE_CLIENT_METRICS,
-                        ..Default::default()
-                    });
-                }
-            }
-            RESOURCE_TYPE_GROUP => {
-                for (group_id, _cfgs) in image.group_configs() {
-                    out.push(ConfigResource {
-                        resource_name: group_id.clone(),
-                        resource_type: RESOURCE_TYPE_GROUP,
-                        ..Default::default()
-                    });
-                }
-            }
-            // Unknown types (anything new) silently drop.
-            _ => {}
-        }
+    if wants(RESOURCE_TYPE_GROUP) {
+        out.extend(rows(
+            RESOURCE_TYPE_GROUP,
+            image.group_configs().map(|(id, _)| id.clone()).collect(),
+        ));
     }
-
-    out.sort_by(|a, b| {
-        a.resource_type
-            .cmp(&b.resource_type)
-            .then_with(|| a.resource_name.cmp(&b.resource_name))
-    });
+    if wants(RESOURCE_TYPE_CLIENT_METRICS) {
+        out.extend(rows(
+            RESOURCE_TYPE_CLIENT_METRICS,
+            image
+                .client_metrics_subscriptions()
+                .map(|(name, _)| name.clone())
+                .collect(),
+        ));
+    }
+    if wants(RESOURCE_TYPE_BROKER_LOGGER) {
+        out.extend(broker_rows(RESOURCE_TYPE_BROKER_LOGGER));
+    }
+    if wants(RESOURCE_TYPE_BROKER) {
+        out.extend(broker_rows(RESOURCE_TYPE_BROKER));
+    }
+    if wants(RESOURCE_TYPE_TOPIC) {
+        out.extend(rows(
+            RESOURCE_TYPE_TOPIC,
+            image.topics().map(|t| t.name.clone()).collect(),
+        ));
+    }
     out
 }
 
@@ -215,35 +225,143 @@ mod tests {
 
     const VERSION: i16 = 1;
 
-    fn image_with_topics_and_brokers(topics: &[&str], broker_ids: &[u64]) -> MetadataImage {
+    const LISTENER: &str = "PLAINTEXT";
+
+    /// A case name, the request version, its `resource_types`, and the
+    /// `(type, name)` rows expected in order.
+    type Case<'a> = (&'a str, i16, Vec<i8>, Vec<(i8, &'a str)>);
+
+    fn broker_on(id: u64, listener: &str) -> MetadataRecord {
+        MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
+            fenced: false,
+            in_controlled_shutdown: false,
+            cordoned_log_dirs: None,
+            node_id: krabka_audit::NodeId(id),
+            broker_epoch: 0,
+            incarnation_id: uuid::Uuid::nil(),
+            host: "127.0.0.1".into(),
+            port: 9092,
+            rack: None,
+            log_dirs: vec![],
+            endpoints: vec![krabka_metadata::BrokerEndpoint {
+                name: listener.into(),
+                host: "127.0.0.1".into(),
+                port: 9092,
+                protocol: krabka_security::ListenerProtocol::Plaintext,
+            }],
+            features: std::collections::BTreeMap::new(),
+        })
+    }
+
+    /// Topics `t-b` and `t-a`, brokers 10 and 2 on `PLAINTEXT` and broker 3
+    /// on `SSL` only, group config `g-1` and subscription `sub-1`.
+    fn populated_image() -> MetadataImage {
         let mut img = MetadataImage::new(Uuid::nil());
-        for t in topics {
+        for name in ["t-b", "t-a"] {
             img.apply(&MetadataRecord::V1Topic(TopicRecord {
-                name: (*t).to_string(),
+                name: name.into(),
                 topic_id: Uuid::nil(),
                 partitions: 1,
                 replication_factor: 1,
             }));
         }
-        for &id in broker_ids {
-            img.apply(&MetadataRecord::V1BrokerRegistration(
-                BrokerRegistrationRecord {
-                    fenced: false,
-                    in_controlled_shutdown: false,
-                    cordoned_log_dirs: None,
-                    node_id: krabka_audit::NodeId(id),
-                    broker_epoch: 0,
-                    incarnation_id: uuid::Uuid::nil(),
-                    host: "127.0.0.1".into(),
-                    port: 9092,
-                    rack: None,
-                    log_dirs: vec![],
-                    endpoints: vec![],
-                    features: std::collections::BTreeMap::new(),
-                },
-            ));
-        }
+        img.apply(&broker_on(10, LISTENER));
+        img.apply(&broker_on(2, LISTENER));
+        img.apply(&broker_on(3, "SSL"));
+        img.apply(&MetadataRecord::V1GroupConfig(
+            krabka_metadata::GroupConfigRecord {
+                group_id: "g-1".into(),
+                configs: maplit::btreemap! {"streams.num.standby.replicas".into() => "1".into()},
+            },
+        ));
+        img.apply(&MetadataRecord::V1ClientMetricsConfig(
+            krabka_metadata::ClientMetricsConfigRecord {
+                name: "sub-1".into(),
+                configs: maplit::btreemap! {"interval.ms".into() => "60000".into()},
+            },
+        ));
         img
+    }
+
+    fn rows(expected: &[(i8, &str)]) -> Vec<ConfigResource> {
+        expected
+            .iter()
+            .map(|&(resource_type, name)| ConfigResource {
+                resource_name: name.to_string(),
+                resource_type,
+                unknown_tagged_fields: UnknownTaggedFields::default(),
+            })
+            .collect()
+    }
+
+    /// Kafka's `KafkaApis.handleListConfigResources`: membership decides which
+    /// types are listed (a repeated type lists once), the rows follow the
+    /// fixed order `GROUP`, `CLIENT_METRICS`, `BROKER_LOGGER`, `BROKER`,
+    /// `TOPIC`, and broker rows come from `getBrokerNodes(listenerName)`, so
+    /// broker 3 (SSL only) is absent. v0 lists client metrics only.
+    #[test]
+    fn collect_resources_matches_kafka_filter_and_order() {
+        let img = populated_image();
+        let all = [
+            (RESOURCE_TYPE_GROUP, "g-1"),
+            (RESOURCE_TYPE_CLIENT_METRICS, "sub-1"),
+            (RESOURCE_TYPE_BROKER_LOGGER, "2"),
+            (RESOURCE_TYPE_BROKER_LOGGER, "10"),
+            (RESOURCE_TYPE_BROKER, "2"),
+            (RESOURCE_TYPE_BROKER, "10"),
+            (RESOURCE_TYPE_TOPIC, "t-a"),
+            (RESOURCE_TYPE_TOPIC, "t-b"),
+        ];
+        let cases: Vec<Case<'_>> = vec![
+            (
+                "v0 lists client metrics",
+                0,
+                vec![],
+                vec![(RESOURCE_TYPE_CLIENT_METRICS, "sub-1")],
+            ),
+            ("v1 empty filter lists every type", 1, vec![], all.to_vec()),
+            (
+                "v1 repeated topic type lists once",
+                1,
+                vec![RESOURCE_TYPE_TOPIC, RESOURCE_TYPE_TOPIC],
+                vec![(RESOURCE_TYPE_TOPIC, "t-a"), (RESOURCE_TYPE_TOPIC, "t-b")],
+            ),
+            (
+                "v1 filter order does not change row order",
+                1,
+                vec![
+                    RESOURCE_TYPE_TOPIC,
+                    RESOURCE_TYPE_BROKER,
+                    RESOURCE_TYPE_GROUP,
+                ],
+                vec![
+                    (RESOURCE_TYPE_GROUP, "g-1"),
+                    (RESOURCE_TYPE_BROKER, "2"),
+                    (RESOURCE_TYPE_BROKER, "10"),
+                    (RESOURCE_TYPE_TOPIC, "t-a"),
+                    (RESOURCE_TYPE_TOPIC, "t-b"),
+                ],
+            ),
+            (
+                "v1 broker logger names one resource per node on the listener",
+                1,
+                vec![RESOURCE_TYPE_BROKER_LOGGER],
+                vec![
+                    (RESOURCE_TYPE_BROKER_LOGGER, "2"),
+                    (RESOURCE_TYPE_BROKER_LOGGER, "10"),
+                ],
+            ),
+            (
+                "v1 client metrics filter",
+                1,
+                vec![RESOURCE_TYPE_CLIENT_METRICS],
+                vec![(RESOURCE_TYPE_CLIENT_METRICS, "sub-1")],
+            ),
+        ];
+        for (name, version, requested, expected) in cases {
+            let out = collect_resources(&img, version, &requested, LISTENER);
+            assert2::check!(out == rows(&expected), "case {name}");
+        }
     }
 
     crate::test_support::wire_helpers!(
@@ -267,164 +385,6 @@ mod tests {
             })])
             .await
             .expect("seed topic");
-    }
-
-    fn image_with_subs(names: &[&str]) -> MetadataImage {
-        use krabka_metadata::ClientMetricsConfigRecord;
-        let mut img = MetadataImage::new(Uuid::nil());
-        for n in names {
-            let mut cfgs = std::collections::BTreeMap::new();
-            cfgs.insert("interval.ms".to_string(), "60000".to_string());
-            img.apply(&MetadataRecord::V1ClientMetricsConfig(
-                ClientMetricsConfigRecord {
-                    name: (*n).into(),
-                    configs: cfgs,
-                },
-            ));
-        }
-        img
-    }
-
-    #[test]
-    fn v0_returns_client_metrics_subscriptions() {
-        let img = image_with_subs(&["sub-b", "sub-a"]);
-        let out = collect_resources(&img, 0, &[]);
-        assert2::assert!((out.len()) == (2));
-        assert!(
-            out.iter()
-                .all(|r| r.resource_type == RESOURCE_TYPE_CLIENT_METRICS)
-        );
-        assert2::assert!((out[0].resource_name) == ("sub-a")); // sorted
-        assert2::assert!((out[1].resource_name) == ("sub-b"));
-    }
-
-    #[test]
-    fn v1_client_metrics_filter_returns_subscriptions() {
-        let img = image_with_subs(&["sub-a"]);
-        let out = collect_resources(&img, 1, &[RESOURCE_TYPE_CLIENT_METRICS]);
-        assert2::assert!((out.len()) == (1));
-        assert2::assert!((out[0].resource_type) == (RESOURCE_TYPE_CLIENT_METRICS));
-        assert2::assert!((out[0].resource_name) == ("sub-a"));
-    }
-
-    #[test]
-    fn v1_group_filter_returns_configured_groups() {
-        let mut image = MetadataImage::new(Uuid::nil());
-        image.apply(&MetadataRecord::V1GroupConfig(
-            krabka_metadata::GroupConfigRecord {
-                group_id: "streams-b".into(),
-                configs: maplit::btreemap! {"streams.num.standby.replicas".into() => "1".into()},
-            },
-        ));
-        image.apply(&MetadataRecord::V1GroupConfig(
-            krabka_metadata::GroupConfigRecord {
-                group_id: "streams-a".into(),
-                configs: maplit::btreemap! {"streams.num.standby.replicas".into() => "1".into()},
-            },
-        ));
-        let out = collect_resources(&image, 1, &[RESOURCE_TYPE_GROUP]);
-        assert!(
-            out.iter()
-                .all(|resource| resource.resource_type == RESOURCE_TYPE_GROUP)
-        );
-        assert!(
-            out.iter()
-                .map(|resource| resource.resource_name.as_str())
-                .collect::<Vec<_>>()
-                == vec!["streams-a", "streams-b"]
-        );
-    }
-
-    #[test]
-    fn v1_empty_filter_returns_default_set() {
-        let img = image_with_topics_and_brokers(&["t-a", "t-b"], &[1, 2]);
-        let out = collect_resources(&img, 1, &[]);
-        // 2 topics + 2 brokers + 2 broker-loggers + 0 client_metrics = 6
-        // entries, sorted by (type, name): topics (2), brokers (4), then the
-        // broker-logger resource each node answers for (8).
-        let expected = vec![
-            ConfigResource {
-                resource_name: "t-a".to_string(),
-                resource_type: RESOURCE_TYPE_TOPIC,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-            ConfigResource {
-                resource_name: "t-b".to_string(),
-                resource_type: RESOURCE_TYPE_TOPIC,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-            ConfigResource {
-                resource_name: "1".to_string(),
-                resource_type: RESOURCE_TYPE_BROKER,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-            ConfigResource {
-                resource_name: "2".to_string(),
-                resource_type: RESOURCE_TYPE_BROKER,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-            ConfigResource {
-                resource_name: "1".to_string(),
-                resource_type: RESOURCE_TYPE_BROKER_LOGGER,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-            ConfigResource {
-                resource_name: "2".to_string(),
-                resource_type: RESOURCE_TYPE_BROKER_LOGGER,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-        ];
-        assert!(out == expected);
-    }
-
-    #[test]
-    fn v1_explicit_topic_only_filter_skips_brokers() {
-        let img = image_with_topics_and_brokers(&["t-a"], &[1, 2]);
-        let out = collect_resources(&img, 1, &[RESOURCE_TYPE_TOPIC]);
-        let expected = vec![ConfigResource {
-            resource_name: "t-a".to_string(),
-            resource_type: RESOURCE_TYPE_TOPIC,
-            unknown_tagged_fields: UnknownTaggedFields::default(),
-        }];
-        assert!(out == expected);
-    }
-
-    #[test]
-    fn v1_explicit_broker_only_filter_skips_topics() {
-        let img = image_with_topics_and_brokers(&["t-a", "t-b"], &[5, 7]);
-        let out = collect_resources(&img, 1, &[RESOURCE_TYPE_BROKER]);
-        let expected = vec![
-            ConfigResource {
-                resource_name: "5".to_string(),
-                resource_type: RESOURCE_TYPE_BROKER,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-            ConfigResource {
-                resource_name: "7".to_string(),
-                resource_type: RESOURCE_TYPE_BROKER,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-        ];
-        assert!(out == expected);
-    }
-
-    #[test]
-    fn v1_broker_logger_filter_names_one_resource_per_node() {
-        let img = image_with_topics_and_brokers(&["t-a"], &[5, 7]);
-        let out = collect_resources(&img, 1, &[RESOURCE_TYPE_BROKER_LOGGER]);
-        let expected = vec![
-            ConfigResource {
-                resource_name: "5".to_string(),
-                resource_type: RESOURCE_TYPE_BROKER_LOGGER,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-            ConfigResource {
-                resource_name: "7".to_string(),
-                resource_type: RESOURCE_TYPE_BROKER_LOGGER,
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            },
-        ];
-        assert!(out == expected);
     }
 
     /// Kafka's `KafkaApis.handleListConfigResources`: a request naming a type
@@ -498,6 +458,7 @@ mod tests {
             &broker.controller.current_image(),
             VERSION,
             &[RESOURCE_TYPE_TOPIC],
+            LISTENER,
         );
         assert!(topics.iter().any(|r| r.resource_name == "t-a"));
         let expected = ListConfigResourcesResponse {
@@ -508,30 +469,6 @@ mod tests {
         };
         assert!(resp == expected);
         broker_handle.shutdown().await;
-    }
-
-    #[test]
-    fn output_is_deterministic_regardless_of_input_order() {
-        let img = image_with_topics_and_brokers(&["z-late", "a-early"], &[10, 1]);
-        let out = collect_resources(&img, 1, &[]);
-        // Sorted by (resource_type, resource_name): topics (2), then brokers
-        // (4), then the broker-logger resource per node (8), each group
-        // lexicographic — so broker ids sort as strings.
-        let names: Vec<(i8, &str)> = out
-            .iter()
-            .map(|r| (r.resource_type, r.resource_name.as_str()))
-            .collect();
-        assert!(
-            names
-                == vec![
-                    (RESOURCE_TYPE_TOPIC, "a-early"),
-                    (RESOURCE_TYPE_TOPIC, "z-late"),
-                    (RESOURCE_TYPE_BROKER, "1"),
-                    (RESOURCE_TYPE_BROKER, "10"),
-                    (RESOURCE_TYPE_BROKER_LOGGER, "1"),
-                    (RESOURCE_TYPE_BROKER_LOGGER, "10"),
-                ]
-        );
     }
 
     #[tokio::test]
@@ -579,6 +516,7 @@ mod tests {
             &broker.controller.current_image(),
             VERSION,
             &[RESOURCE_TYPE_TOPIC],
+            LISTENER,
         );
         assert!(topics.iter().any(|r| r.resource_name == "orders"));
         let allowed = ListConfigResourcesResponse {
