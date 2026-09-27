@@ -77,7 +77,7 @@ fn plan_block(
 
 impl From<ProducerIdAllocationError> for crate::error::BrokerError {
     fn from(error: ProducerIdAllocationError) -> Self {
-        Self::Txn(error.to_string())
+        Self::ProducerIdBlockUnavailable(error.to_string())
     }
 }
 

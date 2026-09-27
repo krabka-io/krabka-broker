@@ -61,7 +61,10 @@ pub(super) async fn prepare_transaction(
                 %error,
                 "EndTxn: failed to allocate completion producer identity"
             );
-            codes::UNKNOWN_SERVER_ERROR
+            // Kafka's `TransactionCoordinator.endTransaction` answers a failed
+            // `generateProducerId` with its error code:
+            // `COORDINATOR_LOAD_IN_PROGRESS` while no block is ready.
+            codes::from_broker_error(&error)
         })?;
     staged.last_update_ms = now_millis();
     if let Err(error) = coordinator

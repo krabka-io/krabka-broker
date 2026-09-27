@@ -141,8 +141,19 @@ pub(crate) async fn handle(
 
     let resp = match req.transactional_id.as_deref() {
         None => {
-            // Non-transactional path (idempotence).
-            let (pid, epoch) = producer_ids.allocate().await?;
+            // Non-transactional path (idempotence). Kafka's
+            // `TransactionCoordinator.handleInitProducerId` answers a failed
+            // `generateProducerId` with its error code, which is
+            // `COORDINATOR_LOAD_IN_PROGRESS` while no block is ready, and
+            // keeps the connection.
+            let (pid, epoch) = match producer_ids.allocate().await {
+                Ok(identity) => identity,
+                Err(error) => {
+                    let error = BrokerError::from(error);
+                    tracing::warn!(%error, "InitProducerId: no producer ID available");
+                    return encode_err(version, codes::from_broker_error(&error));
+                }
+            };
             InitProducerIdResponse {
                 throttle_time_ms: 0,
                 error_code: codes::NONE,
@@ -254,6 +265,12 @@ pub(crate) async fn handle(
                     Some(error_code) => {
                         tracing::warn!(tid, %error, error_code, "InitProducerId: coordinator term changed");
                         return encode_err(version, error_code);
+                    }
+                    // `generateProducerId` failed for a new or rotated
+                    // producer id. Kafka answers its error code.
+                    None if matches!(error, BrokerError::ProducerIdBlockUnavailable(_)) => {
+                        tracing::warn!(tid, %error, "InitProducerId: no producer ID available");
+                        return encode_err(version, codes::from_broker_error(&error));
                     }
                     None => return Err(error),
                 },

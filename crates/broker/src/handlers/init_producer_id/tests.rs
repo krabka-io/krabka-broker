@@ -952,3 +952,102 @@ async fn two_phase_commit_gate_is_scoped_to_enable_2pc_not_keep_prepared_txn() {
         broker_handle.shutdown().await;
     }
 }
+
+/// #1015: Kafka's `RPCProducerIdManager.generateProducerId` throws
+/// `COORDINATOR_LOAD_IN_PROGRESS` while it has no producer ID block, and
+/// `TransactionCoordinator.handleInitProducerId` answers that code for an
+/// idempotent producer and for a new transactional id alike. The client
+/// retries; the broker keeps the connection.
+#[tokio::test]
+async fn a_failed_block_allocation_answers_coordinator_load_in_progress() {
+    let (broker_handle, _dir) = start_broker_with(|config| {
+        config.audit_enabled = false;
+    })
+    .await;
+    let broker = broker_handle.broker_arc_for_test();
+    wait_for_leader(&broker).await;
+    let principal = principal("admin");
+    let peer = peer();
+    let context = crate::test_support::request_context(&principal, &peer, "txn-client");
+    let tid = "txn-no-block";
+
+    let find_version = krabka_protocol::owned::find_coordinator_response::MAX_VERSION;
+    let find_request = krabka_protocol::owned::find_coordinator_request::FindCoordinatorRequest {
+        key_type: 1,
+        coordinator_keys: vec![tid.to_string()],
+        ..Default::default()
+    };
+    let find_response = crate::handlers::find_coordinator::handle(
+        &broker,
+        find_version,
+        1,
+        &crate::test_support::encode_request(&find_request, find_version),
+        &context,
+    )
+    .await
+    .expect("find transaction coordinator");
+    let find_response: krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse =
+        crate::test_support::decode_response(&find_response, find_version);
+    assert!(
+        find_response
+            .coordinators
+            .iter()
+            .all(|coordinator| coordinator.error_code == codes::NONE)
+    );
+
+    // The last frontier that cannot fit another block: the controller refuses
+    // every allocation from here on.
+    let broker_epoch = broker
+        .controller
+        .current_image()
+        .broker_epoch(broker.config.node_id)
+        .expect("registered broker epoch");
+    broker
+        .controller
+        .submit_change(vec![MetadataRecord::V1ProducerIds(
+            krabka_metadata::ProducerIdsRecord {
+                broker_id: broker.config.node_id,
+                broker_epoch,
+                next_producer_id: i64::MAX - 999,
+            },
+        )])
+        .await
+        .expect("seed exhausted producer ID space");
+
+    let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
+    let cases = [
+        ("idempotent producer", None),
+        ("new transactional id", Some(tid)),
+    ];
+    for (name, transactional_id) in cases {
+        let request = InitProducerIdRequest {
+            transactional_id: transactional_id.map(ToString::to_string),
+            transaction_timeout_ms: 5_000,
+            producer_id: -1,
+            producer_epoch: -1,
+            ..Default::default()
+        };
+        let response = handle(
+            &broker,
+            version,
+            3,
+            &crate::test_support::encode_request(&request, version),
+            &context,
+        )
+        .await
+        .expect("answered, not a closed connection");
+        let response: InitProducerIdResponse =
+            crate::test_support::decode_response(&response, version);
+        assert!(
+            response
+                == InitProducerIdResponse {
+                    error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
+                    producer_id: -1,
+                    producer_epoch: -1,
+                    ..Default::default()
+                },
+            "{name}"
+        );
+    }
+    broker_handle.shutdown().await;
+}
