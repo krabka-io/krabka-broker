@@ -14,13 +14,13 @@ module(
 # That label resolved transitively until the rules_img work reshaped the module
 # graph; naming it here makes the visibility explicit rather than incidental.
 bazel_dep(name = "platforms", version = "1.1.0")
-bazel_dep(name = "rules_rs", version = "0.0.111")
+bazel_dep(name = "rules_rs", version = "0.0.112")
 bazel_dep(name = "rules_rs_mutants", version = "0.1.1")
 
 # rules_rs treats unknown cfg keys as false, so a dependency guarded by
 # `not(target_has_atomic = "64")` becomes unconditional on 64-bit targets.
 #
-# 0.0.111 also fetches the zlib1g .deb its rustc toolchain links against from
+# Since 0.0.111 it fetches the zlib1g .deb its rustc toolchain links against from
 # launchpad.net and a pinned snapshot.ubuntu.com snapshot. 0.0.107 used one
 # archive.ubuntu.com pool URL, which 404s once Ubuntu supersedes the build, so
 # this module no longer patches that URL.
@@ -28,7 +28,7 @@ single_version_override(
     module_name = "rules_rs",
     patch_strip = 1,
     patches = ["//bazel/patches:rules-rs-target-has-atomic.patch"],
-    version = "0.0.111",
+    version = "0.0.112",
 )
 
 # Expose the metadata rules already used by rules_rs so workspace crates appear
@@ -184,18 +184,9 @@ bazel_dep(name = "aspect_rules_lint", version = "2.9.0")
 
 # Supplies a clippy aspect shaped the way `aspect lint` expects -- it writes the
 # `rules_lint_machine` output group, which the aspect from @rules_rust does not.
-# It also registers a Rust toolchain of its own, pinned to 1.92.0 / edition 2021
-# for its own tests; see the toolchain block below for how the two coexist.
-bazel_dep(name = "aspect_rules_lint_rust", version = "0.0.2")
-
-# See the patch header: that module registers `@default_rust_toolchains//:all`,
-# a package rules_rs 0.0.110 does not create.
-single_version_override(
-    module_name = "aspect_rules_lint_rust",
-    patch_strip = 1,
-    patches = ["//bazel/patches:aspect-rules-lint-rust-toolchain-pattern.patch"],
-    version = "0.0.2",
-)
+# It registers `@default_rust_toolchains`, which the toolchain block below
+# configures.
+bazel_dep(name = "aspect_rules_lint_rust", version = "0.0.3")
 
 bazel_dep(name = "buildifier_prebuilt", version = "10.1.0")
 
@@ -209,14 +200,11 @@ use_repo(rules_rust, "rules_rust")
 # ---------------------------------------------------------------------------
 toolchains = use_extension("@rules_rs//rs/toolchains:module_extension.bzl", "toolchains")
 
-# Named rather than left as `default_rust_toolchains`, which
-# aspect_rules_lint_rust also claims: rules_rs refuses two configurations under
-# one repo name, and that module wants 1.92.0 / edition 2021 while this
-# repository is on edition 2024 and the channel `rust-toolchain.toml` pins. Both
-# toolchains get registered; ours is registered from the root module, which is
-# what makes it the one that resolves.
+# Configured under the default repo name. aspect_rules_lint_rust imports
+# `default_rust_toolchains` without configuring it, and rules_rs creates that
+# repo only from a configuration, so this one is the toolchain both modules
+# register.
 toolchains.toolchain(
-    name = "krabka_rust_toolchains",
     edition = "2024",
     # rustfmt.toml sets `format_code_in_doc_comments`, `group_imports` and
     # `imports_granularity`, all still nightly-gated. Stable rustfmt does not
@@ -230,9 +218,9 @@ toolchains.toolchain(
     # dependency source of truth" arrangement exists to avoid.
     version = "1.98.1",
 )
-use_repo(toolchains, "default_rust_toolchains", "krabka_rust_toolchains")
+use_repo(toolchains, "default_rust_toolchains")
 
-register_toolchains("@krabka_rust_toolchains//...")
+register_toolchains("@default_rust_toolchains//...")
 
 # ---------------------------------------------------------------------------
 # Native `-sys` crates, built by Bazel rather than by their build scripts.

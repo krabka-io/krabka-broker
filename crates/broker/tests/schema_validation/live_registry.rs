@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use apache_avro::{AvroSchema, Schema, to_avro_datum_schemata, to_value};
+use apache_avro::{AvroSchema, Schema, to_value, writer::datum::GenericDatumWriter};
 use assert2::{assert, check};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use bytes::{Buf, BufMut, Bytes};
@@ -477,17 +477,20 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
         r#"{"type":"record","name":"Envelope","fields":[{"name":"base","type":"Base"}]}"#,
     ])
     .unwrap();
-    let referenced_body = to_avro_datum_schemata(
-        &referenced_schemas[1],
-        referenced_schemas.iter().collect(),
-        to_value(Envelope {
-            base: Base {
-                id: "referenced".into(),
-            },
-        })
-        .unwrap(),
-    )
-    .unwrap();
+    let referenced_body = GenericDatumWriter::builder(&referenced_schemas[1])
+        .schemata(referenced_schemas.iter().collect())
+        .unwrap()
+        .build()
+        .unwrap()
+        .write_value_to_vec(
+            to_value(Envelope {
+                base: Base {
+                    id: "referenced".into(),
+                },
+            })
+            .unwrap(),
+        )
+        .unwrap();
     let referenced_payload = framed(referenced_id, &referenced_body);
 
     let bootstrap_client = client(&bootstrap).await;
