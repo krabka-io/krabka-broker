@@ -387,6 +387,19 @@ async fn offline_partition_with_diverged_logs(
         .await
         .expect("inject dead-leader PartitionRecord");
     wait_partition_isr_only(h1, topic, 0, &[99]).await;
+    // `wait_partition_hosted` reads the metadata image. Each broker creates its
+    // local partition, and installs the dead leader, on its own reconcile
+    // after that, and the direct appends below need all three partitions.
+    for handle in [h1, h2, h3] {
+        handle
+            .wait_until_local_partition_target(
+                topic,
+                0,
+                krabka_broker::NodeId(99),
+                pr_before.leader_epoch.next(),
+            )
+            .await;
+    }
     // Give the supervisors a beat to observe the leader change and tear down
     // any in-flight replication fetchers before we diverge the logs.
     // intentional: fetcher teardown is a background reconcile action with no
