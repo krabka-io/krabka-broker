@@ -1000,14 +1000,14 @@
       "name": "StreamsGroupDescribe",
       "krabka": {
         "min": 0,
-        "max": 0
+        "max": 1
       },
       "kafka": {
         "min": 0,
         "max": 0
       },
-      "verdict": "same",
-      "intent": null
+      "verdict": "range_differs",
+      "intent": "Intended. krabka serves StreamsGroupDescribe v1 from Kafka trunk (KIP-1331, KIP-1357), which 4.3.1 predates: a described group names its assignor, sticky, and a request for the topology description is answered NOT_STORED, as Kafka answers it without a topology description plugin. A 4.3 client negotiates v0 and sees no difference."
     },
     {
       "api_key": 90,

@@ -45,12 +45,6 @@ fn request(group_ids: &[&str]) -> StreamsGroupDescribeRequest {
     }
 }
 
-crate::test_support::codec_helpers!(
-    StreamsGroupDescribeRequest,
-    StreamsGroupDescribeResponse,
-    version = response_mod::MAX_VERSION
-);
-
 pub(super) async fn start_broker(
     streams_enabled: bool,
 ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
@@ -172,18 +166,42 @@ pub(super) async fn describe_as(
     group_ids: &[&str],
     include_authorized_operations: bool,
 ) -> StreamsGroupDescribeResponse {
-    let version = response_mod::MAX_VERSION;
     let req = StreamsGroupDescribeRequest {
         include_authorized_operations,
         ..request(group_ids)
     };
-    let req_bytes = encode_request(&req);
+    send(broker, principal, response_mod::MAX_VERSION, &req).await
+}
+
+/// Describes `group_ids` as `admin` at `version`, asking for the topology
+/// description when `include_topology_description` is set (v1+).
+pub(super) async fn describe_at(
+    broker: &Broker,
+    version: i16,
+    include_topology_description: bool,
+    group_ids: &[&str],
+) -> StreamsGroupDescribeResponse {
+    let principal = crate::test_support::principal("admin");
+    let req = StreamsGroupDescribeRequest {
+        include_topology_description,
+        ..request(group_ids)
+    };
+    send(broker, &principal, version, &req).await
+}
+
+async fn send(
+    broker: &Broker,
+    principal: &Principal,
+    version: i16,
+    req: &StreamsGroupDescribeRequest,
+) -> StreamsGroupDescribeResponse {
+    let req_bytes = crate::test_support::encode_request(req, version);
     let peer = crate::test_support::peer();
     let ctx = crate::test_support::request_context(principal, &peer, "admin-client");
     let resp = handle(broker, version, 1, &req_bytes, &ctx)
         .await
         .expect("handle describe");
-    decode_response(&resp)
+    crate::test_support::decode_response(&resp, version)
 }
 
 pub(super) fn task_map(entries: &[(&str, Vec<i32>)]) -> BTreeMap<String, Vec<i32>> {

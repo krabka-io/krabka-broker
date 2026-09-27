@@ -134,6 +134,15 @@ const RANGE_DIVERGENCE_INTENTS: &[(i16, &str)] = &[
          topology description plugin. The v1 request is the v0 request, so a \
          4.3 client negotiates v0 and sees no difference.",
     ),
+    (
+        89, // StreamsGroupDescribe
+        "Intended. krabka serves StreamsGroupDescribe v1 from Kafka trunk \
+         (KIP-1331, KIP-1357), which 4.3.1 predates: a described group names \
+         its assignor, sticky, and a request for the topology description is \
+         answered NOT_STORED, as Kafka answers it without a topology \
+         description plugin. A 4.3 client negotiates v0 and sees no \
+         difference.",
+    ),
 ];
 
 /// The recorded intent for one row of the join.

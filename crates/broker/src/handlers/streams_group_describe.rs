@@ -40,6 +40,10 @@ mod tests;
 use self::group::describe_group;
 use crate::{broker::Broker, codes, error::BrokerError};
 
+/// Kafka's `TopologyDescriptionStatus` `NOT_STORED` (1): no description is
+/// recorded for the group.
+const TOPOLOGY_DESCRIPTION_STATUS_NOT_STORED: i8 = 1;
+
 /// Minimum finalized `streams.version` feature level at which the broker
 /// serves the KIP-1071 streams RPCs, heartbeat and describe.
 const STREAMS_VERSION_MIN_LEVEL: i16 = 1;
@@ -118,6 +122,17 @@ pub(crate) async fn handle(
             )
             .await,
         );
+    }
+    // KIP-1331: a request that asks for the topology description gets
+    // Kafka's `StreamsGroupTopologyDescriptionManager.attachTopologyDescriptions`
+    // answer without a description plugin, `NOT_STORED` on every described
+    // group. An error row keeps `NOT_REQUESTED`.
+    if req.include_topology_description {
+        for row in &mut other_rows {
+            if row.error_code == codes::NONE {
+                row.topology_description_status = TOPOLOGY_DESCRIPTION_STATUS_NOT_STORED;
+            }
+        }
     }
     denied_rows.extend(other_rows);
 

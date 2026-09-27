@@ -1111,13 +1111,24 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
     },
     KipAnnotation {
         key: "KIP-1331",
-        claim: "StreamsGroupHeartbeat v1: the int64 recovery lag and TopologyDescriptionRequired",
+        claim: "Streams topology descriptions: StreamsGroupHeartbeat and StreamsGroupDescribe v1",
         status: KipStatus::Partial,
         module: "crates/broker/src/coordinator/unified/streams/actor/response.rs",
         tests: &[
             "crates/broker/src/coordinator/unified/streams/actor/tests.rs::heartbeat_response_carries_the_recovery_lag_at_version_1_only",
+            "crates/broker/src/handlers/streams_group_describe/tests.rs::version_1_names_the_assignor_and_the_topology_description_status",
         ],
-        note: "krabka has no topology description plugin, as a Kafka broker has none by default: TopologyDescriptionRequired stays false and StreamsGroupTopologyDescriptionUpdate (93) is not served. The MISSING_CLIENT_TAGS status v1 may carry needs `streams.rack.aware.assignment.tags`, which krabka does not support, so it is never sent, as Kafka never sends it with that list empty.",
+        note: "krabka has no topology description plugin, as a Kafka broker has none by default: a heartbeat never sets TopologyDescriptionRequired, a describe that asks for the description answers NOT_STORED, and StreamsGroupTopologyDescriptionUpdate (93) is not served. The MISSING_CLIENT_TAGS status heartbeat v1 may carry needs `streams.rack.aware.assignment.tags`, which krabka does not support, so it is never sent, as Kafka never sends it with that list empty.",
+    },
+    KipAnnotation {
+        key: "KIP-1357",
+        claim: "StreamsGroupDescribe v1 names the group's task assignor",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/streams_group_describe/render.rs",
+        tests: &[
+            "crates/broker/src/handlers/streams_group_describe/tests.rs::version_1_names_the_assignor_and_the_topology_description_status",
+        ],
+        note: "",
     },
     KipAnnotation {
         key: "SASL/GSSAPI",
@@ -1470,9 +1481,7 @@ fn admin_apis() -> Vec<ApiVersion> {
         v!(share_group_describe_request),
         // KIP-1071 streams-group rebalance protocol.
         v!(streams_group_heartbeat_request),
-        // Version 1, with the topology description and the assignor name, is
-        // Kafka trunk's; Kafka 4.3 serves version 0.
-        v!(streams_group_describe_request, max = 0),
+        v!(streams_group_describe_request),
         // KIP-932 ShareFetch / ShareAcknowledge data-plane RPCs.
         v!(share_fetch_request),
         v!(share_acknowledge_request),
