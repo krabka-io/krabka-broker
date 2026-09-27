@@ -248,6 +248,9 @@ mod tests {
                 "fetch",
                 api_key::FETCH,
                 PeerRequest::Fetch {
+                    cluster_id: None,
+                    max_wait_ms: 0,
+                    high_watermark: -1,
                     from: NodeId(2),
                     current_leader_epoch: 1,
                     fetch_epoch: 1,

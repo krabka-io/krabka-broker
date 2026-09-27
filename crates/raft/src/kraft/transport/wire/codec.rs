@@ -23,7 +23,7 @@ pub const METADATA_TOPIC_ID: MetaUuid = MetaUuid([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
 /// Captured flexible wire versions, byte-validated against fixture frames.
 pub const VOTE_VERSION: i16 = 2;
 pub const QUORUM_EPOCH_VERSION: i16 = 1;
-pub const FETCH_VERSION: i16 = 17;
+pub const FETCH_VERSION: i16 = 18;
 pub const FETCH_SNAPSHOT_VERSION: i16 = 1;
 
 pub fn records_payload_to_bytes(payload: &RecordsPayload) -> Bytes {

@@ -27,13 +27,13 @@ use crate::kraft::{
 };
 
 const UNKNOWN_TOPIC_OR_PARTITION: i16 = 3;
-const NOT_LEADER_OR_FOLLOWER: i16 = 6;
-const INVALID_REQUEST: i16 = 42;
+pub(super) const NOT_LEADER_OR_FOLLOWER: i16 = 6;
+pub(super) const INVALID_REQUEST: i16 = 42;
 const FENCED_LEADER_EPOCH: i16 = 74;
 const UNKNOWN_LEADER_EPOCH: i16 = 75;
 const SNAPSHOT_NOT_FOUND: i16 = 98;
 const POSITION_OUT_OF_RANGE: i16 = 99;
-const INCONSISTENT_CLUSTER_ID: i16 = 104;
+pub(super) const INCONSISTENT_CLUSTER_ID: i16 = 104;
 const INVALID_VOTER_KEY: i16 = 125;
 
 /// Kafka's `BOOTSTRAP_SNAPSHOT_ID`. The bootstrap checkpoint is not
@@ -79,7 +79,7 @@ impl Engine {
     }
 
     /// Kafka's `hasValidClusterId`: an absent id is valid.
-    fn has_valid_cluster_id(&self, cluster_id: Option<&str>) -> bool {
+    pub(super) fn has_valid_cluster_id(&self, cluster_id: Option<&str>) -> bool {
         cluster_id.is_none_or(|id| {
             wire::parse_cluster_id(id) == Some(self.core.quorum_state().cluster_id)
         })

@@ -21,6 +21,7 @@
 
 pub(crate) mod addressing;
 mod dialer;
+mod negotiation;
 mod peer_sender;
 
 pub use self::dialer::{OutboundDialer, PlaintextDialer};

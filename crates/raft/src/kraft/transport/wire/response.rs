@@ -124,6 +124,7 @@ impl FetchAnswer {
             node_endpoints: self
                 .leader
                 .node_endpoint()
+                .filter(|_| version >= 17)
                 .map(|(node_id, host, port)| fetch_resp::NodeEndpoint {
                     node_id,
                     host,

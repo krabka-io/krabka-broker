@@ -232,6 +232,7 @@ pub fn build_engine_only_with_policy(
             controls,
             replica_fetch_offsets: BTreeMap::new(),
             replica_directory_ids: BTreeMap::new(),
+            fetch_purgatory: Vec::new(),
             wall_clock_base: std::time::SystemTime::now(),
             leader_reported_hwm: log_hwm_at_open,
             pending_reconfig: None,

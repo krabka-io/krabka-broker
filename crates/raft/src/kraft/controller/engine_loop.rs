@@ -57,9 +57,11 @@ impl Engine {
             let election_sleep = sleep_until_opt(self.election_at);
             let fetch_sleep = sleep_until_opt(self.fetch_at);
             let check_quorum_sleep = sleep_until_opt(self.check_quorum_at);
+            let parked_fetch_sleep = sleep_until_opt(self.next_parked_fetch_deadline());
             tokio::pin!(election_sleep);
             tokio::pin!(fetch_sleep);
             tokio::pin!(check_quorum_sleep);
+            tokio::pin!(parked_fetch_sleep);
 
             tokio::select! {
                 cmd = cmd_rx.recv() => {
@@ -83,7 +85,12 @@ impl Engine {
                 _ = heartbeat.tick() => {
                     self.on_timer(TimerTick::Heartbeat);
                 }
+                // A parked fetch whose wait ran out is answered below.
+                () = &mut parked_fetch_sleep => {}
             }
+            // Whatever this turn did may have grown the log, moved the high
+            // watermark or ended the leadership a parked fetch waits on.
+            self.complete_parked_fetches(Instant::now());
             self.retry_pending_downgrade_snapshot();
             // A quiet log still needs to snapshot on the time cap: an apply
             // that advances the HWM already retriggers this check, but an

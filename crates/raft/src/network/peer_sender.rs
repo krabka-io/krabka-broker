@@ -24,6 +24,7 @@ use crate::{
     network::{
         addressing::{api_version_for, controller_addr},
         dialer::OutboundDialer,
+        negotiation::{convert_request, convert_response, negotiated_version},
     },
 };
 
@@ -120,9 +121,27 @@ impl PeerSender for RealPeerSender {
         // `(api_key, api_version)` pairing is done through the newtypes so the
         // two adjacent `i16`s cannot be transposed, then unwrapped at the wire
         // boundary below.
-        let version = api_version_for(ApiKey(key));
-        match conn.raw_request(key, version.get(), body).await {
-            Ok(resp) => Ok(resp),
+        // Kafka's `NetworkClient` picks the highest version both ends speak.
+        // A peer below the engine's version gets the body at its maximum, and
+        // its answer goes back to the engine at the engine's version.
+        let ours = api_version_for(ApiKey(key)).get();
+        let version = negotiated_version(key, conn.versions().broker_range(key));
+        let body = if version == ours {
+            body
+        } else {
+            convert_request(key, &body, ours, version).ok_or(RaftError::Protocol(
+                krabka_protocol::ProtocolError::InvalidValue(
+                    "peer request does not convert to the negotiated version",
+                ),
+            ))?
+        };
+        match conn.raw_request(key, version, body).await {
+            Ok(resp) if version == ours => Ok(resp),
+            Ok(resp) => convert_response(key, &resp, version, ours).ok_or(RaftError::Protocol(
+                krabka_protocol::ProtocolError::InvalidValue(
+                    "peer response does not convert to the engine version",
+                ),
+            )),
             Err(e) => {
                 // Drop the cached connection on any transport error so the next
                 // send redials a fresh socket (a crashed/restarted peer).

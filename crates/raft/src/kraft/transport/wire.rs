@@ -5,7 +5,7 @@
 //! generated KIP-595 message bodies. Those bodies are header-less, because the
 //! framing layer in `server.rs` and `network.rs` adds the request header and
 //! the response header. The captured wire versions are Vote v2,
-//! `BeginQuorumEpoch` v1, `EndQuorumEpoch` v1, and Fetch v17. Krabka-to-Krabka
+//! `BeginQuorumEpoch` v1, `EndQuorumEpoch` v1, and Fetch v18. Krabka-to-Krabka
 //! replication rides these exact bytes.
 //!
 //! The metadata log is the single `KRaft` topic `__cluster_metadata`, partition
@@ -63,6 +63,9 @@ mod tests {
             owned::{fetch_request::FetchRequest, fetch_response::FetchResponse},
         };
         let req = PeerRequest::Fetch {
+            cluster_id: None,
+            max_wait_ms: 0,
+            high_watermark: -1,
             from: NodeId(2),
             current_leader_epoch: 1,
             fetch_epoch: 1,

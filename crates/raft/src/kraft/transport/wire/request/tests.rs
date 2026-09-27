@@ -262,6 +262,9 @@ fn encoded_begin_and_end_requests_carry_quorum_defaults_and_leader() {
 #[test]
 fn fetch_request_round_trips() {
     let req = PeerRequest::Fetch {
+        cluster_id: None,
+        max_wait_ms: 0,
+        high_watermark: -1,
         from: NodeId(2),
         current_leader_epoch: 3,
         fetch_epoch: 1,
@@ -277,6 +280,9 @@ fn encoded_fetch_request_carries_replica_state_epoch_sentinel() {
 
     let dir_id = uuid::Uuid::from_u128(42);
     let req = PeerRequest::Fetch {
+        cluster_id: None,
+        max_wait_ms: 0,
+        high_watermark: -1,
         from: NodeId(2),
         current_leader_epoch: 4,
         fetch_epoch: 1,
@@ -340,11 +346,22 @@ fn encoded_fetch_snapshot_request_carries_cluster_id_and_current_leader_epoch() 
     );
 }
 
+/// The Fetch a replica sends is Kafka's `KafkaRaftClient.buildFetchRequest`:
+/// the cluster id, `MaxWaitMs`, the replica id in `ReplicaState`, the quorum
+/// epoch, the last fetched epoch, the fetch offset, the directory id and the
+/// local high watermark.
 #[test]
 fn fetch_request_wire_encoding_fields() {
-    use krabka_protocol::{Decode, owned::fetch_request::FetchRequest};
+    use krabka_protocol::{
+        Decode,
+        owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic, ReplicaState},
+        primitives::uuid::Uuid as WireUuid,
+    };
 
     let req = PeerRequest::Fetch {
+        cluster_id: Some(uuid::Uuid::from_u128(9)),
+        max_wait_ms: 500,
+        high_watermark: 8,
         from: NodeId(1),
         current_leader_epoch: 2,
         fetch_epoch: 2,
@@ -354,12 +371,31 @@ fn fetch_request_wire_encoding_fields() {
     let bytes = req.try_encode().expect("encodes fetch request");
     let mut cur = &bytes[..];
     let decoded = FetchRequest::decode(&mut cur, FETCH_VERSION).expect("decodes fetch request");
-    check!(decoded.max_wait_ms == 500);
-    check!(decoded.min_bytes == 1);
-    check!(decoded.max_bytes == 1024 * 1024);
-    check!(decoded.isolation_level == 0);
-    check!(decoded.session_id == 0);
-    check!(decoded.session_epoch == -1);
-    check!(decoded.replica_state.replica_epoch == -1);
-    check!(decoded.replica_state.replica_id == 1);
+    let expected = FetchRequest {
+        max_wait_ms: 500,
+        min_bytes: 1,
+        max_bytes: 1024 * 1024,
+        cluster_id: Some("AAAAAAAAAAAAAAAAAAAACQ".into()),
+        replica_state: ReplicaState {
+            replica_id: 1,
+            ..Default::default()
+        },
+        topics: vec![FetchTopic {
+            topic_id: METADATA_TOPIC_ID,
+            partitions: vec![FetchPartition {
+                partition: 0,
+                current_leader_epoch: 2,
+                fetch_offset: 10,
+                last_fetched_epoch: 2,
+                replica_directory_id: WireUuid(*uuid::Uuid::from_u128(123).as_bytes()),
+                high_watermark: 8,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    check!(cur.is_empty());
+    check!(decoded == expected);
+    check!(decode_fetch(&bytes) == Some(req));
 }

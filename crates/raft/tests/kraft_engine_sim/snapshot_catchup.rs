@@ -226,6 +226,9 @@ async fn follower_that_pruned_independently_redirects_a_lagging_fetch_to_the_lea
     // follower's own pruned log_start. Only a leader serves a Fetch, so the
     // follower answers `buildEmptyFetchResponse(NOT_LEADER_OR_FOLLOWER)`.
     let fetch_req = wire::PeerRequest::Fetch {
+        cluster_id: None,
+        max_wait_ms: 0,
+        high_watermark: -1,
         from: NodeId(3),
         current_leader_epoch: i32::try_from(epoch).unwrap(),
         fetch_epoch: 0,
@@ -364,6 +367,9 @@ async fn a_snapshot_fetch_in_flight_survives_the_leader_rolling_to_a_new_checkpo
     // The lagging peer asks for records from 0, below the leader's pruned
     // log start, and is pointed at that checkpoint.
     let fetch = wire::PeerRequest::Fetch {
+        cluster_id: None,
+        max_wait_ms: 0,
+        high_watermark: -1,
         from: NodeId(3),
         current_leader_epoch: i32::try_from(epoch).unwrap(),
         fetch_epoch: 0,

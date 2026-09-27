@@ -77,6 +77,9 @@ fn test_endpoint() -> (String, u16) {
 /// A Fetch request from `from` in `current_leader_epoch`, at offset 0.
 fn fetch_request(from: NodeId, current_leader_epoch: i32) -> bytes::Bytes {
     wire::PeerRequest::Fetch {
+        cluster_id: None,
+        max_wait_ms: 0,
+        high_watermark: -1,
         from,
         current_leader_epoch,
         fetch_epoch: 0,
@@ -937,6 +940,9 @@ async fn a_leader_answers_a_diverging_fetch_without_truncating_its_own_log() {
     engine.on_inbound(Inbound::Fetch {
         version: crate::kraft::transport::wire::FETCH_VERSION,
         req: wire::PeerRequest::Fetch {
+            cluster_id: None,
+            max_wait_ms: 0,
+            high_watermark: -1,
             from: NodeId(2),
             current_leader_epoch: i32::try_from(leader_epoch).unwrap(),
             fetch_epoch: 1,
@@ -1004,6 +1010,9 @@ async fn quorum_state_snapshot_tracks_fetch_timestamps_and_observers() {
     engine.on_inbound(Inbound::Fetch {
         version: crate::kraft::transport::wire::FETCH_VERSION,
         req: wire::PeerRequest::Fetch {
+            cluster_id: None,
+            max_wait_ms: 0,
+            high_watermark: -1,
             from: NodeId(2),
             current_leader_epoch: i32::try_from(engine.core.quorum_state().leader_epoch).unwrap(),
             fetch_epoch: 1,
@@ -1033,6 +1042,9 @@ async fn quorum_state_snapshot_tracks_fetch_timestamps_and_observers() {
     engine.on_inbound(Inbound::Fetch {
         version: crate::kraft::transport::wire::FETCH_VERSION,
         req: wire::PeerRequest::Fetch {
+            cluster_id: None,
+            max_wait_ms: 0,
+            high_watermark: -1,
             from: NodeId(99),
             current_leader_epoch: i32::try_from(engine.core.quorum_state().leader_epoch).unwrap(),
             fetch_epoch: 1,
@@ -1094,6 +1106,9 @@ async fn quorum_state_snapshot_negative_timestamp_fallback() {
     engine.on_inbound(Inbound::Fetch {
         version: crate::kraft::transport::wire::FETCH_VERSION,
         req: wire::PeerRequest::Fetch {
+            cluster_id: None,
+            max_wait_ms: 0,
+            high_watermark: -1,
             from: NodeId(2),
             current_leader_epoch: i32::try_from(engine.core.quorum_state().leader_epoch).unwrap(),
             fetch_epoch: 1,

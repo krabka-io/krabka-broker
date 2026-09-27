@@ -188,6 +188,9 @@ mod tests {
 
         // Deliver Inbound::Fetch from observer so partition.observers is non-empty
         let req = crate::kraft::transport::wire::PeerRequest::Fetch {
+            cluster_id: None,
+            max_wait_ms: 0,
+            high_watermark: -1,
             from: crate::NodeId(99),
             current_leader_epoch: partition.leader_epoch,
             fetch_epoch: partition.leader_epoch.cast_unsigned(),

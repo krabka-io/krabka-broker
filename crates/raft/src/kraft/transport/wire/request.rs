@@ -64,7 +64,12 @@ pub enum PeerRequest {
         preferred_candidates: Vec<(NodeId, uuid::Uuid)>,
     },
     Fetch {
+        /// The sender's cluster id, which the leader checks.
+        cluster_id: Option<uuid::Uuid>,
         from: NodeId,
+        /// How long the leader may hold the request when it has nothing new:
+        /// `MaxWaitMs`.
+        max_wait_ms: i32,
         /// The epoch the sender is in: `CurrentLeaderEpoch`, which the
         /// responder checks in `validateLeaderOnlyRequest`. Raw, as for
         /// `FetchSnapshot`, so a negative epoch stays fenced.
@@ -74,6 +79,10 @@ pub enum PeerRequest {
         fetch_epoch: Epoch,
         fetch_offset: i64,
         replica_directory_id: uuid::Uuid,
+        /// The sender's high watermark, or -1 while it knows none:
+        /// `HighWatermark` (v18). The leader answers at once when its own is
+        /// higher.
+        high_watermark: i64,
     },
     FetchSnapshot {
         /// The sender's cluster id, which the leader checks.
@@ -197,14 +206,20 @@ impl PeerRequest {
                 Some(encode_body(&req, QUORUM_EPOCH_VERSION))
             }
             PeerRequest::Fetch {
+                cluster_id,
                 from,
+                max_wait_ms,
                 current_leader_epoch,
                 fetch_epoch,
                 fetch_offset,
                 replica_directory_id,
+                high_watermark,
             } => {
+                // Kafka's `KafkaRaftClient.buildFetchRequest`.
                 let req = FetchRequest {
-                    max_wait_ms: 500,
+                    cluster_id: cluster_id.map(|id| URL_SAFE_NO_PAD.encode(id.as_bytes())),
+                    replica_id: node_to_wire(from),
+                    max_wait_ms,
                     min_bytes: 1,
                     max_bytes: 1024 * 1024,
                     replica_state: fetch_req::ReplicaState {
@@ -222,6 +237,7 @@ impl PeerRequest {
                             replica_directory_id: krabka_protocol::primitives::uuid::Uuid(
                                 *replica_directory_id.as_bytes(),
                             ),
+                            high_watermark,
                             ..Default::default()
                         }],
                         ..Default::default()
@@ -407,11 +423,17 @@ pub fn decode_fetch(buf: &[u8]) -> Option<PeerRequest> {
     let p = req.topics.first()?.partitions.first()?;
     let replica_directory_id = uuid::Uuid::from_bytes(p.replica_directory_id.0);
     Some(PeerRequest::Fetch {
+        cluster_id: match req.cluster_id.as_deref() {
+            Some(id) => Some(parse_cluster_id(id)?),
+            None => None,
+        },
         from,
+        max_wait_ms: req.max_wait_ms,
         current_leader_epoch: p.current_leader_epoch,
         fetch_epoch: epoch_from_wire(p.last_fetched_epoch),
         fetch_offset: p.fetch_offset,
         replica_directory_id,
+        high_watermark: p.high_watermark,
     })
 }
 
