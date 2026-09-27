@@ -1,9 +1,9 @@
 # Ecosystem qualification
 
 [`qualification/milestone-23.json`](../qualification/milestone-23.json) is the
-qualified baseline: krabka-broker v0.6.1 with its sibling set, which passed all
-eight gates in
-[`qualification-36281037268`](https://github.com/krabka-io/krabka-broker/releases/tag/qualification-36281037268).
+qualified baseline: krabka-broker v0.6.1 with krabka-operator v0.4.1 and the
+rest of its sibling set, which passed all eight gates in
+[`qualification-36293960620`](https://github.com/krabka-io/krabka-broker/releases/tag/qualification-36293960620).
 It is the default manifest for the workflow and for `aspect
 check-qualification`. Schema 2 binds each executed check to a candidate and the
 exact qualification adapters, and requires the Milestone 22 disaster-recovery
