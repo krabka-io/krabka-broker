@@ -142,6 +142,7 @@ mod tests {
             check!(
                 out == vec![MemberResponse {
                     member_id: "m1".into(),
+                    group_instance_id: None,
                     error_code: codes::NONE,
                     ..Default::default()
                 }],

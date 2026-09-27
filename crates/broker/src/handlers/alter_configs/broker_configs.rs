@@ -173,6 +173,9 @@ mod tests {
                 log_dirs: vec![],
                 endpoints: Vec::new(),
                 features: BTreeMap::new(),
+                fenced: false,
+                in_controlled_shutdown: false,
+                cordoned_log_dirs: None,
             },
         ));
         let cluster = krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID;

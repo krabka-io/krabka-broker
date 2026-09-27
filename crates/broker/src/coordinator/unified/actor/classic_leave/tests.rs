@@ -537,6 +537,7 @@ async fn classic_leave_in_completing_rebalance_reopens_the_rebalance() {
     check!(
         left == vec![MemberResponse {
             member_id: "m3".into(),
+            group_instance_id: None,
             error_code: codes::NONE,
             ..Default::default()
         }]

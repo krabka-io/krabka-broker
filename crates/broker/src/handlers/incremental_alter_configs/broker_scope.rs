@@ -226,6 +226,9 @@ mod tests {
                 log_dirs: vec![],
                 endpoints: vec![],
                 features: BTreeMap::new(),
+                fenced: false,
+                in_controlled_shutdown: false,
+                cordoned_log_dirs: None,
             },
         ));
         for (node, key, value) in configs {

@@ -1930,9 +1930,9 @@ fn validate_offset_commit_follows_kafka_streams_group() {
     }
 }
 
-/// Kafka's version 0 heartbeat response carries `AcceptableRecoveryLag = 0`
-/// whatever `acceptable.recovery.lag` says: 4.3.0 never sets the field, and
-/// trunk sets only the `int64` field of version 1.
+/// Kafka's version 0 heartbeat response carries `AcceptableRecoveryLagLegacy
+/// = 0` whatever `acceptable.recovery.lag` says: 4.3.0 never sets the field,
+/// and trunk sets only the `int64` field of version 1, to the config.
 #[test]
 fn heartbeat_response_carries_no_recovery_lag_at_version_0() {
     let config = StreamsGroupConfig {
@@ -1945,7 +1945,8 @@ fn heartbeat_response_carries_no_recovery_lag_at_version_0() {
                 error_code: codes::NONE,
                 member_epoch: 3,
                 heartbeat_interval_ms: 5_000,
-                acceptable_recovery_lag: 0,
+                acceptable_recovery_lag_legacy: 0,
+                acceptable_recovery_lag: 10_000,
                 task_offset_interval_ms: i32::try_from(config.task_offset_interval.as_millis())
                     .expect("fits"),
                 ..Default::default()

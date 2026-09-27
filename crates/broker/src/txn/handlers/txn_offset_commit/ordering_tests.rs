@@ -333,7 +333,7 @@ async fn per_topic_codes_survive_every_exit_and_gate_the_coordinator_call() {
             producer_id,
             producer_epoch: 0,
             member_id,
-            generation_id,
+            generation_id_or_member_epoch: generation_id,
             topics: case.topics.clone(),
             ..Default::default()
         };
