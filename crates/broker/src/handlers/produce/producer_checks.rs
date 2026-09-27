@@ -625,8 +625,11 @@ mod tests {
         // decided here, the way `await_durability` decides it for a request.
         let resp: PartitionProduceResponse = match outcome {
             crate::handlers::produce::pipeline::PartitionOutcome::AwaitingHighWatermark(ack) => {
-                ack.finish(std::time::Instant::now() + Duration::from_millis(50))
-                    .await
+                ack.finish(
+                    std::time::Instant::now() + Duration::from_millis(50),
+                    |_| None,
+                )
+                .await
             }
             crate::handlers::produce::pipeline::PartitionOutcome::Done(response) => {
                 panic!("an acks=-1 duplicate must wait on the high watermark, got {response:?}")

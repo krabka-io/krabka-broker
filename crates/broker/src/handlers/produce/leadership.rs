@@ -101,11 +101,8 @@ pub(super) fn validate_partition_gate(
             current_leader: None,
         });
     }
-    let configured_min_isr =
-        topic_min_insync_replicas(image, topic_name, default_min_insync_replicas);
-    let effective_min_isr = usize::try_from(configured_min_isr)
-        .unwrap_or(0)
-        .min(record.replicas.len());
+    let effective_min_isr =
+        effective_min_isr_of(image, topic_name, record, default_min_insync_replicas);
     if acks == ACKS_ALL && record.isr.len() < effective_min_isr {
         return Err(PartitionGateError {
             code: codes::NOT_ENOUGH_REPLICAS,
@@ -116,6 +113,43 @@ pub(super) fn validate_partition_gate(
         partition,
         effective_min_isr,
     })
+}
+
+/// Kafka's `Partition.effectiveMinIsr`: the `min.insync.replicas` that
+/// `image` resolves for `topic`, capped at the size of `record`'s replica
+/// assignment.
+fn effective_min_isr_of(
+    image: &krabka_metadata::MetadataImage,
+    topic: &str,
+    record: &krabka_metadata::PartitionRecord,
+    default_min_insync_replicas: i32,
+) -> usize {
+    let configured_min_isr = topic_min_insync_replicas(image, topic, default_min_insync_replicas);
+    usize::try_from(configured_min_isr)
+        .unwrap_or(0)
+        .min(record.replicas.len())
+}
+
+/// The effective `min.insync.replicas` of one partition in `image`, or `None`
+/// when the image no longer holds the partition.
+///
+/// An `acks=all` completion reads this when the high watermark reaches its
+/// append, as Kafka's `Partition.checkEnoughReplicasReachOffset` reads
+/// `effectiveMinIsr` then, so a `min.insync.replicas` change during the wait
+/// applies to it.
+pub(super) fn current_effective_min_isr(
+    image: &krabka_metadata::MetadataImage,
+    topic: &str,
+    partition_index: i32,
+    default_min_insync_replicas: i32,
+) -> Option<usize> {
+    let record = image.partition(topic, partition_index)?;
+    Some(effective_min_isr_of(
+        image,
+        topic,
+        record,
+        default_min_insync_replicas,
+    ))
 }
 
 pub(super) fn diskless_role_ready(
