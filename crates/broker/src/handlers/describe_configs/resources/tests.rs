@@ -20,8 +20,8 @@ use super::{
         entry::EntryOptions,
         wire::{
             CONFIG_SOURCE_DEFAULT, CONFIG_SOURCE_DYNAMIC_BROKER,
-            CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER, CONFIG_SOURCE_DYNAMIC_TOPIC,
-            CONFIG_SOURCE_STATIC_BROKER,
+            CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER, CONFIG_SOURCE_DYNAMIC_GROUP,
+            CONFIG_SOURCE_DYNAMIC_TOPIC, CONFIG_SOURCE_STATIC_BROKER,
         },
     },
     *,
@@ -63,6 +63,36 @@ fn serving_node_for(resource_type: i8, resource_name: &str) -> krabka_metadata::
     }
 }
 
+/// A named broker's entries without the topic-default broker keys it reports
+/// at their defaults, which `a_broker_reports_its_topic_default_keys_typed`
+/// covers, so the static-layer tests read only the keys they are about.
+fn static_view(result: &DescribeConfigsResult) -> Vec<DescribeConfigsResourceResult> {
+    result
+        .configs
+        .iter()
+        .filter(|entry| {
+            !crate::config_keys::broker_dynamic::TOPIC_DEFAULT_SYNONYMS
+                .iter()
+                .any(|(broker, _)| *broker == entry.name)
+        })
+        .cloned()
+        .collect()
+}
+
+/// `image` with the topic a `TOPIC` resource names registered in it.
+fn with_topic(image: &MetadataImage, resource_type: i8, name: &str) -> MetadataImage {
+    let mut image = image.clone();
+    if resource_type == RESOURCE_TYPE_TOPIC && image.topic(name).is_none() {
+        image.apply(&MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
+            name: name.into(),
+            topic_id: Uuid::from_u128(0x70),
+            partitions: 1,
+            replication_factor: 1,
+        }));
+    }
+    image
+}
+
 /// Describe one resource, served by `serving_node`, against a process that
 /// named none of its static broker keys and runs every logger at `info`.
 fn describe_at(
@@ -76,7 +106,7 @@ fn describe_at(
     let (levels, _filter) = krabka_telemetry::LogLevelController::new("info");
     describe_one(
         image,
-        krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
+        &krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
             resource_type,
             resource_name: resource_name.to_owned(),
             configuration_keys,
@@ -89,6 +119,7 @@ fn describe_at(
                 node_id: 1,
                 levels: &levels,
             },
+            static_min_insync_replicas: 1,
         },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
@@ -107,6 +138,9 @@ fn describe(
     configuration_keys: Option<Vec<String>>,
     options: EntryOptions,
 ) -> DescribeConfigsResult {
+    // A topic resource describes a topic that exists; the tests that probe a
+    // missing or invalid name drive [`describe_at`] directly.
+    let image = &with_topic(image, resource_type, resource_name);
     describe_at(
         serving_node_for(resource_type, resource_name),
         image,
@@ -129,7 +163,7 @@ fn describe_with_loggers(
 ) -> DescribeConfigsResult {
     describe_one(
         image,
-        krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
+        &krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
             resource_type,
             resource_name: resource_name.to_owned(),
             configuration_keys,
@@ -139,6 +173,7 @@ fn describe_with_loggers(
             node: serving_node_for(resource_type, resource_name),
             static_broker: untuned(),
             loggers,
+            static_min_insync_replicas: 1,
         },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
@@ -159,7 +194,7 @@ fn describe_with_static(
     let (levels, _filter) = krabka_telemetry::LogLevelController::new("info");
     describe_one(
         image,
-        krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
+        &krabka_protocol::owned::describe_configs_request::DescribeConfigsResource {
             resource_type,
             resource_name: resource_name.to_owned(),
             configuration_keys,
@@ -172,6 +207,7 @@ fn describe_with_static(
                 node_id: 1,
                 levels: &levels,
             },
+            static_min_insync_replicas: 1,
         },
         300_000,
         &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
@@ -322,18 +358,19 @@ fn a_topic_reports_its_override_above_the_cluster_default_with_the_whole_chain()
                 resource_type: RESOURCE_TYPE_TOPIC,
                 resource_name: "orders".to_owned(),
                 configs: vec![
-                    // Set nowhere, and krabka reads no broker-level
-                    // `log.cleanup.policy`, so the key reports its built-in
-                    // default under an empty chain. `apache/kafka:4.3.1`
-                    // answers that same shape for a topic key it names no
-                    // broker config for, such as `remote.storage.enable`.
+                    // Set nowhere, so the key reports its default beneath
+                    // the broker synonym Kafka names, `log.cleanup.policy`.
                     DescribeConfigsResourceResult {
                         name: config_keys::CLEANUP_POLICY.to_owned(),
                         value: Some("delete".to_owned()),
                         read_only: false,
                         config_source: CONFIG_SOURCE_DEFAULT,
                         is_sensitive: false,
-                        synonyms: Vec::new(),
+                        synonyms: vec![synonym(
+                            "log.cleanup.policy",
+                            "delete",
+                            CONFIG_SOURCE_DEFAULT
+                        )],
                         config_type: ConfigType::List.wire(),
                         documentation: Some(policy.doc.to_owned()),
                         unknown_tagged_fields: UnknownTaggedFields::default(),
@@ -344,11 +381,14 @@ fn a_topic_reports_its_override_above_the_cluster_default_with_the_whole_chain()
                         read_only: false,
                         config_source: CONFIG_SOURCE_DYNAMIC_TOPIC,
                         is_sensitive: false,
-                        synonyms: vec![synonym(
-                            config_keys::RETENTION_MS,
-                            "60000",
-                            CONFIG_SOURCE_DYNAMIC_TOPIC
-                        )],
+                        synonyms: vec![
+                            synonym(
+                                config_keys::RETENTION_MS,
+                                "60000",
+                                CONFIG_SOURCE_DYNAMIC_TOPIC
+                            ),
+                            synonym("log.retention.hours", "168", CONFIG_SOURCE_DEFAULT),
+                        ],
                         config_type: ConfigType::Long.wire(),
                         documentation: Some(retention.doc.to_owned()),
                         unknown_tagged_fields: UnknownTaggedFields::default(),
@@ -667,7 +707,7 @@ fn a_broker_that_overrides_nothing_still_reports_its_static_configuration() {
     );
 
     assert!(
-        result.configs
+        static_view(&result)
             == vec![
                 DescribeConfigsResourceResult {
                     name: config_keys::AUTO_CREATE_TOPICS_ENABLE.to_owned(),
@@ -875,7 +915,8 @@ fn the_key_filter_decides_what_a_broker_resource_reports() {
             configuration_keys,
             VALUES_ONLY,
         );
-        let names: Vec<&str> = result.configs.iter().map(|e| e.name.as_str()).collect();
+        let view = static_view(&result);
+        let names: Vec<&str> = view.iter().map(|e| e.name.as_str()).collect();
 
         check!(names == expected, "{label}");
     }
@@ -938,19 +979,10 @@ fn an_empty_key_filter_asks_for_everything_the_way_a_null_filter_does() {
 #[test]
 fn every_key_an_alter_can_store_on_a_broker_comes_back_with_its_value() {
     // The registry's own hazard: a stored key with no row is a key the
-    // entry builder must not disclose, so it would come back null. Every
-    // key the alter path accepts therefore has to have a row, and the
-    // read-only rows are exactly the ones the alter path refuses.
-    use crate::handlers::incremental_alter_configs::is_known_broker_config;
-
+    // entry builder must not disclose, so it would come back null, which is
+    // what Kafka does for a dynamic key it has no type for. Every key krabka
+    // runs with therefore has to have a row.
     for row in registry::keys_in(ConfigScope::Broker) {
-        check!(
-            is_known_broker_config(row.name) == !row.read_only,
-            "{} is alterable={} but read_only={}",
-            row.name,
-            is_known_broker_config(row.name),
-            row.read_only
-        );
         if row.read_only {
             continue;
         }
@@ -1055,29 +1087,93 @@ fn the_cluster_default_broker_resource_is_served_by_any_node() {
 }
 
 #[test]
-fn a_non_numeric_broker_resource_name_is_refused() {
-    let image = MetadataImage::new(Uuid::nil());
-    let result = describe(
+fn a_resource_name_kafka_refuses_is_refused_with_kafkas_error() {
+    let mut image = MetadataImage::new(Uuid::nil());
+    image.apply(&MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
+        name: "orders".into(),
+        topic_id: Uuid::from_u128(1),
+        partitions: 1,
+        replication_factor: 1,
+    }));
+    let cases = [
+        (
+            RESOURCE_TYPE_TOPIC,
+            "missing",
+            crate::codes::UNKNOWN_TOPIC_OR_PARTITION,
+            None,
+        ),
+        (
+            RESOURCE_TYPE_TOPIC,
+            "",
+            crate::codes::INVALID_TOPIC_EXCEPTION,
+            Some("Topic name is invalid: the empty string is not allowed"),
+        ),
+        (
+            RESOURCE_TYPE_TOPIC,
+            "bad/name",
+            crate::codes::INVALID_TOPIC_EXCEPTION,
+            Some(
+                "Topic name is invalid: 'bad/name' contains one or more characters other than \
+                 ASCII alphanumerics, '.', '_' and '-'",
+            ),
+        ),
+        (
+            RESOURCE_TYPE_CLIENT_METRICS,
+            "",
+            crate::codes::INVALID_REQUEST,
+            Some("Client metrics subscription name must not be empty"),
+        ),
+        (
+            RESOURCE_TYPE_GROUP,
+            "",
+            crate::codes::INVALID_REQUEST,
+            Some("Group name must not be empty"),
+        ),
+        (
+            RESOURCE_TYPE_BROKER,
+            "abc",
+            crate::codes::INVALID_REQUEST,
+            Some("Broker id must be an integer, but it is: abc"),
+        ),
+        (
+            RESOURCE_TYPE_BROKER,
+            "-1",
+            crate::codes::INVALID_REQUEST,
+            Some("Unexpected broker id, expected 1 or empty string, but received -1"),
+        ),
+    ];
+    for (resource_type, name, error_code, message) in cases {
+        let result = describe_at(
+            krabka_metadata::NodeId(1),
+            &image,
+            resource_type,
+            name,
+            None,
+            EVERYTHING,
+        );
+        check!(
+            result
+                == DescribeConfigsResult {
+                    error_code,
+                    error_message: message.map(str::to_owned),
+                    resource_type,
+                    resource_name: name.to_owned(),
+                    configs: Vec::new(),
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                },
+            "{resource_type} {name:?}"
+        );
+    }
+    let found = describe_at(
+        krabka_metadata::NodeId(1),
         &image,
-        RESOURCE_TYPE_BROKER,
-        "not-a-number",
+        RESOURCE_TYPE_TOPIC,
+        "orders",
         None,
         EVERYTHING,
     );
-
-    assert!(
-        result
-            == DescribeConfigsResult {
-                error_code: crate::codes::INVALID_REQUEST,
-                error_message: Some(
-                    "resource_name `not-a-number` is not a valid broker id".to_owned()
-                ),
-                resource_type: RESOURCE_TYPE_BROKER,
-                resource_name: "not-a-number".to_owned(),
-                configs: Vec::new(),
-                unknown_tagged_fields: UnknownTaggedFields::default(),
-            }
-    );
+    check!(found.error_code == crate::codes::NONE);
+    check!(!found.configs.is_empty());
 }
 
 #[test]
@@ -1144,7 +1240,11 @@ fn a_group_reports_its_override_above_the_streams_default() {
         entry.synonyms
             == vec![
                 synonym(KEY_NUM_STANDBY_REPLICAS, "2", CONFIG_SOURCE_DYNAMIC_GROUP),
-                synonym(KEY_NUM_STANDBY_REPLICAS, &fallback, CONFIG_SOURCE_DEFAULT),
+                synonym(
+                    "group.streams.num.standby.replicas",
+                    &fallback,
+                    CONFIG_SOURCE_DEFAULT
+                ),
             ]
     );
 }
@@ -1152,9 +1252,8 @@ fn a_group_reports_its_override_above_the_streams_default() {
 #[test]
 fn every_key_a_group_or_a_subscription_answers_with_is_typed_and_disclosed() {
     // The same hazard as the broker resource, over the two key sets the
-    // broker itself supplies: `StreamsGroupConfig` decides which group keys
-    // a response holds, and a key it names that the registry does not would
-    // come back untyped and with no value at all.
+    // broker itself supplies: Kafka's `GroupConfig` decides which group keys a
+    // response holds, and each one must come back typed and with a value.
     let image = MetadataImage::new(Uuid::nil());
     let group = describe(&image, RESOURCE_TYPE_GROUP, "streams-1", None, EVERYTHING);
     let subscription = describe(
@@ -1165,10 +1264,11 @@ fn every_key_a_group_or_a_subscription_answers_with_is_typed_and_disclosed() {
         EVERYTHING,
     );
 
-    let defaults = crate::coordinator::unified::streams::config::StreamsGroupConfig::default()
-        .group_config_values();
     let reported: Vec<&str> = group.configs.iter().map(|e| e.name.as_str()).collect();
-    let expected: Vec<&str> = defaults.keys().map(String::as_str).collect();
+    let expected: Vec<&str> = crate::config_keys::group::KAFKA_GROUP_KEYS
+        .iter()
+        .map(|key| key.name)
+        .collect();
 
     check!(reported == expected);
     for entry in group.configs.iter().chain(&subscription.configs) {
@@ -1414,11 +1514,8 @@ fn a_broker_reports_its_idle_window_beside_the_static_node_id() {
         VALUES_ONLY,
     );
 
-    let names: Vec<&str> = result
-        .configs
-        .iter()
-        .map(|entry| entry.name.as_str())
-        .collect();
+    let view = static_view(&result);
+    let names: Vec<&str> = view.iter().map(|entry| entry.name.as_str()).collect();
     assert!(
         names
             == vec![
@@ -1538,4 +1635,227 @@ fn the_cluster_default_resource_reports_no_idle_window() {
     );
 
     assert!(result.configs == Vec::new());
+}
+
+/// A topic with a stored config map, for the synonym-chain rows below.
+fn image_with_topic(overrides: &[(&str, &str)], cluster: &[(&str, &str)]) -> MetadataImage {
+    let mut image = image_with_broker_config(DEFAULT_BROKER_CONFIG_NODE_ID, cluster);
+    image.apply(&MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
+        name: "t".into(),
+        topic_id: Uuid::from_u128(7),
+        partitions: 1,
+        replication_factor: 1,
+    }));
+    image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
+        topic: "t".into(),
+        overrides: overrides
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect(),
+    }));
+    image
+}
+
+/// Kafka's `createTopicConfigEntry` chain: the topic override, then every
+/// broker synonym of the key under the broker key's name. Each row is the
+/// stored state, the key, and the entry's value, source and synonyms.
+#[test]
+fn a_topic_key_reports_its_broker_synonyms_under_the_broker_names() {
+    let cases = [
+        (
+            vec![],
+            vec![("min.insync.replicas", "2")],
+            "min.insync.replicas",
+            "2",
+            CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
+            vec![
+                synonym(
+                    "min.insync.replicas",
+                    "2",
+                    CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
+                ),
+                synonym("min.insync.replicas", "1", CONFIG_SOURCE_DEFAULT),
+            ],
+        ),
+        (
+            vec![("retention.ms", "1000")],
+            vec![],
+            "retention.ms",
+            "1000",
+            CONFIG_SOURCE_DYNAMIC_TOPIC,
+            vec![
+                synonym("retention.ms", "1000", CONFIG_SOURCE_DYNAMIC_TOPIC),
+                synonym("log.retention.hours", "168", CONFIG_SOURCE_DEFAULT),
+            ],
+        ),
+        (
+            vec![],
+            vec![],
+            "retention.ms",
+            "604800000",
+            CONFIG_SOURCE_DEFAULT,
+            vec![synonym("log.retention.hours", "168", CONFIG_SOURCE_DEFAULT)],
+        ),
+        (
+            vec![],
+            vec![],
+            "max.message.bytes",
+            "1048588",
+            CONFIG_SOURCE_DEFAULT,
+            vec![synonym(
+                "message.max.bytes",
+                "1048588",
+                CONFIG_SOURCE_DEFAULT,
+            )],
+        ),
+        (
+            vec![],
+            vec![("log.cleanup.policy", "compact")],
+            "cleanup.policy",
+            "compact",
+            CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
+            vec![
+                synonym(
+                    "log.cleanup.policy",
+                    "compact",
+                    CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
+                ),
+                synonym("log.cleanup.policy", "delete", CONFIG_SOURCE_DEFAULT),
+            ],
+        ),
+    ];
+    for (overrides, cluster, key, value, source, synonyms) in cases {
+        let image = image_with_topic(&overrides, &cluster);
+        let result = describe_topic(&image, "t", Some(vec![key.to_owned()]));
+        let entry = entry_named(&result, key);
+        check!(
+            (entry.value.as_deref(), entry.config_source, &entry.synonyms)
+                == (Some(value), source, &synonyms),
+            "{key} {overrides:?} {cluster:?}"
+        );
+    }
+}
+
+/// A broker's `min.insync.replicas` is typed and disclosed, on the cluster
+/// default resource and on a named broker, and a named broker reports each
+/// topic-default broker key it runs with.
+#[test]
+fn a_broker_reports_its_topic_default_keys_typed() {
+    let image = image_with_broker_config(
+        DEFAULT_BROKER_CONFIG_NODE_ID,
+        &[("min.insync.replicas", "2")],
+    );
+    let cluster = describe(&image, RESOURCE_TYPE_BROKER, "", None, EVERYTHING);
+    let entry = entry_named(&cluster, "min.insync.replicas");
+    check!(
+        (
+            entry.value.as_deref(),
+            entry.config_source,
+            entry.is_sensitive,
+            entry.config_type,
+            entry.synonyms.clone(),
+        ) == (
+            Some("2"),
+            CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
+            false,
+            ConfigType::Int.wire(),
+            vec![synonym(
+                "min.insync.replicas",
+                "2",
+                CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
+            )],
+        )
+    );
+
+    let named = describe(&image, RESOURCE_TYPE_BROKER, "1", None, EVERYTHING);
+    let entry = entry_named(&named, "message.max.bytes");
+    check!(
+        (entry.value.as_deref(), entry.config_source, entry.read_only)
+            == (Some("1048588"), CONFIG_SOURCE_DEFAULT, false)
+    );
+    for (key, _) in crate::config_keys::broker_dynamic::TOPIC_DEFAULT_SYNONYMS {
+        check!(
+            named.configs.iter().any(|entry| entry.name == *key),
+            "{key}"
+        );
+    }
+}
+
+/// Kafka's `createGroupConfigEntry`: every `GroupConfig` key, with the group
+/// override above the broker synonym, or a `DEFAULT_CONFIG` entry under the
+/// group key's own name for a key with no broker synonym.
+#[test]
+fn a_group_reports_every_kafka_group_key_with_its_broker_synonym() {
+    let mut image = MetadataImage::new(Uuid::nil());
+    image.apply(&MetadataRecord::V1GroupConfig(
+        krabka_metadata::GroupConfigRecord {
+            group_id: "g".into(),
+            configs: maplit::btreemap! {
+                "streams.session.timeout.ms".to_owned() => "60000".to_owned(),
+            },
+        },
+    ));
+    let result = describe(&image, RESOURCE_TYPE_GROUP, "g", None, EVERYTHING);
+    let names: Vec<&str> = result
+        .configs
+        .iter()
+        .map(|entry| entry.name.as_str())
+        .collect();
+    let kafka: Vec<&str> = crate::config_keys::group::KAFKA_GROUP_KEYS
+        .iter()
+        .map(|key| key.name)
+        .collect();
+    check!(names == kafka);
+
+    let cases = [
+        (
+            "consumer.session.timeout.ms",
+            "45000",
+            CONFIG_SOURCE_DEFAULT,
+            vec![synonym(
+                "group.consumer.session.timeout.ms",
+                "45000",
+                CONFIG_SOURCE_DEFAULT,
+            )],
+        ),
+        (
+            "streams.session.timeout.ms",
+            "60000",
+            CONFIG_SOURCE_DYNAMIC_GROUP,
+            vec![
+                synonym(
+                    "streams.session.timeout.ms",
+                    "60000",
+                    CONFIG_SOURCE_DYNAMIC_GROUP,
+                ),
+                synonym(
+                    "group.streams.session.timeout.ms",
+                    "45000",
+                    CONFIG_SOURCE_DEFAULT,
+                ),
+            ],
+        ),
+        (
+            "share.isolation.level",
+            "read_uncommitted",
+            CONFIG_SOURCE_DEFAULT,
+            vec![synonym(
+                "share.isolation.level",
+                "read_uncommitted",
+                CONFIG_SOURCE_DEFAULT,
+            )],
+        ),
+    ];
+    for (key, value, source, synonyms) in cases {
+        let entry = entry_named(&result, key);
+        check!(
+            (
+                entry.value.as_deref(),
+                entry.config_source,
+                entry.is_sensitive,
+                &entry.synonyms
+            ) == (Some(value), source, false, &synonyms),
+            "{key}"
+        );
+    }
 }

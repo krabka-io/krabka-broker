@@ -12,8 +12,8 @@ use crate::{
     CONVERGE_TRIES, ERR_NONE,
     downgrade_classic_join::classic_join_sync,
     downgrade_harness::{
-        boot, commit_offset_simple, connect, create_topic, finalize_streams_version, rejoin_config,
-        topic_id_for,
+        boot, commit_offset_as_member, connect, create_topic, finalize_streams_version,
+        rejoin_config, topic_id_for,
     },
     downgrade_streams_join::{streams_join_and_converge, streams_leave, topology},
 };
@@ -57,11 +57,17 @@ async fn drained_streams_group_downgrades_and_preserves_offsets() {
         "the streams-group-empty waiter must not complete while a member is live: {resp:?}"
     );
 
-    // Commit offset 42 via the simple-consumer path (empty member_id, epoch
-    // -1) — the streams offset-home actor allows commits from unjoined clients.
-    // A commit using the live streams member_id would be rejected by the
-    // classic actor's validate_commit (member not in classic state.members).
-    commit_offset_simple(&streams_client, "g", "in", topic_id, 0, 42).await;
+    // Commit offset 42 as the live streams member.
+    commit_offset_as_member(
+        &streams_client,
+        "g",
+        (&member_id, resp.member_epoch),
+        "in",
+        topic_id,
+        0,
+        42,
+    )
+    .await;
 
     // Leave so the streams group is drained.
     streams_leave(&streams_client, "g", &member_id).await;
@@ -129,8 +135,8 @@ async fn downgrade_survives_restart() {
             streams_join_and_converge(&sc, "g4", topology("in4"), 1, CONVERGE_TRIES).await;
         assert!(resp.error_code == ERR_NONE, "streams converge: {resp:?}");
 
-        // Commit offset 42 via simple consumer path (see watch-item).
-        commit_offset_simple(&sc, "g4", "in4", topic_id, 0, 42).await;
+        // Commit offset 42 as the live streams member.
+        commit_offset_as_member(&sc, "g4", (&mid, resp.member_epoch), "in4", topic_id, 0, 42).await;
 
         // Leave to drain.
         streams_leave(&sc, "g4", &mid).await;

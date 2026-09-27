@@ -17,7 +17,10 @@ use super::{render::render_group, topic_authz};
 use crate::{
     broker::Broker,
     codes,
-    coordinator::{GroupCoordinator, unified::streams::actor::StreamsGroupActorMessage},
+    coordinator::{
+        GroupCoordinator,
+        unified::{GroupType, streams::actor::StreamsGroupActorMessage},
+    },
     handlers::authorized_operations::authorized_operations_bits,
 };
 
@@ -46,9 +49,20 @@ pub(super) async fn describe_group(
         };
     }
     let Some(handle) = ng.find_streams(gid) else {
+        // Kafka's `getStreamsGroupOrThrow` and `castToStreamsGroup` messages.
+        let other_type = ng
+            .group_type(gid)
+            .is_some_and(|group_type| group_type != GroupType::Streams)
+            || ng.find(gid).is_some();
+        let message = if other_type {
+            format!("Group {gid} is not a streams group.")
+        } else {
+            format!("Streams group {gid} not found.")
+        };
         return DescribedGroup {
             group_id: gid.to_owned(),
             error_code: codes::GROUP_ID_NOT_FOUND,
+            error_message: Some(message),
             ..Default::default()
         };
     };

@@ -1,97 +1,88 @@
-//! Step 3 of the assignment: standby placement, which the `HighlyAvailable`
-//! assignor runs and the `Sticky` one skips.
+//! Standby placement: Kafka's `StickyTaskAssignor.assignStandby`.
 //!
-//! A standby copy only helps if it survives the failure that takes the active
-//! task down, so this step spreads the copies of one task across distinct
-//! processes and prefers a rack other than the active owner's.
+//! Each stateful task gets `num.standby.replicas` standby copies, each on a
+//! process that holds no other copy of the task. A copy goes first to the
+//! previous active owner, then to the previous standby owner with the least
+//! load, both within the total task quota, and otherwise to the least loaded
+//! process.
 
-use std::collections::{BTreeSet, HashMap};
+use super::{process::LocalState, types::Task};
 
-use super::types::{AssignorInput, AssignorMember, Task, owns_role};
+/// Places the standby copies of every task in `stateful_tasks`.
+pub(super) fn assign_standby(state: &mut LocalState, stateful_tasks: &[Task]) {
+    // Kafka walks the tasks by partition, then subtopology, in reverse.
+    let mut tasks: Vec<Task> = stateful_tasks.to_vec();
+    tasks.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
 
-/// Step 3: standby placement, for `HighlyAvailable` only.
-///
-/// For each stateful task, this step places up to `num_standby_replicas`
-/// copies on members whose processes differ from the active owner's, from each
-/// other's, and from that of any warmup holder of the task. It prefers a
-/// different rack first, then the smallest standby load, then the
-/// lexicographic id.
-pub(super) fn assign_standby(
-    members: &[&AssignorMember],
-    input: &AssignorInput,
-    tasks: &[Task],
-    active: &HashMap<String, Vec<Task>>,
-    warmup: &HashMap<String, Vec<Task>>,
-    standby: &mut HashMap<String, Vec<Task>>,
-) {
-    if input.num_standby_replicas <= 0 {
-        return;
+    let mut to_least_loaded: Vec<(Task, i64)> = Vec::new();
+    for task in &tasks {
+        for placed in 0..state.num_standby_replicas {
+            if place_on_prev_owner(state, task) {
+                continue;
+            }
+            to_least_loaded.push((task.clone(), state.num_standby_replicas - placed));
+            break;
+        }
     }
 
-    // Reverse index: which member holds each task as active.
-    let active_owner: HashMap<&Task, &str> = active
-        .iter()
-        .flat_map(|(member, ts)| ts.iter().map(move |t| (t, member.as_str())))
-        .collect();
-
-    let by_id: HashMap<&str, &AssignorMember> =
-        members.iter().map(|m| (m.member_id.as_str(), *m)).collect();
-
-    for task in tasks {
-        if !input.stateful.contains(&task.0) {
-            continue; // stateless tasks get no standby.
-        }
-        let Some(&owner_id) = active_owner.get(task) else {
-            continue;
-        };
-        let Some(owner) = by_id.get(owner_id) else {
-            continue;
-        };
-        let active_rack = owner.rack_id.as_deref();
-
-        // Processes already excluded for this task: the active owner's.
-        let mut used_processes: BTreeSet<&str> = BTreeSet::new();
-        used_processes.insert(owner.process_id.as_str());
-
-        for _ in 0..input.num_standby_replicas {
-            let chosen = members
-                .iter()
-                .filter(|m| !used_processes.contains(m.process_id.as_str()))
-                .filter(|m| !owns_role(warmup, &m.member_id, task))
-                .min_by(|a, b| {
-                    standby_rank(a, active_rack, standby).cmp(&standby_rank(
-                        b,
-                        active_rack,
-                        standby,
-                    ))
-                });
-
-            let Some(chosen) = chosen else {
-                break; // no more distinct processes available.
-            };
-            used_processes.insert(chosen.process_id.as_str());
-            standby
-                .entry(chosen.member_id.clone())
-                .or_default()
-                .push(task.clone());
+    // By subtopology, then partition, in reverse.
+    to_least_loaded.sort_by(|a, b| b.0.cmp(&a.0));
+    for (task, remaining) in &to_least_loaded {
+        for placed in 0..*remaining {
+            if !place_on_least_loaded_process(state, task) {
+                tracing::warn!(
+                    "Unable to assign {} of {} standby tasks for task [{}_{}]. There is not \
+                     enough available capacity. You should increase the number of threads \
+                     and/or application instances to maintain the requested number of standby \
+                     replicas.",
+                    state.num_standby_replicas - placed,
+                    state.num_standby_replicas,
+                    task.0,
+                    task.1,
+                );
+                break;
+            }
         }
     }
 }
 
-/// Ranking key for a standby candidate. It prefers a rack *different* from the
-/// active owner's, then the fewest standby tasks so far, then the lexicographic
-/// id. A smaller key is better.
-fn standby_rank(
-    m: &AssignorMember,
-    active_rack: Option<&str>,
-    standby: &HashMap<String, Vec<Task>>,
-) -> (u8, usize, String) {
-    // 0 = preferred (different rack, or no rack info to compare on); 1 = same
-    // rack as the active owner.
-    let rack_penalty = match (active_rack, m.rack_id.as_deref()) {
-        (Some(a), Some(b)) if a == b => 1,
-        _ => 0,
+/// Places one standby copy of `task` on its previous active owner, or else on
+/// its least loaded previous standby owner, each only under the total quota.
+/// Returns whether it placed the copy.
+fn place_on_prev_owner(state: &mut LocalState, task: &Task) -> bool {
+    if let Some(prev) = state.active_task_to_prev_member.get(task).cloned() {
+        let holds = state.processes[&prev.process_id].has_task(task);
+        if !holds && state.member_count(&prev) < state.total_tasks_per_member {
+            let count = state.add_task(&prev, task, false);
+            state.maybe_update_total_tasks_per_member(count);
+            return true;
+        }
+    }
+    let prev =
+        state.prev_member_with_least_load(state.standby_task_to_prev_members.get(task), Some(task));
+    if let Some(prev) = prev
+        && state.member_count(&prev) < state.total_tasks_per_member
+    {
+        let count = state.add_task(&prev, task, false);
+        state.maybe_update_total_tasks_per_member(count);
+        return true;
+    }
+    false
+}
+
+/// Places one standby copy of `task` on the least loaded member of the least
+/// loaded process that does not hold the task yet. Returns whether one did.
+fn place_on_least_loaded_process(state: &mut LocalState, task: &Task) -> bool {
+    let Some(process_id) = state
+        .processes_by_load()
+        .into_iter()
+        .find(|id| !state.processes[id].has_task(task))
+    else {
+        return false;
     };
-    let load = standby.get(&m.member_id).map_or(0, Vec::len);
-    (rack_penalty, load, m.member_id.clone())
+    let count = state.processes.get_mut(&process_id).map_or(0, |process| {
+        process.add_task_to_least_loaded_member(task, false)
+    });
+    state.maybe_update_total_tasks_per_member(count);
+    true
 }

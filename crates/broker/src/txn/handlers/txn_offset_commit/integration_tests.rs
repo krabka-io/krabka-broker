@@ -39,7 +39,7 @@ const NO_TOPIC_READ: &str = "TransactionalId:Write+Group:Read";
 /// Adds topic `a` with one partition, led by this broker, to the metadata
 /// image. `V1Topic` alone would not give the image a partition count or a
 /// partition record after the wire round trip (#716), so this seeds both.
-async fn seed_topic_a(broker: &crate::broker::Broker) {
+pub(super) async fn seed_topic_a(broker: &crate::broker::Broker) {
     let records = vec![
         krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
             name: "a".to_string(),
@@ -67,7 +67,7 @@ async fn seed_topic_a(broker: &crate::broker::Broker) {
         .unwrap_or_else(|error| panic!("seed topic a: {error}"));
 }
 
-fn topic(name: &str, partitions: &[i32]) -> TxnOffsetCommitRequestTopic {
+pub(super) fn topic(name: &str, partitions: &[i32]) -> TxnOffsetCommitRequestTopic {
     TxnOffsetCommitRequestTopic {
         name: name.to_string(),
         partitions: partitions
@@ -88,7 +88,7 @@ fn topic(name: &str, partitions: &[i32]) -> TxnOffsetCommitRequestTopic {
 /// to `(group_id, topic, partition)`. Reads the real log the handler wrote
 /// to, rather than trusting the response alone, so the test also catches a
 /// response that claims success without a durable append (or the reverse).
-fn log_holds_key(
+pub(super) fn log_holds_key(
     broker: &crate::broker::Broker,
     group_id: &str,
     topic: &str,

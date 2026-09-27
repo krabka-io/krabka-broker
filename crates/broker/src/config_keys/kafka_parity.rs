@@ -240,6 +240,35 @@ const KAFKA_TOPIC_CONFIGS: &[KafkaTopicConfig] = &[
     ),
 ];
 
+/// The topic configs Apache Kafka trunk defines beyond 4.3.1, from
+/// `storage/src/main/java/org/apache/kafka/storage/internals/log/LogConfig.java`
+/// at commit `4338e13ea3864a51d9ead14db23a3e0b76ca9fb7`. They arrive with the
+/// next Kafka release, and a `MirrorMaker` 2 replay from a cluster that sets
+/// one of them must not fail.
+const KAFKA_TRUNK_TOPIC_CONFIGS: &[KafkaTopicConfig] = &[
+    kafka(
+        "errors.deadletterqueue.group.enable",
+        ConfigType::Boolean,
+        Some("false"),
+        "false",
+    ),
+    kafka(
+        "max.decompressed.message.bytes",
+        ConfigType::Int,
+        Some("2147483639"),
+        "2147483639",
+    ),
+    kafka("remote.copy.lag.bytes", ConfigType::Long, Some("-1"), "-1"),
+    kafka("remote.copy.lag.ms", ConfigType::Long, Some("0"), "0"),
+];
+
+/// Every Kafka topic config, released and trunk.
+fn kafka_rosters() -> impl Iterator<Item = &'static KafkaTopicConfig> {
+    KAFKA_TOPIC_CONFIGS
+        .iter()
+        .chain(KAFKA_TRUNK_TOPIC_CONFIGS.iter())
+}
+
 /// The topic keys krabka has and Apache Kafka 4.3.1 does not.
 ///
 /// Every one is a deliberate krabka extension. `unclean.recovery.strategy` is
@@ -279,12 +308,12 @@ fn krabka_topic_keys() -> Vec<&'static str> {
 ///
 /// Before `compression.gzip.level`, `compression.lz4.level`,
 /// `compression.zstd.level` and `internal.segment.bytes` were added, this
-/// failed with `unrecognized config key` on each of them -- the same refusal
+/// failed with an unknown-key refusal on each of them -- the same refusal
 /// `MirrorMaker` surfaced as `InvalidConfigurationException: unrecognized config
 /// key`.
 #[test]
 fn every_kafka_4_3_1_topic_config_is_accepted_by_the_alter_path() {
-    for row in KAFKA_TOPIC_CONFIGS {
+    for row in kafka_rosters() {
         check!(
             validate_topic_config(row.name, row.sample) == Ok(()),
             "{}={}",
@@ -299,8 +328,7 @@ fn every_kafka_4_3_1_topic_config_is_accepted_by_the_alter_path() {
 /// it. The whole-map validator is the surface that call lands on.
 #[test]
 fn a_whole_kafka_config_set_replays_in_one_alter() {
-    let replay: BTreeMap<String, String> = KAFKA_TOPIC_CONFIGS
-        .iter()
+    let replay: BTreeMap<String, String> = kafka_rosters()
         .map(|row| (row.name.to_owned(), row.sample.to_owned()))
         .collect();
 
@@ -312,7 +340,7 @@ fn a_whole_kafka_config_set_replays_in_one_alter() {
 #[test]
 fn the_topic_key_sets_differ_only_by_the_rosters_below() {
     let krabka: Vec<&str> = krabka_topic_keys();
-    let kafka: Vec<&str> = KAFKA_TOPIC_CONFIGS.iter().map(|row| row.name).collect();
+    let kafka: Vec<&str> = kafka_rosters().map(|row| row.name).collect();
 
     let missing: Vec<&str> = kafka
         .iter()
@@ -337,7 +365,7 @@ fn the_topic_key_sets_differ_only_by_the_rosters_below() {
 /// hands back, and `kafka-configs --describe --all` prints the default.
 #[test]
 fn kafka_topic_key_types_and_defaults_match() {
-    for row in KAFKA_TOPIC_CONFIGS {
+    for row in kafka_rosters() {
         let Some(krabka_row) = registry::lookup(ConfigScope::Topic, row.name) else {
             // `the_topic_key_sets_differ_only_by_the_rosters_below` reports a
             // missing key; nothing to compare here.
@@ -362,8 +390,7 @@ fn kafka_topic_key_types_and_defaults_match() {
 #[test]
 fn every_recorded_divergence_is_still_a_divergence() {
     for (name, krabka_default) in DEFAULT_DIVERGENCES {
-        let kafka_default = KAFKA_TOPIC_CONFIGS
-            .iter()
+        let kafka_default = kafka_rosters()
             .find(|row| row.name == *name)
             .unwrap_or_else(|| panic!("{name} is not a Kafka 4.3.1 topic config"))
             .default;
@@ -380,7 +407,7 @@ fn every_recorded_divergence_is_still_a_divergence() {
 fn every_kafka_topic_key_is_documented() {
     let documented: Vec<&str> = topic_config_docs().iter().map(|doc| doc.key).collect();
 
-    for row in KAFKA_TOPIC_CONFIGS {
+    for row in kafka_rosters() {
         check!(documented.contains(&row.name), "{}", row.name);
     }
 }

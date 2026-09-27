@@ -31,6 +31,16 @@ fn persisted_group_config_overrides_actor_defaults() {
     assert!(unaffected == StreamsGroupConfig::default());
 }
 
+/// The default config with no initial rebalance delay and no assignment
+/// interval, so that every change assigns at once.
+fn undelayed() -> StreamsGroupConfig {
+    StreamsGroupConfig {
+        initial_rebalance_delay: std::time::Duration::ZERO,
+        assignment_interval: std::time::Duration::ZERO,
+        ..StreamsGroupConfig::default()
+    }
+}
+
 #[derive(Debug)]
 struct EmptyMetadata;
 impl MetadataProvider for EmptyMetadata {
@@ -49,7 +59,7 @@ fn make_coordinator() -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
         ShareGroupConfig::default(),
         metadata,
         log.clone(),
-        StreamsGroupConfig::default(),
+        undelayed(),
     ));
     (coord, log)
 }
@@ -115,8 +125,9 @@ async fn first_join_advances_epoch_not_ready() {
     check!(resp.error_code == codes::NONE);
     check!(resp.member_id == "m1");
     // No metadata source / no topology → NotReady, empty assignment, but the
-    // member still advances to the (bumped) group epoch.
-    check!(resp.member_epoch == 1);
+    // member still advances to the group epoch, which the join bumps past
+    // the initial epoch 1.
+    check!(resp.member_epoch == 2);
     check!(resp.active_tasks == Some(vec![]));
     check!(resp.standby_tasks == Some(vec![]));
     check!(resp.warmup_tasks == Some(vec![]));
@@ -163,7 +174,7 @@ async fn member_limit_rejects_only_new_members() {
         log,
         StreamsGroupConfig {
             max_size: 1,
-            ..StreamsGroupConfig::default()
+            ..undelayed()
         },
     ));
     let handle = coord.get_or_create_streams("g");
@@ -186,9 +197,10 @@ async fn member_limit_rejects_only_new_members() {
 }
 
 /// The member epoch rule of Kafka's `throwIfStreamsGroupMemberEpochIsInvalid`.
-/// Member `m1` is at epoch 3 with previous epoch 2: it joins at epoch 1, `m2`
-/// joins (group epoch 2), `m1` heartbeats at 1, `m3` joins (group epoch 3),
-/// and `m1` heartbeats at 2. With no metadata source every assignment is
+/// Member `m1` is at epoch 4 with previous epoch 3: it joins at epoch 2, the
+/// first bump past the initial group epoch 1, `m2` joins (group epoch 3), `m1`
+/// heartbeats at 2, `m3` joins (group epoch 4), and `m1` heartbeats at 3.
+/// With no metadata source every assignment is
 /// empty. Each row sends one heartbeat on a fresh group. An accepted row must
 /// answer exactly what a heartbeat at the member epoch answers.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -216,12 +228,12 @@ async fn member_epoch_rule_matches_kafka() {
     // (request epoch, owned active tasks, expected error code)
     let rows = [
         (0, None, codes::NONE),
-        (2, Some(vec![]), codes::NONE),
-        (2, unassigned, codes::FENCED_MEMBER_EPOCH),
-        (2, None, codes::FENCED_MEMBER_EPOCH),
-        (1, Some(vec![]), codes::FENCED_MEMBER_EPOCH),
-        (3, None, codes::NONE),
-        (4, Some(vec![]), codes::FENCED_MEMBER_EPOCH),
+        (3, Some(vec![]), codes::NONE),
+        (3, unassigned, codes::FENCED_MEMBER_EPOCH),
+        (3, None, codes::FENCED_MEMBER_EPOCH),
+        (2, Some(vec![]), codes::FENCED_MEMBER_EPOCH),
+        (4, None, codes::NONE),
+        (5, Some(vec![]), codes::FENCED_MEMBER_EPOCH),
     ];
 
     for (index, (member_epoch, active_tasks, error_code)) in rows.into_iter().enumerate() {
@@ -231,22 +243,10 @@ async fn member_epoch_rule_matches_kafka() {
             heartbeat(&handle, request("m1", 0, None))
                 .await
                 .member_epoch
-                == 1
+                == 2
         );
         check!(
             heartbeat(&handle, request("m2", 0, None))
-                .await
-                .member_epoch
-                == 2
-        );
-        check!(
-            heartbeat(&handle, request("m1", 1, None))
-                .await
-                .member_epoch
-                == 2
-        );
-        check!(
-            heartbeat(&handle, request("m3", 0, None))
                 .await
                 .member_epoch
                 == 3
@@ -256,6 +256,18 @@ async fn member_epoch_rule_matches_kafka() {
                 .await
                 .member_epoch
                 == 3
+        );
+        check!(
+            heartbeat(&handle, request("m3", 0, None))
+                .await
+                .member_epoch
+                == 4
+        );
+        check!(
+            heartbeat(&handle, request("m1", 3, None))
+                .await
+                .member_epoch
+                == 4
         );
 
         let resp = heartbeat(&handle, request("m1", member_epoch, active_tasks)).await;
@@ -268,10 +280,10 @@ async fn member_epoch_rule_matches_kafka() {
                 active_tasks: rejoin.clone(),
                 standby_tasks: rejoin.clone(),
                 warmup_tasks: rejoin,
-                ..heartbeat(&handle, request("m1", 3, None)).await
+                ..heartbeat(&handle, request("m1", 4, None)).await
             }
         } else {
-            let relation = if member_epoch > 3 {
+            let relation = if member_epoch > 4 {
                 "greater"
             } else {
                 "smaller"
@@ -280,7 +292,7 @@ async fn member_epoch_rule_matches_kafka() {
                 error_code,
                 Some(format!(
                     "The streams group member has a {relation} member epoch ({member_epoch}) than \
-                     the one known by the group coordinator (3). The member must abandon all its \
+                     the one known by the group coordinator (4). The member must abandon all its \
                      partitions and rejoin."
                 )),
             )
@@ -342,7 +354,7 @@ async fn fenced_epoch_is_rejected() {
         },
     )
     .await;
-    assert!(join.member_epoch == 1);
+    assert!(join.member_epoch == 2);
     let resp = heartbeat(
         &handle,
         StreamsGroupHeartbeatRequest {
@@ -601,7 +613,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             stateful: false,
             change: Change::Image(Box::new(image_of(None, &[("in", 1, 2)]))),
             owned_active: None,
-            epoch: 2,
+            epoch: 3,
             active: Some(vec![0, 1]),
             status: Some(vec![]),
         },
@@ -611,7 +623,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             stateful: false,
             change: Change::Image(Box::new(image_of(None, &[("in", 1, 2)]))),
             owned_active: Some(vec![0]),
-            epoch: 2,
+            epoch: 3,
             active: Some(vec![0, 1]),
             status: Some(vec![]),
         },
@@ -621,7 +633,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             stateful: false,
             change: Change::Image(Box::new(image_of(None, &[]))),
             owned_active: Some(vec![]),
-            epoch: 2,
+            epoch: 3,
             active: Some(vec![]),
             status: Some(vec![Status {
                 status_code: status::MISSING_SOURCE_TOPICS,
@@ -635,7 +647,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             stateful: false,
             change: Change::Rack("rack-b"),
             owned_active: Some(vec![0]),
-            epoch: 2,
+            epoch: 3,
             active: None,
             status: Some(vec![]),
         },
@@ -645,7 +657,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             stateful: false,
             change: Change::Process("process-b"),
             owned_active: Some(vec![0]),
-            epoch: 2,
+            epoch: 3,
             active: None,
             status: Some(vec![]),
         },
@@ -658,7 +670,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
                 &[("in", 1, 1), ("store-changelog", 2, 1)],
             ))),
             owned_active: Some(vec![]),
-            epoch: 2,
+            epoch: 3,
             active: Some(vec![0]),
             status: Some(vec![]),
         },
@@ -686,7 +698,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             },
         )
         .await;
-        check!(joined.member_epoch == 1, "{}", row.name);
+        check!(joined.member_epoch == 2, "{}", row.name);
 
         let (rack, process) = match row.change {
             Change::Image(image) => {
@@ -733,7 +745,7 @@ async fn a_heartbeat_after_a_topic_or_member_change_recomputes_the_assignment() 
             standby_tasks: row.active.as_ref().map(|_| vec![]),
             warmup_tasks: row.active.as_ref().map(|_| vec![]),
             active_tasks: row.active.map(tasks),
-            ..super::response::base_resp(codes::NONE, row.epoch, &StreamsGroupConfig::default())
+            ..super::response::base_resp(codes::NONE, row.epoch, &undelayed())
         };
         check!(resp == expected, "{}", row.name);
     }
@@ -769,11 +781,11 @@ async fn a_new_target_persists_the_target_of_every_member() {
     };
     let m1 = heartbeat(&handle, request("m1", 0)).await;
     let m2 = heartbeat(&handle, request("m2", 0)).await;
-    check!((m1.member_epoch, m2.member_epoch) == (1, 2));
+    check!((m1.member_epoch, m2.member_epoch) == (2, 3));
 
     source.set_image(image_of(None, &[("in", 1, 4)]));
-    let resp = heartbeat(&handle, request("m1", 1)).await;
-    check!(resp.member_epoch == 3);
+    let resp = heartbeat(&handle, request("m1", 2)).await;
+    check!(resp.member_epoch == 4);
 
     let batches = log.batches().await;
     let last = batches.last().expect("the heartbeat wrote a batch");
@@ -824,7 +836,7 @@ async fn a_seeded_group_asks_for_its_missing_internal_topics_again() {
         },
     )
     .await;
-    check!(joined.member_epoch == 1);
+    check!(joined.member_epoch == 2);
     let seed = before
         .cached_streams_seed("g")
         .expect("the join cached a seed");
@@ -839,7 +851,7 @@ async fn a_seeded_group_asks_for_its_missing_internal_topics_again() {
         StreamsGroupHeartbeatRequest {
             group_id: "g".into(),
             member_id: "m1".into(),
-            member_epoch: 1,
+            member_epoch: 2,
             ..Default::default()
         },
     )
@@ -861,7 +873,7 @@ async fn a_seeded_group_asks_for_its_missing_internal_topics_again() {
             status_detail: "Internal topics are missing: store-changelog".into(),
             ..Default::default()
         }]),
-        ..super::response::base_resp(codes::NONE, 1, &StreamsGroupConfig::default())
+        ..super::response::base_resp(codes::NONE, 2, &undelayed())
     };
     check!(result.response == expected);
 }
@@ -997,7 +1009,7 @@ async fn a_join_sizes_the_internal_topics_as_kafka_does() {
             active_tasks: Some(vec![]),
             standby_tasks: Some(vec![]),
             warmup_tasks: Some(vec![]),
-            ..super::response::base_resp(codes::NONE, 1, &StreamsGroupConfig::default())
+            ..super::response::base_resp(codes::NONE, 2, &undelayed())
         };
         check!(result.response == expected, "{}", row.name);
     }
@@ -1048,7 +1060,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
             sources: &["in"],
             beats: vec![Beat::Join("m1", 1)],
             member: "m1",
-            epoch: 1,
+            epoch: 2,
             active: Some(vec![0]),
             status: vec![],
         },
@@ -1057,7 +1069,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
             sources: &["b", "a"],
             beats: vec![Beat::Join("m1", 1)],
             member: "m1",
-            epoch: 1,
+            epoch: 2,
             active: Some(vec![]),
             status: vec![(
                 status::MISSING_SOURCE_TOPICS,
@@ -1069,7 +1081,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
             sources: &["in"],
             beats: vec![Beat::Join("m1", 1), Beat::Heartbeat("m1", true)],
             member: "m1",
-            epoch: 1,
+            epoch: 2,
             active: None,
             status: vec![(
                 status::SHUTDOWN_APPLICATION,
@@ -1087,7 +1099,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
                 Beat::Heartbeat("m1", false),
             ],
             member: "m1",
-            epoch: 3,
+            epoch: 4,
             active: None,
             status: vec![(
                 status::SHUTDOWN_APPLICATION,
@@ -1105,7 +1117,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
                 Beat::Join("m2", 1),
             ],
             member: "m2",
-            epoch: 3,
+            epoch: 4,
             active: Some(vec![0]),
             status: vec![],
         },
@@ -1114,7 +1126,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
             sources: &["in"],
             beats: vec![Beat::Join("m1", 2), Beat::Join("m2", 1)],
             member: "m2",
-            epoch: 2,
+            epoch: 3,
             active: Some(vec![]),
             status: vec![(
                 status::STALE_TOPOLOGY,
@@ -1130,7 +1142,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
                 Beat::Heartbeat("m1", false),
             ],
             member: "m1",
-            epoch: 2,
+            epoch: 3,
             active: None,
             status: vec![],
         },
@@ -1204,7 +1216,7 @@ async fn the_heartbeat_status_list_follows_kafka() {
                     }]
                 }
             }),
-            ..super::response::base_resp(codes::NONE, row.epoch, &StreamsGroupConfig::default())
+            ..super::response::base_resp(codes::NONE, row.epoch, &undelayed())
         };
         check!(last == Some(expected), "{}", row.name);
     }
@@ -1258,7 +1270,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
         standby_partitions: vec![],
         ..Default::default()
     };
-    let config = StreamsGroupConfig::default();
+    let config = undelayed();
     let accepted =
         |member_id: &str, member_epoch, tasks: Option<Vec<i32>>| StreamsGroupHeartbeatResponse {
             member_id: member_id.into(),
@@ -1286,7 +1298,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
             vec![Beat::Join("m1", Some(1))],
             StreamsGroupHeartbeatResponse {
                 partitions_by_user_endpoint: Some(vec![endpoint(1, &[0])]),
-                ..accepted("m1", 1, Some(vec![0]))
+                ..accepted("m1", 2, Some(vec![0]))
             },
         ),
         (
@@ -1297,7 +1309,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
             StreamsGroupHeartbeatResponse {
                 endpoint_information_epoch: 1,
                 partitions_by_user_endpoint: Some(vec![endpoint(1, &[0]), endpoint(2, &[])]),
-                ..accepted("m2", 2, Some(vec![]))
+                ..accepted("m2", 3, Some(vec![]))
             },
         ),
         (
@@ -1309,7 +1321,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
                 Beat::Join("m2", None),
                 Beat::Heartbeat("m1", None),
             ],
-            accepted("m1", 1, Some(vec![0])),
+            accepted("m1", 2, Some(vec![0])),
         ),
         (
             "a member with an endpoint that must revoke a task",
@@ -1323,7 +1335,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
             StreamsGroupHeartbeatResponse {
                 endpoint_information_epoch: 1,
                 partitions_by_user_endpoint: Some(vec![endpoint(1, &[0])]),
-                ..accepted("m1", 1, Some(vec![0]))
+                ..accepted("m1", 2, Some(vec![0]))
             },
         ),
         (
@@ -1331,7 +1343,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
             10,
             1,
             vec![Beat::Join("m1", None), Beat::Heartbeat("m1", None)],
-            accepted("m1", 1, None),
+            accepted("m1", 2, None),
         ),
         (
             "a leave",
@@ -1380,7 +1392,7 @@ async fn the_heartbeat_response_carries_what_kafka_sends() {
             Arc::new(InMemoryOffsetsLog::default()),
             StreamsGroupConfig {
                 max_size,
-                ..StreamsGroupConfig::default()
+                ..undelayed()
             },
         ));
         coord.set_metadata_source(source);
@@ -1435,7 +1447,7 @@ async fn a_member_keeps_its_epoch_until_it_revokes_and_is_fenced_after_its_timeo
 
     use crate::test_support::FakeMetadataSource;
 
-    let config = StreamsGroupConfig::default();
+    let config = undelayed();
     let accepted =
         |member_id: &str, member_epoch, tasks: Option<Vec<i32>>| StreamsGroupHeartbeatResponse {
             member_id: member_id.into(),
@@ -1462,15 +1474,15 @@ async fn a_member_keeps_its_epoch_until_it_revokes_and_is_fenced_after_its_timeo
             "revokes before the timeout",
             600_000,
             true,
-            accepted("m1", 2, None),
-            accepted("m2", 2, Some(vec![1])),
+            accepted("m1", 3, None),
+            accepted("m2", 3, Some(vec![1])),
         ),
         (
             "does not revoke, the timeout is not reached",
             600_000,
             false,
-            accepted("m1", 1, None),
-            accepted("m2", 2, None),
+            accepted("m1", 2, None),
+            accepted("m2", 3, None),
         ),
         (
             "does not revoke within the timeout",
@@ -1480,7 +1492,7 @@ async fn a_member_keeps_its_epoch_until_it_revokes_and_is_fenced_after_its_timeo
                 codes::UNKNOWN_MEMBER_ID,
                 Some("Member m1 is not a member of group g.".into()),
             ),
-            accepted("m2", 3, Some(vec![0, 1])),
+            accepted("m2", 4, Some(vec![0, 1])),
         ),
     ];
 
@@ -1513,14 +1525,14 @@ async fn a_member_keeps_its_epoch_until_it_revokes_and_is_fenced_after_its_timeo
             };
 
         let m1 = heartbeat(&handle, request("m1", 0, Some(&[]))).await;
-        check!(m1 == accepted("m1", 1, Some(vec![0, 1])), "{name}");
+        check!(m1 == accepted("m1", 2, Some(vec![0, 1])), "{name}");
         let m2 = heartbeat(&handle, request("m2", 0, Some(&[]))).await;
-        check!(m2 == accepted("m2", 2, Some(vec![])), "{name}");
-        let m1 = heartbeat(&handle, request("m1", 1, Some(&[0, 1]))).await;
-        check!(m1 == accepted("m1", 1, Some(vec![0])), "{name}");
+        check!(m2 == accepted("m2", 3, Some(vec![])), "{name}");
+        let m1 = heartbeat(&handle, request("m1", 2, Some(&[0, 1]))).await;
+        check!(m1 == accepted("m1", 2, Some(vec![0])), "{name}");
         if revokes {
-            let m1 = heartbeat(&handle, request("m1", 1, Some(&[0]))).await;
-            check!(m1 == accepted("m1", 2, None), "{name}");
+            let m1 = heartbeat(&handle, request("m1", 2, Some(&[0]))).await;
+            check!(m1 == accepted("m1", 3, None), "{name}");
         }
         // A row whose member never revokes within its rebalance timeout waits
         // for the fence, which the actor runs at the deadline.
@@ -1537,9 +1549,9 @@ async fn a_member_keeps_its_epoch_until_it_revokes_and_is_fenced_after_its_timeo
         }
 
         let owned_by_m1: &[i32] = if revokes { &[0] } else { &[0, 1] };
-        let m1_epoch = if revokes { 2 } else { 1 };
+        let m1_epoch = if revokes { 3 } else { 2 };
         let last_m1 = heartbeat(&handle, request("m1", m1_epoch, Some(owned_by_m1))).await;
-        let last_m2 = heartbeat(&handle, request("m2", 2, Some(&[]))).await;
+        let last_m2 = heartbeat(&handle, request("m2", 3, Some(&[]))).await;
         check!((last_m1, last_m2) == (expected_m1, expected_m2), "{name}");
     }
 }
@@ -1574,7 +1586,7 @@ async fn a_topology_update_or_an_invalid_owned_task_is_refused() {
     let owning = |subtopology: &str, partition| StreamsGroupHeartbeatRequest {
         group_id: "g".into(),
         member_id: "m1".into(),
-        member_epoch: 1,
+        member_epoch: 2,
         active_tasks: Some(vec![TaskIds {
             subtopology_id: subtopology.into(),
             partitions: vec![partition],
@@ -1656,7 +1668,7 @@ async fn a_static_member_follows_kafka_static_membership() {
 
     let config = StreamsGroupConfig {
         max_size: 2,
-        ..StreamsGroupConfig::default()
+        ..undelayed()
     };
     let join = |member_id: &str, instance_id: &str| StreamsGroupHeartbeatRequest {
         group_id: "g".into(),
@@ -1706,8 +1718,8 @@ async fn a_static_member_follows_kafka_static_membership() {
         (
             "a new member replaces the released static member",
             vec![beat("m1", -2, "i1"), join("m2", "i1")],
-            assigned("m2", 1),
-            vec![("m2".to_string(), 1, vec![0])],
+            assigned("m2", 2),
+            vec![("m2".to_string(), 2, vec![0])],
         ),
         (
             "a join with an instance id that a member still holds",
@@ -1720,7 +1732,7 @@ async fn a_static_member_follows_kafka_static_membership() {
                         .into(),
                 ),
             ),
-            vec![("m1".to_string(), 1, vec![0])],
+            vec![("m1".to_string(), 2, vec![0])],
         ),
         (
             "a heartbeat with the instance id of another member",
@@ -1729,31 +1741,31 @@ async fn a_static_member_follows_kafka_static_membership() {
                 codes::FENCED_INSTANCE_ID,
                 Some("Static member m2 with instance id i1 was fenced by member m1.".into()),
             ),
-            vec![("m1".to_string(), 1, vec![0])],
+            vec![("m1".to_string(), 2, vec![0])],
         ),
         (
             "a heartbeat with an unknown instance id",
-            vec![beat("m1", 1, "i9")],
+            vec![beat("m1", 2, "i9")],
             super::response::error_resp(
                 codes::UNKNOWN_MEMBER_ID,
                 Some("Instance id i9 is unknown.".into()),
             ),
-            vec![("m1".to_string(), 1, vec![0])],
+            vec![("m1".to_string(), 2, vec![0])],
         ),
         (
             "a released static member does not count against a full group",
             vec![join("m3", "i3"), beat("m1", -2, "i1"), join("m2", "i1")],
-            assigned("m2", 2),
+            assigned("m2", 3),
             vec![
-                ("m2".to_string(), 2, vec![0]),
-                ("m3".to_string(), 2, vec![]),
+                ("m2".to_string(), 3, vec![0]),
+                ("m3".to_string(), 3, vec![]),
             ],
         ),
         (
             "a replacement takes over a member id that another member holds",
             vec![join("m2", "i2"), beat("m1", -2, "i1"), join("m2", "i1")],
-            assigned("m2", 3),
-            vec![("m2".to_string(), 3, vec![0])],
+            assigned("m2", 4),
+            vec![("m2".to_string(), 4, vec![0])],
         ),
         (
             "a static member leaves for good",
@@ -1784,7 +1796,7 @@ async fn a_static_member_follows_kafka_static_membership() {
         coord.set_metadata_source(source);
         let handle = coord.get_or_create_streams("g");
         check!(
-            heartbeat(&handle, join("m1", "i1")).await == assigned("m1", 1),
+            heartbeat(&handle, join("m1", "i1")).await == assigned("m1", 2),
             "{name}"
         );
 
@@ -1812,5 +1824,235 @@ async fn a_static_member_follows_kafka_static_membership() {
             .collect();
         described.sort();
         check!(described == members, "{name}");
+    }
+}
+
+/// Kafka's `StreamsGroup.validateOffsetCommit`. Each row is a group (with
+/// member `m1` at epoch 5, or empty), a commit and the expected answer.
+#[test]
+fn validate_offset_commit_follows_kafka_streams_group() {
+    let offset = |api_version| CommitFence::Offset { api_version };
+    let txn = CommitFence::Transactional;
+    let mut group = crate::coordinator::unified::streams::state::StreamsGroupState::new("g");
+    let mut member = crate::coordinator::unified::streams::state::StreamsMemberState::joining(
+        "m1",
+        "client",
+        "/127.0.0.1",
+    );
+    member.member_epoch = 5;
+    group.members.insert("m1".into(), member);
+    let empty = crate::coordinator::unified::streams::state::StreamsGroupState::new("g");
+
+    // (row, group, member id, member epoch, fence, expected)
+    let rows = [
+        (
+            "admin commit on an empty group",
+            &empty,
+            "",
+            -1,
+            offset(9),
+            Ok(()),
+        ),
+        (
+            "admin commit on a live group",
+            &group,
+            "",
+            -1,
+            offset(9),
+            Err(codes::UNKNOWN_MEMBER_ID),
+        ),
+        (
+            "empty member id at a real epoch",
+            &group,
+            "",
+            5,
+            offset(9),
+            Err(codes::UNKNOWN_MEMBER_ID),
+        ),
+        (
+            "transactional commit with no member",
+            &group,
+            "",
+            -1,
+            txn,
+            Ok(()),
+        ),
+        (
+            "unknown member",
+            &group,
+            "m2",
+            5,
+            offset(9),
+            Err(codes::UNKNOWN_MEMBER_ID),
+        ),
+        (
+            "OffsetCommit before v9",
+            &group,
+            "m1",
+            5,
+            offset(8),
+            Err(codes::UNSUPPORTED_VERSION),
+        ),
+        (
+            "TxnOffsetCommit has no version floor",
+            &group,
+            "m1",
+            5,
+            txn,
+            Ok(()),
+        ),
+        ("current epoch", &group, "m1", 5, offset(9), Ok(())),
+        (
+            "newer epoch",
+            &group,
+            "m1",
+            6,
+            offset(9),
+            Err(codes::STALE_MEMBER_EPOCH),
+        ),
+        (
+            "older epoch",
+            &group,
+            "m1",
+            4,
+            offset(9),
+            Err(codes::STALE_MEMBER_EPOCH),
+        ),
+    ];
+    for (row, state, member_id, member_epoch, fence, expected) in rows {
+        check!(
+            validate_offset_commit(state, member_id, member_epoch, fence) == expected,
+            "{row}"
+        );
+    }
+}
+
+/// Kafka's version 0 heartbeat response carries `AcceptableRecoveryLag = 0`
+/// whatever `acceptable.recovery.lag` says: 4.3.0 never sets the field, and
+/// trunk sets only the `int64` field of version 1.
+#[test]
+fn heartbeat_response_carries_no_recovery_lag_at_version_0() {
+    let config = StreamsGroupConfig {
+        acceptable_recovery_lag: 10_000,
+        ..undelayed()
+    };
+    assert!(
+        response::base_resp(codes::NONE, 3, &config)
+            == StreamsGroupHeartbeatResponse {
+                error_code: codes::NONE,
+                member_epoch: 3,
+                heartbeat_interval_ms: 5_000,
+                acceptable_recovery_lag: 0,
+                task_offset_interval_ms: i32::try_from(config.task_offset_interval.as_millis())
+                    .expect("fits"),
+                ..Default::default()
+            }
+    );
+}
+
+/// Kafka's initial rebalance delay and assignment interval
+/// (`maybeUpdateStreamsTargetAssignment`, `computeDelayedTargetAssignment`).
+/// Each row configures the delays, then runs timed heartbeats on a paused
+/// clock and compares each answer's error code, member epoch, active tasks and
+/// status list. With no metadata source every target is empty, so a member's
+/// epoch shows whether the assignment of its group epoch was computed. A
+/// member that joins while the initial delay holds the assignment back
+/// reconciles to Kafka 4.3's initial target assignment epoch 1 with an empty
+/// assignment, so its next heartbeat is not a join.
+#[tokio::test(start_paused = true)]
+async fn assignment_waits_for_the_initial_delay_and_the_interval() {
+    use std::time::Duration;
+
+    use crate::coordinator::unified::streams::{
+        actor::reconciliation::{ASSIGNMENT_INTERVAL_DETAIL, INITIAL_DELAY_DETAIL},
+        topology::status::ASSIGNMENT_DELAYED,
+    };
+
+    // (member id, member epoch sent, clock advance before the heartbeat,
+    // expected member epoch, expected ASSIGNMENT_DELAYED detail)
+    type Step = (&'static str, i32, u64, i32, Option<&'static str>);
+    let rows: [(&str, u64, u64, Vec<Step>); 3] = [
+        (
+            // Three members join within one second: one assignment, after
+            // the delay, for the group epoch of the third join.
+            "initial delay coalesces the joins",
+            3_000,
+            0,
+            vec![
+                ("m1", 0, 0, 1, Some(INITIAL_DELAY_DETAIL)),
+                ("m2", 0, 500, 1, Some(INITIAL_DELAY_DETAIL)),
+                ("m3", 0, 500, 1, Some(INITIAL_DELAY_DETAIL)),
+                ("m1", 1, 2_100, 4, None),
+                ("m2", 1, 0, 4, None),
+            ],
+        ),
+        (
+            // A change 200 ms after an assignment waits for the interval.
+            "assignment interval defers a change",
+            0,
+            1_000,
+            vec![
+                ("m1", 0, 0, 2, None),
+                ("m2", 0, 200, 2, Some(ASSIGNMENT_INTERVAL_DETAIL)),
+                ("m2", 2, 900, 3, None),
+            ],
+        ),
+        (
+            "no delay assigns at once",
+            0,
+            0,
+            vec![("m1", 0, 0, 2, None), ("m2", 0, 200, 3, None)],
+        ),
+    ];
+
+    for (name, delay_ms, interval_ms, steps) in rows {
+        let coord = Arc::new(GroupCoordinator::new(
+            NextGenConfig::default(),
+            ShareGroupConfig::default(),
+            Arc::new(EmptyMetadata),
+            Arc::new(InMemoryOffsetsLog::default()),
+            StreamsGroupConfig {
+                initial_rebalance_delay: Duration::from_millis(delay_ms),
+                assignment_interval: Duration::from_millis(interval_ms),
+                ..StreamsGroupConfig::default()
+            },
+        ));
+        let handle = coord.get_or_create_streams("g");
+        for (member_id, member_epoch, advance_ms, want_epoch, want_delay) in steps {
+            tokio::time::sleep(Duration::from_millis(advance_ms)).await;
+            let resp = heartbeat(
+                &handle,
+                StreamsGroupHeartbeatRequest {
+                    group_id: "g".into(),
+                    member_id: member_id.into(),
+                    member_epoch,
+                    rebalance_timeout_ms: 1_000,
+                    ..Default::default()
+                },
+            )
+            .await;
+            let delayed: Vec<(i8, String)> = resp
+                .status
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|status| status.status_code == ASSIGNMENT_DELAYED)
+                .map(|status| (status.status_code, status.status_detail))
+                .collect();
+            let want: Vec<(i8, String)> = want_delay
+                .map(|detail| (ASSIGNMENT_DELAYED, detail.to_owned()))
+                .into_iter()
+                .collect();
+            // Only a join gets the task lists, since every target is empty.
+            let want_active = (member_epoch == 0).then(Vec::new);
+            check!(
+                (
+                    resp.error_code,
+                    resp.member_epoch,
+                    resp.active_tasks,
+                    delayed
+                ) == (codes::NONE, want_epoch, want_active, want),
+                "{name}: {member_id} after {advance_ms} ms"
+            );
+        }
     }
 }

@@ -20,15 +20,15 @@ use super::{
     member_state::run_reconcile,
     persistence::{flush_classic_metadata, flush_pending, snapshot_pending_after_change},
     retention::tombstone_batch,
-    waiters::{drain_removed_classic_waiters, maybe_complete_classic},
+    waiters::{drain_followers_with, drain_removed_classic_waiters, maybe_complete_classic},
 };
 use crate::{
     codes,
     coordinator::{
         DeleteGroupError,
         unified::{
-            classic_ops, consumer_state::GroupState, group::CoordinatorGroup,
-            offsets_log::OffsetsLog,
+            classic_ops, classic_state::GroupState as ClassicGroupState,
+            consumer_state::GroupState, group::CoordinatorGroup, offsets_log::OffsetsLog,
         },
     },
 };
@@ -67,6 +67,13 @@ pub(super) async fn handle_classic_leave_message(
             }
         }
         drain_removed_classic_waiters(&removed, &mut parked.joiners, &mut parked.followers);
+        // Kafka's `prepareRebalance` from `CompletingRebalance` answers every
+        // member that waits in `SyncGroup` with `REBALANCE_IN_PROGRESS`.
+        if previous.state == ClassicGroupState::CompletingRebalance
+            && state.state == ClassicGroupState::PreparingRebalance
+        {
+            drain_followers_with(&mut parked.followers, codes::REBALANCE_IN_PROGRESS);
+        }
         maybe_complete_classic(state, &mut parked.joiners, &mut parked.followers);
         return Ok(responses);
     }

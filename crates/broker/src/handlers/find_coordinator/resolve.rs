@@ -11,53 +11,69 @@ use krabka_protocol::owned::find_coordinator_response::Coordinator;
 
 use crate::{broker::Broker, codes, handlers::parse_advertised_host_port as parse_host_port};
 
+/// What a coordinator lookup resolves against: one metadata image, the brokers
+/// that are fenced or dead in it, and the listener the request arrived on.
+pub(super) struct ResolveTarget<'a> {
+    pub(super) image: &'a krabka_metadata::MetadataImage,
+    /// From [`crate::handlers::offline_replicas::unavailable_brokers`].
+    pub(super) unavailable: &'a std::collections::HashSet<u64>,
+    /// This broker's node id.
+    pub(super) local_node: krabka_metadata::NodeId,
+    /// This broker's advertised `host:port` on the request's listener.
+    pub(super) advertised: &'a str,
+    /// The name of the listener the request arrived on.
+    pub(super) listener: &'a str,
+}
+
 pub(super) fn resolve_transaction_keys(
     broker: &Broker,
+    target: &ResolveTarget<'_>,
     keys: Vec<String>,
-    advertised: &str,
-    context: &crate::handlers::RequestContext<'_>,
 ) -> Vec<Coordinator> {
     keys.into_iter()
         .map(|key| {
             let partition = broker.txn_coordinator.partition_for(&key).get();
-            resolve_partition_coordinator(
-                broker,
-                &broker.controller.current_image(),
-                crate::txn::bootstrap::TOPIC,
-                partition,
-                key,
-                advertised,
-                context,
-            )
+            resolve_partition_coordinator(target, crate::txn::bootstrap::TOPIC, partition, key)
         })
         .collect()
 }
 
+/// The leader of `state_topic`'s `partition` as a `Coordinator` row for `key`.
+///
+/// Kafka's `getCoordinator` answers with
+/// `metadataCache.getAliveBrokerNode(leaderId, listenerName)`: the leader must
+/// be registered, unfenced, and have an endpoint for the request's listener.
+/// Anything else is `COORDINATOR_NOT_AVAILABLE` with `Node.noNode()`. The
+/// local broker answers with its own advertised address for the listener, the
+/// one it registered.
 pub(super) fn resolve_partition_coordinator(
-    broker: &Broker,
-    image: &krabka_metadata::MetadataImage,
+    target: &ResolveTarget<'_>,
     state_topic: &str,
     partition: i32,
     key: String,
-    advertised: &str,
-    context: &crate::handlers::RequestContext<'_>,
 ) -> Coordinator {
-    let Some(record) = image.partition(state_topic, partition) else {
-        return unavailable_coordinator(key, "partition not found");
+    let Some(record) = target.image.partition(state_topic, partition) else {
+        return unavailable_coordinator(key);
     };
     let leader = record.leader;
-    let Some(registration) = image.broker(leader) else {
-        return unavailable_coordinator(key, "leader broker not registered");
+    let Some(registration) = target.image.broker(leader) else {
+        return unavailable_coordinator(key);
     };
-    let (host, port) = if leader == broker.config.node_id {
-        let (host, port) = parse_host_port(advertised);
+    if target.unavailable.contains(&leader.0) {
+        return unavailable_coordinator(key);
+    }
+    let (host, port) = if leader == target.local_node {
+        let (host, port) = parse_host_port(target.advertised);
         (host, i32::from(port))
     } else {
-        crate::handlers::metadata::pick_endpoint_host_port(
-            registration,
-            context.connection_listener_name,
-            &broker.config.inter_broker_listener_name,
-        )
+        let Some(endpoint) = registration
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.name == target.listener)
+        else {
+            return unavailable_coordinator(key);
+        };
+        (endpoint.host.clone(), i32::from(endpoint.port))
     };
     Coordinator {
         key,
@@ -87,16 +103,8 @@ fn wire_node_id(leader: krabka_metadata::NodeId) -> i32 {
     i32::try_from(leader.0).unwrap_or(-1)
 }
 
-pub(super) fn unavailable_coordinator(key: String, message: &str) -> Coordinator {
-    Coordinator {
-        key,
-        node_id: -1,
-        host: String::new(),
-        port: -1,
-        error_code: codes::COORDINATOR_NOT_AVAILABLE,
-        error_message: Some(message.to_string()),
-        ..Default::default()
-    }
+pub(super) fn unavailable_coordinator(key: String) -> Coordinator {
+    super::response::no_node_row(key, codes::COORDINATOR_NOT_AVAILABLE)
 }
 
 /// Parse a share-coordinator key `"{group}:{topicId}:{partition}"` into its

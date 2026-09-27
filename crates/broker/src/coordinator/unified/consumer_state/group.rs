@@ -28,6 +28,12 @@ pub struct GroupState {
     /// Kafka's `scheduleConsumerGroupRebalanceTimeout` keeps the same deadline
     /// in a timer.
     rebalance_deadlines: HashMap<String, Instant>,
+    /// Members replay restored with a `subscribed_topic_regex` that no
+    /// heartbeat has resolved since. Kafka persists a regex's resolved topics
+    /// (`ConsumerGroupRegularExpression`) and replays them; krabka does not,
+    /// so until the member's next heartbeat carrying the pattern the group
+    /// cannot tell which topics the regex subscribes it to.
+    unresolved_regex_members: HashSet<String>,
 }
 
 impl GroupState {
@@ -40,6 +46,7 @@ impl GroupState {
             target: TargetAssignment::default(),
             dirty: false,
             rebalance_deadlines: HashMap::new(),
+            unresolved_regex_members: HashSet::new(),
         }
     }
 
@@ -99,6 +106,7 @@ impl GroupState {
 
     pub fn remove_member(&mut self, member_id: &str) -> Option<MemberState> {
         self.rebalance_deadlines.remove(member_id);
+        self.unresolved_regex_members.remove(member_id);
         let m = self.members.remove(member_id)?;
         if let Some(ref iid) = m.instance_id
             && self.instance_to_member.get(iid).map(String::as_str) == Some(member_id)
@@ -107,6 +115,28 @@ impl GroupState {
         }
         self.dirty = true;
         Some(m)
+    }
+
+    /// Record that replay restored `member_id` with a regex it has not
+    /// resolved yet.
+    pub(crate) fn mark_regex_unresolved(&mut self, member_id: &str) {
+        self.unresolved_regex_members.insert(member_id.to_owned());
+    }
+
+    /// Record that a heartbeat resolved `member_id`'s regex subscription, or
+    /// that the member no longer has one.
+    pub(crate) fn mark_regex_resolved(&mut self, member_id: &str) {
+        self.unresolved_regex_members.remove(member_id);
+    }
+
+    /// `true` when a member still carries a regex that replay restored and no
+    /// heartbeat has resolved since, so its subscribed topics are unknown.
+    pub(crate) fn has_unresolved_regex(&self) -> bool {
+        self.unresolved_regex_members.iter().any(|member_id| {
+            self.members
+                .get(member_id)
+                .is_some_and(|member| member.subscribed_topic_regex.is_some())
+        })
     }
 
     pub fn evict_expired(&mut self, now: Instant, session_timeout: Duration) -> Vec<String> {

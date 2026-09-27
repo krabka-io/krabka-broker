@@ -20,6 +20,7 @@ use super::{
     REMOTE_LOG_DELETE_ON_DISABLE, REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS,
     SEGMENT_BYTES, SEGMENT_MS,
     delivery::{DELIVERY_MODE, DELIVERY_MODE_SCHEDULED, DELIVERY_SCHEDULE_MONOTONIC},
+    parse::{self, bool_value, int_value, long_value},
     validation::{parse_cleanup_policy, parse_compression_type},
 };
 
@@ -37,17 +38,17 @@ pub(crate) fn apply_to_log_config(
     for (k, v) in overrides {
         match k.as_str() {
             RETENTION_MS => {
-                if let Ok(ms) = v.parse::<i64>() {
+                if let Some(ms) = long_value(v) {
                     out.retention = opt_time_from_millis_i64(ms);
                 }
             }
             RETENTION_BYTES => {
-                if let Ok(b) = v.parse::<i64>() {
+                if let Some(b) = long_value(v) {
                     out.retention_size = opt_size_from_bytes_i64(b);
                 }
             }
             LOCAL_RETENTION_MS => {
-                if let Ok(ms) = v.parse::<i64>() {
+                if let Some(ms) = long_value(v) {
                     // -2 (inherit) and -1 (unlimited)
                     // both collapse to `None` — the greenfield simplification noted
                     // in the spec. >=0 maps to `Some(Time)`.
@@ -55,17 +56,17 @@ pub(crate) fn apply_to_log_config(
                 }
             }
             LOCAL_RETENTION_BYTES => {
-                if let Ok(b) = v.parse::<i64>() {
+                if let Some(b) = long_value(v) {
                     out.local_retention_size = opt_size_from_bytes_i64(b);
                 }
             }
             SEGMENT_BYTES => {
-                if let Ok(b) = v.parse::<u64>() {
+                if let Some(b) = long_value(v).and_then(|b| u64::try_from(b).ok()) {
                     out.segment_size = ByteSize::from_bytes(b);
                 }
             }
             MAX_MESSAGE_BYTES => {
-                if let Ok(b) = v.parse::<i32>()
+                if let Some(b) = int_value(v)
                     && let Ok(b) = u64::try_from(b)
                 {
                     out.max_message_size = ByteSize::from_bytes(b);
@@ -77,28 +78,28 @@ pub(crate) fn apply_to_log_config(
                 }
             }
             SEGMENT_MS => {
-                if let Ok(ms) = v.parse::<i64>()
+                if let Some(ms) = long_value(v)
                     && ms >= 1
                 {
                     out.segment_roll_interval = Time::from_millis(ms);
                 }
             }
             INDEX_INTERVAL_BYTES => {
-                if let Ok(b) = v.parse::<i32>()
+                if let Some(b) = int_value(v)
                     && let Ok(b) = u64::try_from(b)
                 {
                     out.index_interval = ByteSize::from_bytes(b);
                 }
             }
             MIN_COMPACTION_LAG_MS => {
-                if let Ok(ms) = v.parse::<i64>()
+                if let Some(ms) = long_value(v)
                     && ms >= 0
                 {
                     out.min_compaction_lag = Time::from_millis(ms);
                 }
             }
             MAX_COMPACTION_LAG_MS => {
-                if let Ok(ms) = v.parse::<i64>()
+                if let Some(ms) = long_value(v)
                     && ms >= 1
                 {
                     // Kafka's default is `Long.MAX_VALUE`, which is how an
@@ -113,11 +114,12 @@ pub(crate) fn apply_to_log_config(
                 }
             }
             MESSAGE_TIMESTAMP_TYPE => {
-                out.message_timestamp_type = if v == MESSAGE_TIMESTAMP_TYPE_LOG_APPEND {
-                    krabka_protocol::records::TimestampType::LogAppendTime
-                } else {
-                    krabka_protocol::records::TimestampType::CreateTime
-                };
+                out.message_timestamp_type =
+                    if parse::java_trim(v) == MESSAGE_TIMESTAMP_TYPE_LOG_APPEND {
+                        krabka_protocol::records::TimestampType::LogAppendTime
+                    } else {
+                        krabka_protocol::records::TimestampType::CreateTime
+                    };
             }
             COMPRESSION_TYPE => {
                 if let Ok(target) = parse_compression_type(v) {
@@ -125,16 +127,16 @@ pub(crate) fn apply_to_log_config(
                 }
             }
             REMOTE_STORAGE_ENABLE => {
-                out.remote_storage_enable = v == "true";
+                out.remote_storage_enable = bool_value(v) == Some(true);
             }
             REMOTE_LOG_COPY_DISABLE => {
-                out.remote_tier.copy_disable = v == "true";
+                out.remote_tier.copy_disable = bool_value(v) == Some(true);
             }
             REMOTE_LOG_DELETE_ON_DISABLE => {
-                out.remote_tier.delete_on_disable = v == "true";
+                out.remote_tier.delete_on_disable = bool_value(v) == Some(true);
             }
             DELIVERY_MODE => {
-                out.delivery_policy = if v == DELIVERY_MODE_SCHEDULED {
+                out.delivery_policy = if parse::java_trim(v) == DELIVERY_MODE_SCHEDULED {
                     krabka_log::DeliveryPolicy::Scheduled
                 } else {
                     krabka_log::DeliveryPolicy::Immediate
@@ -144,14 +146,14 @@ pub(crate) fn apply_to_log_config(
                 // The log enforces this one, under the same lock acquisition
                 // that writes the batch, so it travels with `delivery.mode`
                 // into `Log.config` rather than being resolved per produce.
-                out.schedule_order = if v == "true" {
+                out.schedule_order = if bool_value(v) == Some(true) {
                     krabka_log::ScheduleOrder::Monotonic
                 } else {
                     krabka_log::ScheduleOrder::Unordered
                 };
             }
             DELETE_RETENTION_MS => {
-                if let Ok(ms) = v.parse::<i64>()
+                if let Some(ms) = long_value(v)
                     && ms >= 0
                 {
                     out.delete_retention = Time::from_millis(ms);
@@ -168,7 +170,7 @@ pub(crate) fn apply_to_log_config(
     // last and wins over whatever `segment.bytes` left behind.
     if let Some(b) = overrides
         .get(INTERNAL_SEGMENT_BYTES)
-        .and_then(|v| v.parse::<i32>().ok())
+        .and_then(|v| int_value(v))
         .and_then(|b| u64::try_from(b).ok())
     {
         out.segment_size = ByteSize::from_bytes(b);

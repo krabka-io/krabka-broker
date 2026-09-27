@@ -28,7 +28,8 @@ use crate::{
 pub enum SubscribedTopics {
     /// Every topic. A classic consumer group whose subscriptions Kafka cannot
     /// read (`ClassicGroup.isSubscribedToTopic` falls back to
-    /// `usesConsumerGroupProtocol()`).
+    /// `usesConsumerGroupProtocol()`), or a KIP-848 group with a regex
+    /// subscription that replay restored and no heartbeat has resolved since.
     All,
     /// Exactly these topics.
     Named(HashSet<String>),
@@ -89,7 +90,16 @@ fn classic_guard(state: &ClassicState) -> Result<SubscribedTopics, ErrorCode> {
 /// plus the topics their regular expressions resolve to. A regex resolves to
 /// the topics it matches that the member may `Describe`, the same rule the
 /// reconciler assigns by.
+///
+/// Kafka replays the topics each regex resolved to. Krabka persists none, so a
+/// member replay restored with a regex subscribes the group to topics it
+/// cannot name until the member's next heartbeat resolves it. Until then the
+/// group counts as subscribed to every topic, so neither `OffsetDelete` nor
+/// offset expiration removes an offset the regex may still cover.
 fn consumer_subscribed_topics(state: &ConsumerState) -> SubscribedTopics {
+    if state.has_unresolved_regex() {
+        return SubscribedTopics::All;
+    }
     let mut topics = HashSet::new();
     for member in state.members.values() {
         topics.extend(member.subscribed_topic_names.iter().cloned());

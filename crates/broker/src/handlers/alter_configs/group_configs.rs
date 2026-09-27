@@ -11,8 +11,8 @@ use krabka_metadata::{GroupConfigRecord, MetadataRecord};
 use krabka_protocol::owned::alter_configs_request::AlterConfigsResource;
 
 use crate::{
-    codes,
-    coordinator::unified::streams::config::{GROUP_CONFIG_KEYS, StreamsGroupConfig},
+    codes, config_keys::group::validate_group_configs,
+    coordinator::unified::streams::config::StreamsGroupConfig,
 };
 
 /// Build the authoritative `V1GroupConfig` record for a GROUP resource. The
@@ -23,20 +23,17 @@ pub(super) fn group_config_record(
     defaults: &StreamsGroupConfig,
 ) -> Result<MetadataRecord, (i16, String)> {
     if resource.resource_name.is_empty() {
-        return Err((codes::INVALID_REQUEST, "group id must not be empty".into()));
+        return Err((
+            codes::INVALID_REQUEST,
+            "Default group resources are not allowed.".into(),
+        ));
     }
-    let mut overrides = std::collections::BTreeMap::new();
-    for cfg in &resource.configs {
-        if !GROUP_CONFIG_KEYS.contains(&cfg.name.as_str()) {
-            return Err((
-                codes::INVALID_CONFIG,
-                format!("unknown group config `{}`", cfg.name),
-            ));
-        }
-        overrides.insert(cfg.name.clone(), cfg.value.clone().unwrap_or_default());
-    }
-    defaults
-        .with_group_overrides(&overrides)
+    let overrides: std::collections::BTreeMap<String, String> = resource
+        .configs
+        .iter()
+        .map(|cfg| (cfg.name.clone(), cfg.value.clone().unwrap_or_default()))
+        .collect();
+    validate_group_configs(&overrides, defaults)
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     Ok(MetadataRecord::V1GroupConfig(GroupConfigRecord {
         group_id: resource.resource_name.clone(),

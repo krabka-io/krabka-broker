@@ -42,9 +42,9 @@ pub(crate) fn resolve_schema_validation(
             .map(String::as_str)
     };
     let gate = SchemaGate {
-        key: read(SCHEMA_VALIDATION_KEY) == Some("true"),
-        value: read(SCHEMA_VALIDATION_VALUE) == Some("true"),
-        mode: match read(SCHEMA_VALIDATION_MODE) {
+        key: read(SCHEMA_VALIDATION_KEY).and_then(super::parse::bool_value) == Some(true),
+        value: read(SCHEMA_VALIDATION_VALUE).and_then(super::parse::bool_value) == Some(true),
+        mode: match read(SCHEMA_VALIDATION_MODE).map(super::parse::java_trim) {
             Some(SCHEMA_VALIDATION_MODE_FULL) => ValidationMode::Full,
             _ => ValidationMode::Id,
         },
@@ -87,7 +87,7 @@ mod tests {
             (SCHEMA_VALIDATION_KEY, "true", true),
             (SCHEMA_VALIDATION_KEY, "false", true),
             (SCHEMA_VALIDATION_KEY, "yes", false),
-            (SCHEMA_VALIDATION_KEY, "True", false),
+            (SCHEMA_VALIDATION_KEY, "True", true),
             (SCHEMA_VALIDATION_KEY, "", false),
             (SCHEMA_VALIDATION_VALUE, "true", true),
             (SCHEMA_VALIDATION_VALUE, "false", true),
@@ -108,6 +108,7 @@ mod tests {
             (SCHEMA_VALIDATION_MODE_ID, true),
             (SCHEMA_VALIDATION_MODE_FULL, true),
             ("Full", false),
+            (" full ", true),
             ("body", false),
             ("", false),
         ];
@@ -122,7 +123,11 @@ mod tests {
     #[test]
     fn schema_validation_mode_rejection_names_both_modes() {
         let error = validate_topic_config(SCHEMA_VALIDATION_MODE, "body").unwrap_err();
-        assert!(error == "schema.validation.mode=body not supported; expected `id` or `full`");
+        assert!(
+            error
+                == "Invalid value body for configuration schema.validation.mode: String must be \
+                    one of: id, full"
+        );
     }
 
     #[test]
@@ -242,7 +247,7 @@ mod tests {
         use crate::schema_validation::{SchemaGate, ValidationMode};
 
         // A corrupt boolean resolves to `false`, which leaves no gate.
-        for value in ["yes", "TRUE", "1", ""] {
+        for value in ["yes", "1", ""] {
             let image = image_with_topic_config(&[
                 (SCHEMA_VALIDATION_KEY, value),
                 (SCHEMA_VALIDATION_VALUE, value),

@@ -23,7 +23,7 @@ pub(crate) use self::{
         serve_classic_sync, upsert_classic_member,
     },
     upgrade::{
-        classic_is_convertible, convert_classic_to_consumer, decode_consumer_subscription,
-        upgrade_pending_records,
+        convert_classic_to_consumer, decode_consumer_subscription, upgrade_pending_records,
+        validate_online_upgrade,
     },
 };

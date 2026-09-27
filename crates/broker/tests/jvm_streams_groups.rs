@@ -302,6 +302,10 @@ async fn join_and_converge(
                 })
                 .collect()
         });
+        // As the Kafka Streams client does, the follow-up is never a join.
+        // While the initial rebalance delay holds the assignment back, the
+        // member is at Kafka 4.3's initial target assignment epoch 1, not at
+        // the join epoch 0 that would need the rebalance timeout again.
         resp = client
             .send(follow_up(group, &member_id, resp.member_epoch, active))
             .await
@@ -409,8 +413,9 @@ async fn jvm_streams_groups_admin_round_trips_krabka() {
 
     // Make a streams group EXIST on Krabka: a lone member owns both partitions
     // of the single subtopology over `streams-input` (native StreamsGroupHeartbeat
-    // / api 88).
-    let (member_id, resp) = join_and_converge(&client, group, topology(topic), 2, 12).await;
+    // / api 88). The broker runs Kafka's 3 s initial rebalance delay, so the
+    // bound allows 10 s of 200 ms heartbeats.
+    let (member_id, resp) = join_and_converge(&client, group, topology(topic), 2, 50).await;
     check!(
         resp.error_code == 0,
         "lone member must join cleanly, got member_id={member_id:?}, {resp:?}"

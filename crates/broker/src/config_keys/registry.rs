@@ -21,14 +21,16 @@
 
 use super::{
     CLEANUP_POLICY, COMPRESSION_GZIP_LEVEL, COMPRESSION_LZ4_LEVEL, COMPRESSION_TYPE,
-    COMPRESSION_ZSTD_LEVEL, DELETE_RETENTION_MS, FILE_DELETE_DELAY_MS, FLUSH_MESSAGES, FLUSH_MS,
-    INDEX_INTERVAL_BYTES, INTERNAL_SEGMENT_BYTES, LOCAL_RETENTION_BYTES, LOCAL_RETENTION_INHERIT,
-    LOCAL_RETENTION_MS, MAX_COMPACTION_LAG_MS, MAX_MESSAGE_BYTES, MESSAGE_TIMESTAMP_AFTER_MAX_MS,
+    COMPRESSION_ZSTD_LEVEL, DELETE_RETENTION_MS, ERRORS_DEADLETTERQUEUE_GROUP_ENABLE,
+    FILE_DELETE_DELAY_MS, FLUSH_MESSAGES, FLUSH_MS, INDEX_INTERVAL_BYTES, INTERNAL_SEGMENT_BYTES,
+    LOCAL_RETENTION_BYTES, LOCAL_RETENTION_INHERIT, LOCAL_RETENTION_MS, MAX_COMPACTION_LAG_MS,
+    MAX_DECOMPRESSED_MESSAGE_BYTES, MAX_MESSAGE_BYTES, MESSAGE_TIMESTAMP_AFTER_MAX_MS,
     MESSAGE_TIMESTAMP_BEFORE_MAX_MS, MESSAGE_TIMESTAMP_TYPE, MESSAGE_TIMESTAMP_TYPE_CREATE,
     MESSAGE_TIMESTAMP_TYPE_LOG_APPEND, MIN_CLEANABLE_DIRTY_RATIO, MIN_COMPACTION_LAG_MS,
-    MIN_INSYNC_REPLICAS, PREALLOCATE, REMOTE_LOG_COPY_DISABLE, REMOTE_LOG_DELETE_ON_DISABLE,
-    REMOTE_STORAGE_ENABLE, RETENTION_BYTES, RETENTION_MS, RETENTION_UNLIMITED, SEGMENT_BYTES,
-    SEGMENT_INDEX_BYTES, SEGMENT_JITTER_MS, SEGMENT_MS,
+    MIN_INSYNC_REPLICAS, PREALLOCATE, REMOTE_COPY_LAG_BYTES, REMOTE_COPY_LAG_MS,
+    REMOTE_LOG_COPY_DISABLE, REMOTE_LOG_DELETE_ON_DISABLE, REMOTE_STORAGE_ENABLE, RETENTION_BYTES,
+    RETENTION_MS, RETENTION_UNLIMITED, SEGMENT_BYTES, SEGMENT_INDEX_BYTES, SEGMENT_JITTER_MS,
+    SEGMENT_MS, SOFT_MAX_ARRAY_LENGTH,
     broker_scope::{
         AUTO_CREATE_TOPICS_ENABLE, BROKER_FENCED, BROKER_WITNESS, CONNECTIONS_MAX_IDLE_MS,
         CONNECTIONS_MAX_REAUTH_MS, DEFAULT_REPLICATION_FACTOR, DELETE_TOPIC_ENABLE, NUM_PARTITIONS,
@@ -288,14 +290,12 @@ pub(super) const GZIP_DEFAULT_LEVEL: i32 = -1;
 /// `internal.segment.bytes`, which `defineInternal` gives no validator at all.
 const SEGMENT_BYTES_MIN: i32 = 1024 * 1024;
 
-/// The two values every boolean key accepts, in the order a refusal names
-/// them.
-pub(super) const BOOLEAN_VALUES: &[&str] = &["true", "false"];
-/// The values `cleanup.policy` accepts, in any order and in any non-empty
-/// combination: Kafka types the key as a LIST and `LogConfig` derives its
-/// `compact` and `delete` booleans by membership, so `compact,delete` is as
-/// valid as either name alone.
-pub(super) const CLEANUP_POLICY_VALUES: &[&str] = &["delete", "compact"];
+/// The values `cleanup.policy` accepts, in the order Kafka's
+/// `ValidList.in(COMPACT, DELETE)` names them. Kafka types the key as a LIST
+/// and `LogConfig` derives its `compact` and `delete` booleans by membership,
+/// so `compact,delete` is as valid as either name alone, and so is the empty
+/// list.
+pub(super) const CLEANUP_POLICY_VALUES: &[&str] = &["compact", "delete"];
 const MESSAGE_TIMESTAMP_TYPE_VALUES: &[&str] = &[
     MESSAGE_TIMESTAMP_TYPE_CREATE,
     MESSAGE_TIMESTAMP_TYPE_LOG_APPEND,
@@ -346,7 +346,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
         ConfigScope::Topic,
         ConfigType::List,
         Some("delete"),
-        "Any non-empty combination of `delete` and `compact`, comma-separated: `delete`, `compact`, or `compact,delete`, which both compacts the log and applies retention to it. A policy containing `compact` cannot be combined with remote.storage.enable=true or with delivery.mode=scheduled.",
+        "Any combination of `delete` and `compact`, comma-separated, each named at most once: `delete`, `compact`, `compact,delete`, which both compacts the log and applies retention to it, or the empty list, which runs neither and keeps every segment. A policy containing `compact` cannot be combined with remote.storage.enable=true or with delivery.mode=scheduled.",
         ValueCheck::Parsed,
     ),
     key(
@@ -443,7 +443,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Topic,
             ConfigType::Boolean,
             Some("false"),
-            "Opt this topic into tiered (remote) storage. Refused on a topic whose cleanup.policy contains `compact`: tiered storage is not supported for compacted topics.",
+            "Opt this topic into tiered (remote) storage. Refused when this broker has no remote storage backend, and on a topic whose cleanup.policy is anything but `delete` or the empty list.",
             ValueCheck::Bool,
         )
     },
@@ -493,6 +493,47 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ValueCheck::I64AtLeast(LOCAL_RETENTION_INHERIT),
         )
     },
+    ConfigKey {
+        type_note: Some("ms"),
+        ..key(
+            REMOTE_COPY_LAG_MS,
+            ConfigScope::Topic,
+            ConfigType::Long,
+            Some("0"),
+            "How old a sealed segment may get before it is copied to the remote tier; -1 derives the lag from the effective local retention. On a tiered topic it must not exceed the effective local.retention.ms. Stored and reported only: krabka copies a segment once it is sealed.",
+            ValueCheck::I64AtLeast(-1),
+        )
+    },
+    ConfigKey {
+        type_note: Some("bytes"),
+        ..key(
+            REMOTE_COPY_LAG_BYTES,
+            ConfigScope::Topic,
+            ConfigType::Long,
+            Some("-1"),
+            "How many newer local bytes a sealed segment may sit behind before it is copied to the remote tier; -1 derives the lag from the effective local retention. On a tiered topic it must not exceed the effective local.retention.bytes. Stored and reported only: krabka copies a segment once it is sealed.",
+            ValueCheck::I64AtLeast(-1),
+        )
+    },
+    ConfigKey {
+        type_note: Some("bytes, 1..2147483639"),
+        ..key(
+            MAX_DECOMPRESSED_MESSAGE_BYTES,
+            ConfigScope::Topic,
+            ConfigType::Int,
+            Some("2147483639"),
+            "Largest decompressed size one record may have. Stored and reported only: krabka does not yet check it on produce or compaction.",
+            ValueCheck::I32Between(1, SOFT_MAX_ARRAY_LENGTH),
+        )
+    },
+    key(
+        ERRORS_DEADLETTERQUEUE_GROUP_ENABLE,
+        ConfigScope::Topic,
+        ConfigType::Boolean,
+        Some("false"),
+        "Whether share groups may write undeliverable records to this topic as their dead-letter queue. Stored and reported only: krabka's share groups have no dead-letter queue.",
+        ValueCheck::Bool,
+    ),
     ConfigKey {
         type_note: Some("ms"),
         kip: Some("KIP-534"),

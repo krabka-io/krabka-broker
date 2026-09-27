@@ -16,7 +16,7 @@ use krabka_protocol::owned::{
 
 use super::{
     ActorState, chrono_now_ms,
-    reconciliation::{configure_after_load, reconcile},
+    reconciliation::{assignment_delay, configure_after_load, reconcile},
     records::{flush_pending, snapshot_pending_after_change},
     request::{build_member, task_ids_to_map, task_offsets_to_map},
     response::{ResponseDelta, build_assignment_resp, endpoint_to_partitions, error_resp},
@@ -83,8 +83,9 @@ pub(super) async fn handle_heartbeat(
     let now = Instant::now();
     let now_ms = chrono_now_ms();
     // Kafka's `groups.containsKey`: a group that this heartbeat creates
-    // reports endpoint information epoch 0.
-    let group_existed = actor.state.group_epoch > 0;
+    // reports endpoint information epoch 0. A new group already holds its
+    // initial group epoch, so the epoch alone does not tell.
+    let group_existed = !actor.holds_nothing();
 
     // ─── Leave path ──────────────────────────────────────────────
     // -1 leaves, and -2 is the temporary leave of a static member.
@@ -141,6 +142,15 @@ pub(super) async fn handle_heartbeat(
             return Ok(resp);
         }
         let new_member_id = req.member_id.clone();
+        // Kafka schedules the initial rebalance delay when a member joins an
+        // empty group, unless it is already scheduled.
+        if actor.state.members.is_empty()
+            && !config.initial_rebalance_delay.is_zero()
+            && actor.initial_rebalance_deadline.is_none()
+        {
+            actor.initial_rebalance_deadline =
+                Some(tokio::time::Instant::now() + config.initial_rebalance_delay);
+        }
         let m = build_member(&new_member_id, req, client_id, client_host, now);
         actor.state.add_or_update_member(m);
         // Kafka's `maybeUpdateTopology`: a join initializes the topology of a
@@ -218,9 +228,10 @@ pub(super) async fn handle_heartbeat(
     let mut changed = update_member_steady_state(actor, req, client_id, client_host, now);
     refresh_topic_metadata(actor, metadata_source);
 
-    if actor.state.dirty {
+    if actor.state.dirty || actor.assignment_pending() {
+        let epochs = (actor.state.group_epoch, actor.state.target.epoch);
         reconcile(actor, config, metadata_source);
-        changed = true;
+        changed |= epochs != (actor.state.group_epoch, actor.state.target.epoch);
     }
     // Kafka's `maybeReconcile`: move the member toward the target, and arm
     // or cancel its rebalance timeout when its assignment changed.
@@ -344,6 +355,7 @@ fn accepted_response(
         config,
         ResponseDelta {
             send_tasks: req.member_epoch == 0 || tasks_changed,
+            assignment_delayed: assignment_delay(actor, config, tokio::time::Instant::now()),
             endpoint_information_epoch: actor.state.endpoint_information_epoch,
             partitions_by_user_endpoint,
         },

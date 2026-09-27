@@ -63,7 +63,9 @@ pub(crate) fn resolve_unclean_leader_election_enabled(
     image: &krabka_metadata::MetadataImage,
     topic: &str,
 ) -> bool {
-    topic_or_cluster_default(image, topic, UNCLEAN_LEADER_ELECTION_ENABLE) == Some("true")
+    topic_or_cluster_default(image, topic, UNCLEAN_LEADER_ELECTION_ENABLE)
+        .and_then(super::parse::bool_value)
+        == Some(true)
 }
 
 #[cfg(test)]

@@ -22,8 +22,12 @@ use super::{
 use crate::{
     codes,
     coordinator::unified::{
-        GroupCoordinator, classic_ops, classic_state::GroupState as ClassicGroupState,
-        config::NextGenConfig, group::CoordinatorGroup, migration, offsets_log::OffsetsLog,
+        GroupCoordinator, classic_ops,
+        classic_state::GroupState as ClassicGroupState,
+        config::{ConsumerGroupMigrationPolicy, NextGenConfig},
+        group::{CoordinatorGroup, GroupKind},
+        migration,
+        offsets_log::OffsetsLog,
     },
 };
 
@@ -51,6 +55,49 @@ pub(super) async fn handle_classic_join_message(
     client_host: &str,
     reply: oneshot::Sender<JoinResult>,
 ) -> bool {
+    if let Some(consumer) = group.as_consumer() {
+        if consumer.members.is_empty() {
+            // Kafka's `classicGroupJoin` sends a join to an empty consumer
+            // group down the classic path, which deletes the consumer group
+            // and creates a classic one; the committed offsets stay with the
+            // group id.
+            let batch = super::retention::tombstone_batch(
+                &group.group_id,
+                &[],
+                Some(&group.kind),
+                chrono_now_ms(),
+            );
+            if services
+                .offsets_log
+                .append(&group.group_id, batch)
+                .await
+                .is_err()
+            {
+                let _ = reply.send(JoinResult {
+                    error_code: codes::COORDINATOR_NOT_AVAILABLE,
+                    member_id: request.member_id,
+                    ..JoinResult::default()
+                });
+                return true;
+            }
+            services
+                .coordinator
+                .mark_classic_after_downgrade(&group.group_id);
+            *group.kind_mut() = GroupKind::Classic(
+                crate::coordinator::unified::classic_state::ClassicGroup::new(
+                    group.group_id.clone(),
+                ),
+            );
+        } else if services.config.migration_policy == ConsumerGroupMigrationPolicy::Disabled {
+            // `throwIfClassicMemberCannotJoinConsumerGroup`.
+            let _ = reply.send(JoinResult {
+                error_code: codes::INCONSISTENT_GROUP_PROTOCOL,
+                member_id: request.member_id,
+                ..JoinResult::default()
+            });
+            return true;
+        }
+    }
     if let Some(state) = group.as_classic_mut() {
         let previous = state.clone();
         let outcome = classic_ops::handle_join(
@@ -475,5 +522,58 @@ mod tests {
             union == vec![0, 1],
             "the union of partitions must be {{0, 1}}"
         );
+    }
+
+    /// Kafka's `classicGroupJoin` against a consumer group: (label, policy,
+    /// native members) to (join error code, consumer group tombstoned, group
+    /// classic afterwards). An empty consumer group is replaced by a classic
+    /// group; a live one under policy `disabled` refuses the classic member
+    /// with `INCONSISTENT_GROUP_PROTOCOL`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn classic_join_against_a_consumer_group_follows_kafka() {
+        use crate::coordinator::unified::{
+            actor::GroupKindTag, config::ConsumerGroupMigrationPolicy as Policy,
+        };
+
+        let rows = [
+            (
+                "empty consumer group",
+                Policy::Disabled,
+                0,
+                (codes::MEMBER_ID_REQUIRED, true, true),
+            ),
+            (
+                "live consumer group, policy disabled",
+                Policy::Disabled,
+                1,
+                (codes::INCONSISTENT_GROUP_PROTOCOL, false, false),
+            ),
+        ];
+        for (label, policy, members, want) in rows {
+            let (coord, log) = make_coordinator_with_topic_policy("t", 1, policy);
+            let handle = coord.get_or_create_group("g", GroupKindTag::Consumer);
+            for index in 0..members {
+                let joined =
+                    rpc::consumer_heartbeat(&handle, &format!("native-{index}"), 0, Some("t"))
+                        .await;
+                assert!(joined.error_code == codes::NONE, "{label}");
+            }
+
+            let joined = rpc::classic_join(&handle, "", "t").await;
+
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            handle
+                .tx
+                .send(GroupActorMessage::ClassicInspect { reply: tx })
+                .await
+                .unwrap();
+            let is_classic = rx.await.is_ok();
+            let got = (
+                joined.error_code,
+                log.has_next_gen_group_metadata_tombstone("g").await,
+                is_classic,
+            );
+            check!(got == want, "{label}");
+        }
     }
 }

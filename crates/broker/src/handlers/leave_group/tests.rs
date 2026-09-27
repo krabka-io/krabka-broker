@@ -1,0 +1,147 @@
+//! Live-broker tests for the `LeaveGroup` handler.
+
+use assert2::assert;
+use krabka_protocol::owned::{
+    leave_group_request::MemberIdentity,
+    leave_group_response::{LeaveGroupResponse, MemberResponse},
+};
+
+use super::*;
+use crate::test_support::{DenyAll, encode_request, peer, principal, start_broker_with};
+
+async fn leave(broker: &Broker, request: &LeaveGroupRequest, version: i16) -> LeaveGroupResponse {
+    let principal = principal("alice");
+    let peer = peer();
+    let context = crate::test_support::request_context(&principal, &peer, "leave-client");
+    let response = handle(
+        broker,
+        version,
+        1,
+        &encode_request(request, version),
+        &context,
+    )
+    .await
+    .expect("LeaveGroup");
+    crate::test_support::decode_response(&response, version)
+}
+
+fn identity(member_id: &str, group_instance_id: Option<&str>) -> MemberIdentity {
+    MemberIdentity {
+        member_id: member_id.into(),
+        group_instance_id: group_instance_id.map(Into::into),
+        ..Default::default()
+    }
+}
+
+fn unknown_row(member_id: &str, group_instance_id: Option<&str>) -> MemberResponse {
+    MemberResponse {
+        member_id: member_id.into(),
+        group_instance_id: group_instance_id.map(Into::into),
+        error_code: codes::UNKNOWN_MEMBER_ID,
+        ..Default::default()
+    }
+}
+
+/// (label, version, request, whole expected response) against a broker that
+/// holds no group. Kafka's `GroupCoordinatorService.leaveGroup` answers an
+/// empty group id `INVALID_GROUP_ID`, and a missing group with one
+/// `UNKNOWN_MEMBER_ID` row per identity under a top-level `NONE`, which
+/// `LeaveGroupResponse` folds into the top-level code at v0-v2.
+#[tokio::test]
+async fn leave_group_answers_kafka_shapes_for_missing_and_invalid_groups() {
+    let (broker_handle, _dir) = start_broker_with(|config| {
+        config.audit_enabled = false;
+        config.offsets_topic_replication_factor = 1;
+    })
+    .await;
+    let broker = broker_handle.broker_arc_for_test();
+    let rows = [
+        (
+            "v2 missing group",
+            2,
+            LeaveGroupRequest {
+                group_id: "ghost".into(),
+                member_id: "m".into(),
+                ..Default::default()
+            },
+            LeaveGroupResponse {
+                error_code: codes::UNKNOWN_MEMBER_ID,
+                ..Default::default()
+            },
+        ),
+        (
+            "v5 missing group",
+            5,
+            LeaveGroupRequest {
+                group_id: "ghost".into(),
+                members: vec![identity("m-a", None), identity("", Some("inst-b"))],
+                ..Default::default()
+            },
+            LeaveGroupResponse {
+                error_code: codes::NONE,
+                members: vec![unknown_row("m-a", None), unknown_row("", Some("inst-b"))],
+                ..Default::default()
+            },
+        ),
+        (
+            "v5 empty group id",
+            5,
+            LeaveGroupRequest {
+                group_id: String::new(),
+                members: vec![identity("m-a", None)],
+                ..Default::default()
+            },
+            LeaveGroupResponse {
+                error_code: codes::INVALID_GROUP_ID,
+                ..Default::default()
+            },
+        ),
+        (
+            "v0 empty group id",
+            0,
+            LeaveGroupRequest {
+                group_id: String::new(),
+                member_id: "m".into(),
+                ..Default::default()
+            },
+            LeaveGroupResponse {
+                error_code: codes::INVALID_GROUP_ID,
+                ..Default::default()
+            },
+        ),
+    ];
+    for (label, version, request, expected) in rows {
+        let response = leave(&broker, &request, version).await;
+        assert!(response == expected, "{label}");
+    }
+    assert!(broker.group_coordinator.find("ghost").is_none());
+    broker_handle.shutdown().await;
+}
+
+/// The `Read` check on the group runs first, so a denied principal gets
+/// `GROUP_AUTHORIZATION_FAILED` even for an empty group id.
+#[tokio::test]
+async fn denied_read_answers_group_authorization_failed_before_validation() {
+    let (broker_handle, _dir) = start_broker_with(|config| {
+        config.audit_enabled = false;
+        config.authorizer = std::sync::Arc::new(DenyAll);
+    })
+    .await;
+    let broker = broker_handle.broker_arc_for_test();
+    let request = LeaveGroupRequest {
+        group_id: String::new(),
+        members: vec![identity("m-a", None)],
+        ..Default::default()
+    };
+
+    let response = leave(&broker, &request, 5).await;
+
+    assert!(
+        response
+            == LeaveGroupResponse {
+                error_code: codes::GROUP_AUTHORIZATION_FAILED,
+                ..Default::default()
+            }
+    );
+    broker_handle.shutdown().await;
+}

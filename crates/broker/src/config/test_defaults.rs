@@ -242,8 +242,17 @@ impl BrokerConfig {
             share_group: Box::new(
                 crate::coordinator::unified::share::config::ShareGroupConfig::default(),
             ),
+            // Tests drive streams heartbeats directly and expect each change to
+            // be assigned at once, so they run without Kafka's initial
+            // rebalance delay and assignment interval, as Kafka's own
+            // integration tests set `group.streams.initial.rebalance.delay.ms`
+            // to 0.
             streams_group: Box::new(
-                crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
+                crate::coordinator::unified::streams::config::StreamsGroupConfig {
+                    initial_rebalance_delay: std::time::Duration::ZERO,
+                    assignment_interval: std::time::Duration::ZERO,
+                    ..crate::coordinator::unified::streams::config::StreamsGroupConfig::default()
+                },
             ),
             share_coordinator: Box::new(
                 crate::share_coordinator::config::ShareCoordinatorConfig::default(),

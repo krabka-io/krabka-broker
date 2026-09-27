@@ -43,7 +43,7 @@ pub(crate) fn resolve_delivery_max_delay(
     let millis = image
         .topic_config(topic)
         .and_then(|configs| configs.get(DELIVERY_MAX_DELAY_MS))
-        .and_then(|value| value.parse::<i64>().ok())
+        .and_then(|value| super::parse::long_value(value))
         .filter(|millis| *millis >= DELIVERY_MAX_DELAY_UNLIMITED)
         .unwrap_or(DEFAULT_DELIVERY_MAX_DELAY_MS);
     opt_time_from_millis_i64(millis)

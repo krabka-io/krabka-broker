@@ -62,8 +62,9 @@ async fn replay_preserves_group_epoch_and_members() {
         create_topic(&client, "tp", 2).await;
         let req = ConsumerGroupHeartbeatRequest {
             group_id: "gp".into(),
-            member_id: String::new(),
+            member_id: uuid::Uuid::new_v4().to_string(),
             member_epoch: 0,
+            topic_partitions: Some(vec![]),
             subscribed_topic_names: Some(vec!["tp".into()]),
             rebalance_timeout_ms: 60_000,
             ..Default::default()
@@ -125,8 +126,9 @@ async fn next_gen_state_cleared_after_leave_then_restart() {
         create_topic(&client, "tp2", 1).await;
         let join = ConsumerGroupHeartbeatRequest {
             group_id: "gpx".into(),
-            member_id: String::new(),
+            member_id: uuid::Uuid::new_v4().to_string(),
             member_epoch: 0,
+            topic_partitions: Some(vec![]),
             subscribed_topic_names: Some(vec!["tp2".into()]),
             rebalance_timeout_ms: 60_000,
             ..Default::default()

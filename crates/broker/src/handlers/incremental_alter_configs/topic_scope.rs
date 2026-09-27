@@ -1,7 +1,11 @@
 //! Topic-scoped resources for `IncrementalAlterConfigs`. The handler merges
 //! the per-key operations onto the topic's current override map, validates
-//! each new value and the resulting combination, and returns the
-//! `V1TopicConfig` record that carries the merged map.
+//! the resulting map, and returns the `V1TopicConfig` record that carries it.
+//!
+//! The order is Kafka's `ConfigurationControlManager`: the operations merge
+//! first (an APPEND or SUBTRACT of a key that is not a `LIST` is refused
+//! there), then `ControllerConfigurationValidator` checks the topic name and
+//! the merged map, and only then does the existence check run.
 //!
 //! `krabka.diskless` is fixed when the topic is created, so the merged map is
 //! also compared against the topic's current one: a SET that restates the
@@ -13,21 +17,65 @@
 use krabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord};
 use krabka_protocol::owned::incremental_alter_configs_request::AlterConfigsResource;
 
-use super::{OP_DELETE, OP_SET};
-use crate::{codes, config_keys, topic_policy::TopicPolicy};
+use super::{OP_APPEND, OP_DELETE, OP_SET};
+use crate::{
+    codes,
+    config_keys::{
+        self,
+        registry::{self, ConfigScope, ConfigType},
+    },
+    topic_policy::TopicPolicy,
+};
+
+/// Kafka's `ConfigurationControlManager` APPEND and SUBTRACT: a `LIST` key's
+/// current value (or its default) split on commas, with each item of the
+/// operation's value added when absent or removed.
+pub(in crate::handlers::incremental_alter_configs) fn merge_list_op(
+    operation: i8,
+    current: Option<&str>,
+    default: Option<&str>,
+    value: &str,
+) -> String {
+    let base = current.or(default).unwrap_or_default();
+    let mut parts: Vec<&str> = base.split(',').filter(|part| !part.is_empty()).collect();
+    // Java's `String.split` drops trailing empty strings.
+    let items: Vec<&str> = value.trim_end_matches(',').split(',').collect();
+    for item in items {
+        if operation == OP_APPEND {
+            if !parts.contains(&item) {
+                parts.push(item);
+            }
+        } else if let Some(at) = parts.iter().position(|part| *part == item) {
+            parts.remove(at);
+        }
+    }
+    parts.join(",")
+}
+
+/// Kafka's refusal of an APPEND or SUBTRACT on a key that is not a `LIST`.
+pub(in crate::handlers::incremental_alter_configs) fn not_a_list(
+    operation: i8,
+    key: &str,
+) -> (i16, String) {
+    let verb = if operation == OP_APPEND {
+        "APPEND"
+    } else {
+        "SUBTRACT"
+    };
+    (
+        codes::INVALID_CONFIG,
+        format!("Can't {verb} to key {key} because its type is not LIST."),
+    )
+}
 
 pub(super) fn topic_config_record(
     resource: &AlterConfigsResource,
     image: &MetadataImage,
     policy: &TopicPolicy,
+    remote_storage_system_enabled: bool,
 ) -> Result<MetadataRecord, (i16, String)> {
-    if image.topic(&resource.resource_name).is_none() {
-        return Err((
-            codes::UNKNOWN_TOPIC_OR_PARTITION,
-            format!("unknown topic `{}`", resource.resource_name),
-        ));
-    }
-    let current = image.topic_config(&resource.resource_name);
+    let topic = resource.resource_name.as_str();
+    let current = image.topic_config(topic);
     let mut merged = current.cloned().unwrap_or_default();
     for config in &resource.configs {
         // A controller-managed key is refused before the operation is read.
@@ -39,49 +87,63 @@ pub(super) fn topic_config_record(
                 config_keys::controller_managed_topic_config_message(&config.name),
             ));
         }
+        let value = config.value.as_deref().unwrap_or_default();
         match config.config_operation {
             OP_SET => {
-                let value = config.value.clone().unwrap_or_default();
-                config_keys::validate_topic_config(&config.name, &value)
-                    .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
-                merged.insert(config.name.clone(), value);
+                merged.insert(config.name.clone(), value.to_owned());
             }
+            // A DELETE of a key the topic does not hold changes nothing, and
+            // Kafka writes no record for it, whatever the key is.
             OP_DELETE => {
-                if !config_keys::is_recognized(&config.name) {
-                    return Err((
-                        codes::INVALID_CONFIG,
-                        format!("unrecognized config key `{}`", config.name),
-                    ));
-                }
                 merged.remove(&config.name);
             }
             operation => {
-                return Err((
-                    codes::INVALID_CONFIG,
-                    format!(
-                        "config_operation={operation} (APPEND/SUBTRACT) not supported for key \
-                         `{}` — only SET and DELETE are honored on this broker",
-                        config.name
-                    ),
-                ));
+                let row = registry::lookup(ConfigScope::Topic, &config.name)
+                    .filter(|row| row.is_alterable() && row.config_type == ConfigType::List)
+                    .ok_or_else(|| not_a_list(operation, &config.name))?;
+                let next = merge_list_op(
+                    operation,
+                    merged.get(&config.name).map(String::as_str),
+                    row.default,
+                    value,
+                );
+                merged.insert(config.name.clone(), next);
             }
         }
     }
-    // The ops alone cannot show a conflict: `merged` is what the topic ends up
-    // with, so the cross-key rules are checked against that.
-    config_keys::validate_config_combination(&merged)
-        .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
+    // `ControllerConfigurationValidator.validateTopicName`, then the map.
+    if topic.is_empty() {
+        return Err((
+            codes::INVALID_REQUEST,
+            "Default topic resources are not allowed.".into(),
+        ));
+    }
+    if let Err(invalid) = krabka_log::topic_name::validate_topic_name(topic) {
+        return Err((codes::INVALID_TOPIC_EXCEPTION, invalid.to_string()));
+    }
+    let merged = config_keys::canonical_topic_config_map(
+        &merged,
+        &config_keys::TopicDefaults::from_image(image),
+        remote_storage_system_enabled,
+    )
+    .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     config_keys::validate_diskless_unchanged(current, &merged)
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     config_keys::validate_remote_storage_disable(current, &merged)
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
+    if image.topic(topic).is_none() {
+        return Err((
+            codes::UNKNOWN_TOPIC_OR_PARTITION,
+            format!("The topic '{topic}' does not exist."),
+        ));
+    }
     // KIP-133: the operator-declared policy, on the map the topic ends up
     // with. Kafka calls `AlterConfigPolicy.validate` on the same resolved map,
     // and its `RequestMetadata` carries no partition count and no replication
     // factor, so neither is passed here. It runs after the built-in
     // validators, as `ConfigAdminManager` does: a config the broker itself
     // refuses never reaches the policy.
-    crate::topic_policy::check(policy, &resource.resource_name, None, None, &merged)
+    crate::topic_policy::check(policy, topic, None, None, &merged)
         .map_err(|reason| (codes::POLICY_VIOLATION, reason))?;
     Ok(MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: resource.resource_name.clone(),
@@ -108,7 +170,7 @@ mod tests {
         resource: &AlterConfigsResource,
         image: &MetadataImage,
     ) -> Result<MetadataRecord, (i16, String)> {
-        super::topic_config_record(resource, image, &TopicPolicy::default())
+        super::topic_config_record(resource, image, &TopicPolicy::default(), true)
     }
 
     #[test]
@@ -370,6 +432,7 @@ mod tests {
             ),
             &img,
             &policy,
+            true,
         )
         .expect_err("a merged map below the policy floor must be refused");
 
@@ -395,6 +458,7 @@ mod tests {
             ),
             &img,
             &policy,
+            true,
         )
         .expect("a merge that lifts the topic to the floor is accepted");
 
@@ -404,5 +468,105 @@ mod tests {
             config_keys::MIN_INSYNC_REPLICAS.to_string() => "2".to_string()},
         });
         check!(record == expected);
+    }
+
+    /// Kafka's `ConfigurationControlManager` merge and
+    /// `ControllerConfigurationValidator` order for a `TOPIC` resource. Each
+    /// row is the stored overrides, the operations, and the whole outcome.
+    #[test]
+    fn topic_operations_follow_kafkas_merge_rules() {
+        let op = |key: &str, operation: i8, value: &str| AlterableConfig {
+            name: key.into(),
+            config_operation: operation,
+            value: Some(value.into()),
+            ..Default::default()
+        };
+        let leader = crate::throttle::LEADER_THROTTLED_REPLICAS_KEY;
+        let record = |pairs: &[(&str, &str)]| {
+            Ok(MetadataRecord::V1TopicConfig(TopicConfigRecord {
+                topic: "orders".into(),
+                overrides: pairs
+                    .iter()
+                    .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                    .collect(),
+            }))
+        };
+        let cases = [
+            (
+                "orders",
+                vec![],
+                vec![make_del_cfg("not.a.topic.config")],
+                record(&[]),
+            ),
+            (
+                "orders",
+                vec![],
+                vec![op(config_keys::CLEANUP_POLICY, OP_APPEND, "compact")],
+                record(&[(config_keys::CLEANUP_POLICY, "delete,compact")]),
+            ),
+            (
+                "orders",
+                vec![(config_keys::CLEANUP_POLICY, "compact,delete")],
+                vec![op(config_keys::CLEANUP_POLICY, 3, "delete")],
+                record(&[(config_keys::CLEANUP_POLICY, "compact")]),
+            ),
+            (
+                "orders",
+                vec![(leader, "0:1")],
+                vec![op(leader, OP_APPEND, "1:2")],
+                record(&[(leader, "0:1,1:2")]),
+            ),
+            (
+                "orders",
+                vec![(leader, "0:1")],
+                vec![op(leader, OP_APPEND, "0:1")],
+                record(&[(leader, "0:1")]),
+            ),
+            (
+                "orders",
+                vec![],
+                vec![op(config_keys::RETENTION_MS, OP_APPEND, "1")],
+                Err((
+                    codes::INVALID_CONFIG,
+                    "Can't APPEND to key retention.ms because its type is not LIST.".to_owned(),
+                )),
+            ),
+            (
+                "",
+                vec![],
+                vec![make_set_cfg(config_keys::RETENTION_MS, "1000")],
+                Err((
+                    codes::INVALID_REQUEST,
+                    "Default topic resources are not allowed.".to_owned(),
+                )),
+            ),
+            (
+                "a/b",
+                vec![],
+                vec![make_set_cfg(config_keys::RETENTION_MS, "1000")],
+                Err((
+                    codes::INVALID_TOPIC_EXCEPTION,
+                    "Topic name is invalid: 'a/b' contains one or more characters other than \
+                     ASCII alphanumerics, '.', '_' and '-'"
+                        .to_owned(),
+                )),
+            ),
+            (
+                "missing",
+                vec![],
+                vec![make_set_cfg(config_keys::RETENTION_MS, "1000")],
+                Err((
+                    codes::UNKNOWN_TOPIC_OR_PARTITION,
+                    "The topic 'missing' does not exist.".to_owned(),
+                )),
+            ),
+        ];
+        for (name, stored, ops, want) in cases {
+            let image = image_with_topic_config("orders", &stored);
+            check!(
+                topic_config_record(&make_topic_resource(name, ops.clone()), &image) == want,
+                "{name:?} {stored:?} {ops:?}"
+            );
+        }
     }
 }

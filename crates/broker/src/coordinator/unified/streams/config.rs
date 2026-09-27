@@ -21,16 +21,16 @@ pub const GROUP_CONFIG_KEYS: [&str; 8] = [
     KEY_SHARE_AUTO_OFFSET_RESET,
 ];
 
-/// Server-side task-assignor selection for a streams group. `Auto` (the Kafka
-/// default) picks `HighlyAvailable` when the topology has any stateful
-/// subtopology (a state-changelog topic) and `Sticky` otherwise.
+/// The `streams.assignor.name` value of a streams group.
+///
+/// Every value runs the same assignor, a port of Kafka's `StickyTaskAssignor`,
+/// the only built-in streams assignor in Kafka. The value is kept only for
+/// the configuration surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StreamsAssignorKind {
     #[default]
     Auto,
-    /// Minimise task movement; active-only, no standby/warmup.
     Sticky,
-    /// Place standby replicas + warm up state migrations for fault tolerance.
     HighlyAvailable,
 }
 
@@ -284,8 +284,16 @@ pub struct StreamsGroupConfig {
     pub max_session_timeout: Duration,
     pub min_heartbeat_interval: Duration,
     pub max_heartbeat_interval: Duration,
-    /// Max members per group.
+    /// Max members per group: Kafka's `group.streams.max.size`, whose default
+    /// is `Integer.MAX_VALUE`.
     pub max_size: usize,
+    /// Kafka's `group.streams.initial.rebalance.delay.ms`: how long the first
+    /// assignment of a group that a member joins while it is empty waits for
+    /// more members. Zero assigns at once.
+    pub initial_rebalance_delay: Duration,
+    /// Kafka's `group.streams.assignment.interval.ms`: the least time between
+    /// two target assignments. Zero does not wait.
+    pub assignment_interval: Duration,
     /// `num.standby.replicas`: standby copies per stateful task.
     pub num_standby_replicas: i32,
     /// `max.warmup.replicas`: cap on concurrent warmup tasks. A warmup task
@@ -318,19 +326,24 @@ impl Default for StreamsGroupConfig {
             max_session_timeout: Duration::from_mins(1),
             min_heartbeat_interval: Duration::from_secs(5),
             max_heartbeat_interval: Duration::from_secs(15),
-            max_size: 200,
+            max_size: MAX_SIZE_DEFAULT,
+            initial_rebalance_delay: Duration::from_secs(3),
+            assignment_interval: Duration::from_secs(1),
             // Kafka GA defaults: no standby copies, up to 2 warmups,
             // acceptable lag 10k records.
             num_standby_replicas: 0,
             num_warmup_replicas: 2,
             acceptable_recovery_lag: 10_000,
-            task_offset_interval: Duration::from_secs(30),
+            task_offset_interval: Duration::from_mins(1),
             assignor: StreamsAssignorKind::Auto,
             share_auto_offset_reset: ShareAutoOffsetReset::Latest,
             actor_mailbox_capacity: 64,
         }
     }
 }
+
+/// Kafka's `STREAMS_GROUP_MAX_SIZE_DEFAULT`, `Integer.MAX_VALUE`.
+const MAX_SIZE_DEFAULT: usize = 2_147_483_647;
 
 impl StreamsGroupConfig {
     /// Apply a persisted GROUP resource override map to these broker defaults.
@@ -446,11 +459,13 @@ mod tests {
                     max_session_timeout: Duration::from_mins(1),
                     min_heartbeat_interval: Duration::from_secs(5),
                     max_heartbeat_interval: Duration::from_secs(15),
-                    max_size: 200,
+                    max_size: 2_147_483_647,
+                    initial_rebalance_delay: Duration::from_secs(3),
+                    assignment_interval: Duration::from_secs(1),
                     num_standby_replicas: 0,
                     num_warmup_replicas: 2,
                     acceptable_recovery_lag: 10_000,
-                    task_offset_interval: Duration::from_secs(30),
+                    task_offset_interval: Duration::from_mins(1),
                     assignor: StreamsAssignorKind::Auto,
                     share_auto_offset_reset: ShareAutoOffsetReset::Latest,
                     actor_mailbox_capacity: 64,

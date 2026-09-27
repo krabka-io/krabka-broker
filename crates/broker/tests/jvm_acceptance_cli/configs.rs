@@ -133,9 +133,10 @@ async fn kafka_configs_describe_all_shows_effective_values_and_their_sources() {
 
     for (label, expected) in [
         (
-            "the topic override sits at the head of its chain",
+            "the topic override sits at the head of its broker synonym chain",
             "retention.ms=60000 sensitive=false \
-             synonyms={DYNAMIC_TOPIC_CONFIG:retention.ms=60000}",
+             synonyms={DYNAMIC_TOPIC_CONFIG:retention.ms=60000, \
+             DEFAULT_CONFIG:log.retention.hours=168}",
         ),
         (
             "an inherited value names the cluster default above the built-in one",
@@ -144,8 +145,9 @@ async fn kafka_configs_describe_all_shows_effective_values_and_their_sources() {
              DEFAULT_CONFIG:unclean.leader.election.enable=false}",
         ),
         (
-            "a key nobody set still reports its effective value",
-            "cleanup.policy=delete sensitive=false synonyms={}",
+            "a key nobody set reports its effective value and the broker default behind it",
+            "cleanup.policy=delete sensitive=false \
+             synonyms={DEFAULT_CONFIG:log.cleanup.policy=delete}",
         ),
     ] {
         assert!(
@@ -361,7 +363,10 @@ async fn kafka_configs_refuses_tiered_storage_on_a_compacted_topic() {
         "the alter must be refused, not applied: {rendered}"
     );
     assert!(
-        rendered.contains("Tiered storage is not supported for compacted topics"),
+        rendered.contains(
+            "Remote log storage only supports topics with cleanup.policy=delete or \
+             cleanup.policy being an empty list."
+        ) || rendered.contains("Tiered Storage functionality is disabled in the broker."),
         "alter should be refused with Kafka's message: {rendered}"
     );
 }

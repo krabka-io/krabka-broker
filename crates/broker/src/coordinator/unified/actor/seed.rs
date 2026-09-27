@@ -129,6 +129,12 @@ pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed, image: &Reconc
             last_synced_assignment: Bytes::new(),
             awaiting_sync: true,
         });
+        // Kafka replays a regex's resolved topics; krabka persists none, so
+        // the member's regex subscription stays unresolved until its next
+        // heartbeat that carries the pattern.
+        if meta.subscribed_topic_regex.is_some() {
+            state.mark_regex_unresolved(&mid);
+        }
         state.add_or_update_member(MemberState {
             member_id: mid.clone(),
             instance_id: meta.instance_id,
@@ -345,5 +351,104 @@ mod tests {
         let facade = state.members["m"].classic.as_ref().expect("classic facade");
         check!(facade.last_synced_assignment == target_to_consumer_assignment(&held, &image()));
         check!(facade.awaiting_sync);
+    }
+
+    /// Kafka replays the topics a regex resolved to
+    /// (`ConsumerGroupRegularExpression`), so offset expiration and
+    /// `OffsetDelete` still see them as subscribed after a failover. Krabka
+    /// persists no resolution, so a replayed regex member leaves the group
+    /// subscribed to every topic until a heartbeat resolves the pattern:
+    /// (label, heartbeat pattern and the handler's authorized topics after
+    /// replay, the group's subscribed topics).
+    #[test]
+    fn a_replayed_regex_keeps_every_topic_subscribed_until_a_heartbeat_resolves_it() {
+        use krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest;
+
+        use crate::coordinator::unified::{
+            ClientIdentity,
+            actor::{
+                member_state::update_member_state,
+                offset_delete::{SubscribedTopics, offset_delete_guard},
+                test_support::StaticMetadata,
+            },
+            config::NextGenConfig,
+            group::{CoordinatorGroup, GroupKind},
+        };
+
+        // The heartbeat after replay: its pattern and the handler's authorized
+        // topics.
+        type Heartbeat = (Option<&'static str>, &'static [&'static str]);
+
+        let named = |topics: &[&str]| {
+            SubscribedTopics::Named(topics.iter().map(|topic| (*topic).to_string()).collect())
+        };
+        let rows: [(&str, Option<Heartbeat>, SubscribedTopics); 3] = [
+            ("replayed and unresolved", None, SubscribedTopics::All),
+            (
+                "a heartbeat carrying the pattern resolves it",
+                Some((Some("pay.*"), &["payments"])),
+                named(&["orders", "payments"]),
+            ),
+            (
+                "a heartbeat without the pattern drops the regex",
+                Some((None, &[])),
+                named(&["orders"]),
+            ),
+        ];
+        for (label, heartbeat, want) in rows {
+            let mut state = GroupState::new("g");
+            let seed = GroupSeed {
+                group_epoch: 5,
+                target_epoch: 5,
+                members: [(
+                    "m".to_string(),
+                    MemberMetadataValue {
+                        instance_id: None,
+                        rack_id: None,
+                        client_id: "c".to_string(),
+                        client_host: "/127.0.0.1".to_string(),
+                        subscribed_topic_names: vec!["orders".to_string()],
+                        subscribed_topic_regex: Some("pay.*".to_string()),
+                        server_assignor: None,
+                        rebalance_timeout_ms: 60_000,
+                        classic: None,
+                    },
+                )]
+                .into(),
+                target_per_member: HashMap::new(),
+                current_per_member: HashMap::new(),
+            };
+            apply_seed(&mut state, seed, &image());
+            if let Some((pattern, authorized)) = heartbeat {
+                let authorized: HashSet<String> = authorized
+                    .iter()
+                    .map(|topic| (*topic).to_string())
+                    .collect();
+                update_member_state(
+                    &mut state,
+                    &NextGenConfig::default(),
+                    &StaticMetadata { input: image() },
+                    &ConsumerGroupHeartbeatRequest {
+                        group_id: "g".into(),
+                        member_id: "m".into(),
+                        member_epoch: 5,
+                        subscribed_topic_names: Some(vec!["orders".into()]),
+                        subscribed_topic_regex: pattern.map(str::to_owned),
+                        rebalance_timeout_ms: 60_000,
+                        ..Default::default()
+                    },
+                    ClientIdentity {
+                        id: "c",
+                        host: "/127.0.0.1",
+                    },
+                    Instant::now(),
+                    &authorized,
+                )
+                .unwrap();
+            }
+            let group = CoordinatorGroup::seeded("g", GroupKind::Consumer(state), HashMap::new());
+
+            check!(offset_delete_guard(&group) == Ok(want), "{label}");
+        }
     }
 }

@@ -107,13 +107,13 @@ pub(crate) async fn topic_id_for(client: &Client, name: &str) -> WireUuid {
         .unwrap_or_default()
 }
 
-/// Commits an offset through the "simple consumer" path, with an empty
-/// `member_id`, which skips classic-member validation. This is safe for a
-/// streams group, because the offset-home actor accepts a commit from a client
-/// that has not joined, at generation -1.
-pub(crate) async fn commit_offset_simple(
+/// Commits an offset as the streams member `member_id` at `member_epoch`, as
+/// a Streams client does. Kafka's `StreamsGroup.validateOffsetCommit` refuses
+/// a commit with no member on a group that has members.
+pub(crate) async fn commit_offset_as_member(
     client: &Client,
     group_id: &str,
+    (member_id, member_epoch): (&str, i32),
     topic: &str,
     topic_id: WireUuid,
     partition: i32,
@@ -122,8 +122,8 @@ pub(crate) async fn commit_offset_simple(
     let cr = client
         .send(OffsetCommitRequest {
             group_id: group_id.into(),
-            generation_id_or_member_epoch: -1,
-            member_id: String::new(),
+            generation_id_or_member_epoch: member_epoch,
+            member_id: member_id.into(),
             topics: vec![OffsetCommitRequestTopic {
                 name: topic.into(),
                 topic_id,
@@ -142,7 +142,7 @@ pub(crate) async fn commit_offset_simple(
         .expect("OffsetCommit");
     assert!(
         cr.topics[0].partitions[0].error_code == ERR_NONE,
-        "OffsetCommit (simple consumer) failed: {cr:?}"
+        "OffsetCommit (streams member) failed: {cr:?}"
     );
 }
 

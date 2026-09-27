@@ -246,5 +246,74 @@ fn row_outcome(
     })
 }
 
+/// `true` when the request finalizes `eligible.leader.replicas.version` above
+/// 0 and that row was accepted.
+pub(super) fn enables_elr(
+    request: &UpdateFeaturesRequest,
+    results: &[UpdatableFeatureResult],
+) -> bool {
+    request
+        .feature_updates
+        .iter()
+        .zip(results)
+        .any(|(update, result)| {
+            update.feature == crate::features::ELR_VERSION
+                && update.max_version_level > 0
+                && result.error_code == codes::NONE
+        })
+}
+
+/// Kafka's `ConfigurationControlManager.maybeGenerateElrSafetyRecords`: the
+/// config records that make it safe to turn ELR on, written in the same batch
+/// as, and ahead of, the feature record. The cluster-level
+/// `min.insync.replicas` is set to the broker's static value when it has
+/// none, and every broker-level `min.insync.replicas` is removed, including
+/// one left behind by a broker that has since unregistered.
+pub(super) fn elr_safety_records(
+    image: &krabka_metadata::MetadataImage,
+    static_min_insync_replicas: i32,
+) -> Vec<MetadataRecord> {
+    let key = crate::config_keys::MIN_INSYNC_REPLICAS;
+    let mut records = Vec::new();
+    if !image
+        .default_broker_config()
+        .is_some_and(|configs| configs.contains_key(key))
+    {
+        records.push(MetadataRecord::V1BrokerConfig(
+            krabka_metadata::BrokerConfigRecord {
+                node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+                config_name: key.into(),
+                config_value: Some(static_min_insync_replicas.to_string()),
+            },
+        ));
+    }
+    // Every broker config resource, registered broker or not, as Kafka walks
+    // `brokersWithConfigs`: unregistering a broker leaves its configs behind.
+    // The image names those resources only through its record form.
+    let mut nodes: Vec<krabka_metadata::NodeId> = image
+        .to_records()
+        .into_iter()
+        .filter_map(|record| match record {
+            MetadataRecord::V1BrokerConfig(config)
+                if config.node_id != krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID
+                    && config.config_name == key =>
+            {
+                Some(config.node_id)
+            }
+            _ => None,
+        })
+        .collect();
+    nodes.sort_unstable();
+    nodes.dedup();
+    records.extend(nodes.into_iter().map(|node_id| {
+        MetadataRecord::V1BrokerConfig(krabka_metadata::BrokerConfigRecord {
+            node_id,
+            config_name: key.into(),
+            config_value: None,
+        })
+    }));
+    records
+}
+
 #[cfg(test)]
 mod tests;

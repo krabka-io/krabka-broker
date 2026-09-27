@@ -8,8 +8,9 @@
 //! render the in-memory `subtopology -> partitions` task maps back into the
 //! wire `TaskIds` shape.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+use krabka_log::Offset;
 use krabka_metadata::MetadataImage;
 use krabka_protocol::owned::{
     common::streams_group_heartbeat_response::{
@@ -26,7 +27,7 @@ use crate::{
         config::StreamsGroupConfig,
         persistence::StreamsGroupTopologyValue,
         state::{StreamsGroupState, StreamsMemberState},
-        topology::{ConfiguredSubtopology, status as topo_status},
+        topology::{ConfiguredSubtopology, ConfiguredTopology, status as topo_status},
     },
 };
 
@@ -42,6 +43,11 @@ fn map_to_task_ids(map: &BTreeMap<String, Vec<i32>>) -> Vec<RespTaskIds> {
         .collect()
 }
 
+/// The fields of every accepted heartbeat response.
+///
+/// Version 0 of the response carries the recovery lag in an `int32` field
+/// that Kafka never sets: 4.3.0 leaves it out, and trunk sets only the
+/// `int64` field of version 1. It is therefore 0 here too.
 pub(super) fn base_resp(
     error_code: i16,
     member_epoch: i32,
@@ -51,7 +57,6 @@ pub(super) fn base_resp(
         error_code,
         member_epoch,
         heartbeat_interval_ms: duration_ms(config.heartbeat_interval, 5_000),
-        acceptable_recovery_lag: i32::try_from(config.acceptable_recovery_lag).unwrap_or(i32::MAX),
         task_offset_interval_ms: duration_ms(config.task_offset_interval, 30_000),
         ..Default::default()
     }
@@ -78,6 +83,9 @@ pub(super) struct ResponseDelta {
     /// Send the three task lists: the member joined or its assignment
     /// changed. Kafka sends null lists otherwise.
     pub send_tasks: bool,
+    /// The detail of Kafka's `ASSIGNMENT_DELAYED` status, when a delay holds
+    /// the assignment back.
+    pub assignment_delayed: Option<&'static str>,
     pub endpoint_information_epoch: i32,
     pub partitions_by_user_endpoint: Option<Vec<EndpointToPartitions>>,
 }
@@ -108,6 +116,12 @@ pub(super) fn build_assignment_resp(
                 "The member's topology epoch {} is behind the group's topology epoch {}.",
                 m.topology_epoch, state.topology_epoch
             ),
+        ));
+    }
+    if let Some(detail) = delta.assignment_delayed {
+        status.push(status_entry(
+            topo_status::ASSIGNMENT_DELAYED,
+            detail.to_owned(),
         ));
     }
     if let Some((code, detail)) = &state.status {
@@ -228,7 +242,42 @@ fn topic_partitions(
 pub(super) fn build_describe(
     state: &StreamsGroupState,
     topology: Option<&StreamsGroupTopologyValue>,
+    configured_topology: Option<&ConfiguredTopology>,
 ) -> StreamsDescribeView {
+    let target = |role: &HashMap<String, BTreeMap<String, Vec<i32>>>, member_id: &str| {
+        role.get(member_id).cloned().unwrap_or_default()
+    };
+    let offsets = |offsets: &BTreeMap<(String, i32), Offset>| {
+        offsets
+            .iter()
+            .map(|(task, offset)| (task.clone(), offset.0))
+            .collect()
+    };
+    let mut members: Vec<StreamsDescribeMember> = state
+        .members
+        .values()
+        .map(|m| StreamsDescribeMember {
+            member_id: m.member_id.clone(),
+            member_epoch: m.member_epoch,
+            instance_id: m.instance_id.clone(),
+            rack_id: m.rack_id.clone(),
+            client_id: m.client_id.clone(),
+            client_host: m.client_host.clone(),
+            topology_epoch: m.topology_epoch,
+            process_id: m.process_id.clone(),
+            user_endpoint: m.user_endpoint.clone(),
+            client_tags: m.client_tags.clone(),
+            task_offsets: offsets(&m.task_offsets),
+            task_end_offsets: offsets(&m.task_end_offsets),
+            active: m.active.clone(),
+            standby: m.standby.clone(),
+            warmup: m.warmup.clone(),
+            target_active: target(&state.target.active, &m.member_id),
+            target_standby: target(&state.target.standby, &m.member_id),
+            target_warmup: target(&state.target.warmup, &m.member_id),
+        })
+        .collect();
+    members.sort_by(|a, b| a.member_id.cmp(&b.member_id));
     StreamsDescribeView {
         group_id: state.group_id.clone(),
         group_epoch: state.group_epoch,
@@ -236,22 +285,8 @@ pub(super) fn build_describe(
         topology_epoch: state.topology_epoch,
         group_state: state.phase.as_str().to_string(),
         topology: topology.cloned(),
-        members: state
-            .members
-            .values()
-            .map(|m| StreamsDescribeMember {
-                member_id: m.member_id.clone(),
-                member_epoch: m.member_epoch,
-                instance_id: m.instance_id.clone(),
-                rack_id: m.rack_id.clone(),
-                client_id: m.client_id.clone(),
-                client_host: m.client_host.clone(),
-                process_id: m.process_id.clone(),
-                active: m.active.clone(),
-                standby: m.standby.clone(),
-                warmup: m.warmup.clone(),
-            })
-            .collect(),
+        configured_topology: configured_topology.cloned(),
+        members,
     }
 }
 

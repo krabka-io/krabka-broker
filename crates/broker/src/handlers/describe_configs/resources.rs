@@ -33,7 +33,7 @@ use super::{
 use crate::{
     codes,
     config_keys::{
-        self,
+        self, broker_dynamic,
         registry::{self, ConfigScope, NODE_ID},
     },
 };
@@ -71,12 +71,15 @@ pub(super) struct ServingBroker<'a> {
     /// This node's live log levels, and the broker id a `BROKER_LOGGER`
     /// resource must name.
     pub(super) loggers: BrokerLoggers<'a>,
+    /// The `min.insync.replicas` this process was started with, which a
+    /// topic reports as its static broker layer.
+    pub(super) static_min_insync_replicas: i32,
 }
 
 /// Dispatches one resource entry from a `DescribeConfigs` request.
 pub(super) fn describe_one(
     image: &krabka_metadata::MetadataImage,
-    r: krabka_protocol::owned::describe_configs_request::DescribeConfigsResource,
+    r: &krabka_protocol::owned::describe_configs_request::DescribeConfigsResource,
     serving: ServingBroker<'_>,
     client_metrics_default_interval_ms: i32,
     streams_defaults: &crate::coordinator::unified::streams::config::StreamsGroupConfig,
@@ -98,56 +101,77 @@ pub(super) fn describe_one(
         .as_deref()
         .filter(|keys| !keys.is_empty());
     let wanted = |key: &str| key_filter.is_none_or(|keys| keys.iter().any(|f| f == key));
+    // Kafka's `ConfigHelper.describeConfigs` turns each exception it throws
+    // for one resource into that resource's error, with no configs.
+    let failed = |error_code: i16, error_message: Option<String>| DescribeConfigsResult {
+        error_code,
+        error_message,
+        resource_type: r.resource_type,
+        resource_name: r.resource_name.clone(),
+        configs: Vec::new(),
+        ..Default::default()
+    };
 
     if r.resource_type == RESOURCE_TYPE_TOPIC {
-        return ok(topic_configs(image, &r.resource_name, &wanted, options));
+        // `Topic.validate` first, then `metadataCache.contains`: a name Kafka
+        // refuses is INVALID_TOPIC_EXCEPTION, and a topic that does not exist
+        // is UNKNOWN_TOPIC_OR_PARTITION with no message, never a list of
+        // defaults that look real.
+        if let Err(invalid) = krabka_log::topic_name::validate_topic_name(&r.resource_name) {
+            return failed(codes::INVALID_TOPIC_EXCEPTION, Some(invalid.to_string()));
+        }
+        if image.topic(&r.resource_name).is_none() {
+            return failed(codes::UNKNOWN_TOPIC_OR_PARTITION, None);
+        }
+        let broker = TopicBrokerLayers {
+            node: serving.node,
+            static_min_insync_replicas: serving.static_min_insync_replicas,
+        };
+        return ok(topic_configs(
+            image,
+            &r.resource_name,
+            broker,
+            &wanted,
+            options,
+        ));
     }
 
     if r.resource_type == RESOURCE_TYPE_BROKER {
         let node_id = if r.resource_name.is_empty() {
             None
         } else {
-            let Ok(node_id) = r.resource_name.parse::<u64>() else {
-                return DescribeConfigsResult {
-                    error_code: codes::INVALID_REQUEST,
-                    error_message: Some(format!(
-                        "resource_name `{}` is not a valid broker id",
+            // Kafka's `resourceNameToBrokerId` is `String.toInt`, so `-1` is
+            // an integer that names some other node.
+            let Ok(node_id) = r.resource_name.parse::<i32>() else {
+                return failed(
+                    codes::INVALID_REQUEST,
+                    Some(format!(
+                        "Broker id must be an integer, but it is: {}",
                         r.resource_name
                     )),
-                    resource_type: r.resource_type,
-                    resource_name: r.resource_name,
-                    configs: Vec::new(),
-                    ..Default::default()
-                };
+                );
             };
-            let node_id = krabka_metadata::NodeId(node_id);
-            // Kafka's `ConfigHelper.describeConfigs`: a broker resource is
-            // answered from the serving process's own configuration, so it
-            // refuses to answer for any other node. The
-            // `kafka-transaction-coordinator`-era `kafka_2.13-4.3.1.jar`
-            // carries the message verbatim -- "Unexpected broker id, expected
-            // <id> or empty string, but received <name>" -- as an
-            // `InvalidRequestException`. The JVM `AdminClient` never sends
-            // one: it routes a broker resource to the node it names.
-            if node_id != serving.node {
-                return DescribeConfigsResult {
-                    error_code: codes::INVALID_REQUEST,
-                    error_message: Some(format!(
+            let node_id = u64::try_from(node_id)
+                .map_or(None, |id| Some(krabka_metadata::NodeId(id)))
+                .filter(|id| *id == serving.node);
+            let Some(node_id) = node_id else {
+                return failed(
+                    codes::INVALID_REQUEST,
+                    Some(format!(
                         "Unexpected broker id, expected {} or empty string, but received {}",
                         serving.node.0, r.resource_name
                     )),
-                    resource_type: r.resource_type,
-                    resource_name: r.resource_name,
-                    configs: Vec::new(),
-                    ..Default::default()
-                };
-            }
+                );
+            };
+            // A broker resource is answered from the serving process's own
+            // configuration, so Kafka refuses to answer for any other node.
             Some(node_id)
         };
         return ok(broker_configs(
             image,
             node_id,
             serving.static_broker,
+            serving.static_min_insync_replicas,
             &wanted,
             options,
         ));
@@ -157,14 +181,7 @@ pub(super) fn describe_one(
         if let Err(message) =
             broker_logger::validate_resource_name(&r.resource_name, serving.loggers.node_id)
         {
-            return DescribeConfigsResult {
-                error_code: codes::INVALID_REQUEST,
-                error_message: Some(message),
-                resource_type: r.resource_type,
-                resource_name: r.resource_name,
-                configs: Vec::new(),
-                ..Default::default()
-            };
+            return failed(codes::INVALID_REQUEST, Some(message));
         }
         return ok(broker_logger::logger_configs(
             serving.loggers.levels,
@@ -173,6 +190,12 @@ pub(super) fn describe_one(
     }
 
     if r.resource_type == RESOURCE_TYPE_CLIENT_METRICS {
+        if r.resource_name.is_empty() {
+            return failed(
+                codes::INVALID_REQUEST,
+                Some("Client metrics subscription name must not be empty".into()),
+            );
+        }
         return ok(client_metrics_configs(
             image,
             &r.resource_name,
@@ -183,6 +206,12 @@ pub(super) fn describe_one(
     }
 
     if r.resource_type == RESOURCE_TYPE_GROUP {
+        if r.resource_name.is_empty() {
+            return failed(
+                codes::INVALID_REQUEST,
+                Some("Group name must not be empty".into()),
+            );
+        }
         return ok(group_configs(
             image,
             &r.resource_name,
@@ -224,6 +253,7 @@ pub(crate) fn effective_topic_configs(
         image,
         topic,
         Some(overrides),
+        None,
         &|_| true,
         EntryOptions {
             include_synonyms: false,
@@ -240,23 +270,53 @@ pub(crate) fn effective_topic_configs(
 fn topic_configs(
     image: &krabka_metadata::MetadataImage,
     topic: &str,
+    broker: TopicBrokerLayers,
     wanted: &impl Fn(&str) -> bool,
     options: EntryOptions,
 ) -> Vec<DescribeConfigsResourceResult> {
-    topic_configs_with_overrides(image, topic, image.topic_config(topic), wanted, options)
+    topic_configs_with_overrides(
+        image,
+        topic,
+        image.topic_config(topic),
+        Some(broker),
+        wanted,
+        options,
+    )
+}
+
+/// The serving broker's own layers of a topic key's synonym chain: its
+/// per-broker dynamic configs and its static `min.insync.replicas`.
+#[derive(Debug, Clone, Copy)]
+struct TopicBrokerLayers {
+    node: krabka_metadata::NodeId,
+    static_min_insync_replicas: i32,
 }
 
 /// [`topic_configs`] against a caller-supplied override map, which is what a
 /// not-yet-committed topic has instead of a stored one.
+///
+/// Each key's chain is Kafka's `ConfigHelper.createTopicConfigEntry`: the
+/// topic override, then every broker synonym of the key (the serving
+/// broker's `DYNAMIC_BROKER_CONFIG`, the `DYNAMIC_DEFAULT_BROKER_CONFIG`, the
+/// `STATIC_BROKER_CONFIG` and the `DEFAULT_CONFIG`), each under the broker
+/// key's name. The value and `config_source` are the head of that chain.
 fn topic_configs_with_overrides(
     image: &krabka_metadata::MetadataImage,
     topic: &str,
     overrides: Option<&std::collections::BTreeMap<String, String>>,
+    broker: Option<TopicBrokerLayers>,
     wanted: &impl Fn(&str) -> bool,
     options: EntryOptions,
 ) -> Vec<DescribeConfigsResourceResult> {
     let cluster_defaults = image.default_broker_config();
+    let per_broker = broker.and_then(|broker| image.broker_config(broker.node));
     let freeze = write_freeze_override(image, topic);
+    // Kafka reports a static `min.insync.replicas` when `server.properties`
+    // sets one; a value other than Kafka's default of 1 was set there.
+    let static_min_isr = broker
+        .map(|broker| broker.static_min_insync_replicas)
+        .filter(|value| *value != 1)
+        .map(|value| value.to_string());
 
     let mut configs: Vec<DescribeConfigsResourceResult> = registry::keys_in(ConfigScope::Topic)
         .filter(|row| wanted(row.name))
@@ -268,7 +328,7 @@ fn topic_configs_with_overrides(
                     .and_then(|configs| configs.get(row.name))
                     .map(String::as_str)
             };
-            let mut layers = Vec::with_capacity(2);
+            let mut layers = Vec::with_capacity(4);
             if let Some(value) = stored {
                 layers.push(Layer {
                     source: CONFIG_SOURCE_DYNAMIC_TOPIC,
@@ -276,27 +336,75 @@ fn topic_configs_with_overrides(
                     value,
                 });
             }
-            if let Some(cluster_default) = row.cluster_default
-                && let Some(value) = cluster_defaults
-                    .and_then(|configs| configs.get(cluster_default))
-                    .map(String::as_str)
+            let synonyms = broker_dynamic::topic_broker_synonyms(row.name);
+            if synonyms.is_empty() {
+                // A krabka key with no Kafka broker synonym may still fall
+                // back to a cluster-default broker config of its own.
+                if let Some(cluster_default) = row.cluster_default
+                    && let Some(value) = cluster_defaults
+                        .and_then(|configs| configs.get(cluster_default))
+                        .map(String::as_str)
+                {
+                    layers.push(Layer {
+                        source: CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
+                        name: cluster_default,
+                        value,
+                    });
+                }
+                return config_entry(
+                    Some(row),
+                    row.name,
+                    &layers,
+                    DefaultLayer {
+                        value: row.default,
+                        name: row.cluster_default,
+                    },
+                    options,
+                );
+            }
+            for (map, source) in [
+                (per_broker, CONFIG_SOURCE_DYNAMIC_BROKER),
+                (cluster_defaults, CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER),
+            ] {
+                for synonym in &synonyms {
+                    if let Some(value) = map.and_then(|configs| configs.get(synonym.name)) {
+                        layers.push(Layer {
+                            source,
+                            name: synonym.name,
+                            value,
+                        });
+                    }
+                }
+            }
+            if row.name == config_keys::MIN_INSYNC_REPLICAS
+                && let Some(value) = static_min_isr.as_deref()
             {
                 layers.push(Layer {
-                    source: CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
-                    name: cluster_default,
+                    source: CONFIG_SOURCE_STATIC_BROKER,
+                    name: config_keys::MIN_INSYNC_REPLICAS,
                     value,
                 });
             }
-            config_entry(
+            let default = synonyms
+                .iter()
+                .find_map(|synonym| synonym.default.map(|value| (synonym.name, value)));
+            let mut entry = config_entry(
                 Some(row),
                 row.name,
                 &layers,
                 DefaultLayer {
-                    value: row.default,
-                    name: row.cluster_default,
+                    value: default.map(|(_, value)| value),
+                    name: default.map(|(name, _)| name),
                 },
                 options,
-            )
+            );
+            // The default layer may sit under a broker key of another unit,
+            // such as `log.retention.hours` beneath `retention.ms`; the entry
+            // still reports the topic key's own default.
+            if layers.is_empty() {
+                entry.value = row.default.map(str::to_owned);
+            }
+            entry
         })
         .collect();
     configs.sort_unstable_by(|left, right| left.name.cmp(&right.name));
@@ -322,28 +430,42 @@ fn broker_configs(
     image: &krabka_metadata::MetadataImage,
     node_id: Option<krabka_metadata::NodeId>,
     static_broker: StaticBrokerConfigs<'_>,
+    static_min_insync_replicas: i32,
     wanted: &impl Fn(&str) -> bool,
     options: EntryOptions,
 ) -> Vec<DescribeConfigsResourceResult> {
     let defaults = image.default_broker_config();
     let per_broker = node_id.and_then(|node_id| image.broker_config(node_id));
-    let mut keys = std::collections::BTreeSet::new();
+    let mut keys: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     keys.extend(
         defaults
             .into_iter()
-            .flat_map(std::collections::BTreeMap::keys),
+            .flat_map(std::collections::BTreeMap::keys)
+            .map(String::as_str),
     );
     keys.extend(
         per_broker
             .into_iter()
-            .flat_map(std::collections::BTreeMap::keys),
+            .flat_map(std::collections::BTreeMap::keys)
+            .map(String::as_str),
     );
+    // A named broker reports every topic-default broker key it runs with,
+    // set or not, the way Kafka reports each `KafkaConfig` key.
+    if node_id.is_some() {
+        keys.extend(
+            broker_dynamic::TOPIC_DEFAULT_SYNONYMS
+                .iter()
+                .map(|(broker, _)| *broker),
+        );
+    }
+    let static_min_isr =
+        (static_min_insync_replicas != 1).then(|| static_min_insync_replicas.to_string());
 
     let mut configs: Vec<DescribeConfigsResourceResult> = keys
         .into_iter()
         .filter(|key| wanted(key))
         .map(|key| {
-            let mut layers = Vec::with_capacity(2);
+            let mut layers = Vec::with_capacity(3);
             if let Some(value) = per_broker
                 .and_then(|configs| configs.get(key))
                 .map(String::as_str)
@@ -364,14 +486,30 @@ fn broker_configs(
                     value,
                 });
             }
-            let row = registry::lookup(ConfigScope::Broker, key);
-            let default = row
-                .and_then(|row| row.default)
-                .map(|value| DefaultLayer {
-                    value: Some(value),
-                    name: Some(key.as_str()),
-                })
-                .unwrap_or_default();
+            if node_id.is_some()
+                && key == config_keys::MIN_INSYNC_REPLICAS
+                && let Some(value) = static_min_isr.as_deref()
+            {
+                layers.push(Layer {
+                    source: CONFIG_SOURCE_STATIC_BROKER,
+                    name: key,
+                    value,
+                });
+            }
+            let row = broker_dynamic::broker_key_row(key);
+            // Kafka filters the cluster-default resource's chain to its
+            // `DYNAMIC_DEFAULT_BROKER_CONFIG` entries, so only a named broker
+            // shows the default beneath them.
+            let default = if node_id.is_some() {
+                broker_default(key)
+                    .map(|value| DefaultLayer {
+                        value: Some(value),
+                        name: Some(key),
+                    })
+                    .unwrap_or_default()
+            } else {
+                DefaultLayer::default()
+            };
             let mut entry = config_entry(row, key, &layers, default, options);
             entry.read_only |= config_keys::is_controller_managed_broker_config(key);
             entry
@@ -398,6 +536,23 @@ fn broker_configs(
         configs.sort_unstable_by(|left, right| left.name.cmp(&right.name));
     }
     configs
+}
+
+/// Kafka's `KafkaConfig` default of a broker key krabka reports: its own
+/// registry row's, or the one its topic-key synonym family gives it.
+fn broker_default(key: &str) -> Option<&'static str> {
+    if let Some(row) = registry::lookup(ConfigScope::Broker, key) {
+        return row.default;
+    }
+    broker_dynamic::TOPIC_DEFAULT_SYNONYMS
+        .iter()
+        .find(|(broker, _)| *broker == key)
+        .and_then(|(_, topic)| {
+            broker_dynamic::topic_broker_synonyms(topic)
+                .into_iter()
+                .find(|synonym| synonym.name == key)
+        })
+        .and_then(|synonym| synonym.default)
 }
 
 /// A KIP-714 client-metrics subscription: all three keys, with the ones the
@@ -451,8 +606,14 @@ fn client_metrics_configs(
         .collect()
 }
 
-/// A KIP-1071 group resource: the streams defaults this broker runs with, and
-/// the per-group overrides that sit above them.
+/// A group resource: every key of Kafka's `GroupConfig`, with the group's
+/// override above the value this broker runs the group with.
+///
+/// The chain is Kafka's `ConfigHelper.createGroupConfigEntry`: the override
+/// at `DYNAMIC_GROUP_CONFIG`, then the key's broker synonym, at
+/// `STATIC_BROKER_CONFIG` when this broker was started with a value other
+/// than Kafka's default and at `DEFAULT_CONFIG` otherwise, or, for a key with
+/// no broker synonym, a `DEFAULT_CONFIG` entry under the group key's own name.
 fn group_configs(
     image: &krabka_metadata::MetadataImage,
     group: &str,
@@ -461,31 +622,53 @@ fn group_configs(
     options: EntryOptions,
 ) -> Vec<DescribeConfigsResourceResult> {
     let overrides = image.group_config(group).cloned().unwrap_or_default();
-    let defaults = streams_defaults.group_config_values();
+    // The values krabka's coordinators run with, for the keys they apply.
+    let broker_values = streams_defaults.group_config_values();
 
-    defaults
+    config_keys::group::KAFKA_GROUP_KEYS
         .iter()
-        .filter(|(key, _)| wanted(key))
-        .map(|(key, default)| {
-            let layers: Vec<Layer<'_>> = overrides
-                .get(key)
+        .filter(|key| wanted(key.name))
+        .map(|key| {
+            let own_row = registry::lookup(ConfigScope::Group, key.name);
+            let row = own_row
+                .copied()
+                .unwrap_or_else(|| config_keys::group::group_row(key));
+            let broker_value = broker_values
+                .get(key.name)
+                .map(String::as_str)
+                .or(key.default);
+            let mut layers: Vec<Layer<'_>> = overrides
+                .get(key.name)
                 .map(|value| Layer {
                     source: CONFIG_SOURCE_DYNAMIC_GROUP,
-                    name: key,
+                    name: key.name,
                     value,
                 })
                 .into_iter()
                 .collect();
-            config_entry(
-                registry::lookup(ConfigScope::Group, key),
-                key,
+            let broker_name = key.broker_synonym.unwrap_or(key.name);
+            if key.broker_synonym.is_some()
+                && let Some(value) = broker_value
+                && Some(value) != key.default
+            {
+                layers.push(Layer {
+                    source: CONFIG_SOURCE_STATIC_BROKER,
+                    name: broker_name,
+                    value,
+                });
+            }
+            let mut entry = config_entry(
+                Some(&row),
+                key.name,
                 &layers,
                 DefaultLayer {
-                    value: Some(default),
-                    name: Some(key),
+                    value: key.default,
+                    name: key.default.map(|_| broker_name),
                 },
                 options,
-            )
+            );
+            entry.read_only = false;
+            entry
         })
         .collect()
 }

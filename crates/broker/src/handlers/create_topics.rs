@@ -235,6 +235,7 @@ pub(crate) async fn handle(
 
     let mut results: Vec<CreatableTopicResult> = Vec::with_capacity(req.topics.len());
     let preferred_site = resolve_preferred_leader_site(&image);
+    let topic_defaults = config_keys::TopicDefaults::from_image(&image);
     // KIP-108: a validate-only request runs every check and commits nothing,
     // so the policy below sees it exactly as it sees a committing one.
     let validate_only = req.validate_only;
@@ -272,19 +273,27 @@ pub(crate) async fn handle(
 
         // Kafka validates a topic's configs before it looks at placement, so a
         // rejected config wins over INVALID_PARTITIONS on the same topic.
-        let config_overrides = topic_config_overrides(&topic_req);
-        if let Err(reason) = config_keys::validate_topic_config_map(&config_overrides) {
-            results.push(topic_error_result(
-                name,
-                codes::INVALID_CONFIG,
-                Some(reason),
-            ));
-            continue;
-        }
+        // The stored map carries each value in the form Kafka reports it, so
+        // every reader of it parses ` TRUE ` as it parses `true`.
+        let config_overrides = match config_keys::canonical_topic_config_map(
+            &topic_config_overrides(&topic_req),
+            &topic_defaults,
+            broker.config.remote_storage_backend.is_some(),
+        ) {
+            Ok(canonical) => canonical,
+            Err(reason) => {
+                results.push(topic_error_result(
+                    name,
+                    codes::INVALID_CONFIG,
+                    Some(reason),
+                ));
+                continue;
+            }
+        };
 
-        // `validate_topic_config_map` sees the key/value pairs alone and
-        // cannot see the broker's own configuration. A diskless topic needs
-        // one thing from it: an object-store backend. Without
+        // `canonical_topic_config_map` checks tiered storage against the
+        // broker's backend, but not the diskless flag. A diskless topic needs
+        // the same thing from the broker: an object-store backend. Without
         // `remote_storage_backend` there is no `DisklessReadHandle`, so the
         // broker starts neither the WAL index projection nor the object
         // flusher. The topic would still accept writes through its WAL

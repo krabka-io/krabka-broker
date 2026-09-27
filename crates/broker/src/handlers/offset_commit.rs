@@ -40,7 +40,7 @@ use crate::{
         unified::{
             actor::{GroupActorHandle, GroupActorMessage, GroupKindTag, validate_offset_commit},
             classic_state::OffsetEntry,
-            streams::actor::validate_streams_group_commit,
+            streams::actor::validate_streams_group_offset_commit,
         },
     },
     error::BrokerError,
@@ -238,7 +238,13 @@ async fn commit_rows(
 ) -> Result<Vec<OffsetCommitResponseTopic>, i16> {
     let image = broker.controller.current_image();
     match local_partition_for_group(&image, broker.config.node_id, &req.group_id) {
-        Ok(_) => {}
+        Ok(partition) => {
+            if let Some(code) =
+                crate::handlers::coordinator_routing::group_partition_loading(broker, partition)
+            {
+                return Err(code);
+            }
+        }
         Err(GroupRoutingError::Unavailable) => return Err(codes::COORDINATOR_NOT_AVAILABLE),
         Err(GroupRoutingError::NotCoordinator) => return Err(codes::NOT_COORDINATOR),
     }
@@ -375,7 +381,7 @@ async fn validate(
     let coordinator = &broker.group_coordinator;
     let generation = req.generation_id_or_member_epoch;
     let code = if let Some(streams) = coordinator.find_streams(&req.group_id) {
-        validate_streams_group_commit(&streams, &req.member_id, generation).await
+        validate_streams_group_offset_commit(&streams, &req.member_id, generation, version).await
     } else if let Some(handle) = coordinator.find(&req.group_id) {
         let code = validate_offset_commit(
             &handle,

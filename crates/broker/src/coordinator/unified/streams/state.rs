@@ -116,16 +116,26 @@ pub struct StreamsGroupState {
     pub endpoint_information_epoch: i32,
 }
 
+/// The group epoch and target assignment epoch of a new streams group, as
+/// Kafka's `StreamsGroup` constructor sets them. The first join bumps the group
+/// epoch past the assignment epoch. A member that joins while the initial
+/// rebalance delay holds the assignment back so reconciles to epoch 1, and does
+/// not stay at the join epoch 0.
+pub const INITIAL_EPOCH: i32 = 1;
+
 impl StreamsGroupState {
     pub fn new(group_id: impl Into<String>) -> Self {
         Self {
             group_id: group_id.into(),
-            group_epoch: 0,
-            assignment_epoch: 0,
+            group_epoch: INITIAL_EPOCH,
+            assignment_epoch: INITIAL_EPOCH,
             members: HashMap::new(),
             topology_epoch: 0,
             topology: None,
-            target: StreamsTargetAssignment::default(),
+            target: StreamsTargetAssignment {
+                epoch: INITIAL_EPOCH,
+                ..StreamsTargetAssignment::default()
+            },
             dirty: false,
             phase: StreamsGroupStatePhase::Empty,
             status: None,
@@ -391,8 +401,9 @@ impl StreamsGroupState {
     }
 
     /// Kafka's `StreamsGroup.maybeUpdateGroupState` for a group with a ready
-    /// topology: `Empty` with no members, `Reconciling` while a member is not
-    /// reconciled to the assignment epoch, and `Stable` otherwise. A
+    /// topology: `Empty` with no members, `Assigning` while the target
+    /// assignment is behind the group epoch, `Reconciling` while a member is
+    /// not reconciled to the assignment epoch, and `Stable` otherwise. A
     /// `NotReady` group stays `NotReady` until a target is computed.
     pub fn refresh_phase(&mut self) {
         if self.members.is_empty() {
@@ -400,6 +411,10 @@ impl StreamsGroupState {
             return;
         }
         if self.phase == StreamsGroupStatePhase::NotReady {
+            return;
+        }
+        if self.group_epoch > self.target.epoch {
+            self.phase = StreamsGroupStatePhase::Assigning;
             return;
         }
         let reconciled = self.members.values().all(|member| {
@@ -492,12 +507,23 @@ mod tests {
         assert!(!g.dirty);
     }
 
+    /// Kafka 4.3's `StreamsGroup` constructor starts a group at group epoch 1
+    /// and `TargetAssignmentMetadata.INITIAL`, target assignment epoch 1.
+    #[test]
+    fn a_new_group_starts_at_kafkas_initial_epochs() {
+        let g = StreamsGroupState::new("g");
+        check!(
+            (g.group_epoch, g.assignment_epoch, g.target.epoch, g.phase)
+                == (1, 1, 1, StreamsGroupStatePhase::Empty)
+        );
+    }
+
     #[test]
     fn bump_epoch_increments_and_dirties() {
         let mut g = StreamsGroupState::new("g");
         g.dirty = false;
         assert!(g.bump_epoch());
-        assert!(g.group_epoch == 1);
+        assert!(g.group_epoch == 2);
         assert!(g.dirty);
     }
 

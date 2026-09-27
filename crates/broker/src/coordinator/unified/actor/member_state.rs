@@ -90,6 +90,7 @@ pub(super) fn update_member_state(
     }
     let mut member_metadata_changed = false;
     let mut became_dirty = false;
+    let mut regex_resolved = false;
     if let Some(m) = state.members.get_mut(&req.member_id) {
         m.last_seen = now;
         if m.client_id != client.id {
@@ -150,6 +151,12 @@ pub(super) fn update_member_state(
                 .clone_from(regex_authorized_topics);
             state.dirty = true;
         }
+        // This heartbeat carried the pattern, so the handler resolved it; or
+        // the member has none left to resolve.
+        regex_resolved = req.subscribed_topic_regex.is_some() || m.subscribed_topic_regex.is_none();
+    }
+    if regex_resolved {
+        state.mark_regex_resolved(&req.member_id);
     }
     if became_dirty {
         state.dirty = true;

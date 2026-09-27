@@ -26,12 +26,18 @@ pub(super) fn topic_config_record(
     resource: &AlterConfigsResource,
     image: &krabka_metadata::MetadataImage,
     policy: &TopicPolicy,
+    remote_storage_system_enabled: bool,
 ) -> Result<MetadataRecord, (i16, String)> {
-    if image.topic(&resource.resource_name).is_none() {
+    // `ControllerConfigurationValidator.validateTopicName` runs before the
+    // configs are checked, and the existence check runs after them.
+    if resource.resource_name.is_empty() {
         return Err((
-            codes::UNKNOWN_TOPIC_OR_PARTITION,
-            format!("unknown topic `{}`", resource.resource_name),
+            codes::INVALID_REQUEST,
+            "Default topic resources are not allowed.".into(),
         ));
+    }
+    if let Err(invalid) = krabka_log::topic_name::validate_topic_name(&resource.resource_name) {
+        return Err((codes::INVALID_TOPIC_EXCEPTION, invalid.to_string()));
     }
     let current = image.topic_config(&resource.resource_name);
     let mut overrides = std::collections::BTreeMap::new();
@@ -39,24 +45,36 @@ pub(super) fn topic_config_record(
         // A controller-managed key has no client writer, so it cannot take
         // part in the replacement. The check comes before the whitelist, so
         // the operator reads the refusal that names what does write the key
-        // and not `unrecognized config key`.
+        // and not `Unknown topic config name`.
         if config_keys::is_controller_managed_topic_config(&cfg.name) {
             return Err((
                 codes::INVALID_CONFIG,
                 config_keys::controller_managed_topic_config_message(&cfg.name),
             ));
         }
-        let value = cfg.value.clone().unwrap_or_default();
-        config_keys::validate_topic_config(&cfg.name, &value)
-            .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
+        let value = config_keys::canonical_topic_config(
+            &cfg.name,
+            cfg.value.as_deref().unwrap_or_default(),
+        )
+        .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
         overrides.insert(cfg.name.clone(), value);
     }
-    config_keys::validate_config_combination(&overrides)
-        .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
+    config_keys::validate_config_combination(
+        &overrides,
+        &config_keys::TopicDefaults::from_image(image),
+        remote_storage_system_enabled,
+    )
+    .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     config_keys::validate_diskless_unchanged(current, &overrides)
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     config_keys::validate_remote_storage_disable(current, &overrides)
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
+    if image.topic(&resource.resource_name).is_none() {
+        return Err((
+            codes::UNKNOWN_TOPIC_OR_PARTITION,
+            format!("The topic '{}' does not exist.", resource.resource_name),
+        ));
+    }
     // KIP-133: the operator-declared policy, on the map the topic ends up
     // with. Kafka calls `AlterConfigPolicy.validate` on the same resolved map,
     // and its `RequestMetadata` carries no partition count and no replication
@@ -89,7 +107,7 @@ mod tests {
         resource: &AlterConfigsResource,
         image: &krabka_metadata::MetadataImage,
     ) -> Result<MetadataRecord, (i16, String)> {
-        super::topic_config_record(resource, image, &TopicPolicy::default())
+        super::topic_config_record(resource, image, &TopicPolicy::default(), true)
     }
 
     #[test]
@@ -119,10 +137,10 @@ mod tests {
         );
     }
 
-    /// Kafka's `LogConfig.validate` refuses tiered storage on a compacted
-    /// topic, and `AlterConfigs` is one of the three paths that surface the
-    /// `ConfigException` as `INVALID_CONFIG`. The policy test is a membership
-    /// test over the list, so `compact,delete` is refused beside `compact`.
+    /// Kafka's `LogConfig.validateRemoteStorageRequiresDeleteCleanupPolicy`
+    /// refuses tiered storage on a topic whose policy is anything but `delete`
+    /// or the empty list, and `AlterConfigs` is one of the three paths that
+    /// surface the `ConfigException` as `INVALID_CONFIG`.
     #[test]
     fn topic_replacement_rejects_tiered_storage_on_a_compacted_topic() {
         let image = image_with_topic("orders");
@@ -142,7 +160,7 @@ mod tests {
 
             check!(code == codes::INVALID_CONFIG, "cleanup.policy={policy}");
             check!(
-                message == "Tiered storage is not supported for compacted topics",
+                message == config_keys::REMOTE_STORAGE_POLICY_MESSAGE,
                 "cleanup.policy={policy}"
             );
         }
@@ -333,6 +351,7 @@ mod tests {
             ),
             &image,
             &policy,
+            true,
         )
         .expect_err("a forbidden value must be refused");
 
@@ -363,6 +382,7 @@ mod tests {
             ),
             &image,
             &policy,
+            true,
         )
         .expect("the other value of a forbidden key is accepted");
 
@@ -372,5 +392,56 @@ mod tests {
             config_keys::UNCLEAN_LEADER_ELECTION_ENABLE.to_string() => "false".to_string()},
         });
         check!(record == expected);
+    }
+
+    /// `ControllerConfigurationValidator.validateTopicName` runs before the
+    /// configs, and the existence check after them, each with Kafka's code
+    /// and message.
+    #[test]
+    fn topic_names_are_checked_in_kafkas_order() {
+        let image = image_with_topic("orders");
+        let cases = [
+            (
+                "",
+                vec![(config_keys::RETENTION_MS, "1000")],
+                (
+                    codes::INVALID_REQUEST,
+                    "Default topic resources are not allowed.".to_owned(),
+                ),
+            ),
+            (
+                "a/b",
+                vec![(config_keys::RETENTION_MS, "1000")],
+                (
+                    codes::INVALID_TOPIC_EXCEPTION,
+                    "Topic name is invalid: 'a/b' contains one or more characters other than \
+                     ASCII alphanumerics, '.', '_' and '-'"
+                        .to_owned(),
+                ),
+            ),
+            (
+                "missing",
+                vec![(config_keys::RETENTION_MS, "1000")],
+                (
+                    codes::UNKNOWN_TOPIC_OR_PARTITION,
+                    "The topic 'missing' does not exist.".to_owned(),
+                ),
+            ),
+            (
+                "missing",
+                vec![(config_keys::RETENTION_MS, "abc")],
+                (
+                    codes::INVALID_CONFIG,
+                    "Invalid value abc for configuration retention.ms: Not a number of type LONG"
+                        .to_owned(),
+                ),
+            ),
+        ];
+        for (name, configs, want) in cases {
+            check!(
+                topic_config_record(&topic_resource(name, &configs), &image) == Err(want),
+                "{name:?}"
+            );
+        }
     }
 }

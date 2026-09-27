@@ -92,9 +92,7 @@ pub(crate) fn configured_min_insync_replicas(
     image: &krabka_metadata::MetadataImage,
     topic: &str,
 ) -> Option<i32> {
-    topic_or_cluster_default(image, topic, MIN_INSYNC_REPLICAS)?
-        .parse::<i32>()
-        .ok()
+    super::parse::int_value(topic_or_cluster_default(image, topic, MIN_INSYNC_REPLICAS)?)
 }
 
 /// The effective `min.insync.replicas` of one partition, as Kafka's

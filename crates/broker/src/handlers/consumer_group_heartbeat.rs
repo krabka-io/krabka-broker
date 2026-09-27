@@ -58,12 +58,12 @@ pub(crate) async fn handle(
         // protocol is gated on a finalized group.version >= 1. Below that —
         // including UNFINALIZED, which means disabled — reject so the client
         // falls back to the classic protocol.
-        if group_version_disabled(&image) {
+        // `isConsumerGroupProtocolEnabled` also needs `consumer` among the
+        // configured rebalance protocols, and answers the same way without it.
+        if group_version_disabled(&image)
+            || next_gen_config_disabled(coordinator.config.next_gen_enabled())
+        {
             return crate::handlers::encode_response(&error(codes::UNSUPPORTED_VERSION), version);
-        }
-
-        if next_gen_config_disabled(coordinator.config.next_gen_enabled()) {
-            return crate::handlers::encode_response(&error(codes::GROUP_ID_NOT_FOUND), version);
         }
 
         // ── ACL preamble ────────────────────────────────────────────
@@ -95,6 +95,12 @@ pub(crate) async fn handle(
                 &error(codes::TOPIC_AUTHORIZATION_FAILED),
                 version,
             );
+        }
+
+        // `GroupCoordinatorService.consumerGroupHeartbeat` validates the
+        // request before it routes it to a coordinator shard.
+        if let Err(refused) = validate_request(&req, version, &coordinator.config) {
+            return crate::handlers::encode_response(&*refused, version);
         }
 
         // `subscribed_topic_regex` (KIP-848 v1+): resolve it against every
@@ -377,6 +383,96 @@ fn error(code: i16) -> ConsumerGroupHeartbeatResponse {
     }
 }
 
+/// The version from which a consumer must generate its own member id,
+/// Kafka's `CONSUMER_GENERATED_MEMBER_ID_REQUIRED_VERSION`.
+const CONSUMER_GENERATED_MEMBER_ID_REQUIRED_VERSION: i16 = 1;
+const LEAVE_GROUP_MEMBER_EPOCH: i32 = -1;
+const LEAVE_GROUP_STATIC_MEMBER_EPOCH: i32 = -2;
+
+/// Kafka's `GroupCoordinatorService.throwIfConsumerGroupHeartbeatRequestIsInvalid`.
+///
+/// A refusal carries only the error code and Kafka's message.
+fn validate_request(
+    req: &ConsumerGroupHeartbeatRequest,
+    version: i16,
+    config: &crate::coordinator::unified::config::NextGenConfig,
+) -> Result<(), Box<ConsumerGroupHeartbeatResponse>> {
+    let invalid = |message: &str| {
+        Box::new(ConsumerGroupHeartbeatResponse {
+            error_code: codes::INVALID_REQUEST,
+            error_message: Some(message.to_string()),
+            ..Default::default()
+        })
+    };
+    // `Utils.throwIfEmptyString`: a present value that trims to nothing.
+    let blank = |value: Option<&str>| value.is_some_and(|value| value.trim().is_empty());
+
+    if (version >= CONSUMER_GENERATED_MEMBER_ID_REQUIRED_VERSION
+        || req.member_epoch > 0
+        || req.member_epoch == LEAVE_GROUP_MEMBER_EPOCH)
+        && blank(Some(&req.member_id))
+    {
+        return Err(invalid("MemberId can't be empty."));
+    }
+    if blank(Some(&req.group_id)) {
+        return Err(invalid("GroupId can't be empty."));
+    }
+    if blank(req.instance_id.as_deref()) {
+        return Err(invalid("InstanceId can't be empty."));
+    }
+    if blank(req.rack_id.as_deref()) {
+        return Err(invalid("RackId can't be empty."));
+    }
+
+    if req.member_epoch == 0 {
+        if req.rebalance_timeout_ms == -1 {
+            return Err(invalid(
+                "RebalanceTimeoutMs must be provided in first request.",
+            ));
+        }
+        if req
+            .topic_partitions
+            .as_ref()
+            .is_none_or(|partitions| !partitions.is_empty())
+        {
+            return Err(invalid("TopicPartitions must be empty when (re-)joining."));
+        }
+        if req.subscribed_topic_names.is_none() && req.subscribed_topic_regex.is_none() {
+            return Err(invalid(
+                "Either SubscribedTopicNames or SubscribedTopicRegex must be non-null when \
+                 (re-)joining.",
+            ));
+        }
+    } else if req.member_epoch == LEAVE_GROUP_STATIC_MEMBER_EPOCH {
+        if req.instance_id.is_none() {
+            return Err(invalid("InstanceId can't be null."));
+        }
+    } else if req.member_epoch < LEAVE_GROUP_STATIC_MEMBER_EPOCH {
+        return Err(invalid("MemberEpoch is invalid."));
+    }
+
+    if let Some(name) = req
+        .server_assignor
+        .as_deref()
+        .filter(|name| !config.assignor_enabled(name))
+    {
+        let supported: Vec<&str> = config
+            .assignors
+            .iter()
+            .map(|assignor| assignor.name())
+            .collect();
+        return Err(Box::new(ConsumerGroupHeartbeatResponse {
+            error_code: codes::UNSUPPORTED_ASSIGNOR,
+            error_message: Some(format!(
+                "ServerAssignor {name} is not supported. Supported assignors: {}.",
+                supported.join(", ")
+            )),
+            ..Default::default()
+        }));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -391,8 +487,10 @@ mod tests {
     fn request(group_id: &str) -> Bytes {
         let req = ConsumerGroupHeartbeatRequest {
             group_id: group_id.into(),
+            member_id: "member-a".into(),
             member_epoch: 0,
             rebalance_timeout_ms: 30_000,
+            topic_partitions: Some(vec![]),
             subscribed_topic_names: Some(vec!["topic-a".into()]),
             ..Default::default()
         };
@@ -443,6 +541,177 @@ mod tests {
     fn next_gen_config_gate_inverts_enabled_flag() {
         assert!(!next_gen_config_disabled(true));
         assert!(next_gen_config_disabled(false));
+    }
+
+    /// Kafka's `throwIfConsumerGroupHeartbeatRequestIsInvalid`, row by row:
+    /// (label, version, request, whole expected refusal or `None`).
+    #[test]
+    fn validate_request_follows_kafka() {
+        use krabka_protocol::owned::consumer_group_heartbeat_request::TopicPartitions;
+
+        let join = ConsumerGroupHeartbeatRequest {
+            group_id: "g".into(),
+            member_id: "m".into(),
+            member_epoch: 0,
+            rebalance_timeout_ms: 30_000,
+            subscribed_topic_names: Some(vec!["t".into()]),
+            topic_partitions: Some(vec![]),
+            ..Default::default()
+        };
+        let steady = ConsumerGroupHeartbeatRequest {
+            member_epoch: 3,
+            rebalance_timeout_ms: -1,
+            subscribed_topic_names: None,
+            topic_partitions: None,
+            ..join.clone()
+        };
+        let invalid = |message: &str| {
+            Some(ConsumerGroupHeartbeatResponse {
+                error_code: codes::INVALID_REQUEST,
+                error_message: Some(message.into()),
+                ..Default::default()
+            })
+        };
+        let rows = [
+            ("valid join", 1, join.clone(), None),
+            ("valid steady", 1, steady.clone(), None),
+            (
+                "v0 join mints the member id",
+                0,
+                ConsumerGroupHeartbeatRequest {
+                    member_id: String::new(),
+                    ..join.clone()
+                },
+                None,
+            ),
+            (
+                "v1 empty member id",
+                1,
+                ConsumerGroupHeartbeatRequest {
+                    member_id: " ".into(),
+                    ..join.clone()
+                },
+                invalid("MemberId can't be empty."),
+            ),
+            (
+                "v0 leave with empty member id",
+                0,
+                ConsumerGroupHeartbeatRequest {
+                    member_id: String::new(),
+                    member_epoch: -1,
+                    ..steady.clone()
+                },
+                invalid("MemberId can't be empty."),
+            ),
+            (
+                "empty group id",
+                1,
+                ConsumerGroupHeartbeatRequest {
+                    group_id: String::new(),
+                    ..join.clone()
+                },
+                invalid("GroupId can't be empty."),
+            ),
+            (
+                "empty instance id",
+                1,
+                ConsumerGroupHeartbeatRequest {
+                    instance_id: Some(String::new()),
+                    ..join.clone()
+                },
+                invalid("InstanceId can't be empty."),
+            ),
+            (
+                "empty rack id",
+                1,
+                ConsumerGroupHeartbeatRequest {
+                    rack_id: Some(String::new()),
+                    ..join.clone()
+                },
+                invalid("RackId can't be empty."),
+            ),
+            (
+                "join without rebalance timeout",
+                1,
+                ConsumerGroupHeartbeatRequest {
+                    rebalance_timeout_ms: -1,
+                    ..join.clone()
+                },
+                invalid("RebalanceTimeoutMs must be provided in first request."),
+            ),
+            (
+                "join with null owned partitions",
+                1,
+                ConsumerGroupHeartbeatRequest {
+                    topic_partitions: None,
+                    ..join.clone()
+                },
+                invalid("TopicPartitions must be empty when (re-)joining."),
+            ),
+            (
+                "join with owned partitions",
+                1,
+                ConsumerGroupHeartbeatRequest {
+                    topic_partitions: Some(vec![TopicPartitions::default()]),
+                    ..join.clone()
+                },
+                invalid("TopicPartitions must be empty when (re-)joining."),
+            ),
+            (
+                "join without a subscription",
+                1,
+                ConsumerGroupHeartbeatRequest {
+                    subscribed_topic_names: None,
+                    ..join.clone()
+                },
+                invalid(
+                    "Either SubscribedTopicNames or SubscribedTopicRegex must be non-null when \
+                     (re-)joining.",
+                ),
+            ),
+            (
+                "static leave without instance id",
+                1,
+                ConsumerGroupHeartbeatRequest {
+                    member_epoch: -2,
+                    ..steady.clone()
+                },
+                invalid("InstanceId can't be null."),
+            ),
+            (
+                "epoch below -2",
+                1,
+                ConsumerGroupHeartbeatRequest {
+                    member_epoch: -3,
+                    ..steady.clone()
+                },
+                invalid("MemberEpoch is invalid."),
+            ),
+            (
+                "unknown assignor",
+                1,
+                ConsumerGroupHeartbeatRequest {
+                    server_assignor: Some("sticky".into()),
+                    ..join.clone()
+                },
+                Some(ConsumerGroupHeartbeatResponse {
+                    error_code: codes::UNSUPPORTED_ASSIGNOR,
+                    error_message: Some(
+                        "ServerAssignor sticky is not supported. Supported assignors: uniform, \
+                         range."
+                            .into(),
+                    ),
+                    ..Default::default()
+                }),
+            ),
+        ];
+        let config = crate::coordinator::unified::config::NextGenConfig::default();
+        for (label, version, request, want) in rows {
+            let got = validate_request(&request, version, &config)
+                .err()
+                .map(|e| *e);
+            assert!(got == want, "{label}");
+        }
     }
 
     #[test]
@@ -619,6 +888,7 @@ mod tests {
             member_id,
             member_epoch,
             rebalance_timeout_ms: 30_000,
+            topic_partitions: Some(vec![]),
             subscribed_topic_names: Some(vec!["topic-a".into()]),
             ..Default::default()
         };
@@ -835,6 +1105,7 @@ mod tests {
             &ConsumerGroupHeartbeatRequest {
                 group_id: "g".into(),
                 rebalance_timeout_ms: 30_000,
+                topic_partitions: Some(vec![]),
                 subscribed_topic_names: Some(vec!["topic-a".into()]),
                 ..Default::default()
             },
@@ -896,7 +1167,9 @@ mod tests {
         let req = crate::test_support::encode_request(
             &ConsumerGroupHeartbeatRequest {
                 group_id: "g".into(),
+                member_id: "regex-member".into(),
                 rebalance_timeout_ms: 30_000,
+                topic_partitions: Some(vec![]),
                 subscribed_topic_regex: Some("^orders-.*".into()),
                 ..Default::default()
             },
@@ -1011,6 +1284,7 @@ mod tests {
                 member_id: member_id.clone(),
                 member_epoch: 0,
                 rebalance_timeout_ms: 30_000,
+                topic_partitions: Some(vec![]),
                 subscribed_topic_regex: Some("^orders-.*".into()),
                 ..Default::default()
             },
@@ -1036,6 +1310,7 @@ mod tests {
                 member_id: member_id.clone(),
                 member_epoch: resp.member_epoch,
                 rebalance_timeout_ms: 30_000,
+                topic_partitions: Some(vec![]),
                 subscribed_topic_regex: Some("^orders-.*".into()),
                 ..Default::default()
             },
@@ -1102,6 +1377,7 @@ mod tests {
                 member_id: member_id.clone(),
                 member_epoch: 0,
                 rebalance_timeout_ms: 30_000,
+                topic_partitions: Some(vec![]),
                 subscribed_topic_regex: Some("^orders-.*".into()),
                 ..Default::default()
             },
@@ -1143,6 +1419,7 @@ mod tests {
                 member_id: member_id.clone(),
                 member_epoch: resp.member_epoch,
                 rebalance_timeout_ms: 30_000,
+                topic_partitions: Some(vec![]),
                 subscribed_topic_regex: Some("^orders-.*".into()),
                 ..Default::default()
             },
@@ -1219,6 +1496,7 @@ mod tests {
                 member_id: member_id.clone(),
                 member_epoch: 0,
                 rebalance_timeout_ms: 30_000,
+                topic_partitions: Some(vec![]),
                 subscribed_topic_regex: Some("^orders-.*".into()),
                 ..Default::default()
             },
@@ -1240,6 +1518,7 @@ mod tests {
                 member_id: member_id.clone(),
                 member_epoch: resp.member_epoch,
                 rebalance_timeout_ms: 30_000,
+                topic_partitions: Some(vec![]),
                 subscribed_topic_regex: Some("^orders-.*".into()),
                 ..Default::default()
             },
@@ -1310,6 +1589,7 @@ mod tests {
                 member_id: member_id.clone(),
                 member_epoch: 0,
                 rebalance_timeout_ms: 30_000,
+                topic_partitions: Some(vec![]),
                 subscribed_topic_regex: Some("^orders-.*".into()),
                 ..Default::default()
             },
@@ -1335,6 +1615,7 @@ mod tests {
                 member_id: member_id.clone(),
                 member_epoch: resp.member_epoch,
                 rebalance_timeout_ms: 30_000,
+                topic_partitions: Some(vec![]),
                 subscribed_topic_regex: Some("^orders-.*".into()),
                 ..Default::default()
             },

@@ -71,6 +71,10 @@ pub(super) fn encode_resp(
     Ok(buf.freeze())
 }
 
+/// Encodes a whole-request error that precedes the per-topic sweep: the
+/// transactional id `Write` and group `Read` gates, which Kafka answers with
+/// `TxnOffsetCommitRequest.getErrorResponse` on every row. Every later exit
+/// goes through [`build_response`] with the sweep's denied and unknown rows.
 pub(super) fn encode_err_all(
     version: i16,
     req: &TxnOffsetCommitRequest,
