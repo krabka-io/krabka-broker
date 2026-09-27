@@ -40,7 +40,7 @@ mod test_support;
 #[path = "actor/share_group_model.rs"]
 mod share_group_model;
 
-pub(crate) use self::admin_offsets::{DeleteTopic, ResetPartition};
+pub(crate) use self::admin_offsets::{DeleteTopic, DeleteTopicOutcome, ResetPartition};
 pub use self::describe::{ShareDescribeMember, ShareDescribeView};
 use self::{
     admin_offsets::{delete_offsets, reset_offsets},
@@ -73,7 +73,7 @@ pub enum ShareGroupActorMessage {
     },
     DeleteOffsets {
         requests: Vec<DeleteTopic>,
-        reply: oneshot::Sender<Result<Vec<i16>, i16>>,
+        reply: oneshot::Sender<Result<Vec<DeleteTopicOutcome>, i16>>,
     },
     /// `DeleteGroups`. On success the actor stops, and the coordinator drops
     /// its registry entries.
