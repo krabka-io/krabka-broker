@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 
 /// One member of a [`Group`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Member {
     pub id: String,
     /// KIP-345 static-membership pin. When `Some`, a client that rejoins

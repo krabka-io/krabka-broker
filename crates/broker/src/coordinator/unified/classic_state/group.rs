@@ -27,7 +27,7 @@ pub enum GroupState {
     Stable,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassicGroup {
     pub group_id: String,
     pub state: GroupState,

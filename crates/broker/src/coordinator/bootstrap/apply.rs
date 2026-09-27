@@ -200,34 +200,55 @@ pub(super) fn apply_streams_record(
     Ok(())
 }
 
+/// Rebuilds a classic group from its persisted `GroupMetadata` value, as
+/// Kafka's `GroupMetadataManager.replay(GroupMetadataKey, GroupMetadataValue)`
+/// does.
+///
+/// Each loaded member supports one protocol: the protocol that the group
+/// selected, with the stored subscription of the member as its metadata. A new
+/// member that proposes that protocol can then join the group. Kafka gives the
+/// members of a value with no selected protocol a protocol with a null name,
+/// and no `JoinGroup` can propose that name, so here they get no protocol. A
+/// stored rebalance timeout of -1, the schema default of a version 0 value,
+/// becomes the session timeout of the member. An empty protocol type becomes
+/// no protocol type.
 pub(super) fn apply_group_metadata(
     g: &mut ClassicState,
     v: GroupMetadataValue,
     replay_timestamp_ms: i64,
 ) {
-    g.protocol_type = Some(v.protocol_type);
+    g.protocol_type = Some(v.protocol_type).filter(|protocol_type| !protocol_type.is_empty());
     g.generation_id = v.generation;
     g.leader_id = v.leader;
-    g.protocol_name = v.protocol_name;
     // Repopulate members. `last_heartbeat` defaults to `now` inside
     // `Member::new` so they don't immediately time out; the client will
     // re-join anyway after a coordinator restart.
     g.members.clear();
     g.static_members.clear();
     for m in v.members {
+        let rebalance_timeout_ms = if m.rebalance_timeout_ms == -1 {
+            m.session_timeout_ms
+        } else {
+            m.rebalance_timeout_ms
+        };
         let session_timeout = std::time::Duration::from_millis(
             u64::try_from(m.session_timeout_ms.max(0)).unwrap_or(30_000),
         );
         let rebalance_timeout = std::time::Duration::from_millis(
-            u64::try_from(m.rebalance_timeout_ms.max(0)).unwrap_or(60_000),
+            u64::try_from(rebalance_timeout_ms.max(0)).unwrap_or(60_000),
         );
+        let protocols = v
+            .protocol_name
+            .iter()
+            .map(|name| (name.clone(), m.subscription.clone()))
+            .collect();
         let mut member = Member::new(
             m.member_id.clone(),
             m.client_id,
             m.client_host,
             session_timeout,
             rebalance_timeout,
-            Vec::new(),
+            protocols,
         )
         .with_instance_id(m.group_instance_id.clone());
         member.protocol_metadata = m.subscription;
@@ -237,6 +258,7 @@ pub(super) fn apply_group_metadata(
         }
         g.members.insert(m.member_id, member);
     }
+    g.protocol_name = v.protocol_name;
     g.state = if g.members.is_empty() {
         ClassicGroupState::Empty
     } else {
