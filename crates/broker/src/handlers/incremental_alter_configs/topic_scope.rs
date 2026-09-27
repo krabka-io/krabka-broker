@@ -121,8 +121,12 @@ pub(super) fn topic_config_record(
     if let Err(invalid) = krabka_log::topic_name::validate_topic_name(topic) {
         return Err((codes::INVALID_TOPIC_EXCEPTION, invalid.to_string()));
     }
-    let merged = config_keys::canonical_topic_config_map(&merged, remote_storage_system_enabled)
-        .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
+    let merged = config_keys::canonical_topic_config_map(
+        &merged,
+        &config_keys::TopicDefaults::from_image(image),
+        remote_storage_system_enabled,
+    )
+    .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     config_keys::validate_diskless_unchanged(current, &merged)
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     config_keys::validate_remote_storage_disable(current, &merged)

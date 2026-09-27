@@ -124,7 +124,7 @@ pub(crate) fn canonical_value(row: &ConfigKey, value: &str) -> Result<String, St
 pub(crate) fn validate_topic_config_map(
     overrides: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    canonical_topic_config_map(overrides, true).map(drop)
+    canonical_topic_config_map(overrides, &TopicDefaults::default(), true).map(drop)
 }
 
 /// Validate a topic's complete override map, and return it in the canonical
@@ -132,18 +132,20 @@ pub(crate) fn validate_topic_config_map(
 /// or create path stores. `CreateTopics` builds the whole map before it
 /// commits anything, so it validates in one call.
 ///
-/// `remote_storage_system_enabled` is Kafka's
+/// `defaults` are the effective broker defaults the cross-key rules read for a
+/// key the map leaves unset. `remote_storage_system_enabled` is Kafka's
 /// `RemoteLogManagerConfig.isRemoteStorageSystemEnabled`: whether this broker
 /// has a remote storage backend at all.
 pub(crate) fn canonical_topic_config_map(
     overrides: &BTreeMap<String, String>,
+    defaults: &TopicDefaults,
     remote_storage_system_enabled: bool,
 ) -> Result<BTreeMap<String, String>, String> {
     let canonical = overrides
         .iter()
         .map(|(key, value)| Ok((key.clone(), canonical_topic_config(key, value)?)))
         .collect::<Result<BTreeMap<_, _>, String>>()?;
-    validate_config_combination(&canonical, remote_storage_system_enabled)?;
+    validate_config_combination(&canonical, defaults, remote_storage_system_enabled)?;
     Ok(canonical)
 }
 
@@ -152,7 +154,10 @@ pub(crate) fn canonical_topic_config_map(
 ///
 /// Kafka's own rules come first, in the order `LogConfig.validate` runs them:
 /// `validateValues` (the compaction lags), then, when `remote.storage.enable`
-/// is true, the tiered-storage rules in [`validate_remote_storage`].
+/// is true, the tiered-storage rules in [`validate_remote_storage`]. Kafka
+/// runs them over the topic map merged over the broker's effective defaults
+/// (`KafkaConfig.extractLogConfigMap`), so a key the topic leaves unset reads
+/// `defaults` before the registry default.
 ///
 /// KFC-1 states the first krabka rule: `cleanup.policy=compact` and
 /// `delivery.mode=scheduled` exclude each other. Compaction deletes a record
@@ -173,13 +178,14 @@ pub(crate) fn canonical_topic_config_map(
 /// `delivery.mode=scheduled`.
 pub(crate) fn validate_config_combination(
     overrides: &BTreeMap<String, String>,
+    defaults: &TopicDefaults,
     remote_storage_system_enabled: bool,
 ) -> Result<(), String> {
-    validate_compaction_lag_order(overrides)?;
+    validate_compaction_lag_order(overrides, defaults)?;
     // krabka's diskless rule names the diskless flag, which is the key an
     // operator has to change, so it answers before the tier checks do.
     validate_diskless_combination(overrides)?;
-    validate_remote_storage(overrides, remote_storage_system_enabled)?;
+    validate_remote_storage(overrides, defaults, remote_storage_system_enabled)?;
     let compacting = overrides.get(CLEANUP_POLICY).is_some_and(|policy| {
         parse_cleanup_policy(policy).is_ok_and(CleanupPolicy::contains_compact)
     });
@@ -209,13 +215,79 @@ pub(crate) fn validate_config_combination(
     Ok(())
 }
 
-/// A `LONG` key of the resulting map, read at its registry default when the
-/// map does not set it, which is what Kafka's combined map carries for an
-/// unset key.
-fn long_or_default(overrides: &BTreeMap<String, String>, key: &str) -> Option<i64> {
+/// The broker-level defaults a topic key takes when the topic sets no
+/// override, keyed by topic key.
+///
+/// Kafka's `ControllerConfigurationValidator` hands `LogConfig.validate` the
+/// broker's `KafkaConfig.extractLogConfigMap`, and the cross-key rules run over
+/// the topic's configs merged over it. A cluster that sets
+/// `log.cleanup.policy=compact` therefore refuses a tiered topic that leaves
+/// `cleanup.policy` unset. Krabka's broker-level topic defaults are the
+/// cluster-wide dynamic broker configs; a key the cluster does not set keeps
+/// its registry default.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct TopicDefaults(BTreeMap<&'static str, String>);
+
+impl TopicDefaults {
+    /// The effective defaults `image`'s cluster-wide broker configs give each
+    /// topic key, through the key's broker synonyms in Kafka's order of
+    /// preference. `log.retention.minutes` and `log.retention.hours` are
+    /// converted to milliseconds, and a negative retention is `-1`, as
+    /// `KafkaConfig.logRetentionTimeMillis` reads them.
+    pub(crate) fn from_image(image: &krabka_metadata::MetadataImage) -> Self {
+        let Some(cluster) = image.default_broker_config() else {
+            return Self::default();
+        };
+        Self(
+            registry::keys_in(ConfigScope::Topic)
+                .filter_map(|row| {
+                    super::broker_dynamic::topic_broker_synonyms(row.name)
+                        .iter()
+                        .find_map(|synonym| {
+                            let value = cluster.get(synonym.name)?;
+                            Some((row.name, in_topic_unit(row.name, synonym.name, value)?))
+                        })
+                })
+                .collect(),
+        )
+    }
+
+    fn get(&self, key: &str) -> Option<&str> {
+        self.0.get(key).map(String::as_str)
+    }
+}
+
+/// A broker synonym's `value` in the unit of `topic_key`: minutes and hours
+/// become milliseconds, and a negative `retention.ms` is `-1`. `None` when a
+/// value that needs converting is not a number.
+fn in_topic_unit(topic_key: &str, broker_key: &str, value: &str) -> Option<String> {
+    let per_unit = match broker_key {
+        "log.retention.hours" | "log.roll.hours" | "log.roll.jitter.hours" => 3_600_000,
+        "log.retention.minutes" => 60_000,
+        _ if topic_key == RETENTION_MS => 1,
+        _ => return Some(value.to_owned()),
+    };
+    let millis = long_value(value)?.checked_mul(per_unit)?;
+    let millis = if topic_key == RETENTION_MS && millis < 0 {
+        -1
+    } else {
+        millis
+    };
+    Some(millis.to_string())
+}
+
+/// A `LONG` key of the resulting map: the topic override, else the effective
+/// broker default, else the registry default. That is what Kafka's combined
+/// map carries for the key.
+fn long_or_default(
+    overrides: &BTreeMap<String, String>,
+    defaults: &TopicDefaults,
+    key: &str,
+) -> Option<i64> {
     overrides
         .get(key)
         .map(String::as_str)
+        .or_else(|| defaults.get(key))
         .or_else(|| registry::lookup(ConfigScope::Topic, key).and_then(|row| row.default))
         .and_then(long_value)
 }
@@ -229,6 +301,7 @@ fn long_or_default(overrides: &BTreeMap<String, String>, key: &str) -> Option<i6
 /// total retention equal.
 fn validate_remote_storage(
     overrides: &BTreeMap<String, String>,
+    defaults: &TopicDefaults,
     remote_storage_system_enabled: bool,
 ) -> Result<(), String> {
     if !flag(overrides, REMOTE_STORAGE_ENABLE) {
@@ -239,11 +312,13 @@ fn validate_remote_storage(
     }
     let policy = overrides
         .get(CLEANUP_POLICY)
-        .map_or_else(|| vec!["delete"], |value| list_value(value));
+        .map(String::as_str)
+        .or_else(|| defaults.get(CLEANUP_POLICY))
+        .map_or_else(|| vec!["delete"], list_value);
     if !policy.is_empty() && policy != ["delete"] {
         return Err(REMOTE_STORAGE_POLICY_MESSAGE.to_owned());
     }
-    let value = |key: &str| long_or_default(overrides, key).unwrap_or_default();
+    let value = |key: &str| long_or_default(overrides, defaults, key).unwrap_or_default();
     let retention_bytes = value(RETENTION_BYTES);
     let local_retention_bytes = value(LOCAL_RETENTION_BYTES);
     let retention_ms = value(RETENTION_MS);
@@ -338,8 +413,11 @@ fn validate_remote_storage(
 /// registry default, which is what Kafka's `props` carries for an unset key:
 /// `min.compaction.lag.ms` 0 and `max.compaction.lag.ms` `i64::MAX`, so an
 /// alter that sets only one of the two is still checked against the other.
-fn validate_compaction_lag_order(overrides: &BTreeMap<String, String>) -> Result<(), String> {
-    let lag = |name: &str| long_or_default(overrides, name);
+fn validate_compaction_lag_order(
+    overrides: &BTreeMap<String, String>,
+    defaults: &TopicDefaults,
+) -> Result<(), String> {
+    let lag = |name: &str| long_or_default(overrides, defaults, name);
     let (Some(min), Some(max)) = (lag(MIN_COMPACTION_LAG_MS), lag(MAX_COMPACTION_LAG_MS)) else {
         return Ok(());
     };

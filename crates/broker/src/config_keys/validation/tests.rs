@@ -388,7 +388,8 @@ fn compact_and_scheduled_delivery_exclude_each_other() {
             overrides.insert(DELIVERY_MODE.to_string(), mode.to_string());
         }
         assert!(
-            validate_config_combination(&overrides, true).is_ok() == want_ok,
+            validate_config_combination(&overrides, &TopicDefaults::default(), true).is_ok()
+                == want_ok,
             "overrides {overrides:?}"
         );
     }
@@ -422,7 +423,8 @@ fn a_min_compaction_lag_above_the_max_is_refused() {
             overrides.insert(MAX_COMPACTION_LAG_MS.to_string(), max.to_string());
         }
         assert!(
-            validate_config_combination(&overrides, true).is_ok() == want_ok,
+            validate_config_combination(&overrides, &TopicDefaults::default(), true).is_ok()
+                == want_ok,
             "{case}: {overrides:?}"
         );
     }
@@ -436,7 +438,7 @@ fn the_compaction_lag_conflict_carries_kafkas_message() {
         (MAX_COMPACTION_LAG_MS.to_string(), "1".to_string()),
     ]);
     assert!(
-        validate_config_combination(&overrides, true)
+        validate_config_combination(&overrides, &TopicDefaults::default(), true)
             == Err(
                 "conflict topic config setting min.compaction.lag.ms (60000) > \
                  max.compaction.lag.ms (1)"
@@ -607,8 +609,124 @@ fn tiered_storage_rules_follow_kafkas_log_config() {
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect();
         check!(
-            canonical_topic_config_map(&map, tier_on).map(drop) == want,
+            canonical_topic_config_map(&map, &TopicDefaults::default(), tier_on).map(drop) == want,
             "tier={tier_on} {pairs:?}"
+        );
+    }
+}
+
+/// Kafka validates a topic's map merged over the broker's effective defaults
+/// (`KafkaConfig.extractLogConfigMap`), so a key the topic leaves unset takes
+/// the cluster-wide broker default, in the topic key's unit, and not the
+/// registry default.
+#[test]
+fn cross_key_rules_read_the_cluster_broker_defaults() {
+    // (cluster-wide broker configs, topic overrides, outcome).
+    type Case = (
+        Vec<(&'static str, &'static str)>,
+        Vec<(&'static str, &'static str)>,
+        Result<(), String>,
+    );
+    let local_ms_over = |value: i64, total: i64| {
+        Err(format!(
+            "Invalid value {value} for configuration local.retention.ms: Value must not be \
+             more than retention.ms property value: {total}"
+        ))
+    };
+    let cases: Vec<Case> = vec![
+        (
+            vec![("log.cleanup.policy", "compact")],
+            vec![(REMOTE_STORAGE_ENABLE, "true")],
+            Err(REMOTE_STORAGE_POLICY_MESSAGE.to_owned()),
+        ),
+        (
+            vec![("log.cleanup.policy", "compact")],
+            vec![(REMOTE_STORAGE_ENABLE, "true"), (CLEANUP_POLICY, "delete")],
+            Ok(()),
+        ),
+        (
+            vec![("log.cleanup.policy", "compact")],
+            vec![(REMOTE_STORAGE_ENABLE, "false")],
+            Ok(()),
+        ),
+        (
+            vec![("log.retention.ms", "1000")],
+            vec![
+                (REMOTE_STORAGE_ENABLE, "true"),
+                (LOCAL_RETENTION_MS, "2000"),
+            ],
+            local_ms_over(2000, 1000),
+        ),
+        (
+            vec![("log.retention.hours", "1")],
+            vec![
+                (REMOTE_STORAGE_ENABLE, "true"),
+                (LOCAL_RETENTION_MS, "3600001"),
+            ],
+            local_ms_over(3_600_001, 3_600_000),
+        ),
+        (
+            vec![("log.retention.hours", "1"), ("log.retention.minutes", "1")],
+            vec![
+                (REMOTE_STORAGE_ENABLE, "true"),
+                (LOCAL_RETENTION_MS, "60001"),
+            ],
+            local_ms_over(60_001, 60_000),
+        ),
+        (
+            vec![("log.retention.ms", "-5")],
+            vec![
+                (REMOTE_STORAGE_ENABLE, "true"),
+                (LOCAL_RETENTION_MS, "60001"),
+            ],
+            Ok(()),
+        ),
+        (
+            vec![("log.local.retention.ms", "5000")],
+            vec![(REMOTE_STORAGE_ENABLE, "true"), (RETENTION_MS, "1000")],
+            local_ms_over(5000, 1000),
+        ),
+        (
+            vec![("log.retention.bytes", "100")],
+            vec![
+                (REMOTE_STORAGE_ENABLE, "true"),
+                (LOCAL_RETENTION_BYTES, "200"),
+            ],
+            Err(
+                "Invalid value 200 for configuration local.retention.bytes: Value must not be \
+                 more than retention.bytes property value: 100"
+                    .to_owned(),
+            ),
+        ),
+        (
+            vec![("log.cleaner.min.compaction.lag.ms", "100")],
+            vec![(MAX_COMPACTION_LAG_MS, "50")],
+            Err(
+                "conflict topic config setting min.compaction.lag.ms (100) > \
+                 max.compaction.lag.ms (50)"
+                    .to_owned(),
+            ),
+        ),
+    ];
+    for (cluster, topic, want) in cases {
+        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        for (name, value) in &cluster {
+            image.apply(&krabka_metadata::MetadataRecord::V1BrokerConfig(
+                krabka_metadata::BrokerConfigRecord {
+                    node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+                    config_name: (*name).to_owned(),
+                    config_value: Some((*value).to_owned()),
+                },
+            ));
+        }
+        let map: BTreeMap<String, String> = topic
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect();
+        check!(
+            canonical_topic_config_map(&map, &TopicDefaults::from_image(&image), true).map(drop)
+                == want,
+            "{cluster:?} {topic:?}"
         );
     }
 }
@@ -635,7 +753,7 @@ fn compact_and_delete_is_compaction_for_the_scheduled_delivery_rule() {
     CLEANUP_POLICY.to_string() => "compact,delete".to_string(),
     DELIVERY_MODE.to_string() => DELIVERY_MODE_SCHEDULED.to_string()};
 
-    assert!(validate_config_combination(&overrides, true).is_err());
+    assert!(validate_config_combination(&overrides, &TopicDefaults::default(), true).is_err());
 }
 
 /// KFC-1's third exclusion: a scheduled topic reads each batch's
@@ -659,7 +777,7 @@ fn log_append_time_and_scheduled_delivery_exclude_each_other() {
         if let Some(mode) = mode {
             overrides.insert(DELIVERY_MODE.to_string(), mode.to_string());
         }
-        let outcome = validate_config_combination(&overrides, true);
+        let outcome = validate_config_combination(&overrides, &TopicDefaults::default(), true);
         check!(
             outcome.is_ok() == want_ok,
             "message.timestamp.type={timestamp_type} delivery.mode={mode:?}"
@@ -688,7 +806,8 @@ fn compact_plus_scheduled_rejection_names_both_keys() {
     let overrides = maplit::btreemap! {
     CLEANUP_POLICY.to_string() => "compact".to_string(),
     DELIVERY_MODE.to_string() => DELIVERY_MODE_SCHEDULED.to_string()};
-    let error = validate_config_combination(&overrides, true).unwrap_err();
+    let error =
+        validate_config_combination(&overrides, &TopicDefaults::default(), true).unwrap_err();
     assert!(error.contains(CLEANUP_POLICY), "got: {error}");
     assert!(error.contains(DELIVERY_MODE), "got: {error}");
 }

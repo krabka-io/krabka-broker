@@ -59,8 +59,12 @@ pub(super) fn topic_config_record(
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
         overrides.insert(cfg.name.clone(), value);
     }
-    config_keys::validate_config_combination(&overrides, remote_storage_system_enabled)
-        .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
+    config_keys::validate_config_combination(
+        &overrides,
+        &config_keys::TopicDefaults::from_image(image),
+        remote_storage_system_enabled,
+    )
+    .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     config_keys::validate_diskless_unchanged(current, &overrides)
         .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
     config_keys::validate_remote_storage_disable(current, &overrides)

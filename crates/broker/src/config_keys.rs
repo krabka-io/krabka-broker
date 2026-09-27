@@ -143,7 +143,7 @@ pub(crate) use self::{
         WRITE_FREEZE, controller_managed_topic_config_message, is_controller_managed_topic_config,
     },
     validation::{
-        canonical_topic_config, canonical_topic_config_map, parse_cleanup_policy,
+        TopicDefaults, canonical_topic_config, canonical_topic_config_map, parse_cleanup_policy,
         parse_compression_type, validate_config_combination, validate_remote_storage_disable,
         validate_topic_config,
     },

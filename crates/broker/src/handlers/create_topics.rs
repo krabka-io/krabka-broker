@@ -235,6 +235,7 @@ pub(crate) async fn handle(
 
     let mut results: Vec<CreatableTopicResult> = Vec::with_capacity(req.topics.len());
     let preferred_site = resolve_preferred_leader_site(&image);
+    let topic_defaults = config_keys::TopicDefaults::from_image(&image);
     // KIP-108: a validate-only request runs every check and commits nothing,
     // so the policy below sees it exactly as it sees a committing one.
     let validate_only = req.validate_only;
@@ -276,6 +277,7 @@ pub(crate) async fn handle(
         // every reader of it parses ` TRUE ` as it parses `true`.
         let config_overrides = match config_keys::canonical_topic_config_map(
             &topic_config_overrides(&topic_req),
+            &topic_defaults,
             broker.config.remote_storage_backend.is_some(),
         ) {
             Ok(canonical) => canonical,
