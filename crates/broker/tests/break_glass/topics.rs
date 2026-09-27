@@ -121,7 +121,13 @@ async fn delete_through_controller(bootstrap: &Client, name: &str) -> Result<i16
 /// Whether `client`'s cluster still knows `name`.
 pub(super) async fn topic_exists(client: &Client, name: &str) -> bool {
     client
-        .send(krabka_protocol::owned::metadata_request::MetadataRequest::default())
+        // Null topics is "every topic", the request `kafka-topics --list`
+        // sends; an empty list would ask for none.
+        .send(MetadataRequest {
+            topics: None,
+            allow_auto_topic_creation: false,
+            ..MetadataRequest::default()
+        })
         .await
         .expect("Metadata")
         .topics

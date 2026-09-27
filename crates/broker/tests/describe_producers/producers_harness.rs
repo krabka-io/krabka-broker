@@ -61,7 +61,12 @@ pub(crate) async fn create_topic(client: &Client, name: &str, partitions: i32) {
 pub(crate) async fn init_producer(p: &support::InProcess) -> (i64, i16) {
     let init = p
         .client
-        .send(InitProducerIdRequest::default())
+        .send(InitProducerIdRequest {
+            // A null transactional id is what makes this an idempotent
+            // producer; Kafka rejects an empty one with INVALID_REQUEST.
+            transactional_id: None,
+            ..Default::default()
+        })
         .await
         .expect("InitProducerId");
     (init.producer_id, init.producer_epoch)

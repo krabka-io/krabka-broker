@@ -202,7 +202,14 @@ async fn end_to_end_create_produce_fetch_delete() {
     assert!(cr.topics[0].error_code == 0);
 
     // 3. Metadata — confirm topic is visible and grab its UUID.
-    let meta = p.client.send(MetadataRequest::default()).await.unwrap();
+    let meta = p
+        .client
+        .send(MetadataRequest {
+            topics: None,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     assert!(meta.topics.iter().any(|t| t.name.as_deref() == Some("e2e")));
     let topic_id = topic_id_for(&p.client, "e2e").await;
 
@@ -435,7 +442,13 @@ async fn second_open_recovers_partitions_from_disk() {
         .build()
         .await
         .unwrap();
-    let meta = client.send(MetadataRequest::default()).await.unwrap();
+    let meta = client
+        .send(MetadataRequest {
+            topics: None,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     let t = meta
         .topics
         .iter()

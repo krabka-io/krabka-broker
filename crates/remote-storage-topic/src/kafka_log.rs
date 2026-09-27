@@ -47,7 +47,7 @@ use futures_util::stream::{StreamExt, unfold};
 use krabka_client_core::{
     BrokerInfo, BrokerPool, Client, ClientError, ClientFrameMax, Connection,
     ConnectionDispatchQueueCapacity, ConnectionOptions, FetchMinBytes, FetchPartitionResult,
-    IsolatedFetch, connection_target_host, fetch_partition_with_isolation_progress,
+    IsolatedFetch, MetadataScope, connection_target_host, fetch_partition_with_isolation_progress,
 };
 use krabka_client_producer::{Acks, Producer, ProducerRecord};
 use krabka_protocol::{
@@ -184,9 +184,11 @@ impl KafkaMetadataEventLog {
             .dispatch_queue_capacity(cfg.dispatch_queue_capacity.get())
             .frame_max(cfg.frame_max.size())
             .maybe_security(cfg.security.clone())
+            .metadata_scope(METADATA_TOPIC_SCOPE)
             .build()
             .await
             .map_err(|e| MetadataLogError::Other(format!("client build failed: {e}")))?;
+        client.metadata_topics().set([cfg.topic.as_str()]);
 
         // 4. Leader connections for bounded range reads.
         let reader_options = ConnectionOptions {
@@ -332,6 +334,16 @@ fn brokers_of(
         })
         .collect()
 }
+
+/// The metadata scope of every RLMM client: only the metadata topic.
+///
+/// Kafka's `TopicBasedRemoteLogMetadataManager` reads through a consumer that
+/// `assign`s the metadata topic partitions, and its `ConsumerMetadata` names
+/// exactly the assigned topics. The RLMM creates the topic itself, so no
+/// request may auto-create it with broker defaults.
+pub(super) const METADATA_TOPIC_SCOPE: MetadataScope = MetadataScope::Topics {
+    allow_auto_topic_creation: false,
+};
 
 pub(super) fn partition_leader(
     metadata: &krabka_protocol::owned::metadata_response::MetadataResponse,
@@ -568,6 +580,27 @@ mod tests {
     use assert2::{assert, check};
 
     use super::*;
+
+    #[test]
+    fn metadata_requests_name_only_the_metadata_topic_without_auto_creation() {
+        use krabka_client_core::MetadataTopics;
+        use krabka_protocol::owned::metadata_request::{MetadataRequest, MetadataRequestTopic};
+
+        let topics = MetadataTopics::new(METADATA_TOPIC_SCOPE);
+        topics.set([config::METADATA_TOPIC]);
+
+        check!(
+            topics.request()
+                == MetadataRequest {
+                    topics: Some(vec![MetadataRequestTopic {
+                        name: Some(config::METADATA_TOPIC.to_owned()),
+                        ..Default::default()
+                    }]),
+                    allow_auto_topic_creation: false,
+                    ..Default::default()
+                }
+        );
+    }
 
     #[tokio::test]
     async fn open_read_only_rejects_invalid_policy_before_connecting() {

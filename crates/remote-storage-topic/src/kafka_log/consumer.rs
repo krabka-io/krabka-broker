@@ -26,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{instrument, warn};
 
 use crate::{
-    kafka_log::{config::MetadataEventQueueCapacity, partition_leader},
+    kafka_log::{METADATA_TOPIC_SCOPE, config::MetadataEventQueueCapacity, partition_leader},
     log::{AssignmentHandle, MetadataEventRecord, PartitionStart},
 };
 
@@ -137,6 +137,7 @@ async fn partition_fetch_loop(
         .dispatch_queue_capacity(state.dispatch_queue_capacity.get())
         .frame_max(state.frame_max.size())
         .maybe_security(state.security.clone())
+        .metadata_scope(METADATA_TOPIC_SCOPE)
         .build()
         .await
     {
@@ -146,6 +147,7 @@ async fn partition_fetch_loop(
             return;
         }
     };
+    client.metadata_topics().set([state.topic.as_str()]);
 
     let mut next_offset = start_offset.max(0);
     let mut leader = None;
