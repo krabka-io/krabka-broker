@@ -222,7 +222,11 @@ pub mod metadata_source;
 pub mod metrics;
 pub(crate) mod metrics_server;
 pub mod network;
+// The OAUTHBEARER token introspection client and the JWKS refresher need an
+// HTTP client stack, which wasm32-wasip1 does not have.
+#[cfg(not(target_family = "wasm"))]
 pub(crate) mod oauth_introspection;
+#[cfg(not(target_family = "wasm"))]
 pub(crate) mod oauth_jwks;
 pub mod operator_keys;
 mod partition;

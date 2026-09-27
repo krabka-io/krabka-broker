@@ -281,7 +281,28 @@ fn read_records(
     // whenever it is set — see the comment there). It is the offset just
     // past the last batch this call actually served, which bounds the
     // aborted-transaction scan below to what the response carries.
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+    ))]
     let mut served_upper_bound: Option<Offset> = None;
+    // Every read on the targets without sendfile takes the raw-byte path,
+    // which assigns this exactly once.
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+    )))]
+    let served_upper_bound: Option<Offset>;
     #[cfg(any(
         target_os = "linux",
         target_os = "macos",

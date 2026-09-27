@@ -7,14 +7,13 @@ use krabka_compression::RecordDecompressionPolicy;
 use krabka_protocol::{
     owned::produce_response::BatchIndexAndErrorMessage, records::RecordBatchBorrowed,
 };
-use krabka_schema_serde::subject::Role;
 use krabka_verified::{
     SchemaBatchAdmission, SchemaFieldAction, SchemaFieldRole, schema_batch_admission,
     schema_field_action,
 };
 
 use super::prepare::{PreparedBatch, PreparedSource};
-use crate::schema_validation::{RejectReason, SchemaGate, SchemaValidator};
+use crate::schema_validation::{RejectReason, Role, SchemaGate, SchemaValidator};
 
 /// The KIP-467 `error_message` a schema rejection carries.
 ///

@@ -68,7 +68,7 @@ pub struct BrokerRaftHandshake {
     pub tls_acceptor: Option<TlsAcceptor>,
     pub plain_credentials: HashMap<String, String>,
     pub enabled_sasl_mechanisms: Vec<SaslMechanism>,
-    pub gssapi: Option<krabka_security::gssapi::GssapiConfig>,
+    pub gssapi: Option<crate::network::auth::GssapiConfig>,
     pub oauthbearer_validator: krabka_security::OAuthBearerValidator,
     pub protocol: ListenerProtocol,
     pub controller: ControllerHandleArc,

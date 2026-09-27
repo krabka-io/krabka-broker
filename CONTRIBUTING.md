@@ -42,6 +42,20 @@ that the change does not otherwise touch. The
 [style guides](docs/style_guides/README.md) contain the code and documentation
 rules.
 
+### The `wasm32-wasip1` build
+
+The broker library also builds for `wasm32-wasip1`, which the Cluster Lab runs in a browser. The `wasm` CI job runs Clippy for that target. To run it locally, install the target, unpack the [WASI sysroot](https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-25/wasi-sysroot-25.0.tar.gz) of wasi-sdk 25, and point the C compiler of the codecs at it:
+
+```sh
+rustup target add wasm32-wasip1
+# Name the llvm-ar your distribution installs, for example llvm-ar-18.
+export CC_wasm32_wasip1=clang AR_wasm32_wasip1=llvm-ar
+export CFLAGS_wasm32_wasip1="--sysroot=/path/to/wasi-sysroot-25.0"
+cargo clippy --target wasm32-wasip1 --lib -p krabka-broker -- -D warnings
+```
+
+`.cargo/config.toml` supplies the `--cfg tokio_unstable` that tokio needs for `net` on a wasm target. Keep native-only dependencies in a `[target.'cfg(not(target_family = "wasm"))'.dependencies]` table. A subsystem that needs one answers "unavailable on this platform" on wasm, as the OPA authorizer and the metrics server do.
+
 ## Bumping the upstream Kafka version
 
 A Kafka version bump is two changes, one in each of two repositories. Give both

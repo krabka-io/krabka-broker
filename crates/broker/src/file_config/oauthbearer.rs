@@ -5,6 +5,7 @@
 //! broker builds. The sibling `oauthbearer_apply` module reads this table and
 //! constructs the validator.
 
+#[cfg(not(target_family = "wasm"))]
 use krabka_units::{Time, secs};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -128,8 +129,10 @@ pub struct FileOAuthBearerConfig {
 }
 
 /// Default timeout for outbound introspection / userinfo HTTP requests (10 s).
+#[cfg(not(target_family = "wasm"))]
 pub(super) const DEFAULT_INTROSPECTION_HTTP_TIMEOUT: Time = secs(10);
 
 /// Default clock-skew tolerance for `exp` / `iat` / `nbf` checks. Matches the
 /// `krabka_security` validators' built-in default.
+#[cfg(not(target_family = "wasm"))]
 pub(super) const DEFAULT_ALLOWABLE_CLOCK_SKEW: Time = secs(30);

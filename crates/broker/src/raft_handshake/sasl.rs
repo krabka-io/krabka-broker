@@ -24,7 +24,7 @@ use super::{
     frame::{read_kafka_request, write_response, write_response_body},
 };
 use crate::network::auth::{
-    ConnectionAuth, ReauthClock, SaslExchange, generic_failure_message, handle_authenticate_gssapi,
+    ConnectionAuth, ReauthClock, generic_failure_message, handle_authenticate_gssapi,
     handle_authenticate_oauthbearer, handle_authenticate_plain, handle_authenticate_scram,
     handle_handshake,
 };
@@ -247,13 +247,9 @@ pub(super) async fn run_inbound_sasl(
                 // loop for the next `SaslAuthenticate` frame.
                 assert2::assert!(
                     matches!(
-                        auth,
-                        ConnectionAuth::Negotiating {
-                            exchange: SaslExchange::Scram(_)
-                                | SaslExchange::OAuthBearerFailed
-                                | SaslExchange::Gssapi(_),
-                            ..
-                        }
+                        &auth,
+                        ConnectionAuth::Negotiating { exchange, .. }
+                            if exchange.awaits_client_round()
                     ),
                     "expected SASL continuation after non-authenticated success"
                 );

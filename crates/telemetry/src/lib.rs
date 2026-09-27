@@ -19,6 +19,14 @@
 //! on. `OTEL_SDK_DISABLED=true` turns OTLP off and overrides the other
 //! variables.
 //!
+//! ## WebAssembly
+//!
+//! On `wasm32-wasip1` the crate has no OTLP exporter and no profiling admin
+//! server, because both need a network client stack or a socket `bind`. There,
+//! [`init`] returns `TelemetryError::Unsupported` for an OTLP configuration
+//! and installs nothing, and [`profiling`] exports only its configuration
+//! types.
+//!
 //! ## Resolve OTLP settings without touching the environment
 //!
 //! ```rust
@@ -43,7 +51,9 @@ pub mod profiling;
 
 mod config;
 mod error;
+#[cfg(not(target_family = "wasm"))]
 mod exporter;
+#[cfg(not(target_family = "wasm"))]
 mod heartbeat;
 mod log_levels;
 mod subscriber;

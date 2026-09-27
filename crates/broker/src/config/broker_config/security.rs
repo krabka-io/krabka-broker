@@ -159,7 +159,7 @@ macro_rules! security_fields {
             /// SASL/GSSAPI (Kerberos) configuration. `Some` only when `Gssapi` is in
             /// `enabled_sasl_mechanisms`; carries the service keytab path,
             /// `auth_to_local` rules, and KDC/realm settings for the initiate path.
-            pub gssapi: Option<krabka_security::gssapi::GssapiConfig>,
+            pub gssapi: Option<crate::network::auth::GssapiConfig>,
 
             /// JWKS endpoint to fetch OAUTHBEARER signing keys from. `Some`
             /// only when `oauthbearer_validator` is the signed variant. When set,

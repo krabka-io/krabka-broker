@@ -10,7 +10,9 @@ use std::sync::Arc;
 
 use krabka_client_core::ClientDuplex;
 use krabka_security::ListenerProtocol;
-use krabka_units::{ByteSize, convert::ByteSizeExt as _, mebibytes};
+#[cfg(not(target_family = "wasm"))]
+use krabka_units::convert::ByteSizeExt as _;
+use krabka_units::{ByteSize, mebibytes};
 use thiserror::Error;
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
@@ -37,6 +39,7 @@ const DEFAULT_SOCKET_BUFFER: ByteSize = mebibytes(1);
 ///
 /// All failures are non-fatal and logged at debug level, exactly as on the
 /// accept side: an untuned connection still works, just less efficiently.
+#[cfg(not(target_family = "wasm"))]
 fn tune_outbound_socket(stream: &TcpStream, send_buffer: ByteSize, receive_buffer: ByteSize) {
     if let Err(e) = stream.set_nodelay(true) {
         tracing::debug!(error = %e, "TCP_NODELAY set failed on outbound socket");

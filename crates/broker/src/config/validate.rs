@@ -30,6 +30,9 @@ impl BrokerConfig {
     /// - A SASL listener is declared while `enabled_sasl_mechanisms` is empty.
     /// - The role set or the [`stretch`][Self::stretch] profile is incoherent.
     /// - `audit_topic` is named outside the internal-topic convention.
+    /// - On `wasm32-wasip1`, a subsystem that the platform cannot run is
+    ///   configured: the metrics server, the OTLP forwarding of client
+    ///   metrics, or the OAUTHBEARER JWKS refresher.
     pub fn validate(&self) -> Result<(), BrokerError> {
         self.validate_log_io_policy()?;
         crate::internal_topics::validate_audit_topic_name(&self.audit_topic)?;
@@ -135,6 +138,7 @@ impl BrokerConfig {
             }
         }
         self.validate_outbound_sasl(inter_broker_listener)?;
+        self.validate_platform(cfg!(target_family = "wasm"))?;
         self.validate_positive_runtime_scalars()?;
         self.validate_additional_runtime_scalars()?;
         // After the scalar checks: the stretch durability check reads the
@@ -235,6 +239,44 @@ impl BrokerConfig {
 
     /// Checks the pairs of runtime scalars that must keep an order between
     /// them, such as a minimum below its maximum.
+    /// Refuses the subsystems that `wasm32-wasip1` cannot run, when `wasm` is
+    /// true.
+    ///
+    /// That target has no HTTP client stack and no `bind`, so the metrics
+    /// server, the OTLP forwarding of client metrics and the OAUTHBEARER JWKS
+    /// refresher are unavailable there. A configuration that asks for one
+    /// fails here, before any side effect, and does not start without it.
+    /// [`Self::validate`] passes whether the build target is wasm; the flag is
+    /// a parameter so that the refusals can be tested on every target.
+    fn validate_platform(&self, wasm: bool) -> Result<(), BrokerError> {
+        if !wasm {
+            return Ok(());
+        }
+        let unavailable = [
+            (
+                "metrics_listen_addr",
+                "the metrics server",
+                self.metrics_listen_addr.is_some(),
+            ),
+            (
+                "client_metrics_otlp_endpoint",
+                "OTLP forwarding of client metrics",
+                self.client_metrics_otlp_endpoint.is_some(),
+            ),
+            (
+                "oauthbearer_jwks_endpoint",
+                "the OAUTHBEARER JWKS refresher",
+                self.oauthbearer_jwks_endpoint.is_some(),
+            ),
+        ];
+        match unavailable.iter().find(|(_, _, set)| *set) {
+            Some((setting, subsystem, _)) => Err(BrokerError::InvalidRuntimeConfig(format!(
+                "{setting} is set, but {subsystem} is unavailable on this platform"
+            ))),
+            None => Ok(()),
+        }
+    }
+
     fn validate_runtime_relations(&self) -> Result<(), BrokerError> {
         if self.self_registration_backoff_min > self.self_registration_backoff_max {
             return Err(BrokerError::InvalidRuntimeConfig(
@@ -390,6 +432,39 @@ mod tests {
                 assert!(result.is_ok());
             }
         }
+    }
+
+    /// wasm32-wasip1 refuses each subsystem it cannot run, and names the
+    /// setting that asked for it. Every other target accepts the same
+    /// configurations.
+    /// A setting and the change that sets it.
+    type SetsOne = (&'static str, fn(&mut BrokerConfig));
+
+    #[test]
+    fn the_wasm_platform_refuses_the_subsystems_it_cannot_run() {
+        let cases: [SetsOne; 3] = [
+            ("metrics_listen_addr", |config| {
+                config.metrics_listen_addr = Some("127.0.0.1:9404".parse().unwrap());
+            }),
+            ("client_metrics_otlp_endpoint", |config| {
+                config.client_metrics_otlp_endpoint = Some("http://collector:4317".into());
+            }),
+            ("oauthbearer_jwks_endpoint", |config| {
+                config.oauthbearer_jwks_endpoint = Some("https://idp/jwks".into());
+            }),
+        ];
+        for (setting, set) in cases {
+            let mut config = BrokerConfig::default();
+            set(&mut config);
+            let Err(BrokerError::InvalidRuntimeConfig(message)) = config.validate_platform(true)
+            else {
+                panic!("expected {setting} to be refused on wasm");
+            };
+            assert!(message.starts_with(&format!("{setting} is set, but ")));
+            assert!(message.ends_with(" is unavailable on this platform"));
+            assert!(config.validate_platform(false).is_ok());
+        }
+        assert!(BrokerConfig::default().validate_platform(true).is_ok());
     }
 
     #[test]

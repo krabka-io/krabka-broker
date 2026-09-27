@@ -358,6 +358,70 @@ jobs:
       - name: nextest
         run: cargo nextest run --workspace --profile ci
 
+  # The broker library for wasm32-wasip1, the target that the Cluster Lab
+  # runs a real broker on in a browser. Neither Bazel nor the job above builds
+  # it, so this is what keeps the platform gates honest: a native-only
+  # dependency or call that reaches the broker's library graph fails here.
+  #
+  # The C in zstd-sys, lzzzz and ring compiles with the runner's clang against
+  # the WASI sysroot that wasi-sdk publishes, which is the only piece this job
+  # downloads. `.cargo/config.toml` adds the `--cfg tokio_unstable` that tokio
+  # needs for `net` on a wasm target, scoped to that target. The packages are
+  # the broker's library and every workspace crate in its graph; the binaries
+  # and the tests stay native-only.
+  wasm:
+    name: cargo clippy · wasm32-wasip1
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - id: toolchain
+        run: |
+          set -euo pipefail
+          channel="$(sed -ne 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+          test -n "${channel}"
+          echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
+
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+          targets: wasm32-wasip1
+          components: clippy
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # The runner ships clang, but its `llvm-ar` has a version suffix and no
+      # unversioned name on PATH, so the archiver is resolved rather than
+      # named.
+      - name: install the WASI sysroot
+        run: |
+          set -euo pipefail
+          curl -LsSf --retry 5 --retry-all-errors \
+            --output "${RUNNER_TEMP}/wasi-sysroot.tar.gz" \
+            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-25/wasi-sysroot-25.0.tar.gz
+          tar zxf "${RUNNER_TEMP}/wasi-sysroot.tar.gz" -C "${RUNNER_TEMP}"
+          ar="$(clang -print-prog-name=llvm-ar)"
+          if ! command -v "${ar}" >/dev/null 2>&1; then
+            ar="$(ls /usr/lib/llvm-*/bin/llvm-ar | sort -V | tail -n 1)"
+          fi
+          {
+            echo "CC_wasm32_wasip1=clang"
+            echo "AR_wasm32_wasip1=${ar}"
+            echo "CFLAGS_wasm32_wasip1=--sysroot=${RUNNER_TEMP}/wasi-sysroot-25.0"
+          } >> "${GITHUB_ENV}"
+
+      - name: clippy
+        run: >-
+          cargo clippy --target wasm32-wasip1 --lib
+          -p krabka-broker -p krabka-format -p krabka-raft -p krabka-log
+          -p krabka-audit -p krabka-authz -p krabka-kraft-core -p krabka-logfmt
+          -p krabka-object-store -p krabka-records-legacy -p krabka-remote-storage
+          -p krabka-remote-storage-topic -p krabka-telemetry -p krabka-throttle
+          -p krabka-verified
+          -- -D warnings
+
   # The repository's cheap checks, in one job.
   #
   # These were four jobs -- `axl tasks`, `changelogs`, `creusot mutants::skip`
@@ -1236,6 +1300,7 @@ jobs:
       - coverage
       - supply-chain
       - cargo
+      - wasm
       - checks
       - proofs
       - select

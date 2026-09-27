@@ -2,18 +2,20 @@
 
 use std::sync::Arc;
 
-use object_store::{ClientOptions, ObjectStore, RetryConfig};
+use object_store::ObjectStore;
+#[cfg(not(target_family = "wasm"))]
+use object_store::{ClientOptions, RetryConfig};
 
-use crate::{
-    config::{GcsConfig, ObjectStoreConfig, S3Config},
-    error::ObjectStoreError,
-};
+#[cfg(not(target_family = "wasm"))]
+use crate::config::{GcsConfig, S3Config};
+use crate::{config::ObjectStoreConfig, error::ObjectStoreError};
 
 /// The retry budget `cfg` asks for.
 ///
 /// The backoff curve is `object_store`'s: what an operator turns is how many
 /// attempts a request gets and how long the whole sequence may take, not the
 /// shape of the sleeps between them.
+#[cfg(not(target_family = "wasm"))]
 fn retry_config(max_retries: usize, retry_timeout: std::time::Duration) -> RetryConfig {
     RetryConfig {
         backoff: object_store::BackoffConfig::default(),
@@ -27,6 +29,7 @@ fn retry_config(max_retries: usize, retry_timeout: std::time::Duration) -> Retry
 /// Both timeouts are always set rather than left to the crate's defaults: a
 /// store that stalls has to hit a bound the operator chose, and a value that
 /// only exists inside a dependency is not one they can turn.
+#[cfg(not(target_family = "wasm"))]
 fn client_options(
     base: ClientOptions,
     allow_http: bool,
@@ -46,22 +49,34 @@ fn client_options(
 /// # Errors
 ///
 /// Returns [`ObjectStoreError::InvalidConfig`] if the backend builder rejects
-/// the combination of bucket, region, endpoint, and credentials.
+/// the combination of bucket, region, endpoint, and credentials. On
+/// `wasm32-wasip1`, also for every backend other than
+/// [`ObjectStoreConfig::InMemory`].
 pub fn build_object_store(
     cfg: &ObjectStoreConfig,
 ) -> Result<Arc<dyn ObjectStore>, ObjectStoreError> {
     match cfg {
+        #[cfg(not(target_family = "wasm"))]
         ObjectStoreConfig::S3(s3) => build_s3(s3),
+        #[cfg(not(target_family = "wasm"))]
         ObjectStoreConfig::Gcs(gcs) => Ok(Arc::new(build_gcs_store(gcs)?)),
+        #[cfg(not(target_family = "wasm"))]
         ObjectStoreConfig::Local { root } => {
             let store = object_store::local::LocalFileSystem::new_with_prefix(root)
                 .map_err(|e| ObjectStoreError::InvalidConfig(format!("local: {e}")))?;
             Ok(Arc::new(store))
         }
+        #[cfg(target_family = "wasm")]
+        ObjectStoreConfig::S3(_) => Err(crate::unavailable::unavailable("S3")),
+        #[cfg(target_family = "wasm")]
+        ObjectStoreConfig::Gcs(_) => Err(crate::unavailable::unavailable("GCS")),
+        #[cfg(target_family = "wasm")]
+        ObjectStoreConfig::Local { .. } => Err(crate::unavailable::unavailable("local filesystem")),
         ObjectStoreConfig::InMemory => Ok(Arc::new(object_store::memory::InMemory::new())),
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub(crate) fn build_s3_store(
     cfg: &S3Config,
 ) -> Result<object_store::aws::AmazonS3, ObjectStoreError> {
@@ -93,10 +108,12 @@ pub(crate) fn build_s3_store(
         .map_err(|e| ObjectStoreError::InvalidConfig(format!("S3 builder: {e}")))
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn build_s3(cfg: &S3Config) -> Result<Arc<dyn ObjectStore>, ObjectStoreError> {
     Ok(Arc::new(build_s3_store(cfg)?))
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub(crate) fn build_gcs_store(
     cfg: &GcsConfig,
 ) -> Result<object_store::gcp::GoogleCloudStorage, ObjectStoreError> {

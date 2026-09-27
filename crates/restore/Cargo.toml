@@ -56,7 +56,7 @@ crc32c = { workspace = true }
 # The archive listing is consumed as a stream, so the scan never holds the
 # whole bucket in memory.
 futures-util = { workspace = true }
-object_store = { workspace = true }
+object_store = { workspace = true, features = ["aws", "gcp", "fs"] }
 # RE2 semantics: `--exclude-key` and `--exclude-header` run over millions of
 # archived records, so an operator-supplied pattern must stay linear in the
 # input.

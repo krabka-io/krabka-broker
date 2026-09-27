@@ -20,3 +20,12 @@
 # does not. Local builds also read it, so developers get the runners' fetch path.
 [net]
 git-fetch-with-cli = true
+
+# tokio compiles `net`, `fs`, `rt-multi-thread` and `signal` for a wasm target
+# only under `--cfg tokio_unstable`; without it, `tokio/src/lib.rs` stops the
+# build with "Only features sync,macros,io-util,rt,time are supported on
+# wasm". The broker needs `net` there for the listeners that the embedder
+# adopts from preopened sockets. The flag is scoped to this target, so native
+# builds and Bazel do not see it.
+[target.wasm32-wasip1]
+rustflags = ["--cfg", "tokio_unstable"]

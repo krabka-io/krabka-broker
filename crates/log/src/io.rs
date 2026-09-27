@@ -98,7 +98,21 @@ pub trait LogIo: Debug + Send + Sync {
     /// # Errors
     /// Returns the underlying open or sync error.
     fn sync_dir(&self, dir: &Path) -> std::io::Result<()> {
-        real_sync_dir(dir)
+        // Rust's standard directory-open path is supported on Unix, where
+        // syncing the parent is what makes a rename or a fresh name durable.
+        // Windows offers no equivalent through `std` (`File::open` on a
+        // directory fails with `EACCES`), so the call is a no-op there and on
+        // every other non-Unix target, `wasm32-wasip1` included. The file
+        // contents are still synced before every rename.
+        #[cfg(unix)]
+        {
+            File::open(dir)?.sync_all()
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = dir;
+            Ok(())
+        }
     }
 
     /// Rename a file on behalf of `target`.
@@ -117,25 +131,6 @@ pub trait LogIo: Debug + Send + Sync {
     fn remove_file(&self, target: IoTarget, path: &Path) -> std::io::Result<()> {
         let _ = target;
         std::fs::remove_file(path)
-    }
-}
-
-/// `fsync` `dir` for real.
-///
-/// Rust's standard directory-open path is supported on Unix, where syncing the
-/// parent is what makes a rename or a fresh name durable. Windows offers no
-/// equivalent through `std` (`File::open` on a directory fails with `EACCES`),
-/// so the call is a no-op there and the file contents are still synced before
-/// every rename.
-pub(crate) fn real_sync_dir(dir: &Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        File::open(dir)?.sync_all()
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = dir;
-        Ok(())
     }
 }
 

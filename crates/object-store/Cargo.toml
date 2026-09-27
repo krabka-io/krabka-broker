@@ -19,19 +19,28 @@ categories = ["database-implementations", "filesystem"]
 workspace = true
 
 [dependencies]
-object_store = { workspace = true }
+# `tokio` carries the `WriteMultipart` upload that `ObjectStoreClient` streams
+# a large segment through.
+object_store = { workspace = true, features = ["tokio"] }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 futures-util = { workspace = true }
-http = "1"
-quick-xml = { version = "0.42", features = ["serialize"] }
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "system-proxy"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util"] }
 tracing = { workspace = true }
+
+# The S3, GCS and local-filesystem backends, and the signed bucket requests of
+# the multipart listing and the WORM check. Their HTTP client and
+# `LocalFileSystem` do not build for wasm32-wasip1, where only the in-memory
+# backend is available and the other configurations are rejected.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+object_store = { workspace = true, features = ["aws", "gcp", "fs"] }
+http = "1"
+quick-xml = { version = "0.42", features = ["serialize"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "system-proxy"] }
 
 [dev-dependencies]
 assert2 = { workspace = true }

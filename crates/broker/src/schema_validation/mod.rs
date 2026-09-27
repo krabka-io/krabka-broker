@@ -15,9 +15,12 @@
 //! - [`RejectReason`], what came back when a record failed, which becomes both
 //!   a metric label and the KIP-467 per-record message the producer sees.
 
+// The registry client needs an HTTP stack that wasm32-wasip1 does not have,
+// so that target builds the stand-in, which no configuration can construct.
+#[cfg_attr(target_family = "wasm", path = "validator/wasm.rs")]
 mod validator;
 
-pub use validator::{RejectReason, SchemaValidator, SchemaValidatorError};
+pub use validator::{RejectReason, Role, SchemaValidator, SchemaValidatorError};
 
 /// What `schema.validation.mode` selects.
 ///

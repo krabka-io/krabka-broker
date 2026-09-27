@@ -33,6 +33,9 @@ mod reject;
 #[cfg(test)]
 mod test_support;
 
+/// Which field of a record a check reads, and so which subject it names.
+pub use krabka_schema_serde::subject::Role;
+
 use self::cache::Cached;
 pub use self::reject::RejectReason;
 

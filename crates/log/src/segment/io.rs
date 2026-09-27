@@ -94,6 +94,13 @@ fn read_at(file: &File, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
     std::os::windows::fs::FileExt::seek_read(file, buf, offset)
 }
 
+// `std::os::wasi::fs::FileExt` is unstable (`wasi_ext`), so the positional
+// read goes through the safe `pread` wrapper of rustix on this target.
+#[cfg(target_os = "wasi")]
+fn read_at(file: &File, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
+    rustix::io::pread(file, buf, offset).map_err(Into::into)
+}
+
 impl Segment {
     pub(super) fn read_log_range(
         &self,

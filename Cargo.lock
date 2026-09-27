@@ -3604,6 +3604,7 @@ dependencies = [
  "maplit",
  "mutants",
  "proptest",
+ "rustix",
  "stateright",
  "tempfile",
  "testcontainers",

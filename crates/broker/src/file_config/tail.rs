@@ -50,6 +50,13 @@ fn apply_authorization_tail(
             crate::authorizer::SimpleAclAuthorizer::new(super_users)
                 .with_allow_everyone_if_no_acl_found(authorization.allow_everyone_if_no_acl_found),
         ),
+        #[cfg(target_family = "wasm")]
+        AuthzType::Opa => {
+            return Err(FileConfigError::OpaConfig(
+                "the OPA authorizer is unavailable on this platform".to_owned(),
+            ));
+        }
+        #[cfg(not(target_family = "wasm"))]
         AuthzType::Opa => {
             let opa = authorization
                 .opa
@@ -147,35 +154,7 @@ pub(super) fn apply_config_tail(
             .collect::<Result<_, _>>()?;
     }
     if let Some(gssapi) = tail.gssapi {
-        let max_time_skew = gssapi
-            .max_time_skew
-            .unwrap_or(krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW);
-        if max_time_skew < Time::ZERO {
-            return Err(FileConfigError::InvalidConfig(
-                "gssapi.max_time_skew must be non-negative".to_owned(),
-            ));
-        }
-        let rules = gssapi
-            .principal_to_local_rules
-            .iter()
-            .map(|spec| {
-                krabka_security::gssapi::name::Rule::parse(spec).map_err(|error| {
-                    FileConfigError::InvalidConfig(format!(
-                        "invalid GSSAPI principal rule {spec:?}: {error}"
-                    ))
-                })
-            })
-            .collect::<Result<_, _>>()?;
-        cfg.gssapi = Some(krabka_security::gssapi::GssapiConfig {
-            keytab_path: gssapi.keytab_path,
-            service_name: gssapi
-                .service_name
-                .unwrap_or_else(|| DEFAULT_KERBEROS_SERVICE_NAME.to_owned()),
-            principal_to_local_rules: rules,
-            realm: gssapi.realm,
-            kdc: gssapi.kdc,
-            max_time_skew,
-        });
+        cfg.gssapi = Some(gssapi_config(gssapi)?);
     }
     if let Some(credentials) = tail.inter_broker_credentials {
         cfg.inter_broker_credentials = Some(match credentials {
@@ -246,6 +225,53 @@ pub(super) fn apply_config_tail(
     cfg.audit_spool_max = ByteSize::from_bytes(spool.max_bytes);
     cfg.audit_spool_sync_every_n = spool.sync_every_n;
     Ok(())
+}
+
+/// Resolve the `[gssapi]` section into the accept-path configuration.
+#[cfg(not(target_family = "wasm"))]
+fn gssapi_config(
+    gssapi: FileGssapiConfig,
+) -> Result<crate::network::auth::GssapiConfig, FileConfigError> {
+    let max_time_skew = gssapi
+        .max_time_skew
+        .unwrap_or(krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW);
+    if max_time_skew < Time::ZERO {
+        return Err(FileConfigError::InvalidConfig(
+            "gssapi.max_time_skew must be non-negative".to_owned(),
+        ));
+    }
+    let rules = gssapi
+        .principal_to_local_rules
+        .iter()
+        .map(|spec| {
+            krabka_security::gssapi::name::Rule::parse(spec).map_err(|error| {
+                FileConfigError::InvalidConfig(format!(
+                    "invalid GSSAPI principal rule {spec:?}: {error}"
+                ))
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(krabka_security::gssapi::GssapiConfig {
+        keytab_path: gssapi.keytab_path,
+        service_name: gssapi
+            .service_name
+            .unwrap_or_else(|| DEFAULT_KERBEROS_SERVICE_NAME.to_owned()),
+        principal_to_local_rules: rules,
+        realm: gssapi.realm,
+        kdc: gssapi.kdc,
+        max_time_skew,
+    })
+}
+
+/// wasm32-wasip1 has no Kerberos stack, so a `[gssapi]` section is an error
+/// there.
+#[cfg(target_family = "wasm")]
+fn gssapi_config(
+    _gssapi: FileGssapiConfig,
+) -> Result<crate::network::auth::GssapiConfig, FileConfigError> {
+    Err(FileConfigError::InvalidConfig(
+        "SASL/GSSAPI is unavailable on this platform".to_owned(),
+    ))
 }
 
 #[cfg(test)]
