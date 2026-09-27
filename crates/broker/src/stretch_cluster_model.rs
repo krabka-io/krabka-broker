@@ -31,8 +31,8 @@
 //! - `ProduceAcksAll` mirrors the two `acks=all` gates of
 //!   `handlers::produce`. An in-sync replica set under `min.insync.replicas`
 //!   gives `NOT_ENOUGH_REPLICAS`. An in-sync replica that the leader cannot
-//!   reach holds back the high watermark and gives
-//!   `NOT_ENOUGH_REPLICAS_AFTER_APPEND`.
+//!   reach holds back the high watermark, and the wait times out with
+//!   `REQUEST_TIMED_OUT`.
 //!
 //! # What the model checks
 //!
