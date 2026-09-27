@@ -71,6 +71,7 @@ tokio-util = { workspace = true, features = ["codec", "rt"] }
 tokio-metrics = { workspace = true }
 toml = { workspace = true }
 dashmap = { workspace = true }
+fancy-regex = { workspace = true }
 regex = { workspace = true }
 refined_type = { workspace = true }
 tracing = { workspace = true }

@@ -3216,6 +3216,7 @@ dependencies = [
  "crc32c",
  "dashmap",
  "exponential-backoff",
+ "fancy-regex",
  "futures-util",
  "hex",
  "jsonpath-rust",
