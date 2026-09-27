@@ -986,14 +986,14 @@
       "name": "StreamsGroupHeartbeat",
       "krabka": {
         "min": 0,
-        "max": 0
+        "max": 1
       },
       "kafka": {
         "min": 0,
         "max": 0
       },
-      "verdict": "same",
-      "intent": null
+      "verdict": "range_differs",
+      "intent": "Intended. krabka serves StreamsGroupHeartbeat v1 from Kafka trunk (KIP-1331), which 4.3.1 predates: the response carries the group's acceptable.recovery.lag in the int64 AcceptableRecoveryLag field, and TopologyDescriptionRequired stays false because krabka has no topology description plugin. The v1 request is the v0 request, so a 4.3 client negotiates v0 and sees no difference."
     },
     {
       "api_key": 89,

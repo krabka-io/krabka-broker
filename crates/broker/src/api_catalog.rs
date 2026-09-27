@@ -1110,6 +1110,16 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "",
     },
     KipAnnotation {
+        key: "KIP-1331",
+        claim: "StreamsGroupHeartbeat v1: the int64 recovery lag and TopologyDescriptionRequired",
+        status: KipStatus::Partial,
+        module: "crates/broker/src/coordinator/unified/streams/actor/response.rs",
+        tests: &[
+            "crates/broker/src/coordinator/unified/streams/actor/tests.rs::heartbeat_response_carries_the_recovery_lag_at_version_1_only",
+        ],
+        note: "krabka has no topology description plugin, as a Kafka broker has none by default: TopologyDescriptionRequired stays false and StreamsGroupTopologyDescriptionUpdate (93) is not served. The MISSING_CLIENT_TAGS status v1 may carry needs `streams.rack.aware.assignment.tags`, which krabka does not support, so it is never sent, as Kafka never sends it with that list empty.",
+    },
+    KipAnnotation {
         key: "SASL/GSSAPI",
         claim: "SASL/Kerberos authentication",
         status: KipStatus::Implemented,
@@ -1459,8 +1469,9 @@ fn admin_apis() -> Vec<ApiVersion> {
         v!(share_group_heartbeat_request),
         v!(share_group_describe_request),
         // KIP-1071 streams-group rebalance protocol.
-        // v1 is Kafka trunk's; Kafka 4.3 serves v0.
-        v!(streams_group_heartbeat_request, max = 0),
+        v!(streams_group_heartbeat_request),
+        // Version 1, with the topology description and the assignor name, is
+        // Kafka trunk's; Kafka 4.3 serves version 0.
         v!(streams_group_describe_request, max = 0),
         // KIP-932 ShareFetch / ShareAcknowledge data-plane RPCs.
         v!(share_fetch_request),
@@ -1519,7 +1530,7 @@ mod tests {
         assert!(keys.contains(&88));
         assert!(keys.contains(&89));
         let hb = apis.iter().find(|a| a.api_key == 88).unwrap();
-        assert!(hb.min_version == 0 && hb.max_version == 0);
+        assert!((hb.min_version, hb.max_version) == (0, 1));
     }
 
     #[test]
