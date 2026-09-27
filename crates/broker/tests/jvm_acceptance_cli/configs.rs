@@ -133,9 +133,10 @@ async fn kafka_configs_describe_all_shows_effective_values_and_their_sources() {
 
     for (label, expected) in [
         (
-            "the topic override sits at the head of its chain",
+            "the topic override sits at the head of its broker synonym chain",
             "retention.ms=60000 sensitive=false \
-             synonyms={DYNAMIC_TOPIC_CONFIG:retention.ms=60000}",
+             synonyms={DYNAMIC_TOPIC_CONFIG:retention.ms=60000, \
+             DEFAULT_CONFIG:log.retention.hours=168}",
         ),
         (
             "an inherited value names the cluster default above the built-in one",
