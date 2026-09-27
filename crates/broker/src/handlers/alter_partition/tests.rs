@@ -37,7 +37,7 @@ async fn handle_denies_cluster_action_for_whole_request() {
     };
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
-    let req_bytes = encode_request(&request_with_topics(Vec::new()), version);
+    let req_bytes = encode_request(&request_with_topics(&broker, Vec::new()), version);
 
     let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
         .await
@@ -67,7 +67,7 @@ async fn leader_accepts_empty_alter_partition_request() {
     };
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
-    let req_bytes = encode_request(&request_with_topics(Vec::new()), version);
+    let req_bytes = encode_request(&request_with_topics(&broker, Vec::new()), version);
 
     let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
         .await
@@ -98,17 +98,20 @@ async fn handle_returns_topic_partition_response_and_commits_isr_change() {
     };
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = test_context(&principal, &peer);
-    let req = request_with_topics(vec![ReqTopicData {
-        topic_id: wire_topic_id(),
-        partitions: vec![ReqPartitionData {
-            partition_index: 0,
-            leader_epoch: 5,
-            new_isr: vec![1],
-            partition_epoch: 0,
+    let req = request_with_topics(
+        &broker,
+        vec![ReqTopicData {
+            topic_id: wire_topic_id(),
+            partitions: vec![ReqPartitionData {
+                partition_index: 0,
+                leader_epoch: 5,
+                new_isr: vec![1],
+                partition_epoch: 0,
+                ..Default::default()
+            }],
             ..Default::default()
         }],
-        ..Default::default()
-    }]);
+    );
     let req_bytes = encode_request(&req, version);
 
     let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
@@ -202,11 +205,14 @@ async fn topic_row_error_follows_version_and_topic_id() {
             partition_epoch,
             ..Default::default()
         };
-        let req = request_with_topics(vec![ReqTopicData {
-            topic_id,
-            partitions: vec![row(0), row(1)],
-            ..Default::default()
-        }]);
+        let req = request_with_topics(
+            &broker,
+            vec![ReqTopicData {
+                topic_id,
+                partitions: vec![row(0), row(1)],
+                ..Default::default()
+            }],
+        );
         let req_bytes = encode_request(&req, version);
         let resp = super::handle(&broker, version, 123, &req_bytes, &ctx)
             .await
@@ -255,5 +261,62 @@ async fn topic_row_error_follows_version_and_topic_id() {
         ));
     }
     assert!(actual == expected);
+    broker_handle.shutdown().await;
+}
+
+/// Kafka's `ReplicationControlManager.alterPartition` starts with
+/// `ClusterControlManager.checkBrokerEpoch`: a sender whose broker epoch is
+/// not its registration's, or that is not registered, gets a top-level
+/// `STALE_BROKER_EPOCH` and no rows, and the ISR does not move.
+#[tokio::test]
+async fn a_stale_sender_broker_epoch_refuses_the_whole_request() {
+    let version = alter_partition_response::MAX_VERSION;
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    wait_for_leader(&broker).await;
+    seed_partition(&broker).await;
+    let principal = Principal {
+        name: "replica".into(),
+        auth_method: AuthMethod::Anonymous,
+        groups: Vec::new(),
+    };
+    let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
+    let ctx = test_context(&principal, &peer);
+    let current = request_with_topics(&broker, Vec::new()).broker_epoch;
+
+    for (broker_id, broker_epoch) in [(1, current + 1), (1, -1), (99, current)] {
+        let req = AlterPartitionRequest {
+            broker_id,
+            broker_epoch,
+            ..request_with_topics(
+                &broker,
+                vec![ReqTopicData {
+                    topic_id: wire_topic_id(),
+                    partitions: vec![ReqPartitionData {
+                        partition_index: 0,
+                        leader_epoch: 5,
+                        new_isr_with_epochs: vec![super::test_support::bs(1, -1)],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+            )
+        };
+        let resp = super::handle(&broker, version, 123, &encode_request(&req, version), &ctx)
+            .await
+            .expect("handle");
+        let expected = AlterPartitionResponse {
+            throttle_time_ms: 0,
+            error_code: codes::STALE_BROKER_EPOCH,
+            topics: Vec::new(),
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        };
+        assert!(
+            decode_response(&resp, version) == expected,
+            "broker {broker_id} at epoch {broker_epoch}"
+        );
+    }
+    let image = broker.controller.current_image();
+    assert!(image.partition("t", 0).expect("seeded").partition_epoch == 0);
     broker_handle.shutdown().await;
 }

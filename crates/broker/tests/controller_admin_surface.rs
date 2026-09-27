@@ -924,11 +924,18 @@ async fn controller_listener_serves_the_inter_broker_and_sasl_apis() {
     let (broker, _dir) = start_broker().await;
     let connection = dial_controller(&broker).await;
     let unknown_topic = WireUuid([7; 16]);
+    // The controller checks the sender's broker epoch before any row, as
+    // Kafka's `checkBrokerEpoch` does, so the request carries the real one.
+    broker.wait_until_brokers_registered(1).await;
+    let broker_epoch = broker
+        .controller_image_for_test()
+        .broker_epoch(krabka_metadata::NodeId(1))
+        .expect("broker 1 registered");
 
     let alter_partition = connection
         .send(AlterPartitionRequest {
             broker_id: 1,
-            broker_epoch: -1,
+            broker_epoch,
             topics: vec![AlterPartitionTopicData {
                 topic_id: unknown_topic,
                 partitions: vec![AlterPartitionPartitionData {

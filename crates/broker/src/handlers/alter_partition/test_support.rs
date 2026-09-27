@@ -163,10 +163,19 @@ pub(super) async fn seed_partition(broker: &Broker) {
         .expect("seed topic partition");
 }
 
-pub(super) fn request_with_topics(topics: Vec<ReqTopicData>) -> AlterPartitionRequest {
+/// A request from broker 1 at the broker epoch its registration holds, or -1
+/// before it registers.
+pub(super) fn request_with_topics(
+    broker: &Broker,
+    topics: Vec<ReqTopicData>,
+) -> AlterPartitionRequest {
     AlterPartitionRequest {
         broker_id: 1,
-        broker_epoch: -1,
+        broker_epoch: broker
+            .controller
+            .current_image()
+            .broker_epoch(krabka_metadata::NodeId(1))
+            .unwrap_or(-1),
         topics,
         ..Default::default()
     }

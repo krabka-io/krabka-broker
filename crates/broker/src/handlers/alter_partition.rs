@@ -1,9 +1,10 @@
 //! `AlterPartition` (`api_key=56`). Controller-side ISR update handler.
 //!
 //! The handler validates that this broker is the openraft leader, and returns
-//! `NOT_CONTROLLER` if it is not. It then validates each partition row in the
-//! order of Kafka's `ReplicationControlManager.validateAlterPartitionData`
-//! (see `isr_update`), and submits the updated `PartitionRecord` through
+//! `NOT_CONTROLLER` if it is not. It then checks the sender's broker epoch,
+//! validates each partition row in the order of Kafka's
+//! `ReplicationControlManager.validateAlterPartitionData` (see `isr_update`),
+//! and submits the updated `PartitionRecord`s through
 //! `controller.submit_change`.
 
 use bytes::Bytes;
@@ -88,6 +89,24 @@ pub(crate) async fn handle(
         }
 
         let image = controller.current_image();
+        // Kafka's `ReplicationControlManager.alterPartition` starts with
+        // `ClusterControlManager.checkBrokerEpoch`: a sender that is not
+        // registered, or that sends another epoch than its registration's,
+        // gets a top-level `STALE_BROKER_EPOCH` and no rows.
+        let sender_epoch = u64::try_from(req.broker_id)
+            .ok()
+            .and_then(|id| image.broker_epoch(krabka_metadata::NodeId(id)));
+        if sender_epoch != Some(req.broker_epoch) {
+            return encode_resp(
+                version,
+                &AlterPartitionResponse {
+                    throttle_time_ms: 0,
+                    error_code: codes::STALE_BROKER_EPOCH,
+                    topics: Vec::new(),
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                },
+            );
+        }
         // One snapshot of the brokers that may sit in an ISR: alive, unfenced
         // and not in controlled shutdown. The registry is seeded for this term
         // first, so a request served right after a failover does not read
