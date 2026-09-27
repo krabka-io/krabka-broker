@@ -138,6 +138,9 @@ mod tests {
 
     fn broker(id: u64, rack: Option<&str>) -> BrokerRegistrationRecord {
         BrokerRegistrationRecord {
+            fenced: false,
+            in_controlled_shutdown: false,
+            cordoned_log_dirs: None,
             node_id: NodeId(id),
             broker_epoch: 0,
             incarnation_id: uuid::Uuid::nil(),

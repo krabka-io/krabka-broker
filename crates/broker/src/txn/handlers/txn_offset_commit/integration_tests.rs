@@ -264,7 +264,7 @@ async fn unknown_rows_survive_a_group_fencing_failure() {
         producer_id: 42,
         producer_epoch: 0,
         member_id: "never-registered-member".to_string(),
-        generation_id: 0,
+        generation_id_or_member_epoch: 0,
         topics: vec![topic("a", &[0]), topic("missing", &[0])],
         ..Default::default()
     };

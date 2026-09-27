@@ -17,6 +17,8 @@ type t_AclOperationKind =
   | AlterConfigs
   | IdempotentWrite
   | TwoPhaseCommit
+  | CreateTokens
+  | DescribeTokens
 
 meta "compute_max_steps" 1000000
 

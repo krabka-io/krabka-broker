@@ -126,7 +126,10 @@ pub(super) fn create_delegation_token_adapter<'a>(
                 .delegation_token_default_renew_period
                 .millis_i64(),
             &*broker.controller,
-            &broker.config.super_users,
+            crate::handlers::create_delegation_token::TokenAcl {
+                authorizer: broker.config.authorizer.as_ref(),
+                peer,
+            },
         )
         .await;
         if resp.error_code == crate::codes::NONE {

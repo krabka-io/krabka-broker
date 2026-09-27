@@ -298,6 +298,10 @@ mod tests {
             }],
             // Filled by the handler on request; the wire default otherwise.
             authorized_operations: i32::MIN,
+            // v1 fields, at their schema defaults: the handler serves v0.
+            topology_description: None,
+            topology_description_status: 0,
+            assignor_name: None,
             unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
         };
         assert!(rendered == expected);

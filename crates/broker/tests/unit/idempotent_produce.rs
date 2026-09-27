@@ -48,7 +48,10 @@ async fn idempotent_produce_dedups_duplicate_batch() {
 
     let init = p
         .client
-        .send(InitProducerIdRequest::default())
+        .send(InitProducerIdRequest {
+            transactional_id: None,
+            ..Default::default()
+        })
         .await
         .expect("InitProducerId");
     let pid = init.producer_id;
@@ -90,7 +93,10 @@ async fn out_of_order_returns_45() {
 
     let init = p
         .client
-        .send(InitProducerIdRequest::default())
+        .send(InitProducerIdRequest {
+            transactional_id: None,
+            ..Default::default()
+        })
         .await
         .expect("InitProducerId");
     let pid = init.producer_id;

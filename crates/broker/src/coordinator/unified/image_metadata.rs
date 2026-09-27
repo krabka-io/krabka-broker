@@ -85,6 +85,9 @@ mod tests {
         ] {
             image.apply(&krabka_metadata::MetadataRecord::V1BrokerRegistration(
                 krabka_metadata::BrokerRegistrationRecord {
+                    fenced: false,
+                    in_controlled_shutdown: false,
+                    cordoned_log_dirs: None,
                     node_id: krabka_metadata::NodeId(node_id),
                     broker_epoch: i64::try_from(node_id).unwrap(),
                     incarnation_id: real_uuid(u8::try_from(node_id).unwrap()),

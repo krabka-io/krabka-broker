@@ -19,6 +19,9 @@ use crate::{partition::Partition, test_support::FakeMetadataSource};
 
 pub(super) fn reg(id: NodeId) -> MetadataRecord {
     MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
+        fenced: false,
+        in_controlled_shutdown: false,
+        cordoned_log_dirs: None,
         node_id: id,
         broker_epoch: i64::try_from(id.0).unwrap(),
         incarnation_id: uuid::Uuid::nil(),

@@ -23,6 +23,10 @@ pub(super) fn topic_error_result(
         name,
         error_code,
         error_message,
+        // Kafka never sets `Configs` on a refused row, so it goes out as the
+        // generated Java default: an empty list, not null (`FieldSpec`
+        // gives an array field without `"default": "null"` `new ArrayList(0)`).
+        configs: Some(Vec::new()),
         ..Default::default()
     }
 }

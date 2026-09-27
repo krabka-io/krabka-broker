@@ -2,7 +2,7 @@
 //! controller to submit against, the authenticated-connection builders, and
 //! the super-user sets that the act-as cases need.
 
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use assert2::assert;
 use krabka_raft::ControllerHandle;
@@ -15,15 +15,27 @@ use crate::network::auth::ConnectionAuth;
 /// renew-period clamping pass this value.
 pub(super) const RENEW_24H_MS: i64 = 24 * 60 * 60 * 1_000;
 
-/// Helper that produces an empty super-users set, for tests that do not
+/// An ACL authorizer with no super users and no ACLs, for tests that do not
 /// exercise the act-as path.
-pub(super) fn empty_super_users() -> HashSet<String> {
-    HashSet::new()
+pub(super) fn empty_super_users() -> crate::authorizer::SimpleAclAuthorizer {
+    super_users_with(&[])
 }
 
-/// Helper that produces a super-users set with the given names.
-pub(super) fn super_users_with(names: &[&str]) -> HashSet<String> {
-    names.iter().map(|s| (*s).to_string()).collect()
+/// An ACL authorizer whose super users are `names`, with no ACLs.
+pub(super) fn super_users_with(names: &[&str]) -> crate::authorizer::SimpleAclAuthorizer {
+    crate::authorizer::SimpleAclAuthorizer::new(names.iter().map(|s| (*s).to_string()).collect())
+}
+
+/// The `CreateTokens` check inputs over `authorizer`, from a fixed peer.
+pub(super) fn token_acl(
+    authorizer: &crate::authorizer::SimpleAclAuthorizer,
+) -> super::TokenAcl<'_> {
+    static PEER: std::sync::LazyLock<std::net::SocketAddr> =
+        std::sync::LazyLock::new(|| "127.0.0.1:50000".parse().expect("static addr"));
+    super::TokenAcl {
+        authorizer,
+        peer: &PEER,
+    }
 }
 
 /// Starts a single-voter `Controller` for tests and waits for the

@@ -16,6 +16,20 @@ use krabka_raft::RaftError;
 
 use crate::codes;
 
+/// The row for a creation the controller committed.
+///
+/// Kafka's `AclApis.handleCreateAcls` answers a successful creation with a
+/// bare `new AclCreationResult()` and sets the error fields only when the
+/// creation failed, so the row carries the generated default for
+/// `ErrorMessage`: the empty string, not null.
+pub(super) fn acl_success_result() -> AclCreationResult {
+    AclCreationResult {
+        error_code: codes::NONE,
+        error_message: Some(String::new()),
+        ..Default::default()
+    }
+}
+
 pub(super) fn acl_error_result(code: i16, msg: impl Into<String>) -> AclCreationResult {
     AclCreationResult {
         error_code: code,
@@ -38,7 +52,8 @@ pub(super) fn create_acls_response(results: Vec<AclCreationResult>) -> CreateAcl
 /// `NotControllerException` when it is not (or is no longer) the active
 /// controller, and wraps anything else as an `UnknownServerException`, whose
 /// text `ApiError.fromThrowable` drops so no internal detail reaches the
-/// client. Neither carries a coordinator error.
+/// client. Neither carries a coordinator error, and neither carries a message:
+/// Kafka writes `ApiError.message()`, which is null for both.
 pub(super) fn apply_submit_error(
     results: &mut [AclCreationResult],
     to_submit: &[(usize, MetadataRecord)],
@@ -51,6 +66,7 @@ pub(super) fn apply_submit_error(
     for (idx, _) in to_submit {
         results[*idx] = AclCreationResult {
             error_code: code,
+            error_message: None,
             ..Default::default()
         };
     }
@@ -99,7 +115,7 @@ mod tests {
         ];
         for (error, code) in cases {
             let mut results = vec![
-                AclCreationResult::default(),
+                acl_success_result(),
                 acl_error_result(codes::INVALID_REQUEST, "already invalid"),
             ];
             apply_submit_error(&mut results, &submitted, &error);

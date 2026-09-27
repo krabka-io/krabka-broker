@@ -23,8 +23,14 @@ use crate::{
     },
 };
 
+/// The echo of one ACL a filter removed.
+///
+/// Kafka's `DeleteAclsResponse.matchingAcl` writes `ApiError.NONE`'s code and
+/// message for a successful deletion, and that message is null.
 pub(super) fn matching_acl_result(e: &AclEntry) -> DeleteAclsMatchingAcl {
     DeleteAclsMatchingAcl {
+        error_code: codes::NONE,
+        error_message: None,
         resource_type: resource_type_to_wire(e.resource_type),
         resource_name: e.resource_name.clone(),
         pattern_type: pattern_type_to_wire(e.pattern_type),

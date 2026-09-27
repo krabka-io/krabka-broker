@@ -51,7 +51,7 @@ mod tests {
     use super::*;
     use crate::{
         handlers::create_acls::{
-            response::acl_error_result,
+            response::{acl_error_result, acl_success_result},
             test_support::{
                 OPERATION_READ, OPERATION_WRITE, creation, request, test_context, validate,
             },
@@ -76,7 +76,7 @@ mod tests {
             ),
         ];
         let results = vec![
-            AclCreationResult::default(),
+            acl_success_result(),
             acl_error_result(codes::COORDINATOR_NOT_AVAILABLE, "submit failed"),
         ];
 

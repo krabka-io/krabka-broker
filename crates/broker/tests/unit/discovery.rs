@@ -50,7 +50,11 @@ async fn metadata_returns_this_broker_and_listed_topics() {
 
     let resp = p
         .client
-        .send(MetadataRequest::default())
+        // Null topics means every topic; the schema default is an empty list.
+        .send(MetadataRequest {
+            topics: None,
+            ..Default::default()
+        })
         .await
         .expect("Metadata");
     assert!(resp.brokers.len() == 1);

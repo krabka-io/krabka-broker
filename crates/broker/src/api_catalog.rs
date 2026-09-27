@@ -374,12 +374,14 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
     KipAnnotation {
         key: "KIP-373",
         claim: "Delegation tokens for other users: the `USER` resource type and the `CREATE_TOKENS` and `DESCRIBE_TOKENS` operations",
-        status: KipStatus::Partial,
-        module: "crates/broker/src/handlers/acl_wire/binding_filter.rs",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/create_delegation_token.rs",
         tests: &[
-            "crates/broker/src/handlers/acl_wire/binding_filter/tests.rs::unstorable_and_unknown_axes_match_nothing",
+            "crates/broker/src/handlers/create_delegation_token/tests.rs::create_tokens_acl_admits_minting_for_that_owner_only",
+            "crates/broker/src/handlers/describe_delegation_token/tests.rs::describe_tokens_acl_on_the_owner_grants_all_of_their_tokens",
+            "crates/broker/src/handlers/acl_wire/binding_filter/tests.rs::exact_user_token_filter_matches_the_stored_binding",
         ],
-        note: "DescribeAcls and DeleteAcls accept the KIP-373 wire values in a filter, but they match nothing: the ACL metadata model has no `USER` resource type and no token operations, so no such ACL can be stored (#769). CreateDelegationToken for another owner is granted only to super users, not to a holder of `CREATE_TOKENS` on `User:<owner>` (#765).",
+        note: "",
     },
     KipAnnotation {
         key: "KIP-382",
@@ -1131,10 +1133,16 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
 
 macro_rules! v {
     ($mod:ident) => {
+        v!($mod, max = krabka_protocol::owned::$mod::MAX_VERSION)
+    };
+    // The protocol crate vendors Kafka trunk's schemas, which can run ahead of
+    // what the latest Kafka release, and this broker, implement. An explicit
+    // maximum advertises only the versions the handler serves.
+    ($mod:ident,max = $max:expr) => {
         ApiVersion {
             api_key: krabka_protocol::owned::$mod::API_KEY,
             min_version: krabka_protocol::owned::$mod::MIN_VERSION,
-            max_version: krabka_protocol::owned::$mod::MAX_VERSION,
+            max_version: $max,
             ..Default::default()
         }
     };
@@ -1368,7 +1376,8 @@ fn admin_apis() -> Vec<ApiVersion> {
         v!(add_offsets_to_txn_request),
         v!(end_txn_request),
         v!(write_txn_markers_request),
-        v!(txn_offset_commit_request),
+        // v6 (topic ids) is Kafka trunk's; Kafka 4.3 serves up to v5.
+        v!(txn_offset_commit_request, max = 5),
         v!(describe_configs_request),
         v!(alter_replica_log_dirs_request),
         v!(describe_log_dirs_request),
@@ -1447,8 +1456,9 @@ fn admin_apis() -> Vec<ApiVersion> {
         v!(share_group_heartbeat_request),
         v!(share_group_describe_request),
         // KIP-1071 streams-group rebalance protocol.
-        v!(streams_group_heartbeat_request),
-        v!(streams_group_describe_request),
+        // v1 is Kafka trunk's; Kafka 4.3 serves v0.
+        v!(streams_group_heartbeat_request, max = 0),
+        v!(streams_group_describe_request, max = 0),
         // KIP-932 ShareFetch / ShareAcknowledge data-plane RPCs.
         v!(share_fetch_request),
         v!(share_acknowledge_request),

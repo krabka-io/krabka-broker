@@ -60,6 +60,9 @@ fn jvm_dump_log_parses_engine_snapshot() {
     // RegisterBroker (apiKey 0).
     image.apply(&MetadataRecord::V1BrokerRegistration(
         BrokerRegistrationRecord {
+            fenced: false,
+            in_controlled_shutdown: false,
+            cordoned_log_dirs: None,
             node_id: NodeId(1),
             broker_epoch: 0,
             incarnation_id: uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10),

@@ -26,25 +26,21 @@ pub(crate) use krabka_metadata::metadata_version::SHARE_VERSION_FEATURE as SHARE
 /// with `feature_enabled`.
 pub(crate) use krabka_metadata::metadata_version::STREAMS_VERSION_FEATURE as STREAMS_VERSION;
 
+/// The `metadata.version` a self-bootstrapped cluster finalizes: Kafka 4.3's
+/// `MetadataVersion.LATEST_PRODUCTION`, `4.3-IV0`. It is the level
+/// `krabka format` picks when no release is named, and the two must agree.
+///
+/// The feature table also carries Kafka trunk's unstable `4.4-IV0` and
+/// `4.4-IV1`. A stock 4.3 node or tool does not know them, so a cluster
+/// reaches them only through `UpdateFeatures` or an explicit
+/// `krabka format --release-version`.
+pub(crate) const LATEST_PRODUCTION_METADATA_VERSION: i16 = 30;
+
 /// The `metadata.version` level at which CIDR-based ACL host patterns
 /// (KIP-1276) are accepted: upstream Kafka's `4.4-IV1`,
 /// `MetadataVersion.isCidrAclSupported`.
-///
-/// `krabka_metadata::metadata_version`'s table -- the canonical
-/// level<->`X.Y-IVn` mapping this broker advertises and negotiates -- ends at
-/// `METADATA_VERSION_MAX` (`4.0-IV3`, level 25) and has no `4.4-IV1` entry
-/// yet, so this constant sits one level past that ceiling rather than naming
-/// a table entry that does not exist. `require_feature` only compares
-/// integers, so the gate below is already correct: no real cluster can
-/// finalize a level this high today (`UpdateFeatures` rejects any level
-/// outside `[METADATA_VERSION_MIN, METADATA_VERSION_MAX]`), so `CreateAcls`
-/// answers every CIDR host with the same `UNSUPPORTED_VERSION` Kafka gives
-/// below `4.4-IV1` -- correct present-day behavior, matching the "Kafka does
-/// not support this yet either, at this metadata version" reality. The day
-/// `krabka_metadata`'s table grows a real `4.4-IV1` entry, this constant
-/// should be redefined against it instead of `METADATA_VERSION_MAX + 1`.
 pub(crate) const CIDR_ACL_HOST_MIN_LEVEL: i16 =
-    krabka_metadata::metadata_version::METADATA_VERSION_MAX + 1;
+    krabka_metadata::metadata_version::CIDR_ACL_MIN_LEVEL;
 
 /// One row of the `ApiVersions.supported_features` advertisement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,12 +110,8 @@ pub(crate) fn require_feature(
 /// KIP-1276 admission gate: whether `image` supports CIDR-range ACL hosts.
 ///
 /// Unlike [`require_feature`], an unfinalized `metadata.version` is treated
-/// as at most [`krabka_metadata::metadata_version::METADATA_VERSION_MAX`]
-/// (today's real ceiling), not as an unconditional pass. A pre-bootstrap or
-/// legacy image that has never finalized `metadata.version` is still bound
-/// by whatever level the broker binary itself actually supports, and this
-/// binary supports at most `METADATA_VERSION_MAX`, below
-/// [`CIDR_ACL_HOST_MIN_LEVEL`].
+/// as [`krabka_metadata::metadata_version::METADATA_VERSION_MAX`], the level
+/// this binary supports, not as an unconditional pass.
 pub(crate) fn cidr_hosts_supported(image: &MetadataImage) -> bool {
     image
         .finalized_features()
@@ -158,6 +150,36 @@ mod tests {
             level: 1,
         }));
         assert!(feature_enabled(&image, "group.version", 1)); // present at 1 → enabled
+    }
+
+    /// KIP-1276's gate: an image with no `metadata.version` is judged against
+    /// this binary's highest level, 4.4-IV1, which admits CIDR hosts; a
+    /// finalized level admits them only from 4.4-IV1.
+    #[test]
+    fn cidr_hosts_supported_follows_the_finalized_metadata_version() {
+        use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
+        for (finalized, want) in [
+            (None, true),
+            (Some(LATEST_PRODUCTION_METADATA_VERSION), false),
+            (Some(CIDR_ACL_HOST_MIN_LEVEL - 1), false),
+            (Some(CIDR_ACL_HOST_MIN_LEVEL), true),
+        ] {
+            let mut image = MetadataImage::new(uuid::Uuid::nil());
+            if let Some(level) = finalized {
+                image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+                    name: METADATA_VERSION.into(),
+                    level,
+                }));
+            }
+            assert!(cidr_hosts_supported(&image) == want, "{finalized:?}");
+        }
+    }
+
+    #[test]
+    fn self_bootstrap_and_format_default_to_the_same_metadata_version() {
+        assert!(
+            LATEST_PRODUCTION_METADATA_VERSION == krabka_format::LATEST_PRODUCTION_METADATA_VERSION
+        );
     }
 
     #[test]

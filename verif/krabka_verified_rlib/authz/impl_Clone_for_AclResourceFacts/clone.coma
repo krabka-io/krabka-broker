@@ -1,4 +1,4 @@
-(* #"/workspace/crates/verified/src/authz.rs" 63 27 63 32 *)
+(* #"/workspace/crates/verified/src/authz.rs" 67 27 67 32 *)
 
 (* <authz::AclResourceFacts as std::clone::Clone> *)
 
@@ -16,7 +16,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let clone_AclResourceFacts [#"/workspace/crates/verified/src/authz.rs" 63 27 63 32] (self: t_AclResourceFacts)
+let clone_AclResourceFacts [#"/workspace/crates/verified/src/authz.rs" 67 27 67 32] (self: t_AclResourceFacts)
   (return (x: t_AclResourceFacts)) = (! bb0
   [ bb0 = s0 [ s0 = [ &_ret <- self ] s1 | s1 = return {_ret} ] ]
   [ & _ret: t_AclResourceFacts = Any.any_l () | & self: t_AclResourceFacts = self ])

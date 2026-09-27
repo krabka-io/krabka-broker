@@ -23,7 +23,6 @@ use krabka_protocol::{
     owned::{
         default_principal_data::DefaultPrincipalData,
         describe_quorum_request::API_KEY as DESCRIBE_QUORUM_API_KEY,
-        describe_quorum_response::DescribeQuorumResponse,
         envelope_request::{self, EnvelopeRequest},
         envelope_response::{self, EnvelopeResponse},
     },
@@ -122,8 +121,8 @@ fn peer_address_octets(ip: std::net::IpAddr) -> Vec<u8> {
 ///
 /// # Errors
 /// Returns an error if the bytes do not decode as an `EnvelopeResponse`, or
-/// as an encoded [`DescribeQuorumResponse`] error frame if the envelope
-/// itself was refused or malformed.
+/// as an encoded `DescribeQuorumResponse` error frame if the envelope itself
+/// was refused or malformed.
 pub(super) fn unwrap_response(
     broker: &Broker,
     envelope_bytes: &[u8],
@@ -146,10 +145,7 @@ pub(super) fn unwrap_response(
             codes::NOT_LEADER_OR_FOLLOWER
         };
         return crate::handlers::encode_response(
-            &DescribeQuorumResponse {
-                error_code,
-                ..Default::default()
-            },
+            &super::top_level_error_response(error_code),
             version,
         );
     }

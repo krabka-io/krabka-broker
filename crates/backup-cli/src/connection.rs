@@ -218,6 +218,11 @@ fn sasl_credentials(properties: &BTreeMap<String, String>) -> Result<SaslCredent
             },
             username: required(&options, "username")?,
             password: required(&options, "password")?,
+            // Kafka's `ScramLoginModule` reads `tokenauth` with
+            // `Boolean.parseBoolean`: a delegation-token login.
+            delegation_token: options
+                .get("tokenauth")
+                .is_some_and(|value| value.eq_ignore_ascii_case("true")),
         }),
         value => invalid(&format!("unsupported sasl.mechanism {value}")),
     }
@@ -334,9 +339,42 @@ mod tests {
             mechanism: SaslMechanism::ScramSha512,
             username,
             password,
+            delegation_token: false,
         }) = policy.sasl);
         check!(username == "backup");
         check!(password == "not-logged");
+    }
+
+    /// `tokenauth` marks a delegation-token SCRAM login, read the way Kafka's
+    /// `ScramLoginModule` reads it.
+    #[test]
+    fn tokenauth_marks_a_delegation_token_login() {
+        for (jaas, expected) in [
+            ("x required username=id password=hmac;", false),
+            ("x required username=id password=hmac tokenauth=true;", true),
+            ("x required username=id password=hmac tokenauth=TRUE;", true),
+            (
+                "x required username=id password=hmac tokenauth=false;",
+                false,
+            ),
+        ] {
+            let properties = parse_properties(&format!(
+                "security.protocol=SASL_PLAINTEXT\n\
+                 sasl.mechanism=SCRAM-SHA-256\n\
+                 sasl.jaas.config={jaas}\n"
+            ))
+            .expect("valid properties");
+            let policy = security(&properties)
+                .expect("valid policy")
+                .expect("secured policy");
+            assert!(
+                let Some(SaslCredentials::Scram {
+                    delegation_token, ..
+                }) = policy.sasl,
+                "{jaas}"
+            );
+            check!(delegation_token == expected, "{jaas}");
+        }
     }
 
     #[test]

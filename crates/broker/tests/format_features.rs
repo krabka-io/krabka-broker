@@ -112,11 +112,14 @@ async fn standalone_format_feature_overrides_surface_in_api_versions() {
 
     // transaction.version=1 took effect (not the release default 2);
     // group.version=0 → omitted → not finalized at all;
-    // metadata.version was not overridden → latest stable (25).
+    // metadata.version was not overridden → Kafka 4.3's latest production.
     for (feature, want) in [
         ("transaction.version", Some(1)),
         ("group.version", None),
-        ("metadata.version", Some(25)),
+        (
+            "metadata.version",
+            Some(krabka_format::LATEST_PRODUCTION_METADATA_VERSION),
+        ),
     ] {
         check!(
             finalized(feature) == want,

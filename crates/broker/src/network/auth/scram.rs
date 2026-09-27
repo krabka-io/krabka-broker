@@ -154,13 +154,10 @@ fn authenticate_scram(
             return fail_authenticate_with(AUTHORIZATION_ID_MISMATCH.to_owned());
         }
 
-        // The exchange checks the raw `n=` value against its username, so it
-        // gets the undecoded SASL name; the principal carries the decoded one.
-        let server = ScramServerExchange::new_with_principal(
-            client_first.sasl_name.to_owned(),
-            cred,
-            principal,
-        );
+        // The exchange decodes the `n=` value and checks it against its
+        // username, as `ScramSaslServer` does with `ScramFormatter.username`,
+        // so it gets the decoded name.
+        let server = ScramServerExchange::new_with_principal(username, cred, principal);
         // Feed the same client-first bytes; on success the exchange emits
         // the server-first message and yields the next phase.
         match server.step(&req.auth_bytes) {

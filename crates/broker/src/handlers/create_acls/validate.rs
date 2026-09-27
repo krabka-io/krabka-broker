@@ -157,9 +157,8 @@ pub(super) fn validate(
         return Err(invalid("Invalid empty resource name".to_owned()));
     }
 
-    // `AclControlManager.validateNewAcl`. A code Kafka knows but krabka's
-    // metadata cannot store (`USER`, `CREATE_TOKENS`, `DESCRIBE_TOKENS`) is
-    // refused here under its Kafka name.
+    // `AclControlManager.validateNewAcl`: a code Kafka does not recognize is
+    // refused under Kafka's name for it, `UNKNOWN`.
     let resource_type = resource_type_concrete(c.resource_type).map_err(|_| {
         invalid(format!(
             "Invalid resourceType {}",
@@ -249,7 +248,7 @@ mod tests {
     #[test]
     fn validate_accepts_any_principal_type_and_the_kafka_cluster_name() {
         type Shape = fn(&mut AclCreation);
-        let cases: [(Shape, AclEntry); 3] = [
+        let cases: [(Shape, AclEntry); 4] = [
             (
                 |_| {},
                 AclEntry {
@@ -291,6 +290,24 @@ mod tests {
                     permission_type: PermissionType::Deny,
                 },
             ),
+            // KIP-373: Kafka's `validateNewAcl` accepts the `USER` resource
+            // type and the `CREATE_TOKENS` operation like any other.
+            (
+                |c| {
+                    c.resource_type = 7;
+                    c.resource_name = "User:bob".into();
+                    c.operation = 13;
+                },
+                AclEntry {
+                    resource_type: ResourceType::User,
+                    resource_name: "User:bob".into(),
+                    pattern_type: PatternType::Literal,
+                    principal: "User:alice".into(),
+                    host: "*".into(),
+                    operation: AclOperation::CreateTokens,
+                    permission_type: PermissionType::Allow,
+                },
+            ),
         ];
         for (shape, expected) in cases {
             let mut c = creation("topic-a", "User:alice", OPERATION_READ);
@@ -304,7 +321,7 @@ mod tests {
     #[test]
     fn validate_refuses_with_kafka_messages() {
         type Corrupt = fn(&mut AclCreation);
-        let cases: [(Corrupt, &str); 11] = [
+        let cases: [(Corrupt, &str); 9] = [
             (
                 |c| {
                     c.resource_type = 4;
@@ -320,13 +337,11 @@ mod tests {
                 "The only valid name for the CLUSTER resource is kafka-cluster",
             ),
             (|c| c.resource_name.clear(), "Invalid empty resource name"),
-            (|c| c.resource_type = 7, "Invalid resourceType USER"),
             (|c| c.resource_type = 99, "Invalid resourceType UNKNOWN"),
             (
                 |c| c.resource_pattern_type = 9,
                 "Invalid patternType UNKNOWN",
             ),
-            (|c| c.operation = 13, "Invalid operation CREATE_TOKENS"),
             (|c| c.operation = 42, "Invalid operation UNKNOWN"),
             (|c| c.permission_type = 5, "Invalid permissionType UNKNOWN"),
             (

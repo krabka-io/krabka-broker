@@ -101,6 +101,9 @@ pub fn describe_quorum(
                     ..Default::default()
                 })
                 .collect(),
+            // Kafka's `getPartitionLevelErrorResponse` leaves the top-level
+            // message at its empty default.
+            error_message: Some(String::new()),
             ..Default::default()
         };
     }
@@ -116,6 +119,9 @@ pub fn describe_quorum(
                 }],
                 ..Default::default()
             }],
+            // Kafka's `DescribeQuorumResponse.singletonErrorResponse` leaves
+            // the top-level message at its empty default.
+            error_message: Some(String::new()),
             ..Default::default()
         };
     };
@@ -144,6 +150,9 @@ pub fn describe_quorum(
                         replica_state(quorum, id, directory_id)
                     })
                     .collect(),
+                // Kafka's `RaftUtil.singletonDescribeQuorumResponse` sets
+                // neither message, so both stay at their empty default.
+                error_message: Some(String::new()),
                 ..Default::default()
             }],
             ..Default::default()
@@ -166,6 +175,7 @@ pub fn describe_quorum(
                 ..Default::default()
             })
             .collect(),
+        error_message: Some(String::new()),
         ..Default::default()
     }
 }
@@ -285,6 +295,7 @@ mod tests {
                                 replica(2, 2, 40, 900, 850),
                             ],
                             observers: vec![replica(9, 99, 38, 800, 700)],
+                            error_message: Some(String::new()),
                             ..Default::default()
                         }],
                         ..Default::default()
@@ -302,6 +313,7 @@ mod tests {
                             ..Default::default()
                         })
                         .collect(),
+                    error_message: Some(String::new()),
                     ..Default::default()
                 }
         );
@@ -329,6 +341,7 @@ mod tests {
                         }],
                         ..Default::default()
                     }],
+                    error_message: Some(String::new()),
                     ..Default::default()
                 }
         );
@@ -399,6 +412,7 @@ mod tests {
                         ..Default::default()
                     })
                     .collect(),
+                error_message: Some(String::new()),
                 ..Default::default()
             };
             check!(

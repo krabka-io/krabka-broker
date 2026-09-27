@@ -164,6 +164,9 @@ mod tests {
             for (index, rack) in racks.iter().enumerate() {
                 image.apply(&MetadataRecord::V1BrokerRegistration(
                     BrokerRegistrationRecord {
+                        fenced: false,
+                        in_controlled_shutdown: false,
+                        cordoned_log_dirs: None,
                         node_id: krabka_audit::NodeId(1 + u64::try_from(index).unwrap()),
                         broker_epoch: 0,
                         incarnation_id: uuid::Uuid::nil(),

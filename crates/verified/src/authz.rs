@@ -42,6 +42,10 @@ pub enum AclOperationKind {
     AlterConfigs,
     IdempotentWrite,
     TwoPhaseCommit,
+    /// KIP-373: create a delegation token owned by the `User` resource.
+    CreateTokens,
+    /// KIP-373: describe the delegation tokens the `User` resource owns.
+    DescribeTokens,
 }
 
 /// Match a principal or host by exact equality or its axis-specific wildcard.
@@ -147,6 +151,10 @@ pub fn acl_operation_match(
         }
         AclOperationKind::TwoPhaseCommit => {
             matches!(requested, AclOperationKind::TwoPhaseCommit)
+        }
+        AclOperationKind::CreateTokens => matches!(requested, AclOperationKind::CreateTokens),
+        AclOperationKind::DescribeTokens => {
+            matches!(requested, AclOperationKind::DescribeTokens)
         }
     }
 }

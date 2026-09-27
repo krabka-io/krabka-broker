@@ -72,8 +72,9 @@ pub fn scram_credential_source(
 ///
 /// Matches `DelegationTokenManager.filterToken` in Kafka trunk: a caller sees
 /// a token only when the (possibly absent) owner filter matches it, and even
-/// then only as the token's owner, a listed renewer, or the holder of a
-/// `Describe` ACL on that exact token. The caller is never a delegation-token-
+/// then only as the token's owner, a listed renewer, or the holder of an ACL
+/// grant: `Describe` on that exact token, or KIP-373's `DescribeTokens` on
+/// the owner's `User` resource. `acl_allows` is either grant. The caller is never a delegation-token-
 /// authenticated identity here — [`token_api_admission`] refuses every such
 /// caller before the host ever builds this predicate, so this kernel does not
 /// re-derive that isolation; folding it into the owner/renewer/ACL relation

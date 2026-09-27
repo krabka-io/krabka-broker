@@ -772,23 +772,40 @@ mod tests {
         .await
     }
 
+    /// Finalizes `streams.version` 1, the level that turns the streams
+    /// protocol on.
     async fn finalize_streams_version(broker: &Broker) {
+        set_streams_version(broker, 1).await;
+    }
+
+    /// Removes the finalized `streams.version`. A broker bootstrapped at
+    /// `4.2-IV1` or later finalizes level 1 by default, as Kafka's
+    /// `StreamsVersion.SV_1` does, so a test that needs the protocol off has
+    /// to take it away.
+    async fn unfinalize_streams_version(broker: &Broker) {
+        set_streams_version(broker, 0).await;
+    }
+
+    /// Writes a `streams.version` `FeatureLevelRecord` at `level` and waits
+    /// until the image shows it. Level 0 removes the feature, as in Kafka.
+    async fn set_streams_version(broker: &Broker, level: i16) {
         broker
             .controller
             .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
                 name: crate::features::STREAMS_VERSION.into(),
-                level: 1,
+                level,
             })])
             .await
             .expect("submit streams.version");
 
+        let want = (level != 0).then_some(level);
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
                 if broker
                     .controller
                     .current_image()
                     .finalized_feature(crate::features::STREAMS_VERSION)
-                    == Some(1)
+                    == want
                 {
                     break;
                 }
@@ -804,6 +821,7 @@ mod tests {
         let version = streams_group_heartbeat_response::MAX_VERSION;
         let (broker_handle, _dir) = start_broker(true).await;
         let broker = broker_handle.broker_arc_for_test();
+        unfinalize_streams_version(&broker).await;
         let principal = principal();
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = context(&principal, &peer);

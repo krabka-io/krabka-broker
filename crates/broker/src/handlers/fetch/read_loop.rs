@@ -392,8 +392,12 @@ async fn revalidate_epochs(broker: &Broker, pending: &mut [PendingRead]) -> bool
             log_start_offset: -1,
             partition_max_bytes: read.max_bytes,
         };
+        // A fenced or diverging row is a `LogReadResult` of Kafka's read path,
+        // so its aborted transactions are null (`FetchDataInfo.empty`), not
+        // the generated default's empty list.
         let mut fresh = PartitionData {
             partition_index: read.partition_index,
+            aborted_transactions: None,
             ..Default::default()
         };
         if apply_epoch_checks(
@@ -466,8 +470,12 @@ async fn reread_woken(
     if state.cold_served[index] {
         return Ok(());
     }
+    // `do_read` fills `aborted_transactions` only for a `read_committed`
+    // consumer. Every other re-read leaves it null, as Kafka's `LocalLog.read`
+    // does outside `TXN_COMMITTED` isolation.
     read.out = PartitionData {
         partition_index: read.partition_index,
+        aborted_transactions: None,
         ..Default::default()
     };
     // A re-read replaces this entry's bytes rather than adding to them, so
@@ -1508,6 +1516,122 @@ mod tests {
         assert!(
             pending[0].out
                 == super::super::plan::refused_read(0, crate::codes::NOT_LEADER_OR_FOLLOWER)
+        );
+        broker_handle.shutdown().await;
+    }
+
+    /// A long-poll re-read is a fresh pass through Kafka's `LocalLog.read`,
+    /// which returns an aborted-transaction list only under `TXN_COMMITTED`
+    /// isolation. A `read_uncommitted` re-read carries null, not the
+    /// generated default's empty list, and a `read_committed` one carries
+    /// the (here empty) list its read found.
+    #[tokio::test]
+    async fn a_reread_carries_aborted_transactions_only_for_read_committed() {
+        let cases = [
+            ("read_uncommitted", false, None),
+            ("read_committed", true, Some(Vec::new())),
+        ];
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let broker_handle = Broker::start(crate::config::BrokerConfig::for_tests(
+            dir.path().to_path_buf(),
+        ))
+        .await
+        .expect("start broker");
+        let broker = broker_handle.broker_arc_for_test();
+
+        for (name, read_committed, want_aborted) in cases {
+            let (part, _part_dir) = consumer_partition(Vec::new()).await;
+            let mut pending = [consumer_read("reread", &part, read_committed)];
+            let phases = RequestPhases::default();
+            let mut state = state_for(&pending, 0, 0);
+            super::reread_woken(&broker, &mut pending, 0, &mut state, &phases)
+                .await
+                .expect("re-read");
+
+            assert!(
+                pending[0].out
+                    == super::PartitionData {
+                        partition_index: 0,
+                        error_code: crate::codes::NONE,
+                        high_watermark: 0,
+                        last_stable_offset: 0,
+                        log_start_offset: 0,
+                        aborted_transactions: want_aborted,
+                        records: None,
+                        ..Default::default()
+                    },
+                "{name}"
+            );
+        }
+        broker_handle.shutdown().await;
+    }
+
+    /// An epoch recheck that finds the fetch diverging replaces the row with
+    /// Kafka's diverging-epoch answer, which `Partition.readRecords` builds
+    /// from `FetchDataInfo.empty`: the live bounds, the diverging epoch, and
+    /// null aborted transactions, not the generated default's empty list.
+    #[tokio::test]
+    async fn a_diverging_recheck_carries_null_aborted_transactions() {
+        const TOPIC: &str = "recheck-diverge";
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let broker_handle = Broker::start(crate::config::BrokerConfig::for_tests(
+            dir.path().to_path_buf(),
+        ))
+        .await
+        .expect("start broker");
+        let broker = broker_handle.broker_arc_for_test();
+        let part_dir = dir.path().join(format!("{TOPIC}-0"));
+        std::fs::create_dir_all(&part_dir).expect("partition dir");
+        let part = crate::broker::spawn_partition(
+            TOPIC.to_string(),
+            PartitionIndex(0),
+            dir.path().to_path_buf(),
+            Log::open(&part_dir, LogConfig::default()).expect("open partition log"),
+            broker.log_dir_status.clone(),
+            broker.producer_state.clone(),
+            false,
+        );
+        {
+            let mut log = part.log.lock().expect("log mutex poisoned");
+            for epoch in [0, 0, 1, 1] {
+                let mut batch = RecordBatch {
+                    partition_leader_epoch: epoch,
+                    records: vec![Record::default()],
+                    ..Default::default()
+                };
+                log.append(&mut batch).expect("append");
+            }
+        }
+        // Epoch 3 starts at offset 4, so epoch 2, which this log never saw,
+        // ends there.
+        part.install_local_leadership(None, 1, 3)
+            .await
+            .expect("promote");
+        let mut pending = [super::PendingRead {
+            last_fetched_epoch: 2,
+            fetch_offset: 6,
+            ..consumer_read(TOPIC, &part, false)
+        }];
+
+        assert!(super::revalidate_epochs(&broker, &mut pending).await);
+        assert!(
+            pending[0].out
+                == super::PartitionData {
+                    partition_index: 0,
+                    error_code: crate::codes::NONE,
+                    high_watermark: 0,
+                    last_stable_offset: 0,
+                    log_start_offset: 0,
+                    aborted_transactions: None,
+                    diverging_epoch: krabka_protocol::owned::fetch_response::EpochEndOffset {
+                        epoch: 1,
+                        end_offset: 4,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }
         );
         broker_handle.shutdown().await;
     }

@@ -138,6 +138,7 @@ pub(super) fn one_partition_response(
                 high_watermark: 5,
                 last_stable_offset: 5,
                 log_start_offset: 0,
+                aborted_transactions: None,
                 preferred_read_replica: -1,
                 records,
                 ..PartitionData::default()

@@ -91,8 +91,9 @@ async fn handle_persists_non_validate_feature_update() {
     let principal = principal();
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = context(&principal, &peer);
+    // A safe downgrade one level below the bootstrapped 4.3-IV0.
     let req = apply_request(vec![metadata_update(
-        crate::features::METADATA_VERSION_MAX - 1,
+        crate::features::LATEST_PRODUCTION_METADATA_VERSION - 1,
         2,
     )]);
 
@@ -103,7 +104,7 @@ async fn handle_persists_non_validate_feature_update() {
     wait_for_finalized_feature(
         &broker,
         crate::features::METADATA_VERSION,
-        crate::features::METADATA_VERSION_MAX - 1,
+        crate::features::LATEST_PRODUCTION_METADATA_VERSION - 1,
     )
     .await;
     broker_handle.shutdown().await;
@@ -242,8 +243,9 @@ async fn handle_rejects_online_metadata_version_deletion() {
 
 #[tokio::test]
 async fn handle_rejects_downgrade_without_downgrade_flag() {
+    // An UPGRADE-typed update one level below the bootstrapped 4.3-IV0.
     let req = validate_only(vec![metadata_update(
-        crate::features::METADATA_VERSION_MAX - 1,
+        crate::features::LATEST_PRODUCTION_METADATA_VERSION - 1,
         1,
     )]);
 

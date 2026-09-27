@@ -101,6 +101,8 @@ fn operation_kind(operation: AclOperation) -> AclOperationKind {
         AclOperation::AlterConfigs => AclOperationKind::AlterConfigs,
         AclOperation::IdempotentWrite => AclOperationKind::IdempotentWrite,
         AclOperation::TwoPhaseCommit => AclOperationKind::TwoPhaseCommit,
+        AclOperation::CreateTokens => AclOperationKind::CreateTokens,
+        AclOperation::DescribeTokens => AclOperationKind::DescribeTokens,
     }
 }
 

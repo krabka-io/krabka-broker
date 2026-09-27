@@ -112,23 +112,42 @@ pub(super) fn topology_with_source_topic(topic: &str) -> StreamsGroupTopologyVal
     }
 }
 
+/// Finalizes `streams.version` 1, the level that turns the streams protocol
+/// on.
 pub(super) async fn finalize_streams_version(broker: &Broker) {
+    set_streams_version(broker, 1).await;
+}
+
+/// Removes the finalized `streams.version`, turning the streams protocol off.
+///
+/// A broker bootstrapped at `4.2-IV1` or later finalizes `streams.version` 1
+/// by default, as Kafka's `StreamsVersion.SV_1` does, so a test that needs the
+/// protocol off has to take it away.
+pub(super) async fn unfinalize_streams_version(broker: &Broker) {
+    set_streams_version(broker, 0).await;
+}
+
+/// Writes a `streams.version` `FeatureLevelRecord` at `level` and waits until
+/// the broker's image shows it. Level 0 removes the feature, as it does in
+/// Kafka.
+async fn set_streams_version(broker: &Broker, level: i16) {
     broker
         .controller
         .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
             name: crate::features::STREAMS_VERSION.into(),
-            level: 1,
+            level,
         })])
         .await
         .expect("submit streams.version");
 
+    let want = (level != 0).then_some(level);
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if broker
                 .controller
                 .current_image()
                 .finalized_feature(crate::features::STREAMS_VERSION)
-                == Some(1)
+                == want
             {
                 break;
             }
@@ -254,6 +273,9 @@ pub(super) fn error_group(group_id: &str, error_code: i16) -> DescribedGroup {
         members: Vec::new(),
         // Wire default (INT32_MIN sentinel = "not set").
         authorized_operations: i32::MIN,
+        topology_description: None,
+        topology_description_status: 0,
+        assignor_name: None,
         unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
     }
 }

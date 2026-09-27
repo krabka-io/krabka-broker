@@ -523,8 +523,12 @@ pub(super) async fn plan_partition_read(
     if context.authorization.refuses_topic(topic_name) {
         return refused(codes::TOPIC_AUTHORIZATION_FAILED);
     }
+    // `finish_read` fills `aborted_transactions` for a `read_committed`
+    // consumer. Every other read leaves it null, as Kafka's `LocalLog.read`
+    // returns no aborted list outside `TXN_COMMITTED` isolation.
     let mut output = PartitionData {
         partition_index: request.partition,
+        aborted_transactions: None,
         ..Default::default()
     };
     // A witness replicates the partition and counts toward
@@ -826,6 +830,9 @@ mod tests {
         for (node_id, rack) in [(1u64, "dc-a"), (2u64, "dc-b")] {
             image.apply(&MetadataRecord::V1BrokerRegistration(
                 BrokerRegistrationRecord {
+                    fenced: false,
+                    in_controlled_shutdown: false,
+                    cordoned_log_dirs: None,
                     node_id: krabka_audit::NodeId(node_id),
                     broker_epoch: 0,
                     incarnation_id: uuid::Uuid::from_u128(u128::from(node_id)),

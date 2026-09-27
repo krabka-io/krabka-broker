@@ -23,6 +23,9 @@ fn broker_registration_epoch_is_assigned_from_appended_offset() {
 
     let base = engine.log.log_end_offset();
     let reg = MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
+        fenced: false,
+        in_controlled_shutdown: false,
+        cordoned_log_dirs: None,
         node_id: NodeId(7),
         broker_epoch: 0,
         incarnation_id: uuid::Uuid::from_u128(7),
@@ -47,6 +50,9 @@ fn broker_registration_projection_preserves_existing_epoch() {
     let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1)]);
     elect_single_voter_engine(&mut engine);
     let registration = BrokerRegistrationRecord {
+        fenced: false,
+        in_controlled_shutdown: false,
+        cordoned_log_dirs: None,
         node_id: NodeId(7),
         broker_epoch: 0,
         incarnation_id: uuid::Uuid::from_u128(7),
@@ -83,6 +89,9 @@ async fn broker_registration_epoch_equals_commit_offset() {
     let reg = |id: u64| {
         vec![MetadataRecord::V1BrokerRegistration(
             BrokerRegistrationRecord {
+                fenced: false,
+                in_controlled_shutdown: false,
+                cordoned_log_dirs: None,
                 node_id: NodeId(id),
                 broker_epoch: 0, // overwritten by the leader at append
                 incarnation_id: uuid::Uuid::from_u128(u128::from(id)),

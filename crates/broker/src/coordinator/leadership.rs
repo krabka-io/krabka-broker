@@ -577,7 +577,7 @@ mod tests {
                     group_id: "g".into(),
                     producer_id: 7,
                     producer_epoch: 0,
-                    generation_id: -1,
+                    generation_id_or_member_epoch: -1,
                     topics: vec![TxnOffsetCommitRequestTopic {
                         // A topic the image knows, so the commit reaches the coordinator.
                         name: OFFSETS_TOPIC.into(),

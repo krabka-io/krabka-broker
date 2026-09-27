@@ -94,7 +94,10 @@ mod tests {
         assert!(
             resp == SaslAuthenticateResponse {
                 error_code: SASL_AUTHENTICATION_FAILED,
-                ..Default::default()
+                error_message: None,
+                auth_bytes: bytes::Bytes::new(),
+                session_lifetime_ms: 0,
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(Vec::new()),
             }
         );
     }

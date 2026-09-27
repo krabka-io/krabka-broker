@@ -461,6 +461,8 @@ mod tests {
         };
         let request = |edit: fn(&mut AddRaftVoterRequest)| {
             let mut request = AddRaftVoterRequest {
+                // A request with no cluster id skips Kafka's cluster check.
+                cluster_id: None,
                 voter_id: 3,
                 voter_directory_id: DIRECTORY,
                 listeners: vec![listener("controller")],
@@ -577,6 +579,8 @@ mod tests {
     fn update_voter_checks_run_in_kafka_order() {
         let request = |edit: fn(&mut UpdateRaftVoterRequest)| {
             let mut request = UpdateRaftVoterRequest {
+                // A request with no cluster id skips Kafka's cluster check.
+                cluster_id: None,
                 voter_id: 2,
                 voter_directory_id: DIRECTORY,
                 current_leader_epoch: 7,

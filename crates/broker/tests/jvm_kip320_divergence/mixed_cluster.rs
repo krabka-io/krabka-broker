@@ -120,6 +120,33 @@ fn krabka_mixed_config(
     cfg
 }
 
+/// Format a Krabka node's log directory at Kafka 4.0's `metadata.version`.
+///
+/// The JVM node runs 4.0.0, which supports `metadata.version` only up to
+/// `4.0-IV3`, and the Krabka nodes are the controller majority that writes the
+/// cluster's bootstrap metadata. Self-bootstrapped, they would finalize Kafka
+/// 4.3's `4.3-IV0` and the JVM broker could never register, so they format at
+/// the release the oldest node runs, as a Kafka operator mixing in a 4.0 node
+/// would. The formatter runs in process because a Bazel test sandbox has no
+/// Cargo working tree to spawn it from.
+async fn format_at_kafka_4_0(log_dir: &std::path::Path, cluster_id: &str, node: &BrokerConfig) {
+    let argv = vec![
+        "krabka-format".to_string(),
+        "--log-dir".to_string(),
+        log_dir.to_str().unwrap().to_string(),
+        "--cluster-id".to_string(),
+        cluster_id.to_string(),
+        "--node-id".to_string(),
+        node.node_id.0.to_string(),
+        "--directory-id".to_string(),
+        node.directory_id.to_string(),
+        "--release-version".to_string(),
+        "4.0".to_string(),
+    ];
+    let code = krabka_format::run_from_args(argv).await;
+    assert2::assert!(code == 0, "krabka-format exited {code}");
+}
+
 /// Stand up two Krabka brokers (the metadata-quorum majority + data plane) and
 /// one mirror.gcr.io/apache/kafka:4.0.0 broker, optionally as a controller voter.
 /// Returns once the Krabka voters have elected a shared leader. The JVM broker
@@ -167,6 +194,8 @@ pub async fn start_mixed_cluster(container: &str, jvm_is_controller: bool) -> Mi
         cluster_id,
         dir2.path(),
     );
+    format_at_kafka_4_0(dir1.path(), &cid_str, &cfg1).await;
+    format_at_kafka_4_0(dir2.path(), &cid_str, &cfg2).await;
     let (c1, c2): (BrokerHandle, BrokerHandle) = {
         let s1 = tokio::spawn(Broker::start(cfg1));
         let s2 = tokio::spawn(Broker::start(cfg2));

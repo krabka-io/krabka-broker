@@ -47,7 +47,8 @@ fn map_to_task_ids(map: &BTreeMap<String, Vec<i32>>) -> Vec<RespTaskIds> {
 ///
 /// Version 0 of the response carries the recovery lag in an `int32` field
 /// that Kafka never sets: 4.3.0 leaves it out, and trunk sets only the
-/// `int64` field of version 1. It is therefore 0 here too.
+/// `int64` field of version 1, from the group's `acceptable.recovery.lag`.
+/// The legacy field is therefore 0 here too.
 pub(super) fn base_resp(
     error_code: i16,
     member_epoch: i32,
@@ -58,6 +59,7 @@ pub(super) fn base_resp(
         member_epoch,
         heartbeat_interval_ms: duration_ms(config.heartbeat_interval, 5_000),
         task_offset_interval_ms: duration_ms(config.task_offset_interval, 30_000),
+        acceptable_recovery_lag: config.acceptable_recovery_lag,
         ..Default::default()
     }
 }

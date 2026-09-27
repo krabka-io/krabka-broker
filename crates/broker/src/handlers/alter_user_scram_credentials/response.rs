@@ -12,6 +12,8 @@ use crate::codes;
 pub(super) fn ok_result(name: String) -> AlterUserScramCredentialsResult {
     AlterUserScramCredentialsResult {
         user: name,
+        error_code: 0,
+        error_message: None,
         ..Default::default()
     }
 }

@@ -93,23 +93,23 @@ fn from_wire_decodes_every_axis() {
             }),
         ),
         (
-            "KIP-373 values are valid but unstorable",
+            "KIP-373 values decode to the stored USER resource and token operations",
             WireAclBindingFilter {
-                resource_type: WIRE_RESOURCE_USER,
+                resource_type: 7,
                 resource_name: None,
                 pattern_type: PREFIXED,
                 principal: None,
                 host: None,
-                operation: WIRE_OPERATION_CREATE_TOKENS,
+                operation: 13,
                 permission_type: WIRE_ANY,
             },
             Ok(AclBindingFilter {
-                resource_type: AxisFilter::Unstorable,
+                resource_type: AxisFilter::Exact(ResourceType::User),
                 resource_name: None,
                 pattern_type: PatternTypeFilter::Exact(PatternType::Prefixed),
                 principal: None,
                 host: None,
-                operation: AxisFilter::Unstorable,
+                operation: AxisFilter::Exact(AclOperation::CreateTokens),
                 permission_type: AxisFilter::Any,
             }),
         ),
@@ -244,21 +244,41 @@ fn entry_matching_takes_only_null_as_any() {
     }
 }
 
+/// KIP-373: an exact `USER` / `CREATE_TOKENS` filter finds the binding that
+/// `CreateAcls` stored, so `DescribeAcls` lists it and `DeleteAcls` revokes it.
 #[test]
-fn unstorable_and_unknown_axes_match_nothing() {
+fn exact_user_token_filter_matches_the_stored_binding() {
+    let entry = AclEntry {
+        resource_type: ResourceType::User,
+        resource_name: "User:bob".into(),
+        pattern_type: PatternType::Literal,
+        principal: "User:alice".into(),
+        host: "*".into(),
+        operation: AclOperation::CreateTokens,
+        permission_type: PermissionType::Allow,
+    };
+    let filter = AclBindingFilter::from_wire(WireAclBindingFilter {
+        resource_type: 7,
+        resource_name: Some("User:bob"),
+        pattern_type: LITERAL,
+        principal: None,
+        host: None,
+        operation: 13,
+        permission_type: WIRE_ANY,
+    })
+    .unwrap();
+    check!(filter.matches(&entry));
+}
+
+#[test]
+fn unknown_axes_match_nothing() {
     let entry = topic_acl("orders", PatternType::Literal);
-    let cases: [(&str, FilterEdit); 5] = [
-        ("unstorable resource type", |f| {
-            f.resource_type = AxisFilter::Unstorable;
-        }),
+    let cases: [(&str, FilterEdit); 3] = [
         ("unknown resource type", |f| {
             f.resource_type = AxisFilter::Unknown;
         }),
         ("unknown pattern type", |f| {
             f.pattern_type = PatternTypeFilter::Unknown;
-        }),
-        ("unstorable operation", |f| {
-            f.operation = AxisFilter::Unstorable;
         }),
         ("unknown permission", |f| {
             f.permission_type = AxisFilter::Unknown;
@@ -273,13 +293,8 @@ fn unstorable_and_unknown_axes_match_nothing() {
 
 #[test]
 fn unknown_message_names_the_failing_half_of_the_filter() {
-    let cases: [(&str, FilterEdit, Option<&str>); 7] = [
+    let cases: [(&str, FilterEdit, Option<&str>); 6] = [
         ("valid", |_| {}, None),
-        (
-            "unstorable is valid",
-            |f| f.operation = AxisFilter::Unstorable,
-            None,
-        ),
         (
             "resource type",
             |f| f.resource_type = AxisFilter::Unknown,

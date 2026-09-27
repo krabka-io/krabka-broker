@@ -27,11 +27,14 @@ use std::collections::{HashMap, HashSet};
 
 use bytes::Bytes;
 use krabka_metadata::ResourceType;
-use krabka_protocol::owned::{
-    alter_partition_reassignments_request::AlterPartitionReassignmentsRequest,
-    alter_partition_reassignments_response::{
-        AlterPartitionReassignmentsResponse, ReassignablePartitionResponse,
-        ReassignableTopicResponse,
+use krabka_protocol::{
+    UnknownTaggedFields,
+    owned::{
+        alter_partition_reassignments_request::AlterPartitionReassignmentsRequest,
+        alter_partition_reassignments_response::{
+            AlterPartitionReassignmentsResponse, ReassignablePartitionResponse,
+            ReassignableTopicResponse,
+        },
     },
 };
 use krabka_verified::FreezeMutationKind;
@@ -170,13 +173,18 @@ pub(crate) async fn handle(
         .map(|(name, partitions)| ReassignableTopicResponse {
             name,
             partitions,
-            ..Default::default()
+            unknown_tagged_fields: UnknownTaggedFields::default(),
         })
         .collect();
+    // Kafka's `ReplicationControlManager.alterPartitionReassignments` sets the
+    // top-level `ErrorMessage` to null explicitly.
     let resp = AlterPartitionReassignmentsResponse {
+        throttle_time_ms: 0,
         allow_replication_factor_change: req.allow_replication_factor_change,
+        error_code: 0,
+        error_message: None,
         responses,
-        ..Default::default()
+        unknown_tagged_fields: UnknownTaggedFields::default(),
     };
     encode_response(&resp, api_version)
 }

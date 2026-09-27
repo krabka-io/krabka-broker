@@ -30,9 +30,9 @@
 //! authorization live in `owner`, the deadline arithmetic in `lifetime`, and
 //! the response shapes in `wire`.
 
-use std::{collections::HashSet, hash::BuildHasher};
+use std::net::SocketAddr;
 
-use krabka_metadata::{DelegationTokenRecord, MetadataRecord};
+use krabka_metadata::{AclOperation, DelegationTokenRecord, MetadataRecord, ResourceType};
 use krabka_protocol::owned::{
     create_delegation_token_request::CreateDelegationTokenRequest,
     create_delegation_token_response::CreateDelegationTokenResponse,
@@ -40,7 +40,19 @@ use krabka_protocol::owned::{
 use krabka_security::{KafkaPrincipal, SecretBytes};
 use krabka_verified::delegation_token::{TokenApi, TokenApiAdmission};
 
-use crate::{network::auth::ConnectionAuth, time_util::now_ms};
+use crate::{
+    authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
+    network::auth::ConnectionAuth,
+    time_util::now_ms,
+};
+
+/// What the KIP-373 `CreateTokens` check reads: the broker's authorizer and
+/// the peer the request came from.
+#[derive(Clone, Copy)]
+pub(crate) struct TokenAcl<'a> {
+    pub(crate) authorizer: &'a dyn Authorizer,
+    pub(crate) peer: &'a SocketAddr,
+}
 
 mod lifetime;
 mod owner;
@@ -79,14 +91,14 @@ fn anonymous_principal() -> KafkaPrincipal {
     skip_all,
     fields(api = "CreateDelegationToken")
 )]
-pub(crate) async fn handle<S: BuildHasher>(
+pub(crate) async fn handle(
     req: &CreateDelegationTokenRequest,
     auth: &ConnectionAuth,
     secret_key: Option<&SecretBytes>,
     max_lifetime_ms: DurationMs,
     default_renew_period_ms: DurationMs,
     controller: &dyn crate::metadata_source::MetadataSource,
-    super_users: &HashSet<String, S>,
+    acl: TokenAcl<'_>,
 ) -> CreateDelegationTokenResponse {
     let requester = auth
         .principal()
@@ -100,7 +112,22 @@ pub(crate) async fn handle<S: BuildHasher>(
             &requester,
         );
     }
-    if !may_create_for(&owner, &requester, super_users) {
+    let image = controller.current_image();
+    let authorize_create_tokens = |resource_name: &str| {
+        auth.principal().is_some_and(|principal| {
+            acl.authorizer.authorize(
+                &*image,
+                &AuthorizationRequest {
+                    principal,
+                    host: acl.peer,
+                    resource_type: ResourceType::User,
+                    resource_name,
+                    operation: AclOperation::CreateTokens,
+                },
+            ) == AuthorizationResult::Allow
+        })
+    };
+    if !may_create_for(&owner, &requester, authorize_create_tokens) {
         return broker_refusal(
             crate::codes::DELEGATION_TOKEN_AUTHORIZATION_FAILED,
             &owner,
@@ -122,7 +149,6 @@ pub(crate) async fn handle<S: BuildHasher>(
             &requester,
         );
     };
-    let image = controller.current_image();
     // KIP-48/KIP-778: KRaft delegation tokens require metadata.version >= 3.6-IV2.
     if crate::features::require_feature(
         &image,

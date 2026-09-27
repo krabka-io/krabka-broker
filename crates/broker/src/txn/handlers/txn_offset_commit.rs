@@ -235,12 +235,17 @@ pub(crate) async fn handle(
     // actor would wrongly reject every EOS offset commit with UNKNOWN_MEMBER_ID.
     if version >= 3 {
         let code = if let Some(streams) = broker.group_coordinator.find_streams(&req.group_id) {
-            validate_streams_group_commit(&streams, &req.member_id, req.generation_id).await
+            validate_streams_group_commit(
+                &streams,
+                &req.member_id,
+                req.generation_id_or_member_epoch,
+            )
+            .await
         } else {
             validate_group_commit(
                 &handle,
                 &req.member_id,
-                req.generation_id,
+                req.generation_id_or_member_epoch,
                 req.group_instance_id.as_deref(),
             )
             .await

@@ -41,6 +41,16 @@ pub(super) fn parse_feature_spec(s: &str) -> Result<(String, i16), String> {
     Ok((name.to_string(), level))
 }
 
+/// The `metadata.version` a cluster formats at when neither `--release-version`
+/// nor `--feature metadata.version` names one: Kafka 4.3's
+/// `MetadataVersion.LATEST_PRODUCTION`, `4.3-IV0`.
+///
+/// The levels above it that the feature table carries, `4.4-IV0` and
+/// `4.4-IV1`, are Kafka trunk's unstable versions. A stock 4.3 node or tool
+/// does not know them, so a cluster reaches them only when an operator names
+/// one here or finalizes it with `UpdateFeatures`.
+pub const LATEST_PRODUCTION_METADATA_VERSION: i16 = 30;
+
 /// Resolve `krabka format`'s KIP-1022 feature flags into the bootstrap
 /// `metadata.version` level and the per-feature override map, applying the
 /// validation `kafka-storage format` performs:
@@ -49,13 +59,13 @@ pub(super) fn parse_feature_spec(s: &str) -> Result<(String, i16), String> {
 ///   range (else reject);
 /// - `--feature metadata.version=X` conflicts with `--release-version`;
 /// - `bootstrap_mv` = `--feature metadata.version` if set, else
-///   `--release-version`, else the newest supported level (latest stable);
+///   `--release-version`, else [`LATEST_PRODUCTION_METADATA_VERSION`];
 /// - the fully-resolved feature set satisfies every KIP-1022 dependency.
 pub(super) fn resolve_format_features(
     release_version: Option<&str>,
     features: &[(String, i16)],
 ) -> Result<(i16, BTreeMap<String, i16>), String> {
-    use krabka_metadata::metadata_version::{METADATA_VERSION_FEATURE, METADATA_VERSION_MAX};
+    use krabka_metadata::metadata_version::METADATA_VERSION_FEATURE;
 
     let mut overrides: BTreeMap<String, i16> = BTreeMap::new();
     let mut feature_mv: Option<i16> = None;
@@ -101,7 +111,7 @@ pub(super) fn resolve_format_features(
     } else if let Some(rv) = release_version {
         resolve_release_level(rv)?
     } else {
-        METADATA_VERSION_MAX
+        LATEST_PRODUCTION_METADATA_VERSION
     };
 
     // KIP-1022 dependency validation over the fully-resolved feature set
@@ -176,15 +186,12 @@ mod tests {
         }
     }
 
-    // The no-flag default path (`Ok(None) => METADATA_VERSION_MAX` in `run()`)
-    // is covered end-to-end by `format_smoke.rs`, which formats without
+    // The no-flag default path (`LATEST_PRODUCTION_METADATA_VERSION`) is
+    // covered end-to-end by `format_smoke.rs`, which formats without
     // `--release-version` and asserts the FeatureLevel record is present.
     #[test]
-    fn max_version_string_resolves_to_max() {
-        assert2::assert!(
-            resolve_release_level("4.0").unwrap()
-                == krabka_metadata::metadata_version::METADATA_VERSION_MAX
-        );
+    fn short_release_string_resolves_to_its_last_iv() {
+        assert2::assert!(resolve_release_level("4.0").unwrap() == 25);
     }
 
     #[test]
@@ -211,12 +218,13 @@ mod tests {
     }
 
     #[test]
-    fn resolve_features_defaults_bootstrap_mv_to_max() {
-        // No --release-version, no metadata.version override → bootstrap at MAX;
-        // an explicit non-metadata feature becomes an override.
+    fn resolve_features_defaults_bootstrap_mv_to_latest_production() {
+        // No --release-version, no metadata.version override → bootstrap at
+        // 4.3-IV0, not at trunk's unstable levels; an explicit non-metadata
+        // feature becomes an override.
         let (mv, ov) =
             resolve_format_features(None, &[("group.version".into(), 1)]).expect("resolve");
-        assert2::assert!(mv == krabka_metadata::metadata_version::METADATA_VERSION_MAX);
+        assert2::assert!(mv == LATEST_PRODUCTION_METADATA_VERSION);
         assert2::assert!(ov.get("group.version") == Some(&1));
     }
 

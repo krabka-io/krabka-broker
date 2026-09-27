@@ -228,6 +228,9 @@ mod tests {
         for &id in broker_ids {
             img.apply(&MetadataRecord::V1BrokerRegistration(
                 BrokerRegistrationRecord {
+                    fenced: false,
+                    in_controlled_shutdown: false,
+                    cordoned_log_dirs: None,
                     node_id: krabka_audit::NodeId(id),
                     broker_epoch: 0,
                     incarnation_id: uuid::Uuid::nil(),

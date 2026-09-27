@@ -47,11 +47,28 @@ fn format_with_add_scram_writes_credential_record() {
         .expect("bootstrap.records.bin must exist");
     assert2::assert!(bin_meta.len() > 0);
     let records = bootstrap_records(&dir);
-    // Static format seeds every registered feature whose default at the latest
-    // release is > 0 (metadata.version=25 KIP-778 + group.version=1
-    // KIP-848 + transaction.version=2 KIP-890; share.version + streams.version
-    // default to 0 and are omitted per KIP-1022) + SCRAM = 4 records.
-    assert2::assert!(records.len() == 4);
+    // Static format seeds every registered feature whose default at Kafka
+    // 4.3's latest production release, 4.3-IV0, is > 0 (features at 0 are
+    // omitted per KIP-1022), plus the SCRAM credential.
+    let features: std::collections::BTreeMap<&str, i16> = records
+        .iter()
+        .filter_map(|record| match record {
+            MetadataRecord::V1FeatureLevel(f) => Some((f.name.as_str(), f.level)),
+            _ => None,
+        })
+        .collect();
+    assert2::assert!(
+        features
+            == std::collections::BTreeMap::from([
+                ("eligible.leader.replicas.version", 1),
+                ("group.version", 1),
+                ("metadata.version", 30),
+                ("share.version", 1),
+                ("streams.version", 1),
+                ("transaction.version", 2),
+            ])
+    );
+    assert2::assert!(records.len() == features.len() + 1);
     assert2::assert!(records.iter().all(|record| !matches!(
         record,
         MetadataRecord::V1KRaftVersion(_) | MetadataRecord::V1Voters(_)
