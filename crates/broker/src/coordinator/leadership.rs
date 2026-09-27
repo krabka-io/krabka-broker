@@ -398,6 +398,7 @@ mod tests {
         Heartbeat,
         LeaveGroup,
         OffsetCommit,
+        TxnOffsetCommit,
         OffsetFetch,
         DeleteGroups,
     }
@@ -418,6 +419,11 @@ mod tests {
             offset_commit_response::OffsetCommitResponse,
             offset_fetch_request::{OffsetFetchRequest, OffsetFetchRequestGroup},
             offset_fetch_response::OffsetFetchResponse,
+            txn_offset_commit_request::{
+                TxnOffsetCommitRequest, TxnOffsetCommitRequestPartition,
+                TxnOffsetCommitRequestTopic,
+            },
+            txn_offset_commit_response::TxnOffsetCommitResponse,
         };
 
         use crate::test_support::{decode_response, encode_request};
@@ -515,6 +521,37 @@ mod tests {
                 decode_response::<OffsetCommitResponse>(&bytes, 8).topics[0].partitions[0]
                     .error_code
             }
+            GroupRpc::TxnOffsetCommit => {
+                let request = TxnOffsetCommitRequest {
+                    transactional_id: "tid".into(),
+                    group_id: "g".into(),
+                    producer_id: 7,
+                    producer_epoch: 0,
+                    generation_id: -1,
+                    topics: vec![TxnOffsetCommitRequestTopic {
+                        // A topic the image knows, so the commit reaches the coordinator.
+                        name: OFFSETS_TOPIC.into(),
+                        partitions: vec![TxnOffsetCommitRequestPartition {
+                            partition_index: 0,
+                            committed_offset: 5,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                };
+                let bytes = crate::txn::handlers::txn_offset_commit::handle(
+                    broker,
+                    4,
+                    1,
+                    &encode_request(&request, 4),
+                    &ctx,
+                )
+                .await
+                .unwrap();
+                decode_response::<TxnOffsetCommitResponse>(&bytes, 4).topics[0].partitions[0]
+                    .error_code
+            }
             GroupRpc::OffsetFetch => {
                 let request = OffsetFetchRequest {
                     groups: vec![OffsetFetchRequestGroup {
@@ -584,6 +621,10 @@ mod tests {
             ),
             (
                 GroupRpc::OffsetCommit,
+                crate::codes::COORDINATOR_LOAD_IN_PROGRESS,
+            ),
+            (
+                GroupRpc::TxnOffsetCommit,
                 crate::codes::COORDINATOR_LOAD_IN_PROGRESS,
             ),
             (

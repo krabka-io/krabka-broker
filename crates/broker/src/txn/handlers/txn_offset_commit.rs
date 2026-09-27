@@ -45,7 +45,8 @@
 //! `commitTransactionalOffsets` then (`KafkaApis.scala:2163-2165`): no routing
 //! check, no fencing code, no transaction registration. Otherwise the group
 //! routing check runs first, so a client on the wrong broker gets the
-//! retriable `NOT_COORDINATOR`, then the staged producer identity gate, then
+//! retriable `NOT_COORDINATOR` and a shard still replaying answers
+//! `COORDINATOR_LOAD_IN_PROGRESS`, then the staged producer identity gate, then
 //! the KIP-447 fencing checks.
 
 use bytes::Bytes;
@@ -184,7 +185,15 @@ pub(crate) async fn handle(
     let (offsets_partition, txnv) = {
         let image = broker.controller.current_image();
         match local_partition_for_group(&image, broker.config.node_id, &req.group_id) {
-            Ok(partition) => (partition, crate::txn::version::resolve_txn_version(&image)),
+            Ok(partition) => {
+                // A shard still replaying answers `COORDINATOR_LOAD_IN_PROGRESS`
+                // on every row, as Kafka's `CoordinatorRuntime` does for a
+                // `LOADING` shard, before either coordinator is touched.
+                if let Some(code) = crate::handlers::group_partition_loading(broker, partition) {
+                    return respond(code);
+                }
+                (partition, crate::txn::version::resolve_txn_version(&image))
+            }
             Err(GroupRoutingError::Unavailable) => {
                 return respond(codes::COORDINATOR_NOT_AVAILABLE);
             }
