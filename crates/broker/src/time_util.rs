@@ -13,10 +13,17 @@
 //! yields. A cadence loop has nothing left to do once its ticker cannot be
 //! armed, and re-arming it in a loop would spin the task at full speed, so both
 //! helpers log the failure against the task's name and report it as "stop".
+//!
+//! [`system_timer`] is the real-time timer those loops run on outside tests.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
-use qubit_clock::{TimeError, Timer, TimerFuture};
+use qubit_clock::{
+    MonotonicClock, MonotonicInstant, StdMonotonicClock, StdTimer, TimeError, Timer, TimerFuture,
+};
 
 /// Returns `instant` in milliseconds since the Unix epoch.
 ///
@@ -75,12 +82,57 @@ pub(crate) fn fired(outcome: Result<(), TimeError>, task: &'static str) -> bool 
     }
 }
 
+/// The real-time timer a cadence loop runs on outside tests.
+///
+/// Natively this is [`StdTimer`], whose deadlines one scheduler thread, shared
+/// by the process, watches. `wasm32-wasip1` cannot start that thread -- every
+/// registration fails there -- so on that target it is a [`RuntimeTimer`].
+pub(crate) fn system_timer() -> Arc<dyn Timer> {
+    if cfg!(target_os = "wasi") {
+        Arc::new(RuntimeTimer::default())
+    } else {
+        Arc::new(StdTimer::new())
+    }
+}
+
+/// A timer whose deadlines are sleeps on the tokio runtime that polls them.
+///
+/// It needs no thread of its own, which is what `wasm32-wasip1` needs. The
+/// sleep is made at the first poll, inside the runtime, so the timer and its
+/// futures can be made outside one, as the configs that hold a timer are; the
+/// deadline is still fixed when it is armed, as for any [`Timer`].
+#[derive(Debug, Default)]
+pub(crate) struct RuntimeTimer {
+    /// The clock the deadlines are read against, and whose domain
+    /// [`Timer::at`] holds them to.
+    clock: StdMonotonicClock,
+}
+
+impl Timer for RuntimeTimer {
+    fn clock(&self) -> &dyn MonotonicClock {
+        &self.clock
+    }
+
+    fn at(&self, deadline: MonotonicInstant) -> Result<TimerFuture, TimeError> {
+        deadline.validate_domain(MonotonicClock::domain(&self.clock))?;
+        // A deadline that has passed is due at once, as it is for `StdTimer`.
+        let Ok(wait) = deadline.duration_since(MonotonicClock::now(&self.clock)) else {
+            return Ok(Box::pin(std::future::ready(Ok(()))));
+        };
+        let until = tokio::time::Instant::now()
+            .checked_add(wait)
+            .ok_or(TimeError::InstantOverflow)?;
+        Ok(Box::pin(async move {
+            tokio::time::sleep_until(until).await;
+            Ok(())
+        }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use assert2::check;
-    use qubit_clock::{ManualMonotonicClock, MonotonicClock as _};
+    use assert2::{assert, check};
+    use qubit_clock::ManualMonotonicClock;
 
     use super::*;
 
@@ -166,5 +218,43 @@ mod tests {
 
         check!(fired(Ok(()), TASK));
         check!(!fired(Err(refusal), TASK));
+    }
+
+    /// A [`RuntimeTimer`] deadline is a sleep on the runtime's clock: it is
+    /// pending until the clock reaches it, and then fires.
+    #[tokio::test(start_paused = true)]
+    async fn a_runtime_timer_fires_when_the_runtime_clock_reaches_the_deadline() {
+        let timer = RuntimeTimer::default();
+        let started = tokio::time::Instant::now();
+        let mut armed = timer.after(Duration::from_secs(60)).expect("arm");
+
+        check!(futures_util::poll!(&mut armed).is_pending());
+        tokio::time::advance(Duration::from_secs(59)).await;
+        check!(futures_util::poll!(&mut armed).is_pending());
+        let fired = armed.await;
+
+        assert!(let Ok(()) = fired);
+        check!(started.elapsed() >= Duration::from_secs(60));
+    }
+
+    /// The timer and its futures can be made outside a runtime, because the
+    /// sleep is only made at the first poll; a deadline already reached is
+    /// ready at once; and a deadline from another clock is refused.
+    #[test]
+    fn a_runtime_timer_needs_no_runtime_until_it_is_polled() {
+        let timer = RuntimeTimer::default();
+        let armed = timer.after(Duration::from_millis(5)).expect("arm");
+        let due = timer.after(Duration::ZERO).expect("arm a due deadline");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .start_paused(true)
+            .build()
+            .expect("build a runtime");
+
+        assert!(let Ok(()) = runtime.block_on(armed));
+        check!(let Some(Ok(())) = futures_util::FutureExt::now_or_never(due));
+
+        let foreign = StdMonotonicClock::new().now();
+        check!(let Err(TimeError::ClockDomainMismatch { .. }) = timer.at(foreign));
     }
 }

@@ -163,6 +163,12 @@ pub(crate) mod barrier;
 // recovery tool has to read a marker back out of the log, and a second decoder
 // beside this one would be a second thing to drift.
 pub use barrier::marker::{BarrierMarker, parse_barrier_marker};
+/// Where blocking work runs: in place, on the blocking pool, or inline on
+/// `wasm32-wasip1`, which has no threads.
+pub(crate) mod blocking;
+/// Drives the `wasm32-wasip1` placement of blocking work on a native thread.
+#[cfg(any(test, feature = "test-helpers"))]
+pub use blocking::{InlineBlockingGuard, inline_blocking_on_this_thread};
 pub mod bootstrap;
 pub(crate) mod break_glass;
 mod broker;

@@ -25,9 +25,10 @@ impl Partition {
     /// [`krabka_log::Log::maybe_start_transaction_verification`].
     ///
     /// The log mutex can be held by an append that waits on the disk, so the
-    /// call leaves normal async polling the way the writer's appends do:
-    /// `block_in_place` on the multi-thread runtime, and `spawn_blocking`
-    /// elsewhere.
+    /// call leaves normal async polling the way the writer's appends do,
+    /// through [`crate::blocking::run_blocking`]: `block_in_place` on the
+    /// multi-thread runtime, `spawn_blocking` on a current-thread one, and
+    /// inline on `wasm32-wasip1`.
     ///
     /// # Errors
     ///
@@ -44,12 +45,9 @@ impl Partition {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .maybe_start_transaction_verification(batch, supports_epoch_bump, clock)
         };
-        match tokio::runtime::Handle::current().runtime_flavor() {
-            tokio::runtime::RuntimeFlavor::MultiThread => tokio::task::block_in_place(start),
-            _ => tokio::task::spawn_blocking(start).await.unwrap_or(Err(
-                krabka_log::TransactionAppendRefusal::InvalidTransactionState,
-            )),
-        }
+        crate::blocking::run_blocking(start).await.unwrap_or(Err(
+            krabka_log::TransactionAppendRefusal::InvalidTransactionState,
+        ))
     }
 
     /// Push `overrides` through the writer actor so the partition's `Log`

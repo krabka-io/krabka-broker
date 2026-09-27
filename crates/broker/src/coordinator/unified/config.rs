@@ -2,7 +2,7 @@
 
 use std::{str::FromStr, sync::Arc, time::Duration};
 
-use qubit_clock::{StdTimer, Timer};
+use qubit_clock::Timer;
 
 use super::assignor::{Assignor, RangeAssignor, UniformAssignor};
 
@@ -95,7 +95,7 @@ pub struct NextGenConfig {
     /// conversion. The conversion triggers consult it.
     pub migration_policy: ConsumerGroupMigrationPolicy,
     /// Timer that drives the per-group actor's session-expiry tick cadence.
-    /// Production uses [`qubit_clock::StdTimer`], which is real time. Tests
+    /// Production uses `time_util::system_timer`, which is real time. Tests
     /// inject the timer of a [`qubit_clock::ManualMonotonicClock`] so the tick
     /// fires on a controlled manual timeline instead of wall-clock time.
     pub timer: Arc<dyn Timer>,
@@ -213,7 +213,7 @@ impl Default for NextGenConfig {
             assignors: vec![Arc::new(UniformAssignor), Arc::new(RangeAssignor)],
             max_size: DEFAULT_MAX_GROUP_SIZE,
             migration_policy: ConsumerGroupMigrationPolicy::default(),
-            timer: Arc::new(StdTimer::new()),
+            timer: crate::time_util::system_timer(),
         }
     }
 }

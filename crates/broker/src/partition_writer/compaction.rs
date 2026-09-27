@@ -69,7 +69,7 @@ pub(super) async fn handle_compact(
     )
     .await;
     let log_for_blocking = Arc::clone(log);
-    let join = tokio::task::spawn_blocking(move || {
+    let join = crate::blocking::spawn_blocking(move || {
         let mut log = lock_log(&log_for_blocking);
         let last_stable_offset = log.last_stable_offset(high_watermark);
         let context = krabka_log::CompactionContext {

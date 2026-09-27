@@ -7,7 +7,6 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use krabka_ids::Offset;
 use krabka_log::Log;
-use tokio::runtime::RuntimeFlavor;
 
 use super::WalStore;
 use crate::error::BrokerError;
@@ -29,46 +28,32 @@ impl LocalFsyncWal {
 impl WalStore for LocalFsyncWal {
     async fn sync_durable(&self, leo: Offset) -> Result<Offset, BrokerError> {
         let log = self.log.clone();
-        // fsync off the async poller (mirrors run_produce_append_batch's
-        // block_in_place / spawn_blocking discipline).
-        let res = match tokio::runtime::Handle::current().runtime_flavor() {
-            RuntimeFlavor::MultiThread => tokio::task::block_in_place(|| {
-                log.lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .sync()
-            }),
-            _ => tokio::task::spawn_blocking(move || {
-                log.lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .sync()
-            })
-            .await
-            .map_err(|e| {
-                crate::partition_writer::storage_failure_error("wal fsync task panicked", &e)
-            })?,
-        };
+        // fsync off the async poller, through the seam
+        // run_produce_append_batch uses.
+        let res = crate::blocking::run_blocking(move || {
+            log.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .sync()
+        })
+        .await
+        .map_err(|e| {
+            crate::partition_writer::storage_failure_error("wal fsync task panicked", &e)
+        })?;
         res.map_err(BrokerError::from)?;
         Ok(leo)
     }
 
     async fn trim_to_offset(&self, new_start: Offset) -> Result<Offset, BrokerError> {
         let log = self.log.clone();
-        let result = match tokio::runtime::Handle::current().runtime_flavor() {
-            RuntimeFlavor::MultiThread => tokio::task::block_in_place(|| {
-                log.lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .trim_to_offset(new_start)
-            }),
-            _ => tokio::task::spawn_blocking(move || {
-                log.lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .trim_to_offset(new_start)
-            })
-            .await
-            .map_err(|error| {
-                crate::partition_writer::storage_failure_error("wal trim task panicked", error)
-            })?,
-        };
+        let result = crate::blocking::run_blocking(move || {
+            log.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .trim_to_offset(new_start)
+        })
+        .await
+        .map_err(|error| {
+            crate::partition_writer::storage_failure_error("wal trim task panicked", error)
+        })?;
         result.map_err(BrokerError::from)
     }
 }

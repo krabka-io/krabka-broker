@@ -242,7 +242,7 @@ impl FollowerLog {
                 expected.0, leader_end.0
             )));
         }
-        sync_replica(self.log.clone(), &batches).await?;
+        sync_replica(self.log.clone(), batches).await?;
         let actual = self.end_offset();
         if actual != expected {
             return Err(crate::BrokerError::Replication(format!(
@@ -269,20 +269,14 @@ pub(super) fn voter_dir(root: &Path, topic: &str, shard: ShardId, node_id: NodeI
 async fn run_blocking<T: Send + 'static>(
     operation: impl FnOnce() -> Result<T, crate::BrokerError> + Send + 'static,
 ) -> Result<T, crate::BrokerError> {
-    if tokio::runtime::Handle::current().runtime_flavor()
-        == tokio::runtime::RuntimeFlavor::MultiThread
-    {
-        tokio::task::block_in_place(operation)
-    } else {
-        tokio::task::spawn_blocking(operation)
-            .await
-            .map_err(|error| {
-                crate::partition_writer::storage_failure_error(
-                    "WAL follower storage task panicked",
-                    error,
-                )
-            })?
-    }
+    crate::blocking::run_blocking(operation)
+        .await
+        .map_err(|error| {
+            crate::partition_writer::storage_failure_error(
+                "WAL follower storage task panicked",
+                error,
+            )
+        })?
 }
 
 #[cfg(test)]

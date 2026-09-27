@@ -218,7 +218,7 @@ async fn start_metadata_source(
             snapshot_fetch_max: observer_snapshot_fetch_max(config)?,
             max_bytes: config.observer_fetch_max,
             poll_interval: config.observer_poll_interval,
-            timer: Arc::new(qubit_clock::StdTimer::new()),
+            timer: crate::time_util::system_timer(),
         },
     );
     let forwarder = crate::metadata_source::QuorumForwarder {

@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use krabka_units::{Time, millis, secs};
-use qubit_clock::{StdTimer, StdWallClock, Timer, WallClock};
+use qubit_clock::{StdWallClock, Timer, WallClock};
 
 /// How the broker-wide delivery scheduler paces itself, and where it reads
 /// time.
@@ -44,7 +44,7 @@ pub(crate) struct DeliveryConfig {
     pub(crate) clock: Arc<dyn WallClock>,
 
     /// Timer that drives the scheduler's cadence. Production uses
-    /// [`qubit_clock::StdTimer`]. A test takes this from the same
+    /// `time_util::system_timer`. A test takes this from the same
     /// [`qubit_clock::ManualMonotonicClock`] that handed out [`Self::clock`],
     /// which puts the reading and the cadence on one timeline by construction
     /// rather than by agreement.
@@ -57,7 +57,7 @@ impl Default for DeliveryConfig {
             idle_sleep: secs(1),
             min_sleep: millis(1),
             clock: Arc::new(StdWallClock::new()),
-            timer: Arc::new(StdTimer::new()),
+            timer: crate::time_util::system_timer(),
         }
     }
 }

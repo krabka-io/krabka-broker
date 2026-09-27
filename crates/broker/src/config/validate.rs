@@ -237,14 +237,15 @@ impl BrokerConfig {
         self.validate_leader_rebalance()
     }
 
-    /// Checks the pairs of runtime scalars that must keep an order between
-    /// them, such as a minimum below its maximum.
     /// Refuses the subsystems that `wasm32-wasip1` cannot run, when `wasm` is
     /// true.
     ///
     /// That target has no HTTP client stack and no `bind`, so the metrics
     /// server, the OTLP forwarding of client metrics and the OAUTHBEARER JWKS
-    /// refresher are unavailable there. A configuration that asks for one
+    /// refresher are unavailable there. It has no threads either, and the
+    /// topic-backed remote log metadata manager of tiered storage answers its
+    /// synchronous SPI by blocking a thread on the runtime, so tiered storage
+    /// over it is unavailable too. A configuration that asks for one of them
     /// fails here, before any side effect, and does not start without it.
     /// [`Self::validate`] passes whether the build target is wasm; the flag is
     /// a parameter so that the refusals can be tested on every target.
@@ -268,6 +269,12 @@ impl BrokerConfig {
                 "the OAUTHBEARER JWKS refresher",
                 self.oauthbearer_jwks_endpoint.is_some(),
             ),
+            (
+                "remote_storage_backend",
+                "tiered storage over the topic-backed remote log metadata manager",
+                self.remote_storage_backend.is_some()
+                    && matches!(self.remote_log_metadata, RlmmKind::TopicBacked(_)),
+            ),
         ];
         match unavailable.iter().find(|(_, _, set)| *set) {
             Some((setting, subsystem, _)) => Err(BrokerError::InvalidRuntimeConfig(format!(
@@ -277,6 +284,8 @@ impl BrokerConfig {
         }
     }
 
+    /// Checks the pairs of runtime scalars that must keep an order between
+    /// them, such as a minimum below its maximum.
     fn validate_runtime_relations(&self) -> Result<(), BrokerError> {
         if self.self_registration_backoff_min > self.self_registration_backoff_max {
             return Err(BrokerError::InvalidRuntimeConfig(
@@ -442,7 +451,7 @@ mod tests {
 
     #[test]
     fn the_wasm_platform_refuses_the_subsystems_it_cannot_run() {
-        let cases: [SetsOne; 3] = [
+        let cases: [SetsOne; 4] = [
             ("metrics_listen_addr", |config| {
                 config.metrics_listen_addr = Some("127.0.0.1:9404".parse().unwrap());
             }),
@@ -451,6 +460,12 @@ mod tests {
             }),
             ("oauthbearer_jwks_endpoint", |config| {
                 config.oauthbearer_jwks_endpoint = Some("https://idp/jwks".into());
+            }),
+            // The default metadata manager is the topic-backed one.
+            ("remote_storage_backend", |config| {
+                config.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
+                    dir: "/tiered".into(),
+                });
             }),
         ];
         for (setting, set) in cases {
@@ -465,6 +480,17 @@ mod tests {
             assert!(config.validate_platform(false).is_ok());
         }
         assert!(BrokerConfig::default().validate_platform(true).is_ok());
+
+        // Tiered storage itself is not refused: the in-process metadata
+        // manager needs no thread.
+        let config = BrokerConfig {
+            remote_storage_backend: Some(crate::config::RemoteStorageBackend::Local {
+                dir: "/tiered".into(),
+            }),
+            remote_log_metadata: RlmmKind::InMemory,
+            ..BrokerConfig::default()
+        };
+        assert!(config.validate_platform(true).is_ok());
     }
 
     #[test]

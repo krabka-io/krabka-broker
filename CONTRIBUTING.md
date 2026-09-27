@@ -56,6 +56,8 @@ cargo clippy --target wasm32-wasip1 --lib -p krabka-broker -- -D warnings
 
 `.cargo/config.toml` supplies the `--cfg tokio_unstable` that tokio needs for `net` on a wasm target. Keep native-only dependencies in a `[target.'cfg(not(target_family = "wasm"))'.dependencies]` table. A subsystem that needs one answers "unavailable on this platform" on wasm, as the OPA authorizer and the metrics server do.
 
+That target has no threads either, so the broker runs its blocking work through `crate::blocking` rather than `tokio::task::spawn_blocking` or `block_in_place`, and takes its real-time timer from `time_util::system_timer` rather than `qubit_clock::StdTimer`. On wasm both run on the runtime's one thread. A test drives that path on a native target with `inline_blocking_on_this_thread`, as `tests/inline_blocking.rs` does.
+
 ## Bumping the upstream Kafka version
 
 A Kafka version bump is two changes, one in each of two repositories. Give both

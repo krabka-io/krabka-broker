@@ -73,7 +73,7 @@ pub(super) async fn run_log_mutation<T: Send + 'static>(
     panic_context: &'static str,
     storage: (&Arc<ArcSwap<PathBuf>>, &LogDirRegistry),
 ) -> Result<T, crate::error::BrokerError> {
-    let result = match tokio::task::spawn_blocking(operation).await {
+    let result = match crate::blocking::spawn_blocking(operation).await {
         Ok(value) => value,
         Err(join_err) => Err(storage_failure_error(panic_context, join_err)),
     };

@@ -269,7 +269,7 @@ async fn read_raw(
     }
     let read_max = ByteSize::from_bytes_i64(i64::from(max_bytes.max(0)));
     let log = part.log.clone();
-    let join = tokio::task::spawn_blocking(move || {
+    let join = crate::blocking::spawn_blocking(move || {
         let log = log.lock().expect("log mutex poisoned");
         log.read_raw(fetch_offset, limit_offset, read_max)
     });
@@ -313,7 +313,7 @@ pub(super) async fn unreadable_batch_ranges(
         return Ok(Vec::new());
     }
     let log = part.log.clone();
-    let join = tokio::task::spawn_blocking(move || {
+    let join = crate::blocking::spawn_blocking(move || {
         let log = log.lock().expect("log mutex poisoned");
         // Aborted transactions by producer, as `(first offset, abort marker)`.
         let mut aborted: HashMap<i64, Vec<(i64, i64)>> = HashMap::new();
@@ -393,7 +393,7 @@ pub(super) async fn pending_activation_ranges(
         return Ok(Vec::new());
     }
     let log = part.log.clone();
-    let join = tokio::task::spawn_blocking(move || {
+    let join = crate::blocking::spawn_blocking(move || {
         let log = log.lock().expect("log mutex poisoned");
         log.pending_activation_ranges(start, end - 1, now_ms)
     });
