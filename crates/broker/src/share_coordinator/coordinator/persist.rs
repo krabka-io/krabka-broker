@@ -2,8 +2,8 @@
 //! of that partition's log prefix.
 //!
 //! `persist_record` is the single write path that `initialize`, `write`, and
-//! `delete` share. `maybe_prune` is the KIP-932 log trim that follows a folded
-//! `ShareSnapshot`. Both talk to the partition log rather than to the delivery
+//! `delete` share. `maybe_prune` is the KIP-932 log trim that the prune timer
+//! in `jobs` runs. Both talk to the partition log rather than to the delivery
 //! state machine, so they live apart from `state_machine`.
 
 use std::sync::Arc;
@@ -123,8 +123,7 @@ impl ShareCoordinator {
     /// partition. If `redundant_offset` is more than the current
     /// `log_start_offset` of the partition, the method trims the log up to it.
     /// Every retained key keeps its latest snapshot, so the trim is safe. The
-    /// method logs each error and then discards it. A prune never fails a
-    /// write.
+    /// method logs each error and then discards it.
     pub(super) async fn maybe_prune(&self, state_partition: PartitionIndex) {
         let Some(part) = self.partitions.get(bootstrap::TOPIC, state_partition) else {
             return;
@@ -158,117 +157,5 @@ impl ShareCoordinator {
                 "share-state log prune failed; continuing"
             );
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use assert2::{assert, check};
-    use tempfile::tempdir;
-
-    use super::*;
-    use crate::{
-        partition_registry::PartitionRegistry,
-        share_coordinator::{
-            config::ShareCoordinatorConfig,
-            coordinator::test_support::{
-                batch, image_with_topic, lead_all, open_state_partition, share_write,
-            },
-        },
-    };
-
-    #[tokio::test]
-    async fn snapshot_fold_after_threshold_resets_counter() {
-        let dir = tempdir().unwrap();
-        let reg = Arc::new(PartitionRegistry::new());
-        for p in 0..ShareCoordinatorConfig::default().state_topic_num_partitions {
-            open_state_partition(&reg, dir.path(), p);
-        }
-        // Small threshold so a few writes trigger a fold.
-        let cfg = ShareCoordinatorConfig {
-            snapshot_update_records_per_snapshot: 3,
-            ..ShareCoordinatorConfig::default()
-        };
-        let coord = ShareCoordinator::new(krabka_audit::NodeId(1), reg.clone(), cfg);
-        lead_all(&coord).await;
-        let tid = uuid::Uuid::from_bytes([9; 16]);
-
-        coord.initialize("g", tid, 0, 1, Offset(0)).await.unwrap();
-        for i in 0..3 {
-            let base = i64::from(i) * 10;
-            coord
-                .write(
-                    &image_with_topic(tid, 1),
-                    "g",
-                    tid,
-                    0,
-                    share_write((1, 1), (0, 0), vec![batch(base, base + 9)]),
-                )
-                .await
-                .unwrap();
-        }
-
-        let st = coord.state_for_test("g", tid, 0).await.expect("present");
-        // After the 3rd update crossed the threshold, a snapshot was folded
-        // and the counter reset.
-        assert!(st.updates_since_snapshot == 0);
-        assert!(st.snapshot_epoch == 1);
-    }
-
-    /// After a snapshot fold, `maybe_prune` must trim the state-partition log.
-    ///
-    /// The trim goes up to the redundant offset, which is the offset of the
-    /// folded snapshot. The `log_start_offset` of the partition then advances
-    /// past 0. If the prune does not run, `log_start_offset` stays at 0.
-    #[tokio::test]
-    async fn snapshot_fold_prunes_log_prefix() {
-        let dir = tempdir().unwrap();
-        let reg = Arc::new(PartitionRegistry::new());
-        for p in 0..ShareCoordinatorConfig::default().state_topic_num_partitions {
-            open_state_partition(&reg, dir.path(), p);
-        }
-        // Fold after 2 updates so a snapshot lands a few records in.
-        let cfg = ShareCoordinatorConfig {
-            snapshot_update_records_per_snapshot: 2,
-            ..ShareCoordinatorConfig::default()
-        };
-        let coord = ShareCoordinator::new(krabka_audit::NodeId(1), reg.clone(), cfg);
-        lead_all(&coord).await;
-        let tid = uuid::Uuid::from_bytes([13; 16]);
-        let state_partition = coord.state_partition_for("g", &tid, 0);
-        let part = reg
-            .get(bootstrap::TOPIC, state_partition)
-            .expect("state partition open");
-
-        // record 0: initialize snapshot.
-        coord.initialize("g", tid, 0, 1, Offset(0)).await.unwrap();
-        // records 1,2: updates; the 2nd crosses the threshold and folds a
-        // snapshot at record 3, then prunes up to it.
-        coord
-            .write(
-                &image_with_topic(tid, 1),
-                "g",
-                tid,
-                0,
-                share_write((1, 1), (0, 0), vec![batch(0, 9)]),
-            )
-            .await
-            .unwrap();
-        coord
-            .write(
-                &image_with_topic(tid, 1),
-                "g",
-                tid,
-                0,
-                share_write((1, 1), (0, 0), vec![batch(10, 19)]),
-            )
-            .await
-            .unwrap();
-
-        // The folded snapshot's offset is the sole key's last-snapshot offset,
-        // which is > 0 and exceeds the log's initial start (0), so the prune
-        // advanced the prefix. Without pruning the start stays at 0.
-        let start = part.log_start_offset();
-        check!(start > 0);
     }
 }

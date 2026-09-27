@@ -1,12 +1,22 @@
 //! KIP-932 share-state record codecs for the `__share_group_state` internal
 //! topic.
 //!
-//! Two record types share one key namespace. A leading `i16` record-type
-//! version tells them apart: `ShareSnapshot`, a full per-partition state
-//! image, and `ShareUpdate`, a delta. Keys then carry `group_id` (string),
-//! `topic_id` (16 raw bytes), and `partition` (`i32`). Values use an
-//! `i16(0)` version preamble, fixed fields, then a length-prefixed array of
-//! [`StateBatch`].
+//! The layouts are Kafka's `ShareSnapshotKey`, `ShareSnapshotValue`,
+//! `ShareUpdateKey` and `ShareUpdateValue` schemas under
+//! `share-coordinator/src/main/resources/common/message/`, framed as Kafka's
+//! `CoordinatorRecordSerde` frames them:
+//!
+//! - A key is the `i16` record type (`0` for `ShareSnapshot`, a full
+//!   per-partition state image, and `1` for `ShareUpdate`, a delta), then the
+//!   non-flexible version 0 key: `group_id` (`i16`-length string), `topic_id`
+//!   (16 raw bytes), and `partition` (`i32`).
+//! - A value is the `i16` version `0`, then the flexible version 0 message: a
+//!   compact batch array, a tagged-field trailer after every batch and after
+//!   the message, and `DeliveryCompleteCount` as tag 0 with default `-1`.
+//!
+//! krabka-protocol generates no coordinator-record schemas, so these codecs
+//! are written by hand on the `flex` leaf codecs that the `__consumer_offsets`
+//! records use.
 //!
 //! These keys are distinct from the `__consumer_offsets` share-group keys
 //! (versions 9–14). This is a different topic with its own discriminator
@@ -18,12 +28,19 @@ use krabka_protocol::ProtocolError;
 use uuid::Uuid;
 
 use crate::{
-    coordinator::unified::persistence::{get_i16, get_i32, get_i64, get_string, put_string},
+    coordinator::unified::persistence::{flex, get_i16, get_i32, get_i64, get_string, put_string},
     error::BrokerError,
 };
 
 pub const KEY_SHARE_SNAPSHOT: i16 = 0;
 pub const KEY_SHARE_UPDATE: i16 = 1;
+
+/// The default of the tagged `DeliveryCompleteCount` field: the count is not
+/// known. Kafka writes the tag only when the value differs from it.
+pub const UNKNOWN_DELIVERY_COMPLETE_COUNT: i32 = -1;
+
+/// Tag of `DeliveryCompleteCount` in both value schemas.
+const TAG_DELIVERY_COMPLETE_COUNT: u32 = 0;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShareStateKey {
@@ -79,54 +96,71 @@ pub struct StateBatch {
     pub delivery_count: i16,
 }
 
+/// Kafka's `ShareSnapshotValue` version 0, a full state image of one key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShareSnapshotValue {
-    pub snapshot_epoch: i64,
+    pub snapshot_epoch: i32,
     pub state_epoch: i32,
     pub leader_epoch: i32,
     pub start_offset: Offset,
     pub delivery_complete_count: i32,
+    /// Milliseconds since the epoch at which the state was created.
+    pub create_timestamp: i64,
+    /// Milliseconds since the epoch at which this snapshot was written.
+    pub write_timestamp: i64,
     pub state_batches: Vec<StateBatch>,
 }
 
 impl ShareSnapshotValue {
+    /// Encodes the value with its `i16` version prefix, as Kafka's
+    /// `CoordinatorRecordSerde.serializeValue` does.
     #[must_use]
     pub fn encode(&self) -> Bytes {
         let mut buf = BytesMut::new();
         buf.put_i16(0);
-        buf.put_i64(self.snapshot_epoch);
+        buf.put_i32(self.snapshot_epoch);
         buf.put_i32(self.state_epoch);
         buf.put_i32(self.leader_epoch);
         buf.put_i64(self.start_offset.0);
-        buf.put_i32(self.delivery_complete_count);
+        buf.put_i64(self.create_timestamp);
+        buf.put_i64(self.write_timestamp);
         put_batches(&mut buf, &self.state_batches);
+        put_value_tags(&mut buf, self.delivery_complete_count);
         buf.freeze()
     }
 
     /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
+    ///
+    /// Returns an error when the bytes are not a version 0
+    /// `ShareSnapshotValue`.
     pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
-        let _v = get_i16(&mut buf)?;
-        let snapshot_epoch = get_i64(&mut buf)?;
+        check_version(&mut buf)?;
+        let snapshot_epoch = get_i32(&mut buf)?;
         let state_epoch = get_i32(&mut buf)?;
         let leader_epoch = get_i32(&mut buf)?;
         let start_offset = Offset(get_i64(&mut buf)?);
-        let delivery_complete_count = get_i32(&mut buf)?;
+        let create_timestamp = get_i64(&mut buf)?;
+        let write_timestamp = get_i64(&mut buf)?;
         let state_batches = get_batches(&mut buf)?;
+        let delivery_complete_count = get_value_tags(&mut buf)?;
         Ok(Self {
             snapshot_epoch,
             state_epoch,
             leader_epoch,
             start_offset,
             delivery_complete_count,
+            create_timestamp,
+            write_timestamp,
             state_batches,
         })
     }
 }
 
+/// Kafka's `ShareUpdateValue` version 0, a delta over the latest snapshot of
+/// one key. It has no state epoch and no timestamps.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShareUpdateValue {
-    pub snapshot_epoch: i64,
+    pub snapshot_epoch: i32,
     pub leader_epoch: i32,
     pub start_offset: Offset,
     pub delivery_complete_count: i32,
@@ -134,27 +168,29 @@ pub struct ShareUpdateValue {
 }
 
 impl ShareUpdateValue {
+    /// Encodes the value with its `i16` version prefix.
     #[must_use]
     pub fn encode(&self) -> Bytes {
         let mut buf = BytesMut::new();
         buf.put_i16(0);
-        buf.put_i64(self.snapshot_epoch);
+        buf.put_i32(self.snapshot_epoch);
         buf.put_i32(self.leader_epoch);
         buf.put_i64(self.start_offset.0);
-        buf.put_i32(self.delivery_complete_count);
         put_batches(&mut buf, &self.state_batches);
+        put_value_tags(&mut buf, self.delivery_complete_count);
         buf.freeze()
     }
 
     /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
+    ///
+    /// Returns an error when the bytes are not a version 0 `ShareUpdateValue`.
     pub fn decode(mut buf: &[u8]) -> Result<Self, BrokerError> {
-        let _v = get_i16(&mut buf)?;
-        let snapshot_epoch = get_i64(&mut buf)?;
+        check_version(&mut buf)?;
+        let snapshot_epoch = get_i32(&mut buf)?;
         let leader_epoch = get_i32(&mut buf)?;
         let start_offset = Offset(get_i64(&mut buf)?);
-        let delivery_complete_count = get_i32(&mut buf)?;
         let state_batches = get_batches(&mut buf)?;
+        let delivery_complete_count = get_value_tags(&mut buf)?;
         Ok(Self {
             snapshot_epoch,
             leader_epoch,
@@ -165,31 +201,73 @@ impl ShareUpdateValue {
     }
 }
 
+/// Reads the `i16` value version and refuses every version but 0, the only
+/// version of both schemas.
+fn check_version(buf: &mut &[u8]) -> Result<(), BrokerError> {
+    if get_i16(buf)? == 0 {
+        Ok(())
+    } else {
+        Err(BrokerError::Protocol(ProtocolError::InvalidValue(
+            "unsupported share-state value version",
+        )))
+    }
+}
+
+/// Writes the message trailer: tag 0 when the delivery complete count is not
+/// the default, and no tag when it is.
+fn put_value_tags(buf: &mut BytesMut, delivery_complete_count: i32) {
+    if delivery_complete_count == UNKNOWN_DELIVERY_COMPLETE_COUNT {
+        flex::put_empty_tagged_fields(buf);
+    } else {
+        flex::put_tagged_fields(
+            buf,
+            vec![(
+                TAG_DELIVERY_COMPLETE_COUNT,
+                Bytes::copy_from_slice(&delivery_complete_count.to_be_bytes()),
+            )],
+        );
+    }
+}
+
+/// Reads the message trailer. It returns the delivery complete count, or the
+/// default when tag 0 is absent, and skips every other tag.
+fn get_value_tags(buf: &mut &[u8]) -> Result<i32, BrokerError> {
+    let mut delivery_complete_count = UNKNOWN_DELIVERY_COMPLETE_COUNT;
+    flex::read_tagged(buf, |tag, payload| {
+        if tag != TAG_DELIVERY_COMPLETE_COUNT {
+            return Ok(false);
+        }
+        if payload.len() != 4 {
+            return Err(ProtocolError::InvalidValue(
+                "DeliveryCompleteCount tag is not an int32",
+            ));
+        }
+        delivery_complete_count = payload.get_i32();
+        Ok(true)
+    })?;
+    Ok(delivery_complete_count)
+}
+
 fn put_batches(buf: &mut BytesMut, batches: &[StateBatch]) {
-    let n = i32::try_from(batches.len()).expect("batch count fits in i32");
-    buf.put_i32(n);
+    flex::put_compact_array_len(buf, batches.len());
     for b in batches {
         buf.put_i64(b.first_offset.0);
         buf.put_i64(b.last_offset.0);
         buf.put_i8(b.delivery_state);
         buf.put_i16(b.delivery_count);
+        flex::put_empty_tagged_fields(buf);
     }
 }
 
 fn get_batches(buf: &mut &[u8]) -> Result<Vec<StateBatch>, BrokerError> {
-    let n = get_i32(buf)?;
-    let cap = usize::try_from(n.max(0)).expect("non-negative");
-    let mut out = Vec::with_capacity(cap);
-    for _ in 0..n.max(0) {
+    let n = flex::get_compact_array_len(buf)?;
+    let mut out = Vec::with_capacity(n.min(buf.len()));
+    for _ in 0..n {
         let first_offset = Offset(get_i64(buf)?);
         let last_offset = Offset(get_i64(buf)?);
-        if buf.remaining() < 1 {
-            return Err(BrokerError::Protocol(ProtocolError::InvalidValue(
-                "share-state batch buf < i8",
-            )));
-        }
-        let delivery_state = buf.get_i8();
+        let delivery_state = flex::get_i8(buf)?;
         let delivery_count = get_i16(buf)?;
+        flex::skip_tagged_fields(buf)?;
         out.push(StateBatch {
             first_offset,
             last_offset,
@@ -202,7 +280,7 @@ fn get_batches(buf: &mut &[u8]) -> Result<Vec<StateBatch>, BrokerError> {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
+    use assert2::{assert, check};
 
     use super::*;
 
@@ -211,30 +289,43 @@ mod tests {
         r.get_i16()
     }
 
-    #[test]
-    fn snapshot_key_round_trip() {
-        let key = ShareStateKey {
-            record_type: KEY_SHARE_SNAPSHOT,
-            group_id: "g1".into(),
-            topic_id: Uuid::from_bytes([7; 16]),
-            partition: 3,
-        };
-        let bytes = encode_state_key(&key);
-        assert!(peek_type(&bytes) == KEY_SHARE_SNAPSHOT);
-        assert!(parse_state_key(&bytes).unwrap() == key);
+    /// Bytes from a hex string that may hold spaces.
+    fn hex(s: &str) -> Vec<u8> {
+        let digits: Vec<u8> = s.bytes().filter(u8::is_ascii_hexdigit).collect();
+        digits
+            .chunks(2)
+            .map(|pair| {
+                u8::from_str_radix(std::str::from_utf8(pair).expect("ascii"), 16).expect("hex")
+            })
+            .collect()
+    }
+
+    fn state_batch(first: i64, last: i64, state: i8, count: i16) -> StateBatch {
+        StateBatch {
+            first_offset: Offset(first),
+            last_offset: Offset(last),
+            delivery_state: state,
+            delivery_count: count,
+        }
     }
 
     #[test]
-    fn update_key_round_trip() {
-        let key = ShareStateKey {
-            record_type: KEY_SHARE_UPDATE,
-            group_id: "another-group".into(),
-            topic_id: Uuid::from_bytes([1; 16]),
-            partition: 0,
-        };
-        let bytes = encode_state_key(&key);
-        assert!(peek_type(&bytes) == KEY_SHARE_UPDATE);
-        assert!(parse_state_key(&bytes).unwrap() == key);
+    fn state_key_round_trip() {
+        let rows = [
+            (KEY_SHARE_SNAPSHOT, "g1", [7; 16], 3),
+            (KEY_SHARE_UPDATE, "another-group", [1; 16], 0),
+        ];
+        for (record_type, group_id, topic_id, partition) in rows {
+            let key = ShareStateKey {
+                record_type,
+                group_id: group_id.into(),
+                topic_id: Uuid::from_bytes(topic_id),
+                partition,
+            };
+            let bytes = encode_state_key(&key);
+            check!(peek_type(&bytes) == record_type);
+            check!(parse_state_key(&bytes).unwrap() == key);
+        }
     }
 
     #[test]
@@ -247,93 +338,108 @@ mod tests {
         assert!(parse_state_key(&b.freeze()).is_err());
     }
 
+    /// The bytes of each value, derived field by field from Kafka's
+    /// `ShareSnapshotValue.json` and `ShareUpdateValue.json` at version 0:
+    /// the `i16` version, the fixed fields in schema order, a compact batch
+    /// array whose batches each end with an empty tag trailer, and a message
+    /// trailer that carries tag 0 only when `DeliveryCompleteCount` is not
+    /// `-1`.
     #[test]
-    fn snapshot_value_round_trip() {
-        let v = ShareSnapshotValue {
-            snapshot_epoch: 5,
-            state_epoch: 2,
-            leader_epoch: 9,
-            start_offset: Offset(100),
-            delivery_complete_count: 4,
-            state_batches: vec![
-                StateBatch {
-                    first_offset: Offset(100),
-                    last_offset: Offset(109),
-                    delivery_state: 0,
-                    delivery_count: 1,
+    fn snapshot_values_match_the_kafka_layout() {
+        let rows = [
+            (
+                ShareSnapshotValue {
+                    snapshot_epoch: 0,
+                    state_epoch: 1,
+                    leader_epoch: 0,
+                    start_offset: Offset(-1),
+                    delivery_complete_count: -1,
+                    create_timestamp: 1000,
+                    write_timestamp: 1000,
+                    state_batches: vec![],
                 },
-                StateBatch {
-                    first_offset: Offset(110),
-                    last_offset: Offset(119),
-                    delivery_state: 2,
-                    delivery_count: 3,
+                "0000 00000000 00000001 00000000 ffffffffffffffff \
+                 00000000000003e8 00000000000003e8 01 00",
+            ),
+            (
+                ShareSnapshotValue {
+                    snapshot_epoch: 3,
+                    state_epoch: 2,
+                    leader_epoch: 4,
+                    start_offset: Offset(10),
+                    delivery_complete_count: 5,
+                    create_timestamp: 1000,
+                    write_timestamp: 2000,
+                    state_batches: vec![state_batch(10, 19, 0, 1), state_batch(20, 29, 2, 3)],
                 },
-            ],
-        };
-        assert!(ShareSnapshotValue::decode(&v.encode()).unwrap() == v);
+                "0000 00000003 00000002 00000004 000000000000000a \
+                 00000000000003e8 00000000000007d0 03 \
+                 000000000000000a 0000000000000013 00 0001 00 \
+                 0000000000000014 000000000000001d 02 0003 00 \
+                 01 00 04 00000005",
+            ),
+        ];
+        for (value, expected) in rows {
+            let bytes = value.encode();
+            check!(bytes.as_ref() == hex(expected).as_slice());
+            check!(ShareSnapshotValue::decode(&bytes).unwrap() == value);
+        }
     }
 
     #[test]
-    fn update_value_round_trip() {
-        let v = ShareUpdateValue {
-            snapshot_epoch: 7,
-            leader_epoch: 4,
-            start_offset: Offset(200),
-            delivery_complete_count: 11,
-            state_batches: vec![StateBatch {
-                first_offset: Offset(200),
-                last_offset: Offset(250),
-                delivery_state: 1,
-                delivery_count: 2,
-            }],
-        };
-        assert!(ShareUpdateValue::decode(&v.encode()).unwrap() == v);
+    fn update_values_match_the_kafka_layout() {
+        let rows = [
+            (
+                ShareUpdateValue {
+                    snapshot_epoch: 3,
+                    leader_epoch: 4,
+                    start_offset: Offset(12),
+                    delivery_complete_count: -1,
+                    state_batches: vec![state_batch(12, 15, 0, 1)],
+                },
+                "0000 00000003 00000004 000000000000000c 02 \
+                 000000000000000c 000000000000000f 00 0001 00 00",
+            ),
+            (
+                ShareUpdateValue {
+                    snapshot_epoch: 3,
+                    leader_epoch: 4,
+                    start_offset: Offset(12),
+                    delivery_complete_count: 7,
+                    state_batches: vec![],
+                },
+                "0000 00000003 00000004 000000000000000c 01 01 00 04 00000007",
+            ),
+        ];
+        for (value, expected) in rows {
+            let bytes = value.encode();
+            check!(bytes.as_ref() == hex(expected).as_slice());
+            check!(ShareUpdateValue::decode(&bytes).unwrap() == value);
+        }
     }
 
+    /// A reader skips a tag it does not know, and refuses a version other
+    /// than 0 and a malformed tag 0.
     #[test]
-    fn snapshot_value_empty_batches_round_trip() {
-        let v = ShareSnapshotValue {
-            snapshot_epoch: 0,
-            state_epoch: 0,
-            leader_epoch: 0,
-            start_offset: Offset(0),
-            delivery_complete_count: 0,
-            state_batches: vec![],
-        };
-        assert!(ShareSnapshotValue::decode(&v.encode()).unwrap() == v);
-    }
-
-    #[test]
-    fn update_value_multi_batch_round_trip() {
-        let batches: Vec<StateBatch> = (0..5)
-            .map(|i| StateBatch {
-                first_offset: Offset(i64::from(i) * 10),
-                last_offset: Offset(i64::from(i) * 10 + 9),
-                delivery_state: i8::try_from(i % 3).unwrap(),
-                delivery_count: i16::try_from(i + 1).unwrap(),
-            })
-            .collect();
-        let v = ShareUpdateValue {
-            snapshot_epoch: 3,
-            leader_epoch: 1,
-            start_offset: Offset(0),
-            delivery_complete_count: 42,
-            state_batches: batches,
-        };
-        assert!(ShareUpdateValue::decode(&v.encode()).unwrap() == v);
-    }
-
-    #[test]
-    fn delivery_complete_count_preserved() {
-        let v = ShareSnapshotValue {
-            snapshot_epoch: 1,
-            state_epoch: 1,
-            leader_epoch: 1,
-            start_offset: Offset(0),
-            delivery_complete_count: 1_234_567,
-            state_batches: vec![],
-        };
-        let decoded = ShareSnapshotValue::decode(&v.encode()).unwrap();
-        assert!(decoded.delivery_complete_count == 1_234_567);
+    fn decode_skips_unknown_tags_and_refuses_bad_input() {
+        let unknown_tag =
+            hex("0000 00000001 00000002 0000000000000003 01 02 00 04 00000009 05 01 ff");
+        check!(
+            ShareUpdateValue::decode(&unknown_tag).unwrap()
+                == ShareUpdateValue {
+                    snapshot_epoch: 1,
+                    leader_epoch: 2,
+                    start_offset: Offset(3),
+                    delivery_complete_count: 9,
+                    state_batches: vec![],
+                }
+        );
+        let bad = [
+            "0001 00000001 00000002 0000000000000003 01 00",
+            "0000 00000001 00000002 0000000000000003 01 01 00 02 0009",
+        ];
+        for bytes in bad {
+            check!(ShareUpdateValue::decode(&hex(bytes)).is_err(), "{bytes}");
+        }
     }
 }

@@ -1,5 +1,7 @@
 //! KIP-932 share-coordinator (persister) configuration.
 
+use std::time::Duration;
+
 use krabka_units::{ByteSize, mebibytes};
 
 /// This struct is not `Eq`. The recovery read budget is a quantity, and its
@@ -12,6 +14,14 @@ pub struct ShareCoordinatorConfig {
     pub state_topic_segment_bytes: ByteSize,
     pub snapshot_update_records_per_snapshot: u32,
     pub recovery_read_max: ByteSize,
+    /// Kafka's `share.coordinator.state.topic.prune.interval.ms`: how often
+    /// the coordinator trims the redundant prefix of each led state
+    /// partition.
+    pub state_topic_prune_interval: Duration,
+    /// Kafka's `share.coordinator.cold.partition.snapshot.interval.ms`: how
+    /// old the latest snapshot of a key may get before the coordinator writes
+    /// a new one.
+    pub cold_partition_snapshot_interval: Duration,
 }
 
 impl Default for ShareCoordinatorConfig {
@@ -23,6 +33,8 @@ impl Default for ShareCoordinatorConfig {
             state_topic_segment_bytes: mebibytes(100),
             snapshot_update_records_per_snapshot: 50,
             recovery_read_max: mebibytes(1),
+            state_topic_prune_interval: Duration::from_secs(300),
+            cold_partition_snapshot_interval: Duration::from_secs(300),
         }
     }
 }
@@ -42,6 +54,8 @@ mod tests {
             state_topic_segment_bytes: mebibytes(100),
             snapshot_update_records_per_snapshot: 50,
             recovery_read_max: mebibytes(1),
+            state_topic_prune_interval: Duration::from_millis(300_000),
+            cold_partition_snapshot_interval: Duration::from_millis(300_000),
         };
         assert!(ShareCoordinatorConfig::default() == expected);
     }

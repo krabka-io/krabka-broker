@@ -48,6 +48,8 @@ async fn recover_honors_nondefault_read_bound() {
         leader_epoch: 4,
         start_offset: Offset(5),
         delivery_complete_count: 6,
+        create_timestamp: 0,
+        write_timestamp: 0,
         state_batches: vec![],
     };
     let mut batch = RecordBatch::default();
@@ -102,7 +104,10 @@ async fn write_persists_and_recovers() {
             ShareCoordinatorConfig::default(),
         );
         lead_all(&coord).await;
-        coord.initialize("g", tid, 0, 2, Offset(0)).await.unwrap();
+        coord
+            .initialize(&image_with_topic(tid, 1), "g", tid, 0, 2, Offset(0))
+            .await
+            .unwrap();
         coord
             .read(&image_with_topic(tid, 1), "g", tid, 0, 3)
             .await
@@ -205,6 +210,8 @@ async fn replay_uses_per_record_and_inter_batch_offsets() {
                 leader_epoch: 3,
                 start_offset: Offset(20),
                 delivery_complete_count: 4,
+                create_timestamp: 0,
+                write_timestamp: 0,
                 state_batches: vec![batch(20, 29)],
             }
             .encode(),
@@ -226,6 +233,8 @@ async fn replay_uses_per_record_and_inter_batch_offsets() {
                 leader_epoch: 9,
                 start_offset: Offset(50),
                 delivery_complete_count: 8,
+                create_timestamp: 0,
+                write_timestamp: 0,
                 state_batches: vec![batch(50, 59)],
             }
             .encode(),
@@ -306,6 +315,8 @@ async fn replay_snapshot_offset_is_base_plus_delta() {
                 leader_epoch: 3,
                 start_offset: Offset(20),
                 delivery_complete_count: 4,
+                create_timestamp: 0,
+                write_timestamp: 0,
                 state_batches: vec![batch(20, 29)],
             }
             .encode(),
@@ -418,7 +429,7 @@ async fn leadership_change_loads_and_unloads_the_state_partition() {
         .finished()
         .await;
     coordinator_a
-        .initialize("g", topic_id, 0, 1, Offset(10))
+        .initialize(&data_image, "g", topic_id, 0, 1, Offset(10))
         .await
         .unwrap();
 

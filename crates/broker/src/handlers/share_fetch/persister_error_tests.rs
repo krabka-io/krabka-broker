@@ -299,7 +299,14 @@ async fn a_fenced_state_write_fails_the_acknowledgement_and_drops_the_partition(
             .state_epoch;
         shared
             .share_coordinator
-            .initialize(&name, topic_uuid(topic_id), 0, state_epoch + 1, Offset(0))
+            .initialize(
+                &shared.controller.current_image(),
+                &name,
+                topic_uuid(topic_id),
+                0,
+                state_epoch + 1,
+                Offset(0),
+            )
             .await
             .expect("raise the state epoch");
 
