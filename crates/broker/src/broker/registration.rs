@@ -29,8 +29,10 @@ fn self_registration_record(config: &BrokerConfig) -> krabka_metadata::BrokerReg
     let log_dirs = config.all_log_dirs();
     let log_dir_ids = crate::log_dir_id::LogDirIds::resolve(&log_dirs).ids_for(&log_dirs);
 
+    // A new registration is fenced, as Kafka's `RegisterBrokerRecord`
+    // defaults `Fenced` to true; the first caught-up heartbeat unfences it.
     krabka_metadata::BrokerRegistrationRecord {
-        fenced: false,
+        fenced: true,
         in_controlled_shutdown: false,
         cordoned_log_dirs: None,
         node_id: config.node_id,
@@ -264,12 +266,20 @@ fn broker_restart_batch(
     records
 }
 
+/// Register this node as a broker and return the broker epoch its new
+/// registration committed at, or `None` for a node that is not a broker.
+///
+/// Kafka's `BrokerLifecycleManager` keeps the epoch from the
+/// `BrokerRegistration` response and names it in every heartbeat, producer id
+/// allocation and clean-shutdown proof that follows, rather than reading it
+/// from the local metadata image, which may still hold the previous
+/// incarnation's registration.
 pub(super) async fn register_broker(
     config: &BrokerConfig,
     controller: &dyn crate::metadata_source::MetadataSource,
-) -> Result<(), BrokerError> {
+) -> Result<Option<i64>, BrokerError> {
     if !config.is_broker() {
-        return Ok(());
+        return Ok(None);
     }
     let image = controller.current_image();
     // Captured before the submit, not after: a restart's `broker_restart_batch`
@@ -279,7 +289,9 @@ pub(super) async fn register_broker(
     let previous = image.broker(config.node_id).cloned();
     let records = broker_restart_batch(config, &image);
     submit_startup_records(config, controller, records, "broker self-registration").await?;
-    wait_for_self_registration_published(config, controller, previous.as_ref()).await
+    wait_for_self_registration_published(config, controller, previous.as_ref())
+        .await
+        .map(Some)
 }
 
 /// Waits until `current_image()` actually carries this broker's own,
@@ -310,9 +322,13 @@ pub(super) async fn register_broker(
 /// -- and every reader downstream of `Broker::start` (the heartbeat sender
 /// among them) could keep running against the stale epoch, incarnation,
 /// endpoints, or witness-role config the new commit was meant to replace.
-/// Every commit assigns a fresh `broker_epoch`, so comparing against
-/// `previous` by value reliably distinguishes the new record from the old
-/// one even when every other field is identical.
+/// Every new registration commits at a fresh `broker_epoch`, so the wait is
+/// for this incarnation's registration at an epoch other than `previous`'s.
+/// Comparing the whole record would not do: the controller fences the
+/// previous registration at its own epoch when that session expires, and
+/// that change is not the new registration.
+///
+/// It returns the epoch of the new registration.
 ///
 /// The wait is bounded by `startup_leader_wait_timeout`, the same budget
 /// `wait_for_metadata_leader` uses elsewhere in startup: a broker-only node
@@ -323,16 +339,25 @@ async fn wait_for_self_registration_published(
     config: &BrokerConfig,
     controller: &dyn crate::metadata_source::MetadataSource,
     previous: Option<&krabka_metadata::BrokerRegistrationRecord>,
-) -> Result<(), BrokerError> {
+) -> Result<i64, BrokerError> {
+    let previous_epoch = previous.map(|registration| registration.broker_epoch);
     let mut images = controller.watch_image();
     let wait_for_publish = async {
         loop {
-            if images.borrow().broker(config.node_id) != previous {
-                return;
+            let published = images
+                .borrow()
+                .broker(config.node_id)
+                .filter(|registration| {
+                    registration.incarnation_id == config.incarnation_id
+                        && Some(registration.broker_epoch) != previous_epoch
+                })
+                .map(|registration| registration.broker_epoch);
+            if let Some(epoch) = published {
+                return Some(epoch);
             }
             if images.changed().await.is_err() {
                 // The sender is gone; nothing more will ever publish.
-                return;
+                return None;
             }
         }
     };
@@ -346,6 +371,11 @@ async fn wait_for_self_registration_published(
             "broker self-registration did not become visible in current_image() within {:?}",
             config.startup_leader_wait_timeout.to_std()
         ))
+    })?
+    .ok_or_else(|| {
+        BrokerError::Startup(
+            "the metadata image closed before broker self-registration became visible".into(),
+        )
     })
 }
 

@@ -204,6 +204,7 @@ mod tests {
                         NodeId(node),
                         BrokerStanding {
                             fenced: false,
+                            shutting_down: false,
                             alive_epoch: Some(5),
                         },
                     )
@@ -401,6 +402,7 @@ mod tests {
                 NodeId(3),
                 BrokerStanding {
                     fenced: true,
+                    shutting_down: false,
                     alive_epoch: None,
                 },
             );

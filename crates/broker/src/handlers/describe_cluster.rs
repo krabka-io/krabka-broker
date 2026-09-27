@@ -287,7 +287,10 @@ mod tests {
     /// gated below by `the_authorized_operations_bitfield` table.
     #[tokio::test]
     async fn a_principal_without_describe_still_gets_full_cluster_data() {
-        let (broker_handle, _dir) = start_broker(Arc::new(DenyAll)).await;
+        let (broker_handle, _dir) = start_broker(Arc::new(
+            crate::test_support::ControllerPeerAllowed(DenyAll),
+        ))
+        .await;
         seed_broker(&broker_handle).await;
         let broker = broker_handle.broker_arc_for_test();
         let p = principal("alice");

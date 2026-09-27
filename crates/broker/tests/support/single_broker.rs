@@ -114,8 +114,9 @@ pub async fn start_with_deny_all_authz() -> InProcess {
     // with no credentials so it has no super-user bypass — every operation is
     // denied and the auditing decorator emits AuthorizationDenied events.
     config.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(HashSet::new()));
+    // The broker's own heartbeat is denied too, so it stays fenced: it never
+    // becomes alive in the liveness registry, and nothing here needs it to.
     let broker = Broker::start(config).await.expect("broker start");
-    broker.wait_until_broker_alive(1).await;
     let bootstrap = broker.listen_addr().to_string();
     let client = Client::builder()
         .bootstrap(&bootstrap)

@@ -32,7 +32,7 @@ use super::{
     RETENTION_MS, RETENTION_UNLIMITED, SEGMENT_BYTES, SEGMENT_INDEX_BYTES, SEGMENT_JITTER_MS,
     SEGMENT_MS, SOFT_MAX_ARRAY_LENGTH,
     broker_scope::{
-        AUTO_CREATE_TOPICS_ENABLE, BROKER_FENCED, BROKER_WITNESS, CONNECTIONS_MAX_IDLE_MS,
+        AUTO_CREATE_TOPICS_ENABLE, BROKER_WITNESS, CONNECTIONS_MAX_IDLE_MS,
         CONNECTIONS_MAX_REAUTH_MS, DEFAULT_REPLICATION_FACTOR, DELETE_TOPIC_ENABLE, NUM_PARTITIONS,
         OFFSETS_RETENTION_CHECK_INTERVAL_MS, OFFSETS_RETENTION_MINUTES,
         REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS, STRETCH_PREFERRED_LEADER_SITE,
@@ -896,18 +896,6 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigType::Boolean,
             Some("false"),
             "Marks this node as a data-bearing witness: it replicates and votes but serves no client and leads no partition. Only the controller writes it.",
-            ValueCheck::NotAltered,
-        )
-    },
-    ConfigKey {
-        kip: Some("KIP-500"),
-        read_only: true,
-        ..key(
-            BROKER_FENCED,
-            ConfigScope::Broker,
-            ConfigType::Boolean,
-            Some("false"),
-            "Marks this node as fenced: it is past its heartbeat deadline, or has not yet proved metadata catch-up, so every node reports its replicas offline. Only the controller writes it.",
             ValueCheck::NotAltered,
         )
     },

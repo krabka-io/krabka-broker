@@ -175,17 +175,15 @@ pub fn partition_batches(batches: &[Vec<MetadataRecord>]) -> Vec<Vec<MetadataRec
         .collect()
 }
 
-/// The `(broker, fenced)` pairs a liveness tick published, in submission
-/// order. `fenced` is `false` where the tick tombstoned the key.
+/// The `(broker, fenced)` pairs of the registration changes a liveness tick
+/// published, in submission order.
 pub fn fencing_updates(batches: &[Vec<MetadataRecord>]) -> Vec<(u64, bool)> {
     batches
         .iter()
         .flatten()
         .filter_map(|record| match record {
-            MetadataRecord::V1BrokerConfig(config)
-                if config.config_name == crate::config_keys::BROKER_FENCED =>
-            {
-                Some((config.node_id.0, config.config_value.is_some()))
+            MetadataRecord::V1BrokerRegistration(registration) => {
+                Some((registration.node_id.0, registration.fenced))
             }
             _ => None,
         })

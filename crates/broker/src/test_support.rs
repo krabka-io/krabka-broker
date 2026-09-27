@@ -73,6 +73,55 @@ impl crate::authorizer::Authorizer for DenyAll {
     }
 }
 
+/// An authorizer that lets the broker's own heartbeat through and asks the
+/// wrapped one about everything else.
+///
+/// A test broker heartbeats its own controller over a plaintext controller
+/// listener, as the `ANONYMOUS` principal, and a new registration stays fenced
+/// until a heartbeat unfences it. A Kafka operator grants the inter-broker
+/// principal `ClusterAction` or makes it a super user for the same reason.
+/// Tests that exercise a restrictive authorizer on client requests wrap it in
+/// this, so the broker still unfences.
+#[derive(Debug)]
+pub(crate) struct ControllerPeerAllowed<A>(pub(crate) A);
+
+impl<A: crate::authorizer::Authorizer> crate::authorizer::Authorizer for ControllerPeerAllowed<A> {
+    fn authorize(
+        &self,
+        source: &dyn crate::authorizer::AclSource,
+        request: &crate::authorizer::AuthorizationRequest<'_>,
+    ) -> crate::authorizer::AuthorizationResult {
+        if request.principal.name == "ANONYMOUS"
+            && request.resource_type == krabka_metadata::ResourceType::Cluster
+            && request.operation == krabka_metadata::AclOperation::ClusterAction
+        {
+            crate::authorizer::AuthorizationResult::Allow
+        } else {
+            self.0.authorize(source, request)
+        }
+    }
+
+    fn is_configured(&self) -> bool {
+        self.0.is_configured()
+    }
+
+    fn decision_ttl(&self) -> Option<std::time::Duration> {
+        self.0.decision_ttl()
+    }
+
+    fn authorize_by_resource_type(
+        &self,
+        source: &dyn crate::authorizer::AclSource,
+        principal: &krabka_security::Principal,
+        host: &std::net::SocketAddr,
+        resource_type: krabka_metadata::ResourceType,
+        operation: krabka_metadata::AclOperation,
+    ) -> crate::authorizer::AuthorizationResult {
+        self.0
+            .authorize_by_resource_type(source, principal, host, resource_type, operation)
+    }
+}
+
 /// Build an anonymous-auth [`Principal`] with the given name and no groups.
 ///
 /// The name matters. Authorization decisions and audit records key on this
@@ -216,20 +265,18 @@ pub(crate) async fn seed_remote_broker(handle: &BrokerHandle, node_id: u64) {
 }
 
 /// Fence `node_id` the way the controller does: its heartbeat session is
-/// fenced, and the replicated `broker.fenced` config says so, which is what
-/// every node reads.
+/// fenced, and its registration says so, which is what every node reads.
 pub(crate) async fn fence_remote_broker(handle: &BrokerHandle, node_id: u64) {
     let broker = handle.broker_arc_for_test();
     broker.liveness.record_fenced_heartbeat(node_id).await;
+    let fence = crate::heartbeat::fencing::registration_change(
+        &broker.controller.current_image(),
+        krabka_raft::NodeId(node_id),
+        crate::heartbeat::fencing::RegistrationChange::FENCE,
+    );
     broker
         .controller
-        .submit_change(vec![MetadataRecord::V1BrokerConfig(
-            krabka_metadata::BrokerConfigRecord {
-                node_id: krabka_raft::NodeId(node_id),
-                config_name: crate::config_keys::BROKER_FENCED.to_string(),
-                config_value: Some(crate::config_keys::FENCED_TRUE.to_string()),
-            },
-        )])
+        .submit_change(fence.into_iter().collect())
         .await
         .expect("publish broker fencing");
 }

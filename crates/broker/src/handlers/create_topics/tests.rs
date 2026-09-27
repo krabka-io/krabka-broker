@@ -1593,10 +1593,11 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
     ];
 
     for (label, case) in cases {
-        let (broker_handle, _dir) = start_broker(Arc::new(
-            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
-        ))
-        .await;
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::test_support::ControllerPeerAllowed(
+                crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
+            )))
+            .await;
         let broker = broker_handle.broker_arc_for_test();
         if !case.acls.is_empty() {
             broker

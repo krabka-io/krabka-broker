@@ -34,7 +34,9 @@ pub fn sasl_plain_broker_config(
             .insert((*u).to_string(), (*p).to_string());
     }
     cfg.super_users = super_user.map(str::to_string).into_iter().collect();
-    cfg.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(cfg.super_users.clone()));
+    cfg.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(with_controller_peer(
+        &cfg.super_users,
+    )));
     cfg
 }
 
@@ -63,6 +65,24 @@ pub fn sasl_plain_broker_config_multi_super(
             .insert((*u).to_string(), (*p).to_string());
     }
     cfg.super_users = super_users.iter().map(|s| (*s).to_string()).collect();
-    cfg.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(cfg.super_users.clone()));
+    cfg.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(with_controller_peer(
+        &cfg.super_users,
+    )));
     cfg
+}
+
+/// The authorizer's super-users: the configured ones and `ANONYMOUS`.
+///
+/// Clients reach this broker over SASL, but its own heartbeat reaches the
+/// PLAINTEXT controller listener as `ANONYMOUS`. Like a Kafka inter-broker
+/// principal it needs `ClusterAction`, or the broker never unfences and places
+/// no replica.
+fn with_controller_peer(
+    super_users: &std::collections::HashSet<String>,
+) -> std::collections::HashSet<String> {
+    super_users
+        .iter()
+        .cloned()
+        .chain(std::iter::once("ANONYMOUS".to_string()))
+        .collect()
 }

@@ -53,7 +53,7 @@ impl BrokerHandle {
     }
 
     /// Test-only: the node ids this broker's committed image reports as
-    /// fenced, through the same `broker.fenced` resolution the offline-replica
+    /// fenced, through the same registration fence the offline-replica
     /// projection uses. The role-separation suite reads it on every node,
     /// because the fencing state is replicated: a controller that fences a
     /// broker it never hears from publishes that to every image in the
@@ -61,7 +61,7 @@ impl BrokerHandle {
     #[cfg(any(test, feature = "test-helpers"))]
     #[must_use]
     pub fn fenced_broker_ids_for_test(&self) -> std::collections::BTreeSet<u64> {
-        crate::config_keys::fenced_node_ids(&self.broker.controller.current_image())
+        crate::heartbeat::fencing::fenced_node_ids(&self.broker.controller.current_image())
             .into_iter()
             .collect()
     }
@@ -287,12 +287,18 @@ impl BrokerHandle {
         id
     }
 
-    /// Test-only: await until this node's metadata image sees `>= n` brokers.
+    /// Test-only: await until this node's metadata image sees `>= n` brokers
+    /// registered and unfenced.
+    ///
+    /// A new registration is fenced until its broker's first caught-up
+    /// heartbeat, and a fenced broker takes no replica, so a test that goes on
+    /// to place replicas waits for the unfenced registrations, as Kafka's
+    /// harness waits for its brokers to be alive.
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
     #[track_caller]
     pub fn wait_until_brokers_registered(&self, n: usize) -> impl std::future::Future<Output = ()> {
-        self.wait_for_image(move |img| img.brokers().count() >= n)
+        self.wait_for_image(move |img| img.brokers().filter(|broker| !broker.fenced).count() >= n)
     }
 
     /// Test-only: whether this node's controller liveness registry currently

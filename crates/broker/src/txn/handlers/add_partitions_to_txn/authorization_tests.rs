@@ -261,7 +261,7 @@ async fn add_partitions_to_txn_authorizes_by_version_and_fails_the_whole_transac
 
     let (handle_, _dir) = crate::test_support::start_broker_with(|cfg| {
         cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(Grants);
+        cfg.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(Grants));
         cfg.transaction_state_num_partitions = 1;
         cfg.transaction_state_replication_factor = 1;
     })

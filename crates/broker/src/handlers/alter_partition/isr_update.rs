@@ -65,10 +65,11 @@ pub(super) fn handle_partition_with_recovery(
     // Kafka's `ineligibleReplicasForIsr`: a broker in the proposed ISR is
     // ineligible if it is not registered, is in controlled shutdown, is
     // fenced, or carries a broker epoch other than -1 that disagrees with its
-    // registration (KIP-903). The controller's heartbeat registry holds the
-    // fence and the controlled shutdown, and `active` is its snapshot. A
-    // request older than v3 carries no epochs, so Kafka checks its `new_isr`
-    // with -1 for each. Any ineligible replica fails the whole partition.
+    // registration (KIP-903). The registration carries the fence and the
+    // controlled shutdown, and `active`, the controller's heartbeat registry,
+    // also refuses a broker whose change has not committed yet. A request
+    // older than v3 carries no epochs, so Kafka checks its `new_isr` with -1
+    // for each. Any ineligible replica fails the whole partition.
     let proposed_states: Vec<(i32, i64)> =
         if !new_isr_i32.is_empty() || new_isr_with_epochs.is_empty() {
             effective_isr_i32.iter().map(|&id| (id, -1)).collect()
@@ -82,10 +83,12 @@ pub(super) fn handle_partition_with_recovery(
         let Ok(id) = u64::try_from(broker_id) else {
             return false;
         };
-        let registered = image.broker_epoch(NodeId(id));
-        registered.is_some()
-            && active.contains(&id)
-            && (broker_epoch == -1 || registered == Some(broker_epoch))
+        image.broker(NodeId(id)).is_some_and(|registration| {
+            !registration.fenced
+                && !registration.in_controlled_shutdown
+                && active.contains(&id)
+                && (broker_epoch == -1 || registration.broker_epoch == broker_epoch)
+        })
     });
 
     let requested_recovery_state = match request.leader_recovery_state {
@@ -798,10 +801,14 @@ mod tests {
 
     /// krabka-io/krabka-broker#825: Kafka's `ineligibleReplicasForIsr`. The
     /// leader, broker 1, proposes the ISR `[1, 2]`. Broker 2 is in each row's
-    /// state, as the controller's heartbeat registry holds it.
+    /// state, as the controller's heartbeat registry holds it, or as its
+    /// registration in the image holds it while the registry says active.
     #[tokio::test]
     async fn a_replica_that_is_not_active_is_ineligible_for_the_isr() {
-        use crate::heartbeat::controller_state::{BrokerControlState, ControllerLivenessState};
+        use crate::heartbeat::{
+            controller_state::{BrokerControlState, ControllerLivenessState},
+            fencing::{RegistrationChange, registration_change as registration_change_record},
+        };
 
         /// Where broker 2 stands.
         #[derive(Debug, Clone, Copy)]
@@ -811,6 +818,8 @@ mod tests {
             InControlledShutdown,
             NeverHeartbeated,
             NotRegistered,
+            RegistrationFenced,
+            RegistrationInControlledShutdown,
         }
 
         let cases: &[(Broker2, i16)] = &[
@@ -819,13 +828,30 @@ mod tests {
             (Broker2::InControlledShutdown, codes::INELIGIBLE_REPLICA),
             (Broker2::NeverHeartbeated, codes::INELIGIBLE_REPLICA),
             (Broker2::NotRegistered, codes::INELIGIBLE_REPLICA),
+            (Broker2::RegistrationFenced, codes::INELIGIBLE_REPLICA),
+            (
+                Broker2::RegistrationInControlledShutdown,
+                codes::INELIGIBLE_REPLICA,
+            ),
         ];
         for (broker_2, expected) in cases {
             let registered: &[(u64, i64)] = match broker_2 {
                 Broker2::NotRegistered => &[(1, 10)],
                 _ => &[(1, 10), (2, 20)],
             };
-            let image = image_with(registered);
+            let mut image = image_with(registered);
+            let registration_change = match broker_2 {
+                Broker2::RegistrationFenced => Some(RegistrationChange::FENCE),
+                Broker2::RegistrationInControlledShutdown => {
+                    Some(RegistrationChange::CONTROLLED_SHUTDOWN)
+                }
+                _ => None,
+            };
+            if let Some(change) = registration_change {
+                let record = registration_change_record(&image, NodeId(2), change)
+                    .expect("broker 2 is registered unfenced");
+                image.apply(&record);
+            }
             let liveness = ControllerLivenessState::new(krabka_units::secs(10));
             for (node, _) in registered {
                 if *node == 2 && matches!(broker_2, Broker2::NeverHeartbeated) {

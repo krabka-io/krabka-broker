@@ -121,6 +121,11 @@ pub(crate) async fn allocate_block(
 pub struct ProducerIdManager {
     controller: Option<Arc<dyn MetadataSource>>,
     node_id: NodeId,
+    /// The broker epoch this process registered at, which every allocation
+    /// names, as Kafka's `RPCProducerIdManager` reads `brokerEpochSupplier`
+    /// (`BrokerLifecycleManager.brokerEpoch`). -1 when this node never
+    /// registered as a broker.
+    broker_epoch: i64,
     next: AtomicI64,
     end_exclusive: AtomicI64,
     refill: Mutex<()>,
@@ -138,10 +143,15 @@ impl std::fmt::Debug for ProducerIdManager {
 
 impl ProducerIdManager {
     #[must_use]
-    pub(crate) fn clustered(node_id: NodeId, controller: Arc<dyn MetadataSource>) -> Self {
+    pub(crate) fn clustered(
+        node_id: NodeId,
+        broker_epoch: i64,
+        controller: Arc<dyn MetadataSource>,
+    ) -> Self {
         Self {
             controller: Some(controller),
             node_id,
+            broker_epoch,
             next: AtomicI64::new(0),
             end_exclusive: AtomicI64::new(0),
             refill: Mutex::new(()),
@@ -164,11 +174,10 @@ impl ProducerIdManager {
                     "test allocator exhausted its local ID space".into(),
                 )
             })?;
-            let image = controller.current_image();
-            let broker_epoch = image
-                .broker_epoch(self.node_id)
-                .ok_or(ProducerIdAllocationError::BrokerNotRegistered(self.node_id))?;
-            let block = allocate_block(controller, self.node_id, broker_epoch).await?;
+            if self.broker_epoch < 0 {
+                return Err(ProducerIdAllocationError::BrokerNotRegistered(self.node_id));
+            }
+            let block = allocate_block(controller, self.node_id, self.broker_epoch).await?;
             self.next.store(block.first, Ordering::Release);
             self.end_exclusive.store(block.next, Ordering::Release);
         }
@@ -196,6 +205,7 @@ impl ProducerIdManager {
         Self {
             controller: None,
             node_id: NodeId(0),
+            broker_epoch: -1,
             next: AtomicI64::new(0),
             end_exclusive: AtomicI64::new(i64::MAX),
             refill: Mutex::new(()),
@@ -253,6 +263,7 @@ mod tests {
         let manager = ProducerIdManager {
             controller: None,
             node_id: NodeId(0),
+            broker_epoch: -1,
             next: AtomicI64::new(10),
             end_exclusive: AtomicI64::new(12),
             refill: Mutex::new(()),

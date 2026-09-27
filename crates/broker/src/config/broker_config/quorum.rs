@@ -56,6 +56,14 @@ macro_rules! quorum_fields {
             /// what a first-ever boot has.
             pub previous_broker_epoch: i64,
 
+            /// The broker epoch this process registered at, or -1 before its
+            /// self-registration is published. Kafka keeps it as
+            /// `BrokerLifecycleManager.brokerEpoch`, from the
+            /// `BrokerRegistration` response, and every request that names
+            /// this broker's epoch reads it there rather than out of a
+            /// metadata image that may still hold the previous incarnation's.
+            pub broker_epoch: i64,
+
             /// KIP-853: when true, an observer issues `AddVoter` for itself once it
             /// has caught up to the leader. The observer joins the quorum without
             /// operator action. Maps to Kafka's `controller.quorum.auto.join.enable`.

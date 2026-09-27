@@ -48,7 +48,9 @@ const ADMIN_GRANTS: &str = "Cluster:Create";
 async fn boot() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
     let (handle, dir) = start_broker_with(|cfg| {
         cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(GrantsInPrincipalName);
+        cfg.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(
+            GrantsInPrincipalName,
+        ));
         cfg.transaction_state_num_partitions = 1;
         cfg.transaction_state_replication_factor = 1;
     })

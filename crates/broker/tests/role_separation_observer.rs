@@ -162,7 +162,7 @@ const FENCING_WINDOW: Duration = Duration::from_secs(4);
 
 /// Every broker any node currently reports as fenced.
 ///
-/// The fencing decision is replicated as the `broker.fenced` broker config, so
+/// The fencing decision is replicated on the broker's registration, so
 /// an observer's image carries it as surely as the controller's.
 fn fenced_anywhere(cluster: &RoleSeparated) -> BTreeSet<u64> {
     cluster
@@ -399,7 +399,7 @@ async fn a_broker_only_node_recovers_after_the_controller_prunes_past_its_fetch_
 /// `ControllerRegistrationRecord`. When the heartbeat client looked the leader
 /// up as a broker instead, every tick bailed out, no heartbeat ever reached
 /// the controller, and roughly one `liveness_tick_interval` after boot the
-/// controller published `broker.fenced=true` for every broker in the cluster —
+/// controller fenced the registration of every broker in the cluster —
 /// permanently, since nothing could ever unfence them.
 ///
 /// So this holds the assertion across several liveness ticks and past

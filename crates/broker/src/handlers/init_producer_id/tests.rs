@@ -860,7 +860,9 @@ async fn two_phase_commit_gate_is_scoped_to_enable_2pc_not_keep_prepared_txn() {
             config.transaction_state_num_partitions = 7;
             config.transaction_max_timeout = secs(8);
             config.features.transaction_two_phase_commit_enable = true;
-            config.authorizer = Arc::new(SimpleAclAuthorizer::new(HashSet::new()));
+            config.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(
+                SimpleAclAuthorizer::new(HashSet::new()),
+            ));
         })
         .await;
         let broker = broker_handle.broker_arc_for_test();

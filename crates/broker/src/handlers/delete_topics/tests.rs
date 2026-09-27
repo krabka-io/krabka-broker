@@ -444,10 +444,11 @@ async fn handle_authorizes_delete_per_topic_when_cluster_delete_is_denied() {
     ];
 
     for (label, case) in cases {
-        let (broker_handle, _dir) = start_broker(Arc::new(
-            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
-        ))
-        .await;
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::test_support::ControllerPeerAllowed(
+                crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
+            )))
+            .await;
         let broker = broker_handle.broker_arc_for_test();
         let p = principal("alice");
         let peer = peer();
@@ -622,10 +623,11 @@ async fn rows_follow_kafkas_describe_and_delete_decisions() {
     let mut actual = Vec::with_capacity(cases.len());
     let mut expected = Vec::with_capacity(cases.len());
     for case in cases {
-        let (broker_handle, _dir) = start_broker(Arc::new(
-            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
-        ))
-        .await;
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::test_support::ControllerPeerAllowed(
+                crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
+            )))
+            .await;
         let broker = broker_handle.broker_arc_for_test();
         let p = principal("alice");
         let peer = peer();

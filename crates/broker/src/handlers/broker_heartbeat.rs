@@ -175,6 +175,14 @@ pub(crate) async fn handle(
 /// every active broker reports a metadata offset at or past the end of those
 /// records, so no peer still acts on metadata from before the handover.
 ///
+/// Each transition also changes the broker's registration, as Kafka's
+/// `handleBrokerFenced`, `handleBrokerUnfenced` and
+/// `handleBrokerInControlledShutdown` write a `BrokerRegistrationChangeRecord`:
+/// fenced for `Fenced` and `ShutdownNow`, unfenced for `Unfenced`, and in
+/// controlled shutdown for `ControlledShutdown`. The registration change of a
+/// fence follows the partition changes, and that of a controlled shutdown
+/// precedes them, in Kafka's order.
+///
 /// Kafka writes the drain once. A broker in controlled shutdown is not active
 /// here either, so nothing elects it again, but a leadership that came back to
 /// it before it entered is written away again on the next heartbeat.
@@ -186,10 +194,11 @@ async fn advance_broker_state(
     req: &BrokerHeartbeatRequest,
     caught_up: bool,
 ) -> BrokerControlState {
-    let current = liveness.control_state(broker.0).await;
+    let image = controller.current_image();
+    let current = current_broker_state(liveness.control_state(broker.0).await, &image, broker);
     let asks_for_change = req.want_fence || req.want_shut_down;
     let left = if asks_for_change || current == BrokerControlState::ControlledShutdown {
-        leave_isrs(&controller.current_image(), broker, liveness, metrics).await
+        leave_isrs(&image, broker, liveness, metrics).await
     } else {
         LeaveIsrs::default()
     };
@@ -211,8 +220,15 @@ async fn advance_broker_state(
         BrokerControlState::ControlledShutdown => current != next || left.has_leaderships,
         BrokerControlState::Unfenced => false,
     };
-    let wrote = leaves && !left.changes.is_empty();
-    if wrote && let Err(error) = controller.submit_change(left.changes).await {
+    let records = transition_records(
+        &image,
+        broker,
+        current,
+        next,
+        if leaves { left.changes } else { Vec::new() },
+    );
+    let wrote = !records.is_empty();
+    if wrote && let Err(error) = controller.submit_change(records).await {
         tracing::warn!(broker = broker.0, %error, ?next, "broker heartbeat: submit_change failed");
         // Nothing moved. Stay where the broker was, and let the next
         // heartbeat try again.
@@ -234,4 +250,54 @@ async fn advance_broker_state(
             .await;
     }
     next
+}
+
+/// The state a heartbeat starts from: the registry's, except that a fenced
+/// registration is never `Unfenced`.
+///
+/// A new registration is fenced, and `ClusterControlManager.registerBroker`
+/// resets the broker's heartbeat state to that fence. The registry can still
+/// hold the unfenced session of the registration it replaced, because a
+/// broker's self-registration does not pass through `BrokerRegistration`, so
+/// the registration's fence decides.
+fn current_broker_state(
+    registry: BrokerControlState,
+    image: &krabka_metadata::MetadataImage,
+    broker: NodeId,
+) -> BrokerControlState {
+    match registry {
+        BrokerControlState::Unfenced if crate::heartbeat::fencing::is_fenced(image, broker) => {
+            BrokerControlState::Fenced
+        }
+        state => state,
+    }
+}
+
+/// The records one heartbeat transition writes, in Kafka's order: the
+/// partition changes `leaving` takes the broker out of its ISRs with, and the
+/// registration change of the transition, if the registration does not
+/// already carry it.
+fn transition_records(
+    image: &krabka_metadata::MetadataImage,
+    broker: NodeId,
+    current: BrokerControlState,
+    next: BrokerControlState,
+    mut leaving: Vec<krabka_metadata::MetadataRecord>,
+) -> Vec<krabka_metadata::MetadataRecord> {
+    use crate::heartbeat::fencing::{RegistrationChange, registration_change};
+    if current == next {
+        return leaving;
+    }
+    let change = match next {
+        BrokerControlState::Fenced | BrokerControlState::ShutdownNow => RegistrationChange::FENCE,
+        BrokerControlState::Unfenced => RegistrationChange::UNFENCE,
+        BrokerControlState::ControlledShutdown => RegistrationChange::CONTROLLED_SHUTDOWN,
+    };
+    let registration = registration_change(image, broker, change);
+    if next == BrokerControlState::ControlledShutdown {
+        registration.into_iter().chain(leaving).collect()
+    } else {
+        leaving.extend(registration);
+        leaving
+    }
 }

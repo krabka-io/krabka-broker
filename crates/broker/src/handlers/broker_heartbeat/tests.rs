@@ -185,9 +185,11 @@ impl Cluster {
         let (handle, dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = handle.broker_arc_for_test();
         wait_for_leader(&broker).await;
+        // A new registration is fenced, as Kafka's `RegisterBrokerRecord`
+        // defaults `Fenced` to true.
         let registration = |node: u64| {
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
-                fenced: false,
+                fenced: true,
                 in_controlled_shutdown: false,
                 cordoned_log_dirs: None,
                 node_id: NodeId(node),
@@ -293,6 +295,18 @@ impl Cluster {
     fn applied(&self) -> i64 {
         self.broker.controller.current_metadata_offset()
     }
+
+    /// The `(fenced, in_controlled_shutdown)` flags of `node`'s registration,
+    /// and whether it still holds the epoch it registered at.
+    fn registration(&self, node: u64, epoch: i64) -> (bool, bool, bool) {
+        let image = self.broker.controller.current_image();
+        let registration = image.broker(NodeId(node)).expect("a registered broker");
+        (
+            registration.fenced,
+            registration.in_controlled_shutdown,
+            registration.broker_epoch == epoch,
+        )
+    }
 }
 
 /// krabka-io/krabka-broker#824: `BrokerHeartbeat` follows Kafka's
@@ -312,6 +326,11 @@ async fn a_controlled_shutdown_drains_the_isrs_and_waits_for_active_brokers() {
     let epoch_3 = cluster.epoch(3);
     let mut answers = Vec::new();
     let mut expected = Vec::new();
+    // Broker 2's registration after each step: Kafka's
+    // `BrokerRegistrationChangeRecord`s move its fence and its controlled
+    // shutdown, at the epoch it registered at.
+    let mut registrations = vec![("registered", cluster.registration(2, epoch_2))];
+    let mut expected_registrations = vec![("registered", (true, false, true))];
 
     let stale = Answer {
         error_code: codes::STALE_BROKER_EPOCH,
@@ -353,12 +372,16 @@ async fn a_controlled_shutdown_drains_the_isrs_and_waits_for_active_brokers() {
             .heartbeat(2, epoch_2, cluster.applied(), false)
             .await,
     ));
+    registrations.push(("unfenced", cluster.registration(2, epoch_2)));
+    expected_registrations.push(("unfenced", (false, false, true)));
 
     expected.push(("broker 2 asks to shut down", answer(false, false)));
     answers.push((
         "broker 2 asks to shut down",
         cluster.heartbeat(2, epoch_2, cluster.applied(), true).await,
     ));
+    registrations.push(("in controlled shutdown", cluster.registration(2, epoch_2)));
+    expected_registrations.push(("in controlled shutdown", (false, true, true)));
     let drained = cluster.applied();
     let (leader_0, isr_0) = cluster.leader_and_isr(0);
     let (leader_1, isr_1) = cluster.leader_and_isr(1);
@@ -401,8 +424,11 @@ async fn a_controlled_shutdown_drains_the_isrs_and_waits_for_active_brokers() {
         "broker 2 may shut down",
         cluster.heartbeat(2, epoch_2, cluster.applied(), true).await,
     ));
+    registrations.push(("shut down", cluster.registration(2, epoch_2)));
+    expected_registrations.push(("shut down", (true, true, true)));
 
     check!(answers == expected);
+    check!(registrations == expected_registrations);
     cluster.handle.shutdown().await;
 }
 

@@ -97,8 +97,12 @@ impl FollowerStats {
 /// half of Kafka's `Partition.isReplicaIsrEligible`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BrokerStanding {
-    /// The controller has published the broker as fenced.
+    /// Kafka's `metadataCache.isBrokerFenced`: the broker's registration is
+    /// fenced.
     pub(crate) fenced: bool,
+    /// Kafka's `metadataCache.isBrokerShuttingDown`: the broker's registration
+    /// is in controlled shutdown.
+    pub(crate) shutting_down: bool,
     /// Kafka's `metadataCache.getAliveBrokerEpoch`: the registered broker
     /// epoch of a registered, unfenced broker.
     pub(crate) alive_epoch: Option<i64>,
@@ -141,10 +145,8 @@ impl LeaderPolicy {
     /// controller maintains the KIP-966 eligible-leader set against), then
     /// `default_min_insync_replicas`, this broker's static value, capped by
     /// the replica count. It is the value the produce gate admits `acks=all`
-    /// against, so a write admitted under it is never committed below it. The
-    /// image carries no controlled
-    /// shutdown state; the controller's `AlterPartition` check refuses a
-    /// broker in controlled shutdown as `INELIGIBLE_REPLICA`.
+    /// against, so a write admitted under it is never committed below it. Each
+    /// replica's fence and controlled shutdown are its registration's.
     pub(crate) fn from_image(
         image: &krabka_metadata::MetadataImage,
         record: &krabka_metadata::PartitionRecord,
@@ -155,13 +157,17 @@ impl LeaderPolicy {
             .replicas
             .iter()
             .map(|&replica| {
-                let fenced = crate::config_keys::resolve_broker_fenced(image, replica);
-                let alive_epoch = image.broker_epoch(replica).filter(|_| !fenced);
+                let registration = image.broker(replica);
+                let fenced = registration.is_some_and(|broker| broker.fenced);
                 (
                     replica,
                     BrokerStanding {
                         fenced,
-                        alive_epoch,
+                        shutting_down: registration
+                            .is_some_and(|broker| broker.in_controlled_shutdown),
+                        alive_epoch: registration
+                            .filter(|broker| !broker.fenced)
+                            .map(|broker| broker.broker_epoch),
                     },
                 )
             })
@@ -294,9 +300,7 @@ impl ReplicaState {
         let standing = self.policy.brokers.get(&replica);
         IsrEligibilityFacts {
             fenced: standing.is_some_and(|standing| standing.fenced),
-            // The metadata image carries no controlled-shutdown state; see
-            // `LeaderPolicy::from_image`.
-            shutting_down: false,
+            shutting_down: standing.is_some_and(|standing| standing.shutting_down),
             fetch_broker_epoch: self
                 .per_follower
                 .get(&replica)
@@ -943,6 +947,7 @@ mod tests {
                         NodeId(node),
                         BrokerStanding {
                             fenced: false,
+                            shutting_down: false,
                             alive_epoch: Some(7),
                         },
                     )
@@ -1025,6 +1030,7 @@ mod tests {
                         NodeId(3),
                         BrokerStanding {
                             fenced: true,
+                            shutting_down: false,
                             alive_epoch: None,
                         },
                     )]
@@ -1078,13 +1084,13 @@ mod tests {
     #[test]
     fn a_policy_reads_min_isr_and_broker_standing_from_the_image() {
         use krabka_metadata::{
-            BrokerConfigRecord, BrokerRegistrationRecord, MetadataImage, MetadataRecord,
-            PartitionRecord, TopicConfigRecord, TopicRecord,
+            BrokerRegistrationRecord, MetadataImage, MetadataRecord, PartitionRecord,
+            TopicConfigRecord, TopicRecord,
         };
-        let register = |node: u64, broker_epoch: i64| {
+        let register = |node: u64, broker_epoch: i64, fenced: bool, in_controlled_shutdown| {
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
-                fenced: false,
-                in_controlled_shutdown: false,
+                fenced,
+                in_controlled_shutdown,
                 cordoned_log_dirs: None,
                 node_id: NodeId(node),
                 broker_epoch,
@@ -1121,16 +1127,12 @@ mod tests {
             .into_iter()
             .collect(),
         }));
-        image.apply(&register(1, 11));
-        image.apply(&register(2, 12));
-        image.apply(&register(3, 13));
-        image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: NodeId(3),
-            config_name: crate::config_keys::BROKER_FENCED.to_string(),
-            config_value: Some(crate::config_keys::FENCED_TRUE.to_string()),
-        }));
-        let standing = |fenced, alive_epoch| BrokerStanding {
+        image.apply(&register(1, 11, false, false));
+        image.apply(&register(2, 12, false, true));
+        image.apply(&register(3, 13, true, false));
+        let standing = |fenced, shutting_down, alive_epoch| BrokerStanding {
             fenced,
+            shutting_down,
             alive_epoch,
         };
         let lag = Duration::from_secs(30);
@@ -1140,10 +1142,10 @@ mod tests {
                     effective_min_isr: 2,
                     replica_lag_time_max: lag,
                     brokers: [
-                        (NodeId(1), standing(false, Some(11))),
-                        (NodeId(2), standing(false, Some(12))),
-                        (NodeId(3), standing(true, None)),
-                        (NodeId(4), standing(false, None)),
+                        (NodeId(1), standing(false, false, Some(11))),
+                        (NodeId(2), standing(false, true, Some(12))),
+                        (NodeId(3), standing(true, false, None)),
+                        (NodeId(4), standing(false, false, None)),
                     ]
                     .into_iter()
                     .collect(),

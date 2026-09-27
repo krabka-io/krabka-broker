@@ -182,6 +182,9 @@ pub(super) struct BrokerRuntimeStartup {
     pub(super) want_shutdown: Arc<tokio::sync::watch::Sender<bool>>,
     pub(super) should_shutdown: Arc<tokio::sync::watch::Sender<bool>>,
     pub(super) unclean_recovery: crate::unclean_recovery::UncleanRecoveryHandle,
+    /// Where this broker's first unfencing stands.
+    pub(super) initial_unfence:
+        tokio::sync::watch::Receiver<crate::heartbeat::client::InitialUnfence>,
     pub(super) metrics: crate::metrics::BrokerMetrics,
     pub(super) metrics_bound_addr: Option<SocketAddr>,
     pub(super) throttle_state: Arc<crate::throttle::ThrottleState>,
@@ -258,6 +261,7 @@ pub(super) async fn start_broker_runtime(
         want_shutdown,
         should_shutdown,
         unclean_recovery,
+        initial_unfence,
     } = start_liveness_services(
         config,
         controller,
@@ -323,6 +327,7 @@ pub(super) async fn start_broker_runtime(
         want_shutdown,
         should_shutdown,
         unclean_recovery,
+        initial_unfence,
         metrics,
         metrics_bound_addr,
         throttle_state,

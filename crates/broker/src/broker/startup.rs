@@ -382,6 +382,11 @@ impl Broker {
         }
         .spawn();
 
+        let initial_unfence = runtime.initial_unfence.clone();
+        let images = controller.watch_image();
+        let is_broker = config.is_broker();
+        let node_id = config.node_id;
+        let unfence_timeout = config.startup_leader_wait_timeout.to_std();
         let handle = finish_broker_startup(
             config,
             data_plane_listeners,
@@ -403,11 +408,64 @@ impl Broker {
             },
         )
         .await?;
+        if is_broker {
+            wait_for_initial_unfence(initial_unfence, images, node_id, unfence_timeout).await;
+        }
         // `finish_broker_startup` returns only once every data-plane listener
         // is bound and its accept loop is running, so the last readiness
         // condition this node controls on its own is met here.
         health.mark_listeners_bound();
         Ok(handle)
+    }
+}
+
+/// Wait for the first heartbeat answer that says this broker is unfenced, as
+/// Kafka's `BrokerServer.startup` waits on
+/// `BrokerLifecycleManager.initialUnfenceFuture`.
+///
+/// A new registration is fenced, and the controller unfences it on the first
+/// heartbeat that has caught up to it; until then the broker leads nothing
+/// and takes no new replica. The heartbeat reaches the controller only once
+/// this node's controller listener routes to the broker, so the wait comes
+/// after the rest of startup. It is bounded by `startup_leader_wait_timeout`
+/// and only warns when that elapses, so a slow controller delays startup but
+/// does not fail it. A heartbeat the controller refuses for authorization
+/// ends the wait too: only an ACL change could unfence this broker.
+///
+/// Once the controller has answered, the wait goes on until this node's own
+/// image carries the unfenced registration. A broker-only node places replicas
+/// against that image, and it trails the controller's.
+async fn wait_for_initial_unfence(
+    mut initial_unfence: tokio::sync::watch::Receiver<crate::heartbeat::client::InitialUnfence>,
+    mut images: tokio::sync::watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
+    node_id: krabka_raft::NodeId,
+    timeout: std::time::Duration,
+) {
+    use crate::heartbeat::client::InitialUnfence;
+    let settled = async {
+        let state = *initial_unfence
+            .wait_for(|state| *state != InitialUnfence::Pending)
+            .await?;
+        if state == InitialUnfence::Unfenced {
+            images
+                .wait_for(|image| image.broker(node_id).is_some_and(|broker| !broker.fenced))
+                .await?;
+        }
+        Ok::<_, tokio::sync::watch::error::RecvError>(state)
+    };
+    match tokio::time::timeout(timeout, settled).await {
+        Ok(Ok(InitialUnfence::Refused)) => tracing::error!(
+            "the controller refused this broker's heartbeat with \
+             CLUSTER_AUTHORIZATION_FAILED; it stays fenced"
+        ),
+        Ok(Ok(_)) => {}
+        Ok(Err(_)) => {
+            tracing::warn!("the heartbeat client stopped before this broker was unfenced");
+        }
+        Err(_) => tracing::warn!(
+            ?timeout,
+            "this broker was not unfenced within the startup wait"
+        ),
     }
 }
 

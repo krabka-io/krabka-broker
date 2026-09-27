@@ -118,6 +118,10 @@ fn start_broker_with_opa_authorizer(
     // what `block_in_place` requires).
     let mut super_users = std::collections::HashSet::new();
     super_users.insert("admin".to_string());
+    // Clients reach this broker over SASL, but its own heartbeat reaches the
+    // PLAINTEXT controller listener as ANONYMOUS; like a Kafka inter-broker
+    // principal it needs `ClusterAction`, or the broker never unfences.
+    super_users.insert("ANONYMOUS".to_string());
     let opa = OpaAuthorizer::new(
         super_users,
         opa_url,

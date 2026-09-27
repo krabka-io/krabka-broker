@@ -169,6 +169,7 @@ pub(super) async fn recover_storage_and_groups(
     ));
     let producer_ids = Arc::new(crate::producer_id_manager::ProducerIdManager::clustered(
         config.node_id,
+        config.broker_epoch,
         Arc::clone(controller),
     ));
     crate::coordinator::bootstrap::bootstrap(

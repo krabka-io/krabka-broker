@@ -3,7 +3,6 @@
 //! the `INVALID_REPLICA_ASSIGNMENT` path that must add no partition at all.
 
 use assert2::assert;
-use krabka_metadata::{BrokerConfigRecord, MetadataRecord};
 use krabka_protocol::owned::{
     create_partitions_request::{CreatePartitionsRequest, CreatePartitionsTopic},
     create_topics_request::{CreatableTopic, CreateTopicsRequest},
@@ -16,21 +15,25 @@ use crate::{
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn automatic_placement_excludes_a_fenced_broker_for_create_and_expand() {
-    let cluster = start_n_node_with_retry(3).await;
+    let mut cluster = start_n_node_with_retry(3).await;
     wait_for_all_brokers_registered(&cluster, 3).await;
+    // Stop a broker that is neither the one the test talks to nor the
+    // controller leader. Its controlled shutdown ends fenced, as Kafka's
+    // `processBrokerHeartbeat` fences a broker that may shut down, and it
+    // never heartbeats again to unfence.
+    let leader = cluster[0].0.controller_leader_id();
+    let stopped_index = if leader == Some(krabka_broker::NodeId(3)) {
+        1
+    } else {
+        2
+    };
+    let (stopped, stopped_cfg, _stopped_dir) = cluster.remove(stopped_index);
+    let fenced = stopped_cfg.node_id;
+    stopped.shutdown().await;
     let (broker, cfg, _dir) = &cluster[0];
     let client = build_client(cfg.listen_addr).await;
-
     broker
-        .submit_metadata_record_for_test(MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
-            node_id: krabka_broker::NodeId(3),
-            config_name: "broker.fenced".into(),
-            config_value: Some("true".into()),
-        }))
-        .await
-        .unwrap();
-    broker
-        .wait_for_image(|_| broker.fenced_broker_ids_for_test().contains(&3))
+        .wait_for_image(|_| broker.fenced_broker_ids_for_test().contains(&fenced.0))
         .await;
 
     let created = client
@@ -73,8 +76,8 @@ async fn automatic_placement_excludes_a_fenced_broker_for_create_and_expand() {
         let record = broker
             .partition_record_for_test("t-usable-brokers", partition)
             .unwrap();
-        assert!(!record.replicas.contains(&krabka_broker::NodeId(3)));
-        assert!(!record.isr.contains(&krabka_broker::NodeId(3)));
+        assert!(!record.replicas.contains(&fenced));
+        assert!(!record.isr.contains(&fenced));
     }
 
     let rejected = client
