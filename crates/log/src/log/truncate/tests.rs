@@ -177,6 +177,69 @@ fn truncate_to_removes_future_empty_producer_snapshots() {
     );
 }
 
+/// Kafka takes a producer-state snapshot at a roll, on `close`, after
+/// `truncateTo` and after `truncateFullyAndStartAt`, and a truncation drops
+/// every snapshot at or below the log start. Each row starts from three
+/// two-record batches from one idempotent producer, one per segment (rolls at
+/// 2 and 4, log end 6), then
+/// applies an action and lists the snapshot offsets left on disk. A reopen
+/// then restores the same producer state it had.
+#[test]
+fn producer_snapshots_follow_kafkas_lifecycle() {
+    #[derive(Debug, Clone, Copy)]
+    enum Action {
+        Nothing,
+        Close,
+        TruncateToFirstRoll,
+        TrimThenTruncate,
+        ResetTo,
+    }
+    let cases = [
+        (Action::Nothing, vec![Offset(2), Offset(4)]),
+        (Action::Close, vec![Offset(2), Offset(4), Offset(6)]),
+        (Action::TruncateToFirstRoll, vec![Offset(2)]),
+        (Action::TrimThenTruncate, vec![Offset(4)]),
+        (Action::ResetTo, vec![Offset(10)]),
+    ];
+    for (action, expected) in cases {
+        let dir = tempdir().unwrap();
+        let config = LogConfig {
+            segment_size: bytes(1),
+            ..LogConfig::default()
+        };
+        let mut log = Log::open(dir.path(), config.clone()).unwrap();
+        for sequence in [0, 2, 4] {
+            let mut batch = sample_batch(2);
+            batch.producer_id = 42;
+            batch.base_sequence = sequence;
+            log.append(&mut batch).unwrap();
+        }
+        match action {
+            Action::Nothing | Action::Close => {}
+            Action::TruncateToFirstRoll => log.truncate_to(Offset(2)).unwrap(),
+            Action::TrimThenTruncate => {
+                log.trim_to_offset(Offset(2)).unwrap();
+                log.truncate_to(Offset(4)).unwrap();
+            }
+            Action::ResetTo => log.reset_to(Offset(10)).unwrap(),
+        }
+        let before = log.producer_state_snapshot();
+        if matches!(action, Action::Close) {
+            log.close();
+        } else {
+            drop(log);
+        }
+        let offsets: Vec<Offset> = producer_snapshot::list(dir.path())
+            .unwrap()
+            .into_iter()
+            .map(|(offset, _)| offset)
+            .collect();
+        check!(offsets == expected, "{action:?}");
+        let reopened = Log::open(dir.path(), config).unwrap();
+        check!(reopened.producer_state_snapshot() == before, "{action:?}");
+    }
+}
+
 #[test]
 fn truncate_to_log_end_is_noop() {
     let dir = tempdir().unwrap();

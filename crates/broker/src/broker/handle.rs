@@ -43,6 +43,26 @@ async fn shutdown_partition_writers(partitions: &PartitionRegistry) {
     }
 }
 
+/// Take a producer-state snapshot at the end of every partition's log, as
+/// Kafka's `UnifiedLog.close` does on a clean shutdown, so the next start
+/// restores producer state without replaying the active segment. The writers
+/// are stopped first, so no append races the snapshot.
+fn snapshot_producer_state(partitions: &PartitionRegistry) {
+    for partition in partitions.arcs() {
+        let Ok(mut log) = partition.log.lock() else {
+            continue;
+        };
+        if let Err(error) = log.take_producer_snapshot() {
+            tracing::warn!(
+                topic = %partition.topic,
+                partition = partition.index.0,
+                %error,
+                "producer-state snapshot at shutdown failed; the next start replays the log"
+            );
+        }
+    }
+}
+
 fn abort_partition_writers(partitions: &PartitionRegistry) {
     for task in take_partition_writer_tasks(partitions) {
         task.abort();
@@ -427,6 +447,7 @@ impl BrokerHandle {
         }
         crate::future_log::shutdown_moves(&self.broker.future_logs).await;
         shutdown_partition_writers(&self.broker.partitions).await;
+        snapshot_producer_state(&self.broker.partitions);
         self.broker.client_metrics.shutdown().await;
         // Every log this broker holds is now closed, so the record set it
         // brings back on restart is the one the cluster believes it has. That

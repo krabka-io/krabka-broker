@@ -152,6 +152,9 @@ impl Log {
         if !self.producer_state.is_empty() || !self.unreplicated.is_empty() {
             self.rebuild_producer_and_transaction_state()?;
         }
+        // Kafka's `UnifiedLog.truncateTo` rebuilds the producer state and
+        // takes a snapshot at the new log end, so a reopen replays nothing.
+        self.take_producer_snapshot()?;
         // A verification started against the discarded tail proves nothing
         // about the retained log. A reopen starts without one too.
         self.verification_states.clear();
