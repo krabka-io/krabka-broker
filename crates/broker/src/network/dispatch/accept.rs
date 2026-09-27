@@ -155,7 +155,8 @@ where
         Some(window) => match tokio::time::timeout(window, handshake).await {
             Ok(outcome) => outcome,
             Err(_elapsed) => {
-                tracing::info!(
+                // An idle close, which Kafka's `Selector` logs below INFO.
+                tracing::debug!(
                     peer = %peer,
                     idle_ms = window.as_millis(),
                     "TLS handshake idle past connections.max.idle.ms, closing"

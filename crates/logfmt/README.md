@@ -7,7 +7,7 @@ It installs a stdout `fmt` layer. The layer writes each event as one JSON object
 on one line, in the shape that Google Cloud Logging (GKE) reads:
 
 ```json
-{"timestamp":"2026-06-13T05:55:09.951788Z","severity":"INFO","target":"krabka_broker::network::dispatch","message":"connection opened","listener":"PLAIN","sasl":false}
+{"timestamp":"2026-06-13T05:55:09.951788Z","severity":"DEBUG","target":"krabka_broker::network::dispatch","message":"connection opened","listener":"PLAIN","sasl":false}
 ```
 
 - The layer maps `severity` from the `tracing` level (`WARN` → `WARNING`,

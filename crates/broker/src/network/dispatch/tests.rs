@@ -1033,3 +1033,150 @@ mod request_budget {
         handle.shutdown().await;
     }
 }
+
+/// The level of each line the serve loop logs about a connection.
+///
+/// Kafka's `SocketServer` and `Selector` log a connection's setup and close at
+/// DEBUG, and its `RequestChannel` logs each request at DEBUG on
+/// `kafka.request.logger`. A failure keeps its WARN.
+mod log_levels {
+    use assert2::assert;
+    use futures_util::{SinkExt as _, StreamExt as _};
+    use tracing::{Instrument as _, Level};
+
+    use super::{DEFAULT_MAX_FRAME_BYTES, request_frame};
+    use crate::{broker::Broker, network::codec, test_support::LogCapture};
+
+    // What the client end of the one connection does.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Peer {
+        // Sends an `ApiVersions` v0 request, reads the response and hangs up.
+        OneRequest,
+        // Sends a one-byte frame, which is not a request.
+        NotARequest,
+        // Sends nothing, so the broker closes the connection when it is idle.
+        Idle,
+    }
+
+    // Serves one connection to `peer`, and returns what the dispatch module
+    // logged at DEBUG or above about that connection.
+    async fn logged_serving(peer: Peer) -> Vec<(Level, String)> {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let mut cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+        if matches!(peer, Peer::Idle) {
+            cfg.connections_max_idle = Some(krabka_units::millis(100));
+        }
+        let handle = Broker::start(cfg).await.expect("start broker");
+        let broker = handle.broker_arc_for_test();
+
+        let capture = LogCapture::default();
+        let _capturing = tracing::dispatcher::set_default(&capture.dispatch());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let addr = listener.local_addr().expect("listener addr");
+        let spec = crate::config::ListenerSpec {
+            name: "PLAINTEXT".to_string(),
+            bind_addr: addr,
+            advertised: "127.0.0.1:9092".to_string(),
+            protocol: krabka_security::ListenerProtocol::Plaintext,
+            tls_config: None,
+            sasl_mechanisms: None,
+            principal_mapper: crate::SslPrincipalMapper::default(),
+        };
+        let loop_task = tokio::spawn(
+            async move {
+                let (stream, peer) = listener.accept().await.expect("accept");
+                super::super::serve_connection_stream(broker, stream, spec, peer, None).await;
+            }
+            .instrument(LogCapture::span()),
+        );
+        let client = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("connect to the serve loop");
+        let mut client = codec::frame(client, DEFAULT_MAX_FRAME_BYTES);
+        let open_client = match peer {
+            Peer::OneRequest => {
+                client
+                    .send(request_frame(18, 0, 1, None, None, &[]).freeze())
+                    .await
+                    .expect("send the request");
+                client
+                    .next()
+                    .await
+                    .expect("a response frame")
+                    .expect("response decode");
+                // The hang-up is what ends the serve loop.
+                drop(client);
+                None
+            }
+            Peer::NotARequest => {
+                client
+                    .send(bytes::Bytes::from_static(&[0x00]))
+                    .await
+                    .expect("send the frame");
+                Some(client)
+            }
+            Peer::Idle => Some(client),
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(30), loop_task)
+            .await
+            .expect("the serve loop ends within 30s")
+            .expect("the serve loop does not panic");
+        drop(open_client);
+        handle.shutdown().await;
+        capture
+            .events()
+            .into_iter()
+            .filter(|event| {
+                event.target.starts_with("krabka_broker::network::dispatch")
+                    && event.level <= Level::DEBUG
+            })
+            .map(|event| (event.level, event.message))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn the_serve_loop_logs_connections_and_requests_at_debug() {
+        let opened = (Level::DEBUG, "connection opened");
+        let closed = (Level::DEBUG, "connection closed");
+        let cases = [
+            (
+                Peer::OneRequest,
+                vec![opened, (Level::DEBUG, "dispatching request"), closed],
+            ),
+            (
+                Peer::NotARequest,
+                vec![
+                    opened,
+                    (Level::WARN, "frame too small to peek api_key, closing"),
+                    closed,
+                ],
+            ),
+            (
+                Peer::Idle,
+                vec![
+                    opened,
+                    (
+                        Level::DEBUG,
+                        "connection idle past connections.max.idle.ms, closing",
+                    ),
+                    closed,
+                ],
+            ),
+        ];
+        let mut logged_rows = Vec::new();
+        let mut expected_rows = Vec::new();
+        for (peer, expected) in cases {
+            logged_rows.push((peer, logged_serving(peer).await));
+            expected_rows.push((
+                peer,
+                expected
+                    .into_iter()
+                    .map(|(level, message)| (level, message.to_string()))
+                    .collect::<Vec<_>>(),
+            ));
+        }
+        assert!(logged_rows == expected_rows);
+    }
+}

@@ -17,6 +17,9 @@
 //! every one of them stops when that ticker gives out, so the fake that makes a
 //! ticker give out is shared rather than copied into each of their test
 //! modules.
+//!
+//! `LogCapture` records what one piece of work logs, for the tests that check
+//! the level of a log line.
 
 use std::{
     collections::BTreeSet,
@@ -42,6 +45,11 @@ use qubit_clock::{
     TimerUnavailableError,
 };
 use tokio::sync::watch;
+use tracing_subscriber::{
+    Layer,
+    layer::{Context, SubscriberExt as _},
+    registry::LookupSpan,
+};
 
 use crate::{
     broker::{Broker, BrokerHandle},
@@ -953,6 +961,84 @@ impl Timer for BrokenTimer {
         match self.failure {
             TimerFailure::Registration => Err(error),
             TimerFailure::Completion => Ok(Box::pin(std::future::ready(Err(error)))),
+        }
+    }
+}
+
+// One `tracing` event that a `LogCapture` recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LoggedEvent {
+    pub(crate) level: tracing::Level,
+    pub(crate) target: String,
+    pub(crate) message: String,
+}
+
+// Records the `tracing` events logged inside a `LogCapture::span`, so a test
+// sees what one piece of work logged and not what the rest of a running broker
+// logged at the same time.
+#[derive(Clone, Default)]
+pub(crate) struct LogCapture {
+    events: Arc<Mutex<Vec<LoggedEvent>>>,
+}
+
+impl LogCapture {
+    // The name `LogCapture::span` gives its span.
+    const SPAN_NAME: &str = "log_capture";
+
+    // A dispatcher that records into this capture. Install it with
+    // `tracing::dispatcher::set_default` or `with_default` on the thread that
+    // does the work.
+    pub(crate) fn dispatch(&self) -> tracing::Dispatch {
+        tracing::Dispatch::new(tracing_subscriber::registry().with(self.clone()))
+    }
+
+    // The span whose events the capture records. Create it while the
+    // capture's dispatcher is the default one.
+    pub(crate) fn span() -> tracing::Span {
+        tracing::info_span!("log_capture")
+    }
+
+    // The events recorded so far, oldest first.
+    pub(crate) fn events(&self) -> Vec<LoggedEvent> {
+        self.events
+            .lock()
+            .expect("the captured events are not poisoned")
+            .clone()
+    }
+}
+
+impl<S> Layer<S> for LogCapture
+where
+    S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>,
+{
+    fn on_event(&self, event: &tracing::Event<'_>, ctx: Context<'_, S>) {
+        let inside = ctx
+            .event_scope(event)
+            .is_some_and(|mut scope| scope.any(|span| span.name() == Self::SPAN_NAME));
+        if !inside {
+            return;
+        }
+        let mut message = MessageField::default();
+        event.record(&mut message);
+        self.events
+            .lock()
+            .expect("the captured events are not poisoned")
+            .push(LoggedEvent {
+                level: *event.metadata().level(),
+                target: event.metadata().target().to_owned(),
+                message: message.0,
+            });
+    }
+}
+
+// The `message` of an event, as `format_args!` renders it.
+#[derive(Default)]
+struct MessageField(String);
+
+impl tracing::field::Visit for MessageField {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            self.0 = format!("{value:?}");
         }
     }
 }

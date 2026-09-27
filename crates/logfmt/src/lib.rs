@@ -18,7 +18,7 @@
 //! `target` and all the event fields. A line looks like this:
 //!
 //! ```json
-//! {"timestamp":"2026-06-13T05:55:09.951788Z","severity":"INFO","target":"krabka_broker::network::dispatch","message":"connection opened","listener":"PLAIN","sasl":false}
+//! {"timestamp":"2026-06-13T05:55:09.951788Z","severity":"DEBUG","target":"krabka_broker::network::dispatch","message":"connection opened","listener":"PLAIN","sasl":false}
 //! ```
 //!
 //! The JSON formatter never writes ANSI escape codes, so logs stay clean in
