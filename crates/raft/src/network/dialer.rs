@@ -52,11 +52,12 @@ impl OutboundDialer for PlaintextDialer {
         // Re-resolve `addr` (a `<host>:<port>`) on every dial. A `StatefulSet`
         // peer that restarts keeps its stable DNS name but gets a fresh pod IP;
         // resolving here (rather than once at startup) reaches the new IP.
-        // `lookup_host` also accepts a literal `ip:port` (returns it verbatim),
-        // so this stays correct for IP-form addresses.
-        let sock: SocketAddr = tokio::net::lookup_host(addr)
+        // A literal `ip:port` resolves to itself with no lookup, which is
+        // what keeps this usable on WASI, where a host name is an error.
+        let sock: SocketAddr = krabka_client_core::transport::resolve(addr)
             .await
             .map_err(ClientError::Io)?
+            .into_iter()
             .next()
             .ok_or_else(|| {
                 ClientError::Io(std::io::Error::new(

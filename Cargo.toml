@@ -82,7 +82,11 @@ num-traits = "0.2.19"
 # `object_store` is the Apache-stewarded multi-backend object-store client used
 # across the Rust data ecosystem (DataFusion, Polars, Delta-rs). Krabka's
 # S3-compatible and native-GCS RemoteStorageManagers (KIP-405) are built on it.
-object_store = { version = "0.14", features = ["aws", "gcp"] }
+# The version is pinned here and only the core is on: each member turns on the
+# `aws`, `gcp` and `fs` backends it uses, and only for the targets that build
+# them. Their HTTP client and `LocalFileSystem` do not build for
+# wasm32-wasip1, where the broker keeps only the core.
+object_store = { version = "0.14", default-features = false }
 # Slice 42: OTLP distributed tracing. opentelemetry-otlp 0.32 lines up with
 # the tonic 0.14 / prost 0.14 / reqwest 0.13 stack already in the dep graph.
 opentelemetry = { version = "0.32", default-features = false, features = ["trace", "logs"] }
@@ -92,10 +96,11 @@ opentelemetry = { version = "0.32", default-features = false, features = ["trace
 opentelemetry-appender-tracing = { version = "0.32", default-features = false }
 opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "logs", "grpc-tonic", "http-proto", "reqwest-blocking-client"] }
 # Slice KIP-714: prost-generated OTLP MetricsData / MetricsService types
-# (opentelemetry 0.32 stack). `gen-tonic` exposes the OTLP gRPC service traits the
-# metrics distributor implements; `gen-tonic-messages` + `trace` serve the traces
-# signal; `tonic-prost` carries the prost codec for tonic 0.14.
-opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic", "gen-tonic-messages", "metrics", "trace"] }
+# (opentelemetry 0.32 stack). `gen-tonic-messages` + `trace` serve the traces
+# signal. `gen-tonic` exposes the OTLP gRPC service traits and client, which
+# pull tonic's transport; the broker adds it only on the native targets, because
+# that transport does not build for wasm32-wasip1.
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "metrics", "trace"] }
 opentelemetry_sdk = { version = "0.32", default-features = false, features = ["trace", "logs"] }
 pbkdf2 = { version = "=0.13.0", default-features = false, features = ["kdf", "hmac"] }
 prometheus-client = "0.25"
@@ -177,16 +182,16 @@ krabka-units = "0.4.0"
 krabka-authz = { path = "crates/authz" }
 krabka-audit = { path = "crates/audit" }
 krabka-telemetry = { path = "crates/telemetry" }
-krabka-client-admin = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "59e91dc8576a6382bb97ca3f884e5479a5baca31" }
-krabka-client-consumer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "59e91dc8576a6382bb97ca3f884e5479a5baca31" }
-krabka-client-core = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "59e91dc8576a6382bb97ca3f884e5479a5baca31" }
-krabka-client-producer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "59e91dc8576a6382bb97ca3f884e5479a5baca31" }
-krabka-compression = { git = "https://github.com/krabka-io/krabka-protocol", rev = "d4e2fe530c70e7459825ea51cc24c638623c5d23" }
-krabka-ids = { git = "https://github.com/krabka-io/krabka-protocol", rev = "d4e2fe530c70e7459825ea51cc24c638623c5d23" }
-krabka-metadata = { git = "https://github.com/krabka-io/krabka-protocol", rev = "d4e2fe530c70e7459825ea51cc24c638623c5d23" }
-krabka-protocol = { git = "https://github.com/krabka-io/krabka-protocol", rev = "d4e2fe530c70e7459825ea51cc24c638623c5d23" }
-krabka-security = { git = "https://github.com/krabka-io/krabka-protocol", rev = "d4e2fe530c70e7459825ea51cc24c638623c5d23" }
-krabka-trace-context = { git = "https://github.com/krabka-io/krabka-protocol", rev = "d4e2fe530c70e7459825ea51cc24c638623c5d23" }
-krabka-units = { git = "https://github.com/krabka-io/krabka-protocol", rev = "d4e2fe530c70e7459825ea51cc24c638623c5d23" }
-krabka-voters = { git = "https://github.com/krabka-io/krabka-protocol", rev = "d4e2fe530c70e7459825ea51cc24c638623c5d23" }
+krabka-client-admin = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "00d3c55b216d423224f1684cb47d4a43bce92d30" }
+krabka-client-consumer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "00d3c55b216d423224f1684cb47d4a43bce92d30" }
+krabka-client-core = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "00d3c55b216d423224f1684cb47d4a43bce92d30" }
+krabka-client-producer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "00d3c55b216d423224f1684cb47d4a43bce92d30" }
+krabka-compression = { git = "https://github.com/krabka-io/krabka-protocol", rev = "81b2b0b528025180e00c0c0c3946cb4441c1a439" }
+krabka-ids = { git = "https://github.com/krabka-io/krabka-protocol", rev = "81b2b0b528025180e00c0c0c3946cb4441c1a439" }
+krabka-metadata = { git = "https://github.com/krabka-io/krabka-protocol", rev = "81b2b0b528025180e00c0c0c3946cb4441c1a439" }
+krabka-protocol = { git = "https://github.com/krabka-io/krabka-protocol", rev = "81b2b0b528025180e00c0c0c3946cb4441c1a439" }
+krabka-security = { git = "https://github.com/krabka-io/krabka-protocol", rev = "81b2b0b528025180e00c0c0c3946cb4441c1a439" }
+krabka-trace-context = { git = "https://github.com/krabka-io/krabka-protocol", rev = "81b2b0b528025180e00c0c0c3946cb4441c1a439" }
+krabka-units = { git = "https://github.com/krabka-io/krabka-protocol", rev = "81b2b0b528025180e00c0c0c3946cb4441c1a439" }
+krabka-voters = { git = "https://github.com/krabka-io/krabka-protocol", rev = "81b2b0b528025180e00c0c0c3946cb4441c1a439" }
 krabka-schema-serde = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "bc033b21e8fa0cf5c3f6873988ca17ad1484416b" }

@@ -66,7 +66,7 @@ impl ShareCoordinator {
         let read_max = self.config.recovery_read_max;
         let updates_per_snapshot = self.config.snapshot_update_records_per_snapshot;
         let replayed = match self.partitions.get(bootstrap::TOPIC, state_partition) {
-            Some(part) => tokio::task::spawn_blocking(move || {
+            Some(part) => crate::blocking::spawn_blocking(move || {
                 replay_partition(&part, state_partition, read_max, updates_per_snapshot)
             })
             .await

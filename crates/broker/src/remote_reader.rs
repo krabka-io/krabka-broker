@@ -6,8 +6,8 @@
 //!
 //! The RSM and RLMM SPIs are synchronous and blocking. This module therefore
 //! wraps byte-range reads, index reads, and `ListOffsets` metadata scans in
-//! `tokio::task::spawn_blocking`, so those remote-tier operations do not stall
-//! the broker's reactor. It decodes the fetched bytes with
+//! [`crate::blocking::spawn_blocking`], so those remote-tier operations do not
+//! stall the broker's reactor. It decodes the fetched bytes with
 //! [`krabka_remote_storage::index`], whose lookups mirror
 //! `krabka_log::index::{OffsetIndex,TimeIndex}::lookup` against the Kafka-format
 //! index bytes that the copy path wrote verbatim.

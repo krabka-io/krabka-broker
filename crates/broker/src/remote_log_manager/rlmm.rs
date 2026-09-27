@@ -25,7 +25,7 @@ where
         + 'static,
 {
     let rlmm = Arc::clone(rlmm);
-    match tokio::task::spawn_blocking(move || op(rlmm.as_ref())).await {
+    match crate::blocking::spawn_blocking(move || op(rlmm.as_ref())).await {
         Ok(res) => res,
         Err(e) => Err(krabka_remote_storage::RemoteStorageError::Backend(format!(
             "RLMM mutation task panicked: {e}"

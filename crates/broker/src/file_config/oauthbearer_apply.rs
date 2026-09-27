@@ -8,13 +8,11 @@
 
 use krabka_units::{Time, convert::TimeExt as _};
 
-use super::{
-    FileConfigError,
-    oauthbearer::{
-        DEFAULT_ALLOWABLE_CLOCK_SKEW, DEFAULT_INTROSPECTION_HTTP_TIMEOUT, FileOAuthBearerConfig,
-    },
-};
+#[cfg(not(target_family = "wasm"))]
+use super::oauthbearer::{DEFAULT_ALLOWABLE_CLOCK_SKEW, DEFAULT_INTROSPECTION_HTTP_TIMEOUT};
+use super::{FileConfigError, oauthbearer::FileOAuthBearerConfig};
 
+#[cfg(not(target_family = "wasm"))]
 fn configure_introspection_validator(
     oauth: &FileOAuthBearerConfig,
     endpoint: &str,
@@ -74,6 +72,21 @@ fn configure_introspection_validator(
             groups_claim,
             groups_claim_delimiter: oauth.groups_claim_delimiter.clone(),
         },
+    );
+}
+
+/// RFC 7662 introspection needs an HTTP client stack, which wasm32-wasip1 does
+/// not have.
+#[cfg(target_family = "wasm")]
+fn configure_introspection_validator(
+    _oauth: &FileOAuthBearerConfig,
+    endpoint: &str,
+    _custom_claim_check: Option<jsonpath_rust::parser::model::JpQuery>,
+    _groups_claim: Option<jsonpath_rust::parser::model::JpQuery>,
+    _cfg: &mut crate::config::BrokerConfig,
+) {
+    panic!(
+        "[oauthbearer]: introspection_endpoint_uri {endpoint:?} is set, but token introspection is unavailable on this platform"
     );
 }
 

@@ -15,6 +15,7 @@ use crate::{
     error::BrokerError,
     log_dir,
     partition_registry::PartitionRegistry,
+    platform::Sockets,
 };
 
 pub(super) struct ListenerStartup {
@@ -52,8 +53,8 @@ pub(super) async fn bind_ephemeral_data_plane_listener(
     {
         return Ok(());
     }
-    let listener = TcpListener::bind(config.listen_addr).await?;
-    let bound = listener.local_addr()?;
+    let listener = crate::platform::bind_listener(config.listen_addr).await?;
+    let bound = Sockets::TARGET.listener_address(&listener, config.listen_addr)?;
     config.listen_addr = bound;
     if let Some((host, _)) = config.advertised_listener.rsplit_once(':') {
         config.advertised_listener = format!("{host}:{}", bound.port());
@@ -64,25 +65,16 @@ pub(super) async fn bind_ephemeral_data_plane_listener(
 
 pub(super) async fn bind_listeners_and_recover_moves(
     config: &mut BrokerConfig,
-    mut supplied_listeners: Vec<TcpListener>,
+    supplied_listeners: Vec<TcpListener>,
     partitions: &Arc<PartitionRegistry>,
     throttle_state: &Arc<crate::throttle::ThrottleState>,
 ) -> Result<ListenerStartup, BrokerError> {
-    let listener_specs = config.effective_listeners();
-    let mut bound = Vec::with_capacity(listener_specs.len());
-    for spec in listener_specs {
-        let listener = if let Some(index) = supplied_listeners.iter().position(|listener| {
-            listener
-                .local_addr()
-                .is_ok_and(|addr| addr == spec.bind_addr)
-        }) {
-            supplied_listeners.swap_remove(index)
-        } else {
-            TcpListener::bind(spec.bind_addr).await?
-        };
-        let address = listener.local_addr()?;
-        bound.push((spec, listener, address));
-    }
+    let bound = adopt_or_bind_listeners(
+        Sockets::TARGET,
+        config.effective_listeners(),
+        supplied_listeners,
+    )
+    .await?;
     let listen_addr = bound
         .iter()
         .find(|(spec, _, _)| spec.name == config.inter_broker_listener_name)
@@ -128,6 +120,38 @@ pub(super) async fn bind_listeners_and_recover_moves(
     })
 }
 
+/// Pairs every listener spec with a listener: a supplied one when one serves
+/// the spec, and a fresh bind of the spec's address otherwise.
+///
+/// A native supplied listener serves the spec whose `bind_addr` equals its
+/// local address. A preopened listener cannot report its address, so the
+/// supplied listeners serve the specs in order, and each one is taken to be
+/// bound on its spec's `bind_addr`.
+async fn adopt_or_bind_listeners(
+    sockets: Sockets,
+    specs: Vec<crate::config::ListenerSpec>,
+    mut supplied: Vec<TcpListener>,
+) -> std::io::Result<Vec<(crate::config::ListenerSpec, TcpListener, SocketAddr)>> {
+    let mut bound = Vec::with_capacity(specs.len());
+    for spec in specs {
+        let serving = match sockets {
+            Sockets::Native => supplied.iter().position(|listener| {
+                listener
+                    .local_addr()
+                    .is_ok_and(|addr| addr == spec.bind_addr)
+            }),
+            Sockets::Preopened => (!supplied.is_empty()).then_some(0),
+        };
+        let listener = match serving {
+            Some(index) => supplied.remove(index),
+            None => crate::platform::bind_listener(spec.bind_addr).await?,
+        };
+        let address = sockets.listener_address(&listener, spec.bind_addr)?;
+        bound.push((spec, listener, address));
+    }
+    Ok(bound)
+}
+
 pub(super) fn spawn_listener_tasks(
     broker: &Arc<Broker>,
     bound: Vec<(crate::config::ListenerSpec, TcpListener, SocketAddr)>,
@@ -145,4 +169,102 @@ pub(super) fn spawn_listener_tasks(
         })
         .collect();
     (shutdown, tasks)
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::assert;
+    use krabka_security::ListenerProtocol;
+
+    use super::*;
+    use crate::config::ListenerSpec;
+
+    fn spec(name: &str, bind_addr: SocketAddr) -> ListenerSpec {
+        ListenerSpec {
+            name: name.to_owned(),
+            bind_addr,
+            advertised: bind_addr.to_string(),
+            protocol: ListenerProtocol::Plaintext,
+            tls_config: None,
+            sasl_mechanisms: None,
+            principal_mapper: crate::SslPrincipalMapper::default(),
+        }
+    }
+
+    /// `(spec name, address the broker records, address the socket is bound
+    /// to)` for each adopted listener.
+    fn adopted(
+        bound: &[(ListenerSpec, TcpListener, SocketAddr)],
+    ) -> Vec<(String, SocketAddr, SocketAddr)> {
+        bound
+            .iter()
+            .map(|(spec, listener, address)| {
+                (
+                    spec.name.clone(),
+                    *address,
+                    listener.local_addr().expect("local address"),
+                )
+            })
+            .collect()
+    }
+
+    /// A preopened listener cannot report its address, so the supplied
+    /// listeners serve the specs in order and take the spec's address. The
+    /// specs name an address that no local interface has, so a bind of
+    /// either would fail: the adoption binds nothing.
+    #[tokio::test]
+    async fn preopened_listeners_serve_the_specs_in_order_without_a_bind() {
+        let first = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let second = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let locals = (
+            first.local_addr().expect("local address"),
+            second.local_addr().expect("local address"),
+        );
+        let data: SocketAddr = "10.255.0.1:9092".parse().expect("literal");
+        let internal: SocketAddr = "10.255.0.1:9094".parse().expect("literal");
+
+        let bound = adopt_or_bind_listeners(
+            Sockets::Preopened,
+            vec![spec("PLAINTEXT", data), spec("INTERNAL", internal)],
+            vec![first, second],
+        )
+        .await
+        .expect("adopted");
+
+        assert!(
+            adopted(&bound)
+                == vec![
+                    ("PLAINTEXT".to_owned(), data, locals.0),
+                    ("INTERNAL".to_owned(), internal, locals.1),
+                ]
+        );
+    }
+
+    /// A native listener serves the spec whose address it is bound to,
+    /// whatever the order of the supplied listeners.
+    #[tokio::test]
+    async fn native_listeners_serve_the_spec_with_their_address() {
+        let first = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let second = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let locals = (
+            first.local_addr().expect("local address"),
+            second.local_addr().expect("local address"),
+        );
+
+        let bound = adopt_or_bind_listeners(
+            Sockets::Native,
+            vec![spec("PLAINTEXT", locals.1), spec("INTERNAL", locals.0)],
+            vec![first, second],
+        )
+        .await
+        .expect("adopted");
+
+        assert!(
+            adopted(&bound)
+                == vec![
+                    ("PLAINTEXT".to_owned(), locals.1, locals.1),
+                    ("INTERNAL".to_owned(), locals.0, locals.0),
+                ]
+        );
+    }
 }

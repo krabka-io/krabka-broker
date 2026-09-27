@@ -2,7 +2,8 @@
 //!
 //! The `RemoteStorageManager` and `RemoteLogMetadataManager` traits are
 //! blocking, so every segment-listing, index and log read that the reader
-//! performs goes to the `tokio` blocking pool through one of these helpers.
+//! performs goes to the `tokio` blocking pool through one of these helpers,
+//! by way of [`crate::blocking::spawn_blocking`].
 //! Each helper also maps a panicked blocking task onto
 //! `RemoteStorageError::Io`, so a defective SPI implementation surfaces as a
 //! read error rather than as a lost future.
@@ -21,7 +22,7 @@ impl RemoteReader {
     ) -> Result<Vec<RemoteLogSegmentMetadata>, RemoteStorageError> {
         let rlmm = self.rlmm.clone();
         let tp = tp.clone();
-        match tokio::task::spawn_blocking(move || rlmm.list_remote_log_segments(&tp)).await {
+        match crate::blocking::spawn_blocking(move || rlmm.list_remote_log_segments(&tp)).await {
             Ok(result) => result,
             Err(error) => {
                 warn!(error = %error, "remote-reader: list_remote_log_segments task panicked");
@@ -48,7 +49,7 @@ impl RemoteReader {
         let rsm = self.rsm.clone();
         let cache = self.index_cache.clone();
         let segment_id = metadata.remote_log_segment_id().id;
-        match tokio::task::spawn_blocking(move || {
+        match crate::blocking::spawn_blocking(move || {
             cache.get_or_fetch(segment_id, kind, || rsm.fetch_index(&metadata, kind))
         })
         .await
@@ -70,7 +71,7 @@ impl RemoteReader {
         end_position: Option<BytePosition>,
     ) -> Result<Vec<u8>, RemoteStorageError> {
         let rsm = self.rsm.clone();
-        match tokio::task::spawn_blocking(move || {
+        match crate::blocking::spawn_blocking(move || {
             rsm.fetch_log_segment(&metadata, start_position, end_position)
         })
         .await

@@ -37,6 +37,11 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 zerocopy = { workspace = true }
 
+# The positional segment read on wasm32-wasip1. std's `FileExt` for wasi is
+# unstable, and rustix wraps `fd_pread` safely.
+[target.'cfg(target_os = "wasi")'.dependencies]
+rustix = { workspace = true }
+
 [dev-dependencies]
 mutants = { workspace = true }
 proptest = { workspace = true }

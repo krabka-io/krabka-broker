@@ -21,7 +21,7 @@
 use std::{sync::Arc, time::Duration};
 
 use krabka_units::{Time, convert::TimeExt as _};
-use qubit_clock::{StdTimer, Timer};
+use qubit_clock::Timer;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -40,7 +40,7 @@ mod tests;
 pub(crate) struct CleanerConfig {
     pub interval: Time,
     /// Relative timer that drives the compaction-sweep cadence. Production
-    /// uses [`qubit_clock::StdTimer`], which is real time. Tests inject a
+    /// uses `time_util::system_timer`, which is real time. Tests inject a
     /// timer from a [`qubit_clock::ManualMonotonicClock`], so the sweep
     /// interval fires on a controlled manual timeline instead of wall-clock
     /// time.
@@ -59,7 +59,7 @@ impl CleanerConfig {
     pub(crate) fn system(interval: Time) -> Self {
         Self {
             interval,
-            timer: Arc::new(StdTimer::new()),
+            timer: crate::time_util::system_timer(),
             metadata: None,
         }
     }

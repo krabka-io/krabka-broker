@@ -4,13 +4,9 @@
 //! diskless path, which appends at an externally assigned base offset, share
 //! the one-lock-per-group discipline, so they stay together in one module.
 
-use std::{
-    panic::{AssertUnwindSafe, catch_unwind},
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 use krabka_log::{Log, Offset};
-use tokio::runtime::{Handle, RuntimeFlavor};
 
 use super::storage::{lock_log, storage_failure_error};
 use crate::partition::{AppendedBatch, ProduceData, ProducerAppendCheck};
@@ -215,7 +211,8 @@ fn append_produce_batch_at(
 /// On the broker's multi-thread runtime, `block_in_place` avoids the per-batch
 /// `spawn_blocking` scheduling hop. Tokio can still hand the worker's other
 /// tasks to a replacement thread. Current-thread test runtimes keep the
-/// `spawn_blocking` fallback because `block_in_place` is illegal there. The
+/// `spawn_blocking` fallback because `block_in_place` is illegal there, and
+/// `wasm32-wasip1` appends inline; [`crate::blocking`] makes that choice. The
 /// writer loop is still the single serializer for this partition, so the append
 /// order does not change.
 pub(crate) async fn run_produce_append_batch(
@@ -230,15 +227,11 @@ pub(crate) async fn run_produce_append_batch(
     ),
     crate::error::BrokerError,
 > {
-    match Handle::current().runtime_flavor() {
-        RuntimeFlavor::MultiThread => catch_unwind(AssertUnwindSafe(|| {
-            tokio::task::block_in_place(move || append_produce_batch(&log, high_watermark, datas))
-        }))
-        .map_err(|_| storage_failure_error("append task panicked", "block_in_place panic")),
-        _ => tokio::task::spawn_blocking(move || append_produce_batch(&log, high_watermark, datas))
-            .await
-            .map_err(|join_err| storage_failure_error("append task panicked", &join_err)),
-    }
+    crate::blocking::run_blocking_catching(move || {
+        append_produce_batch(&log, high_watermark, datas)
+    })
+    .await
+    .map_err(|error| storage_failure_error("append task panicked", error))
 }
 
 pub(crate) async fn run_produce_append_batch_at(
@@ -254,19 +247,11 @@ pub(crate) async fn run_produce_append_batch_at(
     ),
     crate::error::BrokerError,
 > {
-    match Handle::current().runtime_flavor() {
-        RuntimeFlavor::MultiThread => catch_unwind(AssertUnwindSafe(|| {
-            tokio::task::block_in_place(move || {
-                append_produce_batch_at(&log, base, high_watermark, datas)
-            })
-        }))
-        .map_err(|_| storage_failure_error("append task panicked", "block_in_place panic")),
-        _ => tokio::task::spawn_blocking(move || {
-            append_produce_batch_at(&log, base, high_watermark, datas)
-        })
-        .await
-        .map_err(|join_err| storage_failure_error("append task panicked", &join_err)),
-    }
+    crate::blocking::run_blocking_catching(move || {
+        append_produce_batch_at(&log, base, high_watermark, datas)
+    })
+    .await
+    .map_err(|error| storage_failure_error("append task panicked", error))
 }
 
 #[cfg(test)]

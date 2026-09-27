@@ -2,10 +2,7 @@
 //! mutex, the blocking seek-and-read that serves it, and the response
 //! fields the served bytes fill in.
 
-use std::{
-    panic::{AssertUnwindSafe, catch_unwind},
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 use krabka_log::{Log, Offset};
 use krabka_protocol::{
@@ -13,7 +10,6 @@ use krabka_protocol::{
     records::RecordsPayload,
 };
 use krabka_units::{ByteSize, convert::ByteSizeExt as _};
-use tokio::runtime::{Handle, RuntimeFlavor};
 
 use super::{FetchWatermarks, VisibilityWindow, compute_visibility_window, plan::refused_read};
 use crate::{codes, error::BrokerError, partition::Partition};
@@ -221,23 +217,18 @@ struct BlockingRead {
 ///
 /// `block_in_place` is also flatly illegal on a current-thread runtime, where
 /// it panics rather than degrading, so the current-thread runtimes that
-/// `#[tokio::test]` builds keep the `spawn_blocking` path.
+/// `#[tokio::test]` builds keep the `spawn_blocking` path, and
+/// `wasm32-wasip1`, which has no blocking pool, reads inline.
+/// [`crate::blocking`] makes that choice.
 async fn run_blocking_read(
     log: &Arc<Mutex<Log>>,
     read: &BlockingRead,
 ) -> Result<(Option<RecordsPayload>, Vec<AbortedTransaction>), BrokerError> {
-    let served = if Handle::current().runtime_flavor() == RuntimeFlavor::MultiThread {
-        catch_unwind(AssertUnwindSafe(|| {
-            tokio::task::block_in_place(|| read_records(log, read))
-        }))
-        .map_err(|_| read_task_panicked(&"block_in_place panic"))?
-    } else {
-        let log = Arc::clone(log);
-        let read = BlockingRead { ..*read };
-        tokio::task::spawn_blocking(move || read_records(&log, &read))
-            .await
-            .map_err(|error| read_task_panicked(&error))?
-    };
+    let log = Arc::clone(log);
+    let read = BlockingRead { ..*read };
+    let served = crate::blocking::run_blocking_catching(move || read_records(&log, &read))
+        .await
+        .map_err(|error| read_task_panicked(&error))?;
     let (records, aborted) = served?;
     let records = (records.payload_len() > 0).then_some(records);
     Ok((records, aborted))
@@ -281,7 +272,28 @@ fn read_records(
     // whenever it is set — see the comment there). It is the offset just
     // past the last batch this call actually served, which bounds the
     // aborted-transaction scan below to what the response carries.
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+    ))]
     let mut served_upper_bound: Option<Offset> = None;
+    // Every read on the targets without sendfile takes the raw-byte path,
+    // which assigns this exactly once.
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+    )))]
+    let served_upper_bound: Option<Offset>;
     #[cfg(any(
         target_os = "linux",
         target_os = "macos",
@@ -597,11 +609,12 @@ mod tests {
 
     /// [`super::run_blocking_read`] picks its hand-off from the runtime
     /// flavor: `block_in_place` on the multi-threaded runtime the broker runs
-    /// on, and `spawn_blocking` on a current-thread runtime, where
-    /// `block_in_place` panics outright rather than degrading. Both arms have
-    /// to serve exactly the bytes a direct read serves.
+    /// on, `spawn_blocking` on a current-thread runtime, where
+    /// `block_in_place` panics outright rather than degrading, and the calling
+    /// thread on `wasm32-wasip1`. Every arm has to serve exactly the bytes a
+    /// direct read serves.
     #[test]
-    fn either_runtime_flavor_serves_the_same_bytes() {
+    fn every_placement_serves_the_same_bytes() {
         let (_dir, log) = two_record_log();
         let limit = log.log_end_offset();
         let log = Arc::new(Mutex::new(log));
@@ -633,9 +646,18 @@ mod tests {
                 .build()
                 .expect("build a multi-threaded runtime"),
         );
+        let inline = {
+            let _inline = crate::blocking::inline_blocking_on_this_thread();
+            served(
+                tokio::runtime::Builder::new_current_thread()
+                    .build()
+                    .expect("build a current-thread runtime"),
+            )
+        };
 
         assert!(current_thread == expected);
         assert!(multi_thread == expected);
+        assert!(inline == expected);
     }
 
     #[test]

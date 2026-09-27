@@ -4,31 +4,15 @@
 //! the optional OTLP log bridge into one registry, and it owns the shutdown
 //! path for the providers that those layers export through.
 
-use krabka_units::prelude::TimeExt;
-use opentelemetry::trace::TracerProvider as _;
-use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
-use opentelemetry_sdk::{
-    logs::SdkLoggerProvider, propagation::TraceContextPropagator, trace::SdkTracerProvider,
-};
+use opentelemetry_sdk::{logs::SdkLoggerProvider, trace::SdkTracerProvider};
 use tracing_subscriber::{
-    EnvFilter, Layer as _, layer::SubscriberExt as _, util::SubscriberInitExt as _,
+    EnvFilter, Layer, Registry, layer::SubscriberExt as _, util::SubscriberInitExt as _,
 };
 
-use crate::{
-    config::OtlpConfig, error::TelemetryError, heartbeat::spawn_heartbeat_task,
-    log_levels::LogLevelController,
-};
+use crate::{config::OtlpConfig, error::TelemetryError, log_levels::LogLevelController};
 
-/// Per-layer filter for the OTLP layer.
-///
-/// Operators who want more control can override the filter with
-/// `KRABKA_OTLP_FILTER`. Without that variable, the filter falls back to
-/// `default`.
-fn otel_filter(default: &str, get: impl Fn(&str) -> Option<String>) -> EnvFilter {
-    get("KRABKA_OTLP_FILTER")
-        .and_then(|s| EnvFilter::try_new(s).ok())
-        .unwrap_or_else(|| EnvFilter::new(default))
-}
+/// The stdout layer, boxed as `krabka_logfmt::layer` returns it.
+type StdoutLayer = Box<dyn Layer<Registry> + Send + Sync>;
 
 /// Owns the OTLP `SdkTracerProvider`, so shutdown flushes the spans.
 ///
@@ -89,8 +73,12 @@ impl TelemetryGuard {
 ///
 /// You must call this function exactly one time, and from inside the tokio
 /// runtime. The gRPC exporter captures the current runtime handle.
+///
 /// # Errors
-/// Returns an error when telemetry input is malformed, a query cannot be evaluated, or the configured storage or export backend fails.
+///
+/// Returns `TelemetryError::Exporter` when an OTLP exporter cannot be built.
+/// On `wasm32-wasip1`, returns `TelemetryError::Unsupported` for any OTLP
+/// configuration and installs nothing.
 pub fn init(
     otlp: Option<OtlpConfig>,
     fmt_default_filter: &str,
@@ -118,67 +106,154 @@ pub fn init(
             log_levels,
         });
     };
-
-    let exporter = cfg.build_exporter()?;
-    let provider = SdkTracerProvider::builder()
-        .with_batch_exporter(exporter)
-        .with_resource(cfg.resource())
-        .with_sampler(cfg.sampler())
-        .build();
-    let tracer = provider.tracer(tracer_name.to_owned());
-
-    opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
-    opentelemetry::global::set_tracer_provider(provider.clone());
-
-    let otel_layer = tracing_opentelemetry::layer()
-        .with_tracer(tracer)
-        .with_location(false)
-        .with_filter(otel_filter(otel_default_filter, |k| std::env::var(k).ok()));
-
-    // OTLP LOGS: a `tracing` → OTLP-log-record bridge so services ship their
-    // logs over OTLP (alloy:4317 → logs-distributor) — Docker-stdout tailing
-    // doesn't stream on Docker Desktop. Quiet the OTLP/transport stack on THIS
-    // layer so the exporter's own events can't feed back into more log records.
-    let log_exporter = cfg.build_log_exporter()?;
-    let logger_provider = SdkLoggerProvider::builder()
-        .with_batch_exporter(log_exporter)
-        .with_resource(cfg.resource())
-        .build();
-    let logs_default = format!(
-        "{otel_default_filter},opentelemetry=warn,opentelemetry_sdk=warn,opentelemetry_otlp=warn,hyper_util=warn,tonic=warn,h2=warn,tower=warn"
-    );
-    let otel_logs_layer = OpenTelemetryTracingBridge::new(&logger_provider)
-        .with_filter(otel_filter(&logs_default, |k| std::env::var(k).ok()));
-
-    tracing_subscriber::registry()
-        .with(fmt_layer)
-        .with(otel_layer)
-        .with(otel_logs_layer)
-        .init();
-
-    let heartbeat_task = cfg.heartbeat_interval.map(|interval| {
-        spawn_heartbeat_task(
-            provider.clone(),
-            cfg.service_name.clone(),
-            cfg.service_instance_id.clone(),
-            interval,
-        )
-    });
-
-    tracing::info!(
-        endpoint = %cfg.endpoint,
-        protocol = ?cfg.protocol,
-        sample_ratio = cfg.sample_ratio,
-        heartbeat_interval_secs = cfg.heartbeat_interval.map(TimeExt::secs_f64),
-        "OTLP distributed tracing + logs enabled"
-    );
-
-    Ok(TelemetryGuard {
-        provider: Some(provider),
-        logger_provider: Some(logger_provider),
-        heartbeat_task,
+    otlp::install(
+        &cfg,
+        fmt_layer,
         log_levels,
-    })
+        otel_default_filter,
+        tracer_name,
+    )
+}
+
+/// The OTLP span and log layers, installed beside the stdout layer.
+#[cfg(not(target_family = "wasm"))]
+mod otlp {
+    use krabka_units::prelude::TimeExt;
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
+    use opentelemetry_sdk::{
+        logs::SdkLoggerProvider, propagation::TraceContextPropagator, trace::SdkTracerProvider,
+    };
+    use tracing_subscriber::{
+        EnvFilter, Layer as _, layer::SubscriberExt as _, util::SubscriberInitExt as _,
+    };
+
+    use super::{StdoutLayer, TelemetryGuard};
+    use crate::{
+        config::OtlpConfig, error::TelemetryError, heartbeat::spawn_heartbeat_task,
+        log_levels::LogLevelController,
+    };
+
+    /// Per-layer filter for the OTLP layer.
+    ///
+    /// Operators who want more control can override the filter with
+    /// `KRABKA_OTLP_FILTER`. Without that variable, the filter falls back to
+    /// `default`.
+    fn otel_filter(default: &str, get: impl Fn(&str) -> Option<String>) -> EnvFilter {
+        get("KRABKA_OTLP_FILTER")
+            .and_then(|s| EnvFilter::try_new(s).ok())
+            .unwrap_or_else(|| EnvFilter::new(default))
+    }
+
+    pub(super) fn install(
+        cfg: &OtlpConfig,
+        fmt_layer: StdoutLayer,
+        log_levels: LogLevelController,
+        otel_default_filter: &str,
+        tracer_name: &str,
+    ) -> Result<TelemetryGuard, TelemetryError> {
+        let exporter = cfg.build_exporter()?;
+        let provider = SdkTracerProvider::builder()
+            .with_batch_exporter(exporter)
+            .with_resource(cfg.resource())
+            .with_sampler(cfg.sampler())
+            .build();
+        let tracer = provider.tracer(tracer_name.to_owned());
+
+        opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
+        opentelemetry::global::set_tracer_provider(provider.clone());
+
+        let otel_layer = tracing_opentelemetry::layer()
+            .with_tracer(tracer)
+            .with_location(false)
+            .with_filter(otel_filter(otel_default_filter, |k| std::env::var(k).ok()));
+
+        // OTLP LOGS: a `tracing` → OTLP-log-record bridge so services ship their
+        // logs over OTLP (alloy:4317 → logs-distributor) — Docker-stdout tailing
+        // doesn't stream on Docker Desktop. Quiet the OTLP/transport stack on THIS
+        // layer so the exporter's own events can't feed back into more log records.
+        let log_exporter = cfg.build_log_exporter()?;
+        let logger_provider = SdkLoggerProvider::builder()
+            .with_batch_exporter(log_exporter)
+            .with_resource(cfg.resource())
+            .build();
+        let logs_default = format!(
+            "{otel_default_filter},opentelemetry=warn,opentelemetry_sdk=warn,opentelemetry_otlp=warn,hyper_util=warn,tonic=warn,h2=warn,tower=warn"
+        );
+        let otel_logs_layer = OpenTelemetryTracingBridge::new(&logger_provider)
+            .with_filter(otel_filter(&logs_default, |k| std::env::var(k).ok()));
+
+        tracing_subscriber::registry()
+            .with(fmt_layer)
+            .with(otel_layer)
+            .with(otel_logs_layer)
+            .init();
+
+        let heartbeat_task = cfg.heartbeat_interval.map(|interval| {
+            spawn_heartbeat_task(
+                provider.clone(),
+                cfg.service_name.clone(),
+                cfg.service_instance_id.clone(),
+                interval,
+            )
+        });
+
+        tracing::info!(
+            endpoint = %cfg.endpoint,
+            protocol = ?cfg.protocol,
+            sample_ratio = cfg.sample_ratio,
+            heartbeat_interval_secs = cfg.heartbeat_interval.map(TimeExt::secs_f64),
+            "OTLP distributed tracing + logs enabled"
+        );
+
+        Ok(TelemetryGuard {
+            provider: Some(provider),
+            logger_provider: Some(logger_provider),
+            heartbeat_task,
+            log_levels,
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::otel_filter;
+        use crate::test_support::env_from;
+
+        #[test]
+        fn otel_filter_uses_override_or_default() {
+            let filter = otel_filter("warn", env_from(&[]));
+            assert2::assert!(filter.to_string() == "warn");
+
+            let filter = otel_filter(
+                "warn",
+                env_from(&[("KRABKA_OTLP_FILTER", "krabka_telemetry=debug")]),
+            );
+            assert2::assert!(filter.to_string() == "krabka_telemetry=debug");
+
+            let filter = otel_filter("warn", env_from(&[("KRABKA_OTLP_FILTER", "[")]));
+            assert2::assert!(filter.to_string() == "warn");
+        }
+    }
+}
+
+// OTLP export needs a gRPC or HTTP client stack, which `wasm32-wasip1` does
+// not have.
+#[cfg(target_family = "wasm")]
+mod otlp {
+    use super::{StdoutLayer, TelemetryGuard};
+    use crate::{config::OtlpConfig, error::TelemetryError, log_levels::LogLevelController};
+
+    pub(super) fn install(
+        _cfg: &OtlpConfig,
+        _fmt_layer: StdoutLayer,
+        _log_levels: LogLevelController,
+        _otel_default_filter: &str,
+        _tracer_name: &str,
+    ) -> Result<TelemetryGuard, TelemetryError> {
+        Err(TelemetryError::Unsupported {
+            what: "OTLP export",
+        })
+    }
 }
 
 #[cfg(test)]
@@ -191,7 +266,6 @@ mod tests {
     use opentelemetry_sdk::error::OTelSdkResult;
 
     use super::*;
-    use crate::test_support::env_from;
 
     #[derive(Clone, Debug)]
     struct ShutdownCountingSpanExporter {
@@ -210,21 +284,6 @@ mod tests {
             self.calls.fetch_add(1, SeqCst);
             Ok(())
         }
-    }
-
-    #[test]
-    fn otel_filter_uses_override_or_default() {
-        let filter = otel_filter("warn", env_from(&[]));
-        assert2::assert!(filter.to_string() == "warn");
-
-        let filter = otel_filter(
-            "warn",
-            env_from(&[("KRABKA_OTLP_FILTER", "krabka_telemetry=debug")]),
-        );
-        assert2::assert!(filter.to_string() == "krabka_telemetry=debug");
-
-        let filter = otel_filter("warn", env_from(&[("KRABKA_OTLP_FILTER", "[")]));
-        assert2::assert!(filter.to_string() == "warn");
     }
 
     #[test]

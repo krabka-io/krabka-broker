@@ -2,13 +2,18 @@
 //! client `MetricsData` to the OTLP collector that traces already use. Sends
 //! happen on a bounded background task. The sink drops and counts overflow, so
 //! the request path never blocks on a slow collector.
+//!
+//! `wasm32-wasip1` has no gRPC or HTTP client stack, so the forwarder there is
+//! always disabled: `BrokerConfig::validate` refuses an OTLP endpoint on that
+//! target.
 
+use opentelemetry_proto::tonic::metrics::v1::MetricsData;
+#[cfg(not(target_family = "wasm"))]
 use opentelemetry_proto::tonic::{
     collector::metrics::v1::{
         ExportMetricsServiceRequest, metrics_service_client::MetricsServiceClient,
     },
     common::v1::{AnyValue, KeyValue, any_value::Value},
-    metrics::v1::MetricsData,
 };
 use prometheus_client::metrics::counter::Counter;
 use tokio::sync::mpsc;
@@ -17,6 +22,7 @@ const FORWARD_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 
 /// Build an OTLP export request from decoded metrics. This function tags
 /// every resource with the originating client's instance id.
+#[cfg(not(target_family = "wasm"))]
 pub(crate) fn build_export_request(
     mut md: MetricsData,
     client_instance_id: &str,
@@ -55,6 +61,7 @@ impl OtlpForwarder {
 
     /// Spawn a background worker that POSTs export requests to `endpoint`
     /// (HTTP/protobuf `/v1/metrics`). `capacity` bounds the in-flight queue.
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn spawn(
         endpoint: String,
         protocol: krabka_telemetry::OtlpProtocol,
@@ -106,6 +113,20 @@ impl OtlpForwarder {
             task: tokio::sync::Mutex::new(Some(task)),
             dropped,
         }
+    }
+
+    /// `BrokerConfig::validate` refuses an OTLP endpoint on this platform,
+    /// which has no gRPC or HTTP client stack, so the forwarder stays
+    /// disabled.
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn spawn(
+        _endpoint: String,
+        _protocol: krabka_telemetry::OtlpProtocol,
+        _capacity: usize,
+        _dropped: Counter,
+        _failed: Counter,
+    ) -> Self {
+        Self::disabled()
     }
 
     #[cfg(test)]

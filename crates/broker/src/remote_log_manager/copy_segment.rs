@@ -183,7 +183,7 @@ async fn copy_one_inner(
     let md_copy = metadata.clone();
     let copy_result = tokio::time::timeout(
         tier.copy_timeout.to_std(),
-        tokio::task::spawn_blocking(move || rsm_copy.copy_log_segment_data(&md_copy, &data)),
+        crate::blocking::spawn_blocking(move || rsm_copy.copy_log_segment_data(&md_copy, &data)),
     )
     .await;
 
@@ -311,7 +311,8 @@ async fn rollback(
             let rsm_del = rsm.clone();
             let md_del = metadata.clone();
             let _ =
-                tokio::task::spawn_blocking(move || rsm_del.delete_log_segment_data(&md_del)).await;
+                crate::blocking::spawn_blocking(move || rsm_del.delete_log_segment_data(&md_del))
+                    .await;
         }
         ArchiveMode::WriteOnce => {
             debug!(topic = %id.topic_id_partition.topic,

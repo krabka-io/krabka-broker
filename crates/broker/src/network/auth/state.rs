@@ -288,8 +288,25 @@ pub enum SaslExchange {
     /// GSSAPI multi-round in flight: the live RFC 4752 server state machine,
     /// from GSS context establishment to security-layer negotiation. This
     /// variant is boxed to keep the `sspi`-backed acceptor out of the size of
-    /// the whole enum.
-    Gssapi(Box<krabka_security::gssapi::server::GssapiServerExchange>),
+    /// the whole enum. `wasm32-wasip1` has no Kerberos stack, so the variant
+    /// does not exist there.
+    #[cfg(not(target_family = "wasm"))]
+    Gssapi(Box<super::gssapi::GssapiServerExchange>),
+}
+
+impl SaslExchange {
+    /// Whether the exchange waits for another `SaslAuthenticate` round from
+    /// the client: a SCRAM or GSSAPI exchange in flight, or the RFC 7628
+    /// OAUTHBEARER failure that waits for the client's final message.
+    #[must_use]
+    pub fn awaits_client_round(&self) -> bool {
+        match self {
+            Self::Scram(_) | Self::OAuthBearerFailed => true,
+            #[cfg(not(target_family = "wasm"))]
+            Self::Gssapi(_) => true,
+            Self::Plain | Self::ScramPending | Self::OAuthBearer | Self::GssapiPending => false,
+        }
+    }
 }
 
 impl ConnectionAuth {

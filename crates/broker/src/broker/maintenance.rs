@@ -50,6 +50,9 @@ pub(super) fn spawn_storage_security_maintenance(
         };
         tokio::spawn(scanner.run())
     });
+    // `BrokerConfig::validate` refuses a JWKS endpoint on wasm32-wasip1, which
+    // has no HTTP client stack.
+    #[cfg(not(target_family = "wasm"))]
     if let Some(endpoint) = config.oauthbearer_jwks_endpoint.clone()
         && let Some(handle) = config.oauthbearer_validator.jwks_handle()
     {
@@ -74,7 +77,7 @@ pub(super) fn spawn_storage_security_maintenance(
                 &config.oauthbearer_jwks_last_on_demand_refresh_ms,
             ),
             ignore_key_use: config.features.oauthbearer_jwks_ignore_key_use,
-            timer: Arc::new(qubit_clock::StdTimer::new()),
+            timer: crate::time_util::system_timer(),
         };
         tokio::spawn(refresher.run());
     }

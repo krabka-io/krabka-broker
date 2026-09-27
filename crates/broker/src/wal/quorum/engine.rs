@@ -354,7 +354,7 @@ impl WalShardEngine {
             // with the offset it has fsynced, and `configure_distributed`
             // records that offset when a placement arrives after this call
             // has already returned.
-            if let Err(error) = sync_replica(source.clone(), &[]).await {
+            if let Err(error) = sync_replica(source.clone(), Vec::new()).await {
                 self.record_quorum_loss(target, &error);
                 return Err(error);
             }
@@ -424,7 +424,7 @@ impl WalShardEngine {
             let Ok(batches) = read_batches_exact(&source, sync_start, target) else {
                 continue;
             };
-            if sync_replica(replica.log.clone(), &batches).await.is_ok() {
+            if sync_replica(replica.log.clone(), batches).await.is_ok() {
                 synced += 1;
             }
         }

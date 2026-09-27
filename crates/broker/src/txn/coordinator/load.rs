@@ -271,7 +271,7 @@ impl TxnCoordinator {
             Some(part) => {
                 let read_max = self.recovery_read_max;
                 let num_partitions = self.num_partitions;
-                tokio::task::spawn_blocking(move || {
+                crate::blocking::spawn_blocking(move || {
                     replay_partition(&part, partition, read_max, |tid| {
                         PartitionIndex(crate::txn::partitioner::partition_for_tid(
                             tid,

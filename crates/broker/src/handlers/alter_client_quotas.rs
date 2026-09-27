@@ -143,9 +143,11 @@ async fn resolve_ip_names(req: &AlterClientQuotasRequest) -> HashSet<String> {
             {
                 continue;
             }
-            if tokio::net::lookup_host((name, 0))
+            // A literal address never reaches this lookup. A host name is
+            // unresolvable on a platform without name resolution, WASI.
+            if krabka_client_core::transport::resolve(&format!("{name}:0"))
                 .await
-                .is_ok_and(|mut addrs| addrs.next().is_some())
+                .is_ok_and(|addrs| !addrs.is_empty())
             {
                 resolvable.insert(name.to_owned());
             }

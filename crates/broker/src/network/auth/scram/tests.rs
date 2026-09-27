@@ -25,7 +25,7 @@ use pbkdf2::{
 use super::{ClientFirst, decode_sasl_name};
 use crate::{
     network::auth::{
-        ConnectionAuth, SaslExchange, handle_authenticate_scram,
+        ConnectionAuth, handle_authenticate_scram, state::SaslExchange,
         test_support::assert_failed_authenticate_response,
     },
     test_support::FakeMetadataSource,

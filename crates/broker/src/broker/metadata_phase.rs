@@ -218,7 +218,7 @@ async fn start_metadata_source(
             snapshot_fetch_max: observer_snapshot_fetch_max(config)?,
             max_bytes: config.observer_fetch_max,
             poll_interval: config.observer_poll_interval,
-            timer: Arc::new(qubit_clock::StdTimer::new()),
+            timer: crate::time_util::system_timer(),
         },
     );
     let forwarder = crate::metadata_source::QuorumForwarder {
@@ -310,8 +310,10 @@ async fn bind_ephemeral_controller_listener(
     if prebound.is_some() || !config.is_controller() || config.controller_listen_addr.port() != 0 {
         return Ok(prebound);
     }
-    let listener = TcpListener::bind(config.controller_listen_addr).await?;
-    publish_bound_controller_addr(config, listener.local_addr()?);
+    let listener = crate::platform::bind_listener(config.controller_listen_addr).await?;
+    let bound = crate::platform::Sockets::TARGET
+        .listener_address(&listener, config.controller_listen_addr)?;
+    publish_bound_controller_addr(config, bound);
     Ok(Some(listener))
 }
 

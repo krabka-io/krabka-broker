@@ -14,14 +14,19 @@
 //!
 //! CPU profiling uses POSIX signals, so it is available only on Unix. On
 //! non-Unix targets the server returns a 503 stub, and the crate thus compiles
-//! on all platforms.
+//! on all platforms. On `wasm32-wasip1` there is no server at all, because the
+//! admin server binds its own socket: the module exports only the
+//! configuration types there.
 
 mod config;
+#[cfg(not(target_family = "wasm"))]
 mod routes;
+#[cfg(not(target_family = "wasm"))]
 mod server;
 
+pub use self::config::{ProfilingConfig, ProfilingError, ProfilingSampleFrequency};
+#[cfg(not(target_family = "wasm"))]
 pub use self::{
-    config::{ProfilingConfig, ProfilingError, ProfilingSampleFrequency},
     routes::{pprof_router, pprof_router_with_config},
     server::{
         await_admin_exit, serve_admin, serve_admin_from_env, serve_admin_from_env_with,

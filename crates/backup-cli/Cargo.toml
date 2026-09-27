@@ -47,7 +47,7 @@ bytes = { workspace = true }
 clap = { workspace = true, features = ["env"] }
 futures-util = { workspace = true }
 hex = { workspace = true }
-object_store = { workspace = true }
+object_store = { workspace = true, features = ["aws", "gcp", "fs"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 # Every captured artifact carries a SHA-256, which is what `verify` re-reads

@@ -56,10 +56,6 @@ krabka-client-core = { version = "0.4.0" }
 krabka-throttle = { version = "0.6.1", path = "../throttle" }
 krabka-units = { workspace = true }
 krabka-security.workspace = true
-# KFC-7 broker-side schema validation: the Confluent wire framing, the
-# registry REST client, and the untyped body validators.
-krabka-schema-serde = { version = "0.4.0", features = ["avro", "protobuf", "json"] }
-apache-avro = { workspace = true }
 qubit-clock = { workspace = true }
 arc-swap.workspace = true
 async-trait.workspace = true
@@ -79,24 +75,20 @@ regex = { workspace = true }
 refined_type = { workspace = true }
 tracing = { workspace = true }
 rustix = { workspace = true }
-socket2 = "0.6"
 tracing-subscriber = { workspace = true }
-opentelemetry-proto = { workspace = true }
 clap = { workspace = true, features = ["env"] }
 uuid = { workspace = true }
 # KIP-1071 streams group metadata hash: Kafka hashes topic metadata with XXH3.
 twox-hash = { workspace = true }
 futures-util = { workspace = true }
+# The object-store core. `krabka-object-store` turns on the S3, GCS and
+# local-filesystem backends on the targets that build them.
 object_store = { workspace = true }
+# KIP-714: the prost-generated OTLP `MetricsData` that PushTelemetry decodes.
+# The native table below adds the gRPC client that forwards it.
+opentelemetry-proto = { workspace = true }
 prometheus-client.workspace = true
-axum.workspace = true
-# Fetch the OAUTHBEARER JWKS over HTTP(S). The `rustls` feature reuses the
-# rustls + aws-lc-rs crypto stack already in the workspace dep graph.
-# `json` (Response::json) + `form` (RequestBuilder::form) are for the
-# RFC 7662 introspection POST; direct `serde_json` dep for the response value.
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form"] }
 serde_json = { workspace = true }
-jsonschema = { workspace = true }
 # Compile customClaimCheck JsonPath expressions at config-load
 # and inject into the OAUTHBEARER validators.
 jsonpath-rust = { workspace = true }
@@ -121,8 +113,30 @@ hex = { workspace = true }
 # (`operator_keys::approver_set_fingerprint`), recorded on every break-glass
 # audit event so a per-broker divergence in the set is visible afterwards.
 sha2 = { workspace = true }
-tonic = { workspace = true }
 exponential-backoff = "2.1.1"
+
+# The HTTP, gRPC and cloud-storage stacks, and the socket tuning. They need a
+# `connect` or a `bind` that wasm32-wasip1 does not have, and most pull
+# `socket2`, which does not build for that target. On wasm the subsystems that
+# use them answer "unavailable on this platform" when a configuration asks for
+# them: OAUTHBEARER JWKS and introspection, the OPA authorizer, KFC-7 schema
+# validation, OTLP forwarding of client metrics, the metrics and health
+# servers.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+# KFC-7 broker-side schema validation: the Confluent wire framing, the
+# registry REST client, and the untyped body validators.
+krabka-schema-serde = { version = "0.4.0", features = ["avro", "protobuf", "json"] }
+apache-avro = { workspace = true }
+jsonschema = { workspace = true }
+# Fetch the OAUTHBEARER JWKS over HTTP(S). The `rustls` feature reuses the
+# rustls + aws-lc-rs crypto stack already in the workspace dep graph.
+# `json` (Response::json) + `form` (RequestBuilder::form) are for the
+# RFC 7662 introspection POST; direct `serde_json` dep for the response value.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form"] }
+tonic = { workspace = true }
+opentelemetry-proto = { workspace = true, features = ["gen-tonic"] }
+axum.workspace = true
+socket2 = "0.6"
 
 # Heap profiling via jemalloc. Unix-only: tikv-jemallocator does not build on
 # Windows. The `heap-profiling` feature activates this dep; the global

@@ -11,6 +11,10 @@
 //! owns one child module of its own, and `handshake` negotiates which of them
 //! a connection runs.
 
+// SASL/GSSAPI needs the `sspi` Kerberos stack, which does not build for
+// wasm32-wasip1. That target builds the stand-in, whose configuration type has
+// no values, so no broker there can enable the mechanism.
+#[cfg_attr(target_family = "wasm", path = "auth/gssapi/wasm.rs")]
 mod gssapi;
 mod handshake;
 mod oauthbearer;
@@ -29,7 +33,7 @@ mod test_support;
 #[cfg(test)]
 pub use self::state::AuthenticatedSnapshot;
 pub use self::{
-    gssapi::handle_authenticate_gssapi,
+    gssapi::{GssapiConfig, handle_authenticate_gssapi},
     handshake::{ReauthClock, handle_handshake},
     oauthbearer::{
         handle_authenticate_oauthbearer, handle_authenticate_oauthbearer_with_jwks_cache,
@@ -38,6 +42,6 @@ pub use self::{
     response::generic_failure_message,
     scram::handle_authenticate_scram,
     ssl_principal_mapper::{SslPrincipalMapper, SslPrincipalRuleError},
-    state::{ConnectionAuth, SaslExchange},
+    state::ConnectionAuth,
     subject_dn::subject_dn_rfc2253,
 };

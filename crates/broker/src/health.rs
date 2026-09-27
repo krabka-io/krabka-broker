@@ -36,16 +36,21 @@
 //! startup phase marks its condition as it completes. The state is an `Arc`
 //! inside, so the clone the broker holds and the clone the router holds are
 //! the same state.
+//!
+//! `wasm32-wasip1` has no `bind` and no HTTP server stack, so the router and
+//! `serve` are native-only. The state and its readiness rules are on every
+//! target.
 
-use std::{
-    net::SocketAddr,
-    sync::{
-        Arc, OnceLock,
-        atomic::{AtomicBool, Ordering},
-    },
+#[cfg(not(target_family = "wasm"))]
+use std::net::SocketAddr;
+use std::sync::{
+    Arc, OnceLock,
+    atomic::{AtomicBool, Ordering},
 };
 
+#[cfg(not(target_family = "wasm"))]
 use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
+#[cfg(not(target_family = "wasm"))]
 use tokio_util::sync::CancellationToken;
 
 #[cfg(test)]
@@ -264,6 +269,7 @@ impl HealthState {
 }
 
 /// Builds the router: `/healthz` for liveness and `/readyz` for readiness.
+#[cfg(not(target_family = "wasm"))]
 pub fn router(state: HealthState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
@@ -277,6 +283,7 @@ pub fn router(state: HealthState) -> Router {
 /// # Errors
 ///
 /// Returns the bind error when `addr` cannot be bound.
+#[cfg(not(target_family = "wasm"))]
 pub async fn serve(
     addr: SocketAddr,
     state: HealthState,
@@ -300,12 +307,14 @@ pub async fn serve(
 /// Liveness. It answers 200 for as long as the process can run this handler,
 /// and deliberately consults none of the readiness conditions: see the module
 /// documentation for why a recovering broker must not be killed.
+#[cfg(not(target_family = "wasm"))]
 async fn healthz() -> impl IntoResponse {
     (StatusCode::OK, "ok\n")
 }
 
 /// Readiness. 200 once every condition holds; otherwise 503 whose body names
 /// the first condition that does not.
+#[cfg(not(target_family = "wasm"))]
 async fn readyz(State(state): State<HealthState>) -> impl IntoResponse {
     match state.readiness() {
         Ok(()) => (StatusCode::OK, "ready\n".to_string()),

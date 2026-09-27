@@ -9,6 +9,7 @@ use krabka_protocol::owned::{
     sasl_authenticate_request::SaslAuthenticateRequest,
     sasl_authenticate_response::SaslAuthenticateResponse,
 };
+pub use krabka_security::gssapi::{GssapiConfig, server::GssapiServerExchange};
 use krabka_security::{Principal, SaslMechanism};
 use krabka_units::{ByteSize, Time, kibibytes};
 

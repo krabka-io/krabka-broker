@@ -30,6 +30,9 @@ impl BrokerConfig {
     /// - A SASL listener is declared while `enabled_sasl_mechanisms` is empty.
     /// - The role set or the [`stretch`][Self::stretch] profile is incoherent.
     /// - `audit_topic` is named outside the internal-topic convention.
+    /// - On `wasm32-wasip1`, a subsystem that the platform cannot run is
+    ///   configured: the metrics server, the OTLP forwarding of client
+    ///   metrics, or the OAUTHBEARER JWKS refresher.
     pub fn validate(&self) -> Result<(), BrokerError> {
         self.validate_log_io_policy()?;
         crate::internal_topics::validate_audit_topic_name(&self.audit_topic)?;
@@ -135,6 +138,7 @@ impl BrokerConfig {
             }
         }
         self.validate_outbound_sasl(inter_broker_listener)?;
+        self.validate_platform(cfg!(target_family = "wasm"))?;
         self.validate_positive_runtime_scalars()?;
         self.validate_additional_runtime_scalars()?;
         // After the scalar checks: the stretch durability check reads the
@@ -231,6 +235,53 @@ impl BrokerConfig {
         }
         self.validate_remote_storage_worm()?;
         self.validate_leader_rebalance()
+    }
+
+    /// Refuses the subsystems that `wasm32-wasip1` cannot run, when `wasm` is
+    /// true.
+    ///
+    /// That target has no HTTP client stack and no `bind`, so the metrics
+    /// server, the OTLP forwarding of client metrics and the OAUTHBEARER JWKS
+    /// refresher are unavailable there. It has no threads either, and the
+    /// topic-backed remote log metadata manager of tiered storage answers its
+    /// synchronous SPI by blocking a thread on the runtime, so tiered storage
+    /// over it is unavailable too. A configuration that asks for one of them
+    /// fails here, before any side effect, and does not start without it.
+    /// [`Self::validate`] passes whether the build target is wasm; the flag is
+    /// a parameter so that the refusals can be tested on every target.
+    fn validate_platform(&self, wasm: bool) -> Result<(), BrokerError> {
+        if !wasm {
+            return Ok(());
+        }
+        let unavailable = [
+            (
+                "metrics_listen_addr",
+                "the metrics server",
+                self.metrics_listen_addr.is_some(),
+            ),
+            (
+                "client_metrics_otlp_endpoint",
+                "OTLP forwarding of client metrics",
+                self.client_metrics_otlp_endpoint.is_some(),
+            ),
+            (
+                "oauthbearer_jwks_endpoint",
+                "the OAUTHBEARER JWKS refresher",
+                self.oauthbearer_jwks_endpoint.is_some(),
+            ),
+            (
+                "remote_storage_backend",
+                "tiered storage over the topic-backed remote log metadata manager",
+                self.remote_storage_backend.is_some()
+                    && matches!(self.remote_log_metadata, RlmmKind::TopicBacked(_)),
+            ),
+        ];
+        match unavailable.iter().find(|(_, _, set)| *set) {
+            Some((setting, subsystem, _)) => Err(BrokerError::InvalidRuntimeConfig(format!(
+                "{setting} is set, but {subsystem} is unavailable on this platform"
+            ))),
+            None => Ok(()),
+        }
     }
 
     /// Checks the pairs of runtime scalars that must keep an order between
@@ -390,6 +441,56 @@ mod tests {
                 assert!(result.is_ok());
             }
         }
+    }
+
+    /// wasm32-wasip1 refuses each subsystem it cannot run, and names the
+    /// setting that asked for it. Every other target accepts the same
+    /// configurations.
+    /// A setting and the change that sets it.
+    type SetsOne = (&'static str, fn(&mut BrokerConfig));
+
+    #[test]
+    fn the_wasm_platform_refuses_the_subsystems_it_cannot_run() {
+        let cases: [SetsOne; 4] = [
+            ("metrics_listen_addr", |config| {
+                config.metrics_listen_addr = Some("127.0.0.1:9404".parse().unwrap());
+            }),
+            ("client_metrics_otlp_endpoint", |config| {
+                config.client_metrics_otlp_endpoint = Some("http://collector:4317".into());
+            }),
+            ("oauthbearer_jwks_endpoint", |config| {
+                config.oauthbearer_jwks_endpoint = Some("https://idp/jwks".into());
+            }),
+            // The default metadata manager is the topic-backed one.
+            ("remote_storage_backend", |config| {
+                config.remote_storage_backend = Some(crate::config::RemoteStorageBackend::Local {
+                    dir: "/tiered".into(),
+                });
+            }),
+        ];
+        for (setting, set) in cases {
+            let mut config = BrokerConfig::default();
+            set(&mut config);
+            let Err(BrokerError::InvalidRuntimeConfig(message)) = config.validate_platform(true)
+            else {
+                panic!("expected {setting} to be refused on wasm");
+            };
+            assert!(message.starts_with(&format!("{setting} is set, but ")));
+            assert!(message.ends_with(" is unavailable on this platform"));
+            assert!(config.validate_platform(false).is_ok());
+        }
+        assert!(BrokerConfig::default().validate_platform(true).is_ok());
+
+        // Tiered storage itself is not refused: the in-process metadata
+        // manager needs no thread.
+        let config = BrokerConfig {
+            remote_storage_backend: Some(crate::config::RemoteStorageBackend::Local {
+                dir: "/tiered".into(),
+            }),
+            remote_log_metadata: RlmmKind::InMemory,
+            ..BrokerConfig::default()
+        };
+        assert!(config.validate_platform(true).is_ok());
     }
 
     #[test]

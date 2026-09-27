@@ -12,9 +12,14 @@
 //! [`crate::Broker::start`] spawns the server when
 //! `BrokerConfig::metrics_listen_addr` is `Some`. The broker's supervisor
 //! shutdown token cancels it.
+//!
+//! `wasm32-wasip1` has no `bind` and no HTTP server stack, so there is no
+//! server on that target. `BrokerConfig::validate` refuses the setting there,
+//! and [`run`] answers `Unsupported`.
 
 use std::net::SocketAddr;
 
+#[cfg(not(target_family = "wasm"))]
 use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
 use tokio_util::sync::CancellationToken;
 
@@ -23,6 +28,7 @@ use crate::metrics::SharedRegistry;
 /// Builds the router. It serves `/metrics` for Prometheus, and
 /// `/debug/pprof/{profile,heap}`. The CPU route is always present on Unix. The
 /// heap route needs a build with `--features heap-profiling`.
+#[cfg(not(target_family = "wasm"))]
 pub fn router(
     registry: SharedRegistry,
     profiling: krabka_telemetry::profiling::ProfilingConfig,
@@ -39,6 +45,7 @@ pub fn router(
 /// an integration test can scrape a `127.0.0.1:0` config without a guess at
 /// the port. On any axum error, which is normally a socket close, it logs the
 /// error and returns.
+#[cfg(not(target_family = "wasm"))]
 pub(crate) async fn run(
     addr: SocketAddr,
     registry: SharedRegistry,
@@ -60,6 +67,25 @@ pub(crate) async fn run(
     Ok(bound)
 }
 
+/// `BrokerConfig::validate` refuses `metrics_listen_addr` on this platform,
+/// which has no `bind` and no HTTP server stack.
+#[cfg(target_family = "wasm")]
+pub(crate) fn run(
+    addr: SocketAddr,
+    _registry: SharedRegistry,
+    _profiling: krabka_telemetry::profiling::ProfilingConfig,
+    _shutdown: CancellationToken,
+) -> std::future::Ready<Result<SocketAddr, krabka_telemetry::profiling::ProfilingError>> {
+    std::future::ready(Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        format!(
+            "cannot serve metrics on {addr}: the metrics server is unavailable on this platform"
+        ),
+    )
+    .into()))
+}
+
+#[cfg(not(target_family = "wasm"))]
 async fn metrics(State(registry): State<SharedRegistry>) -> impl IntoResponse {
     let mut buf = String::new();
     let r = registry.lock().await;

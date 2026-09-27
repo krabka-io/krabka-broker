@@ -11,6 +11,12 @@
 pub enum TelemetryError {
     #[error("invalid {name}: {message}")]
     InvalidConfig { name: &'static str, message: String },
+    #[cfg(not(target_family = "wasm"))]
     #[error("failed to build OTLP span exporter: {0}")]
     Exporter(#[from] opentelemetry_otlp::ExporterBuildError),
+    /// The configuration asks for a capability that this platform does not
+    /// have, such as OTLP export on `wasm32-wasip1`.
+    #[cfg(target_family = "wasm")]
+    #[error("{what} is unavailable on this platform")]
+    Unsupported { what: &'static str },
 }

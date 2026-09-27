@@ -194,7 +194,9 @@ resolves. The aspect only sees Bazel targets, though, so CI also runs
 `cargo clippy --workspace --all-targets -- -D warnings` in its `cargo` job: the
 benches under `crates/broker/benches` and `crates/log/benches` have no Bazel
 target, `aspect lint` narrows the rest to what a change touched, and
-`krabka-protocol`'s build script only ever runs under Cargo.
+`krabka-protocol`'s build script only ever runs under Cargo. Its `wasm` job
+runs the same Clippy for `wasm32-wasip1` over the broker library and every
+workspace crate in its graph.
 
 Two details worth knowing:
 
