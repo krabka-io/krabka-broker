@@ -9,9 +9,77 @@
 
 use krabka_log::Offset;
 
-use super::{AcquisitionState, InFlightBatch, RecordState};
+use super::{AcquisitionState, InFlightBatch, RecordState, clamp_i32};
+
+/// Gives an acquired run back: Kafka's `InFlightState.tryUpdateState` to
+/// `AVAILABLE`, which archives the run instead when its delivery count has
+/// reached `max_attempts`. The owner and the lock go either way.
+///
+/// It returns whether the run was archived, and counts the archived offsets
+/// into `delivery_complete_count`.
+pub(super) fn give_back(
+    batch: &mut InFlightBatch,
+    max_attempts: i16,
+    delivery_complete_count: &mut i32,
+) -> bool {
+    batch.acquired_by = None;
+    batch.lock_deadline = None;
+    if batch.delivery_count >= max_attempts {
+        batch.state = RecordState::Archived;
+        *delivery_complete_count = delivery_complete_count.saturating_add(clamp_i32(batch.len()));
+        true
+    } else {
+        batch.state = RecordState::Available;
+        false
+    }
+}
 
 impl AcquisitionState {
+    /// One past the last offset that was ever handed out: the end of the last
+    /// run that is not a never-delivered `Available` or `Deferred` run.
+    ///
+    /// Kafka's `SharePartition` caches a batch only once it is acquired, so
+    /// this is where its cached state ends. The window can run further,
+    /// because materialization adds records before any member takes them.
+    fn in_flight_end(&self) -> Option<Offset> {
+        self.batches
+            .iter()
+            .rev()
+            .find(|b| {
+                !(matches!(b.state, RecordState::Available | RecordState::Deferred)
+                    && b.delivery_count == 0)
+            })
+            .map(|b| b.last_offset + 1)
+    }
+
+    /// The part of `[first, last]` that an acknowledgement applies to, as
+    /// Kafka's `SharePartition.acknowledge` and
+    /// `fetchSubMapForAcknowledgementBatch` find it.
+    ///
+    /// A range that ends below the SPSO is already done and yields `None`. A
+    /// range that starts below it is cut at the SPSO.
+    ///
+    /// # Errors
+    ///
+    /// `INVALID_RECORD_STATE` when nothing was ever handed out, and
+    /// `INVALID_REQUEST` when the range runs past the last offset that was.
+    pub(crate) fn ack_bounds(
+        &self,
+        first: Offset,
+        last: Offset,
+    ) -> Result<Option<(Offset, Offset)>, i16> {
+        if last < self.start_offset {
+            return Ok(None);
+        }
+        let end = self
+            .in_flight_end()
+            .ok_or(crate::codes::INVALID_RECORD_STATE)?;
+        if last >= end {
+            return Err(crate::codes::INVALID_REQUEST);
+        }
+        Ok(Some((first.max(self.start_offset), last)))
+    }
+
     /// True if and only if `member` currently holds every offset in
     /// `[first, last]` as Acquired.
     pub(super) fn range_acquired_by(&self, member: &str, first: Offset, last: Offset) -> bool {

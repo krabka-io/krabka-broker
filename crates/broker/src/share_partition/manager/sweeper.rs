@@ -35,7 +35,7 @@ impl SharePartitionLeaderManager {
                 let now = std::time::Instant::now();
                 for ((group, topic_id, partition), cell) in cells {
                     let mut st = cell.lock().await;
-                    st.expire_locks(now);
+                    st.expire_locks(now, mgr.config.max_delivery_attempts);
                     if st.dirty {
                         // A failed write keeps the state dirty for the next tick.
                         let _ = mgr

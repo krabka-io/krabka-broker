@@ -63,7 +63,7 @@ impl SharePartitionLeaderManager {
                 continue;
             };
             let mut state = cell.lock().await;
-            state.release_member(member);
+            state.release_member(member, self.config.max_delivery_attempts);
             // Best-effort: a failed write keeps the state dirty for a retry.
             let _ = self
                 .persist_if_dirty(group, topic_id, partition, Some(&cell), &mut state)

@@ -160,7 +160,7 @@ mod tests {
         let mut s = AcquisitionState::new(Offset(0));
         s.materialize(Offset(10), 100);
         let _ = s.acquire("m1", 4, krabka_log::Offset(i64::MAX), t0(), LOCK, 5); // [0,3] Acquired, [4,9] Available
-        s.acknowledge("m1", Offset(0), Offset(3), AckType::Accept, t0())
+        s.acknowledge("m1", Offset(0), Offset(3), AckType::Accept, 5)
             .unwrap(); // SPSO -> 4
         let (start, _dcc, batches) = s.to_persist_batches();
         assert!(start == 4);

@@ -197,8 +197,11 @@ impl Model for ShareModel {
                 ack,
             } => {
                 let name = Self::member_name(member);
-                let now = self.now(state.clock);
-                if state.sm.acknowledge(&name, first, hi, ack, now).is_err() {
+                if state
+                    .sm
+                    .acknowledge(&name, first, hi, ack, self.max_attempts)
+                    .is_err()
+                {
                     return None; // inapplicable ack: no transition
                 }
             }
@@ -215,7 +218,7 @@ impl Model for ShareModel {
             }
             ShareAction::ExpireLocks => {
                 let now = self.now(state.clock);
-                state.sm.expire_locks(now);
+                state.sm.expire_locks(now, self.max_attempts);
             }
             ShareAction::Tick => {
                 if state.clock >= self.max_tick {

@@ -93,7 +93,7 @@ mod tests {
         let mut s = AcquisitionState::new(Offset(0));
         s.materialize(Offset(6), 100); // [0,5] Available
         let _ = s.acquire("m1", 2, krabka_log::Offset(i64::MAX), t0(), LOCK, 5); // [0,1] Acquired
-        s.acknowledge("m1", Offset(0), Offset(1), AckType::Accept, t0())
+        s.acknowledge("m1", Offset(0), Offset(1), AckType::Accept, 5)
             .unwrap(); // SPSO -> 2
         let _ = s.acquire("m1", 1, krabka_log::Offset(i64::MAX), t0(), LOCK, 5); // [2,2] Acquired
         s.archive_internal(Offset(3), Offset(3));
@@ -107,7 +107,7 @@ mod tests {
                 .is_empty()
         );
         // The acquired record is still m1's, which proves defer left it alone.
-        s.acknowledge("m1", Offset(2), Offset(2), AckType::Accept, t0())
+        s.acknowledge("m1", Offset(2), Offset(2), AckType::Accept, 5)
             .unwrap();
 
         s.promote_deferred();
@@ -198,7 +198,7 @@ mod tests {
         // Burn both delivery attempts, so the record is at the archive limit.
         for _ in 0..2 {
             let _ = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 2);
-            s.expire_locks(t0() + Duration::from_secs(31));
+            s.expire_locks(t0() + Duration::from_secs(31), i16::MAX);
         }
         s.defer_internal(Offset(0), Offset(1));
 

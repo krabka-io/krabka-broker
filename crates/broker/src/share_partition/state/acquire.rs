@@ -290,7 +290,7 @@ mod tests {
         for _ in 0..2 {
             // max_attempts = 2
             let _ = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0(), LOCK, 2);
-            s.expire_locks(t0() + Duration::from_secs(31));
+            s.expire_locks(t0() + Duration::from_secs(31), 2);
         }
         let acq = s.acquire(
             "m1",

@@ -269,7 +269,7 @@ mod tests {
 
         let accepted = mgr
             .apply_durably("g1", tid, 0, &cell, &mut st, |st| {
-                st.acknowledge("m1", Offset(0), Offset(3), AckType::Accept, Instant::now())
+                st.acknowledge("m1", Offset(0), Offset(3), AckType::Accept, 5)
                     .err()
                     .unwrap_or(codes::NONE)
             })
@@ -277,7 +277,7 @@ mod tests {
         let rolled_back = st == before;
         let refused = mgr
             .apply_durably("g1", tid, 0, &cell, &mut st, |st| {
-                st.acknowledge("m2", Offset(0), Offset(3), AckType::Accept, Instant::now())
+                st.acknowledge("m2", Offset(0), Offset(3), AckType::Accept, 5)
                     .err()
                     .unwrap_or(codes::NONE)
             })

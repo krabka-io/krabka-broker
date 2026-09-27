@@ -11,7 +11,7 @@ use std::{sync::Arc, time::Instant};
 use krabka_log::{LogError, Offset};
 
 use super::{
-    acknowledge::apply_one_ack,
+    acknowledge::{AckApplication, apply_acknowledgements},
     long_poll::{arm_waits, long_poll},
     pending::PendingPartition,
     records::{
@@ -262,7 +262,14 @@ async fn acquire_pass(
         p.out.records = None;
         p.out.acquired_records.clear();
 
-        let has_acks = apply_acks && !p.ack_batches.is_empty();
+        let mut has_acks = apply_acks && !p.ack_batches.is_empty();
+        // Kafka's `SharePartitionManager.acknowledge` runs before the fetch,
+        // and answers UNKNOWN_TOPIC_OR_PARTITION for a share partition that no
+        // earlier fetch on this broker loaded.
+        if has_acks && mgr.cached(group, p.topic_id, p.partition_index).is_none() {
+            p.out.acknowledge_error_code = codes::UNKNOWN_TOPIC_OR_PARTITION;
+            has_acks = false;
+        }
         // A failed state read fails the partition and caches nothing, as
         // Kafka's `SharePartitionManager.handleInitializationException` does.
         let cell = match mgr.get_or_load(group, p.topic_id, p.partition_index).await {
@@ -274,24 +281,25 @@ async fn acquire_pass(
         };
         let mut st = cell.lock().await;
 
-        // Apply piggybacked acknowledgements (first pass only). The type
-        // Renew renews the lock of its offsets, and the other types take
-        // their normal transition. The change is durable before the
-        // acquisition runs, or it is rolled back and the write error becomes
-        // the acknowledge error.
+        // Apply piggybacked acknowledgements (first pass only), all or
+        // nothing. The type Renew renews the lock of its offsets, and the
+        // other types take their normal transition. The change is durable
+        // before the acquisition runs, or it is rolled back and the write
+        // error becomes the acknowledge error.
         if has_acks {
-            let ack_batches = &p.ack_batches;
+            let application = AckApplication {
+                member,
+                now,
+                renewal,
+                max_attempts: cfg.max_delivery_attempts,
+            };
+            let batches = p
+                .ack_batches
+                .iter()
+                .map(|(first, last, types)| (*first, *last, types.as_slice()));
             let code = mgr
                 .apply_durably(group, p.topic_id, p.partition_index, &cell, &mut st, |st| {
-                    let mut ack_err = codes::NONE;
-                    for (first, last, types) in ack_batches {
-                        if let Err(code) =
-                            apply_one_ack(st, member, *first, *last, types, now, renewal)
-                        {
-                            ack_err = code;
-                        }
-                    }
-                    ack_err
+                    apply_acknowledgements(st, &application, batches)
                 })
                 .await;
             p.out.acknowledge_error_code = code;
@@ -310,7 +318,7 @@ async fn acquire_pass(
         }
 
         // Expire stale locks, materialize freshly produced records, acquire.
-        st.expire_locks(now);
+        st.expire_locks(now, cfg.max_delivery_attempts);
         let part = p.topic_name.as_deref().and_then(|name| {
             broker
                 .partitions

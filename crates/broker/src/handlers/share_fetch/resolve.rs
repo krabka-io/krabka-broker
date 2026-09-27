@@ -120,7 +120,7 @@ pub(super) fn resolve_row(
     if let Some(code) = ack_error {
         out.acknowledge_error_code = code;
     }
-    if !exists || denied || !(fetchable || !ack_batches.is_empty()) {
+    if !exists || denied || (!fetchable && ack_batches.is_empty()) {
         return pending(out, false, ack_batches);
     }
 

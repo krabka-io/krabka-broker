@@ -39,8 +39,9 @@ use crate::{
     handlers::{
         group_read_denied,
         share_fetch::{
-            Renewal, acknowledgement_batches_are_valid, apply_one_ack, current_leader,
-            leader_endpoints, member_id_is_valid, names_the_leader, renew_acknowledge_enabled,
+            AckApplication, Renewal, acknowledgement_batches_are_valid, apply_acknowledgements,
+            current_leader, leader_endpoints, member_id_is_valid, names_the_leader,
+            renew_acknowledge_enabled,
         },
     },
 };
@@ -281,36 +282,35 @@ async fn process_topics(context: &AcknowledgeContext<'_>) -> Vec<ShareAcknowledg
                 continue;
             }
 
-            // A failed state read fails the partition and caches nothing.
-            let cell = match mgr.get_or_load(group, topic_id, ap.partition_index).await {
-                Ok(cell) => cell,
-                Err(code) => {
-                    out.error_code = code;
-                    parts.push(out);
-                    continue;
-                }
+            // Kafka's `SharePartitionManager.acknowledge` answers
+            // UNKNOWN_TOPIC_OR_PARTITION for a share partition that no fetch on
+            // this broker loaded, and reads no state for it.
+            let Some(cell) = mgr.cached(group, topic_id, ap.partition_index) else {
+                out.error_code = codes::UNKNOWN_TOPIC_OR_PARTITION;
+                parts.push(out);
+                continue;
             };
             let mut st = cell.lock().await;
-            // The acknowledgement is durable before the answer, or it is rolled
-            // back and the write error is the partition error, as Kafka's
+            // The batches apply as one unit. The acknowledgement is durable
+            // before the answer, or it is rolled back and the write error is
+            // the partition error, as Kafka's
             // `SharePartition.rollbackOrProcessStateUpdates` does.
+            let application = AckApplication {
+                member,
+                now,
+                renewal,
+                max_attempts: cfg.max_delivery_attempts,
+            };
+            let batches = ap.acknowledgement_batches.iter().map(|batch| {
+                (
+                    batch.first_offset,
+                    batch.last_offset,
+                    batch.acknowledge_types.as_slice(),
+                )
+            });
             out.error_code = mgr
                 .apply_durably(group, topic_id, ap.partition_index, &cell, &mut st, |st| {
-                    let mut err = codes::NONE;
-                    for batch in &ap.acknowledgement_batches {
-                        if let Err(code) = apply_one_ack(
-                            st,
-                            member,
-                            batch.first_offset,
-                            batch.last_offset,
-                            &batch.acknowledge_types,
-                            now,
-                            renewal,
-                        ) {
-                            err = code;
-                        }
-                    }
-                    err
+                    apply_acknowledgements(st, &application, batches)
                 })
                 .await;
             parts.push(out);

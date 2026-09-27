@@ -396,7 +396,10 @@ async fn state_topic_led_by_an_unknown_broker(broker: &BrokerHandle) {
 /// A state read that no coordinator can serve fails the partition with
 /// `COORDINATOR_NOT_AVAILABLE`, which is what Kafka's `fetchPersisterError`
 /// gives for the coordinator errors. The broker caches nothing, so a later
-/// request reads again. The partition never starts from a guessed offset.
+/// request reads again. The partition never starts from a guessed offset. An
+/// acknowledgement for the partition then finds nothing cached and answers
+/// `UNKNOWN_TOPIC_OR_PARTITION`, as Kafka's `SharePartitionManager.acknowledge`
+/// does, without reading the state.
 #[tokio::test]
 async fn a_failed_state_read_fails_the_partition_and_caches_nothing() {
     let (broker, _dir) = start().await;
@@ -423,7 +426,7 @@ async fn a_failed_state_read_fails_the_partition_and_caches_nothing() {
             (acknowledge, acknowledge_cached)
         ) == (
             (codes::COORDINATOR_NOT_AVAILABLE, Vec::new(), false),
-            (codes::COORDINATOR_NOT_AVAILABLE, false)
+            (codes::UNKNOWN_TOPIC_OR_PARTITION, false)
         )
     );
     broker.shutdown().await;

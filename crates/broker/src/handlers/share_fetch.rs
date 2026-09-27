@@ -71,7 +71,8 @@ mod topic_resolution_tests;
 
 pub(crate) use self::{
     acknowledge::{
-        Renewal, acknowledgement_batches_are_valid, apply_one_ack, renew_acknowledge_enabled,
+        AckApplication, Renewal, acknowledgement_batches_are_valid, apply_acknowledgements,
+        renew_acknowledge_enabled,
     },
     leader_hint::{current_leader, leader_endpoints, names_the_leader},
 };
