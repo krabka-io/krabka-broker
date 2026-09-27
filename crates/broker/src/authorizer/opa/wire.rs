@@ -103,6 +103,8 @@ fn operation_str(op: AclOperation) -> &'static str {
         AclOperation::AlterConfigs => "AlterConfigs",
         AclOperation::IdempotentWrite => "IdempotentWrite",
         AclOperation::TwoPhaseCommit => "TwoPhaseCommit",
+        AclOperation::CreateTokens => "CreateTokens",
+        AclOperation::DescribeTokens => "DescribeTokens",
     }
 }
 
@@ -114,6 +116,7 @@ fn resource_type_str(t: ResourceType) -> &'static str {
         ResourceType::Cluster => "Cluster",
         ResourceType::TransactionalId => "TransactionalId",
         ResourceType::DelegationToken => "DelegationToken",
+        ResourceType::User => "User",
     }
 }
 

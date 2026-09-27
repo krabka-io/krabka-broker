@@ -394,6 +394,7 @@ async fn run_authenticate(
         // Callers only run an exchange a handshake started.
         None => krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse {
             error_code: codes::ILLEGAL_SASL_STATE,
+            error_message: None,
             ..Default::default()
         },
     };

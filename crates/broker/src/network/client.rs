@@ -72,6 +72,8 @@ pub(crate) fn to_client_creds(c: &InterBrokerCredentials) -> krabka_client_core:
             mechanism: *mechanism,
             username: username.clone(),
             password: password.clone(),
+            // A broker authenticates with its own password, never a token.
+            delegation_token: false,
         },
         InterBrokerCredentials::Gssapi {
             keytab_path,
@@ -86,7 +88,8 @@ pub(crate) fn to_client_creds(c: &InterBrokerCredentials) -> krabka_client_core:
         },
         InterBrokerCredentials::OAuthBearer { token_path } => {
             krabka_client_core::SaslCredentials::OAuthBearer {
-                token_path: token_path.clone(),
+                token: krabka_client_core::OAuthBearerTokenSource::File(token_path.clone()),
+                extensions: std::collections::BTreeMap::new(),
             }
         }
     }
@@ -439,11 +442,13 @@ mod tests {
             token_path: token_path.clone(),
         });
         let krabka_client_core::SaslCredentials::OAuthBearer {
-            token_path: actual_path,
+            token: krabka_client_core::OAuthBearerTokenSource::File(actual_path),
+            extensions,
         } = credentials
         else {
-            panic!("expected OAUTHBEARER client credentials");
+            panic!("expected file-backed OAUTHBEARER client credentials");
         };
         assert2::assert!(actual_path == token_path);
+        assert2::assert!(extensions.is_empty());
     }
 }

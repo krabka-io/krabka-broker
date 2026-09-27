@@ -174,7 +174,7 @@ async fn start_registry(
         .unwrap();
     store.install_primary(primary.clone());
     let auth = AuthState {
-        audit: krabka_audit_registry::AuditLog::disabled(),
+        audit: krabka_audit::AuditLog::disabled(),
         basic: Some(Arc::new(BasicAuthStore::from_users(HashMap::from([(
             REGISTRY_USERNAME.to_owned(),
             REGISTRY_PASSWORD.to_owned(),

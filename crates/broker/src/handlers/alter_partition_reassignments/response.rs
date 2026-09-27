@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use krabka_protocol::{
-    Encode,
+    Encode, UnknownTaggedFields,
     owned::{
         alter_partition_reassignments_request::AlterPartitionReassignmentsRequest,
         alter_partition_reassignments_response::{
@@ -19,10 +19,16 @@ use krabka_protocol::{
     },
 };
 
+/// A partition the request altered, or would have.
+///
+/// Kafka's `ReplicationControlManager.alterPartitionReassignments` sets
+/// `ErrorMessage` from `ApiError.NONE.message()`, which is null.
 pub(super) fn ok_row(partition_index: i32) -> ReassignablePartitionResponse {
     ReassignablePartitionResponse {
         partition_index,
-        ..Default::default()
+        error_code: 0,
+        error_message: None,
+        unknown_tagged_fields: UnknownTaggedFields::default(),
     }
 }
 
@@ -35,7 +41,7 @@ pub(super) fn err_row(
         partition_index,
         error_code: code,
         error_message: Some(msg),
-        ..Default::default()
+        unknown_tagged_fields: UnknownTaggedFields::default(),
     }
 }
 
@@ -70,14 +76,18 @@ pub(super) fn encode_whole_request_error(
                 .iter()
                 .map(|p| err_row(p.partition_index, code, msg.into()))
                 .collect(),
-            ..Default::default()
+            unknown_tagged_fields: UnknownTaggedFields::default(),
         })
         .collect();
     let resp = AlterPartitionReassignmentsResponse {
+        throttle_time_ms: 0,
+        // Kafka's `AlterPartitionReassignmentsRequest.getErrorResponse` leaves
+        // this at its schema default, `true`, whatever the request asked.
+        allow_replication_factor_change: true,
         error_code: code,
         error_message: Some(msg.to_string()),
         responses,
-        ..Default::default()
+        unknown_tagged_fields: UnknownTaggedFields::default(),
     };
     encode_response(&resp, api_version)
 }
@@ -96,7 +106,6 @@ pub(super) fn encode_response<R: Encode>(
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_protocol::UnknownTaggedFields;
 
     use super::*;
     use crate::{

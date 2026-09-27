@@ -63,7 +63,7 @@ pub(crate) async fn handle(
         if broker.config.authorizer.authorize(&*image, &acl_req) == AuthorizationResult::Deny {
             return encode(
                 version,
-                &JoinGroupResponse {
+                JoinGroupResponse {
                     error_code: codes::GROUP_AUTHORIZATION_FAILED,
                     ..Default::default()
                 },
@@ -76,7 +76,7 @@ pub(crate) async fn handle(
     {
         return encode(
             version,
-            &JoinGroupResponse {
+            JoinGroupResponse {
                 error_code,
                 member_id: req.member_id,
                 ..Default::default()
@@ -108,7 +108,7 @@ pub(crate) async fn handle(
         ) => {
             return encode(
                 version,
-                &JoinGroupResponse {
+                JoinGroupResponse {
                     error_code: codes::GROUP_ID_NOT_FOUND,
                     ..Default::default()
                 },
@@ -124,7 +124,7 @@ pub(crate) async fn handle(
     if !req.member_id.is_empty() && broker.group_coordinator.find(&req.group_id).is_none() {
         return encode(
             version,
-            &JoinGroupResponse {
+            JoinGroupResponse {
                 error_code: codes::UNKNOWN_MEMBER_ID,
                 member_id: req.member_id,
                 ..Default::default()
@@ -152,7 +152,7 @@ pub(crate) async fn handle(
     {
         return encode(
             version,
-            &JoinGroupResponse {
+            JoinGroupResponse {
                 error_code: codes::REBALANCE_IN_PROGRESS,
                 ..Default::default()
             },
@@ -161,7 +161,7 @@ pub(crate) async fn handle(
     let Ok(result) = rx.await else {
         return encode(
             version,
-            &JoinGroupResponse {
+            JoinGroupResponse {
                 error_code: codes::REBALANCE_IN_PROGRESS,
                 ..Default::default()
             },
@@ -189,7 +189,7 @@ pub(crate) async fn handle(
         throttle_time_ms: 0,
         ..Default::default()
     };
-    encode(version, &resp)
+    encode(version, resp)
 }
 
 /// The request checks of Kafka's `GroupCoordinatorService.joinGroup`, which
@@ -209,12 +209,21 @@ fn request_error(req: &JoinGroupRequest, config: &NextGenConfig) -> Option<i16> 
     }
 }
 
-fn encode(version: i16, resp: &JoinGroupResponse) -> Result<Bytes, BrokerError> {
-    crate::handlers::encode_response(resp, version)
+/// Encodes `resp` after the `ProtocolName` normalisation of Kafka's
+/// `JoinGroupResponse` constructor, which every `JoinGroup` reply passes
+/// through: from v7, where the field is nullable, an empty name goes on the
+/// wire as null. Below v7 a null name already encodes as the empty string.
+fn encode(version: i16, mut resp: JoinGroupResponse) -> Result<Bytes, BrokerError> {
+    if version >= 7 && resp.protocol_name.as_deref() == Some("") {
+        resp.protocol_name = None;
+    }
+    crate::handlers::encode_response(&resp, version)
 }
 
 #[cfg(test)]
 mod tests {
+    use krabka_protocol::{UnknownTaggedFields, owned::join_group_response};
+
     use super::*;
 
     /// #791: Kafka's `GroupCoordinatorService.joinGroup` request checks with
@@ -243,6 +252,47 @@ mod tests {
         }
     }
 
+    /// Kafka's `JoinGroupResponse` constructor sends an empty `ProtocolName`
+    /// as null from v7 and as `""` below it; a chosen protocol passes through.
+    #[test]
+    fn protocol_name_normalised_like_kafka() {
+        for version in join_group_response::MIN_VERSION..=join_group_response::MAX_VERSION {
+            let empty = (version < 7).then(String::new);
+            for (sent, want) in [
+                (Some(String::new()), empty.clone()),
+                (None, empty.clone()),
+                (Some("range".to_owned()), Some("range".to_owned())),
+            ] {
+                let bytes = encode(
+                    version,
+                    JoinGroupResponse {
+                        error_code: codes::GROUP_AUTHORIZATION_FAILED,
+                        protocol_name: sent.clone(),
+                        ..Default::default()
+                    },
+                )
+                .expect("encode");
+                let mut cur: &[u8] = &bytes;
+                let got = JoinGroupResponse::decode(&mut cur, version).expect("decode");
+                assert2::check!(
+                    got == JoinGroupResponse {
+                        error_code: codes::GROUP_AUTHORIZATION_FAILED,
+                        generation_id: -1,
+                        protocol_type: None,
+                        protocol_name: want,
+                        leader: String::new(),
+                        skip_assignment: false,
+                        member_id: String::new(),
+                        members: vec![],
+                        throttle_time_ms: 0,
+                        unknown_tagged_fields: UnknownTaggedFields::default(),
+                    },
+                    "v{version} {sent:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn encodes_join_group_response() {
         let resp = JoinGroupResponse {
@@ -256,7 +306,7 @@ mod tests {
             throttle_time_ms: 0,
             ..Default::default()
         };
-        let bytes = encode(5, &resp).expect("encode");
+        let bytes = encode(5, resp).expect("encode");
         assert2::check!(!bytes.is_empty());
     }
 }

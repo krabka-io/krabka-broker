@@ -55,7 +55,7 @@ pub fn resource_type_concrete(b: ResourceTypeCode) -> Result<ResourceType, WireA
         4 => Ok(ResourceType::Cluster),
         5 => Ok(ResourceType::TransactionalId),
         6 => Ok(ResourceType::DelegationToken),
-        // 7 (User) / 0 (Unknown) / 1 (Any) rejected.
+        7 => Ok(ResourceType::User),
         WIRE_UNKNOWN | WIRE_ANY => Err(WireAclError::AnyRequiresFilter),
         _ => Err(WireAclError::UnknownDiscriminant),
     }
@@ -69,6 +69,7 @@ pub fn resource_type_to_wire(rt: ResourceType) -> ResourceTypeCode {
         ResourceType::Cluster => 4,
         ResourceType::TransactionalId => 5,
         ResourceType::DelegationToken => 6,
+        ResourceType::User => 7,
     }
 }
 
@@ -106,6 +107,8 @@ pub fn operation_concrete(b: OperationCode) -> Result<AclOperation, WireAclError
         10 => Ok(AclOperation::DescribeConfigs),
         11 => Ok(AclOperation::AlterConfigs),
         12 => Ok(AclOperation::IdempotentWrite),
+        13 => Ok(AclOperation::CreateTokens),
+        14 => Ok(AclOperation::DescribeTokens),
         15 => Ok(AclOperation::TwoPhaseCommit),
         WIRE_UNKNOWN | WIRE_ANY => Err(WireAclError::AnyRequiresFilter),
         _ => Err(WireAclError::UnknownDiscriminant),
@@ -126,6 +129,8 @@ pub fn operation_to_wire(op: AclOperation) -> OperationCode {
         AclOperation::DescribeConfigs => 10,
         AclOperation::AlterConfigs => 11,
         AclOperation::IdempotentWrite => 12,
+        AclOperation::CreateTokens => 13,
+        AclOperation::DescribeTokens => 14,
         AclOperation::TwoPhaseCommit => 15,
     }
 }
@@ -220,6 +225,22 @@ mod tests {
     fn two_phase_commit_operation_is_byte_15() {
         check!(operation_to_wire(AclOperation::TwoPhaseCommit) == 15);
         check!(operation_concrete(15) == Ok(AclOperation::TwoPhaseCommit));
+    }
+
+    /// KIP-373's `USER` resource type (7) and its `CREATE_TOKENS` (13) and
+    /// `DESCRIBE_TOKENS` (14) operations round-trip through the wire codec,
+    /// with Kafka's `ResourceType` and `AclOperation` codes.
+    #[test]
+    fn kip_373_user_resource_and_token_operations_round_trip() {
+        check!(resource_type_concrete(7) == Ok(ResourceType::User));
+        check!(resource_type_to_wire(ResourceType::User) == 7);
+        for (code, operation) in [
+            (13, AclOperation::CreateTokens),
+            (14, AclOperation::DescribeTokens),
+        ] {
+            check!(operation_concrete(code) == Ok(operation));
+            check!(operation_to_wire(operation) == code);
+        }
     }
 
     /// The KIP-48 `TOKEN` resource type, also named `DELEGATION_TOKEN`, is

@@ -17,6 +17,7 @@ use super::{
     test_support::{
         describe, describe_as, error_group, finalize_streams_version, seed_streams_group_topology,
         start_broker, start_broker_with_authorizer, topology_with_source_topic,
+        unfinalize_streams_version,
     },
     *,
 };
@@ -58,6 +59,7 @@ async fn grant(
 async fn disabled_feature_returns_requested_group_error_rows() {
     let (broker_handle, _dir) = start_broker(true).await;
     let broker = broker_handle.broker_arc_for_test();
+    unfinalize_streams_version(&broker).await;
 
     let resp = describe(&broker, &["g-disabled-a", "g-disabled-b"]).await;
 
@@ -135,8 +137,8 @@ async fn disabled_protocol_answers_every_requested_group_with_unsupported_versio
     for group_ids in cases {
         let (broker_handle, _dir) = start_broker(true).await;
         let broker = broker_handle.broker_arc_for_test();
-        // Note: `finalize_streams_version` is never called, so
-        // `streams.version` stays unfinalized and the protocol gate is off.
+        // `streams.version` is unfinalized, so the protocol gate is off.
+        unfinalize_streams_version(&broker).await;
 
         let resp = describe(&broker, group_ids).await;
 
@@ -161,7 +163,8 @@ async fn disabled_protocol_answers_every_requested_group_with_unsupported_versio
 async fn protocol_gate_runs_before_the_group_acl_check() {
     let (broker_handle, _dir) = start_broker_with_authorizer(Arc::new(DenyAll)).await;
     let broker = broker_handle.broker_arc_for_test();
-    // Never finalized: the protocol is off regardless of the authorizer.
+    // Unfinalized: the protocol is off regardless of the authorizer.
+    unfinalize_streams_version(&broker).await;
     let alice = principal("alice");
 
     let resp = describe_as(&broker, &alice, &["g1"], false).await;
@@ -479,6 +482,9 @@ async fn ready_group_describes_the_configured_topology_and_every_member_field() 
                 unknown_tagged_fields: none(),
             }],
             authorized_operations: i32::MIN,
+            topology_description: None,
+            topology_description_status: 0,
+            assignor_name: None,
             unknown_tagged_fields: none(),
         }],
         unknown_tagged_fields: none(),

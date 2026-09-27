@@ -16,6 +16,9 @@ fn image_registering_node_at(broker_epoch: i64) -> MetadataImage {
     let mut image = MetadataImage::new(uuid::Uuid::nil());
     image.apply(&MetadataRecord::V1BrokerRegistration(
         BrokerRegistrationRecord {
+            fenced: false,
+            in_controlled_shutdown: false,
+            cordoned_log_dirs: None,
             node_id: NODE,
             broker_epoch,
             incarnation_id: uuid::Uuid::from_u128(7),

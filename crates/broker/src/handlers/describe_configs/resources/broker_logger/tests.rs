@@ -48,7 +48,9 @@ fn every_logger_reports_its_level_at_the_broker_logger_source() {
             is_sensitive: false,
             synonyms: Vec::new(),
             config_type: 0,
-            documentation: None,
+            // Kafka never sets it for a logger, so the JVM broker sends the
+            // generated default, the empty string.
+            documentation: Some(String::new()),
             unknown_tagged_fields: UnknownTaggedFields::default(),
         }
     };

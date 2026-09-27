@@ -183,7 +183,7 @@ async fn handle_falls_back_to_topic_authorization_failed_for_each_topic() {
                 error_message: Some("Authorization failed.".into()),
                 num_partitions: -1,
                 replication_factor: -1,
-                configs: None,
+                configs: Some(Vec::new()),
                 topic_config_error_code: 0,
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             },
@@ -194,7 +194,7 @@ async fn handle_falls_back_to_topic_authorization_failed_for_each_topic() {
                 error_message: Some("Authorization failed.".into()),
                 num_partitions: -1,
                 replication_factor: -1,
-                configs: None,
+                configs: Some(Vec::new()),
                 topic_config_error_code: 0,
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             },
@@ -233,7 +233,7 @@ async fn handle_reports_invalid_partition_count_and_replication_factor() {
                 ),
                 num_partitions: -1,
                 replication_factor: -1,
-                configs: None,
+                configs: Some(Vec::new()),
                 topic_config_error_code: 0,
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             },
@@ -249,7 +249,7 @@ async fn handle_reports_invalid_partition_count_and_replication_factor() {
                 ),
                 num_partitions: -1,
                 replication_factor: -1,
-                configs: None,
+                configs: Some(Vec::new()),
                 topic_config_error_code: 0,
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             },
@@ -291,6 +291,9 @@ async fn minus_one_takes_the_broker_topic_creation_defaults() {
             .controller
             .submit_change(vec![MetadataRecord::V1BrokerRegistration(
                 krabka_metadata::BrokerRegistrationRecord {
+                    fenced: false,
+                    in_controlled_shutdown: false,
+                    cordoned_log_dirs: None,
                     node_id: krabka_raft::NodeId(node_id),
                     broker_epoch: 0,
                     incarnation_id: Uuid::nil(),
@@ -362,7 +365,11 @@ async fn minus_one_takes_the_broker_topic_creation_defaults() {
                 error_message: error_message.map(str::to_owned),
                 num_partitions: created,
                 replication_factor: created_rf,
-                configs: created_ok.then(|| expected_configs(&[])),
+                configs: Some(if created_ok {
+                    expected_configs(&[])
+                } else {
+                    Vec::new()
+                }),
                 topic_config_error_code: 0,
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             }],
@@ -822,7 +829,7 @@ async fn duplicate_topic_reports_error_without_success_fields() {
             error_message: Some("Topic 'dupe' already exists.".into()),
             num_partitions: -1,
             replication_factor: -1,
-            configs: None,
+            configs: Some(Vec::new()),
             topic_config_error_code: 0,
             unknown_tagged_fields: UnknownTaggedFields::default(),
         }],
@@ -855,6 +862,7 @@ async fn validate_only_answers_the_verdict_and_commits_nothing() {
                 error_message: Some("Topic 'existing' already exists.".into()),
                 num_partitions: -1,
                 replication_factor: -1,
+                configs: Some(Vec::new()),
                 ..Default::default()
             },
         ),
@@ -868,6 +876,7 @@ async fn validate_only_answers_the_verdict_and_commits_nothing() {
             CreatableTopicResult {
                 name: "fresh".into(),
                 error_code: codes::NONE,
+                error_message: None,
                 num_partitions: 1,
                 replication_factor: 1,
                 configs: None,
@@ -885,9 +894,10 @@ async fn validate_only_answers_the_verdict_and_commits_nothing() {
         let resp = drive(&broker, &req, &p, &peer).await;
 
         assert!(resp.topics.len() == 1, "topic {name}");
-        // A refused row carries no configuration at all; the one that passed
-        // carries what the topic would have been created with. The dry run
-        // committed nothing, so that is the empty override map resolved
+        // A refused row carries an empty configuration list -- Kafka's
+        // generated default for `Configs`, which the refusal never sets; the
+        // one that passed carries what the topic would have been created
+        // with. The dry run committed nothing, so that is the empty override map resolved
         // against the image.
         let configs = if expected_row.error_code == codes::NONE {
             Some(effective_topic_configs(
@@ -971,6 +981,7 @@ async fn strict_create_topics_rejects_after_quota_exhaustion() {
             name: "rejected".into(),
             error_code: codes::THROTTLING_QUOTA_EXCEEDED,
             error_message: Some("The throttling quota has been exceeded.".into()),
+            configs: Some(Vec::new()),
             ..Default::default()
         }],
         ..Default::default()
@@ -1151,7 +1162,7 @@ async fn v4_response_encodes_without_the_kip_525_fields() {
             error_message: None,
             num_partitions: -1,
             replication_factor: -1,
-            configs: None,
+            configs: Some(Vec::new()),
             topic_config_error_code: 0,
             unknown_tagged_fields: UnknownTaggedFields::default(),
         }],
@@ -1280,7 +1291,7 @@ async fn handle_refuses_invalid_and_colliding_topic_names() {
                     error_message: error_message.clone(),
                     num_partitions: -1,
                     replication_factor: -1,
-                    configs: None,
+                    configs: Some(Vec::new()),
                     topic_config_error_code: 0,
                     unknown_tagged_fields: UnknownTaggedFields::default(),
                 }],
@@ -1451,7 +1462,7 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
                 error_message: error_message.map(str::to_owned),
                 num_partitions: -1,
                 replication_factor: -1,
-                configs: None,
+                configs: Some(Vec::new()),
                 topic_config_error_code: 0,
                 unknown_tagged_fields: UnknownTaggedFields::default(),
             }],
@@ -1640,7 +1651,7 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
                     error_message: Some("Authorization failed.".into()),
                     num_partitions: -1,
                     replication_factor: -1,
-                    configs: None,
+                    configs: Some(Vec::new()),
                     topic_config_error_code: 0,
                     unknown_tagged_fields: UnknownTaggedFields::default(),
                 }
@@ -1653,7 +1664,7 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
             error_message: Some("Duplicate topic name.".into()),
             num_partitions: -1,
             replication_factor: -1,
-            configs: None,
+            configs: Some(Vec::new()),
             topic_config_error_code: 0,
             unknown_tagged_fields: UnknownTaggedFields::default(),
         };
@@ -1666,7 +1677,7 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
             ),
             num_partitions: -1,
             replication_factor: -1,
-            configs: None,
+            configs: Some(Vec::new()),
             topic_config_error_code: 0,
             unknown_tagged_fields: UnknownTaggedFields::default(),
         };
@@ -1727,12 +1738,14 @@ fn topic_with_nullable_configs(name: &str, configs: &[(&str, Option<&str>)]) -> 
     }
 }
 
-/// An error row, as Kafka builds it: no topic id and no KIP-525 fields.
+/// An error row, as Kafka builds it: no topic id, and the KIP-525 fields at
+/// the Java defaults (-1 counts, an empty config list).
 fn error_row(name: &str, error_code: i16, message: &str) -> CreatableTopicResult {
     CreatableTopicResult {
         name: name.into(),
         error_code,
         error_message: Some(message.into()),
+        configs: Some(Vec::new()),
         ..Default::default()
     }
 }
@@ -1923,6 +1936,7 @@ async fn rows_follow_kafkas_check_order_and_messages() {
                 row.unwrap_or_else(|| CreatableTopicResult {
                     name: name.into(),
                     topic_id: actual_row.topic_id,
+                    error_message: None,
                     num_partitions: 1,
                     replication_factor: 1,
                     configs: Some(expected_configs(&[])),

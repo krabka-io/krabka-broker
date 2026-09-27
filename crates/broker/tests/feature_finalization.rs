@@ -8,6 +8,8 @@
 use assert2::assert;
 mod support;
 
+use krabka_format::LATEST_PRODUCTION_METADATA_VERSION;
+use krabka_metadata::metadata_version::METADATA_VERSION_MAX;
 use krabka_protocol::owned::{
     api_versions_request::ApiVersionsRequest,
     update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
@@ -25,13 +27,15 @@ fn metadata_version_update(level: i16) -> UpdateFeaturesRequest {
     }
 }
 
+/// A cluster bootstraps at 4.3-IV0 and opts into Kafka trunk's 4.4 levels by
+/// finalizing them.
 #[tokio::test]
 async fn finalizes_metadata_version_and_surfaces_in_api_versions() {
     let p = support::start().await;
 
     let resp = p
         .client
-        .send(metadata_version_update(25))
+        .send(metadata_version_update(METADATA_VERSION_MAX))
         .await
         .expect("UpdateFeatures");
     assert!(resp.error_code == 0, "{resp:?}");
@@ -58,7 +62,7 @@ async fn finalizes_metadata_version_and_surfaces_in_api_versions() {
         .iter()
         .find(|f| f.name == "metadata.version")
         .expect("metadata.version finalized");
-    assert!(fin.max_version_level == 25, "{av:?}");
+    assert!(fin.max_version_level == METADATA_VERSION_MAX, "{av:?}");
     assert!(av.finalized_features_epoch >= 0, "{av:?}");
 
     p.broker.shutdown().await;
@@ -121,7 +125,7 @@ fn metadata_version(
 async fn validate_only_does_not_persist() {
     let p = support::start().await;
 
-    // A self-bootstrapped broker already finalizes metadata.version=25, so
+    // A self-bootstrapped broker already finalizes metadata.version=4.3-IV0, so
     // emptiness no longer signals "nothing persisted". Capture the level + epoch
     // BEFORE, send a validate_only request that WOULD change metadata.version,
     // then assert neither moved — validate_only must run the checks without
@@ -135,13 +139,16 @@ async fn validate_only_does_not_persist() {
     };
 
     let before = api_versions().await.expect("ApiVersions");
-    assert!(metadata_version(&before) == 25, "{before:?}");
+    assert!(
+        metadata_version(&before) == LATEST_PRODUCTION_METADATA_VERSION,
+        "{before:?}"
+    );
     let epoch_before = before.finalized_features_epoch;
     assert!(epoch_before >= 0, "{before:?}");
 
-    // Request a SAFE_DOWNGRADE to level 24 with validate_only — this would
+    // Request a SAFE_DOWNGRADE one level down with validate_only — this would
     // change metadata.version if persisted.
-    let mut req = metadata_version_update(24);
+    let mut req = metadata_version_update(LATEST_PRODUCTION_METADATA_VERSION - 1);
     req.feature_updates[0].upgrade_type = 2; // SAFE_DOWNGRADE
     req.validate_only = true;
     let resp = p.client.send(req).await.expect("UpdateFeatures");
@@ -150,7 +157,7 @@ async fn validate_only_does_not_persist() {
     // Nothing changed: same level, same epoch.
     let after = api_versions().await.expect("ApiVersions");
     assert!(
-        metadata_version(&after) == 25,
+        metadata_version(&after) == LATEST_PRODUCTION_METADATA_VERSION,
         "validate_only must not change the level: {after:?}",
     );
     assert!(

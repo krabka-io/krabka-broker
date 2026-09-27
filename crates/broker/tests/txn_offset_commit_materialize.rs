@@ -242,7 +242,7 @@ async fn begin_and_commit_offsets(
             group_id: group_id.into(),
             producer_id: pid,
             producer_epoch: epoch,
-            generation_id: -1,
+            generation_id_or_member_epoch: -1,
             member_id: String::new(),
             topics: vec![TxnOffsetCommitRequestTopic {
                 name: TOPIC.into(),

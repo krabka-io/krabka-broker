@@ -118,7 +118,13 @@ async fn create_topic_on_any_node_propagates() {
     // Await the topic in node 2's controller image (deterministic), then the
     // client metadata reflects it immediately.
     cluster[2].0.wait_until_partition_present("prop", 0).await;
-    let m = c2.send(MetadataRequest::default()).await.unwrap();
+    let m = c2
+        .send(MetadataRequest {
+            topics: None,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     assert!(
         m.topics.iter().any(|t| t.name.as_deref() == Some("prop")),
         "topic 'prop' not visible to node 2"

@@ -79,6 +79,8 @@ pub fn supported_operations(resource_type: ResourceType) -> &'static [AclOperati
             AclOperation::TwoPhaseCommit,
         ],
         ResourceType::DelegationToken => &[AclOperation::Describe],
+        // KIP-373.
+        ResourceType::User => &[AclOperation::CreateTokens, AclOperation::DescribeTokens],
     }
 }
 

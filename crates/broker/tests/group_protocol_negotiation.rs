@@ -441,6 +441,7 @@ async fn protocol_type_mismatch_rejected() {
         resp_b
             == JoinGroupResponse {
                 error_code: ERR_INCONSISTENT_GROUP_PROTOCOL,
+                protocol_name: None,
                 ..JoinGroupResponse::default()
             },
         "member B with protocol_type=stream must hit INCONSISTENT_GROUP_PROTOCOL on a consumer group, got {resp_b:?}"

@@ -92,6 +92,9 @@ async fn single_broker_handle_helpers_observe_real_state_and_errors() {
     handle
         .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1BrokerRegistration(
             krabka_metadata::BrokerRegistrationRecord {
+                fenced: false,
+                in_controlled_shutdown: false,
+                cordoned_log_dirs: None,
                 node_id: krabka_raft::NodeId(handle.node_id() + 1),
                 broker_epoch: 0,
                 incarnation_id: uuid::Uuid::from_u128(0xBEEF),

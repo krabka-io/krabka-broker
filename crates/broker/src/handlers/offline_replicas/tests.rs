@@ -15,6 +15,9 @@ fn dir(n: u128) -> Uuid {
 
 fn registration(node_id: u64, log_dirs: Vec<Uuid>) -> MetadataRecord {
     MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
+        fenced: false,
+        in_controlled_shutdown: false,
+        cordoned_log_dirs: None,
         node_id: NodeId(node_id),
         broker_epoch: 0,
         incarnation_id: Uuid::from_u128(u128::from(node_id)),

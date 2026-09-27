@@ -17,7 +17,7 @@ use tempfile::TempDir;
 use super::{
     test_support::{
         RENEW_24H_MS, anonymous, authed, authed_with_token, empty_super_users, super_users_with,
-        test_controller,
+        test_controller, token_acl,
     },
     *,
 };
@@ -177,7 +177,7 @@ async fn refusals_follow_kafka_order_and_name_both_principals() {
             60_000,
             RENEW_24H_MS,
             &*controller,
-            &super_users,
+            token_acl(&super_users),
         )
         .await;
         assert!(resp == expected, "{case}");
@@ -353,7 +353,7 @@ async fn mints_for_the_resolved_owner_with_kafka_deadlines() {
             ceiling_ms,
             RENEW_24H_MS,
             &*controller,
-            &super_users,
+            token_acl(&super_users),
         )
         .await;
         // The token id is a random UUID and the HMAC-SHA-256 output is 32
@@ -390,6 +390,65 @@ async fn mints_for_the_resolved_owner_with_kafka_deadlines() {
     controller.cancel().await;
 }
 
+/// KIP-373: `CreateTokens` on `User:<owner>` lets a requester mint a token for
+/// that owner, and for no other (Kafka's `handleCreateTokenRequest`).
+#[tokio::test]
+async fn create_tokens_acl_admits_minting_for_that_owner_only() {
+    let dir = TempDir::new().unwrap();
+    let controller = test_controller(dir.path().into()).await;
+    controller
+        .submit_change(vec![krabka_metadata::MetadataRecord::V1AccessControlEntry(
+            krabka_metadata::AclEntry {
+                resource_type: krabka_metadata::ResourceType::User,
+                resource_name: "User:alice".into(),
+                pattern_type: krabka_metadata::PatternType::Literal,
+                principal: "User:bob".into(),
+                host: "*".into(),
+                operation: krabka_metadata::AclOperation::CreateTokens,
+                permission_type: krabka_metadata::PermissionType::Allow,
+            },
+        )])
+        .await
+        .expect("seed acl");
+    let secret = SecretBytes::new(b"master-key".to_vec());
+    let authorizer = empty_super_users();
+
+    let mint = |owner: &'static str| {
+        let req = act_as("User", owner);
+        let controller = &controller;
+        let secret = &secret;
+        let authorizer = &authorizer;
+        async move {
+            handle(
+                &req,
+                &authed("bob"),
+                Some(secret),
+                60_000,
+                RENEW_24H_MS,
+                &**controller,
+                token_acl(authorizer),
+            )
+            .await
+        }
+    };
+    let for_alice = mint("alice").await;
+    let for_carol = mint("carol").await;
+
+    assert!(
+        (for_alice.error_code, for_alice.principal_name.as_str()) == (crate::codes::NONE, "alice")
+    );
+    assert!(
+        for_carol
+            == refusal(
+                crate::codes::DELEGATION_TOKEN_AUTHORIZATION_FAILED,
+                &user("carol"),
+                &user("bob"),
+                -1,
+            )
+    );
+    controller.cancel().await;
+}
+
 /// Kafka's `DelegationTokenControlManager.sum` saturates at `Long.MAX_VALUE`
 /// instead of refusing a lifetime that runs past it.
 #[tokio::test]
@@ -409,7 +468,7 @@ async fn lifetime_past_i64_max_saturates() {
         i64::MAX,
         1,
         &*controller,
-        &empty_super_users(),
+        token_acl(&empty_super_users()),
     )
     .await;
 
@@ -443,7 +502,7 @@ async fn non_positive_configured_periods_mint_nothing() {
             ceiling_ms,
             renew_ms,
             &*controller,
-            &empty_super_users(),
+            token_acl(&empty_super_users()),
         )
         .await;
         let expected = refusal(

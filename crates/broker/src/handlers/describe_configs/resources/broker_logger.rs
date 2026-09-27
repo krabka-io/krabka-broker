@@ -13,7 +13,9 @@
 //! The three refusals below are Kafka's, message for message, because
 //! `kafka-configs` prints them straight through to the operator.
 
-use krabka_protocol::owned::describe_configs_response::DescribeConfigsResourceResult;
+use krabka_protocol::{
+    UnknownTaggedFields, owned::describe_configs_response::DescribeConfigsResourceResult,
+};
 use krabka_telemetry::LogLevelController;
 
 use super::super::wire::CONFIG_SOURCE_DYNAMIC_BROKER_LOGGER;
@@ -71,7 +73,12 @@ pub(super) fn logger_configs(
             config_source: CONFIG_SOURCE_DYNAMIC_BROKER_LOGGER,
             is_sensitive: false,
             synonyms: Vec::new(),
-            ..Default::default()
+            config_type: 0,
+            // Kafka's `ConfigHelper` builds a logger entry without calling
+            // `setDocumentation`, so the field goes out as the generated
+            // default: the empty string, not null.
+            documentation: Some(String::new()),
+            unknown_tagged_fields: UnknownTaggedFields::default(),
         })
         .collect()
 }

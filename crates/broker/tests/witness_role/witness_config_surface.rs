@@ -73,6 +73,8 @@ async fn witness_role_is_a_read_only_broker_config() {
                 read_only: true,
                 config_source: CONFIG_SOURCE_DYNAMIC_BROKER,
                 config_type: CONFIG_TYPE_BOOLEAN,
+                // Not requested, so null, as Kafka sends it.
+                documentation: None,
                 ..Default::default()
             }),
         "broker.witness is reported, read-only, and typed"
@@ -90,6 +92,8 @@ async fn witness_role_is_a_read_only_broker_config() {
                 read_only: true,
                 config_source: CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
                 config_type: CONFIG_TYPE_STRING,
+                // Not requested, so null, as Kafka sends it.
+                documentation: None,
                 ..Default::default()
             }),
         "the preferred leader site is a read-only cluster default"

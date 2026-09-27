@@ -286,6 +286,9 @@ mod tests {
         };
         img.apply(&MetadataRecord::V1BrokerRegistration(
             BrokerRegistrationRecord {
+                fenced: false,
+                in_controlled_shutdown: false,
+                cordoned_log_dirs: None,
                 node_id: NodeId(node_id),
                 broker_epoch: 0,
                 incarnation_id: uuid::Uuid::nil(),

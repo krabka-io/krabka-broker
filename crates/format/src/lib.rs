@@ -21,7 +21,9 @@ use clap::Parser;
 mod format;
 mod ids;
 
-pub use format::{FormatArgs, ScramSpec, run, run_with_records};
+pub use format::{
+    FormatArgs, LATEST_PRODUCTION_METADATA_VERSION, ScramSpec, run, run_with_records,
+};
 pub use ids::{ClusterId, DirectoryId};
 /// The seed record type [`run_with_records`] accepts, re-exported so a caller
 /// building a bootstrap stream does not have to name [`krabka_metadata`]

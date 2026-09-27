@@ -34,6 +34,9 @@ fn stretch_image(
     for (node_id, rack) in brokers {
         image.apply(&MetadataRecord::V1BrokerRegistration(
             krabka_metadata::BrokerRegistrationRecord {
+                fenced: false,
+                in_controlled_shutdown: false,
+                cordoned_log_dirs: None,
                 node_id: NodeId(*node_id),
                 broker_epoch: 0,
                 incarnation_id: uuid::Uuid::from_u128(u128::from(*node_id)),

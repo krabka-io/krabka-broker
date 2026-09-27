@@ -17,7 +17,12 @@ async fn init_producer_id_returns_fresh_pid() {
     let p = support::start().await;
     let r = p
         .client
-        .send(InitProducerIdRequest::default())
+        // A null transactional id asks for an idempotent producer; the schema
+        // default is an empty string.
+        .send(InitProducerIdRequest {
+            transactional_id: None,
+            ..Default::default()
+        })
         .await
         .expect("InitProducerId");
     check!(r.error_code == 0);

@@ -243,7 +243,7 @@ async fn txn_offset_commit_fences_classic_generation_and_member() {
         group_id: "fence-g".into(),
         producer_id,
         producer_epoch,
-        generation_id,
+        generation_id_or_member_epoch: generation_id,
         member_id: member_id.into(),
         topics: vec![TxnOffsetCommitRequestTopic {
             name: "fence-in".into(),
@@ -339,7 +339,7 @@ async fn txn_offset_commit_fences_next_gen_member_epoch() {
         group_id: "ng-g".into(),
         producer_id,
         producer_epoch,
-        generation_id: epoch_val, // carries the member epoch for next-gen groups
+        generation_id_or_member_epoch: epoch_val, // carries the member epoch for next-gen groups
         member_id: member_id.clone(),
         topics: vec![TxnOffsetCommitRequestTopic {
             name: "ng-in".into(),

@@ -69,8 +69,15 @@ fn describe_acls_resource(
     }
 }
 
+/// A successful listing.
+///
+/// Kafka's `AclApis.handleDescribeAcls` sets only the throttle time and the
+/// resources, so `ErrorMessage` keeps its generated default: the empty
+/// string, not null.
 fn describe_acls_response(resources: Vec<DescribeAclsResource>) -> DescribeAclsResponse {
     DescribeAclsResponse {
+        error_code: codes::NONE,
+        error_message: Some(String::new()),
         resources,
         ..Default::default()
     }
@@ -364,7 +371,7 @@ mod tests {
         let expected_resp = DescribeAclsResponse {
             throttle_time_ms: 0,
             error_code: codes::NONE,
-            error_message: None,
+            error_message: Some(String::new()),
             resources: vec![resource],
             unknown_tagged_fields: UnknownTaggedFields::default(),
         };
@@ -496,7 +503,7 @@ mod tests {
         let expected = DescribeAclsResponse {
             throttle_time_ms: 0,
             error_code: codes::NONE,
-            error_message: None,
+            error_message: Some(String::new()),
             resources: Vec::new(),
             unknown_tagged_fields: UnknownTaggedFields::default(),
         };
@@ -612,7 +619,7 @@ mod tests {
             let expected = DescribeAclsResponse {
                 throttle_time_ms: 0,
                 error_code: codes::NONE,
-                error_message: None,
+                error_message: Some(String::new()),
                 resources: want
                     .iter()
                     .map(|(resource_name, pattern_type)| DescribeAclsResource {
@@ -705,7 +712,7 @@ mod tests {
         let expected = DescribeAclsResponse {
             throttle_time_ms: 0,
             error_code: codes::NONE,
-            error_message: None,
+            error_message: Some(String::new()),
             resources: vec![DescribeAclsResource {
                 resource_type: RESOURCE_TYPE_TOPIC,
                 resource_name: "orders".into(),

@@ -16,6 +16,9 @@ pub(super) fn make_image_with_broker(node_id: NodeId) -> MetadataImage {
     let mut img = MetadataImage::new(uuid::Uuid::nil());
     img.apply(&MetadataRecord::V1BrokerRegistration(
         BrokerRegistrationRecord {
+            fenced: false,
+            in_controlled_shutdown: false,
+            cordoned_log_dirs: None,
             node_id,
             broker_epoch: 0,
             incarnation_id: uuid::Uuid::nil(),

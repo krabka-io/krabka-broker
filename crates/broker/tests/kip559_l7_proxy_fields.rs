@@ -155,6 +155,7 @@ async fn join_group_inconsistent_protocol_error_carries_no_protocol_fields() {
     assert!(
         r == JoinGroupResponse {
             error_code: 23,
+            protocol_name: None,
             ..JoinGroupResponse::default()
         },
         "expected a bare INCONSISTENT_GROUP_PROTOCOL (23), got {r:?}"

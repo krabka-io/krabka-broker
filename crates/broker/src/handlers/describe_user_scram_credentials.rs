@@ -91,7 +91,9 @@ fn denied_response(
         .unwrap_or_default()
         .iter()
         .map(|_| DescribeUserScramCredentialsResult {
+            user: String::new(),
             error_code: CLUSTER_AUTHORIZATION_FAILED,
+            error_message: None,
             ..Default::default()
         })
         .collect();
@@ -491,8 +493,11 @@ mod tests {
 
         assert!(
             resp == DescribeUserScramCredentialsResponse {
+                throttle_time_ms: 0,
                 error_code: CLUSTER_AUTHORIZATION_FAILED,
-                ..Default::default()
+                error_message: None,
+                results: Vec::new(),
+                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
             }
         );
         broker_handle.shutdown().await;

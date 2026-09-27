@@ -528,6 +528,10 @@ pub(crate) async fn handle(
             name,
             topic_id: ProtoUuid(topic_id.into_bytes()),
             error_code: codes::NONE,
+            // Kafka sets the message to null on a created row
+            // (`ReplicationControlManager.createTopic`), not to the
+            // empty string the generated default carries.
+            error_message: None,
             ..Default::default()
         };
         disclose_created_topic(

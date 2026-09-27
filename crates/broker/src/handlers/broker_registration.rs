@@ -108,6 +108,9 @@ pub(crate) async fn handle(
         Vec::new()
     };
     let record = BrokerRegistrationRecord {
+        fenced: false,
+        in_controlled_shutdown: false,
+        cordoned_log_dirs: None,
         node_id,
         // An amend keeps the epoch it registered at. The controller stamps a
         // new epoch on any other registration, and on an amend it sees the
@@ -525,6 +528,9 @@ mod tests {
         for (node, directory) in [(1, 500), (2, 600)] {
             image.apply(&MetadataRecord::V1BrokerRegistration(
                 BrokerRegistrationRecord {
+                    fenced: false,
+                    in_controlled_shutdown: false,
+                    cordoned_log_dirs: None,
                     node_id: NodeId(node),
                     broker_epoch: 10,
                     incarnation_id: uuid::Uuid::from_u128(u128::from(node)),
@@ -625,6 +631,9 @@ mod wire_tests {
                 level: 1,
             }),
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
+                fenced: false,
+                in_controlled_shutdown: false,
+                cordoned_log_dirs: None,
                 node_id: REGISTERED,
                 // The controller stamps the real epoch on submit; this is the
                 // placeholder every self-registration sends.

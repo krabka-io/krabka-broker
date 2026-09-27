@@ -414,6 +414,9 @@ mod tests {
         for n in 1..=6u64 {
             img_inner.apply(&MetadataRecord::V1BrokerRegistration(
                 BrokerRegistrationRecord {
+                    fenced: false,
+                    in_controlled_shutdown: false,
+                    cordoned_log_dirs: None,
                     node_id: NodeId(n),
                     broker_epoch: 0,
                     incarnation_id: Uuid::nil(),

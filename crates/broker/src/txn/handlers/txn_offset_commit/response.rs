@@ -106,6 +106,8 @@ mod tests {
             throttle_time_ms: 0,
             topics: vec![TxnOffsetCommitResponseTopic {
                 name: "orders".into(),
+                // v6 (topic ids) is not served; the field keeps its default.
+                topic_id: krabka_protocol::primitives::uuid::Uuid::default(),
                 partitions: vec![
                     TxnOffsetCommitResponsePartition {
                         partition_index: 2,
@@ -159,6 +161,8 @@ mod tests {
             throttle_time_ms: 0,
             topics: vec![TxnOffsetCommitResponseTopic {
                 name: "orders".into(),
+                // v6 (topic ids) is not served; the field keeps its default.
+                topic_id: krabka_protocol::primitives::uuid::Uuid::default(),
                 partitions: vec![
                     TxnOffsetCommitResponsePartition {
                         partition_index: 2,

@@ -93,8 +93,11 @@ async fn abort_then_read_committed_skips_records() {
         .unwrap();
     producer.init_transactions().await.unwrap();
     let txn = producer.begin_transaction().await.unwrap();
+    // Wait for each acknowledgement: like Kafka's, the producer's abort
+    // discards the batches it has not sent yet, so the records would otherwise
+    // never reach the log and there would be no abort marker to skip.
     for v in ["x", "y", "z"] {
-        drop(producer.send(rec("ta", v)).await);
+        send_ok(&producer, rec("ta", v)).await;
     }
     txn.abort().await.unwrap();
 
@@ -237,8 +240,10 @@ async fn interleaved_commit_and_abort() {
 
     // Second txn: abort ["X", "Y"].
     let txn = producer.begin_transaction().await.unwrap();
+    // Acknowledged, so the aborted records are in the log: the producer's
+    // abort discards the batches it has not sent yet.
     for v in ["X", "Y"] {
-        drop(producer.send(rec("ti", v)).await);
+        send_ok(&producer, rec("ti", v)).await;
     }
     txn.abort().await.unwrap();
 

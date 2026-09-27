@@ -2,8 +2,6 @@
 //! `CreateDelegationToken` call mints, and whether the requester may mint for
 //! that principal.
 
-use std::{collections::HashSet, hash::BuildHasher};
-
 use krabka_protocol::owned::create_delegation_token_request::CreateDelegationTokenRequest;
 use krabka_security::KafkaPrincipal;
 
@@ -28,15 +26,16 @@ pub(super) fn resolve_owner(
 
 /// Whether `requester` may mint a token owned by `owner`.
 ///
-/// Kafka needs no ACL when the owner is the requester, and otherwise
-/// authorizes `CreateTokens` on the `User:<owner>` resource. The ACL model
-/// here has neither the `User` resource type nor the `CreateTokens`
-/// operation, so the only grant that can be expressed is the one every Kafka
-/// authorizer gives unconditionally: a configured super user.
-pub(super) fn may_create_for<S: BuildHasher>(
+/// Matches `KafkaApis.handleCreateTokenRequest` in Kafka trunk: no ACL is
+/// needed when the owner is the requester, and otherwise the requester needs
+/// KIP-373's `CreateTokens` on the `User` resource named by the owner's
+/// principal string (`owner.toString`, for example `User:alice`).
+/// `authorize_create_tokens` answers that ACL question for a resource name;
+/// the authorizer grants a super user every operation.
+pub(super) fn may_create_for(
     owner: &KafkaPrincipal,
     requester: &KafkaPrincipal,
-    super_users: &HashSet<String, S>,
+    authorize_create_tokens: impl FnOnce(&str) -> bool,
 ) -> bool {
-    owner == requester || super_users.contains(&requester.name)
+    owner == requester || authorize_create_tokens(&owner.to_string())
 }

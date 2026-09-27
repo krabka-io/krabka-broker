@@ -118,6 +118,8 @@ async fn describe_configs_reports_the_retention_knobs() {
                 read_only: true,
                 config_source: CONFIG_SOURCE_DEFAULT,
                 config_type: CONFIG_TYPE_INT,
+                // Not requested, so null, as Kafka sends it.
+                documentation: None,
                 ..Default::default()
             })
     );
@@ -130,6 +132,8 @@ async fn describe_configs_reports_the_retention_knobs() {
                 read_only: true,
                 config_source: CONFIG_SOURCE_DEFAULT,
                 config_type: CONFIG_TYPE_LONG,
+                // Not requested, so null, as Kafka sends it.
+                documentation: None,
                 ..Default::default()
             })
     );
@@ -178,6 +182,8 @@ async fn describe_configs_reports_a_named_knob_as_static() {
                     // Untouched, so still inherited.
                     config_source: CONFIG_SOURCE_DEFAULT,
                     config_type: CONFIG_TYPE_LONG,
+                    // Not requested, so null, as Kafka sends it.
+                    documentation: None,
                     ..Default::default()
                 },
                 DescribeConfigsResourceResult {
@@ -186,6 +192,8 @@ async fn describe_configs_reports_a_named_knob_as_static() {
                     read_only: true,
                     config_source: CONFIG_SOURCE_STATIC_BROKER,
                     config_type: CONFIG_TYPE_INT,
+                    // Not requested, so null, as Kafka sends it.
+                    documentation: None,
                     ..Default::default()
                 },
             ]

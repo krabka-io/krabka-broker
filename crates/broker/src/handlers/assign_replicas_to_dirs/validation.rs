@@ -50,6 +50,9 @@ mod tests {
         let mut image = MetadataImage::new(Uuid::nil());
         image.apply(&MetadataRecord::V1BrokerRegistration(
             BrokerRegistrationRecord {
+                fenced: false,
+                in_controlled_shutdown: false,
+                cordoned_log_dirs: None,
                 node_id: NodeId(node_id),
                 broker_epoch,
                 incarnation_id: Uuid::nil(),

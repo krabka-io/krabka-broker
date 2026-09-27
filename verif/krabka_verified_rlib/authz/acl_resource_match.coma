@@ -1,8 +1,8 @@
-(* #"/workspace/crates/verified/src/authz.rs" 86 0 86 83 *)
+(* #"/workspace/crates/verified/src/authz.rs" 90 0 90 83 *)
 
-let%span sauthz = "/workspace/crates/verified/src/authz.rs" 88 48 88 53
-let%span sauthz'0 = "/workspace/crates/verified/src/authz.rs" 90 12 90 51
-let%span sauthz'1 = "/workspace/crates/verified/src/authz.rs" 81 10 84 2
+let%span sauthz = "/workspace/crates/verified/src/authz.rs" 92 48 92 53
+let%span sauthz'0 = "/workspace/crates/verified/src/authz.rs" 94 12 94 51
+let%span sauthz'1 = "/workspace/crates/verified/src/authz.rs" 85 10 88 2
 
 use creusot.prelude.Any
 
@@ -22,7 +22,7 @@ meta "compute_max_steps" 1000000
 
 meta "select_lsinst" "all"
 
-let acl_resource_match [#"/workspace/crates/verified/src/authz.rs" 86 0 86 83] (pattern: t_AclPatternKind)
+let acl_resource_match [#"/workspace/crates/verified/src/authz.rs" 90 0 90 83] (pattern: t_AclPatternKind)
   (facts: t_AclResourceFacts) (return (x: bool)) = (! bb0
   [ bb0 = s0
     [ s0 = [ &_9 <- { f0 = facts.resource_type; f1 = pattern } ] s1

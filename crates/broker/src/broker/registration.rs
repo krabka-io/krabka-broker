@@ -30,6 +30,9 @@ fn self_registration_record(config: &BrokerConfig) -> krabka_metadata::BrokerReg
     let log_dir_ids = crate::log_dir_id::LogDirIds::resolve(&log_dirs).ids_for(&log_dirs);
 
     krabka_metadata::BrokerRegistrationRecord {
+        fenced: false,
+        in_controlled_shutdown: false,
+        cordoned_log_dirs: None,
         node_id: config.node_id,
         broker_epoch: 0,
         incarnation_id: config.incarnation_id,

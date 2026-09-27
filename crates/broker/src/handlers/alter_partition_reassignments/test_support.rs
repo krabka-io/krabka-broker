@@ -81,6 +81,9 @@ pub(super) fn img_with_epoch(
     for n in 1u64..=6 {
         img.apply(&MetadataRecord::V1BrokerRegistration(
             BrokerRegistrationRecord {
+                fenced: false,
+                in_controlled_shutdown: false,
+                cordoned_log_dirs: None,
                 node_id: NodeId(n),
                 broker_epoch: 0,
                 incarnation_id: uuid::Uuid::nil(),

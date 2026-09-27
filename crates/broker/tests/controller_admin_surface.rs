@@ -330,6 +330,8 @@ async fn controller_listener_serves_the_topic_lifecycle() {
             topics: vec![CreatePartitionsTopic {
                 name: "controller-lifecycle".into(),
                 count: 3,
+                // No manual assignment: Kafka's admin client sends null.
+                assignments: None,
                 ..Default::default()
             }],
             timeout_ms: 5_000,
@@ -645,7 +647,9 @@ async fn controller_only_node_places_no_replica_on_itself() {
                     ),
                     num_partitions: -1,
                     replication_factor: -1,
-                    configs: None,
+                    // Kafka never sets `Configs` on an error row, so it keeps
+                    // the generated default, an empty list.
+                    configs: Some(Vec::new()),
                     topic_config_error_code: 0,
                     unknown_tagged_fields: UnknownTaggedFields::default(),
                 }],
@@ -696,6 +700,8 @@ impl Registration {
             broker_id: self.broker_id,
             cluster_id: image.cluster_id().to_string(),
             incarnation_id: WireUuid(*uuid::Uuid::from_u128(self.incarnation).as_bytes()),
+            // A broker with no `broker.rack` registers a null rack.
+            rack: None,
             listeners: vec![RegistrationListener {
                 name: "PLAINTEXT".into(),
                 host: "127.0.0.1".into(),

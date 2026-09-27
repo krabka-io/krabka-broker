@@ -28,7 +28,7 @@
 
 use bytes::Bytes;
 use krabka_protocol::{
-    Decode,
+    Decode, UnknownTaggedFields,
     owned::{
         describe_quorum_request::DescribeQuorumRequest,
         describe_quorum_response::DescribeQuorumResponse,
@@ -60,10 +60,7 @@ pub(crate) async fn handle(
     // Whole-request Cluster Describe gate. DescribeQuorum is
     // cluster-wide raft introspection — same gate as DescribeCluster.
     if cluster_describe_denied(broker, &image, ctx) {
-        let resp = DescribeQuorumResponse {
-            error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
-            ..Default::default()
-        };
+        let resp = top_level_error_response(codes::CLUSTER_AUTHORIZATION_FAILED);
         return crate::handlers::encode_response(&resp, version);
     }
 
@@ -92,10 +89,7 @@ pub(crate) async fn handle(
             // dispatch loop has no response shape to build for a bare
             // `Err(BrokerError)` here and just closes the connection.
             Err(_raft_error) => crate::handlers::encode_response(
-                &DescribeQuorumResponse {
-                    error_code: codes::NOT_LEADER_OR_FOLLOWER,
-                    ..Default::default()
-                },
+                &top_level_error_response(codes::NOT_LEADER_OR_FOLLOWER),
                 version,
             ),
         };
@@ -108,13 +102,90 @@ pub(crate) async fn handle(
     // quorum snapshot and is the active controller, the only case a
     // `MetadataSource` implementer declines to forward on.
     let Some(quorum) = broker.controller.quorum_snapshot() else {
-        let resp = DescribeQuorumResponse {
-            error_code: codes::NOT_LEADER_OR_FOLLOWER,
-            ..Default::default()
-        };
+        let resp = top_level_error_response(codes::NOT_LEADER_OR_FOLLOWER);
         return crate::handlers::encode_response(&resp, version);
     };
 
     let resp = krabka_raft::describe_quorum(&req, &quorum);
     crate::handlers::encode_response(&resp, version)
+}
+
+/// Kafka's `Errors.CLUSTER_AUTHORIZATION_FAILED.message()`.
+const CLUSTER_AUTHORIZATION_FAILED_MESSAGE: &str = "Cluster authorization failed.";
+
+/// Kafka's `Errors.NOT_LEADER_OR_FOLLOWER.message()`.
+const NOT_LEADER_OR_FOLLOWER_MESSAGE: &str = "For requests intended only for the leader, this \
+     error indicates that the broker is not the current leader. For requests intended for any \
+     replica, this error indicates that the broker is not a replica of the topic partition.";
+
+/// A whole-request `DescribeQuorum` refusal, in the shape of Kafka's
+/// `DescribeQuorumRequest.getTopLevelErrorResponse`: the top-level
+/// `error_code` and that error's own `Errors.message()`, with no topics.
+///
+/// Kafka answers every whole-request failure this way, from the
+/// `getErrorResponse` that `ControllerApis` and the broker's forwarding path
+/// build, so the message is set rather than left at the field's empty
+/// default. Only the codes this handler emits carry a message here; any
+/// other code gets Kafka's empty default.
+pub(super) fn top_level_error_response(error_code: i16) -> DescribeQuorumResponse {
+    let error_message = match error_code {
+        codes::CLUSTER_AUTHORIZATION_FAILED => CLUSTER_AUTHORIZATION_FAILED_MESSAGE,
+        codes::NOT_LEADER_OR_FOLLOWER => NOT_LEADER_OR_FOLLOWER_MESSAGE,
+        _ => "",
+    };
+    DescribeQuorumResponse {
+        error_code,
+        error_message: Some(error_message.to_owned()),
+        topics: Vec::new(),
+        nodes: Vec::new(),
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::assert;
+    use krabka_protocol::{Encode as _, owned::describe_quorum_response};
+
+    use super::*;
+
+    /// Each whole-request refusal carries Kafka's `Errors.message()` for
+    /// its code, as `DescribeQuorumRequest.getTopLevelErrorResponse` sets.
+    #[test]
+    fn top_level_error_response_carries_kafkas_message() {
+        for (error_code, message) in [
+            (
+                codes::CLUSTER_AUTHORIZATION_FAILED,
+                "Cluster authorization failed.",
+            ),
+            (
+                codes::NOT_LEADER_OR_FOLLOWER,
+                "For requests intended only for the leader, this error indicates that the \
+                 broker is not the current leader. For requests intended for any replica, this \
+                 error indicates that the broker is not a replica of the topic partition.",
+            ),
+        ] {
+            assert!(
+                top_level_error_response(error_code)
+                    == DescribeQuorumResponse {
+                        error_code,
+                        error_message: Some(message.to_owned()),
+                        ..Default::default()
+                    }
+            );
+        }
+    }
+
+    /// The refusal survives the wire at v2+, where `ErrorMessage` exists,
+    /// with the message intact rather than null.
+    #[test]
+    fn top_level_error_response_round_trips_its_message() {
+        let resp = top_level_error_response(codes::CLUSTER_AUTHORIZATION_FAILED);
+        let version = describe_quorum_response::MAX_VERSION;
+        let mut out = bytes::BytesMut::new();
+        resp.encode(&mut out, version).expect("encode");
+        let mut cur: &[u8] = &out;
+        let decoded = DescribeQuorumResponse::decode(&mut cur, version).expect("decode");
+        assert!(decoded == resp);
+    }
 }

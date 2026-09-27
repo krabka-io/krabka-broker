@@ -29,7 +29,8 @@ pub struct FormatArgs {
     #[arg(long, value_parser = parse_cluster_id)]
     pub(super) cluster_id: Option<Uuid>,
     /// Bootstrap `metadata.version` (KIP-778), e.g. `4.0` or `4.0-IV3`.
-    /// Defaults to the broker's maximum supported level when omitted.
+    /// Defaults to Kafka 4.3's latest production level, `4.3-IV0`, when
+    /// omitted.
     #[arg(long)]
     pub(super) release_version: Option<String>,
     /// Set an individual feature's finalized level at format time (KIP-1022),
