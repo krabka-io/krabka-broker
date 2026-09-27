@@ -16,7 +16,7 @@ impl AcquisitionState {
     /// earlier.
     ///
     /// A range below the SPSO is already done, and a range that starts below
-    /// it is cut there, as [`AcquisitionState::ack_bounds`] says. `member`
+    /// it is cut there, as `ack_bounds` says. `member`
     /// must currently hold the rest of the range as `Acquired`. The method
     /// splits the range into its own batches at the boundaries, then applies
     /// the acknowledgement. `Accept` gives Acknowledged. `Release` gives
