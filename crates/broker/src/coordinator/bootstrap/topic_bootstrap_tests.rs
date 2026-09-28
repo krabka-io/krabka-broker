@@ -3,9 +3,10 @@
 
 use std::sync::Arc;
 
-use assert2::check;
+use assert2::{assert, check};
 use krabka_ids::PartitionIndex;
 use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
+use krabka_protocol::owned::create_topics_request::CreateTopicsRequest;
 use tempfile::tempdir;
 
 use super::{
@@ -120,16 +121,23 @@ async fn internal_topics_are_created_with_kafkas_topic_configs() {
         .await
         .expect("start broker");
     let broker = handle.broker_arc_for_test();
-    for topic in [
-        OFFSETS_TOPIC,
-        crate::txn::bootstrap::TOPIC,
-        crate::share_coordinator::bootstrap::TOPIC,
-    ] {
-        let creatable = crate::auto_topic_creation::coordinator_topic(&broker.config, topic)
-            .expect("a coordinator topic");
-        crate::auto_topic_creation::create(&broker, creatable)
-            .await
-            .unwrap_or_else(|row| panic!("create {topic}: {row:?}"));
+    let request = CreateTopicsRequest {
+        topics: [
+            OFFSETS_TOPIC,
+            crate::txn::bootstrap::TOPIC,
+            crate::share_coordinator::bootstrap::TOPIC,
+        ]
+        .into_iter()
+        .map(|topic| crate::auto_topic_creation::creatable_topic(&broker.config, topic))
+        .collect(),
+        ..Default::default()
+    };
+    let response = crate::topic_creator::TopicCreator::new(&broker)
+        .create_topic_without_principal(request)
+        .await
+        .expect("the controller answers CreateTopics");
+    for row in &response.topics {
+        assert!(row.error_code == crate::codes::NONE, "create: {row:?}");
     }
 
     let image = handle.controller_image_for_test();

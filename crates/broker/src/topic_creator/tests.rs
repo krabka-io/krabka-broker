@@ -174,8 +174,9 @@ async fn without_principal_creates_a_topic_and_then_reports_that_it_exists() {
 
 /// The controller authorizes an enveloped request against the principal it
 /// names, not against the broker that sent it. The broker's own identity
-/// holds `ClusterAction` and nothing else, so it cannot create a topic
-/// itself, but a principal that holds `Create` can through it.
+/// holds `ClusterAction` and `Create` on the `Cluster`, so it creates a topic
+/// itself. A forwarded principal without `Create` still cannot create one
+/// through it, and a principal that holds `Create` can.
 #[tokio::test]
 async fn the_controller_authorizes_the_forwarded_principal() {
     let (handle, _dir) = start_broker_with(|cfg| {
@@ -193,11 +194,13 @@ async fn the_controller_authorizes_the_forwarded_principal() {
         )))
     };
     let cases = [
+        // The broker's own identity may not describe the configs of the new
+        // topic either, so KIP-525 withholds them too.
         (
-            "the broker's own identity holds no Create",
+            "the broker's own identity",
             Sender::Broker,
             "by-broker",
-            denied("by-broker"),
+            None,
         ),
         (
             "a forwarded principal without Create",

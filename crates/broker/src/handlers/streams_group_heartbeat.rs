@@ -30,8 +30,6 @@ mod creation;
 mod topic_authz;
 mod validation;
 
-pub(crate) use self::creation::StreamsInternalTopics;
-
 #[tracing::instrument(
     name = "handle_streams_group_heartbeat",
     level = "info",
@@ -42,7 +40,7 @@ pub(crate) use self::creation::StreamsInternalTopics;
 pub(crate) async fn handle(
     broker: &Broker,
     version: i16,
-    _correlation_id: i32,
+    correlation_id: i32,
     req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
@@ -139,8 +137,9 @@ pub(crate) async fn handle(
             );
         }
 
-        ng.mark_streams(&req.group_id);
-        let handle = ng.get_or_create_streams(&req.group_id);
+        let group_id = req.group_id.clone();
+        ng.mark_streams(&group_id);
+        let handle = ng.get_or_create_streams(&group_id);
         let (tx, rx) = oneshot::channel();
         if handle
             .tx
@@ -163,10 +162,19 @@ pub(crate) async fn handle(
         };
         let mut resp = result.response;
         // KafkaApis hands the internal topics that the coordinator asks for to
-        // the `CreateTopics` path, with the principal of the caller.
+        // `AutoTopicCreationManager.createStreamsInternalTopics`, with the
+        // principal of the caller.
         if !result.creatable_topics.is_empty() {
-            creation::create_internal_topics(broker, ctx, &mut resp, &result.creatable_topics)
-                .await?;
+            creation::create_internal_topics(
+                broker,
+                &creation::Heartbeat {
+                    ctx,
+                    correlation_id,
+                    group_id: &group_id,
+                },
+                &mut resp,
+                &result.creatable_topics,
+            );
         }
         crate::handlers::encode_response(&resp, version)
     }
@@ -247,10 +255,13 @@ mod tests {
 
     /// Kafka creates the internal topics of a streams topology through
     /// `CreateTopics` with the principal of the caller, so the controller
-    /// validates the configs and places the replicas, and it names a failed
-    /// creation in the `MISSING_INTERNAL_TOPICS` status. Each row joins one
-    /// member with a changelog topic on a one-broker cluster and compares the
-    /// created topic and the status detail.
+    /// validates the configs and places the replicas. The creation runs in
+    /// the background, so the heartbeat that starts it reports only the
+    /// missing topic. A failure goes into the error cache, and the
+    /// `MISSING_INTERNAL_TOPICS` status of the next heartbeat names it. Each
+    /// row joins one member with a changelog topic on a one-broker cluster,
+    /// waits until the creation ends, heartbeats again, and compares the
+    /// created topic and the status details.
     #[tokio::test]
     async fn handle_creates_the_internal_topics_through_create_topics() {
         use krabka_protocol::owned::common::streams_group_heartbeat_request::{
@@ -271,7 +282,7 @@ mod tests {
         };
         // (group id, the changelog topic of the topology, the expected
         // (replication factor, configs) of the created topic or None, the
-        // expected end of the status detail)
+        // expected status details of the second heartbeat)
         create_source_topic(&broker, "in").await;
         let rows = [
             (
@@ -282,7 +293,7 @@ mod tests {
                     ..Default::default()
                 },
                 Some((1, vec![("cleanup.policy", "compact")])),
-                &"Internal topics are missing: rf-unset-changelog".to_string(),
+                Vec::<String>::new(),
             ),
             (
                 "rf-too-high",
@@ -292,11 +303,13 @@ mod tests {
                     ..Default::default()
                 },
                 None,
-                &"Internal topics are missing: rf-too-high-changelog; Creation failed: \
-                  rf-too-high-changelog (Unable to replicate the partition 3 time(s): The \
-                  target replication factor of 3 cannot be reached because only 1 broker(s) \
-                  are registered or some brokers have all their log directories cordoned.)."
-                    .to_string(),
+                vec![
+                    "Internal topics are missing: rf-too-high-changelog; Creation failed: \
+                     rf-too-high-changelog (Unable to replicate the partition 3 time(s): The \
+                     target replication factor of 3 cannot be reached because only 1 broker(s) \
+                     are registered or some brokers have all their log directories cordoned.)."
+                        .to_string(),
+                ],
             ),
             (
                 "bad-config",
@@ -306,37 +319,51 @@ mod tests {
                     ..Default::default()
                 },
                 None,
-                &format!(
+                vec![format!(
                     "Internal topics are missing: bad-config-changelog; Creation failed: \
                      bad-config-changelog ({}).",
                     crate::config_keys::validate_topic_config_map(&maplit::btreemap! {
                         "cleanup.policy".to_string() => "bogus".to_string()
                     })
                     .expect_err("an unknown cleanup policy is refused")
-                ),
+                )],
             ),
         ];
 
-        for (group_id, changelog, created, detail) in rows {
+        for (group_id, changelog, created, second_details) in rows {
             let mut req = request(group_id);
             let topology = req.topology.as_mut().expect("the join carries a topology");
             topology.subtopologies[0].state_changelog_topics = vec![changelog.clone()];
 
-            let bytes = handle(&broker, version, 1, &encode_request(&req), &ctx)
-                .await
-                .expect("handle");
-            let resp = decode_response(&bytes);
-
-            assert!(resp.error_code == codes::NONE, "{group_id}: {resp:?}");
-            let status = resp.status.unwrap_or_default();
-            assert!(
-                status
-                    .iter()
-                    .map(|s| s.status_detail.clone())
-                    .collect::<Vec<_>>()
-                    == vec![detail.clone()],
-                "{group_id}: {status:?}"
+            let first = decode_response(
+                &handle(&broker, version, 1, &encode_request(&req), &ctx)
+                    .await
+                    .expect("handle"),
             );
+            assert!(first.error_code == codes::NONE, "{group_id}: {first:?}");
+            assert!(
+                status_details(&first)
+                    == vec![format!("Internal topics are missing: {}", changelog.name)],
+                "{group_id}: {first:?}"
+            );
+
+            wait_until_creation_ends(&broker, &changelog.name).await;
+            let next = StreamsGroupHeartbeatRequest {
+                member_epoch: first.member_epoch,
+                topology: None,
+                ..request(group_id)
+            };
+            let second = decode_response(
+                &handle(&broker, version, 2, &encode_request(&next), &ctx)
+                    .await
+                    .expect("handle"),
+            );
+            assert!(second.error_code == codes::NONE, "{group_id}: {second:?}");
+            assert!(
+                status_details(&second) == second_details,
+                "{group_id}: {second:?}"
+            );
+
             let image = broker.controller.current_image();
             let topic = image.topic(&changelog.name);
             match created {
@@ -356,6 +383,27 @@ mod tests {
             }
         }
         broker_handle.shutdown().await;
+    }
+
+    /// The status details of `response`, in order.
+    fn status_details(response: &StreamsGroupHeartbeatResponse) -> Vec<String> {
+        response
+            .status
+            .iter()
+            .flatten()
+            .map(|status| status.status_detail.clone())
+            .collect()
+    }
+
+    /// Waits until no creation of `topic` is in flight on `broker`.
+    async fn wait_until_creation_ends(broker: &Broker, topic: &str) {
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            while broker.auto_topic_creation.is_in_flight(topic) {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the creation ends");
     }
 
     /// Kafka's `handleStreamsGroupHeartbeat` reads the topology straight off

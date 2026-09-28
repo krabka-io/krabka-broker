@@ -1,7 +1,7 @@
 //! Kafka's `DefaultAutoTopicCreationManager` for a `Metadata` request that
 //! asks to auto-create a missing coordinator topic.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
 
 use assert2::{assert, check};
 use krabka_protocol::{
@@ -27,8 +27,9 @@ fn row(error_code: i16, name: &str, is_internal: bool) -> MetadataResponseTopic 
 
 /// `creatableTopic` gives `__consumer_offsets` its configured partition count,
 /// replication factor and topic configs, not the broker defaults, and
-/// `filterCreatableTopics` skips it while its creation is in flight. Both
-/// requests answer 3, as `createTopics` answers every name.
+/// `filterCreatableTopics` skips it while its creation is in flight. The
+/// uncreatable rows come first: an invalid name answers 17, and a name in
+/// flight answers 3. `createTopics` answers 3 for the name that it sends.
 #[tokio::test]
 async fn a_coordinator_topic_is_created_with_its_configured_shape_unless_in_flight() {
     let (handle, _dir) = start_broker_with(|config| {
@@ -41,23 +42,29 @@ async fn a_coordinator_topic_is_created_with_its_configured_shape_unless_in_flig
     let user = principal("alice");
     let address = peer();
     let ctx = request_context(&user, &address, "metadata-client");
-    let expected = vec![row(codes::UNKNOWN_TOPIC_OR_PARTITION, OFFSETS_TOPIC, true)];
 
-    assert!(broker.auto_topic_creation.begin(OFFSETS_TOPIC));
-    let skipped = missing_topic_rows(&broker, &ctx, &[OFFSETS_TOPIC], true).await;
-    check!(skipped == expected);
+    assert!(broker.auto_topic_creation.hold_for_test(OFFSETS_TOPIC));
+    let skipped = missing_topic_rows(&broker, &ctx, 1, &["bad name", OFFSETS_TOPIC], true);
     check!(
-        broker
-            .controller
-            .current_image()
-            .topic(OFFSETS_TOPIC)
-            .is_none()
+        skipped
+            == vec![
+                row(codes::INVALID_TOPIC_EXCEPTION, "bad name", false),
+                row(codes::UNKNOWN_TOPIC_OR_PARTITION, OFFSETS_TOPIC, true),
+            ]
     );
-    broker.auto_topic_creation.end(OFFSETS_TOPIC);
+    check!(broker.auto_topic_creation.started() == 0);
+    broker.auto_topic_creation.release_for_test(OFFSETS_TOPIC);
 
-    let created = missing_topic_rows(&broker, &ctx, &[OFFSETS_TOPIC], true).await;
-    check!(created == expected);
-    check!(!broker.auto_topic_creation.is_in_flight(OFFSETS_TOPIC));
+    let created = missing_topic_rows(&broker, &ctx, 2, &[OFFSETS_TOPIC], true);
+    check!(created == vec![row(codes::UNKNOWN_TOPIC_OR_PARTITION, OFFSETS_TOPIC, true)]);
+    check!(broker.auto_topic_creation.started() == 1);
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while broker.auto_topic_creation.is_in_flight(OFFSETS_TOPIC) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the creation ends");
     let image = broker.controller.current_image();
     check!(image.topic_partition_count(OFFSETS_TOPIC) == 7);
     let configs: BTreeMap<String, String> =
