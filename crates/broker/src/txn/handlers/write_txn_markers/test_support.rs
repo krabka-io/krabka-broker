@@ -35,9 +35,14 @@ pub(crate) fn open_partition(
     part
 }
 
+/// Start a broker with auditing switched off, and wait until its group
+/// coordinator serves `__consumer_offsets`: the offsets-partition marker tests
+/// append to that topic, and no broker creates it when it starts.
 pub(super) async fn start_broker() -> (BrokerHandle, tempfile::TempDir) {
-    crate::test_support::start_broker_with(|cfg| {
+    let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
         cfg.audit_enabled = false;
     })
-    .await
+    .await;
+    handle.wait_until_group_coordinator_ready().await;
+    (handle, dir)
 }

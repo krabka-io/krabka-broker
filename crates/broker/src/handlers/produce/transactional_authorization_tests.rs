@@ -15,7 +15,6 @@ use std::sync::Arc;
 
 use assert2::assert;
 use bytes::Bytes;
-use krabka_ids::PartitionIndex;
 use krabka_protocol::{
     owned::{
         create_topics_request::{self, CreatableTopic, CreateTopicsRequest},
@@ -36,7 +35,6 @@ use crate::{
         GrantsInPrincipalName, decode_response, dispatch_context, encode_request, peer, principal,
         request_context, start_broker_with,
     },
-    txn::coordinator::leadership::LoadStatus,
 };
 
 const TOPIC: &str = "orders";
@@ -58,33 +56,10 @@ async fn boot() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
     handle.wait_until_controller_leader().await;
     handle.wait_until_brokers_registered(1).await;
     let broker = handle.broker_arc_for_test();
-    // The `__transaction_state` topic is normally bootstrapped lazily by a
-    // `FindCoordinator(TRANSACTION)` call; `open_transaction` below drives
-    // `InitProducerId` directly, so it is bootstrapped here instead, exactly
-    // as `add_partitions_to_txn::authorization_tests` does.
-    crate::txn::bootstrap::ensure_topic(
-        &broker.controller,
-        1,
-        1,
-        &crate::txn::bootstrap::topic_configs(
-            broker.config.transaction_state_segment_bytes,
-            broker.config.transaction_state_min_isr,
-        ),
-    )
-    .await
-    .expect("bootstrap __transaction_state");
-    // Wait for the coordinator's own leadership/load bookkeeping, not just
-    // the partition object -- see the same wait in
-    // `add_partitions_to_txn::authorization_tests`.
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        while broker.txn_coordinator.load_status(PartitionIndex(0)).await
-            != Some(LoadStatus::Loaded)
-        {
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .expect("__transaction_state-0 becomes local");
+    // A client's first `FindCoordinator(TRANSACTION)` creates
+    // `__transaction_state`. `open_transaction` below drives `InitProducerId`
+    // directly, so the topic is created here instead.
+    handle.wait_until_transaction_coordinator_ready().await;
     create_topic(&broker, TOPIC).await;
     (handle, dir)
 }

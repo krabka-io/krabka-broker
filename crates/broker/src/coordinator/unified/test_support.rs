@@ -137,6 +137,7 @@ pub(super) fn make_share_persister(
             krabka_metadata::NodeId(1),
             share_coordinator,
             source,
+            Arc::default(),
             Arc::new(crate::network::client::InterBrokerClient::new(None, None)),
             krabka_security::ListenerProtocol::Plaintext,
             "PLAINTEXT".into(),

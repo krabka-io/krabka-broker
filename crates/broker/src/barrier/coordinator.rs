@@ -48,6 +48,7 @@ pub(crate) use self::{
     injection::InjectionOutcome,
 };
 use crate::{
+    auto_topic_creation::AutoTopicCreation,
     barrier::{
         STATE_TOPIC,
         config::BarrierConfig,
@@ -145,6 +146,8 @@ pub(crate) struct BarrierCoordinator {
     pub(crate) node_id: NodeId,
     partitions: Arc<PartitionRegistry>,
     controller: Arc<dyn MetadataSource>,
+    /// Creates `__barrier_state` when the first group needs it.
+    auto_topic_creation: Arc<AutoTopicCreation>,
     config: BarrierConfig,
     metrics: Arc<dyn BarrierMetrics>,
     remote: Option<Arc<dyn RemoteMarkerWriter>>,
@@ -159,6 +162,7 @@ impl BarrierCoordinator {
         node_id: NodeId,
         partitions: Arc<PartitionRegistry>,
         controller: Arc<dyn MetadataSource>,
+        auto_topic_creation: Arc<AutoTopicCreation>,
         config: BarrierConfig,
         metrics: Arc<dyn BarrierMetrics>,
     ) -> Self {
@@ -166,6 +170,7 @@ impl BarrierCoordinator {
             node_id,
             partitions,
             controller,
+            auto_topic_creation,
             config,
             metrics,
             remote: None,
@@ -180,16 +185,6 @@ impl BarrierCoordinator {
     /// every remote partition lands in the `missing` list of the cut.
     pub(crate) fn configure_marker_transport(&mut self, remote: Arc<dyn RemoteMarkerWriter>) {
         self.remote = Some(remote);
-    }
-
-    #[must_use]
-    pub(crate) fn state_topic_num_partitions(&self) -> i32 {
-        self.config.state_topic_num_partitions
-    }
-
-    #[must_use]
-    pub(crate) fn state_topic_replication_factor(&self) -> i16 {
-        self.config.state_topic_replication_factor
     }
 
     /// How often the scheduler should call [`Self::run_due_injections`].

@@ -243,11 +243,14 @@ mod tests {
         authorizer: Arc<dyn Authorizer>,
         share_enabled: bool,
     ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-        crate::test_support::start_broker_with(|cfg| {
+        let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
             cfg.authorizer = authorizer;
             cfg.share_group.enable = share_enabled;
         })
-        .await
+        .await;
+        handle.wait_until_group_coordinator_ready().await;
+        handle.wait_until_share_coordinator_ready().await;
+        (handle, dir)
     }
 
     fn principal() -> Principal {

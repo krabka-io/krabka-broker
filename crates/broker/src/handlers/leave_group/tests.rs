@@ -54,6 +54,7 @@ async fn leave_group_answers_kafka_shapes_for_missing_and_invalid_groups() {
         config.offsets_topic_replication_factor = 1;
     })
     .await;
+    broker_handle.wait_until_group_coordinator_ready().await;
     let broker = broker_handle.broker_arc_for_test();
     let rows = [
         (

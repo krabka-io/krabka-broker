@@ -173,8 +173,6 @@ pub struct RuntimeArgs {
     pub audit_tail_window_offsets: Option<PositiveI64>,
     #[arg(long, env = "KRABKA_AUDIT_TAIL_READ_MAX", value_parser = krabka_units::parse::positive_byte_size)]
     pub audit_tail_read_max: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_OFFSETS_TOPIC_METADATA_WAIT_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
-    pub offsets_topic_metadata_wait_timeout: Option<Time>,
     #[arg(long, env = "KRABKA_CLIENT_METRICS_STALE_PUSH_INTERVALS", value_parser = clap::value_parser!(u32).range(1..))]
     pub client_metrics_stale_push_intervals: Option<u32>,
     #[arg(long, env = "KRABKA_CLIENT_METRICS_OTLP_QUEUE_CAPACITY", value_parser = parse_positive_count)]

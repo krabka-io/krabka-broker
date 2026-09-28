@@ -816,6 +816,7 @@ mod tests {
             cfg.share_group.enable = true;
         })
         .await;
+        broker_handle.wait_until_group_coordinator_ready().await;
         let broker = broker_handle.broker_arc_for_test();
         let allowed_id = uuid::Uuid::from_u128(1);
         let node = krabka_raft::NodeId(broker_handle.node_id());
@@ -867,6 +868,7 @@ mod tests {
             cfg.share_group.enable = true;
         })
         .await;
+        broker_handle.wait_until_group_coordinator_ready().await;
         let broker = broker_handle.broker_arc_for_test();
         let principal = anonymous_principal();
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
@@ -940,6 +942,7 @@ mod tests {
             cfg.share_group.enable = true;
         })
         .await;
+        broker_handle.wait_until_group_coordinator_ready().await;
         let broker = broker_handle.broker_arc_for_test();
         let coordinator = &broker.group_coordinator;
         let _classic = coordinator.get_or_create_classic("classic");

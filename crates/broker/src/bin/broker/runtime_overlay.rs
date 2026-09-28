@@ -124,7 +124,6 @@ impl RuntimeArgs {
             quota_throttle_max,
             quota_window,
             controller_mutation_quota_window,
-            offsets_topic_metadata_wait_timeout,
             producer_id_expiration,
             producer_id_expiration_scan_interval,
             transaction_max_timeout,

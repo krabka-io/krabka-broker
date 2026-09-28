@@ -13,6 +13,8 @@ use crate::{broker::BrokerHandle, error::BrokerError, partition_registry::Partit
 #[cfg(any(test, feature = "test-helpers"))]
 mod cluster;
 #[cfg(any(test, feature = "test-helpers"))]
+mod coordinator_topics;
+#[cfg(any(test, feature = "test-helpers"))]
 mod diskless;
 #[cfg(any(test, feature = "test-helpers"))]
 mod groups;

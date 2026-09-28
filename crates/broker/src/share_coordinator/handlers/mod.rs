@@ -131,22 +131,23 @@ pub(crate) mod test_support {
         ))
     }
 
-    /// Creates the real `__share_group_state` topic on `broker` and waits until
-    /// the share coordinator has loaded every partition of it.
+    /// Creates the real `__share_group_state` topic on `broker`, with its
+    /// configured shape, and waits until the share coordinator has loaded
+    /// every partition of it. A topic that exists already is kept.
     ///
     /// A test must not seed the leadership by hand on a live broker: the
     /// metadata reconcile loop applies the image again at any time, and an
     /// image without the topic drops every led partition.
     pub(crate) async fn lead_share_state_partitions(broker: &Broker) {
-        let partitions = broker.share_coordinator.state_topic_num_partitions();
-        bootstrap::ensure_topic(
-            &broker.controller,
-            partitions,
-            broker.share_coordinator.state_topic_replication_factor(),
-            &broker.share_coordinator.state_topic_configs(),
-        )
-        .await
-        .expect("create __share_group_state");
+        let partitions = broker.config.share_coordinator.state_topic_num_partitions;
+        let topic = crate::auto_topic_creation::coordinator_topic(&broker.config, bootstrap::TOPIC)
+            .expect("__share_group_state is a coordinator topic");
+        if let Err(row) = crate::auto_topic_creation::create(broker, topic).await {
+            assert2::assert!(
+                row.error_code == crate::codes::TOPIC_ALREADY_EXISTS,
+                "create __share_group_state: {row:?}"
+            );
+        }
         tokio::time::timeout(std::time::Duration::from_secs(30), async {
             loop {
                 broker
