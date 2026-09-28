@@ -23,12 +23,50 @@ pub(crate) use self::{
     shutdown::{BrokerControlState, HeartbeatFacts, HeartbeatWants, next_broker_state},
 };
 
-/// Every broker the image registers, with the fence the image replicates for
-/// it: what [`ControllerLivenessState::seed_brokers`] starts a controller term
-/// from.
-pub(crate) fn replicated_fences(image: &krabka_metadata::MetadataImage) -> Vec<(u64, bool)> {
+/// The fence and controlled shutdown the metadata log holds for one broker's
+/// registration, which `RegisterBrokerRecord` and
+/// `BrokerRegistrationChangeRecord` replay into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ReplicatedRegistration {
+    pub(crate) node_id: u64,
+    pub(crate) fenced: bool,
+    pub(crate) in_controlled_shutdown: bool,
+}
+
+impl ReplicatedRegistration {
+    /// An unfenced registration that is not in controlled shutdown.
+    #[cfg(test)]
+    pub(crate) const fn unfenced(node_id: u64) -> Self {
+        Self {
+            node_id,
+            fenced: false,
+            in_controlled_shutdown: false,
+        }
+    }
+
+    /// A fenced registration that is not in controlled shutdown.
+    #[cfg(test)]
+    pub(crate) const fn fenced(node_id: u64) -> Self {
+        Self {
+            node_id,
+            fenced: true,
+            in_controlled_shutdown: false,
+        }
+    }
+}
+
+/// Every broker the image registers, with the fence and controlled shutdown
+/// its registration holds: what [`ControllerLivenessState::seed_brokers`]
+/// starts a controller term from.
+pub(crate) fn replicated_registrations(
+    image: &krabka_metadata::MetadataImage,
+) -> Vec<ReplicatedRegistration> {
     image
         .brokers()
-        .map(|broker| (broker.node_id.0, broker.fenced))
+        .map(|broker| ReplicatedRegistration {
+            node_id: broker.node_id.0,
+            fenced: broker.fenced,
+            in_controlled_shutdown: broker.in_controlled_shutdown,
+        })
         .collect()
 }

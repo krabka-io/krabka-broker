@@ -35,7 +35,9 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
-use krabka_metadata::{BrokerRegistrationRecord, MetadataImage, NodeId};
+use krabka_metadata::{
+    BrokerRegistrationChangeRecord, BrokerRegistrationRecord, MetadataImage, NodeId,
+};
 
 /// Kafka's `ServerLogConfigs.CORDONED_LOG_DIRS_CONFIG`.
 pub(crate) const CORDONED_LOG_DIRS: &str = "cordoned.log.dirs";
@@ -156,8 +158,9 @@ pub(crate) fn fully_cordoned_brokers(image: &MetadataImage) -> std::collections:
         .collect()
 }
 
-/// The registration record that stores `reported` as the cordoned directories
-/// of `node_id`, or `None` when the registration already holds that set.
+/// The `BrokerRegistrationChangeRecord` that stores `reported` as the cordoned
+/// directories of `node_id`, at its broker epoch, or `None` when the
+/// registration already holds that set.
 ///
 /// This is Kafka's `ReplicationControlManager.handleDirectoriesCordoned`. A
 /// heartbeat with no cordoned directories (the broker has not caught up yet)
@@ -175,10 +178,12 @@ pub(crate) fn registration_change(
         stored.iter().collect::<BTreeSet<_>>() != reported.iter().collect::<BTreeSet<_>>()
     });
     changed.then(|| {
-        krabka_metadata::MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
-            cordoned_log_dirs: Some(reported.to_vec()),
-            ..current.clone()
-        })
+        krabka_metadata::MetadataRecord::V1BrokerRegistrationChange(
+            BrokerRegistrationChangeRecord {
+                cordoned_log_dirs: Some(reported.to_vec()),
+                ..BrokerRegistrationChangeRecord::no_change(node_id, current.broker_epoch)
+            },
+        )
     })
 }
 
@@ -439,11 +444,15 @@ mod tests {
         for (label, stored, reported, writes) in cases {
             let mut image = MetadataImage::new(uuid::Uuid::nil());
             let current = registration(&[1, 2], stored);
-            image.apply(&MetadataRecord::V1BrokerRegistration(current.clone()));
+            image.apply(&MetadataRecord::V1BrokerRegistration(current));
             let want = writes.then(|| {
-                MetadataRecord::V1BrokerRegistration(krabka_metadata::BrokerRegistrationRecord {
+                MetadataRecord::V1BrokerRegistrationChange(BrokerRegistrationChangeRecord {
+                    node_id: NodeId(1),
+                    broker_epoch: 7,
+                    fenced: krabka_metadata::FencingChange::None,
+                    in_controlled_shutdown: false,
+                    log_dirs: vec![],
                     cordoned_log_dirs: reported.clone(),
-                    ..current
                 })
             });
             check!(

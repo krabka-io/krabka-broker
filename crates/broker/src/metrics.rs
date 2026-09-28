@@ -212,7 +212,7 @@ pub struct BrokerMetrics {
     /// The pass awaits its own `submit_change`, so an increment means any
     /// fencing record that pass decided on is committed and applied rather
     /// than still in flight. That is what lets a test tell "nobody is fenced"
-    /// apart from "a `broker.fenced=true` is on its way", which the image
+    /// apart from "a fencing `BrokerRegistrationChangeRecord` is on its way", which the image
     /// alone cannot distinguish. Mirrors the intent of
     /// [`Self::log_cleaner_runs_total`].
     pub controller_fencing_publications_total: Counter,

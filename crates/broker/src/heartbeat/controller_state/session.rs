@@ -100,31 +100,46 @@ impl ControllerLivenessState {
     }
 
     /// Seed the liveness registry when this node becomes the controller
-    /// leader. `brokers` pairs every registered broker id with the fence the
-    /// metadata image replicates for it. Every entry becomes `Alive` with
-    /// `last_heartbeat = now`, so live peers get a full timeout window to
-    /// redirect their heartbeat loop at the new controller, and
+    /// leader. `brokers` holds every registered broker with the fence and
+    /// controlled shutdown its registration replays to. Every entry becomes
+    /// `Alive` with `last_heartbeat = now`, so live peers get a full timeout
+    /// window to redirect their heartbeat loop at the new controller, and
     /// [`tick`](Self::tick) still detects dead peers after `timeout`.
     ///
     /// This is `ClusterControlManager.activate`: a broker keeps the fence the
     /// cluster replicated for it, and only an unfenced one starts with a
     /// heartbeat session. A broker the previous controller had fenced has no
     /// session until it heartbeats, so a new incarnation of it may register.
-    pub(crate) async fn seed_brokers(&self, brokers: impl IntoIterator<Item = (u64, bool)>) {
+    ///
+    /// An unfenced registration in controlled shutdown starts in controlled
+    /// shutdown, so nothing elects it (Kafka's `ClusterControlManager.isActive`
+    /// reads the registration). Its shutdown offset is unknown to this term, so
+    /// it is -1: its next heartbeat drains any leadership it still holds and
+    /// moves the offset to the end of that drain, or, if it leads nothing, lets
+    /// it shut down, as Kafka's first heartbeat after a failover does. A fenced
+    /// registration leaves controlled shutdown, as Kafka's
+    /// `BrokerHeartbeatManager.touch` does.
+    pub(crate) async fn seed_brokers(
+        &self,
+        brokers: impl IntoIterator<Item = super::ReplicatedRegistration>,
+    ) {
         let mut map = self.brokers.lock().await;
         let now = self.clock.now();
-        for (id, replicated_fence) in brokers {
-            map.entry(id)
-                .and_modify(|entry| {
-                    entry.last_heartbeat = now;
-                    entry.state = BrokerLivenessState::Alive;
-                    entry.fenced = entry.fenced || replicated_fence;
-                    entry.contact = !entry.fenced;
-                    if entry.fenced {
-                        entry.controlled_shutdown_offset = None;
-                    }
-                })
-                .or_insert(BrokerEntry::new(now, replicated_fence, !replicated_fence));
+        for replicated in brokers {
+            let entry = map.entry(replicated.node_id).or_insert(BrokerEntry::new(
+                now,
+                replicated.fenced,
+                !replicated.fenced,
+            ));
+            entry.last_heartbeat = now;
+            entry.state = BrokerLivenessState::Alive;
+            entry.fenced = entry.fenced || replicated.fenced;
+            entry.contact = !entry.fenced;
+            if entry.fenced {
+                entry.controlled_shutdown_offset = None;
+            } else if replicated.in_controlled_shutdown {
+                entry.controlled_shutdown_offset.get_or_insert(-1);
+            }
         }
     }
 
@@ -138,7 +153,7 @@ impl ControllerLivenessState {
     pub(crate) async fn seed_term(
         &self,
         term: Option<u64>,
-        brokers: impl IntoIterator<Item = (u64, bool)>,
+        brokers: impl IntoIterator<Item = super::ReplicatedRegistration>,
     ) {
         use std::sync::atomic::Ordering;
         // One registration turn at a time decides whether to seed, so two
@@ -215,7 +230,66 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::heartbeat::controller_state::TestClock;
+    use crate::heartbeat::controller_state::{
+        BrokerControlState, ReplicatedRegistration, TestClock,
+    };
+
+    /// krabka-io/krabka-broker#825: a controller that takes over, a restarted
+    /// one included, starts every broker from the fence and controlled
+    /// shutdown its registration replays to, as
+    /// `ClusterControlManager.activate` registers each replayed
+    /// `BrokerRegistration` with the heartbeat manager.
+    #[tokio::test]
+    async fn a_new_term_starts_from_the_replayed_registration() {
+        let cases = [
+            (
+                "unfenced",
+                ReplicatedRegistration::unfenced(1),
+                (BrokerControlState::Unfenced, true, true, None),
+            ),
+            (
+                "fenced",
+                ReplicatedRegistration::fenced(1),
+                (BrokerControlState::Fenced, false, false, None),
+            ),
+            (
+                "in controlled shutdown",
+                ReplicatedRegistration {
+                    in_controlled_shutdown: true,
+                    ..ReplicatedRegistration::unfenced(1)
+                },
+                (
+                    BrokerControlState::ControlledShutdown,
+                    false,
+                    true,
+                    Some(-1),
+                ),
+            ),
+            (
+                "fenced in controlled shutdown",
+                ReplicatedRegistration {
+                    in_controlled_shutdown: true,
+                    ..ReplicatedRegistration::fenced(1)
+                },
+                (BrokerControlState::Fenced, false, false, None),
+            ),
+        ];
+        for (what, replicated, want) in cases {
+            let liveness = ControllerLivenessState::new(krabka_units::secs(10));
+
+            liveness.seed_term(Some(1), [replicated]).await;
+
+            assert2::check!(
+                (
+                    liveness.control_state(1).await,
+                    liveness.is_alive(1).await,
+                    liveness.has_valid_session(1).await,
+                    liveness.controlled_shutdown_offset(1).await,
+                ) == want,
+                "{what}"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn new_broker_starts_alive_after_first_heartbeat() {
@@ -305,7 +379,9 @@ mod tests {
         let _ = liveness.tick().await;
         assert!(liveness.dead_snapshot().await.contains(&4));
 
-        liveness.seed_brokers([(4, false)]).await;
+        liveness
+            .seed_brokers([ReplicatedRegistration::unfenced(4)])
+            .await;
 
         assert!(liveness.dead_snapshot().await.is_empty());
     }
@@ -315,7 +391,9 @@ mod tests {
         let clock = TestClock::new();
         let liveness =
             ControllerLivenessState::with_clock(Duration::from_millis(50), clock.clock());
-        liveness.seed_brokers([(7, false)]).await;
+        liveness
+            .seed_brokers([ReplicatedRegistration::unfenced(7)])
+            .await;
         // Well within the 50ms window — deterministically still alive.
         clock.advance(Duration::from_millis(1));
 
@@ -335,7 +413,9 @@ mod tests {
         clock.advance(Duration::from_millis(20));
 
         // ...a normal re-seed must REFRESH the existing entry to a full window,
-        liveness.seed_brokers([(7, false)]).await;
+        liveness
+            .seed_brokers([ReplicatedRegistration::unfenced(7)])
+            .await;
         // so 1ms later it is nowhere near expiry. Were the refresh missing, the
         // entry would be ~21ms stale here and `tick` would mark it dead — which
         // is exactly the regression this test guards.
@@ -452,8 +532,16 @@ mod tests {
                         liveness.apply_fencing(BROKER, true, true).await;
                     }
                     Discover => liveness.track_registered([BROKER]).await,
-                    Seed => liveness.seed_brokers([(BROKER, false)]).await,
-                    SeedFenced => liveness.seed_brokers([(BROKER, true)]).await,
+                    Seed => {
+                        liveness
+                            .seed_brokers([ReplicatedRegistration::unfenced(BROKER)])
+                            .await;
+                    }
+                    SeedFenced => {
+                        liveness
+                            .seed_brokers([ReplicatedRegistration::fenced(BROKER)])
+                            .await;
+                    }
                     ReplaceIncarnation => liveness.replace_incarnation(BROKER).await,
                     Advance(millis) => clock.advance(Duration::from_millis(*millis)),
                     Tick => {
@@ -507,15 +595,33 @@ mod tests {
         let clock = TestClock::new();
         let liveness = ControllerLivenessState::with_test_clock(Duration::from_millis(10), &clock);
 
-        liveness.seed_term(Some(3), [(1, false)]).await;
+        liveness
+            .seed_term(Some(3), [ReplicatedRegistration::unfenced(1)])
+            .await;
         clock.advance(Duration::from_millis(11));
         // A second caller in term 3 does not refresh the window.
-        liveness.seed_term(Some(3), [(1, false), (2, false)]).await;
+        liveness
+            .seed_term(
+                Some(3),
+                [
+                    ReplicatedRegistration::unfenced(1),
+                    ReplicatedRegistration::unfenced(2),
+                ],
+            )
+            .await;
         assert!(liveness.tick().await == vec![LivenessTransition::AliveToDead(1)]);
         assert!(liveness.state(2).await == None);
 
         // Term 4 seeds again.
-        liveness.seed_term(Some(4), [(1, false), (2, false)]).await;
+        liveness
+            .seed_term(
+                Some(4),
+                [
+                    ReplicatedRegistration::unfenced(1),
+                    ReplicatedRegistration::unfenced(2),
+                ],
+            )
+            .await;
         assert!(liveness.alive_snapshot().await == [1, 2].into_iter().collect());
     }
 
