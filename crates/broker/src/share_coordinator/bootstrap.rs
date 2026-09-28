@@ -2,7 +2,7 @@
 //!
 //! The first `FindCoordinator(SHARE)`, or the first call of the share-state
 //! persister, creates the topic with its configured partition count and
-//! replication factor ([`crate::auto_topic_creation::AutoTopicCreation`]), as
+//! replication factor (`crate::auto_topic_creation`), as
 //! Kafka's `KafkaApis.getCoordinator` does.
 
 use std::collections::BTreeMap;
