@@ -29,6 +29,14 @@ mod support;
 /// `FENCED_INSTANCE_ID` (82, KIP-345).
 const FENCED_INSTANCE_ID: i16 = 82;
 
+/// Boots one broker and waits until its group coordinator serves
+/// `__consumer_offsets`. No broker creates that topic when it starts.
+async fn start() -> support::InProcess {
+    let p = support::start().await;
+    p.broker.wait_until_group_coordinator_ready().await;
+    p
+}
+
 fn join_request(group_id: &str, member_id: &str, instance_id: Option<&str>) -> JoinGroupRequest {
     JoinGroupRequest {
         group_id: group_id.into(),
@@ -93,7 +101,7 @@ async fn bootstrap_static_member(
 
 #[tokio::test]
 async fn static_rejoin_preserves_assignment_and_generation() {
-    let p = support::start().await;
+    let p = start().await;
 
     let (mid1, gen1, assignment) = bootstrap_static_member(
         &p.client,
@@ -185,7 +193,7 @@ async fn static_rejoin_preserves_assignment_and_generation() {
 
 #[tokio::test]
 async fn second_client_with_same_instance_id_is_fenced() {
-    let p = support::start().await;
+    let p = start().await;
 
     let (mid1, gen1, _) = bootstrap_static_member(
         &p.client,
@@ -244,7 +252,7 @@ async fn second_client_with_same_instance_id_is_fenced() {
 
 #[tokio::test]
 async fn leave_group_resolves_static_member_by_instance_id() {
-    let p = support::start().await;
+    let p = start().await;
 
     let (mid, _gen, _) = bootstrap_static_member(
         &p.client,
