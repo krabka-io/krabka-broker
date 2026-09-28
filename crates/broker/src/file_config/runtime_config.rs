@@ -724,9 +724,6 @@ pub struct RuntimeFileConfig {
     pub streams_group_heartbeat_interval: Option<Time>,
     /// Maximum number of members in one streams group.
     pub streams_group_max_size: Option<usize>,
-    /// Replication factor of the internal topics a streams group creates, such
-    /// as its repartition and changelog topics.
-    pub streams_internal_topic_replication_factor: Option<i16>,
     /// Number of standby replicas the assignor places for each task, the
     /// group's `streams.num.standby.replicas`.
     pub streams_group_num_standby_replicas: Option<i32>,

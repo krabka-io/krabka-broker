@@ -490,10 +490,6 @@ impl BrokerConfig {
                 self.transaction_state_replication_factor,
             ),
             (
-                "streams_internal_topic_replication_factor",
-                self.streams_group.internal_topic_replication_factor,
-            ),
-            (
                 "barrier_state_replication_factor",
                 self.barrier_state_replication_factor,
             ),

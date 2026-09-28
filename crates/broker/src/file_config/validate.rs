@@ -503,8 +503,8 @@ mod tests {
         let cases = [
             ("heartbeat_interval = \"0ms\"\n", "heartbeat_interval"),
             (
-                "[runtime]\nstreams_internal_topic_replication_factor = 0\n",
-                "streams_internal_topic_replication_factor",
+                "[runtime]\noffsets_topic_replication_factor = 0\n",
+                "offsets_topic_replication_factor",
             ),
             (
                 "[delegation_token]\nmax_lifetime_ms = 0\n",

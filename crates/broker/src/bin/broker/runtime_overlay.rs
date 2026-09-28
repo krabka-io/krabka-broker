@@ -198,7 +198,6 @@ impl RuntimeArgs {
             share_group_max_inflight_records,
             share_group_max_size,
             streams_group_max_size,
-            streams_internal_topic_replication_factor,
         );
         copy_plain_runtime!(
             self,

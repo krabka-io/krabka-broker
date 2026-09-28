@@ -313,8 +313,6 @@ pub struct RuntimeArgs {
     pub streams_group_heartbeat_interval: Option<Time>,
     #[arg(long, env = "KRABKA_STREAMS_GROUP_MAX_SIZE", value_parser = parse_positive_count)]
     pub streams_group_max_size: Option<PositiveCount>,
-    #[arg(long, env = "KRABKA_STREAMS_INTERNAL_TOPIC_REPLICATION_FACTOR", value_parser = parse_positive_i16)]
-    pub streams_internal_topic_replication_factor: Option<PositiveI16>,
     #[arg(long, env = "KRABKA_STREAMS_GROUP_NUM_STANDBY_REPLICAS", value_parser = clap::value_parser!(i32).range(0..))]
     pub streams_group_num_standby_replicas: Option<i32>,
     #[arg(long, env = "KRABKA_STREAMS_GROUP_NUM_WARMUP_REPLICAS", value_parser = clap::value_parser!(i32).range(0..))]

@@ -2821,16 +2821,6 @@
             "null"
           ]
         },
-        "streams_internal_topic_replication_factor": {
-          "description": "Replication factor of the internal topics a streams group creates, such\nas its repartition and changelog topics.",
-          "format": "int16",
-          "maximum": 32767,
-          "minimum": -32768,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
         "sync_group_follower_wait": {
           "default": null,
           "description": "Maximum time a classic-protocol follower waits for its `SyncGroup`\nassignment.",
