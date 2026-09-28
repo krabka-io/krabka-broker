@@ -186,7 +186,21 @@ async fn sasl_controller_listener_answers_api_versions_before_authentication() {
         assert!(authenticate[..3] == [0, 0, 0]);
 
         let after = api_versions(&mut stream, version, 5).await;
-        check!(before == after, "v{version}");
+        // `finalized_features_epoch` is the controller's metadata offset, as
+        // Kafka's `KRaftMetadataCache.features` reports it, so a record the
+        // controller commits between the two requests may move it on. The
+        // rest of the answer is unchanged by authentication.
+        check!(
+            after.finalized_features_epoch >= before.finalized_features_epoch,
+            "v{version}"
+        );
+        check!(
+            ApiVersionsResponse {
+                finalized_features_epoch: before.finalized_features_epoch,
+                ..after
+            } == before,
+            "v{version}"
+        );
         check!(before.error_code == 0, "v{version}");
         check!(
             before.api_keys.iter().any(|key| key.api_key == 52),
