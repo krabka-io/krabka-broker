@@ -1048,11 +1048,13 @@ async fn second_create_of_uncommitted_topic_is_refused_before_append() {
     );
 }
 
-/// A waiter that fails on leadership loss leaves `commit_waiters`, and its
-/// pending name goes with it. After node 1 is leader again, a create of the
-/// same name is appended. The pending-name check does not refuse it.
+/// A waiter that fails on leadership loss leaves `commit_waiters`, but its
+/// record stays in the log. After node 1 is leader again, that record is
+/// still pending, so a create of the same name gets `TopicExists` and appends
+/// nothing, as Kafka's controller has replayed the pending record. Once the
+/// record commits, the name exists, and only one `TopicRecord` is in the log.
 #[tokio::test]
-async fn pending_create_clears_when_leadership_loss_fails_its_waiter() {
+async fn create_of_a_name_left_uncommitted_by_an_earlier_epoch_is_refused() {
     let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
     elect_three_voter_engine(&mut engine, 0);
 
@@ -1077,19 +1079,42 @@ async fn pending_create_clears_when_leadership_loss_fails_its_waiter() {
     let end_before_retry = engine.log.log_end_offset();
     let (retry_tx, mut retry_rx) = oneshot::channel();
     engine.on_submit_change(&topic_record_named("first", 2), retry_tx);
-
     assert!(matches!(
         retry_rx.try_recv(),
+        Ok(Err(RaftError::Metadata(
+            krabka_metadata::MetadataError::TopicExists(name)
+        ))) if name == "first"
+    ));
+    check!(engine.log.log_end_offset() == end_before_retry);
+
+    // A create of another name is not held back by the pending tail.
+    let (other_tx, mut other_rx) = oneshot::channel();
+    engine.on_submit_change(&topic_record_named("other", 3), other_tx);
+    assert!(matches!(
+        other_rx.try_recv(),
         Err(oneshot::error::TryRecvError::Empty)
     ));
-    check!(engine.log.log_end_offset() > end_before_retry);
+    let end_after_other = engine.log.log_end_offset();
+    check!(end_after_other > end_before_retry);
+
+    // Node 2 fetches the whole log. With node 1, that is a majority of three.
+    engine.on_event(Event::ReceiveFetch {
+        from: NodeId(2),
+        fetch_epoch: engine.core.quorum_state().leader_epoch,
+        fetch_offset: end_after_other.0,
+    });
+    assert!(matches!(other_rx.try_recv(), Ok(Ok(_))));
+    check!(
+        engine.image.topic("first").map(|topic| topic.topic_id) == Some(uuid::Uuid::from_u128(1))
+    );
     check!(
         engine
-            .commit_waiters
-            .iter()
-            .map(|waiter| waiter.creates.clone())
-            .collect::<Vec<_>>()
-            == vec![vec!["first".to_string()]]
+            .image
+            .topic_by_id(&uuid::Uuid::from_u128(2))
+            .is_none()
+    );
+    check!(
+        engine.image.topic("other").map(|topic| topic.topic_id) == Some(uuid::Uuid::from_u128(3))
     );
 }
 
