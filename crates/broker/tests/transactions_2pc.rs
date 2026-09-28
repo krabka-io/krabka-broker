@@ -130,6 +130,9 @@ async fn enable_2pc_rejected_when_cluster_disabled() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn keep_prepared_txn_without_ongoing_transaction_is_a_noop() {
     let (broker, bootstrap, _dir) = boot(true).await;
+    // The producer does not retry COORDINATOR_NOT_AVAILABLE from
+    // FindCoordinator. Bring the transaction coordinator up first.
+    broker.wait_until_transaction_coordinator_ready().await;
     let producer = Producer::builder()
         .bootstrap(bootstrap.clone())
         .transactional_id("tid-keep")
@@ -174,6 +177,9 @@ async fn keep_prepared_txn_without_ongoing_transaction_is_a_noop() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn enable_2pc_persists_no_timeout_sentinel() {
     let (broker, bootstrap, _dir) = boot(true).await;
+    // The producer does not retry COORDINATOR_NOT_AVAILABLE from
+    // FindCoordinator. Bring the transaction coordinator up first.
+    broker.wait_until_transaction_coordinator_ready().await;
 
     // Bootstrap the txn coordinator + this tid's entry via a normal producer.
     let producer = Producer::builder()

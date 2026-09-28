@@ -90,7 +90,7 @@ async fn describe_reflects_spso_after_consume() {
     let client = connect(&broker.listen_addr().to_string()).await;
     create_topic(&broker, &client, "t", 1).await;
     let tid = topic_id(&broker, "t");
-    bootstrap_share_state(&broker, &client, "g1", tid, 0).await;
+    bootstrap_share_state(&broker, &client, "g1").await;
     produce_n(&client, "t", tid, 0, 3).await;
     let (member, _epoch) = join(&client, "g1", "t").await;
     wait_for_share_init(&broker, "g1", tid, 0).await;
@@ -150,12 +150,9 @@ async fn describe_unknown_topic() {
         .await
         .unwrap();
     let client = connect(&broker.listen_addr().to_string()).await;
-    // The persister must exist for the handler to reach topic resolution; a
-    // FindCoordinator(SHARE) bootstrap makes the share coordinator available.
-    // The key needs a syntactically valid `group:topicId:partition` shape; the
-    // topic id need not refer to a real topic for the bootstrap to succeed.
-    let dummy = uuid::Uuid::new_v4();
-    bootstrap_share_state(&broker, &client, "g1", dummy, 0).await;
+    // The persister must exist for the handler to reach topic resolution. The
+    // bootstrap makes the share coordinator available.
+    bootstrap_share_state(&broker, &client, "g1").await;
 
     let group = describe_offsets(&client, "g1", "nonexistent", vec![0]).await;
     assert!(

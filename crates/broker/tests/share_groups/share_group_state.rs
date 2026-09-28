@@ -10,7 +10,7 @@ use assert2::assert;
 use krabka_broker::{BootstrapMode, Broker};
 
 use crate::share_group_harness::{
-    boot, broker_config, connect, create_topic, describe, heartbeat, topic_id,
+    boot, broker_config, connect, create_topic, describe, heartbeat, start, topic_id,
 };
 
 /// Kafka's `PartitionFactory.UNINITIALIZED_START_OFFSET`: the share state
@@ -96,7 +96,7 @@ async fn lifecycle_metadata_survives_restart() {
 
     let tid;
     {
-        let broker = Broker::start(broker_config(log_dir.clone())).await.unwrap();
+        let broker = start(log_dir.clone()).await;
         let bootstrap = broker.listen_addr().to_string();
         let client = connect(&bootstrap).await;
         create_topic(&client, "t6", 2).await;

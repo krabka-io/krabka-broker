@@ -124,6 +124,7 @@ async fn downgrade_survives_restart() {
         let broker = Broker::start(BrokerConfig::for_tests(log_dir.clone()))
             .await
             .unwrap();
+        broker.wait_until_group_coordinator_ready().await;
         let bootstrap = broker.listen_addr().to_string();
         let sc = connect(&bootstrap).await;
         let cc = connect(&bootstrap).await;

@@ -45,6 +45,10 @@ async fn backlog_is_scraped_and_survives_scale_to_zero() {
     config.share_group.backlog_poll_interval = Duration::from_millis(50);
 
     let broker = Broker::start(config).await.unwrap();
+    // No broker creates `__consumer_offsets` or `__share_group_state` when it
+    // starts. The share group needs both coordinators.
+    broker.wait_until_group_coordinator_ready().await;
+    broker.wait_until_share_coordinator_ready().await;
     let client = Arc::new(
         Client::builder()
             .bootstrap(broker.listen_addr().to_string())

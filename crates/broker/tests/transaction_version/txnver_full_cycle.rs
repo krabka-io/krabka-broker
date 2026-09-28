@@ -12,8 +12,9 @@ use bytes::Bytes;
 use krabka_client_consumer::{AutoOffsetReset, Consumer, IsolationLevel};
 use krabka_client_producer::{Producer, ProducerRecord};
 
-use crate::txnver_harness::{
-    admin_client, boot_single, create_topic, downgrade_transaction_version,
+use crate::{
+    support,
+    txnver_harness::{admin_client, boot_single, create_topic, downgrade_transaction_version},
 };
 
 fn rec(topic: &str, v: &str) -> ProducerRecord {
@@ -113,6 +114,10 @@ async fn versioned_full_cycles_commit_and_read() {
         let admin = admin_client(&bootstrap).await;
         create_topic(&admin, case.topic, 1).await;
         downgrade_transaction_version(&admin, case.level).await;
+        // The first lookup asks for `__transaction_state` and answers
+        // COORDINATOR_NOT_AVAILABLE. A Kafka producer retries it; the krabka
+        // producer does not, so the test makes the lookup a client makes.
+        support::find_coordinator(&admin, support::KEY_TYPE_TRANSACTION, case.tid).await;
 
         full_cycle_commit_and_read(&bootstrap, case.topic, case.tid, case.group).await;
 

@@ -25,11 +25,24 @@ pub fn broker_config(log_dir: std::path::PathBuf) -> BrokerConfig {
     config
 }
 
+/// Starts a broker on `log_dir` whose group and share coordinators serve
+/// requests.
+///
+/// No broker creates `__consumer_offsets` or `__share_group_state` when it
+/// starts. `ShareGroupHeartbeat` needs the group coordinator, and the
+/// heartbeat initializes share state through the share coordinator. The
+/// handle helpers ask for each topic as a client's first lookup does, and wait
+/// until this broker serves it.
+pub async fn start(log_dir: std::path::PathBuf) -> krabka_broker::BrokerHandle {
+    let broker = Broker::start(broker_config(log_dir)).await.unwrap();
+    broker.wait_until_group_coordinator_ready().await;
+    broker.wait_until_share_coordinator_ready().await;
+    broker
+}
+
 pub async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().unwrap();
-    let broker = Broker::start(broker_config(dir.path().to_path_buf()))
-        .await
-        .unwrap();
+    let broker = start(dir.path().to_path_buf()).await;
     let bootstrap = broker.listen_addr().to_string();
     (broker, bootstrap, dir)
 }

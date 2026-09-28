@@ -219,6 +219,7 @@ async fn the_broker_sweep_reaps_a_dead_group_on_its_own() {
     let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
     config.offsets_retention_check_interval_override = Some(millis(25));
     let broker = Broker::start(config).await.unwrap();
+    broker.wait_until_group_coordinator_ready().await;
     let client = client_for(&broker).await;
 
     // `OffsetDelete` resolves each partition against the metadata image, so

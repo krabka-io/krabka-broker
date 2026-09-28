@@ -24,6 +24,7 @@ async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
     let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
         .await
         .unwrap();
+    broker.wait_until_group_coordinator_ready().await;
     let bootstrap = broker.listen_addr().to_string();
     (broker, bootstrap, dir)
 }
