@@ -8,16 +8,15 @@
 //! Versions 0 to 2 are non-flexible and carry no `generation_id` or
 //! `member_id` field. Versions 3 to 5 are flexible, carry tagged fields, and
 //! add `generation_id`, `member_id`, and `group_instance_id`. Version 6
-//! (KIP-1319) names each topic by `TopicId` instead of `Name`: an id the image
+//! (KIP-1319, Kafka trunk; 4.3.1 stops at 5) names each topic by `TopicId`
+//! instead of `Name`, in the request and in the response. An id the image
 //! does not hold, or the zero id, answers `UNKNOWN_TOPIC_ID (100)` on every
-//! row of that topic before the topic `Read` gate. At every version the
-//! committed offset records the topic's id, as Kafka trunk's `KafkaApis`
-//! hands it to the coordinator.
-//!
-//! The broker does not advertise version 6 yet: krabka-client-rs' producer
-//! negotiates the highest shared version and fills only `Name`, which v6 does
-//! not carry, so its `sendOffsetsToTransaction` would answer
-//! `UNKNOWN_TOPIC_ID` against a broker that did.
+//! row of that topic before the topic `Read` gate, and an id it holds is
+//! authorized and checked for existence under the topic's name. At every
+//! version the committed offset records the topic's id, as Kafka trunk's
+//! `KafkaApis` hands it to the coordinator. v6 also answers a missing group
+//! `GROUP_ID_NOT_FOUND` and a refused member epoch `STALE_MEMBER_EPOCH`,
+//! which older versions answer `ILLEGAL_GENERATION`.
 //!
 //! On v3 and above, the shared `validate_commit` validates the
 //! consumer-group metadata against the classic generation or the KIP-848
@@ -50,10 +49,12 @@
 //!
 //! The denied and unknown rows keep their own codes on every later exit, as
 //! Kafka merges the group coordinator's answer into a response builder that
-//! already holds them (`KafkaApis.scala:2185`). When no row survives the
-//! sweep, the handler answers those rows and stops, as Kafka does not call
-//! `commitTransactionalOffsets` then (`KafkaApis.scala:2163-2165`): no routing
-//! check, no fencing code, no transaction registration. Otherwise the group
+//! already holds them (`KafkaApis.scala:2185`). The response lists the
+//! sweep's rows first, as that builder does; see [`response::build_response`].
+//! When no row survives the sweep, the handler answers those rows and stops,
+//! as Kafka does not call `commitTransactionalOffsets` then
+//! (`KafkaApis.scala:2163-2165`): no routing check, no fencing code, no
+//! transaction registration. Otherwise the group
 //! routing check runs first, so a client on the wrong broker gets the
 //! retriable `NOT_COORDINATOR` and a shard still replaying answers
 //! `COORDINATOR_LOAD_IN_PROGRESS`, then the staged producer identity gate, then
@@ -146,7 +147,7 @@ pub(crate) async fn handle(
     // ── KIP-1319: name every topic and give it its id ──────────
     // ── ACL preamble: per-topic Read ──────────────────────────
     // ── Existence check: authorized topic/partition must be in the image ──
-    let unresolved_ids = version >= FIRST_TOPIC_ID_VERSION;
+    let topic_ids = version >= FIRST_TOPIC_ID_VERSION;
     let (denied_topics, unknown_rows) = {
         let image = broker.controller.current_image();
         resolve_topics(&mut req, version, &image);
@@ -154,7 +155,7 @@ pub(crate) async fn handle(
             .topics
             .iter()
             .map(|t| t.name.as_str())
-            .filter(|name| !(unresolved_ids && name.is_empty()))
+            .filter(|name| !(topic_ids && name.is_empty()))
             .collect();
         let topic_decisions = authorize_topics(
             broker.config.authorizer.as_ref(),
@@ -185,7 +186,7 @@ pub(crate) async fn handle(
     let respond = |code: i16| {
         encode_resp(
             version,
-            &build_response(&req, code, unresolved_ids, &denied_topics, &unknown_rows),
+            &build_response(&req, code, topic_ids, &denied_topics, &unknown_rows),
         )
     };
 

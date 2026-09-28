@@ -23,6 +23,8 @@ mod txn_fencing;
 mod txn_harness;
 #[path = "transactions/txn_isolation.rs"]
 mod txn_isolation;
+#[path = "transactions/txn_offset_commit_topic_ids.rs"]
+mod txn_offset_commit_topic_ids;
 #[path = "transactions/txn_sasl.rs"]
 mod txn_sasl;
 
