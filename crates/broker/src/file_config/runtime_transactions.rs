@@ -5,6 +5,8 @@
 //! replication factors, and recovery reads, together with the transaction
 //! timeout bounds. `apply_barrier` covers the KFC-4 barrier group knobs.
 
+use krabka_units::{ByteSize, kibibytes};
+
 use super::{
     FileConfigError, RuntimeFileConfig,
     validate::{
@@ -112,6 +114,46 @@ impl RuntimeFileConfig {
                     krabka_units::prelude::TimeExt::to_std(whole_millis_i32_time(name, value)?);
             }
         }
+        // `CompressionType.forId` over Kafka's `INT` codec id.
+        if let Some(value) = runtime.share_state_compression_codec {
+            cfg.share_coordinator.state_topic_compression_codec = u8::try_from(value)
+                .ok()
+                .filter(|id| *id <= 4)
+                .and_then(krabka_compression::CompressionType::from_attribute_bits)
+                .ok_or_else(|| {
+                    invalid_runtime_value(
+                        "share_state_compression_codec",
+                        format!("Unknown compression type id: {value}"),
+                    )
+                })?;
+        }
+        // Kafka's `atLeast(1)`.
+        if let Some(value) = runtime.share_coordinator_threads {
+            let value = positive_i32("share_coordinator_threads", value)?;
+            cfg.share_coordinator.threads = value.unsigned_abs();
+        }
+        // Kafka's `atLeast(-1)`, with -1 its adaptive linger.
+        if let Some(value) = runtime.share_coordinator_append_linger_ms {
+            cfg.share_coordinator.append_linger = match value {
+                -1 => None,
+                0.. => Some(std::time::Duration::from_millis(u64::from(
+                    value.unsigned_abs(),
+                ))),
+                _ => {
+                    return Err(invalid_runtime_value(
+                        "share_coordinator_append_linger_ms",
+                        "must be at least -1",
+                    ));
+                }
+            };
+        }
+        // Kafka's `atLeast(512 * 1024)` over an `INT`.
+        set_runtime_size_bytes!(
+            runtime,
+            share_coordinator_cached_buffer_max_bytes,
+            cfg.share_coordinator.cached_buffer_max_bytes,
+            cached_buffer_max_bytes
+        );
         set_runtime_i32!(
             runtime,
             offsets_topic_num_partitions,
@@ -220,6 +262,17 @@ impl RuntimeFileConfig {
     }
 }
 
+/// Kafka's `share.coordinator.cached.buffer.max.bytes` range: an `INT` of at
+/// least 512 KiB.
+fn cached_buffer_max_bytes(name: &str, value: ByteSize) -> Result<ByteSize, FileConfigError> {
+    let value = kafka_int_bytes(name, value)?;
+    if value >= kibibytes(512) {
+        Ok(value)
+    } else {
+        Err(invalid_runtime_value(name, "must be at least 524288 bytes"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use assert2::assert;
@@ -289,6 +342,8 @@ barrier_max_topics_per_group = 16
     fn share_coordinator_keys_follow_kafka_defaults_and_bounds() {
         use std::time::Duration;
 
+        use krabka_compression::CompressionType;
+
         use crate::share_coordinator::config::ShareCoordinatorConfig;
 
         let with = |f: fn(&mut ShareCoordinatorConfig)| {
@@ -297,7 +352,7 @@ barrier_max_topics_per_group = 16
             Some(config)
         };
         // (row, `[runtime]` body, expected share coordinator config)
-        let rows: [(&str, &str, Option<ShareCoordinatorConfig>); 9] = [
+        let rows: [(&str, &str, Option<ShareCoordinatorConfig>); 20] = [
             ("defaults", "", Some(ShareCoordinatorConfig::default())),
             (
                 "snapshot cadence at its ceiling",
@@ -338,6 +393,61 @@ barrier_max_topics_per_group = 16
                 "load buffer size",
                 "share_coordinator_load_buffer_size = \"2MiB\"",
                 Some(ShareCoordinatorConfig::default()),
+            ),
+            (
+                "zstd state topic codec",
+                "share_state_compression_codec = 4",
+                with(|c| c.state_topic_compression_codec = CompressionType::Zstd),
+            ),
+            (
+                "unknown state topic codec",
+                "share_state_compression_codec = 5",
+                None,
+            ),
+            (
+                "negative state topic codec",
+                "share_state_compression_codec = -1",
+                None,
+            ),
+            (
+                "four coordinator threads",
+                "share_coordinator_threads = 4",
+                with(|c| c.threads = 4),
+            ),
+            (
+                "zero coordinator threads",
+                "share_coordinator_threads = 0",
+                None,
+            ),
+            (
+                "adaptive append linger",
+                "share_coordinator_append_linger_ms = -1",
+                Some(ShareCoordinatorConfig::default()),
+            ),
+            (
+                "zero append linger",
+                "share_coordinator_append_linger_ms = 0",
+                with(|c| c.append_linger = Some(Duration::ZERO)),
+            ),
+            (
+                "append linger below -1",
+                "share_coordinator_append_linger_ms = -2",
+                None,
+            ),
+            (
+                "cached buffer at its floor",
+                "share_coordinator_cached_buffer_max_bytes = \"512KiB\"",
+                with(|c| c.cached_buffer_max_bytes = krabka_units::kibibytes(512)),
+            ),
+            (
+                "cached buffer below 512KiB",
+                "share_coordinator_cached_buffer_max_bytes = \"524287B\"",
+                None,
+            ),
+            (
+                "cached buffer above the INT ceiling",
+                "share_coordinator_cached_buffer_max_bytes = \"2GiB\"",
+                None,
             ),
         ];
         for (row, body, expected) in rows {

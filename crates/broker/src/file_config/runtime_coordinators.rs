@@ -5,15 +5,18 @@
 //! share groups and the KIP-1071 streams groups. All three write the same
 //! coordinator layer, and all three validate the durations Kafka bounds.
 
-use krabka_units::convert::TimeExt as _;
+use std::{ops::RangeInclusive, time::Duration};
+
+use krabka_units::{Time, convert::TimeExt as _};
 
 use super::{
     FileConfigError, RuntimeFileConfig,
     validate::{
-        invalid_runtime_value, nonnegative_time, positive_i16, positive_i32, positive_time,
-        positive_usize,
+        invalid_runtime_value, nonnegative_time, positive_i16, positive_time, positive_usize,
+        whole_millis_i32_time,
     },
 };
+use crate::coordinator::unified::share::config::ShareGroupConfig;
 
 impl RuntimeFileConfig {
     pub(super) fn apply_coordinators(
@@ -96,56 +99,138 @@ impl RuntimeFileConfig {
         Ok(())
     }
 
+    /// Applies the share-group keys with the ranges of Kafka's
+    /// `GroupCoordinatorConfig` and `ShareGroupConfig` `ConfigDef`, then
+    /// checks the order within each value, minimum and maximum triple over
+    /// the resulting config, as their constructors `require` it.
+    ///
+    /// The order check runs over `cfg` rather than over this table alone, so
+    /// a command-line overlay applied after the file is checked against the
+    /// file's values.
     pub(super) fn apply_share_group(
         &mut self,
         cfg: &mut crate::config::BrokerConfig,
     ) -> Result<(), FileConfigError> {
         let runtime = self;
-        set_runtime_plain!(runtime, share_group_enable, cfg.share_group.enable);
-        set_runtime_duration!(
-            runtime,
-            share_group_session_timeout,
-            cfg.share_group.session_timeout
-        );
-        set_runtime_duration!(
-            runtime,
-            share_group_heartbeat_interval,
-            cfg.share_group.heartbeat_interval
-        );
-        set_runtime_usize!(runtime, share_group_max_size, cfg.share_group.max_size);
-        set_runtime_duration!(
-            runtime,
-            share_group_record_lock_duration,
-            cfg.share_group.record_lock_duration
-        );
-        if let Some(value) = runtime.share_group_max_delivery_attempts {
-            let value = positive_i16("share_group_max_delivery_attempts", value)?;
-            cfg.share_group.max_delivery_attempts = value;
+        let share = &mut *cfg.share_group;
+        set_runtime_plain!(runtime, share_group_enable, share.enable);
+        for (name, value, target, range) in [
+            (
+                "share_group_session_timeout",
+                runtime.share_group_session_timeout,
+                &mut share.session_timeout,
+                AT_LEAST_ONE_MS,
+            ),
+            (
+                "share_group_heartbeat_interval",
+                runtime.share_group_heartbeat_interval,
+                &mut share.heartbeat_interval,
+                AT_LEAST_ONE_MS,
+            ),
+            (
+                "share_group_min_session_timeout",
+                runtime.share_group_min_session_timeout,
+                &mut share.min_session_timeout,
+                AT_LEAST_ONE_MS,
+            ),
+            (
+                "share_group_max_session_timeout",
+                runtime.share_group_max_session_timeout,
+                &mut share.max_session_timeout,
+                AT_LEAST_ONE_MS,
+            ),
+            (
+                "share_group_min_heartbeat_interval",
+                runtime.share_group_min_heartbeat_interval,
+                &mut share.min_heartbeat_interval,
+                AT_LEAST_ONE_MS,
+            ),
+            (
+                "share_group_max_heartbeat_interval",
+                runtime.share_group_max_heartbeat_interval,
+                &mut share.max_heartbeat_interval,
+                AT_LEAST_ONE_MS,
+            ),
+            (
+                "share_group_record_lock_duration",
+                runtime.share_group_record_lock_duration,
+                &mut share.record_lock_duration,
+                1_000..=3_600_000,
+            ),
+            (
+                "share_group_min_record_lock_duration",
+                runtime.share_group_min_record_lock_duration,
+                &mut share.min_record_lock_duration,
+                1_000..=30_000,
+            ),
+            (
+                "share_group_max_record_lock_duration",
+                runtime.share_group_max_record_lock_duration,
+                &mut share.max_record_lock_duration,
+                30_000..=3_600_000,
+            ),
+        ] {
+            if let Some(value) = value {
+                *target = int_millis(name, value, range)?;
+            }
         }
-        set_runtime_i32!(
-            runtime,
-            share_group_max_inflight_records,
-            cfg.share_group.max_inflight_records
-        );
+        if let Some(value) = runtime.share_group_max_size {
+            share.max_size = in_range("share_group_max_size", value, 1..=1_000)?;
+        }
+        for (name, value, target, range) in [
+            (
+                "share_group_delivery_count_limit",
+                runtime.share_group_delivery_count_limit,
+                &mut share.max_delivery_attempts,
+                2..=10,
+            ),
+            (
+                "share_group_min_delivery_count_limit",
+                runtime.share_group_min_delivery_count_limit,
+                &mut share.min_delivery_count_limit,
+                2..=5,
+            ),
+            (
+                "share_group_max_delivery_count_limit",
+                runtime.share_group_max_delivery_count_limit,
+                &mut share.max_delivery_count_limit,
+                5..=25,
+            ),
+        ] {
+            if let Some(value) = value {
+                *target = in_range(name, value, range)?;
+            }
+        }
+        for (name, value, target, range) in [
+            (
+                "share_group_partition_max_record_locks",
+                runtime.share_group_partition_max_record_locks,
+                &mut share.max_inflight_records,
+                100..=10_000,
+            ),
+            (
+                "share_group_min_partition_max_record_locks",
+                runtime.share_group_min_partition_max_record_locks,
+                &mut share.min_partition_max_record_locks,
+                100..=2_000,
+            ),
+            (
+                "share_group_max_partition_max_record_locks",
+                runtime.share_group_max_partition_max_record_locks,
+                &mut share.max_partition_max_record_locks,
+                2_000..=10_000,
+            ),
+        ] {
+            if let Some(value) = value {
+                *target = in_range(name, value, range)?;
+            }
+        }
+        validate_share_group_order(share)?;
         set_runtime_duration!(
             runtime,
             share_group_backlog_poll_interval,
             cfg.share_group.backlog_poll_interval
         );
-        if let Some(value) = runtime.share_group_isolation_level.take() {
-            use crate::coordinator::unified::share::config::ShareIsolationLevel;
-            let value = match value.as_str() {
-                "read-uncommitted" => ShareIsolationLevel::ReadUncommitted,
-                "read-committed" => ShareIsolationLevel::ReadCommitted,
-                _ => {
-                    return Err(invalid_runtime_value(
-                        "share_group_isolation_level",
-                        "expected `read-uncommitted` or `read-committed`",
-                    ));
-                }
-            };
-            cfg.share_group.isolation_level = value;
-        }
         Ok(())
     }
 
@@ -222,5 +307,331 @@ impl RuntimeFileConfig {
             cfg.inter_broker_server_name = value;
         }
         Ok(())
+    }
+}
+
+/// Kafka's `atLeast(1)` over an `INT` millisecond key.
+const AT_LEAST_ONE_MS: RangeInclusive<i64> = 1..=2_147_483_647;
+
+/// A whole number of milliseconds within `range`: Kafka's `between` or
+/// `atLeast` over an `INT` key.
+fn int_millis(
+    name: &str,
+    value: Time,
+    range: RangeInclusive<i64>,
+) -> Result<Duration, FileConfigError> {
+    let value = whole_millis_i32_time(name, value)?;
+    if range.contains(&value.millis_i64()) {
+        Ok(value.to_std())
+    } else {
+        Err(invalid_runtime_value(
+            name,
+            format!("must be within {}ms..={}ms", range.start(), range.end()),
+        ))
+    }
+}
+
+/// `value` within `range`: Kafka's `between` over an `INT` key.
+fn in_range<T: PartialOrd + std::fmt::Display>(
+    name: &str,
+    value: T,
+    range: RangeInclusive<T>,
+) -> Result<T, FileConfigError> {
+    if range.contains(&value) {
+        Ok(value)
+    } else {
+        Err(invalid_runtime_value(
+            name,
+            format!("must be within {}..={}", range.start(), range.end()),
+        ))
+    }
+}
+
+/// The `require` checks of Kafka's `GroupCoordinatorConfig` and
+/// `ShareGroupConfig` constructors over the share keys, in Kafka's order and
+/// with Kafka's messages, each naming the `[runtime]` field for the Kafka key.
+fn validate_share_group_order(share: &ShareGroupConfig) -> Result<(), FileConfigError> {
+    const AT_LEAST: &str = "must be greater than or equal to";
+    const AT_MOST: &str = "must be less than or equal to";
+    // (whether the check holds, the field it names, the relation, the field
+    // it compares against)
+    let checks = [
+        (
+            share.max_heartbeat_interval >= share.min_heartbeat_interval,
+            "share_group_max_heartbeat_interval",
+            AT_LEAST,
+            "share_group_min_heartbeat_interval",
+        ),
+        (
+            share.heartbeat_interval >= share.min_heartbeat_interval,
+            "share_group_heartbeat_interval",
+            AT_LEAST,
+            "share_group_min_heartbeat_interval",
+        ),
+        (
+            share.heartbeat_interval <= share.max_heartbeat_interval,
+            "share_group_heartbeat_interval",
+            AT_MOST,
+            "share_group_max_heartbeat_interval",
+        ),
+        (
+            share.max_session_timeout >= share.min_session_timeout,
+            "share_group_max_session_timeout",
+            AT_LEAST,
+            "share_group_min_session_timeout",
+        ),
+        (
+            share.session_timeout >= share.min_session_timeout,
+            "share_group_session_timeout",
+            AT_LEAST,
+            "share_group_min_session_timeout",
+        ),
+        (
+            share.session_timeout <= share.max_session_timeout,
+            "share_group_session_timeout",
+            AT_MOST,
+            "share_group_max_session_timeout",
+        ),
+        (
+            share.heartbeat_interval < share.session_timeout,
+            "share_group_heartbeat_interval",
+            "must be less than",
+            "share_group_session_timeout",
+        ),
+        (
+            share.max_delivery_count_limit >= share.max_delivery_attempts,
+            "share_group_max_delivery_count_limit",
+            AT_LEAST,
+            "share_group_delivery_count_limit",
+        ),
+        (
+            share.max_delivery_attempts >= share.min_delivery_count_limit,
+            "share_group_delivery_count_limit",
+            AT_LEAST,
+            "share_group_min_delivery_count_limit",
+        ),
+        (
+            share.max_partition_max_record_locks >= share.max_inflight_records,
+            "share_group_max_partition_max_record_locks",
+            AT_LEAST,
+            "share_group_partition_max_record_locks",
+        ),
+        (
+            share.max_inflight_records >= share.min_partition_max_record_locks,
+            "share_group_partition_max_record_locks",
+            AT_LEAST,
+            "share_group_min_partition_max_record_locks",
+        ),
+        (
+            share.record_lock_duration >= share.min_record_lock_duration,
+            "share_group_record_lock_duration",
+            AT_LEAST,
+            "share_group_min_record_lock_duration",
+        ),
+        (
+            share.max_record_lock_duration >= share.record_lock_duration,
+            "share_group_max_record_lock_duration",
+            AT_LEAST,
+            "share_group_record_lock_duration",
+        ),
+    ];
+    match checks.into_iter().find(|(holds, ..)| !holds) {
+        Some((_, name, relation, other)) => {
+            Err(invalid_runtime_value(name, format!("{relation} {other}")))
+        }
+        None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::assert;
+
+    use super::*;
+
+    fn with(change: fn(&mut ShareGroupConfig)) -> Result<ShareGroupConfig, String> {
+        let mut config = ShareGroupConfig::default();
+        change(&mut config);
+        if config == ShareGroupConfig::default() {
+            return Err("the row changes nothing".to_owned());
+        }
+        Ok(config)
+    }
+
+    fn refused(message: &str) -> Result<ShareGroupConfig, String> {
+        Err(format!("invalid config: {message}"))
+    }
+
+    /// Kafka 4.3.1's `ShareGroupConfig` and `GroupCoordinatorConfig` ranges
+    /// and `require` checks over the share keys: each `[runtime]` body gives
+    /// the applied share config or the startup error.
+    #[test]
+    fn share_group_keys_follow_kafkas_ranges_and_order() {
+        let rows: Vec<(&str, &str, Result<ShareGroupConfig, String>)> = vec![
+            ("defaults", "", Ok(ShareGroupConfig::default())),
+            (
+                "record lock limit at its floor",
+                "share_group_partition_max_record_locks = 100",
+                with(|c| c.max_inflight_records = 100),
+            ),
+            (
+                "record lock limit below 100",
+                "share_group_partition_max_record_locks = 99",
+                refused("share_group_partition_max_record_locks: must be within 100..=10000"),
+            ),
+            (
+                "record lock limit above 10000",
+                "share_group_partition_max_record_locks = 10001",
+                refused("share_group_partition_max_record_locks: must be within 100..=10000"),
+            ),
+            (
+                "record lock limit above its maximum",
+                "share_group_partition_max_record_locks = 5000",
+                refused(
+                    "share_group_max_partition_max_record_locks: must be greater than or equal \
+                     to share_group_partition_max_record_locks",
+                ),
+            ),
+            (
+                "record lock limit raised with its maximum",
+                "share_group_partition_max_record_locks = 5000\n\
+                 share_group_max_partition_max_record_locks = 5000",
+                with(|c| {
+                    c.max_inflight_records = 5000;
+                    c.max_partition_max_record_locks = 5000;
+                }),
+            ),
+            (
+                "record lock limit below its minimum",
+                "share_group_partition_max_record_locks = 200\n\
+                 share_group_min_partition_max_record_locks = 300",
+                refused(
+                    "share_group_partition_max_record_locks: must be greater than or equal to \
+                     share_group_min_partition_max_record_locks",
+                ),
+            ),
+            (
+                "delivery count limit of 1",
+                "share_group_delivery_count_limit = 1",
+                refused("share_group_delivery_count_limit: must be within 2..=10"),
+            ),
+            (
+                "delivery count limit of 11",
+                "share_group_delivery_count_limit = 11",
+                refused("share_group_delivery_count_limit: must be within 2..=10"),
+            ),
+            (
+                "delivery count limit above its maximum",
+                "share_group_delivery_count_limit = 8\nshare_group_max_delivery_count_limit = 6",
+                refused(
+                    "share_group_max_delivery_count_limit: must be greater than or equal to \
+                     share_group_delivery_count_limit",
+                ),
+            ),
+            (
+                "maximum delivery count limit of 25",
+                "share_group_max_delivery_count_limit = 25",
+                with(|c| c.max_delivery_count_limit = 25),
+            ),
+            (
+                "record lock duration below 1s",
+                "share_group_record_lock_duration = \"999ms\"",
+                refused("share_group_record_lock_duration: must be within 1000ms..=3600000ms"),
+            ),
+            (
+                "record lock duration above its maximum",
+                "share_group_record_lock_duration = \"90s\"",
+                refused(
+                    "share_group_max_record_lock_duration: must be greater than or equal to \
+                     share_group_record_lock_duration",
+                ),
+            ),
+            (
+                "record lock duration below its minimum",
+                "share_group_record_lock_duration = \"10s\"",
+                refused(
+                    "share_group_record_lock_duration: must be greater than or equal to \
+                     share_group_min_record_lock_duration",
+                ),
+            ),
+            (
+                "record lock duration and its minimum lowered",
+                "share_group_record_lock_duration = \"10s\"\n\
+                 share_group_min_record_lock_duration = \"5s\"",
+                with(|c| {
+                    c.record_lock_duration = Duration::from_secs(10);
+                    c.min_record_lock_duration = Duration::from_secs(5);
+                }),
+            ),
+            (
+                "minimum record lock duration above 30s",
+                "share_group_min_record_lock_duration = \"31s\"",
+                refused("share_group_min_record_lock_duration: must be within 1000ms..=30000ms"),
+            ),
+            (
+                "session timeout above its maximum",
+                "share_group_session_timeout = \"61s\"",
+                refused(
+                    "share_group_session_timeout: must be less than or equal to \
+                     share_group_max_session_timeout",
+                ),
+            ),
+            (
+                "session bounds widened",
+                "share_group_min_session_timeout = \"10s\"\n\
+                 share_group_max_session_timeout = \"2min\"\n\
+                 share_group_session_timeout = \"90s\"",
+                with(|c| {
+                    c.min_session_timeout = Duration::from_secs(10);
+                    c.max_session_timeout = Duration::from_mins(2);
+                    c.session_timeout = Duration::from_secs(90);
+                }),
+            ),
+            (
+                "heartbeat interval below its minimum",
+                "share_group_heartbeat_interval = \"4s\"",
+                refused(
+                    "share_group_heartbeat_interval: must be greater than or equal to \
+                     share_group_min_heartbeat_interval",
+                ),
+            ),
+            (
+                "heartbeat bounds inverted",
+                "share_group_min_heartbeat_interval = \"20s\"",
+                refused(
+                    "share_group_max_heartbeat_interval: must be greater than or equal to \
+                     share_group_min_heartbeat_interval",
+                ),
+            ),
+            (
+                "heartbeat interval not below the session timeout",
+                "share_group_min_session_timeout = \"10s\"\n\
+                 share_group_session_timeout = \"15s\"\n\
+                 share_group_heartbeat_interval = \"15s\"",
+                refused(
+                    "share_group_heartbeat_interval: must be less than \
+                     share_group_session_timeout",
+                ),
+            ),
+            (
+                "share group of 1001 members",
+                "share_group_max_size = 1001",
+                refused("share_group_max_size: must be within 1..=1000"),
+            ),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (row, body, want) in rows {
+            let file: crate::file_config::FileConfig =
+                toml::from_str(&format!("[runtime]\n{body}\n")).expect("parse runtime config");
+            let mut cfg = crate::config::BrokerConfig::default();
+            let applied = file
+                .apply_to(&mut cfg)
+                .map(|()| (*cfg.share_group).clone())
+                .map_err(|error| error.to_string());
+            actual.push((row, applied));
+            expected.push((row, want));
+        }
+        assert!(actual == expected);
     }
 }

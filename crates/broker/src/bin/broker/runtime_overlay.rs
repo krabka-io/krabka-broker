@@ -99,6 +99,10 @@ impl RuntimeArgs {
             share_coordinator_write_timeout,
             share_state_prune_interval,
             share_cold_partition_snapshot_interval,
+            share_state_compression_codec,
+            share_coordinator_threads,
+            share_coordinator_append_linger_ms,
+            share_coordinator_cached_buffer_max_bytes,
         );
         copy_refined_runtime!(
             self,
@@ -185,7 +189,13 @@ impl RuntimeArgs {
             runtime,
             share_group_session_timeout,
             share_group_heartbeat_interval,
+            share_group_min_session_timeout,
+            share_group_max_session_timeout,
+            share_group_min_heartbeat_interval,
+            share_group_max_heartbeat_interval,
             share_group_record_lock_duration,
+            share_group_min_record_lock_duration,
+            share_group_max_record_lock_duration,
             streams_group_session_timeout,
             streams_group_heartbeat_interval,
             streams_group_task_offset_interval,
@@ -193,7 +203,6 @@ impl RuntimeArgs {
         copy_refined_runtime!(
             self,
             runtime,
-            share_group_max_inflight_records,
             share_group_max_size,
             streams_group_max_size,
             streams_internal_topic_replication_factor,
@@ -202,20 +211,17 @@ impl RuntimeArgs {
             self,
             runtime,
             share_group_enable,
-            share_group_max_delivery_attempts,
+            share_group_delivery_count_limit,
+            share_group_min_delivery_count_limit,
+            share_group_max_delivery_count_limit,
+            share_group_partition_max_record_locks,
+            share_group_min_partition_max_record_locks,
+            share_group_max_partition_max_record_locks,
             streams_group_enable,
             streams_group_num_standby_replicas,
             streams_group_num_warmup_replicas,
             streams_group_acceptable_recovery_lag,
         );
-        runtime.share_group_isolation_level = self.share_group_isolation_level.map(|value| {
-            use krabka_broker::coordinator::unified::share::config::ShareIsolationLevel;
-            match value {
-                ShareIsolationLevel::ReadUncommitted => "read-uncommitted",
-                ShareIsolationLevel::ReadCommitted => "read-committed",
-            }
-            .to_owned()
-        });
         runtime.streams_group_assignor = self.streams_group_assignor.map(|value| {
             use krabka_broker::coordinator::unified::streams::config::StreamsAssignorKind;
             match value {

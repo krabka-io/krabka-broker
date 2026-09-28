@@ -1,7 +1,7 @@
 //! `DescribeShareGroupOffsets` (`api_key` 90), from KIP-932. It returns the
-//! share-partition start offset (SPSO), leader epoch, and best-effort lag for
-//! each requested `(group, topic, partition)`, read from the share-state
-//! persister.
+//! share-partition start offset (SPSO), leader epoch and lag of each
+//! requested `(group, topic, partition)`: the first two from the share-state
+//! persister, the lag from the end offset the partition leader reports.
 //!
 //! `network::dispatch` intercepts it inline, so the handler receives the
 //! per-connection principal and peer `SocketAddr` for the per-group `Describe`
@@ -10,7 +10,8 @@
 //! This file holds only the wire entry point and the broker-wide feature gate.
 //! `group` resolves one requested group, from the ACL check to the persister
 //! lookup; `topics` decides which topics that group reports when the request
-//! names none; and `rows` builds the topic and partition rows themselves.
+//! names none; `rows` builds the topic and partition rows themselves; and
+//! `end_offsets` asks each partition leader for the end offset of the lag.
 
 use bytes::Bytes;
 use krabka_protocol::{
@@ -23,6 +24,7 @@ use krabka_protocol::{
     },
 };
 
+mod end_offsets;
 mod group;
 mod rows;
 mod topics;

@@ -146,6 +146,60 @@ async fn write_persists_and_recovers() {
     check!(st.state_batches == vec![batch(20, 29)]);
 }
 
+/// Kafka's `share.coordinator.state.topic.compression.codec`: each codec is
+/// the codec of the batch the coordinator stores, and a coordinator that
+/// replays that log reads the state back.
+#[tokio::test]
+async fn state_records_are_stored_in_the_configured_codec_and_recover() {
+    use krabka_compression::CompressionType;
+
+    let tid = uuid::Uuid::from_bytes([12; 16]);
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for codec in [
+        CompressionType::None,
+        CompressionType::Gzip,
+        CompressionType::Snappy,
+        CompressionType::Lz4,
+        CompressionType::Zstd,
+    ] {
+        let dir = tempdir().unwrap();
+        let reg = Arc::new(PartitionRegistry::new());
+        for p in 0..ShareCoordinatorConfig::default().state_topic_num_partitions {
+            open_state_partition(&reg, dir.path(), p);
+        }
+        let config = ShareCoordinatorConfig {
+            state_topic_compression_codec: codec,
+            ..ShareCoordinatorConfig::default()
+        };
+        let coord = ShareCoordinator::new(krabka_audit::NodeId(1), reg.clone(), config.clone());
+        lead_all(&coord).await;
+        coord
+            .initialize(&image_with_topic(tid, 1), "g", tid, 0, 2, Offset(7))
+            .await
+            .unwrap();
+
+        let state_partition = coord.state_partition_for("g", &tid, 0);
+        let stored: Vec<CompressionType> = reg
+            .get(bootstrap::TOPIC, state_partition)
+            .expect("state partition open")
+            .read_log(Offset(0), krabka_units::mebibytes(1))
+            .expect("read state partition")
+            .batches
+            .iter()
+            .map(|batch| batch.attributes.compression())
+            .collect();
+
+        let recovered = ShareCoordinator::new(krabka_audit::NodeId(1), reg, config);
+        recovered.reload_all_partitions_for_test().await;
+        let summary = recovered.read_summary("g", tid, 0).await;
+
+        actual.push((codec, stored, summary));
+        expected.push((codec, vec![codec], Ok(Some((2, 0, Offset(7), 0)))));
+    }
+    assert!(actual == expected);
+}
+
 // The replay must derive each record's offset as
 // `base_offset + offset_delta` and advance the inter-batch cursor as
 // `base_offset + last_offset_delta + 1`. A hand-crafted TWO-record batch

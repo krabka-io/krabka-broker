@@ -12,17 +12,6 @@ use krabka_client_core::{
 };
 use krabka_units::{ByteSize, Ratio, Time};
 
-fn parse_share_isolation(
-    value: &str,
-) -> Result<krabka_broker::coordinator::unified::share::config::ShareIsolationLevel, String> {
-    use krabka_broker::coordinator::unified::share::config::ShareIsolationLevel;
-    match value {
-        "read-uncommitted" => Ok(ShareIsolationLevel::ReadUncommitted),
-        "read-committed" => Ok(ShareIsolationLevel::ReadCommitted),
-        _ => Err("expected `read-uncommitted` or `read-committed`".into()),
-    }
-}
-
 fn parse_streams_assignor(
     value: &str,
 ) -> Result<krabka_broker::coordinator::unified::streams::config::StreamsAssignorKind, String> {
@@ -261,6 +250,18 @@ pub struct RuntimeArgs {
     pub share_state_prune_interval: Option<Time>,
     #[arg(long, env = "KRABKA_SHARE_COLD_PARTITION_SNAPSHOT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub share_cold_partition_snapshot_interval: Option<Time>,
+    #[arg(long, env = "KRABKA_SHARE_STATE_COMPRESSION_CODEC")]
+    pub share_state_compression_codec: Option<i32>,
+    #[arg(long, env = "KRABKA_SHARE_COORDINATOR_THREADS")]
+    pub share_coordinator_threads: Option<i32>,
+    #[arg(
+        long,
+        env = "KRABKA_SHARE_COORDINATOR_APPEND_LINGER_MS",
+        allow_negative_numbers = true
+    )]
+    pub share_coordinator_append_linger_ms: Option<i32>,
+    #[arg(long, env = "KRABKA_SHARE_COORDINATOR_CACHED_BUFFER_MAX_BYTES", value_parser = krabka_units::parse::positive_byte_size)]
+    pub share_coordinator_cached_buffer_max_bytes: Option<ByteSize>,
     #[arg(long, env = "KRABKA_OFFSETS_TOPIC_NUM_PARTITIONS", value_parser = parse_positive_i32)]
     pub offsets_topic_num_partitions: Option<PositiveI32>,
     #[arg(long, env = "KRABKA_OFFSETS_TOPIC_REPLICATION_FACTOR", value_parser = parse_positive_i16)]
@@ -290,17 +291,34 @@ pub struct RuntimeArgs {
     pub share_group_session_timeout: Option<Time>,
     #[arg(long, env = "KRABKA_SHARE_GROUP_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub share_group_heartbeat_interval: Option<Time>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_MIN_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
+    pub share_group_min_session_timeout: Option<Time>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
+    pub share_group_max_session_timeout: Option<Time>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_MIN_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
+    pub share_group_min_heartbeat_interval: Option<Time>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
+    pub share_group_max_heartbeat_interval: Option<Time>,
     #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_SIZE", value_parser = parse_positive_count)]
     pub share_group_max_size: Option<PositiveCount>,
     #[arg(long, env = "KRABKA_SHARE_GROUP_RECORD_LOCK_DURATION", value_parser = krabka_units::parse::positive_time)]
     pub share_group_record_lock_duration: Option<Time>,
-    #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_DELIVERY_ATTEMPTS", value_parser = clap::value_parser!(i16).range(1..))]
-    pub share_group_max_delivery_attempts: Option<i16>,
-    #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_INFLIGHT_RECORDS", value_parser = parse_positive_i32)]
-    pub share_group_max_inflight_records: Option<PositiveI32>,
-    #[arg(long, env = "KRABKA_SHARE_GROUP_ISOLATION_LEVEL", value_parser = parse_share_isolation)]
-    pub share_group_isolation_level:
-        Option<krabka_broker::coordinator::unified::share::config::ShareIsolationLevel>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_MIN_RECORD_LOCK_DURATION", value_parser = krabka_units::parse::positive_time)]
+    pub share_group_min_record_lock_duration: Option<Time>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_RECORD_LOCK_DURATION", value_parser = krabka_units::parse::positive_time)]
+    pub share_group_max_record_lock_duration: Option<Time>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_DELIVERY_COUNT_LIMIT")]
+    pub share_group_delivery_count_limit: Option<i16>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_MIN_DELIVERY_COUNT_LIMIT")]
+    pub share_group_min_delivery_count_limit: Option<i16>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_DELIVERY_COUNT_LIMIT")]
+    pub share_group_max_delivery_count_limit: Option<i16>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_PARTITION_MAX_RECORD_LOCKS")]
+    pub share_group_partition_max_record_locks: Option<i32>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_MIN_PARTITION_MAX_RECORD_LOCKS")]
+    pub share_group_min_partition_max_record_locks: Option<i32>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_PARTITION_MAX_RECORD_LOCKS")]
+    pub share_group_max_partition_max_record_locks: Option<i32>,
     #[arg(long, env = "KRABKA_STREAMS_GROUP_ENABLE", action = clap::ArgAction::Set)]
     pub streams_group_enable: Option<bool>,
     #[arg(long, env = "KRABKA_STREAMS_GROUP_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]

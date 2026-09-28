@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use krabka_metadata::MetadataImage;
 
-use crate::coordinator::unified::share::config::{ShareGroupConfig, ShareIsolationLevel};
+use crate::coordinator::unified::share::config::ShareGroupConfig;
 
 /// Kafka's `GroupConfig.SHARE_RECORD_LOCK_DURATION_MS_CONFIG`.
 const KEY_RECORD_LOCK_DURATION_MS: &str = "share.record.lock.duration.ms";
@@ -45,9 +45,9 @@ impl GroupShareSettings {
     /// Resolves the settings of `group`: each override in the group config
     /// of `image`, or the broker setting of `defaults`.
     ///
-    /// Kafka has no broker-level share isolation key, and its group default is
-    /// `read_uncommitted`. The broker setting stands in as that default here,
-    /// because it is what a deployment configures today.
+    /// Kafka has no broker-level share isolation key. A group without a
+    /// `share.isolation.level` reads `read_uncommitted`, Kafka's
+    /// `GroupConfig.SHARE_ISOLATION_LEVEL_DEFAULT`.
     #[must_use]
     pub(crate) fn resolve(image: &MetadataImage, group: &str, defaults: &ShareGroupConfig) -> Self {
         let overrides = image.group_config(group);
@@ -62,10 +62,8 @@ impl GroupShareSettings {
             max_record_locks: value(KEY_PARTITION_MAX_RECORD_LOCKS)
                 .and_then(|locks| locks.trim().parse().ok())
                 .unwrap_or(defaults.max_inflight_records),
-            read_committed: value(KEY_ISOLATION_LEVEL).map_or(
-                defaults.isolation_level == ShareIsolationLevel::ReadCommitted,
-                |level| level.trim().eq_ignore_ascii_case("read_committed"),
-            ),
+            read_committed: value(KEY_ISOLATION_LEVEL)
+                .is_some_and(|level| level.trim().eq_ignore_ascii_case("read_committed")),
             renew_acknowledge_enabled: value(KEY_RENEW_ACKNOWLEDGE_ENABLE)
                 .is_none_or(|enabled| !enabled.trim().eq_ignore_ascii_case("false")),
         }
