@@ -231,20 +231,6 @@ impl RuntimeFileConfig {
             share_group_backlog_poll_interval,
             cfg.share_group.backlog_poll_interval
         );
-        if let Some(value) = runtime.share_group_isolation_level.take() {
-            use crate::coordinator::unified::share::config::ShareIsolationLevel;
-            let value = match value.as_str() {
-                "read-uncommitted" => ShareIsolationLevel::ReadUncommitted,
-                "read-committed" => ShareIsolationLevel::ReadCommitted,
-                _ => {
-                    return Err(invalid_runtime_value(
-                        "share_group_isolation_level",
-                        "expected `read-uncommitted` or `read-committed`",
-                    ));
-                }
-            };
-            cfg.share_group.isolation_level = value;
-        }
         Ok(())
     }
 

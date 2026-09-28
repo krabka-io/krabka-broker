@@ -2607,13 +2607,6 @@
             "null"
           ]
         },
-        "share_group_isolation_level": {
-          "description": "Transaction isolation for share-group reads, Kafka's\n`share.group.isolation.level`. Either `read-uncommitted`, which reads\nup to the high watermark, or `read-committed`, which clamps reads to\nthe last stable offset.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "share_group_max_delivery_count_limit": {
           "description": "Upper bound on the delivery count limit, and on a group's\n`share.delivery.count.limit`, Kafka's\n`group.share.max.delivery.count.limit`: from 5 to 25.",
           "format": "int16",

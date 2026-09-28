@@ -12,17 +12,6 @@ use krabka_client_core::{
 };
 use krabka_units::{ByteSize, Ratio, Time};
 
-fn parse_share_isolation(
-    value: &str,
-) -> Result<krabka_broker::coordinator::unified::share::config::ShareIsolationLevel, String> {
-    use krabka_broker::coordinator::unified::share::config::ShareIsolationLevel;
-    match value {
-        "read-uncommitted" => Ok(ShareIsolationLevel::ReadUncommitted),
-        "read-committed" => Ok(ShareIsolationLevel::ReadCommitted),
-        _ => Err("expected `read-uncommitted` or `read-committed`".into()),
-    }
-}
-
 fn parse_streams_assignor(
     value: &str,
 ) -> Result<krabka_broker::coordinator::unified::streams::config::StreamsAssignorKind, String> {
@@ -322,9 +311,6 @@ pub struct RuntimeArgs {
     pub share_group_min_partition_max_record_locks: Option<i32>,
     #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_PARTITION_MAX_RECORD_LOCKS")]
     pub share_group_max_partition_max_record_locks: Option<i32>,
-    #[arg(long, env = "KRABKA_SHARE_GROUP_ISOLATION_LEVEL", value_parser = parse_share_isolation)]
-    pub share_group_isolation_level:
-        Option<krabka_broker::coordinator::unified::share::config::ShareIsolationLevel>,
     #[arg(long, env = "KRABKA_STREAMS_GROUP_ENABLE", action = clap::ArgAction::Set)]
     pub streams_group_enable: Option<bool>,
     #[arg(long, env = "KRABKA_STREAMS_GROUP_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]

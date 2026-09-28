@@ -1,19 +1,11 @@
 //! KIP-932 share-group membership configuration.
 use std::time::Duration;
 
-/// Transaction isolation for share-group reads. `ReadUncommitted`, the
-/// default of Kafka's `share.group.isolation.level`, exposes all records up to
-/// the high watermark. `ReadCommitted` clamps reads to the last stable offset,
-/// so the group never acquires uncommitted transactional records.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ShareIsolationLevel {
-    #[default]
-    ReadUncommitted,
-    ReadCommitted,
-}
-
 /// The broker share-group settings: the share keys of Kafka's
 /// `GroupCoordinatorConfig` and of its `ShareGroupConfig`.
+///
+/// Kafka has no broker share isolation key. A group reads with its own
+/// `share.isolation.level`, which defaults to `read_uncommitted`.
 ///
 /// Each `min_*` and `max_*` pair bounds the broker value beside it and the
 /// matching per-group override. The `[runtime]` applier checks Kafka's
@@ -57,7 +49,6 @@ pub struct ShareGroupConfig {
     /// Kafka's `group.share.max.partition.max.record.locks`.
     pub max_partition_max_record_locks: i32,
     pub backlog_poll_interval: Duration,
-    pub isolation_level: ShareIsolationLevel,
     pub actor_mailbox_capacity: usize,
     /// Kafka's internal `group.share.initialize.retry.interval.ms`: how long a
     /// partition may stay initializing before the group asks the persister to
@@ -86,7 +77,6 @@ impl Default for ShareGroupConfig {
             min_partition_max_record_locks: 100,
             max_partition_max_record_locks: 4000,
             backlog_poll_interval: Duration::from_secs(15),
-            isolation_level: ShareIsolationLevel::ReadUncommitted,
             actor_mailbox_capacity: 64,
             initialize_retry_interval: Duration::from_secs(30),
         }
@@ -122,7 +112,6 @@ mod tests {
             min_partition_max_record_locks: 100,
             max_partition_max_record_locks: 4000,
             backlog_poll_interval: Duration::from_secs(15),
-            isolation_level: ShareIsolationLevel::ReadUncommitted,
             actor_mailbox_capacity: 64,
             initialize_retry_interval: Duration::from_secs(30),
         };

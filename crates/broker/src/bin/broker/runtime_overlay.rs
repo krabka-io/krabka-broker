@@ -220,14 +220,6 @@ impl RuntimeArgs {
             streams_group_num_warmup_replicas,
             streams_group_acceptable_recovery_lag,
         );
-        runtime.share_group_isolation_level = self.share_group_isolation_level.map(|value| {
-            use krabka_broker::coordinator::unified::share::config::ShareIsolationLevel;
-            match value {
-                ShareIsolationLevel::ReadUncommitted => "read-uncommitted",
-                ShareIsolationLevel::ReadCommitted => "read-committed",
-            }
-            .to_owned()
-        });
         runtime.streams_group_assignor = self.streams_group_assignor.map(|value| {
             use krabka_broker::coordinator::unified::streams::config::StreamsAssignorKind;
             match value {

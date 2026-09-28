@@ -761,11 +761,6 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub share_group_backlog_poll_interval: Option<Time>,
-    /// Transaction isolation for share-group reads, Kafka's
-    /// `share.group.isolation.level`. Either `read-uncommitted`, which reads
-    /// up to the high watermark, or `read-committed`, which clamps reads to
-    /// the last stable offset.
-    pub share_group_isolation_level: Option<String>,
     /// Whether the broker serves KIP-1071 streams groups.
     pub streams_group_enable: Option<bool>,
     /// Default streams-group session timeout, the group's
