@@ -6,7 +6,7 @@
 //! int in `100..=3_600_000` with default 300000. `match` is a CSV of
 //! `selector=regex`, where the regex is a `java.util.regex.Pattern`.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt::Write as _};
 
 use fancy_regex::Regex;
 
@@ -252,6 +252,11 @@ fn java_to_fancy(pattern: &str) -> Option<String> {
             if c == '\\' && chars.get(i + 1) == Some(&'E') {
                 quoted = false;
                 i += 1;
+            } else if c.is_whitespace() || c == '#' {
+                // A quoted space or `#` stays literal under Java's `(?x)`;
+                // `regex::escape` leaves them bare, and `fancy_regex`'s
+                // `x` would drop them.
+                let _ = write!(out, "\\x{{{:X}}}", u32::from(c));
             } else {
                 out.push_str(&regex::escape(c.encode_utf8(&mut [0; 4])));
             }
@@ -282,10 +287,18 @@ fn java_to_fancy(pattern: &str) -> Option<String> {
                             .is_some_and(|&end| end == '>'),
                         _ => false,
                     },
-                    Some(_) => rest
-                        .iter()
-                        .find(|c| !matches!(c, 'i' | 'd' | 'm' | 's' | 'u' | 'x' | 'U' | '-'))
-                        .is_some_and(|&end| end == ')' || end == ':'),
+                    Some(_) => {
+                        let (flags, len) = java_flag_group(rest)?;
+                        // Java refuses `(?i)*` as a dangling quantifier;
+                        // an emptied group must not hand it to the atom
+                        // before it.
+                        if flags.is_empty() && matches!(rest.get(len), Some('*' | '+' | '?')) {
+                            return None;
+                        }
+                        out.push_str(&flags);
+                        i += 2 + len;
+                        continue;
+                    }
                     None => false,
                 };
                 if !ok {
@@ -297,6 +310,61 @@ fn java_to_fancy(pattern: &str) -> Option<String> {
         i += 1;
     }
     Some(out)
+}
+
+/// Translate a Java inline flag group, `rest` starting just after its `(?`,
+/// into `fancy_regex` syntax. Returns the translation and the chars consumed
+/// through the closing `)` or `:`, or `None` where `Pattern.compile` answers
+/// "Unknown inline modifier".
+///
+/// Java's `Pattern.addFlag` takes `idmsuxcU`, then optionally one `-` and
+/// the same letters to clear, then `)` or `:`; an empty group such as `(?)`
+/// or `(?-:x)` is valid. `fancy_regex` refuses empty groups and gives `U` a
+/// different meaning, so only the flags it shares keep their letter:
+///
+/// - `i`, `m`, `s` and `x` (`CASE_INSENSITIVE`, `MULTILINE`, `DOTALL`,
+///   `COMMENTS`) pass through. `fancy_regex`'s `i` folds Unicode case, which
+///   is Java's `i` with `u`; Java's `i` alone folds ASCII only, and
+///   `fancy_regex` cannot turn Unicode folding off.
+/// - `d` (`UNIX_LINES`) is dropped: `fancy_regex` already treats `\n` as the
+///   only line terminator for `.`, `^` and `$`.
+/// - `u` (`UNICODE_CASE`) is dropped: its effect, Unicode folding under `i`,
+///   is how `fancy_regex`'s `i` always folds.
+/// - `U` (`UNICODE_CHARACTER_CLASS`) is dropped: `fancy_regex`'s `\w`, `\d`,
+///   `\s` and `\b` are always Unicode, and it implies `u`, which already
+///   holds. Passing it through would swap greediness in `fancy_regex`.
+/// - `c` (`CANON_EQ`) is dropped: canonical-equivalence matching has no
+///   `fancy_regex` form, and it changes nothing for text already in one
+///   normalization form.
+fn java_flag_group(rest: &[char]) -> Option<(String, usize)> {
+    let mut on = String::new();
+    let mut off = String::new();
+    let mut clearing = false;
+    for (n, &c) in rest.iter().enumerate() {
+        match c {
+            'i' | 'm' | 's' | 'x' => {
+                if clearing {
+                    off.push(c);
+                } else {
+                    on.push(c);
+                }
+            }
+            'd' | 'u' | 'c' | 'U' => {}
+            '-' if !clearing => clearing = true,
+            ')' | ':' => {
+                let scoped = c == ':';
+                let flags = match (on.is_empty() && off.is_empty(), scoped) {
+                    (true, false) => String::new(),
+                    (true, true) => "(?:".to_string(),
+                    (false, _) if off.is_empty() => format!("(?{on}{c}"),
+                    (false, _) => format!("(?{on}-{off}{c}"),
+                };
+                return Some((flags, n + 1));
+            }
+            _ => return None,
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -448,6 +516,59 @@ mod tests {
                 quoted[0].pattern.is_match(input).unwrap() == expected,
                 "{input}"
             );
+        }
+    }
+
+    /// Java's inline flags, each case checked against `Pattern.compile` and
+    /// `Matcher.matches` on JDK 21: `None` is a refusal, otherwise the
+    /// inputs the compiled pattern must and must not fully match.
+    #[test]
+    fn java_inline_flags_mean_what_they_mean_in_java() {
+        type Case = (&'static str, Option<&'static [(&'static str, bool)]>);
+        let cases: [Case; 18] = [
+            ("(?d)^foo$", Some(&[("foo", true), ("xfoo", false)])),
+            ("(?i-d)foo", Some(&[("FOO", true)])),
+            ("(?U)\\w+", Some(&[("é", true), ("a b", false)])),
+            // `U` swapped greediness would make the atomic group take both.
+            ("(?U)(?>a+?)a", Some(&[("aa", true)])),
+            ("(?iu)é", Some(&[("É", true), ("e", false)])),
+            ("(?-i)A", Some(&[("A", true), ("a", false)])),
+            ("(?i)(?-i)A", Some(&[("A", true), ("a", false)])),
+            ("(?i:abc)d", Some(&[("ABCd", true), ("ABCD", false)])),
+            ("(?-:a)b", Some(&[("ab", true)])),
+            ("(?)a", Some(&[("a", true)])),
+            ("(?c)a", Some(&[("a", true)])),
+            ("(?ix)A b", Some(&[("ab", true), ("a b", false)])),
+            ("(?x)\\Q a#\\E", Some(&[(" a#", true), ("a", false)])),
+            ("(?q)a", None),
+            ("(?i--x)a", None),
+            ("(?-i-x)a", None),
+            ("(?i", None),
+            ("a(?d)*", None),
+        ];
+        for (pattern, expected) in cases {
+            let entry = format!("client_id={pattern}");
+            match (parse_match_rules(&entry), expected) {
+                (Ok(rules), Some(inputs)) => {
+                    for &(input, matches) in inputs {
+                        check!(
+                            rules[0].pattern.is_match(input).unwrap() == matches,
+                            "{pattern} on {input:?}"
+                        );
+                    }
+                }
+                (Err(error), None) => {
+                    check!(
+                        error
+                            == ConfigError::InvalidConfig(format!(
+                                "Illegal client matching pattern: {entry}"
+                            ))
+                    );
+                }
+                (result, _) => {
+                    check!(result.is_ok() == expected.is_some(), "{pattern}");
+                }
+            }
         }
     }
 
