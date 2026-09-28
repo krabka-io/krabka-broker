@@ -160,6 +160,7 @@ async fn round_trip_group_join_and_api_versions_with_kcat() {
                     partitions: 1,
                     replicas: 1,
                     configs: std::collections::BTreeMap::default(),
+                    replica_assignments: std::collections::BTreeMap::new(),
                 }],
                 krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(5)),
             )
@@ -298,6 +299,7 @@ async fn next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x() {
                 partitions: 1,
                 replicas: 1,
                 configs: std::collections::BTreeMap::default(),
+                replica_assignments: std::collections::BTreeMap::new(),
             }],
             krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(5)),
         )

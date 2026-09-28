@@ -8,7 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use krabka_audit::FileEd25519Signer;
 use krabka_client_admin::{
-    AdminClient, TopicConfigOverrides, TopicMetadata, groups::ListGroupsOptions,
+    AdminClient, AdminError, ConfigResource, DescribeConfigsOptions, TopicMetadata,
+    groups::ListGroupsOptions,
 };
 use krabka_client_core::{
     Client, CoordinatorKeyType, build_find_coordinator, coordinator_endpoint,
@@ -235,10 +236,31 @@ async fn capture_diskless_index(
         .filter(|topic| topic.name != TOPIC)
         .map(|topic| topic.name.as_str())
         .collect::<Vec<_>>();
+    let resources = topic_names
+        .iter()
+        .map(|name| ConfigResource::topic(*name))
+        .collect::<Vec<_>>();
     let configs = admin
-        .describe_configs(&topic_names)
+        .describe_configs(&resources, DescribeConfigsOptions::default())
         .await
-        .map_err(|error| BackupError::Cluster(format!("DescribeConfigs: {error}")))?;
+        .map_err(|error| BackupError::Cluster(format!("DescribeConfigs: {error}")))?
+        .into_iter()
+        .map(|(resource, config)| {
+            // The client used to fail the whole call on a resource error, as
+            // this `Broker` error; keep that text.
+            let config = config.map_err(|error| {
+                let error = AdminError::Broker {
+                    api: "DescribeConfigs",
+                    code: error.code,
+                    name: error.name,
+                    message: error.message,
+                };
+                BackupError::Cluster(format!("DescribeConfigs: {error}"))
+            })?;
+            let overrides = config.dynamic_overrides(&resource);
+            Ok((resource.name, overrides))
+        })
+        .collect::<Result<BTreeMap<_, _>, BackupError>>()?;
     let topics = diskless_topic_topology(&metadata, &configs, TOPIC)?;
     let mut config = KafkaMetadataLogConfig::new(bootstrap);
     TOPIC.clone_into(&mut config.topic);
@@ -303,13 +325,9 @@ async fn capture_diskless_index(
 
 fn diskless_topic_topology(
     metadata: &TopicMetadata,
-    configs: &[TopicConfigOverrides],
+    configs: &BTreeMap<String, BTreeMap<String, String>>,
     index_topic: &str,
 ) -> Result<std::collections::HashMap<uuid::Uuid, (String, i32)>, BackupError> {
-    let configs = configs
-        .iter()
-        .map(|config| (config.topic.as_str(), &config.overrides))
-        .collect::<std::collections::HashMap<_, _>>();
     let mut topics = std::collections::HashMap::new();
     for topic in metadata
         .topics
@@ -431,10 +449,10 @@ mod diskless_tests {
             }],
             ..Default::default()
         };
-        let configs = vec![TopicConfigOverrides {
-            topic: "orders".into(),
-            overrides: BTreeMap::from([("krabka.diskless".into(), "true".into())]),
-        }];
+        let configs = BTreeMap::from([(
+            "orders".to_owned(),
+            BTreeMap::from([("krabka.diskless".into(), "true".into())]),
+        )]);
 
         check!(
             diskless_topic_topology(&metadata, &configs, "__diskless_wal_index").unwrap()

@@ -42,7 +42,7 @@ pub(super) async fn stage_recovery_identity(
         .await?
     } else {
         crate::txn::handlers::end_txn::next_producer_identity(
-            crate::txn::version::TxnVersion::TwoPhase,
+            crate::txn::version::TxnVersion::Verified,
             client_pid,
             client_epoch,
             producer_ids,

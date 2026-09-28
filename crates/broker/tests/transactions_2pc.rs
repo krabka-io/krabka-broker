@@ -7,7 +7,10 @@
 //!  - `keepPreparedTxn` succeeds with the no-ongoing sentinels when there is
 //!    no transaction to recover;
 //!  - with 2PC enabled, an `enable2Pc` transaction is persisted with the
-//!    no-timeout sentinel (`i32::MAX`), so it is exempt from the idle reaper.
+//!    no-timeout sentinel (`i32::MAX`), so it is exempt from the idle reaper;
+//!  - none of it needs a `transaction.version` above `TV_2`, which is the
+//!    highest level Kafka defines, and an upgrade to 3 is refused as Kafka
+//!    refuses it (krabka-io/krabka-broker#784).
 //!
 //! `txn::two_pc_model` proves the reaper's *decision*, that it never aborts a
 //! 2PC transaction, exhaustively. These tests pin the wire and handler
@@ -70,22 +73,6 @@ async fn boot(two_pc_enabled: bool) -> (BrokerHandle, String, TempDir) {
     cfg.features.unstable_api_versions = krabka_broker::api_catalog::UnstableApiVersions::Enabled;
     let broker = Broker::start(cfg).await.unwrap();
     let bootstrap = broker.listen_addr().to_string();
-    if two_pc_enabled {
-        let admin = client(&bootstrap).await;
-        let response = admin
-            .send(UpdateFeaturesRequest {
-                feature_updates: vec![FeatureUpdateKey {
-                    feature: "transaction.version".into(),
-                    max_version_level: 3,
-                    upgrade_type: 1,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
-            .await
-            .expect("enable transaction.version 3");
-        assert!(response.error_code == NONE, "{response:?}");
-    }
     (broker, bootstrap, dir)
 }
 
@@ -244,5 +231,62 @@ async fn enable_2pc_persists_no_timeout_sentinel() {
     );
 
     producer.close().await.ok();
+    broker.shutdown().await;
+}
+
+/// krabka-io/krabka-broker#784: KIP-939 runs at the bootstrapped
+/// `transaction.version` 2, and an upgrade to 3 fails as it does on Kafka
+/// 4.3.1, whose `TransactionVersion` stops at `TV_2`: `INVALID_UPDATE_VERSION`
+/// (95) with `QuorumFeatures.reasonNotSupported`'s message and no rows.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_phase_commit_needs_no_transaction_version_3_and_3_is_refused() {
+    use krabka_protocol::owned::{
+        api_versions_request::ApiVersionsRequest, update_features_response::UpdateFeaturesResponse,
+    };
+
+    let (broker, bootstrap, _dir) = boot(true).await;
+    let client = client(&bootstrap).await;
+
+    let api_versions = client
+        .send(ApiVersionsRequest {
+            client_software_name: "krabka-test".into(),
+            client_software_version: "0.0.0".into(),
+            ..Default::default()
+        })
+        .await
+        .expect("ApiVersions");
+    let finalized = api_versions
+        .finalized_features
+        .iter()
+        .find(|feature| feature.name == "transaction.version")
+        .map(|feature| feature.max_version_level);
+    assert!(finalized == Some(2), "{api_versions:?}");
+
+    let response = client
+        .send(UpdateFeaturesRequest {
+            feature_updates: vec![FeatureUpdateKey {
+                feature: "transaction.version".into(),
+                max_version_level: 3,
+                upgrade_type: 1,
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .expect("UpdateFeatures");
+    assert!(
+        response
+            == UpdateFeaturesResponse {
+                error_code: 95,
+                error_message: Some(
+                    "The update failed for all features since the following feature had an \
+                     error: Invalid update version 3 for feature transaction.version. Local \
+                     controller 1 only supports versions 0-2"
+                        .into(),
+                ),
+                ..Default::default()
+            },
+        "{response:?}"
+    );
     broker.shutdown().await;
 }

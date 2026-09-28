@@ -577,6 +577,10 @@ impl Engine {
                     registration_nodes.push(unregister.node_id);
                     r
                 }
+                MetadataRecord::V1BrokerRegistrationChange(change) => {
+                    registration_nodes.push(change.node_id);
+                    r
+                }
                 other => other,
             };
             if let Err(e) = scratch.validate(r) {

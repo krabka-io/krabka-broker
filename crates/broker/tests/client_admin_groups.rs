@@ -24,6 +24,7 @@ async fn lists_groups_and_committed_offsets() {
                 partitions: 1,
                 replicas: 1,
                 configs: std::collections::BTreeMap::default(),
+                replica_assignments: std::collections::BTreeMap::new(),
             }],
             krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(5)),
         )

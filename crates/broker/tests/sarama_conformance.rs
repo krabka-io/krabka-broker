@@ -830,6 +830,7 @@ async fn sarama_round_trip_and_cluster_views_agree_with_krabka() {
                 partitions: PARTITIONS,
                 replicas: 1,
                 configs: BTreeMap::default(),
+                replica_assignments: BTreeMap::new(),
             }],
             krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(5)),
         )

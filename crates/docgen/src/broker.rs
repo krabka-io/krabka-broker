@@ -134,8 +134,9 @@ fn api_spec(api_key: i16) -> (&'static str, &'static str) {
         80..=82 => KIP_853,
         // KIP-1071: Kafka Streams rebalance protocol.
         88 | 89 => KIP_1071,
-        // GetReplicaLogInfo — recent KRaft tooling RPC; KIP-500 family.
-        93 => KIP_500,
+        // GetReplicaLogInfo — krabka-private (1020) KRaft tooling RPC; KIP-500
+        // family.
+        1020 => KIP_500,
         _ => PROTOCOL_GUIDE,
     }
 }

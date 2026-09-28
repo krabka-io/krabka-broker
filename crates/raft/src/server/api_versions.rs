@@ -611,7 +611,7 @@ mod tests {
                 METADATA_VERSION_MAX,
             ),
             supported("group.version", 0, 1),
-            supported("transaction.version", 0, 3),
+            supported("transaction.version", 0, 2),
             supported("share.version", 0, 1),
             supported("streams.version", 0, 1),
             supported("eligible.leader.replicas.version", 0, 1),

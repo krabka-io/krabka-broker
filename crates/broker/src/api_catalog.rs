@@ -1315,9 +1315,10 @@ pub enum ClientMetricsReceiver {
 /// controller, and a client that skips version negotiation would otherwise
 /// still reach the handlers.
 ///
-/// `GetReplicaLogInfo` (93) is the ninth. Its schema is tagged `broker`, but no
-/// released Kafka advertises it -- `mirror.gcr.io/apache/kafka:4.3.1` stops at
-/// api key 92 -- and the only caller in this tree is the KIP-966 unclean
+/// `GetReplicaLogInfo` (1020) is the ninth. It is krabka-private: Kafka trunk
+/// gives 93, the key it used to hold, to `StreamsGroupTopologyDescriptionUpdate`,
+/// and no released Kafka advertises either -- `mirror.gcr.io/apache/kafka:4.3.1`
+/// stops at api key 92. The only caller in this tree is the KIP-966 unclean
 /// recovery manager, which dials a replica's inter-broker endpoint. It
 /// therefore belongs on the same side of the split as the other eight.
 ///

@@ -14,8 +14,8 @@
 //! At 4.3-IV0 that is `group.version = 1`, `transaction.version = 2`, and ELR,
 //! `share.version` and `streams.version` at 1. It also reports a real
 //! `finalized_features_epoch` of `>= 0`. `tests/feature_finalization.rs`
-//! exercises `UpdateFeatures`. `transaction.version = 3` is advertised but
-//! remains opt-in for KIP-939.
+//! exercises `UpdateFeatures`. `transaction.version` is advertised up to 2, the
+//! highest level Kafka defines. KIP-939 needs no higher one.
 //!
 //! A finalized `metadata.version` above the connecting JVM client's known
 //! `MetadataVersion` enum, or one with `finalized_features_epoch = 0`, makes
@@ -77,7 +77,7 @@ async fn v3_response_advertises_supported_and_bootstrapped_finalized_features() 
         .find(|f| f.name == "transaction.version")
         .expect("transaction.version advertised in supported_features");
     assert!(tv.min_version == 0, "{resp:?}");
-    assert!(tv.max_version == 3, "{resp:?}");
+    assert!(tv.max_version == 2, "{resp:?}");
 
     // A self-bootstrapped broker finalizes the release defaults.
     let finalized_metadata_version = resp

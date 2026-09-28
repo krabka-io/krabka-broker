@@ -52,7 +52,7 @@ async fn reaper_never_retries_a_prepared_two_phase_transaction() {
             &coordinator,
             &prepared.transactional_id,
             i64::MAX,
-            TxnVersion::TwoPhase,
+            TxnVersion::Verified,
         )
         .await
         .is_none()

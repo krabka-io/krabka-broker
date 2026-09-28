@@ -267,6 +267,7 @@ async fn a_jvm_consumer_reads_across_barrier_markers_unchanged() {
                 partitions: PARTITIONS,
                 replicas: 1,
                 configs: BTreeMap::default(),
+                replica_assignments: BTreeMap::new(),
             }],
             krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(10)),
         )

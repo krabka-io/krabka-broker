@@ -185,16 +185,16 @@ krabka-units = "0.4.0"
 krabka-authz = { path = "crates/authz" }
 krabka-audit = { path = "crates/audit" }
 krabka-telemetry = { path = "crates/telemetry" }
-krabka-client-admin = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "4754e9d5c898f6a4a9148f2692f40d8265c285b7" }
-krabka-client-consumer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "4754e9d5c898f6a4a9148f2692f40d8265c285b7" }
-krabka-client-core = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "4754e9d5c898f6a4a9148f2692f40d8265c285b7" }
-krabka-client-producer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "4754e9d5c898f6a4a9148f2692f40d8265c285b7" }
-krabka-compression = { git = "https://github.com/krabka-io/krabka-protocol", rev = "2d34902e2074c6e0ce996428b3650678bf78ec50" }
-krabka-ids = { git = "https://github.com/krabka-io/krabka-protocol", rev = "2d34902e2074c6e0ce996428b3650678bf78ec50" }
-krabka-metadata = { git = "https://github.com/krabka-io/krabka-protocol", rev = "2d34902e2074c6e0ce996428b3650678bf78ec50" }
-krabka-protocol = { git = "https://github.com/krabka-io/krabka-protocol", rev = "2d34902e2074c6e0ce996428b3650678bf78ec50" }
-krabka-security = { git = "https://github.com/krabka-io/krabka-protocol", rev = "2d34902e2074c6e0ce996428b3650678bf78ec50" }
-krabka-trace-context = { git = "https://github.com/krabka-io/krabka-protocol", rev = "2d34902e2074c6e0ce996428b3650678bf78ec50" }
-krabka-units = { git = "https://github.com/krabka-io/krabka-protocol", rev = "2d34902e2074c6e0ce996428b3650678bf78ec50" }
-krabka-voters = { git = "https://github.com/krabka-io/krabka-protocol", rev = "2d34902e2074c6e0ce996428b3650678bf78ec50" }
-krabka-schema-serde = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "146a4c87f792da1b38c460bbd9e63c757ef883ff" }
+krabka-client-admin = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "638d10fae65a4f21c0b43e204ae8ee039c2d3116" }
+krabka-client-consumer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "638d10fae65a4f21c0b43e204ae8ee039c2d3116" }
+krabka-client-core = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "638d10fae65a4f21c0b43e204ae8ee039c2d3116" }
+krabka-client-producer = { git = "https://github.com/krabka-io/krabka-client-rs", rev = "638d10fae65a4f21c0b43e204ae8ee039c2d3116" }
+krabka-compression = { git = "https://github.com/krabka-io/krabka-protocol", rev = "b0b78650b3d8e96bac8b0cf6f04fad5db3b3b286" }
+krabka-ids = { git = "https://github.com/krabka-io/krabka-protocol", rev = "b0b78650b3d8e96bac8b0cf6f04fad5db3b3b286" }
+krabka-metadata = { git = "https://github.com/krabka-io/krabka-protocol", rev = "b0b78650b3d8e96bac8b0cf6f04fad5db3b3b286" }
+krabka-protocol = { git = "https://github.com/krabka-io/krabka-protocol", rev = "b0b78650b3d8e96bac8b0cf6f04fad5db3b3b286" }
+krabka-security = { git = "https://github.com/krabka-io/krabka-protocol", rev = "b0b78650b3d8e96bac8b0cf6f04fad5db3b3b286" }
+krabka-trace-context = { git = "https://github.com/krabka-io/krabka-protocol", rev = "b0b78650b3d8e96bac8b0cf6f04fad5db3b3b286" }
+krabka-units = { git = "https://github.com/krabka-io/krabka-protocol", rev = "b0b78650b3d8e96bac8b0cf6f04fad5db3b3b286" }
+krabka-voters = { git = "https://github.com/krabka-io/krabka-protocol", rev = "b0b78650b3d8e96bac8b0cf6f04fad5db3b3b286" }
+krabka-schema-serde = { git = "https://github.com/krabka-io/krabka-schema-registry", rev = "f0070c772d9942f8294224dc4c305e1c90745a3e" }

@@ -2,15 +2,15 @@
 //!
 //! They drive a live broker, because the transactional path only becomes
 //! reachable once the coordinator owns the `__transaction_state` partition for
-//! the transactional id and the cluster has finalised `transaction.version` 3.
+//! the transactional id. KIP-939 needs the broker config
+//! `transaction.two.phase.commit.enable`, not a `transaction.version` level.
 //! Keeping them out of the module root leaves the request flow readable.
 
 use std::{collections::HashSet, sync::Arc};
 
 use assert2::assert;
 use krabka_metadata::{
-    AclEntry, AclOperation, FeatureLevelRecord, MetadataRecord, PatternType, PermissionType,
-    ResourceType,
+    AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
 };
 use krabka_units::secs;
 
@@ -40,22 +40,25 @@ async fn wait_for_leader(broker: &Broker) {
     }
 }
 
-async fn enable_transaction_version_3(broker: &Broker) {
-    wait_for_leader(broker).await;
-    broker
+/// Waits for the controller, and checks the cluster finalized `TV_2`, the
+/// highest `transaction.version` Kafka defines, which a self-bootstrapped
+/// broker finalizes. KIP-939 needs no higher level.
+async fn wait_for_transaction_version_2(broker_handle: &crate::broker::BrokerHandle) {
+    wait_for_leader(&broker_handle.broker_arc_for_test()).await;
+    broker_handle
+        .wait_for_image(|image| {
+            image.finalized_feature(
+                krabka_metadata::transaction_version::TRANSACTION_VERSION_FEATURE,
+            ) == Some(krabka_metadata::transaction_version::TRANSACTION_VERSION_MAX)
+        })
+        .await;
+    let image = broker_handle
+        .broker_arc_for_test()
         .controller
-        .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: krabka_metadata::transaction_version::TRANSACTION_VERSION_FEATURE.into(),
-            level: 3,
-        })])
-        .await
-        .expect("enable transaction.version 3");
+        .current_image();
     assert!(
-        broker
-            .controller
-            .current_image()
-            .finalized_feature(krabka_metadata::transaction_version::TRANSACTION_VERSION_FEATURE)
-            == Some(3)
+        crate::txn::version::resolve_txn_version(&image)
+            == crate::txn::version::TxnVersion::Verified
     );
 }
 
@@ -145,7 +148,7 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
     let tids = ["txn-small", "txn-above-max", "txn-2pc", "txn-zero"];
 
     let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
-    enable_transaction_version_3(&broker).await;
+    wait_for_transaction_version_2(&broker_handle).await;
     broker_handle
         .wait_until_transaction_coordinator_ready()
         .await;
@@ -191,7 +194,7 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
     };
     broker
         .txn_coordinator
-        .put(snapshot, crate::txn::version::TxnVersion::TwoPhase)
+        .put(snapshot, crate::txn::version::TxnVersion::Verified)
         .await
         .expect("persist ongoing 2PC transaction");
 
@@ -302,20 +305,45 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
     broker_handle.shutdown().await;
 }
 
+/// krabka-io/krabka-broker#784: Kafka 4.3.1 gates KIP-939 on
+/// `transaction.two.phase.commit.enable`, not on a `transaction.version`
+/// level. With the config off (its default),
+/// `TransactionCoordinator.handleInitProducerId` answers `enable2Pc` with
+/// `TRANSACTIONAL_ID_AUTHORIZATION_FAILED` and `keepPreparedTxn` with
+/// `UNSUPPORTED_VERSION`. At `TV_2`, with the config on, neither is refused on
+/// version grounds, and a broker that coordinates nothing answers the
+/// coordinator check.
 #[tokio::test]
-async fn kip939_fields_require_transaction_version_3() {
-    let (broker_handle, _dir) = start_broker_with(|config| {
-        config.audit_enabled = false;
-        config.features.transaction_two_phase_commit_enable = true;
-    })
-    .await;
-    let broker = broker_handle.broker_arc_for_test();
-    let principal = principal("admin");
-    let peer = peer();
-    let context = crate::test_support::request_context(&principal, &peer, "txn-client");
-    let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
-
-    for (enable_2pc, keep_prepared_txn) in [(true, false), (false, true)] {
+async fn kip939_fields_follow_the_two_phase_commit_config_at_transaction_version_2() {
+    let refused = |error_code| InitProducerIdResponse {
+        error_code,
+        producer_id: -1,
+        producer_epoch: -1,
+        ..Default::default()
+    };
+    for (two_phase_commit, enable_2pc, keep_prepared_txn, want) in [
+        (
+            false,
+            true,
+            false,
+            refused(codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED),
+        ),
+        (false, false, true, refused(codes::UNSUPPORTED_VERSION)),
+        (true, true, false, refused(codes::NOT_COORDINATOR)),
+        (true, false, true, refused(codes::NOT_COORDINATOR)),
+    ] {
+        let (broker_handle, _dir) = start_broker_with(|config| {
+            config.audit_enabled = false;
+            config.features.transaction_two_phase_commit_enable = two_phase_commit;
+        })
+        .await;
+        wait_for_transaction_version_2(&broker_handle).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let principal = principal("admin");
+        let peer = peer();
+        let context = crate::test_support::request_context(&principal, &peer, "txn-client");
+        let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
+        // No FindCoordinator ran, so this broker coordinates nothing.
         let request = InitProducerIdRequest {
             transactional_id: Some("txn-tv2".to_string()),
             transaction_timeout_ms: 500,
@@ -331,15 +359,16 @@ async fn kip939_fields_require_transaction_version_3() {
             &context,
         )
         .await
-        .expect("reject KIP-939 request before TV3");
+        .expect("answer the KIP-939 request");
         let response: InitProducerIdResponse =
             crate::test_support::decode_response(&response, version);
         assert!(
-            response.error_code == codes::UNSUPPORTED_VERSION,
-            "{response:?}"
+            response == want,
+            "config {two_phase_commit}, enable2Pc {enable_2pc}, keepPreparedTxn \
+             {keep_prepared_txn}: {response:?}"
         );
+        broker_handle.shutdown().await;
     }
-    broker_handle.shutdown().await;
 }
 
 #[tokio::test]
@@ -352,7 +381,7 @@ async fn keep_prepared_txn_without_enable_2pc_preserves_finite_timeout() {
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    enable_transaction_version_3(&broker).await;
+    wait_for_transaction_version_2(&broker_handle).await;
     broker_handle
         .wait_until_transaction_coordinator_ready()
         .await;
@@ -409,7 +438,7 @@ async fn keep_prepared_txn_without_enable_2pc_preserves_finite_timeout() {
     };
     broker
         .txn_coordinator
-        .put(snapshot, crate::txn::version::TxnVersion::TwoPhase)
+        .put(snapshot, crate::txn::version::TxnVersion::Verified)
         .await
         .expect("persist finite ongoing transaction");
 
@@ -447,7 +476,7 @@ async fn the_timeout_check_runs_before_the_coordinator_check() {
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    enable_transaction_version_3(&broker).await;
+    wait_for_transaction_version_2(&broker_handle).await;
     let principal = principal("admin");
     let peer = peer();
     let context = crate::test_support::request_context(&principal, &peer, "txn-client");
@@ -509,7 +538,7 @@ async fn half_an_identity_is_invalid_and_an_old_client_gets_invalid_producer_epo
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    enable_transaction_version_3(&broker).await;
+    wait_for_transaction_version_2(&broker_handle).await;
     broker_handle
         .wait_until_transaction_coordinator_ready()
         .await;
@@ -875,7 +904,7 @@ async fn two_phase_commit_gate_is_scoped_to_enable_2pc_not_keep_prepared_txn() {
         })
         .await;
         let broker = broker_handle.broker_arc_for_test();
-        enable_transaction_version_3(&broker).await;
+        wait_for_transaction_version_2(&broker_handle).await;
         broker_handle
             .wait_until_transaction_coordinator_ready()
             .await;
