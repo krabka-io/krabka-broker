@@ -25,7 +25,15 @@ pub(super) struct TransactionRequest<'a> {
     pub(super) transactional_id: &'a str,
     pub(super) producer_id: krabka_log::ProducerId,
     pub(super) producer_epoch: i16,
+    /// The partitions to check and add, one row per `(topic, partition)`.
     pub(super) topics: &'a [AddPartitionsToTxnTopic],
+    /// The request topics, as sent, that an add-path answer lists. Kafka's
+    /// coordinator answers an add with one code, and
+    /// `AddPartitionsToTxnRequest.errorResponseForTransaction` spreads it over
+    /// the request's own topic list rather than over the partitions it added,
+    /// so a repeated topic or partition gets a row per mention. A verify-only
+    /// answer is keyed by partition instead and lists [`Self::topics`].
+    pub(super) response_topics: &'a [AddPartitionsToTxnTopic],
     pub(super) denied: &'a std::collections::HashSet<String>,
     pub(super) frozen: &'a std::collections::HashSet<String>,
     pub(super) txnv: crate::txn::version::TxnVersion,
@@ -51,19 +59,24 @@ pub(super) async fn process_one_txn(
         producer_id,
         producer_epoch,
         topics,
+        response_topics,
         denied,
         frozen,
         txnv,
         verify_only,
         version,
     } = request;
+    // Every answer below but the verify-only one carries one code, which
+    // Kafka's add path spreads over the request's own topic list and its
+    // verify path over the partitions it checked.
+    let answer_topics = if verify_only { topics } else { response_topics };
     // Kafka's `TransactionCoordinator` checks this before anything else: a
     // null or empty transactional id is `INVALID_REQUEST`, whole-transaction
     // on the add path and per-partition on the verify path (this code lands
     // on every row either way).
     if tid.is_empty() {
         let unread = std::collections::HashSet::new();
-        return per_topic_with_refusals(topics, denied, &unread, codes::INVALID_REQUEST);
+        return per_topic_with_refusals(answer_topics, denied, &unread, codes::INVALID_REQUEST);
     }
     // Topics allowed to proceed past the per-topic Write ACL gate and the
     // write-freeze gate. A frozen topic never joins the partition set, which
@@ -82,14 +95,14 @@ pub(super) async fn process_one_txn(
     //    owns the decision and answers the freeze.
     if let Some(code) = coord.coordinator_error(tid).await {
         let unread = std::collections::HashSet::new();
-        return per_topic_with_refusals(topics, denied, &unread, code);
+        return per_topic_with_refusals(answer_topics, denied, &unread, code);
     }
 
     // 2. Look up entry for the TV_2 verify-only path.
     let Some(entry_mutex) = coord.get(tid) else {
         // A leadership change can evict the entry after the check above.
         let code = coord.missing_entry_error(tid).await;
-        return per_topic_with_refusals(topics, denied, frozen, code);
+        return per_topic_with_refusals(answer_topics, denied, frozen, code);
     };
     // Kafka's `TransactionCoordinator.handleVerifyPartitionsInTransaction`
     // answers a verify-only request at every transaction version. A partition
@@ -117,5 +130,5 @@ pub(super) async fn process_one_txn(
     let code = coord
         .register_partitions(tid, producer_id, producer_epoch, partitions, txnv, version)
         .await;
-    per_topic_with_refusals(topics, denied, frozen, code)
+    per_topic_with_refusals(response_topics, denied, frozen, code)
 }

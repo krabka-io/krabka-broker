@@ -18,7 +18,6 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use assert2::check;
-use krabka_ids::PartitionIndex;
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::owned::{
     add_partitions_to_txn_request::{AddPartitionsToTxnRequest, AddPartitionsToTxnTransaction},
@@ -27,14 +26,13 @@ use krabka_protocol::owned::{
 
 use super::{
     handle,
-    test_support::{seed_topic, topic, topic_result},
+    test_support::{enlisted, seed_transaction, start_coordinator, topic, topic_result},
 };
 use crate::{
     authorizer::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer},
     codes,
     coordinator::bootstrap::OFFSETS_TOPIC,
     test_support::{decode_response, encode_request, peer, principal, request_context},
-    txn::state::TxnEntry,
 };
 
 /// A broker principal: `ClusterAction` on the cluster and nothing else.
@@ -259,45 +257,9 @@ async fn add_partitions_to_txn_authorizes_by_version_and_fails_the_whole_transac
         },
     ];
 
-    let (handle_, _dir) = crate::test_support::start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(Grants));
-        cfg.transaction_state_num_partitions = 1;
-        cfg.transaction_state_replication_factor = 1;
-    })
-    .await;
+    let (handle_, _dir) =
+        start_coordinator(Arc::new(crate::test_support::ControllerPeerAllowed(Grants))).await;
     let broker = handle_.broker_arc_for_test();
-    handle_.wait_until_controller_leader().await;
-    handle_.wait_until_brokers_registered(1).await;
-    crate::txn::bootstrap::ensure_topic(
-        &broker.controller,
-        1,
-        1,
-        &crate::txn::bootstrap::topic_configs(
-            broker.config.transaction_state_segment_bytes,
-            broker.config.transaction_state_min_isr,
-        ),
-    )
-    .await
-    .expect("bootstrap __transaction_state");
-    seed_topic(&broker, "a", 1).await;
-    seed_topic(&broker, "b", 1).await;
-    // Wait for the coordinator's own leadership/load bookkeeping, not just
-    // the partition object. The broker's metadata reconcile loop also calls
-    // refresh_leader_partitions on every image change and does not wait for
-    // the load it starts, so a caller can otherwise see the partition object
-    // exist locally before the coordinator itself considers the partition
-    // loaded, and puts before that point fail "does not coordinate".
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        while broker.txn_coordinator.load_status(PartitionIndex(0)).await
-            != Some(crate::txn::coordinator::leadership::LoadStatus::Loaded)
-        {
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .expect("__transaction_state-0 becomes local");
-    let txnv = crate::txn::version::resolve_txn_version(&broker.controller.current_image());
 
     let address = peer();
     // The verify-only case reads the transaction that the case before it
@@ -308,20 +270,7 @@ async fn add_partitions_to_txn_authorizes_by_version_and_fails_the_whole_transac
         if !case.verify_only {
             tid = format!("tid-{index}");
             producer_id = 100 + index;
-            broker
-                .txn_coordinator
-                .put(
-                    TxnEntry::new_empty(
-                        tid.clone(),
-                        krabka_log::ProducerId(producer_id),
-                        2,
-                        30_000,
-                        0,
-                    ),
-                    txnv,
-                )
-                .await
-                .expect("seed the open transaction");
+            seed_transaction(&broker, &tid, producer_id).await;
         }
         let user = principal(case.caller);
         let ctx = request_context(&user, &address, "add-partitions-authorization");
@@ -340,16 +289,7 @@ async fn add_partitions_to_txn_authorizes_by_version_and_fails_the_whole_transac
             "{}",
             case.name
         );
-        let enlisted: BTreeSet<(String, i32)> = broker
-            .txn_coordinator
-            .get(&tid)
-            .expect("open transaction")
-            .lock()
-            .await
-            .partitions
-            .iter()
-            .map(|tp| (tp.topic.clone(), tp.partition.get()))
-            .collect();
+        let enlisted = enlisted(&broker, &tid).await;
         let want: BTreeSet<(String, i32)> = case
             .enlisted
             .iter()
