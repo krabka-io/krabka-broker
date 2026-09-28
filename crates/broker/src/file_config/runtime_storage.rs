@@ -200,18 +200,6 @@ impl RuntimeFileConfig {
             cfg.socket_receive_buffer,
             whole_bytes_usize
         );
-        set_runtime_size_bytes!(
-            runtime,
-            acl_max_principal,
-            cfg.acl_max_principal,
-            whole_bytes_usize
-        );
-        set_runtime_size_bytes!(
-            runtime,
-            acl_max_resource_name,
-            cfg.acl_max_resource_name,
-            whole_bytes_usize
-        );
         set_runtime_i32!(
             runtime,
             max_request_partition_size_limit,

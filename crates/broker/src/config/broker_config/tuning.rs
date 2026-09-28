@@ -161,10 +161,6 @@ macro_rules! tuning_fields {
             pub socket_send_buffer: ByteSize,
             /// Broker socket receive-buffer size.
             pub socket_receive_buffer: ByteSize,
-            /// Maximum encoded ACL principal length.
-            pub acl_max_principal: ByteSize,
-            /// Maximum encoded ACL resource-name length.
-            pub acl_max_resource_name: ByteSize,
             /// Maximum accepted Kafka record decompression ratio.
             pub record_decompression_max_ratio: Ratio,
             /// Minimum Kafka record decompression output allowance.

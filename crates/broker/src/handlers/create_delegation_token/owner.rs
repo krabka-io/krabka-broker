@@ -5,22 +5,25 @@
 use krabka_protocol::owned::create_delegation_token_request::CreateDelegationTokenRequest;
 use krabka_security::KafkaPrincipal;
 
-/// The owner of the token this request mints.
+/// The owner of the token this request mints, or `None` when Kafka cannot
+/// build one.
 ///
 /// Matches `KafkaApis.handleCreateTokenRequest` and
-/// `DelegationTokenControlManager.createDelegationToken` in Kafka trunk: a
+/// `DelegationTokenControlManager.createDelegationToken` in Kafka 4.3.1: a
 /// null or empty `owner_principal_name` means the requester, and any other
 /// name is taken with whatever `owner_principal_type` the request carries.
+/// A null `owner_principal_type` beside a name makes the `KafkaPrincipal`
+/// constructor throw (`requireNonNull`), which is `None` here.
 pub(super) fn resolve_owner(
     req: &CreateDelegationTokenRequest,
     requester: &KafkaPrincipal,
-) -> KafkaPrincipal {
+) -> Option<KafkaPrincipal> {
     match req.owner_principal_name.as_deref() {
-        None | Some("") => requester.clone(),
-        Some(name) => KafkaPrincipal {
-            principal_type: req.owner_principal_type.clone().unwrap_or_default(),
+        None | Some("") => Some(requester.clone()),
+        Some(name) => Some(KafkaPrincipal {
+            principal_type: req.owner_principal_type.clone()?,
             name: name.to_string(),
-        },
+        }),
     }
 }
 
