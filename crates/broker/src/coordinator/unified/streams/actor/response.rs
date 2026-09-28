@@ -17,6 +17,7 @@ use krabka_protocol::owned::{
         endpoint::Endpoint, status::Status, task_ids::TaskIds as RespTaskIds,
         topic_partition::TopicPartition,
     },
+    streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
     streams_group_heartbeat_response::{EndpointToPartitions, StreamsGroupHeartbeatResponse},
 };
 
@@ -152,6 +153,48 @@ pub(super) fn build_assignment_resp(
         partitions_by_user_endpoint: delta.partitions_by_user_endpoint,
         ..base_resp(codes::NONE, m.member_epoch, config)
     }
+}
+
+/// Appends Kafka trunk's `MISSING_CLIENT_TAGS` status to an accepted
+/// heartbeat response when the member does not send every tag key that
+/// `streams.rack.aware.assignment.tags` names.
+///
+/// `GroupMetadataManager.streamsGroupHeartbeat` adds it last, after the
+/// shutdown request, and only at request version 1 and above: a version 0
+/// client throws on a status code it does not know. The detail names the
+/// missing keys in the configured order, as Java's `List.toString` renders
+/// them. A refused heartbeat and a leave carry no such status.
+pub(super) fn add_missing_client_tags(
+    response: &mut StreamsGroupHeartbeatResponse,
+    state: &StreamsGroupState,
+    config: &StreamsGroupConfig,
+    request: &StreamsGroupHeartbeatRequest,
+    version: i16,
+) {
+    if version < 1 || response.error_code != codes::NONE || request.member_epoch < 0 {
+        return;
+    }
+    let Some(member) = state.members.get(&response.member_id) else {
+        return;
+    };
+    let missing: Vec<&str> = config
+        .rack_aware_assignment_tags
+        .iter()
+        .filter(|tag| !member.client_tags.iter().any(|(key, _)| key == *tag))
+        .map(String::as_str)
+        .collect();
+    if missing.is_empty() {
+        return;
+    }
+    response.status.get_or_insert_with(Vec::new).push(Status {
+        status_code: topo_status::MISSING_CLIENT_TAGS,
+        status_detail: format!(
+            "Missing required client tags for rack-aware standby assignment: [{}]. Configure \
+             them via 'client.tag.<tagKey>' in your Streams config.",
+            missing.join(", ")
+        ),
+        ..Default::default()
+    });
 }
 
 /// Kafka's `StreamsGroup.buildEndpointToPartitions`: one entry for each member
