@@ -733,6 +733,7 @@ fn try_resolve_waiters_resolves_at_exact_hwm_and_keeps_future_waiter() {
         base_offset: Offset(4),
         need_offset: Offset(5),
         rejection: None,
+        creates: Vec::new(),
         result: SubmitChangeResult::default(),
         reply: ready_tx,
     });
@@ -740,6 +741,7 @@ fn try_resolve_waiters_resolves_at_exact_hwm_and_keeps_future_waiter() {
         base_offset: Offset(5),
         need_offset: Offset(6),
         rejection: None,
+        creates: Vec::new(),
         result: SubmitChangeResult::default(),
         reply: future_tx,
     });
@@ -770,6 +772,7 @@ fn fail_waiters_reached_by_fails_only_waiters_at_or_below_target_hwm() {
         base_offset: Offset(4),
         need_offset: Offset(5),
         rejection: None,
+        creates: Vec::new(),
         result: SubmitChangeResult::default(),
         reply: ready_tx,
     });
@@ -777,6 +780,7 @@ fn fail_waiters_reached_by_fails_only_waiters_at_or_below_target_hwm() {
         base_offset: Offset(5),
         need_offset: Offset(6),
         rejection: None,
+        creates: Vec::new(),
         result: SubmitChangeResult::default(),
         reply: future_tx,
     });
@@ -889,39 +893,51 @@ async fn submit_change_on_non_leader_rejects() {
 
 /// FIX 2: a committed record that fails apply-`validate` must only fail the
 /// waiter whose appended range actually contains it, not every later waiter.
-/// Park three submits in a 3-voter leader (no peer fetches → nothing commits
-/// on its own): A creates "first" (valid), B re-creates "first" (duplicate →
-/// rejected at apply), C creates "third" (valid). Then drive a single HWM
-/// advance past all three via a follower fetch. B must get `Err`; C must get
-/// `Ok` (not bled the rejection from B's earlier offset).
+/// A committed topic "zero" is the seed. Then park three submits in a 3-voter
+/// leader (no peer fetches, so nothing commits on its own): A deletes "zero"
+/// (valid), B sets a config on "zero" (valid at submit, but "zero" is gone at
+/// apply, so apply rejects it), C creates "third" (valid). Then drive a single
+/// HWM advance past all three via a follower fetch. B must get `Err`; C must
+/// get `Ok` (not bled the rejection from B's earlier offset).
 #[tokio::test]
 async fn rejection_scoped_to_owning_waiter_range() {
+    use krabka_metadata::{DeleteTopicRecord, MetadataRecord, TopicConfigRecord};
+
     let (ctrl, _dir) = build(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
     elect_leader_with_helper(&ctrl, NodeId(1), NodeId(2)).await;
+
+    let cz = ctrl.clone();
+    let zero = tokio::spawn(async move { cz.submit_change(topic_record_named("zero", 9)).await });
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    commit_whole_log_via_node_2(&ctrl).await;
+    let rz = tokio::time::timeout(StdDuration::from_secs(5), zero)
+        .await
+        .expect("seed did not hang")
+        .expect("join");
+    assert!(rz.is_ok(), "seed topic should commit: {rz:?}");
 
     let ca = ctrl.clone();
     let cb = ctrl.clone();
     let cc = ctrl.clone();
-    // A and B both create topic "first"; B is the duplicate that fails apply.
-    // C creates a distinct "third" and must commit cleanly.
-    let a = tokio::spawn(async move { ca.submit_change(topic_record_named("first", 1)).await });
+    let a = tokio::spawn(async move {
+        ca.submit_change(vec![MetadataRecord::V1DeleteTopic(DeleteTopicRecord {
+            name: "zero".to_string(),
+        })])
+        .await
+    });
     tokio::time::sleep(StdDuration::from_millis(20)).await;
-    let b = tokio::spawn(async move { cb.submit_change(topic_record_named("first", 1)).await });
+    let b = tokio::spawn(async move {
+        cb.submit_change(vec![MetadataRecord::V1TopicConfig(TopicConfigRecord {
+            topic: "zero".to_string(),
+            overrides: [("retention.ms".to_string(), "1000".to_string())].into(),
+        })])
+        .await
+    });
     tokio::time::sleep(StdDuration::from_millis(20)).await;
     let c = tokio::spawn(async move { cc.submit_change(topic_record_named("third", 3)).await });
     tokio::time::sleep(StdDuration::from_millis(40)).await;
 
-    // Drive the HWM past all appended batches by simulating a follower (node
-    // 2) that has fetched the whole log. With a 3-voter majority of 2, the
-    // leader's own log end plus node 2's fetch offset commits everything.
-    let qs = ctrl.quorum_state().await.unwrap();
-    ctrl.inject_event(Event::ReceiveFetch {
-        from: NodeId(2),
-        fetch_epoch: qs.leader_epoch,
-        fetch_offset: qs.log_end_offset,
-    })
-    .await
-    .unwrap();
+    commit_whole_log_via_node_2(&ctrl).await;
 
     let ra = tokio::time::timeout(StdDuration::from_secs(5), a)
         .await
@@ -936,13 +952,145 @@ async fn rejection_scoped_to_owning_waiter_range() {
         .expect("C did not hang")
         .expect("join");
 
-    check!(ra.is_ok(), "A (first valid) should commit: {ra:?}");
-    assert2::assert!(matches!(rb, Err(RaftError::Metadata(_))));
+    check!(ra.is_ok(), "A (delete) should commit: {ra:?}");
+    assert2::assert!(matches!(
+        rb,
+        Err(RaftError::Metadata(krabka_metadata::MetadataError::UnknownTopic(name)))
+            if name == "zero"
+    ));
     check!(
         rc.is_ok(),
         "C (distinct valid) must NOT bleed B's rejection: {rc:?}"
     );
     ctrl.shutdown().await;
+}
+
+/// Drive the HWM to the log end: node 2 reports that it has fetched the whole
+/// log. With a 3-voter majority of 2, the leader's own log end plus node 2's
+/// fetch offset commits every appended batch.
+async fn commit_whole_log_via_node_2(ctrl: &crate::kraft::controller::KraftController) {
+    let qs = ctrl.quorum_state().await.unwrap();
+    ctrl.inject_event(Event::ReceiveFetch {
+        from: NodeId(2),
+        fetch_epoch: qs.leader_epoch,
+        fetch_offset: qs.log_end_offset,
+    })
+    .await
+    .unwrap();
+}
+
+/// Elect node 1 of a three-voter engine. Node 2 grants the pre-vote at
+/// `epoch` and the real vote at `epoch + 1`.
+fn elect_three_voter_engine(engine: &mut super::Engine, epoch: u32) {
+    engine.on_event(Event::ElectionTimeout);
+    for vote_epoch in [epoch, epoch + 1] {
+        engine.on_event(Event::ReceiveVoteResponse {
+            from: NodeId(2),
+            epoch: vote_epoch,
+            vote_granted: true,
+        });
+    }
+    assert!(engine.core.role().is_leader());
+}
+
+/// Kafka's `QuorumController` replays a record before it commits, so
+/// `ReplicationControlManager.createTopics` sees a pending topic name as an
+/// existing topic. A second create of a name that has not committed gets
+/// `TOPIC_ALREADY_EXISTS`, and no second `TopicRecord` goes into the log.
+#[tokio::test]
+async fn second_create_of_uncommitted_topic_is_refused_before_append() {
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    elect_three_voter_engine(&mut engine, 0);
+
+    let (first_tx, mut first_rx) = oneshot::channel();
+    engine.on_submit_change(&topic_record_named("first", 1), first_tx);
+    assert!(matches!(
+        first_rx.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    let end_after_first = engine.log.log_end_offset();
+
+    let (second_tx, mut second_rx) = oneshot::channel();
+    engine.on_submit_change(&topic_record_named("first", 2), second_tx);
+    assert!(matches!(
+        second_rx.try_recv(),
+        Ok(Err(RaftError::Metadata(
+            krabka_metadata::MetadataError::TopicExists(name)
+        ))) if name == "first"
+    ));
+    check!(engine.log.log_end_offset() == end_after_first);
+    check!(
+        engine
+            .commit_waiters
+            .iter()
+            .map(|waiter| waiter.creates.clone())
+            .collect::<Vec<_>>()
+            == vec![vec!["first".to_string()]]
+    );
+
+    // Node 2 fetches the whole log. With node 1, that is a majority of three.
+    engine.on_event(Event::ReceiveFetch {
+        from: NodeId(2),
+        fetch_epoch: engine.core.quorum_state().leader_epoch,
+        fetch_offset: end_after_first.0,
+    });
+
+    assert!(matches!(first_rx.try_recv(), Ok(Ok(_))));
+    check!(engine.commit_waiters.is_empty());
+    check!(
+        engine.image.topic("first").map(|topic| topic.topic_id) == Some(uuid::Uuid::from_u128(1))
+    );
+    check!(
+        engine
+            .image
+            .topic_by_id(&uuid::Uuid::from_u128(2))
+            .is_none()
+    );
+}
+
+/// A waiter that fails on leadership loss leaves `commit_waiters`, and its
+/// pending name goes with it. After node 1 is leader again, a create of the
+/// same name is appended. The pending-name check does not refuse it.
+#[tokio::test]
+async fn pending_create_clears_when_leadership_loss_fails_its_waiter() {
+    let (mut engine, _dir) = build_engine_only(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    elect_three_voter_engine(&mut engine, 0);
+
+    let (first_tx, mut first_rx) = oneshot::channel();
+    engine.on_submit_change(&topic_record_named("first", 1), first_tx);
+    check!(engine.commit_waiters.len() == 1);
+
+    // A higher-epoch BeginQuorumEpoch from node 2 makes node 1 a follower.
+    engine.on_event(Event::ReceiveBeginQuorumEpoch {
+        leader_id: NodeId(2),
+        leader_epoch: 9,
+    });
+    assert!(matches!(
+        first_rx.try_recv(),
+        Ok(Err(RaftError::NotLeader {
+            current_leader: Some(NodeId(2))
+        }))
+    ));
+    check!(engine.commit_waiters.is_empty());
+
+    elect_three_voter_engine(&mut engine, 9);
+    let end_before_retry = engine.log.log_end_offset();
+    let (retry_tx, mut retry_rx) = oneshot::channel();
+    engine.on_submit_change(&topic_record_named("first", 2), retry_tx);
+
+    assert!(matches!(
+        retry_rx.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    check!(engine.log.log_end_offset() > end_before_retry);
+    check!(
+        engine
+            .commit_waiters
+            .iter()
+            .map(|waiter| waiter.creates.clone())
+            .collect::<Vec<_>>()
+            == vec![vec!["first".to_string()]]
+    );
 }
 
 /// A two-replica partition whose second replica has reported its directory,
