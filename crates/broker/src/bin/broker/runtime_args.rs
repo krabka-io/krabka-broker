@@ -294,14 +294,34 @@ pub struct RuntimeArgs {
     pub share_group_session_timeout: Option<Time>,
     #[arg(long, env = "KRABKA_SHARE_GROUP_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
     pub share_group_heartbeat_interval: Option<Time>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_MIN_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
+    pub share_group_min_session_timeout: Option<Time>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
+    pub share_group_max_session_timeout: Option<Time>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_MIN_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
+    pub share_group_min_heartbeat_interval: Option<Time>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]
+    pub share_group_max_heartbeat_interval: Option<Time>,
     #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_SIZE", value_parser = parse_positive_count)]
     pub share_group_max_size: Option<PositiveCount>,
     #[arg(long, env = "KRABKA_SHARE_GROUP_RECORD_LOCK_DURATION", value_parser = krabka_units::parse::positive_time)]
     pub share_group_record_lock_duration: Option<Time>,
-    #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_DELIVERY_ATTEMPTS", value_parser = clap::value_parser!(i16).range(1..))]
-    pub share_group_max_delivery_attempts: Option<i16>,
-    #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_INFLIGHT_RECORDS", value_parser = parse_positive_i32)]
-    pub share_group_max_inflight_records: Option<PositiveI32>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_MIN_RECORD_LOCK_DURATION", value_parser = krabka_units::parse::positive_time)]
+    pub share_group_min_record_lock_duration: Option<Time>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_RECORD_LOCK_DURATION", value_parser = krabka_units::parse::positive_time)]
+    pub share_group_max_record_lock_duration: Option<Time>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_DELIVERY_COUNT_LIMIT")]
+    pub share_group_delivery_count_limit: Option<i16>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_MIN_DELIVERY_COUNT_LIMIT")]
+    pub share_group_min_delivery_count_limit: Option<i16>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_DELIVERY_COUNT_LIMIT")]
+    pub share_group_max_delivery_count_limit: Option<i16>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_PARTITION_MAX_RECORD_LOCKS")]
+    pub share_group_partition_max_record_locks: Option<i32>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_MIN_PARTITION_MAX_RECORD_LOCKS")]
+    pub share_group_min_partition_max_record_locks: Option<i32>,
+    #[arg(long, env = "KRABKA_SHARE_GROUP_MAX_PARTITION_MAX_RECORD_LOCKS")]
+    pub share_group_max_partition_max_record_locks: Option<i32>,
     #[arg(long, env = "KRABKA_SHARE_GROUP_ISOLATION_LEVEL", value_parser = parse_share_isolation)]
     pub share_group_isolation_level:
         Option<krabka_broker::coordinator::unified::share::config::ShareIsolationLevel>,

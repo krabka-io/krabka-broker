@@ -2581,6 +2581,16 @@
             "null"
           ]
         },
+        "share_group_delivery_count_limit": {
+          "description": "The delivery count at which a share record is archived, Kafka's\n`group.share.delivery.count.limit`: from 2 to 10, within the minimum\nand maximum below.",
+          "format": "int16",
+          "maximum": 32767,
+          "minimum": -32768,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "share_group_enable": {
           "description": "Whether the broker serves KIP-932 share groups, Kafka's\n`group.share.enable`.",
           "type": [
@@ -2604,8 +2614,8 @@
             "null"
           ]
         },
-        "share_group_max_delivery_attempts": {
-          "description": "Number of times a share record may be delivered before it is archived,\nKafka's `group.share.delivery.count.limit`.",
+        "share_group_max_delivery_count_limit": {
+          "description": "Upper bound on the delivery count limit, and on a group's\n`share.delivery.count.limit`, Kafka's\n`group.share.max.delivery.count.limit`: from 5 to 25.",
           "format": "int16",
           "maximum": 32767,
           "minimum": -32768,
@@ -2614,16 +2624,43 @@
             "null"
           ]
         },
-        "share_group_max_inflight_records": {
-          "description": "Maximum records a share partition may hold in flight, Kafka's\n`group.share.partition.max.record.locks`.",
+        "share_group_max_heartbeat_interval": {
+          "default": null,
+          "description": "Upper bound on the share-group heartbeat interval, and on a group's\n`share.heartbeat.interval.ms`, Kafka's\n`group.share.max.heartbeat.interval.ms`.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "share_group_max_partition_max_record_locks": {
+          "description": "Upper bound on the record lock limit, and on a group's\n`share.partition.max.record.locks`, Kafka's\n`group.share.max.partition.max.record.locks`: from 2000 to 10000.",
           "format": "int32",
           "type": [
             "integer",
             "null"
           ]
         },
+        "share_group_max_record_lock_duration": {
+          "default": null,
+          "description": "Upper bound on the record lock duration, and on a group's\n`share.record.lock.duration.ms`, Kafka's\n`group.share.max.record.lock.duration.ms`: from 30s to 1h.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "share_group_max_session_timeout": {
+          "default": null,
+          "description": "Upper bound on the share-group session timeout, and on a group's\n`share.session.timeout.ms`, Kafka's\n`group.share.max.session.timeout.ms`.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "share_group_max_size": {
-          "description": "Maximum number of members in one share group, Kafka's\n`group.share.max.size`.",
+          "description": "Maximum number of members in one share group, Kafka's\n`group.share.max.size`: from 1 to 1000.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -2631,9 +2668,62 @@
             "null"
           ]
         },
+        "share_group_min_delivery_count_limit": {
+          "description": "Lower bound on the delivery count limit, and on a group's\n`share.delivery.count.limit`, Kafka's\n`group.share.min.delivery.count.limit`: from 2 to 5.",
+          "format": "int16",
+          "maximum": 32767,
+          "minimum": -32768,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "share_group_min_heartbeat_interval": {
+          "default": null,
+          "description": "Lower bound on the share-group heartbeat interval, and on a group's\n`share.heartbeat.interval.ms`, Kafka's\n`group.share.min.heartbeat.interval.ms`.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "share_group_min_partition_max_record_locks": {
+          "description": "Lower bound on the record lock limit, and on a group's\n`share.partition.max.record.locks`, Kafka's\n`group.share.min.partition.max.record.locks`: from 100 to 2000.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "share_group_min_record_lock_duration": {
+          "default": null,
+          "description": "Lower bound on the record lock duration, and on a group's\n`share.record.lock.duration.ms`, Kafka's\n`group.share.min.record.lock.duration.ms`: from 1s to 30s.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "share_group_min_session_timeout": {
+          "default": null,
+          "description": "Lower bound on the share-group session timeout, and on a group's\n`share.session.timeout.ms`, Kafka's\n`group.share.min.session.timeout.ms`.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "share_group_partition_max_record_locks": {
+          "description": "Maximum records a share partition may hold in flight, Kafka's\n`group.share.partition.max.record.locks`: from 100 to 10000, within\nthe minimum and maximum below.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "share_group_record_lock_duration": {
           "default": null,
-          "description": "How long an acquired share record stays locked before it is released\nfor redelivery, Kafka's `group.share.record.lock.duration.ms`.",
+          "description": "How long an acquired share record stays locked before it is released\nfor redelivery, Kafka's `group.share.record.lock.duration.ms`: a whole\nnumber of milliseconds from 1s to 1h, within the minimum and maximum\nbelow.",
           "format": "duration",
           "type": [
             "string",

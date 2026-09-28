@@ -35,9 +35,9 @@ use crate::{
 /// KFC-1: the most not-yet-due records an acquire pass leaves in one share
 /// partition's window.
 ///
-/// A deferred run is not in flight, so it does not spend
-/// `share_group_max_inflight_records`, and materialization walks past it to
-/// reach the due records behind it. That is the point of the whole path, and
+/// A deferred run is not in flight, so it does not spend the record lock
+/// limit, `share_group_partition_max_record_locks`, and materialization walks
+/// past it to reach the due records behind it. That is the point of the whole path, and
 /// it needs a second bound of its own: without one, a single far-future batch
 /// at the head of the window pulls the rest of the log in behind it, and every
 /// later pass re-walks all of it.
