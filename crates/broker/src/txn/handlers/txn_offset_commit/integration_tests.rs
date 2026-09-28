@@ -47,18 +47,24 @@ const READ_ON_STAR: &str = "TransactionalId:Write+Group:Read+Topic:Read";
 const NO_TOPIC_READ: &str = "TransactionalId:Write+Group:Read";
 
 /// Adds topic `a` with one partition, led by this broker, to the metadata
-/// image. `V1Topic` alone would not give the image a partition count or a
-/// partition record after the wire round trip (#716), so this seeds both.
+/// image.
 pub(super) async fn seed_topic_a(broker: &crate::broker::Broker) {
+    seed_topic(broker, "a").await;
+}
+
+/// Adds `name` with one partition, led by this broker, to the metadata image.
+/// `V1Topic` alone would not give the image a partition count or a partition
+/// record after the wire round trip (#716), so this seeds both.
+async fn seed_topic(broker: &crate::broker::Broker, name: &str) {
     let records = vec![
         krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
-            name: "a".to_string(),
+            name: name.to_string(),
             topic_id: uuid::Uuid::new_v4(),
             partitions: 1,
             replication_factor: 1,
         }),
         krabka_metadata::MetadataRecord::V1Partition(krabka_metadata::PartitionRecord {
-            topic: "a".to_string(),
+            topic: name.to_string(),
             partition: 0,
             leader: broker.config.node_id,
             replicas: vec![broker.config.node_id],
@@ -74,7 +80,7 @@ pub(super) async fn seed_topic_a(broker: &crate::broker::Broker) {
         .controller
         .submit_change(records)
         .await
-        .unwrap_or_else(|error| panic!("seed topic a: {error}"));
+        .unwrap_or_else(|error| panic!("seed topic {name}: {error}"));
 }
 
 /// Starts a broker that grants what the principal name says, waits until its
@@ -188,9 +194,10 @@ async fn txn_offset_commit_runs_the_existence_check_after_the_topic_read_gate() 
             name: "mixed_request_appends_only_the_existing_partition",
             topics: vec![topic("a", &[0]), topic("missing", &[0])],
             grants: READ_ON_STAR,
+            // Kafka's response builder holds the swept rows first.
             expected: vec![
-                ("a", 0, codes::NONE),
                 ("missing", 0, codes::UNKNOWN_TOPIC_OR_PARTITION),
+                ("a", 0, codes::NONE),
             ],
             appended: vec![("a", 0)],
         },
@@ -304,8 +311,8 @@ async fn unknown_rows_survive_a_group_fencing_failure() {
         })
         .collect();
     let expected = vec![
-        ("a".to_string(), 0, codes::ILLEGAL_GENERATION),
         ("missing".to_string(), 0, codes::UNKNOWN_TOPIC_OR_PARTITION),
+        ("a".to_string(), 0, codes::ILLEGAL_GENERATION),
     ];
     check!(got == expected, "fenced response preserves unknown rows");
 
@@ -354,14 +361,61 @@ fn logged_value(
         .find_map(|record| OffsetCommitValue::decode_value(record.value.as_ref()?).ok())
 }
 
-/// #867, KIP-1319: v6 names each topic by id. An id the image holds commits
-/// under the topic's name and records the id with the offset; an id it does
-/// not hold, and the zero id, answer `UNKNOWN_TOPIC_ID` and commit nothing.
-/// v5 still names the topic, and the offset records the id the image holds
-/// for that name, as Kafka trunk's `KafkaApis` resolves it for the
-/// coordinator.
+/// Allows every request except `Read` on the topic `b`, so a case can tell
+/// the topic `Read` gate apart from the others by the topic's name.
+#[derive(Debug)]
+struct DeniesReadOnB;
+
+impl crate::authorizer::Authorizer for DeniesReadOnB {
+    fn authorize(
+        &self,
+        _source: &dyn crate::authorizer::AclSource,
+        request: &crate::authorizer::AuthorizationRequest<'_>,
+    ) -> crate::authorizer::AuthorizationResult {
+        if request.resource_type == krabka_metadata::ResourceType::Topic
+            && request.operation == krabka_metadata::AclOperation::Read
+            && request.resource_name == "b"
+        {
+            crate::authorizer::AuthorizationResult::Deny
+        } else {
+            crate::authorizer::AuthorizationResult::Allow
+        }
+    }
+}
+
+/// How one request topic names its topic.
+#[derive(Clone, Copy)]
+enum TopicRef {
+    /// By name, as v0 to v5 do.
+    Name(&'static str),
+    /// By the id the image holds for this topic, as v6 does.
+    IdOf(&'static str),
+    /// By an id the image does not hold.
+    Id(uuid::Uuid),
+}
+
+struct V6Case {
+    name: &'static str,
+    version: i16,
+    topics: Vec<(TopicRef, &'static [i32])>,
+    /// The response topics in order: who the topic is and its rows.
+    expected: Vec<(TopicRef, Vec<(i32, i16)>)>,
+    /// The `(topic, partition)` rows the log holds after the request, each
+    /// with the topic id its offset records.
+    logged: Vec<(&'static str, i32)>,
+}
+
+/// #867, KIP-1319, against Kafka trunk's `KafkaApis.handleTxnOffsetCommitRequest`
+/// and `KafkaApisTest.testHandleTxnOffsetCommitRequestTopicsAndPartitionsValidation`.
+/// v6 names each topic by id. An id the image holds is authorized and checked
+/// for existence under the topic's name, and its offset records the id. An id
+/// the image does not hold, and the zero id, answer `UNKNOWN_TOPIC_ID` ahead
+/// of the `Read` gate. The v6 response carries the topic ids, and the rows the
+/// topic sweep settled lead the rows that reached the coordinator. v5 still
+/// names the topic, and its offset records the id the image holds for that
+/// name.
 #[tokio::test]
-async fn v6_resolves_topic_ids_and_answers_unknown_ones() {
+async fn v6_resolves_topic_ids_before_the_read_gate_and_the_existence_check() {
     use krabka_protocol::{
         owned::txn_offset_commit_response::{
             TxnOffsetCommitResponsePartition, TxnOffsetCommitResponseTopic,
@@ -369,61 +423,106 @@ async fn v6_resolves_topic_ids_and_answers_unknown_ones() {
         primitives::uuid::Uuid as WireUuid,
     };
 
-    let (handle, _dir) = start_seeded_broker().await;
+    let (handle, _dir) = start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.authorizer = Arc::new(DeniesReadOnB);
+    })
+    .await;
+    handle.wait_until_group_coordinator_ready().await;
     let broker = handle.broker_arc_for_test();
+    seed_topic(&broker, "a").await;
+    seed_topic(&broker, "b").await;
     transaction_version_1(&broker).await;
-    let a_id = broker
-        .controller
-        .current_image()
-        .topic("a")
-        .expect("topic a")
-        .topic_id;
+    let image = broker.controller.current_image();
+    let id_of = |name: &str| image.topic(name).expect("seeded topic").topic_id;
+    let dead = uuid::Uuid::from_u128(0xDEAD);
     let address = peer();
-    let user = principal(READ_ON_STAR);
+    let user = principal("user");
     let ctx = request_context(&user, &address, "txn-offset-commit-v6");
 
-    let by_id = |id: uuid::Uuid| TxnOffsetCommitRequestTopic {
-        topic_id: WireUuid(id.into_bytes()),
-        ..topic("", &[0])
-    };
-    // (version, request topic, response topic name, error code, logged topic id)
     let cases = [
-        (
-            5,
-            topic("a", &[0]),
-            "a",
-            WireUuid::default(),
-            codes::NONE,
-            Some(a_id),
-        ),
-        (
-            6,
-            by_id(a_id),
-            "",
-            WireUuid(a_id.into_bytes()),
-            codes::NONE,
-            Some(a_id),
-        ),
-        (
-            6,
-            by_id(uuid::Uuid::from_u128(0xDEAD)),
-            "",
-            WireUuid(uuid::Uuid::from_u128(0xDEAD).into_bytes()),
-            codes::UNKNOWN_TOPIC_ID,
-            None,
-        ),
-        (
-            6,
-            by_id(uuid::Uuid::nil()),
-            "",
-            WireUuid::default(),
-            codes::UNKNOWN_TOPIC_ID,
-            None,
-        ),
+        V6Case {
+            name: "v5_names_the_topic_and_logs_its_id",
+            version: 5,
+            topics: vec![(TopicRef::Name("a"), &[0])],
+            expected: vec![(TopicRef::Name("a"), vec![(0, codes::NONE)])],
+            logged: vec![("a", 0)],
+        },
+        V6Case {
+            name: "v6_known_id_commits_under_the_topic_name",
+            version: 6,
+            topics: vec![(TopicRef::IdOf("a"), &[0])],
+            expected: vec![(TopicRef::IdOf("a"), vec![(0, codes::NONE)])],
+            logged: vec![("a", 0)],
+        },
+        V6Case {
+            name: "v6_unknown_id_is_unknown_topic_id",
+            version: 6,
+            topics: vec![(TopicRef::Id(dead), &[0])],
+            expected: vec![(TopicRef::Id(dead), vec![(0, codes::UNKNOWN_TOPIC_ID)])],
+            logged: vec![],
+        },
+        V6Case {
+            name: "v6_zero_id_is_unknown_topic_id",
+            version: 6,
+            topics: vec![(TopicRef::Id(uuid::Uuid::nil()), &[0])],
+            expected: vec![(
+                TopicRef::Id(uuid::Uuid::nil()),
+                vec![(0, codes::UNKNOWN_TOPIC_ID)],
+            )],
+            logged: vec![],
+        },
+        V6Case {
+            name: "v6_known_id_missing_partition_is_unknown_topic_or_partition",
+            version: 6,
+            topics: vec![(TopicRef::IdOf("a"), &[5])],
+            expected: vec![(
+                TopicRef::IdOf("a"),
+                vec![(5, codes::UNKNOWN_TOPIC_OR_PARTITION)],
+            )],
+            logged: vec![],
+        },
+        V6Case {
+            name: "v6_read_is_authorized_by_the_resolved_name",
+            version: 6,
+            topics: vec![(TopicRef::IdOf("b"), &[0])],
+            expected: vec![(
+                TopicRef::IdOf("b"),
+                vec![(0, codes::TOPIC_AUTHORIZATION_FAILED)],
+            )],
+            logged: vec![],
+        },
+        V6Case {
+            name: "v6_swept_rows_lead_the_committed_ones",
+            version: 6,
+            topics: vec![
+                (TopicRef::IdOf("a"), &[0, 5]),
+                (TopicRef::IdOf("b"), &[0]),
+                (TopicRef::Id(dead), &[0]),
+            ],
+            expected: vec![
+                (
+                    TopicRef::IdOf("a"),
+                    vec![(5, codes::UNKNOWN_TOPIC_OR_PARTITION), (0, codes::NONE)],
+                ),
+                (
+                    TopicRef::IdOf("b"),
+                    vec![(0, codes::TOPIC_AUTHORIZATION_FAILED)],
+                ),
+                (TopicRef::Id(dead), vec![(0, codes::UNKNOWN_TOPIC_ID)]),
+            ],
+            logged: vec![("a", 0)],
+        },
     ];
-    for (row, (version, request_topic, name, topic_id, error_code, logged_id)) in
-        cases.into_iter().enumerate()
-    {
+
+    // The request's name and id for `topic`, and the response's as `version`
+    // decodes them: v6 carries only the id and v5 only the name.
+    let request_key = |topic: TopicRef| match topic {
+        TopicRef::Name(name) => (name.to_string(), WireUuid::default()),
+        TopicRef::IdOf(name) => (String::new(), WireUuid(id_of(name).into_bytes())),
+        TopicRef::Id(id) => (String::new(), WireUuid(id.into_bytes())),
+    };
+    for (row, case) in cases.into_iter().enumerate() {
         let group_id = format!("group-v6-{row}");
         let request = TxnOffsetCommitRequest {
             transactional_id: format!("tid-v6-{row}"),
@@ -431,40 +530,71 @@ async fn v6_resolves_topic_ids_and_answers_unknown_ones() {
             producer_id: 42,
             producer_epoch: 0,
             generation_id_or_member_epoch: -1,
-            topics: vec![request_topic],
+            topics: case
+                .topics
+                .iter()
+                .map(|&(topic_ref, partitions)| {
+                    let (name, topic_id) = request_key(topic_ref);
+                    TxnOffsetCommitRequestTopic {
+                        topic_id,
+                        ..topic(&name, partitions)
+                    }
+                })
+                .collect(),
             ..Default::default()
         };
-        let bytes = super::handle(
+        let bytes = dispatch_context(
             &broker,
-            version,
-            1,
-            &encode_request(&request, version),
+            txn_offset_commit_request::API_KEY,
+            case.version,
+            &encode_request(&request, case.version),
             &ctx,
         )
-        .await
-        .expect("handle");
-        let response: TxnOffsetCommitResponse = decode_response(&bytes, version);
+        .await;
+        let response: TxnOffsetCommitResponse = decode_response(&bytes, case.version);
 
         let expected = TxnOffsetCommitResponse {
             throttle_time_ms: 0,
-            topics: vec![TxnOffsetCommitResponseTopic {
-                name: name.into(),
-                topic_id,
-                partitions: vec![TxnOffsetCommitResponsePartition {
-                    partition_index: 0,
-                    error_code,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
+            topics: case
+                .expected
+                .iter()
+                .map(|(topic_ref, rows)| {
+                    let (name, topic_id) = request_key(*topic_ref);
+                    TxnOffsetCommitResponseTopic {
+                        name,
+                        topic_id,
+                        partitions: rows
+                            .iter()
+                            .map(|&(partition_index, error_code)| {
+                                TxnOffsetCommitResponsePartition {
+                                    partition_index,
+                                    error_code,
+                                    ..Default::default()
+                                }
+                            })
+                            .collect(),
+                        ..Default::default()
+                    }
+                })
+                .collect(),
             ..Default::default()
         };
-        check!(response == expected, "row {row}");
-        check!(
-            logged_value(&broker, &group_id, "a", 0).map(|value| value.topic_id)
-                == logged_id.map(Some),
-            "row {row}"
-        );
+        check!(response == expected, "{}", case.name);
+
+        let logged: Vec<(&str, i32, Option<uuid::Uuid>)> = ["a", "b"]
+            .into_iter()
+            .flat_map(|name| [0, 5].map(|partition| (name, partition)))
+            .filter_map(|(name, partition)| {
+                logged_value(&broker, &group_id, name, partition)
+                    .map(|value| (name, partition, value.topic_id))
+            })
+            .collect();
+        let want: Vec<(&str, i32, Option<uuid::Uuid>)> = case
+            .logged
+            .iter()
+            .map(|&(name, partition)| (name, partition, Some(id_of(name))))
+            .collect();
+        check!(logged == want, "{}: logged offsets", case.name);
     }
 
     handle.shutdown().await;

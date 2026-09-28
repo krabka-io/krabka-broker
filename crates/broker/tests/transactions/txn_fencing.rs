@@ -10,7 +10,10 @@ use assert2::assert;
 use krabka_client_consumer::{AutoOffsetReset, Consumer};
 use krabka_client_producer::{Producer, ProducerError};
 
-use crate::txn_harness::{boot_single, create_topic, init_transaction, rec, send_ok};
+use crate::{
+    support,
+    txn_harness::{boot_single, create_topic, init_transaction, rec, send_ok},
+};
 
 /// Producer B with the same `transactional_id` fences Producer A. Every
 /// `Transaction::commit` producer A attempts from then on must fail with
@@ -237,6 +240,8 @@ async fn txn_offset_commit_fences_classic_generation_and_member() {
         .await
         .unwrap();
     let (producer_id, producer_epoch) = init_transaction(&client, "fence-tid").await;
+    // The client negotiates v6 (KIP-1319), which names the topic by id only.
+    let topic_id = support::topic_id_for(&client, "fence-in").await;
 
     let mk = |generation_id: i32, member_id: &str| TxnOffsetCommitRequest {
         transactional_id: "fence-tid".into(),
@@ -247,6 +252,7 @@ async fn txn_offset_commit_fences_classic_generation_and_member() {
         member_id: member_id.into(),
         topics: vec![TxnOffsetCommitRequestTopic {
             name: "fence-in".into(),
+            topic_id,
             partitions: vec![TxnOffsetCommitRequestPartition {
                 partition_index: 0,
                 committed_offset: 1,
@@ -294,9 +300,9 @@ async fn txn_offset_commit_fences_classic_generation_and_member() {
 /// The broker fences a KIP-848 next-gen "consumer"-protocol `TxnOffsetCommit`
 /// that carries a member epoch other than the member's, and accepts it at the
 /// current epoch. The member epoch travels in the
-/// `generation_id_or_member_epoch` field. Below v6, the version this broker
-/// negotiates, Kafka's `validateTransactionalOffsetCommit` answers the
-/// group's `StaleMemberEpochException` with `ILLEGAL_GENERATION`.
+/// `generation_id_or_member_epoch` field. At v6, the version the client
+/// negotiates, Kafka's `validateTransactionalOffsetCommit` passes the group's
+/// `StaleMemberEpochException` through as `STALE_MEMBER_EPOCH` (KIP-1319).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn txn_offset_commit_fences_next_gen_member_epoch() {
     use krabka_protocol::owned::{
@@ -315,6 +321,7 @@ async fn txn_offset_commit_fences_next_gen_member_epoch() {
         .await
         .unwrap();
     let (producer_id, producer_epoch) = init_transaction(&client, "ng-tid").await;
+    let topic_id = support::topic_id_for(&client, "ng-in").await;
 
     // Establish a next-gen group member; after the first heartbeat the member
     // is at epoch 1.
@@ -345,6 +352,7 @@ async fn txn_offset_commit_fences_next_gen_member_epoch() {
         member_id: member_id.clone(),
         topics: vec![TxnOffsetCommitRequestTopic {
             name: "ng-in".into(),
+            topic_id,
             partitions: vec![TxnOffsetCommitRequestPartition {
                 partition_index: 0,
                 committed_offset: 1,
@@ -355,12 +363,12 @@ async fn txn_offset_commit_fences_next_gen_member_epoch() {
         ..Default::default()
     };
 
-    // An older and a newer epoch → ILLEGAL_GENERATION (22).
+    // An older and a newer epoch → STALE_MEMBER_EPOCH (113).
     for other_epoch in [epoch - 1, epoch + 1] {
         let fenced = client.send(mk(other_epoch)).await.unwrap();
         assert!(
-            fenced.topics[0].partitions[0].error_code == 22,
-            "epoch {other_epoch} against {epoch} should be ILLEGAL_GENERATION: {fenced:?}"
+            fenced.topics[0].partitions[0].error_code == 113,
+            "epoch {other_epoch} against {epoch} should be STALE_MEMBER_EPOCH: {fenced:?}"
         );
     }
 
