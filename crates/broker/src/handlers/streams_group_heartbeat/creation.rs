@@ -249,6 +249,17 @@ fn append_missing_internal_topics_detail(
     }
 }
 
+/// The replication factor Kafka 4.3.1's `InternalTopicManager.toCreatableTopic`
+/// sends for a topology topic: the topology's own, or -1 when the topology
+/// sets none (0). `CreateTopics` resolves -1 to `default.replication.factor`.
+fn creatable_replication_factor(topology_replication_factor: i16) -> i16 {
+    if topology_replication_factor == 0 {
+        -1
+    } else {
+        topology_replication_factor
+    }
+}
+
 /// Sends one `CreateTopics` request for `specs` with the principal of the
 /// caller, and returns the error message of each topic that it did not
 /// create.
@@ -264,17 +275,7 @@ async fn create_topics(
             .map(|spec| CreatableTopic {
                 name: spec.name.clone(),
                 num_partitions: spec.partitions,
-                // Kafka's `toCreatableTopic` sends the replication factor of
-                // the topology, and the default of the broker when it has
-                // none.
-                replication_factor: if spec.replication_factor > 0 {
-                    spec.replication_factor
-                } else {
-                    broker
-                        .config
-                        .streams_group
-                        .internal_topic_replication_factor
-                },
+                replication_factor: creatable_replication_factor(spec.replication_factor),
                 configs: spec
                     .configs
                     .iter()

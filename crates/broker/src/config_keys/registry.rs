@@ -1162,6 +1162,17 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
         )
     },
     ConfigKey {
+        kip: Some("KIP-1071"),
+        ..key(
+            crate::coordinator::unified::streams::config::KEY_RACK_AWARE_ASSIGNMENT_TAGS,
+            ConfigScope::Group,
+            ConfigType::List,
+            Some(""),
+            "Client tag keys every member of this streams group must send. A version 1 heartbeat from a member that leaves one out carries the MISSING_CLIENT_TAGS status.",
+            ValueCheck::Parsed,
+        )
+    },
+    ConfigKey {
         kip: Some("KIP-932"),
         ..key(
             crate::coordinator::unified::streams::config::KEY_SHARE_AUTO_OFFSET_RESET,
