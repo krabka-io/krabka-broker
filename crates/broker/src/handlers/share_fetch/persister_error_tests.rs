@@ -371,7 +371,7 @@ async fn a_fenced_state_write_fails_the_acknowledgement_and_drops_the_partition(
 /// registered, so no share coordinator can serve a state read.
 async fn state_topic_led_by_an_unknown_broker(broker: &BrokerHandle) {
     let shared = broker.broker_arc_for_test();
-    let partitions = shared.share_coordinator.state_topic_num_partitions();
+    let partitions = shared.config.share_coordinator.state_topic_num_partitions;
     let mut records = vec![MetadataRecord::V1Topic(TopicRecord {
         name: crate::share_coordinator::bootstrap::TOPIC.to_string(),
         topic_id: uuid::Uuid::new_v4(),

@@ -280,6 +280,10 @@ async fn a_captured_cluster_restores_with_its_configuration_and_its_group_positi
     pre_broker
         .wait_until_partition_present(TOPIC, PARTITION)
         .await;
+    // No broker creates `__consumer_offsets` at startup. It is created on the
+    // first coordinator lookup, as Kafka's `IntegrationTestHarness` creates it
+    // before a test commits an offset.
+    pre_broker.wait_until_group_coordinator_ready().await;
     let pre_bootstrap = pre_broker.listen_addr().to_string();
     commit_position(&pre_client, &pre_bootstrap, COMMITTED_OFFSET).await;
     check!(committed_offset(&pre_bootstrap).await == COMMITTED_OFFSET);
@@ -325,6 +329,7 @@ async fn a_captured_cluster_restores_with_its_configuration_and_its_group_positi
     post_broker
         .wait_until_partition_present(TOPIC, PARTITION)
         .await;
+    post_broker.wait_until_group_coordinator_ready().await;
     let post_bootstrap = post_broker.listen_addr().to_string();
 
     // 5. The restored cluster has the configuration back and the group's

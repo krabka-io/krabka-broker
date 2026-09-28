@@ -11,6 +11,13 @@
 //! and still answers each of them with 3: the topic is not described until a
 //! later request finds it in the metadata image. It lists the invalid names
 //! ahead of the created ones.
+//!
+//! A coordinator topic is created with its configured partition count,
+//! replication factor and topic configs, as
+//! `DefaultAutoTopicCreationManager.creatableTopic` builds it, and not with the
+//! broker defaults. A name whose creation is in flight already, from an
+//! earlier `Metadata` request or from a coordinator lookup, is not sent again
+//! (`filterCreatableTopics`). It is answered 3 among the invalid names.
 
 use krabka_log::topic_name::validate_topic_name;
 use krabka_protocol::{
@@ -63,15 +70,25 @@ pub(super) async fn missing_topic_rows(
             .map(|name| row(error_code(name), name))
             .collect();
     }
-    let (creatable, invalid): (Vec<&str>, Vec<&str>) = names
-        .iter()
-        .partition(|name| validate_topic_name(name).is_ok());
+    let mut uncreatable = Vec::new();
+    let mut creatable = Vec::new();
+    for name in names {
+        if validate_topic_name(name).is_err() {
+            uncreatable.push(row(codes::INVALID_TOPIC_EXCEPTION, name));
+        } else if broker.auto_topic_creation.begin(name) {
+            creatable.push(*name);
+        } else {
+            uncreatable.push(row(codes::UNKNOWN_TOPIC_OR_PARTITION, name));
+        }
+    }
     if !creatable.is_empty() {
         create_topics(broker, ctx, &creatable).await;
+        for name in &creatable {
+            broker.auto_topic_creation.end(name);
+        }
     }
-    invalid
+    uncreatable
         .into_iter()
-        .map(|name| row(codes::INVALID_TOPIC_EXCEPTION, name))
         .chain(
             creatable
                 .into_iter()
@@ -80,19 +97,24 @@ pub(super) async fn missing_topic_rows(
         .collect()
 }
 
-/// Sends one `CreateTopics` request for `names` with the broker defaults and
-/// the principal of `ctx`. A failure is logged, not answered: Kafka's
+/// Sends one `CreateTopics` request for `names` with the principal of `ctx`.
+/// A coordinator topic gets its configured shape; any other name gets the
+/// broker defaults. A failure is logged, not answered: Kafka's
 /// auto-creation logs the controller's errors and answers the `Metadata`
 /// request the same way whatever they are.
 async fn create_topics(broker: &Broker, ctx: &RequestContext<'_>, names: &[&str]) {
     let request = CreateTopicsRequest {
         topics: names
             .iter()
-            .map(|name| CreatableTopic {
-                name: (*name).to_owned(),
-                num_partitions: -1,
-                replication_factor: -1,
-                ..Default::default()
+            .map(|name| {
+                crate::auto_topic_creation::coordinator_topic(&broker.config, name).unwrap_or_else(
+                    || CreatableTopic {
+                        name: (*name).to_owned(),
+                        num_partitions: -1,
+                        replication_factor: -1,
+                        ..Default::default()
+                    },
+                )
             })
             .collect(),
         timeout_ms: 30_000,
@@ -150,3 +172,6 @@ async fn create_topics(broker: &Broker, ctx: &RequestContext<'_>, names: &[&str]
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

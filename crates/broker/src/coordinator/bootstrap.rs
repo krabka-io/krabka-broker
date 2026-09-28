@@ -1,14 +1,14 @@
 //! `__consumer_offsets` topic lifecycle.
 //!
-//! The module makes sure that the topic exists at startup. It then replays
-//! every record synchronously into the in-memory `GroupCoordinator`.
+//! At startup the module opens the local partitions of the topic and replays
+//! every record synchronously into the in-memory `GroupCoordinator`. The first
+//! `FindCoordinator(GROUP)` creates the topic, not the startup.
 
 use std::{collections::BTreeMap, sync::Arc};
 
 use krabka_ids::PartitionIndex;
-use krabka_metadata::{MetadataRecord, PartitionRecord, TopicConfigRecord, TopicRecord};
-use krabka_raft::RaftError;
-use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
+use krabka_metadata::PartitionRecord;
+use krabka_units::convert::ByteSizeExt as _;
 
 use crate::{
     broker::spawn_partition, config::BrokerConfig, coordinator::GroupCoordinator,
@@ -72,17 +72,17 @@ pub(crate) fn offsets_topic_configs(config: &BrokerConfig) -> BTreeMap<String, S
     ])
 }
 
-/// Ensure `__consumer_offsets` exists, open every partition assigned to this
-/// broker, spawn its writer task, and replay each local log into the supplied
-/// `GroupCoordinator`. Registers the topic via the metadata quorum
-/// (`controller.submit_change(...)`) with Kafka's default partition count;
-/// `TopicExists` is treated as success so a restart that finds the topic
-/// already in the log is a no-op.
+/// Open every `__consumer_offsets` partition assigned to this broker, spawn
+/// its writer task, and replay each local log that this broker leads into the
+/// supplied `GroupCoordinator`.
 ///
-/// The function registers the topic through the metadata quorum with
-/// `controller.submit_change(...)` as a 1-partition internal topic. It treats
-/// `TopicExists` as a success, so a restart that finds the topic already in
-/// the log does nothing.
+/// The function does not create the topic. The first
+/// `FindCoordinator(GROUP)` creates it, with its configured partition count
+/// and replication factor
+/// ([`crate::auto_topic_creation::AutoTopicCreation`]), as Kafka's
+/// `KafkaApis.getCoordinator` does. On a restart the topic is in the image
+/// already, and this function reloads the group state before the listener
+/// binds.
 ///
 /// `Broker::start` calls this exactly once, BEFORE the TCP listener binds and
 /// AFTER the controller has elected a leader. See `Broker::start`.
@@ -104,109 +104,6 @@ pub async fn bootstrap(
             "every configured log.dir failed the startup writability probe; \
              cannot bootstrap the group-coordinator partition",
         )));
-    }
-    // Register the topic via the metadata quorum, but only from a SINGLE
-    // consistent writer: the controller leader. The previous `is_none()` ->
-    // `submit_change` path was a TOCTOU race — when two voters boot
-    // concurrently, both observe `__consumer_offsets` absent and both submit a
-    // `TopicRecord` (`topic_id` is a random `Uuid::new_v4()` per node) plus a
-    // `PartitionRecord` (`leader`/`replicas`/`isr` differ per node). The
-    // controller's `TopicExists` dedup is apply-time, so BOTH conflicting
-    // records land in the replicated metadata log, and a JVM follower
-    // replicating that far fatal-faults with "Found duplicate TopicRecord for
-    // __consumer_offsets with a different ID than before."
-    //
-    // Fix: only the leader registers the topic (one writer => one id, one
-    // partition placement). Followers wait for the record to replicate into
-    // their image rather than submitting a possibly-conflicting copy.
-    if controller.current_image().topic(OFFSETS_TOPIC).is_none() {
-        // Copy the leader id out of the watch `Ref` BEFORE any `.await` so we
-        // don't hold the borrow across an await point.
-        let am_leader = *controller.watch_leader().borrow() == Some(config.node_id);
-        if am_leader {
-            let image = controller.current_image();
-            let mut brokers: Vec<_> = image.brokers().map(|broker| broker.node_id).collect();
-            drop(image);
-            if brokers.is_empty() {
-                brokers.push(config.node_id);
-            }
-            brokers.sort_unstable();
-            let replication_factor =
-                i16::try_from(crate::bootstrap::internal_topic_replication_factor(
-                    config.offsets_topic_replication_factor,
-                    brokers.len(),
-                ))
-                .expect("effective offsets replication factor fits i16");
-            let assignments = crate::handlers::create_topics::round_robin_replicas(
-                &brokers,
-                config.offsets_topic_num_partitions,
-                replication_factor,
-            );
-            let mut records = Vec::with_capacity(
-                1 + usize::try_from(config.offsets_topic_num_partitions).unwrap_or_default(),
-            );
-            records.push(MetadataRecord::V1Topic(TopicRecord {
-                name: OFFSETS_TOPIC.to_string(),
-                topic_id: uuid::Uuid::new_v4(),
-                partitions: config.offsets_topic_num_partitions,
-                replication_factor,
-            }));
-            for (partition, replicas) in assignments.into_iter().enumerate() {
-                records.push(MetadataRecord::V1Partition(PartitionRecord {
-                    topic: OFFSETS_TOPIC.to_string(),
-                    partition: i32::try_from(partition)
-                        .expect("offsets partition index overflows i32"),
-                    leader: replicas[0],
-                    replicas: replicas.clone(),
-                    isr: replicas,
-                    leader_epoch: krabka_metadata::LeaderEpoch(0),
-                    adding_replicas: vec![],
-                    removing_replicas: vec![],
-                    directories: vec![],
-                    partition_epoch: 0,
-                }));
-            }
-            records.push(MetadataRecord::V1TopicConfig(TopicConfigRecord {
-                topic: OFFSETS_TOPIC.to_string(),
-                overrides: offsets_topic_configs(config),
-            }));
-            match controller.submit_change(records).await {
-                // An earlier boot of ours already registered it (single
-                // writer, so no conflicting-id race) — treat as success.
-                Ok(_)
-                | Err(RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))) => {}
-                Err(e) => return Err(BrokerError::Startup(e.to_string())),
-            }
-        } else {
-            // Follower: do NOT submit (that's the race). Wait for the leader's
-            // record to replicate into our image. Failing loudly on timeout is
-            // correct — submitting a duplicate on timeout is what caused the
-            // JVM fatal fault.
-            let mut images = controller.watch_image();
-            let deadline =
-                tokio::time::Instant::now() + config.offsets_topic_metadata_wait_timeout.to_std();
-            while !offsets_topic_ready(
-                &controller.current_image(),
-                config.offsets_topic_num_partitions,
-            ) {
-                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-                if remaining.is_zero() {
-                    return Err(BrokerError::Startup(format!(
-                        "timed out waiting for the controller leader to register \
-                         {OFFSETS_TOPIC} in the metadata image"
-                    )));
-                }
-                if tokio::time::timeout(remaining, images.changed())
-                    .await
-                    .is_err()
-                {
-                    return Err(BrokerError::Startup(format!(
-                        "timed out waiting for the controller leader to register \
-                         {OFFSETS_TOPIC} in the metadata image"
-                    )));
-                }
-            }
-        }
     }
 
     let local_records: Vec<PartitionRecord> = controller
@@ -255,9 +152,4 @@ pub async fn bootstrap(
     }
     finalize(coordinator, replayed).await;
     Ok(())
-}
-
-fn offsets_topic_ready(image: &krabka_metadata::MetadataImage, expected_partitions: i32) -> bool {
-    image.topic(OFFSETS_TOPIC).is_some()
-        && image.topic_partition_count(OFFSETS_TOPIC) == expected_partitions
 }

@@ -122,6 +122,52 @@ impl<A: crate::authorizer::Authorizer> crate::authorizer::Authorizer for Control
     }
 }
 
+/// An authorizer that a fixture holds as a trait object, so that it can go
+/// inside [`ControllerPeerAllowed`].
+#[derive(Debug)]
+struct SharedAuthorizer(std::sync::Arc<dyn crate::authorizer::Authorizer>);
+
+impl crate::authorizer::Authorizer for SharedAuthorizer {
+    fn authorize(
+        &self,
+        source: &dyn crate::authorizer::AclSource,
+        request: &crate::authorizer::AuthorizationRequest<'_>,
+    ) -> crate::authorizer::AuthorizationResult {
+        self.0.authorize(source, request)
+    }
+
+    fn is_configured(&self) -> bool {
+        self.0.is_configured()
+    }
+
+    fn decision_ttl(&self) -> Option<std::time::Duration> {
+        self.0.decision_ttl()
+    }
+
+    fn authorize_by_resource_type(
+        &self,
+        source: &dyn crate::authorizer::AclSource,
+        principal: &krabka_security::Principal,
+        host: &std::net::SocketAddr,
+        resource_type: krabka_metadata::ResourceType,
+        operation: krabka_metadata::AclOperation,
+    ) -> crate::authorizer::AuthorizationResult {
+        self.0
+            .authorize_by_resource_type(source, principal, host, resource_type, operation)
+    }
+}
+
+/// Wraps `authorizer` in [`ControllerPeerAllowed`].
+///
+/// A fixture that waits for a coordinator needs this: the broker places a
+/// coordinator topic only on an unfenced broker, as Kafka's
+/// `ReplicaPlacer` does.
+pub(crate) fn controller_peer_allowed(
+    authorizer: std::sync::Arc<dyn crate::authorizer::Authorizer>,
+) -> std::sync::Arc<dyn crate::authorizer::Authorizer> {
+    std::sync::Arc::new(ControllerPeerAllowed(SharedAuthorizer(authorizer)))
+}
+
 /// Build an anonymous-auth [`Principal`] with the given name and no groups.
 ///
 /// The name matters. Authorization decisions and audit records key on this
@@ -1095,14 +1141,120 @@ mod tests {
     use std::collections::BTreeSet;
 
     use assert2::assert;
-    use krabka_metadata::{KRaftVersionRange, MetadataRecord, Voter};
+    use krabka_metadata::{
+        AclOperation, KRaftVersionRange, MetadataImage, MetadataRecord, ResourceType, Voter,
+    };
     use krabka_raft::{
         AddVoter, Node, NodeId, QuorumState, RaftError, RemoveVoter, SnapshotRange,
         SubmitChangeResult, UpdateVoter,
     };
 
     use super::FakeMetadataSource;
-    use crate::metadata_source::MetadataSource;
+    use crate::{
+        authorizer::{
+            AuthorizationRequest,
+            AuthorizationResult::{Allow, Deny},
+        },
+        metadata_source::MetadataSource,
+    };
+
+    /// An authorizer with a decision cache of its own and a real
+    /// `authorize_by_resource_type` scan, so that forwarding is visible.
+    #[derive(Debug)]
+    struct Cached;
+
+    impl crate::authorizer::Authorizer for Cached {
+        fn authorize(
+            &self,
+            _source: &dyn crate::authorizer::AclSource,
+            _request: &crate::authorizer::AuthorizationRequest<'_>,
+        ) -> crate::authorizer::AuthorizationResult {
+            crate::authorizer::AuthorizationResult::Deny
+        }
+
+        fn decision_ttl(&self) -> Option<std::time::Duration> {
+            Some(std::time::Duration::from_secs(7))
+        }
+
+        fn authorize_by_resource_type(
+            &self,
+            _source: &dyn crate::authorizer::AclSource,
+            _principal: &krabka_security::Principal,
+            _host: &std::net::SocketAddr,
+            _resource_type: krabka_metadata::ResourceType,
+            _operation: krabka_metadata::AclOperation,
+        ) -> crate::authorizer::AuthorizationResult {
+            crate::authorizer::AuthorizationResult::Allow
+        }
+    }
+
+    /// `controller_peer_allowed` allows only the `ClusterAction` of the
+    /// `ANONYMOUS` controller peer, and answers everything else as the
+    /// wrapped authorizer does.
+    #[test]
+    fn controller_peer_allowed_adds_only_the_controller_peer_grant() {
+        let image = MetadataImage::new(uuid::Uuid::nil());
+        let peer = super::peer();
+        let alice = super::principal("alice");
+        let authorizer = super::controller_peer_allowed(std::sync::Arc::new(Cached));
+        let cases = [
+            (
+                "ANONYMOUS",
+                ResourceType::Cluster,
+                AclOperation::ClusterAction,
+                Allow,
+            ),
+            (
+                "alice",
+                ResourceType::Cluster,
+                AclOperation::ClusterAction,
+                Deny,
+            ),
+            (
+                "ANONYMOUS",
+                ResourceType::Cluster,
+                AclOperation::Create,
+                Deny,
+            ),
+            (
+                "ANONYMOUS",
+                ResourceType::Topic,
+                AclOperation::ClusterAction,
+                Deny,
+            ),
+        ];
+        for (name, resource_type, operation, expected) in cases {
+            let principal = super::principal(name);
+            let request = AuthorizationRequest {
+                principal: &principal,
+                host: &peer,
+                resource_type,
+                resource_name: "kafka-cluster",
+                operation,
+            };
+            assert!(
+                authorizer.authorize(&image, &request) == expected,
+                "{name} {resource_type:?} {operation:?}"
+            );
+        }
+        assert!(
+            (
+                authorizer.is_configured(),
+                authorizer.decision_ttl(),
+                authorizer.authorize_by_resource_type(
+                    &image,
+                    &alice,
+                    &peer,
+                    ResourceType::Topic,
+                    AclOperation::Write,
+                ),
+            ) == (true, Some(std::time::Duration::from_secs(7)), Allow)
+        );
+        let unconfigured = super::controller_peer_allowed(std::sync::Arc::new(
+            crate::authorizer::AllowAllAuthorizer,
+        ));
+        assert!(!unconfigured.is_configured());
+    }
 
     fn voter() -> Voter {
         Voter {

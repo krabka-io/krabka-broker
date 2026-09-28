@@ -2203,15 +2203,6 @@
             "null"
           ]
         },
-        "offsets_topic_metadata_wait_timeout": {
-          "default": null,
-          "description": "Maximum wait for `__consumer_offsets` metadata before a request fails.",
-          "format": "duration",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "offsets_topic_num_partitions": {
           "description": "Partition count of the `__consumer_offsets` internal topic, Kafka's\n`offsets.topic.num.partitions`.",
           "format": "int32",
@@ -2818,16 +2809,6 @@
           "format": "duration",
           "type": [
             "string",
-            "null"
-          ]
-        },
-        "streams_internal_topic_replication_factor": {
-          "description": "Replication factor of the internal topics a streams group creates, such\nas its repartition and changelog topics.",
-          "format": "int16",
-          "maximum": 32767,
-          "minimum": -32768,
-          "type": [
-            "integer",
             "null"
           ]
         },

@@ -166,10 +166,6 @@ impl RuntimeFileConfig {
             cfg.streams_group.heartbeat_interval
         );
         set_runtime_usize!(runtime, streams_group_max_size, cfg.streams_group.max_size);
-        if let Some(value) = runtime.streams_internal_topic_replication_factor {
-            cfg.streams_group.internal_topic_replication_factor =
-                positive_i16("streams_internal_topic_replication_factor", value)?;
-        }
         if let Some(value) = runtime.streams_group_num_standby_replicas {
             if value < 0 {
                 return Err(invalid_runtime_value(

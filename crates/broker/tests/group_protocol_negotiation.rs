@@ -32,6 +32,7 @@ async fn start_broker() -> (krabka_broker::BrokerHandle, String, tempfile::TempD
     let tempdir = tempfile::tempdir().expect("tempdir");
     let config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
     let handle = Broker::start(config).await.expect("broker must start");
+    handle.wait_until_group_coordinator_ready().await;
     let bootstrap = handle.listen_addr().to_string();
     (handle, bootstrap, tempdir)
 }

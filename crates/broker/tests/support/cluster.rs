@@ -111,13 +111,17 @@ pub async fn start_n_node_with(
         .enumerate()
     {
         let dir = TempDir::new().unwrap();
+        // Size the coordinator topics for the cluster, as Kafka's defaults
+        // size them for a production one: replication factor `min(n, 3)`.
+        // `customize` runs after, so a suite can still override them.
         let mut cfg = static_voter_broker_config(
             i,
             client_addrs[i],
             controller_addrs[i],
             &voters,
             dir.path(),
-        );
+        )
+        .with_internal_topics_for(n_usize);
         customize(i, &mut cfg);
         let cfg_for_spawn = cfg.clone();
         starts.push(tokio::spawn(async move {

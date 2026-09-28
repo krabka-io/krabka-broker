@@ -160,6 +160,9 @@ async fn boot_with_ongoing_txn(
 ) {
     let (broker, bootstrap, dir) = boot_single().await;
     create_topic(&bootstrap, topic).await;
+    // The producer does not retry COORDINATOR_NOT_AVAILABLE from
+    // FindCoordinator. Bring the transaction coordinator up first.
+    broker.wait_until_transaction_coordinator_ready().await;
 
     let producer = Arc::new(
         Producer::builder()

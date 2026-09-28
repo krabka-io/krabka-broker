@@ -213,7 +213,7 @@ async fn transactional_console_producer_eos() {
                 },
             ],
             inter_broker_listener_name: "INTERNAL".to_string(),
-            ..BrokerConfig::default()
+            ..BrokerConfig::default().with_internal_topics_for(3)
         };
         tempdirs.push(dir);
         spawns.push(tokio::spawn(async move {

@@ -15,11 +15,14 @@ pub(super) async fn start_broker(
     authorizer: Arc<dyn Authorizer>,
     share_enabled: bool,
 ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-    crate::test_support::start_broker_with(|cfg| {
+    let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
         cfg.authorizer = authorizer;
         cfg.share_group.enable = share_enabled;
     })
-    .await
+    .await;
+    handle.wait_until_group_coordinator_ready().await;
+    handle.wait_until_share_coordinator_ready().await;
+    (handle, dir)
 }
 
 pub(super) fn image_with_topic(name: &str, topic_id: uuid::Uuid) -> MetadataImage {
@@ -38,7 +41,8 @@ pub(super) fn image_with_topic(name: &str, topic_id: uuid::Uuid) -> MetadataImag
 ///
 /// The share coordinator refuses to initialize state for a topic-partition its
 /// metadata does not hold, as Kafka's `ShareCoordinatorService` does, so a test
-/// registers each topic it seeds share state for.
+/// registers each topic it seeds share state for. It returns once the
+/// partition is materialized locally, so a row's lag reads its high watermark.
 pub(super) async fn register_topic(
     broker: &crate::broker::Broker,
     name: &str,
@@ -69,4 +73,18 @@ pub(super) async fn register_topic(
         ])
         .await
         .expect("register topic");
+    let materialized = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while broker
+            .partitions
+            .get(name, krabka_ids::PartitionIndex(0))
+            .is_none()
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert2::assert!(
+        materialized.is_ok(),
+        "{name}-0 was not materialized locally"
+    );
 }

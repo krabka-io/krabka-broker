@@ -26,6 +26,14 @@ use krabka_protocol::{
 /// Kafka's `UNKNOWN_TOPIC_ID` error code.
 const UNKNOWN_TOPIC_ID: i16 = 100;
 
+/// Boots one broker and waits until its group coordinator serves
+/// `__consumer_offsets`. No broker creates that topic when it starts.
+async fn start() -> support::InProcess {
+    let p = support::start().await;
+    p.broker.wait_until_group_coordinator_ready().await;
+    p
+}
+
 async fn topic_id_for(client: &krabka_client_core::Client, name: &str) -> WireUuid {
     let resp = client
         .send(MetadataRequest {
@@ -46,7 +54,7 @@ async fn topic_id_for(client: &krabka_client_core::Client, name: &str) -> WireUu
 
 #[tokio::test]
 async fn offset_commit_and_fetch_by_topic_id_round_trip() {
-    let p = support::start().await;
+    let p = start().await;
     p.client
         .send(CreateTopicsRequest {
             topics: vec![CreatableTopic {
@@ -125,7 +133,7 @@ async fn offset_fetch_unresolved_topic_id_returns_unknown_topic_id() {
     /// Kafka's `UNKNOWN_TOPIC_ID` error code.
     const UNKNOWN_TOPIC_ID: i16 = 100;
 
-    let p = support::start().await;
+    let p = start().await;
     let cases = [
         (
             "non-zero id",
@@ -188,7 +196,7 @@ async fn offset_fetch_unresolved_topic_id_returns_unknown_topic_id() {
 /// ahead of the committed row.
 #[tokio::test]
 async fn offset_commit_unresolved_topic_id_returns_unknown_topic_id() {
-    let p = support::start().await;
+    let p = start().await;
     p.client
         .send(CreateTopicsRequest {
             topics: vec![CreatableTopic {
@@ -259,7 +267,7 @@ async fn offset_commit_unresolved_topic_id_returns_unknown_topic_id() {
 /// because v10 drops the name from the wire and the client matches by id.
 #[tokio::test]
 async fn offset_fetch_all_echoes_topic_id() {
-    let p = support::start().await;
+    let p = start().await;
     p.client
         .send(CreateTopicsRequest {
             topics: vec![CreatableTopic {

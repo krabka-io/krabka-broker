@@ -38,6 +38,9 @@ enum Resolution {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn read_committed_latest_stops_at_an_open_transaction() {
     let p = support::start().await;
+    // The producer does not retry COORDINATOR_NOT_AVAILABLE from
+    // FindCoordinator. Bring the transaction coordinator up first.
+    p.broker.wait_until_transaction_coordinator_ready().await;
     let bootstrap = p.broker.listen_addr().to_string();
 
     for (label, resolution) in [

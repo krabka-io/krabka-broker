@@ -94,6 +94,9 @@ pub struct Broker {
     /// keeps them.
     pub(crate) streams_internal_topics:
         Arc<crate::handlers::streams_group_heartbeat::StreamsInternalTopics>,
+    /// The creation of the coordinator topics on first use, as Kafka's
+    /// `DefaultAutoTopicCreationManager` does it.
+    pub(crate) auto_topic_creation: Arc<crate::auto_topic_creation::AutoTopicCreation>,
     pub(crate) producer_ids: Arc<crate::producer_id_manager::ProducerIdManager>,
     pub(crate) producer_state: Arc<crate::producer_state::ProducerState>,
     pub(crate) txn_coordinator: Arc<crate::txn::coordinator::TxnCoordinator>,

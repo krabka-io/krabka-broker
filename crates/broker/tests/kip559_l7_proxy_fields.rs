@@ -22,6 +22,14 @@ const GROUP: &str = "kip559-grp";
 const PROTOCOL_TYPE: &str = "consumer";
 const PROTOCOL_NAME: &str = "range";
 
+/// Boots one broker and waits until its group coordinator serves
+/// `__consumer_offsets`. No broker creates that topic when it starts.
+async fn start() -> support::InProcess {
+    let p = support::start().await;
+    p.broker.wait_until_group_coordinator_ready().await;
+    p
+}
+
 async fn bootstrap_member(p: &support::InProcess) -> (String, i32) {
     // Step 1: empty member_id → broker returns MEMBER_ID_REQUIRED with a
     // generated id. KIP-559 doesn't require fields here (the group state
@@ -83,14 +91,14 @@ async fn bootstrap_member(p: &support::InProcess) -> (String, i32) {
 
 #[tokio::test]
 async fn join_group_response_carries_protocol_type_and_name_on_success() {
-    let p = support::start().await;
+    let p = start().await;
     let (_mid, _generation) = bootstrap_member(&p).await;
     p.broker.shutdown().await;
 }
 
 #[tokio::test]
 async fn sync_group_response_carries_protocol_type_and_name_on_success() {
-    let p = support::start().await;
+    let p = start().await;
     let (mid, generation) = bootstrap_member(&p).await;
 
     let r3 = p
@@ -127,7 +135,7 @@ async fn sync_group_response_carries_protocol_type_and_name_on_success() {
 
 #[tokio::test]
 async fn join_group_inconsistent_protocol_error_carries_no_protocol_fields() {
-    let p = support::start().await;
+    let p = start().await;
     // Bootstrap the group as `consumer/range`.
     let (_mid, _gen) = bootstrap_member(&p).await;
 
@@ -169,7 +177,7 @@ async fn join_group_inconsistent_protocol_error_carries_no_protocol_fields() {
 /// `protocol_name` stay null even though the group has a recorded protocol.
 #[tokio::test]
 async fn sync_group_error_carries_no_protocol_fields() {
-    let p = support::start().await;
+    let p = start().await;
     let (_mid, generation) = bootstrap_member(&p).await;
 
     let r = p

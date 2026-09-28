@@ -107,8 +107,6 @@ macro_rules! tuning_fields {
             pub audit_tail_window_offsets: i64,
             /// Maximum bytes read by an audit tail request.
             pub audit_tail_read_max: ByteSize,
-            /// Maximum wait for offset topic metadata before failing requests.
-            pub offsets_topic_metadata_wait_timeout: Time,
             /// Number of stale push intervals before client metrics expire.
             pub client_metrics_stale_push_intervals: u32,
             /// Mailbox capacity for coordinator actors.

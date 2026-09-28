@@ -582,8 +582,15 @@ async fn every_charged_api_reports_its_delay_and_mutes() {
 
     let mute_window = millis(1000);
     let window_ms = i32::try_from(mute_window.millis_i64()).expect("a window");
-    let (handle, _dir) =
-        broker_with_anonymous_quotas(mute_window, &[("request_percentage", 0.0001)]).await;
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let mut cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
+    cfg.quota_throttle_max = mute_window;
+    let handle = Broker::start(cfg).await.expect("start broker");
+    // The `FindCoordinator` case must find `__consumer_offsets`. A lookup
+    // that creates it runs the creation on this runtime, and that work would
+    // delay the read the mute window is measured from.
+    handle.wait_until_group_coordinator_ready().await;
+    seed_anonymous_quotas(&handle, &[("request_percentage", 0.0001)]).await;
 
     let cases = [
         QuotaCase {

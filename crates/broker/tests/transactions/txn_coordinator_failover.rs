@@ -303,6 +303,12 @@ async fn a_transaction_commits_through_the_next_coordinator() {
     .await
     .expect("start the cluster");
     support::wait_for_all_brokers_registered(&cluster, 3).await;
+    // `__consumer_offsets` needs three brokers for its replication factor.
+    // Create it now, while all three run, as Kafka's `createOffsetsTopic`
+    // does. The consumer at the end looks its group up after one broker stops.
+    for (handle, _, _) in &cluster {
+        handle.wait_until_group_coordinator_ready().await;
+    }
 
     let admin = client(&cluster[0].0.listen_addr().to_string()).await;
     create_topic(&admin).await;

@@ -95,10 +95,14 @@ metadata_max_snapshot_interval = "1h"
 partition_disk_scan_interval = "1m"
 tls_reload_interval = "30s"
 txn_id_expiration = "168h"
+# A single node holds each coordinator internal topic on its one broker, so
+# each replication factor is 1 and each minimum ISR is 1.
 offsets_topic_replication_factor = 1
 transaction_state_replication_factor = 1
 transaction_state_min_isr = 1
+share_state_replication_factor = 1
 share_state_min_isr = 1
+barrier_state_replication_factor = 1
 default_min_insync_replicas = 1
 
 # Tiered storage (KIP-405). A single node keeps the tier on the local

@@ -50,6 +50,7 @@ async fn replay_preserves_group_epoch_and_members() {
         let broker = Broker::start(BrokerConfig::for_tests(log_dir.clone()))
             .await
             .unwrap();
+        broker.wait_until_group_coordinator_ready().await;
         let bootstrap = broker.listen_addr().to_string();
         let client = Arc::new(
             Client::builder()
@@ -114,6 +115,7 @@ async fn next_gen_state_cleared_after_leave_then_restart() {
         let broker = Broker::start(BrokerConfig::for_tests(log_dir.clone()))
             .await
             .unwrap();
+        broker.wait_until_group_coordinator_ready().await;
         let bootstrap = broker.listen_addr().to_string();
         let client = Arc::new(
             Client::builder()

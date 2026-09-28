@@ -73,7 +73,7 @@ async fn acks_all_survives_leader_crash() {
         controller_election_timeout: krabka_units::millis(500),
         controller_heartbeat_interval: krabka_units::millis(100),
         bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
-        ..krabka_broker::BrokerConfig::default()
+        ..krabka_broker::BrokerConfig::default().with_internal_topics_for(3)
     };
     let h0 = tokio::spawn(async move {
         krabka_broker::Broker::start(cfg0)
@@ -103,7 +103,7 @@ async fn acks_all_survives_leader_crash() {
             controller_election_timeout: krabka_units::millis(500),
             controller_heartbeat_interval: krabka_units::millis(100),
             bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
-            ..krabka_broker::BrokerConfig::default()
+            ..krabka_broker::BrokerConfig::default().with_internal_topics_for(3)
         };
         tempdirs.push(dir);
         join_spawns.push(tokio::spawn(async move {
@@ -155,6 +155,10 @@ async fn acks_all_survives_leader_crash() {
     //    burst. The in-process metadata image ISR is exactly what the JVM
     //    `kafka-topics --describe` reports, so observe it directly.
     cluster[0].0.wait_until_isr_len(TOPIC, 0, 3).await;
+    // The consumer at the end needs `__consumer_offsets`, which takes three
+    // replicas. Create it while all three brokers are up, as Kafka's
+    // `IntegrationTestHarness.createOffsetsTopic` does before a test.
+    cluster[0].0.wait_until_group_coordinator_ready().await;
 
     // 3. Determine partition-0 leader from Metadata via local port (not Docker).
     let leader_node_id = {

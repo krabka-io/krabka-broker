@@ -4,6 +4,11 @@
 //! `init_transaction` drives `FindCoordinator` and then retries
 //! `InitProducerId` until the transaction coordinator is loaded, so a test does
 //! not have to encode that readiness race itself.
+//!
+//! No broker creates `__transaction_state` or `__consumer_offsets` when it
+//! starts. The boot helpers bring both coordinators up before they return.
+//! The krabka producer does not retry `COORDINATOR_NOT_AVAILABLE` from
+//! `FindCoordinator`, which Kafka's `TransactionManager` does.
 
 use std::time::Duration;
 
@@ -14,19 +19,28 @@ use krabka_client_core::security::{ClientSecurity, SaslCredentials};
 use krabka_client_producer::{Producer, ProducerRecord};
 use krabka_protocol::owned::{
     create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
-    find_coordinator_request::FindCoordinatorRequest,
     init_producer_id_request::InitProducerIdRequest,
 };
 use krabka_security::{ListenerProtocol, SaslMechanism};
 use tempfile::TempDir;
+
+use crate::support;
 
 pub async fn boot_single() -> (BrokerHandle, String, TempDir) {
     let dir = TempDir::new().unwrap();
     let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
         .await
         .unwrap();
+    wait_until_coordinators_ready(&broker).await;
     let bootstrap = broker.listen_addr().to_string();
     (broker, bootstrap, dir)
+}
+
+/// Creates and loads `__transaction_state` and `__consumer_offsets`, as the
+/// first client lookup of each does.
+async fn wait_until_coordinators_ready(broker: &BrokerHandle) {
+    broker.wait_until_transaction_coordinator_ready().await;
+    broker.wait_until_group_coordinator_ready().await;
 }
 
 pub async fn create_topic(bootstrap: &str, name: &str) {
@@ -81,23 +95,7 @@ pub async fn init_transaction(
     client: &krabka_client_core::Client,
     transactional_id: &str,
 ) -> (i64, i16) {
-    let coordinator = client
-        .send(FindCoordinatorRequest {
-            key: transactional_id.into(),
-            key_type: 1,
-            coordinator_keys: vec![transactional_id.into()],
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert!(
-        coordinator.error_code == 0
-            || coordinator
-                .coordinators
-                .iter()
-                .all(|entry| entry.error_code == 0),
-        "FindCoordinator: {coordinator:?}"
-    );
+    support::find_coordinator(client, support::KEY_TYPE_TRANSACTION, transactional_id).await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
@@ -151,6 +149,7 @@ pub fn boot_single_sasl(
     }
     Box::pin(async move {
         let broker = Broker::start(cfg).await.unwrap();
+        wait_until_coordinators_ready(&broker).await;
         let bootstrap = broker.listen_addr().to_string();
         (broker, bootstrap, dir)
     })

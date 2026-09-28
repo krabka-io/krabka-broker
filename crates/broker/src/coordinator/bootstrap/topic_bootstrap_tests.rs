@@ -1,10 +1,11 @@
-//! Tests for the registration of `__consumer_offsets` in the metadata quorum
-//! and for the local partition directories that [`super::bootstrap`] opens.
+//! Tests for the local partition directories that [`super::bootstrap`] opens,
+//! and for the topic configs of the coordinator topics.
 
 use std::sync::Arc;
 
-use assert2::{assert, check};
+use assert2::check;
 use krabka_ids::PartitionIndex;
+use krabka_metadata::{MetadataRecord, PartitionRecord, TopicRecord};
 use tempfile::tempdir;
 
 use super::{
@@ -13,43 +14,41 @@ use super::{
 };
 use crate::{config::BrokerConfig, log_dir, partition_registry::PartitionRegistry};
 
-#[tokio::test]
-async fn bootstrap_creates_topic_dir() {
-    let dir = tempdir().unwrap();
-    let config = BrokerConfig::for_tests(dir.path().to_path_buf());
-    let controller: Arc<dyn crate::metadata_source::MetadataSource> =
-        controller_with_leader(dir.path().join("__cluster_metadata_test")).await;
-    let partitions: Arc<PartitionRegistry> = Arc::new(PartitionRegistry::new());
-    let coordinator = test_coordinator(&controller, &partitions);
-    let log_dir_status = crate::log_dir_status::LogDirRegistry::probe(&config.all_log_dirs());
-    bootstrap(
-        &config,
-        &controller,
-        &partitions,
-        &coordinator,
-        &log_dir_status,
-        &Arc::new(crate::producer_state::ProducerState::new()),
-    )
-    .await
-    .unwrap();
-    let topic_dir = log_dir::partition_dir(&config.log_dir, OFFSETS_TOPIC, OFFSETS_PARTITION);
-    check!(topic_dir.exists());
-    check!(partitions.contains(OFFSETS_TOPIC, PartitionIndex(OFFSETS_PARTITION)));
-    check!(controller.current_image().topic(OFFSETS_TOPIC).is_some());
+/// Registers a one-partition `__consumer_offsets` that this node leads, as
+/// the first group lookup's auto-creation does.
+async fn register_offsets_topic(controller: &Arc<dyn crate::metadata_source::MetadataSource>) {
+    let node = krabka_metadata::NodeId(1);
+    controller
+        .submit_change(vec![
+            MetadataRecord::V1Topic(TopicRecord {
+                name: OFFSETS_TOPIC.to_owned(),
+                topic_id: uuid::Uuid::new_v4(),
+                partitions: 1,
+                replication_factor: 1,
+            }),
+            MetadataRecord::V1Partition(PartitionRecord {
+                topic: OFFSETS_TOPIC.to_owned(),
+                partition: OFFSETS_PARTITION,
+                leader: node,
+                replicas: vec![node],
+                isr: vec![node],
+                leader_epoch: krabka_metadata::LeaderEpoch(0),
+                adding_replicas: Vec::new(),
+                removing_replicas: Vec::new(),
+                directories: Vec::new(),
+                partition_epoch: 0,
+            }),
+        ])
+        .await
+        .expect("register __consumer_offsets");
 }
 
-/// Regression for the bootstrap TOCTOU: a SECOND bootstrap against a
-/// controller that already has `__consumer_offsets` must NOT submit a
-/// second, conflicting `TopicRecord`.
-///
-/// The leader registered the topic on the first boot. The second bootstrap
-/// must see the existing topic, skip the registration, succeed, and leave
-/// EXACTLY ONE `__consumer_offsets` topic in the image. The test exercises
-/// the "already exists => no-op" arm and the leader gate. Test node 1 is
-/// the leader, so the first boot is the single writer. The second boot
-/// finds the topic present and skips it.
+/// The startup bootstrap creates no topic. Kafka creates `__consumer_offsets`
+/// on the first `FindCoordinator(GROUP)`, with its configured replication
+/// factor, and a broker that started alone must not create it with fewer
+/// replicas.
 #[tokio::test]
-async fn second_bootstrap_does_not_duplicate_offsets_topic() {
+async fn bootstrap_creates_no_offsets_topic() {
     let dir = tempdir().unwrap();
     let config = BrokerConfig::for_tests(dir.path().to_path_buf());
     let controller: Arc<dyn crate::metadata_source::MetadataSource> =
@@ -57,8 +56,6 @@ async fn second_bootstrap_does_not_duplicate_offsets_topic() {
     let partitions: Arc<PartitionRegistry> = Arc::new(PartitionRegistry::new());
     let coordinator = test_coordinator(&controller, &partitions);
     let log_dir_status = crate::log_dir_status::LogDirRegistry::probe(&config.all_log_dirs());
-
-    // First boot: this node IS the leader, so it registers the topic.
     bootstrap(
         &config,
         &controller,
@@ -69,38 +66,39 @@ async fn second_bootstrap_does_not_duplicate_offsets_topic() {
     )
     .await
     .unwrap();
-    let id_after_first = controller
-        .current_image()
-        .topic(OFFSETS_TOPIC)
-        .expect("offsets topic registered on first boot")
-        .topic_id;
+    check!(controller.current_image().topic(OFFSETS_TOPIC).is_none());
+    check!(!partitions.contains(OFFSETS_TOPIC, PartitionIndex(OFFSETS_PARTITION)));
+}
 
-    // Second boot (simulating a restart / a second broker reaching
-    // bootstrap): topic already present => must be a no-op, no second
-    // submit, and must succeed.
-    bootstrap(
-        &config,
-        &controller,
-        &partitions,
-        &coordinator,
-        &log_dir_status,
-        &Arc::new(crate::producer_state::ProducerState::new()),
-    )
-    .await
-    .unwrap();
-
-    // Exactly one `__consumer_offsets` topic, and its id is unchanged
-    // (no conflicting duplicate landed in the log).
+/// On a restart the topic is in the image already. The bootstrap opens the
+/// local partition, and a second bootstrap keeps the one it opened.
+#[tokio::test]
+async fn bootstrap_opens_the_local_partitions_of_an_existing_offsets_topic() {
+    let dir = tempdir().unwrap();
+    let config = BrokerConfig::for_tests(dir.path().to_path_buf());
+    let controller: Arc<dyn crate::metadata_source::MetadataSource> =
+        controller_with_leader(dir.path().join("__cluster_metadata_test")).await;
+    register_offsets_topic(&controller).await;
+    let partitions: Arc<PartitionRegistry> = Arc::new(PartitionRegistry::new());
+    let coordinator = test_coordinator(&controller, &partitions);
+    let log_dir_status = crate::log_dir_status::LogDirRegistry::probe(&config.all_log_dirs());
+    for _boot in 0..2 {
+        bootstrap(
+            &config,
+            &controller,
+            &partitions,
+            &coordinator,
+            &log_dir_status,
+            &Arc::new(crate::producer_state::ProducerState::new()),
+        )
+        .await
+        .unwrap();
+        let topic_dir = log_dir::partition_dir(&config.log_dir, OFFSETS_TOPIC, OFFSETS_PARTITION);
+        check!(topic_dir.exists());
+        check!(partitions.contains(OFFSETS_TOPIC, PartitionIndex(OFFSETS_PARTITION)));
+    }
     let image = controller.current_image();
-    let count = image.topics().filter(|t| t.name == OFFSETS_TOPIC).count();
-    assert!(
-        count == 1,
-        "expected exactly one __consumer_offsets, got {count}"
-    );
-    assert!(
-        image.topic(OFFSETS_TOPIC).unwrap().topic_id == id_after_first,
-        "topic_id changed across boots — a duplicate TopicRecord was submitted"
-    );
+    check!(image.topics().filter(|t| t.name == OFFSETS_TOPIC).count() == 1);
 }
 
 /// Kafka creates each coordinator topic with an explicit config map:
@@ -114,29 +112,25 @@ async fn second_bootstrap_does_not_duplicate_offsets_topic() {
 #[tokio::test]
 async fn internal_topics_are_created_with_kafkas_topic_configs() {
     let dir = tempdir().unwrap();
-    let handle = crate::broker::Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
+    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+    // Kafka's default minimum ISR. The single-node fixture lowers it to 1.
+    config.transaction_state_min_isr = 2;
+    config.share_coordinator.state_topic_min_isr = 2;
+    let handle = crate::broker::Broker::start(config)
         .await
         .expect("start broker");
     let broker = handle.broker_arc_for_test();
-    crate::txn::bootstrap::ensure_topic(
-        &broker.controller,
-        1,
-        1,
-        &crate::txn::bootstrap::topic_configs(
-            broker.config.transaction_state_segment_bytes,
-            broker.config.transaction_state_min_isr,
-        ),
-    )
-    .await
-    .expect("create transaction-state topic");
-    crate::share_coordinator::bootstrap::ensure_topic(
-        &broker.controller,
-        1,
-        1,
-        &crate::share_coordinator::bootstrap::topic_configs(&broker.config.share_coordinator),
-    )
-    .await
-    .expect("create share-state topic");
+    for topic in [
+        OFFSETS_TOPIC,
+        crate::txn::bootstrap::TOPIC,
+        crate::share_coordinator::bootstrap::TOPIC,
+    ] {
+        let creatable = crate::auto_topic_creation::coordinator_topic(&broker.config, topic)
+            .expect("a coordinator topic");
+        crate::auto_topic_creation::create(&broker, creatable)
+            .await
+            .unwrap_or_else(|row| panic!("create {topic}: {row:?}"));
+    }
 
     let image = handle.controller_image_for_test();
     for (topic, expected) in [

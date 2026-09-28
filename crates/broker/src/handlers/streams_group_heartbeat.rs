@@ -753,11 +753,13 @@ mod tests {
     async fn start_broker(
         streams_enabled: bool,
     ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-        crate::test_support::start_broker_with(|cfg| {
+        let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
             cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
             cfg.streams_group.enable = streams_enabled;
         })
-        .await
+        .await;
+        handle.wait_until_group_coordinator_ready().await;
+        (handle, dir)
     }
 
     /// A broker whose authorizer grants exactly the operations named in the
@@ -765,11 +767,15 @@ mod tests {
     /// for the tests that drive a specific ACL gate rather than allow
     /// everything.
     async fn start_broker_with_grants() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-        crate::test_support::start_broker_with(|cfg| {
-            cfg.authorizer = Arc::new(crate::test_support::GrantsInPrincipalName);
+        let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
+            cfg.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(
+                crate::test_support::GrantsInPrincipalName,
+            ));
             cfg.streams_group.enable = true;
         })
-        .await
+        .await;
+        handle.wait_until_group_coordinator_ready().await;
+        (handle, dir)
     }
 
     /// Finalizes `streams.version` 1, the level that turns the streams
@@ -834,6 +840,7 @@ mod tests {
             cfg.streams_group.acceptable_recovery_lag = LAG;
         })
         .await;
+        broker_handle.wait_until_group_coordinator_ready().await;
         let broker = broker_handle.broker_arc_for_test();
         finalize_streams_version(&broker).await;
         let principal = principal();

@@ -206,6 +206,11 @@ impl BrokerProcess {
             &advertised,
             "--metrics-listen-addr=none",
             "--health-listen-addr=none",
+            // One broker holds every replica, as a single-node Kafka sets
+            // `offsets.topic.replication.factor=1`. The default of 3 leaves
+            // `__consumer_offsets` uncreatable and the consumer below with
+            // no coordinator.
+            "--offsets-topic-replication-factor=1",
         ]);
         node
     }

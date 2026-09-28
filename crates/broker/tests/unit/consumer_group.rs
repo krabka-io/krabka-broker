@@ -21,9 +21,17 @@ use crate::{
     support,
 };
 
+/// Boots one broker and waits until its group coordinator serves
+/// `__consumer_offsets`. No broker creates that topic when it starts.
+async fn start() -> support::InProcess {
+    let p = support::start().await;
+    p.broker.wait_until_group_coordinator_ready().await;
+    p
+}
+
 #[tokio::test]
 async fn join_group_with_empty_member_returns_member_id_required() {
-    let p = support::start().await;
+    let p = start().await;
     let req = JoinGroupRequest {
         group_id: "g".into(),
         protocol_type: "consumer".into(),
@@ -45,7 +53,7 @@ async fn join_group_with_empty_member_returns_member_id_required() {
 
 #[tokio::test]
 async fn join_group_single_member_completes_after_deadline() {
-    let p = support::start().await;
+    let p = start().await;
     // First call to obtain a server-assigned member_id.
     let r1 = p
         .client
@@ -92,7 +100,7 @@ async fn join_group_single_member_completes_after_deadline() {
 
 #[tokio::test]
 async fn full_group_flow_join_sync_heartbeat_commit_fetch_leave() {
-    let p = support::start().await;
+    let p = start().await;
 
     // KIP-516: OffsetCommit/OffsetFetch negotiate to v10/v8+, which key by
     // topic_id on the wire — so the topic must exist to carry a real UUID.

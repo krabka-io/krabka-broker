@@ -28,7 +28,7 @@ use crate::{
         decode_response, dispatch_context, encode_request, peer, principal, request_context,
         start_broker_with,
     },
-    txn::{coordinator::leadership::LoadStatus, state::TopicPartition},
+    txn::state::TopicPartition,
 };
 
 const TOPIC: &str = "orders";
@@ -46,26 +46,7 @@ async fn a_produce_that_starts_a_transaction_on_many_partitions_makes_one_coordi
     handle_.wait_until_controller_leader().await;
     handle_.wait_until_brokers_registered(1).await;
     let broker = handle_.broker_arc_for_test();
-    crate::txn::bootstrap::ensure_topic(
-        &broker.controller,
-        1,
-        1,
-        &crate::txn::bootstrap::topic_configs(
-            broker.config.transaction_state_segment_bytes,
-            broker.config.transaction_state_min_isr,
-        ),
-    )
-    .await
-    .expect("bootstrap __transaction_state");
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        while broker.txn_coordinator.load_status(PartitionIndex(0)).await
-            != Some(LoadStatus::Loaded)
-        {
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .expect("__transaction_state-0 becomes local");
+    handle_.wait_until_transaction_coordinator_ready().await;
 
     let user = principal("client");
     let address = peer();

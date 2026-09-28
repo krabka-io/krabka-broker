@@ -105,6 +105,7 @@ impl Fixture {
             NodeId(1),
             Arc::clone(&self.registry),
             controller,
+            Arc::default(),
             self.config.clone(),
             Arc::new(NoBarrierMetrics),
         );
