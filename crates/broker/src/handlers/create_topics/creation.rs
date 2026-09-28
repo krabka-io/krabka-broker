@@ -87,7 +87,7 @@ impl<'a> TopicCreation<'a> {
         &self,
         topic_req: CreatableTopic,
         quota: Option<&mut ControllerMutationQuota>,
-    ) -> Result<NewTopic, CreatableTopicResult> {
+    ) -> Result<NewTopic, Box<CreatableTopicResult>> {
         let mut topic_req = topic_req;
         let broker = self.broker;
         let image = self.image;
@@ -98,7 +98,7 @@ impl<'a> TopicCreation<'a> {
         // of the partition directory path, so no later step may see a name
         // that this check refuses.
         if let Some((code, message)) = topic_name_error(image, &name) {
-            return Err(topic_error_result(name, code, Some(message)));
+            return Err(Box::new(topic_error_result(name, code, Some(message))));
         }
 
         // Kafka answers an existing topic TOPIC_ALREADY_EXISTS before it
@@ -106,17 +106,17 @@ impl<'a> TopicCreation<'a> {
         // `kafka-topics --create --if-not-exists` succeeds whatever else the
         // request carries.
         if image.topic(&name).is_some() {
-            return Err(topic_exists_result(name));
+            return Err(Box::new(topic_exists_result(name)));
         }
 
         // Kafka's `computeConfigChanges` refuses a config with a null value
         // before it validates the others.
         if let Some(message) = null_config_error(&topic_req) {
-            return Err(topic_error_result(
+            return Err(Box::new(topic_error_result(
                 name,
                 codes::INVALID_CONFIG,
                 Some(message),
-            ));
+            )));
         }
 
         // Kafka validates a topic's configs before it looks at placement, so a
@@ -130,11 +130,11 @@ impl<'a> TopicCreation<'a> {
         ) {
             Ok(canonical) => canonical,
             Err(reason) => {
-                return Err(topic_error_result(
+                return Err(Box::new(topic_error_result(
                     name,
                     codes::INVALID_CONFIG,
                     Some(reason),
-                ));
+                )));
             }
         };
 
@@ -158,7 +158,7 @@ impl<'a> TopicCreation<'a> {
         // configuration is the case worth having.
         let diskless = config_keys::resolve_diskless(Some(&config_overrides));
         if diskless && broker.config.remote_storage_backend.is_none() {
-            return Err(topic_error_result(
+            return Err(Box::new(topic_error_result(
                 name,
                 codes::INVALID_CONFIG,
                 Some(format!(
@@ -167,7 +167,7 @@ impl<'a> TopicCreation<'a> {
                      or trim",
                     config_keys::DISKLESS
                 )),
-            ));
+            )));
         }
 
         // Kafka's `ReplicationControlManager.createTopic` checks the
@@ -177,7 +177,11 @@ impl<'a> TopicCreation<'a> {
         // both, and `resolve_assignments` checks that.
         if topic_req.assignments.is_empty() {
             if let Some((code, message)) = invalid_topic_shape(&topic_req) {
-                return Err(topic_error_result(name, code, Some(message.to_owned())));
+                return Err(Box::new(topic_error_result(
+                    name,
+                    code,
+                    Some(message.to_owned()),
+                )));
             }
             topic_req.num_partitions =
                 resolve_default(topic_req.num_partitions, broker.config.num_partitions);
@@ -194,11 +198,12 @@ impl<'a> TopicCreation<'a> {
         // The automatic placement never picks an unavailable broker. A manual
         // assignment may name one, because Kafka checks only that the broker
         // is registered, and the ISR below leaves it out.
-        let unavailable = crate::handlers::offline_replicas::unavailable_brokers(broker, image).await;
+        let unavailable =
+            crate::handlers::offline_replicas::unavailable_brokers(broker, image).await;
         let manual = !topic_req.assignments.is_empty();
         let no_exclusion = std::collections::HashSet::new();
         let brokers = site_broker_views(
-            &image,
+            image,
             broker.config.is_broker().then_some(node_id),
             if manual { &no_exclusion } else { &unavailable },
         );
@@ -206,7 +211,7 @@ impl<'a> TopicCreation<'a> {
         let assignments = match resolve_assignments(&topic_req, &brokers, self.preferred_site) {
             Ok(assignments) => assignments,
             Err((code, message)) => {
-                return Err(topic_error_result(name, code, Some(message)));
+                return Err(Box::new(topic_error_result(name, code, Some(message))));
             }
         };
 
@@ -214,14 +219,14 @@ impl<'a> TopicCreation<'a> {
             // The placement cannot satisfy the request. RF above the broker
             // count is the common cause. Surface INVALID_REPLICATION_FACTOR
             // with the message of Kafka's replica placer.
-            return Err(topic_error_result(
+            return Err(Box::new(topic_error_result(
                 name,
                 codes::INVALID_REPLICATION_FACTOR,
                 Some(placement_failure_message(
                     topic_req.replication_factor,
                     brokers.len(),
                 )),
-            ));
+            )));
         }
 
         let leaderships = if manual {
@@ -233,11 +238,11 @@ impl<'a> TopicCreation<'a> {
             ) {
                 Ok(leaderships) => leaderships,
                 Err(message) => {
-                    return Err(topic_error_result(
+                    return Err(Box::new(topic_error_result(
                         name,
                         codes::INVALID_REPLICA_ASSIGNMENT,
                         Some(message),
-                    ));
+                    )));
                 }
             }
         } else {
@@ -248,11 +253,11 @@ impl<'a> TopicCreation<'a> {
             && let Some(reason) =
                 diskless_wal_placement_error(image, &broker.config, 0, &leaderships)
         {
-            return Err(topic_error_result(
+            return Err(Box::new(topic_error_result(
                 name,
                 codes::INVALID_CONFIG,
                 Some(reason),
-            ));
+            )));
         }
 
         // KIP-108: the operator-declared topic policy, on the effective
@@ -267,99 +272,36 @@ impl<'a> TopicCreation<'a> {
             assignments.first().map(Vec::len),
             &config_overrides,
         ) {
-            return Err(topic_error_result(
+            return Err(Box::new(topic_error_result(
                 name,
                 codes::POLICY_VIOLATION,
                 Some(reason),
-            ));
+            )));
         }
 
         // KIP-599: charge the partitions this topic creates.
         let partition_count = u64::try_from(assignments.len()).unwrap_or(u64::MAX);
         if quota.is_some_and(|quota| quota.record(partition_count).is_err()) {
-            return Err(topic_error_result(
+            return Err(Box::new(topic_error_result(
                 name,
                 codes::THROTTLING_QUOTA_EXCEEDED,
                 Some(THROTTLING_QUOTA_EXCEEDED_MESSAGE.into()),
-            ));
+            )));
         }
 
         let topic_id = Uuid::new_v4();
 
         // A validate-only request has now passed every check the committing
         // path runs, and commits nothing.
-        let failure = if self.validate_only {
-            None
-        } else {
-            // Build the batch: one TopicRecord + N PartitionRecords.
-            let records = topic_records(
-                &topic_req,
+        if !self.validate_only {
+            let placement = Placement {
                 topic_id,
-                &assignments,
-                &leaderships,
-                &config_overrides,
-            );
-
-            match broker.controller.submit_change(records).await {
-                Ok(_) => {
-                    materialize_topic(
-                        TopicMaterialization {
-                            partitions: &broker.partitions,
-                            log_dirs: &broker.config.all_log_dirs(),
-                            log_config: &broker.config.log_config,
-                            log_dir_status: &broker.log_dir_status,
-                            producer_state: &broker.producer_state,
-                            producer_id_expiration: broker.config.producer_id_expiration,
-                            max_produce_group: broker.config.max_produce_group,
-                            partition_writer_queue_depth: broker
-                                .config
-                                .partition_writer_queue_depth,
-                            diskless_wal_local_replica_count: broker
-                                .config
-                                .diskless_wal_local_replica_count,
-                            node_id,
-                            diskless,
-                            topic_id,
-                            hot_tail: &broker.hot_tail,
-                            wal_shards: &broker.wal_shards,
-                            controller: &broker.controller,
-                        },
-                        &name,
-                        &assignments,
-                        &leaderships,
-                    )
-                    .await;
-                    None
-                }
-                // Another request created the name after this one read the
-                // image. The quorum decides that race, and the row is the one
-                // Kafka's existence check answers.
-                Err(RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))) => {
-                    Some(topic_exists_result(name.clone()))
-                }
-                Err(RaftError::Metadata(krabka_metadata::MetadataError::InvalidRecord(_))) => {
-                    // E.g., `partitions <= 0` rejected by image::validate.
-                    Some(topic_error_result(
-                        name.clone(),
-                        codes::INVALID_PARTITIONS,
-                        None,
-                    ))
-                }
-                Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => Some(
-                    topic_error_result(name.clone(), codes::NOT_CONTROLLER, None),
-                ),
-                Err(e) => {
-                    tracing::error!(topic = %name, error = %e, "CreateTopics submit_change failed");
-                    Some(topic_error_result(
-                        name.clone(),
-                        codes::UNKNOWN_SERVER_ERROR,
-                        None,
-                    ))
-                }
-            }
-        };
-        if let Some(failure) = failure {
-            return Err(failure);
+                assignments: &assignments,
+                leaderships: &leaderships,
+                overrides: &config_overrides,
+                diskless,
+            };
+            self.commit(&topic_req, &placement).await?;
         }
         Ok(NewTopic {
             name,
@@ -367,6 +309,82 @@ impl<'a> TopicCreation<'a> {
             assignments,
             overrides: config_overrides,
         })
-
     }
+
+    /// Commits the records of a checked topic, and opens the partitions this
+    /// broker holds.
+    async fn commit(
+        &self,
+        topic_req: &CreatableTopic,
+        placement: &Placement<'_>,
+    ) -> Result<(), Box<CreatableTopicResult>> {
+        let broker = self.broker;
+        let name = &topic_req.name;
+        // Build the batch: one TopicRecord + N PartitionRecords.
+        let records = topic_records(
+            topic_req,
+            placement.topic_id,
+            placement.assignments,
+            placement.leaderships,
+            placement.overrides,
+        );
+
+        let failure = match broker.controller.submit_change(records).await {
+            Ok(_) => {
+                materialize_topic(
+                    TopicMaterialization {
+                        partitions: &broker.partitions,
+                        log_dirs: &broker.config.all_log_dirs(),
+                        log_config: &broker.config.log_config,
+                        log_dir_status: &broker.log_dir_status,
+                        producer_state: &broker.producer_state,
+                        producer_id_expiration: broker.config.producer_id_expiration,
+                        max_produce_group: broker.config.max_produce_group,
+                        partition_writer_queue_depth: broker.config.partition_writer_queue_depth,
+                        diskless_wal_local_replica_count: broker
+                            .config
+                            .diskless_wal_local_replica_count,
+                        node_id: broker.config.node_id,
+                        diskless: placement.diskless,
+                        topic_id: placement.topic_id,
+                        hot_tail: &broker.hot_tail,
+                        wal_shards: &broker.wal_shards,
+                        controller: &broker.controller,
+                    },
+                    name,
+                    placement.assignments,
+                    placement.leaderships,
+                )
+                .await;
+                return Ok(());
+            }
+            // Another request created the name after this one read the
+            // image. The quorum decides that race, and the row is the one
+            // Kafka's existence check answers.
+            Err(RaftError::Metadata(krabka_metadata::MetadataError::TopicExists(_))) => {
+                topic_exists_result(name.clone())
+            }
+            Err(RaftError::Metadata(krabka_metadata::MetadataError::InvalidRecord(_))) => {
+                // E.g., `partitions <= 0` rejected by image::validate.
+                topic_error_result(name.clone(), codes::INVALID_PARTITIONS, None)
+            }
+            Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
+                topic_error_result(name.clone(), codes::NOT_CONTROLLER, None)
+            }
+            Err(e) => {
+                tracing::error!(topic = %name, error = %e, "CreateTopics submit_change failed");
+                topic_error_result(name.clone(), codes::UNKNOWN_SERVER_ERROR, None)
+            }
+        };
+        Err(Box::new(failure))
+    }
+}
+
+/// The placement and configs a checked topic is committed with.
+struct Placement<'a> {
+    topic_id: Uuid,
+    assignments: &'a [Vec<krabka_raft::NodeId>],
+    leaderships: &'a [super::InitialLeadership],
+    overrides: &'a BTreeMap<String, String>,
+    diskless: bool,
 }

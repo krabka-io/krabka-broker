@@ -146,6 +146,9 @@ async fn handler_refuses_a_timeout_kafka_refuses_and_stores_the_rest_as_sent() {
 
     let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
     enable_transaction_version_3(&broker).await;
+    broker_handle
+        .wait_until_transaction_coordinator_ready()
+        .await;
 
     let find_version = krabka_protocol::owned::find_coordinator_response::MAX_VERSION;
     let find_request = krabka_protocol::owned::find_coordinator_request::FindCoordinatorRequest {
@@ -350,6 +353,9 @@ async fn keep_prepared_txn_without_enable_2pc_preserves_finite_timeout() {
     .await;
     let broker = broker_handle.broker_arc_for_test();
     enable_transaction_version_3(&broker).await;
+    broker_handle
+        .wait_until_transaction_coordinator_ready()
+        .await;
     let principal = principal("admin");
     let peer = peer();
     let context = crate::test_support::request_context(&principal, &peer, "txn-client");
@@ -504,6 +510,9 @@ async fn half_an_identity_is_invalid_and_an_old_client_gets_invalid_producer_epo
     .await;
     let broker = broker_handle.broker_arc_for_test();
     enable_transaction_version_3(&broker).await;
+    broker_handle
+        .wait_until_transaction_coordinator_ready()
+        .await;
     let principal = principal("admin");
     let peer = peer();
     let context = crate::test_support::request_context(&principal, &peer, "txn-client");
@@ -865,6 +874,9 @@ async fn two_phase_commit_gate_is_scoped_to_enable_2pc_not_keep_prepared_txn() {
         .await;
         let broker = broker_handle.broker_arc_for_test();
         enable_transaction_version_3(&broker).await;
+        broker_handle
+            .wait_until_transaction_coordinator_ready()
+            .await;
 
         let mut acls = vec![acl(
             PermissionType::Allow,
@@ -966,6 +978,9 @@ async fn a_failed_block_allocation_answers_coordinator_load_in_progress() {
     .await;
     let broker = broker_handle.broker_arc_for_test();
     wait_for_leader(&broker).await;
+    broker_handle
+        .wait_until_transaction_coordinator_ready()
+        .await;
     let principal = principal("admin");
     let peer = peer();
     let context = crate::test_support::request_context(&principal, &peer, "txn-client");

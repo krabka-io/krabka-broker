@@ -60,7 +60,9 @@ async fn configured_partition_count_controls_txn_topic_and_routing() {
 
     let first = find(&broker, &request, version, "admin").await;
     check!(first.coordinators == vec![row(tid, codes::COORDINATOR_NOT_AVAILABLE, None)]);
-    broker_handle.wait_until_transaction_coordinator_ready().await;
+    broker_handle
+        .wait_until_transaction_coordinator_ready()
+        .await;
 
     let response = handle(
         &broker,
@@ -169,7 +171,9 @@ async fn mixed_rejection_and_resolution_preserve_key_order_and_errors() {
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
-    broker_handle.wait_until_transaction_coordinator_ready().await;
+    broker_handle
+        .wait_until_transaction_coordinator_ready()
+        .await;
     let principal = principal("alice");
     let peer = peer();
     let context = crate::test_support::request_context(&principal, &peer, "txn-client");

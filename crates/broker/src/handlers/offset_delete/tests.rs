@@ -31,11 +31,13 @@ use crate::{
 };
 
 async fn start(authorizer: Arc<dyn Authorizer>) -> (BrokerHandle, tempfile::TempDir) {
-    crate::test_support::start_broker_with(|cfg| {
+    let (broker, dir) = crate::test_support::start_broker_with(|cfg| {
         cfg.audit_enabled = false;
         cfg.authorizer = authorizer;
     })
-    .await
+    .await;
+    broker.wait_until_group_coordinator_ready().await;
+    (broker, dir)
 }
 
 async fn create_topic(broker: &BrokerHandle, name: &str) {

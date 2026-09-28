@@ -618,7 +618,9 @@ async fn an_internal_topic_refuses_a_trim() {
     let ctx = test_context(&admin, &peer);
 
     broker_handle.wait_until_group_coordinator_ready().await;
-    broker_handle.wait_until_transaction_coordinator_ready().await;
+    broker_handle
+        .wait_until_transaction_coordinator_ready()
+        .await;
     broker_handle.wait_until_share_coordinator_ready().await;
     topic_holding_a_pending_batch(&broker_handle, &broker, "orders", None, &ctx).await;
 

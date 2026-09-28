@@ -86,8 +86,9 @@ pub(crate) fn error_code(error: &BarrierError) -> i16 {
         BarrierError::UnknownGroup { .. } => codes::RESOURCE_NOT_FOUND,
         BarrierError::GroupExists { .. } => codes::TOPIC_ALREADY_EXISTS,
         BarrierError::InvalidDefinition(_) => codes::INVALID_CONFIG,
-        BarrierError::StateNotLocal { .. }
-        | BarrierError::Persist(_) => codes::COORDINATOR_NOT_AVAILABLE,
+        BarrierError::StateNotLocal { .. } | BarrierError::Persist(_) => {
+            codes::COORDINATOR_NOT_AVAILABLE
+        }
     }
 }
 

@@ -16,16 +16,30 @@ pub(super) struct CoordinatorStartup {
     pub(super) share_persister: Arc<crate::share_coordinator::persister_client::SharePersister>,
 }
 
+/// The shared components the coordinators are built on.
+pub(super) struct CoordinatorInputs<'a> {
+    pub(super) controller: &'a Arc<dyn crate::metadata_source::MetadataSource>,
+    pub(super) partitions: &'a Arc<PartitionRegistry>,
+    pub(super) group_coordinator: &'a Arc<crate::coordinator::GroupCoordinator>,
+    pub(super) producer_ids: &'a Arc<crate::producer_id_manager::ProducerIdManager>,
+    pub(super) inter_broker_client: &'a Arc<crate::network::client::InterBrokerClient>,
+    pub(super) auto_topic_creation: &'a Arc<crate::auto_topic_creation::AutoTopicCreation>,
+    pub(super) metrics: &'a crate::metrics::BrokerMetrics,
+}
+
 pub(super) async fn start_coordinators(
     config: &BrokerConfig,
-    controller: &Arc<dyn crate::metadata_source::MetadataSource>,
-    partitions: &Arc<PartitionRegistry>,
-    group_coordinator: &Arc<crate::coordinator::GroupCoordinator>,
-    producer_ids: &Arc<crate::producer_id_manager::ProducerIdManager>,
-    inter_broker_client: &Arc<crate::network::client::InterBrokerClient>,
-    auto_topic_creation: &Arc<crate::auto_topic_creation::AutoTopicCreation>,
-    metrics: &crate::metrics::BrokerMetrics,
+    inputs: CoordinatorInputs<'_>,
 ) -> CoordinatorStartup {
+    let CoordinatorInputs {
+        controller,
+        partitions,
+        group_coordinator,
+        producer_ids,
+        inter_broker_client,
+        auto_topic_creation,
+        metrics,
+    } = inputs;
     let listener_protocol = config
         .effective_listeners()
         .iter()

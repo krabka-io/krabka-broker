@@ -172,3 +172,6 @@ async fn create_topics(broker: &Broker, ctx: &RequestContext<'_>, names: &[&str]
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

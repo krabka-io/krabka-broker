@@ -36,17 +36,19 @@ mod response;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::placement::{
-    InitialLeadership, automatic_leaderships, manual_leaderships, placement_failure_message,
-    round_robin_replicas, site_broker_views, validate_manual_partition_assignment,
-};
-pub(crate) use self::creation::TopicCreation;
 use self::{
     authorization::{authorize_create_topics, describe_configs_denied},
     name::CLUSTER_METADATA_TOPIC,
     response::{
         create_topics_response, effective_topic_configs, encode_response, finish_response,
         topic_error_result,
+    },
+};
+pub(crate) use self::{
+    creation::TopicCreation,
+    placement::{
+        InitialLeadership, automatic_leaderships, manual_leaderships, placement_failure_message,
+        round_robin_replicas, site_broker_views, validate_manual_partition_assignment,
     },
 };
 use crate::{authorizer::AuthorizationResult, broker::Broker, codes, error::BrokerError};
@@ -224,7 +226,7 @@ pub(crate) async fn handle(
         let created = match creation.create(topic_req, Some(&mut quota)).await {
             Ok(created) => created,
             Err(failure) => {
-                results.push(failure);
+                results.push(*failure);
                 continue;
             }
         };

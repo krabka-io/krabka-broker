@@ -22,7 +22,6 @@ pub struct MetaProperties {
     pub version: u64,
 }
 
-
 /// Reads this replica's stable directory id from `meta.properties.json`,
 /// which `krabka format` writes.
 ///

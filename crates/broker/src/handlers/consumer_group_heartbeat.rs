@@ -506,7 +506,15 @@ mod tests {
         client_id = "consumer-group-heartbeat-test"
     );
 
-    use crate::test_support::start_broker_with_authorizer as start_broker;
+    /// Start a broker with `authorizer` and wait until its group coordinator
+    /// serves `__consumer_offsets`.
+    async fn start_broker(
+        authorizer: Arc<dyn crate::authorizer::Authorizer>,
+    ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
+        let (handle, dir) = crate::test_support::start_broker_with_authorizer(authorizer).await;
+        handle.wait_until_group_coordinator_ready().await;
+        (handle, dir)
+    }
 
     fn image_with_group_version(level: i16) -> MetadataImage {
         let mut image = MetadataImage::new(uuid::Uuid::nil());

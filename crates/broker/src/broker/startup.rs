@@ -11,7 +11,7 @@ use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
 use crate::{
     broker::{
         Broker, BrokerHandle, DisklessRuntime,
-        coordinators::{CoordinatorStartup, start_coordinators},
+        coordinators::{CoordinatorInputs, CoordinatorStartup, start_coordinators},
         finish::{BrokerStorageStartup, finish_broker_startup},
         metadata_phase::start_metadata_phase,
         runtime::start_broker_runtime,
@@ -252,13 +252,15 @@ impl Broker {
             share_persister,
         } = start_coordinators(
             &config,
-            &controller,
-            &partitions,
-            &group_coordinator,
-            &producer_ids,
-            &inter_broker_client,
-            &auto_topic_creation,
-            &metrics,
+            CoordinatorInputs {
+                controller: &controller,
+                partitions: &partitions,
+                group_coordinator: &group_coordinator,
+                producer_ids: &producer_ids,
+                inter_broker_client: &inter_broker_client,
+                auto_topic_creation: &auto_topic_creation,
+                metrics: &metrics,
+            },
         )
         .await;
 

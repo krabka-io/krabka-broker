@@ -93,8 +93,7 @@ async fn bootstrap_opens_the_local_partitions_of_an_existing_offsets_topic() {
         )
         .await
         .unwrap();
-        let topic_dir =
-            log_dir::partition_dir(&config.log_dir, OFFSETS_TOPIC, OFFSETS_PARTITION);
+        let topic_dir = log_dir::partition_dir(&config.log_dir, OFFSETS_TOPIC, OFFSETS_PARTITION);
         check!(topic_dir.exists());
         check!(partitions.contains(OFFSETS_TOPIC, PartitionIndex(OFFSETS_PARTITION)));
     }

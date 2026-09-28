@@ -182,7 +182,10 @@ pub fn coordinator_topic(config: &BrokerConfig, name: &str) -> Option<CreatableT
 /// # Errors
 ///
 /// Returns the refused row, in the shape `CreateTopics` answers it.
-pub async fn create(broker: &Broker, topic: CreatableTopic) -> Result<(), CreatableTopicResult> {
+pub async fn create(
+    broker: &Broker,
+    topic: CreatableTopic,
+) -> Result<(), Box<CreatableTopicResult>> {
     let image = broker.controller.current_image();
     TopicCreation::new(broker, &image, false)
         .create(topic, None)
