@@ -494,7 +494,7 @@ The keys stay registered and unadvertised, and the registry coverage test encode
 
 ### Eager Creation of `__barrier_state`
 
-The topic could be created at broker startup, beside `__transaction_state` and `__share_group_state`, which is simpler than waiting for a first group.
+The topic could be created at broker startup, which is simpler than waiting for a first group. No coordinator topic is created at startup now: `__consumer_offsets`, `__transaction_state` and `__share_group_state` are also created on first use.
 
 It cost two unrelated JVM acceptance suites. Fifty partitions at replication factor 3 on a cluster that cannot satisfy the factor stay leaderless, and the leader-election sweep walks all fifty on every pass. The metadata churn changed election timing enough to break `jvm_static_quorum_spike` and `jvm_kip320_divergence`, neither of which uses barriers.
 

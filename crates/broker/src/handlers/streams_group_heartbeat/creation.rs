@@ -249,6 +249,32 @@ fn append_missing_internal_topics_detail(
     }
 }
 
+/// The `CreateTopics` row of one internal topic, as Kafka's
+/// `InternalTopicManager.toCreatableTopic` builds it: the replication factor
+/// of the topology when it is not 0, else -1, so that the controller applies
+/// `default.replication.factor`.
+fn creatable_topic(spec: &InternalTopicSpec) -> CreatableTopic {
+    CreatableTopic {
+        name: spec.name.clone(),
+        num_partitions: spec.partitions,
+        replication_factor: if spec.replication_factor == 0 {
+            -1
+        } else {
+            spec.replication_factor
+        },
+        configs: spec
+            .configs
+            .iter()
+            .map(|(name, value)| CreatableTopicConfig {
+                name: name.clone(),
+                value: Some(value.clone()),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }
+}
+
 /// Sends one `CreateTopics` request for `specs` with the principal of the
 /// caller, and returns the error message of each topic that it did not
 /// create.
@@ -259,32 +285,7 @@ async fn create_topics(
 ) -> BTreeMap<String, String> {
     let version = krabka_protocol::owned::create_topics_request::MAX_VERSION;
     let request = CreateTopicsRequest {
-        topics: specs
-            .iter()
-            .map(|spec| CreatableTopic {
-                name: spec.name.clone(),
-                num_partitions: spec.partitions,
-                // Kafka's `InternalTopicManager.toCreatableTopic` sends the
-                // replication factor of the topology when it is not 0. Else
-                // it sends -1, and the controller applies
-                // `default.replication.factor`.
-                replication_factor: if spec.replication_factor == 0 {
-                    -1
-                } else {
-                    spec.replication_factor
-                },
-                configs: spec
-                    .configs
-                    .iter()
-                    .map(|(name, value)| CreatableTopicConfig {
-                        name: name.clone(),
-                        value: Some(value.clone()),
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            })
-            .collect(),
+        topics: specs.iter().map(creatable_topic).collect(),
         ..Default::default()
     };
     let failures = |message: &str| {
@@ -332,6 +333,36 @@ mod tests {
             partitions: 1,
             replication_factor: 0,
             configs: BTreeMap::new(),
+        }
+    }
+
+    /// Kafka's `InternalTopicManager.toCreatableTopic` sends -1 for a
+    /// topology that names no replication factor, and the controller applies
+    /// `default.replication.factor`. A named factor goes out as it is.
+    #[test]
+    fn creatable_topic_sends_the_topology_replication_factor_or_minus_one() {
+        for (replication_factor, expected) in [(0, -1), (1, 1), (3, 3)] {
+            let spec = InternalTopicSpec {
+                name: "app-store-changelog".into(),
+                partitions: 4,
+                replication_factor,
+                configs: BTreeMap::from([("cleanup.policy".into(), "compact".into())]),
+            };
+            check!(
+                creatable_topic(&spec)
+                    == CreatableTopic {
+                        name: "app-store-changelog".into(),
+                        num_partitions: 4,
+                        replication_factor: expected,
+                        configs: vec![CreatableTopicConfig {
+                            name: "cleanup.policy".into(),
+                            value: Some("compact".into()),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    },
+                "replication_factor = {replication_factor}"
+            );
         }
     }
 
