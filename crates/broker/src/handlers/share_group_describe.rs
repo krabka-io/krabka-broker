@@ -244,7 +244,7 @@ mod tests {
         share_enabled: bool,
     ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
         let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
-            cfg.authorizer = authorizer;
+            cfg.authorizer = crate::test_support::controller_peer_allowed(authorizer);
             cfg.share_group.enable = share_enabled;
         })
         .await;

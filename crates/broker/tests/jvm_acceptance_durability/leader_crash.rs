@@ -73,7 +73,7 @@ async fn acks_all_survives_leader_crash() {
         controller_election_timeout: krabka_units::millis(500),
         controller_heartbeat_interval: krabka_units::millis(100),
         bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
-        ..krabka_broker::BrokerConfig::default()
+        ..krabka_broker::BrokerConfig::default().with_internal_topics_for(3)
     };
     let h0 = tokio::spawn(async move {
         krabka_broker::Broker::start(cfg0)
@@ -103,7 +103,7 @@ async fn acks_all_survives_leader_crash() {
             controller_election_timeout: krabka_units::millis(500),
             controller_heartbeat_interval: krabka_units::millis(100),
             bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
-            ..krabka_broker::BrokerConfig::default()
+            ..krabka_broker::BrokerConfig::default().with_internal_topics_for(3)
         };
         tempdirs.push(dir);
         join_spawns.push(tokio::spawn(async move {

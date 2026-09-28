@@ -799,7 +799,7 @@ async fn a_lookup_with_too_few_brokers_creates_nothing_until_enough_register() {
                 in_controlled_shutdown: false,
                 cordoned_log_dirs: None,
                 node_id: other,
-                broker_epoch: 0,
+                broker_epoch: -1,
                 incarnation_id: uuid::Uuid::from_u128(2),
                 host: "127.0.0.1".into(),
                 port: 9094,

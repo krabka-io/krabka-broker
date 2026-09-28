@@ -71,7 +71,7 @@ pub(crate) fn start_host_broker_with_minio_tier(
         // local-retention pass evicts them) within the test's wall clock.
         remote_log_manager_interval: krabka_units::secs(1),
         remote_log_metadata: rlmm,
-        ..BrokerConfig::default()
+        ..BrokerConfig::default().with_internal_topics_for(1)
     };
     Box::pin(async move {
         let handle = Broker::start(config.clone()).await.expect("start broker");

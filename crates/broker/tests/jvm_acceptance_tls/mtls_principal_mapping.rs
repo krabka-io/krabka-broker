@@ -154,7 +154,7 @@ async fn start_mtls_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir)
         inter_broker_listener_name: "SSL".to_string(),
         tls_config: Some(tls),
         super_users: maplit::hashset! {MAPPED_PRINCIPAL.to_string()},
-        ..BrokerConfig::default()
+        ..BrokerConfig::default().with_internal_topics_for(1)
     };
     // The PLAINTEXT controller listener carries `ANONYMOUS`, and the node's own
     // heartbeats reach it. Every data listener here authenticates, so this

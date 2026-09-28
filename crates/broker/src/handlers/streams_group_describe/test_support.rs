@@ -64,7 +64,7 @@ pub(super) async fn start_broker_with_authorizer(
 ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
     let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
         cfg.streams_group.enable = true;
-        cfg.authorizer = authorizer;
+        cfg.authorizer = crate::test_support::controller_peer_allowed(authorizer);
     })
     .await;
     handle.wait_until_group_coordinator_ready().await;

@@ -810,8 +810,8 @@ mod tests {
     #[tokio::test]
     async fn handle_all_authorized_creates_member() {
         let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-            cfg.authorizer = Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
-                std::collections::HashSet::new(),
+            cfg.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(
+                crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
             ));
             cfg.share_group.enable = true;
         })

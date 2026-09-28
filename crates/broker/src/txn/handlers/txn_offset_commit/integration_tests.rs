@@ -72,7 +72,9 @@ pub(super) async fn seed_topic_a(broker: &crate::broker::Broker) {
 async fn start_seeded_broker() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
     let (handle, dir) = start_broker_with(|cfg| {
         cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(GrantsInPrincipalName);
+        cfg.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(
+            GrantsInPrincipalName,
+        ));
     })
     .await;
     handle.wait_until_group_coordinator_ready().await;

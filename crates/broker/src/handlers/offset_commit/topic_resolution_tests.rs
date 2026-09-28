@@ -96,7 +96,10 @@ type Outcome = (i16, TopicRef, OffsetCommitResponse, Vec<(String, i32)>);
 /// Start a broker under `authorizer` whose group coordinator serves
 /// `__consumer_offsets`, which no broker creates at startup.
 async fn start(authorizer: Arc<dyn Authorizer>) -> (BrokerHandle, tempfile::TempDir) {
-    let (broker, dir) = start_broker_with_authorizer_no_audit(authorizer).await;
+    let (broker, dir) = start_broker_with_authorizer_no_audit(
+        crate::test_support::controller_peer_allowed(authorizer),
+    )
+    .await;
     broker.wait_until_group_coordinator_ready().await;
     (broker, dir)
 }

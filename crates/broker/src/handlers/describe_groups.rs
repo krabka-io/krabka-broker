@@ -257,8 +257,10 @@ mod tests {
     async fn start_broker(
         authorizer: Arc<dyn crate::authorizer::Authorizer>,
     ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-        let (handle, dir) =
-            crate::test_support::start_broker_with_authorizer_no_audit(authorizer).await;
+        let (handle, dir) = crate::test_support::start_broker_with_authorizer_no_audit(
+            crate::test_support::controller_peer_allowed(authorizer),
+        )
+        .await;
         handle.wait_until_group_coordinator_ready().await;
         (handle, dir)
     }

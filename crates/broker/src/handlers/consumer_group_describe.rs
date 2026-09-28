@@ -654,8 +654,10 @@ mod tests {
     async fn handle_protocol_gate_precedes_group_acl_for_every_row() {
         let authorizer =
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
-        let (broker_handle, _dir) =
-            start_broker_with_authorizer(std::sync::Arc::new(authorizer)).await;
+        let (broker_handle, _dir) = start_broker_with_authorizer(std::sync::Arc::new(
+            crate::test_support::ControllerPeerAllowed(authorizer),
+        ))
+        .await;
         let broker = broker_handle.broker_arc_for_test();
         disable_group_version(&broker).await;
         let principal = crate::test_support::principal("nobody");
@@ -690,8 +692,10 @@ mod tests {
     async fn handle_orders_denied_rows_before_allowed_rows() {
         let authorizer =
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
-        let (broker_handle, _dir) =
-            start_broker_with_authorizer(std::sync::Arc::new(authorizer)).await;
+        let (broker_handle, _dir) = start_broker_with_authorizer(std::sync::Arc::new(
+            crate::test_support::ControllerPeerAllowed(authorizer),
+        ))
+        .await;
         let broker = broker_handle.broker_arc_for_test();
         // Grant "alice" Describe on "allowed" only; "denied" has no matching
         // ACL and stays denied under SimpleAclAuthorizer's default-deny.

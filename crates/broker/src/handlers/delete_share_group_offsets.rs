@@ -472,7 +472,7 @@ mod tests {
             ),
             (
                 "denied group returns top-level authorization failure",
-                Arc::new(DenyAll),
+                Arc::new(crate::test_support::ControllerPeerAllowed(DenyAll)),
                 true,
                 vec!["missing"],
                 DeleteShareGroupOffsetsResponse {

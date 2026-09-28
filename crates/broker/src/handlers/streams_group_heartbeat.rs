@@ -768,7 +768,9 @@ mod tests {
     /// everything.
     async fn start_broker_with_grants() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
         let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
-            cfg.authorizer = Arc::new(crate::test_support::GrantsInPrincipalName);
+            cfg.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(
+                crate::test_support::GrantsInPrincipalName,
+            ));
             cfg.streams_group.enable = true;
         })
         .await;

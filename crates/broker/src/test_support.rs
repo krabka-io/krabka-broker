@@ -122,6 +122,52 @@ impl<A: crate::authorizer::Authorizer> crate::authorizer::Authorizer for Control
     }
 }
 
+/// An authorizer that a fixture holds as a trait object, so that it can go
+/// inside [`ControllerPeerAllowed`].
+#[derive(Debug)]
+struct SharedAuthorizer(std::sync::Arc<dyn crate::authorizer::Authorizer>);
+
+impl crate::authorizer::Authorizer for SharedAuthorizer {
+    fn authorize(
+        &self,
+        source: &dyn crate::authorizer::AclSource,
+        request: &crate::authorizer::AuthorizationRequest<'_>,
+    ) -> crate::authorizer::AuthorizationResult {
+        self.0.authorize(source, request)
+    }
+
+    fn is_configured(&self) -> bool {
+        self.0.is_configured()
+    }
+
+    fn decision_ttl(&self) -> Option<std::time::Duration> {
+        self.0.decision_ttl()
+    }
+
+    fn authorize_by_resource_type(
+        &self,
+        source: &dyn crate::authorizer::AclSource,
+        principal: &krabka_security::Principal,
+        host: &std::net::SocketAddr,
+        resource_type: krabka_metadata::ResourceType,
+        operation: krabka_metadata::AclOperation,
+    ) -> crate::authorizer::AuthorizationResult {
+        self.0
+            .authorize_by_resource_type(source, principal, host, resource_type, operation)
+    }
+}
+
+/// Wraps `authorizer` in [`ControllerPeerAllowed`].
+///
+/// A fixture that waits for a coordinator needs this: the broker places a
+/// coordinator topic only on an unfenced broker, as Kafka's
+/// `ReplicaPlacer` does.
+pub(crate) fn controller_peer_allowed(
+    authorizer: std::sync::Arc<dyn crate::authorizer::Authorizer>,
+) -> std::sync::Arc<dyn crate::authorizer::Authorizer> {
+    std::sync::Arc::new(ControllerPeerAllowed(SharedAuthorizer(authorizer)))
+}
+
 /// Build an anonymous-auth [`Principal`] with the given name and no groups.
 ///
 /// The name matters. Authorization decisions and audit records key on this

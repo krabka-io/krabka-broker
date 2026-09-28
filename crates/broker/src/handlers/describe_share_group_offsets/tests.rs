@@ -104,7 +104,7 @@ async fn handle_error_scenarios_preserve_expected_rows() {
         ),
         (
             "denied group preserves group id and error code",
-            Arc::new(DenyAll),
+            Arc::new(crate::test_support::ControllerPeerAllowed(DenyAll)),
             true,
             vec![("g1", vec![("missing", vec![0])])],
             DescribeShareGroupOffsetsResponse {
