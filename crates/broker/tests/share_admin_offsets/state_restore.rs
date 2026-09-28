@@ -36,7 +36,7 @@ async fn delivery_complete_count_restored_across_restart() {
         let client = connect(&broker.listen_addr().to_string()).await;
         create_topic(&broker, &client, "t", 1).await;
         tid = topic_id(&broker, "t");
-        bootstrap_share_state(&broker, &client, "g1", tid, 0).await;
+        bootstrap_share_state(&broker, &client, "g1").await;
         produce_n(&client, "t", tid, 0, N).await;
         let (member, _epoch) = join(&client, "g1", "t").await;
         wait_for_share_init(&broker, "g1", tid, 0).await;
@@ -80,7 +80,7 @@ async fn delivery_complete_count_restored_across_restart() {
         cfg.bootstrap_mode = BootstrapMode::Rejoin;
         let broker = Broker::start(cfg).await.unwrap();
         let client = connect(&broker.listen_addr().to_string()).await;
-        bootstrap_share_state(&broker, &client, "g1", tid, 0).await;
+        bootstrap_share_state(&broker, &client, "g1").await;
 
         // The summary load is driven by the share coordinator reading the
         // persisted record; await until the recovered state is present.

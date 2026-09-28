@@ -14,13 +14,11 @@ use std::{
 };
 
 use assert2::assert;
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use krabka_broker::BrokerConfig;
 use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        find_coordinator_request::FindCoordinatorRequest,
         incremental_alter_configs_request::{
             AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
         },
@@ -98,7 +96,6 @@ fn wire(tid: uuid::Uuid) -> WireUuid {
     WireUuid(*tid.as_bytes())
 }
 
-const SHARE_STATE_TOPIC: &str = "__share_group_state";
 const SHARE_STATE_PARTITIONS: i32 = 1;
 const MAX_CONCURRENT_TEST_BROKERS: usize = 3;
 
@@ -119,37 +116,23 @@ pub fn broker_config(log_dir: std::path::PathBuf) -> BrokerConfig {
     config
 }
 
+/// Brings up the two coordinators that a share group uses, and puts `group` on
+/// `share.auto.offset.reset=earliest`.
+///
+/// No broker creates `__consumer_offsets` or `__share_group_state` when it
+/// starts. `ShareGroupHeartbeat` needs the group coordinator, and the
+/// share-partition manager persists its SPSO advance through the share
+/// coordinator. Until this broker leads and loads the state partition, that
+/// advance lives only in memory, and a restart loses it. The handle helpers
+/// ask for each topic as a client's first lookup does, and wait until this
+/// broker serves it.
 pub async fn bootstrap_share_state(
     broker: &krabka_broker::BrokerHandle,
     client: &Client,
     group: &str,
-    topic_id: uuid::Uuid,
-    partition: i32,
 ) {
-    let key = format!(
-        "{group}:{}:{partition}",
-        URL_SAFE_NO_PAD.encode(topic_id.as_bytes())
-    );
-    let resp = client
-        .send(FindCoordinatorRequest {
-            key_type: 2, // SHARE
-            coordinator_keys: vec![key],
-            ..Default::default()
-        })
-        .await
-        .expect("FindCoordinator(SHARE)");
-    assert!(
-        resp.coordinators[0].error_code == 0,
-        "FindCoordinator(SHARE) error: {}",
-        resp.coordinators[0].error_code
-    );
-    // Wait until every state partition this single broker should lead is local,
-    // so the share-state writes land durably.
-    for p in 0..SHARE_STATE_PARTITIONS {
-        broker
-            .wait_until_partition_present(SHARE_STATE_TOPIC, p)
-            .await;
-    }
+    broker.wait_until_group_coordinator_ready().await;
+    broker.wait_until_share_coordinator_ready().await;
     set_auto_offset_reset_earliest(client, group).await;
 }
 

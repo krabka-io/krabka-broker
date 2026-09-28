@@ -171,6 +171,9 @@ async fn fetch_metadata_and_the_metrics_endpoint_still_answer_for_a_frozen_topic
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn offset_commit_still_works_against_a_frozen_topic() {
     let p = support::start().await;
+    // The raw OffsetCommit makes no coordinator lookup. Create
+    // `__consumer_offsets` and load it first, as a client lookup does.
+    p.broker.wait_until_group_coordinator_ready().await;
     let frozen = create_topic(&p.broker, &p.client, "orders").await;
     let control = create_topic(&p.broker, &p.client, CONTROL).await;
     check!(produce_outcome(&p.broker, &p.client, "orders", frozen).await == accepted(1));

@@ -18,7 +18,6 @@ use krabka_protocol::{
     owned::{
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
         fetch_response::FetchResponse,
-        find_coordinator_request::FindCoordinatorRequest,
         share_group_heartbeat_request::ShareGroupHeartbeatRequest,
     },
     primitives::uuid::Uuid as WireUuid,
@@ -127,24 +126,19 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
         .topic(TOPIC)
         .expect("topic metadata")
         .topic_id;
-    let mut share_ready = false;
-    for _ in 0..40 {
-        let response = admin
-            .send(FindCoordinatorRequest {
-                key_type: 2,
-                coordinator_keys: vec![share_coordinator_key("backlog-rf3-bootstrap", topic_id, 0)],
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        if response.coordinators[0].error_code == 0 {
-            share_ready = true;
-            break;
-        }
-        assert!(response.coordinators[0].error_code == 15, "{response:?}");
-        tokio::time::sleep(Duration::from_millis(50)).await;
+    // No broker creates `__consumer_offsets` or `__share_group_state` when it
+    // starts. The candidate search below reads both topics out of the image,
+    // and the group and share coordinators of every broker must serve.
+    for (broker, _, _) in &cluster {
+        broker.wait_until_group_coordinator_ready().await;
+        broker.wait_until_share_coordinator_ready().await;
     }
-    assert!(share_ready, "share coordinator did not become ready");
+    support::find_coordinator(
+        &admin,
+        support::KEY_TYPE_SHARE,
+        &share_coordinator_key("backlog-rf3-bootstrap", topic_id, 0),
+    )
+    .await;
     for (broker, _, _) in &cluster {
         broker
             .wait_until_partition_present(SHARE_STATE_TOPIC, 0)
@@ -217,18 +211,12 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
             .await
             .unwrap(),
     );
-    let share_coordinator = coordinator_client
-        .send(FindCoordinatorRequest {
-            key_type: 2,
-            coordinator_keys: vec![share_coordinator_key(&group_id, topic_id, data_partition)],
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert!(
-        share_coordinator.coordinators[0].error_code == 0,
-        "{share_coordinator:?}"
-    );
+    support::find_coordinator(
+        &coordinator_client,
+        support::KEY_TYPE_SHARE,
+        &share_coordinator_key(&group_id, topic_id, data_partition),
+    )
+    .await;
     let joined = coordinator_client
         .send(ShareGroupHeartbeatRequest {
             group_id: group_id.clone(),

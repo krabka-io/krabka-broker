@@ -52,6 +52,9 @@ async fn an_open_transaction_fences_max_timestamp_and_a_timestamp_lookup() {
     const IN_TXN: [i64; 2] = [5_000, 5_100];
 
     let p = support::start().await;
+    // The producer does not retry COORDINATOR_NOT_AVAILABLE from
+    // FindCoordinator. Bring the transaction coordinator up first.
+    p.broker.wait_until_transaction_coordinator_ready().await;
     let bootstrap = p.broker.listen_addr().to_string();
 
     create_topic(&p.client, TOPIC).await;

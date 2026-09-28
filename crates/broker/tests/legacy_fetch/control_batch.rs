@@ -30,6 +30,9 @@ use crate::{
 async fn fetch_v3_drops_control_batch() {
     let p = support::start().await;
     create_topic(&p.client, "legacy_fetch_ctrl").await;
+    // The producer does not retry COORDINATOR_NOT_AVAILABLE from
+    // FindCoordinator. Bring the transaction coordinator up first.
+    p.broker.wait_until_transaction_coordinator_ready().await;
 
     let addr = p.broker.listen_addr();
     let producer = Producer::builder()
