@@ -104,6 +104,12 @@ need only the port of the listener they connect to: 9092 under
 A node refuses to boot on an unformatted log directory. `krabka-format`
 writes `meta.properties.json`, the bootstrap checkpoint and the KIP-853
 voter record. The directory must be empty or absent; the tool creates it.
+The cluster id and the directory ids are in Kafka's 22-character base64
+form, the form `kafka-storage random-uuid` prints; the hyphenated form is also
+accepted on the command line. A node with more than one disk names every
+directory in one run, `--log-dir` repeated or comma-separated, with the
+metadata log directory first. [Format divergences](../format-divergences.md)
+lists where `krabka-format` differs from `kafka-storage format`.
 
 A single node that is its own controller:
 
@@ -121,9 +127,9 @@ takes its voter set from that record, not from `controller_quorum_voters`:
 
 ```
 krabka-format --log-dir /var/lib/krabka --node-id 1 \
-    --cluster-id 0d7e2f5a-9b1c-4c1e-8a3f-2b6d1e4c9f10 \
-    --directory-id 3a1d6f2b-0c4e-4f7a-9b8d-5e2c1a7f4d21 \
-    --initial-controllers 1@broker-1.example:9093:3a1d6f2b-0c4e-4f7a-9b8d-5e2c1a7f4d21,2@broker-2.example:9093:<dir-2>,3@broker-3.example:9093:<dir-3>
+    --cluster-id DX4vWpscTB6KPyttHkyfEA \
+    --directory-id Oh1vKwxOT3qbjV4sGn9NIQ \
+    --initial-controllers 1@broker-1.example:9093:Oh1vKwxOT3qbjV4sGn9NIQ,2@broker-2.example:9093:<dir-2>,3@broker-3.example:9093:<dir-3>
 ```
 
 A node that will join an existing quorum later formats with
@@ -234,7 +240,7 @@ Timers are strings with a unit: `"30s"`, `"250ms"`. Sizes are strings too:
 ```
 krabka-broker --config-file /etc/krabka/broker.toml \
     --log-dir /var/lib/krabka --broker-id 1 \
-    --cluster-id 0d7e2f5a-9b1c-4c1e-8a3f-2b6d1e4c9f10
+    --cluster-id DX4vWpscTB6KPyttHkyfEA
 ```
 
 The broker logs `health server listening` first, before it opens the log

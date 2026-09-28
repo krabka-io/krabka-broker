@@ -1,9 +1,10 @@
 //! Per-`log.dir` stable UUIDs (KIP-858 directory ids).
 //!
 //! Each configured `log.dir` carries a `directory_id` in its
-//! `meta.properties.json`. `krabka format` creates the id for the primary
-//! metadata dir. This module creates and persists the id for each extra JBOD
-//! dir on the first boot.
+//! `meta.properties.json`, in Kafka's 22-character base64 form. `krabka
+//! format` writes it for every directory it was given. This module creates and
+//! persists the id for an extra JBOD dir that was added after the format, on
+//! its first boot.
 //!
 //! The resulting map from path to uuid lets the broker stamp
 //! `AssignReplicasToDirs` and `offline_log_dirs` with stable ids that the
@@ -26,8 +27,8 @@ impl LogDirIds {
     /// Resolves a stable UUID for every dir in `log_dirs`, by a read or by a
     /// new id. A dir whose `meta.properties.json` already carries a
     /// `directory_id` keeps it. A dir without one, such as a fresh JBOD disk,
-    /// gets a new v4 UUID, which this method persists into a
-    /// `meta.properties.json` in that dir.
+    /// gets a new id, as Kafka's `DirectoryId.random` makes one, which this
+    /// method persists into a `meta.properties.json` in that dir.
     #[must_use]
     pub fn resolve(log_dirs: &[PathBuf]) -> Self {
         let mut by_path = HashMap::new();
@@ -69,11 +70,13 @@ fn read_or_mint(dir: &Path) -> Uuid {
     let path = dir.join("meta.properties.json");
     if let Ok(bytes) = std::fs::read(&path)
         && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes)
-        && let Some(id) = v["directory_id"].as_str().and_then(|s| s.parse().ok())
+        && let Some(id) = v["directory_id"]
+            .as_str()
+            .and_then(|s| s.parse::<krabka_format::DirectoryId>().ok())
     {
-        return id;
+        return id.into();
     }
-    let id = Uuid::new_v4();
+    let id = krabka_format::DirectoryId::random();
     // Persist, merging into any existing object so we don't clobber a
     // cluster_id/version written by `krabka format`.
     let mut obj = std::fs::read(&path)
@@ -88,7 +91,7 @@ fn read_or_mint(dir: &Path) -> Uuid {
         let _ = std::fs::create_dir_all(dir);
         let _ = std::fs::write(&path, serialized);
     }
-    id
+    id.into()
 }
 
 #[cfg(test)]
@@ -98,12 +101,17 @@ mod tests {
 
     use super::*;
 
+    /// A minted id is persisted in Kafka's form and read back unchanged.
     #[test]
     fn mints_and_persists_for_dir_without_meta() {
         let tmp = tempdir().unwrap();
         let ids = LogDirIds::resolve(&[tmp.path().to_path_buf()]);
         let first = ids.id_for(tmp.path()).expect("minted");
-        assert!(tmp.path().join("meta.properties.json").exists());
+        let v: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(tmp.path().join("meta.properties.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(v["directory_id"] == krabka_format::DirectoryId(first).to_string());
         let ids2 = LogDirIds::resolve(&[tmp.path().to_path_buf()]);
         assert!(ids2.id_for(tmp.path()) == Some(first));
     }
@@ -116,7 +124,7 @@ mod tests {
             tmp.path().join("meta.properties.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
                 "cluster_id": "c-1",
-                "directory_id": id.to_string(),
+                "directory_id": krabka_format::DirectoryId(id).to_string(),
                 "version": 1,
             }))
             .unwrap(),

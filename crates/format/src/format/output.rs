@@ -1,10 +1,13 @@
-//! The files a format leaves in the log directory.
+//! The files a format leaves in a log directory.
 //!
-//! A formatted directory holds `meta.properties.json`, the bootstrap manifest
-//! and its binary record stream, and — for a dynamic KIP-853 format — the
-//! offset-zero metadata checkpoint. Each writer serializes records the run has
-//! already resolved, so the encoding and the I/O sit together here, apart from
-//! the flag handling that decides what goes in them.
+//! Every formatted directory holds `meta.properties.json` and the bootstrap
+//! manifest with its binary record stream. The metadata log directory of a
+//! dynamic KIP-853 format also holds the offset-zero metadata checkpoint. Each
+//! writer serializes records the run has already resolved, so the encoding and
+//! the I/O sit together here, apart from the flag handling that decides what
+//! goes in them.
+
+use std::{ffi::OsString, io::Write as _, path::Path};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use krabka_metadata::MetadataRecord;
@@ -15,10 +18,56 @@ use wincode::Serialize as _;
 use crate::ids::{ClusterId, DirectoryId};
 
 pub(super) const ZERO_CHECKPOINT_NAME: &str = "00000000000000000000-0000000000.checkpoint";
-const META_PROPERTIES_VERSION: u64 = 2;
 
-/// Persist `meta.properties.json` — the broker recovers `directory_id`
-/// from it on every boot (KIP-853 voter identity).
+/// The format stamp of `meta.properties.json`. Version 3 stores both ids in
+/// Kafka's 22-character base64 form. The broker refuses any other stamp.
+pub const META_PROPERTIES_VERSION: u64 = 3;
+
+/// The name `meta.properties.json` has while it is written, before the rename
+/// that publishes it.
+pub(super) const META_PROPERTIES_TMP: &str = "meta.properties.json.tmp";
+
+/// The environment variable that makes a run fail after it writes the file of
+/// the given name. It is a test seam: it is how the tests interrupt a run
+/// partway through, to show that the next run recovers.
+pub const FAIL_AFTER_ENV: &str = "KRABKA_FORMAT_FAIL_AFTER";
+
+/// A failure injected through [`FAIL_AFTER_ENV`], or `None` in normal use.
+#[derive(Debug, Clone, Default)]
+pub(super) struct Fault(Option<OsString>);
+
+impl Fault {
+    /// Reads [`FAIL_AFTER_ENV`].
+    pub(super) fn from_env() -> Self {
+        Self(std::env::var_os(FAIL_AFTER_ENV))
+    }
+
+    /// Fails when `path` is the file the fault names.
+    fn after(&self, path: &Path) -> Result<(), String> {
+        match (&self.0, path.file_name()) {
+            (Some(name), Some(written)) if name == written => Err(format!(
+                "injected failure after {} ({FAIL_AFTER_ENV})",
+                path.display()
+            )),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// The content of `meta.properties.json`.
+#[derive(Serialize)]
+struct MetaPropertiesFile {
+    cluster_id: ClusterId,
+    directory_id: DirectoryId,
+    version: u64,
+}
+
+/// Writes `meta.properties.json`: the marker of a formatted directory, and the
+/// file the broker reads its cluster and directory ids from on every boot.
+///
+/// The file is written under a temporary name, synced, and renamed into
+/// place, as Kafka's `PropertiesUtils.writePropertiesFile` does. A run that
+/// stops partway therefore never leaves a truncated marker.
 #[tracing::instrument(
     level = "debug",
     name = "cli.write_meta_properties",
@@ -27,19 +76,29 @@ const META_PROPERTIES_VERSION: u64 = 2;
     err
 )]
 pub(super) fn write_meta_properties(
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     cluster_id: ClusterId,
     directory_id: DirectoryId,
+    fault: &Fault,
 ) -> Result<(), String> {
-    let meta = serde_json::json!({
-        "cluster_id": cluster_id.to_string(),
-        "directory_id": directory_id.to_string(),
-        "version": META_PROPERTIES_VERSION,
-    });
+    let meta = MetaPropertiesFile {
+        cluster_id,
+        directory_id,
+        version: META_PROPERTIES_VERSION,
+    };
     let bytes = serde_json::to_vec_pretty(&meta)
         .map_err(|e| format!("serialize meta.properties.json: {e}"))?;
-    std::fs::write(log_dir.join(super::META_PROPERTIES), bytes)
-        .map_err(|e| format!("write meta.properties.json: {e}"))
+    let tmp = log_dir.join(META_PROPERTIES_TMP);
+    let write = || -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(&bytes)?;
+        file.sync_all()
+    };
+    write().map_err(|e| format!("write {}: {e}", tmp.display()))?;
+    fault.after(&tmp)?;
+    let path = log_dir.join(super::META_PROPERTIES);
+    std::fs::rename(&tmp, &path).map_err(|e| format!("write {}: {e}", path.display()))?;
+    fault.after(&path)
 }
 
 /// Human-readable manifest written to `<log_dir>/bootstrap.json`.
@@ -48,8 +107,7 @@ struct BootstrapManifest {
     /// Schema version of this bootstrap manifest. Bumped if the layout
     /// changes; the broker's future consumer will reject unknown values.
     schema: u32,
-    // `ClusterId` is `#[serde(transparent)]`, so this serializes as the bare
-    // UUID string exactly as the previous `Uuid` field did.
+    /// Kafka's 22-character base64 form.
     cluster_id: ClusterId,
     record_count: usize,
     /// Base64-encoded `SerdeCompat<MetadataRecord>` payloads, one per
@@ -61,10 +119,11 @@ struct BootstrapManifest {
 /// Write the authoritative KIP-630/KIP-853 offset-zero checkpoint for a
 /// dynamically formatted controller.
 pub(super) fn write_dynamic_checkpoint(
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     cluster_id: ClusterId,
     control_records: &[MetadataRecord],
     metadata_records: &[MetadataRecord],
+    fault: &Fault,
 ) -> Result<(), String> {
     let mut image = krabka_metadata::MetadataImage::new(cluster_id.into());
     for record in control_records.iter().chain(metadata_records) {
@@ -72,11 +131,13 @@ pub(super) fn write_dynamic_checkpoint(
     }
     let bytes = krabka_raft::serialize_metadata_snapshot(&image, 0)
         .map_err(|e| format!("serialize offset-zero checkpoint: {e}"))?;
-    let checkpoint_dir = krabka_raft::kraft::checkpoint_dir(&log_dir.join("__cluster_metadata"));
+    let checkpoint_dir =
+        krabka_raft::kraft::checkpoint_dir(&log_dir.join(super::ensemble::CLUSTER_METADATA));
     std::fs::create_dir_all(&checkpoint_dir)
         .map_err(|e| format!("create checkpoint directory: {e}"))?;
-    std::fs::write(checkpoint_dir.join(ZERO_CHECKPOINT_NAME), bytes)
-        .map_err(|e| format!("write offset-zero checkpoint: {e}"))
+    let path = checkpoint_dir.join(ZERO_CHECKPOINT_NAME);
+    std::fs::write(&path, bytes).map_err(|e| format!("write offset-zero checkpoint: {e}"))?;
+    fault.after(&path)
 }
 
 /// Serialize the manifest + records to disk under `log_dir`. Returns the
@@ -89,9 +150,10 @@ pub(super) fn write_dynamic_checkpoint(
     err
 )]
 pub(super) fn write_bootstrap_files(
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     cluster_id: ClusterId,
     records: &[MetadataRecord],
+    fault: &Fault,
 ) -> Result<(), String> {
     // 1. Per-record `SerdeCompat<MetadataRecord>` payloads.
     let mut record_blobs: Vec<Vec<u8>> = Vec::with_capacity(records.len());
@@ -109,8 +171,9 @@ pub(super) fn write_bootstrap_files(
         bin.extend_from_slice(&len.to_le_bytes());
         bin.extend_from_slice(blob);
     }
-    std::fs::write(log_dir.join("bootstrap.records.bin"), &bin)
-        .map_err(|e| format!("write bootstrap.records.bin: {e}"))?;
+    let bin_path = log_dir.join("bootstrap.records.bin");
+    std::fs::write(&bin_path, &bin).map_err(|e| format!("write bootstrap.records.bin: {e}"))?;
+    fault.after(&bin_path)?;
 
     // 3. Manifest JSON (cluster id + base64 mirrors of each blob).
     let records_b64: Vec<String> = record_blobs.iter().map(|b| STANDARD.encode(b)).collect();
@@ -122,8 +185,7 @@ pub(super) fn write_bootstrap_files(
     };
     let json =
         serde_json::to_string_pretty(&manifest).map_err(|e| format!("serialize manifest: {e}"))?;
-    std::fs::write(log_dir.join("bootstrap.json"), json)
-        .map_err(|e| format!("write bootstrap.json: {e}"))?;
-
-    Ok(())
+    let json_path = log_dir.join("bootstrap.json");
+    std::fs::write(&json_path, json).map_err(|e| format!("write bootstrap.json: {e}"))?;
+    fault.after(&json_path)
 }

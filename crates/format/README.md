@@ -1,7 +1,7 @@
 # krabka-format
 
-Formats a fresh krabka broker log directory: `meta.properties.json`, the
-bootstrap records, and the singleton `VotersRecord`.
+Formats the log directories of a krabka broker node: `meta.properties.json`,
+the bootstrap records, and the singleton `VotersRecord`.
 
 Part of [krabka-broker](../../README.md), an Apache Kafka-compatible broker
 written in Rust.
@@ -10,8 +10,13 @@ written in Rust.
 
 A KRaft node does not boot against an unformatted directory. The broker treats
 one as an operator error and stops at startup. This tool is the counterpart of
-`kafka-storage format`. It writes the directory identity, seeds the bootstrap
-metadata records, and can seed SCRAM credentials and ACLs at the same time.
+`kafka-storage format`. It formats every log directory of the node in one run,
+writes each directory's identity, seeds the bootstrap metadata records, and can
+seed SCRAM credentials and ACLs at the same time. The cluster id and the
+directory ids are written and printed in Kafka's 22-character base64 form, so
+an id moves between krabka and the Kafka tools unchanged.
+[`docs/format-divergences.md`](../../docs/format-divergences.md) lists every
+place the tool differs from `kafka-storage format`, and why.
 
 The crate is a library as well as a binary. Broker tests call
 `krabka_format::run_from_args` in process, because a Bazel test sandbox has no
@@ -39,7 +44,7 @@ the list, and each entry names the controller's directory id:
 krabka-format \
   --log-dir /var/lib/krabka \
   --node-id 2 \
-  --initial-controllers '1@ctrl-1:9093:5e6b2c8a-3d1f-4b9e-9a7c-1f2e3d4c5b6a,2@ctrl-2:9093:0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d,3@ctrl-3:9093:7c6b5a4d-3e2f-4d1c-9b8a-0f9e8d7c6b5a' \
+  --initial-controllers '1@ctrl-1:9093:Xmssij0fS56afB8uPUxbag,2@ctrl-2:9093:ChssPU5fSmuMfZ4PGis8TQ,3@ctrl-3:9093:fGtaTT4vTRybig-ejXxrWg' \
   --release-version 4.0
 ```
 
@@ -50,30 +55,53 @@ the quorum rejects a joiner whose cluster id differs:
 ```sh
 krabka-format \
   --log-dir /var/lib/krabka \
-  --cluster-id 0d7e2f5a-9b1c-4c1e-8a3f-2b6d1e4c9f10 \
+  --cluster-id DX4vWpscTB6KPyttHkyfEA \
   --no-initial-controllers
 ```
 
-The exit code is `0` on success and non-zero on every failure the operator can
-cause, such as a directory that is not empty or a malformed `--add-scram` spec.
-The reason is on stderr.
+Format a node with a metadata disk and two data disks. The first `--log-dir`
+is the metadata log directory, and the broker's `--log-dir` names it. The
+others are the broker's `--extra-log-dirs`:
+
+```sh
+krabka-format \
+  --log-dir /var/lib/krabka,/mnt/disk1/krabka,/mnt/disk2/krabka \
+  --node-id 1 --standalone --controller-listener broker-1:9093
+```
+
+`--ignore-formatted` skips a directory that is already formatted and formats
+the rest, which is how a disk added later is formatted. Without it, one
+formatted directory refuses the whole run. A run that fails partway can be run
+again as it was: `meta.properties.json` is written last, and the next run
+removes what the failed run left.
+
+The reason for a failure is on stderr. The exit code names its cause:
+
+| Code | Cause |
+| :--- | :--- |
+| `0` | Every directory is formatted, or was already and `--ignore-formatted` is set. |
+| `2` | An `--add-scram` iteration count is below 4096, or the command line does not parse. |
+| `3` | A directory is already formatted without `--ignore-formatted`, holds files that `krabka-format` did not write, or names another cluster. |
+| `4` | A write failed, or the quorum flags name an invalid voter set. |
+| `5` | A `--feature`, `--release-version`, or quorum-mode combination is invalid. |
 
 ## Flags
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `--log-dir <path>` | required | The directory to format. It must be empty or absent. |
-| `--cluster-id <uuid>` | generated | The cluster id. |
+| `--log-dir <path>` | required | A directory to format. Repeat the flag or separate paths with commas. The first is the metadata log directory. A directory must be absent, empty, or formatted by an interrupted run. |
+| `--cluster-id <id>` | kept or generated | The cluster id, in Kafka's base64 form or the hyphenated form. Without it, the id of an already formatted directory is kept, else a new id is generated. |
 | `--release-version <version>` | the broker's maximum | The bootstrap `metadata.version` (KIP-778), for example `4.0` or `4.0-IV3`. |
 | `--feature <name>=<level>` | none | Set one feature's finalized level (KIP-1022), for example `transaction.version=2`. Repeat for each feature. Conflicts with `--release-version` for `metadata.version` only. |
 | `--add-scram <spec>` | none | Seed a SCRAM credential. The spec is `SCRAM-SHA-256=[name=<u>,password=<p>,iterations=<n>]` or the `SCRAM-SHA-512` form. `iterations` defaults to `4096`. Repeat for each credential. |
 | `--add-acl <spec>` | none | Seed an ACL entry. The spec is `principal=User:<name>,host=<ip or *>,operation=<Op>,permission=<Allow or Deny>,resource=<Type>:<Name>[:<Pattern>]`. `Pattern` defaults to `Literal`. Repeat for each entry. |
 | `--node-id <id>` | none | This node's raft id. Required with `--standalone` and with `--initial-controllers`. |
-| `--directory-id <uuid>` | generated | A stable directory identity, for an orchestrator that checks the exact node incarnation before it declares the node ready. |
+| `--directory-id <id>` | generated | The metadata log directory's id, in either form, for an orchestrator that checks the exact node incarnation before it declares the node ready. |
 | `--standalone` | off | Format this node as the sole initial controller voter. |
-| `--initial-controllers <list>` | none | The initial controllers, as comma-separated `id@host:port:directory-id` entries. |
+| `--initial-controllers <list>` | none | The initial controllers, as comma-separated `id@host:port:directory-id` entries. The directory id is in either form. |
 | `--no-initial-controllers` | off | Format a dynamic controller that joins an existing quorum. |
 | `--controller-listener <host:port>` | none | This node's controller listener, written into the `VotersRecord` with `--standalone`. |
+| `--ignore-formatted` | off | Skip an already formatted directory and format the others. |
 
 `--standalone`, `--initial-controllers`, and `--no-initial-controllers`
 exclude each other.

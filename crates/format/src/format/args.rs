@@ -9,25 +9,35 @@
 
 use std::path::PathBuf;
 
-use base64::Engine as _;
 use clap::Args;
 use krabka_metadata::AclEntry;
 use krabka_security::SaslMechanism;
-use uuid::Uuid;
 
 use super::{acl::parse_acl_spec, features::parse_feature_spec, scram::parse_scram_spec};
-use crate::ids::DirectoryId;
+use crate::ids::{ClusterId, DirectoryId};
 
 #[derive(Args, Debug)]
 pub struct FormatArgs {
-    /// Directory to format. Must be empty or non-existent.
-    #[arg(long)]
-    pub(super) log_dir: PathBuf,
-    /// Cluster id. Generated if not provided. Accepts Kafka's base64 `Uuid`
-    /// form -- what `Metadata` and `DescribeCluster` report (#1042) -- or
-    /// `java.util.UUID`'s hyphenated form.
-    #[arg(long, value_parser = parse_cluster_id)]
-    pub(super) cluster_id: Option<Uuid>,
+    /// A log directory to format. Repeat the flag, or separate paths with
+    /// commas, to format every directory of the node in one run. The first
+    /// directory is the metadata log directory: only it gets the
+    /// `__cluster_metadata` checkpoint, and the broker's `--log-dir` must name
+    /// it. `kafka-storage format` reads the same set from `log.dirs` and
+    /// `metadata.log.dir` in its `--config` file; krabka takes no
+    /// `server.properties`, so there is no `--config`.
+    #[arg(
+        long = "log-dir",
+        value_name = "DIR",
+        value_delimiter = ',',
+        required = true
+    )]
+    pub(super) log_dirs: Vec<PathBuf>,
+    /// Cluster id. Written and printed in Kafka's 22-character base64 form.
+    /// Accepts that form or the hyphenated form. When omitted, the id of an
+    /// already formatted directory in the set is kept, and otherwise a new id
+    /// is generated.
+    #[arg(long, value_parser = ClusterId::parse_cli)]
+    pub(super) cluster_id: Option<ClusterId>,
     /// Bootstrap `metadata.version` (KIP-778), e.g. `4.0` or `4.0-IV3`.
     /// Defaults to Kafka 4.3's latest production level, `4.3-IV0`, when
     /// omitted.
@@ -54,9 +64,11 @@ pub struct FormatArgs {
     /// `--initial-controllers` so the local directory id can be persisted.
     #[arg(long, value_parser = parse_node_id)]
     pub(super) node_id: Option<krabka_metadata::NodeId>,
-    /// Stable directory identity. Intended for orchestrators that must verify
-    /// the exact node incarnation before declaring it ready.
-    #[arg(long, value_parser = parse_directory_id)]
+    /// The metadata log directory's stable id: the node's KIP-853 voter
+    /// identity. Intended for orchestrators that verify the exact node
+    /// incarnation before they declare it ready. Accepts Kafka's base64 form
+    /// or the hyphenated form. The other directories get generated ids.
+    #[arg(long, value_parser = DirectoryId::parse_cli)]
     pub(super) directory_id: Option<DirectoryId>,
     /// Format this node as the sole initial controller voter.
     #[arg(
@@ -64,7 +76,9 @@ pub struct FormatArgs {
         conflicts_with_all = ["initial_controllers", "no_initial_controllers"]
     )]
     pub(super) standalone: bool,
-    /// Explicit initial controllers: `id@host:port:directory-id`, comma-separated.
+    /// Explicit initial controllers: `id@host:port:directory-id`,
+    /// comma-separated. The directory id is in Kafka's base64 form or the
+    /// hyphenated form.
     #[arg(
         long,
         value_delimiter = ',',
@@ -81,9 +95,8 @@ pub struct FormatArgs {
     /// `VotersRecord` when `--standalone`.
     #[arg(long)]
     pub(super) controller_listener: Option<String>,
-    /// Exit 0 without touching an already-formatted directory, instead of
-    /// refusing it. Matches Kafka's `kafka-storage.sh format
-    /// --ignore-formatted`.
+    /// Skip an already formatted directory, instead of refusing the run, and
+    /// format the others. Matches `kafka-storage format --ignore-formatted`.
     ///
     /// This is what makes the formatter safe to run unconditionally, which a
     /// Kubernetes init container has to: the image carries no shell, so there
@@ -108,42 +121,34 @@ fn parse_node_id(s: &str) -> Result<krabka_metadata::NodeId, String> {
     Ok(krabka_metadata::NodeId(id))
 }
 
-/// Parses a `--cluster-id` value in Kafka's base64 `Uuid` form (what
-/// `Metadata` and `DescribeCluster` report, e.g. `AQIDBAUGBwgJCgsMDQ4PEA`) or
-/// `java.util.UUID`'s hyphenated form.
-fn parse_cluster_id(s: &str) -> Result<Uuid, String> {
-    if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s)
-        && let Ok(bytes) = <[u8; 16]>::try_from(bytes)
-    {
-        return Ok(Uuid::from_bytes(bytes));
-    }
-    Uuid::parse_str(s).map_err(|_| {
-        format!("{s:?} is not a cluster id: neither a base64 Uuid nor a hyphenated UUID")
-    })
-}
-
-fn parse_directory_id(s: &str) -> Result<DirectoryId, String> {
-    Uuid::parse_str(s)
-        .map(DirectoryId)
-        .map_err(|error| format!("directory id: {error}"))
-}
-
 #[cfg(test)]
 mod tests {
 
     use assert2::check;
+    use clap::Parser as _;
 
     use super::*;
 
-    /// `--cluster-id` accepts Kafka's base64 `Uuid` form -- what `Metadata`
-    /// and `DescribeCluster` report (#1082) -- as well as the hyphenated
-    /// `java.util.UUID` form.
+    /// `--log-dir` takes repeated flags and comma-separated lists alike, and
+    /// keeps the order they were given in.
     #[test]
-    fn parse_cluster_id_accepts_kafka_base64_and_hyphenated_uuid_forms() {
-        let id = Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
-        check!(parse_cluster_id("AQIDBAUGBwgJCgsMDQ4PEA") == Ok(id));
-        check!(parse_cluster_id(&id.to_string()) == Ok(id));
-        check!(parse_cluster_id("not-a-cluster-id").is_err());
+    fn log_dir_is_repeatable_and_comma_separated() {
+        let cases: [&[&str]; 3] = [
+            &["--log-dir", "/a", "--log-dir", "/b"],
+            &["--log-dir", "/a,/b"],
+            &["--log-dir=/a", "--log-dir=/b"],
+        ];
+        for argv in cases {
+            let cli = crate::Cli::try_parse_from(
+                std::iter::once("krabka-format").chain(argv.iter().copied()),
+            )
+            .expect("parse");
+            check!(
+                cli.args.log_dirs == vec![PathBuf::from("/a"), PathBuf::from("/b")],
+                "{argv:?}"
+            );
+        }
+        check!(crate::Cli::try_parse_from(["krabka-format"]).is_err());
     }
 
     /// A node id is a bare `u64`, and everything else is an error rather than

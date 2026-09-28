@@ -46,6 +46,12 @@ krabka-compression = { version = "0.4.0", default-features = false }
 krabka-raft = { version = "0.6.1", path = "../raft" }
 krabka-kraft-core = { version = "0.6.1", path = "../kraft-core" }
 krabka-verified = { version = "0.6.1", path = "../verified" }
+# `meta.properties.json` is read with the formatter's own id types and format
+# stamp, so the file has one parser. Tests such as `bootstrap_consumption`,
+# `cli_smoke` and `format_features` also call `krabka_format::run_from_args` to
+# format a log directory before they boot a broker: a subprocess would need a
+# Cargo working tree, which a Bazel test sandbox does not have.
+krabka-format = { version = "0.6.1", path = "../format" }
 krabka-voters = { version = "0.4.0" }
 krabka-metadata = { version = "0.4.0" }
 krabka-authz = { version = "0.6.1", path = "../authz" }
@@ -179,11 +185,6 @@ krabka-broker = { path = ".", features = ["test-helpers"] }
 # enables the feature, so it is turned on here to keep the trace shape under
 # test. Bazel reads the feature off the same table.
 krabka-raft = { version = "0.6.1", path = "../raft", features = ["scenarios"] }
-# `bootstrap_consumption`, `cli_smoke` and `format_features` format a log
-# directory before booting a broker. They call the library rather than spawn the
-# binary: the formatting is setup, not the thing under test, and a subprocess
-# would need a Cargo working tree, which a Bazel test sandbox does not have.
-krabka-format = { version = "0.6.1", path = "../format" }
 # `jvm_acceptance_tiered`'s restore case rebuilds a log directory from the
 # MinIO bucket this crate's own tiered-storage path filled, then boots a broker
 # on it and points the JVM console consumer at that. Called in process for the

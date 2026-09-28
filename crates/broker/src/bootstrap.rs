@@ -13,13 +13,34 @@ use wincode::Deserialize;
 
 use crate::error::BrokerError;
 
-pub const META_PROPERTIES_VERSION: u64 = 2;
+/// The `meta.properties.json` format stamp this build reads: the one
+/// `krabka format` writes.
+pub const META_PROPERTIES_VERSION: u64 = krabka_format::META_PROPERTIES_VERSION;
 
-#[derive(Debug, serde::Deserialize)]
+/// The identity and format stamp in `meta.properties.json`.
+///
+/// Both ids are in Kafka's 22-character base64 form, the form
+/// `org.apache.kafka.common.Uuid` prints, and a file that holds any other form
+/// does not read.
+#[derive(Debug)]
 pub struct MetaProperties {
     pub cluster_id: uuid::Uuid,
     pub directory_id: uuid::Uuid,
     pub version: u64,
+}
+
+/// The file as it is on disk.
+#[derive(serde::Deserialize)]
+struct MetaPropertiesFile {
+    cluster_id: krabka_format::ClusterId,
+    directory_id: krabka_format::DirectoryId,
+}
+
+/// The format stamp alone, read before the ids, so that a file of another
+/// version is reported as such rather than as an id that does not parse.
+#[derive(serde::Deserialize)]
+struct Stamp {
+    version: u64,
 }
 
 /// Selects a configured internal-topic replication factor, bounded by the
@@ -52,22 +73,30 @@ pub fn read_meta_properties(log_dir: &Path) -> Result<MetaProperties, BrokerErro
         path: path.clone(),
         source: Box::new(e),
     })?;
-    let meta: MetaProperties =
-        serde_json::from_slice(&bytes).map_err(|e| BrokerError::BootstrapFile {
-            path: path.clone(),
-            source: Box::new(e),
-        })?;
-    if meta.version != META_PROPERTIES_VERSION {
+    let stamp: Stamp = serde_json::from_slice(&bytes).map_err(|e| BrokerError::BootstrapFile {
+        path: path.clone(),
+        source: Box::new(e),
+    })?;
+    if stamp.version != META_PROPERTIES_VERSION {
         return Err(BrokerError::BootstrapFile {
             path,
             source: format!(
                 "unsupported meta.properties version {}; this build requires version {}; run krabka-format on a fresh directory and restore the topic data",
-                meta.version, META_PROPERTIES_VERSION
+                stamp.version, META_PROPERTIES_VERSION
             )
             .into(),
         });
     }
-    Ok(meta)
+    let file: MetaPropertiesFile =
+        serde_json::from_slice(&bytes).map_err(|e| BrokerError::BootstrapFile {
+            path: path.clone(),
+            source: Box::new(e),
+        })?;
+    Ok(MetaProperties {
+        cluster_id: file.cluster_id.into(),
+        directory_id: file.directory_id.into(),
+        version: stamp.version,
+    })
 }
 
 /// Read the format stamp and reject a configured identity for another cluster.
@@ -87,7 +116,8 @@ pub fn read_and_validate_meta_properties(
             path: log_dir.join("meta.properties.json"),
             source: format!(
                 "INCONSISTENT_CLUSTER_ID: configured cluster id {} does not match {}",
-                configured, meta.cluster_id
+                krabka_format::ClusterId(configured),
+                krabka_format::ClusterId(meta.cluster_id)
             )
             .into(),
         });
@@ -252,25 +282,75 @@ mod tests {
         assert!(initial_voters(&recs).is_empty());
     }
 
+    fn write_meta(dir: &Path, meta: &serde_json::Value) {
+        std::fs::write(
+            dir.join("meta.properties.json"),
+            serde_json::to_vec_pretty(meta).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// The ids are read in Kafka's base64 form, the one `krabka format`
+    /// writes.
     #[test]
     fn read_directory_id_roundtrips() {
         let dir = tempfile::tempdir().unwrap();
-        let id = uuid::Uuid::new_v4();
-        let cluster_id = uuid::Uuid::new_v4();
-        let meta = serde_json::json!({
-            "cluster_id": cluster_id.to_string(),
-            "directory_id": id.to_string(),
-            "version": META_PROPERTIES_VERSION,
-        });
-        std::fs::write(
-            dir.path().join("meta.properties.json"),
-            serde_json::to_vec_pretty(&meta).unwrap(),
-        )
-        .unwrap();
+        let id = uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
+        let cluster_id = uuid::Uuid::from_u128(0xc1);
+        write_meta(
+            dir.path(),
+            &serde_json::json!({
+                "cluster_id": "AAAAAAAAAAAAAAAAAAAAwQ",
+                "directory_id": "AQIDBAUGBwgJCgsMDQ4PEA",
+                "version": META_PROPERTIES_VERSION,
+            }),
+        );
         assert!(read_directory_id(dir.path()).unwrap() == id);
         let meta = read_and_validate_meta_properties(dir.path(), Some(cluster_id)).unwrap();
-        assert!(meta.cluster_id == cluster_id);
-        assert!(meta.directory_id == id);
+        assert!(
+            (meta.cluster_id, meta.directory_id, meta.version)
+                == (cluster_id, id, META_PROPERTIES_VERSION)
+        );
+    }
+
+    /// Only Kafka's form reads. Krabka is undeployed, so a directory that
+    /// holds the hyphenated form is reformatted rather than read.
+    #[test]
+    fn refuses_ids_not_in_kafka_form() {
+        for (what, cluster_id, directory_id) in [
+            (
+                "hyphenated cluster id",
+                "00000000-0000-0000-0000-0000000000c1",
+                "AQIDBAUGBwgJCgsMDQ4PEA",
+            ),
+            (
+                "hyphenated directory id",
+                "AAAAAAAAAAAAAAAAAAAAwQ",
+                "01020304-0506-0708-090a-0b0c0d0e0f10",
+            ),
+            (
+                "too short",
+                "AAAAAAAAAAAAAAAAAAAAwQ",
+                "AQIDBAUGBwgJCgsMDQ4P",
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            write_meta(
+                dir.path(),
+                &serde_json::json!({
+                    "cluster_id": cluster_id,
+                    "directory_id": directory_id,
+                    "version": META_PROPERTIES_VERSION,
+                }),
+            );
+            assert!(
+                matches!(
+                    read_meta_properties(dir.path()),
+                    Err(BrokerError::BootstrapFile { .. })
+                ),
+                "{what}"
+            );
+        }
     }
 
     #[test]
@@ -285,43 +365,40 @@ mod tests {
     #[test]
     fn rejects_unknown_meta_properties_version() {
         let dir = tempfile::tempdir().unwrap();
-        let meta = serde_json::json!({
-            "cluster_id": uuid::Uuid::new_v4(),
-            "directory_id": uuid::Uuid::new_v4(),
-            "version": META_PROPERTIES_VERSION - 1,
-        });
-        std::fs::write(
-            dir.path().join("meta.properties.json"),
-            serde_json::to_vec(&meta).unwrap(),
-        )
-        .unwrap();
+        write_meta(
+            dir.path(),
+            &serde_json::json!({
+                "cluster_id": uuid::Uuid::new_v4(),
+                "directory_id": uuid::Uuid::new_v4(),
+                "version": META_PROPERTIES_VERSION - 1,
+            }),
+        );
         let error = read_meta_properties(dir.path()).unwrap_err().to_string();
         assert!(error.contains("unsupported meta.properties version"));
         assert!(error.contains("krabka-format"));
     }
 
+    /// The mismatch names both ids in the form Kafka prints them.
     #[test]
     fn rejects_configured_cluster_id_mismatch() {
         let dir = tempfile::tempdir().unwrap();
-        let on_disk = uuid::Uuid::new_v4();
-        let configured = uuid::Uuid::new_v4();
-        let meta = serde_json::json!({
-            "cluster_id": on_disk,
-            "directory_id": uuid::Uuid::new_v4(),
-            "version": META_PROPERTIES_VERSION,
-        });
-        std::fs::write(
-            dir.path().join("meta.properties.json"),
-            serde_json::to_vec(&meta).unwrap(),
-        )
-        .unwrap();
+        let configured = uuid::Uuid::from_u128(0xc2);
+        write_meta(
+            dir.path(),
+            &serde_json::json!({
+                "cluster_id": "AAAAAAAAAAAAAAAAAAAAwQ",
+                "directory_id": "AQIDBAUGBwgJCgsMDQ4PEA",
+                "version": META_PROPERTIES_VERSION,
+            }),
+        );
 
         let error = read_and_validate_meta_properties(dir.path(), Some(configured))
             .unwrap_err()
             .to_string();
-        assert!(error.contains("INCONSISTENT_CLUSTER_ID"));
-        assert!(error.contains(&configured.to_string()));
-        assert!(error.contains(&on_disk.to_string()));
+        assert!(error.contains(
+            "INCONSISTENT_CLUSTER_ID: configured cluster id AAAAAAAAAAAAAAAAAAAAwg does not match \
+             AAAAAAAAAAAAAAAAAAAAwQ"
+        ));
     }
 
     #[test]

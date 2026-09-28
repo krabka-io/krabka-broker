@@ -42,6 +42,20 @@ the `krabka-*` names to crates.io.
   `share.isolation.level`, `read_uncommitted` by default. A streams internal
   topic whose topology sets no replication factor gets
   `default.replication.factor`.
+- **Breaking, on-disk format.** `krabka-format` writes the cluster id and the
+  directory ids in Kafka's 22-character base64 form, in
+  `meta.properties.json`, in `bootstrap.json` and on stdout, and the format
+  stamp is now version 3. The broker refuses a version 2 directory with
+  `unsupported meta.properties version`; run a fresh `krabka-format`.
+  `--cluster-id`, `--directory-id` and `--initial-controllers` accept Kafka's
+  form as `Uuid.fromString` does, and the hyphenated form.
+- `krabka-format` formats every directory of a node in one run: `--log-dir`
+  is repeatable and comma-separated, and the first directory is the metadata
+  log directory. `--ignore-formatted` skips the formatted directories and
+  formats the rest; without it, one formatted directory refuses the run with
+  Kafka's message. A run that fails partway can be run again without an
+  `rm -rf`. `docs/format-divergences.md` lists every difference from
+  `kafka-storage format`.
 - The broker share-group settings take Kafka 4.3.1's defaults, ranges and
   minimum and maximum keys, and refuse an out-of-order triple with Kafka's
   `require` messages (#959, #958). The record lock limit defaults to 2000.

@@ -472,7 +472,9 @@ fn directory_id(fs: &TinyFs) -> uuid::Uuid {
         .find(|line| line.contains("directory_id"))
         .and_then(|line| line.split('"').nth(3))
         .expect("meta.properties.json directory_id");
-    uuid::Uuid::parse_str(text).expect("directory UUID")
+    text.parse::<krabka_format::DirectoryId>()
+        .expect("directory id in Kafka's base64 form")
+        .into()
 }
 
 async fn assign_node1_dirs(cluster: &Cluster, primary: &[i32], extra: &[i32]) {

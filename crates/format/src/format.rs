@@ -1,30 +1,52 @@
 //! `krabka format` subcommand.
 //!
-//! Writes bootstrap metadata for a fresh broker:
-//! - a randomly-generated (or operator-supplied) cluster id
-//! - any seed SCRAM credentials supplied via `--add-scram`
+//! Formats every log directory of a node, as `kafka-storage format` does:
+//! each directory gets the same cluster id and its own directory id. The
+//! first `--log-dir` is the metadata log directory, the counterpart of Kafka's
+//! `metadata.log.dir`, which defaults to the first entry of `log.dirs`.
 //!
-//! ## Bootstrap output format
+//! ## Output
 //!
 //! Non-Raft metadata is written as a bootstrap stream for the broker to
 //! pre-load. Dynamic KIP-853 modes additionally write the authoritative
-//! offset-zero metadata checkpoint. The output is:
+//! offset-zero metadata checkpoint. Each directory receives:
 //!
-//! - `<log_dir>/bootstrap.json` — a human-readable manifest with the
-//!   cluster id and a base64'd `serde_wincode` blob per metadata record.
-//! - `<log_dir>/bootstrap.records.bin` — the same records concatenated
-//!   as length-prefixed `serde_wincode<SerdeCompat<MetadataRecord>>`
-//!   payloads, so the broker can stream them without touching JSON.
-//! - `<log_dir>/__cluster_metadata/@metadata-0/00000000000000000000-0000000000.checkpoint`
-//!   — the KIP-630/KIP-853 bootstrap snapshot for dynamic membership.
+//! - `bootstrap.json` — a human-readable manifest with the cluster id and a
+//!   base64'd `serde_wincode` blob per metadata record.
+//! - `bootstrap.records.bin` — the same records concatenated as
+//!   length-prefixed `serde_wincode<SerdeCompat<MetadataRecord>>` payloads, so
+//!   the broker can stream them without touching JSON.
+//! - `meta.properties.json` — the cluster and directory ids, written last.
+//!
+//! The metadata log directory of a dynamic format also receives
+//! `__cluster_metadata/@metadata-0/00000000000000000000-0000000000.checkpoint`,
+//! the KIP-630/KIP-853 bootstrap snapshot for dynamic membership.
+//!
+//! ## Exit codes
+//!
+//! `kafka-storage format` exits 1 for every failure. `krabka format` keeps a
+//! code per cause, so an orchestrator can tell an operator error from an I/O
+//! fault:
+//!
+//! | Code | Cause |
+//! | :--- | :--- |
+//! | 0 | Every directory is formatted, or was already and `--ignore-formatted` is set. |
+//! | 2 | An `--add-scram` iteration count is below 4096, or clap refused the command line. |
+//! | 3 | A directory is already formatted without `--ignore-formatted`, holds files `format` did not write, or disagrees with the others on the cluster id. |
+//! | 4 | A write failed, or the quorum flags name an invalid voter set. |
+//! | 5 | A `--feature`, `--release-version`, or quorum-mode combination is invalid. |
 
-use krabka_metadata::{KRaftVersionRecord, MetadataRecord, ScramCredentialRecord, VotersRecord};
+use std::path::PathBuf;
+
+use krabka_metadata::{
+    KRaftVersionRecord, MetadataRecord, ScramCredentialRecord, VoterSet, VotersRecord,
+};
 use krabka_security::scram::{MIN_SCRAM_ITERATIONS, hash_scram_password_with_salt};
 use ring::rand::{SecureRandom, SystemRandom};
-use uuid::Uuid;
 
 mod acl;
 mod args;
+mod ensemble;
 mod features;
 mod output;
 mod quorum;
@@ -35,29 +57,28 @@ mod tests;
 pub use self::{
     args::{FormatArgs, ScramSpec},
     features::LATEST_PRODUCTION_METADATA_VERSION,
+    output::{FAIL_AFTER_ENV, META_PROPERTIES_VERSION},
 };
 use self::{
+    ensemble::{Ensemble, SurveyError, remove_partial_output},
     features::resolve_format_features,
-    output::{write_bootstrap_files, write_dynamic_checkpoint, write_meta_properties},
+    output::{Fault, write_bootstrap_files, write_dynamic_checkpoint, write_meta_properties},
     quorum::{build_initial_voters, is_dynamic_format},
 };
 use crate::ids::{ClusterId, DirectoryId};
 
-/// Exit codes:
-/// - 0: success
-/// - 2: iterations < 4096
-/// - 3: `log_dir` non-empty
-/// - 4: bootstrap write failure
-const EXIT_OK: i32 = 0;
 /// The file a formatted directory is recognised by: the broker reads the
 /// cluster and directory ids back out of it on every boot.
 const META_PROPERTIES: &str = "meta.properties.json";
+
+/// Exit codes. The table in the module documentation gives the cause of each.
+const EXIT_OK: i32 = 0;
 const EXIT_LOW_ITERATIONS: i32 = 2;
 const EXIT_DIRTY_LOG_DIR: i32 = 3;
 const EXIT_BOOTSTRAP_FAIL: i32 = 4;
 const EXIT_INVALID_FEATURE: i32 = 5;
 
-/// Formats `args.log_dir`, returning the process exit code.
+/// Formats `args.log_dirs`, returning the process exit code.
 ///
 /// Every failure a caller can cause -- an unwritable directory, a malformed
 /// `--add-scram` spec, an unknown feature -- is reported on stderr and returned
@@ -77,7 +98,7 @@ pub async fn run(args: FormatArgs) -> i32 {
 // (purely fs + crypto) but a real raft-log bootstrap would await tokio I/O.
 // The body yields an `i32` (not a future), so `#[instrument]` is safe here
 // w.r.t. `clippy::async_yields_async`.
-/// Formats `args.log_dir` with `extra` seeded alongside the records the flags
+/// Formats `args.log_dirs` with `extra` seeded alongside the records the flags
 /// produce, returning the process exit code.
 ///
 /// A cluster restored from tiered-storage archives has to come up with its
@@ -110,84 +131,106 @@ pub async fn run(args: FormatArgs) -> i32 {
     name = "cli.format",
     skip_all,
     fields(
-        log_dir = %args.log_dir.display(),
+        log_dirs = ?args.log_dirs,
         standalone = args.standalone,
         extra_records = extra.len(),
     )
 )]
 pub async fn run_with_records(args: FormatArgs, extra: Vec<MetadataRecord>) -> i32 {
-    let dynamic_format = match is_dynamic_format(&args) {
-        Ok(dynamic) => dynamic,
-        Err(e) => {
-            eprintln!("krabka format: {e}");
-            return EXIT_INVALID_FEATURE;
-        }
-    };
-
-    // An already-formatted directory under `--ignore-formatted` is the
-    // no-op the flag promises, not an error: it is the second and every later
-    // boot of a pod that keeps its volume. `meta.properties.json` is the
-    // marker because it is the file the broker itself reads the directory id
-    // back out of, and it is written last (see the end of this function), so
-    // its presence is exactly "a format ran here and completed". A directory
-    // left half-written by a failed run has no marker: it is refused as a
-    // dirty log dir on the next run, rather than silently accepted as one a
-    // broker can boot from.
-    if args.ignore_formatted && args.log_dir.join(META_PROPERTIES).is_file() {
-        println!(
-            "krabka format: {} is already formatted; leaving it alone",
-            args.log_dir.display(),
-        );
-        return EXIT_OK;
-    }
-
-    // Refuse to overwrite a non-empty directory. We treat "exists with
-    // any entry" as non-empty; an empty dir or missing path is OK.
-    if args.log_dir.exists() {
-        match std::fs::read_dir(&args.log_dir) {
-            Ok(mut it) => {
-                if it.next().is_some() {
-                    eprintln!(
-                        "krabka format: refusing to overwrite non-empty log_dir {}",
-                        args.log_dir.display(),
-                    );
-                    return EXIT_DIRTY_LOG_DIR;
-                }
-            }
-            Err(e) => {
-                eprintln!(
-                    "krabka format: cannot read log_dir {}: {e}",
-                    args.log_dir.display(),
-                );
-                return EXIT_BOOTSTRAP_FAIL;
-            }
+    match plan(args, extra).and_then(|plan| plan.execute(&Fault::from_env())) {
+        Ok(()) => EXIT_OK,
+        Err((code, message)) => {
+            eprintln!("{message}");
+            code
         }
     }
+}
 
-    if let Err(e) = std::fs::create_dir_all(&args.log_dir) {
-        eprintln!(
-            "krabka format: cannot create log_dir {}: {e}",
-            args.log_dir.display(),
-        );
-        return EXIT_BOOTSTRAP_FAIL;
+/// A failed run: its exit code and the line it prints on stderr.
+type Failure = (i32, String);
+
+/// Prefixes `message` with the command name, as every krabka-specific
+/// message is. Kafka's own messages are printed bare.
+fn krabka(code: i32, message: impl std::fmt::Display) -> Failure {
+    (code, format!("krabka format: {message}"))
+}
+
+/// What a run writes, and where. [`plan`] builds it without touching the
+/// disk beyond reading it, so every validation failure leaves the directories
+/// as they were.
+struct Plan {
+    cluster_id: ClusterId,
+    metadata_version: String,
+    /// The directories to write, the metadata log directory first when it is
+    /// one of them.
+    targets: Vec<Target>,
+    /// The formatted directories `--ignore-formatted` skips.
+    skipped: Vec<PathBuf>,
+    /// The directories whose `meta.properties.json` does not read.
+    errors: Vec<PathBuf>,
+    raft_control_records: Vec<MetadataRecord>,
+    records: Vec<MetadataRecord>,
+}
+
+/// One directory to format.
+struct Target {
+    dir: PathBuf,
+    kind: DirectoryKind,
+    directory_id: DirectoryId,
+}
+
+/// Kafka's `Formatter.DirectoryType`: what a directory holds, which decides
+/// whether it gets the checkpoint and how the run describes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectoryKind {
+    Data,
+    StaticMetadata,
+    DynamicMetadata,
+    DynamicMetadataVoter,
+}
+
+impl DirectoryKind {
+    /// Kafka's `DirectoryType.description`.
+    fn description(self) -> &'static str {
+        match self {
+            Self::Data => "data directory",
+            Self::StaticMetadata => "metadata directory",
+            Self::DynamicMetadata => "dynamic metadata directory",
+            Self::DynamicMetadataVoter => "dynamic metadata voter directory",
+        }
     }
 
-    let cluster_id = ClusterId(args.cluster_id.unwrap_or_else(Uuid::new_v4));
+    fn is_dynamic_metadata(self) -> bool {
+        matches!(self, Self::DynamicMetadata | Self::DynamicMetadataVoter)
+    }
+}
 
-    // KIP-853: generate + persist this replica's stable directory id. The
-    // broker reads it back from `meta.properties.json` on every boot; it is
-    // the identity component of every `Voter` this node ever appears as.
-    let generated_directory_id = args
-        .directory_id
-        .unwrap_or_else(|| DirectoryId(Uuid::new_v4()));
-    let initial_voters = match build_initial_voters(&args, generated_directory_id) {
-        Ok(voters) => voters,
-        Err(e) => {
-            eprintln!("krabka format: {e}");
-            return EXIT_BOOTSTRAP_FAIL;
-        }
-    };
-    let directory_id = if args.initial_controllers.is_empty() {
+/// Validates the command line, reads the directories, and decides what to
+/// write.
+fn plan(args: FormatArgs, extra: Vec<MetadataRecord>) -> Result<Plan, Failure> {
+    let dynamic_format = is_dynamic_format(&args).map_err(|e| krabka(EXIT_INVALID_FEATURE, e))?;
+
+    // KIP-584 / KIP-778 / KIP-1022 bootstrap: finalize each registered feature
+    // at its `--feature` override, else its per-release default for the
+    // resolved bootstrap metadata.version (`--feature metadata.version` >
+    // `--release-version` > latest stable). A 4.0 format thus seeds
+    // metadata.version, group.version, etc. at their 4.0 defaults so a fresh
+    // cluster engages each feature with no manual step; a level-0 feature is
+    // omitted (absent = disabled), matching `kafka-storage format`.
+    let (bootstrap_mv, feature_overrides) =
+        resolve_format_features(args.release_version.as_deref(), &args.feature)
+            .map_err(|e| krabka(EXIT_INVALID_FEATURE, e))?;
+    let metadata_version = krabka_metadata::metadata_version::from_feature_level(bootstrap_mv)
+        .map_or_else(|| bootstrap_mv.to_string(), |mv| mv.ivn().to_owned());
+
+    // KIP-853: this node's stable directory id for the metadata log
+    // directory. The broker reads it back from `meta.properties.json` on
+    // every boot; it is the identity component of every `Voter` this node
+    // ever appears as.
+    let generated_directory_id = args.directory_id.unwrap_or_else(DirectoryId::random);
+    let initial_voters = build_initial_voters(&args, generated_directory_id)
+        .map_err(|e| krabka(EXIT_BOOTSTRAP_FAIL, e))?;
+    let metadata_directory_id = if args.initial_controllers.is_empty() {
         generated_directory_id
     } else {
         DirectoryId(
@@ -197,10 +240,13 @@ pub async fn run_with_records(args: FormatArgs, extra: Vec<MetadataRecord>) -> i
                 .directory_id,
         )
     };
-    if args.directory_id.is_some() && directory_id != generated_directory_id {
-        eprintln!("krabka format: --directory-id must match the local --initial-controllers entry");
-        return EXIT_BOOTSTRAP_FAIL;
+    if args.directory_id.is_some() && metadata_directory_id != generated_directory_id {
+        return Err(krabka(
+            EXIT_BOOTSTRAP_FAIL,
+            "--directory-id must match the local --initial-controllers entry",
+        ));
     }
+    let metadata_kind = metadata_directory_kind(dynamic_format, &args, &initial_voters);
 
     // KIP-853 control records live in the offset-zero metadata checkpoint,
     // separate from the non-Raft bootstrap record stream.
@@ -216,51 +262,151 @@ pub async fn run_with_records(args: FormatArgs, extra: Vec<MetadataRecord>) -> i
         }
     }
 
-    let mut records: Vec<MetadataRecord> = Vec::new();
-
-    // KIP-584 / KIP-778 / KIP-1022 bootstrap: finalize each registered feature
-    // at its `--feature` override, else its per-release default for the
-    // resolved bootstrap metadata.version (`--feature metadata.version` >
-    // `--release-version` > latest stable). A 4.0 format thus seeds
-    // metadata.version, group.version, etc. at their 4.0 defaults so a fresh
-    // cluster engages each feature with no manual step; a level-0 feature is
-    // omitted (absent = disabled), matching `kafka-storage format`.
-    let (bootstrap_mv, feature_overrides) =
-        match resolve_format_features(args.release_version.as_deref(), &args.feature) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("krabka format: {e}");
-                return EXIT_INVALID_FEATURE;
-            }
-        };
-    records.extend(krabka_metadata::bootstrap_feature_records_with_overrides(
-        bootstrap_mv,
-        &feature_overrides,
-    ));
-
+    let mut records: Vec<MetadataRecord> =
+        krabka_metadata::bootstrap_feature_records_with_overrides(bootstrap_mv, &feature_overrides);
     // Caller-seeded records (a restore's recovered topics) follow the feature
     // levels that decide how they are read, and precede the credential and ACL
     // records so a seeded ACL names a topic the image already holds.
     records.extend(extra);
+    records.extend(scram_records(&args)?);
+    records.extend(
+        args.add_acl
+            .into_iter()
+            .map(MetadataRecord::V1AccessControlEntry),
+    );
 
-    // Build the seed records. Each `--add-scram` is hashed *here* (CLI
-    // side) using `hash_scram_password_with_salt` from `krabka-security`
-    // so the on-disk record carries the stretched keys, never the plain
-    // password.
+    // Kafka keeps the directories in a set, so a path named twice is
+    // formatted once.
+    let mut log_dirs: Vec<PathBuf> = Vec::with_capacity(args.log_dirs.len());
+    for dir in args.log_dirs {
+        if !log_dirs.contains(&dir) {
+            log_dirs.push(dir);
+        }
+    }
+    let ensemble = Ensemble::load(&log_dirs).map_err(|error| match error {
+        SurveyError::Foreign(dir) => krabka(
+            EXIT_DIRTY_LOG_DIR,
+            format_args!(
+                "refusing to overwrite non-empty log directory {}: it holds files krabka format \
+                 did not write",
+                dir.display()
+            ),
+        ),
+        SurveyError::Io(dir, e) => krabka(
+            EXIT_BOOTSTRAP_FAIL,
+            format_args!("cannot read log directory {}: {e}", dir.display()),
+        ),
+    })?;
+    if ensemble.errors.contains(&log_dirs[0]) {
+        return Err((
+            EXIT_DIRTY_LOG_DIR,
+            format!(
+                "Encountered I/O error in metadata log directory {}. Cannot continue.",
+                log_dirs[0].display()
+            ),
+        ));
+    }
+    let cluster_id = ensemble
+        .verify(args.cluster_id)
+        .map_err(|message| (EXIT_DIRTY_LOG_DIR, message))?
+        .unwrap_or_else(ClusterId::random);
+    if !args.ignore_formatted
+        && let Some((first, _)) = ensemble.formatted.first()
+    {
+        return Err((
+            EXIT_DIRTY_LOG_DIR,
+            format!(
+                "Log directory {} is already formatted. Use --ignore-formatted to ignore this \
+                 directory and format the others.",
+                first.display()
+            ),
+        ));
+    }
+
+    let mut used: Vec<DirectoryId> = ensemble
+        .formatted
+        .iter()
+        .map(|(_, meta)| meta.directory_id)
+        .collect();
+    let mut targets = Vec::with_capacity(ensemble.empty.len());
+    for dir in ensemble.empty {
+        let (kind, directory_id) = if dir == log_dirs[0] {
+            (metadata_kind, metadata_directory_id)
+        } else {
+            (DirectoryKind::Data, fresh_directory_id(&used))
+        };
+        used.push(directory_id);
+        targets.push(Target {
+            dir,
+            kind,
+            directory_id,
+        });
+    }
+    if targets.is_empty() && ensemble.formatted.is_empty() {
+        return Err((
+            EXIT_BOOTSTRAP_FAIL,
+            "No available log directories to format.".to_owned(),
+        ));
+    }
+
+    Ok(Plan {
+        cluster_id,
+        metadata_version,
+        targets,
+        skipped: ensemble.formatted.into_iter().map(|(dir, _)| dir).collect(),
+        errors: ensemble.errors,
+        raft_control_records,
+        records,
+    })
+}
+
+/// Kafka's `DirectoryType.calculate` for the metadata log directory.
+fn metadata_directory_kind(
+    dynamic_format: bool,
+    args: &FormatArgs,
+    initial_voters: &VoterSet,
+) -> DirectoryKind {
+    if !dynamic_format {
+        DirectoryKind::StaticMetadata
+    } else if args.node_id.is_some_and(|id| initial_voters.contains(id)) {
+        DirectoryKind::DynamicMetadataVoter
+    } else {
+        DirectoryKind::DynamicMetadata
+    }
+}
+
+/// A random directory id that no other directory of the node holds, as
+/// Kafka's `Copier.generateValidDirectoryId` returns.
+fn fresh_directory_id(used: &[DirectoryId]) -> DirectoryId {
+    loop {
+        let id = DirectoryId::random();
+        if !used.contains(&id) {
+            return id;
+        }
+    }
+}
+
+/// Hashes each `--add-scram` credential. The hashing happens here, on the
+/// formatter's side, with `hash_scram_password_with_salt` from
+/// `krabka-security`, so the record on disk carries the stretched keys and
+/// never the plain password.
+fn scram_records(args: &FormatArgs) -> Result<Vec<MetadataRecord>, Failure> {
+    let min = u32::try_from(MIN_SCRAM_ITERATIONS).expect("SCRAM minimum is positive");
+    let mut records = Vec::with_capacity(args.add_scram.len());
     for spec in &args.add_scram {
-        if spec.iterations < u32::try_from(MIN_SCRAM_ITERATIONS).expect("SCRAM minimum is positive")
-        {
-            eprintln!(
-                "krabka format: iterations must be >= {MIN_SCRAM_ITERATIONS}, got {} for user {}",
-                spec.iterations, spec.name,
-            );
-            return EXIT_LOW_ITERATIONS;
+        if spec.iterations < min {
+            return Err(krabka(
+                EXIT_LOW_ITERATIONS,
+                format_args!(
+                    "iterations must be >= {MIN_SCRAM_ITERATIONS}, got {} for user {}",
+                    spec.iterations, spec.name,
+                ),
+            ));
         }
         let mut salt = vec![0u8; 16];
-        if let Err(e) = SystemRandom::new().fill(&mut salt) {
-            eprintln!("krabka format: rng failure: {e}");
-            return EXIT_BOOTSTRAP_FAIL;
-        }
+        SystemRandom::new()
+            .fill(&mut salt)
+            .map_err(|e| krabka(EXIT_BOOTSTRAP_FAIL, format_args!("rng failure: {e}")))?;
         let cred = hash_scram_password_with_salt(
             spec.password.as_bytes(),
             spec.mechanism,
@@ -276,43 +422,76 @@ pub async fn run_with_records(args: FormatArgs, extra: Vec<MetadataRecord>) -> i
             iterations: cred.iterations,
         }));
     }
+    Ok(records)
+}
 
-    for acl in args.add_acl {
-        records.push(MetadataRecord::V1AccessControlEntry(acl));
+impl Plan {
+    /// Writes every target directory, printing Kafka's progress lines.
+    fn execute(self, fault: &Fault) -> Result<(), Failure> {
+        for dir in &self.errors {
+            println!(
+                "I/O error trying to read log directory {}. Ignoring...",
+                dir.display()
+            );
+        }
+        for dir in &self.skipped {
+            println!(
+                "krabka format: {} is already formatted; leaving it alone",
+                dir.display()
+            );
+        }
+        if self.targets.is_empty() {
+            println!("All of the log directories are already formatted.");
+            return Ok(());
+        }
+        for target in &self.targets {
+            println!(
+                "Formatting {} {} with metadata.version {}.",
+                target.kind.description(),
+                target.dir.display(),
+                self.metadata_version,
+            );
+            self.write(target, fault)
+                .map_err(|e| krabka(EXIT_BOOTSTRAP_FAIL, e))?;
+        }
+        println!(
+            "Formatted {} log director{} with cluster-id {} ({} seed record(s))",
+            self.targets.len(),
+            if self.targets.len() == 1 { "y" } else { "ies" },
+            self.cluster_id,
+            self.records.len(),
+        );
+        Ok(())
     }
 
-    if dynamic_format
-        && let Err(e) =
-            write_dynamic_checkpoint(&args.log_dir, cluster_id, &raft_control_records, &records)
-    {
-        eprintln!("krabka format: checkpoint failed: {e}");
-        return EXIT_BOOTSTRAP_FAIL;
+    /// Writes one directory.
+    ///
+    /// Whatever an interrupted run left is removed first, and
+    /// `meta.properties.json` is written last and published by a rename. Its
+    /// presence thus means "a format ran here to completion". A run that
+    /// fails partway -- an unwritable checkpoint, a killed process -- leaves a
+    /// directory without it, which the next run treats as empty and formats
+    /// again. Written first, the marker would make the next unconditional
+    /// init-container run exit 0 on a directory with no seed checkpoint, no
+    /// voter set, and no bootstrap records.
+    fn write(&self, target: &Target, fault: &Fault) -> Result<(), String> {
+        let dir = &target.dir;
+        remove_partial_output(dir)
+            .map_err(|e| format!("cannot clear log directory {}: {e}", dir.display()))?;
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("cannot create log directory {}: {e}", dir.display()))?;
+        if target.kind.is_dynamic_metadata() {
+            write_dynamic_checkpoint(
+                dir,
+                self.cluster_id,
+                &self.raft_control_records,
+                &self.records,
+                fault,
+            )
+            .map_err(|e| format!("checkpoint failed: {e}"))?;
+        }
+        write_bootstrap_files(dir, self.cluster_id, &self.records, fault)
+            .map_err(|e| format!("bootstrap failed: {e}"))?;
+        write_meta_properties(dir, self.cluster_id, target.directory_id, fault)
     }
-
-    if let Err(e) = write_bootstrap_files(&args.log_dir, cluster_id, &records) {
-        eprintln!("krabka format: bootstrap failed: {e}");
-        return EXIT_BOOTSTRAP_FAIL;
-    }
-
-    // `meta.properties.json` is written last, after every other output has
-    // landed, because it is the marker `--ignore-formatted` reads: its
-    // presence has to mean "this format ran to completion", not "a format
-    // started here". Written first, a run that failed after it -- an
-    // unwritable checkpoint, a rejected `--add-scram`, a killed process --
-    // would leave a directory that the next unconditional init-container run
-    // exits 0 on and never repairs, and the broker would then boot with no
-    // seed checkpoint, no voter set, and no bootstrap records. Written last,
-    // that directory still looks unformatted and the next run redoes it.
-    if let Err(e) = write_meta_properties(&args.log_dir, cluster_id, directory_id) {
-        eprintln!("krabka format: {e}");
-        return EXIT_BOOTSTRAP_FAIL;
-    }
-
-    println!(
-        "Formatted {} with cluster-id {} ({} seed record(s))",
-        args.log_dir.display(),
-        cluster_id,
-        records.len(),
-    );
-    EXIT_OK
 }
