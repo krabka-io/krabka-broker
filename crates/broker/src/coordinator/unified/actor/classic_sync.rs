@@ -79,8 +79,13 @@ async fn hosted_classic_sync(
     // never reports what it owns.
     let previous_assigned = std::mem::replace(&mut member.assigned_partitions, synced);
     let previous_pending = std::mem::take(&mut member.partitions_pending_revocation);
+    let previous_epochs = member.assignment_epochs.clone();
     let previous_state = member.assignment_state;
     member.assignment_state = MemberAssignmentState::Stable;
+    // A partition the blob grants for the first time is assigned at the
+    // member's epoch, which its join moved to the target epoch.
+    let epoch = member.member_epoch;
+    member.stamp_assignment_epochs(epoch);
     let pending =
         snapshot_pending_after_change(state, std::slice::from_ref(&request.member_id), false);
     if let Err(error) = flush_pending(
@@ -97,6 +102,7 @@ async fn hosted_classic_sync(
         if let Some(member) = state.members.get_mut(&request.member_id) {
             member.assigned_partitions = previous_assigned;
             member.partitions_pending_revocation = previous_pending;
+            member.assignment_epochs = previous_epochs;
             member.assignment_state = previous_state;
             if let Some(facade) = member.classic.as_mut() {
                 facade.last_synced_assignment = previous_blob.unwrap_or_default();

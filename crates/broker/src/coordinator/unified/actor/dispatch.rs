@@ -112,21 +112,8 @@ pub(super) async fn handle_actor_message(
             )
             .await
         }
-        GroupActorMessage::ValidateCommit {
-            member_id,
-            group_instance_id,
-            generation_or_epoch,
-            fence,
-            reply,
-        } => {
-            let result = validate_commit_message(
-                group,
-                &member_id,
-                group_instance_id.as_deref(),
-                generation_or_epoch,
-                fence,
-            );
-            let _ = reply.send(result);
+        GroupActorMessage::ValidateCommit { commit, reply } => {
+            let _ = reply.send(validate_commit_message(group, &commit));
             true
         }
         GroupActorMessage::Describe { reply } => {

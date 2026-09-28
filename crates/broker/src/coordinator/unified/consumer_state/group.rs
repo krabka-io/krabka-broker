@@ -7,14 +7,28 @@
 //! the `reconcile` sibling.
 
 use std::{
+    cmp::Ordering,
     collections::{HashMap, HashSet},
     time::{Duration, Instant},
 };
 
+use krabka_protocol::primitives::uuid::Uuid;
+
 use super::{TargetAssignment, member::MemberState};
-use crate::coordinator::unified::{
-    expired_member_ids, persistence_next_gen::MemberAssignmentState,
+use crate::{
+    codes,
+    coordinator::unified::{
+        actor::CommitFence, expired_member_ids, persistence_next_gen::MemberAssignmentState,
+    },
 };
+
+/// The first `OffsetCommit` version that a member of the consumer protocol
+/// (KIP-848) may use. Kafka's `ConsumerGroup.validateOffsetCommit` answers
+/// `UNSUPPORTED_VERSION` below it.
+const FIRST_CONSUMER_PROTOCOL_COMMIT_VERSION: i16 = 9;
+
+/// Kafka's `JoinGroupRequest.UNKNOWN_GENERATION_ID`.
+const UNKNOWN_GENERATION_ID: i32 = -1;
 
 #[derive(Debug)]
 pub struct GroupState {
@@ -69,24 +83,79 @@ impl GroupState {
         true
     }
 
-    /// The KIP-848 `OffsetCommit` fencing decision: a member may commit only
-    /// with its CURRENT member epoch. `Ok(())` accepts the commit. Any other
-    /// result is the Kafka error code.
+    /// Kafka's `ConsumerGroup.validateOffsetCommit`, with the per-partition
+    /// validator of `createAssignmentEpochValidator` (KIP-1251) run over
+    /// `partitions`, as `OffsetMetadataManager.commitOffset` and
+    /// `commitTransactionalOffset` run it over each partition they commit.
+    /// `Ok(())` accepts the commit. Any other result is the Kafka error code
+    /// for the whole commit.
     ///
-    /// This method deliberately does NOT check partition ownership, because
-    /// Kafka lets a member with the right epoch commit any partition. The
-    /// epoch is the only fence. It therefore rejects a zombie from before a
-    /// rebalance, whose epoch the group has since raised.
+    /// The rule, in order:
     ///
-    /// The method is pure. It is separate from the actor's `ValidateCommit` so
-    /// that the consumer-group composition model can drive the real rule.
-    pub(crate) fn validate_commit_decision(&self, member_id: &str, epoch: i32) -> Result<(), i16> {
-        match self.members.get(member_id) {
-            None => Err(crate::codes::UNKNOWN_MEMBER_ID),
-            Some(m) if epoch < m.member_epoch => Err(crate::codes::STALE_MEMBER_EPOCH),
-            Some(m) if epoch > m.member_epoch => Err(crate::codes::FENCED_MEMBER_EPOCH),
-            Some(_) => Ok(()),
+    /// 1. A negative epoch commits on a group with no members: that is the
+    ///    admin client or a consumer that does not use group management.
+    /// 2. A `TxnOffsetCommit` with no member id, no instance id and epoch -1
+    ///    commits: its producer gave no group metadata.
+    /// 3. Any other member id must be a member (`UNKNOWN_MEMBER_ID`).
+    /// 4. An `OffsetCommit` from a member of the consumer protocol must be v9
+    ///    or later (`UNSUPPORTED_VERSION`).
+    /// 5. The member's epoch commits every partition.
+    /// 6. A newer epoch is refused.
+    /// 7. An older epoch commits a partition only if the member holds it,
+    ///    assigned or pending revocation, and the epoch is at least the
+    ///    partition's assignment epoch.
+    ///
+    /// A refusal in 6 or 7 is `STALE_MEMBER_EPOCH` for a member of the
+    /// consumer protocol and `ILLEGAL_GENERATION` for a member of the classic
+    /// protocol. The `TxnOffsetCommit` handler maps `STALE_MEMBER_EPOCH` by
+    /// version, as `validateTransactionalOffsetCommit` does.
+    ///
+    /// The method is pure, so that the consumer-group composition model can
+    /// drive the real rule.
+    pub(crate) fn validate_offset_commit(
+        &self,
+        member_id: &str,
+        group_instance_id: Option<&str>,
+        member_epoch: i32,
+        fence: CommitFence,
+        partitions: &[(Uuid, i32)],
+    ) -> Result<(), i16> {
+        if member_epoch < 0 && self.members.is_empty() {
+            return Ok(());
         }
+        if fence == CommitFence::Transactional
+            && member_epoch == UNKNOWN_GENERATION_ID
+            && member_id.is_empty()
+            && group_instance_id.is_none()
+        {
+            return Ok(());
+        }
+        let member = self
+            .members
+            .get(member_id)
+            .ok_or(codes::UNKNOWN_MEMBER_ID)?;
+        let classic = member.is_classic();
+        if let CommitFence::Offset { api_version } = fence
+            && !classic
+            && api_version < FIRST_CONSUMER_PROTOCOL_COMMIT_VERSION
+        {
+            return Err(codes::UNSUPPORTED_VERSION);
+        }
+        let refused = if classic {
+            codes::ILLEGAL_GENERATION
+        } else {
+            codes::STALE_MEMBER_EPOCH
+        };
+        let accepted = match member_epoch.cmp(&member.member_epoch) {
+            Ordering::Equal => true,
+            Ordering::Greater => false,
+            Ordering::Less => partitions.iter().all(|(topic_id, partition)| {
+                member
+                    .assignment_epoch(topic_id, *partition)
+                    .is_some_and(|assigned_at| member_epoch >= assigned_at)
+            }),
+        };
+        if accepted { Ok(()) } else { Err(refused) }
     }
 
     pub fn add_or_update_member(&mut self, mut m: MemberState) {
@@ -335,11 +404,17 @@ impl GroupState {
     /// Sets a static member that leaves for a while to epoch -2, as Kafka's
     /// `consumerGroupStaticMemberGroupLeave` does. It keeps its assignment
     /// and drops the partitions it had still to revoke.
+    ///
+    /// Every partition it keeps is set to assignment epoch 0, as Kafka's
+    /// `resetAssignedPartitionsEpochsToZero` does. The member that rejoins
+    /// with the instance id holds them from epoch 0 under its new id, and a
+    /// commit under the old member id is refused.
     pub fn release_static_member(&mut self, member_id: &str) {
         self.rebalance_deadlines.remove(member_id);
         if let Some(member) = self.members.get_mut(member_id) {
             member.member_epoch = -2;
             member.partitions_pending_revocation.clear();
+            member.reset_assignment_epochs(0);
         }
     }
 
@@ -426,6 +501,353 @@ mod tests {
             }
             assert!(g.state_name() == expected);
         }
+    }
+
+    const T: Uuid = Uuid([1; 16]);
+
+    /// One row of issue #800's table: the committing member's protocol, the
+    /// request, the partitions it commits, and Kafka's answer. The group
+    /// holds `native` and `classic`, both at member epoch 5, each assigned
+    /// partition 0 at epoch 3, partition 1 at epoch 5, and partition 2 pending
+    /// revocation from epoch 2.
+    struct CommitRow {
+        name: &'static str,
+        member_id: &'static str,
+        instance_id: Option<&'static str>,
+        epoch: i32,
+        fence: CommitFence,
+        partitions: &'static [i32],
+        result: Result<(), i16>,
+    }
+
+    fn commit_group(empty: bool) -> GroupState {
+        let mut g = GroupState::new("g");
+        if empty {
+            return g;
+        }
+        for (id, classic) in [("native", false), ("classic", true)] {
+            let mut m = member(id);
+            m.member_epoch = 5;
+            m.assigned_partitions = [(T, vec![0, 1])].into();
+            m.partitions_pending_revocation = [(T, vec![2])].into();
+            m.assignment_epochs = [(T, [(0, 3), (1, 5), (2, 2)].into())].into();
+            m.classic = classic.then(|| super::super::ClassicMemberFacade {
+                generation_id: 5,
+                supported_protocols: vec![],
+                session_timeout: Duration::from_secs(45),
+                last_synced_assignment: bytes::Bytes::new(),
+                awaiting_sync: false,
+            });
+            g.members.insert(id.into(), m);
+        }
+        g
+    }
+
+    // The rows of `offset_commit_follows_kafka_consumer_group_rule`.
+    fn commit_rows() -> Vec<CommitRow> {
+        const V9: CommitFence = CommitFence::Offset { api_version: 9 };
+        const TXN: CommitFence = CommitFence::Transactional;
+        let row = |name, member_id, epoch, fence, partitions, result| CommitRow {
+            name,
+            member_id,
+            instance_id: None,
+            epoch,
+            fence,
+            partitions,
+            result,
+        };
+        vec![
+            row("native, member epoch", "native", 5, V9, &[0, 1, 3], Ok(())),
+            row(
+                "native, newer epoch",
+                "native",
+                6,
+                V9,
+                &[0],
+                Err(codes::STALE_MEMBER_EPOCH),
+            ),
+            row(
+                "native, older epoch, assigned before it",
+                "native",
+                4,
+                V9,
+                &[0],
+                Ok(()),
+            ),
+            row(
+                "native, older epoch, pending since before it",
+                "native",
+                4,
+                V9,
+                &[2],
+                Ok(()),
+            ),
+            row(
+                "native, older epoch, assigned at it",
+                "native",
+                3,
+                V9,
+                &[0],
+                Ok(()),
+            ),
+            row(
+                "native, older epoch, assigned after it",
+                "native",
+                4,
+                V9,
+                &[1],
+                Err(codes::STALE_MEMBER_EPOCH),
+            ),
+            row(
+                "native, older epoch, not assigned",
+                "native",
+                4,
+                V9,
+                &[3],
+                Err(codes::STALE_MEMBER_EPOCH),
+            ),
+            row(
+                "native, older epoch, one partition refused",
+                "native",
+                4,
+                V9,
+                &[0, 1],
+                Err(codes::STALE_MEMBER_EPOCH),
+            ),
+            row(
+                "native, older epoch, no partition",
+                "native",
+                4,
+                V9,
+                &[],
+                Ok(()),
+            ),
+            row(
+                "native, v8",
+                "native",
+                5,
+                CommitFence::Offset { api_version: 8 },
+                &[0],
+                Err(codes::UNSUPPORTED_VERSION),
+            ),
+            row(
+                "classic, v8",
+                "classic",
+                5,
+                CommitFence::Offset { api_version: 8 },
+                &[0],
+                Ok(()),
+            ),
+            row(
+                "classic, newer generation",
+                "classic",
+                6,
+                V9,
+                &[0],
+                Err(codes::ILLEGAL_GENERATION),
+            ),
+            row(
+                "classic, older generation, assigned before it",
+                "classic",
+                4,
+                V9,
+                &[0],
+                Ok(()),
+            ),
+            row(
+                "classic, older generation, assigned after it",
+                "classic",
+                4,
+                V9,
+                &[1],
+                Err(codes::ILLEGAL_GENERATION),
+            ),
+            row(
+                "classic, older generation, not assigned",
+                "classic",
+                4,
+                V9,
+                &[3],
+                Err(codes::ILLEGAL_GENERATION),
+            ),
+            row(
+                "admin, group with members",
+                "",
+                -1,
+                V9,
+                &[0],
+                Err(codes::UNKNOWN_MEMBER_ID),
+            ),
+            row(
+                "unknown member",
+                "ghost",
+                5,
+                V9,
+                &[0],
+                Err(codes::UNKNOWN_MEMBER_ID),
+            ),
+            row("txn, no group metadata", "", -1, TXN, &[0], Ok(())),
+            row(
+                "txn, native, v8 is not checked",
+                "native",
+                5,
+                TXN,
+                &[0],
+                Ok(()),
+            ),
+            row(
+                "txn, native, older epoch, assigned before it",
+                "native",
+                4,
+                TXN,
+                &[0],
+                Ok(()),
+            ),
+            row(
+                "txn, native, older epoch, assigned after it",
+                "native",
+                4,
+                TXN,
+                &[1],
+                Err(codes::STALE_MEMBER_EPOCH),
+            ),
+            row(
+                "txn, native, newer epoch",
+                "native",
+                6,
+                TXN,
+                &[0],
+                Err(codes::STALE_MEMBER_EPOCH),
+            ),
+            row(
+                "txn, classic, older generation, not assigned",
+                "classic",
+                4,
+                TXN,
+                &[3],
+                Err(codes::ILLEGAL_GENERATION),
+            ),
+            CommitRow {
+                instance_id: Some("i1"),
+                ..row(
+                    "txn, instance id and no member",
+                    "",
+                    -1,
+                    TXN,
+                    &[0],
+                    Err(codes::UNKNOWN_MEMBER_ID),
+                )
+            },
+        ]
+    }
+
+    /// Kafka 4.3.1's `ConsumerGroup.validateOffsetCommit` and
+    /// `createAssignmentEpochValidator`, row by row.
+    #[test]
+    fn offset_commit_follows_kafka_consumer_group_rule() {
+        let rows = commit_rows();
+        let g = commit_group(false);
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for r in &rows {
+            let partitions: Vec<(Uuid, i32)> = r.partitions.iter().map(|&p| (T, p)).collect();
+            let got =
+                g.validate_offset_commit(r.member_id, r.instance_id, r.epoch, r.fence, &partitions);
+            actual.push((r.name, got));
+            expected.push((r.name, r.result));
+        }
+        assert!(actual == expected);
+    }
+
+    /// A group with no members takes a commit with a negative epoch from
+    /// anyone, at any version, and refuses any other.
+    #[test]
+    fn empty_group_takes_only_a_negative_epoch() {
+        let g = commit_group(true);
+        let rows = [
+            ("", -1, CommitFence::Offset { api_version: 9 }, Ok(())),
+            ("", -1, CommitFence::Offset { api_version: 2 }, Ok(())),
+            ("m", -1, CommitFence::Transactional, Ok(())),
+            (
+                "ghost",
+                1,
+                CommitFence::Offset { api_version: 9 },
+                Err(codes::UNKNOWN_MEMBER_ID),
+            ),
+        ];
+        let actual: Vec<_> = rows
+            .iter()
+            .map(|&(member_id, epoch, fence, _)| {
+                (
+                    member_id,
+                    epoch,
+                    fence,
+                    g.validate_offset_commit(member_id, None, epoch, fence, &[(T, 0)]),
+                )
+            })
+            .collect();
+        assert!(actual == rows);
+    }
+
+    /// Reconciliation stamps a partition with the epoch at which the member
+    /// is granted it, keeps the epoch of a partition it keeps or moves to
+    /// pending revocation, and drops the epoch of a partition it gives up.
+    /// A static member that leaves for a while keeps its partitions at epoch 0.
+    #[test]
+    fn assignment_epochs_follow_kafka_current_assignment_builder() {
+        let mut g = GroupState::new("g");
+        g.add_or_update_member(member("m1"));
+        let epochs = |g: &GroupState| -> Vec<(i32, i32)> {
+            let mut v: Vec<(i32, i32)> = g.members["m1"]
+                .assignment_epochs
+                .get(&T)
+                .map(|e| e.iter().map(|(&p, &e)| (p, e)).collect())
+                .unwrap_or_default();
+            v.sort_unstable();
+            v
+        };
+        let mut steps = Vec::new();
+
+        // Epoch 1: granted partitions 0 and 1.
+        g.group_epoch = 1;
+        g.install_target([("m1".to_string(), [(T, vec![0, 1])].into())].into());
+        g.advance_member_epoch("m1");
+        g.reconcile_member("m1", &HashMap::new());
+        steps.push(epochs(&g));
+
+        // Epoch 2: partition 1 goes. The member still owns it, so it is
+        // pending revocation with the epoch it was assigned at.
+        g.group_epoch = 2;
+        g.install_target([("m1".to_string(), [(T, vec![0])].into())].into());
+        g.reconcile_member("m1", &[(T, vec![0, 1])].into());
+        steps.push(epochs(&g));
+
+        // The member revokes it and moves to epoch 2.
+        g.advance_member_epoch("m1");
+        g.reconcile_member("m1", &[(T, vec![0])].into());
+        steps.push(epochs(&g));
+
+        // Epoch 3: partition 2 comes, at epoch 3; partition 0 keeps epoch 1.
+        g.group_epoch = 3;
+        g.install_target([("m1".to_string(), [(T, vec![0, 2])].into())].into());
+        g.advance_member_epoch("m1");
+        g.reconcile_member("m1", &[(T, vec![0])].into());
+        steps.push(epochs(&g));
+
+        // A static leave keeps the assignment at epoch 0.
+        g.release_static_member("m1");
+        steps.push(epochs(&g));
+
+        assert!(
+            steps
+                == vec![
+                    vec![(0, 1), (1, 1)],
+                    vec![(0, 1), (1, 1)],
+                    vec![(0, 1)],
+                    vec![(0, 1), (2, 3)],
+                    vec![(0, 0), (2, 0)],
+                ]
+        );
     }
 
     #[test]

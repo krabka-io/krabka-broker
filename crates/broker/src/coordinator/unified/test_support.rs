@@ -171,9 +171,10 @@ pub(super) fn next_current(epoch: i32) -> persistence_next_gen::CurrentMemberAss
         member_epoch: epoch,
         previous_member_epoch: epoch - 1,
         state: persistence_next_gen::MemberAssignmentState::Stable,
-        assigned_partitions: vec![persistence_next_gen::AssignedTopicPartitions {
+        assigned_partitions: vec![persistence_next_gen::CurrentTopicPartitions {
             topic_id: proto_uuid(1),
             partitions: vec![0, 1],
+            assignment_epochs: None,
         }],
         partitions_pending_revocation: vec![],
     }

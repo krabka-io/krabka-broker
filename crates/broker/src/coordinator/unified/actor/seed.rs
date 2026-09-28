@@ -162,6 +162,7 @@ pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed, image: &Reconc
             assignment_state: MemberAssignmentState::Stable,
             assigned_partitions: HashMap::new(),
             partitions_pending_revocation: HashMap::new(),
+            assignment_epochs: HashMap::new(),
             last_seen: Instant::now(),
             classic,
         });
@@ -171,6 +172,20 @@ pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed, image: &Reconc
             m.member_epoch = cur.member_epoch;
             m.previous_member_epoch = cur.previous_member_epoch;
             m.assignment_state = cur.state;
+            // Kafka's `ConsumerGroupMember.Builder.updateWith` reads each
+            // partition's assignment epoch through
+            // `Utils.assignmentFromTopicPartitions`, with the member epoch as
+            // the default.
+            for tp in cur
+                .assigned_partitions
+                .iter()
+                .chain(&cur.partitions_pending_revocation)
+            {
+                m.assignment_epochs
+                    .entry(tp.topic_id)
+                    .or_default()
+                    .extend(tp.epochs(cur.member_epoch));
+            }
             for tp in cur.assigned_partitions {
                 m.assigned_partitions.insert(tp.topic_id, tp.partitions);
             }
@@ -220,8 +235,8 @@ mod tests {
         coordinator::unified::{
             migration::serve_classic_heartbeat,
             persistence_next_gen::{
-                ClassicMemberMetadata, CurrentMemberAssignmentValue, MemberMetadataValue,
-                TargetAssignmentMemberValue,
+                ClassicMemberMetadata, CurrentMemberAssignmentValue, CurrentTopicPartitions,
+                MemberMetadataValue, TargetAssignmentMemberValue,
             },
         },
     };
@@ -281,13 +296,15 @@ mod tests {
                     member_epoch: 5,
                     previous_member_epoch: 4,
                     state: MemberAssignmentState::Stable,
-                    assigned_partitions: vec![AssignedTopicPartitions {
+                    assigned_partitions: vec![CurrentTopicPartitions {
                         topic_id: TOPIC,
                         partitions: assigned,
+                        assignment_epochs: None,
                     }],
-                    partitions_pending_revocation: vec![AssignedTopicPartitions {
+                    partitions_pending_revocation: vec![CurrentTopicPartitions {
                         topic_id: TOPIC,
                         partitions: pending,
+                        assignment_epochs: None,
                     }],
                 },
             )]

@@ -48,20 +48,13 @@ pub enum GroupActorMessage {
         regex_authorized_topics: std::collections::HashSet<String>,
         reply: oneshot::Sender<ConsumerGroupHeartbeatResponse>,
     },
-    /// Validate an `OffsetCommit` against the group's LIVE protocol. The actor
-    /// dispatches on `group.kind`. Next-gen checks `member_epoch`. Classic
-    /// checks member, instance, and generation. `Ok(())` allows the commit and
-    /// `Err(code)` rejects it.
+    /// Validate an `OffsetCommit` or `TxnOffsetCommit` against the group's
+    /// LIVE protocol. The actor dispatches on `group.kind`. Next-gen checks
+    /// the member epoch and, for an older epoch, each partition's assignment
+    /// epoch. Classic checks member, instance, and generation. `Ok(())`
+    /// allows the commit and `Err(code)` rejects it.
     ValidateCommit {
-        member_id: String,
-        group_instance_id: Option<String>,
-        /// The request's `generation_id_or_member_epoch` field. The actor
-        /// reads it as the consumer `member_epoch` or as the classic
-        /// generation, depending on the live kind.
-        generation_or_epoch: i32,
-        /// Whether `OffsetCommit` or `TxnOffsetCommit` asks, which selects
-        /// the rule.
-        fence: super::commit_validation::CommitFence,
+        commit: super::commit_validation::CommitRequest,
         reply: oneshot::Sender<Result<(), ErrorCode>>,
     },
     Describe {
