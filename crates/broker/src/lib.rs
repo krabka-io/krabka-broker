@@ -273,6 +273,7 @@ pub(crate) mod test_support;
 pub mod throttle;
 pub(crate) mod time_util;
 pub(crate) mod tls_reload;
+pub(crate) mod topic_creator;
 pub mod topic_policy;
 pub(crate) mod topic_resolve;
 mod txn;
