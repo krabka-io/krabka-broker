@@ -9,14 +9,13 @@
 //! `KRaftMetadataCache.isReplicaOffline` then reads `fenced()` back on
 //! whichever broker serves the request.
 //!
-//! Krabka's registration record carries the same two flags. A change is the
-//! broker's current registration with those flags moved, at the same
-//! incarnation and broker epoch; [`registration_change`] builds it. Like a
-//! `BrokerRegistrationChangeRecord`, it applies only while the broker is
-//! still registered at that epoch: the controller keeps the epoch, and drops a
-//! change whose broker registered again after it was built, so a stale change
-//! neither overwrites the new registration nor registers the broker again. A
-//! new registration carries broker epoch -1, and the controller stamps it.
+//! Krabka writes the same records. [`registration_change`] builds the
+//! `BrokerRegistrationChangeRecord` of one transition for the broker's current
+//! epoch. It applies only while the broker is still registered at that epoch:
+//! the controller drops a change whose broker registered again after it was
+//! built, and the image ignores one it replays at another epoch, so a stale
+//! change never touches the new registration. A new registration carries
+//! broker epoch -1, and the controller stamps it.
 //!
 //! The heartbeat handler writes the fence, unfence and controlled-shutdown
 //! transitions of Kafka's heartbeat state machine. The liveness ticker writes
@@ -28,7 +27,9 @@
 
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
-use krabka_metadata::{MetadataImage, MetadataRecord, NodeId};
+use krabka_metadata::{
+    BrokerRegistrationChangeRecord, FencingChange, MetadataImage, MetadataRecord, NodeId,
+};
 
 use crate::{
     heartbeat::controller_state::ControllerLivenessState, metadata_source::MetadataSource,
@@ -64,26 +65,32 @@ impl RegistrationChange {
     };
 }
 
-/// The registration record that applies `change` to `node_id`'s current
-/// registration, or `None` when the broker is not registered or the
-/// registration already says so.
+/// The `BrokerRegistrationChangeRecord` that applies `change` to `node_id`'s
+/// current registration, at its broker epoch, or `None` when the broker is not
+/// registered or the registration already says so.
+///
+/// Kafka's `handleBrokerFenced` and `handleBrokerUnfenced` set only `Fenced`
+/// and `handleBrokerInControlledShutdown` sets only `InControlledShutdown`,
+/// and each names the epoch of the registration it changes.
 pub(crate) fn registration_change(
     image: &MetadataImage,
     node_id: NodeId,
     change: RegistrationChange,
 ) -> Option<MetadataRecord> {
     let current = image.broker(node_id)?;
-    let fenced = change.fenced.unwrap_or(current.fenced);
-    let in_controlled_shutdown = current.in_controlled_shutdown || change.in_controlled_shutdown;
-    (fenced != current.fenced || in_controlled_shutdown != current.in_controlled_shutdown).then(
-        || {
-            MetadataRecord::V1BrokerRegistration(krabka_metadata::BrokerRegistrationRecord {
-                fenced,
-                in_controlled_shutdown,
-                ..current.clone()
-            })
-        },
-    )
+    let fenced = match change.fenced {
+        Some(true) if !current.fenced => FencingChange::Fence,
+        Some(false) if current.fenced => FencingChange::Unfence,
+        _ => FencingChange::None,
+    };
+    let in_controlled_shutdown = change.in_controlled_shutdown && !current.in_controlled_shutdown;
+    (fenced != FencingChange::None || in_controlled_shutdown).then(|| {
+        MetadataRecord::V1BrokerRegistrationChange(BrokerRegistrationChangeRecord {
+            fenced,
+            in_controlled_shutdown,
+            ..BrokerRegistrationChangeRecord::no_change(node_id, current.broker_epoch)
+        })
+    })
 }
 
 /// Whether the registration of `node_id` is fenced. A broker with no
@@ -188,10 +195,26 @@ mod tests {
         ids.iter().copied().collect()
     }
 
-    /// Each change moves only the flags it names, keeps the epoch and the
-    /// incarnation, and is `None` when the registration already agrees.
+    /// The `BrokerRegistrationChangeRecord` Kafka writes for `node` at its
+    /// registered epoch, with `fenced` and `in_controlled_shutdown` set.
+    fn change(node: u64, fenced: FencingChange, in_controlled_shutdown: bool) -> MetadataRecord {
+        MetadataRecord::V1BrokerRegistrationChange(BrokerRegistrationChangeRecord {
+            node_id: NodeId(node),
+            broker_epoch: i64::try_from(node).expect("small id") * 10,
+            fenced,
+            in_controlled_shutdown,
+            log_dirs: vec![],
+            cordoned_log_dirs: None,
+        })
+    }
+
+    /// Each transition writes the `BrokerRegistrationChangeRecord` Kafka's
+    /// `handleBrokerFenced`, `handleBrokerUnfenced` or
+    /// `handleBrokerInControlledShutdown` writes, at the registration's epoch
+    /// and with only its own field set, and nothing when the registration
+    /// already agrees. Replaying the record moves only that flag.
     #[test]
-    fn a_registration_change_moves_only_its_flags() {
+    fn a_registration_change_is_kafkas_change_record() {
         let shutting_down = BrokerRegistrationRecord {
             in_controlled_shutdown: true,
             ..registration(1, false)
@@ -201,57 +224,85 @@ mod tests {
                 "fence an unfenced broker",
                 registration(1, false),
                 RegistrationChange::FENCE,
-                Some(registration(1, true)),
+                Some(change(1, FencingChange::Fence, false)),
+                registration(1, true),
             ),
             (
                 "fence a fenced broker",
                 registration(1, true),
                 RegistrationChange::FENCE,
                 None,
+                registration(1, true),
             ),
             (
                 "unfence a fenced broker",
                 registration(1, true),
                 RegistrationChange::UNFENCE,
-                Some(registration(1, false)),
+                Some(change(1, FencingChange::Unfence, false)),
+                registration(1, false),
             ),
             (
                 "unfence an unfenced broker",
                 registration(1, false),
                 RegistrationChange::UNFENCE,
                 None,
+                registration(1, false),
             ),
             (
                 "enter controlled shutdown",
                 registration(1, false),
                 RegistrationChange::CONTROLLED_SHUTDOWN,
-                Some(shutting_down.clone()),
+                Some(change(1, FencingChange::None, true)),
+                shutting_down.clone(),
             ),
             (
                 "enter controlled shutdown twice",
                 shutting_down.clone(),
                 RegistrationChange::CONTROLLED_SHUTDOWN,
                 None,
+                shutting_down.clone(),
             ),
             (
                 "fencing keeps controlled shutdown",
                 shutting_down.clone(),
                 RegistrationChange::FENCE,
-                Some(BrokerRegistrationRecord {
+                Some(change(1, FencingChange::Fence, false)),
+                BrokerRegistrationRecord {
                     fenced: true,
                     ..shutting_down.clone()
-                }),
+                },
             ),
         ];
-        for (name, current, change, want) in cases {
+        for (name, current, transition, want, after) in cases {
             let mut image = MetadataImage::new(uuid::Uuid::nil());
             image.apply(&MetadataRecord::V1BrokerRegistration(current));
-            assert!(
-                registration_change(&image, NodeId(1), change)
-                    == want.map(MetadataRecord::V1BrokerRegistration),
-                "{name}"
-            );
+            let record = registration_change(&image, NodeId(1), transition);
+            assert!(record == want, "{name}");
+            if let Some(record) = &record {
+                image.apply(record);
+            }
+            assert!(image.broker(NodeId(1)) == Some(&after), "{name}");
         }
+    }
+
+    /// Kafka's `ClusterControlManager.replayRegistrationChange` refuses a
+    /// change for any epoch but the registration's: a change built before the
+    /// broker registered again changes nothing, and the leader's validation
+    /// refuses it.
+    #[test]
+    fn a_change_at_another_epoch_is_a_no_op() {
+        let mut image = image_with(&[1], &[]);
+        let stale = registration_change(&image, NodeId(1), RegistrationChange::FENCE)
+            .expect("broker 1 is unfenced");
+        let reregistered = BrokerRegistrationRecord {
+            broker_epoch: 11,
+            ..registration(1, false)
+        };
+        image.apply(&MetadataRecord::V1BrokerRegistration(reregistered.clone()));
+
+        assert!(image.validate(&stale).is_err());
+        image.apply(&stale);
+        assert!(image.broker(NodeId(1)) == Some(&reregistered));
     }
 
     #[test]
@@ -280,7 +331,7 @@ mod tests {
                 "a dead broker is fenced",
                 image_with(&[1, 2], &[]),
                 unavailable(&[2]),
-                vec![MetadataRecord::V1BrokerRegistration(registration(2, true))],
+                vec![change(2, FencingChange::Fence, false)],
             ),
             (
                 "a fenced broker is not fenced again",

@@ -552,10 +552,14 @@ fn a_heartbeat_stores_its_cordoned_dirs_from_4_3_iv0() {
         ..Default::default()
     };
     let stored = |ids: &[u128]| {
-        Some(krabka_metadata::MetadataRecord::V1BrokerRegistration(
-            krabka_metadata::BrokerRegistrationRecord {
+        Some(krabka_metadata::MetadataRecord::V1BrokerRegistrationChange(
+            krabka_metadata::BrokerRegistrationChangeRecord {
+                node_id: NodeId(2),
+                broker_epoch: 5,
+                fenced: krabka_metadata::FencingChange::None,
+                in_controlled_shutdown: false,
+                log_dirs: vec![],
                 cordoned_log_dirs: Some(ids.iter().copied().map(dir).collect()),
-                ..registration.clone()
             },
         ))
     };
@@ -575,6 +579,126 @@ fn a_heartbeat_stores_its_cordoned_dirs_from_4_3_iv0() {
         check!(
             cordoned_dirs_change(&image_at(level), NodeId(2), &heartbeat(cordoned)) == want,
             "{label}"
+        );
+    }
+}
+
+/// krabka-io/krabka-broker#1009: the records each heartbeat transition
+/// writes, as `ReplicationControlManager.processBrokerHeartbeat` writes them.
+/// `handleBrokerFenced` (for `FENCED` and `SHUTDOWN_NOW`) puts the partition
+/// changes before a `BrokerRegistrationChangeRecord` with `Fenced = 1`;
+/// `handleBrokerUnfenced` writes `Fenced = -1`, and
+/// `handleBrokerInControlledShutdown` writes `InControlledShutdown = 1` ahead
+/// of the partition changes, and not at all when the registration already
+/// holds it. Every change names the broker's registered epoch.
+#[test]
+fn each_transition_writes_kafkas_registration_change() {
+    use BrokerControlState::{ControlledShutdown, Fenced, ShutdownNow, Unfenced};
+    use krabka_metadata::{
+        BrokerRegistrationChangeRecord, FencingChange, MetadataImage, MetadataRecord, TopicRecord,
+    };
+
+    let registered = |fenced: bool, in_controlled_shutdown: bool| {
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        let MetadataRecord::V1BrokerRegistration(registration) = new_registration(2) else {
+            unreachable!("new_registration builds a registration");
+        };
+        image.apply(&MetadataRecord::V1BrokerRegistration(
+            krabka_metadata::BrokerRegistrationRecord {
+                broker_epoch: 40,
+                fenced,
+                in_controlled_shutdown,
+                ..registration
+            },
+        ));
+        image
+    };
+    let change = |fenced: FencingChange, in_controlled_shutdown: bool| {
+        MetadataRecord::V1BrokerRegistrationChange(BrokerRegistrationChangeRecord {
+            fenced,
+            in_controlled_shutdown,
+            ..BrokerRegistrationChangeRecord::no_change(NodeId(2), 40)
+        })
+    };
+    // Stands in for the partition changes that take broker 2 out of its ISRs,
+    // which the handler passes in for every transition but an unfence.
+    let leave = MetadataRecord::V1Topic(TopicRecord {
+        name: "leave".into(),
+        topic_id: uuid::Uuid::from_u128(9),
+        partitions: 1,
+        replication_factor: 1,
+    });
+
+    let cases = [
+        (
+            "fenced -> unfenced",
+            registered(true, false),
+            Fenced,
+            Unfenced,
+            vec![],
+            vec![change(FencingChange::Unfence, false)],
+        ),
+        (
+            "fenced stays fenced",
+            registered(true, false),
+            Fenced,
+            Fenced,
+            vec![leave.clone()],
+            vec![leave.clone()],
+        ),
+        (
+            "fenced -> shutdown now",
+            registered(true, false),
+            Fenced,
+            ShutdownNow,
+            vec![leave.clone()],
+            vec![leave.clone()],
+        ),
+        (
+            "unfenced -> fenced",
+            registered(false, false),
+            Unfenced,
+            Fenced,
+            vec![leave.clone()],
+            vec![leave.clone(), change(FencingChange::Fence, false)],
+        ),
+        (
+            "unfenced -> shutdown now",
+            registered(false, false),
+            Unfenced,
+            ShutdownNow,
+            vec![leave.clone()],
+            vec![leave.clone(), change(FencingChange::Fence, false)],
+        ),
+        (
+            "unfenced -> controlled shutdown",
+            registered(false, false),
+            Unfenced,
+            ControlledShutdown,
+            vec![leave.clone()],
+            vec![change(FencingChange::None, true), leave.clone()],
+        ),
+        (
+            "controlled shutdown already on the registration",
+            registered(false, true),
+            Unfenced,
+            ControlledShutdown,
+            vec![leave.clone()],
+            vec![leave.clone()],
+        ),
+        (
+            "controlled shutdown -> shutdown now",
+            registered(false, true),
+            ControlledShutdown,
+            ShutdownNow,
+            vec![leave.clone()],
+            vec![leave.clone(), change(FencingChange::Fence, false)],
+        ),
+    ];
+    for (what, image, current, next, leaving, want) in cases {
+        check!(
+            transition_records(&image, NodeId(2), current, next, leaving) == want,
+            "{what}"
         );
     }
 }
