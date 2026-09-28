@@ -39,3 +39,8 @@ __pycache__/
 # The image tarball `bench/justfile`'s `build-driver-image` recipe copies out
 # of `bazel-out` for `kind-up` to load.
 /krabka-bench-driver.tar
+
+# A broker run from crates/broker with the default log dir, or a test that
+# forgets its tempdir, writes these. They were committed by accident twice.
+/crates/broker/meta.properties.json
+/crates/broker/krabka-data/
