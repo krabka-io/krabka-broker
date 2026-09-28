@@ -92,7 +92,6 @@ impl Default for BrokerConfig {
             audit_event_queue_capacity: 8_192,
             audit_tail_window_offsets: 4_096,
             audit_tail_read_max: mebibytes(1),
-            offsets_topic_metadata_wait_timeout: secs(30),
             client_metrics_stale_push_intervals: 3,
             coordinator_actor_mailbox_capacity: 64,
             diskless_wal_local_replica_count: DEFAULT_DISKLESS_WAL_LOCAL_REPLICA_COUNT,

@@ -452,7 +452,6 @@ Validated operational policy loaded from `[runtime]`.
 | `observer_poll_interval` | string | broker default | duration | Cadence of the KIP-853 observer promotion poll. |
 | `offsets_retention` | string | broker default | duration | How long a committed consumer offset is kept after its group becomes empty, Kafka's `offsets.retention.minutes`. It must be a whole number of minutes. |
 | `offsets_retention_check_interval` | string | broker default | duration | Cadence of the expired-offset sweep, Kafka's `offsets.retention.check.interval.ms`. |
-| `offsets_topic_metadata_wait_timeout` | string | broker default | duration | Maximum wait for `__consumer_offsets` metadata before a request fails. |
 | `offsets_topic_num_partitions` | integer (int32) | broker default |  | Partition count of the `__consumer_offsets` internal topic, Kafka's `offsets.topic.num.partitions`. |
 | `offsets_topic_replication_factor` | integer (int16) | broker default |  | Replication factor of the `__consumer_offsets` internal topic, Kafka's `offsets.topic.replication.factor`. |
 | `offsets_topic_segment_bytes` | string | broker default | byte size | `segment.bytes` of the `__consumer_offsets` internal topic, Kafka's `offsets.topic.segment.bytes`. |
@@ -522,7 +521,6 @@ Validated operational policy loaded from `[runtime]`.
 | `streams_group_num_warmup_replicas` | integer (int32) | broker default |  | Maximum number of warm-up replicas the assignor may move at once, the group's `streams.num.warmup.replicas`. |
 | `streams_group_session_timeout` | string | broker default | duration | Default streams-group session timeout, the group's `streams.session.timeout.ms`. |
 | `streams_group_task_offset_interval` | string | broker default | duration | Cadence at which members report task offsets, the group's `streams.task.offset.interval.ms`. |
-| `streams_internal_topic_replication_factor` | integer (int16) | broker default |  | Replication factor of the internal topics a streams group creates, such as its repartition and changelog topics. |
 | `sync_group_follower_wait` | string | broker default | duration | Maximum time a classic-protocol follower waits for its `SyncGroup` assignment. |
 | `tls_reload_interval` | string | broker default | duration | Cadence at which the TLS watcher polls the certificate, key, and client-CA files and rebuilds the server configuration if any changed. Zero disables the periodic watcher. |
 | `transaction_max_timeout` | string | broker default | duration | Maximum transaction timeout a producer may request, Kafka's `transaction.max.timeout.ms`. |

@@ -264,16 +264,14 @@ async fn create_topics(
             .map(|spec| CreatableTopic {
                 name: spec.name.clone(),
                 num_partitions: spec.partitions,
-                // Kafka's `toCreatableTopic` sends the replication factor of
-                // the topology, and the default of the broker when it has
-                // none.
-                replication_factor: if spec.replication_factor > 0 {
-                    spec.replication_factor
+                // Kafka's `InternalTopicManager.toCreatableTopic` sends the
+                // replication factor of the topology when it is not 0. Else
+                // it sends -1, and the controller applies
+                // `default.replication.factor`.
+                replication_factor: if spec.replication_factor == 0 {
+                    -1
                 } else {
-                    broker
-                        .config
-                        .streams_group
-                        .internal_topic_replication_factor
+                    spec.replication_factor
                 },
                 configs: spec
                     .configs

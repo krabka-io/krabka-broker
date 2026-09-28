@@ -469,20 +469,6 @@ impl ShareCoordinator {
         }
     }
 
-    #[must_use]
-    pub(crate) fn state_topic_num_partitions(&self) -> i32 {
-        self.config.state_topic_num_partitions
-    }
-
-    pub(crate) fn state_topic_replication_factor(&self) -> i16 {
-        self.config.state_topic_replication_factor
-    }
-
-    /// The topic configs `__share_group_state` is created with.
-    pub(crate) fn state_topic_configs(&self) -> std::collections::BTreeMap<String, String> {
-        super::bootstrap::topic_configs(&self.config)
-    }
-
     /// Returns the `__share_group_state` partition index responsible for the
     /// share key `(group, topic_id, partition)`.
     #[must_use]

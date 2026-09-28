@@ -15,8 +15,6 @@ pub(crate) struct BarrierConfig {
     /// Partition count of `__barrier_state`. It fixes the group-to-partition
     /// map, so a change moves every group.
     pub(crate) state_topic_num_partitions: i32,
-    /// Replication factor of `__barrier_state`. The broker count caps it.
-    pub(crate) state_topic_replication_factor: i16,
     /// How much of a state partition the coordinator reads per call during
     /// recovery.
     pub(crate) recovery_read_max: ByteSize,
@@ -45,7 +43,6 @@ impl Default for BarrierConfig {
     fn default() -> Self {
         Self {
             state_topic_num_partitions: 50,
-            state_topic_replication_factor: 3,
             recovery_read_max: mebibytes(1),
             injection_timeout: minutes(1),
             retry_backoff: millis(100),
@@ -71,7 +68,6 @@ mod tests {
     fn the_defaults_are_the_documented_values() {
         let expected = BarrierConfig {
             state_topic_num_partitions: 50,
-            state_topic_replication_factor: 3,
             recovery_read_max: mebibytes(1),
             injection_timeout: minutes(1),
             retry_backoff: millis(100),

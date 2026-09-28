@@ -357,6 +357,7 @@ async fn oversized_metadata_is_refused_through_the_handler() {
     let shared = broker.broker_arc_for_test();
     create_topic(&shared).await;
     broker.wait_until_partition_present(TOPIC, 0).await;
+    broker.wait_until_group_coordinator_ready().await;
     let max = usize::try_from(shared.config.offset_metadata_max_bytes).unwrap();
     let request = OffsetCommitRequest {
         group_id: GROUP_ID.to_string(),

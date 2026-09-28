@@ -23,6 +23,7 @@ pub(super) async fn start_coordinators(
     group_coordinator: &Arc<crate::coordinator::GroupCoordinator>,
     producer_ids: &Arc<crate::producer_id_manager::ProducerIdManager>,
     inter_broker_client: &Arc<crate::network::client::InterBrokerClient>,
+    auto_topic_creation: &Arc<crate::auto_topic_creation::AutoTopicCreation>,
     metrics: &crate::metrics::BrokerMetrics,
 ) -> CoordinatorStartup {
     let listener_protocol = config
@@ -68,6 +69,7 @@ pub(super) async fn start_coordinators(
             config.node_id,
             Arc::clone(&share_coordinator),
             Arc::clone(controller),
+            Arc::clone(auto_topic_creation),
             Arc::clone(inter_broker_client),
             listener_protocol,
             config.inter_broker_listener_name.clone(),
@@ -90,9 +92,9 @@ pub(super) async fn start_coordinators(
         config.node_id,
         Arc::clone(partitions),
         Arc::clone(controller),
+        Arc::clone(auto_topic_creation),
         crate::barrier::config::BarrierConfig {
             state_topic_num_partitions: config.barrier_state_num_partitions,
-            state_topic_replication_factor: config.barrier_state_replication_factor,
             recovery_read_max: config.barrier_recovery_read_max,
             injection_timeout: config.barrier_injection_timeout,
             default_retained_cuts: config.barrier_retained_cuts,
@@ -120,11 +122,9 @@ pub(super) async fn start_coordinators(
         ),
     ));
     let barrier_coordinator = Arc::new(barrier_coordinator);
-    // __barrier_state is created when the first group is defined, not here.
-    // Creating it at every startup put 50 partitions into the metadata log on
-    // every broker, whether or not anything used barriers, and a cluster that
-    // cannot satisfy the replication factor then leaves all of them
-    // leaderless for the election sweep to walk on every pass.
+    // __barrier_state is created when the first group is defined, not here,
+    // as the other coordinator topics are created on first use
+    // (`AutoTopicCreation`).
     //
     // Recovery below needs no bootstrap: it replays the partitions this broker
     // leads, and a topic that does not exist has none.

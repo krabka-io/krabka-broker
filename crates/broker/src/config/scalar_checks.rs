@@ -5,7 +5,6 @@
 use krabka_units::{
     ByteSize, Time,
     convert::{ByteSizeExt, TimeExt},
-    millis,
 };
 
 use crate::{BrokerError, config::BrokerConfig};
@@ -285,11 +284,6 @@ impl BrokerConfig {
                 "auto_join_voter_request_timeout must be within 1..=i32::MAX milliseconds".into(),
             ));
         }
-        if self.offsets_topic_metadata_wait_timeout < millis(1) {
-            return Err(BrokerError::InvalidRuntimeConfig(
-                "offsets_topic_metadata_wait_timeout must be at least 1ms".into(),
-            ));
-        }
         self.validate_txn_id_expiry_scalars()?;
         // Kafka's `group.initial.rebalance.delay.ms` is `atLeast(0)`: zero
         // completes a new group's first rebalance as soon as it opens.
@@ -488,10 +482,6 @@ impl BrokerConfig {
             (
                 "transaction_state_replication_factor",
                 self.transaction_state_replication_factor,
-            ),
-            (
-                "streams_internal_topic_replication_factor",
-                self.streams_group.internal_topic_replication_factor,
             ),
             (
                 "barrier_state_replication_factor",

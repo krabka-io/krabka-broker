@@ -139,32 +139,10 @@ async fn lead_group_elsewhere(handle: &crate::broker::BrokerHandle, group_id: &s
 /// transaction coordinator has loaded it, so [`stage_producer_identity`] can
 /// append to it.
 async fn bootstrap_transaction_state(handle: &crate::broker::BrokerHandle) {
-    let broker = handle.broker_arc_for_test();
     handle.wait_until_controller_leader().await;
     handle.wait_until_brokers_registered(1).await;
-    crate::txn::bootstrap::ensure_topic(
-        &broker.controller,
-        1,
-        1,
-        &crate::txn::bootstrap::topic_configs(
-            broker.config.transaction_state_segment_bytes,
-            broker.config.transaction_state_min_isr,
-        ),
-    )
-    .await
-    .expect("bootstrap __transaction_state");
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        while broker
-            .txn_coordinator
-            .load_status(krabka_ids::PartitionIndex(0))
-            .await
-            != Some(crate::txn::coordinator::leadership::LoadStatus::Loaded)
-        {
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .expect("__transaction_state-0 becomes local");
+    handle.wait_until_transaction_coordinator_ready().await;
+    handle.wait_until_group_coordinator_ready().await;
 }
 
 /// Gives `transactional_id` a durable entry with a staged producer identity,
