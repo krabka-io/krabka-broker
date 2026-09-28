@@ -393,8 +393,6 @@ impl BrokerConfig {
             ("sendfile_min", self.sendfile_min),
             ("socket_send_buffer", self.socket_send_buffer),
             ("socket_receive_buffer", self.socket_receive_buffer),
-            ("acl_max_principal", self.acl_max_principal),
-            ("acl_max_resource_name", self.acl_max_resource_name),
             (
                 "future_log_move_read_chunk",
                 self.future_log_move_read_chunk,

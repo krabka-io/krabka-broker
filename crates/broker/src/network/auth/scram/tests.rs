@@ -271,7 +271,7 @@ fn tokenauth_extension_selects_the_credential_store() {
         };
         let generic_failure = Outcome::FirstRoundFailed(None);
         // (case, authzid, sasl name, extensions, password, expected)
-        let cases: [ExchangeCase<'_>; 12] = [
+        let cases: [ExchangeCase<'_>; 15] = [
             (
                 "SCRAM user without extension",
                 None,
@@ -374,6 +374,44 @@ fn tokenauth_extension_selects_the_credential_store() {
                     principal: principal("a,b=c", mechanism),
                     via_token: false,
                 },
+            ),
+            (
+                "authorization id equal to the user",
+                Some("alice"),
+                "alice",
+                "",
+                user,
+                Outcome::Authenticated {
+                    principal: principal("alice", mechanism),
+                    via_token: false,
+                },
+            ),
+            // `ScramSaslServer` compares the authzid against the token id,
+            // the SCRAM user name, not against the token's owner.
+            (
+                "authorization id equal to the token id",
+                Some("tok"),
+                "tok",
+                TOKEN_AUTH,
+                &token_pw,
+                Outcome::Authenticated {
+                    principal: principal(TOKEN_OWNER, mechanism),
+                    via_token: true,
+                },
+            ),
+            // Kafka compares the authzid as sent, still `=2C`/`=3D` encoded,
+            // with the decoded user name, so an escaped name never matches.
+            (
+                "escaped authorization id against the decoded user",
+                Some("a=2Cb=3Dc"),
+                "a=2Cb=3Dc",
+                "",
+                user,
+                Outcome::FirstRoundFailed(Some(
+                    "Authentication failed: Client requested an authorization id that is \
+                     different from username"
+                        .into(),
+                )),
             ),
             (
                 "authorization id other than the user",

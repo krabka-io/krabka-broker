@@ -219,10 +219,6 @@ pub struct RuntimeArgs {
     pub socket_send_buffer: Option<ByteSize>,
     #[arg(long, env = "KRABKA_SOCKET_RECEIVE_BUFFER", value_parser = krabka_units::parse::positive_byte_size)]
     pub socket_receive_buffer: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_ACL_MAX_PRINCIPAL", value_parser = krabka_units::parse::positive_byte_size)]
-    pub acl_max_principal: Option<ByteSize>,
-    #[arg(long, env = "KRABKA_ACL_MAX_RESOURCE_NAME", value_parser = krabka_units::parse::positive_byte_size)]
-    pub acl_max_resource_name: Option<ByteSize>,
     #[arg(long, env = "KRABKA_MAX_REQUEST_PARTITION_SIZE_LIMIT", value_parser = parse_positive_i32)]
     pub max_request_partition_size_limit: Option<PositiveI32>,
     #[arg(long, env = "KRABKA_RECORD_DECOMPRESSION_MAX_RATIO", value_parser = krabka_units::parse::positive_ratio)]

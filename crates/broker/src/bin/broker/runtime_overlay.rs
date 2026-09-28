@@ -169,8 +169,6 @@ impl RuntimeArgs {
             log_timestamp_scan_window,
             log_delivery_clock_uncertainty,
             message_max_bytes,
-            acl_max_principal,
-            acl_max_resource_name,
             record_decompression_max_ratio,
             record_decompression_output_floor,
             record_decompression_output_ceiling,

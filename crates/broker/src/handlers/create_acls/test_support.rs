@@ -1,7 +1,7 @@
 //! Fixtures shared by the `create_acls` test modules.
 //!
 //! The wire constants, the `AclCreation` and `CreateAclsRequest` builders, the
-//! two-argument `validate` shim that drops the byte limits, and the response and
+//! one-argument `validate` shim that allows CIDR hosts, and the response and
 //! context helpers are used from more than one of the sibling test modules, so
 //! they live here rather than being repeated in each.
 
@@ -65,11 +65,10 @@ pub(super) fn all_acls(handle: &BrokerHandle) -> Vec<krabka_metadata::AclEntry> 
         .collect()
 }
 
-/// Validates `c` with unlimited principal/resource-name bytes and CIDR ACL
-/// hosts supported, which is what every test not specifically about those
-/// limits or the CIDR gate wants.
+/// Validates `c` with CIDR ACL hosts supported, which is what every test not
+/// about the CIDR gate wants.
 pub(super) fn validate(c: &AclCreation) -> Result<AclEntry, (i16, String)> {
-    super::validate::validate(c, usize::MAX, usize::MAX, true)
+    super::validate::validate(c, true)
 }
 
 /// An authorizer an operator actually configured, which lets the `admin` test

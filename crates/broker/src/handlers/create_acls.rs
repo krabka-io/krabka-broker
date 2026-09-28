@@ -17,7 +17,6 @@ use krabka_metadata::MetadataRecord;
 use krabka_protocol::owned::{
     create_acls_request::CreateAclsRequest, create_acls_response::AclCreationResult,
 };
-use krabka_units::convert::ByteSizeExt as _;
 
 mod audit;
 mod response;
@@ -130,12 +129,7 @@ pub(crate) async fn handle(
     let mut to_submit: Vec<(usize, MetadataRecord)> = Vec::with_capacity(req.creations.len());
 
     for c in &req.creations {
-        match validate(
-            c,
-            broker.config.acl_max_principal.bytes_usize(),
-            broker.config.acl_max_resource_name.bytes_usize(),
-            cidr_hosts_supported,
-        ) {
+        match validate(c, cidr_hosts_supported) {
             Ok(entry) => {
                 let idx = results.len();
                 results.push(acl_success_result());

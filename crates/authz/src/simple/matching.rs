@@ -125,10 +125,14 @@ mod tests {
     #[test]
     fn operation_implications_are_exhaustive_and_one_way() {
         use AclOperation::{
-            All, Alter, AlterConfigs, ClusterAction, Create, Delete, Describe, DescribeConfigs,
-            IdempotentWrite, Read, TwoPhaseCommit, Write,
+            All, Alter, AlterConfigs, ClusterAction, Create, CreateTokens, Delete, Describe,
+            DescribeConfigs, DescribeTokens, IdempotentWrite, Read, TwoPhaseCommit, Write,
         };
+        // KIP-373's two token operations imply nothing and are implied only by
+        // `All`, like every other operation outside the arrows below.
         let operations = [
+            CreateTokens,
+            DescribeTokens,
             All,
             Read,
             Write,

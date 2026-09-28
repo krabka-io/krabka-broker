@@ -141,8 +141,6 @@ fn invalid(message: String) -> (i16, String) {
 
 pub(super) fn validate(
     c: &AclCreation,
-    max_principal_bytes: usize,
-    max_resource_name_bytes: usize,
     cidr_hosts_supported: bool,
 ) -> Result<AclEntry, (i16, String)> {
     // `AclApis.handleCreateAcls`, before the binding reaches the controller.
@@ -189,14 +187,6 @@ pub(super) fn validate(
         )));
     }
     validate_host(&c.host, cidr_hosts_supported)?;
-
-    // krabka's operator-configured size ceilings. Kafka has none.
-    if c.resource_name.len() > max_resource_name_bytes {
-        return Err(invalid("resource_name too long".to_owned()));
-    }
-    if c.principal.len() > max_principal_bytes {
-        return Err(invalid("principal too long".to_owned()));
-    }
     Ok(AclEntry {
         resource_type,
         resource_name: c.resource_name.clone(),
@@ -449,7 +439,7 @@ mod tests {
         for (host, cidr_hosts_supported, expected_err) in cases {
             let mut c = creation("topic-a", "User:alice", OPERATION_READ);
             c.host = (*host).into();
-            let got = super::validate(&c, usize::MAX, usize::MAX, *cidr_hosts_supported).err();
+            let got = super::validate(&c, *cidr_hosts_supported).err();
             let expected = expected_err.map(|(code, msg)| (code, msg.to_owned()));
             assert!(
                 got == expected,

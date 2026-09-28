@@ -3,7 +3,7 @@
 //!
 //! These cover what only the whole handler shows: the cluster-alter denial that
 //! stamps every creation, the positional interleaving of accepted and rejected
-//! creations, and the configured principal and resource-name byte limits.
+//! creations, and the absence of a principal or resource-name length limit.
 
 use std::sync::Arc;
 
@@ -16,7 +16,6 @@ use krabka_protocol::{
     UnknownTaggedFields,
     owned::create_acls_response::{AclCreationResult, CreateAclsResponse},
 };
-use krabka_units::convert::ByteSizeExt as _;
 
 use super::handle;
 use crate::{
@@ -26,8 +25,7 @@ use crate::{
         decode_response, request, test_context,
     },
     test_support::{
-        DenyAll, peer, principal, start_broker_with,
-        start_broker_with_authorizer_no_audit as start_broker,
+        DenyAll, peer, principal, start_broker_with_authorizer_no_audit as start_broker,
     },
 };
 
@@ -42,70 +40,43 @@ fn committed() -> AclCreationResult {
     }
 }
 
+/// Kafka puts no length limit on an ACL's resource name or principal, so a
+/// binding far past any fixed ceiling is accepted and stored as sent.
 #[tokio::test]
-async fn handle_honors_configured_acl_input_limits() {
-    const PRINCIPAL_LIMIT: usize = 10;
-    const RESOURCE_NAME_LIMIT: usize = 8;
-
-    fn limit(characters: usize) -> krabka_units::ByteSize {
-        krabka_units::ByteSize::from_bytes(u64::try_from(characters).expect("test limit fits u64"))
-    }
-
-    let (broker_handle, _dir) = start_broker_with(|config| {
-        config.acl_max_principal = limit(PRINCIPAL_LIMIT);
-        config.acl_max_resource_name = limit(RESOURCE_NAME_LIMIT);
-        config.audit_enabled = false;
-        config.authorizer = configured_authorizer();
-    })
-    .await;
+async fn handle_stores_long_resource_names_and_principals() {
+    let (broker_handle, _dir) = start_broker(configured_authorizer()).await;
     let broker = broker_handle.broker_arc_for_test();
     let p = principal("admin");
     let peer = peer();
     let ctx = test_context(&p, &peer);
-    let cases = [
-        (
-            "r".repeat(RESOURCE_NAME_LIMIT),
-            "User:a".to_string(),
-            codes::NONE,
-            Some(""),
-        ),
-        (
-            "r".repeat(RESOURCE_NAME_LIMIT + 1),
-            "User:a".to_string(),
-            codes::INVALID_REQUEST,
-            Some("resource_name too long"),
-        ),
-        (
-            "r".to_string(),
-            format!("User:{}", "a".repeat(PRINCIPAL_LIMIT - "User:".len())),
-            codes::NONE,
-            Some(""),
-        ),
-        (
-            "r".to_string(),
-            format!("User:{}", "a".repeat(PRINCIPAL_LIMIT + 1 - "User:".len())),
-            codes::INVALID_REQUEST,
-            Some("principal too long"),
-        ),
-    ];
-    let req = request(
-        cases
-            .iter()
-            .map(|(resource_name, principal, _, _)| {
-                creation(resource_name, principal, OPERATION_READ)
-            })
-            .collect(),
-    );
+    let long_name = "r".repeat(4096);
+    let long_principal = format!("User:{}", "a".repeat(4096));
+    let req = request(vec![
+        creation(&long_name, "User:a", OPERATION_READ),
+        creation("r", &long_principal, OPERATION_READ),
+    ]);
 
     let resp = handle(&broker, req, &ctx, VERSION).await.expect("handle");
     let resp = decode_response(&resp);
 
-    for (result, (_, _, expected_code, expected_message)) in resp.results.iter().zip(&cases) {
-        assert!(
-            (result.error_code, result.error_message.as_deref())
-                == (*expected_code, *expected_message)
-        );
-    }
+    let expected = CreateAclsResponse {
+        throttle_time_ms: 0,
+        results: vec![committed(), committed()],
+        unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+    };
+    assert!(resp == expected);
+    let stored = |resource_name: &str, principal: &str| AclEntry {
+        resource_type: ResourceType::Topic,
+        resource_name: resource_name.into(),
+        pattern_type: PatternType::Literal,
+        principal: principal.into(),
+        host: "*".into(),
+        operation: AclOperation::Read,
+        permission_type: PermissionType::Allow,
+    };
+    let mut acls = all_acls(&broker_handle);
+    acls.sort_by_key(|acl| std::cmp::Reverse(acl.resource_name.len()));
+    assert!(acls == vec![stored(&long_name, "User:a"), stored("r", &long_principal)]);
     broker_handle.shutdown().await;
 }
 

@@ -72,7 +72,9 @@ fn refusal(
     }
 }
 
-/// `KafkaApis.handleCreateTokenRequest` checks `allowTokenRequests` (64),
+/// `KafkaApis.handleCreateTokenRequest` first builds the owner principal,
+/// which fails for a name with a null type (-1, `ANONYMOUS` on both sides).
+/// It then checks `allowTokenRequests` (64),
 /// then the `CreateTokens` authorization (65), then the renewer types (67),
 /// all before the controller's `DELEGATION_TOKEN_AUTH_DISABLED` (61). No
 /// refusal mints a token, and each names the owner and the requester.
@@ -89,6 +91,12 @@ async fn refusals_follow_kafka_order_and_name_both_principals() {
         renewers: vec![renewer("User", "bob"), renewer("Group", "eng")],
         ..self_mint.clone()
     };
+    let name_only = CreateDelegationTokenRequest {
+        owner_principal_name: Some("alice".into()),
+        owner_principal_type: None,
+        ..self_mint.clone()
+    };
+    let unbuildable_owner = crate::codes::UNKNOWN_SERVER_ERROR;
     let not_allowed = crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED;
     let unauthorized = crate::codes::DELEGATION_TOKEN_AUTHORIZATION_FAILED;
     let bad_renewer = crate::codes::INVALID_PRINCIPAL_TYPE;
@@ -96,6 +104,35 @@ async fn refusals_follow_kafka_order_and_name_both_principals() {
 
     // (case, requester, tokens enabled, request, super users, response)
     let cases = [
+        // `new KafkaPrincipal(null, "alice")` throws before
+        // `allowTokenRequests` runs, so even a token-authenticated
+        // requester gets the generic error response.
+        (
+            "owner name without a type",
+            authed_with_token("admin", true),
+            true,
+            name_only.clone(),
+            super_users_with(&["admin"]),
+            refusal(
+                unbuildable_owner,
+                &user("ANONYMOUS"),
+                &user("ANONYMOUS"),
+                -1,
+            ),
+        ),
+        (
+            "owner name without a type, super user",
+            authed("admin"),
+            true,
+            name_only,
+            super_users_with(&["admin"]),
+            refusal(
+                unbuildable_owner,
+                &user("ANONYMOUS"),
+                &user("ANONYMOUS"),
+                -1,
+            ),
+        ),
         (
             "token-authenticated requester",
             authed_with_token("alice", true),
@@ -199,12 +236,6 @@ async fn mints_for_the_resolved_owner_with_kafka_deadlines() {
     let seven_days: i64 = 7 * 24 * one_hour;
     let with_lifetime = |max_lifetime_ms| CreateDelegationTokenRequest {
         max_lifetime_ms,
-        ..Default::default()
-    };
-    let name_only = CreateDelegationTokenRequest {
-        owner_principal_name: Some("alice".into()),
-        owner_principal_type: None,
-        max_lifetime_ms: -1,
         ..Default::default()
     };
     let type_only = CreateDelegationTokenRequest {
@@ -316,17 +347,6 @@ async fn mints_for_the_resolved_owner_with_kafka_deadlines() {
             act_as("Group", "eng"),
             60_000,
             principal("Group", "eng"),
-            vec![],
-            60_000,
-            60_000,
-        ),
-        (
-            "owner name without a type",
-            "admin",
-            super_users_with(&["admin"]),
-            name_only,
-            60_000,
-            principal("", "alice"),
             vec![],
             60_000,
             60_000,
