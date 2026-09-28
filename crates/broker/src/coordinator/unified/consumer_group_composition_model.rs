@@ -18,7 +18,7 @@
 //! over-claimed, so this doc states the scope up front:
 //!   - DRIVEN (real code): the KIP-848 reconciliation engine through
 //!     `step_heartbeat`, AND the real `OffsetCommit` fence
-//!     `GroupState::validate_commit_decision`, which is extracted from the
+//!     `GroupState::validate_offset_commit`, which is extracted from the
 //!     actor's `ValidateCommit`. The model drives the real fence and
 //!     cross-checks it against an INDEPENDENT oracle, the expected epoch
 //!     comparison and the error codes. A divergence is a real fence or

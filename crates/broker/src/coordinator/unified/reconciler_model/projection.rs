@@ -66,6 +66,7 @@ pub(super) fn rebuild_group(s: &ReconState) -> GroupState {
             assignment_state: m.assignment_state,
             assigned_partitions: to_map(&m.assigned),
             partitions_pending_revocation: to_map(&m.pending_revocation),
+            assignment_epochs: HashMap::new(),
             last_seen: now,
             classic: None,
         };

@@ -270,6 +270,7 @@ mod tests {
         m.member_epoch = 7;
         m.previous_member_epoch = 6;
         m.assigned_partitions.insert(topic, vec![0, 1]);
+        m.assignment_epochs.insert(topic, [(0, 4), (1, 7)].into());
         m.classic = Some(
             crate::coordinator::unified::consumer_state::ClassicMemberFacade {
                 generation_id: 7,
@@ -323,9 +324,10 @@ mod tests {
                 member_epoch: 7,
                 previous_member_epoch: 6,
                 state: MemberAssignmentState::Stable,
-                assigned_partitions: vec![p::AssignedTopicPartitions {
+                assigned_partitions: vec![p::CurrentTopicPartitions {
                     topic_id: topic,
                     partitions: vec![0, 1],
+                    assignment_epochs: Some(vec![4, 7]),
                 }],
                 partitions_pending_revocation: vec![],
             }},

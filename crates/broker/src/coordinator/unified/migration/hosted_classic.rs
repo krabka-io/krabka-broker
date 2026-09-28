@@ -150,6 +150,9 @@ pub(crate) fn upsert_classic_member(
     let partitions_pending_revocation = existing
         .map(|m| m.partitions_pending_revocation.clone())
         .unwrap_or_default();
+    let assignment_epochs = existing
+        .map(|m| m.assignment_epochs.clone())
+        .unwrap_or_default();
     let last_synced_assignment = existing
         .and_then(|m| m.classic.as_ref())
         .map(|c| c.last_synced_assignment.clone())
@@ -182,6 +185,7 @@ pub(crate) fn upsert_classic_member(
         assignment_state,
         assigned_partitions,
         partitions_pending_revocation,
+        assignment_epochs,
         last_seen: Instant::now(),
         classic: Some(facade),
     });
@@ -248,6 +252,7 @@ mod tests {
             assignment_state: MemberAssignmentState::UnrevokedPartitions,
             assigned_partitions: [(TOPIC, vec![0])].into(),
             partitions_pending_revocation: [(TOPIC, vec![1])].into(),
+            assignment_epochs: HashMap::new(),
             last_seen: Instant::now(),
             classic: None,
         }

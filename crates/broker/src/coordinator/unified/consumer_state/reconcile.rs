@@ -33,6 +33,9 @@ impl GroupState {
             let (revoke, assigned) = compute_revoke_split(&held, &target);
             member.partitions_pending_revocation = revoke;
             member.assigned_partitions = assigned;
+            // A split only moves partitions between the two maps, so every
+            // held partition keeps its epoch.
+            member.stamp_assignment_epochs(member.member_epoch);
             member.assignment_state = if !member.partitions_pending_revocation.is_empty() {
                 MemberAssignmentState::UnrevokedPartitions
             } else if assignment_covers(&member.assigned_partitions, &target) {
@@ -136,6 +139,11 @@ impl GroupState {
             m.assigned_partitions != new_assigned || m.partitions_pending_revocation != new_pending;
         m.assigned_partitions = new_assigned;
         m.partitions_pending_revocation = new_pending;
+        // The caller has already moved the member to its new epoch, so a
+        // partition granted now is stamped with that epoch, as Kafka's
+        // `computeNextAssignment` stamps it with the target assignment epoch.
+        let epoch = m.member_epoch;
+        m.stamp_assignment_epochs(epoch);
         m.assignment_state = if !m.partitions_pending_revocation.is_empty() {
             MemberAssignmentState::UnrevokedPartitions
         } else if fully_assigned {

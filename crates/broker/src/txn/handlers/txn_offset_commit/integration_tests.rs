@@ -25,7 +25,17 @@ use krabka_protocol::owned::{
 use crate::{
     codes,
     coordinator::{
-        bootstrap::OFFSETS_TOPIC, partitioner::partition_for_group, persistence::OffsetCommitValue,
+        bootstrap::OFFSETS_TOPIC,
+        partitioner::partition_for_group,
+        persistence::OffsetCommitValue,
+        unified::{
+            GroupSeed,
+            actor::GroupActorMessage,
+            persistence_next_gen::{
+                AssignedTopicPartitions, CurrentMemberAssignmentValue, CurrentTopicPartitions,
+                MemberAssignmentState, MemberMetadataValue, TargetAssignmentMemberValue,
+            },
+        },
     },
     test_support::{
         GrantsInPrincipalName, decode_response, dispatch_context, encode_request, peer, principal,
@@ -523,6 +533,129 @@ async fn v6_answers_group_id_not_found_where_older_versions_answer_illegal_gener
             "version {version}"
         );
     }
+
+    handle.shutdown().await;
+}
+
+/// A consumer group whose one native member, `m`, is at member epoch 7 and
+/// was assigned partition 0 of `topic_id` at epoch 5.
+fn kip_1251_seed(topic_id: krabka_protocol::primitives::uuid::Uuid) -> GroupSeed {
+    GroupSeed {
+        group_epoch: 7,
+        target_epoch: 7,
+        members: [(
+            "m".to_string(),
+            MemberMetadataValue {
+                instance_id: None,
+                rack_id: None,
+                client_id: "client".into(),
+                client_host: "/127.0.0.1".into(),
+                subscribed_topic_names: vec!["a".into()],
+                subscribed_topic_regex: None,
+                server_assignor: None,
+                rebalance_timeout_ms: 60_000,
+                classic: None,
+            },
+        )]
+        .into(),
+        target_per_member: [(
+            "m".to_string(),
+            TargetAssignmentMemberValue {
+                topic_partitions: vec![AssignedTopicPartitions {
+                    topic_id,
+                    partitions: vec![0],
+                }],
+            },
+        )]
+        .into(),
+        current_per_member: [(
+            "m".to_string(),
+            CurrentMemberAssignmentValue {
+                member_epoch: 7,
+                previous_member_epoch: 6,
+                state: MemberAssignmentState::Stable,
+                assigned_partitions: vec![CurrentTopicPartitions {
+                    topic_id,
+                    partitions: vec![0],
+                    assignment_epochs: Some(vec![5]),
+                }],
+                partitions_pending_revocation: vec![],
+            },
+        )]
+        .into(),
+    }
+}
+
+/// Kafka's `commitTransactionalOffset` runs the KIP-1251 per-partition
+/// validator: an older member epoch commits a partition assigned at or before
+/// it. A refusal is `STALE_MEMBER_EPOCH` at v6 and `ILLEGAL_GENERATION`
+/// below.
+#[tokio::test]
+async fn an_older_member_epoch_commits_a_partition_assigned_before_it() {
+    let (handle, _dir) = start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.authorizer = Arc::new(GrantsInPrincipalName);
+    })
+    .await;
+    let broker = handle.broker_arc_for_test();
+    seed_topic_a(&broker).await;
+    transaction_version_1(&broker).await;
+    let address = peer();
+    let user = principal(READ_ON_STAR);
+    let ctx = request_context(&user, &address, "txn-offset-commit-kip-1251");
+    let a_id = krabka_protocol::primitives::uuid::Uuid(
+        broker
+            .controller
+            .current_image()
+            .topic("a")
+            .expect("topic a")
+            .topic_id
+            .into_bytes(),
+    );
+
+    let rows = [
+        (5, 7, codes::NONE),
+        (5, 5, codes::NONE),
+        (5, 4, codes::ILLEGAL_GENERATION),
+        (6, 4, codes::STALE_MEMBER_EPOCH),
+        (5, 8, codes::ILLEGAL_GENERATION),
+        (6, 8, codes::STALE_MEMBER_EPOCH),
+    ];
+    let mut actual = Vec::new();
+    for (i, &(version, epoch, _)) in rows.iter().enumerate() {
+        let group_id = format!("kip-1251-{i}");
+        let actor = broker.group_coordinator.get_or_create_consumer(&group_id);
+        actor
+            .tx
+            .send(GroupActorMessage::Seed(kip_1251_seed(a_id)))
+            .await
+            .expect("seed");
+        let request = TxnOffsetCommitRequest {
+            transactional_id: format!("tid-kip-1251-{i}"),
+            group_id: group_id.clone(),
+            producer_id: 42 + i64::try_from(i).expect("small"),
+            producer_epoch: 0,
+            member_id: "m".into(),
+            generation_id_or_member_epoch: epoch,
+            topics: vec![TxnOffsetCommitRequestTopic {
+                topic_id: a_id,
+                ..topic("a", &[0])
+            }],
+            ..Default::default()
+        };
+        let bytes = super::handle(
+            &broker,
+            version,
+            1,
+            &encode_request(&request, version),
+            &ctx,
+        )
+        .await
+        .expect("handle");
+        let response: TxnOffsetCommitResponse = decode_response(&bytes, version);
+        actual.push((version, epoch, response.topics[0].partitions[0].error_code));
+    }
+    check!(actual == rows);
 
     handle.shutdown().await;
 }

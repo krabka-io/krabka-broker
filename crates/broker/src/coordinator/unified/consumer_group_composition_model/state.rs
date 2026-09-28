@@ -18,6 +18,8 @@ pub(super) struct MemberProj {
     pub(super) assignment_state: MemberAssignmentState,
     pub(super) assigned: Vec<i32>,
     pub(super) pending_revocation: Vec<i32>,
+    /// `(partition, assignment epoch)` of every held partition, sorted.
+    pub(super) assignment_epochs: Vec<(i32, i32)>,
     pub(super) target: Vec<i32>,
 }
 
