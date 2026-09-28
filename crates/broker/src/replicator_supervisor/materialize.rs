@@ -87,7 +87,14 @@ pub(super) fn materialize_partition_with_replication_target(
             return Err("preferred log directory is offline".to_owned());
         }
         let dir = preferred.as_ref().map_or_else(
-            || crate::log_dir::place_partition_dir(log_dirs, topic, partition),
+            || {
+                crate::log_dir::place_partition_dir_avoiding(
+                    log_dirs,
+                    partitions.cordoned_log_dirs(),
+                    topic,
+                    partition,
+                )
+            },
             |log_dir| crate::log_dir::partition_dir(log_dir, topic, partition),
         );
         std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;

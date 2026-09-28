@@ -58,6 +58,10 @@ pub(crate) async fn start_move(
             std::io::Error::other("target log directory is offline"),
         )));
     }
+    // (1b) KIP-1066: a cordoned directory takes no new replica.
+    if partitions.cordoned_log_dirs().is_cordoned(&target_log_dir) {
+        return Err(MoveError::Cordoned);
+    }
 
     // (2) Partition must be hosted on this broker.
     let key = (topic.to_string(), partition);

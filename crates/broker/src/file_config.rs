@@ -317,9 +317,10 @@ pub struct FileConfig {
     /// broker consults `transaction.two.phase.commit.enable`,
     /// `quota.window.num`, `quota.window.size.seconds`, `num.partitions`,
     /// `default.replication.factor`, `delete.topic.enable`,
-    /// `auto.create.topics.enable`, and Kafka's internal
-    /// `unstable.api.versions.enable`, which advertises and serves the API
-    /// versions Kafka marks unstable. Any other entry is accepted and ignored.
+    /// `auto.create.topics.enable`, the KIP-1066 `cordoned.log.dirs`, and
+    /// Kafka's internal `unstable.api.versions.enable`, which advertises and
+    /// serves the API versions Kafka marks unstable. Any other entry is
+    /// accepted and ignored.
     /// A key set here loses to the equivalent dedicated key, which is applied
     /// first.
     #[serde(default)]

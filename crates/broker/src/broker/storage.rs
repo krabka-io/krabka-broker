@@ -36,9 +36,13 @@ pub(super) async fn recover_storage_and_groups(
     let log_dirs = config.all_log_dirs();
     let log_dir_status = crate::log_dir_status::LogDirRegistry::probe(&log_dirs);
     let log_dir_ids = crate::log_dir_id::LogDirIds::resolve(&log_dirs);
-    let partitions = Arc::new(PartitionRegistry::with_stamp_source(
-        config.stamp_source.as_ref().map(Arc::clone),
-    ));
+    let partitions = Arc::new(
+        PartitionRegistry::with_stamp_source(config.stamp_source.as_ref().map(Arc::clone))
+            .with_cordoned_log_dirs(crate::cordoned_log_dirs::CordonedLogDirs::new(
+                log_dirs.clone(),
+                config.cordoned_log_dirs.clone(),
+            )),
+    );
     let producer_state = Arc::new(crate::producer_state::ProducerState::new());
     if config.is_broker() {
         let startup_image = controller.current_image();

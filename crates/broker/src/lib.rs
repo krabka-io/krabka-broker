@@ -187,6 +187,7 @@ pub mod config_value;
 mod controller_admin;
 pub(crate) mod controller_endpoint;
 pub mod coordinator;
+pub(crate) mod cordoned_log_dirs;
 /// Compositional end-to-end data-path verification model (produce → replicate →
 /// commit → fetch across clean and unclean failover). It wraps the real
 /// HWM/ISR, leader-epoch-truncation, failover-selection, and fetch-visibility

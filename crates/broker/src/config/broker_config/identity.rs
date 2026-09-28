@@ -38,6 +38,13 @@ macro_rules! identity_fields {
             /// than one entry. Default: empty, which gives a single-directory broker.
             pub extra_log_dirs: Vec<PathBuf>,
 
+            /// KIP-1066 static `cordoned.log.dirs`, as the operator wrote it: a
+            /// comma-separated list of entries of the configured log directories,
+            /// or `*` for all of them. A cordoned directory keeps its replicas but
+            /// takes no new one. A per-broker dynamic value overrides it. `None`
+            /// cordons nothing, which is Kafka's default.
+            pub cordoned_log_dirs: Option<String>,
+
             /// Per-log configuration applied to every partition this broker hosts.
             pub log_config: LogConfig,
 

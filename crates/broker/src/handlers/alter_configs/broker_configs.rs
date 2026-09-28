@@ -21,15 +21,19 @@ use crate::{
         self,
         broker_dynamic::{
             CLUSTER_DEFAULT_ONLY, broker_resource_node, canonical_dynamic_broker_configs,
-            elr_min_isr_error,
+            cordoned_log_dirs_disabled_error, cordoned_log_dirs_error, elr_min_isr_error,
         },
     },
 };
 
+/// The records one `AlterConfigs` `BROKER` resource stages. `log_dirs` are
+/// this node's log directories, which a named-broker `cordoned.log.dirs` must
+/// name, and are empty on a node without the broker role.
 pub(super) fn broker_config_records(
     resource: &AlterConfigsResource,
     image: &krabka_metadata::MetadataImage,
     serving: NodeId,
+    log_dirs: &[std::path::PathBuf],
 ) -> Result<Vec<MetadataRecord>, (i16, String)> {
     let node_id = broker_resource_node(&resource.resource_name, serving)?;
     let per_broker = node_id != krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID;
@@ -60,6 +64,9 @@ pub(super) fn broker_config_records(
         );
     }
     let replacement = canonical_dynamic_broker_configs(&replacement, per_broker)?;
+    if per_broker {
+        cordoned_log_dirs_error(&replacement, log_dirs)?;
+    }
 
     let current = image.broker_config(node_id);
     let deleted: Vec<&String> = current
@@ -78,6 +85,9 @@ pub(super) fn broker_config_records(
         .chain(deleted.iter().map(|name| (*name, None)))
     {
         if let Some(error) = elr_min_isr_error(image, node_id, name, value) {
+            return Err(error);
+        }
+        if let Some(error) = cordoned_log_dirs_disabled_error(image, name) {
             return Err(error);
         }
     }
@@ -134,6 +144,7 @@ mod tests {
             &broker_resource("1", &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "2048")]),
             &image,
             SERVING,
+            &[],
         )
         .expect("valid broker replacement");
 
@@ -232,7 +243,7 @@ mod tests {
             ),
         ];
         for (name, configs, want) in cases {
-            let got = broker_config_records(&broker_resource(name, &configs), &image, SERVING);
+            let got = broker_config_records(&broker_resource(name, &configs), &image, SERVING, &[]);
             let want = want.map_err(|(code, message)| (code, message.to_owned()));
             check!(got == want, "{name:?} {configs:?}");
         }
@@ -248,6 +259,7 @@ mod tests {
                         &broker_resource(resource_name, &[(key, "true")]),
                         &image,
                         SERVING,
+                        &[],
                     ) == Err((
                         codes::INVALID_CONFIG,
                         format!("broker config {key} is controller-managed and read-only"),
@@ -276,6 +288,7 @@ mod tests {
             &broker_resource("1", &[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "2048")]),
             &image,
             SERVING,
+            &[],
         )
         .expect("valid broker replacement");
 
@@ -303,6 +316,7 @@ mod tests {
             ),
             &image,
             SERVING,
+            &[],
         )
         .expect_err("per-broker recovery setting must be rejected");
 
@@ -319,7 +333,7 @@ mod tests {
             Some("2"),
         ));
 
-        let error = broker_config_records(&broker_resource("", &[]), &image, SERVING);
+        let error = broker_config_records(&broker_resource("", &[]), &image, SERVING, &[]);
 
         assert!(
             error

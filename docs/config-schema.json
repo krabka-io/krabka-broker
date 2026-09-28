@@ -3396,7 +3396,7 @@
         "type": "string"
       },
       "default": {},
-      "description": "Raw Apache Kafka `server.properties` keys, for the settings krabka\nreads under their Kafka names rather than a dedicated TOML key. The\nbroker consults `transaction.two.phase.commit.enable`,\n`quota.window.num`, `quota.window.size.seconds`, `num.partitions`,\n`default.replication.factor`, `delete.topic.enable`,\n`auto.create.topics.enable`, and Kafka's internal\n`unstable.api.versions.enable`, which advertises and serves the API\nversions Kafka marks unstable. Any other entry is accepted and ignored.\nA key set here loses to the equivalent dedicated key, which is applied\nfirst.",
+      "description": "Raw Apache Kafka `server.properties` keys, for the settings krabka\nreads under their Kafka names rather than a dedicated TOML key. The\nbroker consults `transaction.two.phase.commit.enable`,\n`quota.window.num`, `quota.window.size.seconds`, `num.partitions`,\n`default.replication.factor`, `delete.topic.enable`,\n`auto.create.topics.enable`, the KIP-1066 `cordoned.log.dirs`, and\nKafka's internal `unstable.api.versions.enable`, which advertises and\nserves the API versions Kafka marks unstable. Any other entry is\naccepted and ignored.\nA key set here loses to the equivalent dedicated key, which is applied\nfirst.",
       "type": "object"
     },
     "stretch": {

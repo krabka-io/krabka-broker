@@ -17,7 +17,31 @@ impl BrokerConfig {
                 "log_timestamp_scan_window must be positive".into(),
             ));
         }
-        Ok(())
+        self.validate_cordoned_log_dirs()
+    }
+
+    /// Kafka's `KafkaConfig.validateCordonedLogDirs`, which a node with the
+    /// broker role runs at startup: every entry of `cordoned.log.dirs` names a
+    /// configured log directory, and `*` stands alone.
+    fn validate_cordoned_log_dirs(&self) -> Result<(), BrokerError> {
+        match (&self.cordoned_log_dirs, self.is_broker()) {
+            (Some(value), true) => crate::cordoned_log_dirs::resolve(value, &self.all_log_dirs())
+                .map(drop)
+                .map_err(BrokerError::InvalidRuntimeConfig),
+            _ => Ok(()),
+        }
+    }
+
+    /// The log directories a `cordoned.log.dirs` value on this node must name:
+    /// [`all_log_dirs`][Self::all_log_dirs] on a node with the broker role, and
+    /// none on a controller-only node, which Kafka does not check the key on.
+    #[must_use]
+    pub(crate) fn broker_log_dirs(&self) -> Vec<PathBuf> {
+        if self.is_broker() {
+            self.all_log_dirs()
+        } else {
+            Vec::new()
+        }
     }
 
     /// All log directories this broker stores partition data in, primary
@@ -50,5 +74,41 @@ mod tests {
         c.extra_log_dirs = vec![extra.clone(), primary.clone(), extra.clone()];
 
         assert!(c.all_log_dirs() == vec![primary, extra]);
+    }
+
+    /// A broker refuses at startup a `cordoned.log.dirs` Kafka refuses, with
+    /// Kafka's message. A node without the broker role does not check it.
+    #[test]
+    fn a_static_cordoned_value_is_checked_on_a_broker_only() {
+        let primary = std::path::PathBuf::from("/data/primary");
+        let cases = [
+            (None, true, Ok(())),
+            (Some("/data/primary"), true, Ok(())),
+            (Some("*"), true, Ok(())),
+            (
+                Some("/elsewhere"),
+                true,
+                Err(
+                    "invalid runtime configuration: requirement failed: All entries in \
+                     cordoned.log.dirs must be present in log.dirs or log.dir. Missing entries \
+                     : /elsewhere",
+                ),
+            ),
+            (Some("/elsewhere"), false, Ok(())),
+        ];
+        for (value, broker, want) in cases {
+            let mut c = BrokerConfig::for_tests(primary.clone());
+            c.cordoned_log_dirs = value.map(str::to_owned);
+            if !broker {
+                c.roles = vec![crate::config::NodeRole::Controller];
+            }
+            let got = c
+                .validate_cordoned_log_dirs()
+                .map_err(|error| error.to_string());
+            assert!(
+                got == want.map_err(str::to_owned),
+                "{value:?} broker={broker}"
+            );
+        }
     }
 }
