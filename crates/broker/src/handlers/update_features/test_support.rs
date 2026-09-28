@@ -7,7 +7,6 @@
 
 use std::{net::SocketAddr, sync::Arc};
 
-use assert2::assert;
 use krabka_protocol::owned::{
     update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
     update_features_response::UpdateFeaturesResponse,
@@ -18,7 +17,6 @@ use super::handle;
 use crate::{
     authorizer::Authorizer,
     broker::{Broker, BrokerHandle},
-    codes,
 };
 
 pub(super) const VERSION: i16 = 1;
@@ -30,6 +28,10 @@ fn feature_update(name: &str, level: i16, upgrade_type: i8) -> FeatureUpdateKey 
         upgrade_type,
         ..Default::default()
     }
+}
+
+pub(super) fn named_update(name: &str, level: i16, upgrade_type: i8) -> FeatureUpdateKey {
+    feature_update(name, level, upgrade_type)
 }
 
 pub(super) fn metadata_update(level: i16, upgrade_type: i8) -> FeatureUpdateKey {
@@ -82,37 +84,20 @@ pub(super) async fn call_with(
     req: UpdateFeaturesRequest,
 ) -> (UpdateFeaturesResponse, BrokerHandle, tempfile::TempDir) {
     let (broker_handle, dir) = start_broker(authorizer).await;
+    let resp = call(&broker_handle, req, VERSION).await;
+    (resp, broker_handle, dir)
+}
+
+pub(super) async fn call(
+    broker_handle: &BrokerHandle,
+    req: UpdateFeaturesRequest,
+    version: i16,
+) -> UpdateFeaturesResponse {
     let broker = broker_handle.broker_arc_for_test();
     let principal = principal();
     let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
     let ctx = context(&principal, &peer);
-    let resp = handle(&broker, req, VERSION, &ctx).await;
-    (resp, broker_handle, dir)
-}
-
-pub(super) fn assert_ok_row(resp: &UpdateFeaturesResponse, feature: &str) {
-    let row = resp
-        .results
-        .iter()
-        .find(|row| row.feature == feature)
-        .expect("feature result row");
-    assert!(row.error_code == codes::NONE, "{resp:?}");
-    assert!(row.error_message.is_none(), "{resp:?}");
-}
-
-pub(super) fn assert_row_error(resp: &UpdateFeaturesResponse, feature: &str, message: &str) {
-    let row = resp
-        .results
-        .iter()
-        .find(|row| row.feature == feature)
-        .expect("feature result row");
-    assert!(row.error_code == codes::INVALID_UPDATE_VERSION, "{resp:?}");
-    assert!(
-        row.error_message
-            .as_deref()
-            .is_some_and(|m| m.contains(message)),
-        "{resp:?}"
-    );
+    handle(&broker, req, version, &ctx).await
 }
 
 pub(super) async fn wait_for_finalized_feature(broker: &Broker, feature: &str, level: i16) {

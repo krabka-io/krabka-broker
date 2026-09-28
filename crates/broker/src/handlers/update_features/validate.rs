@@ -1,266 +1,246 @@
-//! Per-feature validation of an `UpdateFeatures` request.
+//! Validation of a whole `UpdateFeatures` request.
 //!
-//! This module holds the loop that turns each requested feature update into a
-//! result row and, where the update is accepted, into the metadata records
-//! that persist it. It is the bulk of the handler's logic and the only part
-//! that decides whether an update is legal, so it sits apart from the request
-//! plumbing in the module root.
+//! This module is Kafka 4.3.1's `FeatureControlManager.updateFeatures`. The
+//! rows go into a map keyed by feature name, so a repeated name keeps its last
+//! row. Each entry is validated in the map's iteration order against the
+//! current image. The first entry that fails stops the request and nothing is
+//! written. Otherwise every entry's records form one atomic batch.
 
-use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
-use krabka_protocol::owned::{
-    update_features_request::UpdateFeaturesRequest,
-    update_features_response::UpdatableFeatureResult,
+use std::collections::BTreeMap;
+
+use krabka_metadata::{
+    FeatureLevelRecord, MetadataRecord,
+    metadata_version::{KRAFT_VERSION_FEATURE, METADATA_VERSION_FEATURE, METADATA_VERSION_MIN},
 };
+use krabka_protocol::owned::update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest};
 use krabka_verified::features::{
-    FeatureClusterFacts, FeatureLevels, FeatureUpdateDecision, FeatureUpdateFacts,
-    FeatureUpdateType, MetadataVersionFacts, feature_update_decision,
+    FeatureKind, FeatureLevels, FeatureUpdateDecision, FeatureUpdateFacts, feature_update_decision,
 };
 
 use super::{
-    preconditions::{
-        dependencies_met, registered_node_without_metadata_downgrade_capability,
-        unregistered_controller, unsupported_registered_node,
-    },
-    response::row,
+    java_order::hash_map_order,
+    preconditions::{dependency_error, reason_not_supported},
     upgrade_type::update_type,
 };
 use crate::codes;
 
-/// KIP-584: a requested `max_version_level` of `0` asks to *delete* the
-/// finalized feature rather than move it to another level.
-const DELETE_FINALIZED_LEVEL: i16 = 0;
+/// Kafka's `MetadataVersion.MINIMUM_VERSION` name, which
+/// `Feature.validateVersion` quotes.
+const METADATA_VERSION_MIN_NAME: &str = "3.3-IV3";
 
-pub(super) fn validate_updates(
+/// Why a request failed: the error of the first entry that failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct UpdateError {
+    pub code: i16,
+    pub message: String,
+}
+
+impl UpdateError {
+    /// `FeatureControlManager.invalidUpdateVersion`.
+    fn invalid_update_version(feature: &str, level: i16, reason: &str) -> Self {
+        Self {
+            code: codes::INVALID_UPDATE_VERSION,
+            message: format!("Invalid update version {level} for feature {feature}. {reason}"),
+        }
+    }
+
+    /// `FeatureControlManager.unsupportedMetadataDowngrade`.
+    fn unsupported_metadata_downgrade(current: i16, target: i16, reason: &str) -> Self {
+        Self {
+            code: codes::INVALID_UPDATE_VERSION,
+            message: format!(
+                "Unsupported metadata.version downgrade from {current} to {target}. {reason}"
+            ),
+        }
+    }
+}
+
+/// What an accepted request does.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(super) struct UpdatePlan {
+    /// The metadata records, in the order Kafka's controller writes them.
+    pub records: Vec<MetadataRecord>,
+    /// The `kraft.version` level the Raft layer must move to, when the
+    /// request raises it.
+    pub kraft_upgrade: Option<u16>,
+    /// The request turns `eligible.leader.replicas.version` on, which
+    /// `ConfigurationControlManager.updateFeatures` pairs with its safety
+    /// config records.
+    pub enables_elr: bool,
+    /// Every feature the request names, each once.
+    pub features: Vec<String>,
+}
+
+/// Validate `request` against `image` and plan its writes.
+///
+/// `local_controller` is the node that answers for the controller's own
+/// feature support, which Kafka names as `Local controller <id>`.
+///
+/// # Errors
+///
+/// Returns the error of the first entry that fails, in Kafka's map order.
+pub(super) fn plan_updates(
     request: &UpdateFeaturesRequest,
     image: &krabka_metadata::MetadataImage,
-    version: i16,
-) -> (Vec<UpdatableFeatureResult>, Vec<MetadataRecord>) {
-    let mut seen = std::collections::HashSet::new();
-    let mut results = Vec::new();
-    let mut records = Vec::new();
-    let mut metadata_version_records = None;
-    for upd in &request.feature_updates {
-        let name = upd.feature.clone();
-        if !seen.insert(name.clone()) {
-            results.push(row(
-                name,
-                codes::INVALID_REQUEST,
-                "Provided feature can not be updated more than once in the request.",
-            ));
-            continue;
+    local_controller: krabka_metadata::NodeId,
+) -> Result<UpdatePlan, UpdateError> {
+    let order = hash_map_order(
+        request
+            .feature_updates
+            .iter()
+            .map(|update| update.feature.as_str()),
+    );
+    // The last row for a name wins, as `HashMap.put` keeps it.
+    let updates: Vec<&FeatureUpdateKey> = order
+        .iter()
+        .filter_map(|name| {
+            request
+                .feature_updates
+                .iter()
+                .rev()
+                .find(|update| update.feature == *name)
+        })
+        .collect();
+
+    // `proposedUpdatedVersions`: the finalized levels, with every update of
+    // this request applied on top.
+    let mut proposed: BTreeMap<String, i16> = image.finalized_features().clone();
+    proposed.remove(KRAFT_VERSION_FEATURE);
+    for update in &updates {
+        proposed.insert(update.feature.clone(), update.max_version_level);
+    }
+
+    let mut plan = UpdatePlan {
+        features: order.iter().map(ToString::to_string).collect(),
+        ..UpdatePlan::default()
+    };
+    for update in updates {
+        plan_update(update, image, local_controller, &proposed, &mut plan)?;
+        if update.feature == crate::features::ELR_VERSION && update.max_version_level > 0 {
+            plan.enables_elr = true;
         }
-        let Some(feat) = krabka_metadata::feature(&name) else {
-            results.push(row(
-                name,
-                codes::INVALID_REQUEST,
-                "Could not apply finalized feature update because the provided feature is not supported.",
-            ));
-            continue;
+    }
+    Ok(plan)
+}
+
+/// `FeatureControlManager.updateFeature` for one entry.
+fn plan_update(
+    update: &FeatureUpdateKey,
+    image: &krabka_metadata::MetadataImage,
+    local_controller: krabka_metadata::NodeId,
+    proposed: &BTreeMap<String, i16>,
+    plan: &mut UpdatePlan,
+) -> Result<(), UpdateError> {
+    let name = update.feature.as_str();
+    let level = update.max_version_level;
+    let (current, kind, dependency) = if name == METADATA_VERSION_FEATURE {
+        let current = image.finalized_metadata_version().unwrap_or(0);
+        let kind = FeatureKind::MetadataVersion {
+            metadata_changed: crate::features::metadata_changed_between(current, level),
         };
-
-        let level = upd.max_version_level;
-        if name == krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE {
-            let current = i16::try_from(image.kraft_version()).unwrap_or(i16::MAX);
-            if level != 1 || current > level {
-                results.push(row(
-                    name,
-                    codes::INVALID_UPDATE_VERSION,
-                    "kraft.version can only be upgraded from 0 to 1.",
-                ));
-            } else {
-                results.push(row(name, codes::NONE, ""));
-            }
-            continue;
+        (current, kind, None)
+    } else if name == KRAFT_VERSION_FEATURE {
+        let current = i16::try_from(image.kraft_version()).unwrap_or(i16::MAX);
+        (current, FeatureKind::KRaftVersion, None)
+    } else {
+        let current = image.finalized_feature(name).unwrap_or(0);
+        let dependency = feature_dependency_error(name, level, proposed);
+        let kind = FeatureKind::Other {
+            dependencies_met: dependency.is_none(),
+        };
+        (current, kind, dependency)
+    };
+    let not_supported = reason_not_supported(image, local_controller, name, level);
+    let decision = feature_update_decision(FeatureUpdateFacts {
+        update_type: update_type(update.upgrade_type),
+        levels: FeatureLevels {
+            requested: level,
+            current,
+        },
+        all_nodes_support: not_supported.is_none(),
+        kind,
+    });
+    let invalid = |reason: &str| Err(UpdateError::invalid_update_version(name, level, reason));
+    match decision {
+        FeatureUpdateDecision::UnknownUpdateType => {
+            invalid("The controller does not support the given upgrade type.")
         }
-        let current = image.finalized_features().get(&name).copied();
-        let update_type = update_type(version, upd.allow_downgrade, upd.upgrade_type);
-        let planned_cleanup =
-            match plan_feature_update(image, feat, &name, level, current, update_type) {
-                Ok(planned_cleanup) => planned_cleanup,
-                Err(message) => {
-                    results.push(row(name, codes::INVALID_UPDATE_VERSION, &message));
-                    continue;
-                }
-            };
-
-        // Accepted. The verified cleanup result is kept with the deferred
-        // metadata.version record so no intervening append can reverse them.
-        let feature_record = MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: name.clone(),
-            level,
-        });
-        if name == krabka_metadata::metadata_version::METADATA_VERSION_FEATURE {
-            metadata_version_records = Some((planned_cleanup, feature_record));
-        } else {
+        FeatureUpdateDecision::NegativeLevel => invalid("A feature version cannot be less than 0."),
+        FeatureUpdateDecision::UnsupportedByNode => invalid(&not_supported.unwrap_or_default()),
+        FeatureUpdateDecision::DowngradeWithoutFlag => invalid(
+            "Can't downgrade the version of this feature without setting the upgrade type to \
+             either safe or unsafe downgrade.",
+        ),
+        FeatureUpdateDecision::DowngradeToNewerLevel => {
+            invalid("Can't downgrade to a newer version.")
+        }
+        FeatureUpdateDecision::UnsafeMetadataDowngrade => {
+            Err(UpdateError::unsupported_metadata_downgrade(
+                current,
+                level,
+                "Unsafe metadata downgrade is not supported in this version.",
+            ))
+        }
+        FeatureUpdateDecision::LossyMetadataDowngrade => {
+            Err(UpdateError::unsupported_metadata_downgrade(
+                current,
+                level,
+                "Refusing to perform the requested downgrade because it might delete metadata \
+                 information.",
+            ))
+        }
+        FeatureUpdateDecision::KRaftDowngrade => {
+            invalid("Can't downgrade the version of this feature.")
+        }
+        FeatureUpdateDecision::DependencyUnmet => invalid(&dependency.unwrap_or_default()),
+        FeatureUpdateDecision::UpgradeKRaft => {
+            if level > current {
+                plan.kraft_upgrade = u16::try_from(level).ok();
+            }
+            Ok(())
+        }
+        FeatureUpdateDecision::NoChange => Ok(()),
+        FeatureUpdateDecision::EmitFeature => {
             // KIP-966: turning the feature off clears the memberships it
-            // published, the way Kafka's controller emits its own cleaning
-            // records. The clearing records go in first, so a replay that
+            // published. The clearing records go in first, so a replay that
             // stops between them and the feature record has already forgotten
             // the memberships rather than kept them under a feature that is
             // still on.
-            if name == crate::features::ELR_VERSION
-                && level == DELETE_FINALIZED_LEVEL
-                && current.is_some_and(|cur| cur >= 1)
-            {
-                records.extend(crate::elr::clear_published_elr(image));
+            if name == crate::features::ELR_VERSION && level == 0 && current >= 1 {
+                plan.records.extend(crate::elr::clear_published_elr(image));
             }
-            records.push(feature_record);
+            plan.records
+                .push(MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+                    name: name.to_string(),
+                    level,
+                }));
+            Ok(())
         }
-        results.push(row(name, codes::NONE, ""));
     }
-    // KIP-1155: the metadata.version record is always emitted last, after any
-    // records that remove fields unavailable at the target version.
-    if let Some((cleanup_records, feature_record)) = metadata_version_records {
-        records.extend(cleanup_records);
-        records.push(feature_record);
-    }
-    (results, records)
 }
 
-/// Why a registered node blocks a feature row, as the rejection names it.
-struct NodeBlockers {
-    unsupported_level: Option<String>,
-    unregistered_controller: Option<krabka_metadata::NodeId>,
-    no_downgrade_capability: Option<String>,
-}
-
-/// Establish every fact one feature row is decided on, let the verified
-/// kernel decide it, and return the cleanup records an admitted row emits
-/// before its feature-level record, or the rejection message.
-///
-/// A `metadata.version` downgrade's floor and dependencies are read from the
-/// image its cleanup records would leave, so an unsafe downgrade is judged
-/// on the state the caller authorized.
-fn plan_feature_update(
-    image: &krabka_metadata::MetadataImage,
-    feat: &dyn krabka_metadata::Feature,
+/// `Feature.featureFromName` and `Feature.validateVersion` for a feature
+/// other than `metadata.version` and `kraft.version`, against the proposed
+/// levels, or `None` when the level may be set.
+fn feature_dependency_error(
     name: &str,
     level: i16,
-    current: Option<i16>,
-    update_type: Option<FeatureUpdateType>,
-) -> Result<Vec<MetadataRecord>, String> {
-    let is_metadata_version = name == krabka_metadata::metadata_version::METADATA_VERSION_FEATURE;
-    let metadata_downgrade = is_metadata_version && current.is_some_and(|cur| level < cur);
-    let cleanup_records = if metadata_downgrade {
-        image.metadata_version_downgrade_records(level)
-    } else {
-        Vec::new()
+    proposed: &BTreeMap<String, i16>,
+) -> Option<String> {
+    let Some(feature) = krabka_metadata::feature(name) else {
+        return Some(format!("Feature {name} not found."));
     };
-    let projected_image = (!cleanup_records.is_empty()).then(|| {
-        let mut projected = image.clone();
-        for record in &cleanup_records {
-            projected.apply(record);
-        }
-        projected
-    });
-    let target_image = projected_image.as_ref().unwrap_or(image);
-    let blockers = NodeBlockers {
-        unsupported_level: unsupported_registered_node(image, name, level),
-        unregistered_controller: is_metadata_version
-            .then(|| unregistered_controller(image))
-            .flatten(),
-        no_downgrade_capability: is_metadata_version
-            .then(|| registered_node_without_metadata_downgrade_capability(image))
-            .flatten(),
-    };
-    let facts = FeatureUpdateFacts {
-        update_type,
-        levels: FeatureLevels {
-            requested: level,
-            finalized: current,
-            max_supported: feat.supported_range().1,
-            floor: feat.min_required_floor(target_image),
-        },
-        cluster: FeatureClusterFacts {
-            all_nodes_support: blockers.unsupported_level.is_none(),
-            dependencies_met: dependencies_met(target_image, feat.dependencies(level)),
-        },
-        metadata_version: is_metadata_version.then_some(MetadataVersionFacts {
-            online_downgrade_min_level:
-                krabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL,
-            all_controllers_registered: blockers.unregistered_controller.is_none(),
-            all_nodes_downgrade_capable: blockers.no_downgrade_capability.is_none(),
-            cleanup_required: !cleanup_records.is_empty(),
-        }),
-    };
-    row_outcome(feature_update_decision(facts), cleanup_records, blockers)
-}
-
-/// The records an admitted feature row emits before its feature-level
-/// record, or the `INVALID_UPDATE_VERSION` message of a rejected one.
-fn row_outcome(
-    decision: FeatureUpdateDecision,
-    cleanup_records: Vec<MetadataRecord>,
-    blockers: NodeBlockers,
-) -> Result<Vec<MetadataRecord>, String> {
-    Err(match decision {
-        FeatureUpdateDecision::EmitFeature => return Ok(Vec::new()),
-        FeatureUpdateDecision::EmitCleanupThenFeature => return Ok(cleanup_records),
-        FeatureUpdateDecision::UnknownUpdateType => {
-            "The controller does not support the given upgrade type.".into()
-        }
-        FeatureUpdateDecision::OutOfSupportedRange => {
-            "Provided version level is not in the supported range.".into()
-        }
-        FeatureUpdateDecision::UnsupportedByNode => blockers
-            .unsupported_level
-            .unwrap_or_else(|| "A registered node does not support the provided level.".into()),
-        FeatureUpdateDecision::DowngradeWithoutFlag => {
-            "Can not downgrade a finalized feature without setting the downgrade flag.".into()
-        }
-        FeatureUpdateDecision::DowngradeToNewerLevel => {
-            "Can not downgrade to a newer feature version.".into()
-        }
-        FeatureUpdateDecision::OnlineDowngradeUnsupported => {
-            "Online metadata.version downgrade requires 3.7-IV0 or newer.".into()
-        }
-        FeatureUpdateDecision::UnregisteredController => blockers.unregistered_controller.map_or_else(
-            || "A controller has not registered.".into(),
-            |controller| {
-                format!(
-                    "Controller {controller} has not registered, so its metadata.version support cannot be verified."
-                )
-            },
-        ),
-        FeatureUpdateDecision::NodeCannotDowngrade => blockers
-            .no_downgrade_capability
-            .unwrap_or_else(|| "A registered node does not support online metadata.version downgrade.".into()),
-        FeatureUpdateDecision::BelowFloor => {
-            "Can not downgrade the feature below the level required by existing cluster state."
-                .into()
-        }
-        FeatureUpdateDecision::DependencyUnmet => {
-            "Can not finalize feature: a required dependency feature is not finalized at a high enough level."
-                .into()
-        }
-        FeatureUpdateDecision::DeleteMissingFeature => {
-            "Can not delete a finalized feature that does not exist.".into()
-        }
-        FeatureUpdateDecision::DeleteWithoutFlag => {
-            "Can not delete a finalized feature without setting the downgrade flag.".into()
-        }
-        FeatureUpdateDecision::LossyDowngradeNotUnsafe => {
-            "Refusing a lossy metadata.version downgrade; retry with UNSAFE_DOWNGRADE to discard incompatible metadata."
-                .into()
-        }
-    })
-}
-
-/// `true` when the request finalizes `eligible.leader.replicas.version` above
-/// 0 and that row was accepted.
-pub(super) fn enables_elr(
-    request: &UpdateFeaturesRequest,
-    results: &[UpdatableFeatureResult],
-) -> bool {
-    request
-        .feature_updates
-        .iter()
-        .zip(results)
-        .any(|(update, result)| {
-            update.feature == crate::features::ELR_VERSION
-                && update.max_version_level > 0
-                && result.error_code == codes::NONE
-        })
+    if level >= 1
+        && proposed
+            .get(METADATA_VERSION_FEATURE)
+            .is_none_or(|&mv| mv < METADATA_VERSION_MIN)
+    {
+        return Some(format!(
+            "{name} could not be set to {level} because it depends on \
+             metadata.version={METADATA_VERSION_MIN} ({METADATA_VERSION_MIN_NAME})"
+        ));
+    }
+    dependency_error(name, level, feature.dependencies(level), proposed)
 }
 
 /// Kafka's `ConfigurationControlManager.maybeGenerateElrSafetyRecords`: the

@@ -3,7 +3,8 @@
 //! A finalize of `metadata.version` writes a Raft-persisted `V1FeatureLevel`
 //! record, and reports the finalized feature and a real epoch through
 //! `ApiVersions`. Validation rejects an unsupported feature and a level
-//! outside the range. `validate_only` runs every check and persists nothing.
+//! outside the range with Kafka's top-level error. `validate_only` runs every
+//! check and persists nothing.
 
 use assert2::assert;
 mod support;
@@ -68,22 +69,22 @@ async fn finalizes_metadata_version_and_surfaces_in_api_versions() {
     p.broker.shutdown().await;
 }
 
-/// Asserts that a row carries `code`, whatever the wire version. On
-/// `UpdateFeatures` v2 the encoder omits the `results` array, so the handler
-/// moves the first non-zero row error to the top-level `error_code`.
+/// Kafka answers a failed feature with `INVALID_UPDATE_VERSION` (95) at the
+/// top level, a message naming the feature, and no rows, at every version.
 fn assert_feature_error(
     resp: &krabka_protocol::owned::update_features_response::UpdateFeaturesResponse,
     feature: &str,
-    code: i16,
 ) {
-    if let Some(row) = resp.results.iter().find(|r| r.feature == feature) {
-        assert!(row.error_code == code, "per-row error: {resp:?}");
-    } else {
-        assert!(
-            resp.error_code == code,
-            "promoted top-level error: {resp:?}"
-        );
-    }
+    assert!(resp.error_code == 95, "{resp:?}");
+    assert!(resp.results.is_empty(), "{resp:?}");
+    assert!(
+        resp.error_message
+            .as_deref()
+            .is_some_and(|message| message.starts_with(
+                "The update failed for all features since the following feature had an error: "
+            ) && message.contains(&format!("for feature {feature}."))),
+        "{resp:?}"
+    );
 }
 
 #[tokio::test]
@@ -92,8 +93,7 @@ async fn rejects_unsupported_feature() {
     let mut req = metadata_version_update(1);
     req.feature_updates[0].feature = "not.a.feature".into();
     let resp = p.client.send(req).await.expect("UpdateFeatures");
-    // INVALID_REQUEST (42) for an unsupported feature.
-    assert_feature_error(&resp, "not.a.feature", 42);
+    assert_feature_error(&resp, "not.a.feature");
     p.broker.shutdown().await;
 }
 
@@ -105,8 +105,7 @@ async fn rejects_level_above_supported_max() {
         .send(metadata_version_update(99))
         .await
         .expect("UpdateFeatures");
-    // INVALID_UPDATE_VERSION (95) for a level above the supported max.
-    assert_feature_error(&resp, "metadata.version", 95);
+    assert_feature_error(&resp, "metadata.version");
     p.broker.shutdown().await;
 }
 
@@ -146,10 +145,9 @@ async fn validate_only_does_not_persist() {
     let epoch_before = before.finalized_features_epoch;
     assert!(epoch_before >= 0, "{before:?}");
 
-    // Request a SAFE_DOWNGRADE one level down with validate_only — this would
-    // change metadata.version if persisted.
-    let mut req = metadata_version_update(LATEST_PRODUCTION_METADATA_VERSION - 1);
-    req.feature_updates[0].upgrade_type = 2; // SAFE_DOWNGRADE
+    // Request an upgrade with validate_only; it would change
+    // metadata.version if persisted.
+    let mut req = metadata_version_update(METADATA_VERSION_MAX);
     req.validate_only = true;
     let resp = p.client.send(req).await.expect("UpdateFeatures");
     assert!(resp.error_code == 0, "{resp:?}");
@@ -170,13 +168,12 @@ async fn validate_only_does_not_persist() {
 #[tokio::test]
 async fn rejects_level_below_min_floor() {
     let p = support::start().await;
-    // Level 6 is below the baseline floor (METADATA_VERSION_MIN = 7); the
-    // controller refuses it with INVALID_UPDATE_VERSION (95).
+    // Level 6 is below the supported minimum (METADATA_VERSION_MIN = 7).
     let resp = p
         .client
         .send(metadata_version_update(6))
         .await
         .expect("UpdateFeatures");
-    assert_feature_error(&resp, "metadata.version", 95);
+    assert_feature_error(&resp, "metadata.version");
     p.broker.shutdown().await;
 }

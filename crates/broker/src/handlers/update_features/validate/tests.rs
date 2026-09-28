@@ -1,397 +1,336 @@
-//! Tests for the per-feature validation loop, kept in their own file because
-//! they build whole metadata images and outweigh the module they cover.
+//! Tests for the request planner, kept in their own file because they build
+//! whole metadata images and outweigh the module they cover.
 
 use assert2::assert;
+use krabka_metadata::NodeId;
 
 use super::*;
-use crate::handlers::update_features::{
-    test_support::{VERSION, elr_update, metadata_update, validate_only},
-    upgrade_type::{UPGRADE_TYPE_SAFE_DOWNGRADE, UPGRADE_TYPE_UNSAFE_DOWNGRADE},
+use crate::handlers::update_features::test_support::{
+    elr_update, metadata_update, named_update, validate_only,
 };
 
-#[test]
-fn metadata_version_floor_via_registry() {
-    // A fresh image floors metadata.version at its supported min; the
-    // registry trait path returns that floor.
-    let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-    let feat = krabka_metadata::feature("metadata.version").unwrap();
-    assert!(feat.min_required_floor(&image) == crate::features::METADATA_VERSION_MIN);
+const LOCAL: NodeId = NodeId(1);
+const UPGRADE: i8 = 1;
+const SAFE: i8 = 2;
+const UNSAFE: i8 = 3;
+
+fn feature_record(name: &str, level: i16) -> MetadataRecord {
+    MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+        name: name.into(),
+        level,
+    })
 }
 
-fn image_with_directory(metadata_version: i16) -> krabka_metadata::MetadataImage {
+/// An image finalized at `levels`.
+fn image(levels: &[(&str, i16)]) -> krabka_metadata::MetadataImage {
     let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-    let supported_features = krabka_metadata::supported_feature_ranges();
-    image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-        name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
-        level: metadata_version,
-    }));
-    image.apply(&MetadataRecord::V1BrokerRegistration(
-        krabka_metadata::BrokerRegistrationRecord {
-            fenced: false,
-            in_controlled_shutdown: false,
-            cordoned_log_dirs: None,
-            node_id: krabka_metadata::NodeId(1),
-            broker_epoch: 9,
-            incarnation_id: uuid::Uuid::from_u128(1),
-            host: "broker-1".into(),
-            port: 9092,
-            rack: None,
-            endpoints: vec![],
-            log_dirs: vec![uuid::Uuid::from_u128(0xD2)],
-            features: supported_features.clone(),
-        },
-    ));
-    image.apply(&MetadataRecord::V1Partition(
-        krabka_metadata::PartitionRecord {
-            topic: "orders".into(),
-            partition: 0,
-            leader: krabka_metadata::NodeId(1),
-            replicas: vec![krabka_metadata::NodeId(1)],
-            isr: vec![krabka_metadata::NodeId(1)],
-            directories: vec![uuid::Uuid::from_u128(0xD1)],
-            ..Default::default()
-        },
-    ));
+    for &(name, level) in levels {
+        image.apply(&feature_record(name, level));
+    }
     image
 }
 
-#[test]
-fn unsafe_metadata_downgrade_cleans_lossy_fields_before_version_record() {
-    let image = image_with_directory(crate::features::METADATA_VERSION_MAX);
-    let target = krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL - 1;
-
-    let (safe_results, safe_records) = validate_updates(
-        &validate_only(vec![metadata_update(target, UPGRADE_TYPE_SAFE_DOWNGRADE)]),
-        &image,
-        VERSION,
-    );
-    assert!(safe_results[0].error_code == codes::INVALID_UPDATE_VERSION);
-    assert!(
-        safe_results[0]
-            .error_message
-            .as_deref()
-            .is_some_and(|message| message.contains("lossy"))
-    );
-    assert!(safe_records.is_empty());
-
-    let (unsafe_results, unsafe_records) = validate_updates(
-        &validate_only(vec![metadata_update(target, UPGRADE_TYPE_UNSAFE_DOWNGRADE)]),
-        &image,
-        VERSION,
-    );
-    assert!(unsafe_results[0].error_code == codes::NONE);
-    let expected = vec![
-        MetadataRecord::V1BrokerRegistration(krabka_metadata::BrokerRegistrationRecord {
-            fenced: false,
-            in_controlled_shutdown: false,
-            cordoned_log_dirs: None,
-            node_id: krabka_metadata::NodeId(1),
-            broker_epoch: 9,
-            incarnation_id: uuid::Uuid::from_u128(1),
-            host: "broker-1".into(),
-            port: 9092,
-            rack: None,
-            endpoints: vec![],
-            log_dirs: vec![],
-            features: krabka_metadata::supported_feature_ranges(),
-        }),
-        MetadataRecord::V1PartitionDirAssignment(krabka_metadata::PartitionDirAssignmentRecord {
-            topic: "orders".into(),
-            partition: 0,
-            replica: krabka_metadata::NodeId(1),
-            directory: uuid::Uuid::nil(),
-        }),
-        MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
-            level: target,
-        }),
-    ];
-    assert!(unsafe_records == expected);
-
-    let mut projected = image;
-    for record in &unsafe_records {
-        projected.apply(record);
-    }
-    assert!(
-        projected
-            .partition("orders", 0)
-            .expect("partition")
-            .directories
-            == vec![uuid::Uuid::nil()]
-    );
-    assert!(
-        projected
-            .broker(krabka_metadata::NodeId(1))
-            .expect("broker")
-            .log_dirs
-            .is_empty()
-    );
-    assert!(projected.finalized_metadata_version() == Some(target));
-}
-
-#[test]
-fn rejected_lossy_downgrade_is_retryable_and_write_free() {
-    let image = image_with_directory(crate::features::METADATA_VERSION_MAX);
-    let target = krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL - 1;
-    let request = validate_only(vec![metadata_update(target, UPGRADE_TYPE_SAFE_DOWNGRADE)]);
-
-    for _ in 0..2 {
-        let (results, records) = validate_updates(&request, &image, VERSION);
-        assert!(results[0].error_code == codes::INVALID_UPDATE_VERSION);
-        assert!(
-            results[0]
-                .error_message
-                .as_deref()
-                .is_some_and(|message| message.contains("lossy"))
-        );
-        assert!(records.is_empty());
-        assert!(
-            image
-                .partition("orders", 0)
-                .expect("unchanged partition")
-                .directories
-                == vec![uuid::Uuid::from_u128(0xD1)]
-        );
+fn invalid(feature: &str, level: i16, reason: &str) -> UpdateError {
+    UpdateError {
+        code: codes::INVALID_UPDATE_VERSION,
+        message: format!("Invalid update version {level} for feature {feature}. {reason}"),
     }
 }
 
-#[test]
-fn safe_metadata_downgrade_preserves_representable_directory_fields() {
-    let image = image_with_directory(crate::features::METADATA_VERSION_MAX);
-    let target = krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL;
-
-    let (results, records) = validate_updates(
-        &validate_only(vec![metadata_update(target, UPGRADE_TYPE_SAFE_DOWNGRADE)]),
-        &image,
-        VERSION,
-    );
-
-    assert!(results[0].error_code == codes::NONE);
-    assert!(
-        records
-            == vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
-                level: target,
-            })]
-    );
+fn plan(records: Vec<MetadataRecord>, features: &[&str]) -> UpdatePlan {
+    UpdatePlan {
+        records,
+        features: features.iter().map(ToString::to_string).collect(),
+        ..UpdatePlan::default()
+    }
 }
 
+/// The row-validation cases of krabka-io/krabka-broker#780, each against
+/// Kafka 4.3.1's `FeatureControlManager.updateFeature`.
 #[test]
-fn metadata_downgrade_rejects_registered_nodes_without_capability() {
-    let supported = maplit::btreemap! {krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into() => (
-        crate::features::METADATA_VERSION_MIN,
-        crate::features::METADATA_VERSION_MAX,
-    )};
-    let registrations = [
+fn rows_validate_as_kafkas_update_feature() {
+    let mv = "metadata.version";
+    let group = "group.version";
+    let share = "share.version";
+    let elr = "eligible.leader.replicas.version";
+    let cases = [
         (
-            MetadataRecord::V1BrokerRegistration(krabka_metadata::BrokerRegistrationRecord {
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
-                node_id: krabka_metadata::NodeId(2),
-                broker_epoch: 0,
-                incarnation_id: uuid::Uuid::nil(),
-                host: String::new(),
-                port: 0,
-                rack: None,
-                log_dirs: vec![],
-                endpoints: vec![],
-                features: supported.clone(),
-            }),
-            "Broker 2",
+            "empty request",
+            image(&[(mv, 25)]),
+            vec![],
+            Ok(plan(vec![], &[])),
         ),
         (
-            MetadataRecord::V1ControllerRegistration(
-                krabka_metadata::ControllerRegistrationRecord {
-                    node_id: krabka_metadata::NodeId(3),
-                    incarnation_id: uuid::Uuid::nil(),
-                    zk_migration_ready: false,
-                    endpoints: vec![],
-                    features: supported,
-                },
+            "a repeated name keeps its last row",
+            image(&[(mv, 25)]),
+            vec![
+                named_update(group, 9, UPGRADE),
+                named_update(group, 1, UPGRADE),
+            ],
+            Ok(plan(vec![feature_record(group, 1)], &[group])),
+        ),
+        (
+            "unknown feature above level 0",
+            image(&[(mv, 25)]),
+            vec![named_update("no.such.feature", 1, UPGRADE)],
+            Err(invalid(
+                "no.such.feature",
+                1,
+                "Local controller 1 does not support this feature.",
+            )),
+        ),
+        (
+            "unknown feature at level 0",
+            image(&[(mv, 25)]),
+            vec![named_update("no.such.feature", 0, SAFE)],
+            Err(invalid(
+                "no.such.feature",
+                0,
+                "Feature no.such.feature not found.",
+            )),
+        ),
+        (
+            "level 0 downgrade of a feature that is not finalized",
+            image(&[(mv, 25)]),
+            vec![named_update(share, 0, SAFE)],
+            Ok(plan(vec![feature_record(share, 0)], &[share])),
+        ),
+        (
+            "an unknown upgrade type",
+            image(&[(mv, 25)]),
+            vec![named_update(group, 1, 0)],
+            Err(invalid(
+                group,
+                1,
+                "The controller does not support the given upgrade type.",
+            )),
+        ),
+        (
+            "a negative level",
+            image(&[(mv, 25)]),
+            vec![named_update(group, -1, UPGRADE)],
+            Err(invalid(
+                group,
+                -1,
+                "A feature version cannot be less than 0.",
+            )),
+        ),
+        (
+            "a level above the local range",
+            image(&[(mv, 25)]),
+            vec![named_update(share, 9, UPGRADE)],
+            Err(invalid(
+                share,
+                9,
+                "Local controller 1 only supports versions 0-1",
+            )),
+        ),
+        (
+            "a downgrade without a downgrade type",
+            image(&[(mv, 25), (group, 1)]),
+            vec![named_update(group, 0, UPGRADE)],
+            Err(invalid(
+                group,
+                0,
+                "Can't downgrade the version of this feature without setting the upgrade type \
+                 to either safe or unsafe downgrade.",
+            )),
+        ),
+        (
+            "a downgrade type that raises the level",
+            image(&[(mv, 25)]),
+            vec![named_update(group, 1, SAFE)],
+            Err(invalid(group, 1, "Can't downgrade to a newer version.")),
+        ),
+        (
+            "dependencies read the levels the request proposes",
+            image(&[(mv, 22)]),
+            vec![metadata_update(23, UPGRADE), elr_update(1, UPGRADE)],
+            Ok(UpdatePlan {
+                enables_elr: true,
+                ..plan(
+                    vec![feature_record(mv, 23), feature_record(elr, 1)],
+                    &[mv, elr],
+                )
+            }),
+        ),
+        (
+            "an unmet dependency",
+            image(&[(mv, 22)]),
+            vec![elr_update(1, UPGRADE)],
+            Err(invalid(
+                elr,
+                1,
+                "eligible.leader.replicas.version could not be set to 1 because it depends on \
+                 metadata.version level 23",
+            )),
+        ),
+    ];
+    for (case, image, updates, expected) in cases {
+        let actual = plan_updates(&validate_only(updates), &image, LOCAL);
+        assert!(actual == expected, "{case}");
+    }
+}
+
+/// A version 0 row carries `AllowDowngrade` rather than `UpgradeType`, and
+/// Kafka reads the `UpgradeType` default, UPGRADE, so the flag never
+/// authorizes a downgrade.
+#[test]
+fn version_zero_allow_downgrade_is_read_as_upgrade() {
+    let request = UpdateFeaturesRequest {
+        feature_updates: vec![FeatureUpdateKey {
+            feature: "group.version".into(),
+            max_version_level: 0,
+            allow_downgrade: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let image = image(&[("metadata.version", 25), ("group.version", 1)]);
+    assert!(
+        plan_updates(&request, &image, LOCAL)
+            == Err(invalid(
+                "group.version",
+                0,
+                "Can't downgrade the version of this feature without setting the upgrade type \
+                 to either safe or unsafe downgrade.",
+            ))
+    );
+}
+
+/// The first failing entry in Kafka's `HashMap` order names the error, and
+/// the valid rows ahead of it write nothing.
+#[test]
+fn the_first_failure_in_map_order_fails_the_whole_request() {
+    let image = image(&[("metadata.version", 25)]);
+    let request = validate_only(vec![
+        named_update("share.version", 9, UPGRADE),
+        named_update("group.version", 9, UPGRADE),
+    ]);
+    assert!(
+        plan_updates(&request, &image, LOCAL)
+            == Err(invalid(
+                "group.version",
+                9,
+                "Local controller 1 only supports versions 0-1",
+            ))
+    );
+}
+
+/// krabka-io/krabka-broker#781: Kafka's `didMetadataChange` walk decides a
+/// `metadata.version` downgrade, whatever the downgrade type, and an accepted
+/// downgrade writes only its feature record.
+#[test]
+fn metadata_version_downgrades_follow_did_metadata_change() {
+    let refused = |current: i16, target: i16, reason: &str| {
+        Err(UpdateError {
+            code: codes::INVALID_UPDATE_VERSION,
+            message: format!(
+                "Unsupported metadata.version downgrade from {current} to {target}. {reason}"
             ),
-            "Controller 3",
+        })
+    };
+    let lossy = "Refusing to perform the requested downgrade because it might delete metadata \
+                 information.";
+    let unsafe_reason = "Unsafe metadata downgrade is not supported in this version.";
+    let accepted = |target: i16| {
+        Ok(plan(
+            vec![feature_record("metadata.version", target)],
+            &["metadata.version"],
+        ))
+    };
+    let cases = [
+        (25, 24, SAFE, accepted(24)),
+        (25, 24, UNSAFE, accepted(24)),
+        (25, 22, SAFE, refused(25, 22, lossy)),
+        (25, 17, UNSAFE, refused(25, 17, unsafe_reason)),
+        (17, 15, UNSAFE, refused(17, 15, unsafe_reason)),
+        // 3.6-IV1 (13) changed metadata, so leaving it is lossy; 3.6-IV0
+        // (12) did not.
+        (13, 12, SAFE, refused(13, 12, lossy)),
+        (12, 11, SAFE, accepted(11)),
+        (29, 24, SAFE, accepted(24)),
+        (30, 29, SAFE, refused(30, 29, lossy)),
+        (
+            25,
+            24,
+            UPGRADE,
+            Err(invalid(
+                "metadata.version",
+                24,
+                "Can't downgrade the version of this feature without setting the upgrade type \
+                 to either safe or unsafe downgrade.",
+            )),
+        ),
+        (
+            25,
+            6,
+            SAFE,
+            Err(invalid(
+                "metadata.version",
+                6,
+                "Local controller 1 only supports versions 7-32",
+            )),
         ),
     ];
-
-    for (registration, expected_node) in registrations {
-        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
-            level: crate::features::METADATA_VERSION_MAX,
-        }));
-        image.apply(&registration);
-        let (results, records) = validate_updates(
-            &validate_only(vec![metadata_update(
-                krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL,
-                UPGRADE_TYPE_SAFE_DOWNGRADE,
-            )]),
-            &image,
-            VERSION,
-        );
-
-        assert!(results[0].error_code == codes::INVALID_UPDATE_VERSION);
+    for (current, target, upgrade_type, expected) in cases {
+        let image = image(&[("metadata.version", current)]);
+        let request = validate_only(vec![metadata_update(target, upgrade_type)]);
         assert!(
-            results[0].error_message.as_deref().is_some_and(|message| {
-                message.contains(expected_node)
-                    && message.contains("does not support online metadata.version downgrade")
-            }),
-            "{results:?}"
+            plan_updates(&request, &image, LOCAL) == expected,
+            "{current} -> {target} type {upgrade_type}"
         );
-        assert!(records.is_empty());
     }
 }
 
 #[test]
-fn metadata_update_checks_every_capable_registered_node_supports_target() {
-    let mut supported = krabka_metadata::supported_feature_ranges();
-    supported.insert(
-        krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+fn kraft_version_rows_follow_kafka() {
+    let kraft = "kraft.version";
+    let cases = [
         (
-            krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL,
-            crate::features::METADATA_VERSION_MAX,
-        ),
-    );
-    let registrations = [
-        (
-            MetadataRecord::V1BrokerRegistration(krabka_metadata::BrokerRegistrationRecord {
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
-                node_id: krabka_metadata::NodeId(2),
-                broker_epoch: 0,
-                incarnation_id: uuid::Uuid::nil(),
-                host: String::new(),
-                port: 0,
-                rack: None,
-                log_dirs: vec![],
-                endpoints: vec![],
-                features: supported.clone(),
+            "upgrade",
+            vec![named_update(kraft, 1, UPGRADE)],
+            Ok(UpdatePlan {
+                kraft_upgrade: Some(1),
+                ..plan(vec![], &[kraft])
             }),
-            "Broker 2",
         ),
         (
-            MetadataRecord::V1ControllerRegistration(
-                krabka_metadata::ControllerRegistrationRecord {
-                    node_id: krabka_metadata::NodeId(3),
-                    incarnation_id: uuid::Uuid::nil(),
-                    zk_migration_ready: false,
-                    endpoints: vec![],
-                    features: supported,
-                },
-            ),
-            "Controller 3",
+            "upgrade to the current level",
+            vec![named_update(kraft, 0, UPGRADE)],
+            Ok(plan(vec![], &[kraft])),
+        ),
+        (
+            "a downgrade type that raises the level",
+            vec![named_update(kraft, 1, SAFE)],
+            Err(invalid(kraft, 1, "Can't downgrade to a newer version.")),
+        ),
+        (
+            "above the supported range",
+            vec![named_update(kraft, 2, UPGRADE)],
+            Err(invalid(
+                kraft,
+                2,
+                "Local controller 1 only supports versions 0-1",
+            )),
         ),
     ];
-
-    for (registration, expected_node) in registrations {
-        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
-            level: crate::features::METADATA_VERSION_MAX,
-        }));
-        image.apply(&registration);
-        let (results, records) = validate_updates(
-            &validate_only(vec![metadata_update(
-                krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL - 1,
-                UPGRADE_TYPE_SAFE_DOWNGRADE,
-            )]),
-            &image,
-            VERSION,
-        );
-
-        assert!(results[0].error_code == codes::INVALID_UPDATE_VERSION);
+    for (case, updates, expected) in cases {
+        let image = image(&[("metadata.version", 25)]);
         assert!(
-            results[0]
-                .error_message
-                .as_deref()
-                .is_some_and(|message| message.contains(expected_node)),
-            "{results:?}"
+            plan_updates(&validate_only(updates), &image, LOCAL) == expected,
+            "{case}"
         );
-        assert!(records.is_empty());
     }
 }
 
-#[test]
-fn metadata_downgrade_rejects_unregistered_quorum_controller() {
-    let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-    image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-        name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
-        level: crate::features::METADATA_VERSION_MAX,
-    }));
-    image.apply(&MetadataRecord::V1Voters(krabka_metadata::VotersRecord {
-        voters: krabka_metadata::voters::VoterSet::from_voters([krabka_metadata::voters::Voter {
-            id: krabka_metadata::NodeId(3),
-            directory_id: uuid::Uuid::from_u128(3),
-            endpoints: vec![],
-            kraft_version: krabka_metadata::voters::KRaftVersionRange::default(),
-        }]),
-    }));
-
-    let (results, records) = validate_updates(
-        &validate_only(vec![metadata_update(
-            krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL,
-            UPGRADE_TYPE_SAFE_DOWNGRADE,
-        )]),
-        &image,
-        VERSION,
-    );
-
-    assert!(results[0].error_code == codes::INVALID_UPDATE_VERSION);
-    assert!(
-        results[0]
-            .error_message
-            .as_deref()
-            .is_some_and(|message| message.contains("Controller 3 has not registered")),
-        "{results:?}"
-    );
-    assert!(records.is_empty());
-}
-
-#[test]
-fn downgrade_type_cannot_raise_a_finalized_feature() {
-    let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-    image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-        name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
-        level: krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL,
-    }));
-    let (results, records) = validate_updates(
-        &validate_only(vec![metadata_update(
-            krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL + 1,
-            UPGRADE_TYPE_SAFE_DOWNGRADE,
-        )]),
-        &image,
-        VERSION,
-    );
-
-    assert!(results[0].error_code == codes::INVALID_UPDATE_VERSION);
-    assert!(
-        results[0]
-            .error_message
-            .as_deref()
-            .is_some_and(|message| message.contains("newer"))
-    );
-    assert!(records.is_empty());
-}
-
-/// An image at `metadata_version`, with `eligible.leader.replicas.version`
-/// finalized at `elr_level` when one is given and a published ELR on topic
-/// `orders` when `published` is.
-fn elr_image(
-    metadata_version: i16,
-    elr_level: Option<i16>,
-    published: bool,
-) -> krabka_metadata::MetadataImage {
-    let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-    image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-        name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
-        level: metadata_version,
-    }));
+/// An image at 4.3-IV0, with `eligible.leader.replicas.version` finalized at
+/// `elr_level` when one is given and a published ELR on topic `orders` when
+/// `published` is.
+fn elr_image(elr_level: Option<i16>, published: bool) -> krabka_metadata::MetadataImage {
+    let mut image = image(&[("metadata.version", 30)]);
     if let Some(level) = elr_level {
-        image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: crate::features::ELR_VERSION.into(),
-            level,
-        }));
+        image.apply(&feature_record(crate::features::ELR_VERSION, level));
     }
     if published {
         image.apply(&MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
@@ -411,10 +350,7 @@ fn elr_image(
             krabka_metadata::PartitionElrRecord {
                 topic: "orders".into(),
                 partition: 0,
-                eligible_leader_replicas: vec![
-                    krabka_metadata::NodeId(2),
-                    krabka_metadata::NodeId(3),
-                ],
+                eligible_leader_replicas: vec![NodeId(2), NodeId(3)],
                 last_known_elr: vec![],
             },
         ));
@@ -423,143 +359,75 @@ fn elr_image(
 }
 
 /// KIP-966: finalizing the feature back to 0 clears the memberships it
-/// published, the way Kafka's controller emits its own cleaning records. The
-/// clearing records go in ahead of the feature record, so a replay that stops
-/// between them has forgotten the memberships rather than kept them under a
-/// feature that still reads as on.
+/// published, ahead of the feature record; a cluster that never published
+/// any writes the feature record alone.
 #[test]
 fn an_elr_downgrade_clears_the_published_state_before_the_feature_record() {
-    let image = elr_image(crate::features::METADATA_VERSION_MAX, Some(1), true);
-    let request = validate_only(vec![elr_update(0, UPGRADE_TYPE_SAFE_DOWNGRADE)]);
-    let (results, records) = validate_updates(&request, &image, VERSION);
-
-    assert!(results[0].error_code == codes::NONE, "{results:?}");
-    assert!(
-        records
-            == vec![
-                MetadataRecord::V1PartitionElr(krabka_metadata::PartitionElrRecord {
-                    topic: "orders".into(),
-                    partition: 0,
-                    eligible_leader_replicas: vec![],
-                    last_known_elr: vec![],
-                }),
-                MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                    name: crate::features::ELR_VERSION.into(),
-                    level: 0,
-                }),
-            ],
-        "{records:?}"
-    );
-}
-
-/// A cluster that never turned the feature on has nothing to clear, so the
-/// downgrade is the feature record alone.
-#[test]
-fn an_elr_downgrade_without_published_state_emits_only_the_feature_record() {
-    let image = elr_image(crate::features::METADATA_VERSION_MAX, Some(1), false);
-    let request = validate_only(vec![elr_update(0, UPGRADE_TYPE_SAFE_DOWNGRADE)]);
-    let (results, records) = validate_updates(&request, &image, VERSION);
-
-    assert!(results[0].error_code == codes::NONE, "{results:?}");
-    assert!(
-        records
-            == vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                name: crate::features::ELR_VERSION.into(),
-                level: 0,
-            })],
-        "{records:?}"
-    );
-}
-
-/// KIP-1022: `ELRV_1` depends on `metadata.version` at 4.0-IV1, the level
-/// whose `PartitionRecord` carries the ELR fields, so a cluster below it
-/// cannot finalize the feature.
-#[test]
-fn elr_level_one_requires_the_elr_metadata_version() {
-    for (case, metadata_version, want_code) in [
-        (
-            "below 4.0-IV1",
-            krabka_metadata::metadata_version::ELR_MIN_LEVEL - 1,
-            codes::INVALID_UPDATE_VERSION,
-        ),
-        (
-            "at 4.0-IV1",
-            krabka_metadata::metadata_version::ELR_MIN_LEVEL,
-            codes::NONE,
-        ),
-        (
-            "above 4.0-IV1",
-            crate::features::METADATA_VERSION_MAX,
-            codes::NONE,
-        ),
+    let elr = crate::features::ELR_VERSION;
+    let clear = MetadataRecord::V1PartitionElr(krabka_metadata::PartitionElrRecord {
+        topic: "orders".into(),
+        partition: 0,
+        eligible_leader_replicas: vec![],
+        last_known_elr: vec![],
+    });
+    for (published, records) in [
+        (true, vec![clear, feature_record(elr, 0)]),
+        (false, vec![feature_record(elr, 0)]),
     ] {
-        let image = elr_image(metadata_version, None, false);
-        let request = validate_only(vec![elr_update(1, 1)]);
-        let (results, _records) = validate_updates(&request, &image, VERSION);
-        assert!(results[0].error_code == want_code, "{case}: {results:?}");
+        let image = elr_image(Some(1), published);
+        let request = validate_only(vec![elr_update(0, SAFE)]);
+        assert!(
+            plan_updates(&request, &image, LOCAL) == Ok(plan(records, &[elr])),
+            "{published}"
+        );
     }
 }
 
-/// An image at the newest `metadata.version` with `eligible.leader.replicas.version`
-/// finalized at `elr_level`, and broker 2 registered without that feature.
-fn image_with_elr_unaware_broker(elr_level: Option<i16>) -> krabka_metadata::MetadataImage {
-    let mut image = elr_image(crate::features::METADATA_VERSION_MAX, elr_level, false);
-    let mut features = krabka_metadata::supported_feature_ranges();
-    features.remove(crate::features::ELR_VERSION);
-    image.apply(&MetadataRecord::V1BrokerRegistration(
-        krabka_metadata::BrokerRegistrationRecord {
-            fenced: false,
-            in_controlled_shutdown: false,
-            cordoned_log_dirs: None,
-            node_id: krabka_metadata::NodeId(2),
-            broker_epoch: 0,
-            incarnation_id: uuid::Uuid::nil(),
-            host: String::new(),
-            port: 0,
-            rack: None,
-            log_dirs: vec![],
-            endpoints: vec![],
-            features,
-        },
-    ));
-    image
-}
-
-/// Kafka's `FeatureControlManager.updateFeature` order: registered-node
-/// support precedes the direction check, an unfinalized feature reads as
-/// level 0, and a node that did not register a feature supports only level 0.
+/// A broker that did not register a feature supports only level 0, so it
+/// blocks turning the feature on but not off.
 #[test]
-fn feature_rows_follow_kafka_update_feature_precedence() {
+fn a_feature_unaware_broker_blocks_only_enabling() {
+    let elr = crate::features::ELR_VERSION;
+    let unaware = |elr_level| {
+        let mut image = elr_image(elr_level, false);
+        let mut features = krabka_metadata::supported_feature_ranges();
+        features.remove(elr);
+        image.apply(&MetadataRecord::V1BrokerRegistration(
+            krabka_metadata::BrokerRegistrationRecord {
+                fenced: false,
+                in_controlled_shutdown: false,
+                cordoned_log_dirs: None,
+                node_id: NodeId(2),
+                broker_epoch: 0,
+                incarnation_id: uuid::Uuid::nil(),
+                host: String::new(),
+                port: 0,
+                rack: None,
+                log_dirs: vec![],
+                endpoints: vec![],
+                features,
+            },
+        ));
+        image
+    };
     let cases = [
         (
-            "unaware broker blocks enabling before the direction check",
-            image_with_elr_unaware_broker(None),
-            elr_update(1, UPGRADE_TYPE_SAFE_DOWNGRADE),
-            codes::INVALID_UPDATE_VERSION,
-            Some("Broker 2 does not support eligible.leader.replicas.version level 1."),
+            "enabling",
+            unaware(None),
+            elr_update(1, UPGRADE),
+            Err(invalid(elr, 1, "Broker 2 does not support this feature.")),
         ),
         (
-            "a downgrade type cannot raise an unfinalized feature",
-            elr_image(crate::features::METADATA_VERSION_MAX, None, false),
-            elr_update(1, UPGRADE_TYPE_SAFE_DOWNGRADE),
-            codes::INVALID_UPDATE_VERSION,
-            Some("Can not downgrade to a newer feature version."),
-        ),
-        (
-            "unaware broker still allows turning the feature off",
-            image_with_elr_unaware_broker(Some(1)),
-            elr_update(0, UPGRADE_TYPE_SAFE_DOWNGRADE),
-            codes::NONE,
-            None,
+            "disabling",
+            unaware(Some(1)),
+            elr_update(0, SAFE),
+            Ok(plan(vec![feature_record(elr, 0)], &[elr])),
         ),
     ];
-    for (case, image, update, error_code, error_message) in cases {
-        let (results, _) = validate_updates(&validate_only(vec![update]), &image, VERSION);
-        assert!(results.len() == 1, "{case}");
-        assert!(results[0].error_code == error_code, "{case}: {results:?}");
+    for (case, image, update, expected) in cases {
         assert!(
-            results[0].error_message.as_deref() == error_message,
-            "{case}: {results:?}"
+            plan_updates(&validate_only(vec![update]), &image, LOCAL) == expected,
+            "{case}"
         );
     }
 }
@@ -573,8 +441,8 @@ fn feature_rows_follow_kafka_update_feature_precedence() {
 fn enabling_elr_writes_kafkas_safety_config_records() {
     let key = crate::config_keys::MIN_INSYNC_REPLICAS;
     let cluster = krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID;
-    let node = krabka_metadata::NodeId(1);
-    let unregistered = krabka_metadata::NodeId(7);
+    let node = NodeId(1);
+    let unregistered = NodeId(7);
     let config = |node_id, value: Option<&str>| {
         MetadataRecord::V1BrokerConfig(krabka_metadata::BrokerConfigRecord {
             node_id,
@@ -602,7 +470,7 @@ fn enabling_elr_writes_kafkas_safety_config_records() {
         ),
     ];
     for (cluster_value, broker, broker_value, static_value, want) in cases {
-        let mut image = image_with_directory(crate::features::METADATA_VERSION_MAX);
+        let mut image = elr_image(None, false);
         if let Some(value) = cluster_value {
             image.apply(&config(cluster, Some(value)));
         }
@@ -614,17 +482,4 @@ fn enabling_elr_writes_kafkas_safety_config_records() {
             "{cluster_value:?} {broker:?} {broker_value:?} {static_value}"
         );
     }
-
-    let request = crate::handlers::update_features::test_support::apply_request(vec![elr_update(
-        1,
-        UPGRADE_TYPE_SAFE_DOWNGRADE,
-    )]);
-    let accepted = [row(crate::features::ELR_VERSION.into(), codes::NONE, "")];
-    let refused = [row(
-        crate::features::ELR_VERSION.into(),
-        codes::INVALID_UPDATE_VERSION,
-        "refused",
-    )];
-    assert!(enables_elr(&request, &accepted));
-    assert!(!enables_elr(&request, &refused));
 }

@@ -48,11 +48,10 @@
 //!    Krabka-only suffix, then promotes the JVM replica. The Krabka follower
 //!    must truncate that suffix and resume at the JVM leader's exact LEO.
 //!
-//! 4. [`metadata_version_downgrade_rejects_pre_kip1155_jvm`][]: the KIP-1155
-//!    mixed-version safety gate. Kafka 4.0 predates KIP-1155 and therefore
-//!    advertises no downgrade capability. Both safe and unsafe online
-//!    downgrades must be rejected while that broker/controller is registered,
-//!    without changing the finalized version or projecting away metadata.
+//! 4. [`metadata_version_downgrade_refuses_lossy_levels`][]: a
+//!    `metadata.version` downgrade across levels that changed metadata. Both
+//!    safe and unsafe downgrades are refused with Kafka's messages, without
+//!    changing the finalized version or projecting away metadata.
 //!
 //! ## Topology & networking
 //!
