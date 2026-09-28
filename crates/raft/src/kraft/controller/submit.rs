@@ -385,6 +385,24 @@ impl Engine {
             return;
         }
 
+        // Kafka's `QuorumController` replays each record into its in-memory
+        // state before the record commits. Thus `ReplicationControlManager`
+        // `createTopics` sees a pending topic name as an existing topic and
+        // answers `TOPIC_ALREADY_EXISTS`. This leader validates against the
+        // applied image only, so it checks the names that parked waiters
+        // create.
+        let creates = created_topic_names(&self.image, records);
+        if let Some(name) = creates.iter().find(|name| {
+            self.commit_waiters
+                .iter()
+                .any(|waiter| waiter.creates.contains(name))
+        }) {
+            let _ = reply.send(Err(RaftError::Metadata(
+                krabka_metadata::MetadataError::TopicExists(name.clone()),
+            )));
+            return;
+        }
+
         // Pre-validate and translate to KIP-631 value blobs in ONE pass against
         // an evolving scratch image, so config-diff / ACL-resolution in
         // `to_kraft_values` see in-batch prior records (a batch mixing
@@ -531,6 +549,7 @@ impl Engine {
             base_offset: base,
             need_offset,
             rejection: None,
+            creates,
             result,
             reply,
         });
@@ -670,6 +689,23 @@ fn rebase_partition_directories(
         }),
         _ => None,
     }
+}
+
+/// The names of the topics that `records` create: each `V1Topic` name that
+/// `image` does not have. A `V1Topic` for a topic that `image` has is a
+/// partition growth or a rejected re-create, so its name is not included.
+/// Each name occurs one time only.
+fn created_topic_names(image: &MetadataImage, records: &[MetadataRecord]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for record in records {
+        if let MetadataRecord::V1Topic(topic) = record
+            && image.topic(&topic.name).is_none()
+            && !names.contains(&topic.name)
+        {
+            names.push(topic.name.clone());
+        }
+    }
+    names
 }
 
 /// Decode `blobs` the way a replica replays them, each against the image the
@@ -817,6 +853,45 @@ mod tests {
             assert2::check!(p.directories == vec![dir_id]);
         } else {
             panic!("expected V1Partition");
+        }
+    }
+
+    #[test]
+    fn created_topic_names_lists_only_names_absent_from_the_image() {
+        let topic = |name: &str, id: u128| {
+            MetadataRecord::V1Topic(TopicRecord {
+                name: name.into(),
+                topic_id: Uuid::from_u128(id),
+                partitions: 1,
+                replication_factor: 1,
+            })
+        };
+        let mut image = MetadataImage::default();
+        image.apply(&topic("existing", 1));
+
+        let cases: [(&str, Vec<MetadataRecord>, Vec<&str>); 4] = [
+            ("new topic", vec![topic("new", 2)], vec!["new"]),
+            ("existing topic", vec![topic("existing", 1)], vec![]),
+            (
+                "name repeated in one batch",
+                vec![topic("new", 2), topic("new", 3), topic("other", 4)],
+                vec!["new", "other"],
+            ),
+            (
+                "no topic records",
+                vec![MetadataRecord::V1DeleteTopic(
+                    krabka_metadata::DeleteTopicRecord {
+                        name: "existing".into(),
+                    },
+                )],
+                vec![],
+            ),
+        ];
+        for (case, records, expected) in cases {
+            assert2::check!(
+                created_topic_names(&image, &records) == expected,
+                "case: {case}"
+            );
         }
     }
 
