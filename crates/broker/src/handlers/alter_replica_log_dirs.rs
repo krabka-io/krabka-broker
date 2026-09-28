@@ -88,6 +88,7 @@ pub(crate) fn handle(
                         Ok(()) => codes::NONE,
                         Err(MoveError::TopicNameTooLong) => codes::INVALID_TOPIC_EXCEPTION,
                         Err(MoveError::LogDirNotFound) => codes::LOG_DIR_NOT_FOUND,
+                        Err(MoveError::Cordoned) => codes::INVALID_REPLICA_ASSIGNMENT,
                         Err(MoveError::ReplicaNotAvailable) => codes::REPLICA_NOT_AVAILABLE,
                         Err(MoveError::Storage(error)) => {
                             tracing::warn!(

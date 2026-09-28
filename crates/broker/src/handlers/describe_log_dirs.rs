@@ -35,7 +35,7 @@ mod lag;
 
 use self::{
     authz::{cluster_describe_denied, denied_response},
-    dirs::{absolute_path, log_dir_capacity, offline_result},
+    dirs::{absolute_path, cordoned_log_dirs_reported, log_dir_capacity, offline_result},
     filter::request_filter,
     lag::{future_offset_lag, offset_lag_for},
 };
@@ -81,6 +81,14 @@ pub(crate) async fn handle(
         }
 
         let filter = request_filter(req);
+        // KIP-1066: `IsCordoned` goes out only from `metadata.version`
+        // `4.3-IV0`, as `ReplicaManager.describeLogDirs` gates it on
+        // `isCordonedLogDirsSupported`. Below that level every directory
+        // answers `false` whatever `cordoned.log.dirs` says.
+        let cordoned = cordoned_log_dirs_reported(
+            &broker.controller.current_image(),
+            partitions.cordoned_log_dirs(),
+        );
 
         let mut results = Vec::with_capacity(log_dirs.len());
         for dir in &log_dirs {
@@ -169,6 +177,7 @@ pub(crate) async fn handle(
                 // `-1` and skip the column.
                 total_bytes,
                 usable_bytes,
+                is_cordoned: cordoned.iter().any(|cordoned| cordoned == dir),
                 ..Default::default()
             });
         }

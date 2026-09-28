@@ -216,10 +216,12 @@ fn listener_base(name: &str) -> Option<&str> {
     Some(base)
 }
 
-/// Whether a key may be set only on a named broker: an SSL key, or a
+/// Whether a key may be set only on a named broker: an SSL key,
+/// `cordoned.log.dirs` (`DynamicBrokerConfig.PER_BROKER_CONFIGS`), or a
 /// listener override of anything but the cluster-level listener keys.
 fn is_per_broker(name: &str) -> bool {
     DYNAMIC_SECURITY_CONFIGS.contains(&name)
+        || name == crate::cordoned_log_dirs::CORDONED_LOG_DIRS
         || listener_base(name).is_some_and(|base| !CLUSTER_LEVEL_LISTENER_CONFIGS.contains(&base))
 }
 
@@ -237,6 +239,11 @@ pub(crate) enum BrokerKeyKind {
 
 /// The kind of a broker key, for the APPEND and SUBTRACT checks.
 pub(crate) fn broker_key_kind(name: &str) -> BrokerKeyKind {
+    if let Some(row) = registry::lookup(ConfigScope::Broker, name)
+        && row.config_type == registry::ConfigType::List
+    {
+        return BrokerKeyKind::List;
+    }
     let topic_key = TOPIC_DEFAULT_SYNONYMS
         .iter()
         .find(|(broker, _)| *broker == name)
@@ -312,6 +319,9 @@ fn canonical_broker_value(name: &str, value: &str) -> Result<String, String> {
     }
     if name == REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS {
         return parse_remote_list_offsets_timeout(value).map(|_| value.trim().to_owned());
+    }
+    if name == crate::cordoned_log_dirs::CORDONED_LOG_DIRS {
+        return crate::cordoned_log_dirs::validate_value_type(value).map(|()| value.to_owned());
     }
     if name == UNCLEAN_RECOVERY_STRATEGY {
         return registry::lookup(ConfigScope::Broker, name)
@@ -410,6 +420,51 @@ pub(crate) fn elr_min_isr_error(
         (
             codes::INVALID_CONFIG,
             "Cluster-level min.insync.replicas cannot be removed while ELR is enabled.".into(),
+        )
+    })
+}
+
+/// The broker's own check of the `cordoned.log.dirs` a named-broker resource
+/// ends up with, against this node's `log_dirs`.
+///
+/// Kafka's `ConfigAdminManager.validateBrokerConfigChange` builds a whole
+/// `KafkaConfig` from the resource's dynamic configs, and its
+/// `validateCordonedLogDirs` refuses a value that is not `*` alone or a subset
+/// of `log.dirs`. The `IllegalArgumentException` it throws reaches the client
+/// as `INVALID_REQUEST`. `log_dirs` is empty on a node without the broker role,
+/// which checks nothing here, as a Kafka controller does not.
+///
+/// # Errors
+/// Returns `INVALID_REQUEST` with Kafka's message.
+pub(crate) fn cordoned_log_dirs_error(
+    canonical: &BTreeMap<String, String>,
+    log_dirs: &[std::path::PathBuf],
+) -> Result<(), (i16, String)> {
+    match canonical.get(crate::cordoned_log_dirs::CORDONED_LOG_DIRS) {
+        Some(value) if !log_dirs.is_empty() => crate::cordoned_log_dirs::resolve(value, log_dirs)
+            .map(drop)
+            .map_err(|message| (codes::INVALID_REQUEST, message)),
+        _ => Ok(()),
+    }
+}
+
+/// Kafka's `ConfigurationControlManager.isCordonedLogDirsDisabled`: below
+/// `metadata.version` `4.3-IV0` the controller refuses every write of
+/// `cordoned.log.dirs` to a broker resource, a deletion included.
+pub(crate) fn cordoned_log_dirs_disabled_error(
+    image: &krabka_metadata::MetadataImage,
+    name: &str,
+) -> Option<(i16, String)> {
+    let supported = image.finalized_metadata_version().is_some_and(|level| {
+        level >= krabka_metadata::metadata_version::CORDONED_LOG_DIRS_MIN_LEVEL
+    });
+    (name == crate::cordoned_log_dirs::CORDONED_LOG_DIRS && !supported).then(|| {
+        (
+            codes::INVALID_CONFIG,
+            format!(
+                "The {name} configuration value cannot be set because it requires \
+                 metadata.version >= 4.3-IV0"
+            ),
         )
     })
 }

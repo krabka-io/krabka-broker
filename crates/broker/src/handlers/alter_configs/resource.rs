@@ -184,6 +184,7 @@ pub(super) async fn process_resource(
             &resource,
             image,
             krabka_metadata::NodeId(broker.config.node_id.0),
+            &broker.config.broker_log_dirs(),
         ) {
             Ok(records) => records,
             Err((code, message)) => {

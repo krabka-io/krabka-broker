@@ -158,6 +158,7 @@ impl BrokerConfig {
             advertised_listener: "127.0.0.1:0".into(),
             log_dir,
             extra_log_dirs: Vec::new(),
+            cordoned_log_dirs: None,
             log_config: LogConfig::default(),
             stamp_source: None,
             node_id: NodeId(1),

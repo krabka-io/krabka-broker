@@ -231,8 +231,12 @@ pub async fn bootstrap(
             continue;
         }
 
-        let topic_dir =
-            log_dir::place_partition_dir(&placement_dirs, OFFSETS_TOPIC, record.partition);
+        let topic_dir = log_dir::place_partition_dir_avoiding(
+            &placement_dirs,
+            partitions.cordoned_log_dirs(),
+            OFFSETS_TOPIC,
+            record.partition,
+        );
         std::fs::create_dir_all(&topic_dir)?;
         let log = krabka_log::Log::open(&topic_dir, config.log_config.clone())?;
         if record.leader == config.node_id {

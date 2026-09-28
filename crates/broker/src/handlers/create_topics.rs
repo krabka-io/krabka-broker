@@ -38,8 +38,9 @@ mod response;
 mod tests;
 
 pub(crate) use self::placement::{
-    InitialLeadership, automatic_leaderships, manual_leaderships, placement_failure_message,
-    round_robin_replicas, site_broker_views, validate_manual_partition_assignment,
+    InitialLeadership, automatic_leaderships, automatic_placement_exclusions, manual_leaderships,
+    placement_failure_message, round_robin_replicas, site_broker_views,
+    validate_manual_partition_assignment,
 };
 use self::{
     authorization::{authorize_create_topics, describe_configs_denied},
@@ -346,16 +347,18 @@ pub(crate) async fn handle(
         // site and the witness role of each broker. `site_broker_views` sorts
         // by node id for determinism, and it covers the race in which the
         // self-registration record has not reached the local image yet.
-        // The automatic placement never picks an unavailable broker. A manual
-        // assignment may name one, because Kafka checks only that the broker
-        // is registered, and the ISR below leaves it out.
+        // The automatic placement never picks an unavailable broker, nor one
+        // whose log directories are all cordoned (KIP-1066). A manual
+        // assignment may name either, because Kafka 4.3.1 checks only that the
+        // broker is registered, and the ISR below leaves an unavailable one out.
         let unavailable = super::offline_replicas::unavailable_brokers(broker, &image).await;
         let manual = !topic_req.assignments.is_empty();
         let no_exclusion = std::collections::HashSet::new();
+        let unusable = automatic_placement_exclusions(&image, &unavailable);
         let brokers = site_broker_views(
             &image,
             broker.config.is_broker().then_some(node_id),
-            if manual { &no_exclusion } else { &unavailable },
+            if manual { &no_exclusion } else { &unusable },
         );
 
         let assignments = match resolve_assignments(&topic_req, &brokers, preferred_site) {

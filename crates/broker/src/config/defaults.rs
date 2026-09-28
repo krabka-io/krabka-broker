@@ -157,6 +157,7 @@ impl Default for BrokerConfig {
             advertised_listener: addr.to_string(),
             log_dir: PathBuf::from("./krabka-data"),
             extra_log_dirs: Vec::new(),
+            cordoned_log_dirs: None,
             log_config: LogConfig::default(),
             stamp_source: None,
             node_id: NodeId(1),

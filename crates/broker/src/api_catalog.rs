@@ -989,6 +989,20 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "",
     },
     KipAnnotation {
+        key: "KIP-1066",
+        claim: "cordoned.log.dirs: cordoned log directories take no new replica",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/cordoned_log_dirs.rs",
+        tests: &[
+            "crates/broker/src/cordoned_log_dirs.rs",
+            "crates/broker/src/handlers/broker_heartbeat/tests.rs::a_heartbeat_stores_its_cordoned_dirs_from_4_3_iv0",
+            "crates/broker/src/handlers/create_topics/placement/tests.rs::fully_cordoned_brokers_are_not_automatic_placement_candidates",
+            "crates/broker/src/handlers/incremental_alter_configs/broker_scope.rs",
+            "crates/broker/tests/alter_replica_log_dirs.rs",
+        ],
+        note: "Matches Kafka 4.3.1. A manual CreateTopics or CreatePartitions assignment, or an AlterPartitionReassignments target, that names a broker whose log directories are all cordoned is accepted, as a live `apache/kafka:4.3.1` accepts it: the `INVALID_REPLICA_ASSIGNMENT` refusal `The manual partition assignment includes broker N, but all its log directories are cordoned.` is KAFKA-20832, which is on Kafka trunk and the 4.3 branch after 4.3.1 only. The controller does not tell a forwarded write of `cordoned.log.dirs` from a direct one, so it does not apply Kafka's rule that a direct controller write may only remove entries.",
+    },
+    KipAnnotation {
         key: "KIP-1071",
         claim: "Streams groups: StreamsGroupHeartbeat and StreamsGroupDescribe",
         status: KipStatus::Implemented,

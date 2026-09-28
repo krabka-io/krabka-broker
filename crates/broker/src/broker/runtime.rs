@@ -228,6 +228,14 @@ pub(super) async fn start_broker_runtime(
     let (diskless_runtime, metrics, health) = runtime_deps;
     let supervisor_shutdown = CancellationToken::new();
     let throttle_state = Arc::new(crate::throttle::ThrottleState::new());
+    // KIP-1066: keep the cordoned set in step with this broker's dynamic
+    // `cordoned.log.dirs`, as Kafka's `DynamicLogConfig.reconfigure` does.
+    crate::cordoned_log_dirs::spawn_watcher(
+        controller,
+        config.node_id,
+        storage.0.cordoned_log_dirs().clone(),
+        supervisor_shutdown.child_token(),
+    );
     let inter_listener_protocol = config
         .effective_listeners()
         .iter()
@@ -269,7 +277,7 @@ pub(super) async fn start_broker_runtime(
         inter_listener_protocol,
         (&metrics, &audit_log),
         &supervisor_shutdown,
-        (storage.2, storage.3),
+        (storage.2, storage.3, storage.0.cordoned_log_dirs()),
     );
     let ObservabilityStartup {
         metrics_bound_addr,

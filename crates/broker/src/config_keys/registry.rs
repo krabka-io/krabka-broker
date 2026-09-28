@@ -866,6 +866,17 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
         )
     },
     ConfigKey {
+        kip: Some("KIP-1066"),
+        ..key(
+            crate::cordoned_log_dirs::CORDONED_LOG_DIRS,
+            ConfigScope::Broker,
+            ConfigType::List,
+            Some(""),
+            crate::cordoned_log_dirs::CORDONED_LOG_DIRS_DOC,
+            ValueCheck::Parsed,
+        )
+    },
+    ConfigKey {
         kip: Some("KIP-966"),
         ..key(
             UNCLEAN_RECOVERY_STRATEGY,

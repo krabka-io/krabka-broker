@@ -82,6 +82,11 @@ pub enum MoveError {
     TopicNameTooLong,
     /// Target path is not one of this broker's configured `log.dirs`.
     LogDirNotFound,
+    /// KIP-1066: the target directory is cordoned. Kafka's
+    /// `ReplicaManager.alterReplicaLogDirs` answers it with
+    /// `INVALID_REPLICA_ASSIGNMENT`, after the offline check and before it
+    /// looks at the partition.
+    Cordoned,
     /// The named partition is not hosted on this broker.
     ReplicaNotAvailable,
     /// `krabka_log::Log::open` or `mkdir` failed while staging the future log.

@@ -98,6 +98,20 @@ fn apply_boolean_properties(
     Ok(())
 }
 
+/// KIP-1066 `cordoned.log.dirs` under its Kafka name. A value already set by
+/// another source wins. `crate::BrokerConfig::validate` checks it against the
+/// log directories once they are all known.
+fn apply_cordoned_log_dirs(
+    properties: &std::collections::BTreeMap<String, String>,
+    cfg: &mut crate::config::BrokerConfig,
+) {
+    if cfg.cordoned_log_dirs.is_none()
+        && let Some(value) = properties.get(crate::cordoned_log_dirs::CORDONED_LOG_DIRS)
+    {
+        cfg.cordoned_log_dirs = Some(value.clone());
+    }
+}
+
 /// A positive integer `server_properties` value.
 fn parse_positive<T: std::str::FromStr + Default + PartialOrd>(
     name: &str,
@@ -193,6 +207,7 @@ pub(super) fn apply_listener_settings(
     }
     apply_topic_creation_properties(&settings.server_properties, cfg)?;
     apply_boolean_properties(&settings.server_properties, cfg)?;
+    apply_cordoned_log_dirs(&settings.server_properties, cfg);
     let num_val = settings
         .server_properties
         .get("quota.window.num")
