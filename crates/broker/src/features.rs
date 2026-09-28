@@ -51,7 +51,7 @@ pub(crate) const CIDR_ACL_HOST_MIN_LEVEL: i16 =
 /// place they are defined.
 const DID_METADATA_CHANGE: [bool; 26] = [
     true,  // 7   3.3-IV3: InControlledShutdown in broker registration (KIP-841)
-    true,  // 8   3.4-IV0: ZK migration records (KIP-866)
+    true,  // 8   3.4-IV0: ZK migration records
     false, // 9   3.5-IV0: tiered storage (KIP-405)
     false, // 10  3.5-IV1: replica epoch in Fetch (KIP-903)
     true,  // 11  3.5-IV2: KRaft SCRAM
@@ -70,11 +70,11 @@ const DID_METADATA_CHANGE: [bool; 26] = [
     false, // 24  4.0-IV2: transaction.version bootstrap (KIP-890)
     false, // 25  4.0-IV3: async remote LIST_OFFSETS (KIP-1075)
     false, // 26  4.1-IV0: ELR on by default (KIP-966)
-    false, // 27  4.1-IV1: replica fetcher FETCH v18 (KIP-1166)
+    false, // 27  4.1-IV1: replica fetcher FETCH v18
     false, // 28  4.2-IV0: share groups by default (KIP-932)
     false, // 29  4.2-IV1: streams groups by default (KIP-1071)
     true,  // 30  4.3-IV0: cordoned log dirs in broker registration
-    false, // 31  4.4-IV0: share-group dead-letter queue (KIP-1191)
+    false, // 31  4.4-IV0: share-group dead-letter queue
     true,  // 32  4.4-IV1: CIDR ACL host patterns (KIP-1276)
 ];
 

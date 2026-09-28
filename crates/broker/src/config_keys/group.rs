@@ -3,7 +3,7 @@
 //! krabka's coordinators apply.
 //!
 //! Kafka trunk defines 27 group keys. krabka's streams coordinator applies
-//! the seven `streams.*` keys it runs with, and its share partitions apply
+//! the eight `streams.*` keys it runs with, and its share partitions apply
 //! `share.auto.offset.reset`. The streams coordinator reads a group's whole
 //! stored override map and ignores it all when one key is foreign to it, so
 //! an alter that stored any other group key would silently drop the streams

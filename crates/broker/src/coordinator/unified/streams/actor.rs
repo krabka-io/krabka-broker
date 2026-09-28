@@ -177,7 +177,7 @@ impl StreamsGroupActorHandle {
 ///
 /// It returns `Some(error_code)` to reject the commit, and `None` to allow it.
 ///
-/// The shared `validate_group_commit` knows only about the classic and
+/// The shared `validate_commit` knows only about the classic and
 /// consumer `GroupActorHandle`. A streams-group consumer keeps its membership
 /// in the streams actor, not a classic one, so this function must validate it
 /// instead. Otherwise the broker fences the commit against an empty classic

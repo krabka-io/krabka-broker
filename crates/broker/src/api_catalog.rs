@@ -236,9 +236,12 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         key: "KIP-207",
         claim: "The high watermark a new leader reports may regress after an election",
         status: KipStatus::Implemented,
-        module: "crates/broker/src/data_path_model/model.rs",
-        tests: &["crates/broker/src/data_path_model/model.rs"],
-        note: "The exhaustive data-path model checks durability without a watermark monotonicity assertion, which is what the KIP allows.",
+        module: "crates/broker/src/handlers/list_offsets/resolve.rs",
+        tests: &[
+            "crates/broker/src/data_path_model/model.rs",
+            "crates/broker/src/handlers/list_offsets/resolve.rs::offset_not_available_follows_partition_fetch_offset_for_timestamp",
+        ],
+        note: "The exhaustive data-path model checks durability without a watermark monotonicity assertion, which is what the KIP allows. ListOffsets fences a client lookup while the leader's epoch start is above its high watermark, as Partition.fetchOffsetForTimestamp does: OFFSET_NOT_AVAILABLE from v5, LEADER_NOT_AVAILABLE below.",
     },
     KipAnnotation {
         key: "KIP-211",
@@ -1035,10 +1038,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         claim: "A checkpoint at every metadata.version downgrade",
         status: KipStatus::Implemented,
         module: "crates/raft/src/kraft/controller/snapshotting.rs",
-        tests: &[
-            "crates/raft/src/kraft/controller/tests_downgrade.rs",
-            "crates/broker/tests/jvm_kip320_divergence/metadata_version_downgrade.rs",
-        ],
+        tests: &["crates/raft/src/kraft/controller/tests_downgrade.rs"],
         note: "",
     },
     KipAnnotation {
@@ -1072,12 +1072,13 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
     KipAnnotation {
         key: "KIP-1251",
         claim: "OffsetCommit accepts an older member epoch for a partition assigned at or before that epoch",
-        status: KipStatus::Partial,
-        module: "crates/broker/src/coordinator/unified/actor/commit_validation.rs",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/coordinator/unified/consumer_state/group.rs",
         tests: &[
-            "crates/broker/src/handlers/offset_commit/group_validation_tests.rs::commit_is_fenced_by_kafka_group_rule",
+            "crates/broker/src/handlers/offset_commit/group_validation_tests.rs::consumer_group_commit_follows_kip_1251",
+            "crates/broker/src/coordinator/unified/consumer_state/group.rs::offset_commit_follows_kafka_consumer_group_rule",
         ],
-        note: "Commits are fenced by Kafka's validateOffsetCommit, but every older epoch is still refused: krabka does not record the epoch at which each partition was assigned, so the per-partition acceptance is open (#800).",
+        note: "",
     },
     KipAnnotation {
         key: "KIP-1263",
@@ -1119,8 +1120,9 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/src/coordinator/unified/streams/actor/tests.rs::heartbeat_response_carries_the_recovery_lag_at_version_1_only",
             "crates/broker/src/handlers/streams_group_heartbeat.rs::handle_answers_v1_with_the_recovery_lag_and_no_topology_description_request",
             "crates/broker/src/handlers/streams_group_describe/tests.rs::version_1_names_the_assignor_and_the_topology_description_status",
+            "crates/broker/src/coordinator/unified/streams/actor/tests.rs::a_member_missing_a_rack_aware_tag_gets_missing_client_tags_at_version_1",
         ],
-        note: "krabka has no topology description plugin, as a Kafka broker has none by default: a heartbeat never sets TopologyDescriptionRequired, a describe that asks for the description answers NOT_STORED, and StreamsGroupTopologyDescriptionUpdate (93) is not served. The MISSING_CLIENT_TAGS status heartbeat v1 may carry needs `streams.rack.aware.assignment.tags`, which krabka does not support, so it is never sent, as Kafka never sends it with that list empty.",
+        note: "krabka has no topology description plugin, as a Kafka broker has none by default: a heartbeat never sets TopologyDescriptionRequired, a describe that asks for the description answers NOT_STORED, and StreamsGroupTopologyDescriptionUpdate (93) is not served. Heartbeat v1 carries MISSING_CLIENT_TAGS when a tag key named by the group's `streams.rack.aware.assignment.tags` is missing from the member's client tags.",
     },
     KipAnnotation {
         key: "KIP-1357",
