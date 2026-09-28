@@ -130,6 +130,10 @@ async fn harness(client_id: &str, topics: &[&str]) -> Harness {
         config.metrics_listen_addr = Some("127.0.0.1:0".parse().expect("static addr"));
     })
     .await;
+    // The krabka-client-rs Producer does not retry a FindCoordinator that
+    // answers COORDINATOR_NOT_AVAILABLE, so `__transaction_state` must exist
+    // before `init_transactions`.
+    broker.wait_until_transaction_coordinator_ready().await;
     let bootstrap = broker0_advertised();
     let metrics_addr = broker
         .metrics_addr()

@@ -155,6 +155,10 @@ async fn acks_all_survives_leader_crash() {
     //    burst. The in-process metadata image ISR is exactly what the JVM
     //    `kafka-topics --describe` reports, so observe it directly.
     cluster[0].0.wait_until_isr_len(TOPIC, 0, 3).await;
+    // The consumer at the end needs `__consumer_offsets`, which takes three
+    // replicas. Create it while all three brokers are up, as Kafka's
+    // `IntegrationTestHarness.createOffsetsTopic` does before a test.
+    cluster[0].0.wait_until_group_coordinator_ready().await;
 
     // 3. Determine partition-0 leader from Metadata via local port (not Docker).
     let leader_node_id = {
