@@ -11,8 +11,12 @@
 //!
 //! Krabka's registration record carries the same two flags. A change is the
 //! broker's current registration with those flags moved, at the same
-//! incarnation and broker epoch, which the controller appends without
-//! stamping a new epoch; [`registration_change`] builds it.
+//! incarnation and broker epoch; [`registration_change`] builds it. Like a
+//! `BrokerRegistrationChangeRecord`, it applies only while the broker is
+//! still registered at that epoch: the controller keeps the epoch, and drops a
+//! change whose broker registered again after it was built, so a stale change
+//! neither overwrites the new registration nor registers the broker again. A
+//! new registration carries broker epoch -1, and the controller stamps it.
 //!
 //! The heartbeat handler writes the fence, unfence and controlled-shutdown
 //! transitions of Kafka's heartbeat state machine. The liveness ticker writes

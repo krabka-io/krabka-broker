@@ -185,6 +185,7 @@ impl KraftController {
             commit_waiters: Vec::new(),
             was_leader: initial_was_leader,
             held_epoch: initial_epoch,
+            registration_writes: BTreeMap::new(),
             snapshot_interval_records,
             max_bytes_between_snapshots,
             max_snapshot_interval,

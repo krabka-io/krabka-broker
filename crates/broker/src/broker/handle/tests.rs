@@ -96,7 +96,7 @@ async fn single_broker_handle_helpers_observe_real_state_and_errors() {
                 in_controlled_shutdown: false,
                 cordoned_log_dirs: None,
                 node_id: krabka_raft::NodeId(handle.node_id() + 1),
-                broker_epoch: 0,
+                broker_epoch: -1,
                 incarnation_id: uuid::Uuid::from_u128(0xBEEF),
                 host: "127.0.0.1".to_string(),
                 port: 19_092,

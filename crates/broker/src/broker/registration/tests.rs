@@ -91,7 +91,9 @@ mod publish_race {
             node_id: NodeId(9),
             ..BrokerConfig::for_tests(std::path::PathBuf::new())
         };
-        let registration = self_registration_record(&config);
+        // The controller stamps the offset the registration commits at.
+        let mut registration = self_registration_record(&config);
+        registration.broker_epoch = 0;
         let (image_tx, _keep_alive) =
             watch::channel(Arc::new(MetadataImage::new(uuid::Uuid::nil())));
         let source = DelayedPublishSource {

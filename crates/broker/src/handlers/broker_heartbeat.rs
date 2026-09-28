@@ -252,24 +252,26 @@ async fn advance_broker_state(
     next
 }
 
-/// The state a heartbeat starts from: the registry's, except that a fenced
-/// registration is never `Unfenced`.
+/// The state a heartbeat starts from: `Fenced` whenever the registration is
+/// fenced, and the registry's state otherwise.
 ///
-/// A new registration is fenced, and `ClusterControlManager.registerBroker`
-/// resets the broker's heartbeat state to that fence. The registry can still
-/// hold the unfenced session of the registration it replaced, because a
-/// broker's self-registration does not pass through `BrokerRegistration`, so
-/// the registration's fence decides.
+/// Kafka replays every registration and every fence into
+/// `BrokerHeartbeatManager.register`, whose `touch` with `fenced = true` also
+/// takes the broker out of controlled shutdown, so a fenced registration
+/// always starts its next heartbeat from `FENCED`. krabka's registry does not
+/// replay the log: a broker's self-registration does not pass through
+/// `BrokerRegistration` and its `replace_incarnation`, so the registry can
+/// still hold the unfenced session, or the controlled shutdown, of the
+/// registration a restart replaced. The registration's fence decides.
 fn current_broker_state(
     registry: BrokerControlState,
     image: &krabka_metadata::MetadataImage,
     broker: NodeId,
 ) -> BrokerControlState {
-    match registry {
-        BrokerControlState::Unfenced if crate::heartbeat::fencing::is_fenced(image, broker) => {
-            BrokerControlState::Fenced
-        }
-        state => state,
+    if crate::heartbeat::fencing::is_fenced(image, broker) {
+        BrokerControlState::Fenced
+    } else {
+        registry
     }
 }
 

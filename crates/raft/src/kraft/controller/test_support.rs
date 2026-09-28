@@ -217,6 +217,7 @@ pub fn build_engine_only_with_policy(
             commit_waiters: Vec::new(),
             was_leader,
             held_epoch,
+            registration_writes: std::collections::BTreeMap::new(),
             snapshot_interval_records: 0,
             max_bytes_between_snapshots: krabka_units::prelude::bytes(0),
             max_snapshot_interval: krabka_units::prelude::millis(0),

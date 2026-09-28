@@ -806,7 +806,7 @@ async fn register_follower(broker_handle: &crate::broker::BrokerHandle) {
                 in_controlled_shutdown: false,
                 cordoned_log_dirs: None,
                 node_id: krabka_raft::NodeId(FOLLOWER),
-                broker_epoch: 0,
+                broker_epoch: -1,
                 incarnation_id: uuid::Uuid::nil(),
                 host: "127.0.0.1".into(),
                 port: 9092,

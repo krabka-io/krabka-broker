@@ -250,7 +250,7 @@ pub(crate) async fn seed_remote_broker(handle: &BrokerHandle, node_id: u64) {
                 in_controlled_shutdown: false,
                 cordoned_log_dirs: None,
                 node_id: krabka_raft::NodeId(node_id),
-                broker_epoch: 0,
+                broker_epoch: -1,
                 incarnation_id: uuid::Uuid::nil(),
                 host: "127.0.0.1".into(),
                 port: 9092,

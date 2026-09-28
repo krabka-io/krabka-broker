@@ -36,7 +36,8 @@ fn self_registration_record(config: &BrokerConfig) -> krabka_metadata::BrokerReg
         in_controlled_shutdown: false,
         cordoned_log_dirs: None,
         node_id: config.node_id,
-        broker_epoch: 0,
+        // The controller stamps the offset the registration commits at.
+        broker_epoch: -1,
         incarnation_id: config.incarnation_id,
         host,
         port,

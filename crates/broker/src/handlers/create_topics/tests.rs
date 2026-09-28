@@ -295,7 +295,7 @@ async fn minus_one_takes_the_broker_topic_creation_defaults() {
                     in_controlled_shutdown: false,
                     cordoned_log_dirs: None,
                     node_id: krabka_raft::NodeId(node_id),
-                    broker_epoch: 0,
+                    broker_epoch: -1,
                     incarnation_id: Uuid::nil(),
                     host: "127.0.0.1".into(),
                     port: 9092,
