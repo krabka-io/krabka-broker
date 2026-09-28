@@ -69,11 +69,6 @@ impl RuntimeFileConfig {
             cfg.audit_tail_read_max,
             whole_bytes_usize
         );
-        set_runtime_time_millis!(
-            runtime,
-            offsets_topic_metadata_wait_timeout,
-            cfg.offsets_topic_metadata_wait_timeout
-        );
         set_runtime_u32!(
             runtime,
             client_metrics_stale_push_intervals,

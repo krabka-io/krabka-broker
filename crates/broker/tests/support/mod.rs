@@ -24,7 +24,7 @@
 //! One child module per role: [`single_broker`] and [`operator_keys`] boot a
 //! single node, [`ports`] reserves the addresses a cluster binds and
 //! [`cluster`] and [`cluster_boot`] boot it, [`containers`] addresses the JVM
-//! container suites, [`audit`] reads the audit topic back, and [`relay`] cuts
+//! container suites, [`coordinator`] makes a client's coordinator lookup, [`audit`] reads the audit topic back, and [`relay`] cuts
 //! links. Every helper is re-exported here, so a suite reaches all of them as
 //! `support::<name>`. What stays in this file is the tracing setup, the
 //! metadata round-trip that resolves a topic id, and the two pollers that wait
@@ -44,6 +44,7 @@ mod audit;
 mod cluster;
 mod cluster_boot;
 mod containers;
+mod coordinator;
 mod operator_keys;
 mod ports;
 mod single_broker;
@@ -64,6 +65,7 @@ pub use self::{
         wait_for_all_brokers_registered,
     },
     containers::{JvmListeners, free_port, manifest_dir, unique_container_name},
+    coordinator::{KEY_TYPE_GROUP, KEY_TYPE_SHARE, KEY_TYPE_TRANSACTION, find_coordinator},
     operator_keys::{
         ANONYMOUS, OperatorKey, mint_operator_key, sasl_client, sasl_plain_security,
         start_with_operator_key, start_with_operator_keys, start_with_operator_keys_sasl,

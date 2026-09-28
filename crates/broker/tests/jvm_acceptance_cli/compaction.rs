@@ -86,7 +86,7 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
         bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
         // 3s cleaner tick so we don't have to wait the full 30s default.
         cleaner_interval_override: Some(krabka_units::secs(3)),
-        ..BrokerConfig::default()
+        ..BrokerConfig::default().with_internal_topics_for(1)
     };
     let broker = Broker::start(config).await.expect("start broker");
     eprintln!(

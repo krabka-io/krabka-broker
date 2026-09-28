@@ -1,12 +1,19 @@
 //! `FindCoordinator` (`api_key=10`). Supports:
 //!   - `key_type=0` (GROUP): hashes the group id to its
 //!     `__consumer_offsets` partition and returns that partition's leader.
-//!   - `key_type=1` (TRANSACTION): ensures `__transaction_state` exists,
-//!     hashes the transaction-id to a partition, resolves the leader, and
-//!     returns that broker's address.
+//!   - `key_type=1` (TRANSACTION): hashes the transaction-id to its
+//!     `__transaction_state` partition and returns that partition's leader.
 //!   - `key_type=2` (SHARE, v6+): checks `ClusterAction` once for the whole
 //!     request, validates each `group:topicId:partition` key, and returns the
 //!     leader of its `__share_group_state` partition.
+//!
+//! A state topic that does not exist yet is created on first use. The lookup
+//! asks [`crate::auto_topic_creation::AutoTopicCreation`] for it, which sends
+//! a `CreateTopics` request to the active controller with its configured
+//! partition count and replication factor, and answers
+//! `COORDINATOR_NOT_AVAILABLE` for every admitted key.
+//! A partition with no leader, or with a leader that is not alive, is
+//! `COORDINATOR_NOT_AVAILABLE` too.
 //!
 //! The handler follows `KafkaApis.getCoordinator`. A refused `ClusterAction`
 //! and an unknown key type fail the whole request, as the exception Kafka
@@ -140,10 +147,23 @@ pub(crate) async fn handle(
         })
         .collect();
 
-    let coordinators: Vec<Coordinator> = match req.key_type {
-        _ if keys.is_empty() => Vec::new(),
-        KEY_TYPE_GROUP => {
-            let image = controller.current_image();
+    let coordinators: Vec<Coordinator> = if keys.is_empty() {
+        Vec::new()
+    } else {
+        let state_topic = match req.key_type {
+            KEY_TYPE_GROUP => crate::coordinator::bootstrap::OFFSETS_TOPIC,
+            KEY_TYPE_TRANSACTION => crate::txn::bootstrap::TOPIC,
+            _ => crate::share_coordinator::bootstrap::TOPIC,
+        };
+        let image = controller.current_image();
+        if image.topic(state_topic).is_none() {
+            // Kafka asks `AutoTopicCreationManager.createTopics` for the
+            // state topic without a request context, and answers
+            // COORDINATOR_NOT_AVAILABLE. The client retries, and a later
+            // lookup finds the topic.
+            broker.auto_topic_creation.request(state_topic);
+            unavailable_for_keys(keys)
+        } else {
             let unavailable =
                 crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
             let target = ResolveTarget {
@@ -153,89 +173,18 @@ pub(crate) async fn handle(
                 advertised: &advertised,
                 listener: ctx.connection_listener_name,
             };
-            keys.into_iter()
-                .map(|key| {
-                    let partition =
-                        crate::coordinator::partitioner::partition_for_group(&image, &key);
-                    resolve_partition_coordinator(
-                        &target,
-                        crate::coordinator::bootstrap::OFFSETS_TOPIC,
-                        partition,
-                        key,
-                    )
-                })
-                .collect()
-        }
-        KEY_TYPE_TRANSACTION => {
-            // Ensure __transaction_state topic exists before we try to look up
-            // partitions in it.
-            match crate::txn::bootstrap::ensure_topic(
-                &controller,
-                broker.config.transaction_state_num_partitions,
-                broker.config.transaction_state_replication_factor,
-                &crate::txn::bootstrap::topic_configs(
-                    broker.config.transaction_state_segment_bytes,
-                    broker.config.transaction_state_min_isr,
-                ),
-            )
-            .await
-            {
-                Ok(()) => {
-                    let image = controller.current_image();
-                    let unavailable =
-                        crate::handlers::offline_replicas::unavailable_brokers(broker, &image)
-                            .await;
-                    let target = ResolveTarget {
-                        image: &image,
-                        unavailable: &unavailable,
-                        local_node: broker.config.node_id,
-                        advertised: &advertised,
-                        listener: ctx.connection_listener_name,
-                    };
-                    resolve_transaction_keys(broker, &target, keys)
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        %error,
-                        "txn bootstrap failed; replying COORDINATOR_NOT_AVAILABLE"
-                    );
-                    unavailable_for_keys(keys)
-                }
-            }
-        }
-        KEY_TYPE_SHARE => {
-            // Ensure __share_group_state exists before resolving its
-            // partitions' leaders.
-            let topic_ready = crate::share_coordinator::bootstrap::ensure_topic(
-                &controller,
-                broker.config.share_coordinator.state_topic_num_partitions,
-                broker
-                    .config
-                    .share_coordinator
-                    .state_topic_replication_factor,
-                &crate::share_coordinator::bootstrap::topic_configs(
-                    &broker.config.share_coordinator,
-                ),
-            )
-            .await;
-            if let Err(error) = topic_ready {
-                tracing::warn!(
-                    %error,
-                    "share-state bootstrap failed; replying COORDINATOR_NOT_AVAILABLE"
-                );
-                unavailable_for_keys(keys)
-            } else {
-                let image = controller.current_image();
-                let unavailable =
-                    crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
-                let target = ResolveTarget {
-                    image: &image,
-                    unavailable: &unavailable,
-                    local_node: broker.config.node_id,
-                    advertised: &advertised,
-                    listener: ctx.connection_listener_name,
-                };
-                keys.into_iter()
+            match req.key_type {
+                KEY_TYPE_GROUP => keys
+                    .into_iter()
+                    .map(|key| {
+                        let partition =
+                            crate::coordinator::partitioner::partition_for_group(&image, &key);
+                        resolve_partition_coordinator(&target, state_topic, partition, key)
+                    })
+                    .collect(),
+                KEY_TYPE_TRANSACTION => resolve_transaction_keys(broker, &target, keys),
+                _ => keys
+                    .into_iter()
                     .map(|key| {
                         // Admission validated the key already, so the parse
                         // cannot fail here.
@@ -248,17 +197,11 @@ pub(crate) async fn handle(
                             partition,
                             broker.config.share_coordinator.state_topic_num_partitions,
                         );
-                        resolve_partition_coordinator(
-                            &target,
-                            crate::share_coordinator::bootstrap::TOPIC,
-                            p,
-                            key,
-                        )
+                        resolve_partition_coordinator(&target, state_topic, p, key)
                     })
-                    .collect()
+                    .collect(),
             }
         }
-        _ => Vec::new(),
     };
 
     // Re-attach rejected entries in their original request slots. Kafka's

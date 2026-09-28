@@ -1,11 +1,12 @@
 //! Live-broker tests for the `FindCoordinator` handler.
 //!
 //! These drive `handle` against a running broker, which is what covers the
-//! bootstrap-then-resolve path for the `__transaction_state` topic: the
-//! configured partition count must shape the topic the handler creates and the
-//! partition it routes a transactional id to.
+//! create-on-first-use path of the coordinator topics: the first lookup asks
+//! for the topic and answers `COORDINATOR_NOT_AVAILABLE`, and the configured
+//! partition count and replication factor shape the topic that is created and
+//! the partition a key is routed to.
 
-use assert2::assert;
+use assert2::{assert, check};
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse;
 
@@ -56,6 +57,12 @@ async fn configured_partition_count_controls_txn_topic_and_routing() {
         coordinator_keys: vec![tid.to_string()],
         ..Default::default()
     };
+
+    let first = find(&broker, &request, version, "admin").await;
+    check!(first.coordinators == vec![row(tid, codes::COORDINATOR_NOT_AVAILABLE, None)]);
+    broker_handle
+        .wait_until_transaction_coordinator_ready()
+        .await;
 
     let response = handle(
         &broker,
@@ -164,6 +171,9 @@ async fn mixed_rejection_and_resolution_preserve_key_order_and_errors() {
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
+    broker_handle
+        .wait_until_transaction_coordinator_ready()
+        .await;
     let principal = principal("alice");
     let peer = peer();
     let context = crate::test_support::request_context(&principal, &peer, "txn-client");
@@ -384,6 +394,7 @@ async fn granted_share_request_validates_each_key() {
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
+    broker_handle.wait_until_share_coordinator_ready().await;
     let valid = format!("share-group:{KAFKA_TOPIC_ID}:0");
     let request = FindCoordinatorRequest {
         key_type: KEY_TYPE_SHARE,
@@ -621,6 +632,7 @@ async fn a_legacy_group_lookup_answers_in_the_top_level_fields() {
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
+    broker_handle.wait_until_group_coordinator_ready().await;
     let request = FindCoordinatorRequest {
         key: "legacy-group".into(),
         key_type: KEY_TYPE_GROUP,
@@ -645,5 +657,173 @@ async fn a_legacy_group_lookup_answers_in_the_top_level_fields() {
             }
     );
     assert!(response.port > 0);
+    broker_handle.shutdown().await;
+}
+
+/// Waits until no creation of `topic` is in flight on `broker`.
+async fn wait_until_creation_ends(broker: &crate::broker::Broker, topic: &str) {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while broker.auto_topic_creation.is_in_flight(topic) {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the creation ends");
+}
+
+/// Kafka's `KafkaApis.getCoordinator`: before the state topic exists, every
+/// lookup answers `COORDINATOR_NOT_AVAILABLE` and asks for the topic. Many
+/// concurrent lookups start one creation, as the in-flight set of
+/// `DefaultAutoTopicCreationManager` allows. Once the topic has a leader,
+/// the lookup names this broker, and nothing more is created.
+#[tokio::test]
+async fn the_first_lookup_creates_the_state_topic_once_and_a_later_one_names_the_coordinator() {
+    const LOOKUPS: usize = 8;
+    let share_key = format!("share-group:{KAFKA_TOPIC_ID}:0");
+    let cases = [
+        (
+            KEY_TYPE_GROUP,
+            "group",
+            crate::coordinator::bootstrap::OFFSETS_TOPIC,
+        ),
+        (KEY_TYPE_TRANSACTION, "tid", crate::txn::bootstrap::TOPIC),
+        (
+            KEY_TYPE_SHARE,
+            share_key.as_str(),
+            crate::share_coordinator::bootstrap::TOPIC,
+        ),
+    ];
+    for (key_type, key, topic) in cases {
+        let (broker_handle, _dir) = start_broker_with(|config| {
+            config.audit_enabled = false;
+            config.offsets_topic_num_partitions = 3;
+            config.transaction_state_num_partitions = 3;
+            config.share_coordinator.state_topic_num_partitions = 3;
+        })
+        .await;
+        broker_handle.wait_until_brokers_registered(1).await;
+        let broker = broker_handle.broker_arc_for_test();
+        let request = FindCoordinatorRequest {
+            key_type,
+            coordinator_keys: vec![key.to_owned()],
+            ..Default::default()
+        };
+
+        let first = futures_util::future::join_all(
+            (0..LOOKUPS).map(|_| find(&broker, &request, 6, "admin")),
+        )
+        .await;
+
+        let unavailable = FindCoordinatorResponse {
+            coordinators: vec![row(key, codes::COORDINATOR_NOT_AVAILABLE, None)],
+            ..Default::default()
+        };
+        check!(first == vec![unavailable; LOOKUPS], "{topic}");
+        check!(broker.auto_topic_creation.started() == 1, "{topic}");
+
+        wait_until_creation_ends(&broker, topic).await;
+        match key_type {
+            KEY_TYPE_GROUP => broker_handle.wait_until_group_coordinator_ready().await,
+            KEY_TYPE_TRANSACTION => {
+                broker_handle
+                    .wait_until_transaction_coordinator_ready()
+                    .await;
+            }
+            _ => broker_handle.wait_until_share_coordinator_ready().await,
+        }
+        let resolved = find(&broker, &request, 6, "admin").await;
+        let row = &resolved.coordinators[0];
+        check!(
+            resolved
+                == FindCoordinatorResponse {
+                    coordinators: vec![Coordinator {
+                        key: key.to_owned(),
+                        node_id: broker.config.broker_id,
+                        host: row.host.clone(),
+                        port: row.port,
+                        error_code: codes::NONE,
+                        error_message: None,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            "{topic}"
+        );
+        check!(row.port > 0, "{topic}");
+        check!(broker.auto_topic_creation.started() == 1, "{topic}");
+        broker_handle.shutdown().await;
+    }
+}
+
+/// The replication factor is never lowered to fit the cluster. With fewer
+/// registered brokers than `offsets.topic.replication.factor`, the placement
+/// refuses the creation, the lookup answers `COORDINATOR_NOT_AVAILABLE`, and no
+/// topic exists. Once a second broker registers, the next lookup creates the
+/// topic with a replica on each broker.
+#[tokio::test]
+async fn a_lookup_with_too_few_brokers_creates_nothing_until_enough_register() {
+    let (broker_handle, _dir) = start_broker_with(|config| {
+        config.audit_enabled = false;
+        config.offsets_topic_num_partitions = 3;
+        config.offsets_topic_replication_factor = 2;
+    })
+    .await;
+    broker_handle.wait_until_controller_leader().await;
+    broker_handle.wait_until_brokers_registered(1).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let topic = crate::coordinator::bootstrap::OFFSETS_TOPIC;
+    let request = FindCoordinatorRequest {
+        key_type: KEY_TYPE_GROUP,
+        coordinator_keys: vec!["group".into()],
+        ..Default::default()
+    };
+    let unavailable = FindCoordinatorResponse {
+        coordinators: vec![row("group", codes::COORDINATOR_NOT_AVAILABLE, None)],
+        ..Default::default()
+    };
+
+    check!(find(&broker, &request, 6, "admin").await == unavailable);
+    wait_until_creation_ends(&broker, topic).await;
+    check!(broker.controller.current_image().topic(topic).is_none());
+    check!(find(&broker, &request, 6, "admin").await == unavailable);
+    wait_until_creation_ends(&broker, topic).await;
+    check!(broker.controller.current_image().topic(topic).is_none());
+    check!(broker.auto_topic_creation.started() == 2);
+
+    let other = krabka_metadata::NodeId(broker.config.node_id.0 + 1);
+    broker
+        .controller
+        .submit_change(vec![krabka_metadata::MetadataRecord::V1BrokerRegistration(
+            krabka_metadata::BrokerRegistrationRecord {
+                fenced: false,
+                in_controlled_shutdown: false,
+                cordoned_log_dirs: None,
+                node_id: other,
+                broker_epoch: -1,
+                incarnation_id: uuid::Uuid::from_u128(2),
+                host: "127.0.0.1".into(),
+                port: 9094,
+                rack: None,
+                endpoints: vec![],
+                log_dirs: vec![],
+                features: std::collections::BTreeMap::new(),
+            },
+        )])
+        .await
+        .expect("register a second broker");
+
+    check!(find(&broker, &request, 6, "admin").await == unavailable);
+    wait_until_creation_ends(&broker, topic).await;
+    let image = broker.controller.current_image();
+    let created = image.topic(topic).expect("the topic is created");
+    check!(created.replication_factor == 2);
+    let mut expected = vec![broker.config.node_id, other];
+    expected.sort();
+    for record in image.partitions_of(topic) {
+        let mut replicas = record.replicas.clone();
+        replicas.sort();
+        check!(replicas == expected, "partition {}", record.partition);
+    }
+    check!(image.partitions_of(topic).count() == 3);
     broker_handle.shutdown().await;
 }

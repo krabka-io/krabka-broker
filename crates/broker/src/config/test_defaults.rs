@@ -97,7 +97,6 @@ impl BrokerConfig {
             audit_event_queue_capacity: 8_192,
             audit_tail_window_offsets: 4_096,
             audit_tail_read_max: mebibytes(1),
-            offsets_topic_metadata_wait_timeout: secs(30),
             client_metrics_stale_push_intervals: 3,
             coordinator_actor_mailbox_capacity: 64,
             diskless_wal_local_replica_count: DEFAULT_DISKLESS_WAL_LOCAL_REPLICA_COUNT,
@@ -136,16 +135,19 @@ impl BrokerConfig {
             offsets_topic_num_partitions: 50,
             offsets_retention_override: None,
             offsets_retention_check_interval_override: None,
-            offsets_topic_replication_factor: 3,
+            // A single-node fixture holds each coordinator topic on its one
+            // broker. A multi-broker fixture sizes them with
+            // `with_internal_topics_for`.
+            offsets_topic_replication_factor: 1,
             offsets_topic_segment_bytes: mebibytes(100),
             transaction_state_num_partitions: 50,
             transaction_recovery_read_max: mebibytes(1),
-            transaction_state_replication_factor: 3,
+            transaction_state_replication_factor: 1,
             transaction_state_segment_bytes: mebibytes(100),
-            transaction_state_min_isr: 2,
+            transaction_state_min_isr: 1,
             transaction_max_timeout: minutes(15),
             barrier_state_num_partitions: 50,
-            barrier_state_replication_factor: 3,
+            barrier_state_replication_factor: 1,
             barrier_min_injection_interval: secs(1),
             barrier_injection_timeout: secs(30),
             barrier_recovery_read_max: mebibytes(1),
@@ -252,9 +254,11 @@ impl BrokerConfig {
                     ..crate::coordinator::unified::streams::config::StreamsGroupConfig::default()
                 },
             ),
-            share_coordinator: Box::new(
-                crate::share_coordinator::config::ShareCoordinatorConfig::default(),
-            ),
+            share_coordinator: Box::new(crate::share_coordinator::config::ShareCoordinatorConfig {
+                state_topic_replication_factor: 1,
+                state_topic_min_isr: 1,
+                ..crate::share_coordinator::config::ShareCoordinatorConfig::default()
+            }),
             leader_imbalance_check_interval: DEFAULT_LEADER_IMBALANCE_CHECK_INTERVAL,
             #[cfg(any(test, feature = "test-helpers"))]
             cleaner_interval_override: None,
@@ -335,6 +339,32 @@ impl BrokerConfig {
             audit_spool_sync_every_n: DEFAULT_AUDIT_SPOOL_SYNC_EVERY_N,
         }
     }
+
+    /// Sizes the coordinator internal topics for a test cluster of `brokers`
+    /// brokers.
+    ///
+    /// The replication factor of `__consumer_offsets`,
+    /// `__transaction_state`, `__share_group_state` and `__barrier_state`
+    /// becomes `brokers`, with a maximum of 3. The minimum ISR of
+    /// `__transaction_state` and `__share_group_state` becomes one less than
+    /// that replication factor, with a minimum of 1. With 3 or more brokers,
+    /// these are Kafka's defaults: replication factor 3 and minimum ISR 2.
+    #[must_use]
+    pub fn with_internal_topics_for(mut self, brokers: usize) -> Self {
+        let replication_factor: i16 = match brokers {
+            0 | 1 => 1,
+            2 => 2,
+            _ => 3,
+        };
+        let min_isr = i32::from(replication_factor - 1).max(1);
+        self.offsets_topic_replication_factor = replication_factor;
+        self.transaction_state_replication_factor = replication_factor;
+        self.transaction_state_min_isr = min_isr;
+        self.barrier_state_replication_factor = replication_factor;
+        self.share_coordinator.state_topic_replication_factor = replication_factor;
+        self.share_coordinator.state_topic_min_isr = min_isr;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -344,17 +374,13 @@ mod tests {
 
     use super::*;
 
-    fn additional_policy_snapshot(config: BrokerConfig) -> [String; 25] {
+    fn additional_policy_snapshot(config: BrokerConfig) -> [String; 24] {
         [
             config.self_registration_max_attempts.to_string(),
             config.observer_fetch_max.bytes_u64().to_string(),
             config.audit_event_queue_capacity.to_string(),
             config.audit_tail_window_offsets.to_string(),
             config.audit_tail_read_max.bytes_u64().to_string(),
-            config
-                .offsets_topic_metadata_wait_timeout
-                .millis_i64()
-                .to_string(),
             config.client_metrics_stale_push_intervals.to_string(),
             config.coordinator_actor_mailbox_capacity.to_string(),
             config.unclean_recovery_queue_capacity.to_string(),
@@ -397,7 +423,6 @@ mod tests {
                     "8192",
                     "4096",
                     "1048576",
-                    "30000",
                     "3",
                     "64",
                     "256",
@@ -443,6 +468,41 @@ mod tests {
         // need failover well under their 10s producer timeout.
         assert!(c.controller_election_timeout <= millis(750));
         assert!(c.controller_heartbeat_interval <= millis(200));
+    }
+
+    fn internal_topic_sizes(config: &BrokerConfig) -> (i16, i16, i32, i16, i16, i32) {
+        (
+            config.offsets_topic_replication_factor,
+            config.transaction_state_replication_factor,
+            config.transaction_state_min_isr,
+            config.barrier_state_replication_factor,
+            config.share_coordinator.state_topic_replication_factor,
+            config.share_coordinator.state_topic_min_isr,
+        )
+    }
+
+    #[test]
+    fn for_tests_sizes_internal_topics_for_one_broker() {
+        let config = BrokerConfig::for_tests(PathBuf::from("/tmp"));
+        assert!(internal_topic_sizes(&config) == (1, 1, 1, 1, 1, 1));
+    }
+
+    #[test]
+    fn with_internal_topics_for_caps_at_kafka_defaults() {
+        let cases = [
+            (1, (1, 1, 1, 1, 1, 1)),
+            (2, (2, 2, 1, 2, 2, 1)),
+            (3, (3, 3, 2, 3, 3, 2)),
+            (5, (3, 3, 2, 3, 3, 2)),
+        ];
+        for (brokers, expected) in cases {
+            let config =
+                BrokerConfig::for_tests(PathBuf::from("/tmp")).with_internal_topics_for(brokers);
+            assert!(
+                internal_topic_sizes(&config) == expected,
+                "brokers = {brokers}"
+            );
+        }
     }
 
     #[test]

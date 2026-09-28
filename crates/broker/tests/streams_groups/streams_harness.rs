@@ -29,6 +29,9 @@ pub async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) 
     let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
         .await
         .unwrap();
+    // A streams or classic group needs `__consumer_offsets`. No broker creates
+    // it at startup, so create it as a client's first lookup does.
+    broker.wait_until_group_coordinator_ready().await;
     let bootstrap = broker.listen_addr().to_string();
     (broker, bootstrap, dir)
 }

@@ -328,7 +328,9 @@ fn read(start_offset: i64) -> Response {
 async fn share_state_rpcs_need_cluster_action() {
     let (handle, _dir) = start_broker_with(|cfg| {
         cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(GrantsInPrincipalName);
+        cfg.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(
+            GrantsInPrincipalName,
+        ));
     })
     .await;
     let broker = handle.broker_arc_for_test();

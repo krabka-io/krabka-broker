@@ -302,8 +302,22 @@ mod tests {
         crate::test_support::decode_response(bytes, VERSION)
     }
 
+    /// Start a broker and wait until its group coordinator serves
+    /// `__consumer_offsets`.
     async fn start_broker() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-        crate::test_support::start_broker_with(|_cfg| {}).await
+        let (handle, dir) = crate::test_support::start_broker_with(|_cfg| {}).await;
+        handle.wait_until_group_coordinator_ready().await;
+        (handle, dir)
+    }
+
+    /// Like [`start_broker`], with `authorizer` installed and audit off.
+    async fn start_broker_with_authorizer(
+        authorizer: std::sync::Arc<dyn crate::authorizer::Authorizer>,
+    ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
+        let (handle, dir) =
+            crate::test_support::start_broker_with_authorizer_no_audit(authorizer).await;
+        handle.wait_until_group_coordinator_ready().await;
+        (handle, dir)
     }
 
     fn image_with_group_version(level: i16) -> MetadataImage {
@@ -640,9 +654,9 @@ mod tests {
     async fn handle_protocol_gate_precedes_group_acl_for_every_row() {
         let authorizer =
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
-        let (broker_handle, _dir) = crate::test_support::start_broker_with_authorizer_no_audit(
-            std::sync::Arc::new(authorizer),
-        )
+        let (broker_handle, _dir) = start_broker_with_authorizer(std::sync::Arc::new(
+            crate::test_support::ControllerPeerAllowed(authorizer),
+        ))
         .await;
         let broker = broker_handle.broker_arc_for_test();
         disable_group_version(&broker).await;
@@ -678,9 +692,9 @@ mod tests {
     async fn handle_orders_denied_rows_before_allowed_rows() {
         let authorizer =
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new());
-        let (broker_handle, _dir) = crate::test_support::start_broker_with_authorizer_no_audit(
-            std::sync::Arc::new(authorizer),
-        )
+        let (broker_handle, _dir) = start_broker_with_authorizer(std::sync::Arc::new(
+            crate::test_support::ControllerPeerAllowed(authorizer),
+        ))
         .await;
         let broker = broker_handle.broker_arc_for_test();
         // Grant "alice" Describe on "allowed" only; "denied" has no matching
@@ -734,10 +748,8 @@ mod tests {
     #[tokio::test]
     async fn handle_fills_authorized_operations_only_on_opt_in_for_clean_rows() {
         let authorizer = std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer);
-        let (broker_handle, _dir) = crate::test_support::start_broker_with_authorizer_no_audit(
-            std::sync::Arc::clone(&authorizer) as _,
-        )
-        .await;
+        let (broker_handle, _dir) =
+            start_broker_with_authorizer(std::sync::Arc::clone(&authorizer) as _).await;
         let broker = broker_handle.broker_arc_for_test();
         let _ = broker
             .group_coordinator

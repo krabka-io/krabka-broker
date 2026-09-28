@@ -2,7 +2,7 @@
 //! names, and the message it reports.
 
 use assert2::assert;
-use krabka_units::{gibibytes, nanos};
+use krabka_units::{gibibytes, millis, nanos};
 
 use super::*;
 use crate::config::test_support::{RuntimeInvalidator, assert_invalid_runtime, base};
@@ -106,14 +106,6 @@ fn rejects_invalid_additional_runtime_scalars() {
         ("audit_tail_read_max must be positive", |c| {
             c.audit_tail_read_max = <ByteSize as ByteSizeExt>::ZERO;
         }),
-        (
-            "offsets_topic_metadata_wait_timeout must be at least 1ms",
-            |c| c.offsets_topic_metadata_wait_timeout = <Time as TimeExt>::ZERO,
-        ),
-        (
-            "offsets_topic_metadata_wait_timeout must be at least 1ms",
-            |c| c.offsets_topic_metadata_wait_timeout = nanos(1),
-        ),
         (
             "client_metrics_stale_push_intervals must be positive",
             |c| c.client_metrics_stale_push_intervals = 0,

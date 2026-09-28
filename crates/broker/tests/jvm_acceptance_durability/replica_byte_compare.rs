@@ -102,7 +102,7 @@ async fn three_node_replication_byte_compare() {
         controller_election_timeout: krabka_units::secs(5),
         controller_heartbeat_interval: krabka_units::millis(500),
         bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
-        ..BrokerConfig::default()
+        ..BrokerConfig::default().with_internal_topics_for(3)
     };
     let h0 = tokio::spawn(async move { Broker::start(cfg0).await.expect("broker start") });
 
@@ -132,7 +132,7 @@ async fn three_node_replication_byte_compare() {
             controller_election_timeout: krabka_units::secs(5),
             controller_heartbeat_interval: krabka_units::millis(500),
             bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
-            ..BrokerConfig::default()
+            ..BrokerConfig::default().with_internal_topics_for(3)
         };
         tempdirs.push(dir);
         join_spawns.push(tokio::spawn(async move {

@@ -29,8 +29,18 @@ use crate::{
         actor::{GroupActorMessage, GroupKindTag},
         classic_state::OffsetEntry,
     },
-    test_support::{peer, principal, start_broker_with_authorizer_no_audit as start_broker},
+    test_support::{peer, principal, start_broker_with_authorizer_no_audit},
 };
+
+/// Start a broker under `authorizer` whose group coordinator serves
+/// `__consumer_offsets`, which no broker creates at startup.
+async fn start_broker(
+    authorizer: Arc<dyn crate::authorizer::Authorizer>,
+) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
+    let (broker, dir) = start_broker_with_authorizer_no_audit(authorizer).await;
+    broker.wait_until_group_coordinator_ready().await;
+    (broker, dir)
+}
 
 // Seed a committed offset for (group, topic, partition) directly on the
 // group actor via UpdateCommitted.

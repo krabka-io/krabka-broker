@@ -94,7 +94,7 @@ pub(crate) async fn start_ssl_broker() -> (krabka_broker::BrokerHandle, tempfile
             client_ca_path: None,
             client_auth: krabka_security::ClientAuthMode::Disabled,
         }),
-        ..BrokerConfig::default()
+        ..BrokerConfig::default().with_internal_topics_for(1)
     };
     let handle = Broker::start(config).await.expect("start ssl broker");
     eprintln!(
@@ -257,7 +257,7 @@ pub(crate) fn start_sasl_ssl_broker(
         }),
         enabled_sasl_mechanisms: vec![SaslMechanism::Plain, SaslMechanism::ScramSha512],
         super_users: maplit::hashset! {admin.to_string()},
-        ..BrokerConfig::default()
+        ..BrokerConfig::default().with_internal_topics_for(1)
     };
     // The PLAINTEXT controller listener carries `ANONYMOUS`, and the node's own
     // heartbeats reach it. Every data listener here authenticates, so this

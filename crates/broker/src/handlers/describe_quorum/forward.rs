@@ -17,19 +17,23 @@
 //! and [`super::handle`] re-runs the same `Describe` gate correctly on the
 //! leader.
 
-use bytes::{Buf as _, BufMut as _, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use krabka_protocol::{
     Decode, Encode,
     owned::{
-        default_principal_data::DefaultPrincipalData,
         describe_quorum_request::API_KEY as DESCRIBE_QUORUM_API_KEY,
-        envelope_request::{self, EnvelopeRequest},
+        envelope_request,
         envelope_response::{self, EnvelopeResponse},
     },
-    primitives::string_bytes::put_nullable_string,
 };
 
-use crate::{broker::Broker, codes, error::BrokerError, handlers::RequestContext};
+use crate::{
+    broker::Broker,
+    codes,
+    envelope::{self, ForwardedPrincipal, ForwardedRequest},
+    error::BrokerError,
+    handlers::RequestContext,
+};
 
 /// `Envelope`'s api key (58, KIP-590): what this module actually sends on the
 /// wire, in place of the bare `DescribeQuorum` api key (55).
@@ -58,61 +62,29 @@ pub(super) fn build(
     version: i16,
     ctx: &RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
-    let flexible = broker
-        .handlers()
-        .body_flexible(DESCRIBE_QUORUM_API_KEY, version);
-
-    // The embedded `RequestHeader`: `api_key`, `api_version`, a correlation
-    // id local to this one hop (only ever echoed back inside the envelope
-    // response, which this module strips before returning), `client_id`,
-    // and -- exactly when the embedded body is flexible, which `DescribeQuorum`
-    // always is -- a trailing empty tagged-fields byte.
-    let mut header = BytesMut::new();
-    header.put_i16(DESCRIBE_QUORUM_API_KEY);
-    header.put_i16(version);
-    header.put_i32(0);
-    put_nullable_string(&mut header, Some(ctx.client_id));
-    if flexible {
-        header.put_u8(0);
-    }
-    header.extend_from_slice(req_bytes);
-
-    // `DefaultKafkaPrincipalBuilder.serialize`: a big-endian i16 schema
-    // version, then the flexible `DefaultPrincipalData` body. Krabka's own
-    // `envelope::deserialize_principal` reads this back on the receiving
-    // side and authorizes on `name` alone, so `type_` is set to Kafka's own
-    // "User" constant without needing to match `ctx.principal.auth_method`.
-    let mut principal_data = BytesMut::new();
-    DefaultPrincipalData {
-        type_: "User".to_string(),
+    // The embedded `RequestHeader` carries a correlation id local to this one
+    // hop. Only the envelope response echoes it back, and this module strips
+    // that header before it returns.
+    let request_data = envelope::wrap_request(&ForwardedRequest {
+        api_key: DESCRIBE_QUORUM_API_KEY,
+        api_version: version,
+        correlation_id: 0,
+        client_id: Some(ctx.client_id.to_owned()),
+        body: Bytes::copy_from_slice(req_bytes),
+        body_flexible: broker
+            .handlers()
+            .body_flexible(DESCRIBE_QUORUM_API_KEY, version),
+    });
+    // Krabka's own `envelope::deserialize_principal` reads the principal back
+    // on the receiving side and authorizes on `name` alone.
+    let principal = ForwardedPrincipal {
         name: ctx.principal.name.clone(),
         token_authenticated: false,
-        ..Default::default()
-    }
-    .encode(&mut principal_data, 0)?;
-    let mut principal = BytesMut::with_capacity(2 + principal_data.len());
-    principal.put_i16(0);
-    principal.extend_from_slice(&principal_data);
-
-    let mut out = BytesMut::new();
-    EnvelopeRequest {
-        request_data: header.freeze(),
-        request_principal: Some(principal.freeze()),
-        client_host_address: Bytes::copy_from_slice(&peer_address_octets(ctx.peer.ip())),
-        ..Default::default()
-    }
-    .encode(&mut out, ENVELOPE_VERSION)?;
+    };
+    let request = envelope::envelope_request(request_data, &principal, ctx.peer.ip())?;
+    let mut out = BytesMut::with_capacity(request.encoded_len(ENVELOPE_VERSION));
+    request.encode(&mut out, ENVELOPE_VERSION)?;
     Ok(out.freeze())
-}
-
-/// `InetAddress.getAddress()`: four octets for an IPv4 host, sixteen for an
-/// IPv6 one. This is the SEND side of what
-/// `envelope::deserialize_client_host_address` reads back.
-fn peer_address_octets(ip: std::net::IpAddr) -> Vec<u8> {
-    match ip {
-        std::net::IpAddr::V4(v4) => v4.octets().to_vec(),
-        std::net::IpAddr::V6(v6) => v6.octets().to_vec(),
-    }
 }
 
 /// Decode the leader's `EnvelopeResponse` and return the plain
@@ -151,44 +123,13 @@ pub(super) fn unwrap_response(
     }
 
     // A served envelope's `response_data` is the embedded `ResponseHeader`
-    // (the correlation id this module put in the request, plus a trailing
-    // tagged-fields byte exactly when the embedded body is flexible) in
-    // front of the handler's own body (`envelope::wrap_response`, the
-    // encode-side mirror of this). Strip that header off to get the same
-    // bytes a local answer would have produced.
+    // in front of the handler's own body (`envelope::wrap_response`). Strip
+    // that header off to get the same bytes a local answer would have
+    // produced. The correlation id is local to this hop, so it is not checked.
     let flexible = broker
         .handlers()
         .body_flexible(DESCRIBE_QUORUM_API_KEY, version);
-    let header_len = crate::network::response_header_len(DESCRIBE_QUORUM_API_KEY, flexible);
-    let mut data = resp.response_data.unwrap_or_default();
-    if data.remaining() < header_len {
-        return Err(BrokerError::Protocol(
-            krabka_protocol::ProtocolError::InvalidValue(
-                "forwarded DescribeQuorum envelope response shorter than its embedded header",
-            ),
-        ));
-    }
-    data.advance(header_len);
-    Ok(data)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::net::{Ipv4Addr, Ipv6Addr};
-
-    use assert2::check;
-
-    use super::*;
-
-    #[test]
-    fn peer_address_octets_matches_inet_address_get_address() {
-        check!(
-            peer_address_octets(std::net::IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3)))
-                == vec![10, 1, 2, 3]
-        );
-        check!(
-            peer_address_octets(std::net::IpAddr::V6(Ipv6Addr::LOCALHOST))
-                == vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
-        );
-    }
+    let data = resp.response_data.unwrap_or_default();
+    let (_, body) = envelope::unwrap_response(DESCRIBE_QUORUM_API_KEY, flexible, &data)?;
+    Ok(body)
 }

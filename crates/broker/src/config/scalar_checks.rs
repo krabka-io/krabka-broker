@@ -5,7 +5,6 @@
 use krabka_units::{
     ByteSize, Time,
     convert::{ByteSizeExt, TimeExt},
-    millis,
 };
 
 use crate::{BrokerError, config::BrokerConfig};
@@ -283,11 +282,6 @@ impl BrokerConfig {
         if !(1..=i64::from(i32::MAX)).contains(&voter_request_timeout_ms) {
             return Err(BrokerError::InvalidRuntimeConfig(
                 "auto_join_voter_request_timeout must be within 1..=i32::MAX milliseconds".into(),
-            ));
-        }
-        if self.offsets_topic_metadata_wait_timeout < millis(1) {
-            return Err(BrokerError::InvalidRuntimeConfig(
-                "offsets_topic_metadata_wait_timeout must be at least 1ms".into(),
             ));
         }
         self.validate_txn_id_expiry_scalars()?;

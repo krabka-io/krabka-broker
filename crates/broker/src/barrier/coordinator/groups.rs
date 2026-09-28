@@ -51,28 +51,21 @@ pub(crate) struct GroupDescription {
 }
 
 impl BarrierCoordinator {
-    /// Create a group.
+    /// Ask for `__barrier_state` if it does not exist, and wait until the
+    /// partition `group` hashes to has this broker as its leader.
     ///
-    /// # Errors
-    /// Returns [`BarrierError::NotCoordinator`] when another broker owns the
-    /// group, [`BarrierError::GroupExists`] when the name is live,
-    /// [`BarrierError::InvalidDefinition`] when the definition is not usable,
-    /// and [`BarrierError::Persist`] when the append fails.
-    /// Create `__barrier_state` if no broker has yet, and wait until the
-    /// partition `group` hashes to has a leader.
-    ///
-    /// The call is idempotent and returns at once when the topic is already
-    /// there. The wait is what makes lazy creation safe: leadership is
-    /// assigned after the topic record lands, and `is_coordinator_for` reads
-    /// the leader set, so a caller that raced the assignment would be told it
-    /// is not the coordinator for a group it just asked to create.
+    /// The broker creates the topic in the background, with its configured
+    /// partition count and replication factor
+    /// ([`crate::auto_topic_creation::AutoTopicCreation`]). The call returns
+    /// at once when the topic is already there. The wait is what makes lazy
+    /// creation safe: leadership is assigned after the topic record lands,
+    /// and `is_coordinator_for` reads the leader set, so a caller that raced
+    /// the assignment would be told it is not the coordinator for a group it
+    /// just asked to create.
     async fn ensure_state_topic(&self, group: &str) -> Result<(), BarrierError> {
-        crate::barrier::bootstrap::ensure_topic(
-            &self.controller,
-            self.state_topic_num_partitions(),
-            self.state_topic_replication_factor(),
-        )
-        .await?;
+        if self.controller.current_image().topic(STATE_TOPIC).is_none() {
+            self.auto_topic_creation.request(STATE_TOPIC);
+        }
 
         let partition = self.state_partition_for(group);
         let deadline = Instant::now() + STATE_TOPIC_READY_TIMEOUT.to_std();
@@ -98,6 +91,13 @@ impl BarrierCoordinator {
         }
     }
 
+    /// Create a group.
+    ///
+    /// # Errors
+    /// Returns [`BarrierError::NotCoordinator`] when another broker owns the
+    /// group, [`BarrierError::GroupExists`] when the name is live,
+    /// [`BarrierError::InvalidDefinition`] when the definition is not usable,
+    /// and [`BarrierError::Persist`] when the append fails.
     pub(crate) async fn create_group(
         &self,
         group: &str,

@@ -10,7 +10,7 @@ use assert2::{assert, check};
 use krabka_broker::{BootstrapMode, Broker};
 
 use crate::share_group_harness::{
-    boot, broker_config, connect, create_topic, describe, heartbeat, total_assigned,
+    boot, broker_config, connect, create_topic, describe, heartbeat, start, total_assigned,
 };
 
 /// A single member joins and advances to epoch 1 with an empty assignment,
@@ -153,7 +153,7 @@ async fn state_survives_restart() {
 
     let member_id;
     {
-        let broker = Broker::start(broker_config(log_dir.clone())).await.unwrap();
+        let broker = start(log_dir.clone()).await;
         let bootstrap = broker.listen_addr().to_string();
         let client = connect(&bootstrap).await;
         create_topic(&client, "t4", 2).await;

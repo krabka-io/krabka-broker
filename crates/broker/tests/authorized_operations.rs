@@ -105,6 +105,8 @@ fn boot_with_super_user(super_user: &str) -> impl std::future::Future<Output = H
     cfg.authorizer = Arc::new(SimpleAclAuthorizer::new(authorizer_super_users));
     Box::pin(async move {
         let handle = Broker::start(cfg).await.expect("broker start");
+        // `DescribeGroups` needs a loaded group coordinator.
+        handle.wait_until_group_coordinator_ready().await;
         let client = Client::builder()
             .bootstrap(handle.listen_addr().to_string())
             .client_id("krabka-kip-430-test")

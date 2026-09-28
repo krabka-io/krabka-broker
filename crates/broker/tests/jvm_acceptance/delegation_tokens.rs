@@ -114,7 +114,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_delegatio
                 password: admin_pass.to_string(),
             }),
             delegation_token_secret_key: Some(SecretBytes::new(secret_key.to_vec())),
-            ..BrokerConfig::default()
+            ..BrokerConfig::default().with_internal_topics_for(3)
         };
         cfg.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
             cfg.super_users.clone(),

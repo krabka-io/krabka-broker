@@ -144,6 +144,7 @@ async fn join_group_denied_without_group_read_acl() {
     );
 
     let handle = Broker::start(cfg).await.expect("broker must start");
+    handle.wait_until_group_coordinator_ready().await;
     let addr = handle.listen_addr();
 
     // Seed a meaningless ACL so the compat shim is off. Without this the

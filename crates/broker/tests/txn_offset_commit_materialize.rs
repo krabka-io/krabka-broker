@@ -32,7 +32,6 @@ use krabka_protocol::{
         add_offsets_to_txn_request::AddOffsetsToTxnRequest,
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
         end_txn_request::EndTxnRequest,
-        find_coordinator_request::FindCoordinatorRequest,
         init_producer_id_request::InitProducerIdRequest,
         metadata_request::{MetadataRequest, MetadataRequestTopic},
         offset_commit_request::{
@@ -58,35 +57,15 @@ use krabka_protocol::{
 /// of it.
 const NOT_COORDINATOR: i16 = 16;
 
-/// Poll `FindCoordinator(TRANSACTION, tid)` until the txn coordinator
-/// partition has a real leader, so the later `InitProducerId` does not race
-/// the lazy leader election. Mirrors the retry-with-deadline idiom in the
-/// marker-fanout test.
-async fn await_txn_coordinator(client: &krabka_client_core::Client, tid: &str) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        let fc = client
-            .send(FindCoordinatorRequest {
-                key: tid.into(),
-                key_type: 1, // TRANSACTION
-                coordinator_keys: vec![tid.into()],
-                ..Default::default()
-            })
-            .await
-            .expect("find coordinator");
-        let node = fc.coordinators.first().map_or(fc.node_id, |c| c.node_id);
-        if node >= 0 {
-            return;
-        }
-        assert!(
-            Instant::now() <= deadline,
-            "txn coordinator never became available: {fc:?}"
-        );
-        // intentional: the FindCoordinator RPC itself triggers the lazy
-        // __transaction_state leader election; coordinator availability is not
-        // in the metadata image and has no awaiter/metric, so poll the RPC.
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+/// Boots the broker with a loaded group coordinator.
+///
+/// No broker creates `__consumer_offsets` when it starts. The raw
+/// `OffsetCommit` and `TxnOffsetCommit` below make no group lookup, so the
+/// helper creates the topic and loads it first, as a client lookup does.
+async fn start() -> support::InProcess {
+    let p = support::start().await;
+    p.broker.wait_until_group_coordinator_ready().await;
+    p
 }
 
 const TOPIC: &str = "src";
@@ -192,7 +171,7 @@ async fn begin_and_commit_offsets(
     group_id: &str,
     offset: i64,
 ) -> (i64, i16) {
-    await_txn_coordinator(client, tid).await;
+    support::find_coordinator(client, support::KEY_TYPE_TRANSACTION, tid).await;
     // Even after FindCoordinator resolves, InitProducerId can briefly observe
     // NOT_COORDINATOR while the elected leader installs locally — retry it.
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -270,7 +249,7 @@ async fn begin_and_commit_offsets(
 /// it, `OffsetFetch` reads the committed offset.
 #[tokio::test]
 async fn txn_offset_commit_visible_via_offset_fetch_after_commit_marker() {
-    let p = support::start().await;
+    let p = start().await;
     create_topic(&p.client).await;
     let topic_id = topic_id_for(&p.client).await;
 
@@ -313,7 +292,7 @@ async fn txn_offset_commit_visible_via_offset_fetch_after_commit_marker() {
 /// `EndTxn(abort)`. Aborted offsets must never become committed.
 #[tokio::test]
 async fn txn_offset_commit_dropped_on_abort_marker() {
-    let p = support::start().await;
+    let p = start().await;
     create_topic(&p.client).await;
     let topic_id = topic_id_for(&p.client).await;
 
@@ -463,7 +442,7 @@ fn stable_row(offset: i64) -> OffsetFetchResponsePartitions {
 /// marker does the same request read 9.
 #[tokio::test]
 async fn require_stable_offset_fetch_is_unstable_until_the_commit_marker() {
-    let p = support::start().await;
+    let p = start().await;
     create_topic(&p.client).await;
     let topic_id = topic_id_for(&p.client).await;
 
@@ -518,7 +497,7 @@ async fn require_stable_offset_fetch_is_unstable_until_the_commit_marker() {
 /// telling the consumer to retry for ever.
 #[tokio::test]
 async fn require_stable_offset_fetch_becomes_stable_again_after_an_abort_marker() {
-    let p = support::start().await;
+    let p = start().await;
     create_topic(&p.client).await;
     let topic_id = topic_id_for(&p.client).await;
 

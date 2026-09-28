@@ -1,10 +1,10 @@
 //! `OffsetDelete` (`api_key` 47, KIP-496) broker integration tests.
 //!
-//! Each test boots a single broker with `support::start`, drives the
-//! relevant flows over the PLAINTEXT data plane, and asserts on the
-//! response shape. Single-broker tests stay unconditional, and this
-//! file uses only `support::start`, which is cross-platform, so it needs
-//! no platform gate.
+//! Each test boots a single broker with `support::start`, waits until its
+//! group coordinator is ready, drives the relevant flows over the PLAINTEXT
+//! data plane, and asserts on the response shape. Single-broker tests stay
+//! unconditional, and this file uses only `support::start`, which is
+//! cross-platform, so it needs no platform gate.
 
 use assert2::{assert, check};
 mod support;
@@ -34,6 +34,14 @@ use krabka_protocol::{
 };
 
 const OFFSET_ABSENT_SENTINEL: i64 = -1; // OffsetFetch returns -1 when no offset is committed.
+
+/// Boots one broker and waits until its group coordinator serves
+/// `__consumer_offsets`. No broker creates that topic when it starts.
+async fn start() -> support::InProcess {
+    let p = support::start().await;
+    p.broker.wait_until_group_coordinator_ready().await;
+    p
+}
 
 /// Resolve a topic's UUID with Metadata. Under KIP-516, `OffsetCommit` and
 /// `OffsetFetch` negotiate to v10/v8+, which key by `topic_id` on the wire.
@@ -130,7 +138,7 @@ async fn fetch_offset(p: &support::InProcess, group: &str, topic: &str, partitio
 /// `OffsetFetch` then returns `-1`, which means no committed offset.
 #[tokio::test]
 async fn delete_offsets_from_empty_group_round_trip() {
-    let p = support::start().await;
+    let p = start().await;
     create_topic(&p, "t1", 2).await;
 
     commit_offset(&p, "g1", "t1", 0, 42).await;
@@ -178,7 +186,7 @@ async fn delete_offsets_from_empty_group_round_trip() {
 /// joined or committed returns `GROUP_ID_NOT_FOUND` at the top level.
 #[tokio::test]
 async fn delete_offsets_unknown_group_returns_group_id_not_found() {
-    let p = support::start().await;
+    let p = start().await;
     create_topic(&p, "t2", 1).await;
 
     let resp = p
@@ -214,7 +222,7 @@ async fn delete_offsets_unknown_group_returns_group_id_not_found() {
 /// the group does exist.
 #[tokio::test]
 async fn delete_offsets_missing_topic_returns_unknown_topic_or_partition() {
-    let p = support::start().await;
+    let p = start().await;
     create_topic(&p, "t3", 1).await;
     commit_offset(&p, "g3", "t3", 0, 7).await;
 
@@ -248,7 +256,7 @@ async fn delete_offsets_missing_topic_returns_unknown_topic_or_partition() {
 /// topic's partition count.
 #[tokio::test]
 async fn delete_offsets_partition_out_of_range_returns_unknown_topic_or_partition() {
-    let p = support::start().await;
+    let p = start().await;
     create_topic(&p, "t4", 1).await;
     commit_offset(&p, "g4", "t4", 0, 5).await;
 
@@ -306,7 +314,7 @@ async fn delete_offsets_partition_out_of_range_returns_unknown_topic_or_partitio
 /// `GROUP_SUBSCRIBED_TO_TOPIC` (86). The offset survives the request.
 #[tokio::test]
 async fn delete_offsets_for_subscribed_topic_returns_group_subscribed() {
-    let p = support::start().await;
+    let p = start().await;
     create_topic(&p, "t5", 1).await;
     commit_offset(&p, "g5", "t5", 0, 9).await;
 

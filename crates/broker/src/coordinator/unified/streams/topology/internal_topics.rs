@@ -20,8 +20,9 @@ pub struct InternalTopicSpec {
     pub partitions: i32,
     /// Replication factor that the client requested.
     ///
-    /// A value of `0` uses the configured cluster default, with a cap at the
-    /// number of available brokers.
+    /// A value of `0` means that the topology names no replication factor.
+    /// The broker then sends -1 in `CreateTopics`, and the controller applies
+    /// `default.replication.factor`.
     pub replication_factor: i16,
     pub configs: BTreeMap<String, String>,
 }

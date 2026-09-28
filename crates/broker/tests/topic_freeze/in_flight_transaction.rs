@@ -98,6 +98,9 @@ async fn wait_for_stable_offset(client: &Client, topic: &str, want: i64) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_transaction_that_enlisted_before_the_freeze_still_commits() {
     let p = support::start().await;
+    // The producer does not retry COORDINATOR_NOT_AVAILABLE from
+    // FindCoordinator. Bring the transaction coordinator up first.
+    p.broker.wait_until_transaction_coordinator_ready().await;
     let bootstrap = p.broker.listen_addr().to_string();
     let frozen = create_topic(&p.broker, &p.client, "orders").await;
     let control = create_topic(&p.broker, &p.client, CONTROL).await;

@@ -187,6 +187,7 @@ async fn a_recreated_topic_does_not_inherit_the_old_committed_offsets() {
         crate::authorizer::AllowAllAuthorizer,
     ))
     .await;
+    handle.wait_until_group_coordinator_ready().await;
     let broker = handle.broker_arc_for_test();
     let client = krabka_client_core::Client::builder()
         .bootstrap(handle.listen_addr().to_string())

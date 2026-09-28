@@ -169,12 +169,16 @@ mod tests {
         crate::test_support::request_context(principal, peer, "sync-group-client")
     }
 
+    /// Start a broker with `authorizer` and audit off, and wait until its
+    /// group coordinator serves `__consumer_offsets`.
     async fn start_broker(authorizer: Arc<dyn Authorizer>) -> (BrokerHandle, tempfile::TempDir) {
-        crate::test_support::start_broker_with(|cfg| {
+        let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
             cfg.audit_enabled = false;
-            cfg.authorizer = authorizer;
+            cfg.authorizer = crate::test_support::controller_peer_allowed(authorizer);
         })
-        .await
+        .await;
+        handle.wait_until_group_coordinator_ready().await;
+        (handle, dir)
     }
 
     async fn bootstrap_member(

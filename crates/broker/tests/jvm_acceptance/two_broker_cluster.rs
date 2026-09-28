@@ -99,7 +99,7 @@ pub(crate) async fn start_two_sasl_brokers(
                 username: admin.to_string(),
                 password: admin_pass.to_string(),
             }),
-            ..BrokerConfig::default()
+            ..BrokerConfig::default().with_internal_topics_for(2)
         };
         cfg.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
             cfg.super_users.clone(),
@@ -262,7 +262,7 @@ pub(crate) async fn start_two_sasl_ssl_brokers_with_controller_protocol(
                 username: admin.to_string(),
                 password: admin_pass.to_string(),
             }),
-            ..BrokerConfig::default()
+            ..BrokerConfig::default().with_internal_topics_for(2)
         };
         cfg.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
             cfg.super_users.clone(),

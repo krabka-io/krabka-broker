@@ -77,6 +77,21 @@ pub(super) async fn seed_topic_a(broker: &crate::broker::Broker) {
         .unwrap_or_else(|error| panic!("seed topic a: {error}"));
 }
 
+/// Starts a broker that grants what the principal name says, waits until its
+/// group coordinator serves `__consumer_offsets`, and seeds topic `a`.
+async fn start_seeded_broker() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
+    let (handle, dir) = start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(
+            GrantsInPrincipalName,
+        ));
+    })
+    .await;
+    handle.wait_until_group_coordinator_ready().await;
+    seed_topic_a(&handle.broker_arc_for_test()).await;
+    (handle, dir)
+}
+
 pub(super) fn topic(name: &str, partitions: &[i32]) -> TxnOffsetCommitRequestTopic {
     TxnOffsetCommitRequestTopic {
         name: name.to_string(),
@@ -137,13 +152,8 @@ struct Case {
 /// denied outright, and a mixed request with one row of each outcome.
 #[tokio::test]
 async fn txn_offset_commit_runs_the_existence_check_after_the_topic_read_gate() {
-    let (handle, _dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(GrantsInPrincipalName);
-    })
-    .await;
+    let (handle, _dir) = start_seeded_broker().await;
     let broker = handle.broker_arc_for_test();
-    seed_topic_a(&broker).await;
 
     let cases = [
         Case {
@@ -256,13 +266,8 @@ async fn txn_offset_commit_runs_the_existence_check_after_the_topic_read_gate() 
 /// fencing error and skip the append.
 #[tokio::test]
 async fn unknown_rows_survive_a_group_fencing_failure() {
-    let (handle, _dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(GrantsInPrincipalName);
-    })
-    .await;
+    let (handle, _dir) = start_seeded_broker().await;
     let broker = handle.broker_arc_for_test();
-    seed_topic_a(&broker).await;
 
     let address = peer();
     let version = 3;
@@ -364,13 +369,8 @@ async fn v6_resolves_topic_ids_and_answers_unknown_ones() {
         primitives::uuid::Uuid as WireUuid,
     };
 
-    let (handle, _dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(GrantsInPrincipalName);
-    })
-    .await;
+    let (handle, _dir) = start_seeded_broker().await;
     let broker = handle.broker_arc_for_test();
-    seed_topic_a(&broker).await;
     transaction_version_1(&broker).await;
     let a_id = broker
         .controller
@@ -477,13 +477,8 @@ async fn v6_resolves_topic_ids_and_answers_unknown_ones() {
 /// `ILLEGAL_GENERATION`.
 #[tokio::test]
 async fn v6_answers_group_id_not_found_where_older_versions_answer_illegal_generation() {
-    let (handle, _dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(GrantsInPrincipalName);
-    })
-    .await;
+    let (handle, _dir) = start_seeded_broker().await;
     let broker = handle.broker_arc_for_test();
-    seed_topic_a(&broker).await;
     transaction_version_1(&broker).await;
     let address = peer();
     let user = principal(READ_ON_STAR);
@@ -592,13 +587,8 @@ fn kip_1251_seed(topic_id: krabka_protocol::primitives::uuid::Uuid) -> GroupSeed
 /// below.
 #[tokio::test]
 async fn an_older_member_epoch_commits_a_partition_assigned_before_it() {
-    let (handle, _dir) = start_broker_with(|cfg| {
-        cfg.audit_enabled = false;
-        cfg.authorizer = Arc::new(GrantsInPrincipalName);
-    })
-    .await;
+    let (handle, _dir) = start_seeded_broker().await;
     let broker = handle.broker_arc_for_test();
-    seed_topic_a(&broker).await;
     transaction_version_1(&broker).await;
     let address = peer();
     let user = principal(READ_ON_STAR);

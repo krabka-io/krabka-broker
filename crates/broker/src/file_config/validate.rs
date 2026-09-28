@@ -501,6 +501,10 @@ mod tests {
         let cases = [
             ("heartbeat_interval = \"0ms\"\n", "heartbeat_interval"),
             (
+                "[runtime]\noffsets_topic_replication_factor = 0\n",
+                "offsets_topic_replication_factor",
+            ),
+            (
                 "[delegation_token]\nmax_lifetime_ms = 0\n",
                 "max_lifetime_ms",
             ),

@@ -664,6 +664,7 @@ mod tests {
             config.offsets_topic_replication_factor = 1;
         })
         .await;
+        broker_handle.wait_until_group_coordinator_ready().await;
         let broker = broker_handle.broker_arc_for_test();
         let image = broker.controller.current_image();
         let partition = PartitionIndex(partition_for_group(&image, "g"));

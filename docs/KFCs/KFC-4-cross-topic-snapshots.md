@@ -360,6 +360,8 @@ Eager creation was the first design and it was wrong. Every broker created the t
 
 A broker that never defines a group now carries no barrier state at all.
 
+The topic follows the same rule as `__consumer_offsets`, `__transaction_state` and `__share_group_state`, which Kafka's `DefaultAutoTopicCreationManager` creates on first use. The first `create_group` asks the broker's auto topic creation for the topic. The broker sends a `CreateTopics` request to the active controller, with `barrier_state_num_partitions` partitions and `barrier_state_replication_factor` replicas, and does not wait for the answer. The replication factor is never lowered to fit the cluster. A cluster with fewer live brokers than the factor gets no topic, `create_group` answers that this broker is not the coordinator, and a later call tries again once enough brokers have registered. One set of in-flight names keeps two concurrent calls from creating the topic twice.
+
 Lazy creation needs a wait that eager creation did not. Topic creation, leader assignment and opening the log locally are three separate rounds, and `is_coordinator_for` reads the leader set while the write path needs the partition open. `create_group` waits for both. Without the wait, a caller is told it is not the coordinator for a group it just asked to create.
 
 ### A Trigger Timeout Bounds the Retry, Not the Injection
@@ -492,7 +494,7 @@ The keys stay registered and unadvertised, and the registry coverage test encode
 
 ### Eager Creation of `__barrier_state`
 
-The topic could be created at broker startup, beside `__transaction_state` and `__share_group_state`, which is simpler than waiting for a first group.
+The topic could be created at broker startup, which is simpler than waiting for a first group. No coordinator topic is created at startup now: `__consumer_offsets`, `__transaction_state` and `__share_group_state` are also created on first use.
 
 It cost two unrelated JVM acceptance suites. Fifty partitions at replication factor 3 on a cluster that cannot satisfy the factor stay leaderless, and the leader-election sweep walks all fifty on every pass. The metadata churn changed election timing enough to break `jvm_static_quorum_spike` and `jvm_kip320_divergence`, neither of which uses barriers.
 
