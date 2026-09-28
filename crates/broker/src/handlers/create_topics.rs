@@ -223,7 +223,7 @@ pub(crate) async fn handle(
     let creation = TopicCreation::new(broker, &image, validate_only);
 
     for topic_req in effective {
-        let created = match creation.create(topic_req, Some(&mut quota)).await {
+        let created = match creation.create(topic_req, &mut quota).await {
             Ok(created) => created,
             Err(failure) => {
                 results.push(*failure);

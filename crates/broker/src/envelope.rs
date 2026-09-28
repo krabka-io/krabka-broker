@@ -1,6 +1,6 @@
 //! KIP-590 `Envelope` (`api_key` 58): the wire form a forwarding node uses to
-//! carry a client's admin write to the active controller, and the pure
-//! encode/decode halves of serving it.
+//! carry a client's admin write to the active controller. This module holds
+//! the pure encode/decode halves of sending one and of serving one.
 //!
 //! Everything here was settled against `mirror.gcr.io/apache/kafka:4.3.1`
 //! rather than the wiki, by loading its own `kafka-clients-4.3.1.jar`:
@@ -28,14 +28,16 @@
 //!   principal it cannot deserialize is a `PrincipalDeserializationException`.
 //!   It performs no principal-*type* check, so neither does this module.
 
-use bytes::{BufMut as _, Bytes, BytesMut};
+use bytes::{Buf as _, BufMut as _, Bytes, BytesMut};
 use krabka_protocol::{
-    Decode as _, Encode as _, UnknownTaggedFields,
+    Decode as _, Encode as _, ProtocolError, UnknownTaggedFields,
     owned::{
         default_principal_data::{self, DefaultPrincipalData},
         envelope_request::EnvelopeRequest,
         envelope_response::EnvelopeResponse,
     },
+    primitives::string_bytes::put_nullable_string,
+    tagged_fields::read_tagged_fields,
 };
 
 use crate::{
@@ -204,6 +206,116 @@ pub(crate) fn deserialize_client_host_address(
         return Ok(std::net::IpAddr::from(octets).to_canonical());
     }
     Err(EnvelopeError::InvalidRequest)
+}
+
+/// Write a `request_principal` the way `DefaultKafkaPrincipalBuilder.serialize`
+/// does: a big-endian `int16` schema version 0, then the flexible
+/// `DefaultPrincipalData` body at that version. [`deserialize_principal`]
+/// reads it back.
+///
+/// The principal type is always Kafka's `"User"`, because
+/// `DefaultKafkaPrincipalBuilder` builds every principal with that type and
+/// krabka authorizes on the name alone.
+///
+/// # Errors
+/// Returns an error if the generated codec rejects the principal body.
+pub(crate) fn serialize_principal(principal: &ForwardedPrincipal) -> Result<Bytes, ProtocolError> {
+    let data = DefaultPrincipalData {
+        type_: "User".to_owned(),
+        name: principal.name.clone(),
+        token_authenticated: principal.token_authenticated,
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    };
+    let version = default_principal_data::MIN_VERSION;
+    let mut out = BytesMut::with_capacity(2 + data.encoded_len(version));
+    out.put_i16(version);
+    data.encode(&mut out, version)?;
+    Ok(out.freeze())
+}
+
+/// Write a `client_host_address` the way `InetAddress.getAddress()` does: four
+/// octets for an IPv4 host, sixteen for an IPv6 one.
+/// [`deserialize_client_host_address`] reads it back.
+///
+/// An IPv4-mapped `::ffff:a.b.c.d` goes out as its four IPv4 octets. A JVM
+/// socket reports such a peer as the `Inet4Address` it names, so a JVM
+/// forwarder sends the same four octets for the same client.
+pub(crate) fn serialize_client_host_address(ip: std::net::IpAddr) -> Bytes {
+    match ip.to_canonical() {
+        std::net::IpAddr::V4(v4) => Bytes::copy_from_slice(&v4.octets()),
+        std::net::IpAddr::V6(v6) => Bytes::copy_from_slice(&v6.octets()),
+    }
+}
+
+/// Build an `EnvelopeRequest.request_data`: the embedded request header in
+/// front of the embedded body. This is Kafka's
+/// `AbstractRequest.serializeWithHeader`, and [`unwrap_request`] reads it
+/// back.
+///
+/// The header is `api_key`, `api_version`, `correlation_id` and a nullable
+/// `client_id`. It is v2, with a trailing empty tagged-fields byte, exactly
+/// when the embedded body is flexible.
+pub(crate) fn wrap_request(forwarded: &ForwardedRequest) -> Bytes {
+    let client_id_len = forwarded.client_id.as_ref().map_or(0, String::len);
+    let mut out = BytesMut::with_capacity(10 + client_id_len + 1 + forwarded.body.len());
+    out.put_i16(forwarded.api_key);
+    out.put_i16(forwarded.api_version);
+    out.put_i32(forwarded.correlation_id);
+    put_nullable_string(&mut out, forwarded.client_id.as_deref());
+    if forwarded.body_flexible {
+        out.put_u8(0);
+    }
+    out.put_slice(&forwarded.body);
+    out.freeze()
+}
+
+/// Build the `EnvelopeRequest` that carries `request_data` to the controller
+/// in the name of `principal`, who connected from `client`. This is Kafka's
+/// `ForwardingManagerUtil.buildEnvelopeRequest`.
+///
+/// # Errors
+/// Returns an error if the generated codec rejects the principal body.
+pub(crate) fn envelope_request(
+    request_data: Bytes,
+    principal: &ForwardedPrincipal,
+    client: std::net::IpAddr,
+) -> Result<EnvelopeRequest, ProtocolError> {
+    Ok(EnvelopeRequest {
+        request_data,
+        request_principal: Some(serialize_principal(principal)?),
+        client_host_address: serialize_client_host_address(client),
+        unknown_tagged_fields: UnknownTaggedFields::default(),
+    })
+}
+
+/// Split a served `EnvelopeResponse.response_data` into the correlation id of
+/// its embedded response header and the embedded body. This is the reverse of
+/// [`wrap_response`].
+///
+/// `body_flexible` says whether the embedded body is flexible at the version
+/// the request was sent at. The embedded header then carries a tagged-fields
+/// section, except for `ApiVersions`, as [`crate::network::response_header_v1`]
+/// says.
+///
+/// # Errors
+/// Returns an error if the data is too short to hold the header, or if its
+/// tagged-fields section does not parse.
+pub(crate) fn unwrap_response(
+    api_key: ApiKeyCode,
+    body_flexible: bool,
+    response_data: &Bytes,
+) -> Result<(CorrelationId, Bytes), ProtocolError> {
+    let mut cur = response_data.as_ref();
+    if cur.remaining() < 4 {
+        return Err(ProtocolError::UnexpectedEof {
+            needed: 4 - cur.remaining(),
+        });
+    }
+    let correlation_id = cur.get_i32();
+    if crate::network::response_header_v1(api_key, body_flexible) {
+        read_tagged_fields(&mut cur, |_, _| Ok(false))?;
+    }
+    Ok((correlation_id, response_data.slice_ref(cur)))
 }
 
 /// Decode an `EnvelopeRequest` at `version`.
@@ -467,6 +579,195 @@ mod tests {
                 "case: {case}"
             );
         }
+    }
+
+    /// The send side writes the bytes a JVM forwarder writes, and the receive
+    /// side reads them back into the identity that went in.
+    #[test]
+    fn a_serialized_principal_matches_the_jvm_bytes_and_decodes_back() {
+        let cases = [
+            (
+                "User:alice, not token authenticated",
+                forwarded_principal("alice", false),
+                JVM_USER_ALICE,
+            ),
+            (
+                "User:bob, token authenticated",
+                forwarded_principal("bob", true),
+                JVM_USER_BOB_TOKEN,
+            ),
+        ];
+
+        for (case, principal, jvm) in cases {
+            assert!(let Ok(bytes) = serialize_principal(&principal), "case: {case}");
+
+            check!(bytes.as_ref() == jvm, "case: {case}");
+            check!(
+                deserialize_principal(Some(&bytes)) == Ok(principal),
+                "case: {case}"
+            );
+        }
+    }
+
+    /// `client_host_address` goes out as `InetAddress.getAddress()` writes
+    /// it, and the receive side reads the same address back. An IPv4-mapped
+    /// peer goes out as the four octets of the IPv4 address it names, which
+    /// is what a JVM socket reports for such a peer.
+    #[test]
+    fn a_client_host_address_round_trips_as_inet_address_get_address_writes_it() {
+        let cases: [(&str, std::net::IpAddr, &[u8], std::net::IpAddr); 3] = [
+            (
+                "an IPv4 address is four octets",
+                std::net::IpAddr::from([10, 1, 2, 3]),
+                &[10, 1, 2, 3],
+                std::net::IpAddr::from([10, 1, 2, 3]),
+            ),
+            (
+                "an IPv6 address is sixteen octets",
+                std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+                &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+                std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+            ),
+            (
+                "an IPv4-mapped IPv6 address is the four IPv4 octets",
+                "::ffff:10.1.2.3".parse().expect("literal IPv6 address"),
+                &[10, 1, 2, 3],
+                std::net::IpAddr::from([10, 1, 2, 3]),
+            ),
+        ];
+
+        for (case, ip, octets, decoded) in cases {
+            let bytes = serialize_client_host_address(ip);
+
+            check!(bytes.as_ref() == octets, "case: {case}");
+            check!(
+                deserialize_client_host_address(&bytes) == Ok(decoded),
+                "case: {case}"
+            );
+        }
+    }
+
+    /// `wrap_request` writes the header `unwrap_request` reads, so an embedded
+    /// request round-trips whole, with and without a flexible body and a
+    /// client id. The flexible case writes the same bytes as the hand-built
+    /// frame the receive-side tests use.
+    #[test]
+    fn a_wrapped_request_unwraps_to_the_same_request() {
+        let cases = [
+            (
+                "flexible CreateTopics with a client id",
+                ForwardedRequest {
+                    api_key: 19,
+                    api_version: 7,
+                    correlation_id: 5,
+                    client_id: Some("c".to_owned()),
+                    body: Bytes::from_static(b"topics"),
+                    body_flexible: true,
+                },
+                request_frame(19, 7, 5, Some("c"), true, b"topics"),
+            ),
+            (
+                "non-flexible AlterConfigs with a null client id",
+                ForwardedRequest {
+                    api_key: 33,
+                    api_version: 0,
+                    correlation_id: -3,
+                    client_id: None,
+                    body: Bytes::from_static(b"body"),
+                    body_flexible: false,
+                },
+                request_frame(33, 0, -3, None, false, b"body"),
+            ),
+        ];
+
+        for (case, forwarded, frame) in cases {
+            let wrapped = wrap_request(&forwarded);
+
+            check!(wrapped == frame, "case: {case}");
+            check!(
+                unwrap_request(&wrapped, |_, _| forwarded.body_flexible) == Ok(forwarded),
+                "case: {case}"
+            );
+        }
+    }
+
+    /// `unwrap_response` strips the header `wrap_response` writes and hands
+    /// back the correlation id and the body. `ApiVersions` keeps a v0 header
+    /// even when its body is flexible.
+    #[test]
+    fn a_wrapped_response_unwraps_to_its_correlation_id_and_body() {
+        let forwarded = |api_key: i16, body_flexible: bool| ForwardedRequest {
+            api_key,
+            api_version: 0,
+            correlation_id: 0x0102_0304,
+            client_id: None,
+            body: Bytes::new(),
+            body_flexible,
+        };
+        let cases = [
+            ("flexible body takes a v1 header", forwarded(19, true)),
+            ("non-flexible body takes a v0 header", forwarded(19, false)),
+            (
+                "flexible ApiVersions takes a v0 header",
+                forwarded(18, true),
+            ),
+        ];
+
+        for (case, forwarded) in cases {
+            let wrapped = wrap_response(&forwarded, b"body");
+
+            check!(
+                unwrap_response(forwarded.api_key, forwarded.body_flexible, &wrapped)
+                    .map_err(|error| error.to_string())
+                    == Ok((0x0102_0304, Bytes::from_static(b"body"))),
+                "case: {case}"
+            );
+        }
+    }
+
+    /// Data too short to hold the correlation id, or a flexible header whose
+    /// tagged-fields section is cut off, is refused.
+    #[test]
+    fn a_response_too_short_for_its_header_is_refused() {
+        let cases: [(&str, &[u8], bool); 2] = [
+            ("three bytes", &[0, 0, 1], false),
+            (
+                "a tagged-fields count with no fields after it",
+                &[0, 0, 0, 1, 1],
+                true,
+            ),
+        ];
+
+        for (case, data, flexible) in cases {
+            check!(
+                unwrap_response(19, flexible, &Bytes::copy_from_slice(data)).is_err(),
+                "case: {case}"
+            );
+        }
+    }
+
+    /// The Envelope that the send side builds carries the three pieces the
+    /// receive side reads, and it survives the v0 codec.
+    #[test]
+    fn a_built_envelope_request_carries_what_the_receive_side_reads() {
+        let request_data = request_frame(19, 7, 5, Some("c"), true, b"topics");
+        let client = std::net::IpAddr::from([127, 0, 0, 1]);
+
+        assert!(let Ok(request) = envelope_request(
+            request_data.clone(),
+            &forwarded_principal("alice", false),
+            client,
+        ));
+        let mut encoded = BytesMut::new();
+        request.encode(&mut encoded, 0).expect("encode");
+
+        let want = EnvelopeRequest {
+            request_data,
+            request_principal: Some(Bytes::from_static(JVM_USER_ALICE)),
+            client_host_address: Bytes::from_static(&[127, 0, 0, 1]),
+            unknown_tagged_fields: UnknownTaggedFields::default(),
+        };
+        check!(decode_request(&encoded, 0) == Ok(want));
     }
 
     /// The forwardable set is `ApiKeys.forwardable` from

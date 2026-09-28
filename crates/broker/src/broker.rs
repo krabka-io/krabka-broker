@@ -89,13 +89,7 @@ pub struct Broker {
     pub(crate) future_logs:
         Arc<DashMap<(String, PartitionIndex), Arc<crate::future_log::FutureLogState>>>,
     pub(crate) group_coordinator: Arc<crate::coordinator::GroupCoordinator>,
-    /// KIP-1071: the in-flight creations and the cached failures of the
-    /// streams internal topics, as Kafka's `DefaultAutoTopicCreationManager`
-    /// keeps them.
-    pub(crate) streams_internal_topics:
-        Arc<crate::handlers::streams_group_heartbeat::StreamsInternalTopics>,
-    /// The creation of the coordinator topics on first use, as Kafka's
-    /// `DefaultAutoTopicCreationManager` does it.
+    /// The auto topic creation: Kafka's `DefaultAutoTopicCreationManager`.
     pub(crate) auto_topic_creation: Arc<crate::auto_topic_creation::AutoTopicCreation>,
     pub(crate) producer_ids: Arc<crate::producer_id_manager::ProducerIdManager>,
     pub(crate) producer_state: Arc<crate::producer_state::ProducerState>,

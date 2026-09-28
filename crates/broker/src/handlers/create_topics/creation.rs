@@ -4,10 +4,8 @@
 //! a topic goes through after authorization: the name, the existence check,
 //! the configs, the shape, the replica placement, the topic policy, the
 //! controller-mutation quota and the metadata commit. `CreateTopics` runs it
-//! for each row a client sends. The broker's own auto-creation of an internal
-//! topic runs it without a principal
-//! ([`crate::auto_topic_creation::AutoTopicCreation`]), as Kafka's
-//! `TopicCreator.createTopicWithoutPrincipal` does.
+//! for each row that it gets, from a client or from the auto topic creation
+//! of a broker ([`crate::auto_topic_creation::AutoTopicCreation`]).
 
 use std::collections::BTreeMap;
 
@@ -76,9 +74,7 @@ impl<'a> TopicCreation<'a> {
     /// Runs the checks of one row and, unless the request is validate-only,
     /// commits the topic and opens its local partitions.
     ///
-    /// `quota` is the KIP-599 controller-mutation quota of the request. The
-    /// broker's own creation of an internal topic passes `None`, and nothing
-    /// is charged.
+    /// `quota` is the KIP-599 controller-mutation quota of the request.
     ///
     /// # Errors
     ///
@@ -86,7 +82,7 @@ impl<'a> TopicCreation<'a> {
     pub async fn create(
         &self,
         topic_req: CreatableTopic,
-        quota: Option<&mut ControllerMutationQuota>,
+        quota: &mut ControllerMutationQuota,
     ) -> Result<NewTopic, Box<CreatableTopicResult>> {
         let mut topic_req = topic_req;
         let broker = self.broker;
@@ -281,7 +277,7 @@ impl<'a> TopicCreation<'a> {
 
         // KIP-599: charge the partitions this topic creates.
         let partition_count = u64::try_from(assignments.len()).unwrap_or(u64::MAX);
-        if quota.is_some_and(|quota| quota.record(partition_count).is_err()) {
+        if quota.record(partition_count).is_err() {
             return Err(Box::new(topic_error_result(
                 name,
                 codes::THROTTLING_QUOTA_EXCEEDED,

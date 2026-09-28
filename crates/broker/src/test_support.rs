@@ -73,15 +73,19 @@ impl crate::authorizer::Authorizer for DenyAll {
     }
 }
 
-/// An authorizer that lets the broker's own heartbeat through and asks the
-/// wrapped one about everything else.
+/// An authorizer that lets the broker's own controller requests through and
+/// asks the wrapped one about everything else.
 ///
-/// A test broker heartbeats its own controller over a plaintext controller
-/// listener, as the `ANONYMOUS` principal, and a new registration stays fenced
-/// until a heartbeat unfences it. A Kafka operator grants the inter-broker
-/// principal `ClusterAction` or makes it a super user for the same reason.
-/// Tests that exercise a restrictive authorizer on client requests wrap it in
-/// this, so the broker still unfences.
+/// A test broker talks to its own controller over a plaintext controller
+/// listener, as the `ANONYMOUS` principal. A new registration stays fenced
+/// until a heartbeat unfences it, and the heartbeat needs `ClusterAction` on
+/// the `Cluster`. The auto topic creation of a coordinator topic sends
+/// `CreateTopics` with no client principal, and the controller checks
+/// `Create` on the `Cluster` for it. A Kafka operator grants the inter-broker
+/// principal `ClusterAction` and `Create`, or makes it a super user, for the
+/// same reasons. Tests that exercise a restrictive authorizer on client
+/// requests wrap it in this, so the broker still unfences and still creates
+/// its coordinator topics.
 #[derive(Debug)]
 pub(crate) struct ControllerPeerAllowed<A>(pub(crate) A);
 
@@ -93,7 +97,11 @@ impl<A: crate::authorizer::Authorizer> crate::authorizer::Authorizer for Control
     ) -> crate::authorizer::AuthorizationResult {
         if request.principal.name == "ANONYMOUS"
             && request.resource_type == krabka_metadata::ResourceType::Cluster
-            && request.operation == krabka_metadata::AclOperation::ClusterAction
+            && matches!(
+                request.operation,
+                krabka_metadata::AclOperation::ClusterAction
+                    | krabka_metadata::AclOperation::Create
+            )
         {
             crate::authorizer::AuthorizationResult::Allow
         } else {
@@ -1188,9 +1196,9 @@ mod tests {
         }
     }
 
-    /// `controller_peer_allowed` allows only the `ClusterAction` of the
-    /// `ANONYMOUS` controller peer, and answers everything else as the
-    /// wrapped authorizer does.
+    /// `controller_peer_allowed` allows only `ClusterAction` and `Create` on
+    /// the `Cluster` for the `ANONYMOUS` controller peer, and answers
+    /// everything else as the wrapped authorizer does.
     #[test]
     fn controller_peer_allowed_adds_only_the_controller_peer_grant() {
         let image = MetadataImage::new(uuid::Uuid::nil());
@@ -1214,8 +1222,16 @@ mod tests {
                 "ANONYMOUS",
                 ResourceType::Cluster,
                 AclOperation::Create,
+                Allow,
+            ),
+            ("alice", ResourceType::Cluster, AclOperation::Create, Deny),
+            (
+                "ANONYMOUS",
+                ResourceType::Cluster,
+                AclOperation::Alter,
                 Deny,
             ),
+            ("ANONYMOUS", ResourceType::Topic, AclOperation::Create, Deny),
             (
                 "ANONYMOUS",
                 ResourceType::Topic,

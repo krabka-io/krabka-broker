@@ -8,9 +8,10 @@
 //!     leader of its `__share_group_state` partition.
 //!
 //! A state topic that does not exist yet is created on first use. The lookup
-//! asks [`crate::auto_topic_creation::AutoTopicCreation`] for it, which creates
-//! it in the background with its configured partition count and replication
-//! factor, and answers `COORDINATOR_NOT_AVAILABLE` for every admitted key.
+//! asks [`crate::auto_topic_creation::AutoTopicCreation`] for it, which sends
+//! a `CreateTopics` request to the active controller with its configured
+//! partition count and replication factor, and answers
+//! `COORDINATOR_NOT_AVAILABLE` for every admitted key.
 //! A partition with no leader, or with a leader that is not alive, is
 //! `COORDINATOR_NOT_AVAILABLE` too.
 //!
