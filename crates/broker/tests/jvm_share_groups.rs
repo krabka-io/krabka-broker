@@ -43,7 +43,6 @@ use krabka_log::LogConfig;
 use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        find_coordinator_request::FindCoordinatorRequest,
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
     },
     primitives::uuid::Uuid as WireUuid,
@@ -141,7 +140,7 @@ async fn start_host_broker() -> (BrokerHandle, tempfile::TempDir) {
         controller_election_timeout: krabka_units::secs(5),
         controller_heartbeat_interval: krabka_units::millis(500),
         bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
-        ..BrokerConfig::default()
+        ..BrokerConfig::default().with_internal_topics_for(1)
     };
     let handle = Broker::start(config).await.expect("start broker");
     eprintln!("KRABKA[test] broker started listen={listen} advertised={bootstrap}");
@@ -196,19 +195,7 @@ async fn create_topic(broker: &BrokerHandle, client: &Client, topic: &str) -> uu
 /// partition is local, so the share coordinator can accept writes before the
 /// JVM consumer drives `ShareFetch` and `ShareAcknowledge`.
 async fn bootstrap_share_state(broker: &BrokerHandle, client: &Client, key: &str) {
-    let resp = client
-        .send(FindCoordinatorRequest {
-            key_type: 2, // SHARE
-            coordinator_keys: vec![key.to_string()],
-            ..Default::default()
-        })
-        .await
-        .expect("FindCoordinator(SHARE)");
-    assert!(
-        resp.coordinators[0].error_code == 0,
-        "FindCoordinator(SHARE) error: {}",
-        resp.coordinators[0].error_code
-    );
+    support::find_coordinator(client, support::KEY_TYPE_SHARE, key).await;
     for p in 0..SHARE_STATE_PARTITIONS {
         broker
             .wait_until_partition_present(SHARE_STATE_TOPIC, p)

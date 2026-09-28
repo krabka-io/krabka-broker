@@ -394,6 +394,9 @@ async fn consumer_clamps_at_hw_when_followers_lag() {
 async fn read_committed_under_rf1_unchanged() {
     let (broker, bootstrap, _dir) = boot_single().await;
     create_topic(&broker, &bootstrap, "rctxn", 1).await;
+    // The producer does not retry COORDINATOR_NOT_AVAILABLE from
+    // FindCoordinator. Bring the transaction coordinator up first.
+    broker.wait_until_transaction_coordinator_ready().await;
 
     let producer = Producer::builder()
         .bootstrap(bootstrap.clone())

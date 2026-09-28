@@ -1,12 +1,15 @@
 //! `InitProducerId` with and without a transactional id.
 //!
 //! A plain call hands out a pooled producer id, and a transactional one needs
-//! the `__transaction_state` topic to exist first, so `FindCoordinator` with
-//! `key_type` 1 bootstraps it. A repeated transactional id bumps the epoch.
+//! the `__transaction_state` topic to exist first. Only `FindCoordinator` with
+//! `key_type` 1 asks for that topic. Its first answer is
+//! `COORDINATOR_NOT_AVAILABLE`, and the client retries until the lookup names
+//! a broker. A repeated transactional id bumps the epoch.
 
 use assert2::{assert, check};
 use krabka_protocol::owned::{
     find_coordinator_request::FindCoordinatorRequest,
+    find_coordinator_response::{Coordinator, FindCoordinatorResponse},
     init_producer_id_request::InitProducerIdRequest,
 };
 
@@ -33,9 +36,10 @@ async fn init_producer_id_returns_fresh_pid() {
 
 #[tokio::test]
 async fn init_producer_id_without_coordinator_bootstrap_returns_not_coordinator() {
-    // Without a prior FindCoordinator(TRANSACTION) call, the broker has not
-    // yet refreshed its leader_partitions set for __transaction_state, so it
-    // cannot confirm it is the coordinator and returns NOT_COORDINATOR (16).
+    // Without a prior FindCoordinator(TRANSACTION) call, __transaction_state
+    // does not exist. Kafka's `TransactionStateManager
+    // .getAndMaybeAddTransactionState` then answers NOT_COORDINATOR (16), and
+    // InitProducerId does not create the topic.
     // A valid timeout isolates that path: `InitProducerId` now validates
     // transaction.timeout.ms before the coordinator lookup, and the wire
     // default of 0 is itself invalid, which would otherwise answer
@@ -55,11 +59,11 @@ async fn init_producer_id_without_coordinator_bootstrap_returns_not_coordinator(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn find_coordinator_txn_creates_topic_and_returns_local_broker() {
+async fn find_coordinator_txn_creates_topic_then_returns_local_broker() {
     let p = support::start().await; // single-voter broker
     // Use coordinator_keys (v4+ style) so the transaction-id reaches the
     // broker on the wire. key_type=1 selects the TRANSACTION branch.
-    let r = p
+    let first = p
         .client
         .send(FindCoordinatorRequest {
             coordinator_keys: vec!["my-tid".into()],
@@ -68,33 +72,51 @@ async fn find_coordinator_txn_creates_topic_and_returns_local_broker() {
         })
         .await
         .expect("FindCoordinator(TRANSACTION)");
-    // The broker bootstraps __transaction_state on demand, resolves the
-    // partition leader, and returns itself (the only broker in the cluster).
-    assert!(r.error_code == 0, "top-level error_code");
-    assert!(r.coordinators.len() == 1, "one coordinator entry");
-    let c = &r.coordinators[0];
-    check!(c.error_code == 0, "coordinator error_code");
-    check!(c.node_id == 1, "node_id should be this single broker");
-    check!(!c.host.is_empty(), "host should be non-empty");
-    check!(c.port > 0, "port should be positive");
+    // Kafka's `KafkaApis.getCoordinator`: the lookup finds no
+    // __transaction_state, asks for it, and answers COORDINATOR_NOT_AVAILABLE
+    // (15) with `Node.noNode()`.
+    check!(
+        first
+            == FindCoordinatorResponse {
+                coordinators: vec![Coordinator {
+                    key: "my-tid".into(),
+                    node_id: -1,
+                    host: String::new(),
+                    port: -1,
+                    error_code: 15,
+                    error_message: None,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }
+    );
+
+    // The retried lookup resolves the partition leader, which is this broker
+    // (the only broker in the cluster).
+    let retried =
+        support::find_coordinator(&p.client, support::KEY_TYPE_TRANSACTION, "my-tid").await;
+    let listen = p.broker.listen_addr();
+    check!(
+        retried
+            == Coordinator {
+                key: "my-tid".into(),
+                node_id: 1,
+                host: listen.ip().to_string(),
+                port: i32::from(listen.port()),
+                error_code: 0,
+                error_message: None,
+                ..Default::default()
+            }
+    );
     p.broker.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn init_producer_id_with_transactional_id_returns_real_pid() {
     let p = support::start().await;
-    // Bootstrap __transaction_state via FindCoordinator (key_type=1).
-    // Use coordinator_keys (v4+ wire format) so the transaction-id reaches
-    // the broker and triggers topic creation + leader registration.
-    let _ = p
-        .client
-        .send(FindCoordinatorRequest {
-            coordinator_keys: vec!["my-tid".into()],
-            key_type: 1, // TRANSACTION
-            ..Default::default()
-        })
-        .await
-        .expect("FindCoordinator");
+    // Bootstrap __transaction_state via FindCoordinator (key_type=1), and
+    // retry until the lookup names a coordinator, as a client does.
+    support::find_coordinator(&p.client, support::KEY_TYPE_TRANSACTION, "my-tid").await;
 
     let r = p
         .client
@@ -117,16 +139,9 @@ async fn init_producer_id_with_transactional_id_returns_real_pid() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn init_producer_id_with_same_tid_bumps_epoch() {
     let p = support::start().await;
-    // Bootstrap __transaction_state for stable-tid.
-    let _ = p
-        .client
-        .send(FindCoordinatorRequest {
-            coordinator_keys: vec!["stable-tid".into()],
-            key_type: 1, // TRANSACTION
-            ..Default::default()
-        })
-        .await
-        .expect("FindCoordinator");
+    // Bootstrap __transaction_state for stable-tid, and retry until the
+    // lookup names a coordinator, as a client does.
+    support::find_coordinator(&p.client, support::KEY_TYPE_TRANSACTION, "stable-tid").await;
 
     let r1 = p
         .client

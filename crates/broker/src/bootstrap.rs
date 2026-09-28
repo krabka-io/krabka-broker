@@ -43,12 +43,6 @@ struct Stamp {
     version: u64,
 }
 
-/// Selects a configured internal-topic replication factor, bounded by the
-/// number of registered brokers.
-pub(crate) fn internal_topic_replication_factor(desired: i16, broker_count: usize) -> usize {
-    broker_count.min(usize::try_from(desired).expect("replication factor is positive"))
-}
-
 /// Reads this replica's stable directory id from `meta.properties.json`,
 /// which `krabka format` writes.
 ///
@@ -193,12 +187,6 @@ mod tests {
     use wincode::Serialize;
 
     use super::*;
-
-    #[test]
-    fn internal_topic_replication_factor_uses_configured_value_and_broker_cap() {
-        assert!(internal_topic_replication_factor(2, 3) == 2);
-        assert!(internal_topic_replication_factor(4, 3) == 3);
-    }
 
     fn write_frame(out: &mut Vec<u8>, rec: &MetadataRecord) {
         let bytes = <SerdeCompat<MetadataRecord>>::serialize(rec).unwrap();

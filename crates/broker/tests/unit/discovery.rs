@@ -2,13 +2,15 @@
 //!
 //! `ApiVersions`, `Metadata`, and `FindCoordinator` are the three round trips
 //! a client makes on a fresh connection, and each of them reports this single
-//! broker back to the caller.
+//! broker back to the caller. The first group lookup finds no
+//! `__consumer_offsets`, so it asks for the topic and the client retries.
 
 use assert2::{assert, check};
 use krabka_protocol::owned::{
     api_versions_request::ApiVersionsRequest,
     create_topics_request::{CreatableTopic, CreateTopicsRequest},
     find_coordinator_request::FindCoordinatorRequest,
+    find_coordinator_response::{Coordinator, FindCoordinatorResponse},
     metadata_request::MetadataRequest,
 };
 
@@ -72,19 +74,46 @@ async fn metadata_returns_this_broker_and_listed_topics() {
     p.broker.shutdown().await;
 }
 
+/// Kafka's `KafkaApis.getCoordinator`: the first group lookup finds no
+/// `__consumer_offsets`, asks for it, and answers `COORDINATOR_NOT_AVAILABLE`
+/// (15) with `Node.noNode()`. A retried lookup names this broker.
 #[tokio::test]
-async fn find_coordinator_returns_self() {
+async fn find_coordinator_creates_the_offsets_topic_then_returns_self() {
     let p = support::start().await;
     let req = FindCoordinatorRequest {
         coordinator_keys: vec!["any-group".into()],
         ..Default::default()
     };
-    let r = p.client.send(req).await.expect("FindCoordinator");
-    for c in &r.coordinators {
-        check!(c.error_code == 0);
-        check!(c.node_id == 1);
-        check!(!c.host.is_empty());
-        check!(c.port > 0);
-    }
+    let first = p.client.send(req).await.expect("FindCoordinator");
+    check!(
+        first
+            == FindCoordinatorResponse {
+                coordinators: vec![Coordinator {
+                    key: "any-group".into(),
+                    node_id: -1,
+                    host: String::new(),
+                    port: -1,
+                    error_code: 15,
+                    error_message: None,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }
+    );
+
+    let retried = support::find_coordinator(&p.client, support::KEY_TYPE_GROUP, "any-group").await;
+    let listen = p.broker.listen_addr();
+    check!(
+        retried
+            == Coordinator {
+                key: "any-group".into(),
+                node_id: 1,
+                host: listen.ip().to_string(),
+                port: i32::from(listen.port()),
+                error_code: 0,
+                error_message: None,
+                ..Default::default()
+            }
+    );
     p.broker.shutdown().await;
 }

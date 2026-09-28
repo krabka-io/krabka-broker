@@ -242,7 +242,7 @@ async fn start_worm_broker(
         // for the whole test. A restart is what would start a new epoch, and
         // this suite never restarts.
         remote_log_metadata: krabka_broker::RlmmKind::InMemory,
-        ..krabka_broker::BrokerConfig::default()
+        ..krabka_broker::BrokerConfig::default().with_internal_topics_for(1)
     };
     let handle = krabka_broker::Broker::start(config)
         .await

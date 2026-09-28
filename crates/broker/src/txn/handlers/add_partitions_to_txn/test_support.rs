@@ -88,37 +88,9 @@ pub(super) async fn start_coordinator(
     let broker = handle.broker_arc_for_test();
     handle.wait_until_controller_leader().await;
     handle.wait_until_brokers_registered(1).await;
-    crate::txn::bootstrap::ensure_topic(
-        &broker.controller,
-        1,
-        1,
-        &crate::txn::bootstrap::topic_configs(
-            broker.config.transaction_state_segment_bytes,
-            broker.config.transaction_state_min_isr,
-        ),
-    )
-    .await
-    .expect("bootstrap __transaction_state");
+    handle.wait_until_transaction_coordinator_ready().await;
     seed_topic(&broker, "a", 1).await;
     seed_topic(&broker, "b", 1).await;
-    // Wait for the coordinator's own leadership/load bookkeeping, not just
-    // the partition object. The broker's metadata reconcile loop also calls
-    // refresh_leader_partitions on every image change and does not wait for
-    // the load it starts, so a caller can otherwise see the partition object
-    // exist locally before the coordinator itself considers the partition
-    // loaded, and puts before that point fail "does not coordinate".
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        while broker
-            .txn_coordinator
-            .load_status(krabka_ids::PartitionIndex(0))
-            .await
-            != Some(crate::txn::coordinator::leadership::LoadStatus::Loaded)
-        {
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .expect("__transaction_state-0 becomes local");
     (handle, dir)
 }
 

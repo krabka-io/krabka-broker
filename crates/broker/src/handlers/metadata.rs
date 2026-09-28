@@ -87,7 +87,7 @@ const FIRST_TOPIC_AUTHORIZED_OPERATIONS_VERSION: i16 = 8;
 pub(crate) async fn handle(
     broker: &Broker,
     version: i16,
-    _correlation_id: i32,
+    correlation_id: i32,
     req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
@@ -133,9 +133,9 @@ pub(crate) async fn handle(
             version,
             requested: &requested,
             unavailable: &unavailable,
+            correlation_id,
         },
-    )
-    .await;
+    );
 
     // controller_id: an unfenced registered broker, not the quorum leader.
     // See `handlers::controller_id`.
@@ -325,11 +325,14 @@ struct TopicRowInputs<'a> {
     /// Brokers the controller currently treats as fenced or dead, from
     /// [`crate::handlers::offline_replicas::unavailable_brokers`].
     unavailable: &'a std::collections::HashSet<u64>,
+    /// The correlation id of the request, which an auto-creation forwards to
+    /// the controller.
+    correlation_id: i32,
 }
 
 /// The topic rows, in Kafka's order: unknown ids, the described topics, the
 /// topics denied `Create`, and the topics denied `Describe`.
-async fn build_topic_rows(
+fn build_topic_rows(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     ctx: &crate::handlers::RequestContext<'_>,
@@ -394,9 +397,13 @@ async fn build_topic_rows(
             .filter(|name| image.topic(name).is_none())
             .collect();
         if !missing.is_empty() {
-            described_rows.extend(
-                missing_topics::missing_topic_rows(broker, ctx, &missing, auto_create).await,
-            );
+            described_rows.extend(missing_topics::missing_topic_rows(
+                broker,
+                ctx,
+                inputs.correlation_id,
+                &missing,
+                auto_create,
+            ));
         }
     }
     if inputs.version >= FIRST_TOPIC_AUTHORIZED_OPERATIONS_VERSION

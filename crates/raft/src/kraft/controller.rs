@@ -305,6 +305,11 @@ struct CommitWaiter {
     need_offset: Offset,
     /// First per-record rejection observed at apply time, if any.
     rejection: Option<RaftError>,
+    /// The names of the topics that this batch creates. A name is here when
+    /// the batch has a `V1Topic` for it and the applied image did not have
+    /// the topic at submit time. While the waiter is parked, a second submit
+    /// that creates one of these names gets `TopicExists`.
+    creates: Vec<String>,
     result: SubmitChangeResult,
     reply: oneshot::Sender<Result<SubmitChangeResult, RaftError>>,
 }

@@ -135,7 +135,18 @@ mod tests {
         client_id = "admin-client"
     );
 
-    use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
+    /// Start a broker with `authorizer` and audit off, and wait until its
+    /// group coordinator serves `__consumer_offsets`.
+    async fn start_broker(
+        authorizer: Arc<dyn crate::authorizer::Authorizer>,
+    ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
+        let (handle, dir) = crate::test_support::start_broker_with_authorizer_no_audit(
+            crate::test_support::controller_peer_allowed(authorizer),
+        )
+        .await;
+        handle.wait_until_group_coordinator_ready().await;
+        (handle, dir)
+    }
 
     async fn drive(
         broker: &Broker,

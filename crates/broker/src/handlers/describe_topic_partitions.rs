@@ -843,12 +843,8 @@ mod tests {
     /// default the way a Deny row's is -- and its error code follows
     /// `Topic.validate`: 17 for a name it refuses, 3 otherwise.
     ///
-    /// Uses `__transaction_state` rather than `__consumer_offsets`: the
-    /// broker's coordinator bootstrap creates `__consumer_offsets` eagerly on
-    /// startup (`coordinator::bootstrap::bootstrap`), so it would not be
-    /// `UNKNOWN_TOPIC_OR_PARTITION` by the time this request runs.
-    /// `__transaction_state` is internal (`INTERNAL_TOPICS`) but has no such
-    /// eager bootstrap.
+    /// `__transaction_state` is internal (`INTERNAL_TOPICS`), and no broker
+    /// creates it at startup, so it is `UNKNOWN_TOPIC_OR_PARTITION` here.
     #[tokio::test]
     async fn missing_topic_row_follows_topic_validate() {
         let too_long = "a".repeat(250);

@@ -16,7 +16,7 @@ use super::{
         assigned_record_offset, hwm_reaches_waiter, is_single_voter_majority,
         submit_waiter_need_offset, validate_append_result,
     },
-    records::metadata_record_batch,
+    records::{metadata_record_batch, next_batch_offset},
 };
 use crate::{
     DelegationTokenMutation, OffsetReservation, SubmitChangeResult, error::RaftError,
@@ -334,6 +334,64 @@ impl Engine {
         Ok(())
     }
 
+    /// The names of the topics that uncommitted records from earlier leader
+    /// epochs create.
+    ///
+    /// The records between the high watermark and this leader's epoch start
+    /// offset were appended by an earlier leader, possibly this node, and are
+    /// not committed. They commit when this epoch's first record does. Each
+    /// value is decoded against the image that the values before it produce,
+    /// as a replica replays it. A value that does not decode or validate adds
+    /// no name.
+    fn earlier_epoch_topic_names(&self) -> Vec<String> {
+        let Role::Leader {
+            epoch_start_offset, ..
+        } = self.core.role()
+        else {
+            return Vec::new();
+        };
+        let end = Offset(*epoch_start_offset);
+        let mut image = self.image.clone();
+        let mut names = Vec::new();
+        let mut cursor = self.log.hwm();
+        while cursor < end {
+            let Ok(batches) = self
+                .log
+                .read_decoded(cursor, self.metadata_raft_fetch_max.size())
+            else {
+                break;
+            };
+            let Some(next) = next_batch_offset(&batches).filter(|next| *next > cursor) else {
+                break;
+            };
+            for batch in &batches {
+                if batch.base_offset >= end.0 || batch.attributes.is_control_batch() {
+                    continue;
+                }
+                for value in batch
+                    .records
+                    .iter()
+                    .filter_map(|record| record.value.as_ref())
+                {
+                    let Ok(record) = from_kraft_value(value, &image) else {
+                        continue;
+                    };
+                    if image.validate(&record).is_err() {
+                        continue;
+                    }
+                    if let MetadataRecord::V1Topic(topic) = &record
+                        && image.topic(&topic.name).is_none()
+                    {
+                        names.push(topic.name.clone());
+                    }
+                    image.apply(&record);
+                }
+            }
+            cursor = next;
+        }
+        names
+    }
+
     /// Whether a change to the registration of `node_id` must wait for the
     /// log to commit before the leader can decide it.
     ///
@@ -420,6 +478,36 @@ impl Engine {
 
         if let Err(error) = self.check_compare_and_set_records(records, delegation_token_guarded) {
             let _ = reply.send(Err(error));
+            return;
+        }
+
+        // Kafka's `QuorumController` replays each record into its in-memory
+        // state before the record commits. Thus `ReplicationControlManager`
+        // `createTopics` sees a pending topic name as an existing topic and
+        // answers `TOPIC_ALREADY_EXISTS`. This leader validates against the
+        // applied image only, so it checks the names that parked waiters
+        // create.
+        //
+        // A leadership loss drops the waiters, but their records can stay in
+        // the log. This leader never truncates its own log, so a record from
+        // an earlier epoch commits with this epoch's first record. Its topic
+        // names count as pending too.
+        let creates = created_topic_names(&self.image, records);
+        let earlier_epoch_creates = if creates.is_empty() {
+            Vec::new()
+        } else {
+            self.earlier_epoch_topic_names()
+        };
+        if let Some(name) = creates.iter().find(|name| {
+            earlier_epoch_creates.contains(name)
+                || self
+                    .commit_waiters
+                    .iter()
+                    .any(|waiter| waiter.creates.contains(name))
+        }) {
+            let _ = reply.send(Err(RaftError::Metadata(
+                krabka_metadata::MetadataError::TopicExists(name.clone()),
+            )));
             return;
         }
 
@@ -597,6 +685,7 @@ impl Engine {
             base_offset: base,
             need_offset,
             rejection: None,
+            creates,
             result,
             reply,
         });
@@ -736,6 +825,23 @@ fn rebase_partition_directories(
         }),
         _ => None,
     }
+}
+
+/// The names of the topics that `records` create: each `V1Topic` name that
+/// `image` does not have. A `V1Topic` for a topic that `image` has is a
+/// partition growth or a rejected re-create, so its name is not included.
+/// Each name occurs one time only.
+fn created_topic_names(image: &MetadataImage, records: &[MetadataRecord]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for record in records {
+        if let MetadataRecord::V1Topic(topic) = record
+            && image.topic(&topic.name).is_none()
+            && !names.contains(&topic.name)
+        {
+            names.push(topic.name.clone());
+        }
+    }
+    names
 }
 
 /// Decode `blobs` the way a replica replays them, each against the image the
@@ -883,6 +989,45 @@ mod tests {
             assert2::check!(p.directories == vec![dir_id]);
         } else {
             panic!("expected V1Partition");
+        }
+    }
+
+    #[test]
+    fn created_topic_names_lists_only_names_absent_from_the_image() {
+        let topic = |name: &str, id: u128| {
+            MetadataRecord::V1Topic(TopicRecord {
+                name: name.into(),
+                topic_id: Uuid::from_u128(id),
+                partitions: 1,
+                replication_factor: 1,
+            })
+        };
+        let mut image = MetadataImage::default();
+        image.apply(&topic("existing", 1));
+
+        let cases: [(&str, Vec<MetadataRecord>, Vec<&str>); 4] = [
+            ("new topic", vec![topic("new", 2)], vec!["new"]),
+            ("existing topic", vec![topic("existing", 1)], vec![]),
+            (
+                "name repeated in one batch",
+                vec![topic("new", 2), topic("new", 3), topic("other", 4)],
+                vec!["new", "other"],
+            ),
+            (
+                "no topic records",
+                vec![MetadataRecord::V1DeleteTopic(
+                    krabka_metadata::DeleteTopicRecord {
+                        name: "existing".into(),
+                    },
+                )],
+                vec![],
+            ),
+        ];
+        for (case, records, expected) in cases {
+            assert2::check!(
+                created_topic_names(&image, &records) == expected,
+                "case: {case}"
+            );
         }
     }
 

@@ -273,17 +273,7 @@ mod tests {
             broker.controller.current_image().brokers().next().is_some()
         })
         .await;
-        crate::txn::bootstrap::ensure_topic(
-            &broker.controller,
-            1,
-            1,
-            &crate::txn::bootstrap::topic_configs(
-                broker.config.transaction_state_segment_bytes,
-                broker.config.transaction_state_min_isr,
-            ),
-        )
-        .await
-        .expect("bootstrap __transaction_state");
+        handle.wait_until_transaction_coordinator_ready().await;
         // The two topics exist, so the existence check lets them through to
         // the freeze gate.
         crate::txn::handlers::add_partitions_to_txn::test_support::seed_topic(

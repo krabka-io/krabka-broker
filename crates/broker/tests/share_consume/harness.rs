@@ -10,13 +10,11 @@ use std::{
 };
 
 use assert2::assert;
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use krabka_broker::BrokerConfig;
 use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
         create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        find_coordinator_request::FindCoordinatorRequest,
         incremental_alter_configs_request::{
             AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
         },
@@ -81,14 +79,6 @@ pub fn wire(tid: uuid::Uuid) -> WireUuid {
     WireUuid(*tid.as_bytes())
 }
 
-/// Bootstrap `__share_group_state` and wait until this broker has materialized
-/// the state partition that owns `key`. `FindCoordinator(SHARE)` creates the
-/// topic lazily, exactly as a KIP-932 client does. Until this broker leads that
-/// partition, the share-partition manager's persist would route to a
-/// not-yet-present leader, and the SPSO advance would only live in memory. A
-/// restart would then lose it. This is the share-state analogue of waiting for
-/// the data partition.
-const SHARE_STATE_TOPIC: &str = "__share_group_state";
 // These single-broker tests only need one state partition. Keeping the test
 // geometry small also prevents the parallel test runner from exhausting its
 // process-wide file-descriptor limit while eleven brokers run concurrently.
@@ -112,37 +102,23 @@ pub fn broker_config(log_dir: std::path::PathBuf) -> BrokerConfig {
     config
 }
 
+/// Brings up the two coordinators that a share group uses, and puts `group` on
+/// `share.auto.offset.reset=earliest`.
+///
+/// No broker creates `__consumer_offsets` or `__share_group_state` when it
+/// starts. `ShareGroupHeartbeat` needs the group coordinator, and the
+/// share-partition manager persists its SPSO advance through the share
+/// coordinator. Until this broker leads and loads the state partition, that
+/// advance lives only in memory, and a restart loses it. The handle helpers
+/// ask for each topic as a client's first lookup does, and wait until this
+/// broker serves it.
 pub async fn bootstrap_share_state(
     broker: &krabka_broker::BrokerHandle,
     client: &Client,
     group: &str,
-    topic_id: uuid::Uuid,
-    partition: i32,
 ) {
-    let key = format!(
-        "{group}:{}:{partition}",
-        URL_SAFE_NO_PAD.encode(topic_id.as_bytes())
-    );
-    let resp = client
-        .send(FindCoordinatorRequest {
-            key_type: 2, // SHARE
-            coordinator_keys: vec![key],
-            ..Default::default()
-        })
-        .await
-        .expect("FindCoordinator(SHARE)");
-    assert!(
-        resp.coordinators[0].error_code == 0,
-        "FindCoordinator(SHARE) error: {}",
-        resp.coordinators[0].error_code
-    );
-    // Wait until every state partition this single broker should lead is local,
-    // so the share-state writes land durably.
-    for p in 0..SHARE_STATE_PARTITIONS {
-        broker
-            .wait_until_partition_present(SHARE_STATE_TOPIC, p)
-            .await;
-    }
+    broker.wait_until_group_coordinator_ready().await;
+    broker.wait_until_share_coordinator_ready().await;
     set_auto_offset_reset_earliest(client, group).await;
 }
 

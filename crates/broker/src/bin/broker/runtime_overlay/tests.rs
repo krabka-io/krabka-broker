@@ -25,6 +25,14 @@ fn runtime_policy_cli_rejects_invalid_and_accepts_valid_values() {
             vec!["krabka-broker", "--sync-group-follower-wait=0ms"],
             false,
         ),
+        (
+            vec!["krabka-broker", "--offsets-topic-replication-factor=0"],
+            false,
+        ),
+        (
+            vec!["krabka-broker", "--offsets-topic-replication-factor=1"],
+            true,
+        ),
         (vec!["krabka-broker", "--replication-fetch-min=0B"], false),
         (vec!["krabka-broker", "--replication-fetch-min=1B"], true),
         (
@@ -261,6 +269,7 @@ fn file_runtime_with_nondefault_values() -> krabka_broker::file_config::FileConf
         auto_join_voter_request_timeout = "9s"
         share_state_replication_factor = 2
         transaction_state_replication_factor = 2
+        offsets_topic_replication_factor = 2
         "#,
     )
     .expect("parse runtime file config")
@@ -277,6 +286,7 @@ fn explicit_cli_default_runtime_values_override_file() {
         "--auto-join-voter-request-timeout=30s",
         "--share-state-replication-factor=3",
         "--transaction-state-replication-factor=3",
+        "--offsets-topic-replication-factor=3",
     ])
     .expect("parse explicit CLI defaults");
     let mut config = BrokerConfig::default();
@@ -298,7 +308,8 @@ fn explicit_cli_default_runtime_values_override_file() {
             config.auto_join_voter_request_timeout,
             config.share_coordinator.state_topic_replication_factor,
             config.transaction_state_replication_factor,
-        ) == (secs(30), secs(20), secs(30), 3, 3)
+            config.offsets_topic_replication_factor,
+        ) == (secs(30), secs(20), secs(30), 3, 3, 3)
     );
 }
 
@@ -313,6 +324,7 @@ fn explicit_env_default_runtime_values_override_file() {
             ("KRABKA_AUTO_JOIN_VOTER_REQUEST_TIMEOUT", Some("30s")),
             ("KRABKA_SHARE_STATE_REPLICATION_FACTOR", Some("3")),
             ("KRABKA_TRANSACTION_STATE_REPLICATION_FACTOR", Some("3")),
+            ("KRABKA_OFFSETS_TOPIC_REPLICATION_FACTOR", Some("3")),
         ],
         || {
             let args = Args::try_parse_from(["krabka-broker"]).expect("parse env defaults");
@@ -335,7 +347,8 @@ fn explicit_env_default_runtime_values_override_file() {
                     config.auto_join_voter_request_timeout,
                     config.share_coordinator.state_topic_replication_factor,
                     config.transaction_state_replication_factor,
-                ) == (secs(30), secs(20), secs(30), 3, 3)
+                    config.offsets_topic_replication_factor,
+                ) == (secs(30), secs(20), secs(30), 3, 3, 3)
             );
         },
     );

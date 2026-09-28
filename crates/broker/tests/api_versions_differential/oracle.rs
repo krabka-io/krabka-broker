@@ -115,7 +115,7 @@ pub(crate) async fn start_krabka(listeners: &JvmListeners) -> (BrokerHandle, tem
         controller_election_timeout: krabka_units::secs(5),
         controller_heartbeat_interval: krabka_units::millis(500),
         bootstrap_mode: krabka_broker::BootstrapMode::Bootstrap,
-        ..BrokerConfig::default()
+        ..BrokerConfig::default().with_internal_topics_for(1)
     };
     let handle = Broker::start(config).await.expect("start broker");
     eprintln!(

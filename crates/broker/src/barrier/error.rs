@@ -76,10 +76,6 @@ pub(crate) enum BarrierError {
         current: i32,
     },
 
-    /// The coordinator could not create `__barrier_state` in the metadata.
-    #[error("__barrier_state bootstrap failed: {0}")]
-    Bootstrap(String),
-
     /// An append to `__barrier_state` failed.
     #[error("__barrier_state append failed: {0}")]
     Persist(#[from] BrokerError),

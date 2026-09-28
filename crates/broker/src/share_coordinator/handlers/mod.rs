@@ -131,22 +131,33 @@ pub(crate) mod test_support {
         ))
     }
 
-    /// Creates the real `__share_group_state` topic on `broker` and waits until
-    /// the share coordinator has loaded every partition of it.
+    /// Creates the real `__share_group_state` topic through the active
+    /// controller, with its configured shape, and waits until the share
+    /// coordinator of `broker` has loaded every partition of it. A topic that
+    /// exists already is kept.
     ///
     /// A test must not seed the leadership by hand on a live broker: the
     /// metadata reconcile loop applies the image again at any time, and an
     /// image without the topic drops every led partition.
     pub(crate) async fn lead_share_state_partitions(broker: &Broker) {
-        let partitions = broker.share_coordinator.state_topic_num_partitions();
-        bootstrap::ensure_topic(
-            &broker.controller,
-            partitions,
-            broker.share_coordinator.state_topic_replication_factor(),
-            &broker.share_coordinator.state_topic_configs(),
-        )
-        .await
-        .expect("create __share_group_state");
+        let partitions = broker.config.share_coordinator.state_topic_num_partitions;
+        let request = krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
+            topics: vec![crate::auto_topic_creation::creatable_topic(
+                &broker.config,
+                bootstrap::TOPIC,
+            )],
+            ..Default::default()
+        };
+        let response = crate::topic_creator::TopicCreator::new(broker)
+            .create_topic_without_principal(request)
+            .await
+            .expect("the controller answers CreateTopics");
+        for row in &response.topics {
+            assert2::assert!(
+                [crate::codes::NONE, crate::codes::TOPIC_ALREADY_EXISTS].contains(&row.error_code),
+                "create __share_group_state: {row:?}"
+            );
+        }
         tokio::time::timeout(std::time::Duration::from_secs(30), async {
             loop {
                 broker

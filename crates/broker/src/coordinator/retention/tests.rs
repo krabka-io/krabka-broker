@@ -64,6 +64,7 @@ async fn start() -> (crate::broker::BrokerHandle, tempfile::TempDir) {
     let (broker, dir) =
         start_broker_with_authorizer_no_audit(Arc::new(crate::authorizer::AllowAllAuthorizer))
             .await;
+    broker.wait_until_group_coordinator_ready().await;
     let admin = principal("admin");
     let address = peer();
     let ctx = request_context(&admin, &address, "retention-admin");

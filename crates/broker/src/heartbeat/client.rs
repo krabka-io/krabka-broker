@@ -83,6 +83,9 @@ pub(crate) struct Config {
     /// The broker cancels this when all dirs go offline. This stops
     /// replication and materialization against dead disks before teardown.
     pub supervisor_shutdown: tokio_util::sync::CancellationToken,
+    /// KIP-1066: the log directories this broker holds cordoned. Heartbeats
+    /// report their ids once the broker has caught up with the metadata.
+    pub cordoned_log_dirs: crate::cordoned_log_dirs::CordonedLogDirs,
 }
 
 /// UUIDs of the currently-offline log dirs, for the heartbeat's `offline_log_dirs`.
@@ -127,19 +130,55 @@ fn heartbeat_connection_options(broker_id: i32, interval: Time) -> ConnectionOpt
     }
 }
 
+/// The cordoned directory ids a heartbeat carries, or `None` when it carries
+/// none.
+///
+/// Kafka's `BrokerLifecycleManager.sendBrokerHeartbeat` sets
+/// `CordonedLogDirs` only once the broker has caught up with the metadata
+/// (`initialCatchUpFuture`), because the dynamic config is up to date only
+/// then, and only while `metadata.version` is at least `4.3-IV0`.
+fn cordoned_dir_uuids(
+    caught_up: bool,
+    image: &krabka_metadata::MetadataImage,
+    cordoned: &crate::cordoned_log_dirs::CordonedLogDirs,
+    ids: &crate::log_dir_id::LogDirIds,
+) -> Option<Vec<krabka_protocol::primitives::uuid::Uuid>> {
+    let supported = image.finalized_metadata_version().is_some_and(|level| {
+        level >= krabka_metadata::metadata_version::CORDONED_LOG_DIRS_MIN_LEVEL
+    });
+    (caught_up && supported).then(|| {
+        cordoned
+            .cordoned()
+            .iter()
+            .filter_map(|dir| ids.id_for(dir))
+            .map(|id| krabka_protocol::primitives::uuid::Uuid(*id.as_bytes()))
+            .collect()
+    })
+}
+
+/// The two directory lists a heartbeat reports.
+#[derive(Debug, Default)]
+struct HeartbeatLogDirs {
+    /// KIP-858 directories that went offline.
+    offline: Vec<krabka_protocol::primitives::uuid::Uuid>,
+    /// KIP-1066 cordoned directories, `None` before the broker catches up.
+    cordoned: Option<Vec<krabka_protocol::primitives::uuid::Uuid>>,
+}
+
 fn heartbeat_request(
     broker_id: i32,
     broker_epoch: i64,
     current_metadata_offset: i64,
     want_shut_down: bool,
-    offline_log_dirs: Vec<krabka_protocol::primitives::uuid::Uuid>,
+    log_dirs: HeartbeatLogDirs,
 ) -> BrokerHeartbeatRequest {
     BrokerHeartbeatRequest {
         broker_id,
         broker_epoch,
         current_metadata_offset,
         want_shut_down,
-        offline_log_dirs,
+        offline_log_dirs: log_dirs.offline,
+        cordoned_log_dirs: log_dirs.cordoned,
         ..Default::default()
     }
 }
@@ -224,6 +263,9 @@ pub(crate) async fn run(mut cfg: Config) {
     }
     let mut tick = tokio::time::interval(cfg.interval.to_std());
     let mut channel: Option<ControllerChannel> = None;
+    // Kafka's `initialCatchUpFuture`: set by the first answer that says the
+    // broker has caught up, and never cleared.
+    let mut caught_up = false;
     loop {
         tokio::select! {
             _ = tick.tick() => {},
@@ -276,7 +318,15 @@ pub(crate) async fn run(mut cfg: Config) {
             }
         };
         let want_shut_down = *cfg.want_shutdown.borrow_and_update();
-        let offline_log_dirs = offline_dir_uuids(&cfg.log_dir_status, &cfg.log_dir_ids);
+        let log_dirs = HeartbeatLogDirs {
+            offline: offline_dir_uuids(&cfg.log_dir_status, &cfg.log_dir_ids),
+            cordoned: cordoned_dir_uuids(
+                caught_up,
+                &image,
+                &cfg.cordoned_log_dirs,
+                &cfg.log_dir_ids,
+            ),
+        };
         let resp = tokio::time::timeout(
             rpc_timeout.to_std(),
             open.connection.send(heartbeat_request(
@@ -284,7 +334,7 @@ pub(crate) async fn run(mut cfg: Config) {
                 cfg.broker_epoch,
                 cfg.controller.current_metadata_offset(),
                 want_shut_down,
-                offline_log_dirs,
+                log_dirs,
             )),
         )
         .await;
@@ -311,6 +361,7 @@ pub(crate) async fn run(mut cfg: Config) {
                     );
                     continue;
                 }
+                caught_up |= r.is_caught_up;
                 if !r.is_fenced {
                     cfg.unfenced.send_replace(InitialUnfence::Unfenced);
                 }
@@ -354,7 +405,7 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use assert2::assert;
+    use assert2::{assert, check};
     use bytes::BytesMut;
     use krabka_client_core::{MockBroker, MockReply};
     use krabka_metadata::{BrokerRegistrationRecord, MetadataRecord};
@@ -533,6 +584,7 @@ mod tests {
             log_dir_ids: crate::log_dir_id::LogDirIds::resolve(&no_dirs),
             all_log_dirs: no_dirs.clone(),
             supervisor_shutdown: CancellationToken::new(),
+            cordoned_log_dirs: crate::cordoned_log_dirs::CordonedLogDirs::default(),
         }));
 
         // The dials each fake has taken after each step, compared at the end.
@@ -619,7 +671,6 @@ mod tests {
 
     #[test]
     fn heartbeat_connection_options_use_bounded_rpc_timeout() {
-        use assert2::check;
         let opts = heartbeat_connection_options(9, millis(500));
 
         check!(opts.client_id == "krabka-broker-9-heartbeat");
@@ -631,13 +682,79 @@ mod tests {
     #[test]
     fn heartbeat_request_reports_registration_and_applied_metadata() {
         let offline = krabka_protocol::primitives::uuid::Uuid([7; 16]);
-        let req = heartbeat_request(3, 41, 47, true, vec![offline]);
+        let cordoned = krabka_protocol::primitives::uuid::Uuid([9; 16]);
+        let req = heartbeat_request(
+            3,
+            41,
+            47,
+            true,
+            HeartbeatLogDirs {
+                offline: vec![offline],
+                cordoned: Some(vec![cordoned]),
+            },
+        );
 
-        assert!(req.broker_id == 3);
-        assert!(req.broker_epoch == 41);
-        assert!(req.current_metadata_offset == 47);
-        assert!(!req.want_fence);
-        assert!(req.want_shut_down);
-        assert!(req.offline_log_dirs == vec![offline]);
+        assert!(
+            req == BrokerHeartbeatRequest {
+                broker_id: 3,
+                broker_epoch: 41,
+                current_metadata_offset: 47,
+                want_fence: false,
+                want_shut_down: true,
+                offline_log_dirs: vec![offline],
+                cordoned_log_dirs: Some(vec![cordoned]),
+                ..Default::default()
+            }
+        );
+    }
+
+    /// Kafka's `BrokerLifecycleManager.sendBrokerHeartbeat`: the cordoned
+    /// directory ids go out once the broker has caught up and only from
+    /// `metadata.version` `4.3-IV0`, and an empty set is still sent.
+    #[test]
+    fn heartbeats_carry_cordoned_dirs_once_caught_up_on_a_supporting_version() {
+        let a = tempdir().unwrap();
+        let b = tempdir().unwrap();
+        let paths = vec![a.path().to_path_buf(), b.path().to_path_buf()];
+        let ids = crate::log_dir_id::LogDirIds::resolve(&paths);
+        let wire = |dir: &std::path::Path| {
+            krabka_protocol::primitives::uuid::Uuid(*ids.id_for(dir).unwrap().as_bytes())
+        };
+        let image_at = |level: Option<i16>| {
+            let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+            if let Some(level) = level {
+                image.apply(&MetadataRecord::V1FeatureLevel(
+                    krabka_metadata::FeatureLevelRecord {
+                        name: crate::features::METADATA_VERSION.into(),
+                        level,
+                    },
+                ));
+            }
+            image
+        };
+        let one = crate::cordoned_log_dirs::CordonedLogDirs::new(
+            paths.clone(),
+            Some(b.path().display().to_string()),
+        );
+        let none = crate::cordoned_log_dirs::CordonedLogDirs::new(paths.clone(), None);
+        let cases = [
+            ("not caught up", false, Some(30), &one, None),
+            (
+                "caught up",
+                true,
+                Some(30),
+                &one,
+                Some(vec![wire(b.path())]),
+            ),
+            ("nothing cordoned", true, Some(30), &none, Some(vec![])),
+            ("below 4.3-IV0", true, Some(29), &one, None),
+            ("no metadata.version", true, None, &one, None),
+        ];
+        for (label, caught_up, level, cordoned, want) in cases {
+            check!(
+                cordoned_dir_uuids(caught_up, &image_at(level), cordoned, &ids) == want,
+                "{label}"
+            );
+        }
     }
 }

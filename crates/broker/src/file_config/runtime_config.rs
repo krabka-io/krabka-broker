@@ -293,10 +293,6 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
     pub audit_tail_read_max: Option<ByteSize>,
-    /// Maximum wait for `__consumer_offsets` metadata before a request fails.
-    #[serde(default, with = "krabka_units::serde_units::human::option_time")]
-    #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
-    pub offsets_topic_metadata_wait_timeout: Option<Time>,
     /// Number of missed push intervals after which client metrics expire.
     pub client_metrics_stale_push_intervals: Option<u32>,
     /// Capacity of the client-metrics OTLP forwarding queue.

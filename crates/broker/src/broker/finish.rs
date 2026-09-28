@@ -31,6 +31,7 @@ pub(super) type BrokerCoordinatorSet = (
     Arc<crate::share_coordinator::coordinator::ShareCoordinator>,
     Arc<crate::share_partition::manager::SharePartitionLeaderManager>,
     Arc<crate::barrier::coordinator::BarrierCoordinator>,
+    Arc<crate::auto_topic_creation::AutoTopicCreation>,
 );
 
 pub(super) struct BrokerStorageStartup {
@@ -73,7 +74,6 @@ pub(super) async fn finish_broker_startup(
         .queued_max_request_bytes
         .map(|budget| crate::network::dispatch::RequestByteBudget::of(budget.bytes_usize()));
     let broker = Arc::new(Broker {
-        streams_internal_topics: Arc::default(),
         config,
         controller,
         partitions,
@@ -85,6 +85,7 @@ pub(super) async fn finish_broker_startup(
         share_coordinator: coordinators.4,
         share_partition_leaders: coordinators.5,
         barrier_coordinator: coordinators.6,
+        auto_topic_creation: coordinators.7,
         supervisor_shutdown: runtime.supervisor_shutdown,
         supervisor_handle: tokio::sync::Mutex::new(Some(runtime.supervisor_handle)),
         disk_scanner_handle: tokio::sync::Mutex::new(runtime.disk_scanner_handle),
@@ -120,6 +121,10 @@ pub(super) async fn finish_broker_startup(
     // "kTLS is available here" beside the drain counter that says whether the
     // offload is carrying fetches.
     broker.metrics.set_ktls_enabled(broker.ktls_enabled);
+    broker.auto_topic_creation.bind(&broker).map_err(|error| {
+        broker.supervisor_shutdown.cancel();
+        BrokerError::Startup(error.into())
+    })?;
     if let Some(router) = admin_router {
         router.bind(&broker).map_err(|error| {
             broker.supervisor_shutdown.cancel();

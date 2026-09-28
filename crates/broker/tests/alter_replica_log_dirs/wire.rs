@@ -114,16 +114,63 @@ pub(crate) async fn alter_replica_log_dirs(
 }
 
 pub(crate) async fn describe_log_dirs(addr: SocketAddr) -> DescribeLogDirsResponse {
+    describe_log_dirs_at(addr, DESCRIBE_VERSION).await
+}
+
+/// `DescribeLogDirs` for every partition, at `version`.
+pub(crate) async fn describe_log_dirs_at(
+    addr: SocketAddr,
+    version: i16,
+) -> DescribeLogDirsResponse {
     let req = DescribeLogDirsRequest {
         topics: None,
         ..Default::default()
     };
     let mut stream = TcpStream::connect(addr).await.unwrap();
     let mut body = BytesMut::new();
-    req.encode(&mut body, DESCRIBE_VERSION).unwrap();
-    let resp_bytes = round_trip(&mut stream, 35, DESCRIBE_VERSION, &body)
-        .await
-        .unwrap();
+    req.encode(&mut body, version).unwrap();
+    let resp_bytes = round_trip(&mut stream, 35, version, &body).await.unwrap();
     let mut cur: &[u8] = &resp_bytes;
-    DescribeLogDirsResponse::decode(&mut cur, DESCRIBE_VERSION).unwrap()
+    DescribeLogDirsResponse::decode(&mut cur, version).unwrap()
+}
+
+/// `IncrementalAlterConfigs` v1 that SETs one key on broker `broker`, and the
+/// per-resource `(error_code, error_message)` it answers.
+pub(crate) async fn set_broker_config(
+    addr: SocketAddr,
+    broker: i32,
+    name: &str,
+    value: &str,
+) -> (i16, Option<String>) {
+    use krabka_protocol::owned::{
+        incremental_alter_configs_request::{
+            AlterConfigsResource, AlterableConfig, IncrementalAlterConfigsRequest,
+        },
+        incremental_alter_configs_response::IncrementalAlterConfigsResponse,
+    };
+    let version: i16 = 1;
+    let req = IncrementalAlterConfigsRequest {
+        resources: vec![AlterConfigsResource {
+            resource_type: 4,
+            resource_name: broker.to_string(),
+            configs: vec![AlterableConfig {
+                name: name.to_string(),
+                config_operation: 0,
+                value: Some(value.to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let mut body = BytesMut::new();
+    req.encode(&mut body, version).unwrap();
+    let resp_bytes = round_trip(&mut stream, 44, version, &body).await.unwrap();
+    let mut cur: &[u8] = &resp_bytes;
+    let resp = IncrementalAlterConfigsResponse::decode(&mut cur, version).unwrap();
+    (
+        resp.responses[0].error_code,
+        resp.responses[0].error_message.clone(),
+    )
 }

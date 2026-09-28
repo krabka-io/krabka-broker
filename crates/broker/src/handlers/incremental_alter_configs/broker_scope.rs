@@ -22,7 +22,8 @@ use crate::{
         self,
         broker_dynamic::{
             BrokerKeyKind, CLUSTER_DEFAULT_ONLY, broker_key_kind, broker_resource_node,
-            canonical_dynamic_broker_configs, elr_min_isr_error,
+            canonical_dynamic_broker_configs, cordoned_log_dirs_disabled_error,
+            cordoned_log_dirs_error, elr_min_isr_error,
         },
     },
 };
@@ -100,10 +101,14 @@ fn apply_operations(
 }
 
 /// The records one `BROKER` resource stages, or the error it answers with.
+/// `log_dirs` are this node's log directories, which a named-broker
+/// `cordoned.log.dirs` must name, and are empty on a node without the broker
+/// role.
 fn broker_records(
     resource: &AlterConfigsResource,
     image: &MetadataImage,
     serving: NodeId,
+    log_dirs: &[std::path::PathBuf],
 ) -> Result<Vec<MetadataRecord>, (i16, String)> {
     let node_id = broker_resource_node(&resource.resource_name, serving)?;
     if let Some(cfg) = resource.configs.iter().find(|cfg| {
@@ -150,6 +155,9 @@ fn broker_records(
     apply_operations(resource, &mut props)?;
     let per_broker = node_id != krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID;
     let canonical = canonical_dynamic_broker_configs(&props, per_broker)?;
+    if per_broker {
+        cordoned_log_dirs_error(&canonical, log_dirs)?;
+    }
 
     // Kafka writes a record for every key the request names, changed or not
     // (KAFKA-14136), and checks the ELR rules on each.
@@ -157,6 +165,9 @@ fn broker_records(
     for cfg in &resource.configs {
         let value = canonical.get(&cfg.name).cloned();
         if let Some(error) = elr_min_isr_error(image, node_id, &cfg.name, value.as_deref()) {
+            return Err(error);
+        }
+        if let Some(error) = cordoned_log_dirs_disabled_error(image, &cfg.name) {
             return Err(error);
         }
         records.push(MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
@@ -172,10 +183,11 @@ pub(super) fn handle_broker_scoped(
     resource: &AlterConfigsResource,
     image: &MetadataImage,
     serving: NodeId,
+    log_dirs: &[std::path::PathBuf],
     out: &mut AlterConfigsResourceResponse,
     to_submit: &mut Vec<MetadataRecord>,
 ) {
-    match broker_records(resource, image, serving) {
+    match broker_records(resource, image, serving, log_dirs) {
         Ok(records) => to_submit.extend(records),
         Err((code, message)) => {
             out.error_code = code;
@@ -410,7 +422,7 @@ mod tests {
         ];
         for (name, image, configs, want) in cases {
             let resource = make_resource(name, configs.clone());
-            let got = broker_records(&resource, &image, SERVING);
+            let got = broker_records(&resource, &image, SERVING, &[]);
             let want = want.map_err(|(code, message)| (code, message.to_owned()));
             check!(got == want, "{name:?} {configs:?}");
         }
@@ -422,7 +434,7 @@ mod tests {
             for cfg in [make_set_cfg(key, "true"), make_del_cfg(key)] {
                 let resource = make_resource("1", vec![cfg]);
                 check!(
-                    broker_records(&resource, &image_with(&[], false), SERVING)
+                    broker_records(&resource, &image_with(&[], false), SERVING, &[])
                         == Err((
                             codes::INVALID_CONFIG,
                             format!("broker config {key} is controller-managed and read-only"),
@@ -430,6 +442,118 @@ mod tests {
                     "key {key}"
                 );
             }
+        }
+    }
+
+    /// KIP-1066 `cordoned.log.dirs`, with each refusal a live
+    /// `apache/kafka:4.3.1` gave `kafka-configs --alter` on a broker with
+    /// `log.dirs=/tmp/d1,/tmp/d2`: a per-broker key, a `LIST` that APPEND and
+    /// SUBTRACT act on, a value checked against this node's `log.dirs`, and a
+    /// write the controller refuses below `metadata.version` `4.3-IV0`.
+    #[test]
+    fn cordoned_log_dirs_follows_kafkas_dynamic_config_rules() {
+        const KEY: &str = crate::cordoned_log_dirs::CORDONED_LOG_DIRS;
+        let log_dirs = [
+            std::path::PathBuf::from("/tmp/d1"),
+            std::path::PathBuf::from("/tmp/d2"),
+        ];
+        let at_level = |level: i16, configs: &[(NodeId, &str, &str)]| {
+            let mut image = image_with(configs, false);
+            image.apply(&MetadataRecord::V1FeatureLevel(
+                krabka_metadata::FeatureLevelRecord {
+                    name: crate::features::METADATA_VERSION.into(),
+                    level,
+                },
+            ));
+            image
+        };
+        let disabled = (
+            codes::INVALID_CONFIG,
+            "The cordoned.log.dirs configuration value cannot be set because it requires \
+             metadata.version >= 4.3-IV0",
+        );
+        let cases: Vec<Case<'_>> = vec![
+            (
+                "1",
+                at_level(30, &[]),
+                vec![make_set_cfg(KEY, "/tmp/d1")],
+                Ok(vec![record(SERVING, KEY, Some("/tmp/d1"))]),
+            ),
+            (
+                "1",
+                at_level(30, &[]),
+                vec![make_set_cfg(KEY, "*")],
+                Ok(vec![record(SERVING, KEY, Some("*"))]),
+            ),
+            (
+                "1",
+                at_level(30, &[(SERVING, KEY, "/tmp/d1")]),
+                vec![op(KEY, OP_APPEND, "/tmp/d2")],
+                Ok(vec![record(SERVING, KEY, Some("/tmp/d1,/tmp/d2"))]),
+            ),
+            (
+                "1",
+                at_level(30, &[(SERVING, KEY, "/tmp/d1,/tmp/d2")]),
+                vec![op(KEY, OP_SUBTRACT, "/tmp/d1")],
+                Ok(vec![record(SERVING, KEY, Some("/tmp/d2"))]),
+            ),
+            (
+                "1",
+                at_level(30, &[]),
+                vec![make_set_cfg(KEY, "/tmp/nope")],
+                Err((
+                    codes::INVALID_REQUEST,
+                    "requirement failed: All entries in cordoned.log.dirs must be present in \
+                     log.dirs or log.dir. Missing entries : /tmp/nope",
+                )),
+            ),
+            (
+                "1",
+                at_level(30, &[]),
+                vec![make_set_cfg(KEY, "*,/tmp/d1")],
+                Err((
+                    codes::INVALID_REQUEST,
+                    "requirement failed: When cordoned.log.dirs is set to *, it must not \
+                     contain other values",
+                )),
+            ),
+            (
+                "1",
+                at_level(30, &[]),
+                vec![make_set_cfg(KEY, "/tmp/d1,")],
+                Err((
+                    codes::INVALID_REQUEST,
+                    "Configuration 'cordoned.log.dirs' values must not be empty.",
+                )),
+            ),
+            (
+                "",
+                at_level(30, &[]),
+                vec![make_set_cfg(KEY, "/tmp/d1")],
+                Err((
+                    codes::INVALID_REQUEST,
+                    "Cannot update these configs at default cluster level, broker id must be \
+                     specified: [cordoned.log.dirs]",
+                )),
+            ),
+            (
+                "1",
+                at_level(29, &[]),
+                vec![make_set_cfg(KEY, "")],
+                Err(disabled),
+            ),
+            (
+                "1",
+                at_level(29, &[]),
+                vec![make_del_cfg(KEY)],
+                Err(disabled),
+            ),
+        ];
+        for (name, image, configs, want) in cases {
+            let resource = make_resource(name, configs.clone());
+            let got = broker_records(&resource, &image, SERVING, &log_dirs);
+            let want = want.map_err(|(code, message)| (code, message.to_owned()));
+            check!(got == want, "{name:?} {configs:?}");
         }
     }
 }

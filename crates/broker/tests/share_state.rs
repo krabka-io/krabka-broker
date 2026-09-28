@@ -7,11 +7,14 @@
 //! negotiation through `ApiVersions`.
 //!
 //! Timing note: the raw persister RPC handlers do NOT create
-//! `__share_group_state`. `FindCoordinator(SHARE)` does. After the broker
-//! creates the topic, it materializes and leads the topic's partitions
-//! asynchronously in the replicator supervisor. So the first `Initialize` may
-//! briefly return a coordinator-not-ready code. The `*_ready` helpers retry,
-//! exactly as a real client would.
+//! `__share_group_state`. `FindCoordinator(SHARE)` does. The first lookup asks
+//! for the topic and answers `COORDINATOR_NOT_AVAILABLE`, and a client retries
+//! it. After the broker creates the topic, it materializes and leads the
+//! topic's partitions asynchronously in the replicator supervisor. So the first
+//! `Initialize` may briefly return a coordinator-not-ready code. The `*_ready`
+//! helpers retry, exactly as a real client would.
+
+mod support;
 
 use std::{sync::Arc, time::Duration};
 
@@ -26,6 +29,7 @@ use krabka_protocol::{
             DeleteShareGroupStateRequest, DeleteStateData, PartitionData as DeletePart,
         },
         find_coordinator_request::FindCoordinatorRequest,
+        find_coordinator_response::Coordinator,
         initialize_share_group_state_request::{
             InitializeShareGroupStateRequest, InitializeStateData, PartitionData as InitPart,
         },
@@ -42,7 +46,6 @@ use krabka_protocol::{
     primitives::uuid::Uuid as WireUuid,
 };
 
-const KEY_TYPE_SHARE: i8 = 2;
 const COORDINATOR_LOAD_IN_PROGRESS: i16 = 14;
 const COORDINATOR_NOT_AVAILABLE: i16 = 15;
 const NOT_COORDINATOR: i16 = 16;
@@ -110,19 +113,21 @@ fn share_coordinator_key(group: &str, tid: uuid::Uuid, partition: i32) -> String
     )
 }
 
-/// Create `__share_group_state` lazily through `FindCoordinator` SHARE, and
-/// return the resolved coordinator node id for `key`.
-async fn find_share(client: &Client, key: &str) -> (i16, i32) {
+/// Sends one `FindCoordinator(SHARE)` for `key` and returns its row. A lookup
+/// before `__share_group_state` exists asks for the topic.
+async fn find_share_once(client: &Client, key: &str) -> Coordinator {
     let resp = client
         .send(FindCoordinatorRequest {
-            key_type: KEY_TYPE_SHARE,
+            key_type: support::KEY_TYPE_SHARE,
             coordinator_keys: vec![key.to_string()],
             ..Default::default()
         })
         .await
         .expect("FindCoordinator(SHARE)");
-    let c = &resp.coordinators[0];
-    (c.error_code, c.node_id)
+    let [row] = resp.coordinators.as_slice() else {
+        panic!("one coordinator row: {resp:?}");
+    };
+    row.clone()
 }
 
 /// Initialize one (group, topic, partition). This helper retries while the
@@ -257,21 +262,44 @@ async fn read_state(
 
 /// `FindCoordinator(SHARE)` bootstraps `__share_group_state` and routes the
 /// `(group, topic, partition)` key to a real broker (this single node).
+///
+/// The first lookup finds no topic. It asks for the topic and answers
+/// `COORDINATOR_NOT_AVAILABLE` with no node, as Kafka's
+/// `KafkaApis.getCoordinator` does. A retried lookup names this broker.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn find_coordinator_share_returns_broker() {
+async fn find_coordinator_share_creates_topic_and_returns_broker() {
     let (broker, bootstrap, _d) = boot().await;
     let client = connect(&bootstrap).await;
 
     let tid = uuid::Uuid::from_bytes([3u8; 16]);
-    let (error_code, node_id) = find_share(&client, &share_coordinator_key("g1", tid, 0)).await;
-
-    assert!(
-        error_code == 0,
-        "FindCoordinator(SHARE) error: {error_code}"
+    let key = share_coordinator_key("g1", tid, 0);
+    let first = find_share_once(&client, &key).await;
+    check!(
+        first
+            == Coordinator {
+                key: key.clone(),
+                node_id: -1,
+                host: String::new(),
+                port: -1,
+                error_code: COORDINATOR_NOT_AVAILABLE,
+                error_message: None,
+                ..Default::default()
+            }
     );
-    assert!(
-        node_id == i32::try_from(broker.node_id()).unwrap(),
-        "coordinator must be this broker, got {node_id}"
+
+    let retried = support::find_coordinator(&client, support::KEY_TYPE_SHARE, &key).await;
+    let addr = broker.listen_addr();
+    check!(
+        retried
+            == Coordinator {
+                key,
+                node_id: i32::try_from(broker.node_id()).unwrap(),
+                host: addr.ip().to_string(),
+                port: i32::from(addr.port()),
+                error_code: 0,
+                error_message: None,
+                ..Default::default()
+            }
     );
 }
 
@@ -283,8 +311,12 @@ async fn persister_round_trip() {
     let tid = create_topic(&client, "round-trip").await;
 
     // Bootstrap __share_group_state, then initialize (retrying until led).
-    let (fc, _) = find_share(&client, &share_coordinator_key("g1", tid, 0)).await;
-    assert!(fc == 0, "FindCoordinator(SHARE) error: {fc}");
+    support::find_coordinator(
+        &client,
+        support::KEY_TYPE_SHARE,
+        &share_coordinator_key("g1", tid, 0),
+    )
+    .await;
     let init = initialize_ready(&client, "g1", tid, 0, 0, 0).await;
     assert!(init == 0, "initialize error: {init}");
 
@@ -390,8 +422,12 @@ async fn write_fences_stale_state_epoch() {
     let client = connect(&bootstrap).await;
     let tid = create_topic(&client, "stale-state-epoch").await;
 
-    let (fc, _) = find_share(&client, &share_coordinator_key("g1", tid, 0)).await;
-    assert!(fc == 0);
+    support::find_coordinator(
+        &client,
+        support::KEY_TYPE_SHARE,
+        &share_coordinator_key("g1", tid, 0),
+    )
+    .await;
     let init = initialize_ready(&client, "g1", tid, 0, 5, 0).await; // state_epoch 5
     assert!(init == 0, "initialize error: {init}");
 
@@ -430,8 +466,12 @@ async fn state_survives_restart() {
         let client = connect(&broker.listen_addr().to_string()).await;
         let tid = create_topic(&client, "survives-restart").await;
 
-        let (fc, _) = find_share(&client, &share_coordinator_key("g1", tid, 0)).await;
-        assert!(fc == 0);
+        support::find_coordinator(
+            &client,
+            support::KEY_TYPE_SHARE,
+            &share_coordinator_key("g1", tid, 0),
+        )
+        .await;
         let init = initialize_ready(&client, "g1", tid, 0, 0, 0).await;
         assert!(init == 0, "initialize error: {init}");
         let w = write_state(

@@ -57,6 +57,7 @@ use krabka_protocol::{
 use krabka_security::ListenerProtocol;
 
 use crate::{
+    auto_topic_creation::AutoTopicCreation,
     error::BrokerError,
     metadata_source::MetadataSource,
     network::client::InterBrokerClient,
@@ -78,6 +79,8 @@ pub(crate) struct SharePersister {
     node_id: NodeId,
     share_coordinator: Arc<ShareCoordinator>,
     controller: Arc<dyn MetadataSource>,
+    /// Creates `__share_group_state` when the first call needs it.
+    auto_topic_creation: Arc<AutoTopicCreation>,
     inter_broker_client: Arc<InterBrokerClient>,
     inter_broker_listener_protocol: ListenerProtocol,
     inter_broker_listener_name: String,
@@ -96,6 +99,7 @@ impl SharePersister {
         node_id: NodeId,
         share_coordinator: Arc<ShareCoordinator>,
         controller: Arc<dyn MetadataSource>,
+        auto_topic_creation: Arc<AutoTopicCreation>,
         inter_broker_client: Arc<InterBrokerClient>,
         inter_broker_listener_protocol: ListenerProtocol,
         inter_broker_listener_name: String,
@@ -104,6 +108,7 @@ impl SharePersister {
             node_id,
             share_coordinator,
             controller,
+            auto_topic_creation,
             inter_broker_client,
             inter_broker_listener_protocol,
             inter_broker_listener_name,
@@ -246,14 +251,16 @@ impl SharePersister {
         }
     }
 
-    /// Make sure `__share_group_state` exists, and refresh this broker's view
-    /// of which of its partitions it leads. This method creates the topic
-    /// lazily. The creation is idempotent and accepts an existing topic. The
-    /// leadership refresh picks up every partition that the replicator
-    /// supervisor has already materialized locally. When this broker leads
-    /// `state_partition`, the method waits, up to the same deadline, until the
-    /// load of that partition ends. A load that is still running at the
-    /// deadline is not an error: the local coordinator then answers
+    /// Ask for `__share_group_state` if it does not exist, and refresh this
+    /// broker's view of which of its partitions it leads. The broker creates
+    /// the topic in the background, with its configured partition count and
+    /// replication factor ([`AutoTopicCreation`]), as Kafka's persister gets
+    /// it created through `FindCoordinator(SHARE)`. The leadership refresh
+    /// picks up every partition that the replicator supervisor has already
+    /// materialized locally. When this broker leads `state_partition`, the
+    /// method waits, up to the same deadline, until the load of that
+    /// partition ends. A load that is still running at the deadline is not an
+    /// error: the local coordinator then answers
     /// `COORDINATOR_LOAD_IN_PROGRESS`, and the caller retries.
     ///
     /// # Errors
@@ -277,13 +284,14 @@ impl SharePersister {
         &self,
         state_partition: PartitionIndex,
     ) -> Result<(), BrokerError> {
-        bootstrap::ensure_topic(
-            &self.controller,
-            self.share_coordinator.state_topic_num_partitions(),
-            self.share_coordinator.state_topic_replication_factor(),
-            &self.share_coordinator.state_topic_configs(),
-        )
-        .await?;
+        if self
+            .controller
+            .current_image()
+            .topic(bootstrap::TOPIC)
+            .is_none()
+        {
+            self.auto_topic_creation.request(bootstrap::TOPIC);
+        }
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {

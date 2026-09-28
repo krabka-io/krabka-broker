@@ -645,7 +645,9 @@ fn resolve_group_config(
     )
 }
 
-fn resolve_group_config_from_image(
+/// The streams config of `group_id`: the group config overrides in `image`
+/// over the broker `defaults`.
+pub(crate) fn resolve_group_config_from_image(
     defaults: &StreamsGroupConfig,
     image: &krabka_metadata::MetadataImage,
     group_id: &str,

@@ -158,11 +158,56 @@ pub(crate) async fn handle(
             }
         }
 
+        // KIP-1066: store the directories the broker reports cordoned on its
+        // registration, as `ReplicationControlManager.processBrokerHeartbeat`
+        // calls `handleDirectoriesCordoned` from `metadata.version` `4.3-IV0`.
+        record_cordoned_dirs(&controller, NodeId(broker_id_u64), &req).await;
+
         encode_response(
             version,
             &success_response(decision.caught_up, next.fenced(), next.should_shut_down()),
         )
     }
+}
+
+/// Write the cordoned directories a heartbeat reports onto the broker's
+/// registration, when the metadata version carries them and the set changed.
+///
+/// A failed submit is logged and dropped: the broker reports the same set on
+/// its next heartbeat, and the next one retries.
+async fn record_cordoned_dirs(
+    controller: &std::sync::Arc<dyn crate::metadata_source::MetadataSource>,
+    broker: NodeId,
+    req: &BrokerHeartbeatRequest,
+) {
+    let image = controller.current_image();
+    let Some(record) = cordoned_dirs_change(&image, broker, req) else {
+        return;
+    };
+    if let Err(error) = controller.submit_change(vec![record]).await {
+        tracing::warn!(broker = broker.0, %error, "broker heartbeat: cordoned-dirs submit failed");
+    }
+}
+
+/// The registration change a heartbeat's `cordoned_log_dirs` asks for, or
+/// `None` below `metadata.version` `4.3-IV0` or when nothing changed.
+fn cordoned_dirs_change(
+    image: &krabka_metadata::MetadataImage,
+    broker: NodeId,
+    req: &BrokerHeartbeatRequest,
+) -> Option<krabka_metadata::MetadataRecord> {
+    let supported = image.finalized_metadata_version().is_some_and(|level| {
+        level >= krabka_metadata::metadata_version::CORDONED_LOG_DIRS_MIN_LEVEL
+    });
+    if !supported {
+        return None;
+    }
+    let reported: Option<Vec<uuid::Uuid>> = req.cordoned_log_dirs.as_ref().map(|dirs| {
+        dirs.iter()
+            .map(|dir| uuid::Uuid::from_bytes(dir.0))
+            .collect()
+    });
+    crate::cordoned_log_dirs::registration_change(image, broker, reported.as_deref())
 }
 
 /// Move `broker` through Kafka's heartbeat state machine

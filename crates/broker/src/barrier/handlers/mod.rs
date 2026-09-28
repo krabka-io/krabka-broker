@@ -71,7 +71,7 @@ pub(crate) const NO_EPOCH: i64 = -1;
 /// | `UnknownGroup` | `RESOURCE_NOT_FOUND` (91) |
 /// | `GroupExists` | `TOPIC_ALREADY_EXISTS` (36) |
 /// | `InvalidDefinition` | `INVALID_CONFIG` (40) |
-/// | `StateNotLocal`, `Persist`, `Bootstrap` | `COORDINATOR_NOT_AVAILABLE` (15) |
+/// | `StateNotLocal`, `Persist` | `COORDINATOR_NOT_AVAILABLE` (15) |
 ///
 /// `InvalidDefinition` reaches this function only for a retention or an
 /// interval that is out of range, because [`alter_groups`] rejects a malformed
@@ -86,9 +86,9 @@ pub(crate) fn error_code(error: &BarrierError) -> i16 {
         BarrierError::UnknownGroup { .. } => codes::RESOURCE_NOT_FOUND,
         BarrierError::GroupExists { .. } => codes::TOPIC_ALREADY_EXISTS,
         BarrierError::InvalidDefinition(_) => codes::INVALID_CONFIG,
-        BarrierError::StateNotLocal { .. }
-        | BarrierError::Persist(_)
-        | BarrierError::Bootstrap(_) => codes::COORDINATOR_NOT_AVAILABLE,
+        BarrierError::StateNotLocal { .. } | BarrierError::Persist(_) => {
+            codes::COORDINATOR_NOT_AVAILABLE
+        }
     }
 }
 
@@ -253,10 +253,6 @@ mod tests {
                 BarrierError::StateNotLocal {
                     partition: PartitionIndex(2),
                 },
-                codes::COORDINATOR_NOT_AVAILABLE,
-            ),
-            (
-                BarrierError::Bootstrap("no controller".to_owned()),
                 codes::COORDINATOR_NOT_AVAILABLE,
             ),
             (

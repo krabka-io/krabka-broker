@@ -74,7 +74,7 @@ pub(super) async fn start_jvm_broker(adjust: impl FnOnce(&mut BrokerConfig)) -> 
         controller_election_timeout: krabka_units::secs(5),
         controller_heartbeat_interval: krabka_units::millis(500),
         bootstrap_mode: BootstrapMode::Bootstrap,
-        ..BrokerConfig::default()
+        ..BrokerConfig::default().with_internal_topics_for(1)
     };
     adjust(&mut config);
 

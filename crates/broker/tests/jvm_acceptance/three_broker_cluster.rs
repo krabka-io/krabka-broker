@@ -108,7 +108,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster(
                 username: admin.to_string(),
                 password: admin_pass.to_string(),
             }),
-            ..BrokerConfig::default()
+            ..BrokerConfig::default().with_internal_topics_for(3)
         };
         cfg.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
             cfg.super_users.clone(),
@@ -279,7 +279,7 @@ pub(crate) async fn start_three_broker_sasl_plaintext_jvm_cluster_with_users(
                 username: admin.to_string(),
                 password: admin_pass.to_string(),
             }),
-            ..BrokerConfig::default()
+            ..BrokerConfig::default().with_internal_topics_for(3)
         };
         cfg.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
             cfg.super_users.clone(),

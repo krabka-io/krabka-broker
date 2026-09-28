@@ -73,7 +73,7 @@ pub(crate) fn start_sasl_plaintext_broker(
         }],
         inter_broker_listener_name: "SASL_PLAINTEXT".to_string(),
         enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
-        ..BrokerConfig::default()
+        ..BrokerConfig::default().with_internal_topics_for(1)
     };
     for (u, p) in users {
         config
@@ -167,7 +167,7 @@ pub(crate) fn start_dual_mech_broker_with_reauth(
         ],
         super_users: maplit::hashset! {admin.to_string()},
         connections_max_reauth: max_reauth,
-        ..BrokerConfig::default()
+        ..BrokerConfig::default().with_internal_topics_for(1)
     };
     // The PLAINTEXT controller listener carries `ANONYMOUS`, and the node's own
     // heartbeats reach it. Every data listener here authenticates, so this
@@ -252,7 +252,7 @@ pub(crate) async fn start_oauthbearer_broker() -> (krabka_broker::BrokerHandle, 
         }],
         inter_broker_listener_name: "SASL_PLAINTEXT".to_string(),
         enabled_sasl_mechanisms: vec![SaslMechanism::OAuthBearer],
-        ..BrokerConfig::default()
+        ..BrokerConfig::default().with_internal_topics_for(1)
     };
     let handle = Broker::start(config)
         .await
@@ -319,7 +319,7 @@ pub(crate) fn start_sasl_plaintext_broker_with_super_user(
         inter_broker_listener_name: "SASL_PLAINTEXT".to_string(),
         enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
         super_users: maplit::hashset! {super_user.clone()},
-        ..BrokerConfig::default()
+        ..BrokerConfig::default().with_internal_topics_for(1)
     };
     // The PLAINTEXT controller listener carries `ANONYMOUS`, and the node's own
     // heartbeats reach it. Every data listener here authenticates, so this

@@ -11,142 +11,58 @@
 //! and still answers each of them with 3: the topic is not described until a
 //! later request finds it in the metadata image. It lists the invalid names
 //! ahead of the created ones.
+//!
+//! The auto-creation is [`crate::auto_topic_creation::AutoTopicCreation`]:
+//! it sends the `CreateTopics` request to the active controller in a KIP-590
+//! Envelope that names the client, and does not wait for the answer. The
+//! controller authorizes the client and charges its controller-mutation
+//! quota, as Kafka's `ControllerApis.createTopics` does. A coordinator topic
+//! gets its configured partition count, replication factor and topic configs
+//! (`creatableTopic`). A name whose creation
+//! is in flight already, from an earlier `Metadata` request or from a
+//! coordinator lookup, is not sent again (`filterCreatableTopics`). It is
+//! answered 3 among the invalid names.
 
 use krabka_log::topic_name::validate_topic_name;
 use krabka_protocol::{
-    Decode,
-    owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        create_topics_response::CreateTopicsResponse,
-        metadata_response::MetadataResponseTopic,
-    },
-    primitives::uuid::Uuid as WireUuid,
+    owned::metadata_response::MetadataResponseTopic, primitives::uuid::Uuid as WireUuid,
 };
 
-use crate::{broker::Broker, codes, handlers::RequestContext};
-
-/// The `CreateTopics` version the auto-creation request uses.
-///
-/// Version 5 takes the `-1` partition count and replication factor that ask
-/// for the broker defaults (KIP-464), as Kafka's auto-creation request does.
-/// It is also the last version whose `ControllerMutationQuota` is permissive,
-/// which is the quota `KafkaApis.getTopicMetadata` hands auto-creation
-/// (`newPermissiveQuotaFor`): the mutation is recorded but never refused.
-const AUTO_CREATE_VERSION: i16 = 5;
+use crate::{broker::Broker, codes, handlers::RequestContext, topic_creator::ForwardedIdentity};
 
 /// The rows for `names`, the missing topics that the principal may describe
 /// and, when `auto_create` is set, may create. With `auto_create` set this
-/// also creates the valid names.
-pub(super) async fn missing_topic_rows(
+/// also asks for the valid names to be created, in the name of the client of
+/// `ctx` and its request `correlation_id`.
+pub(super) fn missing_topic_rows(
     broker: &Broker,
     ctx: &RequestContext<'_>,
+    correlation_id: i32,
     names: &[&str],
     auto_create: bool,
 ) -> Vec<MetadataResponseTopic> {
-    let row = |error_code, name: &str| MetadataResponseTopic {
-        error_code,
-        name: Some(name.to_owned()),
-        topic_id: WireUuid::ZERO,
-        is_internal: crate::internal_topics::is_internal_topic(&broker.config, name),
-        ..Default::default()
-    };
-    let error_code = |name: &str| {
-        if validate_topic_name(name).is_ok() {
-            codes::UNKNOWN_TOPIC_OR_PARTITION
-        } else {
-            codes::INVALID_TOPIC_EXCEPTION
-        }
-    };
-    if !auto_create {
-        return names
-            .iter()
-            .map(|name| row(error_code(name), name))
-            .collect();
+    if auto_create {
+        return broker.auto_topic_creation.create_topics(
+            broker,
+            names,
+            Some(ForwardedIdentity::of(ctx, correlation_id)),
+        );
     }
-    let (creatable, invalid): (Vec<&str>, Vec<&str>) = names
+    names
         .iter()
-        .partition(|name| validate_topic_name(name).is_ok());
-    if !creatable.is_empty() {
-        create_topics(broker, ctx, &creatable).await;
-    }
-    invalid
-        .into_iter()
-        .map(|name| row(codes::INVALID_TOPIC_EXCEPTION, name))
-        .chain(
-            creatable
-                .into_iter()
-                .map(|name| row(codes::UNKNOWN_TOPIC_OR_PARTITION, name)),
-        )
+        .map(|name| MetadataResponseTopic {
+            error_code: if validate_topic_name(name).is_ok() {
+                codes::UNKNOWN_TOPIC_OR_PARTITION
+            } else {
+                codes::INVALID_TOPIC_EXCEPTION
+            },
+            name: Some((*name).to_owned()),
+            topic_id: WireUuid::ZERO,
+            is_internal: crate::internal_topics::is_internal_topic(&broker.config, name),
+            ..Default::default()
+        })
         .collect()
 }
 
-/// Sends one `CreateTopics` request for `names` with the broker defaults and
-/// the principal of `ctx`. A failure is logged, not answered: Kafka's
-/// auto-creation logs the controller's errors and answers the `Metadata`
-/// request the same way whatever they are.
-async fn create_topics(broker: &Broker, ctx: &RequestContext<'_>, names: &[&str]) {
-    let request = CreateTopicsRequest {
-        topics: names
-            .iter()
-            .map(|name| CreatableTopic {
-                name: (*name).to_owned(),
-                num_partitions: -1,
-                replication_factor: -1,
-                ..Default::default()
-            })
-            .collect(),
-        timeout_ms: 30_000,
-        ..Default::default()
-    };
-    let Ok(bytes) = crate::handlers::encode_response(&request, AUTO_CREATE_VERSION) else {
-        tracing::warn!(?names, "auto topic creation request could not be encoded");
-        return;
-    };
-    // A context of its own, with the requester's identity, so the
-    // controller-mutation charge `CreateTopics` defers onto its context never
-    // throttles this `Metadata` response. Kafka throttles `Metadata` by the
-    // request quota only.
-    let create_ctx = RequestContext::new(
-        ctx.principal,
-        ctx.peer,
-        ctx.client_id,
-        ctx.connection_id,
-        false,
-        ctx.connection_listener_name,
-    );
-    let response = match crate::handlers::create_topics::handle(
-        broker,
-        AUTO_CREATE_VERSION,
-        0,
-        &bytes,
-        &create_ctx,
-    )
-    .await
-    {
-        Ok(response) => response,
-        Err(error) => {
-            tracing::warn!(?names, %error, "auto topic creation failed");
-            return;
-        }
-    };
-    let mut cursor: &[u8] = &response;
-    match CreateTopicsResponse::decode(&mut cursor, AUTO_CREATE_VERSION) {
-        Ok(response) => {
-            for topic in response
-                .topics
-                .iter()
-                .filter(|topic| topic.error_code != codes::NONE)
-            {
-                tracing::warn!(
-                    topic = %topic.name,
-                    error_code = topic.error_code,
-                    error_message = ?topic.error_message,
-                    "auto topic creation failed"
-                );
-            }
-        }
-        Err(error) => {
-            tracing::warn!(?names, %error, "auto topic creation response could not be decoded");
-        }
-    }
-}
+#[cfg(test)]
+mod tests;

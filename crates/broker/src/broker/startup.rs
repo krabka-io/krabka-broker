@@ -11,7 +11,7 @@ use krabka_units::convert::{ByteSizeExt as _, TimeExt as _};
 use crate::{
     broker::{
         Broker, BrokerHandle, DisklessRuntime,
-        coordinators::{CoordinatorStartup, start_coordinators},
+        coordinators::{CoordinatorInputs, CoordinatorStartup, start_coordinators},
         finish::{BrokerStorageStartup, finish_broker_startup},
         metadata_phase::start_metadata_phase,
         runtime::start_broker_runtime,
@@ -236,6 +236,11 @@ impl Broker {
         // writer, so a Fetch can no longer miss data this node holds.
         health.mark_log_dir_recovery_complete();
 
+        // The share persister and the barrier coordinator create their topics
+        // on first use. The broker binds itself to the component once it is
+        // built.
+        let auto_topic_creation =
+            Arc::new(crate::auto_topic_creation::AutoTopicCreation::default());
         // The barrier coordinator reports through the process registry, and it
         // is built here rather than inside the runtime because the coordinators
         // start first. BrokerMetrics clones cheaply.
@@ -247,12 +252,15 @@ impl Broker {
             share_persister,
         } = start_coordinators(
             &config,
-            &controller,
-            &partitions,
-            &group_coordinator,
-            &producer_ids,
-            &inter_broker_client,
-            &metrics,
+            CoordinatorInputs {
+                controller: &controller,
+                partitions: &partitions,
+                group_coordinator: &group_coordinator,
+                producer_ids: &producer_ids,
+                inter_broker_client: &inter_broker_client,
+                auto_topic_creation: &auto_topic_creation,
+                metrics: &metrics,
+            },
         )
         .await;
 
@@ -399,6 +407,7 @@ impl Broker {
                 share_coordinator,
                 share_partition_leaders,
                 barrier_coordinator,
+                auto_topic_creation,
             ),
             (tls_dynamic, ktls_enabled, inter_broker_client),
             runtime,
