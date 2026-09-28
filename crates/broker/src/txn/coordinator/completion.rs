@@ -22,7 +22,7 @@ use tracing::{info, warn};
 use super::TxnCoordinator;
 use crate::txn::{
     handlers::end_txn::completion_producer_identity,
-    marker::{MarkerFailureClass, MarkerType, classify_marker_failure},
+    marker::{MarkerType, classify_marker_failure},
     state::{TxnEntry, TxnState},
     version::TxnVersion,
 };
@@ -176,16 +176,20 @@ impl TxnCoordinator {
             .dispatch_transaction_markers(&mut prepared, marker)
             .await
         {
-            if classify_marker_failure(&error) == MarkerFailureClass::Fatal {
+            let class = classify_marker_failure(&error);
+            if class.stops_fan_out() {
                 // A fenced producer or coordinator generation has already
-                // superseded this fan-out (#882): retrying here can never
-                // succeed, and would otherwise loop forever at
-                // `RETRY_BACKOFF`. Whatever superseded this generation is
-                // responsible for completing the transaction now.
+                // superseded this fan-out, or a leader answered a code
+                // Kafka's completion handler throws on (#882): retrying here
+                // can never succeed, and would otherwise loop forever at
+                // `RETRY_BACKOFF`. Whatever superseded this generation, or
+                // the coordinator's next load of the partition, completes the
+                // transaction now.
                 warn!(
                     tid = transactional_id,
                     %error,
-                    "transaction completion: marker fan-out fenced by a newer generation; giving up"
+                    ?class,
+                    "transaction completion: marker fan-out cannot succeed; giving up"
                 );
                 return CompletionAttempt::NothingToComplete;
             }

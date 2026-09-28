@@ -10,7 +10,10 @@
 //! the work is identical, so both paths funnel into
 //! [`process_one_txn`](super::registration::process_one_txn).
 
-use std::{collections::HashSet, net::SocketAddr};
+use std::{
+    collections::{HashMap, HashSet},
+    net::SocketAddr,
+};
 
 use bytes::Bytes;
 use krabka_metadata::{AclOperation, MetadataImage, ResourceType};
@@ -58,7 +61,12 @@ struct Transaction<'a> {
     transactional_id: &'a str,
     producer_id: i64,
     producer_epoch: i16,
+    /// The partitions to check and add.
     topics: &'a [AddPartitionsToTxnTopic],
+    /// The request topics an answer that carries one code for the whole
+    /// transaction lists, as sent. See
+    /// [`TransactionRequest::response_topics`].
+    response_topics: &'a [AddPartitionsToTxnTopic],
     verify_only: bool,
 }
 
@@ -84,12 +92,13 @@ async fn process_transaction(
         peer,
         config,
     } = dependencies;
-    // Kafka's response schema keys its per-partition results by (topic,
-    // partition), so a request that names either one twice must still get
-    // one response row for it (#883). Deduping here, before either
-    // authorization check, means every downstream step -- the ACL sweep, the
-    // freeze gate, and the coordinator call -- already works from the
-    // collapsed list.
+    // Kafka checks and adds a set of partitions, so a request that names a
+    // topic or partition twice checks and adds it once, and an answer keyed
+    // by partition -- a failed check, or a verify-only answer -- lists it
+    // once (#883). Deduping here, before either authorization check, means
+    // the ACL sweep, the freeze gate, and the coordinator call all work from
+    // the collapsed list. An answer that carries one code for the whole
+    // transaction lists `txn.response_topics` instead.
     let topics = dedup_topics(txn.topics);
     let authorization = if client {
         let tid_req = AuthorizationRequest {
@@ -100,7 +109,10 @@ async fn process_transaction(
             operation: AclOperation::Write,
         };
         if authorizer.authorize(image, &tid_req) == AuthorizationResult::Deny {
-            return topic_error(&topics, codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED);
+            return topic_error(
+                txn.response_topics,
+                codes::TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
+            );
         }
         TopicAuthorization::Client {
             authorizer,
@@ -123,6 +135,7 @@ async fn process_transaction(
             producer_id: krabka_log::ProducerId(txn.producer_id),
             producer_epoch: txn.producer_epoch,
             topics: &topics,
+            response_topics: txn.response_topics,
             denied: &authorized,
             frozen: &frozen,
             txnv,
@@ -140,49 +153,47 @@ pub(super) async fn handle_v4(
     version: i16,
     req: &AddPartitionsToTxnRequest,
 ) -> Result<Bytes, BrokerError> {
-    // `TransactionalId` is a `mapKey` field of `AddPartitionsToTxnResponse`,
-    // and Kafka's `KafkaApis` keeps its per-transaction results in an
-    // `AddPartitionsToTxnResultCollection` keyed by it. A request that names
-    // the same transactional id twice gets one response row, keyed by first
-    // occurrence and holding the last-processed result (#883).
-    let mut order: Vec<String> = Vec::with_capacity(req.transactions.len());
-    let mut by_tid: std::collections::HashMap<String, AddPartitionsToTxnResult> =
-        std::collections::HashMap::with_capacity(req.transactions.len());
-
+    // A request that names one transactional id twice is answered the way
+    // Kafka 4.3.1's `KafkaApis.handleAddPartitionsToTxnRequest` answers it
+    // (#883). `TransactionalId` is a `mapKey`, but the generated collections
+    // are multi-collections that keep every entry, and the handler walks
+    // every request entry and adds one result for each. Each entry runs with
+    // its own producer id, epoch and `verify_only`. The partitions it checks
+    // and adds come from `partitionsByTransaction()`, a map the last entry
+    // for the id overwrote, and an answer carrying one code lists the topics
+    // of the first entry, the one `errorResponseForTransaction` finds.
+    let mut added_topics: HashMap<&str, &[AddPartitionsToTxnTopic]> = HashMap::new();
+    let mut answered_topics: HashMap<&str, &[AddPartitionsToTxnTopic]> = HashMap::new();
     for txn in &req.transactions {
+        added_topics.insert(txn.transactional_id.as_str(), &txn.topics);
+        answered_topics
+            .entry(txn.transactional_id.as_str())
+            .or_insert(&txn.topics);
+    }
+
+    let mut results_by_transaction = Vec::with_capacity(req.transactions.len());
+    for txn in &req.transactions {
+        let transactional_id = txn.transactional_id.as_str();
         let topic_results = process_transaction(
             dependencies,
             false,
             &Transaction {
-                transactional_id: txn.transactional_id.as_str(),
+                transactional_id,
                 producer_id: txn.producer_id,
                 producer_epoch: txn.producer_epoch,
-                topics: &txn.topics,
+                topics: added_topics[transactional_id],
+                response_topics: answered_topics[transactional_id],
                 verify_only: txn.verify_only,
             },
             version,
         )
         .await;
-        if !by_tid.contains_key(&txn.transactional_id) {
-            order.push(txn.transactional_id.clone());
-        }
-        by_tid.insert(
-            txn.transactional_id.clone(),
-            AddPartitionsToTxnResult {
-                transactional_id: txn.transactional_id.clone(),
-                topic_results,
-                ..Default::default()
-            },
-        );
+        results_by_transaction.push(AddPartitionsToTxnResult {
+            transactional_id: txn.transactional_id.clone(),
+            topic_results,
+            ..Default::default()
+        });
     }
-    let results_by_transaction = order
-        .into_iter()
-        .map(|tid| {
-            by_tid
-                .remove(&tid)
-                .expect("every ordered id was inserted into the map above")
-        })
-        .collect();
 
     let resp = AddPartitionsToTxnResponse {
         results_by_transaction,
@@ -206,6 +217,7 @@ pub(super) async fn handle_v3(
             producer_id: req.v3_and_below_producer_id,
             producer_epoch: req.v3_and_below_producer_epoch,
             topics: &req.v3_and_below_topics,
+            response_topics: &req.v3_and_below_topics,
             // v0-3 has no `verify_only` field (predates KIP-890); always add.
             verify_only: false,
         },
@@ -232,7 +244,7 @@ mod tests {
         test_support::{DenyAll, peer, start_broker_with_authorizer_no_audit as start_broker},
         txn::handlers::add_partitions_to_txn::{
             handle,
-            test_support::{topic, topic_result},
+            test_support::{enlisted, seed_transaction, start_coordinator, topic, topic_result},
         },
     };
 
@@ -290,61 +302,169 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    /// #883: `TransactionalId` is a `mapKey` field, so a v4+ request that
-    /// names the same transactional id twice must answer with exactly one
-    /// `results_by_transaction` row for it, holding the last-processed
-    /// result.
+    /// #883: a v4+ request that names one transactional id twice is answered
+    /// the way Kafka 4.3.1's `KafkaApis.handleAddPartitionsToTxnRequest`
+    /// answers it. The generated collections keep every entry, so each entry
+    /// gets its own result, run with its own producer epoch and
+    /// `verify_only`. Each adds the partitions of the *last* entry for the id
+    /// (`partitionsByTransaction()` is a map the last entry overwrote), and a
+    /// one-code answer lists the topics of the *first* entry (the one
+    /// `errorResponseForTransaction` finds).
     #[tokio::test]
-    async fn handle_v4_duplicate_transactional_id_collapses_to_one_result() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::test_support::GrantsInPrincipalName)).await;
-        let principal = crate::test_support::principal("Cluster:ClusterAction");
+    async fn handle_v4_answers_every_entry_of_a_repeated_transactional_id() {
+        struct Entry {
+            epoch: i16,
+            verify_only: bool,
+            topics: &'static [(&'static str, &'static [i32])],
+        }
+        /// The `(topic, [(partition, code)])` rows one entry answers.
+        type Rows = &'static [(&'static str, &'static [(i32, i16)])];
+        struct Case {
+            name: &'static str,
+            entries: [Entry; 2],
+            /// Per entry, the rows it answers.
+            results: [Rows; 2],
+            /// The partitions in the transaction after the request.
+            enlisted: &'static [(&'static str, i32)],
+        }
+        const EPOCH: i16 = 2;
+        const NONE: i16 = codes::NONE;
+        const FENCED: i16 = codes::PRODUCER_FENCED;
+        const UNKNOWN: i16 = codes::UNKNOWN_TOPIC_OR_PARTITION;
+        const NOT_ATTEMPTED: i16 = codes::OPERATION_NOT_ATTEMPTED;
+        let cases = [
+            Case {
+                name: "both entries add the second entry's partitions",
+                entries: [
+                    Entry {
+                        epoch: EPOCH,
+                        verify_only: false,
+                        topics: &[("a", &[0])],
+                    },
+                    Entry {
+                        epoch: EPOCH,
+                        verify_only: false,
+                        topics: &[("b", &[0])],
+                    },
+                ],
+                results: [&[("a", &[(0, NONE)])], &[("a", &[(0, NONE)])]],
+                enlisted: &[("b", 0)],
+            },
+            Case {
+                name: "each entry is checked with its own producer epoch",
+                entries: [
+                    Entry {
+                        epoch: EPOCH - 1,
+                        verify_only: false,
+                        topics: &[("a", &[0])],
+                    },
+                    Entry {
+                        epoch: EPOCH,
+                        verify_only: false,
+                        topics: &[("b", &[0])],
+                    },
+                ],
+                results: [&[("a", &[(0, FENCED)])], &[("a", &[(0, NONE)])]],
+                enlisted: &[("b", 0)],
+            },
+            Case {
+                name: "a failed partition check lists the checked partitions",
+                entries: [
+                    Entry {
+                        epoch: EPOCH,
+                        verify_only: false,
+                        topics: &[("a", &[0])],
+                    },
+                    Entry {
+                        epoch: EPOCH,
+                        verify_only: false,
+                        topics: &[("b", &[0]), ("missing", &[0])],
+                    },
+                ],
+                results: [
+                    &[("b", &[(0, NOT_ATTEMPTED)]), ("missing", &[(0, UNKNOWN)])],
+                    &[("b", &[(0, NOT_ATTEMPTED)]), ("missing", &[(0, UNKNOWN)])],
+                ],
+                enlisted: &[],
+            },
+            Case {
+                name: "the verify-only entry verifies what the add entry added",
+                entries: [
+                    Entry {
+                        epoch: EPOCH,
+                        verify_only: false,
+                        topics: &[("a", &[0])],
+                    },
+                    Entry {
+                        epoch: EPOCH,
+                        verify_only: true,
+                        topics: &[("b", &[0])],
+                    },
+                ],
+                results: [&[("a", &[(0, NONE)])], &[("b", &[(0, NONE)])]],
+                enlisted: &[("b", 0)],
+            },
+        ];
+
+        let (broker_handle, _dir) = start_coordinator(Arc::new(
+            crate::test_support::ControllerPeerAllowed(crate::test_support::DenyAll),
+        ))
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        let principal = principal();
         let peer = peer();
         let ctx = test_context(&principal, &peer);
-        let req = AddPartitionsToTxnRequest {
-            transactions: vec![
-                AddPartitionsToTxnTransaction {
-                    transactional_id: "dup-tid".into(),
-                    producer_id: 11,
-                    producer_epoch: 2,
-                    verify_only: false,
-                    topics: vec![topic("first-topic", &[0])],
-                    ..Default::default()
-                },
-                AddPartitionsToTxnTransaction {
-                    transactional_id: "dup-tid".into(),
-                    producer_id: 11,
-                    producer_epoch: 2,
-                    verify_only: false,
-                    topics: vec![topic("second-topic", &[0])],
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        };
-        let req_bytes = encode_request(&req, 4);
+        for (index, case) in (0_i64..).zip(&cases) {
+            let tid = format!("dup-tid-{index}");
+            let producer_id = 100 + index;
+            seed_transaction(&broker, &tid, producer_id).await;
+            let req = AddPartitionsToTxnRequest {
+                transactions: case
+                    .entries
+                    .iter()
+                    .map(|entry| AddPartitionsToTxnTransaction {
+                        transactional_id: tid.clone(),
+                        producer_id,
+                        producer_epoch: entry.epoch,
+                        verify_only: entry.verify_only,
+                        topics: entry
+                            .topics
+                            .iter()
+                            .map(|&(name, partitions)| topic(name, partitions))
+                            .collect(),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            };
 
-        let bytes = handle(
-            &broker_handle.broker_arc_for_test(),
-            4,
-            123,
-            &req_bytes,
-            &ctx,
-        )
-        .await
-        .expect("handle");
-        let resp = decode_response(&bytes, 4);
+            let bytes = handle(&broker, 4, 123, &encode_request(&req, 4), &ctx)
+                .await
+                .expect("handle");
 
-        assert!(resp.results_by_transaction.len() == 1);
-        let expected = AddPartitionsToTxnResult {
-            transactional_id: "dup-tid".into(),
-            topic_results: vec![topic_result(
-                "second-topic",
-                &[(0, codes::UNKNOWN_TOPIC_OR_PARTITION)],
-            )],
-            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-        };
-        assert!(resp.results_by_transaction[0] == expected);
+            let expected = AddPartitionsToTxnResponse {
+                results_by_transaction: case
+                    .results
+                    .iter()
+                    .map(|rows| AddPartitionsToTxnResult {
+                        transactional_id: tid.clone(),
+                        topic_results: rows
+                            .iter()
+                            .map(|&(name, rows)| topic_result(name, rows))
+                            .collect(),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            };
+            assert!(decode_response(&bytes, 4) == expected, "{}", case.name);
+            let want: std::collections::BTreeSet<(String, i32)> = case
+                .enlisted
+                .iter()
+                .map(|&(topic, partition)| (topic.to_owned(), partition))
+                .collect();
+            assert!(enlisted(&broker, &tid).await == want, "{}", case.name);
+        }
         broker_handle.shutdown().await;
     }
 

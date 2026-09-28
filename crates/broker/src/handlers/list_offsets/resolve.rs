@@ -26,7 +26,7 @@ use krabka_verified::{
 };
 
 use super::{
-    bound::{FetchBound, last_fetchable_offset},
+    bound::{FetchBound, fetchable_offsets},
     diskless::diskless_earliest_candidate,
     leadership::resolve_leadership,
     local::{latest_offset, leader_epoch_for_offset},
@@ -41,25 +41,6 @@ fn earliest_pending_upload_offset(tiered_offset: i64) -> Option<i64> {
     tiered_offset.checked_add(1)
 }
 
-/// KIP-207. Right after a leader election the new leader's high watermark
-/// can still sit below the start offset of its own epoch: replication has
-/// not yet caught the watermark up to what was already appended in the
-/// outgoing epoch's tail plus this leader's own log-prepare work. Kafka
-/// refuses to answer with an offset the watermark could later step past
-/// going backwards -- which would let a consumer observe a non-monotonic
-/// end of partition. LATEST always targets that live, still-moving end, so
-/// it is fenced immediately, before anything is resolved. A timestamp or
-/// `MAX_TIMESTAMP` lookup, though, can legitimately resolve to an old,
-/// already-stable offset below the current epoch's start even while this
-/// window is open, and that answer carries none of the risk; only a
-/// resolved candidate that lands at or above the epoch's start is fenced.
-/// `Partition.maybeOffsetsError` raises it for LATEST and for any lookup
-/// whose answer would land at or above the bound; `ReplicaManager.scala:1546-1554`
-/// answers `OFFSET_NOT_AVAILABLE` from v5 and `LEADER_NOT_AVAILABLE` for
-/// v1-v4, where the dedicated code did not exist yet. A follower or the
-/// offline-debugging replica id is never bounded by the high watermark to
-/// begin with, so only a client request (`replica_id == -1`) is subject to
-/// the fence.
 /// The values [`resolve_earliest`] needs, gathered so `resolve_partition`
 /// passes them as one handle rather than one parameter each.
 struct EarliestContext<'a> {
@@ -191,23 +172,29 @@ async fn resolve_earliest_pending_upload(
     }
 }
 
-/// LATEST needs no resolution step -- it always targets the live end of the
-/// log, which is exactly what the high watermark not having caught up to
-/// the epoch start puts at risk -- so it is fenced immediately, ahead of the
-/// match that resolves every other sentinel.
-fn epoch_not_caught_up_to_bound(
-    partition: &crate::partition::Partition,
-    kind: ListOffsetsKind,
-    bound: FetchBound,
-    last_fetchable: Option<i64>,
+/// KIP-207's `maybeOffsetsError` from `Partition.fetchOffsetForTimestamp`,
+/// as the code `ReplicaManager.fetchOffset` answers it with, or `None` when
+/// there is no error to raise.
+///
+/// Right after a leader election the new leader's high watermark can still
+/// sit below the start offset of its own epoch, and an end offset read in
+/// that window could later move backwards. Kafka raises the error only for a
+/// client request (`replica_id == -1`, the one shape that passes an isolation
+/// level down) and only while the epoch start is above the high watermark.
+/// The comparison reads the high watermark whatever the isolation level: a
+/// `read_committed` client whose last stable offset an open transaction holds
+/// below the epoch start is not fenced by it.
+///
+/// `ReplicaManager.scala:1543-1551` answers `OFFSET_NOT_AVAILABLE` from v5 and
+/// `LEADER_NOT_AVAILABLE` for v1-v4, where the dedicated code did not exist.
+fn lagging_high_watermark_error(
+    replica_id: i32,
+    epoch_start: Option<i64>,
+    high_watermark: i64,
     version: i16,
 ) -> Option<i16> {
-    let last_fetchable = last_fetchable?;
-    if bound.replica_id() != -1 || kind != ListOffsetsKind::Latest {
-        return None;
-    }
-    let epoch_start = super::local::epoch_start_offset(partition)?;
-    if last_fetchable >= epoch_start {
+    let epoch_start = epoch_start?;
+    if replica_id != -1 || epoch_start <= high_watermark {
         return None;
     }
     Some(if version >= 5 {
@@ -217,41 +204,80 @@ fn epoch_not_caught_up_to_bound(
     })
 }
 
-/// The same fence as [`epoch_not_caught_up_to_bound`], applied after a
-/// timestamp or `MAX_TIMESTAMP` lookup has resolved to a candidate offset,
-/// and only when that candidate actually lands in the risky range: at or
-/// above the current epoch's start, while the high watermark has not yet
-/// caught up to it. An old timestamp that resolves below the epoch start
-/// names an offset that was already stable before this leader's election
-/// and never risks going non-monotonic, so it is answered rather than
-/// refused.
-fn epoch_not_caught_up_to_offset(
+/// Whether a raised [`lagging_high_watermark_error`] fences the lookup that
+/// resolved `candidate_offset`, as `Partition.fetchOffsetForTimestamp` and
+/// `ReplicaManager.fetchOffset` apply it.
+///
+/// LATEST is fenced outright: it is the live end of the log the window puts
+/// at risk. EARLIEST and `EARLIEST_LOCAL` never are, because they resolve from
+/// the start of the log. Every other kind resolves against record data, and
+/// Kafka fences it when the lookup found nothing or when what it found sits
+/// at or above `last_fetchable`, the bound the request's isolation level
+/// selects. A lookup that resolves to an older, already fetchable offset is
+/// answered even while the window is open.
+///
+/// A by-timestamp or `MAX_TIMESTAMP` lookup that found nothing arrives here as
+/// `UNKNOWN_OFFSET`, Kafka's empty `OffsetResultHolder`. The two tiered
+/// sentinels answer `-1` as a found offset instead, and `-1` is below every
+/// bound, so it is never fenced.
+fn lagging_high_watermark_fences(
+    kind: ListOffsetsKind,
+    candidate_offset: i64,
+    last_fetchable: i64,
+) -> bool {
+    match kind {
+        ListOffsetsKind::Latest => true,
+        ListOffsetsKind::Earliest
+        | ListOffsetsKind::EarliestLocal
+        | ListOffsetsKind::Unsupported => false,
+        ListOffsetsKind::Timestamp | ListOffsetsKind::MaxTimestamp
+            if candidate_offset == UNKNOWN_OFFSET =>
+        {
+            true
+        }
+        ListOffsetsKind::Timestamp
+        | ListOffsetsKind::MaxTimestamp
+        | ListOffsetsKind::LatestTiered
+        | ListOffsetsKind::EarliestPendingUpload => candidate_offset >= last_fetchable,
+    }
+}
+
+/// The bound a request's answer is measured against and KIP-207's
+/// `maybeOffsetsError`, as `Partition.fetchOffsetForTimestamp` computes them
+/// before it resolves anything. `Err` carries the code of a partition that
+/// is refused before resolution: a malformed watermark, or LATEST fenced
+/// while the high watermark lags.
+///
+/// Kafka reads `lastFetchableOffset` for every request but EARLIEST and
+/// `EARLIEST_LOCAL`, which it answers from the start of the log without
+/// measuring them. Skipping the read for those two also skips the high
+/// watermark's async mutex and the epoch-start lookup, which the fence never
+/// needs for them.
+async fn measure(
     partition: &crate::partition::Partition,
     kind: ListOffsetsKind,
     bound: FetchBound,
-    last_fetchable: Option<i64>,
-    candidate_offset: i64,
     version: i16,
-) -> Option<i16> {
-    let last_fetchable = last_fetchable?;
-    if bound.replica_id() != -1
-        || !matches!(
-            kind,
-            ListOffsetsKind::MaxTimestamp | ListOffsetsKind::Timestamp
-        )
-        || candidate_offset == UNKNOWN_OFFSET
-    {
-        return None;
+) -> Result<(Option<i64>, Option<i16>), i16> {
+    if matches!(
+        kind,
+        ListOffsetsKind::Earliest | ListOffsetsKind::EarliestLocal
+    ) {
+        return Ok((None, None));
     }
-    let epoch_start = super::local::epoch_start_offset(partition)?;
-    if last_fetchable >= epoch_start || candidate_offset < epoch_start {
-        return None;
+    let Some(offsets) = fetchable_offsets(partition, bound).await else {
+        return Err(codes::KAFKA_STORAGE_ERROR);
+    };
+    let offsets_error = lagging_high_watermark_error(
+        bound.replica_id(),
+        super::local::epoch_start_offset(partition),
+        offsets.high_watermark,
+        version,
+    );
+    match offsets_error {
+        Some(error_code) if kind == ListOffsetsKind::Latest => Err(error_code),
+        _ => Ok((Some(offsets.last_fetchable), offsets_error)),
     }
-    Some(if version >= 5 {
-        codes::OFFSET_NOT_AVAILABLE
-    } else {
-        codes::LEADER_NOT_AVAILABLE
-    })
 }
 
 fn apply_selection(
@@ -357,28 +383,12 @@ pub(super) async fn resolve_partition(
         None
     };
     let remote_topic_id = if remote_enabled { topic_id } else { None };
-    // Kafka reads `lastFetchableOffset` for every request but EARLIEST and
-    // `EARLIEST_LOCAL`, which it answers from the start of the log without
-    // measuring them. Skipping the read for those two also skips the high
-    // watermark's async mutex. It is read here, ahead of the match, because
-    // several arms below hold the log mutex and the watermark must not be
-    // awaited under it.
-    let last_fetchable = if matches!(
-        kind,
-        ListOffsetsKind::Earliest | ListOffsetsKind::EarliestLocal
-    ) {
-        None
-    } else {
-        match last_fetchable_offset(&partition, bound).await {
-            Some(offset) => Some(offset),
-            None => return error_response(index, codes::KAFKA_STORAGE_ERROR),
-        }
+    // Read here, ahead of the match, because several arms below hold the log
+    // mutex and the high watermark must not be awaited under it.
+    let (last_fetchable, offsets_error) = match measure(&partition, kind, bound, version).await {
+        Ok(measured) => measured,
+        Err(error_code) => return error_response(index, error_code),
     };
-    if let Some(error_code) =
-        epoch_not_caught_up_to_bound(&partition, kind, bound, last_fetchable, version)
-    {
-        return error_response(index, error_code);
-    }
     let (offset, timestamp) = match kind {
         ListOffsetsKind::Earliest => {
             match resolve_earliest(EarliestContext {
@@ -473,13 +483,19 @@ pub(super) async fn resolve_partition(
             }
         }
         ListOffsetsKind::MaxTimestamp => {
-            let (offset, timestamp) = {
-                let log = partition.log.lock().expect("log mutex poisoned");
-                log.max_timestamp_offset_and_ts().map_or_else(
-                    || (log.offset_of_max_timestamp().0, UNKNOWN_TIMESTAMP),
+            // An empty log has no record to name, and Kafka's
+            // `UnifiedLog.fetchOffsetByTimestamp` answers it with an empty
+            // result rather than the log start: KIP-207 fences that empty
+            // result, and an unfenced one is the unknown row.
+            let (offset, timestamp) = partition
+                .log
+                .lock()
+                .expect("log mutex poisoned")
+                .max_timestamp_offset_and_ts()
+                .map_or(
+                    (UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP),
                     |(offset, timestamp)| (offset.0, timestamp),
-                )
-            };
+                );
             // Kafka fills the epoch with the resolved batch's own
             // `partitionLeaderEpoch`. `UnifiedLog.java:1742-1749`.
             if offset != UNKNOWN_OFFSET {
@@ -510,10 +526,10 @@ pub(super) async fn resolve_partition(
         }
         ListOffsetsKind::Unsupported => unreachable!("unsupported timestamp returned above"),
     };
-    // KIP-207 for a data-resolved lookup: fenced only once its candidate is
-    // known to land in the new epoch's still-unstable range.
-    if let Some(error_code) =
-        epoch_not_caught_up_to_offset(&partition, kind, bound, last_fetchable, offset, version)
+    // KIP-207 for a data-resolved lookup: fenced only when it found nothing
+    // or found an offset the request's bound does not yet cover.
+    if let (Some(error_code), Some(last_fetchable)) = (offsets_error, last_fetchable)
+        && lagging_high_watermark_fences(kind, offset, last_fetchable)
     {
         return error_response(index, error_code);
     }
@@ -538,7 +554,7 @@ mod tests {
         handlers::list_offsets::{
             handle,
             sentinels::{
-                EARLIEST_LOCAL_TIMESTAMP, EARLIEST_PENDING_UPLOAD_TIMESTAMP,
+                EARLIEST_LOCAL_TIMESTAMP, EARLIEST_PENDING_UPLOAD_TIMESTAMP, EARLIEST_TIMESTAMP,
                 LATEST_TIERED_TIMESTAMP, LATEST_TIMESTAMP, MAX_TIMESTAMP,
             },
             test_support::{
@@ -990,7 +1006,7 @@ mod tests {
     async fn list_one_at_version(
         broker: &crate::broker::BrokerHandle,
         topic: &str,
-        timestamp: i64,
+        (timestamp, isolation_level): (i64, i8),
         version: i16,
     ) -> ListOffsetsPartitionResponse {
         let broker_arc = broker.broker_arc_for_test();
@@ -1014,6 +1030,7 @@ mod tests {
                         ..Default::default()
                     },
                 ],
+                isolation_level,
                 timeout_ms: 5_000,
                 ..Default::default()
             },
@@ -1029,13 +1046,16 @@ mod tests {
     /// One record, appended straight through the partition's writer with a
     /// chosen create timestamp and leader epoch, bypassing the ordinary
     /// Produce validation path (which would otherwise stamp its own
-    /// timestamp). Returns the offset it landed at.
+    /// timestamp). With `transactional_producer`, the record opens a
+    /// transaction that producer leaves open, which pins the last stable
+    /// offset at the offset it lands at. Returns that offset.
     async fn produce_one_at_timestamp(
         partition: &crate::partition::Partition,
         leader_epoch: i32,
         timestamp: i64,
+        transactional_producer: Option<i64>,
     ) -> i64 {
-        let batch = krabka_protocol::records::RecordBatch {
+        let mut batch = krabka_protocol::records::RecordBatch {
             partition_leader_epoch: leader_epoch,
             base_timestamp: timestamp,
             max_timestamp: timestamp,
@@ -1046,22 +1066,129 @@ mod tests {
             }],
             ..Default::default()
         };
+        if let Some(producer_id) = transactional_producer {
+            batch.producer_id = producer_id;
+            batch.producer_epoch = 0;
+            batch.base_sequence = 0;
+            batch.attributes = batch.attributes.with_transactional(true);
+        }
         partition.produce_batch(batch).await.expect("produce").0
     }
 
-    /// KIP-207: a client LATEST lookup is refused unconditionally while the
-    /// high watermark has not yet caught up to the start offset of the live
-    /// leader epoch, because LATEST always targets the live end of the log
-    /// that this window puts at risk. A timestamp or `MAX_TIMESTAMP` lookup
-    /// is refused only when it actually resolves to a candidate in that same
-    /// unstable range; one that resolves to an older, already-stable offset
-    /// below the epoch start answers normally even while the window is
-    /// open.
+    #[test]
+    fn lagging_high_watermark_error_follows_the_high_watermark_and_the_version() {
+        // (label, replica id, epoch start, high watermark, version, error)
+        let cases = [
+            ("no epoch start", -1, None, 3, 11, None),
+            ("caught up exactly", -1, Some(4), 4, 11, None),
+            ("caught up past", -1, Some(4), 6, 11, None),
+            (
+                "lagging, v11",
+                -1,
+                Some(4),
+                3,
+                11,
+                Some(codes::OFFSET_NOT_AVAILABLE),
+            ),
+            (
+                "lagging, v5",
+                -1,
+                Some(4),
+                3,
+                5,
+                Some(codes::OFFSET_NOT_AVAILABLE),
+            ),
+            (
+                "lagging, v4",
+                -1,
+                Some(4),
+                3,
+                4,
+                Some(codes::LEADER_NOT_AVAILABLE),
+            ),
+            (
+                "lagging, v1",
+                -1,
+                Some(4),
+                3,
+                1,
+                Some(codes::LEADER_NOT_AVAILABLE),
+            ),
+            ("lagging, follower", 3, Some(4), 3, 11, None),
+            ("lagging, debugging replica", -2, Some(4), 3, 11, None),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (label, replica_id, epoch_start, high_watermark, version, error) in cases {
+            actual.push((
+                label,
+                lagging_high_watermark_error(replica_id, epoch_start, high_watermark, version),
+            ));
+            expected.push((label, error));
+        }
+        assert!(actual == expected);
+    }
+
+    #[test]
+    fn a_raised_lagging_high_watermark_error_fences_what_kafka_fences() {
+        const LAST_FETCHABLE: i64 = 3;
+        // (kind, candidate offset, fenced)
+        let cases = [
+            (ListOffsetsKind::Latest, 7, true),
+            (ListOffsetsKind::Latest, 0, true),
+            (ListOffsetsKind::Earliest, 0, false),
+            (ListOffsetsKind::EarliestLocal, 0, false),
+            (ListOffsetsKind::Timestamp, 2, false),
+            (ListOffsetsKind::Timestamp, LAST_FETCHABLE, true),
+            (ListOffsetsKind::Timestamp, 5, true),
+            (ListOffsetsKind::Timestamp, UNKNOWN_OFFSET, true),
+            (ListOffsetsKind::MaxTimestamp, 2, false),
+            (ListOffsetsKind::MaxTimestamp, LAST_FETCHABLE, true),
+            (ListOffsetsKind::MaxTimestamp, UNKNOWN_OFFSET, true),
+            (ListOffsetsKind::LatestTiered, 2, false),
+            (ListOffsetsKind::LatestTiered, LAST_FETCHABLE, true),
+            (ListOffsetsKind::LatestTiered, UNKNOWN_OFFSET, false),
+            (ListOffsetsKind::EarliestPendingUpload, 2, false),
+            (ListOffsetsKind::EarliestPendingUpload, 4, true),
+            (
+                ListOffsetsKind::EarliestPendingUpload,
+                UNKNOWN_OFFSET,
+                false,
+            ),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (kind, candidate, fenced) in cases {
+            actual.push((
+                kind,
+                candidate,
+                lagging_high_watermark_fences(kind, candidate, LAST_FETCHABLE),
+            ));
+            expected.push((kind, candidate, fenced));
+        }
+        assert!(actual == expected);
+    }
+
+    /// KIP-207 over the wire, one row per request shape, in the two states
+    /// `Partition.fetchOffsetForTimestamp` distinguishes: the high watermark
+    /// lagging the epoch start and caught up to it, with an open transaction
+    /// holding the last stable offset below the epoch start throughout.
+    ///
+    /// While the high watermark lags, LATEST is fenced outright, and a lookup
+    /// that resolves against record data is fenced when it found nothing or
+    /// found an offset at or above the request's bound -- even one below the
+    /// epoch start. An offset below the bound is answered. The lag itself is
+    /// measured against the high watermark at every isolation level, so a
+    /// `read_committed` client is not fenced once the watermark has caught up.
     #[tokio::test]
-    async fn offset_not_available_is_reported_below_the_epoch_start_and_versioned_correctly() {
+    async fn offset_not_available_follows_partition_fetch_offset_for_timestamp() {
         const TOPIC: &str = "list-offsets-kip-207";
         const OLD_TIMESTAMP: i64 = 1_000;
         const NEW_TIMESTAMP: i64 = 5_000;
+        const PAST_EVERY_RECORD: i64 = 9_000;
+        const PRODUCER_ID: i64 = 77;
+        const READ_UNCOMMITTED: i8 = 0;
+        const READ_COMMITTED: i8 = 1;
 
         let (broker, _dir) = crate::test_support::start_broker_with(|config| {
             config.audit_enabled = false;
@@ -1076,76 +1203,162 @@ mod tests {
             .get(TOPIC, krabka_ids::PartitionIndex(0))
             .expect("partition");
 
-        // Epoch 0: four records at ascending, old timestamps (offsets 0-3).
+        // Epoch 0 holds offsets 0-3 at ascending old timestamps, and offset 2
+        // opens a transaction that never resolves, so the last stable offset
+        // stays at 2. Epoch 1 starts at offset 4 with later timestamps.
         for delta in 0..4 {
-            produce_one_at_timestamp(&partition, 0, OLD_TIMESTAMP + delta).await;
+            let transactional = (delta == 2).then_some(PRODUCER_ID);
+            produce_one_at_timestamp(&partition, 0, OLD_TIMESTAMP + delta, transactional).await;
         }
         broker.test_set_leader_epoch(TOPIC, 0, 1);
-        // Epoch 1 starts at offset 4, with new, later timestamps (offsets
-        // 4-5). `NEW_TIMESTAMP` resolves into this range, `OLD_TIMESTAMP`
-        // resolves below it.
         for delta in 0..2 {
-            produce_one_at_timestamp(&partition, 1, NEW_TIMESTAMP + delta).await;
+            produce_one_at_timestamp(&partition, 1, NEW_TIMESTAMP + delta, None).await;
         }
 
-        // Force the high watermark back below the epoch-1 start, the way a
-        // fresh leader's would sit before replication (and this broker's
-        // own single-replica ack) catches it up.
-        partition.replica_state.lock().await.hw = krabka_log::Offset(3);
+        let found = |offset: i64, timestamp: i64, leader_epoch: i32| ListOffsetsPartitionResponse {
+            partition_index: 0,
+            error_code: codes::NONE,
+            timestamp,
+            offset,
+            leader_epoch,
+            ..Default::default()
+        };
+        let not_found = found(UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP, UNKNOWN_EPOCH);
 
-        // MAX_TIMESTAMP (KIP-734) only decodes from v7, which already sits
-        // above the v5 floor `OFFSET_NOT_AVAILABLE` needs, so there is no
-        // version at which it can see the older `LEADER_NOT_AVAILABLE` code.
-        // LATEST and a timestamp lookup decode from v1 and see both.
-        let fenced_cases: &[(&str, i64, &[i16])] = &[
-            ("LATEST", LATEST_TIMESTAMP, &[4, 5, 11]),
+        // Force the high watermark back below the epoch-1 start, the way a
+        // fresh leader's sits before replication catches it up.
+        partition.replica_state.lock().await.hw = krabka_log::Offset(3);
+        // `None` stands for the KIP-207 error row, whose code depends on the
+        // version. MAX_TIMESTAMP (KIP-734) only decodes from v7, above the v5
+        // floor `OFFSET_NOT_AVAILABLE` needs.
+        // (label, timestamp, isolation level, versions, expected row)
+        let lagging = [
             (
-                "a timestamp lookup resolving into the new epoch",
-                NEW_TIMESTAMP,
-                &[4, 5, 11],
+                "LATEST",
+                LATEST_TIMESTAMP,
+                READ_UNCOMMITTED,
+                &[4, 5, 11][..],
+                None,
             ),
-            ("MAX_TIMESTAMP", MAX_TIMESTAMP, &[7, 11]),
+            (
+                "a timestamp resolving into the new epoch",
+                NEW_TIMESTAMP,
+                READ_UNCOMMITTED,
+                &[4, 5, 11],
+                None,
+            ),
+            (
+                "MAX_TIMESTAMP",
+                MAX_TIMESTAMP,
+                READ_UNCOMMITTED,
+                &[7, 11],
+                None,
+            ),
+            // Below the epoch start but at the high watermark: Kafka compares
+            // the resolved offset with the bound, not with the epoch start.
+            (
+                "a timestamp resolving at the bound, below the epoch start",
+                OLD_TIMESTAMP + 3,
+                READ_UNCOMMITTED,
+                &[4, 5, 11],
+                None,
+            ),
+            // An empty lookup result is fenced too.
+            (
+                "a timestamp past every record",
+                PAST_EVERY_RECORD,
+                READ_UNCOMMITTED,
+                &[4, 5, 11],
+                None,
+            ),
+            (
+                "a timestamp resolving below the bound",
+                OLD_TIMESTAMP + 1,
+                READ_UNCOMMITTED,
+                &[4, 11],
+                Some(found(1, OLD_TIMESTAMP + 1, 0)),
+            ),
+            // The last stable offset (2) is the bound at read_committed.
+            (
+                "a timestamp resolving at the last stable offset",
+                OLD_TIMESTAMP + 2,
+                READ_COMMITTED,
+                &[4, 11],
+                None,
+            ),
+            (
+                "EARLIEST",
+                EARLIEST_TIMESTAMP,
+                READ_UNCOMMITTED,
+                &[4, 11],
+                Some(found(0, UNKNOWN_TIMESTAMP, 0)),
+            ),
         ];
-        for &(label, timestamp, versions) in fenced_cases {
+        for (label, timestamp, isolation_level, versions, expected) in lagging {
             for &version in versions {
-                let want_error = if version >= 5 {
-                    codes::OFFSET_NOT_AVAILABLE
-                } else {
-                    codes::LEADER_NOT_AVAILABLE
-                };
+                let expected = expected.clone().unwrap_or_else(|| {
+                    error_response(
+                        0,
+                        if version >= 5 {
+                            codes::OFFSET_NOT_AVAILABLE
+                        } else {
+                            codes::LEADER_NOT_AVAILABLE
+                        },
+                    )
+                });
                 assert!(
-                    list_one_at_version(&broker, TOPIC, timestamp, version).await
-                        == error_response(0, want_error),
-                    "{label} at v{version}"
+                    list_one_at_version(&broker, TOPIC, (timestamp, isolation_level), version)
+                        .await
+                        == expected,
+                    "lagging: {label} at v{version}"
                 );
             }
         }
 
-        // A timestamp that resolves to an old, already-stable offset below
-        // the epoch start is answered rather than refused, even in the same
-        // window that fences LATEST above.
-        assert!(
-            list_one_at_version(&broker, TOPIC, OLD_TIMESTAMP, 11).await
-                == ListOffsetsPartitionResponse {
-                    partition_index: 0,
-                    error_code: codes::NONE,
-                    timestamp: OLD_TIMESTAMP,
-                    offset: 0,
-                    leader_epoch: 0,
-                    ..Default::default()
-                },
-            "an old timestamp lookup below the epoch start"
-        );
-
-        // Let the watermark catch up to the epoch start and confirm the
-        // fence lifts for LATEST too.
+        // Caught up: nothing is fenced, and each lookup is measured against
+        // its own bound. The open transaction keeps the read_committed bound
+        // at 2, below the epoch start, and Kafka still does not fence it
+        // because the lag is read from the high watermark.
         partition.replica_state.lock().await.hw = krabka_log::Offset(6);
-        assert!(
-            list_one_at_version(&broker, TOPIC, LATEST_TIMESTAMP, 11)
-                .await
-                .error_code
-                == codes::NONE
-        );
+        let caught_up = [
+            (
+                "LATEST, read_uncommitted",
+                LATEST_TIMESTAMP,
+                READ_UNCOMMITTED,
+                found(6, UNKNOWN_TIMESTAMP, 1),
+            ),
+            (
+                "LATEST, read_committed",
+                LATEST_TIMESTAMP,
+                READ_COMMITTED,
+                found(2, UNKNOWN_TIMESTAMP, 1),
+            ),
+            (
+                "a timestamp resolving into the new epoch, read_committed",
+                NEW_TIMESTAMP,
+                READ_COMMITTED,
+                not_found.clone(),
+            ),
+            (
+                "a timestamp past every record",
+                PAST_EVERY_RECORD,
+                READ_UNCOMMITTED,
+                not_found,
+            ),
+            (
+                "a timestamp resolving into the new epoch",
+                NEW_TIMESTAMP,
+                READ_UNCOMMITTED,
+                found(4, NEW_TIMESTAMP, 1),
+            ),
+        ];
+        for (label, timestamp, isolation_level, expected) in caught_up {
+            assert!(
+                list_one_at_version(&broker, TOPIC, (timestamp, isolation_level), 11).await
+                    == expected,
+                "caught up: {label}"
+            );
+        }
 
         drop(client);
         broker.shutdown().await;

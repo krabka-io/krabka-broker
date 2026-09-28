@@ -29,18 +29,21 @@ pub(super) enum MarkerFanOutOutcome {
     /// record is durable, so the caller hands the transaction to the
     /// completion task, which retries the fan-out.
     Retry,
-    /// A fenced producer or coordinator generation cancelled the fan-out
-    /// (#882). A newer generation has already superseded this attempt, so
-    /// retrying cannot succeed; the caller must not queue it for completion.
+    /// A fenced producer or coordinator generation cancelled the fan-out, or
+    /// a leader answered a code Kafka's completion handler treats as an
+    /// illegal state (#882). Retrying cannot succeed, so the caller must not
+    /// queue it for completion.
     GivenUp,
 }
 
 /// What one marker fan-out attempt achieved.
 #[derive(Debug, Default)]
 pub(crate) struct MarkerFanOut {
-    /// The partitions whose marker is durable, and those that no longer exist
-    /// and so need none. Kafka's `TransactionMarkerRequestCompletionHandler`
-    /// removes each of them from the transaction's partition set.
+    /// The partitions whose marker is durable, those whose leader answered
+    /// `UNSUPPORTED_FOR_MESSAGE_FORMAT` or `UNSUPPORTED_VERSION`, and those
+    /// that no longer exist and so need none. Kafka's
+    /// `TransactionMarkerRequestCompletionHandler` removes each of them from
+    /// the transaction's partition set.
     pub(crate) written: Vec<TopicPartition>,
     /// The most severe failure of the attempt, if any partition failed.
     pub(crate) failure: Option<BrokerError>,
@@ -74,11 +77,12 @@ pub(super) async fn dispatch_transaction_markers(
         .await
     {
         Ok(()) => MarkerFanOutOutcome::Complete,
-        Err(error) if classify_marker_failure(&error) == MarkerFailureClass::Fatal => {
+        Err(error) if classify_marker_failure(&error).stops_fan_out() => {
             tracing::warn!(
                 tid = transactional_id,
                 error = %error,
-                "EndTxn: WriteTxnMarkers fan-out fenced by a newer generation; giving up"
+                class = ?classify_marker_failure(&error),
+                "EndTxn: WriteTxnMarkers fan-out cannot succeed; giving up"
             );
             MarkerFanOutOutcome::GivenUp
         }
@@ -206,18 +210,30 @@ pub(crate) async fn dispatch_markers(
 }
 
 /// Keeps `worst` at the most severe of what it already holds and `error`: a
-/// fatal classification always wins over a retriable one, and the first
-/// error is kept when both are the same class.
+/// failure that stops the fan-out always wins over a retriable one, a fenced
+/// generation wins over an unexpected code, and the first error is kept when
+/// both are the same class. Kafka's completion handler cancels on the first
+/// fenced partition and throws on the first unexpected one; either way the
+/// attempt does not retry.
 fn record_worse_failure(worst: &mut Option<BrokerError>, error: BrokerError) {
     let replace = match worst {
         None => true,
         Some(existing) => {
-            classify_marker_failure(&error) == MarkerFailureClass::Fatal
-                && classify_marker_failure(existing) != MarkerFailureClass::Fatal
+            failure_severity(classify_marker_failure(&error))
+                > failure_severity(classify_marker_failure(existing))
         }
     };
     if replace {
         *worst = Some(error);
+    }
+}
+
+/// The order [`record_worse_failure`] keeps failures in.
+fn failure_severity(class: MarkerFailureClass) -> u8 {
+    match class {
+        MarkerFailureClass::Retriable => 0,
+        MarkerFailureClass::Unexpected => 1,
+        MarkerFailureClass::Fenced => 2,
     }
 }
 
