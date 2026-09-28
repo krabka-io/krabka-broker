@@ -111,7 +111,13 @@ impl ShareCoordinator {
             .get(bootstrap::TOPIC, state_partition)
             .ok_or(AppendError::NotLocal(state_partition))?;
 
+        // Kafka's `share.coordinator.state.topic.compression.codec`. The
+        // state topic keeps `compression.type=producer`, so the log stores
+        // the batch in this codec.
         let mut batch = RecordBatch::default();
+        batch.attributes = batch
+            .attributes
+            .with_compression(self.config.state_topic_compression_codec);
         batch.records.push(Record {
             offset_delta: 0,
             key: Some(encode_state_key(&key)),

@@ -474,6 +474,27 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub share_cold_partition_snapshot_interval: Option<Time>,
+    /// Codec of the batches the share coordinator appends to
+    /// `__share_group_state`, Kafka's
+    /// `share.coordinator.state.topic.compression.codec`, as Kafka's codec
+    /// id: 0 none (the default), 1 gzip, 2 snappy, 3 lz4 or 4 zstd.
+    pub share_state_compression_codec: Option<i32>,
+    /// Kafka's `share.coordinator.threads`, at least 1. Accepted and has no
+    /// effect: the share coordinator runs as tasks on the broker's shared
+    /// async runtime rather than on a thread pool of its own.
+    pub share_coordinator_threads: Option<i32>,
+    /// Kafka's `share.coordinator.append.linger.ms`, a whole number of
+    /// milliseconds, or -1 (the default) for an adaptive linger. Accepted and
+    /// has no effect: each share-state write is its own append, and the
+    /// partition writer groups concurrent appends without waiting for more.
+    pub share_coordinator_append_linger_ms: Option<i32>,
+    /// Kafka's `share.coordinator.cached.buffer.max.bytes`, at least 512KiB,
+    /// default 1MiB plus 12 bytes. Accepted and has no effect: the share
+    /// coordinator encodes each record into a new buffer and keeps no buffer
+    /// for reuse.
+    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
+    #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
+    pub share_coordinator_cached_buffer_max_bytes: Option<ByteSize>,
     /// Partition count of the `__consumer_offsets` internal topic, Kafka's
     /// `offsets.topic.num.partitions`.
     pub offsets_topic_num_partitions: Option<i32>,

@@ -2554,12 +2554,37 @@
             "null"
           ]
         },
+        "share_coordinator_append_linger_ms": {
+          "description": "Kafka's `share.coordinator.append.linger.ms`, a whole number of\nmilliseconds, or -1 (the default) for an adaptive linger. Accepted and\nhas no effect: each share-state write is its own append, and the\npartition writer groups concurrent appends without waiting for more.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "share_coordinator_cached_buffer_max_bytes": {
+          "default": null,
+          "description": "Kafka's `share.coordinator.cached.buffer.max.bytes`, at least 512KiB,\ndefault 1MiB plus 12 bytes. Accepted and has no effect: the share\ncoordinator encodes each record into a new buffer and keeps no buffer\nfor reuse.",
+          "format": "byte-size",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "share_coordinator_load_buffer_size": {
           "default": null,
           "description": "Maximum bytes read by one share-state recovery read, Kafka's\n`share.coordinator.load.buffer.size`.",
           "format": "byte-size",
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "share_coordinator_threads": {
+          "description": "Kafka's `share.coordinator.threads`, at least 1. Accepted and has no\neffect: the share coordinator runs as tasks on the broker's shared\nasync runtime rather than on a thread pool of its own.",
+          "format": "int32",
+          "type": [
+            "integer",
             "null"
           ]
         },
@@ -2745,6 +2770,14 @@
           "description": "Updates of one share key between two snapshots of it, Kafka's\n`share.coordinator.snapshot.update.records.per.snapshot`. At most 500.",
           "format": "uint32",
           "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "share_state_compression_codec": {
+          "description": "Codec of the batches the share coordinator appends to\n`__share_group_state`, Kafka's\n`share.coordinator.state.topic.compression.codec`, as Kafka's codec\nid: 0 none (the default), 1 gzip, 2 snappy, 3 lz4 or 4 zstd.",
+          "format": "int32",
           "type": [
             "integer",
             "null"

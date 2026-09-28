@@ -99,6 +99,10 @@ impl RuntimeArgs {
             share_coordinator_write_timeout,
             share_state_prune_interval,
             share_cold_partition_snapshot_interval,
+            share_state_compression_codec,
+            share_coordinator_threads,
+            share_coordinator_append_linger_ms,
+            share_coordinator_cached_buffer_max_bytes,
         );
         copy_refined_runtime!(
             self,
