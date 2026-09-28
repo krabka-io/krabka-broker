@@ -18,6 +18,63 @@ the `krabka-*` names to crates.io.
 
 ## [Unreleased]
 
+### Added
+
+- `group.streams.rack.aware.assignment.tags` is the `[runtime]` key
+  `streams_group_rack_aware_assignment_tags`, with the flag
+  `--streams-group-rack-aware-assignment-tags`. It is the default of each
+  group's `streams.rack.aware.assignment.tags`, and it refuses an empty or a
+  repeated tag key with Kafka's messages.
+- Kafka's `share.coordinator.state.topic.compression.codec`,
+  `share.coordinator.threads`, `share.coordinator.append.linger.ms` and
+  `share.coordinator.cached.buffer.max.bytes` are accepted under `[runtime]`
+  (#939). Only the codec has an effect: it compresses every
+  `__share_group_state` batch.
+
+### Changed
+
+- **Breaking, config.** In `[runtime]`, the share-group lock limit is
+  `share_group_partition_max_record_locks` and the delivery-attempt limit is
+  `share_group_delivery_count_limit`, after the Kafka keys they set.
+  `share_group_isolation_level`, `acl_max_principal`, `acl_max_resource_name`
+  and `streams_internal_topic_replication_factor` are gone, with their flags.
+  Kafka has none of them. A share group reads with its own
+  `share.isolation.level`, `read_uncommitted` by default. A streams internal
+  topic whose topology sets no replication factor gets
+  `default.replication.factor`.
+- The broker share-group settings take Kafka 4.3.1's defaults, ranges and
+  minimum and maximum keys, and refuse an out-of-order triple with Kafka's
+  `require` messages (#959, #958). The record lock limit defaults to 2000.
+- `unstable.api.versions.enable`, read from `[server_properties]`, gates the
+  API versions Kafka marks unstable on both listeners. Off, its default, the
+  broker advertises only stable versions and closes a connection that sends
+  an unstable one (#646).
+
+### Fixed
+
+- ApiVersions matches Kafka 4.3.1 on the broker and controller listeners: the
+  unsupported-version answer, the api-key order, the supported and finalized
+  feature rows, and `finalized_features_epoch` (#842, #783). Produce keeps
+  serving v0 to v2 on purpose, and the KIP matrix records it (#863).
+- UpdateFeatures applies the whole request or none of it, validates each row
+  with Kafka's checks and messages, and decides a `metadata.version`
+  downgrade on Kafka's `didMetadataChange` table (#779, #780, #781).
+- ListOffsets fences as Kafka does while the high watermark trails the leader
+  epoch's start (KIP-207, #879).
+- WriteTxnMarkers retries, drops or cancels a partition by its error code as
+  Kafka's completion handler does (#882). An AddPartitionsToTxn v4+ request
+  that repeats a transactional id gets one result per entry (#883).
+- StreamsGroupHeartbeat v1 carries `MISSING_CLIENT_TAGS` when a member does
+  not send every configured rack-aware tag key (#972).
+- CreateAcls has no length limit on a resource name or a principal, an IPv4
+  CIDR ACL never matches `0.0.0.0`, and CreateDelegationToken with an owner
+  name and no owner type answers `UNKNOWN_SERVER_ERROR` (#772, #652, #765).
+- OffsetCommit and TxnOffsetCommit check an older member epoch against the
+  epoch at which each partition was assigned (KIP-1251, #800).
+- DescribeShareGroupOffsets answers an unknown topic, a failed share-state
+  read and an explicit topic list as Kafka 4.3.1 does, and takes the lag's
+  end offset from each partition's leader (#943).
+
 ## [0.6.1] - 2026-09-26
 
 A patch release that makes secured disaster recovery work on a diskless

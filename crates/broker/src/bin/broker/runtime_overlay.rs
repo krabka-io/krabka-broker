@@ -200,13 +200,7 @@ impl RuntimeArgs {
             streams_group_heartbeat_interval,
             streams_group_task_offset_interval,
         );
-        copy_refined_runtime!(
-            self,
-            runtime,
-            share_group_max_size,
-            streams_group_max_size,
-            streams_internal_topic_replication_factor,
-        );
+        copy_refined_runtime!(self, runtime, share_group_max_size, streams_group_max_size);
         copy_plain_runtime!(
             self,
             runtime,
@@ -222,6 +216,9 @@ impl RuntimeArgs {
             streams_group_num_warmup_replicas,
             streams_group_acceptable_recovery_lag,
         );
+        runtime
+            .streams_group_rack_aware_assignment_tags
+            .clone_from(&self.streams_group_rack_aware_assignment_tags);
         runtime.streams_group_assignor = self.streams_group_assignor.map(|value| {
             use krabka_broker::coordinator::unified::streams::config::StreamsAssignorKind;
             match value {

@@ -208,10 +208,6 @@ fn rejects_invalid_additional_runtime_scalars() {
             "transaction_state_replication_factor must be positive",
             |c| c.transaction_state_replication_factor = 0,
         ),
-        (
-            "streams_internal_topic_replication_factor must be positive",
-            |c| c.streams_group.internal_topic_replication_factor = 0,
-        ),
         ("transaction_max_timeout must be positive", |c| {
             c.transaction_max_timeout = <Time as TimeExt>::ZERO;
         }),

@@ -255,8 +255,7 @@ mod tests {
     ///
     /// A topology that sets no replication factor sends -1, as Kafka 4.3.1's
     /// `InternalTopicManager.toCreatableTopic` does, which `CreateTopics`
-    /// resolves to `default.replication.factor` (1). The streams
-    /// internal-topic replication factor, set to 3 here, plays no part.
+    /// resolves to `default.replication.factor` (1).
     #[tokio::test]
     async fn handle_creates_the_internal_topics_through_create_topics() {
         use krabka_protocol::owned::common::streams_group_heartbeat_request::{
@@ -267,7 +266,6 @@ mod tests {
         let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
             cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
             cfg.streams_group.enable = true;
-            cfg.streams_group.internal_topic_replication_factor = 3;
             cfg.default_replication_factor = 1;
         })
         .await;

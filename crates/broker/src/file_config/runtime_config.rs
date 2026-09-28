@@ -385,14 +385,6 @@ pub struct RuntimeFileConfig {
     #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
     #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
     pub socket_receive_buffer: Option<ByteSize>,
-    /// Maximum encoded ACL principal length.
-    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
-    #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
-    pub acl_max_principal: Option<ByteSize>,
-    /// Maximum encoded ACL resource-name length.
-    #[serde(default, with = "krabka_units::serde_units::human::option_byte_size")]
-    #[schemars(with = "Option<crate::file_config::schema_units::ByteSize>")]
-    pub acl_max_resource_name: Option<ByteSize>,
     /// Upper clamp on `DescribeTopicPartitions`' `response_partition_limit`,
     /// Kafka's `max.request.partition.size.limit`.
     pub max_request_partition_size_limit: Option<i32>,
@@ -796,12 +788,14 @@ pub struct RuntimeFileConfig {
     pub streams_group_heartbeat_interval: Option<Time>,
     /// Maximum number of members in one streams group.
     pub streams_group_max_size: Option<usize>,
-    /// Replication factor of the internal topics a streams group creates, such
-    /// as its repartition and changelog topics.
-    pub streams_internal_topic_replication_factor: Option<i16>,
     /// Number of standby replicas the assignor places for each task, the
     /// group's `streams.num.standby.replicas`.
     pub streams_group_num_standby_replicas: Option<i32>,
+    /// Client tag keys every streams-group member must send, Kafka's
+    /// `group.streams.rack.aware.assignment.tags` and the default of a
+    /// group's `streams.rack.aware.assignment.tags`. A repeated or an empty
+    /// tag key is refused.
+    pub streams_group_rack_aware_assignment_tags: Option<Vec<String>>,
     /// Maximum number of warm-up replicas the assignor may move at once, the
     /// group's `streams.num.warmup.replicas`.
     pub streams_group_num_warmup_replicas: Option<i32>,

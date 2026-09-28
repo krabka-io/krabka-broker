@@ -315,8 +315,11 @@ pub struct FileConfig {
     /// Raw Apache Kafka `server.properties` keys, for the settings krabka
     /// reads under their Kafka names rather than a dedicated TOML key. The
     /// broker consults `transaction.two.phase.commit.enable`,
-    /// `quota.window.num`, `quota.window.size.seconds`, `num.partitions`, and
-    /// `default.replication.factor`. Any other entry is accepted and ignored.
+    /// `quota.window.num`, `quota.window.size.seconds`, `num.partitions`,
+    /// `default.replication.factor`, `delete.topic.enable`,
+    /// `auto.create.topics.enable`, and Kafka's internal
+    /// `unstable.api.versions.enable`, which advertises and serves the API
+    /// versions Kafka marks unstable. Any other entry is accepted and ignored.
     /// A key set here loses to the equivalent dedicated key, which is applied
     /// first.
     #[serde(default)]

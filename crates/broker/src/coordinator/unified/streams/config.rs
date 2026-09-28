@@ -280,11 +280,6 @@ pub struct StreamsGroupConfig {
     pub enable: bool,
     pub session_timeout: Duration,
     pub heartbeat_interval: Duration,
-    /// Set by `streams_internal_topic_replication_factor` and read by no
-    /// creation path: a topology topic with no replication factor goes to
-    /// `CreateTopics` with -1, as in Kafka, which resolves it to
-    /// `default.replication.factor`.
-    pub internal_topic_replication_factor: i16,
     pub min_session_timeout: Duration,
     pub max_session_timeout: Duration,
     pub min_heartbeat_interval: Duration,
@@ -331,7 +326,6 @@ impl Default for StreamsGroupConfig {
             enable: true,
             session_timeout: Duration::from_secs(45),
             heartbeat_interval: Duration::from_secs(5),
-            internal_topic_replication_factor: 1,
             min_session_timeout: Duration::from_secs(45),
             max_session_timeout: Duration::from_mins(1),
             min_heartbeat_interval: Duration::from_secs(5),
@@ -432,35 +426,79 @@ impl StreamsGroupConfig {
     }
 }
 
+/// Kafka's broker-level `group.streams.rack.aware.assignment.tags`, the
+/// default of every group's [`KEY_RACK_AWARE_ASSIGNMENT_TAGS`].
+pub const BROKER_KEY_RACK_AWARE_ASSIGNMENT_TAGS: &str = "group.streams.rack.aware.assignment.tags";
+
+/// Parses the broker's `group.streams.rack.aware.assignment.tags`, given as
+/// the entries of the Kafka property value, which is those entries joined
+/// with commas.
+///
+/// Kafka checks the two failures in the reverse of the group order.
+/// `KafkaConfig`'s `ConfigDef` parse removes repeated entries and then refuses
+/// an empty one with `ValidList`'s message. After that,
+/// `GroupCoordinatorConfig` re-splits the raw value and refuses a repeated
+/// tag key.
+///
+/// # Errors
+///
+/// Returns Kafka's message for an empty or a repeated tag key.
+pub fn parse_broker_rack_aware_assignment_tags(entries: &[String]) -> Result<Vec<String>, String> {
+    let tags = split_tag_list(&entries.join(","));
+    if tags.iter().any(String::is_empty) {
+        return Err(empty_tag_message(BROKER_KEY_RACK_AWARE_ASSIGNMENT_TAGS));
+    }
+    if has_duplicate_tag(&tags) {
+        return Err(duplicate_tag_message(BROKER_KEY_RACK_AWARE_ASSIGNMENT_TAGS));
+    }
+    Ok(tags)
+}
+
 /// Parses `streams.rack.aware.assignment.tags` as Kafka's `GroupConfig`
-/// does. The value is a `LIST`: the trimmed value split on commas, with the
-/// whitespace next to each comma removed. A repeated tag key is refused
-/// first (`validateNoDuplicateRackAwareAssignmentTags` reads the raw value),
-/// then an empty one (`ValidList.anyNonDuplicateValues(true, false)`).
+/// does. A repeated tag key is refused first
+/// (`validateNoDuplicateRackAwareAssignmentTags` reads the raw value), then an
+/// empty one (`ValidList.anyNonDuplicateValues(true, false)`).
 fn parse_tag_list(value: &str) -> Result<Vec<String>, String> {
+    let tags = split_tag_list(value);
+    if has_duplicate_tag(&tags) {
+        return Err(duplicate_tag_message(KEY_RACK_AWARE_ASSIGNMENT_TAGS));
+    }
+    if tags.iter().any(String::is_empty) {
+        return Err(empty_tag_message(KEY_RACK_AWARE_ASSIGNMENT_TAGS));
+    }
+    Ok(tags)
+}
+
+/// Splits a Kafka `LIST` value: the trimmed value split on commas, with the
+/// whitespace next to each comma removed. A blank value is the empty list.
+fn split_tag_list(value: &str) -> Vec<String> {
     let trimmed = value.trim_matches(|c: char| c <= ' ');
     if trimmed.is_empty() {
-        return Ok(Vec::new());
+        return Vec::new();
     }
-    let tags: Vec<String> = trimmed
+    trimmed
         .split(',')
         .map(|tag| {
             tag.trim_matches([' ', '\t', '\n', '\u{b}', '\u{c}', '\r'])
                 .to_owned()
         })
-        .collect();
+        .collect()
+}
+
+fn has_duplicate_tag(tags: &[String]) -> bool {
     let distinct: std::collections::BTreeSet<&String> = tags.iter().collect();
-    if distinct.len() != tags.len() {
-        return Err(format!(
-            "{KEY_RACK_AWARE_ASSIGNMENT_TAGS} must not contain duplicate tag keys."
-        ));
-    }
-    if tags.iter().any(String::is_empty) {
-        return Err(format!(
-            "Configuration '{KEY_RACK_AWARE_ASSIGNMENT_TAGS}' values must not be empty."
-        ));
-    }
-    Ok(tags)
+    distinct.len() != tags.len()
+}
+
+/// The `require` message of Kafka's `GroupConfig` and
+/// `GroupCoordinatorConfig` for a repeated tag key.
+fn duplicate_tag_message(key: &str) -> String {
+    format!("{key} must not contain duplicate tag keys.")
+}
+
+/// `ValidList`'s message for an empty entry.
+fn empty_tag_message(key: &str) -> String {
+    format!("Configuration '{key}' values must not be empty.")
 }
 
 fn parse_positive_millis(key: &str, value: &str) -> Result<Duration, String> {
@@ -500,7 +538,6 @@ mod tests {
                     enable: true,
                     session_timeout: Duration::from_secs(45),
                     heartbeat_interval: Duration::from_secs(5),
-                    internal_topic_replication_factor: 1,
                     min_session_timeout: Duration::from_secs(45),
                     max_session_timeout: Duration::from_mins(1),
                     min_heartbeat_interval: Duration::from_secs(5),

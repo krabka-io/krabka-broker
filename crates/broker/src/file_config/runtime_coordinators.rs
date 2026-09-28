@@ -12,7 +12,7 @@ use krabka_units::{Time, convert::TimeExt as _};
 use super::{
     FileConfigError, RuntimeFileConfig,
     validate::{
-        invalid_runtime_value, nonnegative_time, positive_i16, positive_time, positive_usize,
+        invalid_runtime_value, nonnegative_time, positive_time, positive_usize,
         whole_millis_i32_time,
     },
 };
@@ -251,10 +251,6 @@ impl RuntimeFileConfig {
             cfg.streams_group.heartbeat_interval
         );
         set_runtime_usize!(runtime, streams_group_max_size, cfg.streams_group.max_size);
-        if let Some(value) = runtime.streams_internal_topic_replication_factor {
-            cfg.streams_group.internal_topic_replication_factor =
-                positive_i16("streams_internal_topic_replication_factor", value)?;
-        }
         if let Some(value) = runtime.streams_group_num_standby_replicas {
             if value < 0 {
                 return Err(invalid_runtime_value(
@@ -263,6 +259,13 @@ impl RuntimeFileConfig {
                 ));
             }
             cfg.streams_group.num_standby_replicas = value;
+        }
+        if let Some(entries) = runtime.streams_group_rack_aware_assignment_tags.take() {
+            use crate::coordinator::unified::streams::config::parse_broker_rack_aware_assignment_tags;
+            cfg.streams_group.rack_aware_assignment_tags =
+                parse_broker_rack_aware_assignment_tags(&entries).map_err(|message| {
+                    invalid_runtime_value("streams_group_rack_aware_assignment_tags", message)
+                })?;
         }
         if let Some(value) = runtime.streams_group_num_warmup_replicas {
             if value < 0 {
@@ -631,6 +634,50 @@ mod tests {
                 .map_err(|error| error.to_string());
             actual.push((row, applied));
             expected.push((row, want));
+        }
+        assert!(actual == expected);
+    }
+
+    /// Kafka trunk's `group.streams.rack.aware.assignment.tags`: the TOML
+    /// entries stand for the comma-joined Kafka value, an empty entry fails
+    /// `ValidList` and a repeated one fails `GroupCoordinatorConfig`, with
+    /// the empty check first as in Kafka.
+    #[test]
+    fn streams_group_rack_aware_assignment_tags_follow_kafka() {
+        const EMPTY: &str = "invalid config: streams_group_rack_aware_assignment_tags: \
+                             Configuration 'group.streams.rack.aware.assignment.tags' values \
+                             must not be empty.";
+        const DUPLICATE: &str = "invalid config: streams_group_rack_aware_assignment_tags: \
+                                 group.streams.rack.aware.assignment.tags must not contain \
+                                 duplicate tag keys.";
+        let rows: [(&str, Result<Vec<&str>, &str>); 8] = [
+            ("[]", Ok(vec![])),
+            ("[\"\"]", Ok(vec![])),
+            ("[\"zone\"]", Ok(vec!["zone"])),
+            ("[\" zone \", \"rack\"]", Ok(vec!["zone", "rack"])),
+            ("[\"zone,rack\"]", Ok(vec!["zone", "rack"])),
+            ("[\"zone\", \"\"]", Err(EMPTY)),
+            ("[\"zone\", \"rack\", \"zone\"]", Err(DUPLICATE)),
+            ("[\"zone\", \"zone\", \"\"]", Err(EMPTY)),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (value, want) in rows {
+            let file: crate::file_config::FileConfig = toml::from_str(&format!(
+                "[runtime]\nstreams_group_rack_aware_assignment_tags = {value}\n"
+            ))
+            .expect("parse runtime config");
+            let mut cfg = crate::config::BrokerConfig::default();
+            let applied = file
+                .apply_to(&mut cfg)
+                .map(|()| cfg.streams_group.rack_aware_assignment_tags.clone())
+                .map_err(|error| error.to_string());
+            actual.push((value, applied));
+            expected.push((
+                value,
+                want.map(|tags| tags.into_iter().map(str::to_owned).collect())
+                    .map_err(str::to_owned),
+            ));
         }
         assert!(actual == expected);
     }

@@ -1393,24 +1393,6 @@
       "additionalProperties": false,
       "description": "Validated operational policy loaded from `[runtime]`.",
       "properties": {
-        "acl_max_principal": {
-          "default": null,
-          "description": "Maximum encoded ACL principal length.",
-          "format": "byte-size",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "acl_max_resource_name": {
-          "default": null,
-          "description": "Maximum encoded ACL resource-name length.",
-          "format": "byte-size",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "audit_event_queue_capacity": {
           "description": "Capacity of the asynchronous audit event queue.",
           "format": "uint",
@@ -2919,6 +2901,16 @@
             "null"
           ]
         },
+        "streams_group_rack_aware_assignment_tags": {
+          "description": "Client tag keys every streams-group member must send, Kafka's\n`group.streams.rack.aware.assignment.tags` and the default of a\ngroup's `streams.rack.aware.assignment.tags`. A repeated or an empty\ntag key is refused.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "streams_group_session_timeout": {
           "default": null,
           "description": "Default streams-group session timeout, the group's\n`streams.session.timeout.ms`.",
@@ -2934,16 +2926,6 @@
           "format": "duration",
           "type": [
             "string",
-            "null"
-          ]
-        },
-        "streams_internal_topic_replication_factor": {
-          "description": "Replication factor of the internal topics a streams group creates, such\nas its repartition and changelog topics.",
-          "format": "int16",
-          "maximum": 32767,
-          "minimum": -32768,
-          "type": [
-            "integer",
             "null"
           ]
         },
@@ -3414,7 +3396,7 @@
         "type": "string"
       },
       "default": {},
-      "description": "Raw Apache Kafka `server.properties` keys, for the settings krabka\nreads under their Kafka names rather than a dedicated TOML key. The\nbroker consults `transaction.two.phase.commit.enable`,\n`quota.window.num`, `quota.window.size.seconds`, `num.partitions`, and\n`default.replication.factor`. Any other entry is accepted and ignored.\nA key set here loses to the equivalent dedicated key, which is applied\nfirst.",
+      "description": "Raw Apache Kafka `server.properties` keys, for the settings krabka\nreads under their Kafka names rather than a dedicated TOML key. The\nbroker consults `transaction.two.phase.commit.enable`,\n`quota.window.num`, `quota.window.size.seconds`, `num.partitions`,\n`default.replication.factor`, `delete.topic.enable`,\n`auto.create.topics.enable`, and Kafka's internal\n`unstable.api.versions.enable`, which advertises and serves the API\nversions Kafka marks unstable. Any other entry is accepted and ignored.\nA key set here loses to the equivalent dedicated key, which is applied\nfirst.",
       "type": "object"
     },
     "stretch": {

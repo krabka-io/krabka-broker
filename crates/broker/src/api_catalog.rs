@@ -1122,7 +1122,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/src/handlers/streams_group_describe/tests.rs::version_1_names_the_assignor_and_the_topology_description_status",
             "crates/broker/src/coordinator/unified/streams/actor/tests.rs::a_member_missing_a_rack_aware_tag_gets_missing_client_tags_at_version_1",
         ],
-        note: "krabka has no topology description plugin, as a Kafka broker has none by default: a heartbeat never sets TopologyDescriptionRequired, a describe that asks for the description answers NOT_STORED, and StreamsGroupTopologyDescriptionUpdate (93) is not served. Heartbeat v1 carries MISSING_CLIENT_TAGS when a tag key named by the group's `streams.rack.aware.assignment.tags` is missing from the member's client tags.",
+        note: "krabka has no topology description plugin, as a Kafka broker has none by default: a heartbeat never sets TopologyDescriptionRequired, a describe that asks for the description answers NOT_STORED, and StreamsGroupTopologyDescriptionUpdate (93) is not served. Heartbeat v1 carries MISSING_CLIENT_TAGS when a tag key named by the group's `streams.rack.aware.assignment.tags`, whose default is the broker's `group.streams.rack.aware.assignment.tags`, is missing from the member's client tags.",
     },
     KipAnnotation {
         key: "KIP-1357",
