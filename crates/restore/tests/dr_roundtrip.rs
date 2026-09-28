@@ -44,7 +44,7 @@ use std::collections::BTreeMap;
 
 use assert2::{assert, check};
 use krabka_backup::{archive::ArchiveArgs, capture::capture_key, manifest::RLMM_SNAPSHOT, run};
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_broker::{BrokerConfig, BrokerHandle};
 use krabka_client_admin::AdminClient;
 use krabka_client_core::{
     Client, CoordinatorKeyType, build_find_coordinator, coordinator_endpoint,
@@ -62,7 +62,7 @@ use krabka_restore::restore;
 use uuid::Uuid;
 
 use crate::{
-    args::restore_args,
+    args::ControllerListener,
     fixture::{Fixture, build_fixture},
 };
 
@@ -175,11 +175,13 @@ fn archive_args(root: &std::path::Path) -> ArchiveArgs {
     }
 }
 
-/// Start a broker on `log_dir` and connect a client to it.
-async fn boot(log_dir: std::path::PathBuf) -> (BrokerHandle, Client) {
-    let broker = Broker::start(BrokerConfig::for_tests(log_dir))
-        .await
-        .expect("the broker starts");
+/// Start a broker on `log_dir`, its controller listening on `controller`, and
+/// connect a client to it.
+async fn boot(
+    controller: &mut ControllerListener,
+    log_dir: std::path::PathBuf,
+) -> (BrokerHandle, Client) {
+    let broker = controller.start(BrokerConfig::for_tests(log_dir)).await;
     let client = Client::builder()
         .bootstrap(broker.listen_addr().to_string())
         .client_id("dr-roundtrip")
@@ -264,19 +266,17 @@ async fn a_captured_cluster_restores_with_its_configuration_and_its_group_positi
 
     // 1. The cluster before the disaster: the archive's own history, a group
     //    with a position in it, and the two files on the node's disk.
+    // The restored node comes back at the address the lost one had.
+    let mut controller = ControllerListener::bind().await;
     let pre_log_dir = workspace.path().join("pre");
-    restore(&restore_args(
-        fixture.archive_root.path(),
-        &pre_log_dir,
-        &[],
-    ))
-    .await
-    .expect("stand the pre-disaster cluster up");
+    restore(&controller.restore_args(fixture.archive_root.path(), &pre_log_dir, &[]))
+        .await
+        .expect("stand the pre-disaster cluster up");
     let node_files = workspace.path().join("node");
     std::fs::create_dir_all(&node_files).expect("create the node dir");
     write_node_files(&node_files, &fixture);
 
-    let (pre_broker, pre_client) = boot(pre_log_dir.clone()).await;
+    let (pre_broker, pre_client) = boot(&mut controller, pre_log_dir.clone()).await;
     pre_broker
         .wait_until_partition_present(TOPIC, PARTITION)
         .await;
@@ -307,7 +307,7 @@ async fn a_captured_cluster_restores_with_its_configuration_and_its_group_positi
         krabka_backup::manifest::METADATA_CHECKPOINT,
     ));
     let post_log_dir = workspace.path().join("post");
-    let report = restore(&restore_args(
+    let report = restore(&controller.restore_args(
         fixture.archive_root.path(),
         &post_log_dir,
         &[
@@ -321,7 +321,7 @@ async fn a_captured_cluster_restores_with_its_configuration_and_its_group_positi
     .expect("restore from the archive");
     check!(report.metadata.topic_configs == 1);
 
-    let (post_broker, post_client) = boot(post_log_dir).await;
+    let (post_broker, post_client) = boot(&mut controller, post_log_dir).await;
     post_broker
         .wait_until_partition_present(TOPIC, PARTITION)
         .await;

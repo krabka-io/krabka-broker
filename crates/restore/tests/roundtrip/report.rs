@@ -55,7 +55,12 @@ async fn authenticated_object_count_covers_only_the_selected_topic() {
         .count() as u64;
     let target = tempfile::tempdir().unwrap();
     let refs = extra.iter().map(String::as_str).collect::<Vec<_>>();
-    let args = restore_args(fixture.archive_root.path(), target.path(), &refs);
+    let args = restore_args(
+        fixture.archive_root.path(),
+        target.path(),
+        "127.0.0.1:9093",
+        &refs,
+    );
 
     let report = restore(&args).await.unwrap();
     check!(report.authentication.unwrap().objects == expected);
@@ -73,6 +78,7 @@ async fn json_report_matches_the_fixtures_exact_record_and_segment_counts() {
     let args = restore_args(
         fixture.archive_root.path(),
         &log_dir,
+        "127.0.0.1:9093",
         &["--cluster-id", &cluster_id.to_string()],
     );
 

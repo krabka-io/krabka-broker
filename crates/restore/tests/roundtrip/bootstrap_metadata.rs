@@ -10,7 +10,7 @@
 use std::path::Path;
 
 use assert2::{assert, check};
-use krabka_broker::{Broker, BrokerConfig};
+use krabka_broker::BrokerConfig;
 use krabka_ids::LeaderEpoch;
 use krabka_metadata::{
     AclEntry, AclOperation, MetadataImage, MetadataRecord, NodeId, PartitionRecord, PatternType,
@@ -24,7 +24,7 @@ use krabka_restore::restore;
 use uuid::Uuid;
 
 use crate::{
-    args::restore_args,
+    args::{ControllerListener, restore_args},
     fixture::{Fixture, build_fixture},
 };
 
@@ -41,6 +41,7 @@ async fn restored_bootstrap_metadata_carries_the_archived_topic_ids_and_partitio
     let args = restore_args(
         fixture.archive_root.path(),
         &log_dir,
+        "127.0.0.1:9093",
         &["--cluster-id", &cluster_id.to_string()],
     );
 
@@ -168,7 +169,8 @@ async fn restored_snapshot_reaches_describe_configs_and_describe_acls() {
 
     let target = tempfile::tempdir().expect("target parent");
     let log_dir = target.path().join("restored");
-    let args = restore_args(
+    let mut controller = ControllerListener::bind().await;
+    let args = controller.restore_args(
         fixture.archive_root.path(),
         &log_dir,
         &["--metadata-snapshot", &snapshot_path.display().to_string()],
@@ -186,7 +188,7 @@ async fn restored_snapshot_reaches_describe_configs_and_describe_acls() {
     config.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
         std::iter::once("ANONYMOUS".to_owned()).collect(),
     ));
-    let broker = Broker::start(config).await.expect("restored broker starts");
+    let broker = controller.start(config).await;
     let client = krabka_client_core::Client::builder()
         .bootstrap(broker.listen_addr().to_string())
         .client_id("restore-metadata-test")
