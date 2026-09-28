@@ -20,6 +20,7 @@
 //! compile Rust.
 
 use krabka_protocol::owned::api_versions_response::ApiVersion;
+pub use krabka_raft::UnstableApiVersions;
 
 /// How far the broker takes one KIP.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1161,13 +1162,53 @@ macro_rules! v {
     // what the latest Kafka release, and this broker, implement. An explicit
     // maximum advertises only the versions the handler serves.
     ($mod:ident,max = $max:expr) => {
-        ApiVersion {
+        CatalogApi {
             api_key: krabka_protocol::owned::$mod::API_KEY,
             min_version: krabka_protocol::owned::$mod::MIN_VERSION,
             max_version: $max,
-            ..Default::default()
+            latest_stable_version: krabka_protocol::owned::$mod::LATEST_STABLE_VERSION.min($max),
         }
     };
+}
+
+/// One API the broker dispatches, with the version range it decodes.
+///
+/// `max_version` is the highest version the handler decodes and answers.
+/// `latest_stable_version` is Kafka's `ApiKeys.latestVersion(false)`: the same
+/// version, or one below it when the request schema marks its last version
+/// `latestVersionUnstable`. Kafka advertises and accepts that last version only
+/// under the internal `unstable.api.versions.enable` config, and so does
+/// krabka: [`CatalogApi::advertised`] and [`is_disabled_version`] read it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CatalogApi {
+    pub api_key: i16,
+    pub min_version: i16,
+    pub max_version: i16,
+    pub latest_stable_version: i16,
+}
+
+impl CatalogApi {
+    /// The highest version this API is advertised and accepted at under
+    /// `unstable`.
+    #[must_use]
+    pub const fn enabled_max(self, unstable: UnstableApiVersions) -> i16 {
+        match unstable {
+            UnstableApiVersions::Enabled => self.max_version,
+            UnstableApiVersions::Disabled => self.latest_stable_version,
+        }
+    }
+
+    /// The `ApiVersions` row for this API under `unstable`, Kafka's
+    /// `ApiKeys.toApiVersion(enableUnstableLastVersion)`.
+    #[must_use]
+    pub fn advertised(self, unstable: UnstableApiVersions) -> ApiVersion {
+        ApiVersion {
+            api_key: self.api_key,
+            min_version: self.min_version,
+            max_version: self.enabled_max(unstable),
+            ..Default::default()
+        }
+    }
 }
 
 /// Which of the broker's listeners an `ApiVersions` response goes out on, and
@@ -1294,20 +1335,69 @@ pub const CLIENT_METRICS_APIS: &[i16] = {
     ]
 };
 
-/// Every API the broker dispatches, mirrored from each API's generated
-/// `MIN_VERSION` and `MAX_VERSION` constants. Update it when you add a handler.
+/// Every API the broker dispatches, with the version range it decodes and
+/// its latest stable version, in the order the handlers were added. Update it
+/// when you add a handler.
 ///
-/// This is the union across both listener kinds and both telemetry settings,
-/// so it is what the dispatch registry takes its per-key version bounds from.
-/// It is not what any listener advertises; that is [`supported_apis`].
+/// This is the union across both listener kinds and both telemetry settings.
+/// [`dispatched_apis`] and [`supported_apis`] are both views of it.
 #[must_use]
-pub fn dispatched_apis() -> Vec<ApiVersion> {
+pub fn catalog_apis() -> Vec<CatalogApi> {
     let mut apis = client_facing_apis();
     apis.extend(admin_apis());
     apis
 }
 
-/// The API set `listener` advertises, in [`dispatched_apis`] order.
+/// Every API the broker dispatches, over the whole range its handler decodes,
+/// mirrored from each API's generated `MIN_VERSION` and `MAX_VERSION`.
+///
+/// This is what the dispatch registry takes its per-key version bounds from.
+/// It is not what any listener advertises; that is [`supported_apis`]. A
+/// version above an API's latest stable one is inside this range, and
+/// [`is_disabled_version`] is what refuses it while
+/// [`UnstableApiVersions::Disabled`] holds.
+#[must_use]
+pub fn dispatched_apis() -> Vec<ApiVersion> {
+    catalog_apis()
+        .into_iter()
+        .map(|api| api.advertised(UnstableApiVersions::Enabled))
+        .collect()
+}
+
+/// The `(api_key, latest stable version)` of every dispatched API whose
+/// highest decodable version is unstable. Computed once, because
+/// [`is_disabled_version`] reads it on every request.
+static UNSTABLE_LAST_VERSIONS: std::sync::LazyLock<Vec<(i16, i16)>> =
+    std::sync::LazyLock::new(|| {
+        catalog_apis()
+            .into_iter()
+            .filter(|api| api.latest_stable_version < api.max_version)
+            .map(|api| (api.api_key, api.latest_stable_version))
+            .collect()
+    });
+
+/// Whether `version` of `api_key` is a `latestVersionUnstable` version that
+/// `unstable` disables.
+///
+/// Kafka's `Processor.parseRequestHeader` asks `ApiKeys.isVersionEnabled`,
+/// which refuses such a version, and throws `InvalidRequestException` for it
+/// -- the version is known, only disabled -- so `SocketServer` closes the
+/// connection without a response. `ApiVersions` is exempt in Kafka, and has no
+/// unstable version here either. A version outside the decodable range is not
+/// this function's concern: [`dispatched_apis`] refuses it first.
+#[must_use]
+pub fn is_disabled_version(api_key: i16, version: i16, unstable: UnstableApiVersions) -> bool {
+    unstable == UnstableApiVersions::Disabled
+        && UNSTABLE_LAST_VERSIONS
+            .iter()
+            .any(|(key, latest_stable)| *key == api_key && version > *latest_stable)
+}
+
+/// The API set `listener` advertises, sorted by API key.
+///
+/// Kafka fills the `ApiKeys` collection from `ApiKeys.apisForListener`, an
+/// `EnumSet` that iterates in id order, so every Kafka broker listener answers
+/// with a strictly ascending table, and so does this.
 ///
 /// `client_metrics` gates the two KIP-714 keys on every listener kind, the way
 /// Kafka gates them on a configured `ClientTelemetry` reporter. The
@@ -1316,12 +1406,15 @@ pub fn dispatched_apis() -> Vec<ApiVersion> {
 /// [`ListenerKind::ClientAndInterBroker`] alike -- and kept only on
 /// [`ListenerKind::InterBroker`], the dedicated listener no client dials
 /// (#843). Dispatch is a separate, wider gate: see [`INTER_BROKER_ONLY_APIS`].
+/// `unstable` picks each row's maximum, as Kafka's
+/// `unstable.api.versions.enable` does.
 #[must_use]
 pub fn supported_apis(
     listener: ListenerKind,
     client_metrics: ClientMetricsReceiver,
+    unstable: UnstableApiVersions,
 ) -> Vec<ApiVersion> {
-    dispatched_apis()
+    let mut apis: Vec<ApiVersion> = catalog_apis()
         .into_iter()
         .filter(|api| {
             let withheld_control_plane = listener != ListenerKind::InterBroker
@@ -1330,10 +1423,13 @@ pub fn supported_apis(
                 && CLIENT_METRICS_APIS.contains(&api.api_key);
             !withheld_control_plane && !withheld_telemetry
         })
-        .collect()
+        .map(|api| api.advertised(unstable))
+        .collect();
+    apis.sort_unstable_by_key(|api| api.api_key);
+    apis
 }
 
-fn client_facing_apis() -> Vec<ApiVersion> {
+fn client_facing_apis() -> Vec<CatalogApi> {
     use krabka_protocol::owned;
     vec![
         v!(api_versions_request),
@@ -1351,25 +1447,27 @@ fn client_facing_apis() -> Vec<ApiVersion> {
         // `ListOffsets` below, whose own pre-4.0 version floors are kept on
         // purpose (see their notes in `docs/KIP_MATRIX.md`) because the wider
         // range costs a modern client nothing and keeps an old one working.
-        // #863 is the record of that same choice for `Produce`: intentional,
-        // not yet caught up with those two rows' matrix documentation.
-        ApiVersion {
+        // #863 records that choice for `Produce`: `docs/KIP_MATRIX.md` states
+        // it beside the Fetch and ListOffsets rows, from the
+        // `SERVED_RANGE_DIVERGENCES` entry in
+        // `tests/api_versions_differential/divergence.rs`.
+        CatalogApi {
             api_key: owned::produce_request::API_KEY,
             min_version: krabka_protocol::kafka_3_6_2::owned::produce_request::MIN_VERSION,
             max_version: owned::produce_request::MAX_VERSION,
-            ..Default::default()
+            latest_stable_version: owned::produce_request::LATEST_STABLE_VERSION,
         },
-        ApiVersion {
+        CatalogApi {
             api_key: owned::fetch_request::API_KEY,
             min_version: krabka_protocol::kafka_3_6_2::owned::fetch_request::MIN_VERSION,
             max_version: owned::fetch_request::MAX_VERSION,
-            ..Default::default()
+            latest_stable_version: owned::fetch_request::LATEST_STABLE_VERSION,
         },
-        ApiVersion {
+        CatalogApi {
             api_key: owned::list_offsets_request::API_KEY,
             min_version: 0,
             max_version: owned::list_offsets_request::MAX_VERSION,
-            ..Default::default()
+            latest_stable_version: owned::list_offsets_request::LATEST_STABLE_VERSION,
         },
         v!(metadata_request),
         v!(find_coordinator_request),
@@ -1384,7 +1482,7 @@ fn client_facing_apis() -> Vec<ApiVersion> {
     ]
 }
 
-fn admin_apis() -> Vec<ApiVersion> {
+fn admin_apis() -> Vec<CatalogApi> {
     vec![
         v!(create_topics_request),
         v!(delete_topics_request),
@@ -1519,7 +1617,11 @@ mod tests {
 
     /// The client listener's table, which is what a Kafka client reads.
     fn client_apis() -> Vec<ApiVersion> {
-        supported_apis(ListenerKind::Client, ClientMetricsReceiver::Absent)
+        supported_apis(
+            ListenerKind::Client,
+            ClientMetricsReceiver::Absent,
+            UnstableApiVersions::Disabled,
+        )
     }
 
     #[test]
@@ -1596,7 +1698,11 @@ mod tests {
     /// reach this listener.
     #[test]
     fn the_inter_broker_listener_keeps_the_control_plane_keys() {
-        let apis = supported_apis(ListenerKind::InterBroker, ClientMetricsReceiver::Absent);
+        let apis = supported_apis(
+            ListenerKind::InterBroker,
+            ClientMetricsReceiver::Absent,
+            UnstableApiVersions::Disabled,
+        );
         let keys = keys_of(&apis);
         for api_key in INTER_BROKER_ONLY_APIS {
             assert!(keys.contains(api_key), "api_key {api_key}");
@@ -1616,7 +1722,11 @@ mod tests {
     #[test]
     fn no_client_reachable_listener_advertises_a_control_plane_key() {
         for listener in [ListenerKind::Client, ListenerKind::ClientAndInterBroker] {
-            let keys = keys_of(&supported_apis(listener, ClientMetricsReceiver::Absent));
+            let keys = keys_of(&supported_apis(
+                listener,
+                ClientMetricsReceiver::Absent,
+                UnstableApiVersions::Disabled,
+            ));
             for api_key in INTER_BROKER_ONLY_APIS {
                 assert!(
                     !keys.contains(api_key),
@@ -1635,8 +1745,16 @@ mod tests {
             ListenerKind::InterBroker,
             ListenerKind::ClientAndInterBroker,
         ] {
-            let absent = keys_of(&supported_apis(listener, ClientMetricsReceiver::Absent));
-            let configured = keys_of(&supported_apis(listener, ClientMetricsReceiver::Configured));
+            let absent = keys_of(&supported_apis(
+                listener,
+                ClientMetricsReceiver::Absent,
+                UnstableApiVersions::Disabled,
+            ));
+            let configured = keys_of(&supported_apis(
+                listener,
+                ClientMetricsReceiver::Configured,
+                UnstableApiVersions::Disabled,
+            ));
             assert!(
                 configured
                     .difference(&absent)
@@ -1661,11 +1779,110 @@ mod tests {
                 ClientMetricsReceiver::Absent,
                 ClientMetricsReceiver::Configured,
             ] {
-                for api in supported_apis(listener, metrics) {
+                for api in supported_apis(listener, metrics, UnstableApiVersions::Enabled) {
                     assert!(dispatched.contains(&api), "api_key {}", api.api_key);
                 }
             }
         }
+    }
+
+    /// #842: every listener's table is strictly ascending by api key, as
+    /// Kafka's `apisForListener` `EnumSet` orders it.
+    #[test]
+    fn every_listener_table_is_strictly_ascending() {
+        for listener in [
+            ListenerKind::Client,
+            ListenerKind::InterBroker,
+            ListenerKind::ClientAndInterBroker,
+        ] {
+            for metrics in [
+                ClientMetricsReceiver::Absent,
+                ClientMetricsReceiver::Configured,
+            ] {
+                for unstable in [UnstableApiVersions::Disabled, UnstableApiVersions::Enabled] {
+                    let apis = supported_apis(listener, metrics, unstable);
+                    assert!(
+                        apis.windows(2)
+                            .all(|pair| pair[0].api_key < pair[1].api_key),
+                        "{listener:?} {metrics:?} {unstable:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// #646: the only difference `unstable.api.versions.enable` makes to the
+    /// advertised table is the maximum of an API whose last version is
+    /// `latestVersionUnstable` -- today `InitProducerId` v6 alone -- and the
+    /// disabled version is refused on receive exactly when it is not
+    /// advertised.
+    #[test]
+    fn unstable_api_versions_move_only_the_unstable_maxima() {
+        let unstable_apis: Vec<CatalogApi> = catalog_apis()
+            .into_iter()
+            .filter(|api| api.latest_stable_version < api.max_version)
+            .collect();
+        assert!(
+            unstable_apis
+                == vec![CatalogApi {
+                    api_key: 22,
+                    min_version: 0,
+                    max_version: 6,
+                    latest_stable_version: 5,
+                }]
+        );
+
+        let disabled = supported_apis(
+            ListenerKind::InterBroker,
+            ClientMetricsReceiver::Configured,
+            UnstableApiVersions::Disabled,
+        );
+        let enabled = supported_apis(
+            ListenerKind::InterBroker,
+            ClientMetricsReceiver::Configured,
+            UnstableApiVersions::Enabled,
+        );
+        let moved: Vec<(i16, i16, i16)> = disabled
+            .iter()
+            .zip(&enabled)
+            .filter(|(off, on)| off != on)
+            .map(|(off, on)| (off.api_key, off.max_version, on.max_version))
+            .collect();
+        assert!(moved == vec![(22, 5, 6)]);
+
+        for (unstable, version, disabled_version) in [
+            (UnstableApiVersions::Disabled, 6, true),
+            (UnstableApiVersions::Disabled, 5, false),
+            (UnstableApiVersions::Enabled, 6, false),
+        ] {
+            assert!(
+                is_disabled_version(22, version, unstable) == disabled_version,
+                "{unstable:?} v{version}"
+            );
+        }
+        // Only the api that has an unstable version is gated.
+        assert!(!is_disabled_version(0, 13, UnstableApiVersions::Disabled));
+    }
+
+    /// The single row Kafka puts in an `UNSUPPORTED_VERSION` answer
+    /// (`ApiVersionsResponse.toApiVersion(API_VERSIONS)`) is the same
+    /// `ApiVersions` row every listener advertises.
+    #[test]
+    fn the_unsupported_version_row_is_the_advertised_api_versions_row() {
+        let advertised: Vec<ApiVersion> = client_apis()
+            .into_iter()
+            .filter(|api| api.api_key == 18)
+            .collect();
+        assert!(
+            advertised
+                == vec![ApiVersion {
+                    api_key: 18,
+                    min_version: 0,
+                    max_version: 5,
+                    ..Default::default()
+                }]
+        );
+        assert!(krabka_raft::unsupported_version_response().api_keys == advertised);
     }
 
     /// The KIP number of a `KIP-<n>` key, or `None` for a scope-only key.

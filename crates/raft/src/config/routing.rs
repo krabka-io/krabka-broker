@@ -28,13 +28,64 @@ pub trait RaftShardRouter: Send + Sync {
     ) -> ShardRouteFuture<'_>;
 }
 
+/// Whether a listener advertises and accepts the version of an API that its
+/// schema marks `latestVersionUnstable`.
+///
+/// This is Kafka's internal `unstable.api.versions.enable` broker config.
+/// Kafka's `ApiKeys.toApiVersion` advertises `latestVersion(false)` unless it
+/// is set, and `ApiKeys.isVersionEnabled` refuses the unstable version on
+/// receive, which closes the connection. The default is
+/// [`Disabled`][Self::Disabled], as it is in Kafka.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum UnstableApiVersions {
+    /// Advertise and accept each API only up to its latest stable version.
+    #[default]
+    Disabled,
+    /// Advertise and accept each API up to the highest version it decodes.
+    Enabled,
+}
+
+impl From<bool> for UnstableApiVersions {
+    fn from(enabled: bool) -> Self {
+        if enabled {
+            Self::Enabled
+        } else {
+            Self::Disabled
+        }
+    }
+}
+
 /// One Kafka API version range served by a controller-listener Admin router.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ControllerApiVersion {
     pub api_key: i16,
     pub min_version: i16,
+    /// The highest version the listener decodes, the generated `MAX_VERSION`.
     pub max_version: i16,
+    /// The generated `LATEST_STABLE_VERSION`: `max_version`, or one below it
+    /// when the schema marks the last version `latestVersionUnstable`.
+    pub latest_stable_version: i16,
     pub flexible_min: i16,
+}
+
+impl ControllerApiVersion {
+    /// The highest version the listener advertises and accepts under
+    /// `unstable`, Kafka's `ApiKeys.latestVersion(enableUnstableLastVersion)`.
+    #[must_use]
+    pub const fn enabled_max(self, unstable: UnstableApiVersions) -> i16 {
+        match unstable {
+            UnstableApiVersions::Enabled => self.max_version,
+            UnstableApiVersions::Disabled => self.latest_stable_version,
+        }
+    }
+
+    /// Whether `version` is the unstable version that `unstable` disables:
+    /// inside the decodable range, above the enabled maximum. Kafka's
+    /// `Processor.parseRequestHeader` closes the connection on such a request.
+    #[must_use]
+    pub const fn is_disabled_version(self, version: i16, unstable: UnstableApiVersions) -> bool {
+        version > self.enabled_max(unstable) && version <= self.max_version
+    }
 }
 
 /// Authenticated request handed from the controller listener to the broker's

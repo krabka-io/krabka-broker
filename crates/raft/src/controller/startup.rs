@@ -161,6 +161,7 @@ impl Controller {
             config.handshake.clone(),
             config.shard_router.clone(),
             config.admin_router.clone(),
+            config.unstable_api_versions,
         ));
         info!(
             node_id = config.node_id.0,

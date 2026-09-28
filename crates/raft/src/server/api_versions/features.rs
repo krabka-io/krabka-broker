@@ -1,0 +1,200 @@
+//! The KIP-584 feature rows of an `ApiVersions` response, shared by the
+//! controller listener and the broker listener so the two cannot disagree.
+//!
+//! The rules are Kafka 4.3.1's:
+//!
+//! - `BrokerFeatures.defaultSupportedFeatures` advertises each feature from its
+//!   minimum production level, which is 0 for every feature except
+//!   `metadata.version`, whose minimum is `MetadataVersion.MINIMUM_VERSION`. A
+//!   feature whose maximum is 0 is left out.
+//! - `ApiVersionsResponse.maybeFilterSupportedFeatureKeys` omits every
+//!   supported feature whose minimum is 0 when the request version is below 4
+//!   (`alterFeatureLevel0`, KAFKA-17492): older clients fail to deserialize a
+//!   zero minimum.
+//! - `ApiVersionsResponse.createFinalizedFeatureKeys` omits every finalized
+//!   level 0, and `KRaftMetadataCache.features` adds `kraft.version` only when
+//!   its level is above 0.
+//! - The finalized-features epoch is the offset of the last record the
+//!   metadata image contains, `image.highestOffsetAndEpoch().offset()`.
+
+use krabka_protocol::owned::api_versions_response::{FinalizedFeatureKey, SupportedFeatureKey};
+
+/// First `ApiVersions` version whose JVM client reads a zero feature minimum.
+/// Below it Kafka sets `alterFeatureLevel0`.
+const ZERO_MINIMUM_API_VERSION: i16 = 4;
+
+/// The supported-feature row for one feature at `api_version`, or `None` when
+/// Kafka leaves the feature out of the response.
+#[must_use]
+pub fn supported_feature_key(
+    name: &str,
+    min_version: i16,
+    max_version: i16,
+    api_version: i16,
+) -> Option<SupportedFeatureKey> {
+    let unregistrable = max_version == 0;
+    let alter_level_zero = api_version < ZERO_MINIMUM_API_VERSION && min_version == 0;
+    (!unregistrable && !alter_level_zero).then(|| SupportedFeatureKey {
+        name: name.to_owned(),
+        min_version,
+        max_version,
+        ..Default::default()
+    })
+}
+
+/// Every supported-feature row of the `krabka_metadata` feature registry at
+/// `api_version`.
+#[must_use]
+pub fn supported_feature_keys(api_version: i16) -> Vec<SupportedFeatureKey> {
+    krabka_metadata::feature_registry()
+        .iter()
+        .filter_map(|feature| {
+            let (min_version, max_version) = feature.supported_range();
+            supported_feature_key(feature.name(), min_version, max_version, api_version)
+        })
+        .collect()
+}
+
+/// The finalized-feature rows of `image`, in name order: every finalized
+/// level above 0, and `kraft.version` when its level is above 0.
+#[must_use]
+pub fn finalized_feature_keys(image: &krabka_metadata::MetadataImage) -> Vec<FinalizedFeatureKey> {
+    let mut levels = image.finalized_features().clone();
+    levels.insert(
+        krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE.to_owned(),
+        i16::try_from(image.kraft_version()).unwrap_or(i16::MAX),
+    );
+    levels
+        .into_iter()
+        .filter(|(_, level)| *level != 0)
+        .map(|(name, level)| FinalizedFeatureKey {
+            name,
+            // Kafka reports the finalized level as both bounds.
+            max_version_level: level,
+            min_version_level: level,
+            ..Default::default()
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::check;
+    use krabka_metadata::{
+        FeatureLevelRecord, KRaftVersionRecord, MetadataImage, MetadataRecord,
+        metadata_version::{METADATA_VERSION_MAX, METADATA_VERSION_MIN},
+    };
+
+    use super::*;
+
+    fn supported(name: &str, min_version: i16, max_version: i16) -> SupportedFeatureKey {
+        SupportedFeatureKey {
+            name: name.into(),
+            min_version,
+            max_version,
+            ..Default::default()
+        }
+    }
+
+    fn finalized(name: &str, level: i16) -> FinalizedFeatureKey {
+        FinalizedFeatureKey {
+            name: name.into(),
+            max_version_level: level,
+            min_version_level: level,
+            ..Default::default()
+        }
+    }
+
+    fn image(kraft_version: u16, levels: &[(&str, i16)]) -> MetadataImage {
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        image.apply(&MetadataRecord::V1KRaftVersion(KRaftVersionRecord {
+            kraft_version,
+        }));
+        for (name, level) in levels {
+            image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+                name: (*name).into(),
+                level: *level,
+            }));
+        }
+        image
+    }
+
+    /// #783's table: below v4 only the features with a non-zero minimum stay;
+    /// from v4 every feature is advertised from Kafka's minimum production
+    /// level.
+    #[test]
+    fn supported_features_follow_kafkas_minimums_and_alter_level_zero() {
+        let modern = vec![
+            supported(
+                "metadata.version",
+                METADATA_VERSION_MIN,
+                METADATA_VERSION_MAX,
+            ),
+            supported("group.version", 0, 1),
+            supported("transaction.version", 0, 3),
+            supported("share.version", 0, 1),
+            supported("streams.version", 0, 1),
+            supported("eligible.leader.replicas.version", 0, 1),
+            supported("kraft.version", 0, 1),
+        ];
+        let legacy = vec![supported(
+            "metadata.version",
+            METADATA_VERSION_MIN,
+            METADATA_VERSION_MAX,
+        )];
+        for (api_version, expected) in [(0, &legacy), (3, &legacy), (4, &modern), (5, &modern)] {
+            check!(
+                supported_feature_keys(api_version) == *expected,
+                "v{api_version}"
+            );
+        }
+    }
+
+    /// A feature whose maximum is 0 cannot be finalized above 0, and Kafka
+    /// does not advertise it at any version.
+    #[test]
+    fn a_feature_with_maximum_zero_is_never_advertised() {
+        for api_version in [0, 3, 4, 5] {
+            check!(supported_feature_key("x.version", 0, 0, api_version) == None);
+        }
+        check!(supported_feature_key("x.version", 1, 2, 3) == Some(supported("x.version", 1, 2)));
+    }
+
+    /// Level-0 rows are never finalized rows, `kraft.version` included.
+    #[test]
+    fn finalized_features_omit_level_zero() {
+        for (kraft_version, levels, expected) in [
+            (0, vec![], vec![]),
+            (
+                0,
+                vec![("metadata.version", 25), ("group.version", 1)],
+                vec![
+                    finalized("group.version", 1),
+                    finalized("metadata.version", 25),
+                ],
+            ),
+            (
+                1,
+                vec![("metadata.version", 25)],
+                vec![
+                    finalized("kraft.version", 1),
+                    finalized("metadata.version", 25),
+                ],
+            ),
+            (
+                0,
+                vec![
+                    ("metadata.version", 25),
+                    ("group.version", 1),
+                    ("group.version", 0),
+                ],
+                vec![finalized("metadata.version", 25)],
+            ),
+        ] {
+            check!(
+                finalized_feature_keys(&image(kraft_version, &levels)) == expected,
+                "kraft.version {kraft_version}, {levels:?}"
+            );
+        }
+    }
+}

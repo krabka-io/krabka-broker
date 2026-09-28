@@ -481,12 +481,14 @@ mod tests {
                 api_key: create_topics_request::API_KEY,
                 min_version: create_topics_request::MIN_VERSION,
                 max_version: create_topics_request::MAX_VERSION,
+                latest_stable_version: create_topics_request::LATEST_STABLE_VERSION,
                 flexible_min: create_topics_request::FLEXIBLE_MIN,
             },
             crate::ControllerApiVersion {
                 api_key: vote_request::API_KEY,
                 min_version: vote_request::MIN_VERSION,
                 max_version: vote_request::MAX_VERSION,
+                latest_stable_version: vote_request::LATEST_STABLE_VERSION,
                 flexible_min: i16::MAX,
             },
         ]);

@@ -109,23 +109,6 @@ const RANGE_DIVERGENCE_INTENTS: &[(i16, &str)] = &[
          change before Kafka ships it lands here as a wire break.",
     ),
     (
-        22, // InitProducerId
-        "Intended: krabka advertises InitProducerId v6, the KIP-939 \
-         two-phase-commit request shape with `enable2Pc` and \
-         `keepPreparedTxn`. `handlers::init_producer_id` implements both \
-         fields with Kafka's own gates -- a cluster without \
-         `transaction.two.phase.commit.enable` gets \
-         TRANSACTIONAL_ID_AUTHORIZATION_FAILED, a principal without the \
-         TWO_PHASE_COMMIT ACL the same, and a transaction version below 2 \
-         gets UNSUPPORTED_VERSION -- and `transactions_2pc.rs` drives them. \
-         Kafka's oracle stops at v5 because it clamps the advertised maximum \
-         to the finalized `transaction.version` feature, which this stock \
-         broker leaves below 2; krabka advertises unconditionally and refuses \
-         at call time instead. Same risk as ApiVersions v5: a client can pick \
-         v6 against a cluster whose transaction version cannot serve it, and \
-         learns that from the error code rather than from negotiation.",
-    ),
-    (
         88, // StreamsGroupHeartbeat
         "Intended. krabka serves StreamsGroupHeartbeat v1 from Kafka trunk \
          (KIP-1331), which 4.3.1 predates: the response carries the group's \
@@ -145,6 +128,28 @@ const RANGE_DIVERGENCE_INTENTS: &[(i16, &str)] = &[
     ),
 ];
 
+/// Keys whose advertised ranges match the oracle's while the versions krabka
+/// serves do not, one entry each, with why krabka means it.
+///
+/// `ApiVersions` reports what a broker advertises, not what it accepts, so the
+/// join alone cannot see such a divergence. [`DivergenceReport::build`] labels
+/// these rows [`Verdict::RangeDiffers`] anyway, keeping both advertised ranges
+/// in the version columns, so `docs/KIP_MATRIX.md` states the divergence
+/// beside the Fetch and `ListOffsets` rows instead of calling it a match. The
+/// build panics if one of these keys stops advertising the same range, since
+/// the sentence would then be describing a different divergence.
+const SERVED_RANGE_DIVERGENCES: &[(i16, &str)] = &[(
+    0, // Produce
+    "Intended, and the same choice as Fetch and ListOffsets, though the \
+     advertised ranges match: Kafka 4.x still advertises Produce from v0 \
+     (`ApiKeys.PRODUCE_API_VERSIONS_RESPONSE_MIN_VERSION`, KAFKA-18659, for \
+     librdkafka), but `ProduceRequest.json` accepts only 3-13, so a v0-v2 \
+     request fails with INVALID_REQUEST and the connection closes. krabka \
+     serves v0-v2: `handlers::produce::owned_decode` up-converts the legacy \
+     message set and appends it, so a pre-0.11 producer keeps working, and a \
+     modern client negotiates v13 either way.",
+)];
+
 /// The recorded intent for one row of the join.
 ///
 /// Only a [`Verdict::RangeDiffers`] row carries one: a matching range needs no
@@ -162,6 +167,7 @@ fn range_divergence_intent(api_key: i16, verdict: Verdict) -> Option<String> {
     }
     let Some((_, intent)) = RANGE_DIVERGENCE_INTENTS
         .iter()
+        .chain(SERVED_RANGE_DIVERGENCES)
         .find(|(key, _)| *key == api_key)
     else {
         panic!(
@@ -207,7 +213,18 @@ impl DivergenceReport {
             .map(|api_key| {
                 let krabka = find(krabka, api_key);
                 let kafka = find(kafka, api_key);
+                let served_divergence = SERVED_RANGE_DIVERGENCES
+                    .iter()
+                    .any(|(key, _)| *key == api_key);
                 let verdict = match (krabka, kafka) {
+                    (Some(ours), Some(theirs)) if ours == theirs && served_divergence => {
+                        Verdict::RangeDiffers
+                    }
+                    (Some(_), Some(_)) if served_divergence => panic!(
+                        "api_key {api_key} is recorded in `SERVED_RANGE_DIVERGENCES` \
+                         as advertising the oracle's range, and no longer does; \
+                         rewrite or move its entry"
+                    ),
                     (Some(ours), Some(theirs)) if ours == theirs => Verdict::Same,
                     (Some(_), Some(_)) => Verdict::RangeDiffers,
                     (Some(_), None) => Verdict::KrabkaOnly,
@@ -291,21 +308,13 @@ mod tests {
 
     #[test]
     fn join_covers_both_tables_and_labels_each_key() {
-        let krabka = vec![api(0, 3, 12), api(1, 4, 17), api(80, 0, 1)];
-        let kafka = vec![api(0, 3, 12), api(1, 4, 18), api(88, 0, 0)];
+        let krabka = vec![api(3, 0, 13), api(1, 4, 17), api(80, 0, 1)];
+        let kafka = vec![api(3, 0, 13), api(1, 4, 18), api(88, 0, 0)];
         assert!(
             DivergenceReport::build("oracle:1.2.3", &krabka, &kafka)
                 == DivergenceReport {
                     oracle_image: "oracle:1.2.3".to_owned(),
                     apis: vec![
-                        ApiRow {
-                            api_key: 0,
-                            name: "Produce".to_owned(),
-                            krabka: Some(range(3, 12)),
-                            kafka: Some(range(3, 12)),
-                            verdict: Verdict::Same,
-                            intent: None,
-                        },
                         ApiRow {
                             api_key: 1,
                             name: "Fetch".to_owned(),
@@ -313,6 +322,14 @@ mod tests {
                             kafka: Some(range(4, 18)),
                             verdict: Verdict::RangeDiffers,
                             intent: intent(1),
+                        },
+                        ApiRow {
+                            api_key: 3,
+                            name: "Metadata".to_owned(),
+                            krabka: Some(range(0, 13)),
+                            kafka: Some(range(0, 13)),
+                            verdict: Verdict::Same,
+                            intent: None,
                         },
                         ApiRow {
                             api_key: 80,
@@ -336,21 +353,43 @@ mod tests {
     }
 
     /// Every recorded intent is reachable, so a key that stops diverging
-    /// leaves no stale sentence behind.
+    /// leaves no stale sentence behind. A key is recorded in one table or the
+    /// other, never both.
     #[test]
     fn every_recorded_intent_is_non_empty_and_keyed_once() {
-        let mut keys: Vec<i16> = RANGE_DIVERGENCE_INTENTS
+        let all: Vec<&(i16, &str)> = RANGE_DIVERGENCE_INTENTS
             .iter()
-            .map(|(key, _)| *key)
+            .chain(SERVED_RANGE_DIVERGENCES)
             .collect();
-        let unique: std::collections::BTreeSet<i16> = keys.iter().copied().collect();
-        keys.sort_unstable();
-        assert!(keys == unique.into_iter().collect::<Vec<i16>>());
+        let unique: std::collections::BTreeSet<i16> = all.iter().map(|(key, _)| *key).collect();
+        assert!(unique.len() == all.len());
+        assert!(all.iter().all(|(_, intent)| !intent.trim().is_empty()));
+    }
+
+    /// #863: Produce advertises the oracle's own range, and the row still
+    /// records why krabka serves the versions Kafka refuses.
+    #[test]
+    fn a_served_range_divergence_is_recorded_on_a_matching_advertised_range() {
+        let report = DivergenceReport::build("oracle:1.2.3", &[api(0, 0, 13)], &[api(0, 0, 13)]);
         assert!(
-            RANGE_DIVERGENCE_INTENTS
-                .iter()
-                .all(|(_, intent)| !intent.trim().is_empty())
+            report.apis
+                == vec![ApiRow {
+                    api_key: 0,
+                    name: "Produce".to_owned(),
+                    krabka: Some(range(0, 13)),
+                    kafka: Some(range(0, 13)),
+                    verdict: Verdict::RangeDiffers,
+                    intent: intent(0),
+                }]
         );
+    }
+
+    /// A served-range entry describes a key whose advertised range matches;
+    /// once it does not, the sentence is about something else.
+    #[test]
+    #[should_panic(expected = "no longer does")]
+    fn a_served_range_divergence_whose_advertised_range_moves_panics() {
+        let _ = DivergenceReport::build("oracle:1.2.3", &[api(0, 3, 13)], &[api(0, 0, 13)]);
     }
 
     /// A range that starts differing with nothing written for it fails the

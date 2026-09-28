@@ -3,7 +3,8 @@
 //! The KIP-584 write-side surface. `ApiVersions` v3 and above expose the
 //! feature surface that the JVM admin tooling reads. `supported_features`
 //! advertises `metadata.version` over the range the feature table supports,
-//! `min = 7` (`3.3-IV3`) to `max = 32` (`4.4-IV1`).
+//! `min = 7` (`3.3-IV3`) to `max = 32` (`4.4-IV1`), and from v4 every other
+//! feature from level 0, as Kafka does.
 //!
 //! A standalone, self-bootstrapped broker behaves like a freshly formatted
 //! Kafka 4.3 cluster. It finalizes every registered feature at its release
@@ -64,17 +65,18 @@ async fn v3_response_advertises_supported_and_bootstrapped_finalized_features() 
         .iter()
         .find(|f| f.name == "group.version")
         .expect("group.version advertised in supported_features");
-    // Wire min is clamped to 1 (Kafka SupportedVersionRange requires >= 1),
-    // even though the registry min is 0 (level 0 = "disabled", finalizable via
-    // UpdateFeatures). Advertising min=0 here breaks pre-4.0 JVM admin clients.
-    assert!(gv.min_version == 1, "{resp:?}");
+    // The client negotiates ApiVersions v5, where Kafka advertises every
+    // feature from its minimum production level, 0 for all but
+    // metadata.version (`BrokerFeatures.defaultSupportedFeatures`). Below v4
+    // Kafka omits a zero-minimum feature instead (`alterFeatureLevel0`).
+    assert!(gv.min_version == 0, "{resp:?}");
     assert!(gv.max_version == 1, "{resp:?}");
     let tv = resp
         .supported_features
         .iter()
         .find(|f| f.name == "transaction.version")
         .expect("transaction.version advertised in supported_features");
-    assert!(tv.min_version == 1, "{resp:?}");
+    assert!(tv.min_version == 0, "{resp:?}");
     assert!(tv.max_version == 3, "{resp:?}");
 
     // A self-bootstrapped broker finalizes the release defaults.

@@ -37,7 +37,10 @@ mod test_support;
 mod tests_api_versions;
 mod voter_admin;
 
-pub use self::api_versions::is_valid_client_info;
+pub use self::api_versions::{
+    finalized_feature_keys, is_valid_client_info, supported_feature_key, supported_feature_keys,
+    unsupported_version_response,
+};
 use self::{
     api_versions::{API_KEY_API_VERSIONS, api_versions_response},
     describe_cluster::{
@@ -60,6 +63,7 @@ use crate::{error::RaftError, kraft::KraftController};
 struct ListenerApiVersions {
     engine: KraftController,
     admin_router: Option<Arc<dyn crate::ControllerAdminRouter>>,
+    unstable: crate::UnstableApiVersions,
 }
 
 impl crate::ControllerApiVersions for ListenerApiVersions {
@@ -68,14 +72,40 @@ impl crate::ControllerApiVersions for ListenerApiVersions {
         request_version: i16,
         request_body: &[u8],
     ) -> Result<bytes::Bytes, crate::RaftHandshakeError> {
-        api_versions_response(
+        answer_api_versions(
+            &self.engine,
+            self.admin_router.as_deref(),
+            self.unstable,
             request_version,
             request_body,
-            &self.engine.current_image(),
-            self.admin_router.as_deref(),
         )
         .map_err(|error| crate::RaftHandshakeError::Protocol(error.to_string()))
     }
+}
+
+/// The controller listener's `ApiVersions` answer from `engine`'s current
+/// state, before or after SASL authentication alike.
+fn answer_api_versions(
+    engine: &KraftController,
+    admin_router: Option<&dyn crate::ControllerAdminRouter>,
+    unstable: crate::UnstableApiVersions,
+    request_version: i16,
+    request_body: &[u8],
+) -> Result<bytes::Bytes, RaftError> {
+    // The offset is read before the image, so the epoch never runs ahead of
+    // the features it stamps.
+    let metadata_offset = api_versions::applied_metadata_offset(engine);
+    let image = engine.current_image();
+    api_versions_response(
+        request_version,
+        request_body,
+        api_versions::ApiVersionsView {
+            image: &image,
+            metadata_offset,
+            admin_router,
+            unstable,
+        },
+    )
 }
 
 struct ConnectionContext {
@@ -83,6 +113,8 @@ struct ConnectionContext {
     principal: Option<krabka_security::Principal>,
     authenticated_via_token: bool,
     grants: Arc<dyn crate::ClusterGrants>,
+    /// Kafka's `unstable.api.versions.enable` for this listener.
+    unstable: crate::UnstableApiVersions,
 }
 
 pub(crate) async fn run(
@@ -92,6 +124,7 @@ pub(crate) async fn run(
     handshake: Option<Arc<dyn crate::RaftListenerHandshake>>,
     shard_router: Option<Arc<dyn crate::RaftShardRouter>>,
     admin_router: Option<Arc<dyn crate::ControllerAdminRouter>>,
+    unstable: crate::UnstableApiVersions,
 ) {
     match listener.local_addr() {
         Ok(addr) => info!(%addr, "controller listener started"),
@@ -113,6 +146,7 @@ pub(crate) async fn run(
                                 let api_versions = ListenerApiVersions {
                                     engine: engine.clone(),
                                     admin_router: admin_router.clone(),
+                                    unstable,
                                 };
                                 match hs.upgrade(stream, &api_versions).await {
                                     Ok(s) => s,
@@ -140,6 +174,7 @@ pub(crate) async fn run(
                                     principal: connection.principal,
                                     authenticated_via_token: connection.authenticated_via_token,
                                     grants: connection.grants,
+                                    unstable,
                                 },
                             ).await {
                                 error!(%peer, error = %e, "controller connection error");
@@ -192,14 +227,34 @@ where
                     // are flexible (compact array). Krabka's own client asks at
                     // v0; the JVM controller asks at v4. The generated codec
                     // speaks the raw `int16`, so unwrap the version here.
-                    let resp = api_versions_response(
+                    let resp = answer_api_versions(
+                        &engine,
+                        admin_router.as_deref(),
+                        context.unstable,
                         api_version.get(),
                         &body,
-                        &engine.current_image(),
-                        admin_router.as_deref(),
                     )?;
                     write_response_no_tagged_fields(&mut stream, correlation_id, resp).await?;
                     continue;
+                }
+                // Kafka's `Processor.parseRequestHeader` refuses a
+                // `latestVersionUnstable` version while
+                // `unstable.api.versions.enable` is off
+                // (`ApiKeys.isVersionEnabled`), and `SocketServer` closes the
+                // connection without a response.
+                if api_versions::is_disabled_version(
+                    api_key_n.get(),
+                    api_version.get(),
+                    admin_router.as_deref(),
+                    context.unstable,
+                ) {
+                    tracing::debug!(
+                        peer = %context.peer,
+                        api_key = api_key_n.0,
+                        api_version = api_version.get(),
+                        "disabled unstable api version, closing controller connection"
+                    );
+                    return Ok(());
                 }
                 // Kafka's `ControllerApis` authorizes every request with the
                 // cluster operation its api needs, and answers a denial in the
