@@ -237,21 +237,23 @@ fn begin_request(
     (started, InFlightGuard::new(&broker.metrics, parsed.api_key))
 }
 
-/// Rejects a request at a version outside its API's range.
+/// Rejects a request at a version outside its API's range, or at a
+/// `latestVersionUnstable` version that `unstable.api.versions.enable` leaves
+/// disabled.
 ///
 /// Kafka's `Processor.parseRequestHeader` throws `UnsupportedVersionException`
-/// for such a version, and `SocketServer` closes the channel on it: no
-/// response frame. `ApiVersions` is the one exception, since
-/// `ApiKeys.isVersionEnabled` accepts every version of it: the request reaches
-/// `KafkaApis`, which answers `UNSUPPORTED_VERSION` with a v0 body carrying
-/// the supported ranges, and the client falls back to that version.
+/// for the first and `InvalidRequestException` for the second, and
+/// `SocketServer` closes the channel on either: no response frame.
+/// `ApiVersions` is the one exception, since `ApiKeys.isVersionEnabled`
+/// accepts every version of it: the request reaches `KafkaApis`, which
+/// answers `UNSUPPORTED_VERSION` with a v0 body carrying the one
+/// `ApiVersions` range (KIP-511), and the client falls back to that version.
 async fn reject_unsupported_version<S>(
     framed: &mut Framed<S, LengthDelimitedCodec>,
     broker: &Broker,
     entry: crate::handlers::registry::DispatchEntry,
     parsed: &crate::network::request::ParsedRequest<'_>,
     auth: &crate::network::auth::ConnectionAuth,
-    listener_name: &str,
 ) -> AfterResponse
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -278,14 +280,13 @@ where
     broker
         .metrics
         .record_unsupported_api_request(parsed.api_key);
-    let body =
-        match crate::handlers::api_versions::unsupported_version_response(broker, listener_name) {
-            Ok(body) => body,
-            Err(error) => {
-                tracing::warn!(%error, "unsupported-version response encode error, closing");
-                return AfterResponse::Close;
-            }
-        };
+    let body = match crate::handlers::api_versions::unsupported_version_response() {
+        Ok(body) => body,
+        Err(error) => {
+            tracing::warn!(%error, "unsupported-version response encode error, closing");
+            return AfterResponse::Close;
+        }
+    };
     // The reply is encoded at v0, not at the version the client asked for,
     // and the throttle patch has to read that version and its flexibility.
     let shape = ResponseShape {
@@ -510,17 +511,14 @@ async fn serve_connection_stream<S>(
             );
             break;
         }
-        if !entry.supports_version(parsed.api_version) {
-            match reject_unsupported_version(
-                &mut framed,
-                &broker,
-                entry,
-                &parsed,
-                &auth,
-                &spec.name,
+        if !entry.supports_version(parsed.api_version)
+            || crate::api_catalog::is_disabled_version(
+                parsed.api_key,
+                parsed.api_version,
+                broker.config.features.unstable_api_versions,
             )
-            .await
-            {
+        {
+            match reject_unsupported_version(&mut framed, &broker, entry, &parsed, &auth).await {
                 AfterResponse::Close => break,
                 AfterResponse::Mute(window) => mute_until = mute_deadline(window),
             }

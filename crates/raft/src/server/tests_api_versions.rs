@@ -65,6 +65,7 @@ async fn controller_listener_answers_api_versions_refusals_and_keeps_the_connect
     let listener_api_versions = ListenerApiVersions {
         engine: engine.clone(),
         admin_router: None,
+        unstable: crate::UnstableApiVersions::Disabled,
     };
     let (mut client, server) = tokio::io::duplex(1 << 16);
     let shutdown = CancellationToken::new();
@@ -79,6 +80,7 @@ async fn controller_listener_answers_api_versions_refusals_and_keeps_the_connect
             principal: None,
             authenticated_via_token: false,
             grants: Arc::new(AllowAllGrants),
+            unstable: crate::UnstableApiVersions::Disabled,
         },
     ));
 

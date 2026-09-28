@@ -12,8 +12,8 @@
         "min": 0,
         "max": 13
       },
-      "verdict": "same",
-      "intent": null
+      "verdict": "range_differs",
+      "intent": "Intended, and the same choice as Fetch and ListOffsets, though the advertised ranges match: Kafka 4.x still advertises Produce from v0 (`ApiKeys.PRODUCE_API_VERSIONS_RESPONSE_MIN_VERSION`, KAFKA-18659, for librdkafka), but `ProduceRequest.json` accepts only 3-13, so a v0-v2 request fails with INVALID_REQUEST and the connection closes. krabka serves v0-v2: `handlers::produce::owned_decode` up-converts the legacy message set and appends it, so a pre-0.11 producer keeps working, and a modern client negotiates v13 either way."
     },
     {
       "api_key": 1,
@@ -258,14 +258,14 @@
       "name": "InitProducerId",
       "krabka": {
         "min": 0,
-        "max": 6
+        "max": 5
       },
       "kafka": {
         "min": 0,
         "max": 5
       },
-      "verdict": "range_differs",
-      "intent": "Intended: krabka advertises InitProducerId v6, the KIP-939 two-phase-commit request shape with `enable2Pc` and `keepPreparedTxn`. `handlers::init_producer_id` implements both fields with Kafka's own gates -- a cluster without `transaction.two.phase.commit.enable` gets TRANSACTIONAL_ID_AUTHORIZATION_FAILED, a principal without the TWO_PHASE_COMMIT ACL the same, and a transaction version below 2 gets UNSUPPORTED_VERSION -- and `transactions_2pc.rs` drives them. Kafka's oracle stops at v5 because it clamps the advertised maximum to the finalized `transaction.version` feature, which this stock broker leaves below 2; krabka advertises unconditionally and refuses at call time instead. Same risk as ApiVersions v5: a client can pick v6 against a cluster whose transaction version cannot serve it, and learns that from the error code rather than from negotiation."
+      "verdict": "same",
+      "intent": null
     },
     {
       "api_key": 23,

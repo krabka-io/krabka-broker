@@ -26,6 +26,7 @@ macro_rules! api_version {
             api_key: $request::API_KEY,
             min_version: $request::MIN_VERSION,
             max_version: $request::MAX_VERSION,
+            latest_stable_version: $request::LATEST_STABLE_VERSION,
             flexible_min: $request::FLEXIBLE_MIN,
         }
     };
@@ -195,7 +196,15 @@ mod tests {
     #[test]
     fn advertised_versions_are_the_versions_the_listener_decodes_with() {
         let image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-        let body = super::super::api_versions_response_body(4, &image, None);
+        let body = super::super::api_versions_response_body(
+            4,
+            super::super::ApiVersionsView {
+                image: &image,
+                metadata_offset: -1,
+                admin_router: None,
+                unstable: crate::UnstableApiVersions::Disabled,
+            },
+        );
         let response = ApiVersionsResponse::decode(&mut &body[..], 4).expect("decode response");
         assert!(response.api_keys == expected_entries());
     }

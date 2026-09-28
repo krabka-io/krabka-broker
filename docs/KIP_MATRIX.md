@@ -201,7 +201,7 @@ for by the two facts above.
 
 | API | Key | krabka | Kafka | Verdict | Intent |
 | :--- | ---: | :--- | :--- | :--- | :--- |
-| Produce | 0 | 0-13 | 0-13 | match | -- |
+| Produce | 0 | 0-13 | 0-13 | range differs | Intended, and the same choice as Fetch and ListOffsets, though the advertised ranges match: Kafka 4.x still advertises Produce from v0 (`ApiKeys.PRODUCE_API_VERSIONS_RESPONSE_MIN_VERSION`, KAFKA-18659, for librdkafka), but `ProduceRequest.json` accepts only 3-13, so a v0-v2 request fails with INVALID_REQUEST and the connection closes. krabka serves v0-v2: `handlers::produce::owned_decode` up-converts the legacy message set and appends it, so a pre-0.11 producer keeps working, and a modern client negotiates v13 either way. |
 | Fetch | 1 | 0-18 | 4-18 | range differs | Intended. krabka still serves the pre-v4 Fetch request shapes that Kafka 4.x dropped: `api_catalog::client_facing_apis` takes the key's `min_version` from `krabka_protocol::kafka_3_6_2::owned::fetch_request`, and `handlers::fetch::encode_fetch_response` answers v0-v3 from the same `kafka_3_6_2` flavor, which `throttle_audit`'s split probe also covers. The wider range costs a client nothing -- version negotiation picks the highest both sides know -- and it keeps a long-lived pre-4.0 consumer working against krabka. |
 | ListOffsets | 2 | 0-11 | 1-11 | range differs | Intended, and the same story as Fetch: krabka advertises ListOffsets from v0, which Kafka 4.x no longer does. `client_facing_apis` sets that `min_version` to 0 explicitly and `handlers::list_offsets` routes v0 to its own hand-rolled `v0` module, because the generated schema starts at v1. A modern client negotiates v11 either way. |
 | Metadata | 3 | 0-13 | 0-13 | match | -- |
@@ -219,7 +219,7 @@ for by the two facts above.
 | CreateTopics | 19 | 2-7 | 2-7 | match | -- |
 | DeleteTopics | 20 | 1-6 | 1-6 | match | -- |
 | DeleteRecords | 21 | 0-2 | 0-2 | match | -- |
-| InitProducerId | 22 | 0-6 | 0-5 | range differs | Intended: krabka advertises InitProducerId v6, the KIP-939 two-phase-commit request shape with `enable2Pc` and `keepPreparedTxn`. `handlers::init_producer_id` implements both fields with Kafka's own gates -- a cluster without `transaction.two.phase.commit.enable` gets TRANSACTIONAL_ID_AUTHORIZATION_FAILED, a principal without the TWO_PHASE_COMMIT ACL the same, and a transaction version below 2 gets UNSUPPORTED_VERSION -- and `transactions_2pc.rs` drives them. Kafka's oracle stops at v5 because it clamps the advertised maximum to the finalized `transaction.version` feature, which this stock broker leaves below 2; krabka advertises unconditionally and refuses at call time instead. Same risk as ApiVersions v5: a client can pick v6 against a cluster whose transaction version cannot serve it, and learns that from the error code rather than from negotiation. |
+| InitProducerId | 22 | 0-5 | 0-5 | match | -- |
 | OffsetForLeaderEpoch | 23 | 2-4 | 2-4 | match | -- |
 | AddPartitionsToTxn | 24 | 0-5 | 0-5 | match | -- |
 | AddOffsetsToTxn | 25 | 0-4 | 0-4 | match | -- |

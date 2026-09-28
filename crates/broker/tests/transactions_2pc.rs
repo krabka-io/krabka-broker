@@ -33,7 +33,8 @@ use tempfile::TempDir;
 ///
 /// Kafka marks `InitProducerId` v6 `latestVersionUnstable`, so a client
 /// negotiates v5 at the most and leaves `enable2Pc` and `keepPreparedTxn` off
-/// the wire. These tests drive the v6 semantics, so they pin v6.
+/// the wire. These tests drive the v6 semantics, so they pin v6, on a broker
+/// that enables unstable api versions.
 #[derive(Clone, Debug)]
 struct TwoPhaseCommitInitProducerId(InitProducerIdRequest);
 
@@ -64,6 +65,9 @@ async fn boot(two_pc_enabled: bool) -> (BrokerHandle, String, TempDir) {
     let dir = TempDir::new().unwrap();
     let mut cfg = BrokerConfig::for_tests(dir.path().to_path_buf());
     cfg.features.transaction_two_phase_commit_enable = two_pc_enabled;
+    // v6 is `latestVersionUnstable`: a broker accepts it only with Kafka's
+    // `unstable.api.versions.enable`, and closes the connection otherwise.
+    cfg.features.unstable_api_versions = krabka_broker::api_catalog::UnstableApiVersions::Enabled;
     let broker = Broker::start(cfg).await.unwrap();
     let bootstrap = broker.listen_addr().to_string();
     if two_pc_enabled {

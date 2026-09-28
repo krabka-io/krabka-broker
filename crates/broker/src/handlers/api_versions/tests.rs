@@ -85,27 +85,148 @@ async fn wait_for_leader(broker: &Broker) {
     }
 }
 
+/// The advertised rows whose ranges are a deliberate choice, pinned whole.
+///
+/// - Produce: min 0, as Kafka 4.x still advertises it
+///   (`ApiKeys.PRODUCE_API_VERSIONS_RESPONSE_MIN_VERSION`, KAFKA-18659), and as
+///   krabka still serves it, which Kafka does not (#863).
+/// - Fetch and `ListOffsets`: min 0, below Kafka 4.x's 4 and 1, for pre-4.0
+///   clients.
+/// - `InitProducerId`: v6 is `latestVersionUnstable`, so it is advertised
+///   only under `unstable.api.versions.enable` (#646).
 #[test]
-fn api_versions_advertises_legacy_data_plane_min() {
-    let table = crate::api_catalog::supported_apis(
-        crate::api_catalog::ListenerKind::Client,
-        crate::api_catalog::ClientMetricsReceiver::Absent,
-    );
-    let produce = table.iter().find(|v| v.api_key == 0).expect("produce");
-    let fetch = table.iter().find(|v| v.api_key == 1).expect("fetch");
-    let list_offsets = table.iter().find(|v| v.api_key == 2).expect("list offsets");
-    assert!(
-        produce.min_version == 0,
-        "Produce min must be 0 to advertise the legacy v0-2 support"
-    );
-    assert!(
-        fetch.min_version == 0,
-        "Fetch min must be 0 to advertise the legacy v0-3 support"
-    );
-    assert!(
-        list_offsets.min_version == 0,
-        "ListOffsets min must be 0 for historical librdkafka clients"
-    );
+fn api_versions_advertises_the_deliberate_ranges() {
+    use krabka_protocol::owned::api_versions_response::ApiVersion;
+
+    use crate::api_catalog::UnstableApiVersions;
+
+    let row = |api_key, min_version, max_version| ApiVersion {
+        api_key,
+        min_version,
+        max_version,
+        ..Default::default()
+    };
+    for (unstable, expected) in [
+        (
+            UnstableApiVersions::Disabled,
+            vec![row(0, 0, 13), row(1, 0, 18), row(2, 0, 11), row(22, 0, 5)],
+        ),
+        (
+            UnstableApiVersions::Enabled,
+            vec![row(0, 0, 13), row(1, 0, 18), row(2, 0, 11), row(22, 0, 6)],
+        ),
+    ] {
+        let table = crate::api_catalog::supported_apis(
+            crate::api_catalog::ListenerKind::Client,
+            crate::api_catalog::ClientMetricsReceiver::Absent,
+            unstable,
+        );
+        let pinned: Vec<ApiVersion> = table
+            .into_iter()
+            .filter(|api| [0, 1, 2, 22].contains(&api.api_key))
+            .collect();
+        check!(pinned == expected, "{unstable:?}");
+    }
+}
+
+/// Every `ApiVersions` request version on every listener shape, driven
+/// through the dispatch loop the way a client sends it (#842).
+///
+/// Kafka answers a version it does not serve with a v0 body carrying error 35
+/// and exactly one entry, the `ApiVersions` range; every served version gets
+/// error 0 and a strictly ascending key list, because Kafka iterates
+/// `ApiKeys.apisForListener`, an `EnumSet` in id order. Table-driven over a
+/// client listener, an inter-broker listener, and both client-telemetry
+/// settings.
+#[tokio::test]
+async fn api_versions_answers_every_version_on_every_listener_shape() {
+    use krabka_protocol::owned::api_versions_response::ApiVersion;
+
+    let unsupported = ApiVersionsResponse {
+        error_code: codes::UNSUPPORTED_VERSION,
+        api_keys: vec![ApiVersion {
+            api_key: 18,
+            min_version: 0,
+            max_version: krabka_protocol::owned::api_versions_request::MAX_VERSION,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    for (listener, telemetry) in [
+        ("EXTERNAL", false),
+        ("EXTERNAL", true),
+        ("INTERNAL", false),
+        ("INTERNAL", true),
+    ] {
+        let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+            let external = crate::config::ListenerSpec {
+                name: "EXTERNAL".to_string(),
+                bind_addr: "127.0.0.1:0".parse().unwrap(),
+                advertised: "127.0.0.1:0".to_string(),
+                protocol: krabka_security::ListenerProtocol::Plaintext,
+                tls_config: None,
+                sasl_mechanisms: None,
+                principal_mapper: crate::SslPrincipalMapper::default(),
+            };
+            let internal = crate::config::ListenerSpec {
+                name: "INTERNAL".to_string(),
+                bind_addr: "127.0.0.2:0".parse().unwrap(),
+                advertised: "127.0.0.2:0".to_string(),
+                ..external.clone()
+            };
+            cfg.listeners = vec![external, internal];
+            cfg.inter_broker_listener_name = "INTERNAL".to_string();
+            cfg.client_metrics_enable = telemetry;
+        })
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        let principal = anonymous_principal();
+        let peer = crate::test_support::peer();
+        let context = crate::handlers::RequestContext::new(
+            &principal,
+            &peer,
+            "krabka-test",
+            "test-connection",
+            false,
+            listener,
+        );
+        let expected_keys = crate::api_catalog::supported_apis(
+            broker.config.listener_kind(listener),
+            broker.config.client_metrics_receiver(),
+            crate::api_catalog::UnstableApiVersions::Disabled,
+        );
+        check!(
+            expected_keys
+                .windows(2)
+                .all(|pair| pair[0].api_key < pair[1].api_key),
+            "{listener} telemetry={telemetry}"
+        );
+
+        for version in 0..=krabka_protocol::owned::api_versions_request::MAX_VERSION {
+            let req = ApiVersionsRequest {
+                client_software_name: "krabka-test".into(),
+                client_software_version: "1.0.0".into(),
+                ..Default::default()
+            };
+            let mut req_bytes = BytesMut::with_capacity(req.encoded_len(version));
+            req.encode(&mut req_bytes, version).expect("encode");
+            let bytes = handle(&broker, version, 7, &req_bytes, &context)
+                .await
+                .expect("ApiVersions handler");
+            let resp = decode_response(version, &bytes);
+            check!(
+                (resp.error_code, &resp.api_keys) == (codes::NONE, &expected_keys),
+                "{listener} telemetry={telemetry} v{version}"
+            );
+        }
+        let body = unsupported_version_response().expect("unsupported answer");
+        check!(
+            decode_response(0, &body) == unsupported,
+            "{listener} telemetry={telemetry} v6"
+        );
+
+        broker_handle.shutdown().await;
+    }
 }
 
 #[test]
@@ -116,6 +237,7 @@ fn api_versions_advertises_kip853_rpcs_and_describe_quorum_v2() {
     let table = crate::api_catalog::supported_apis(
         crate::api_catalog::ListenerKind::InterBroker,
         crate::api_catalog::ClientMetricsReceiver::Absent,
+        crate::api_catalog::UnstableApiVersions::Disabled,
     );
     let by_key = |k: i16| table.iter().find(|v| v.api_key == k);
 
@@ -199,8 +321,27 @@ async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
         })])
         .await
         .expect("submit finalized feature");
-    let image = broker.controller.current_image();
-    assert!(image.finalized_features_epoch() > 0);
+    // #783: the epoch is the image's metadata offset, which every record
+    // moves, not a count of feature records. Ten topic records after the last
+    // feature record must move it.
+    let records = (0..10)
+        .map(|index| {
+            MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
+                name: format!("epoch-{index}"),
+                topic_id: uuid::Uuid::new_v4(),
+                partitions: 1,
+                replication_factor: 1,
+            })
+        })
+        .collect();
+    let before_topics = broker.controller.current_metadata_offset();
+    broker
+        .controller
+        .submit_change(records)
+        .await
+        .expect("submit topic records");
+    let metadata_offset = broker.controller.current_metadata_offset();
+    assert!(metadata_offset >= before_topics + 10);
 
     let req = request("krabka-test", "1.0.0");
     let bytes = handle(&broker, API_VERSIONS_V3, 7, &req, &context)
@@ -220,6 +361,7 @@ async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
             == crate::api_catalog::supported_apis(
                 crate::api_catalog::ListenerKind::ClientAndInterBroker,
                 crate::api_catalog::ClientMetricsReceiver::Absent,
+                crate::api_catalog::UnstableApiVersions::Disabled,
             ),
         "{resp:?}"
     );
@@ -238,7 +380,7 @@ async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
         .expect("metadata.version supported");
     check!(mv.min_version == crate::features::METADATA_VERSION_MIN);
     check!(mv.max_version == crate::features::METADATA_VERSION_MAX);
-    check!(resp.finalized_features_epoch == image.finalized_features_epoch());
+    check!(resp.finalized_features_epoch == metadata_offset);
     let finalized_mv = resp
         .finalized_features
         .iter()

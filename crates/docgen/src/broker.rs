@@ -163,6 +163,7 @@ pub fn protocol_apis_md() -> String {
     let mut apis = krabka_broker::api_catalog::supported_apis(
         ListenerKind::Client,
         ClientMetricsReceiver::Configured,
+        krabka_broker::api_catalog::UnstableApiVersions::Disabled,
     );
     apis.sort_by_key(|a| a.api_key);
     for a in apis {

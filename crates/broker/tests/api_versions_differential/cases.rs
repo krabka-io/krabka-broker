@@ -43,6 +43,7 @@ fn catalog_sorted_by_key() -> Vec<ApiVersion> {
     let mut apis = krabka_broker::api_catalog::supported_apis(
         krabka_broker::api_catalog::ListenerKind::Client,
         krabka_broker::api_catalog::ClientMetricsReceiver::Absent,
+        krabka_broker::api_catalog::UnstableApiVersions::Disabled,
     );
     apis.sort_by_key(|api| api.api_key);
     apis

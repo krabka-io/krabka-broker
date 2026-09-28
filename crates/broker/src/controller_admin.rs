@@ -26,6 +26,7 @@ macro_rules! api_version {
             api_key: krabka_protocol::owned::$request::API_KEY,
             min_version: krabka_protocol::owned::$request::MIN_VERSION,
             max_version: krabka_protocol::owned::$request::MAX_VERSION,
+            latest_stable_version: krabka_protocol::owned::$request::LATEST_STABLE_VERSION,
             flexible_min: krabka_protocol::owned::$request::FLEXIBLE_MIN,
         }
     };
@@ -467,6 +468,7 @@ mod tests {
                     api_key: 58,
                     min_version: 0,
                     max_version: 0,
+                    latest_stable_version: 0,
                     flexible_min: 0,
                 })
         );
