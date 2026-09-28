@@ -1,116 +1,306 @@
-//! Predicates over the live metadata image that gate a feature finalize.
+//! Predicates over the live metadata image that gate a feature update.
 //!
 //! Each function answers one question about the cluster as the image records
-//! it: whether the KIP-1022 dependencies of a level hold, whether every
-//! registered node supports a level, and whether the quorum is fully
-//! registered. They are read-only and share no state, so they live apart from
-//! the validation loop that calls them.
+//! it, in the words Kafka's controller answers it: whether every node supports
+//! a level (`FeatureControlManager.reasonNotSupported`) and whether the
+//! KIP-1022 dependencies of a level hold (`Feature.validateVersion`).
 
-/// True when the target image already meets every KIP-1022 dependency for a
-/// feature finalize. `deps` is the feature's `dependencies(level)` slice, which
-/// holds `(dependency_feature_name, min_finalized_level)` pairs.
-pub(super) fn dependencies_met(
-    image: &krabka_metadata::MetadataImage,
-    deps: &[(&str, i16)],
-) -> bool {
-    deps.iter().all(|(dep, min_level)| {
-        image
-            .finalized_features()
-            .get(*dep)
-            .is_some_and(|finalized| finalized >= min_level)
-    })
+use std::collections::BTreeMap;
+
+/// `MetadataVersion.isControllerRegistrationSupported`: controllers
+/// register from `3.7-IV0`.
+const CONTROLLER_REGISTRATION_MIN_LEVEL: i16 =
+    krabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL;
+
+/// Kafka's `QuorumFeatures.DISABLED`: what a node that did not register a
+/// feature supports.
+const DISABLED: (i16, i16) = (0, 0);
+
+/// `QuorumFeatures.reasonNotSupported`, with `VersionRange.toString`.
+fn reason_range_not_supported(level: i16, what: &str, (min, max): (i16, i16)) -> Option<String> {
+    if (min..=max).contains(&level) {
+        None
+    } else if max == 0 {
+        Some(format!("{what} does not support this feature."))
+    } else if min == max {
+        Some(format!("{what} only supports versions {min}"))
+    } else {
+        Some(format!("{what} only supports versions {min}-{max}"))
+    }
 }
 
-pub(super) fn unsupported_registered_node(
+/// `FeatureControlManager.reasonNotSupported`: why some node cannot take
+/// `feature` to `level`, or `None` when every node can.
+///
+/// The local controller answers first from this binary's feature registry,
+/// then every registered broker. From `3.7-IV0`, when controllers register,
+/// every other registered controller answers too, and a quorum voter that has
+/// not registered blocks the update.
+pub(super) fn reason_not_supported(
     image: &krabka_metadata::MetadataImage,
+    local_controller: krabka_metadata::NodeId,
     feature: &str,
     level: i16,
 ) -> Option<String> {
-    // Kafka's `FeatureControlManager.reasonNotSupported` reads a feature a
-    // node did not register as `QuorumFeatures.DISABLED`, the range `0..=0`.
-    let supports = |features: &std::collections::BTreeMap<String, (i16, i16)>| {
-        let (min, max) = features.get(feature).copied().unwrap_or((0, 0));
-        min <= level && level <= max
+    let local = krabka_metadata::feature(feature)
+        .map_or(DISABLED, krabka_metadata::Feature::supported_range);
+    let range = |features: &BTreeMap<String, (i16, i16)>| {
+        features.get(feature).copied().unwrap_or(DISABLED)
     };
-    for broker in image.brokers() {
-        if !supports(&broker.features) {
-            return Some(format!(
-                "Broker {} does not support {feature} level {level}.",
-                broker.node_id
-            ));
+    reason_range_not_supported(
+        level,
+        &format!("Local controller {local_controller}"),
+        local,
+    )
+    .or_else(|| {
+        image.brokers().find_map(|broker| {
+            reason_range_not_supported(
+                level,
+                &format!("Broker {}", broker.node_id),
+                range(&broker.features),
+            )
+        })
+    })
+    .or_else(|| {
+        if image
+            .finalized_metadata_version()
+            .is_none_or(|mv| mv < CONTROLLER_REGISTRATION_MIN_LEVEL)
+        {
+            return None;
         }
-    }
-    for controller in image.controllers() {
-        if !supports(&controller.features) {
-            return Some(format!(
-                "Controller {} does not support {feature} level {level}.",
-                controller.node_id
-            ));
-        }
-    }
-    None
-}
-
-pub(super) fn registered_node_without_metadata_downgrade_capability(
-    image: &krabka_metadata::MetadataImage,
-) -> Option<String> {
-    let supports_downgrade = |features: &std::collections::BTreeMap<String, (i16, i16)>| {
-        features
-            .get(krabka_metadata::metadata_version::METADATA_DOWNGRADE_CAPABILITY_FEATURE)
-            .is_some_and(|&(min, max)| {
-                min <= krabka_metadata::metadata_version::METADATA_DOWNGRADE_CAPABILITY_LEVEL
-                    && krabka_metadata::metadata_version::METADATA_DOWNGRADE_CAPABILITY_LEVEL <= max
+        image
+            .controllers()
+            .filter(|controller| controller.node_id != local_controller)
+            .find_map(|controller| {
+                reason_range_not_supported(
+                    level,
+                    &format!("Controller {}", controller.node_id),
+                    range(&controller.features),
+                )
             })
-    };
-    for broker in image.brokers() {
-        if !supports_downgrade(&broker.features) {
-            return Some(format!(
-                "Broker {} does not support online metadata.version downgrade.",
-                broker.node_id
-            ));
-        }
-    }
-    for controller in image.controllers() {
-        if !supports_downgrade(&controller.features) {
-            return Some(format!(
-                "Controller {} does not support online metadata.version downgrade.",
-                controller.node_id
-            ));
-        }
-    }
-    None
+            .or_else(|| {
+                image
+                    .voters()
+                    .iter()
+                    .map(|voter| voter.id)
+                    .find(|&id| id != local_controller && image.controller(id).is_none())
+                    .map(|id| {
+                        format!(
+                            "controller {id} has not registered, and may not support this \
+                                 feature"
+                        )
+                    })
+            })
+    })
 }
 
-pub(super) fn unregistered_controller(
-    image: &krabka_metadata::MetadataImage,
-) -> Option<krabka_metadata::NodeId> {
-    image
-        .voters()
-        .iter()
-        .map(|voter| voter.id)
-        .find(|&id| image.controller(id).is_none())
+/// The dependency half of `Feature.validateVersion`: why `feature` cannot be
+/// set to `level` given `proposed`, the levels the request would leave, or
+/// `None` when every dependency holds. `deps` is the feature's
+/// `dependencies(level)`.
+pub(super) fn dependency_error(
+    feature: &str,
+    level: i16,
+    deps: &[(&str, i16)],
+    proposed: &BTreeMap<String, i16>,
+) -> Option<String> {
+    deps.iter().find_map(|&(dep, min_level)| {
+        proposed
+            .get(dep)
+            .is_none_or(|&have| have < min_level)
+            .then(|| {
+                format!(
+                    "{feature} could not be set to {level} because it depends on {dep} level \
+                     {min_level}"
+                )
+            })
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use assert2::assert;
+    use krabka_metadata::{
+        BrokerRegistrationRecord, ControllerRegistrationRecord, FeatureLevelRecord, MetadataImage,
+        MetadataRecord, NodeId,
+    };
 
     use super::*;
 
     #[test]
-    fn dependencies_met_checks_finalized_levels() {
-        use krabka_metadata::{FeatureLevelRecord, MetadataImage, MetadataRecord};
+    fn range_reasons_use_kafka_version_range_text() {
+        let cases = [
+            (1, (0, 1), None),
+            (9, (0, 1), Some("Broker 2 only supports versions 0-1")),
+            (2, (1, 1), Some("Broker 2 only supports versions 1")),
+            (1, DISABLED, Some("Broker 2 does not support this feature.")),
+            (0, DISABLED, None),
+        ];
+        for (level, range, want) in cases {
+            assert!(
+                reason_range_not_supported(level, "Broker 2", range).as_deref() == want,
+                "{level} {range:?}"
+            );
+        }
+    }
+
+    fn image(metadata_version: i16) -> MetadataImage {
         let mut image = MetadataImage::new(uuid::Uuid::nil());
-        // No deps → trivially met.
-        assert!(dependencies_met(&image, &[]));
-        // Unmet: metadata.version not finalized at all.
-        assert!(!dependencies_met(&image, &[("metadata.version", 22)]));
-        // Finalize metadata.version=25 → a >=22 dependency is now met, >=26 not.
         image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
             name: "metadata.version".into(),
-            level: 25,
+            level: metadata_version,
         }));
-        assert!(dependencies_met(&image, &[("metadata.version", 22)]));
-        assert!(!dependencies_met(&image, &[("metadata.version", 26)]));
+        image
+    }
+
+    fn broker(node_id: u64, features: BTreeMap<String, (i16, i16)>) -> MetadataRecord {
+        MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
+            fenced: false,
+            in_controlled_shutdown: false,
+            cordoned_log_dirs: None,
+            node_id: NodeId(node_id),
+            broker_epoch: 0,
+            incarnation_id: uuid::Uuid::nil(),
+            host: String::new(),
+            port: 0,
+            rack: None,
+            endpoints: vec![],
+            log_dirs: vec![],
+            features,
+        })
+    }
+
+    fn controller(node_id: u64, features: BTreeMap<String, (i16, i16)>) -> MetadataRecord {
+        MetadataRecord::V1ControllerRegistration(ControllerRegistrationRecord {
+            node_id: NodeId(node_id),
+            incarnation_id: uuid::Uuid::nil(),
+            zk_migration_ready: false,
+            endpoints: vec![],
+            features,
+        })
+    }
+
+    fn voters(ids: &[u64]) -> MetadataRecord {
+        MetadataRecord::V1Voters(krabka_metadata::VotersRecord {
+            voters: krabka_metadata::voters::VoterSet::from_voters(ids.iter().map(|&id| {
+                krabka_metadata::voters::Voter {
+                    id: NodeId(id),
+                    directory_id: uuid::Uuid::from_u128(u128::from(id)),
+                    endpoints: vec![],
+                    kraft_version: krabka_metadata::voters::KRaftVersionRange::default(),
+                }
+            })),
+        })
+    }
+
+    #[test]
+    fn nodes_answer_in_kafka_order() {
+        let all = krabka_metadata::supported_feature_ranges();
+        let mut no_group = all.clone();
+        no_group.remove("group.version");
+        let cases = [
+            (
+                "every node supports",
+                30,
+                vec![broker(2, all.clone())],
+                "group.version",
+                1,
+                None,
+            ),
+            (
+                "unknown feature, local first",
+                30,
+                vec![broker(2, no_group.clone())],
+                "no.such.feature",
+                1,
+                Some("Local controller 1 does not support this feature."),
+            ),
+            (
+                "local range",
+                30,
+                vec![],
+                "group.version",
+                9,
+                Some("Local controller 1 only supports versions 0-1"),
+            ),
+            (
+                "broker without the feature",
+                30,
+                vec![broker(2, no_group.clone())],
+                "group.version",
+                1,
+                Some("Broker 2 does not support this feature."),
+            ),
+            (
+                "other controller without the feature",
+                30,
+                vec![controller(3, no_group.clone())],
+                "group.version",
+                1,
+                Some("Controller 3 does not support this feature."),
+            ),
+            (
+                "the local controller's registration is not read",
+                30,
+                vec![controller(1, no_group.clone())],
+                "group.version",
+                1,
+                None,
+            ),
+            (
+                "controllers do not answer before 3.7-IV0",
+                14,
+                vec![controller(3, no_group.clone()), voters(&[1, 4])],
+                "group.version",
+                1,
+                None,
+            ),
+            (
+                "unregistered voter",
+                30,
+                vec![controller(3, all.clone()), voters(&[1, 3, 4])],
+                "group.version",
+                1,
+                Some("controller 4 has not registered, and may not support this feature"),
+            ),
+        ];
+        for (case, metadata_version, records, feature, level, want) in cases {
+            let mut image = image(metadata_version);
+            for record in &records {
+                image.apply(record);
+            }
+            assert!(
+                reason_not_supported(&image, NodeId(1), feature, level).as_deref() == want,
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn dependencies_read_the_proposed_levels() {
+        let deps: &[(&str, i16)] = &[("metadata.version", 23)];
+        let proposed = |mv: Option<i16>| -> BTreeMap<String, i16> {
+            mv.map(|level| ("metadata.version".to_string(), level))
+                .into_iter()
+                .collect()
+        };
+        let want = Some(
+            "eligible.leader.replicas.version could not be set to 1 because it depends on \
+             metadata.version level 23"
+                .to_string(),
+        );
+        for (mv, expected) in [
+            (None, want.clone()),
+            (Some(22), want),
+            (Some(23), None),
+            (Some(30), None),
+        ] {
+            assert!(
+                dependency_error("eligible.leader.replicas.version", 1, deps, &proposed(mv))
+                    == expected,
+                "{mv:?}"
+            );
+        }
+        assert!(dependency_error("group.version", 1, &[], &proposed(None)).is_none());
     }
 }

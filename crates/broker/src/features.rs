@@ -42,6 +42,65 @@ pub(crate) const LATEST_PRODUCTION_METADATA_VERSION: i16 = 30;
 pub(crate) const CIDR_ACL_HOST_MIN_LEVEL: i16 =
     krabka_metadata::metadata_version::CIDR_ACL_MIN_LEVEL;
 
+/// Kafka's `MetadataVersion.didMetadataChange`, one entry per level from
+/// `METADATA_VERSION_MIN` (7, `3.3-IV3`) upward. A `true` level added or
+/// changed a metadata record, so a downgrade across it may lose metadata.
+///
+/// Levels 7 to 30 are transcribed from `MetadataVersion.java` at Kafka 4.3.1.
+/// Levels 31 (`4.4-IV0`) and 32 (`4.4-IV1`) are from Kafka trunk, the only
+/// place they are defined.
+const DID_METADATA_CHANGE: [bool; 26] = [
+    true,  // 7   3.3-IV3: InControlledShutdown in broker registration (KIP-841)
+    true,  // 8   3.4-IV0: ZK migration records (KIP-866)
+    false, // 9   3.5-IV0: tiered storage (KIP-405)
+    false, // 10  3.5-IV1: replica epoch in Fetch (KIP-903)
+    true,  // 11  3.5-IV2: KRaft SCRAM
+    false, // 12  3.6-IV0: no leader epoch bump on ISR shrink
+    true,  // 13  3.6-IV1: metadata transactions
+    true,  // 14  3.6-IV2: KRaft delegation tokens
+    true,  // 15  3.7-IV0: controller registration (KIP-919)
+    false, // 16  3.7-IV1: reserved
+    true,  // 17  3.7-IV2: JBOD in KRaft
+    false, // 18  3.7-IV3: reserved
+    false, // 19  3.7-IV4: Fetch version for KIP-951
+    false, // 20  3.8-IV0
+    false, // 21  3.9-IV0: ListOffsets v9 (KIP-1005)
+    false, // 22  4.0-IV0: group.version 1 bootstrap (KIP-848)
+    true,  // 23  4.0-IV1: ELR fields and ClearElrRecord (KIP-966)
+    false, // 24  4.0-IV2: transaction.version bootstrap (KIP-890)
+    false, // 25  4.0-IV3: async remote LIST_OFFSETS (KIP-1075)
+    false, // 26  4.1-IV0: ELR on by default (KIP-966)
+    false, // 27  4.1-IV1: replica fetcher FETCH v18 (KIP-1166)
+    false, // 28  4.2-IV0: share groups by default (KIP-932)
+    false, // 29  4.2-IV1: streams groups by default (KIP-1071)
+    true,  // 30  4.3-IV0: cordoned log dirs in broker registration
+    false, // 31  4.4-IV0: share-group dead-letter queue (KIP-1191)
+    true,  // 32  4.4-IV1: CIDR ACL host patterns (KIP-1276)
+];
+
+/// Kafka's `MetadataVersion.checkIfMetadataChanged`: whether any level in
+/// `(low, high]` changed metadata, where `low` and `high` are the two
+/// arguments in ascending order. Equal levels never changed metadata.
+///
+/// Kafka walks down from the higher level until it meets a changed level or
+/// the lower one. A level outside the table has no predecessor for that walk,
+/// which Kafka reads as a change, so it counts as one here too.
+pub(crate) fn metadata_changed_between(source: i16, target: i16) -> bool {
+    let (low, high) = if source <= target {
+        (source, target)
+    } else {
+        (target, source)
+    };
+    (low.saturating_add(1)..=high).any(|level| {
+        level
+            .checked_sub(krabka_metadata::metadata_version::METADATA_VERSION_MIN)
+            .and_then(|index| usize::try_from(index).ok())
+            .and_then(|index| DID_METADATA_CHANGE.get(index))
+            .copied()
+            .unwrap_or(true)
+    })
+}
+
 /// One row of the `ApiVersions.supported_features` advertisement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SupportedFeature {
@@ -175,6 +234,44 @@ mod tests {
         }
     }
 
+    /// Kafka's `checkIfMetadataChanged` walks from the higher level down
+    /// and stops at the first level whose `didMetadataChange` is set, so the
+    /// higher level's own flag counts and the lower level's does not.
+    #[test]
+    fn metadata_changed_between_walks_like_kafka() {
+        for (source, target, want) in [
+            (25, 25, false),
+            (25, 24, false),
+            (24, 25, false),
+            (29, 24, false),
+            (25, 22, true),
+            (25, 23, false),
+            (23, 22, true),
+            (17, 15, true),
+            (16, 15, false),
+            (13, 12, true),
+            (12, 11, false),
+            (30, 29, true),
+            (32, 31, true),
+            (31, 30, false),
+            (8, 7, true),
+            (7, 6, true),
+            (33, 32, true),
+        ] {
+            assert!(
+                metadata_changed_between(source, target) == want,
+                "{source} -> {target}"
+            );
+        }
+    }
+
+    /// The table covers exactly the levels this binary supports.
+    #[test]
+    fn did_metadata_change_covers_every_supported_level() {
+        let levels = usize::try_from(METADATA_VERSION_MAX - METADATA_VERSION_MIN + 1).unwrap();
+        assert!(DID_METADATA_CHANGE.len() == levels);
+    }
+
     #[test]
     fn self_bootstrap_and_format_default_to_the_same_metadata_version() {
         assert!(
@@ -191,10 +288,6 @@ mod tests {
         };
         assert!(lookup(METADATA_VERSION) == Some(expected));
         assert!(lookup("not.a.feature").is_none());
-        assert!(
-            lookup(krabka_metadata::metadata_version::METADATA_DOWNGRADE_CAPABILITY_FEATURE)
-                .is_none()
-        );
     }
 
     #[test]

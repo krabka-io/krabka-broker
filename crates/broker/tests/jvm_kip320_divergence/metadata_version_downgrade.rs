@@ -1,8 +1,8 @@
-//! Scenario 4: the KIP-1155 mixed-version downgrade safety gate.
+//! Scenario 4: a lossy `metadata.version` downgrade in a mixed cluster.
 //!
-//! Kafka 4.0 predates KIP-1155 and advertises no downgrade capability, so both
-//! safe and unsafe online `metadata.version` downgrades must be rejected while
-//! that node is registered. The scenario drives `kafka-features.sh` rather than
+//! Kafka's `FeatureControlManager.updateMetadataVersion` refuses every
+//! downgrade that crosses a level whose `didMetadataChange` is set, with
+//! either downgrade type. The scenario drives `kafka-features.sh` rather than
 //! the replication path, and it needs its own registration waits, so it does
 //! not share a file with the truncation scenarios.
 
@@ -62,10 +62,10 @@ async fn wait_for_jvm_metadata_max(cluster: &MixedCluster, expected: i16) {
 }
 
 /// Block until every Krabka broker's image holds a controller registration
-/// for every voter. `UpdateFeatures` rejects a `metadata.version` downgrade
-/// with "Controller N has not registered" before it checks the downgrade
-/// capability. The test must not send the downgrade before those
-/// registrations land, or it asserts on the wrong rejection text.
+/// for every voter. `UpdateFeatures` rejects any update with "controller N has
+/// not registered" before it looks at the downgrade itself. The test must not
+/// send the downgrade before those registrations land, or it asserts on the
+/// wrong rejection text.
 async fn wait_for_voter_registrations(cluster: &MixedCluster) {
     for (broker, _) in &cluster.krabka {
         broker
@@ -79,13 +79,12 @@ async fn wait_for_voter_registrations(cluster: &MixedCluster) {
     }
 }
 
-/// KIP-1155 mixed-version safety: Kafka 4.0 predates the proposed online
-/// downgrade capability. It must block both safe and unsafe downgrades; unsafe
-/// permits record loss, but never permits a node that cannot perform the
-/// immediate snapshot/reload protocol.
+/// 4.0-IV3 (25) to 3.7-IV1 (16) crosses 4.0-IV1 and 3.7-IV2, which both
+/// changed metadata, so Kafka refuses it as a safe and as an unsafe downgrade,
+/// with its own message for each, and nothing changes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker + published controller/data ports; Linux-bound"]
-async fn metadata_version_downgrade_rejects_pre_kip1155_jvm() {
+async fn metadata_version_downgrade_refuses_lossy_levels() {
     const EXISTING_TOPIC: &str = "krabka-mv-capability-existing";
     const UPPER_LEVEL: i16 = 25; // 4.0-IV3.
 
@@ -119,21 +118,17 @@ async fn metadata_version_downgrade_rejects_pre_kip1155_jvm() {
         .iter()
         .map(|(broker, _)| state(broker))
         .collect::<Vec<_>>();
-    let image = cluster.krabka[0].0.controller_image_for_test();
-    assert2::assert!(
-        !image
-            .broker(krabka_broker::NodeId(3))
-            .expect("Kafka 4.0 registration")
-            .features
-            .contains_key(krabka_metadata::metadata_version::METADATA_DOWNGRADE_CAPABILITY_FEATURE),
-        "pre-KIP-1155 JVM registration unexpectedly advertised downgrade capability"
-    );
-
-    for (kind, command) in [
-        ("safe", vec!["downgrade", "--metadata", "3.7-IV1"]),
+    for (kind, command, reason) in [
+        (
+            "safe",
+            vec!["downgrade", "--metadata", "3.7-IV1"],
+            "Refusing to perform the requested downgrade because it might delete metadata \
+             information.",
+        ),
         (
             "unsafe",
             vec!["downgrade", "--metadata", "3.7-IV1", "--unsafe"],
+            "Unsafe metadata downgrade is not supported in this version.",
         ),
     ] {
         let output = run_features(&cluster.bootstrap_all, &command);
@@ -144,9 +139,10 @@ async fn metadata_version_downgrade_rejects_pre_kip1155_jvm() {
         );
         assert2::assert!(
             !output.status.success()
-                && error.contains("Broker 3")
-                && error.contains("does not support online metadata.version downgrade"),
-            "{kind} downgrade did not reject the pre-capability JVM node: {error}"
+                && error.contains(&format!(
+                    "Unsupported metadata.version downgrade from {UPPER_LEVEL} to 16. {reason}"
+                )),
+            "{kind} downgrade was not refused as lossy: {error}"
         );
     }
 
@@ -157,7 +153,7 @@ async fn metadata_version_downgrade_rejects_pre_kip1155_jvm() {
         .collect::<Vec<_>>();
     assert2::assert!(
         after == before,
-        "rejected mixed-version downgrade changed finalized or directory metadata"
+        "a refused downgrade changed finalized or directory metadata"
     );
     cluster.shutdown().await;
 }
