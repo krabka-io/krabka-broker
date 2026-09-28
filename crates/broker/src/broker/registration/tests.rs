@@ -91,7 +91,9 @@ mod publish_race {
             node_id: NodeId(9),
             ..BrokerConfig::for_tests(std::path::PathBuf::new())
         };
-        let registration = self_registration_record(&config);
+        // The controller stamps the offset the registration commits at.
+        let mut registration = self_registration_record(&config);
+        registration.broker_epoch = 0;
         let (image_tx, _keep_alive) =
             watch::channel(Arc::new(MetadataImage::new(uuid::Uuid::nil())));
         let source = DelayedPublishSource {
@@ -121,7 +123,7 @@ mod publish_race {
             .await
             .expect("register_broker did not observe the published image")
             .expect("register_broker task");
-        assert!(result.is_ok());
+        assert!(result.ok() == Some(Some(0)));
     }
 
     /// The restart case: `image` already carries a registration for this node
@@ -129,7 +131,11 @@ mod publish_race {
     /// "is a registration present" would return immediately on that stale
     /// entry, before the controller republished anything at all. Every
     /// commit assigns a fresh `broker_epoch`, so the fixture tells the two
-    /// apart by epoch, the same way the real controller would.
+    /// apart by epoch, the same way the real controller would. The controller
+    /// fencing the stale registration at its own epoch is a change to the
+    /// image, but not the new registration, and `register_broker` returns the
+    /// new epoch, as Kafka's `BrokerLifecycleManager` keeps the epoch of its
+    /// `BrokerRegistration` response (krabka-io/krabka-broker#1014).
     #[tokio::test(start_paused = true)]
     async fn register_broker_on_restart_waits_for_the_new_epoch_not_the_stale_one() {
         let config = BrokerConfig {
@@ -138,11 +144,12 @@ mod publish_race {
         };
         let mut stale = self_registration_record(&config);
         stale.broker_epoch = 3;
+        stale.fenced = false;
         let mut fresh = self_registration_record(&config);
         fresh.broker_epoch = 7;
 
         let mut initial = MetadataImage::new(uuid::Uuid::nil());
-        initial.apply(&MetadataRecord::V1BrokerRegistration(stale));
+        initial.apply(&MetadataRecord::V1BrokerRegistration(stale.clone()));
         let (image_tx, _keep_alive) = watch::channel(Arc::new(initial));
         let source = DelayedPublishSource {
             image_tx: image_tx.clone(),
@@ -157,6 +164,22 @@ mod publish_race {
              registration already in the image at boot"
         );
 
+        let mut fenced_stale = MetadataImage::new(uuid::Uuid::nil());
+        fenced_stale.apply(&MetadataRecord::V1BrokerRegistration(
+            krabka_metadata::BrokerRegistrationRecord {
+                fenced: true,
+                ..stale
+            },
+        ));
+        image_tx
+            .send(Arc::new(fenced_stale))
+            .expect("test receiver kept alive");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            !call.is_finished(),
+            "register_broker must not return on the controller fencing the stale registration"
+        );
+
         let mut published = MetadataImage::new(uuid::Uuid::nil());
         published.apply(&MetadataRecord::V1BrokerRegistration(fresh));
         image_tx
@@ -167,7 +190,7 @@ mod publish_race {
             .await
             .expect("register_broker did not observe the freshly published registration")
             .expect("register_broker task");
-        assert!(result.is_ok());
+        assert!(result.ok() == Some(Some(7)));
     }
 
     /// A publish that never arrives -- the observer's connection to the

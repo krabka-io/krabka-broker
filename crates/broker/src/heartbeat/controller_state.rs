@@ -29,11 +29,6 @@ pub(crate) use self::{
 pub(crate) fn replicated_fences(image: &krabka_metadata::MetadataImage) -> Vec<(u64, bool)> {
     image
         .brokers()
-        .map(|broker| {
-            (
-                broker.node_id.0,
-                crate::config_keys::resolve_broker_fenced(image, broker.node_id),
-            )
-        })
+        .map(|broker| (broker.node_id.0, broker.fenced))
         .collect()
 }

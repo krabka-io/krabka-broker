@@ -388,22 +388,16 @@ impl BrokerHandle {
     ///
     /// Kafka writes the same proof from `LogManager.shutdown`, through
     /// `CleanShutdownFileHandler`, and reads it back as
-    /// `BrokerRegistrationRequest.previousBrokerEpoch`. A node the cluster has
-    /// no registration for has no epoch to name and writes nothing; so does a
-    /// pure controller, which holds no replica and so no ELR membership.
+    /// `BrokerRegistrationRequest.previousBrokerEpoch`, naming the epoch
+    /// `BrokerLifecycleManager` registered at. A node that never registered
+    /// has no epoch to name and writes nothing; so does a pure controller,
+    /// which holds no replica and so no ELR membership.
     fn write_clean_shutdown_proof(&self) {
         let config = &self.broker.config;
-        if !config.is_broker() {
+        if !config.is_broker() || config.broker_epoch < 0 {
             return;
         }
-        if let Some(epoch) = self
-            .broker
-            .controller
-            .current_image()
-            .broker_epoch(config.node_id)
-        {
-            crate::clean_shutdown::write(&config.log_dir, epoch);
-        }
+        crate::clean_shutdown::write(&config.log_dir, config.broker_epoch);
     }
 
     /// Cancel the listener and drain in-flight connections. The returned

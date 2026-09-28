@@ -107,17 +107,20 @@ pub(crate) async fn handle(
     } else {
         Vec::new()
     };
+    let amended = existing.filter(|existing| existing.incarnation_id == incarnation_id);
     let record = BrokerRegistrationRecord {
-        fenced: false,
-        in_controlled_shutdown: false,
+        // `ClusterControlManager.registerBroker`: a new registration keeps the
+        // schema default `Fenced = true` and is not in controlled shutdown,
+        // and an amend copies both from the registration it amends.
+        fenced: amended.is_none_or(|existing| existing.fenced),
+        in_controlled_shutdown: amended.is_some_and(|existing| existing.in_controlled_shutdown),
         cordoned_log_dirs: None,
         node_id,
-        // An amend keeps the epoch it registered at. The controller stamps a
-        // new epoch on any other registration, and on an amend it sees the
-        // same incarnation and epoch and keeps them.
-        broker_epoch: existing
-            .filter(|existing| existing.incarnation_id == incarnation_id)
-            .map_or(0, |existing| existing.broker_epoch),
+        // An amend keeps the epoch it registered at, and the controller
+        // applies it only while the broker is still registered at that epoch.
+        // Any other registration carries no epoch (-1), and the controller
+        // stamps the offset it commits at.
+        broker_epoch: amended.map_or(-1, |existing| existing.broker_epoch),
         incarnation_id,
         host: first.host.clone(),
         port: first.port,
@@ -126,7 +129,7 @@ pub(crate) async fn handle(
         log_dirs,
         features,
     };
-    if existing.is_some_and(|existing| existing.incarnation_id == incarnation_id) {
+    if amended.is_some() {
         // The same process registered again, after a lost response or a
         // controller change. Kafka rewrites the record with the listeners and
         // features the request carries and keeps the epoch; nothing about the
@@ -635,9 +638,9 @@ mod wire_tests {
                 in_controlled_shutdown: false,
                 cordoned_log_dirs: None,
                 node_id: REGISTERED,
-                // The controller stamps the real epoch on submit; this is the
-                // placeholder every self-registration sends.
-                broker_epoch: 0,
+                // A new registration carries no epoch; the controller stamps
+                // the offset it commits at.
+                broker_epoch: -1,
                 incarnation_id: uuid::Uuid::from_u128(0xdead),
                 host: "broker-2".into(),
                 port: 9092,

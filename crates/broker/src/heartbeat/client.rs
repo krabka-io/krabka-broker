@@ -20,8 +20,29 @@ use krabka_units::{Time, convert::TimeExt as _, fmt::Human as _, millis, secs};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
+/// Where this broker's first unfencing stands: Kafka's
+/// `BrokerLifecycleManager.initialUnfenceFuture`, which broker startup waits
+/// on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InitialUnfence {
+    /// No heartbeat answer has unfenced the broker yet.
+    Pending,
+    /// A heartbeat answer said the broker is unfenced.
+    Unfenced,
+    /// The controller refused the heartbeat with
+    /// `CLUSTER_AUTHORIZATION_FAILED`. Nothing but an ACL change lets the
+    /// broker unfence, so startup stops waiting for it.
+    Refused,
+}
+
 pub(crate) struct Config {
     pub broker_id: i32,
+    /// The broker epoch this process registered at, which every heartbeat
+    /// names: Kafka's `BrokerLifecycleManager.brokerEpoch`. The local image
+    /// can still hold the previous incarnation's registration for a while
+    /// after a restart, and a heartbeat that named its epoch would be refused
+    /// as `STALE_BROKER_EPOCH`.
+    pub broker_epoch: i64,
     pub interval: Time,
     pub controller: Arc<dyn crate::metadata_source::MetadataSource>,
     pub shutdown: CancellationToken,
@@ -48,6 +69,9 @@ pub(crate) struct Config {
     /// `should_shut_down=true`. The caller of `controlled_shutdown`
     /// awaits this flag.
     pub should_shutdown: Arc<tokio::sync::watch::Sender<bool>>,
+    /// The client moves this out of [`InitialUnfence::Pending`] on the first
+    /// answer that unfences the broker or refuses it for authorization.
+    pub unfenced: tokio::sync::watch::Sender<InitialUnfence>,
     /// Per-log-dir health registry. Each heartbeat reports the offline dirs
     /// to the controller as `offline_log_dirs` UUIDs (KIP-858).
     pub log_dir_status: crate::log_dir_status::LogDirRegistry,
@@ -193,6 +217,11 @@ async fn dial(
 /// current leader dials one, so a new leader, or a new address for the same
 /// leader, gets a new connection.
 pub(crate) async fn run(mut cfg: Config) {
+    // A node that never registered as a broker has no heartbeat to send, as a
+    // Kafka controller-only node has no `BrokerLifecycleManager`.
+    if cfg.broker_epoch < 0 {
+        return;
+    }
     let mut tick = tokio::time::interval(cfg.interval.to_std());
     let mut channel: Option<ControllerChannel> = None;
     loop {
@@ -214,15 +243,6 @@ pub(crate) async fn run(mut cfg: Config) {
             continue;
         };
         let image = cfg.controller.current_image();
-        let Some(broker_epoch) = image.broker_epoch(krabka_raft::NodeId(
-            u64::try_from(cfg.broker_id).unwrap_or(u64::MAX),
-        )) else {
-            debug!(
-                broker_id = cfg.broker_id,
-                "heartbeat: broker registration not in metadata image yet"
-            );
-            continue;
-        };
         let Some((host, port)) = crate::controller_endpoint::leader_endpoint(
             &image,
             &cfg.controller_quorum_voters,
@@ -261,7 +281,7 @@ pub(crate) async fn run(mut cfg: Config) {
             rpc_timeout.to_std(),
             open.connection.send(heartbeat_request(
                 cfg.broker_id,
-                broker_epoch,
+                cfg.broker_epoch,
                 cfg.controller.current_metadata_offset(),
                 want_shut_down,
                 offline_log_dirs,
@@ -275,12 +295,24 @@ pub(crate) async fn run(mut cfg: Config) {
                 } else {
                     channel = Some(open);
                 }
+                if r.error_code == crate::codes::CLUSTER_AUTHORIZATION_FAILED {
+                    cfg.unfenced.send_if_modified(|state| {
+                        let pending = *state == InitialUnfence::Pending;
+                        if pending {
+                            *state = InitialUnfence::Refused;
+                        }
+                        pending
+                    });
+                }
                 if r.error_code != crate::codes::NONE {
                     warn!(
                         error_code = r.error_code,
                         "heartbeat rejected by controller"
                     );
                     continue;
+                }
+                if !r.is_fenced {
+                    cfg.unfenced.send_replace(InitialUnfence::Unfenced);
                 }
                 if r.should_shut_down {
                     // Latch true; never flip back. The
@@ -483,6 +515,7 @@ mod tests {
         let shutdown = CancellationToken::new();
         let heartbeats = tokio::spawn(run(Config {
             broker_id: 7,
+            broker_epoch: 11,
             interval: millis(20),
             controller: Arc::clone(&source) as Arc<dyn crate::metadata_source::MetadataSource>,
             shutdown: shutdown.clone(),
@@ -495,6 +528,7 @@ mod tests {
             ],
             want_shutdown,
             should_shutdown: Arc::new(tokio::sync::watch::channel(false).0),
+            unfenced: tokio::sync::watch::channel(InitialUnfence::Pending).0,
             log_dir_status: crate::log_dir_status::LogDirRegistry::probe(&no_dirs),
             log_dir_ids: crate::log_dir_id::LogDirIds::resolve(&no_dirs),
             all_log_dirs: no_dirs.clone(),

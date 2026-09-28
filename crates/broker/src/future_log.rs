@@ -146,7 +146,7 @@ fn future_dir_name_too_long(topic: &str, partition: i32) -> bool {
 /// configured directory by string equality (`LogManager.isLogDirOnline`).
 /// A relative path, a trailing slash, or a symbolic link to a configured
 /// directory names nothing. The destination may spell a directory as its
-/// absolute path or as the canonical path that `DescribeLogDirs` reports.
+/// absolute path, which `DescribeLogDirs` reports, or as its canonical path.
 /// The two are the same string unless the configured path runs through a
 /// link.
 fn configured_log_dir(all_log_dirs: &[PathBuf], requested: &Path) -> Option<PathBuf> {

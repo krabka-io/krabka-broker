@@ -261,6 +261,11 @@ fn homogeneous(
                 break;
             };
             cursor = Some(member);
+            // Kafka checks the holders as they stood before this loop and
+            // never adds the member it just assigned, so a member that comes
+            // round again takes the same partition twice: the insert is a
+            // no-op but the count still drops, and the partition ends up
+            // shared by fewer members than `sharing`.
             if holders.contains(&member) {
                 continue;
             }
@@ -372,6 +377,8 @@ fn heterogeneous(
                     break;
                 };
                 cursor = Some(member);
+                // As in `homogeneous`, Kafka never adds the member it just
+                // assigned to the holders, so the count drops on a repeat.
                 if holders.contains(&member) {
                     continue;
                 }
@@ -582,6 +589,47 @@ mod tests {
                     ("A", &[(T1, &[0])]),
                     ("B", &[(T2, &[0])]),
                     ("C", &[(T1, &[1]), (T2, &[1])]),
+                ]),
+            ),
+            // Kafka's assignRemainingPartitions does not add a member it just
+            // assigned to the partition's holders. After the overshare on
+            // partition 0 is revoked from A, A is the only unfilled member and
+            // comes round twice for partition 1, which Kafka counts as two
+            // assignments: partition 1 ends with one member, not two.
+            (
+                "a repeated member counts twice, as in Kafka (homogeneous)",
+                spec(
+                    vec![
+                        member("A", &[T1], &[(T1, &[0])]),
+                        member("B", &[T1], &[(T1, &[0])]),
+                        member("C", &[T1], &[(T1, &[0])]),
+                    ],
+                    Homogeneous,
+                ),
+                topics(&[(T1, 2)]),
+                None,
+                expected(&[
+                    ("A", &[(T1, &[1])]),
+                    ("B", &[(T1, &[0])]),
+                    ("C", &[(T1, &[0])]),
+                ]),
+            ),
+            (
+                "a repeated member counts twice, as in Kafka (heterogeneous)",
+                spec(
+                    vec![
+                        member("A", &[T1], &[(T1, &[0])]),
+                        member("B", &[T1], &[(T1, &[0])]),
+                        member("C", &[T1, T2], &[(T1, &[0])]),
+                    ],
+                    Heterogeneous,
+                ),
+                topics(&[(T1, 2), (T2, 1)]),
+                None,
+                expected(&[
+                    ("A", &[(T1, &[1])]),
+                    ("B", &[(T1, &[0])]),
+                    ("C", &[(T1, &[0]), (T2, &[0])]),
                 ]),
             ),
         ];

@@ -746,28 +746,28 @@ enum EpochAnswer {
 }
 
 /// What one registration step came to: the error code, the epoch, and the
-/// port the image then holds for the broker the step registered, if the
-/// step was accepted.
+/// port and fence the image then holds for the broker the step registered,
+/// if the step was accepted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Outcome {
     error_code: i16,
     epoch: EpochAnswer,
-    registered_port: Option<u16>,
+    registered: Option<(u16, bool)>,
 }
 
 const fn refused(error_code: i16) -> Outcome {
     Outcome {
         error_code,
         epoch: EpochAnswer::Refused,
-        registered_port: None,
+        registered: None,
     }
 }
 
-const fn accepted(epoch: EpochAnswer, port: u16) -> Outcome {
+const fn accepted(epoch: EpochAnswer, port: u16, fenced: bool) -> Outcome {
     Outcome {
         error_code: 0,
         epoch,
-        registered_port: Some(port),
+        registered: Some((port, fenced)),
     }
 }
 
@@ -778,9 +778,10 @@ const fn accepted(epoch: EpochAnswer, port: u16) -> Outcome {
 /// `ClusterControlManager.registerBroker` refuses that id with
 /// `DUPLICATE_BROKER_REGISTRATION` only while the previous incarnation still
 /// holds a heartbeat session, and registers it with a new broker epoch once
-/// the session expires. It rewrites the record for the same incarnation and
-/// keeps the epoch, and it validates `metadata.version` and the log
-/// directories. Each step runs against the image the steps before it left.
+/// the session expires. A new registration is fenced (`RegisterBrokerRecord`
+/// defaults `Fenced` to true). It rewrites the record for the same incarnation
+/// and keeps the epoch and the fence, and it validates `metadata.version` and
+/// the log directories. Each step runs against the image the steps before it left.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn controller_listener_registers_a_restarted_broker_as_kafka_does() {
     type Step = (&'static str, Registration, Option<Duration>, Outcome);
@@ -789,13 +790,13 @@ async fn controller_listener_registers_a_restarted_broker_as_kafka_does() {
             "a first registration",
             Registration::broker_7(0xa, 19_092),
             None,
-            accepted(EpochAnswer::New, 19_092),
+            accepted(EpochAnswer::New, 19_092, true),
         ),
         (
-            "the same incarnation again, on a new port",
+            "the same incarnation again, on a new port, after it unfenced",
             Registration::broker_7(0xa, 19_093),
             None,
-            accepted(EpochAnswer::Kept, 19_093),
+            accepted(EpochAnswer::Kept, 19_093, false),
         ),
         (
             "a new incarnation while the previous one heartbeats",
@@ -809,7 +810,7 @@ async fn controller_listener_registers_a_restarted_broker_as_kafka_does() {
             // Longer than the two-second `heartbeat_timeout` of the test
             // configuration.
             Some(Duration::from_millis(2_500)),
-            accepted(EpochAnswer::New, 19_094),
+            accepted(EpochAnswer::New, 19_094, true),
         ),
         (
             "no metadata.version feature",
@@ -861,7 +862,7 @@ async fn controller_listener_registers_a_restarted_broker_as_kafka_does() {
             epoch if node == NodeId(7) && epoch == epoch_of_7 => EpochAnswer::Kept,
             _ => EpochAnswer::New,
         };
-        let registered_port = if answer.error_code == 0 {
+        let registered = if answer.error_code == 0 {
             broker
                 .wait_for_image(|image| {
                     image
@@ -872,7 +873,7 @@ async fn controller_listener_registers_a_restarted_broker_as_kafka_does() {
             broker
                 .controller_image_for_test()
                 .broker(node)
-                .map(|registered| registered.port)
+                .map(|registered| (registered.port, registered.fenced))
         } else {
             None
         };
@@ -881,7 +882,7 @@ async fn controller_listener_registers_a_restarted_broker_as_kafka_does() {
             Outcome {
                 error_code: answer.error_code,
                 epoch,
-                registered_port,
+                registered,
             },
         ));
         if answer.error_code != 0 || node != NodeId(7) {
@@ -889,7 +890,8 @@ async fn controller_listener_registers_a_restarted_broker_as_kafka_does() {
         }
         epoch_of_7 = answer.broker_epoch;
         if registration.incarnation == 0xa {
-            // The first incarnation heartbeats, so it holds a session.
+            // The first incarnation heartbeats, so it holds a session, and it
+            // has caught up to its registration, so it unfences.
             let heartbeat = connection
                 .send(BrokerHeartbeatRequest {
                     broker_id: 7,

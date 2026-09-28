@@ -68,8 +68,9 @@ fn selector_matches(rule: &config::MatchRule, attrs: &ClientAttributes) -> bool 
         SourceAddress => (&attrs.source_address).into(),
         SourcePort => attrs.source_port.to_string().into(),
     };
-    // The pattern is anchored at both ends, so this is Kafka's full match.
-    rule.pattern.is_match(&target)
+    // The pattern is anchored at both ends, so this is Kafka's full match. A
+    // pattern that exceeds `fancy_regex`'s backtrack limit counts as no match.
+    rule.pattern.is_match(target.as_ref()).unwrap_or(false)
 }
 
 /// Stable, change-sensitive subscription id.

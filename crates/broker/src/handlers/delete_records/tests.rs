@@ -806,7 +806,7 @@ async fn register_follower(broker_handle: &crate::broker::BrokerHandle) {
                 in_controlled_shutdown: false,
                 cordoned_log_dirs: None,
                 node_id: krabka_raft::NodeId(FOLLOWER),
-                broker_epoch: 0,
+                broker_epoch: -1,
                 incarnation_id: uuid::Uuid::nil(),
                 host: "127.0.0.1".into(),
                 port: 9092,
@@ -821,18 +821,18 @@ async fn register_follower(broker_handle: &crate::broker::BrokerHandle) {
 }
 
 /// Fence [`FOLLOWER`] the way the controller does: its heartbeat session is
-/// fenced, and the replicated `broker.fenced` config says so.
+/// fenced, and its registration says so.
 async fn fence_follower(broker_handle: &crate::broker::BrokerHandle) {
     let broker = broker_handle.broker_arc_for_test();
     broker.liveness.apply_fencing(FOLLOWER, true, true).await;
+    let fence = crate::heartbeat::fencing::registration_change(
+        &broker.controller.current_image(),
+        krabka_raft::NodeId(FOLLOWER),
+        crate::heartbeat::fencing::RegistrationChange::FENCE,
+    )
+    .expect("the follower is registered and unfenced");
     broker_handle
-        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1BrokerConfig(
-            krabka_metadata::BrokerConfigRecord {
-                node_id: krabka_raft::NodeId(FOLLOWER),
-                config_name: crate::config_keys::BROKER_FENCED.to_string(),
-                config_value: Some(crate::config_keys::FENCED_TRUE.to_string()),
-            },
-        ))
+        .submit_metadata_record_for_test(fence)
         .await
         .expect("fence the follower");
 }

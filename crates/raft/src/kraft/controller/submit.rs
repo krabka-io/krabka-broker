@@ -316,6 +316,12 @@ impl Engine {
                         )));
                     }
                 }
+                MetadataRecord::V1BrokerRegistration(change)
+                    if change.broker_epoch >= 0
+                        && self.registration_change_must_wait(change.node_id) =>
+                {
+                    return Err(RaftError::UncommittedTail);
+                }
                 MetadataRecord::V1DeleteDelegationToken(token) if !delegation_token_guarded => {
                     return Err(RaftError::ChangeRejected(format!(
                         "delegation-token delete {} rejected: mutation is not generation-bound",
@@ -326,6 +332,38 @@ impl Engine {
             }
         }
         Ok(())
+    }
+
+    /// Whether a change to the registration of `node_id` must wait for the
+    /// log to commit before the leader can decide it.
+    ///
+    /// A change names the broker epoch of the registration it was built from,
+    /// and applies only while the broker is still registered at that epoch,
+    /// as Kafka's `ClusterControlManager.replayRegistrationChange` refuses a
+    /// `BrokerRegistrationChangeRecord` for any other epoch. The leader
+    /// decides that against its committed image. A registration of the same
+    /// broker this leader appended but has not committed yet is not in that
+    /// image, and neither is anything a previous leader left uncommitted until
+    /// this leader's own epoch commits; either could replace the registration
+    /// the change names. The refusal clears when the tail commits, and the
+    /// caller builds the change again from the image that holds it.
+    fn registration_change_must_wait(&self, node_id: krabka_metadata::NodeId) -> bool {
+        let epoch_ready = match self.core.role() {
+            Role::Leader {
+                epoch_start_offset, ..
+            } => {
+                krabka_verified::wal_reservation_epoch_ready(self.log.hwm().0, *epoch_start_offset)
+            }
+            _ => false,
+        };
+        let leader_epoch = self.core.quorum_state().leader_epoch;
+        !epoch_ready
+            || self
+                .registration_writes
+                .get(&node_id)
+                .is_some_and(|&(epoch, end)| {
+                    epoch == leader_epoch && !hwm_reaches_waiter(self.log.hwm(), end)
+                })
     }
 
     /// Handle a `submit_change`: leader appends + parks a waiter; non-leader
@@ -406,26 +444,50 @@ impl Engine {
         let mut replica_view = self.image.clone();
         let mut result = SubmitChangeResult::default();
         let mut value_blobs: Vec<bytes::Bytes> = Vec::new();
+        // The brokers whose registration this batch writes.
+        let mut registration_nodes = Vec::new();
         for r in records {
             let rebased = rebase_partition_directories(&scratch, r);
             let r = rebased.as_ref().unwrap_or(r);
-            // Stamp the registration epoch = its committed offset.
+            // A new registration carries no epoch (-1) and is stamped with
+            // its committed offset. Anything else is a change to the
+            // registration at the epoch it names, and applies only while the
+            // broker is registered at that epoch, as Kafka's
+            // `ClusterControlManager.replayRegistrationChange` requires of a
+            // `BrokerRegistrationChangeRecord`. A change built from a
+            // registration that has since been replaced is dropped: it must
+            // neither overwrite the new registration nor register again.
             let stamped;
             let r: &MetadataRecord = match r {
+                MetadataRecord::V1BrokerRegistration(b) if b.broker_epoch < 0 => {
+                    registration_nodes.push(b.node_id);
+                    let delta = i64::try_from(value_blobs.len()).unwrap_or(i64::MAX);
+                    let mut b = b.clone();
+                    b.broker_epoch = assigned_record_offset(assign_base, delta);
+                    stamped = MetadataRecord::V1BrokerRegistration(b);
+                    &stamped
+                }
                 MetadataRecord::V1BrokerRegistration(b) => {
-                    let rewrites_existing = scratch.broker(b.node_id).is_some_and(|existing| {
+                    let registered_at_epoch = scratch.broker(b.node_id).is_some_and(|existing| {
                         existing.incarnation_id == b.incarnation_id
                             && existing.broker_epoch == b.broker_epoch
                     });
-                    if rewrites_existing {
-                        r
-                    } else {
-                        let delta = i64::try_from(value_blobs.len()).unwrap_or(i64::MAX);
-                        let mut b = b.clone();
-                        b.broker_epoch = assigned_record_offset(assign_base, delta);
-                        stamped = MetadataRecord::V1BrokerRegistration(b);
-                        &stamped
+                    if !registered_at_epoch {
+                        tracing::warn!(
+                            broker = b.node_id.0,
+                            broker_epoch = b.broker_epoch,
+                            registered_epoch = ?scratch.broker_epoch(b.node_id),
+                            "dropping a broker registration change for an epoch the broker is no \
+                             longer registered at"
+                        );
+                        continue;
                     }
+                    registration_nodes.push(b.node_id);
+                    r
+                }
+                MetadataRecord::V1UnregisterBroker(unregister) => {
+                    registration_nodes.push(unregister.node_id);
+                    r
                 }
                 other => other,
             };
@@ -525,6 +587,10 @@ impl Engine {
             return;
         }
         let need_offset = submit_waiter_need_offset(base, value_blobs.len());
+        for node_id in registration_nodes {
+            self.registration_writes
+                .insert(node_id, (leader_epoch, need_offset));
+        }
         // Park the waiter, then try to advance the HWM immediately: a single
         // voter commits its own append with no peer fetch.
         self.commit_waiters.push(CommitWaiter {

@@ -124,7 +124,7 @@ async fn seed_remote_leaders(broker: &BrokerHandle) {
         .submit_change(vec![
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
                 node_id: NodeId(2),
-                broker_epoch: 0,
+                broker_epoch: -1,
                 incarnation_id: uuid::Uuid::nil(),
                 host: "legacy-2".into(),
                 port: 1000,

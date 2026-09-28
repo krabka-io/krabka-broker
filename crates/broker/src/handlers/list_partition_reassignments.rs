@@ -75,48 +75,52 @@ pub(crate) fn handle(
         return encode_response(&resp, api_version);
     }
 
-    let in_flight: Vec<&PartitionRecord> = match &req.topics {
-        None => image.reassignments_in_flight().collect(),
-        Some(filter) => {
-            let mut acc = Vec::new();
-            for t in filter {
-                let want_all = t.partition_indexes.is_empty();
-                for pr in image.partitions_of(&t.name) {
-                    if pr.adding_replicas.is_empty() && pr.removing_replicas.is_empty() {
-                        continue;
-                    }
-                    if want_all || t.partition_indexes.contains(&pr.partition) {
-                        acc.push(pr);
-                    }
-                }
+    let topics: Vec<OngoingTopicReassignment> = match &req.topics {
+        // Kafka's `ReplicationControlManager.listPartitionReassignments` with
+        // null topics lists every reassigning partition. Grouped by topic in
+        // a `BTreeMap` for a stable alphabetical order.
+        None => {
+            let mut by_topic: std::collections::BTreeMap<
+                String,
+                Vec<OngoingPartitionReassignment>,
+            > = std::collections::BTreeMap::new();
+            for pr in image.reassignments_in_flight() {
+                by_topic
+                    .entry(pr.topic.clone())
+                    .or_default()
+                    .push(ongoing(pr));
             }
-            acc
+            by_topic
+                .into_iter()
+                .map(|(name, partitions)| OngoingTopicReassignment {
+                    name,
+                    partitions,
+                    ..Default::default()
+                })
+                .collect()
         }
+        // `listReassigningTopic`: one row per requested topic, in request
+        // order, holding the requested partitions that are reassigning, in
+        // request order and once per occurrence. A topic with no such
+        // partition, an empty index list included, gives no row.
+        Some(filter) => filter
+            .iter()
+            .filter_map(|t| {
+                let partitions: Vec<OngoingPartitionReassignment> = t
+                    .partition_indexes
+                    .iter()
+                    .filter_map(|&idx| image.partition(&t.name, idx))
+                    .filter(|pr| !pr.adding_replicas.is_empty() || !pr.removing_replicas.is_empty())
+                    .map(ongoing)
+                    .collect();
+                (!partitions.is_empty()).then(|| OngoingTopicReassignment {
+                    name: t.name.clone(),
+                    partitions,
+                    ..Default::default()
+                })
+            })
+            .collect(),
     };
-
-    // Group by topic name using BTreeMap for stable alphabetical ordering.
-    let mut by_topic: std::collections::BTreeMap<String, Vec<OngoingPartitionReassignment>> =
-        std::collections::BTreeMap::new();
-    for pr in in_flight {
-        by_topic
-            .entry(pr.topic.clone())
-            .or_default()
-            .push(OngoingPartitionReassignment {
-                partition_index: pr.partition,
-                replicas: wire_node_ids(&pr.replicas),
-                adding_replicas: wire_node_ids(&pr.adding_replicas),
-                removing_replicas: wire_node_ids(&pr.removing_replicas),
-                ..Default::default()
-            });
-    }
-    let topics: Vec<OngoingTopicReassignment> = by_topic
-        .into_iter()
-        .map(|(name, partitions)| OngoingTopicReassignment {
-            name,
-            partitions,
-            ..Default::default()
-        })
-        .collect();
     let resp = ListPartitionReassignmentsResponse {
         throttle_time_ms: 0,
         error_code: NONE,
@@ -125,6 +129,16 @@ pub(crate) fn handle(
         ..Default::default()
     };
     encode_response(&resp, api_version)
+}
+
+fn ongoing(pr: &PartitionRecord) -> OngoingPartitionReassignment {
+    OngoingPartitionReassignment {
+        partition_index: pr.partition,
+        replicas: wire_node_ids(&pr.replicas),
+        adding_replicas: wire_node_ids(&pr.adding_replicas),
+        removing_replicas: wire_node_ids(&pr.removing_replicas),
+        ..Default::default()
+    }
 }
 
 fn wire_node_ids(nodes: &[krabka_metadata::NodeId]) -> Vec<i32> {
@@ -155,10 +169,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::{
-        broker::BrokerHandle,
-        test_support::{DenyAll, peer, principal},
-    };
+    use crate::test_support::{DenyAll, peer, principal};
 
     const VERSION: i16 = krabka_protocol::owned::list_partition_reassignments_response::MAX_VERSION;
 
@@ -169,34 +180,6 @@ mod tests {
     );
 
     use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
-
-    async fn seed_reassignments(handle: &BrokerHandle) {
-        handle
-            .broker_arc_for_test()
-            .controller
-            .submit_change(vec![
-                MetadataRecord::V1Topic(TopicRecord {
-                    name: "orders-add".into(),
-                    topic_id: Uuid::from_u128(1),
-                    partitions: 1,
-                    replication_factor: 2,
-                }),
-                MetadataRecord::V1Partition(PartitionRecord {
-                    topic: "orders-add".into(),
-                    partition: 0,
-                    leader: NodeId(1),
-                    replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
-                    isr: vec![NodeId(1), NodeId(2)],
-                    leader_epoch: krabka_metadata::LeaderEpoch(4),
-                    adding_replicas: vec![NodeId(3)],
-                    removing_replicas: vec![],
-                    directories: vec![Uuid::nil(), Uuid::nil(), Uuid::nil()],
-                    partition_epoch: 8,
-                }),
-            ])
-            .await
-            .expect("seed reassignments");
-    }
 
     #[tokio::test]
     async fn denied_response_echoes_requested_topics() {
@@ -325,50 +308,119 @@ mod tests {
         }
     }
 
+    fn partition(topic: &str, partition: i32, adding: bool) -> MetadataRecord {
+        MetadataRecord::V1Partition(PartitionRecord {
+            topic: topic.into(),
+            partition,
+            leader: NodeId(1),
+            replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
+            isr: vec![NodeId(1), NodeId(2)],
+            leader_epoch: krabka_metadata::LeaderEpoch(4),
+            adding_replicas: if adding { vec![NodeId(3)] } else { vec![] },
+            removing_replicas: vec![],
+            directories: vec![Uuid::nil(), Uuid::nil(), Uuid::nil()],
+            partition_epoch: 8,
+        })
+    }
+
+    /// Kafka's `ReplicationControlManager.listPartitionReassignments` and
+    /// `listReassigningTopic`: null topics list every reassigning partition,
+    /// a named topic lists only its requested indexes that are reassigning,
+    /// in request order and once per occurrence, and a topic with none (an
+    /// empty index list, an idle partition, an unknown topic) gives no row.
     #[tokio::test]
-    async fn filtered_success_response_preserves_topic_and_partition_fields() {
+    async fn success_response_lists_what_kafka_lists() {
         let (broker_handle, _dir) =
             start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
-        seed_reassignments(&broker_handle).await;
+        broker_handle
+            .broker_arc_for_test()
+            .controller
+            .submit_change(vec![
+                MetadataRecord::V1Topic(TopicRecord {
+                    name: "t".into(),
+                    topic_id: Uuid::from_u128(1),
+                    partitions: 3,
+                    replication_factor: 3,
+                }),
+                partition("t", 0, true),
+                partition("t", 1, true),
+                partition("t", 2, false),
+            ])
+            .await
+            .expect("seed reassignments");
         let broker = broker_handle.broker_arc_for_test();
         let p = principal("admin");
         let peer = peer();
         let ctx = test_context(&p, &peer);
 
-        let bytes = handle(
-            &broker,
-            ListPartitionReassignmentsRequest {
-                topics: Some(vec![ListPartitionReassignmentsTopics {
-                    name: "orders-add".into(),
-                    partition_indexes: vec![],
-                    ..Default::default()
-                }]),
-                ..Default::default()
-            },
-            &ctx,
-            VERSION,
-        )
-        .expect("handle");
-        let resp = decode_response(&bytes);
-
-        let expected = ListPartitionReassignmentsResponse {
-            throttle_time_ms: 0,
-            error_code: 0,
-            error_message: None,
-            topics: vec![OngoingTopicReassignment {
-                name: "orders-add".to_string(),
-                partitions: vec![OngoingPartitionReassignment {
-                    partition_index: 0,
-                    replicas: vec![1, 2, 3],
-                    adding_replicas: vec![3],
-                    removing_replicas: vec![],
-                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-                }],
-                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
-            }],
+        let row = |partition_index: i32| OngoingPartitionReassignment {
+            partition_index,
+            replicas: vec![1, 2, 3],
+            adding_replicas: vec![3],
+            removing_replicas: vec![],
             unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
         };
-        assert!(resp == expected, "{resp:?}");
+        let topic = |name: &str, partitions: &[i32]| OngoingTopicReassignment {
+            name: name.to_string(),
+            partitions: partitions.iter().map(|&p| row(p)).collect(),
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+        };
+        let filter = |topics: &[(&str, &[i32])]| {
+            Some(
+                topics
+                    .iter()
+                    .map(|&(name, indexes)| ListPartitionReassignmentsTopics {
+                        name: name.into(),
+                        partition_indexes: indexes.to_vec(),
+                        ..Default::default()
+                    })
+                    .collect(),
+            )
+        };
+        let cases = vec![
+            ("null topics", None, vec![topic("t", &[0, 1])]),
+            ("empty index list", filter(&[("t", &[])]), vec![]),
+            ("one index", filter(&[("t", &[1])]), vec![topic("t", &[1])]),
+            (
+                "repeated index",
+                filter(&[("t", &[1, 1])]),
+                vec![topic("t", &[1, 1])],
+            ),
+            (
+                "request order",
+                filter(&[("t", &[1, 0])]),
+                vec![topic("t", &[1, 0])],
+            ),
+            ("idle partition", filter(&[("t", &[2])]), vec![]),
+            ("unknown topic", filter(&[("u", &[0])]), vec![]),
+            (
+                "repeated topic",
+                filter(&[("t", &[0]), ("t", &[1])]),
+                vec![topic("t", &[0]), topic("t", &[1])],
+            ),
+        ];
+        for (name, topics, expected_topics) in cases {
+            let bytes = handle(
+                &broker,
+                ListPartitionReassignmentsRequest {
+                    topics,
+                    ..Default::default()
+                },
+                &ctx,
+                VERSION,
+            )
+            .expect("handle");
+            let resp = decode_response(&bytes);
+
+            let expected = ListPartitionReassignmentsResponse {
+                throttle_time_ms: 0,
+                error_code: 0,
+                error_message: None,
+                topics: expected_topics,
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+            };
+            assert2::check!(resp == expected, "case {name}");
+        }
         broker_handle.shutdown().await;
     }
 }

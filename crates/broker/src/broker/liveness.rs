@@ -110,6 +110,9 @@ pub(super) struct LivenessStartup {
     pub(super) want_shutdown: Arc<tokio::sync::watch::Sender<bool>>,
     pub(super) should_shutdown: Arc<tokio::sync::watch::Sender<bool>>,
     pub(super) unclean_recovery: crate::unclean_recovery::UncleanRecoveryHandle,
+    /// Where this broker's first unfencing stands.
+    pub(super) initial_unfence:
+        tokio::sync::watch::Receiver<crate::heartbeat::client::InitialUnfence>,
 }
 
 pub(super) fn start_liveness_services(
@@ -135,9 +138,12 @@ pub(super) fn start_liveness_services(
     let (should_shutdown, _) = tokio::sync::watch::channel(false);
     let want_shutdown = Arc::new(want_shutdown);
     let should_shutdown = Arc::new(should_shutdown);
+    let (unfenced, initial_unfence) =
+        tokio::sync::watch::channel(crate::heartbeat::client::InitialUnfence::Pending);
     tokio::spawn(crate::heartbeat::client::run(
         crate::heartbeat::client::Config {
             broker_id: config.broker_id,
+            broker_epoch: config.broker_epoch,
             interval: config.heartbeat_interval,
             controller: Arc::clone(controller),
             shutdown: shutdown.child_token(),
@@ -150,6 +156,7 @@ pub(super) fn start_liveness_services(
             controller_quorum_voters: config.controller_quorum_voters.clone(),
             want_shutdown: want_shutdown_rx,
             should_shutdown: Arc::clone(&should_shutdown),
+            unfenced,
             log_dir_status: log_dirs.0.clone(),
             log_dir_ids: log_dirs.1.clone(),
             all_log_dirs: config.all_log_dirs(),
@@ -196,6 +203,7 @@ pub(super) fn start_liveness_services(
         want_shutdown,
         should_shutdown,
         unclean_recovery,
+        initial_unfence,
     }
 }
 

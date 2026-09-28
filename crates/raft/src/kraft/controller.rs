@@ -195,6 +195,12 @@ struct Engine {
     /// `submit_change` waiters instead of leaving them hung (FIX 1).
     was_leader: bool,
     held_epoch: Epoch,
+    /// The end offset of the latest batch this leader appended that
+    /// registers, amends or unregisters each broker, with the leader epoch it
+    /// was appended at. A registration change is decided against the
+    /// committed image, so it waits while such a batch is uncommitted: see
+    /// [`Engine::registration_change_must_wait`].
+    registration_writes: BTreeMap<krabka_metadata::NodeId, (Epoch, Offset)>,
     /// Snapshot every this many committed records past the last snapshot, then
     /// prune the log below that point. `0` disables snapshotting (KIP-630).
     snapshot_interval_records: u64,

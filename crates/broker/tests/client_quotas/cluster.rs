@@ -50,7 +50,16 @@ pub fn start_single_broker_sasl_plaintext_with_users(
     // Install `SimpleAclAuthorizer` so the cluster-Alter gate
     // fires for non-super principals; the default `AllowAllAuthorizer`
     // would let every AlterClientQuotas through.
-    cfg.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(cfg.super_users.clone()));
+    // Clients reach this broker over SASL, but its own heartbeat reaches the
+    // PLAINTEXT controller listener as ANONYMOUS; like a Kafka inter-broker
+    // principal it needs `ClusterAction`, or the broker never unfences.
+    cfg.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(
+        cfg.super_users
+            .iter()
+            .cloned()
+            .chain(std::iter::once("ANONYMOUS".to_string()))
+            .collect(),
+    ));
 
     Box::pin(async move {
         let handle = Broker::start(cfg).await.expect("broker must start");

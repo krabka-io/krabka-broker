@@ -1,36 +1,44 @@
 //! The two `offset_lag` values that a `DescribeLogDirs` partition entry
 //! carries.
 //!
-//! A current log reports `LEO − HW`, while a KIP-113 future log reports
+//! Kafka's `ReplicaManager.getLogEndOffsetLag`: a current log reports
+//! `max(HW − LEO, 0)`, which is 0 because the high watermark never passes the
+//! log end offset, while a KIP-113 future log reports
 //! `current_log.LEO − future_log.LEO` so that an operator can watch an
-//! intra-broker move drain. Both readings reach into the partition registry and
-//! the future-log registry, which is why they live together and away from the
-//! directory scan.
+//! intra-broker move drain. Both report [`INVALID_OFFSET_LAG`] when the broker
+//! has no local current log for the partition. Both readings reach into the
+//! partition registry and the future-log registry, which is why they live
+//! together and away from the directory scan.
 
-/// `LEO − HW` for a loaded current log, with a clamp at 0.
+/// `DescribeLogDirsResponse.INVALID_OFFSET_LAG`: the lag is not available
+/// because the replica is not created or is offline.
+pub(super) const INVALID_OFFSET_LAG: i64 = -1;
+
+/// `max(HW − LEO, 0)` for a loaded current log.
 ///
-/// Returns 0 when the partition is not materialized on this broker.
+/// Returns [`INVALID_OFFSET_LAG`] when the partition is not materialized on
+/// this broker.
 pub(super) async fn offset_lag_for(
     partitions: &crate::partition_registry::PartitionRegistry,
     topic: &str,
     partition: i32,
 ) -> i64 {
     let Some(part) = partitions.get(topic, krabka_ids::PartitionIndex(partition)) else {
-        return 0;
+        return INVALID_OFFSET_LAG;
     };
     let leo = part.log_end_offset();
     let hw = part.high_watermark().await;
     // Lag is a record-count delta between two offsets, not an offset.
-    (leo.0 - hw.0).max(0)
+    (hw.0 - leo.0).max(0)
 }
 
-/// `current_log.LEO − future_log.LEO` for an in-progress KIP-113 move, with a
-/// clamp at 0.
+/// `current_log.LEO − future_log.LEO` for an in-progress KIP-113 move, with no
+/// clamp.
 ///
-/// Returns 0 if the partition is not materialized locally. Also returns 0 if
-/// the future-log registry has no entry. The registry has no entry when the
-/// broker has just started and the resume task has not opened the future log
-/// yet.
+/// Returns [`INVALID_OFFSET_LAG`] if the partition is not materialized
+/// locally. The future LEO counts as 0 if the future-log registry has no
+/// entry. The registry has no entry when the broker has just started and the
+/// resume task has not opened the future log yet.
 pub(super) fn future_offset_lag(
     partitions: &crate::partition_registry::PartitionRegistry,
     future_logs: &dashmap::DashMap<
@@ -41,7 +49,7 @@ pub(super) fn future_offset_lag(
     partition: krabka_ids::PartitionIndex,
 ) -> i64 {
     let Some(part) = partitions.get(topic, partition) else {
-        return 0;
+        return INVALID_OFFSET_LAG;
     };
     let current_leo = part.log_end_offset();
     let future_leo =
@@ -55,7 +63,7 @@ pub(super) fn future_offset_lag(
                     .log_end_offset()
             });
     // Lag is a record-count delta between two offsets, not an offset.
-    (current_leo.0 - future_leo.0).max(0)
+    current_leo.0 - future_leo.0
 }
 
 #[cfg(test)]
@@ -127,29 +135,19 @@ mod tests {
             .expect("append records");
     }
 
-    /// A partition that is not materialized locally reports lag `0`.
-    ///
-    /// It does not report the `-1` that a whole-function replacement mutant
-    /// returns.
+    /// `ReplicaManager.getLogEndOffsetLag` for a current log: `-1` with no
+    /// local partition, and `max(HW − LEO, 0)`, so 0, for a leader whose five
+    /// records are not replicated yet (a fresh HW is 0).
     #[tokio::test]
-    async fn offset_lag_missing_partition_is_zero() {
-        let reg = crate::partition_registry::PartitionRegistry::new();
-        assert!(offset_lag_for(&reg, "ghost", 0).await == 0);
-    }
-
-    /// A materialized partition with LEO ahead of HW reports `LEO - HW`.
-    ///
-    /// A fresh HW is 0. This test pins the real subtraction against the
-    /// whole-function `-> -1` replacement.
-    #[tokio::test]
-    async fn offset_lag_uses_leo_minus_hw() {
+    async fn offset_lag_matches_kafka() {
         let dir = tempfile::tempdir().unwrap();
         let reg = crate::partition_registry::PartitionRegistry::new();
         let part = partition_with_leo(dir.path(), "t", krabka_ids::PartitionIndex(0), 5);
         assert!(part.log_end_offset() == krabka_log::Offset(5));
         reg.insert("t".into(), krabka_ids::PartitionIndex(0), part);
-        // Fresh partition HW is 0 → lag == LEO == 5 (not -1, not 0).
-        assert!(offset_lag_for(&reg, "t", 0).await == 5);
+        for (topic, expected) in [("ghost", INVALID_OFFSET_LAG), ("t", 0)] {
+            assert2::check!(offset_lag_for(&reg, topic, 0).await == expected, "{topic}");
+        }
     }
 
     /// Builds a `FutureLogState` whose future log has LEO `future_count`.
@@ -173,39 +171,30 @@ mod tests {
         })
     }
 
-    /// With no local partition, the future-log lag is `0`.
-    ///
-    /// It is not the `1` that a whole-function `-> 1` replacement mutant
-    /// returns.
+    /// `ReplicaManager.getLogEndOffsetLag` for a future log:
+    /// `current LEO − future LEO` with no clamp, and `-1` with no local
+    /// current log.
     #[tokio::test]
-    async fn future_offset_lag_missing_partition_is_zero() {
-        let reg = crate::partition_registry::PartitionRegistry::new();
-        let future_logs = dashmap::DashMap::new();
-        let lag = future_offset_lag(&reg, &future_logs, "ghost", krabka_ids::PartitionIndex(0));
-        assert!(lag == 0);
-    }
-
-    /// `future_offset_lag` is `current_log.LEO − future_log.LEO`, clamped at 0.
-    ///
-    /// With current LEO 5 and future LEO 2 the answer is 3. This value
-    /// separates the real subtraction from every mutant: `-> 0` gives 0,
-    /// `-> 1` gives 1, `-` → `+` gives 7, and `-` → `/` gives 2.
-    #[tokio::test]
-    async fn future_offset_lag_is_current_minus_future_leo() {
+    async fn future_offset_lag_matches_kafka() {
         let cur_dir = tempfile::tempdir().unwrap();
-        let fut_dir = tempfile::tempdir().unwrap();
         let reg = crate::partition_registry::PartitionRegistry::new();
         let part = partition_with_leo(cur_dir.path(), "t", krabka_ids::PartitionIndex(3), 5);
         assert!(part.log_end_offset() == krabka_log::Offset(5));
         reg.insert("t".into(), krabka_ids::PartitionIndex(3), part);
 
-        let future_logs = dashmap::DashMap::new();
-        future_logs.insert(
-            ("t".to_string(), krabka_ids::PartitionIndex(3)),
-            future_state_with_leo(fut_dir.path(), 2),
-        );
-
-        let lag = future_offset_lag(&reg, &future_logs, "t", krabka_ids::PartitionIndex(3));
-        assert!(lag == 3, "current LEO 5 − future LEO 2 == 3, got {lag}");
+        for (name, topic, future_leo, expected) in [
+            ("no local current log", "ghost", 2, INVALID_OFFSET_LAG),
+            ("future three records behind", "t", 2, 3),
+            ("future ahead is not clamped", "t", 7, -2),
+        ] {
+            let fut_dir = tempfile::tempdir().unwrap();
+            let future_logs = dashmap::DashMap::new();
+            future_logs.insert(
+                (topic.to_string(), krabka_ids::PartitionIndex(3)),
+                future_state_with_leo(fut_dir.path(), future_leo),
+            );
+            let lag = future_offset_lag(&reg, &future_logs, topic, krabka_ids::PartitionIndex(3));
+            assert2::check!(lag == expected, "case {name}");
+        }
     }
 }

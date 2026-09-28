@@ -167,6 +167,28 @@ const fn answer(is_fenced: bool, should_shut_down: bool) -> Answer {
     }
 }
 
+/// A new registration of `node`: fenced, as Kafka's `RegisterBrokerRecord`
+/// defaults `Fenced` to true, and at no epoch yet, for the controller to stamp
+/// the offset it commits at.
+fn new_registration(node: u64) -> krabka_metadata::MetadataRecord {
+    krabka_metadata::MetadataRecord::V1BrokerRegistration(
+        krabka_metadata::BrokerRegistrationRecord {
+            fenced: true,
+            in_controlled_shutdown: false,
+            cordoned_log_dirs: None,
+            node_id: NodeId(node),
+            broker_epoch: -1,
+            incarnation_id: uuid::Uuid::from_u128(u128::from(node)),
+            host: "127.0.0.1".into(),
+            port: 19_090 + u16::try_from(node).expect("a small node id"),
+            rack: None,
+            endpoints: vec![],
+            log_dirs: vec![uuid::Uuid::from_u128(1000 + u128::from(node))],
+            features: std::collections::BTreeMap::new(),
+        },
+    )
+}
+
 /// A controller, node 1, with brokers 2 and 3 registered and one topic `t`:
 /// partition 0 led by 2 with the ISR `[2, 3, 1]`, partition 1 led by 3 with
 /// the ISR `[3, 2]`.
@@ -178,29 +200,11 @@ struct Cluster {
 
 impl Cluster {
     async fn start() -> Self {
-        use krabka_metadata::{
-            BrokerRegistrationRecord, LeaderEpoch, MetadataRecord, PartitionRecord, TopicRecord,
-        };
+        use krabka_metadata::{LeaderEpoch, MetadataRecord, PartitionRecord, TopicRecord};
 
         let (handle, dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
         let broker = handle.broker_arc_for_test();
         wait_for_leader(&broker).await;
-        let registration = |node: u64| {
-            MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
-                fenced: false,
-                in_controlled_shutdown: false,
-                cordoned_log_dirs: None,
-                node_id: NodeId(node),
-                broker_epoch: 0,
-                incarnation_id: uuid::Uuid::from_u128(u128::from(node)),
-                host: "127.0.0.1".into(),
-                port: 19_090 + u16::try_from(node).expect("a small node id"),
-                rack: None,
-                endpoints: vec![],
-                log_dirs: vec![uuid::Uuid::from_u128(1000 + u128::from(node))],
-                features: std::collections::BTreeMap::new(),
-            })
-        };
         let partition = |index: i32, leader: u64, isr: &[u64]| {
             MetadataRecord::V1Partition(PartitionRecord {
                 topic: "t".into(),
@@ -218,8 +222,8 @@ impl Cluster {
         broker
             .controller
             .submit_change(vec![
-                registration(2),
-                registration(3),
+                new_registration(2),
+                new_registration(3),
                 MetadataRecord::V1Topic(TopicRecord {
                     name: "t".into(),
                     topic_id: uuid::Uuid::from_u128(0x7),
@@ -293,6 +297,18 @@ impl Cluster {
     fn applied(&self) -> i64 {
         self.broker.controller.current_metadata_offset()
     }
+
+    /// The `(fenced, in_controlled_shutdown)` flags of `node`'s registration,
+    /// and whether it still holds the epoch it registered at.
+    fn registration(&self, node: u64, epoch: i64) -> (bool, bool, bool) {
+        let image = self.broker.controller.current_image();
+        let registration = image.broker(NodeId(node)).expect("a registered broker");
+        (
+            registration.fenced,
+            registration.in_controlled_shutdown,
+            registration.broker_epoch == epoch,
+        )
+    }
 }
 
 /// krabka-io/krabka-broker#824: `BrokerHeartbeat` follows Kafka's
@@ -312,6 +328,11 @@ async fn a_controlled_shutdown_drains_the_isrs_and_waits_for_active_brokers() {
     let epoch_3 = cluster.epoch(3);
     let mut answers = Vec::new();
     let mut expected = Vec::new();
+    // Broker 2's registration after each step: Kafka's
+    // `BrokerRegistrationChangeRecord`s move its fence and its controlled
+    // shutdown, at the epoch it registered at.
+    let mut registrations = vec![("registered", cluster.registration(2, epoch_2))];
+    let mut expected_registrations = vec![("registered", (true, false, true))];
 
     let stale = Answer {
         error_code: codes::STALE_BROKER_EPOCH,
@@ -353,12 +374,16 @@ async fn a_controlled_shutdown_drains_the_isrs_and_waits_for_active_brokers() {
             .heartbeat(2, epoch_2, cluster.applied(), false)
             .await,
     ));
+    registrations.push(("unfenced", cluster.registration(2, epoch_2)));
+    expected_registrations.push(("unfenced", (false, false, true)));
 
     expected.push(("broker 2 asks to shut down", answer(false, false)));
     answers.push((
         "broker 2 asks to shut down",
         cluster.heartbeat(2, epoch_2, cluster.applied(), true).await,
     ));
+    registrations.push(("in controlled shutdown", cluster.registration(2, epoch_2)));
+    expected_registrations.push(("in controlled shutdown", (false, true, true)));
     let drained = cluster.applied();
     let (leader_0, isr_0) = cluster.leader_and_isr(0);
     let (leader_1, isr_1) = cluster.leader_and_isr(1);
@@ -401,8 +426,74 @@ async fn a_controlled_shutdown_drains_the_isrs_and_waits_for_active_brokers() {
         "broker 2 may shut down",
         cluster.heartbeat(2, epoch_2, cluster.applied(), true).await,
     ));
+    registrations.push(("shut down", cluster.registration(2, epoch_2)));
+    expected_registrations.push(("shut down", (true, true, true)));
 
     check!(answers == expected);
+    check!(registrations == expected_registrations);
+    cluster.handle.shutdown().await;
+}
+
+/// Codex review of krabka-io/krabka-broker#1166: a broker that crashes in
+/// controlled shutdown and registers again, without passing through
+/// `BrokerRegistration`'s `replace_incarnation`, leaves the controller's
+/// registry in controlled shutdown. Its new registration is fenced, and Kafka's
+/// `BrokerHeartbeatManager.register` takes a fenced broker out of controlled
+/// shutdown, so its first caught-up heartbeat unfences it rather than holding
+/// it in controlled shutdown or telling it to shut down.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restart_from_controlled_shutdown_starts_fenced() {
+    let cluster = Cluster::start().await;
+    let epoch_2 = cluster.epoch(2);
+    let mut answers = Vec::new();
+    for node in [1, 3, 2] {
+        answers.push((
+            "unfences",
+            cluster
+                .heartbeat(
+                    i32::try_from(node).expect("a small node id"),
+                    cluster.epoch(node),
+                    cluster.applied(),
+                    false,
+                )
+                .await,
+        ));
+    }
+    answers.push((
+        "enters controlled shutdown",
+        cluster.heartbeat(2, epoch_2, cluster.applied(), true).await,
+    ));
+    // Broker 2's self-registration after the crash.
+    cluster
+        .broker
+        .controller
+        .submit_change(vec![new_registration(2)])
+        .await
+        .expect("broker 2 registers again");
+    let restarted = cluster.epoch(2);
+    let registered = cluster.registration(2, restarted);
+    answers.push((
+        "the restart unfences",
+        cluster
+            .heartbeat(2, restarted, cluster.applied(), false)
+            .await,
+    ));
+
+    check!(
+        answers
+            == vec![
+                ("unfences", answer(false, false)),
+                ("unfences", answer(false, false)),
+                ("unfences", answer(false, false)),
+                ("enters controlled shutdown", answer(false, false)),
+                ("the restart unfences", answer(false, false)),
+            ]
+    );
+    check!(restarted > epoch_2);
+    check!(
+        [registered, cluster.registration(2, restarted)]
+            == [(true, false, true), (false, false, true)]
+    );
     cluster.handle.shutdown().await;
 }
 

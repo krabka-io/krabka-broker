@@ -295,7 +295,7 @@ async fn minus_one_takes_the_broker_topic_creation_defaults() {
                     in_controlled_shutdown: false,
                     cordoned_log_dirs: None,
                     node_id: krabka_raft::NodeId(node_id),
-                    broker_epoch: 0,
+                    broker_epoch: -1,
                     incarnation_id: Uuid::nil(),
                     host: "127.0.0.1".into(),
                     port: 9092,
@@ -1593,10 +1593,11 @@ async fn handle_authorizes_create_per_topic_when_cluster_create_is_denied() {
     ];
 
     for (label, case) in cases {
-        let (broker_handle, _dir) = start_broker(Arc::new(
-            crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
-        ))
-        .await;
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::test_support::ControllerPeerAllowed(
+                crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
+            )))
+            .await;
         let broker = broker_handle.broker_arc_for_test();
         if !case.acls.is_empty() {
             broker

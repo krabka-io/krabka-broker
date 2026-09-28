@@ -50,7 +50,12 @@ async fn non_super_user_without_acl_denied() {
         .insert("admin".to_string(), "admin-secret".to_string());
     cfg.plain_credentials
         .insert("alice".to_string(), "alice-secret".to_string());
-    cfg.super_users = std::iter::once("admin".to_string()).collect();
+    // The controller listener is PLAINTEXT, so this broker's own heartbeat
+    // arrives as ANONYMOUS; like a Kafka inter-broker principal it needs
+    // `ClusterAction`, or the broker never unfences and places no replica.
+    cfg.super_users = ["admin".to_string(), "ANONYMOUS".to_string()]
+        .into_iter()
+        .collect();
     // Install `SimpleAclAuthorizer` so the cluster-Alter gate
     // fires for non-super principals; default is `AllowAllAuthorizer`.
     cfg.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(cfg.super_users.clone()));

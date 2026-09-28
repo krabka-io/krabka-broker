@@ -7,7 +7,8 @@
 //! `BrokerRegistration.fenced` is replicated to it.
 //!
 //! Only the controller leader holds the heartbeat registry that decides
-//! fencing, so it publishes the decision as the `broker.fenced` broker config.
+//! fencing, so it writes the decision into the broker's registration, as
+//! Kafka's `BrokerRegistrationChangeRecord` does.
 //! This suite asks a node that is *not* the controller: if that node ignored
 //! the replicated state it would treat every registration as available, and it
 //! would hand a client the dead broker's id — an endpoint nobody answers on,
@@ -156,18 +157,18 @@ fn node_id_of(handle: &BrokerHandle) -> i32 {
 /// Block until the observer's image is known to be past the cluster's start-up
 /// unfencing, with an empty fenced set.
 ///
-/// A broker registers fenced and is unfenced on its first heartbeat, so a
-/// freshly booted cluster publishes an unfencing edge shortly after start. An
+/// A broker registers fenced and is unfenced on its first caught-up heartbeat,
+/// so a freshly booted cluster writes an unfencing edge shortly after start. An
 /// observer image that has simply not seen that edge reads exactly like one
 /// past it: both report nobody fenced. Waiting on the empty set alone can
 /// therefore return before the seed lands, and the death this test measures
 /// would then race the unfencing that precedes it.
 ///
 /// Watching for the fenced set to go non-empty and then empty would not settle
-/// it either. Publication is level-triggered: the controller leader compares
-/// its registry against the image and writes only the difference, so a broker
-/// whose first heartbeat arrives before the leader's first tick is never
-/// published as fenced at all.
+/// it either. The liveness tick's fence publication is level-triggered: the
+/// controller leader compares its registry against the image and writes only
+/// the difference, so it may fence a broker that a heartbeat then unfences,
+/// or never fence one at all.
 ///
 /// What is observable is the decision, the pass that published it, and the
 /// offset it was written at.
@@ -175,7 +176,7 @@ fn node_id_of(handle: &BrokerHandle) -> i32 {
 /// The leader's liveness registry reporting every broker alive means no later
 /// pass computes a fence. It does not mean no earlier one is still committing:
 /// a pass that read the registry before the first heartbeats decides
-/// `broker.fenced=true` and then awaits its own `submit_change`, and while
+/// a fence and then awaits its own `submit_change`, and while
 /// that await is outstanding the registry already reads all-alive and the
 /// leader's image does not carry the record yet. Reading the image there would
 /// find nobody fenced and be wrong about it. So wait for one publication pass
@@ -185,7 +186,7 @@ fn node_id_of(handle: &BrokerHandle) -> i32 {
 ///
 /// From there the image is honest, and the leader agreeing that nobody is
 /// fenced means the tombstone for anything it did write has committed. An
-/// offset read after that is past every `broker.fenced` record the start-up
+/// offset read after that is past every fencing record the start-up
 /// produced, which is what makes the last wait mean something: an observer
 /// that has applied up to that offset has applied the fencing too, so an empty
 /// fenced set there can no longer be one that has not seen it yet.

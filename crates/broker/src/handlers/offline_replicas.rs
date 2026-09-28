@@ -26,11 +26,10 @@
 //! assignments that its registration no longer lists.
 //!
 //! The fencing half is replicated too. Only the controller leader keeps a
-//! heartbeat registry, so it publishes what that registry decides as the
-//! [`BROKER_FENCED`](crate::config_keys::BROKER_FENCED) broker config (see
-//! [`crate::heartbeat::fencing`]), the way Kafka's controller writes
-//! `BrokerRegistrationChangeRecord.fenced`. [`unavailable_brokers`] reads it
-//! back out of the image, so a request served by a follower answers with the
+//! heartbeat registry, so it writes what that registry decides into the
+//! broker's registration (see [`crate::heartbeat::fencing`]), the way Kafka's
+//! controller writes `BrokerRegistrationChangeRecord.fenced`.
+//! [`unavailable_brokers`] reads it back out of the image, so a request served by a follower answers with the
 //! same set as one served by the controller. `DescribeCluster` calls the same
 //! helper for its `is_fenced` column, so the two answers cannot drift apart.
 
@@ -42,7 +41,7 @@ use crate::broker::Broker;
 
 /// The brokers this node knows to be fenced or past their heartbeat deadline.
 ///
-/// The replicated `broker.fenced` state answers this on every node. The
+/// The fence replicated on each registration answers this on every node. The
 /// controller leader unions its live registry on top of it: the publication
 /// trails that registry by at most one liveness tick, and the node that made
 /// the decision must not report less than it already knows.
@@ -50,7 +49,7 @@ use crate::broker::Broker;
 /// `DescribeCluster` reads the same set for `is_fenced` and for the KIP-1073
 /// `include_fenced_brokers` filter.
 pub(crate) async fn unavailable_brokers(broker: &Broker, image: &MetadataImage) -> HashSet<u64> {
-    let mut unavailable = crate::config_keys::fenced_node_ids(image);
+    let mut unavailable = crate::heartbeat::fencing::fenced_node_ids(image);
     let is_controller = *broker.controller.watch_leader().borrow() == Some(broker.config.node_id);
     if is_controller {
         unavailable.extend(broker.liveness.unavailable_snapshot().await);
@@ -67,7 +66,7 @@ pub(crate) async fn unavailable_brokers(broker: &Broker, image: &MetadataImage) 
 /// to whichever broker that rotation last named. Deciding liveness from the
 /// node-local heartbeat registry would answer the same election differently
 /// depending on where it landed, because only the controller leader keeps that
-/// registry. This set is the replicated `broker.fenced` state every node
+/// registry. This set is the fence replicated on the registrations every node
 /// carries, with the controller's own registry unioned in on the node that
 /// owns it, so every broker refuses and permits the same elections.
 pub(crate) async fn live_brokers(broker: &Broker, image: &MetadataImage) -> HashSet<u64> {

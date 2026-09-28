@@ -375,7 +375,9 @@ pub(super) async fn start_metadata_phase(
     }
     submit_bootstrap_records(config, &*controller.0, bootstrap_records).await?;
     register_controller(config, &*controller.0).await?;
-    register_broker(config, &*controller.0).await?;
+    if let Some(epoch) = register_broker(config, &*controller.0).await? {
+        config.broker_epoch = epoch;
+    }
     spawn_deferred_controller_registration(config, &controller.0);
     Ok((controller.0, controller.1, audit_cell))
 }

@@ -226,19 +226,19 @@ async fn first_tick_of_a_new_term_seeds_before_it_sweeps() {
 }
 
 #[tokio::test]
-async fn tick_tombstones_the_fencing_key_when_a_broker_comes_back() {
-    // Broker 3 is fenced in the image and heartbeats again. The tick must
-    // publish the tombstone: until it does, every node reports broker 3's
-    // replicas offline.
+async fn tick_leaves_the_unfence_of_a_returning_broker_to_its_heartbeat() {
+    // Broker 3 is fenced in the image and alive again. Kafka unfences a
+    // broker only in `processBrokerHeartbeat`, once the broker has caught up
+    // to its registration, so the tick writes nothing for it.
     let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
     register_brokers(&mut img, &[1, 2, 3]);
-    img.apply(&krabka_metadata::MetadataRecord::V1BrokerConfig(
-        krabka_metadata::BrokerConfigRecord {
-            node_id: NodeId(3),
-            config_name: crate::config_keys::BROKER_FENCED.into(),
-            config_value: Some(crate::config_keys::FENCED_TRUE.into()),
-        },
-    ));
+    let fence = crate::heartbeat::fencing::registration_change(
+        &img,
+        NodeId(3),
+        crate::heartbeat::fencing::RegistrationChange::FENCE,
+    )
+    .expect("broker 3 is registered and unfenced");
+    img.apply(&fence);
     let source = fake_source(img, Some(NodeId(2)));
     let controller: Arc<dyn crate::metadata_source::MetadataSource> = source.clone();
     let clock = TestClock::new();
@@ -268,5 +268,5 @@ async fn tick_tombstones_the_fencing_key_when_a_broker_comes_back() {
 
     let batches = source.submitted();
     assert!(partition_batches(&batches).is_empty());
-    assert!(fencing_updates(&batches) == vec![(3, false)]);
+    assert!(fencing_updates(&batches) == vec![]);
 }

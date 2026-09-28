@@ -1,42 +1,47 @@
 //! The topic and partition filter that a `DescribeLogDirs` request carries.
 //!
-//! The request's `topics` field is optional, and an empty partition list for a
-//! named topic means every partition of that topic. This module turns that wire
-//! shape into a single predicate, so the directory scan in the parent module
-//! stays about directories.
+//! The request's `topics` field is optional. A named topic contributes only
+//! the partition indexes it lists, so an empty list contributes none, as
+//! Kafka's `KafkaApis.handleDescribeLogDirsRequest` builds its partition set.
+//! This module turns that wire shape into a single predicate, so the directory
+//! scan in the parent module stays about directories.
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use krabka_protocol::owned::describe_log_dirs_request::DescribeLogDirsRequest;
 
 /// Filter that the handler derives from the request `topics` field.
 ///
-/// - `None`  → report every partition. This is the admin-client default.
-/// - `Some`  → report only the listed topics. An empty partition list for a
-///   topic means "all partitions of that topic".
+/// - `None`  → report every partition. This is the admin-client default
+///   (`DescribeLogDirsRequest.isAllTopicPartitions`).
+/// - `Some`  → report only the listed `(topic, partition)` pairs, the union
+///   over every entry of the request.
 pub(super) enum Filter {
     All,
-    Topics(BTreeMap<String, Vec<i32>>),
+    Partitions(BTreeSet<(String, i32)>),
 }
 
 impl Filter {
     pub(super) fn allows(&self, topic: &str, partition: i32) -> bool {
         match self {
             Filter::All => true,
-            Filter::Topics(map) => match map.get(topic) {
-                None => false,
-                Some(parts) => parts.is_empty() || parts.contains(&partition),
-            },
+            Filter::Partitions(set) => set.contains(&(topic.to_string(), partition)),
         }
     }
 }
 
 pub(super) fn request_filter(req: DescribeLogDirsRequest) -> Filter {
     req.topics.map_or(Filter::All, |topics| {
-        Filter::Topics(
+        Filter::Partitions(
             topics
                 .into_iter()
-                .map(|topic| (topic.topic, topic.partitions))
+                .flat_map(|topic| {
+                    let name = topic.topic;
+                    topic
+                        .partitions
+                        .into_iter()
+                        .map(move |partition| (name.clone(), partition))
+                })
                 .collect(),
         )
     })
@@ -44,39 +49,62 @@ pub(super) fn request_filter(req: DescribeLogDirsRequest) -> Filter {
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
+    use assert2::check;
+    use krabka_protocol::owned::describe_log_dirs_request::DescribableLogDirTopic;
 
     use super::*;
 
     #[test]
-    fn filter_all_allows_everything() {
-        let f = Filter::All;
-        assert!(f.allows("any", 0));
-        assert!(f.allows("other", 99));
-    }
-
-    #[test]
-    fn filter_topics_respects_partition_list() {
-        let mut m = BTreeMap::new();
-        m.insert("t".to_string(), vec![0, 2]);
-        let f = Filter::Topics(m);
-        for (topic, partition, want) in [
-            ("t", 0, true),
-            ("t", 1, false),
-            ("t", 2, true),
-            ("other", 0, false),
-        ] {
-            assert!(f.allows(topic, partition) == want, "{topic}-{partition}");
-        }
-    }
-
-    #[test]
-    fn filter_topics_empty_partition_list_means_all() {
-        let mut m = BTreeMap::new();
-        m.insert("t".to_string(), vec![]);
-        let f = Filter::Topics(m);
-        for (topic, partition, want) in [("t", 0, true), ("t", 7, true), ("u", 0, false)] {
-            assert!(f.allows(topic, partition) == want, "{topic}-{partition}");
+    fn filter_matches_kafka_partition_set() {
+        let request = |topics: Option<Vec<(&str, Vec<i32>)>>| DescribeLogDirsRequest {
+            topics: topics.map(|topics| {
+                topics
+                    .into_iter()
+                    .map(|(topic, partitions)| DescribableLogDirTopic {
+                        topic: topic.into(),
+                        partitions,
+                        ..Default::default()
+                    })
+                    .collect()
+            }),
+            ..Default::default()
+        };
+        let cases = [
+            ("null topics", None, ("any", 9), true),
+            (
+                "listed partition",
+                Some(vec![("t", vec![0, 2])]),
+                ("t", 2),
+                true,
+            ),
+            (
+                "unlisted partition",
+                Some(vec![("t", vec![0, 2])]),
+                ("t", 1),
+                false,
+            ),
+            (
+                "unlisted topic",
+                Some(vec![("t", vec![0])]),
+                ("u", 0),
+                false,
+            ),
+            (
+                "empty partition list",
+                Some(vec![("t", vec![])]),
+                ("t", 0),
+                false,
+            ),
+            (
+                "repeated topic entries union",
+                Some(vec![("t", vec![0]), ("t", vec![1])]),
+                ("t", 0),
+                true,
+            ),
+        ];
+        for (name, topics, (topic, partition), expected) in cases {
+            let filter = request_filter(request(topics));
+            check!(filter.allows(topic, partition) == expected, "case {name}");
         }
     }
 }

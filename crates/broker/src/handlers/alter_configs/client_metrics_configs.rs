@@ -11,7 +11,7 @@
 use krabka_metadata::{ClientMetricsConfigRecord, MetadataRecord};
 use krabka_protocol::owned::alter_configs_request::AlterConfigsResource;
 
-use crate::{client_metrics, codes};
+use crate::client_metrics;
 
 /// Build the authoritative `V1ClientMetricsConfig` record for a
 /// `CLIENT_METRICS` resource. The request carries the *complete* set of
@@ -19,19 +19,16 @@ use crate::{client_metrics, codes};
 pub(super) fn client_metrics_config_record(
     resource: &AlterConfigsResource,
 ) -> Result<MetadataRecord, (i16, String)> {
-    if resource.resource_name.is_empty() {
-        return Err((
-            codes::INVALID_REQUEST,
-            "client-metrics subscription name must not be empty".into(),
-        ));
-    }
-    let mut overrides = std::collections::BTreeMap::new();
-    for cfg in &resource.configs {
-        let value = cfg.value.clone().unwrap_or_default();
-        client_metrics::config::validate(&cfg.name, &value)
-            .map_err(|reason| (codes::INVALID_CONFIG, reason))?;
-        overrides.insert(cfg.name.clone(), value);
-    }
+    // Kafka's `legacyAlterConfigResource` turns a null value into a
+    // deletion, so it is left out of the map `ClientMetricsConfigs.validate`
+    // checks.
+    let overrides: std::collections::BTreeMap<String, String> = resource
+        .configs
+        .iter()
+        .filter_map(|cfg| Some((cfg.name.clone(), cfg.value.clone()?)))
+        .collect();
+    client_metrics::config::validate(&resource.resource_name, &overrides)
+        .map_err(|error| (error.code(), error.message().to_string()))?;
     Ok(MetadataRecord::V1ClientMetricsConfig(
         ClientMetricsConfigRecord {
             name: resource.resource_name.clone(),
@@ -45,7 +42,7 @@ mod tests {
     use assert2::assert;
 
     use super::*;
-    use crate::handlers::alter_configs::test_support::client_metrics_resource;
+    use crate::{codes, handlers::alter_configs::test_support::client_metrics_resource};
 
     #[test]
     fn client_metrics_replacement_builds_authoritative_override_map() {
@@ -68,28 +65,51 @@ mod tests {
         assert!(record == expected);
     }
 
+    /// `ClientMetricsConfigs.validate`: an unknown key, an out-of-range
+    /// interval and an empty subscription name are `InvalidRequestException`
+    /// (42), a value `ConfigDef` cannot parse is `ConfigException` (40).
     #[test]
-    fn client_metrics_replacement_rejects_bad_interval() {
-        let error = client_metrics_config_record(&client_metrics_resource(
-            "sub-a",
-            &[("interval.ms", "5")],
-        ))
-        .expect_err("interval below the minimum must be rejected");
-        assert!(error.0 == codes::INVALID_CONFIG);
-    }
-
-    #[test]
-    fn client_metrics_replacement_rejects_unknown_key() {
-        let error =
-            client_metrics_config_record(&client_metrics_resource("sub-a", &[("bogus.key", "x")]))
-                .expect_err("unknown client-metrics key must be rejected");
-        assert!(error.0 == codes::INVALID_CONFIG);
-    }
-
-    #[test]
-    fn client_metrics_replacement_rejects_empty_subscription_name() {
-        let error = client_metrics_config_record(&client_metrics_resource("", &[]))
-            .expect_err("empty subscription name must be rejected");
-        assert!(error.0 == codes::INVALID_REQUEST);
+    fn client_metrics_replacement_refusals_match_kafka() {
+        for (name, subscription, configs, expected) in [
+            (
+                "interval below the minimum",
+                "sub-a",
+                &[("interval.ms", "5")][..],
+                (
+                    codes::INVALID_REQUEST,
+                    "Invalid value 5 for interval.ms, interval must be between 100 and 3600000 \
+                     (1 hour)",
+                ),
+            ),
+            (
+                "unknown key",
+                "sub-a",
+                &[("bogus.key", "x")][..],
+                (
+                    codes::INVALID_REQUEST,
+                    "Unknown client metrics configuration: bogus.key",
+                ),
+            ),
+            (
+                "interval not an int",
+                "sub-a",
+                &[("interval.ms", "abc")][..],
+                (
+                    codes::INVALID_CONFIG,
+                    "Invalid value abc for configuration interval.ms: Not a number of type INT",
+                ),
+            ),
+            (
+                "empty subscription name",
+                "",
+                &[][..],
+                (codes::INVALID_REQUEST, "Subscription name can't be empty"),
+            ),
+        ] {
+            let error =
+                client_metrics_config_record(&client_metrics_resource(subscription, configs))
+                    .expect_err(name);
+            assert2::check!(error == (expected.0, expected.1.to_string()), "case {name}");
+        }
     }
 }

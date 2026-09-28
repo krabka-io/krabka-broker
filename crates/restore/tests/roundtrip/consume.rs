@@ -41,7 +41,7 @@ use std::sync::Arc;
 use assert2::{assert, check};
 use bytes::Bytes;
 use krabka_audit::signing::FileEd25519Signer;
-use krabka_broker::{Broker, BrokerConfig, BrokerHandle};
+use krabka_broker::{BrokerConfig, BrokerHandle};
 use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
@@ -59,7 +59,7 @@ use ring::{rand::SystemRandom, signature::Ed25519KeyPair};
 use uuid::Uuid;
 
 use crate::{
-    args::restore_args,
+    args::ControllerListener,
     fixture::{Fixture, PartitionFixture, build_fixture},
 };
 
@@ -86,6 +86,7 @@ struct RestoredCluster {
     fixture: Fixture,
     target: tempfile::TempDir,
     log_dir: std::path::PathBuf,
+    controller: ControllerListener,
     broker: BrokerHandle,
     client: Client,
     report: RestoreReport,
@@ -100,14 +101,17 @@ impl RestoredCluster {
     async fn start_with(fixture: Fixture, extra: &[&str]) -> Self {
         let target = tempfile::tempdir().expect("target parent");
         let log_dir = target.path().join("restored");
-        let args = restore_args(fixture.archive_root.path(), &log_dir, extra);
+        let mut controller = ControllerListener::bind().await;
+        let args = controller.restore_args(fixture.archive_root.path(), &log_dir, extra);
         let report = restore(&args).await.expect("restore");
 
-        let (broker, client) = boot(BrokerConfig::for_tests(log_dir.clone())).await;
+        let (broker, client) =
+            boot(&mut controller, BrokerConfig::for_tests(log_dir.clone())).await;
         Self {
             fixture,
             target,
             log_dir,
+            controller,
             broker,
             client,
             report,
@@ -125,6 +129,7 @@ impl RestoredCluster {
             fixture,
             target,
             log_dir,
+            mut controller,
             broker,
             client,
             report,
@@ -133,11 +138,12 @@ impl RestoredCluster {
         broker.shutdown().await;
         let mut config = BrokerConfig::for_tests(log_dir.clone());
         config.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
-        let (broker, client) = boot(config).await;
+        let (broker, client) = boot(&mut controller, config).await;
         Self {
             fixture,
             target,
             log_dir,
+            controller,
             broker,
             client,
             report,
@@ -150,9 +156,10 @@ impl RestoredCluster {
     }
 }
 
-/// Start a broker under `config` and connect a client to it.
-async fn boot(config: BrokerConfig) -> (BrokerHandle, Client) {
-    let broker = Broker::start(config).await.expect("restored broker starts");
+/// Start a broker under `config`, its controller listening on `controller`,
+/// and connect a client to it.
+async fn boot(controller: &mut ControllerListener, config: BrokerConfig) -> (BrokerHandle, Client) {
+    let broker = controller.start(config).await;
     let client = Client::builder()
         .bootstrap(broker.listen_addr().to_string())
         .client_id("restore-consume-test")
