@@ -1,12 +1,14 @@
 //! The topic and partition rows of a `DescribeShareGroupOffsets` response.
 //!
-//! This is where a `(group, topic, partition)` turns into numbers: the SPSO
-//! comes from the share-state persister, while the leader epoch and the
-//! best-effort lag come from the local data partition and fall back to `-1`
-//! when the partition is not materialized on this broker. Keeping both row
-//! builders together keeps that fallback, and the `UNKNOWN_TOPIC_OR_PARTITION`
-//! shape an unresolvable topic name produces, in one place.
+//! This is Kafka's `GroupCoordinatorService.describeShareGroupOffsets` and
+//! `computeShareGroupLagAndBuildResponse`: the start offset, leader epoch and
+//! delivery complete count come from the share-state summary, the lag from
+//! the partition end offset its leader reports, and a topic the metadata
+//! image does not hold is answered as having no data rather than as an
+//! error. The `TOPIC_AUTHORIZATION_FAILED` rows of `KafkaApis` are built here
+//! as well, so every row shape of the response lives in one place.
 
+use futures_util::future::join_all;
 use krabka_protocol::{
     owned::{
         describe_share_group_offsets_request::DescribeShareGroupOffsetsRequestTopic,
@@ -17,137 +19,21 @@ use krabka_protocol::{
     primitives::uuid::Uuid,
 };
 
+use super::end_offsets::{
+    EndOffset, LatestOffsets, TopicPartition, UNKNOWN_SERVER_ERROR_MESSAGE, lookup_error,
+};
 use crate::{
-    broker::Broker,
     codes,
-    coordinator::unified::share::persistence::ShareGroupStatePartitionMetadataValue,
+    error::BrokerError,
     share_coordinator::{
-        coordinator::UNINITIALIZED_START_OFFSET, persister_client::SharePersister,
+        coordinator::{ShareStateSummary, UNINITIALIZED_START_OFFSET},
+        persister_client::SharePersister,
     },
 };
 
 /// Kafka's message for `TOPIC_AUTHORIZATION_FAILED`
 /// (`Errors.TOPIC_AUTHORIZATION_FAILED.message()`).
 const TOPIC_AUTHORIZATION_FAILED_MESSAGE: &str = "Topic authorization failed.";
-
-/// The group's initialized partitions for `topic_id`, or empty when the
-/// group has no metadata yet or none of it names this topic. Shared by
-/// [`describe_topic`] and [`unauthorized_topic`], both of which must expand
-/// an empty request `partitions` list to "every initialized partition" the
-/// same way.
-fn initialized_partitions(
-    topic_id: uuid::Uuid,
-    metadata: Option<&ShareGroupStatePartitionMetadataValue>,
-) -> Vec<i32> {
-    metadata
-        .and_then(|m| {
-            m.initialized
-                .iter()
-                .find(|topic| topic.topic_id == topic_id)
-                .map(|topic| topic.partitions.clone())
-        })
-        .unwrap_or_default()
-}
-
-/// Build the response row for a topic the request named explicitly, but which
-/// the caller may not `Describe`.
-///
-/// Kafka's `describeShareGroupOffsetsForGroup` partitions the requested names
-/// by topic `Describe` before it ever dispatches to the coordinator, so an
-/// unauthorized name never reaches the persister. Every partition the request
-/// asked about for that topic answers `TOPIC_AUTHORIZATION_FAILED` with the
-/// `-1` sentinels and the all-zero topic id, and the row is appended after the
-/// coordinator-returned rows. An empty request `partitions` list means "every
-/// initialized partition", same as [`describe_topic`] -- otherwise a denied
-/// all-partitions request would silently answer with no rows at all.
-pub(super) fn unauthorized_topic(
-    image: &krabka_metadata::MetadataImage,
-    metadata: Option<&ShareGroupStatePartitionMetadataValue>,
-    rt: DescribeShareGroupOffsetsRequestTopic,
-) -> DescribeShareGroupOffsetsResponseTopic {
-    let part_indices = if rt.partitions.is_empty() {
-        image
-            .topic(&rt.topic_name)
-            .map(|t| initialized_partitions(t.topic_id, metadata))
-            .unwrap_or_default()
-    } else {
-        rt.partitions
-    };
-    let partitions = part_indices
-        .into_iter()
-        .map(|p| DescribeShareGroupOffsetsResponsePartition {
-            partition_index: p,
-            start_offset: -1,
-            leader_epoch: -1,
-            lag: -1,
-            error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-            error_message: Some(TOPIC_AUTHORIZATION_FAILED_MESSAGE.to_string()),
-            ..Default::default()
-        })
-        .collect();
-    DescribeShareGroupOffsetsResponseTopic {
-        topic_name: rt.topic_name,
-        topic_id: Uuid::default(),
-        partitions,
-        ..Default::default()
-    }
-}
-
-/// Build one response topic. It resolves `name → id`, and an unknown name
-/// gives per-partition `UNKNOWN_TOPIC_OR_PARTITION`. It enumerates the
-/// initialized partitions when the request omits an explicit list. It then
-/// builds one row per partition.
-pub(super) async fn describe_topic(
-    broker: &Broker,
-    persister: &SharePersister,
-    image: &krabka_metadata::MetadataImage,
-    metadata: Option<&ShareGroupStatePartitionMetadataValue>,
-    gid: &str,
-    rt: DescribeShareGroupOffsetsRequestTopic,
-) -> DescribeShareGroupOffsetsResponseTopic {
-    let topic_name = rt.topic_name;
-    let Some(topic_id) = image.topic(&topic_name).map(|t| t.topic_id) else {
-        let partitions = rt
-            .partitions
-            .into_iter()
-            .map(|p| DescribeShareGroupOffsetsResponsePartition {
-                partition_index: p,
-                start_offset: UNINITIALIZED_START_OFFSET,
-                leader_epoch: -1,
-                lag: -1,
-                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
-                ..Default::default()
-            })
-            .collect();
-        return DescribeShareGroupOffsetsResponseTopic {
-            topic_name,
-            topic_id: Uuid::default(),
-            partitions,
-            ..Default::default()
-        };
-    };
-
-    // Empty request partitions ⇒ enumerate the group's initialized partitions
-    // for this topic_id.
-    let part_indices: Vec<i32> = if rt.partitions.is_empty() {
-        initialized_partitions(topic_id, metadata)
-    } else {
-        rt.partitions
-    };
-
-    let mut partitions: Vec<DescribeShareGroupOffsetsResponsePartition> =
-        Vec::with_capacity(part_indices.len());
-    for p in part_indices {
-        partitions.push(describe_partition(broker, persister, gid, &topic_name, topic_id, p).await);
-    }
-
-    DescribeShareGroupOffsetsResponseTopic {
-        topic_name,
-        topic_id: Uuid(*topic_id.as_bytes()),
-        partitions,
-        ..Default::default()
-    }
-}
 
 /// Kafka's `PartitionFactory.DEFAULT_LEADER_EPOCH`.
 const DEFAULT_LEADER_EPOCH: i32 = 0;
@@ -156,129 +42,588 @@ const UNINITIALIZED_DELIVERY_COMPLETE_COUNT: i32 = -1;
 /// Kafka's `PartitionFactory.UNINITIALIZED_LAG`.
 const UNINITIALIZED_LAG: i64 = -1;
 
-/// Build one response partition from the persister's state summary, as
-/// Kafka's `GroupCoordinatorService.describeShareGroupOffsets` does.
+/// A group-level error of the response: the code and Kafka's message.
+pub(super) type GroupError = (i16, &'static str);
+
+/// Kafka's `Persister.readSummary`, one partition at a time.
+pub(super) trait ShareSummaries {
+    /// The share-state summary of `(group, topic_id, partition)`: `None` for
+    /// a key with no state, or the error of the read.
+    async fn read_summary(
+        &self,
+        group: &str,
+        topic_id: uuid::Uuid,
+        partition: i32,
+    ) -> Result<Option<ShareStateSummary>, BrokerError>;
+}
+
+impl ShareSummaries for SharePersister {
+    async fn read_summary(
+        &self,
+        group: &str,
+        topic_id: uuid::Uuid,
+        partition: i32,
+    ) -> Result<Option<ShareStateSummary>, BrokerError> {
+        SharePersister::read_summary(self, group, topic_id, partition).await
+    }
+}
+
+/// The response row of a topic the request named explicitly, but which the
+/// caller may not `Describe`, as `KafkaApis.describeShareGroupOffsetsForGroup`
+/// builds it.
 ///
-/// The leader epoch is the one the share state stores, and
-/// [`DEFAULT_LEADER_EPOCH`] for a key with no state. The lag is Kafka's
-/// `partition end offset - start offset - delivery complete count`, computed
-/// only when both the start offset and the delivery complete count are
-/// initialized, and [`UNINITIALIZED_LAG`] otherwise. Kafka asks the partition
-/// leader for the end offset; krabka reads the high watermark of the local
-/// partition and reports [`UNINITIALIZED_LAG`] for one that is not hosted here.
-async fn describe_partition(
-    broker: &Broker,
-    persister: &SharePersister,
-    gid: &str,
-    topic_name: &str,
+/// Every partition the request named answers `TOPIC_AUTHORIZATION_FAILED`,
+/// with start offset and lag `-1`, the leader epoch Kafka leaves at its
+/// default of 0, and the all-zero topic id. An empty `partitions` list gives
+/// a row with no partitions.
+pub(super) fn unauthorized_topic(
+    topic: DescribeShareGroupOffsetsRequestTopic,
+) -> DescribeShareGroupOffsetsResponseTopic {
+    DescribeShareGroupOffsetsResponseTopic {
+        topic_name: topic.topic_name,
+        topic_id: Uuid::default(),
+        partitions: topic
+            .partitions
+            .into_iter()
+            .map(
+                |partition_index| DescribeShareGroupOffsetsResponsePartition {
+                    partition_index,
+                    start_offset: -1,
+                    leader_epoch: DEFAULT_LEADER_EPOCH,
+                    lag: -1,
+                    error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+                    error_message: Some(TOPIC_AUTHORIZATION_FAILED_MESSAGE.to_owned()),
+                    ..Default::default()
+                },
+            )
+            .collect(),
+        ..Default::default()
+    }
+}
+
+/// A topic of the request the image holds, with the partitions it named.
+struct FoundTopic {
     topic_id: uuid::Uuid,
-    p: i32,
-) -> DescribeShareGroupOffsetsResponsePartition {
-    let (start_offset, leader_epoch, delivery_complete_count, error_code) =
-        match persister.read_summary(gid, topic_id, p).await {
-            Ok(Some((_, leader_epoch, start_offset, delivery_complete_count))) => (
-                start_offset.0,
+    name: String,
+    partitions: Vec<i32>,
+}
+
+/// The share-state summary of one partition, as
+/// `DefaultStatePersister.readSummary` reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PartitionSummary {
+    start_offset: i64,
+    leader_epoch: i32,
+    delivery_complete_count: i32,
+    /// The read of the summary failed.
+    failed: bool,
+}
+
+impl PartitionSummary {
+    fn from_read(read: &Result<Option<ShareStateSummary>, BrokerError>) -> Self {
+        match *read {
+            Ok(Some((_, leader_epoch, start_offset, delivery_complete_count))) => Self {
+                start_offset: start_offset.0,
                 leader_epoch,
                 delivery_complete_count,
-                codes::NONE,
-            ),
-            Ok(None) => (
-                UNINITIALIZED_START_OFFSET,
-                DEFAULT_LEADER_EPOCH,
-                UNINITIALIZED_DELIVERY_COMPLETE_COUNT,
-                codes::NONE,
-            ),
-            Err(_) => (
-                UNINITIALIZED_START_OFFSET,
-                DEFAULT_LEADER_EPOCH,
-                UNINITIALIZED_DELIVERY_COMPLETE_COUNT,
-                codes::COORDINATOR_NOT_AVAILABLE,
-            ),
+                failed: false,
+            },
+            // `ShareCoordinatorShard.readStateSummary` for a key with no state.
+            Ok(None) => Self {
+                start_offset: UNINITIALIZED_START_OFFSET,
+                leader_epoch: DEFAULT_LEADER_EPOCH,
+                delivery_complete_count: UNINITIALIZED_DELIVERY_COMPLETE_COUNT,
+                failed: false,
+            },
+            Err(_) => Self {
+                start_offset: UNINITIALIZED_START_OFFSET,
+                leader_epoch: DEFAULT_LEADER_EPOCH,
+                delivery_complete_count: UNINITIALIZED_DELIVERY_COMPLETE_COUNT,
+                failed: true,
+            },
+        }
+    }
+
+    /// Kafka's `shouldComputeSharePartitionLag`: the read succeeded and both
+    /// the start offset and the delivery complete count are initialized.
+    fn has_lag(self) -> bool {
+        !self.failed
+            && self.start_offset != UNINITIALIZED_START_OFFSET
+            && self.delivery_complete_count != UNINITIALIZED_DELIVERY_COMPLETE_COUNT
+    }
+}
+
+/// The topic rows of one group, as Kafka's
+/// `GroupCoordinatorService.describeShareGroupOffsets` builds them.
+///
+/// A topic the image holds is read from the share state; its lag is the
+/// partition end offset less the start offset and the delivery complete
+/// count, and a partition whose end offset lookup fails carries that error.
+/// A partition whose state is missing or cannot be read has start offset
+/// `-1`, leader epoch 0 and lag `-1`, with no error. A topic the image does
+/// not hold answers each partition it named with start offset `-1`, leader
+/// epoch 0, lag `-1` and no error, and those rows follow the rows of the
+/// topics the image holds.
+///
+/// A topic named twice is one row, and a partition named twice is one row,
+/// as the maps Kafka collects them in make them. Kafka orders the rows of the
+/// topics the image holds by the iteration order of those maps; they keep
+/// the order the request first names them in here.
+///
+/// # Errors
+///
+/// Returns `UNKNOWN_SERVER_ERROR` with Kafka's message when
+/// `DefaultStatePersister` refuses the read before it starts: an empty group
+/// id, a topic the image holds named with no partitions, or a negative
+/// partition.
+pub(super) async fn describe_topics(
+    summaries: &impl ShareSummaries,
+    end_offsets: &impl LatestOffsets,
+    image: &krabka_metadata::MetadataImage,
+    group: &str,
+    topics: Vec<DescribeShareGroupOffsetsRequestTopic>,
+) -> Result<Vec<DescribeShareGroupOffsetsResponseTopic>, GroupError> {
+    let mut found: Vec<FoundTopic> = Vec::new();
+    let mut missing: Vec<DescribeShareGroupOffsetsResponseTopic> = Vec::new();
+    for topic in topics {
+        let Some(topic_id) = image.topic(&topic.topic_name).map(|t| t.topic_id) else {
+            missing.push(missing_topic(topic));
+            continue;
         };
-    let lag = if start_offset == UNINITIALIZED_START_OFFSET
-        || delivery_complete_count == UNINITIALIZED_DELIVERY_COMPLETE_COUNT
-    {
-        UNINITIALIZED_LAG
-    } else if let Some(part) = broker
-        .partitions
-        .get(topic_name, krabka_ids::PartitionIndex(p))
-    {
-        part.high_watermark().await.0 - start_offset - i64::from(delivery_complete_count)
+        // `DefaultStatePersister.validate` checks each topic entry of the
+        // read, before entries naming one topic are merged.
+        if topic.partitions.is_empty() || topic.partitions.iter().any(|p| *p < 0) {
+            return Err((codes::UNKNOWN_SERVER_ERROR, UNKNOWN_SERVER_ERROR_MESSAGE));
+        }
+        let index = found
+            .iter()
+            .position(|entry| entry.topic_id == topic_id)
+            .unwrap_or_else(|| {
+                found.push(FoundTopic {
+                    topic_id,
+                    name: topic.topic_name,
+                    partitions: Vec::new(),
+                });
+                found.len() - 1
+            });
+        let entry = &mut found[index];
+        for partition in topic.partitions {
+            if !entry.partitions.contains(&partition) {
+                entry.partitions.push(partition);
+            }
+        }
+    }
+    if found.is_empty() {
+        return Ok(missing);
+    }
+    if group.is_empty() {
+        return Err((codes::UNKNOWN_SERVER_ERROR, UNKNOWN_SERVER_ERROR_MESSAGE));
+    }
+
+    let reads = found.iter().flat_map(|topic| {
+        topic
+            .partitions
+            .iter()
+            .map(|partition| summaries.read_summary(group, topic.topic_id, *partition))
+    });
+    let mut read = join_all(reads)
+        .await
+        .into_iter()
+        .map(|read| PartitionSummary::from_read(&read));
+    let summaries: Vec<Vec<PartitionSummary>> = found
+        .iter()
+        .map(|topic| read.by_ref().take(topic.partitions.len()).collect())
+        .collect();
+
+    let lagging: Vec<TopicPartition> = found
+        .iter()
+        .zip(&summaries)
+        .flat_map(|(topic, summaries)| {
+            topic
+                .partitions
+                .iter()
+                .zip(summaries)
+                .filter(|(_, summary)| summary.has_lag())
+                .map(|(partition, _)| (topic.name.clone(), *partition))
+        })
+        .collect();
+    let offsets = if lagging.is_empty() {
+        std::collections::HashMap::new()
     } else {
-        UNINITIALIZED_LAG
+        end_offsets.latest_offsets(&lagging).await
     };
-    DescribeShareGroupOffsetsResponsePartition {
-        partition_index: p,
-        start_offset,
-        leader_epoch,
-        lag,
-        error_code,
+
+    let mut rows: Vec<DescribeShareGroupOffsetsResponseTopic> = found
+        .into_iter()
+        .zip(summaries)
+        .map(|(topic, summaries)| {
+            let partitions = topic
+                .partitions
+                .iter()
+                .zip(summaries)
+                .map(|(partition, summary)| {
+                    let end_offset = summary.has_lag().then(|| {
+                        offsets
+                            .get(&(topic.name.clone(), *partition))
+                            .copied()
+                            .unwrap_or(Err(codes::UNKNOWN_SERVER_ERROR))
+                    });
+                    partition_row(*partition, summary, end_offset)
+                })
+                .collect();
+            DescribeShareGroupOffsetsResponseTopic {
+                topic_name: topic.name,
+                topic_id: Uuid(*topic.topic_id.as_bytes()),
+                partitions,
+                ..Default::default()
+            }
+        })
+        .collect();
+    rows.extend(missing);
+    Ok(rows)
+}
+
+/// The row of a topic the image does not hold: no data for each partition
+/// the request named.
+fn missing_topic(
+    topic: DescribeShareGroupOffsetsRequestTopic,
+) -> DescribeShareGroupOffsetsResponseTopic {
+    DescribeShareGroupOffsetsResponseTopic {
+        topic_name: topic.topic_name,
+        topic_id: Uuid::default(),
+        partitions: topic
+            .partitions
+            .into_iter()
+            .map(
+                |partition_index| DescribeShareGroupOffsetsResponsePartition {
+                    partition_index,
+                    start_offset: UNINITIALIZED_START_OFFSET,
+                    leader_epoch: DEFAULT_LEADER_EPOCH,
+                    lag: UNINITIALIZED_LAG,
+                    ..Default::default()
+                },
+            )
+            .collect(),
         ..Default::default()
+    }
+}
+
+/// One partition row of a topic the image holds. `end_offset` is the lookup
+/// of the partition end offset, made only for a partition with a lag.
+fn partition_row(
+    partition_index: i32,
+    summary: PartitionSummary,
+    end_offset: Option<EndOffset>,
+) -> DescribeShareGroupOffsetsResponsePartition {
+    match end_offset {
+        None => DescribeShareGroupOffsetsResponsePartition {
+            partition_index,
+            start_offset: summary.start_offset,
+            leader_epoch: summary.leader_epoch,
+            lag: UNINITIALIZED_LAG,
+            ..Default::default()
+        },
+        Some(Ok(end_offset)) => DescribeShareGroupOffsetsResponsePartition {
+            partition_index,
+            start_offset: summary.start_offset,
+            leader_epoch: summary.leader_epoch,
+            lag: end_offset - summary.start_offset - i64::from(summary.delivery_complete_count),
+            ..Default::default()
+        },
+        // Kafka sets only the index and the error on this row, so the start
+        // offset and the leader epoch keep the schema default of 0.
+        Some(Err(code)) => {
+            let (error_code, message) = lookup_error(code);
+            DescribeShareGroupOffsetsResponsePartition {
+                partition_index,
+                error_code,
+                error_message: Some(message.to_owned()),
+                ..Default::default()
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::collections::HashMap;
 
     use assert2::assert;
     use krabka_log::Offset;
-    use krabka_protocol::UnknownTaggedFields;
+    use krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord};
 
     use super::*;
-    use crate::handlers::describe_share_group_offsets::test_support::{
-        image_with_topic, register_topic, start_broker,
-    };
 
-    #[tokio::test]
-    async fn describe_topic_reads_persisted_partition_state() {
-        let (broker_handle, _dir) =
-            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer), true).await;
-        let broker = broker_handle.broker_arc_for_test();
-        let persister = broker
-            .group_coordinator
-            .share_persister()
-            .cloned()
-            .expect("share persister");
-        let topic_id = uuid::Uuid::from_u128(0xD5C0);
-        let image = image_with_topic("orders", topic_id);
-        register_topic(&broker, "orders", topic_id).await;
-        persister
-            .initialize("g-desc", topic_id, 0, 1, Offset(33))
-            .await
-            .expect("seed state");
+    const ORDERS: uuid::Uuid = uuid::Uuid::from_u128(0xD5C0);
+    const AUDIT: uuid::Uuid = uuid::Uuid::from_u128(0xA0D1);
 
-        let topic = describe_topic(
-            &broker,
-            &persister,
-            &image,
-            None,
-            "g-desc",
-            DescribeShareGroupOffsetsRequestTopic {
-                topic_name: "orders".into(),
-                partitions: vec![0],
-                ..Default::default()
-            },
-        )
-        .await;
+    /// Share-state summaries keyed by `(topic id, partition)`: `Ok(None)`
+    /// for a key with no entry, and an error for a key mapped to `None`.
+    struct Summaries(HashMap<(uuid::Uuid, i32), Option<ShareStateSummary>>);
 
-        let expected = DescribeShareGroupOffsetsResponseTopic {
-            topic_name: "orders".into(),
+    impl ShareSummaries for Summaries {
+        fn read_summary(
+            &self,
+            _group: &str,
+            topic_id: uuid::Uuid,
+            partition: i32,
+        ) -> impl Future<Output = Result<Option<ShareStateSummary>, BrokerError>> {
+            std::future::ready(match self.0.get(&(topic_id, partition)) {
+                None => Ok(None),
+                Some(Some(summary)) => Ok(Some(*summary)),
+                Some(None) => Err(BrokerError::Share("share coordinator down".into())),
+            })
+        }
+    }
+
+    /// End offsets keyed by partition; a partition with no entry fails with
+    /// `NETWORK_EXCEPTION`.
+    struct Ends(HashMap<TopicPartition, EndOffset>);
+
+    impl LatestOffsets for Ends {
+        fn latest_offsets(
+            &self,
+            partitions: &[TopicPartition],
+        ) -> impl Future<Output = HashMap<TopicPartition, EndOffset>> {
+            std::future::ready(
+                partitions
+                    .iter()
+                    .map(|partition| {
+                        let end = self
+                            .0
+                            .get(partition)
+                            .copied()
+                            .unwrap_or(Err(codes::NETWORK_EXCEPTION));
+                        (partition.clone(), end)
+                    })
+                    .collect(),
+            )
+        }
+    }
+
+    fn image() -> MetadataImage {
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        for (name, topic_id) in [("orders", ORDERS), ("audit", AUDIT)] {
+            image.apply(&MetadataRecord::V1Topic(TopicRecord {
+                name: name.into(),
+                topic_id,
+                partitions: 4,
+                replication_factor: 1,
+            }));
+        }
+        image
+    }
+
+    fn topic(name: &str, partitions: &[i32]) -> DescribeShareGroupOffsetsRequestTopic {
+        DescribeShareGroupOffsetsRequestTopic {
+            topic_name: name.into(),
+            partitions: partitions.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    fn row(
+        name: &str,
+        topic_id: uuid::Uuid,
+        partitions: Vec<DescribeShareGroupOffsetsResponsePartition>,
+    ) -> DescribeShareGroupOffsetsResponseTopic {
+        DescribeShareGroupOffsetsResponseTopic {
+            topic_name: name.into(),
             topic_id: Uuid(*topic_id.as_bytes()),
-            partitions: vec![DescribeShareGroupOffsetsResponsePartition {
-                partition_index: 0,
-                start_offset: 33,
-                // Kafka's initial leader epoch, and its lag over the empty
-                // log: end offset 0 - start offset 33 - delivered 0.
-                leader_epoch: 0,
-                lag: -33,
-                error_code: codes::NONE,
-                error_message: None,
-                unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
-            }],
-            unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
+            partitions,
+            ..Default::default()
+        }
+    }
+
+    fn part(
+        partition_index: i32,
+        start_offset: i64,
+        leader_epoch: i32,
+        lag: i64,
+    ) -> DescribeShareGroupOffsetsResponsePartition {
+        DescribeShareGroupOffsetsResponsePartition {
+            partition_index,
+            start_offset,
+            leader_epoch,
+            lag,
+            ..Default::default()
+        }
+    }
+
+    fn no_data(partition_index: i32) -> DescribeShareGroupOffsetsResponsePartition {
+        part(partition_index, -1, 0, -1)
+    }
+
+    /// Kafka's `describeShareGroupOffsets` and
+    /// `computeShareGroupLagAndBuildResponse`, one row per case: the group,
+    /// the request topics, the stored summaries, the end offsets, and the
+    /// whole answer.
+    #[tokio::test]
+    async fn rows_follow_kafkas_share_group_offsets_description() {
+        type Case = (
+            &'static str,
+            &'static str,
+            Vec<DescribeShareGroupOffsetsRequestTopic>,
+            Vec<((uuid::Uuid, i32), Option<ShareStateSummary>)>,
+            Vec<(TopicPartition, EndOffset)>,
+            Result<Vec<DescribeShareGroupOffsetsResponseTopic>, GroupError>,
+        );
+        let orders = |p: i32| ("orders".to_owned(), p);
+        let unknown_server_error =
+            || Err((codes::UNKNOWN_SERVER_ERROR, UNKNOWN_SERVER_ERROR_MESSAGE));
+        let cases: Vec<Case> = vec![
+            (
+                "lag is the end offset less the start offset and the delivered count",
+                "g",
+                vec![topic("orders", &[0])],
+                vec![((ORDERS, 0), Some((1, 4, Offset(21), 10)))],
+                vec![(orders(0), Ok(40))],
+                Ok(vec![row("orders", ORDERS, vec![part(0, 21, 4, 9)])]),
+            ),
+            (
+                "a partition with no state has no data and no lag",
+                "g",
+                vec![topic("orders", &[1])],
+                vec![],
+                vec![],
+                Ok(vec![row("orders", ORDERS, vec![no_data(1)])]),
+            ),
+            (
+                "an uninitialized delivered count has no lag",
+                "g",
+                vec![topic("orders", &[0])],
+                vec![((ORDERS, 0), Some((1, 2, Offset(5), -1)))],
+                vec![],
+                Ok(vec![row("orders", ORDERS, vec![part(0, 5, 2, -1)])]),
+            ),
+            (
+                "a failed state read has no data and no error",
+                "g",
+                vec![topic("orders", &[0])],
+                vec![((ORDERS, 0), None)],
+                vec![],
+                Ok(vec![row("orders", ORDERS, vec![no_data(0)])]),
+            ),
+            (
+                "a failed end offset lookup carries its error",
+                "g",
+                vec![topic("orders", &[0])],
+                vec![((ORDERS, 0), Some((1, 4, Offset(21), 10)))],
+                vec![],
+                Ok(vec![row(
+                    "orders",
+                    ORDERS,
+                    vec![DescribeShareGroupOffsetsResponsePartition {
+                        partition_index: 0,
+                        error_code: codes::NETWORK_EXCEPTION,
+                        error_message: Some(
+                            "The server disconnected before a response was received.".into(),
+                        ),
+                        ..Default::default()
+                    }],
+                )]),
+            ),
+            (
+                "an unknown topic has no data, after the known topics",
+                "g",
+                vec![topic("gone", &[3, 5]), topic("orders", &[1])],
+                vec![],
+                vec![],
+                Ok(vec![
+                    row("orders", ORDERS, vec![no_data(1)]),
+                    row("gone", uuid::Uuid::nil(), vec![no_data(3), no_data(5)]),
+                ]),
+            ),
+            (
+                "an unknown topic with no partitions has a row with none",
+                "g",
+                vec![topic("gone", &[])],
+                vec![],
+                vec![],
+                Ok(vec![row("gone", uuid::Uuid::nil(), vec![])]),
+            ),
+            (
+                "an unknown topic needs no group id",
+                "",
+                vec![topic("gone", &[0])],
+                vec![],
+                vec![],
+                Ok(vec![row("gone", uuid::Uuid::nil(), vec![no_data(0)])]),
+            ),
+            (
+                "a topic and a partition named twice are one row each",
+                "g",
+                vec![
+                    topic("orders", &[1, 0, 1]),
+                    topic("audit", &[0]),
+                    topic("orders", &[2]),
+                ],
+                vec![],
+                vec![],
+                Ok(vec![
+                    row("orders", ORDERS, vec![no_data(1), no_data(0), no_data(2)]),
+                    row("audit", AUDIT, vec![no_data(0)]),
+                ]),
+            ),
+            (
+                "a known topic with no partitions fails the group",
+                "g",
+                vec![topic("orders", &[0]), topic("orders", &[])],
+                vec![],
+                vec![],
+                unknown_server_error(),
+            ),
+            (
+                "a negative partition fails the group",
+                "g",
+                vec![topic("orders", &[-1])],
+                vec![],
+                vec![],
+                unknown_server_error(),
+            ),
+            (
+                "an empty group id fails a known topic",
+                "",
+                vec![topic("orders", &[0])],
+                vec![],
+                vec![],
+                unknown_server_error(),
+            ),
+        ];
+        let image = image();
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (case, group, topics, summaries, ends, want) in cases {
+            let summaries = Summaries(summaries.into_iter().collect());
+            let ends = Ends(ends.into_iter().collect());
+            actual.push((
+                case,
+                describe_topics(&summaries, &ends, &image, group, topics).await,
+            ));
+            expected.push((case, want));
+        }
+        assert!(actual == expected);
+    }
+
+    #[test]
+    fn an_unauthorized_topic_answers_each_partition_it_named() {
+        let denied = |partition_index| DescribeShareGroupOffsetsResponsePartition {
+            partition_index,
+            start_offset: -1,
+            leader_epoch: 0,
+            lag: -1,
+            error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+            error_message: Some("Topic authorization failed.".into()),
+            ..Default::default()
         };
-        assert!(topic == expected);
-        broker_handle.shutdown().await;
+        let actual = [
+            unauthorized_topic(topic("secret", &[1, 0])),
+            unauthorized_topic(topic("secret", &[])),
+        ];
+        let expected = [
+            row("secret", uuid::Uuid::nil(), vec![denied(1), denied(0)]),
+            row("secret", uuid::Uuid::nil(), vec![]),
+        ];
+        assert!(actual == expected);
     }
 }

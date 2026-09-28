@@ -2,7 +2,7 @@
 //! running broker, driven over the wire encoding.
 //!
 //! Each case pins the whole decoded response, so the per-group and
-//! per-partition error rows KIP-932 asks for -- feature disabled, group
+//! per-partition rows KIP-932 asks for -- feature disabled, group
 //! denied, topic unknown -- stay exactly what the JVM admin client reads.
 
 use std::{net::SocketAddr, sync::Arc};
@@ -120,7 +120,7 @@ async fn handle_error_scenarios_preserve_expected_rows() {
             },
         ),
         (
-            "unknown topic preserves partition error rows",
+            "an unknown topic has no data and no error",
             Arc::new(crate::authorizer::AllowAllAuthorizer),
             true,
             vec![("g1", vec![("missing-topic", vec![3, 5])])],
@@ -135,18 +135,18 @@ async fn handle_error_scenarios_preserve_expected_rows() {
                             DescribeShareGroupOffsetsResponsePartition {
                                 partition_index: 3,
                                 start_offset: -1,
-                                leader_epoch: -1,
+                                leader_epoch: 0,
                                 lag: -1,
-                                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+                                error_code: codes::NONE,
                                 error_message: None,
                                 unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
                             },
                             DescribeShareGroupOffsetsResponsePartition {
                                 partition_index: 5,
                                 start_offset: -1,
-                                leader_epoch: -1,
+                                leader_epoch: 0,
                                 lag: -1,
-                                error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+                                error_code: codes::NONE,
                                 error_message: None,
                                 unknown_tagged_fields: UnknownTaggedFields(Vec::new()),
                             },

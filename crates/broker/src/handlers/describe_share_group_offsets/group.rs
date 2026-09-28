@@ -8,15 +8,16 @@
 
 use krabka_metadata::{AclOperation, ResourceType};
 use krabka_protocol::owned::{
-    describe_share_group_offsets_request::DescribeShareGroupOffsetsRequestGroup,
-    describe_share_group_offsets_response::{
-        DescribeShareGroupOffsetsResponseGroup, DescribeShareGroupOffsetsResponseTopic,
+    describe_share_group_offsets_request::{
+        DescribeShareGroupOffsetsRequestGroup, DescribeShareGroupOffsetsRequestTopic,
     },
+    describe_share_group_offsets_response::DescribeShareGroupOffsetsResponseGroup,
 };
 
 use super::{
-    rows::{describe_topic, unauthorized_topic},
-    topics::requested_topics,
+    end_offsets::NetworkLatestOffsets,
+    rows::{describe_topics, unauthorized_topic},
+    topics::initialized_topics,
 };
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult, authorize_topics},
@@ -85,55 +86,75 @@ pub(super) async fn describe_group(
         };
     };
 
-    let metadata = ng.and_then(|ng| ng.share_state_partition_metadata(&gid));
-
     // `group.topics` is `None` for a fetch-all request and `Some(non_empty)`
     // for an explicit list (the `Some(empty)` shape already returned above).
     // Kafka's `describeShareGroupOffsetsForGroup` partitions an explicit list
     // by topic `Describe` and appends the unauthorized topics after the
-    // coordinator's rows; `describeShareGroupAllOffsetsForGroup` instead
-    // drops an unauthorized topic from the fetch-all result with no row at
-    // all, the same way Kafka hides topic existence from a caller who cannot
-    // describe it.
-    let explicit_request = group.topics.is_some();
-    let req_topics = requested_topics(group.topics, metadata.as_ref(), image);
+    // coordinator's rows; `describeShareGroupAllOffsetsForGroup` describes
+    // the group's initialized topics and then drops the ones the caller
+    // cannot describe with no row at all, the same way Kafka hides topic
+    // existence from such a caller.
+    let (requested, unauthorized) = if let Some(topics) = group.topics {
+        let allowed = allowed_topics(broker, image, ctx, &topics);
+        let (requested, denied): (Vec<_>, Vec<_>) = topics
+            .into_iter()
+            .partition(|topic| allowed.contains(topic.topic_name.as_str()));
+        (
+            requested,
+            denied.into_iter().map(unauthorized_topic).collect(),
+        )
+    } else {
+        let metadata = ng.and_then(|ng| ng.share_state_partition_metadata(&gid));
+        let initialized = initialized_topics(metadata.as_ref(), image);
+        let allowed = allowed_topics(broker, image, ctx, &initialized);
+        let requested = initialized
+            .into_iter()
+            .filter(|topic| allowed.contains(topic.topic_name.as_str()))
+            .collect();
+        (requested, Vec::new())
+    };
 
-    let acl_by_topic: std::collections::HashMap<String, AuthorizationResult> = authorize_topics(
+    let end_offsets = NetworkLatestOffsets { broker };
+    match describe_topics(persister.as_ref(), &end_offsets, image, &gid, requested).await {
+        Ok(mut topics) => {
+            topics.extend(unauthorized);
+            DescribeShareGroupOffsetsResponseGroup {
+                group_id: gid,
+                topics,
+                error_code: codes::NONE,
+                ..Default::default()
+            }
+        }
+        // `KafkaApis` answers a failed coordinator call with the group-level
+        // error and no topics, the unauthorized ones included.
+        Err((error_code, message)) => DescribeShareGroupOffsetsResponseGroup {
+            group_id: gid,
+            error_code,
+            error_message: Some(message.to_owned()),
+            ..Default::default()
+        },
+    }
+}
+
+/// The names among `topics` the caller may `Describe`.
+fn allowed_topics(
+    broker: &Broker,
+    image: &krabka_metadata::MetadataImage,
+    ctx: &crate::handlers::RequestContext<'_>,
+    topics: &[DescribeShareGroupOffsetsRequestTopic],
+) -> std::collections::HashSet<String> {
+    authorize_topics(
         broker.config.authorizer.as_ref(),
         image,
         ctx.principal,
         ctx.peer,
         AclOperation::Describe,
-        req_topics.iter().map(|t| t.topic_name.as_str()),
+        topics.iter().map(|topic| topic.topic_name.as_str()),
     )
     .into_iter()
-    .map(|(name, result)| (name.to_string(), result))
-    .collect();
-
-    let mut topics: Vec<DescribeShareGroupOffsetsResponseTopic> =
-        Vec::with_capacity(req_topics.len());
-    let mut unauthorized: Vec<DescribeShareGroupOffsetsResponseTopic> = Vec::new();
-
-    for rt in req_topics {
-        let allowed =
-            acl_by_topic.get(rt.topic_name.as_str()).copied() == Some(AuthorizationResult::Allow);
-        if !allowed {
-            if explicit_request {
-                unauthorized.push(unauthorized_topic(image, metadata.as_ref(), rt));
-            }
-            // Fetch-all: silently omit, matching Kafka's leak-avoidance.
-            continue;
-        }
-        topics.push(describe_topic(broker, &persister, image, metadata.as_ref(), &gid, rt).await);
-    }
-    topics.extend(unauthorized);
-
-    DescribeShareGroupOffsetsResponseGroup {
-        group_id: gid,
-        topics,
-        error_code: codes::NONE,
-        ..Default::default()
-    }
+    .filter(|(_, result)| *result == AuthorizationResult::Allow)
+    .map(|(name, _)| name.to_string())
+    .collect()
 }
 
 #[cfg(test)]
@@ -145,9 +166,8 @@ mod tests {
     use krabka_metadata::{MetadataRecord, TopicRecord};
     use krabka_protocol::{
         UnknownTaggedFields,
-        owned::{
-            describe_share_group_offsets_request::DescribeShareGroupOffsetsRequestTopic,
-            describe_share_group_offsets_response::DescribeShareGroupOffsetsResponsePartition,
+        owned::describe_share_group_offsets_response::{
+            DescribeShareGroupOffsetsResponsePartition, DescribeShareGroupOffsetsResponseTopic,
         },
         primitives::uuid::Uuid as WireUuid,
     };
@@ -228,7 +248,7 @@ mod tests {
         DescribeShareGroupOffsetsResponsePartition {
             partition_index: index,
             start_offset: -1,
-            leader_epoch: -1,
+            leader_epoch: 0,
             lag: -1,
             error_code: codes::TOPIC_AUTHORIZATION_FAILED,
             error_message: Some("Topic authorization failed.".to_string()),
@@ -236,12 +256,12 @@ mod tests {
         }
     }
 
-    /// A denied topic requested with an empty `partitions` list (Kafka's
-    /// "all initialized partitions" shape) must expand to every one of the
-    /// group's initialized partitions for that topic, the same way the
-    /// authorized path does -- not to an empty row that looks like success.
+    /// A denied topic requested with an empty `partitions` list answers a
+    /// row with no partitions: `KafkaApis.describeShareGroupOffsetsForGroup`
+    /// builds one `TOPIC_AUTHORIZATION_FAILED` row per partition the request
+    /// named, and does not look the group's initialized partitions up.
     #[tokio::test]
-    async fn explicit_all_partitions_request_expands_denied_topic_partitions() {
+    async fn a_denied_topic_named_with_no_partitions_has_no_partition_rows() {
         let orders_id = uuid::Uuid::from_u128(1);
         let secret_id = uuid::Uuid::from_u128(2);
         let mut image = image_with_topic("orders", orders_id);
@@ -312,10 +332,7 @@ mod tests {
             .iter()
             .find(|t| t.topic_name == "secret")
             .expect("denied topic row present");
-        assert!(
-            secret_row.partitions == vec![denied_partition(0), denied_partition(1)],
-            "{secret_row:?}"
-        );
+        assert!(secret_row.partitions.is_empty(), "{secret_row:?}");
 
         broker_handle.shutdown().await;
     }
