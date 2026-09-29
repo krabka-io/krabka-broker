@@ -23,8 +23,20 @@ fn registration(node_id: u64) -> MetadataRecord {
         incarnation_id: uuid::Uuid::from_u128(u128::from(node_id)),
         zk_migration_ready: false,
         endpoints: Vec::new(),
-        features: std::collections::BTreeMap::new(),
+        features: supported_metadata_versions(),
     })
+}
+
+/// A controller that supports every `metadata.version`, so finalizing one
+/// with `UpdateFeatures` passes Kafka's per-controller range check.
+fn supported_metadata_versions() -> std::collections::BTreeMap<String, (i16, i16)> {
+    std::collections::BTreeMap::from([(
+        krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.to_owned(),
+        (
+            krabka_metadata::metadata_version::METADATA_VERSION_MIN,
+            krabka_metadata::metadata_version::METADATA_VERSION_MAX,
+        ),
+    )])
 }
 
 fn metadata_version(level: i16) -> MetadataRecord {
@@ -105,6 +117,41 @@ fn wrong_controller_message_names_the_leader_when_there_is_one() {
     assert!(wrong_controller_message(None) == "No controller appears to be active.");
 }
 
+/// Finalizes `metadata.version` at `level` through the `UpdateFeatures`
+/// handler, as `kafka-features upgrade` does.
+async fn finalize_metadata_version(broker: &Broker, level: i16) {
+    use krabka_protocol::owned::update_features_request::{
+        FeatureUpdateKey, MAX_VERSION as UPDATE_FEATURES_VERSION, UpdateFeaturesRequest,
+    };
+
+    let principal = crate::test_support::principal("Cluster:Alter");
+    let peer = crate::test_support::peer();
+    let ctx = crate::test_support::request_context(&principal, &peer, "kafka-features");
+    let answer = crate::handlers::update_features::handle(
+        broker,
+        UpdateFeaturesRequest {
+            feature_updates: vec![FeatureUpdateKey {
+                feature: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+                max_version_level: level,
+                upgrade_type: 1,
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        UPDATE_FEATURES_VERSION,
+        &ctx,
+    )
+    .await;
+    assert!(answer.error_code == codes::NONE, "{answer:?}");
+    assert!(
+        broker
+            .controller
+            .current_image()
+            .finalized_metadata_version()
+            == Some(level)
+    );
+}
+
 async fn submit(broker: &Broker, records: Vec<MetadataRecord>) {
     broker
         .controller
@@ -141,9 +188,7 @@ async fn send(
 
 /// The issue's two rows, a registered and an unknown controller, with the
 /// `metadata.version` gate on either side of 4.4-IV2 and the `Alter` gate.
-/// The pinned krabka-metadata table stops at level 32, but the image does not
-/// check a finalized level, so the served rows finalize 33 through an
-/// ordinary `FeatureLevelRecord`.
+/// Both levels are finalized through `UpdateFeatures`.
 #[tokio::test]
 async fn handle_unregisters_a_registered_controller_as_trunk_does() {
     let (handle, _dir) = crate::test_support::start_broker_with(|cfg| {
@@ -154,7 +199,8 @@ async fn handle_unregisters_a_registered_controller_as_trunk_does() {
     .await;
     let broker = handle.broker_arc_for_test();
     let operator = "Cluster:Alter";
-    submit(&broker, vec![registration(7), metadata_version(32)]).await;
+    submit(&broker, vec![registration(7)]).await;
+    finalize_metadata_version(&broker, 32).await;
 
     let cases = [
         (
@@ -192,7 +238,7 @@ async fn handle_unregisters_a_registered_controller_as_trunk_does() {
             .is_some()
     );
 
-    submit(&broker, vec![metadata_version(33)]).await;
+    finalize_metadata_version(&broker, CONTROLLER_UNREGISTRATION_MIN_LEVEL).await;
     let cases = [
         (
             "the active controller, a voter",

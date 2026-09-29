@@ -1125,7 +1125,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/controller_admin_surface.rs::controller_listener_serves_unregister_controller",
             "crates/broker/tests/unregister_controller_forward.rs",
         ],
-        note: "Matches Kafka trunk: no Kafka release has api key 94. The controller listener answers it and a broker listener forwards it in an Envelope, as trunk's `ControllerApis` and `KafkaApis` do. It needs `metadata.version` 4.4-IV2 (level 33), which the pinned krabka-metadata table does not list yet, so until the table grows that level every request below it answers trunk's UNSUPPORTED_VERSION.",
+        note: "Matches Kafka trunk: no Kafka release has api key 94. The controller listener answers it and a broker listener forwards it in an Envelope, as trunk's `ControllerApis` and `KafkaApis` do. It needs `metadata.version` 4.4-IV2 (level 33), a Kafka trunk level a cluster reaches only through UpdateFeatures or `krabka format --release-version`, and answers trunk's UNSUPPORTED_VERSION below it.",
     },
     KipAnnotation {
         key: "KIP-1319",

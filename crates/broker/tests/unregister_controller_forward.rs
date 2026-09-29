@@ -7,11 +7,13 @@ mod support;
 
 use assert2::check;
 use krabka_metadata::{
-    ControllerRegistrationRecord, FeatureLevelRecord, MetadataRecord, NodeId as MetadataNodeId,
+    ControllerRegistrationRecord, MetadataRecord, NodeId as MetadataNodeId,
+    metadata_version::CONTROLLER_UNREGISTRATION_MIN_LEVEL,
 };
 use krabka_protocol::owned::{
     unregister_controller_request::UnregisterControllerRequest,
     unregister_controller_response::UnregisterControllerResponse,
+    update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
 };
 
 use crate::support::start_n_node_with_retry;
@@ -19,9 +21,8 @@ use crate::support::start_n_node_with_retry;
 /// Kafka trunk's `CONTROLLER_ID_NOT_REGISTERED`.
 const CONTROLLER_ID_NOT_REGISTERED: i16 = 136;
 
-/// The pinned krabka-metadata table stops at `metadata.version` 32, so the
-/// test finalizes trunk's 4.4-IV2 (33) with a raw `FeatureLevelRecord`, which
-/// the image applies without checking the table.
+/// The cluster is first moved to trunk's 4.4-IV2 (33), the level the RPC
+/// needs, through `UpdateFeatures` on the follower, which forwards it too.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_follower_forwards_unregister_controller_to_the_active_controller() {
     let cluster = start_n_node_with_retry(2).await;
@@ -33,24 +34,21 @@ async fn a_follower_forwards_unregister_controller_to_the_active_controller() {
         .iter()
         .find(|(_, cfg, _)| i64::from(cfg.broker_id) == i64::try_from(leader.0).unwrap())
         .expect("the leader");
-    for record in [
-        MetadataRecord::V1ControllerRegistration(ControllerRegistrationRecord {
-            node_id: MetadataNodeId(7),
-            incarnation_id: uuid::Uuid::from_u128(7),
-            zk_migration_ready: false,
-            endpoints: Vec::new(),
-            features: std::collections::BTreeMap::new(),
-        }),
-        MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: "metadata.version".into(),
-            level: 33,
-        }),
-    ] {
-        leader_handle
-            .submit_metadata_record_for_test(record)
-            .await
-            .expect("seed the image");
-    }
+    leader_handle
+        .submit_metadata_record_for_test(MetadataRecord::V1ControllerRegistration(
+            ControllerRegistrationRecord {
+                node_id: MetadataNodeId(7),
+                incarnation_id: uuid::Uuid::from_u128(7),
+                zk_migration_ready: false,
+                endpoints: Vec::new(),
+                features: std::collections::BTreeMap::from([(
+                    "metadata.version".to_owned(),
+                    (7, krabka_metadata::metadata_version::METADATA_VERSION_MAX),
+                )]),
+            },
+        ))
+        .await
+        .expect("seed the registration");
 
     let (_, follower_cfg, _) = cluster
         .iter()
@@ -62,6 +60,20 @@ async fn a_follower_forwards_unregister_controller_to_the_active_controller() {
         .build()
         .await
         .expect("client build");
+    let upgraded = client
+        .send(UpdateFeaturesRequest {
+            feature_updates: vec![FeatureUpdateKey {
+                feature: "metadata.version".into(),
+                max_version_level: CONTROLLER_UNREGISTRATION_MIN_LEVEL,
+                upgrade_type: 1,
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .expect("UpdateFeatures through the follower");
+    check!(upgraded.error_code == 0, "{upgraded:?}");
+
     let mut answers = Vec::new();
     for controller_id in [7, 7] {
         answers.push(

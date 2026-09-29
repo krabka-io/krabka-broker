@@ -77,6 +77,7 @@ use krabka_protocol::{
         sasl_handshake_response::SaslHandshakeResponse,
         unregister_controller_request::UnregisterControllerRequest,
         unregister_controller_response::UnregisterControllerResponse,
+        update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
     },
     primitives::uuid::Uuid as WireUuid,
 };
@@ -610,36 +611,44 @@ async fn controller_listener_serves_assign_replicas_to_dirs() {
 
 /// Kafka trunk's `UnregisterController` (94) over the controller listener: a
 /// registered controller id is dropped from the image, and an unknown one is
-/// `CONTROLLER_ID_NOT_REGISTERED`. The pinned krabka-metadata table stops at
-/// `metadata.version` 32, so the test finalizes trunk's 4.4-IV2 (33) with a
-/// raw `FeatureLevelRecord`, which the image applies without checking the
-/// table.
+/// `CONTROLLER_ID_NOT_REGISTERED`. The cluster is first moved to trunk's
+/// 4.4-IV2 (33), the level the RPC needs, through `UpdateFeatures` on the
+/// same listener.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn controller_listener_serves_unregister_controller() {
     const CONTROLLER_ID_NOT_REGISTERED: i16 = 136;
 
     let (broker, _dir) = start_broker().await;
-    for record in [
-        krabka_metadata::MetadataRecord::V1ControllerRegistration(
+    broker
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1ControllerRegistration(
             krabka_metadata::ControllerRegistrationRecord {
                 node_id: NodeId(7),
                 incarnation_id: uuid::Uuid::from_u128(7),
                 zk_migration_ready: false,
                 endpoints: Vec::new(),
-                features: std::collections::BTreeMap::new(),
+                features: std::collections::BTreeMap::from([(
+                    "metadata.version".to_owned(),
+                    (7, krabka_metadata::metadata_version::METADATA_VERSION_MAX),
+                )]),
             },
-        ),
-        krabka_metadata::MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
-            name: "metadata.version".into(),
-            level: 33,
-        }),
-    ] {
-        broker
-            .submit_metadata_record_for_test(record)
-            .await
-            .expect("seed the image");
-    }
+        ))
+        .await
+        .expect("seed the registration");
     let connection = dial_controller(&broker).await;
+    let upgraded = connection
+        .send(UpdateFeaturesRequest {
+            feature_updates: vec![FeatureUpdateKey {
+                feature: "metadata.version".into(),
+                max_version_level:
+                    krabka_metadata::metadata_version::CONTROLLER_UNREGISTRATION_MIN_LEVEL,
+                upgrade_type: 1,
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .await
+        .expect("UpdateFeatures over the controller listener");
+    check!(upgraded.error_code == 0, "{upgraded:?}");
 
     let mut answers = Vec::new();
     for controller_id in [7, 9] {
