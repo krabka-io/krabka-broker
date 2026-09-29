@@ -254,6 +254,23 @@ mod tests {
                     "Cannot update these configs dynamically: [auto.leader.rebalance.enable]",
                 )),
             ),
+            (
+                "1",
+                vec![("sasl.server.max.receive.size", "1048576")],
+                Err((
+                    codes::INVALID_REQUEST,
+                    "Cannot update these configs dynamically: [sasl.server.max.receive.size]",
+                )),
+            ),
+            (
+                "",
+                vec![("connection.failed.authentication.delay.ms", "0")],
+                Err((
+                    codes::INVALID_REQUEST,
+                    "Cannot update these configs dynamically: \
+                     [connection.failed.authentication.delay.ms]",
+                )),
+            ),
             // A dynamic key is parsed against its `ConfigDef`.
             (
                 "1",

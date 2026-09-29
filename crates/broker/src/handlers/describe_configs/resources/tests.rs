@@ -2157,6 +2157,89 @@ fn a_named_broker_reports_the_static_values_it_holds() {
     );
 }
 
+/// `sasl.server.max.receive.size` and `connection.failed.authentication.delay.ms`
+/// are not dynamic, so a named broker reports each as a read-only `INT`, at
+/// its Kafka default unless the operator named it and at
+/// `STATIC_BROKER_CONFIG` with that default beneath it when they did, even
+/// for a value equal to the default.
+#[test]
+fn a_named_broker_reports_an_authentication_limit_the_operator_named() {
+    let sasl = "sasl.server.max.receive.size";
+    let delay = "connection.failed.authentication.delay.ms";
+    let default_only = |key: &str, default: &str| {
+        (
+            Some(default.to_owned()),
+            CONFIG_SOURCE_DEFAULT,
+            vec![synonym(key, default, CONFIG_SOURCE_DEFAULT)],
+        )
+    };
+    let named = |key: &str, value: &str, default: &str| {
+        (
+            Some(value.to_owned()),
+            CONFIG_SOURCE_STATIC_BROKER,
+            vec![
+                synonym(key, value, CONFIG_SOURCE_STATIC_BROKER),
+                synonym(key, default, CONFIG_SOURCE_DEFAULT),
+            ],
+        )
+    };
+    for (label, source, want_sasl, want_delay) in [
+        (
+            "neither named",
+            "[runtime]\n",
+            default_only(sasl, "524288"),
+            default_only(delay, "100"),
+        ),
+        (
+            "both named",
+            "[runtime]\nsasl_server_max_receive = \"1MiB\"\n\
+             connection_failed_authentication_delay = \"0ms\"\n",
+            named(sasl, "1048576", "524288"),
+            named(delay, "0", "100"),
+        ),
+        (
+            "both named at Kafka's own default",
+            "[runtime]\nsasl_server_max_receive = \"524288B\"\n\
+             connection_failed_authentication_delay = \"100ms\"\n",
+            named(sasl, "524288", "524288"),
+            named(delay, "100", "100"),
+        ),
+    ] {
+        let file: crate::file_config::FileConfig =
+            toml::from_str(source).expect("parse runtime config");
+        let mut config = crate::config::BrokerConfig::default();
+        file.apply_to(&mut config).expect("apply runtime config");
+        let settings = static_settings(&config);
+        let result = describe_with_static(
+            &MetadataImage::new(Uuid::nil()),
+            RESOURCE_TYPE_BROKER,
+            "1",
+            Some(vec![sasl.to_owned(), delay.to_owned()]),
+            EVERYTHING,
+            StaticBrokerConfigs {
+                settings: &settings,
+                ..untuned()
+            },
+        );
+
+        for (key, want) in [(sasl, want_sasl), (delay, want_delay)] {
+            let entry = entry_named(&result, key);
+            check!(
+                (
+                    entry.value.clone(),
+                    entry.config_source,
+                    entry.synonyms.clone(),
+                ) == want,
+                "{label}: {key}"
+            );
+            check!(
+                entry.read_only && entry.config_type == ConfigType::Int.wire(),
+                "{label}: {key} is a read-only INT"
+            );
+        }
+    }
+}
+
 /// Kafka's `KafkaConfigSchema.resolveEffectiveTopicConfig` reports the static
 /// layer whenever `server.properties` names a synonym of the key, at the
 /// default value too, so `message.max.bytes`, `log.segment.bytes` and

@@ -2060,7 +2060,7 @@
           ]
         },
         "max_incremental_fetch_session_cache_slots": {
-          "description": "KIP-227: maximum number of incremental-fetch sessions kept in the per-\nbroker cache, Kafka's `max.incremental.fetch.session.cache.slots`. When\nthe cache is full a non-privileged session is evicted in LRU order.",
+          "description": "KIP-227: maximum number of incremental-fetch sessions kept in the per-\nbroker cache, Kafka's `max.incremental.fetch.session.cache.slots`. When\nthe cache is full, a new session displaces only a session that has been\nunused for more than two minutes, or a smaller one created more than two\nminutes ago (a follower-fetch session may also displace any consumer\nsession); otherwise it is refused and the fetch runs sessionless, as in\nKafka's `FetchSessionCacheShard.tryEvict`.",
           "format": "uint",
           "minimum": 0,
           "type": [

@@ -672,7 +672,11 @@ pub struct RuntimeFileConfig {
     pub tls_reload_interval: Option<Time>,
     /// KIP-227: maximum number of incremental-fetch sessions kept in the per-
     /// broker cache, Kafka's `max.incremental.fetch.session.cache.slots`. When
-    /// the cache is full a non-privileged session is evicted in LRU order.
+    /// the cache is full, a new session displaces only a session that has been
+    /// unused for more than two minutes, or a smaller one created more than two
+    /// minutes ago (a follower-fetch session may also displace any consumer
+    /// session); otherwise it is refused and the fetch runs sessionless, as in
+    /// Kafka's `FetchSessionCacheShard.tryEvict`.
     pub max_incremental_fetch_session_cache_slots: Option<usize>,
     /// Maximum number of live broker connections across all listeners, Kafka's
     /// `max.connections`. A connection accepted past this ceiling is closed

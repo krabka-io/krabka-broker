@@ -43,6 +43,21 @@ pub struct StaticConfigOrigins {
     pub log: LogOrigins,
     /// Which of the static topic-administration switches were supplied.
     pub topic_admin: TopicAdminOrigins,
+    /// Which of the static socket authentication limits were supplied.
+    pub authentication: AuthenticationOrigins,
+}
+
+/// Which of the two static limits on a connection that has not finished
+/// authenticating this node's configuration named explicitly. Neither is
+/// dynamically reconfigurable in Kafka, so `DescribeConfigs` reports the value
+/// a broker runs with at `STATIC_BROKER_CONFIG` when `server.properties` names
+/// the key, and the built-in default alone otherwise.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AuthenticationOrigins {
+    /// `sasl.server.max.receive.size` was supplied.
+    pub sasl_server_max_receive: bool,
+    /// `connection.failed.authentication.delay.ms` was supplied.
+    pub connection_failed_authentication_delay: bool,
 }
 
 /// Which of the static log defaults, each the broker synonym of a topic key,

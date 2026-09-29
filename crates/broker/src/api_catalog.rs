@@ -1069,6 +1069,18 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "",
     },
     KipAnnotation {
+        key: "KIP-1191",
+        claim: "share.version 2, trunk's SV_2, the feature level that gates share-group dead-letter queues",
+        status: KipStatus::Partial,
+        module: "crates/broker/src/features.rs",
+        tests: &[
+            "crates/broker/src/features.rs::share_version_two_is_advertised_only_under_unstable_feature_versions",
+            "crates/broker/src/handlers/update_features/preconditions.rs::share_version_two_needs_unstable_feature_versions",
+            "crates/format/src/format/features.rs::share_version_two_is_trunks_level",
+        ],
+        note: "Kafka trunk's share.version level 2, served only under `unstable.feature.versions.enable`. By default the supported range is 0-1, as on 4.3.1, and a finalization of 2 is refused. With the flag on, ApiVersions advertises 0-2, UpdateFeatures finalizes level 2, and `krabka format` seeds it at 4.4-IV0. Level 2 changes nothing at runtime, because krabka's share groups have no dead-letter queue.",
+    },
+    KipAnnotation {
         key: "KIP-1222",
         claim: "Share acquisition lock renewal: the Renew acknowledge type and IsRenewAck on ShareFetch and ShareAcknowledge v2",
         status: KipStatus::Partial,
