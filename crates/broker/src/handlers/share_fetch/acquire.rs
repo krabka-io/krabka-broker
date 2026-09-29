@@ -87,7 +87,7 @@ pub(super) async fn acquire_records(
     context: &AcquireContext<'_>,
     pending: &mut [PendingPartition],
     max_wait_ms: i32,
-) -> Result<(), BrokerError> {
+) {
     let wait = Duration::from_millis(u64::try_from(max_wait_ms).unwrap_or(0));
     let deadline = Instant::now() + wait;
     let min_bytes = i64::from(context.min_bytes.min(context.max_bytes).max(0));
@@ -102,13 +102,13 @@ pub(super) async fn acquire_records(
         } else {
             arm_waits(context.broker, pending)
         };
-        spent = acquire_pass(context, pending, first, spent).await?;
+        spent = acquire_pass(context, pending, first, spent).await;
         first = false;
         let done = spent.bytes >= min_bytes
             || spent.records >= i64::from(context.max_records)
             || spent.bytes >= i64::from(context.max_bytes);
         if done || left.is_zero() {
-            return Ok(());
+            return;
         }
         let left_ms = i32::try_from(
             deadline
@@ -117,7 +117,7 @@ pub(super) async fn acquire_records(
         )
         .unwrap_or(i32::MAX);
         if long_poll(waits, left_ms).await == LongPollOutcome::NoPartitions {
-            return Ok(());
+            return;
         }
     }
 }
@@ -321,7 +321,7 @@ async fn acquire_pass(
     pending: &mut [PendingPartition],
     apply_acks: bool,
     spent: Spent,
-) -> Result<Spent, BrokerError> {
+) -> Spent {
     let &AcquireContext {
         broker,
         manager: mgr,
@@ -468,39 +468,57 @@ async fn acquire_pass(
         // This pass's records land in `fresh`, then join what earlier passes
         // put in the row.
         let mut fresh = PartitionData::default();
-        let outcome = grow_and_acquire(&mut st, &mut fresh, grow_and_acquire_args()).await;
-        let acquired_count = match outcome {
-            Ok(count) => count,
-            Err(err) if log_start_moved_past_spso(&err) => {
-                // Kafka's `ShareFetchUtils.processFetchResponse` /
-                // `SharePartition.updateCacheAndOffsets`: the log start offset
-                // moved past the SPSO. Archive the Available/Deferred records
-                // below it, move the SPSO (and the SPEO, if the window had not
-                // grown that far). An Acquired record below the new start
-                // stays locked until it times out.
+        let mut outcome = grow_and_acquire(&mut st, &mut fresh, grow_and_acquire_args()).await;
+        if outcome.as_ref().is_err_and(log_start_moved_past_spso) {
+            // Kafka's `ShareFetchUtils.processFetchResponse` /
+            // `SharePartition.updateCacheAndOffsets`: the log start offset
+            // moved past the SPSO. Archive the Available/Deferred records
+            // below it, move the SPSO (and the SPEO, if the window had not
+            // grown that far). An Acquired record below the new start
+            // stays locked until it times out.
+            st.advance_past_log_start(part.log_start_offset());
+            fresh = PartitionData::default();
+            // Retry once in place, now that the SPSO/scan floor is
+            // repaired: without this, a repair that leaves readable
+            // records at the new log start would still report 0
+            // acquired, and the caller (which only long-polls when the
+            // WHOLE pass acquires nothing) would park for the full
+            // max_wait_ms even though a retry right now would already
+            // find them.
+            outcome = grow_and_acquire(&mut st, &mut fresh, grow_and_acquire_args()).await;
+            if outcome.as_ref().is_err_and(log_start_moved_past_spso) {
+                // The log start moved again between the two attempts.
+                // Report the partition as caught up with no records
+                // rather than failing the whole request.
                 st.advance_past_log_start(part.log_start_offset());
                 fresh = PartitionData::default();
-                // Retry once in place, now that the SPSO/scan floor is
-                // repaired: without this, a repair that leaves readable
-                // records at the new log start would still report 0
-                // acquired, and the caller (which only long-polls when the
-                // WHOLE pass acquires nothing) would park for the full
-                // max_wait_ms even though a retry right now would already
-                // find them.
-                match grow_and_acquire(&mut st, &mut fresh, grow_and_acquire_args()).await {
-                    Ok(count) => count,
-                    Err(err) if log_start_moved_past_spso(&err) => {
-                        // The log start moved again between the two attempts.
-                        // Report the partition as caught up with no records
-                        // rather than failing the whole request.
-                        st.advance_past_log_start(part.log_start_offset());
-                        fresh = PartitionData::default();
-                        0
-                    }
-                    Err(err) => return Err(err),
-                }
+                outcome = Ok(0);
             }
-            Err(err) => return Err(err),
+        }
+        let acquired_count = match outcome {
+            Ok(count) => count,
+            Err(err) => {
+                // Kafka's `ShareFetchUtils.processFetchResponse` turns a read
+                // error of one partition into that partition's error code with
+                // no records, and the other partitions of the request still
+                // return theirs. A record that this pass locked before the
+                // failure stays locked until its lock times out.
+                let code = read_failure_code(&err);
+                tracing::warn!(
+                    group,
+                    topic_id = %p.topic_id,
+                    partition = p.partition_index,
+                    error = %err,
+                    code,
+                    "share-partition log read failed"
+                );
+                // Best-effort: a failed write keeps the state dirty for a retry.
+                let _ = mgr
+                    .persist_if_dirty(group, p.topic_id, p.partition_index, Some(&cell), &mut st)
+                    .await;
+                fail_partition(p, false, code);
+                continue;
+            }
         };
 
         p.out.error_code = codes::NONE;
@@ -513,13 +531,33 @@ async fn acquire_pass(
             .await
         {
             Err(code) if fences_the_partition(code) => fail_partition(p, false, code),
-            _ => {
-                total.records += acquired_count;
-                total.bytes += append_records(&mut p.out, fresh)?;
-            }
+            _ => match append_records(&mut p.out, fresh) {
+                Ok(bytes) => {
+                    total.records += acquired_count;
+                    total.bytes += bytes;
+                }
+                Err(err) => fail_partition(p, false, read_failure_code(&err)),
+            },
         }
     }
-    Ok(total)
+    total
+}
+
+/// The error code of a partition whose log read failed, as Kafka's
+/// `Errors.forException` maps what `ReplicaManager.readFromLog` catches: an
+/// I/O fault is `KAFKA_STORAGE_ERROR`, a batch that does not decode or check
+/// is `CORRUPT_MESSAGE`, and anything else is `UNKNOWN_SERVER_ERROR`.
+fn read_failure_code(err: &BrokerError) -> i16 {
+    match err {
+        BrokerError::Log(
+            LogError::CrcMismatch { .. }
+            | LogError::PartialBatch { .. }
+            | LogError::Records(_)
+            | LogError::Corrupt(_),
+        ) => codes::CORRUPT_MESSAGE,
+        BrokerError::Log(LogError::Io(_)) => codes::KAFKA_STORAGE_ERROR,
+        other => codes::from_broker_error(other),
+    }
 }
 
 /// Adds the records and the acquired rows of one pass to a partition row, and
@@ -703,6 +741,35 @@ mod tests {
         check!(shares(10, 3) == vec![4, 3, 3]);
         check!(shares(2, 3) == vec![1, 1, 0]);
         check!(shares(0, 2) == vec![0, 0]);
+    }
+
+    /// Kafka's `Errors.forException` for what `ReplicaManager.readFromLog`
+    /// catches.
+    #[test]
+    fn a_failed_log_read_maps_to_the_partition_error_kafka_gives() {
+        let io = || std::io::Error::other("disk");
+        let cases = [
+            (
+                BrokerError::Log(LogError::Io(io())),
+                codes::KAFKA_STORAGE_ERROR,
+            ),
+            (
+                BrokerError::Log(LogError::Corrupt("txn index".into())),
+                codes::CORRUPT_MESSAGE,
+            ),
+            (
+                BrokerError::Log(LogError::Records(
+                    krabka_protocol::records::RecordsError::BodyTooShort { needed: 1 },
+                )),
+                codes::CORRUPT_MESSAGE,
+            ),
+            (BrokerError::Io(io()), codes::UNKNOWN_SERVER_ERROR),
+        ];
+        let (got, want): (Vec<_>, Vec<_>) = cases
+            .iter()
+            .map(|(err, code)| (read_failure_code(err), *code))
+            .unzip();
+        assert!(got == want);
     }
 
     #[test]

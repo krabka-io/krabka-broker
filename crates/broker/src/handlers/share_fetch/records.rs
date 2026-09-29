@@ -342,10 +342,14 @@ pub(super) fn merge_batches(before: &Bytes, added: &Bytes) -> Result<(Bytes, i64
 /// offset (8) and the length itself (4).
 const LOG_OVERHEAD: usize = 12;
 
+/// A read whose bytes are not a run of whole record batches. Kafka reports
+/// such a batch as `CORRUPT_MESSAGE`, which [`LogError::Records`] maps to.
 fn corrupt_read(what: &str) -> BrokerError {
-    BrokerError::Io(std::io::Error::other(format!(
-        "share-fetch read returned {what}"
-    )))
+    BrokerError::Log(krabka_log::LogError::Records(
+        krabka_protocol::records::RecordsError::RecordParse(format!(
+            "share-fetch read returned {what}"
+        )),
+    ))
 }
 
 /// Reads the verbatim on-disk batch bytes for `[fetch_offset, limit_offset)`

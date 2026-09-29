@@ -290,14 +290,13 @@ pub(crate) async fn handle(
     } else {
         req.max_wait_ms
     };
-    let acquire_result = acquire_records(&acquire, &mut pending, max_wait_ms).await;
+    acquire_records(&acquire, &mut pending, max_wait_ms).await;
     // Kafka's `releaseSession` runs after the final request's response is
     // built: the member gives its records back.
     if session.final_request {
         mgr.release_session_partitions(&group, &member, &session.released)
             .await;
     }
-    acquire_result?;
 
     // Kafka answers a fetch row for each partition of the share session that
     // it fetched, and an acknowledge row for each request partition when the
