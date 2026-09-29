@@ -64,7 +64,10 @@ fn fixture(name: &str) -> std::path::PathBuf {
 /// read it. Java reads a PKCS#12 keystore directly, so no `keytool`
 /// conversion follows.
 fn prepare_client_keystore() -> std::path::PathBuf {
-    let cache_dir = std::env::temp_dir().join("krabka-jvm-mtls-keystore");
+    let cache_dir = crate::support::fixture_cache_dir(
+        "krabka-jvm-mtls-keystore",
+        &["dev_client_cert.pem", "dev_client_key.pem"],
+    );
     std::fs::create_dir_all(&cache_dir).expect("mkdir keystore cache");
     let keystore_path = cache_dir.join("client.p12");
     if keystore_path.exists() {

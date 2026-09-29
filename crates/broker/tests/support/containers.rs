@@ -110,3 +110,27 @@ pub fn manifest_dir() -> std::path::PathBuf {
         .join(workspace)
         .join("crates/broker")
 }
+
+/// A cache directory under the system temp dir whose name carries a digest of
+/// the named `tests/fixtures/security/` files.
+///
+/// The JVM suites stage keystores there and reuse them across runs. Keying the
+/// directory on the fixture bytes means a rotated certificate gets a fresh
+/// directory instead of the stale artifact built from the old one.
+///
+/// # Panics
+///
+/// Panics when a fixture cannot be read.
+#[must_use]
+pub fn fixture_cache_dir(prefix: &str, fixtures: &[&str]) -> std::path::PathBuf {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for name in fixtures {
+        let path = manifest_dir().join("tests/fixtures/security").join(name);
+        std::fs::read(&path)
+            .unwrap_or_else(|error| panic!("read fixture {}: {error}", path.display()))
+            .hash(&mut hasher);
+    }
+    std::env::temp_dir().join(format!("{prefix}-{:016x}", hasher.finish()))
+}
