@@ -10,14 +10,16 @@ use super::{ClientAttributes, ComputedSubscription};
 use crate::client_metrics::config::{self, ALL_METRICS};
 
 /// Kafka's `ClientMetricsManager.createClientInstance`: the push interval
-/// starts at [`config::INTERVAL_MS_DEFAULT`] and every matched subscription
-/// lowers it, whether or not it names any metric.
+/// starts at `default_interval_ms` (Kafka's
+/// [`config::INTERVAL_MS_DEFAULT`] unless the operator moved it) and every
+/// matched subscription lowers it, whether or not it names any metric.
 pub(crate) fn compute_subscription(
     image: &MetadataImage,
     attrs: &ClientAttributes,
+    default_interval_ms: i32,
 ) -> ComputedSubscription {
     let mut matched_metrics: Vec<String> = Vec::new();
-    let mut push_interval_ms = config::INTERVAL_MS_DEFAULT;
+    let mut push_interval_ms = default_interval_ms;
     let mut any_star = false;
 
     for (_name, configs) in image.client_metrics_subscriptions() {
@@ -42,7 +44,8 @@ pub(crate) fn compute_subscription(
                 matched_metrics.push(m);
             }
         }
-        push_interval_ms = push_interval_ms.min(config::effective_interval_ms(configs));
+        push_interval_ms =
+            push_interval_ms.min(config::effective_interval_ms(configs, default_interval_ms));
     }
 
     let metrics = if any_star {
@@ -111,6 +114,45 @@ mod tests {
 
     use super::*;
     use crate::client_metrics::manager::test_support::{attrs, img_with};
+
+    /// The subscription of a broker that keeps Kafka's default interval.
+    fn compute_subscription(
+        image: &MetadataImage,
+        attrs: &ClientAttributes,
+    ) -> ComputedSubscription {
+        super::compute_subscription(image, attrs, config::INTERVAL_MS_DEFAULT)
+    }
+
+    /// The `client_metrics_default_interval` runtime key moves the interval
+    /// that a client with no subscription, or a subscription with no
+    /// `interval.ms`, is given; a subscription still lowers it (#1246).
+    #[test]
+    fn the_default_interval_is_the_one_the_broker_is_given() {
+        let rows = [
+            ("no subscription", MetadataImage::new(Uuid::nil()), 600_000),
+            (
+                "a subscription without interval.ms",
+                img_with("all", &[("metrics", "*")]),
+                600_000,
+            ),
+            (
+                "a subscription below the default",
+                img_with("all", &[("metrics", "*"), ("interval.ms", "60000")]),
+                60_000,
+            ),
+            (
+                "a subscription above the default",
+                img_with("all", &[("metrics", "*"), ("interval.ms", "3600000")]),
+                600_000,
+            ),
+        ];
+        for (name, img, expected) in rows {
+            assert!(
+                super::compute_subscription(&img, &attrs(), 600_000).push_interval_ms == expected,
+                "row {name}"
+            );
+        }
+    }
 
     #[test]
     fn no_subscription_means_no_metrics() {

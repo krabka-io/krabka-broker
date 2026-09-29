@@ -516,3 +516,55 @@ async fn push_telemetry_unsupported_compression_rejected() {
         push_resp.error_code,
     );
 }
+
+/// Sends `GetTelemetrySubscriptions` for `id` and returns the error code.
+async fn get_error_code(client: &krabka_client_core::Client, id: WireUuid) -> i16 {
+    let resp: GetTelemetrySubscriptionsResponse = client
+        .send(GetTelemetrySubscriptionsRequest {
+            client_instance_id: id,
+            ..Default::default()
+        })
+        .await
+        .expect("GetTelemetrySubscriptions");
+    resp.error_code
+}
+
+/// Kafka registers `ClientMetricsManager.connectionDisconnectListener` with the
+/// socket server, so closing the connection that carried a client's telemetry
+/// request drops its instance (#1246). A client that reconnects and asks again
+/// inside its push interval gets an assignment, where the instance it left
+/// behind would answer `THROTTLING_QUOTA_EXCEEDED` (89).
+#[tokio::test]
+async fn closing_the_connection_drops_the_client_instance() {
+    const THROTTLING_QUOTA_EXCEEDED: i16 = 89;
+    let p = start_with_client_metrics().await;
+    let addr = p.broker.listen_addr();
+    let id = WireUuid([0x33; 16]);
+
+    let first = build_client(addr).await;
+    assert!(
+        get_error_code(&first, id).await == 0,
+        "the first get is assigned"
+    );
+    assert!(
+        get_error_code(&first, id).await == THROTTLING_QUOTA_EXCEEDED,
+        "a get inside the push interval is throttled"
+    );
+    drop(first);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let reconnected = build_client(addr).await;
+        let error_code = get_error_code(&reconnected, id).await;
+        if error_code == 0 {
+            break;
+        }
+        assert!(
+            error_code == THROTTLING_QUOTA_EXCEEDED && std::time::Instant::now() < deadline,
+            "the reconnected client's instance survived: error_code={error_code}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    p.broker.shutdown().await;
+}

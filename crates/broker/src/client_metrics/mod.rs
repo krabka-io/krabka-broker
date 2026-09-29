@@ -9,7 +9,7 @@ pub(crate) mod otlp_sink;
 pub(crate) mod prometheus_sink;
 use std::sync::Arc;
 
-use krabka_units::{ByteSize, Time, convert::TimeExt as _};
+use krabka_units::{Time, convert::TimeExt as _};
 pub(crate) use manager::ClientMetricsManager;
 
 use self::{otlp_sink::OtlpForwarder, prometheus_sink::ClientMetricsCollector};
@@ -26,7 +26,7 @@ pub(crate) struct ClientMetrics {
 impl ClientMetrics {
     /// `otlp_endpoint` is `None` when OTLP forwarding is disabled.
     pub(crate) fn new(
-        telemetry_max: ByteSize,
+        manager: ClientMetricsManager,
         otlp_endpoint: Option<String>,
         otlp_protocol: krabka_telemetry::OtlpProtocol,
         otlp_queue_capacity: usize,
@@ -41,7 +41,7 @@ impl ClientMetrics {
             None => OtlpForwarder::disabled(),
         };
         Self {
-            manager: ClientMetricsManager::new(telemetry_max),
+            manager,
             prometheus: Arc::new(ClientMetricsCollector::new(
                 prometheus_snapshot_ttl.to_std(),
             )),

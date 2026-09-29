@@ -25,6 +25,7 @@ mod tests;
 
 use self::prometheus::flatten_for_prometheus;
 use crate::{
+    api_catalog::UnstableApiVersions,
     broker::Broker,
     client_metrics::{
         manager::{ClientAttributes, PushCheck, PushDecision},
@@ -70,13 +71,15 @@ pub(crate) fn handle(
     let manager = &broker.client_metrics.manager;
 
     let attrs = ClientAttributes {
+        connection_id: ctx.connection_id.to_string(),
         client_instance_id: instance,
         client_id: ctx.client_id.to_string(),
         software_name: ctx.software_name.to_string(),
         software_version: ctx.software_version.to_string(),
-        source_address: ctx.peer.ip().to_string(),
+        source_address: ctx.source_address(),
         source_port: ctx.peer.port(),
     };
+    let unstable = broker.config.features.unstable_api_versions;
     let image = broker.controller.current_image();
     let decision = manager.authorize_push(
         &image,
@@ -86,6 +89,7 @@ pub(crate) fn handle(
             terminating: req.terminating,
             compression_supported: codec.is_some(),
             payload_len: req.metrics.len(),
+            unstable,
         },
     );
 
@@ -96,10 +100,11 @@ pub(crate) fn handle(
         PushDecision::Accept if req.metrics.is_empty() => codes::NONE,
         PushDecision::Accept => {
             let ct = codec.expect("authorize_push accepts only a supported codec");
-            // Kafka's exporter decompresses up to `telemetry.max.bytes` and
-            // answers a larger payload with the retriable
-            // TELEMETRY_TOO_LARGE. INVALID_RECORD, which stops the client's
-            // telemetry, is only for a payload that does not decode.
+            // Kafka's exporter decompresses up to `telemetry.max.bytes`. A
+            // larger payload throws `TelemetryTooLargeException`, which 4.3.1
+            // answers with INVALID_RECORD like any other export failure, and
+            // which makes the Java client stop pushing telemetry. Trunk
+            // (KAFKA-21076) answers the retriable TELEMETRY_TOO_LARGE instead.
             match krabka_compression::decompress(ct, &req.metrics, manager.telemetry_max()) {
                 Ok(raw) => match otlp::decode_metrics(&raw) {
                     Ok(md) => {
@@ -114,7 +119,9 @@ pub(crate) fn handle(
                         codes::INVALID_RECORD
                     }
                 },
-                Err(CompressionError::TooLarge { limit }) => {
+                Err(CompressionError::TooLarge { limit })
+                    if unstable == UnstableApiVersions::Enabled =>
+                {
                     tracing::debug!(limit, "client-metrics payload decompresses past the limit");
                     codes::TELEMETRY_TOO_LARGE
                 }

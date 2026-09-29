@@ -41,11 +41,12 @@ pub(crate) fn handle(
     let req = GetTelemetrySubscriptionsRequest::decode(&mut cur, version)?;
 
     let attrs = ClientAttributes {
+        connection_id: ctx.connection_id.to_string(),
         client_instance_id: Uuid::from_bytes(req.client_instance_id.0),
         client_id: ctx.client_id.to_string(),
         software_name: ctx.software_name.to_string(),
         software_version: ctx.software_version.to_string(),
-        source_address: ctx.peer.ip().to_string(),
+        source_address: ctx.source_address(),
         source_port: ctx.peer.port(),
     };
 
@@ -104,6 +105,7 @@ mod tests {
         let broker = broker_handle.broker_arc_for_test();
         let peer = "127.0.0.1:9092".parse().unwrap();
         let ctx = TelemetryContext {
+            connection_id: "connection-a",
             client_id: "client-a",
             peer: &peer,
             software_name: "test-client",

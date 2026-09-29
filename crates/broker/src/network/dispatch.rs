@@ -625,5 +625,12 @@ async fn serve_connection_stream<S>(
         .share_partition_leaders
         .release_connection(&connection_id)
         .await;
+    // KIP-714: Kafka registers `ClientMetricsManager.connectionDisconnectListener`
+    // with the socket server, which drops the client instance that this
+    // connection created.
+    broker
+        .client_metrics
+        .manager
+        .connection_closed(&connection_id);
     tracing::debug!("connection closed");
 }

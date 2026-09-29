@@ -67,8 +67,10 @@ impl BrokerConfig {
             log_retention_check_interval: minutes(5),
             future_log_move_retry_backoff: millis(50),
             client_metrics_eviction_tick: minutes(1),
-            client_metrics_stale_floor: minutes(10),
-            client_metrics_default_interval: minutes(5),
+            client_metrics_stale_floor: minutes(1),
+            client_metrics_default_interval: millis(
+                crate::client_metrics::config::INTERVAL_MS_DEFAULT.unsigned_abs(),
+            ),
             client_metrics_otlp_queue_capacity: 256,
             client_metrics_telemetry_max: mebibytes(1),
             client_metrics_prom_snapshot_ttl: minutes(5),

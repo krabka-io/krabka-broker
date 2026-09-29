@@ -40,7 +40,10 @@ pub(super) async fn start_observability(
         None
     };
     let client_metrics = Arc::new(crate::client_metrics::ClientMetrics::new(
-        config.client_metrics_telemetry_max,
+        crate::client_metrics::ClientMetricsManager::new(
+            config.client_metrics_telemetry_max,
+            config.client_metrics_default_interval.millis_i32(),
+        ),
         config.client_metrics_otlp_endpoint.clone(),
         config.client_metrics_otlp_protocol,
         config.client_metrics_otlp_queue_capacity,

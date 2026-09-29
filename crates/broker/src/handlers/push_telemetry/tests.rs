@@ -14,8 +14,11 @@ use uuid::Uuid;
 
 use super::*;
 use crate::{
-    client_metrics::manager::{
-        SubscriptionDecision, compute_subscription, subscription_id as compute_subscription_id,
+    client_metrics::{
+        config::INTERVAL_MS_DEFAULT,
+        manager::{
+            SubscriptionDecision, compute_subscription, subscription_id as compute_subscription_id,
+        },
     },
     handlers::push_telemetry::test_support::{metrics_data, number_point},
 };
@@ -59,11 +62,12 @@ struct Client<'a> {
 impl Client<'_> {
     fn attrs(&self, instance: Uuid) -> ClientAttributes {
         ClientAttributes {
+            connection_id: self.ctx.connection_id.to_string(),
             client_instance_id: instance,
             client_id: self.ctx.client_id.to_string(),
             software_name: self.ctx.software_name.to_string(),
             software_version: self.ctx.software_version.to_string(),
-            source_address: self.ctx.peer.ip().to_string(),
+            source_address: self.ctx.source_address(),
             source_port: self.ctx.peer.port(),
         }
     }
@@ -86,7 +90,7 @@ impl Client<'_> {
     fn current_subscription_id(&self, instance: Uuid) -> i32 {
         let image = self.broker.controller.current_image();
         compute_subscription_id(
-            &compute_subscription(&image, &self.attrs(instance)),
+            &compute_subscription(&image, &self.attrs(instance), INTERVAL_MS_DEFAULT),
             instance,
         )
     }
@@ -120,13 +124,22 @@ impl Client<'_> {
 }
 
 /// One push after a `GetTelemetrySubscriptions`, with `telemetry.max.bytes`
-/// at 1024. Kafka's `CompressionType.forId` takes 0 to 4 only, and a payload
-/// that decompresses past `telemetry.max.bytes` is `TELEMETRY_TOO_LARGE`, not
-/// `INVALID_RECORD` (#693).
+/// at 1024. Kafka's `CompressionType.forId` takes 0 to 4 only. A payload that
+/// decompresses past `telemetry.max.bytes` is `INVALID_RECORD` on 4.3.1, which
+/// stops the Java client's telemetry, and the retriable `TELEMETRY_TOO_LARGE`
+/// on trunk (KAFKA-21076), which `unstable.api.versions.enable` selects
+/// (#693, #1246).
 #[tokio::test]
 async fn push_after_get_follows_kafkas_payload_checks() {
+    for unstable in [UnstableApiVersions::Disabled, UnstableApiVersions::Enabled] {
+        push_after_get_checks(unstable).await;
+    }
+}
+
+async fn push_after_get_checks(unstable: UnstableApiVersions) {
     let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
         cfg.client_metrics_telemetry_max = krabka_units::kibibytes(1);
+        cfg.features.unstable_api_versions = unstable;
     })
     .await;
     let broker = broker_handle.broker_arc_for_test();
@@ -134,6 +147,7 @@ async fn push_after_get_follows_kafkas_payload_checks() {
     let client = Client {
         broker: &broker,
         ctx: TelemetryContext {
+            connection_id: "connection-a",
             client_id: "client-a",
             peer: &peer,
             software_name: "test-client",
@@ -142,6 +156,10 @@ async fn push_after_get_follows_kafkas_payload_checks() {
     };
     let bomb = gzip(&vec![0; 64 * 1024]);
     assert!(bomb.len() <= 1024);
+    let decompressed_too_large = match unstable {
+        UnstableApiVersions::Disabled => codes::INVALID_RECORD,
+        UnstableApiVersions::Enabled => codes::TELEMETRY_TOO_LARGE,
+    };
     let rows = [
         ("gzip OTLP", GZIP, gzip(&otlp()), codes::NONE),
         ("uncompressed OTLP", NONE, Bytes::from(otlp()), codes::NONE),
@@ -174,7 +192,7 @@ async fn push_after_get_follows_kafkas_payload_checks() {
             "decompressed payload over telemetry.max.bytes",
             GZIP,
             bomb,
-            codes::TELEMETRY_TOO_LARGE,
+            decompressed_too_large,
         ),
         (
             "payload that is not OTLP",
@@ -194,7 +212,7 @@ async fn push_after_get_follows_kafkas_payload_checks() {
         let subscription_id = client.get(instance);
         assert!(
             client.push(instance, subscription_id, compression, payload) == response(expected),
-            "row {name}"
+            "row {name} with {unstable:?}"
         );
     }
     broker_handle.shutdown().await;
@@ -211,6 +229,7 @@ async fn push_without_a_get_builds_the_instance() {
     let client = Client {
         broker: &broker,
         ctx: TelemetryContext {
+            connection_id: "connection-a",
             client_id: "client-a",
             peer: &peer,
             software_name: "test-client",
