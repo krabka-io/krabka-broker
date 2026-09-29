@@ -107,7 +107,9 @@ pub(crate) async fn handle(
         // Kafka's `GroupCoordinatorService` checks the request before it
         // schedules the write on the coordinator, so a refused request changes
         // no group and never gets NOT_COORDINATOR.
-        if let Some((error_code, message)) = validation::request_error(&req) {
+        if let Some((error_code, message)) =
+            validation::request_error(&req, broker.config.features.unstable_api_versions)
+        {
             return crate::handlers::encode_response(
                 &crate::coordinator::unified::streams::actor::response::error_resp(
                     error_code,

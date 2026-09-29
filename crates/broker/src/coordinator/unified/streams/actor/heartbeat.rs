@@ -22,6 +22,7 @@ use super::{
     response::{ResponseDelta, build_assignment_resp, endpoint_to_partitions, error_resp},
 };
 use crate::{
+    api_catalog::UnstableApiVersions,
     codes,
     coordinator::unified::{
         ClientIdentity, GroupCoordinator,
@@ -123,21 +124,29 @@ pub(super) async fn handle_heartbeat(
         }
     }
 
+    // ─── Group size ──────────────────────────────────────────────
+    // Kafka's `throwIfStreamsGroupIsFull` runs on every join. Kafka trunk does
+    // not count a member that is already in the group, and 4.3.1 does: a
+    // known member that rejoins a full group is refused too.
+    let known_member = actor.state.members.contains_key(&req.member_id);
+    if req.member_epoch == 0
+        && actor.state.members.len() >= config.max_size
+        && (!known_member || config.unstable_api_versions == UnstableApiVersions::Disabled)
+    {
+        return Ok(error_resp(
+            codes::GROUP_MAX_SIZE_REACHED,
+            Some(format!(
+                "The streams group has reached its maximum capacity of {} members.",
+                config.max_size
+            )),
+        ));
+    }
+
     // ─── First-join path ─────────────────────────────────────────
     // KIP-1071 mirrors KIP-848: epoch 0 from an unknown member is a first
     // join, with the member id that the client generated. Epoch 0 from a
     // known member is a rejoin and takes the existing-member path below.
-    if req.member_epoch == 0 && !actor.state.members.contains_key(&req.member_id) {
-        // Kafka's `throwIfStreamsGroupIsFull` does not count a known member.
-        if actor.state.members.len() >= config.max_size {
-            return Ok(error_resp(
-                codes::GROUP_MAX_SIZE_REACHED,
-                Some(format!(
-                    "The streams group has reached its maximum capacity of {} members.",
-                    config.max_size
-                )),
-            ));
-        }
+    if req.member_epoch == 0 && !known_member {
         if let Some(resp) = topology_error(actor, req, metadata_source) {
             return Ok(resp);
         }
@@ -341,6 +350,7 @@ fn accepted_response(
                 member_id,
                 configured.as_ref().and_then(|c| c.subtopologies.as_ref()),
                 image.as_deref(),
+                config.unstable_api_versions,
             )
         });
     if group_existed {
