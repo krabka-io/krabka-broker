@@ -118,6 +118,153 @@ async fn member_limit_rejects_only_new_members() {
 
 const IDENTITY_TOPIC: Uuid = Uuid([9; 16]);
 
+/// The one topic `t`, with two partitions, of the handoff test.
+fn handoff_metadata() -> StaticMetadata {
+    StaticMetadata {
+        input: ReconcileInput {
+            topic_id_by_name: [("t".into(), IDENTITY_TOPIC)].into(),
+            partitions_per_topic: [(IDENTITY_TOPIC, 2)].into(),
+            ..Default::default()
+        },
+    }
+}
+
+fn handoff_heartbeat(
+    state: &mut GroupState,
+    request: ConsumerGroupHeartbeatRequest,
+) -> HeartbeatStep {
+    step_heartbeat(
+        state,
+        &NextGenConfig::default(),
+        &handoff_metadata(),
+        &ConsumerGroupHeartbeatRequest {
+            group_id: "g".into(),
+            ..request
+        },
+        ClientIdentity {
+            id: "client",
+            host: "host",
+        },
+        Instant::now(),
+        &HashSet::new(),
+    )
+}
+
+/// The heartbeat with which a consumer joins `handoff_metadata`'s topic.
+fn handoff_join(state: &mut GroupState, member_id: &str) -> HeartbeatStep {
+    handoff_heartbeat(
+        state,
+        ConsumerGroupHeartbeatRequest {
+            member_id: member_id.into(),
+            member_epoch: 0,
+            subscribed_topic_names: Some(vec!["t".into()]),
+            rebalance_timeout_ms: 60_000,
+            topic_partitions: Some(vec![]),
+            ..Default::default()
+        },
+    )
+}
+
+/// What the Java client sends in steady state
+/// (`ConsumerHeartbeatRequestManager.HeartbeatState.buildRequestData`): no
+/// subscription and no rebalance timeout, and `TopicPartitions` only when its
+/// assignment changed, so `owned` is `None` while it did not.
+fn handoff_keepalive(
+    state: &mut GroupState,
+    member_id: &str,
+    member_epoch: i32,
+    owned: Option<Vec<i32>>,
+) -> HeartbeatStep {
+    handoff_heartbeat(
+        state,
+        ConsumerGroupHeartbeatRequest {
+            member_id: member_id.into(),
+            member_epoch,
+            rebalance_timeout_ms: -1,
+            topic_partitions: owned.map(|partitions| {
+                vec![
+                    krabka_protocol::owned::consumer_group_heartbeat_request::TopicPartitions {
+                        topic_id: IDENTITY_TOPIC,
+                        partitions,
+                        ..Default::default()
+                    },
+                ]
+            }),
+            ..Default::default()
+        },
+    )
+}
+
+/// The partitions of `t` that a response assigns, or `None` when it carries no
+/// assignment.
+fn assigned_partitions(response: &ConsumerGroupHeartbeatResponse) -> Option<Vec<i32>> {
+    response.assignment.as_ref().map(|assignment| {
+        assignment
+            .topic_partitions
+            .iter()
+            .flat_map(|topic| topic.partitions.iter().copied())
+            .collect()
+    })
+}
+
+/// Kafka reconciles a member only inside its own heartbeat, and reads a
+/// heartbeat without `TopicPartitions` as "the owned set is unchanged"
+/// (`CurrentAssignmentBuilder.ownsRevokedPartitions(null)`). So with two
+/// members, the joiner is granted a partition only after the incumbent, told to
+/// revoke it in its own heartbeat, reports an owned set without it. Stock
+/// clients send that steady-state heartbeat with a null owned set, which used
+/// to wipe the pending revocation and hand the partition to both members.
+#[test]
+fn a_joiner_gets_a_partition_only_after_the_incumbent_reports_it_revoked() {
+    use crate::coordinator::unified::persistence_next_gen::MemberAssignmentState::{
+        Stable, UnreleasedPartitions, UnrevokedPartitions,
+    };
+
+    let mut state = GroupState::new("g");
+    let incumbent = handoff_join(&mut state, "a");
+    check!(incumbent.response == identity_ok("a", 1, Some(vec![0, 1])));
+
+    // `b` joins: the group moves to epoch 2 and `a` keeps both partitions
+    // until its own heartbeat.
+    let joiner = handoff_join(&mut state, "b");
+    check!(joiner.response.member_epoch == 2);
+    check!(assigned_partitions(&joiner.response) == Some(vec![]));
+    check!(state.members["b"].assignment_state == UnreleasedPartitions);
+    check!(state.members["a"].assigned_partitions == [(IDENTITY_TOPIC, vec![0, 1])].into());
+
+    // The incumbent's heartbeat carries no owned set. It is told its smaller
+    // assignment, and it stays at epoch 1 with the other partition pending
+    // revocation.
+    let told = handoff_keepalive(&mut state, "a", 1, None);
+    let kept = assigned_partitions(&told.response).expect("a is told its assignment shrank");
+    check!(kept.len() == 1);
+    check!(told.response == identity_ok("a", 1, Some(kept.clone())));
+    let revoked = 1 - kept[0];
+    check!(state.members["a"].assignment_state == UnrevokedPartitions);
+    check!(
+        state.members["a"].partitions_pending_revocation
+            == [(IDENTITY_TOPIC, vec![revoked])].into()
+    );
+
+    // Neither `a`'s next null heartbeat nor `b`'s moves anything: `a` still
+    // owns the partition, so `b` does not get it.
+    let again = handoff_keepalive(&mut state, "a", 1, None);
+    check!(again.response == identity_ok("a", 1, None));
+    let waiting = handoff_keepalive(&mut state, "b", 2, None);
+    check!(waiting.response == identity_ok("b", 2, None));
+    check!(state.members["b"].assigned_partitions.is_empty());
+    check!(state.members["a"].assignment_state == UnrevokedPartitions);
+
+    // `a` reports what it owns now, without the revoked partition. It moves to
+    // the target epoch, and `b` is granted the partition at its next heartbeat.
+    let acknowledged = handoff_keepalive(&mut state, "a", 1, Some(kept.clone()));
+    check!(acknowledged.response == identity_ok("a", 2, None));
+    check!(state.members["a"].assignment_state == Stable);
+    let granted = handoff_keepalive(&mut state, "b", 2, None);
+    check!(granted.response == identity_ok("b", 2, Some(vec![revoked])));
+    check!(state.members["b"].assignment_state == Stable);
+}
+
 /// One row of [`heartbeat_identity_rules_follow_kafka`].
 struct IdentityRow {
     name: &'static str,

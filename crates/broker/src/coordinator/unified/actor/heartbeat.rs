@@ -178,7 +178,7 @@ pub(crate) struct HeartbeatStep {
 
 /// The pure, synchronous heartbeat decision core: assignor selection and epoch
 /// validation, member upsert or leave, `update_member_state`, `run_reconcile`,
-/// `advance_member_epoch`, and the response build.
+/// `reconcile_member`, and the response build.
 ///
 /// This function holds no `.await` and does no I/O. `handle_heartbeat` calls
 /// it, then flushes `pending` to the log. It is a separate function so that
@@ -250,11 +250,11 @@ pub(crate) fn step_heartbeat(
         };
         state.add_or_update_member(m);
         run_reconcile(state, config, metadata);
-        state.advance_member_epoch(&member_id);
         // Compute the new member's current assignment (grants free target
-        // partitions, withholds those still held by others) before responding.
+        // partitions, withholds those still held by others) and move it to the
+        // target epoch before responding.
         let owned = reported_owned(req);
-        state.reconcile_member(&member_id, &owned);
+        state.reconcile_member(&member_id, owned.as_ref(), true);
         state.track_rebalance_timeout(&member_id, now);
         let pending = snapshot_pending_after_change(state, std::slice::from_ref(&member_id), true);
         let response = build_assignment_resp(state, &member_id, config, true);

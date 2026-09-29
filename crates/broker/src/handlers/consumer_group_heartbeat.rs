@@ -241,9 +241,9 @@ pub(crate) struct RegexAuthzCacheEntry {
 /// heartbeat with a pattern that does not compile never reaches assignment:
 /// the actor's own `check_subscribed_topic_regex` rejects it with
 /// `INVALID_REGULAR_EXPRESSION` first, so no filtering is needed here.
-/// `Some("")` is a pattern like any other: `Regex::new("")` compiles and
-/// matches every topic name, so it goes through the same authorization walk
-/// as any other pattern rather than being read as "no regex".
+/// An empty pattern is how the Java client drops its regex subscription
+/// (Kafka's `isNotEmpty` gate), so it selects no topic and is never
+/// authorized against.
 ///
 /// `metadata_offset` MUST be read from `broker.controller` before `image` is,
 /// not after: see the comment at its call site in `handle`.
@@ -266,7 +266,13 @@ fn regex_subscription_describe_authorized(
     ctx: &crate::handlers::RequestContext<'_>,
     req: &ConsumerGroupHeartbeatRequest,
 ) -> HashSet<String> {
+    // Kafka's `isNotEmpty` gate: an absent pattern is "unchanged" and an empty
+    // one is how a client drops its regex subscription, so neither selects a
+    // topic. Only the empty one frees the cached decision.
     let Some(pattern) = req.subscribed_topic_regex.as_deref() else {
+        return HashSet::new();
+    };
+    if pattern.is_empty() {
         broker
             .group_coordinator
             .regex_authz_cache
@@ -274,8 +280,9 @@ fn regex_subscription_describe_authorized(
             .expect("regex_authz_cache mutex poisoned")
             .pop(&cache_key(req, ctx));
         return HashSet::new();
-    };
-    let Ok(re) = regex::Regex::new(pattern) else {
+    }
+    // Kafka's `TopicRegexResolver` selects a topic whose whole name matches.
+    let Ok(re) = crate::re2j::compile_full_match(pattern) else {
         return HashSet::new();
     };
     let matched: HashSet<&str> = image
@@ -1056,17 +1063,20 @@ mod tests {
         }
     }
 
-    /// `Some("")` is a valid regex that matches every topic name, not "no
-    /// regex" -- it must go through the same Describe authorization walk as
-    /// any other pattern. This is the #716 regression case: treating an
-    /// empty pattern as absent skipped authorization entirely and returned
-    /// every topic as a free pass.
+    /// Kafka's `TopicRegexResolver` selects a topic only when the pattern
+    /// matches its whole name (`Matcher.matches()`), and its `isNotEmpty` gate
+    /// reads the empty pattern, how the client drops a regex subscription, as
+    /// no subscription at all. The Describe walk keeps only the topics the
+    /// principal may describe.
     #[tokio::test]
-    async fn regex_subscription_describe_authorized_treats_empty_pattern_as_a_real_regex() {
+    async fn regex_subscription_describe_authorized_matches_whole_names_and_skips_empty_patterns() {
         let mut image = MetadataImage::new(uuid::Uuid::nil());
-        image.apply(&describe_acl("orders"));
-        image.apply(&topic_record("orders", uuid::Uuid::from_u128(1), 1));
-        image.apply(&topic_record("payments", uuid::Uuid::from_u128(2), 1));
+        for (id, name) in [(1, "orders"), (2, "orders-eu"), (3, "my-orders")] {
+            image.apply(&describe_acl(name));
+            image.apply(&topic_record(name, uuid::Uuid::from_u128(id), 1));
+        }
+        // No Describe grant: never authorized whatever the pattern.
+        image.apply(&topic_record("orders-dlq", uuid::Uuid::from_u128(4), 1));
         let (broker_handle, _dir) = start_broker(Arc::new(
             crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
         ))
@@ -1075,18 +1085,30 @@ mod tests {
         let principal = alice();
         let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
         let ctx = crate::test_support::request_context(&principal, &peer, "c");
-        let req = ConsumerGroupHeartbeatRequest {
-            group_id: "g".into(),
-            subscribed_topic_regex: Some(String::new()),
-            ..Default::default()
-        };
 
-        let authorized = regex_subscription_describe_authorized(&broker, &image, 0, &ctx, &req);
+        // (pattern, the topics the heartbeat may be assigned)
+        let rows: [(&str, &[&str]); 6] = [
+            ("", &[]),
+            ("orders", &["orders"]),
+            ("orders.*", &["orders", "orders-eu"]),
+            (".*orders", &["orders", "my-orders"]),
+            ("rders", &[]),
+            ("orders-dlq", &[]),
+        ];
+        for (pattern, expected) in rows {
+            let req = ConsumerGroupHeartbeatRequest {
+                group_id: "g".into(),
+                subscribed_topic_regex: Some(pattern.into()),
+                ..Default::default()
+            };
 
-        assert!(
-            authorized == std::collections::HashSet::from(["orders".to_string()]),
-            "{authorized:?}"
-        );
+            let authorized = regex_subscription_describe_authorized(&broker, &image, 0, &ctx, &req);
+
+            assert!(
+                authorized == expected.iter().map(|name| (*name).to_string()).collect(),
+                "{pattern:?}: {authorized:?}"
+            );
+        }
         broker_handle.shutdown().await;
     }
 

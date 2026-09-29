@@ -322,15 +322,36 @@ async fn an_old_epoch_is_fenced() {
     let rb = client.send(req2).await.unwrap();
     assert!(rb.error_code == 0);
 
-    // A catches up: heartbeat at epoch 1 succeeds and advances A's epoch to 2.
+    // A's heartbeat at epoch 1 succeeds and tells A to give up half of its
+    // partitions. Kafka's `CurrentAssignmentBuilder` keeps A at epoch 1 until
+    // A reports an owned set without them.
     let mut catch_up = heartbeat("g6", &mid, 1);
     catch_up.subscribed_topic_names = Some(vec!["t6".into()]);
     let rc = client.send(catch_up).await.unwrap();
     assert!(rc.error_code == 0);
     assert!(
-        rc.member_epoch == 2,
-        "A should be at epoch 2 after catch-up"
+        rc.member_epoch == 1,
+        "A stays at epoch 1 while it owns partitions it must revoke"
     );
+    let kept = rc.assignment.expect("A is told its assignment shrank");
+
+    // A reports what it keeps, and moves to epoch 2.
+    let mut acknowledge = heartbeat("g6", &mid, 1);
+    acknowledge.topic_partitions = Some(
+        kept.topic_partitions
+            .iter()
+            .map(|topic| {
+                krabka_protocol::owned::consumer_group_heartbeat_request::TopicPartitions {
+                    topic_id: topic.topic_id,
+                    partitions: topic.partitions.clone(),
+                    ..Default::default()
+                }
+            })
+            .collect(),
+    );
+    let ra = client.send(acknowledge).await.unwrap();
+    assert!(ra.error_code == 0);
+    assert!(ra.member_epoch == 2, "A moves to epoch 2 once it revoked");
 
     // Now A re-heartbeats at the OLD epoch 1 and reports no owned partitions;
     // A's stored epoch is 2. Kafka's `throwIfConsumerGroupMemberEpochIsInvalid`

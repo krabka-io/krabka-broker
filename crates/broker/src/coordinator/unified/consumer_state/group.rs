@@ -811,27 +811,24 @@ mod tests {
         // Epoch 1: granted partitions 0 and 1.
         g.group_epoch = 1;
         g.install_target([("m1".to_string(), [(T, vec![0, 1])].into())].into());
-        g.advance_member_epoch("m1");
-        g.reconcile_member("m1", &HashMap::new());
+        g.reconcile_member("m1", Some(&HashMap::new()), true);
         steps.push(epochs(&g));
 
         // Epoch 2: partition 1 goes. The member still owns it, so it is
         // pending revocation with the epoch it was assigned at.
         g.group_epoch = 2;
         g.install_target([("m1".to_string(), [(T, vec![0])].into())].into());
-        g.reconcile_member("m1", &[(T, vec![0, 1])].into());
+        g.reconcile_member("m1", Some(&[(T, vec![0, 1])].into()), false);
         steps.push(epochs(&g));
 
         // The member revokes it and moves to epoch 2.
-        g.advance_member_epoch("m1");
-        g.reconcile_member("m1", &[(T, vec![0])].into());
+        g.reconcile_member("m1", Some(&[(T, vec![0])].into()), false);
         steps.push(epochs(&g));
 
         // Epoch 3: partition 2 comes, at epoch 3; partition 0 keeps epoch 1.
         g.group_epoch = 3;
         g.install_target([("m1".to_string(), [(T, vec![0, 2])].into())].into());
-        g.advance_member_epoch("m1");
-        g.reconcile_member("m1", &[(T, vec![0])].into());
+        g.reconcile_member("m1", Some(&[(T, vec![0])].into()), false);
         steps.push(epochs(&g));
 
         // A static leave keeps the assignment at epoch 0.

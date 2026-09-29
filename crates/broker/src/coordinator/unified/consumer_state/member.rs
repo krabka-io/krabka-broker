@@ -57,7 +57,8 @@ pub struct MemberState {
     /// KIP-848 v1+ `subscribed_topic_regex`. When set, the reconciler resolves
     /// it against the metadata image and unions the match with
     /// `subscribed_topic_names`. `None` means "no regex", that is an
-    /// exact-name subscription only.
+    /// exact-name subscription only. The empty pattern a client sends to drop
+    /// its regex is stored as `None`, as Kafka's `isNotEmpty` gate reads it.
     pub subscribed_topic_regex: Option<String>,
     /// Compiled form of `subscribed_topic_regex`. The cache stops the
     /// reconciler from compiling the pattern for this member again on every
@@ -153,9 +154,15 @@ impl MemberState {
     /// therefore reachable only from replay, where a persisted pattern is
     /// restored without going back through that gate.
     pub fn set_regex(&mut self, pattern: Option<String>) {
+        // Kafka's `isNotEmpty` gate: an empty pattern is how the client drops
+        // its regex subscription, so it selects no topic and compiles to
+        // nothing.
+        let pattern = pattern.filter(|pattern| !pattern.is_empty());
         self.compiled_regex = match pattern.as_deref() {
             None => CompiledRegex::Absent,
-            Some(pat) => match Regex::new(pat) {
+            // Kafka's `TopicRegexResolver` selects a topic with
+            // `Matcher.matches()`, so the pattern must match the whole name.
+            Some(pat) => match crate::re2j::compile_full_match(pat) {
                 Ok(regex) => CompiledRegex::Valid(regex),
                 Err(e) => {
                     tracing::warn!(
@@ -300,10 +307,45 @@ mod tests {
     fn sync_regex_cache_populates_from_literal_field() {
         // Mimics a cross-module struct literal: pattern set, cache left None.
         let mut m = member("m1");
-        m.subscribed_topic_regex = Some("^a".into());
+        m.subscribed_topic_regex = Some("a.*".into());
         m.compiled_regex = crate::coordinator::unified::consumer_state::CompiledRegex::Absent;
         m.sync_regex_cache();
-        assert!(m.subscribed_topic_regex.as_deref() == Some("^a"));
+        assert!(m.subscribed_topic_regex.as_deref() == Some("a.*"));
         assert!(m.compiled_regex().expect("synced").is_match("apple"));
+    }
+
+    /// Kafka's `TopicRegexResolver` selects a topic with `Matcher.matches()`,
+    /// so the pattern must match the whole name.
+    #[test]
+    fn set_regex_matches_the_whole_topic_name() {
+        let mut m = member("m1");
+        // (pattern, topic, selected)
+        for (pattern, topic, selected) in [
+            ("orders", "orders", true),
+            ("orders", "orders-eu", false),
+            ("orders", "my-orders", false),
+            ("orders.*", "orders-eu", true),
+            ("a|b", "ab", false),
+            ("a|b", "b", true),
+            // An inline `(?m)` cannot turn the anchors into line anchors.
+            ("(?m)orders", "orders\nx", false),
+        ] {
+            m.set_regex(Some(pattern.into()));
+            assert!(
+                m.compiled_regex().expect("compiles").is_match(topic) == selected,
+                "{pattern} on {topic}"
+            );
+        }
+    }
+
+    /// Kafka's `isNotEmpty` gate: an empty pattern is how the client drops its
+    /// regex subscription, so it leaves the member with none.
+    #[test]
+    fn set_regex_reads_the_empty_pattern_as_no_regex() {
+        let mut m = member("m1");
+        m.set_regex(Some("orders".into()));
+        m.set_regex(Some(String::new()));
+        assert!(m.subscribed_topic_regex.is_none());
+        assert!(m.compiled_regex().is_none());
     }
 }

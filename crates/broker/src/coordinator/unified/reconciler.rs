@@ -457,20 +457,49 @@ mod tests {
         );
     }
 
+    /// Kafka's `isNotEmpty` gate: the empty pattern is how the Java client
+    /// drops a regex subscription, so it selects no topic, whatever the
+    /// authorized set holds. The explicit names still apply.
     #[test]
-    fn empty_regex_matches_everything() {
-        // Empty pattern is a valid regex that matches every string; this
-        // covers the operator-intended "subscribe to all topics" case
-        // without forcing the client to enumerate them.
+    fn empty_regex_subscribes_to_no_topic() {
         let mut g = GroupState::new("g");
-        g.add_or_update_member(member_with_regex("m1", &[], Some(""), &["a", "b", "c"]));
+        g.add_or_update_member(member_with_regex("m1", &["a"], Some(""), &["a", "b", "c"]));
         let inp = input_with_topics(&[("a", 1), ("b", 1), ("c", 1)]);
+        let a = inp.topic_id_by_name["a"];
         reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
         let assigned: HashSet<Uuid> = g.target.per_member["m1"].keys().copied().collect();
-        assert!(
-            assigned.len() == 3,
-            "empty regex matches every topic; got {assigned:?}"
-        );
+        assert!(assigned == maplit::hashset! {a}, "{assigned:?}");
+    }
+
+    /// Kafka's `TopicRegexResolver` selects a topic with `Matcher.matches()`,
+    /// so the pattern `orders` selects the topic `orders` and neither
+    /// `orders-eu` nor `my-orders`.
+    #[test]
+    fn regex_selects_only_topics_whose_whole_name_matches() {
+        let authorized = ["orders", "orders-eu", "my-orders"];
+        let inp = input_with_topics(&[("orders", 1), ("orders-eu", 1), ("my-orders", 1)]);
+        // (pattern, the topics the member subscribes to)
+        for (pattern, expected) in [
+            ("orders", vec!["orders"]),
+            ("orders.*", vec!["orders", "orders-eu"]),
+            (".*orders", vec!["orders", "my-orders"]),
+            ("rders", vec![]),
+        ] {
+            let mut g = GroupState::new("g");
+            g.add_or_update_member(member_with_regex("m1", &[], Some(pattern), &authorized));
+            reconcile_if_dirty(&mut g, &inp, &UniformAssignor);
+            let assigned: HashSet<Uuid> = g
+                .target
+                .per_member
+                .get("m1")
+                .map(|topics| topics.keys().copied().collect())
+                .unwrap_or_default();
+            let expected: HashSet<Uuid> = expected
+                .into_iter()
+                .map(|name| inp.topic_id_by_name[name])
+                .collect();
+            assert!(assigned == expected, "{pattern}: {assigned:?}");
+        }
     }
 
     #[test]
@@ -603,7 +632,7 @@ mod tests {
         g.add_or_update_member(member_with_regex(
             "m1",
             &[],
-            Some("^orders-"),
+            Some("^orders-.*"),
             &["orders-eu"],
         ));
         let inp = input_with_topics(&[("orders-eu", 1), ("shipments", 1)]);
