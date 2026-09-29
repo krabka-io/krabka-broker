@@ -1,5 +1,7 @@
 //! Sparse offset index. Each entry is 8 bytes: `relative_offset` as u32 BE
-//! and position as u32 BE. Entries increase monotonically.
+//! and position as u32 BE. Entries increase monotonically. As in Kafka's
+//! `LogSegment.append`, the offset is the **last** offset of the batch that
+//! starts at the position, not its base offset.
 
 use std::{
     fs::{File, OpenOptions},
@@ -105,6 +107,16 @@ impl OffsetIndex {
         krabka_verified::offset_index_lookup(&self.entries, target)
     }
 
+    /// The entry [`OffsetIndex::lookup`] lands on: the largest entry with
+    /// `relative_offset <= target`, or `None` when every entry is above it.
+    #[must_use]
+    pub fn floor_entry(&self, target: u32) -> Option<(u32, u32)> {
+        let above = self
+            .entries
+            .partition_point(|&(relative_offset, _)| relative_offset <= target);
+        above.checked_sub(1).map(|index| self.entries[index])
+    }
+
     /// Truncate the entries, and the on-disk file, so that no entry with
     /// `position >= max_position_exclusive` remains.
     #[instrument(level = "debug", skip(self), fields(entries = tracing::field::Empty), err)]
@@ -123,8 +135,9 @@ impl OffsetIndex {
     }
 
     /// Byte position of the first entry whose `relative_offset >= target`, or
-    /// `None` when every entry is below `target`. Every batch that covers an
-    /// offset `< target` lies strictly below this position, so the position
+    /// `None` when every entry is below `target`. An entry holds the last
+    /// offset of the batch that starts at its position, so every batch that
+    /// ends below `target` lies strictly below this position, and the position
     /// bounds a scan from the start that must stop at `target`.
     #[must_use]
     pub fn position_at_or_after(&self, target: u32) -> Option<u32> {
@@ -260,6 +273,30 @@ mod tests {
         assert2::assert!(idx.entry_count() == 2);
         assert2::assert!(idx.last_entry() == Some((100, 4096)));
         assert2::assert!(idx.lookup(150) == 4096);
+    }
+
+    /// `floor_entry` is the entry `lookup` lands on, so a read can tell whether
+    /// the indexed batch ends exactly on its target.
+    #[test]
+    fn floor_entry_is_the_entry_lookup_lands_on() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("00000000000000000000.index");
+        let mut idx = OffsetIndex::open(&path).unwrap();
+        idx.append(4, 0).unwrap();
+        idx.append(9, 50).unwrap();
+        for (name, target, want) in [
+            ("below the first entry", 3, None),
+            ("exact first", 4, Some((4, 0))),
+            ("between entries", 8, Some((4, 0))),
+            ("exact last", 9, Some((9, 50))),
+            ("past the last entry", 100, Some((9, 50))),
+        ] {
+            check!(idx.floor_entry(target) == want, "case {name}");
+            check!(
+                idx.lookup(target) == want.map_or(0, |(_, position)| position),
+                "case {name}: lookup agrees"
+            );
+        }
     }
 
     #[test]

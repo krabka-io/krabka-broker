@@ -8,9 +8,8 @@
 
 use krabka_remote_storage::{
     IndexType, LogOffset, RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageError,
-    TimestampMs, TopicIdPartition, corrupt_log, first_record_at_or_after_timestamp,
-    parse_offset_index, parse_time_index, position_for_relative_offset,
-    relative_offset_floor_for_timestamp,
+    TimestampMs, TopicIdPartition, first_record_at_or_after_timestamp, parse_offset_index,
+    parse_time_index, position_for_relative_offset, relative_offset_floor_for_timestamp,
 };
 
 use super::RemoteReader;
@@ -51,13 +50,18 @@ impl RemoteReader {
             let data = self
                 .fetch_log_blocking(metadata.clone(), start_position, None)
                 .await?;
-            let scan_offset = metadata
-                .start_offset()
-                .checked_add(i64::from(scan_rel))
-                .ok_or_else(|| corrupt_log("timestamp-index offset overflow"))?;
-            if let Some(found) =
-                first_record_at_or_after_timestamp(&data, scan_offset, target_timestamp)?
-            {
+            // The time index names the last offset of the batch that set each
+            // running maximum, and the offset index turns that into the
+            // position of a batch at or before it. The records that follow
+            // that position are all candidates, the ones before the named
+            // offset inside that batch included: Kafka's
+            // `RemoteLogManager.lookupTimestamp` filters on the log start
+            // offset only, never on the time index's offset.
+            if let Some(found) = first_record_at_or_after_timestamp(
+                &data,
+                metadata.start_offset(),
+                target_timestamp,
+            )? {
                 return Ok(Some(found));
             }
         }
@@ -72,6 +76,7 @@ mod tests {
     use crate::remote_reader::test_support::{
         populated_reader, sparse_remote_segment_reader,
         sparse_remote_segment_reader_with_max_timestamp, tp,
+        unordered_timestamps_remote_segment_reader,
     };
 
     #[tokio::test]
@@ -133,6 +138,23 @@ mod tests {
             .expect("the unknown max sentinel must not suppress an exact remote scan");
 
         assert!(got == (14, 2_000));
+    }
+
+    /// The time index names the last offset of the batch that set a running
+    /// maximum. The newest record can sit earlier in that batch, and the scan
+    /// must still find it: Kafka's `RemoteLogManager.lookupTimestamp` filters
+    /// on the log start offset, never on the index entry's offset.
+    #[tokio::test]
+    async fn offset_for_timestamp_finds_the_newest_record_before_its_batchs_last_offset() {
+        let (reader, _remote_dir) = unordered_timestamps_remote_segment_reader();
+
+        let got = reader
+            .offset_for_timestamp(&tp(), 2_400)
+            .await
+            .unwrap()
+            .expect("the newest record is the first of the second batch");
+
+        assert!(got == (14, 2_400));
     }
 
     #[tokio::test]

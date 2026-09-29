@@ -204,11 +204,45 @@ pub fn caching_sparse_remote_segment_reader() -> (
 pub fn sparse_remote_segment_reader_with_max_timestamp(
     max_timestamp_ms: i64,
 ) -> (RemoteReader, tempfile::TempDir) {
+    remote_segment_reader(
+        &timestamped_batch_at(10, &[1_000, 1_100, 1_600, 1_700], b'a'),
+        &timestamped_batch_at(14, &[2_000, 2_200, 2_400], b'b'),
+        max_timestamp_ms,
+    )
+}
+
+/// The encoded length of the second batch of the sparse fixture, which is the
+/// smallest byte budget that still holds a batch read from its own start.
+pub fn sparse_fixture_second_batch_len() -> usize {
+    let mut buf = bytes::BytesMut::new();
+    timestamped_batch_at(14, &[2_000, 2_200, 2_400], b'b')
+        .encode(&mut buf)
+        .unwrap();
+    buf.len()
+}
+
+/// A remote segment whose second batch carries its newest record first, so the
+/// record the time index's entry points at is not the last one of the batch.
+pub fn unordered_timestamps_remote_segment_reader() -> (RemoteReader, tempfile::TempDir) {
+    remote_segment_reader(
+        &timestamped_batch_at(10, &[1_000, 1_100, 1_600, 1_700], b'a'),
+        &timestamped_batch_at(14, &[2_400, 2_000, 2_200], b'b'),
+        2_400,
+    )
+}
+
+/// Copies a two-batch segment into a fresh tier, with the indexes Kafka would
+/// write for it at an index interval of one batch: the offset index holds each
+/// batch's last offset and start position, and the time index holds each
+/// running maximum with the last offset of the batch that set it.
+fn remote_segment_reader(
+    first: &krabka_protocol::records::RecordBatch,
+    second: &krabka_protocol::records::RecordBatch,
+    max_timestamp_ms: i64,
+) -> (RemoteReader, tempfile::TempDir) {
     let source_dir = tempfile::tempdir().unwrap();
     let remote_dir = tempfile::tempdir().unwrap();
 
-    let first = timestamped_batch_at(10, &[1_000, 1_100, 1_600, 1_700], b'a');
-    let second = timestamped_batch_at(14, &[2_000, 2_200, 2_400], b'b');
     let mut log_bytes = bytes::BytesMut::new();
     first.encode(&mut log_bytes).unwrap();
     let second_position = u32::try_from(log_bytes.len()).unwrap();
@@ -219,12 +253,12 @@ pub fn sparse_remote_segment_reader_with_max_timestamp(
     let offset_index_path = write_test_file(
         source_dir.path(),
         "00000000000000000010.index",
-        &offset_index_bytes(&[(0, 0), (4, second_position)]),
+        &offset_index_bytes(&[(3, 0), (6, second_position)]),
     );
     let time_index_path = write_test_file(
         source_dir.path(),
         "00000000000000000010.timeindex",
-        &time_index_bytes(&[(1_700, 0), (2_400, 4)]),
+        &time_index_bytes(&[(1_700, 3), (2_400, 6)]),
     );
 
     let rsm: Arc<dyn RemoteStorageManager> = Arc::new(LocalTieredStorage::new(remote_dir.path()));

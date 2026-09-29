@@ -52,7 +52,7 @@ impl Segment {
         }
         let target_rel = u32::try_from((fetch_offset.0 - self.base_offset.0).max(0))
             .map_err(|_| LogError::Corrupt("read_raw_desc target offset out of range".into()))?;
-        let start_pos = u64::from(self.offset_index.lookup(target_rel));
+        let start_pos = self.read_start_position(target_rel)?;
 
         // Mirror `read_raw`'s windowing **exactly** so the chosen byte range is
         // byte-identical. `read_raw` first reads `first_read = max_bytes.max(

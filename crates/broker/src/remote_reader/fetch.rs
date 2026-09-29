@@ -84,7 +84,25 @@ impl RemoteReader {
         // of bytes — the segment's `size` is the safe ceiling.
         let segment_size =
             u32::try_from(metadata.segment_size_in_bytes().max(0)).unwrap_or(u32::MAX);
-        let end_position = end_position_for(start_position, segment_size, max_bytes);
+        // An offset-index entry holds the *last* offset of its batch, as Kafka
+        // writes it, so `start_position` is a batch that ends at or below
+        // `offset`. The batch that covers `offset` starts no later than the
+        // next indexed batch (or than the end of the segment, past the last
+        // entry), so widen the cap by that span: the caller's budget then
+        // counts from the covering batch, as it does when Kafka reads the
+        // stream on from the index position.
+        let next_entry = entries.partition_point(|entry| entry.relative_offset.get() <= target_rel);
+        let skip_span = entries
+            .get(next_entry)
+            .map_or(segment_size, |entry| entry.position.get())
+            .saturating_sub(start_position);
+        // A `max_bytes` of zero means "no cap".
+        let capped_bytes = if max_bytes == 0 {
+            0
+        } else {
+            max_bytes.saturating_add(usize::try_from(skip_span).unwrap_or(usize::MAX))
+        };
+        let end_position = end_position_for(start_position, segment_size, capped_bytes);
 
         let data = self
             .fetch_log_blocking(metadata.clone(), start_position, end_position)
@@ -131,7 +149,7 @@ mod tests {
     use super::*;
     use crate::remote_reader::test_support::{
         NotReadyRlmm, caching_sparse_remote_segment_reader, populated_reader,
-        sparse_remote_segment_reader, tp,
+        sparse_fixture_second_batch_len, sparse_remote_segment_reader, tp,
     };
 
     /// KIP-405's `RemoteIndexCache`: a consumer walking one cold segment
@@ -233,6 +251,24 @@ mod tests {
             "relative offset 2 should read the first batch, not jump to {}",
             got.base_offset
         );
+    }
+
+    /// Kafka's offset index holds each batch's *last* offset, so the position
+    /// it gives for an offset in the second batch is the first batch, which
+    /// ends below it. A budget of exactly the second batch's size must still
+    /// return that batch: the read counts its budget from the covering batch,
+    /// not from the indexed one before it.
+    #[tokio::test]
+    async fn fetch_batch_budget_counts_from_the_covering_batch() {
+        let (reader, _remote_dir) = sparse_remote_segment_reader();
+
+        let got = reader
+            .fetch_batch(&tp(), LeaderEpoch(0), 14, sparse_fixture_second_batch_len())
+            .await
+            .expect("ok")
+            .expect("offset 14 starts the second batch");
+
+        assert!(got.base_offset == 14);
     }
 
     #[tokio::test]
