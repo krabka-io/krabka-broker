@@ -42,15 +42,21 @@ pub(super) fn topic_min_insync_replicas(
 /// `Some(codec)` forces recompression of the batches whose codec differs. The
 /// result matches the resolution that the partition writer applies through its
 /// `LogConfig::compression_type`.
+///
+/// The topic's own `compression.type` wins. A topic that sets none, or whose
+/// stored value does not parse, takes `broker_default`: the broker-wide
+/// `compression.type`, static or dynamic, that the partition's base
+/// `LogConfig` carries.
 pub(super) fn resolve_topic_compression(
     image: &krabka_metadata::MetadataImage,
     topic: &str,
+    broker_default: Option<krabka_compression::CompressionType>,
 ) -> Option<krabka_compression::CompressionType> {
     image
         .topic_config(topic)
         .and_then(|m| m.get(COMPRESSION_TYPE))
         .and_then(|v| parse_compression_type(v).ok())
-        .flatten()
+        .unwrap_or(broker_default)
 }
 
 /// A topic's KIP-32 timestamp policy at produce time: whose clock the stored
@@ -468,10 +474,22 @@ mod tests {
                 overrides,
             }));
             assert!(
-                resolve_topic_compression(&img, "t") == want,
+                resolve_topic_compression(&img, "t", Some(CompressionType::Lz4)) == want,
                 "compression.type {config_value:?}"
             );
         }
+    }
+
+    /// A topic that sets no `compression.type` takes the broker-wide one, and
+    /// a topic that sets one keeps it, `producer` included.
+    #[test]
+    fn a_topic_without_compression_type_takes_the_broker_default() {
+        let img = image_with_topic("t", &[1]);
+        assert!(
+            resolve_topic_compression(&img, "t", Some(CompressionType::Zstd))
+                == Some(CompressionType::Zstd)
+        );
+        assert!(resolve_topic_compression(&img, "t", None) == None);
     }
 
     /// Kafka's `LogValidator.recordHasInvalidTimestamp`, which is

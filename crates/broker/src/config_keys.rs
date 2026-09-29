@@ -96,6 +96,7 @@
 //! are both projections of it, so an operator cannot be told one thing by
 //! `kafka-configs --describe` and another by an alter refusal.
 
+mod broker_defaults;
 pub(crate) mod broker_dynamic;
 mod broker_scope;
 mod delivery;
@@ -120,6 +121,7 @@ pub(crate) use topic_scope::ELIGIBLE_LEADER_REPLICAS;
 
 pub use self::docs::{TopicConfigDoc, topic_config_docs};
 pub(crate) use self::{
+    broker_defaults::{BrokerLogDefaults, dynamic_log_base},
     broker_scope::{
         AUTO_CREATE_TOPICS_ENABLE, BROKER_WITNESS, CONNECTIONS_MAX_IDLE_MS,
         DEFAULT_REPLICATION_FACTOR, DELETE_TOPIC_ENABLE, NUM_PARTITIONS,
