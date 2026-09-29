@@ -82,7 +82,17 @@ impl SharePartitionLeaderManager {
                 st
             }
             Ok(registered) => {
-                let start = self.initial_start_offset(group, topic_id, partition).await;
+                let start = match self.initial_start_offset(group, topic_id, partition).await {
+                    Ok(start) => start,
+                    Err(code) => {
+                        warn!(
+                            group,
+                            %topic_id, partition, code,
+                            "share-partition start offset not available"
+                        );
+                        return Err(code);
+                    }
+                };
                 let mut st = AcquisitionState::new(start);
                 // The strategy decides only where the window starts. The state
                 // epoch stays the coordinator's: it is the fencing token the
@@ -128,9 +138,16 @@ impl SharePartitionLeaderManager {
     ///
     /// The group's `share.auto.offset.reset` picks the offset: `earliest` the
     /// log start, `latest` the high watermark, and `by_duration:<d>` the first
-    /// record at or after `now - d`, which falls back to the high watermark
-    /// when the log holds no such record. Every answer is clamped to the log
-    /// start, so a retention-truncated partition never starts below it.
+    /// record at or after `now - d`. Every answer is clamped to the log start,
+    /// so a retention-truncated partition never starts below it.
+    ///
+    /// # Errors
+    ///
+    /// `OFFSET_NOT_AVAILABLE` when `by_duration` finds no record at or after
+    /// the target time, as Kafka's `ShareFetchUtils.offsetForTimestamp` throws
+    /// `OffsetNotAvailableException` for a log with no such record. The load
+    /// then fails and caches nothing, so the next request resolves again once
+    /// a record in the window exists.
     ///
     /// A partition this broker does not hold, or a topic id the image does not
     /// know, yields offset 0: there is no log to resolve against, and the next
@@ -140,7 +157,7 @@ impl SharePartitionLeaderManager {
         group: &str,
         topic_id: uuid::Uuid,
         partition: i32,
-    ) -> Offset {
+    ) -> Result<Offset, i16> {
         let image = self.controller.current_image();
         let strategy = image
             .group_config(group)
@@ -152,12 +169,12 @@ impl SharePartitionLeaderManager {
             .find(|t| t.topic_id == topic_id)
             .and_then(|topic| self.partitions.get(&topic.name, PartitionIndex(partition)));
         let Some(local) = local else {
-            return Offset(0);
+            return Ok(Offset(0));
         };
         let log_start = local.log_start_offset();
         match strategy {
-            ShareAutoOffsetReset::Earliest => log_start,
-            ShareAutoOffsetReset::Latest => local.high_watermark().await.max(log_start),
+            ShareAutoOffsetReset::Earliest => Ok(log_start),
+            ShareAutoOffsetReset::Latest => Ok(local.high_watermark().await.max(log_start)),
             ShareAutoOffsetReset::ByDuration(duration) => {
                 let target = now_ms()
                     .saturating_sub(i64::try_from(duration.as_millis()).unwrap_or(i64::MAX));
@@ -165,13 +182,12 @@ impl SharePartitionLeaderManager {
                     let log = local.log.lock().expect("log mutex poisoned");
                     log.offset_for_timestamp(target).map(|(offset, _)| offset)
                 };
-                match found {
-                    Some(offset) => offset.max(log_start),
-                    // Every record predates the window: the group starts at
-                    // the end of the log, as Kafka's `offsetForTimestamp`
-                    // fallback does.
-                    None => local.high_watermark().await.max(log_start),
-                }
+                // Every record predates the window: Kafka's
+                // `ShareFetchUtils.offsetForTimestamp` throws, and the
+                // initialization of the share partition fails.
+                found
+                    .map(|offset| offset.max(log_start))
+                    .ok_or(crate::codes::OFFSET_NOT_AVAILABLE)
             }
         }
     }
@@ -321,13 +337,18 @@ mod tests {
 
         // `default` carries no override at all, so the broker default decides.
         let strategies = [
-            ("default", None, Offset(4)),
-            ("latest", Some("latest"), Offset(4)),
-            ("earliest", Some("earliest"), Offset(0)),
+            ("default", None, Ok(Offset(4))),
+            ("latest", Some("latest"), Ok(Offset(4))),
+            ("earliest", Some("earliest"), Ok(Offset(0))),
             // The window reaches back past the second batch only.
-            ("in-window", Some("by_duration:PT2H"), Offset(2)),
-            // No record is inside the window: start at the high watermark.
-            ("past-the-end", Some("by_duration:PT1H"), Offset(4)),
+            ("in-window", Some("by_duration:PT2H"), Ok(Offset(2))),
+            // No record is inside the window: Kafka's `offsetForTimestamp`
+            // throws, and the initialization fails.
+            (
+                "past-the-end",
+                Some("by_duration:PT1H"),
+                Err(codes::OFFSET_NOT_AVAILABLE),
+            ),
         ];
         let mut records = vec![
             MetadataRecord::V1Topic(TopicRecord {

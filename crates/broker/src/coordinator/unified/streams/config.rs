@@ -72,7 +72,9 @@ pub enum ShareAutoOffsetReset {
     /// Start at the partition's log start offset.
     Earliest,
     /// Start at the first record whose timestamp is at or after
-    /// `now - duration`, and at the high watermark when no record qualifies.
+    /// `now - duration`. When no record qualifies, Kafka fails the share
+    /// partition's initialization with `OFFSET_NOT_AVAILABLE`, and a fetch on
+    /// it gets that error until a record inside the window exists.
     ByDuration(Duration),
 }
 
