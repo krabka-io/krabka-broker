@@ -89,6 +89,9 @@ fn index_log_config(
         log_config.fetch_max_bytes = fetch_max;
     }
     log_config.compacted = true;
+    // `min_isr` is Kafka's setting for `__remote_log_metadata`. The index topic
+    // keeps the cluster default.
+    log_config.min_isr = None;
     log_config
 }
 
@@ -228,6 +231,13 @@ mod tests {
 
         config.fetch_max_bytes = krabka_units::kibibytes(4);
         assert!(index_log_config(&config, 1).fetch_max_bytes == krabka_units::kibibytes(4));
+    }
+
+    #[test]
+    fn index_topic_keeps_the_cluster_default_min_isr() {
+        let config = crate::config::KafkaRlmmConfig::default();
+
+        assert!(index_log_config(&config, 1).min_isr.is_none());
     }
 
     /// Hands out a silent-but-open replay first, then a healthy one, and

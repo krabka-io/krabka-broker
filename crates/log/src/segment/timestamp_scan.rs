@@ -224,19 +224,30 @@ impl Segment {
     ///
     /// Returns [`LogError::Io`] when the `.log` file cannot be read.
     pub fn restore_max_timestamp(&mut self) -> Result<(), LogError> {
-        let mut max_timestamp = self
+        // The time index's newest entry pairs the running maximum with the
+        // last offset of the batch that set it, which is where the restored
+        // maximum's batch starts too.
+        let (mut max_timestamp, mut max_timestamp_offset) = self
             .time_index
             .last_entry()
-            .map_or(i64::MIN, |(timestamp, _)| timestamp);
+            .map_or((i64::MIN, self.base_offset - 1), |(timestamp, relative)| {
+                (timestamp, self.base_offset + i64::from(relative))
+            });
         let scan_from = self
             .offset_index
             .last_entry()
             .map_or(0, |(_, position)| u64::from(position));
         self.walk_batch_headers(scan_from, |view| {
-            max_timestamp = max_timestamp.max(view.max_timestamp);
+            if view.max_timestamp > max_timestamp {
+                max_timestamp = view.max_timestamp;
+                max_timestamp_offset = view.last_offset;
+            }
             ControlFlow::Continue(())
         })?;
-        self.max_timestamp = self.max_timestamp.max(max_timestamp);
+        if max_timestamp > self.max_timestamp {
+            self.max_timestamp = max_timestamp;
+            self.max_timestamp_offset = max_timestamp_offset;
+        }
         Ok(())
     }
 }

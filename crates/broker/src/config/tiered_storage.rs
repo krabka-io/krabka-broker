@@ -9,8 +9,8 @@ use krabka_units::{ByteSize, Time, convert::TimeExt};
 use crate::{
     BrokerError,
     config::{
-        BrokerConfig, DEFAULT_RLMM_SNAPSHOT_INTERVAL, DEFAULT_RLMM_TOPIC_NUM_PARTITIONS,
-        DEFAULT_RLMM_TOPIC_REPLICATION_FACTOR,
+        BrokerConfig, DEFAULT_RLMM_SNAPSHOT_INTERVAL, DEFAULT_RLMM_TOPIC_MIN_ISR,
+        DEFAULT_RLMM_TOPIC_NUM_PARTITIONS, DEFAULT_RLMM_TOPIC_REPLICATION_FACTOR,
     },
 };
 
@@ -36,6 +36,11 @@ pub struct KafkaRlmmConfig {
     /// Replication factor to create `__remote_log_metadata` with on
     /// first startup. Ignored when the topic already exists.
     pub replication: i32,
+    /// `min.insync.replicas` to create `__remote_log_metadata` with on first
+    /// startup. Maps to Kafka's `remote.log.metadata.topic.min.isr`. Ignored
+    /// when the topic already exists. Default
+    /// [`DEFAULT_RLMM_TOPIC_MIN_ISR`].
+    pub min_isr: i32,
     /// How often the topic-backed manager flushes its RLMM cache
     /// snapshot to disk. Maps to Kafka's
     /// `remote.log.metadata.snapshot.interval`. Default
@@ -91,6 +96,7 @@ impl Default for KafkaRlmmConfig {
             bootstrap: String::new(),
             num_partitions: DEFAULT_RLMM_TOPIC_NUM_PARTITIONS,
             replication: DEFAULT_RLMM_TOPIC_REPLICATION_FACTOR,
+            min_isr: DEFAULT_RLMM_TOPIC_MIN_ISR,
             snapshot_interval: DEFAULT_RLMM_SNAPSHOT_INTERVAL,
             topic_create_timeout:
                 krabka_remote_storage_topic::DEFAULT_METADATA_TOPIC_CREATE_TIMEOUT,
@@ -116,6 +122,7 @@ impl KafkaRlmmConfig {
         let transport = krabka_remote_storage_topic::KafkaMetadataLogConfig {
             dispatch_queue_capacity: self.dispatch_queue_capacity,
             frame_max: self.frame_max,
+            min_isr: Some(self.min_isr),
             topic_create_timeout: self.topic_create_timeout,
             fetch_max_wait: self.fetch_max_wait,
             fetch_max_bytes: self.fetch_max_bytes,
@@ -209,6 +216,7 @@ mod tests {
         let c = KafkaRlmmConfig::default();
         check!(c.num_partitions == 50);
         check!(c.replication == 3);
+        check!(c.min_isr == 2);
         check!(c.bootstrap.is_empty());
         check!(c.snapshot_dir == std::path::PathBuf::new());
         check!(c.snapshot_interval == DEFAULT_RLMM_SNAPSHOT_INTERVAL);
@@ -233,6 +241,7 @@ mod tests {
             )
             .unwrap(),
             snapshot_interval: secs(90),
+            min_isr: 1,
             ..KafkaRlmmConfig::default()
         };
         valid.validate().unwrap();
@@ -242,6 +251,13 @@ mod tests {
                 "fetch_max_wait",
                 KafkaRlmmConfig {
                     fetch_max_wait: Time::ZERO,
+                    ..KafkaRlmmConfig::default()
+                },
+            ),
+            (
+                "min_isr",
+                KafkaRlmmConfig {
+                    min_isr: 0,
                     ..KafkaRlmmConfig::default()
                 },
             ),

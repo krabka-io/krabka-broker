@@ -153,6 +153,7 @@ allow_http = false
 bootstrap = ""
 num_partitions = 50
 replication = 3
+min_isr = 2
 topic_create_timeout = "30s"
 
 # WORM archive mode signs each segment manifest with a PKCS#8 Ed25519 key.

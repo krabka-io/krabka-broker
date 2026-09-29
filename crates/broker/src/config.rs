@@ -181,6 +181,10 @@ pub const DEFAULT_RLMM_TOPIC_NUM_PARTITIONS: i32 = 50;
 /// creation. Matches Kafka's `remote.log.metadata.topic.replication.factor`.
 pub const DEFAULT_RLMM_TOPIC_REPLICATION_FACTOR: i32 = 3;
 
+/// KIP-405: default `min.insync.replicas` for `__remote_log_metadata` on first
+/// creation. Matches Kafka's `remote.log.metadata.topic.min.isr`.
+pub const DEFAULT_RLMM_TOPIC_MIN_ISR: i32 = 2;
+
 /// Default internal topic name for `FedRAMP` MLA audit records.
 pub const DEFAULT_AUDIT_TOPIC: &str = "__krabka_audit";
 

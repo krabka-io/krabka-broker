@@ -2,7 +2,8 @@
 //!
 //! One admin round-trip at startup reuses an existing topic, whose real
 //! partition count and id then win over the configured values, or creates an
-//! absent one with the configured cleanup policy and `retention.ms=-1`. The same
+//! absent one with the configured cleanup policy, `retention.ms=-1` and the
+//! configured `min.insync.replicas`. The same
 //! round-trip resolves the topic `Uuid`, which the manual fetch path needs
 //! because Fetch v13 and later carry `topic_id` and not the name.
 
@@ -71,17 +72,11 @@ pub(super) async fn ensure_topic(
         )));
     }
 
-    let mut configs = BTreeMap::new();
-    configs.insert(
-        "cleanup.policy".to_string(),
-        if cfg.compacted { "compact" } else { "delete" }.to_string(),
-    );
-    configs.insert("retention.ms".to_string(), "-1".to_string());
     let spec = CreateTopicSpec {
         name: cfg.topic.clone(),
         partitions: cfg.num_partitions,
         replicas: cfg.replication,
-        configs,
+        configs: creation_configs(cfg),
         replica_assignments: BTreeMap::new(),
     };
     let outcomes = admin
@@ -125,6 +120,25 @@ pub(super) async fn ensure_topic(
     Ok((cfg.num_partitions, topic_id))
 }
 
+/// Topic configs a freshly created metadata topic carries. Kafka's
+/// `TopicBasedRemoteLogMetadataManager.newRemoteLogMetadataTopic` also sets
+/// `min.insync.replicas` (`remote.log.metadata.topic.min.isr`, default 2), so
+/// an `acks=all` event lands on that many replicas rather than on the leader
+/// alone.
+fn creation_configs(cfg: &KafkaMetadataLogConfig) -> BTreeMap<String, String> {
+    let mut configs = BTreeMap::from([
+        (
+            "cleanup.policy".to_string(),
+            if cfg.compacted { "compact" } else { "delete" }.to_string(),
+        ),
+        ("retention.ms".to_string(), "-1".to_string()),
+    ]);
+    if let Some(min_isr) = cfg.min_isr {
+        configs.insert("min.insync.replicas".to_string(), min_isr.to_string());
+    }
+    configs
+}
+
 async fn ensure_compacted(admin: &mut AdminClient, topic: &str) -> Result<(), MetadataLogError> {
     let outcomes = admin
         .incremental_alter_configs(
@@ -164,4 +178,66 @@ fn warn_if_zero_topic_id(topic: &str, topic_id: WireUuid) {
 /// requires.
 fn to_wire_uuid(u: uuid::Uuid) -> WireUuid {
     WireUuid(*u.as_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::assert;
+
+    use super::*;
+
+    #[test]
+    fn creation_configs_follow_kafkas_metadata_topic() {
+        let cases = [
+            (
+                "defaults match Kafka: delete policy, infinite retention, min.isr 2",
+                KafkaMetadataLogConfig::new("127.0.0.1:9092"),
+                [
+                    ("cleanup.policy", "delete"),
+                    ("min.insync.replicas", "2"),
+                    ("retention.ms", "-1"),
+                ],
+            ),
+            (
+                "an override reaches the topic",
+                KafkaMetadataLogConfig {
+                    min_isr: Some(1),
+                    ..KafkaMetadataLogConfig::new("127.0.0.1:9092")
+                },
+                [
+                    ("cleanup.policy", "delete"),
+                    ("min.insync.replicas", "1"),
+                    ("retention.ms", "-1"),
+                ],
+            ),
+            (
+                "a compacted topic keeps min.isr",
+                KafkaMetadataLogConfig {
+                    compacted: true,
+                    ..KafkaMetadataLogConfig::new("127.0.0.1:9092")
+                },
+                [
+                    ("cleanup.policy", "compact"),
+                    ("min.insync.replicas", "2"),
+                    ("retention.ms", "-1"),
+                ],
+            ),
+        ];
+        for (name, cfg, expected) in cases {
+            let expected = expected
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect::<BTreeMap<_, _>>();
+            assert!(creation_configs(&cfg) == expected, "case {name}");
+        }
+    }
+
+    #[test]
+    fn unset_min_isr_leaves_the_cluster_default() {
+        let cfg = KafkaMetadataLogConfig {
+            min_isr: None,
+            ..KafkaMetadataLogConfig::new("127.0.0.1:9092")
+        };
+        assert!(!creation_configs(&cfg).contains_key("min.insync.replicas"));
+    }
 }

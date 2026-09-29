@@ -48,34 +48,30 @@ fn offset_map(log: &[Entry]) -> std::collections::HashMap<u8, usize> {
     map
 }
 
-/// Producers whose newest-for-key live data survives. The association is
-/// by key, where key equals pid.
-fn data_survives(
-    log: &[Entry],
-    map: &std::collections::HashMap<u8, usize>,
-) -> std::collections::HashSet<u8> {
-    let mut s = std::collections::HashSet::new();
+/// The indices of the commit markers that have a data entry of their producer
+/// in front of them, after that producer's previous marker. This is Kafka's
+/// per-transaction rule for keeping a commit marker. The association is by
+/// key, where key equals pid.
+fn markers_behind_data(log: &[Entry]) -> std::collections::HashSet<usize> {
+    let mut with_data = std::collections::HashSet::new();
+    let mut held = std::collections::HashSet::new();
     for (idx, e) in log.iter().enumerate() {
-        let EntryKind::Data { value } = &e.kind else {
-            continue;
-        };
-        let Some(k) = e.key else { continue };
-        if value.is_none() {
-            continue;
-        }
-        if map.get(&k).copied() == Some(idx) {
-            s.insert(k);
+        match &e.kind {
+            EntryKind::Data { .. } => {
+                with_data.extend(e.key);
+            }
+            EntryKind::Marker {
+                producer_id,
+                commit: true,
+            } => {
+                if with_data.remove(producer_id) {
+                    held.insert(idx);
+                }
+            }
+            EntryKind::Marker { commit: false, .. } => {}
         }
     }
-    s
-}
-
-fn txn_state(pid: u8, survivors: &std::collections::HashSet<u8>) -> TxnDataState {
-    if survivors.contains(&pid) {
-        TxnDataState::DataSurvives
-    } else {
-        TxnDataState::DataFullyGone
-    }
+    held
 }
 
 /// One compaction pass. This function applies the real `retain_decision`
@@ -83,7 +79,7 @@ fn txn_state(pid: u8, survivors: &std::collections::HashSet<u8>) -> TxnDataState
 /// in the model.
 fn compact(log: &[Entry], clock: i64, ret_ms: i64) -> Vec<Entry> {
     let map = offset_map(log);
-    let survivors = data_survives(log, &map);
+    let held = markers_behind_data(log);
     let mut next = Vec::with_capacity(log.len());
     for (idx, e) in log.iter().enumerate() {
         let (rec, batch, is_newest, txn) = match &e.kind {
@@ -111,7 +107,11 @@ fn compact(log: &[Entry], clock: i64, ret_ms: i64) -> Vec<Entry> {
                     existing_horizon: e.horizon,
                 },
                 false,
-                txn_state(*producer_id, &survivors),
+                if held.contains(&idx) {
+                    TxnDataState::DataSurvives
+                } else {
+                    TxnDataState::DataFullyGone
+                },
             ),
         };
         match retain_decision(rec, batch, is_newest, txn, clock, ret_ms) {
@@ -168,9 +168,13 @@ fn apply(log: &mut Vec<Entry>, clock: &mut i64, op: &Op, ret_ms: i64) {
             let before = log.clone();
             let after = compact(&before, *clock, ret_ms);
 
-            // --- Convergence / idempotence at a fixed clock. ---
+            // --- Convergence at a fixed clock. Kafka reads a transaction's
+            // data before it removes it, so the marker behind data that this
+            // pass removes is stamped one pass later. The log is therefore
+            // stable from the second pass on. ---
             let twice = compact(&after, *clock, ret_ms);
-            prop_assert_eq_inner(&after, &twice);
+            let thrice = compact(&twice, *clock, ret_ms);
+            prop_assert_eq_inner(&twice, &thrice);
 
             // --- Monotone shrink. ---
             assert2::assert!(after.len() <= before.len());
@@ -187,28 +191,27 @@ fn apply(log: &mut Vec<Entry>, clock: &mut i64, op: &Op, ret_ms: i64) {
                 }
             }
 
-            // --- Marker safety: survives iff its txn data survives; never
-            // deleted before clock >= horizon. ---
-            let survivors = data_survives(&before, &map);
-            for e in &before {
-                if let EntryKind::Marker { producer_id, .. } = &e.kind {
-                    let alive = after.iter().any(|x| {
-                        matches!(
-                            &x.kind,
-                            EntryKind::Marker { producer_id: p, .. } if p == producer_id
-                        )
-                    });
-                    if survivors.contains(producer_id) {
-                        assert2::assert!(alive);
-                    }
-                    // If the marker had a horizon and clock < horizon, it
-                    // must still be alive (not aged out prematurely).
-                    if let (Some(h), false) = (e.horizon, survivors.contains(producer_id))
-                        && *clock < h
-                    {
-                        assert2::assert!(alive);
-                    }
-                }
+            // --- Marker safety: a marker stays while data of its own
+            // transaction is in front of it, and until its horizon has
+            // elapsed. The pass never reorders or invents markers, so the
+            // markers of one producer that had to stay are at most the
+            // markers of that producer left. ---
+            let held = markers_behind_data(&before);
+            let marker_count = |log: &[Entry], pid: u8| {
+                log.iter()
+                    .filter(|x| matches!(&x.kind, EntryKind::Marker { producer_id, .. } if *producer_id == pid))
+                    .count()
+            };
+            for pid in 0u8..=2 {
+                let must_stay = before
+                    .iter()
+                    .enumerate()
+                    .filter(|(idx, e)| {
+                        matches!(&e.kind, EntryKind::Marker { producer_id, .. } if *producer_id == pid)
+                            && (held.contains(idx) || e.horizon.is_some_and(|h| *clock < h))
+                    })
+                    .count();
+                assert2::assert!(marker_count(&after, pid) >= must_stay);
             }
 
             // --- Tombstone aging: a surviving tombstone is present iff it

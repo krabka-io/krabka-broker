@@ -248,6 +248,7 @@ async fn tiered_storage_topic_rlmm_survives_restart() {
             bootstrap: String::new(),
             num_partitions: 5,
             replication: 1,
+            min_isr: 1,
             snapshot_interval: krabka_units::secs(2),
             snapshot_dir: std::path::PathBuf::new(),
             security: None,

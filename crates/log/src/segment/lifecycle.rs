@@ -12,6 +12,14 @@ use tracing::instrument;
 use super::{Segment, io::seek_to_log_size};
 use crate::error::LogError;
 
+/// What [`Segment::write_snapshot`] saves for [`Segment::rollback_failed_write`].
+#[derive(Debug, Clone, Copy)]
+pub(super) struct WriteSnapshot {
+    last_offset: Offset,
+    max_timestamp: i64,
+    max_timestamp_offset: Offset,
+}
+
 impl Segment {
     /// Mark this segment as sealed. No more appends.
     pub fn seal(&mut self) {
@@ -52,17 +60,32 @@ impl Segment {
         Ok(())
     }
 
+    /// The part of the segment's state an append changes, saved before the
+    /// write so a failed one can put it back.
+    pub(super) fn write_snapshot(&self) -> WriteSnapshot {
+        WriteSnapshot {
+            last_offset: self.last_offset,
+            max_timestamp: self.max_timestamp,
+            max_timestamp_offset: self.max_timestamp_offset,
+        }
+    }
+
     pub(super) fn rollback_failed_write(
         &mut self,
         position: u64,
-        last_offset: Offset,
-        max_timestamp: i64,
+        snapshot: WriteSnapshot,
     ) -> Result<(), LogError> {
+        let WriteSnapshot {
+            last_offset,
+            max_timestamp,
+            max_timestamp_offset,
+        } = snapshot;
         self.log_file.set_len(position)?;
         seek_to_log_size(&self.log_file, position)?;
         self.log_size = position;
         self.last_offset = last_offset;
         self.max_timestamp = max_timestamp;
+        self.max_timestamp_offset = max_timestamp_offset;
         let position = u32::try_from(position)
             .map_err(|_| LogError::BadSegmentName("position overflow".into()))?;
         self.offset_index.truncate_by_position(position)?;
@@ -117,6 +140,7 @@ impl Segment {
         let mut pos: u64 = 0;
         let mut last_kept_offset = self.base_offset - 1;
         let mut last_kept_ts = i64::MIN;
+        let mut last_kept_ts_offset = last_kept_offset;
         while !cur.is_empty() {
             let before = cur.len();
             let Ok(batch) = RecordBatch::decode(&mut cur) else {
@@ -134,6 +158,7 @@ impl Segment {
             last_kept_offset = batch_last_offset;
             if batch.max_timestamp > last_kept_ts {
                 last_kept_ts = batch.max_timestamp;
+                last_kept_ts_offset = batch_last_offset;
             }
         }
 
@@ -142,6 +167,7 @@ impl Segment {
         self.log_size = pos;
         self.last_offset = last_kept_offset;
         self.max_timestamp = last_kept_ts;
+        self.max_timestamp_offset = last_kept_ts_offset;
 
         let pos_u32 =
             u32::try_from(pos).map_err(|_| LogError::BadSegmentName("position overflow".into()))?;

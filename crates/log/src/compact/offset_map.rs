@@ -1,44 +1,54 @@
 //! The first compaction pass. It builds the key-to-newest-offset dedup map
-//! over the sealed segments, then derives from it which transactional
-//! producers still have surviving data. Both walk the same segment list before
-//! any rewrite starts.
+//! over the sealed segments, before any rewrite starts.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use bytes::Bytes;
-use krabka_ids::{Offset, ProducerId};
+use krabka_ids::Offset;
 use tracing::instrument;
 
-use super::{TxnDataState, batch_reader::read_all_batches, should_index_key};
-#[cfg(test)]
-use crate::txn_index::{AbortedTxn, TxnIndex};
-use crate::{error::LogError, segment::Segment};
+use super::{CleanedTransactionMetadata, batch_reader::read_all_batches, should_index_key};
+use crate::{error::LogError, segment::Segment, txn_index::AbortedTxn};
 
 /// Build a map of `key → latest absolute offset` across the given sealed
 /// segments in input order.
 ///
 /// The map excludes records with `key.is_none()`, because
 /// [`rewrite_segments`] drops them. The map's value is the absolute offset of
-/// the **newest** record seen for each key. Later writes overwrite earlier
-/// ones.
+/// the **newest** record seen for each key. Later writes overwrite earlier ones.
+///
+/// A batch of an aborted transaction never enters the map, as in Kafka's
+/// `Cleaner.buildOffsetMapForSegment`: the rewrite drops its records, so it
+/// must not shadow the committed record that came before it. `aborted` lists
+/// the aborted transactions that overlap the segments, whether their abort
+/// marker sits inside the segments or after them.
 #[instrument(
     level = "debug",
     skip_all,
     fields(segments = segments.len(), keys = tracing::field::Empty),
     err,
 )]
-pub fn build_offset_map(segments: &[&Segment]) -> Result<HashMap<Bytes, Offset>, LogError> {
+pub fn build_offset_map(
+    segments: &[&Segment],
+    aborted: Vec<AbortedTxn>,
+) -> Result<HashMap<Bytes, Offset>, LogError> {
     // Keyed by `Bytes` (cheap refcounted clone of the record key) rather
     // than `Vec<u8>` to avoid a heap copy of every key. Zero-length keys
     // are legal in Kafka and dedup as a distinct "empty key" like any other.
     let mut map: HashMap<Bytes, Offset> = HashMap::new();
+    let mut txn_meta = CleanedTransactionMetadata::default();
+    txn_meta.add_aborted_transactions(aborted);
     for seg in segments {
         for batch in read_all_batches(seg)? {
             // Control batches (txn commit/abort markers) carry a control-type
-            // key that must NEVER enter the dedup map. Skip them entirely —
+            // key that must NEVER enter the dedup map. Skip them entirely:
             // indexing their key silently dropped all-but-newest markers and
             // broke read_committed (the control-batch data-loss bug).
             if batch.attributes.is_control_batch() {
+                txn_meta.on_control_batch_read(&batch);
+                continue;
+            }
+            if txn_meta.on_batch_read(&batch) {
                 continue;
             }
             for record in &batch.records {
@@ -55,83 +65,10 @@ pub fn build_offset_map(segments: &[&Segment]) -> Result<HashMap<Bytes, Offset>,
     Ok(map)
 }
 
-/// Per-producer transactional-data survival, computed in a first pass over the
-/// sealed segments.
-///
-/// KIP-534 keeps a transaction's commit or abort marker as long as any of that
-/// transaction's data records survive compaction. Once compaction removes all
-/// of the data, the marker ages out through the delete horizon.
-///
-/// The survivor set this type computes lets the rewrite rebuild each output
-/// group's own survivor `.txnindex` straight from that group's input
-/// segments, for the transactions whose data still partly survives.
-pub struct CleanedTransactionMetadata {
-    /// Producers (`producer_id`) with at least one surviving data record.
-    survivors: HashSet<ProducerId>,
-}
-
-impl CleanedTransactionMetadata {
-    /// Build the metadata. For each producer, this records whether any of its
-    /// transactional DATA records will survive, that is, a data record that is
-    /// newest-for-key in `offset_map`.
-    #[instrument(
-        level = "debug",
-        skip_all,
-        fields(segments = segments.len(), survivors = tracing::field::Empty),
-        err,
-    )]
-    pub fn build(
-        segments: &[&Segment],
-        offset_map: &HashMap<Bytes, Offset>,
-    ) -> Result<Self, LogError> {
-        let mut survivors: HashSet<ProducerId> = HashSet::new();
-        for seg in segments {
-            for batch in read_all_batches(seg)? {
-                // Only data batches contribute survivors. Control batches
-                // carry no data records.
-                if batch.attributes.is_control_batch() {
-                    continue;
-                }
-                // Only transactional producers (producer_id >= 0) matter for
-                // marker retention.
-                if batch.producer_id < 0 {
-                    continue;
-                }
-                for record in &batch.records {
-                    // A surviving data record is one that is newest-for-key.
-                    let Some(key_bytes) = record.key.as_ref() else {
-                        continue;
-                    };
-                    let absolute = Offset(batch.base_offset + i64::from(record.offset_delta));
-                    if offset_map.get(key_bytes.as_ref()).copied() == Some(absolute) {
-                        survivors.insert(ProducerId(batch.producer_id));
-                        break;
-                    }
-                }
-            }
-        }
-        tracing::Span::current().record("survivors", survivors.len());
-        Ok(Self { survivors })
-    }
-
-    /// The transactional-data state for a given producer.
-    #[must_use]
-    pub fn txn_state(&self, producer_id: ProducerId) -> TxnDataState {
-        if producer_id.get() < 0 {
-            return TxnDataState::NotTransactional;
-        }
-        if self.survivors.contains(&producer_id) {
-            TxnDataState::DataSurvives
-        } else {
-            TxnDataState::DataFullyGone
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
-    use krabka_ids::Offset;
+    use krabka_ids::{Offset, ProducerId};
     use krabka_protocol::records::{Attributes, RecordBatch};
     use tempfile::tempdir;
 
@@ -156,7 +93,7 @@ mod tests {
         data.records[0].offset_delta = 0;
         let seg = write_sealed_batches(dir.path(), &[control_batch(0, 1000, 1 /* COMMIT */), data]);
         let segment_refs: Vec<&Segment> = vec![&seg];
-        let map = build_offset_map(&segment_refs).unwrap();
+        let map = build_offset_map(&segment_refs, vec![]).unwrap();
         assert2::assert!(map == maplit::hashmap! {Bytes::from_static(b"k1") => Offset(1)});
     }
 
@@ -173,7 +110,7 @@ mod tests {
             ],
         );
         let segment_refs: Vec<&Segment> = vec![&first_segment];
-        let map = build_offset_map(&segment_refs).unwrap();
+        let map = build_offset_map(&segment_refs, vec![]).unwrap();
         assert2::assert!(
             map == maplit::hashmap! {
             Bytes::from_static(b"k1") => Offset(2),
@@ -194,7 +131,7 @@ mod tests {
             ],
         );
         let segment_refs: Vec<&Segment> = vec![&first_segment];
-        let map = build_offset_map(&segment_refs).unwrap();
+        let map = build_offset_map(&segment_refs, vec![]).unwrap();
         assert2::assert!(map == maplit::hashmap! {Bytes::from_static(b"k1") => Offset(1)});
     }
 
@@ -212,83 +149,45 @@ mod tests {
             vec![make_record(0, Some(b"k1"), Some(b"v2"))],
         );
         let segment_refs: Vec<&Segment> = vec![&first_segment, &second_segment];
-        let map = build_offset_map(&segment_refs).unwrap();
+        let map = build_offset_map(&segment_refs, vec![]).unwrap();
         assert2::assert!(map == maplit::hashmap! {Bytes::from_static(b"k1") => Offset(10)});
     }
 
-    // Survivor detection compares each record's absolute offset
-    // (`base_offset + offset_delta`) against the newest-for-key offset in the
-    // offset map (`== Some(absolute)`). Two transactional producers write the
-    // SAME key k1:
-    //   - producer 1000 at offset 0 (superseded), and
-    //   - producer 2000 at base 10, delta 5 → offset 15 (newest for k1).
-    // The map therefore holds k1 → 15, so producer 2000 survives and producer
-    // 1000 does not. This pins:
-    //   - `absolute = base_offset + offset_delta` (line 429): mutating `+`→`-`
-    //     makes 2000's record resolve to 5, not 15 → 2000 misclassified
-    //     `DataFullyGone`.
-    //   - the `== Some(absolute)` equality (line 430): mutating `==`→`!=`
-    //     inverts the match — 2000 (the match) becomes `DataFullyGone` and
-    //     1000 (the non-match) becomes `DataSurvives`.
+    /// Kafka's `Cleaner.buildOffsetMapForSegment` skips a batch whose
+    /// transaction aborted. Key `k` holds a committed value at offset 5 and an
+    /// aborted one at offset 10, so the map points at the committed record and
+    /// the aborted one never shadows it. A key that only an aborted batch
+    /// wrote stays out of the map altogether.
     #[test]
-    fn build_detects_surviving_txn_producer() {
+    fn an_aborted_batch_never_enters_the_map() {
         let dir = tempdir().unwrap();
-        // Producer 1000: k1 at offset 0 — superseded by producer 2000.
-        let old = RecordBatch {
-            base_offset: 0,
-            last_offset_delta: 0,
-            producer_id: 1000,
-            attributes: Attributes::default().with_transactional(true),
-            records: vec![make_record(0, Some(b"k1"), Some(b"v1"))],
-            ..RecordBatch::default()
-        };
-        // Producer 2000: k1 at base 10, offset_delta 5 → absolute offset 15,
-        // the newest-for-key record.
-        let newest = RecordBatch {
-            base_offset: 10,
-            last_offset_delta: 5,
-            producer_id: 2000,
-            attributes: Attributes::default().with_transactional(true),
-            records: vec![make_record(5, Some(b"k1"), Some(b"v2"))],
-            ..RecordBatch::default()
-        };
-        let p0 = RecordBatch {
-            base_offset: 20,
-            last_offset_delta: 0,
-            producer_id: 0,
-            attributes: Attributes::default().with_transactional(true),
-            records: vec![make_record(0, Some(b"k0"), Some(b"v0"))],
-            ..RecordBatch::default()
-        };
-        let seg = write_sealed_batches(dir.path(), &[old, newest, p0]);
-        let mut idx = TxnIndex::open(seg.txn_index_path()).unwrap();
-        idx.append(AbortedTxn {
-            start_offset: Offset(10),
-            last_offset: Offset(15),
-            producer_id: ProducerId(2000),
-            last_stable_offset: Offset(16),
-        })
-        .unwrap();
-
-        let segment_refs: Vec<&Segment> = vec![&seg];
-        let map = build_offset_map(&segment_refs).unwrap();
-        assert2::assert!(
-            map == maplit::hashmap! {
-                Bytes::from_static(b"k1") => Offset(15),
-                Bytes::from_static(b"k0") => Offset(20),
-            }
+        let transactional =
+            |base_offset: i64, producer_id: i64, key: &[u8], value: &[u8]| RecordBatch {
+                base_offset,
+                last_offset_delta: 0,
+                producer_id,
+                attributes: Attributes::default().with_transactional(true),
+                records: vec![make_record(0, Some(key), Some(value))],
+                ..RecordBatch::default()
+            };
+        let seg = write_sealed_batches(
+            dir.path(),
+            &[
+                transactional(5, 1000, b"k", b"committed"),
+                control_batch(6, 1000, 1 /* COMMIT */),
+                transactional(10, 2000, b"k", b"aborted"),
+                transactional(11, 2000, b"only-aborted", b"v"),
+                control_batch(12, 2000, 0 /* ABORT */),
+            ],
         );
-
-        let txn = CleanedTransactionMetadata::build(&segment_refs, &map).unwrap();
-        // Producer 2000's and 0's newest data survives; producer 1000's is superseded.
-        assert2::assert!(txn.txn_state(ProducerId(2000)) == TxnDataState::DataSurvives);
-        assert2::assert!(txn.txn_state(ProducerId(1000)) == TxnDataState::DataFullyGone);
-        assert2::assert!(txn.txn_state(ProducerId(0)) == TxnDataState::DataSurvives);
-        assert2::assert!(txn.txn_state(ProducerId(999)) == TxnDataState::DataFullyGone);
-        assert2::assert!(txn.txn_state(ProducerId(-2)) == TxnDataState::NotTransactional);
-        // Which aborted-txn entries carry forward into a rewritten output's
-        // `.txnindex` is `rewrite_segments`'s job now, scoped to that
-        // output's own input segments; see
-        // `compact::rewrite::tests::a_survivor_txn_entry_lands_only_in_its_own_group_txnindex`.
+        let aborted = vec![AbortedTxn {
+            start_offset: Offset(10),
+            last_offset: Offset(12),
+            producer_id: ProducerId(2000),
+            last_stable_offset: Offset(13),
+        }];
+        let segment_refs: Vec<&Segment> = vec![&seg];
+        let map = build_offset_map(&segment_refs, aborted).unwrap();
+        assert2::assert!(map == maplit::hashmap! {Bytes::from_static(b"k") => Offset(5)});
     }
 }

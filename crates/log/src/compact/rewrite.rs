@@ -19,14 +19,12 @@ use super::{
     BatchMeta, CleanedTransactionMetadata, RecordMeta, RetainDecision, TxnDataState,
     batch_reader::read_all_batches, retain_decision,
 };
-use crate::{
-    error::LogError,
-    segment::Segment,
-    txn_index::{AbortedTxn, TxnIndex},
-};
+use crate::{error::LogError, segment::Segment, txn_index::TxnIndex};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod transaction_tests;
 
 /// Result of [`rewrite_segments`]: paths to the `.cleaned` files that
 /// [`atomic_swap`] should promote through `.swap` to their final names.
@@ -39,8 +37,8 @@ pub struct RewriteOutput {
     /// Highest absolute offset of any surviving record.
     #[cfg(test)]
     pub new_last_offset: Offset,
-    /// Path to the rewritten survivor `.txnindex`. The rewrite writes this
-    /// file only when it carries forward one or more aborted-txn entries. It
+    /// Path to the rewritten `.txnindex`. The rewrite writes this file only
+    /// when it keeps the abort marker of one or more aborted transactions. It
     /// is `None` when no aborted transaction survives.
     pub txnindex_swap: Option<PathBuf>,
 }
@@ -67,6 +65,14 @@ pub struct RewriteRetention {
 /// therefore hold gaps in their `offset_delta` values where superseded records
 /// used to live. This matches Kafka's on-disk format for compacted topics.
 ///
+/// Every record of a batch that belongs to an aborted transaction is dropped,
+/// and a transaction marker follows Kafka's `CleanedTransactionMetadata`: it
+/// ages out through its delete horizon once the walk has met no batch of its
+/// transaction. The caller adds the aborted transactions of the range to
+/// `txn_meta` first, and passes the same `txn_meta` to every group of one pass
+/// in offset order, because a transaction can span groups. The output's
+/// `.txnindex` holds the aborted transactions whose marker this group kept.
+///
 /// `RETAIN_EMPTY`: this function normally skips a batch that ends up with no
 /// kept records. It writes such a batch again as a bare header with no records
 /// in two cases: when the batch is the last batch of an active producer in
@@ -92,7 +98,7 @@ pub fn rewrite_segments(
     dir: &Path,
     segments: &[&Segment],
     offset_map: &HashMap<Bytes, Offset>,
-    txn_meta: &CleanedTransactionMetadata,
+    txn_meta: &mut CleanedTransactionMetadata,
     retention: RewriteRetention,
     active_producers: &HashMap<ProducerId, Offset>,
 ) -> Result<RewriteOutput, LogError> {
@@ -154,7 +160,25 @@ pub fn rewrite_segments(
     for (batch_idx, batch) in all_batches.iter().enumerate() {
         let is_control = batch.attributes.is_control_batch();
         let producer_id = ProducerId(batch.producer_id);
-        let txn = txn_meta.txn_state(producer_id);
+        // The pass reads the batch before it filters its records, as Kafka's
+        // `Cleaner.shouldDiscardBatch` does: a transaction whose records all
+        // die in this pass still holds its marker until the next one.
+        let (txn, aborted) = if is_control {
+            let discardable = txn_meta.on_control_batch_read(batch);
+            let state = if producer_id.get() < 0 {
+                TxnDataState::NotTransactional
+            } else if discardable {
+                TxnDataState::DataFullyGone
+            } else {
+                TxnDataState::DataSurvives
+            };
+            (state, false)
+        } else {
+            (
+                TxnDataState::NotTransactional,
+                txn_meta.on_batch_read(batch),
+            )
+        };
         let batch_meta = BatchMeta {
             is_control,
             producer_id,
@@ -176,14 +200,21 @@ pub fn rewrite_segments(
                 has_key: record.key.is_some(),
                 has_value: record.value.is_some(),
             };
-            match retain_decision(
-                rec_meta,
-                batch_meta,
-                is_newest_for_key,
-                txn,
-                retention.now_ms,
-                delete_retention_ms,
-            ) {
+            // Every record of an aborted transaction goes, whether or not it
+            // is the newest for its key: Kafka's `discardBatchRecords`.
+            let decision = if aborted {
+                RetainDecision::Delete
+            } else {
+                retain_decision(
+                    rec_meta,
+                    batch_meta,
+                    is_newest_for_key,
+                    txn,
+                    retention.now_ms,
+                    delete_retention_ms,
+                )
+            };
+            match decision {
                 RetainDecision::Keep => kept.push(record.clone()),
                 RetainDecision::SetHorizon(h) => {
                     kept.push(record.clone());
@@ -257,33 +288,19 @@ pub fn rewrite_segments(
     }
     io.sync_file(crate::io::IoTarget::CompactionSwap, &log_file)?;
 
-    // Rebuild the survivor `.txnindex`: carry forward aborted-txn entries
-    // whose aborted data still partially survives. Producers whose data is
-    // fully compacted away have their entries (and markers) dropped.
+    // Rebuild the `.txnindex` from the aborted transactions the walk kept an
+    // abort marker for, as Kafka's `CleanedTransactionMetadata` appends them
+    // to the cleaned index: a transaction whose batches the pass no longer
+    // meets has its entry dropped together with its marker.
     //
-    // The entries come from THIS group's own input `segments`, not from
-    // `txn_meta`'s aborted list over the whole consumed range: a compaction
-    // pass can rewrite that range into several output segments
-    // (`Log::group_segments_by_size`), and an aborted-txn entry lives in
-    // whichever sealed segment its abort marker was appended to -- never
-    // duplicated across segments. Scoping the read to `segments` here is
-    // what keeps each output's `.txnindex` to the entries that actually
-    // belong to it; a read-committed fetch that scans several of a
+    // An entry lands in the output group that holds its abort marker. A
+    // compaction pass can rewrite the consumed range into several output
+    // segments (`Log::group_segments_by_size`), and the walk closes an
+    // aborted transaction where it reads the marker, so no entry is duplicated
+    // across outputs. A read-committed fetch that scans several of a
     // multi-segment pass's outputs would otherwise see the same aborted
     // transaction once per output and inflate its response.
-    // `txn_meta.txn_state` still supplies the survivor set, which is a fact
-    // about the whole pass, not about this group alone: whether a producer's
-    // data survives compaction can be decided by a record in a different
-    // output group than the one holding that producer's abort entry.
-    let mut retained: Vec<AbortedTxn> = Vec::new();
-    for seg in segments {
-        let idx = TxnIndex::open(seg.txn_index_path())?;
-        retained.extend(
-            idx.entries().iter().copied().filter(|entry| {
-                txn_meta.txn_state(entry.producer_id) == TxnDataState::DataSurvives
-            }),
-        );
-    }
+    let retained = txn_meta.take_cleaned_index();
     let txnindex_swap = if retained.is_empty() {
         None
     } else {

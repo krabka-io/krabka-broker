@@ -3,9 +3,6 @@
 //! the stateright model, the proptest fuzz, and the production rewrite path
 //! can all drive the same code.
 
-#[cfg(test)]
-use std::collections::HashSet;
-
 use krabka_ids::ProducerId;
 // ---------------------------------------------------------------------------
 // KIP-534 pure decision cores
@@ -84,22 +81,6 @@ pub(crate) fn rewrite_batch_horizon(
         .map(|d| base_timestamp.saturating_add(*d).saturating_sub(horizon))
         .collect();
     (horizon, new)
-}
-
-/// Whether compaction removed all of a transactional producer's data. That is
-/// true when the `producer_id` is not in the `survivors` set, the set of
-/// producers with a surviving data record.
-///
-/// The production rewrite path uses
-/// [`CleanedTransactionMetadata::txn_state`], which folds this check in. This
-/// standalone form exists for `core_tests` only; the stateright model in
-/// `compact_model.rs` derives the same fact from its abstract log.
-#[cfg(test)]
-pub(crate) fn txn_data_fully_gone(
-    producer_id: ProducerId,
-    survivors: &HashSet<ProducerId>,
-) -> bool {
-    !survivors.contains(&producer_id)
 }
 
 #[cfg(test)]
@@ -285,13 +266,5 @@ mod core_tests {
         let reconstructed: Vec<i64> = deltas.iter().map(|d| base + d).collect();
         assert2::assert!(base == 9999);
         assert2::assert!(reconstructed == vec![1000, 1005, 1020]);
-    }
-
-    #[test]
-    fn txn_data_fully_gone_checks_survivor_set() {
-        let mut survivors = HashSet::new();
-        survivors.insert(ProducerId(1000));
-        assert2::assert!(txn_data_fully_gone(ProducerId(2000), &survivors));
-        assert2::assert!(!txn_data_fully_gone(ProducerId(1000), &survivors));
     }
 }

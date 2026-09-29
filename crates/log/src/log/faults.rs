@@ -185,8 +185,12 @@ fn a_disk_full_sparse_index_write_is_reported_and_rolled_back() {
             let durable = log.log_end_offset();
 
             log.test_set_io(DiskFull::new(target, prefix));
+            // A newer timestamp, because the time index only takes an entry
+            // that is newer than its last one.
+            let mut newer = sample_batch(2);
+            newer.max_timestamp = 1;
             let error = log
-                .append(&mut sample_batch(2))
+                .append(&mut newer)
                 .expect_err("the index write must fail the append");
             check!(is_storage_full(&error), "{target:?}, {label}: {error:?}");
             drop(log);

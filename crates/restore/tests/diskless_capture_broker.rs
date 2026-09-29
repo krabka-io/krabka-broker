@@ -92,6 +92,7 @@ async fn start_diskless_broker() -> DisklessBroker {
         bootstrap: data_addr.to_string(),
         num_partitions: 1,
         replication: 1,
+        min_isr: 1,
         snapshot_interval: krabka_units::hours(1),
         ..KafkaRlmmConfig::default()
     });

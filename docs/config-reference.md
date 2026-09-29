@@ -318,6 +318,7 @@ TOML shape of `[remote_storage.kafka_metadata]`. Maps to [`crate::config::KafkaR
 | `fetch_max_wait` | string | broker default | duration | Maximum wait for each per-partition metadata fetch. |
 | `fetch_retry_backoff` | string | broker default | duration | Backoff after a failed metadata fetch. |
 | `in_memory` | boolean | `false` |  | Explicit opt-out: run the non-durable in-memory RLMM instead of the topic-backed default. Tests / single-node dev only. |
+| `min_isr` | integer (int32) | broker default |  | `min.insync.replicas` for `__remote_log_metadata` on first creation. Defaults to 2 (Kafka's `remote.log.metadata.topic.min.isr`). Keep it at or below `replication`: a topic whose `min.insync.replicas` exceeds its replica count rejects every `acks=all` write, so a single-broker setup that sets `replication = 1` sets this to 1 as well. |
 | `num_partitions` | integer (int32) | broker default |  | Partition count for `__remote_log_metadata` on first creation. Defaults to 50 (Kafka's `remote.log.metadata.topic.num.partitions`). |
 | `replication` | integer (int32) | broker default |  | Replication factor for `__remote_log_metadata` on first creation. Defaults to 3 (Kafka's `remote.log.metadata.topic.replication.factor`). |
 | `snapshot_interval` | string | broker default | duration | RLMM cache snapshot cadence. |

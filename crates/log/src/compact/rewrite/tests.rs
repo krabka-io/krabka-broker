@@ -9,7 +9,7 @@ use krabka_units::prelude::millis;
 
 use super::*;
 use crate::compact::{
-    TxnDataState, build_offset_map,
+    build_offset_map,
     test_support::{
         RETENTION, control_batch, make_record, write_sealed_batches, write_sealed_segment,
     },
@@ -20,15 +20,15 @@ use crate::compact::{
 const NEVER_AGE_NOW_MS: i64 = 0;
 
 fn rewrite_simple(dir: &Path, segment_refs: &[&Segment]) -> RewriteOutput {
-    let map = build_offset_map(segment_refs).unwrap();
-    let txn = CleanedTransactionMetadata::build(segment_refs, &map).unwrap();
+    let map = build_offset_map(segment_refs, vec![]).unwrap();
+    let mut txn = CleanedTransactionMetadata::default();
     let active: HashMap<ProducerId, Offset> = HashMap::new();
     rewrite_segments(
         &crate::io::FileIo,
         dir,
         segment_refs,
         &map,
-        &txn,
+        &mut txn,
         RewriteRetention {
             now_ms: NEVER_AGE_NOW_MS,
             delete_retention: RETENTION,
@@ -38,7 +38,7 @@ fn rewrite_simple(dir: &Path, segment_refs: &[&Segment]) -> RewriteOutput {
     .unwrap()
 }
 
-fn decode_all(bytes: &[u8]) -> Vec<RecordBatch> {
+pub(super) fn decode_all(bytes: &[u8]) -> Vec<RecordBatch> {
     let mut cursor = bytes;
     let mut out = Vec::new();
     while !cursor.is_empty() {
@@ -211,8 +211,8 @@ fn rewrite_tombstone_gets_horizon_stamp() {
         vec![make_record(0, Some(b"k1"), None)], // tombstone, newest for k1
     );
     let segment_refs = vec![&first_segment];
-    let map = build_offset_map(&segment_refs).unwrap();
-    let txn = CleanedTransactionMetadata::build(&segment_refs, &map).unwrap();
+    let map = build_offset_map(&segment_refs, vec![]).unwrap();
+    let mut txn = CleanedTransactionMetadata::default();
     let now = 5_000i64;
     let ret = 50i64;
     let retention = Time::from_millis(ret);
@@ -221,7 +221,7 @@ fn rewrite_tombstone_gets_horizon_stamp() {
         dir.path(),
         &segment_refs,
         &map,
-        &txn,
+        &mut txn,
         RewriteRetention {
             now_ms: now,
             delete_retention: retention,
@@ -268,15 +268,15 @@ fn rewrite_marker_dropped_when_data_gone_and_horizon_elapsed() {
     };
     let seg = write_sealed_batches(dir.path(), &[marker, data]);
     let segment_refs = vec![&seg];
-    let map = build_offset_map(&segment_refs).unwrap();
-    let txn = CleanedTransactionMetadata::build(&segment_refs, &map).unwrap();
+    let map = build_offset_map(&segment_refs, vec![]).unwrap();
+    let mut txn = CleanedTransactionMetadata::default();
     // now=200 >= horizon 100 → marker deleted.
     let out = rewrite_segments(
         &crate::io::FileIo,
         dir.path(),
         &segment_refs,
         &map,
-        &txn,
+        &mut txn,
         RewriteRetention {
             now_ms: 200,
             delete_retention: millis(50),
@@ -326,8 +326,8 @@ fn rewrite_retain_empty_for_active_producer() {
     };
     let seg = write_sealed_batches(dir.path(), &[data1, data2]);
     let segment_refs = vec![&seg];
-    let map = build_offset_map(&segment_refs).unwrap();
-    let txn = CleanedTransactionMetadata::build(&segment_refs, &map).unwrap();
+    let map = build_offset_map(&segment_refs, vec![]).unwrap();
+    let mut txn = CleanedTransactionMetadata::default();
     let mut active = HashMap::new();
     active.insert(ProducerId(1000), Offset(0)); // pid 1000 active, last batch base 0
     let out = rewrite_segments(
@@ -335,7 +335,7 @@ fn rewrite_retain_empty_for_active_producer() {
         dir.path(),
         &segment_refs,
         &map,
-        &txn,
+        &mut txn,
         RewriteRetention {
             now_ms: 0,
             delete_retention: RETENTION,
@@ -425,103 +425,5 @@ fn rewrite_retain_empty_extends_last_offset() {
                     ..RecordBatch::default()
                 },
             ]
-    );
-}
-
-/// A survivor's aborted-txn entry lands only in the output whose own input
-/// segment carried it, not duplicated into every group a multi-segment
-/// compaction pass produces.
-///
-/// `Log::compact` builds `CleanedTransactionMetadata` once, over the whole
-/// consumed range, and shares it across every size-bounded output group
-/// (`Log::group_segments_by_size`). The survivor set that metadata carries is
-/// correctly global -- producer 2000's data survives via segment A even
-/// though this test also rewrites segment B, which holds none of producer
-/// 2000's records. But each group's own rewritten `.txnindex` must still be
-/// scoped to that group's own input segments: segment B never held the
-/// aborted-txn entry, so B's output must not inherit it from the shared
-/// `txn_meta`. Before the fix, `rewrite_segments` wrote the whole shared
-/// aborted list into every group's output, so a `read_committed` fetch
-/// scanning both A's and B's rewritten segments would see producer 2000's
-/// aborted transaction twice.
-#[test]
-fn a_survivor_txn_entry_lands_only_in_its_own_group_txnindex() {
-    let dir = tempfile::tempdir().unwrap();
-
-    // Segment A: producer 2000's only data record, and its aborted-txn entry
-    // seeded into A's own `.txnindex`.
-    let data_a = RecordBatch {
-        base_offset: 0,
-        last_offset_delta: 0,
-        producer_id: 2000,
-        attributes: Attributes::default().with_transactional(true),
-        records: vec![make_record(0, Some(b"k1"), Some(b"v1"))],
-        ..RecordBatch::default()
-    };
-    let seg_a = write_sealed_batches(dir.path(), &[data_a]);
-    let aborted_entry = AbortedTxn {
-        start_offset: Offset(0),
-        last_offset: Offset(0),
-        producer_id: ProducerId(2000),
-        last_stable_offset: Offset(1),
-    };
-    TxnIndex::open(seg_a.txn_index_path())
-        .unwrap()
-        .append(aborted_entry)
-        .unwrap();
-
-    // Segment B: unrelated data from a different producer, with no
-    // aborted-txn entries of its own.
-    let seg_b = write_sealed_segment(
-        dir.path(),
-        10,
-        vec![make_record(0, Some(b"k2"), Some(b"v2"))],
-    );
-
-    // Survivor determination is global, over both segments, exactly as
-    // `Log::compact` builds it once for the whole consumed range.
-    let all_refs = vec![&seg_a, &seg_b];
-    let map = build_offset_map(&all_refs).unwrap();
-    let txn = CleanedTransactionMetadata::build(&all_refs, &map).unwrap();
-    assert2::assert!(txn.txn_state(ProducerId(2000)) == TxnDataState::DataSurvives);
-
-    // Group 1: rewrite segment A alone. Its own `.txnindex` carried the
-    // entry, so the output carries it forward.
-    let out_a = rewrite_segments(
-        &crate::io::FileIo,
-        dir.path(),
-        &[&seg_a],
-        &map,
-        &txn,
-        RewriteRetention {
-            now_ms: NEVER_AGE_NOW_MS,
-            delete_retention: RETENTION,
-        },
-        &HashMap::new(),
-    )
-    .unwrap();
-    let swap_a = out_a
-        .txnindex_swap
-        .expect("segment A's own aborted entry survives into its own output");
-    assert2::assert!(TxnIndex::open(swap_a).unwrap().entries() == [aborted_entry]);
-
-    // Group 2: rewrite segment B alone, with the SAME shared `txn_meta`. B's
-    // own `.txnindex` held nothing, so its output must not inherit A's entry.
-    let out_b = rewrite_segments(
-        &crate::io::FileIo,
-        dir.path(),
-        &[&seg_b],
-        &map,
-        &txn,
-        RewriteRetention {
-            now_ms: NEVER_AGE_NOW_MS,
-            delete_retention: RETENTION,
-        },
-        &HashMap::new(),
-    )
-    .unwrap();
-    assert2::assert!(
-        out_b.txnindex_swap.is_none(),
-        "segment B must not inherit segment A's aborted entry from the shared txn_meta"
     );
 }

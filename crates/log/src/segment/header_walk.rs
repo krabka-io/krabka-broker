@@ -15,6 +15,12 @@ use zerocopy::FromBytes;
 use super::Segment;
 use crate::{config::DEFAULT_TIMESTAMP_SCAN_WINDOW, error::LogError};
 
+/// Bytes of a v2 batch header that hold the base offset.
+const BASE_OFFSET_LEN: usize = 8;
+
+/// Bytes of a v2 batch up to and including the `batch_length` field.
+const BATCH_PREFIX_LEN: usize = 12;
+
 /// The fields of one v2 batch header that an activation walk reads.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct BatchHeaderView {
@@ -32,6 +38,43 @@ impl Segment {
         let rel = u32::try_from((offset.0 - self.base_offset.0).max(0))
             .map_err(|_| LogError::Corrupt("activation scan offset out of range".into()))?;
         Ok(u64::from(self.offset_index.lookup(rel)))
+    }
+
+    /// Byte position a read for `target_rel` starts at.
+    ///
+    /// The sparse offset index holds the **last** offset of each indexed batch,
+    /// as Kafka's does, so the entry a lookup lands on is a batch that ends at
+    /// or below the target. Unless it ends exactly on the target, it holds
+    /// nothing the read wants, and this method returns the position of the
+    /// batch after it, found from the length in the indexed batch's header.
+    /// Starting the read there keeps a read with a small byte budget from
+    /// spending it stepping over that batch, which would return nothing.
+    pub(super) fn read_start_position(&self, target_rel: u32) -> Result<u64, LogError> {
+        let Some((indexed_last, position)) = self.offset_index.floor_entry(target_rel) else {
+            return Ok(0);
+        };
+        let position = u64::from(position);
+        if indexed_last == target_rel {
+            return Ok(position);
+        }
+        // `base_offset` (8 bytes), then `batch_length` (4 bytes), which counts
+        // everything after itself.
+        let mut prefix = Vec::with_capacity(BATCH_PREFIX_LEN);
+        self.read_log_range(position, &mut prefix, BATCH_PREFIX_LEN)?;
+        let Some(batch_length) = prefix
+            .get(BASE_OFFSET_LEN..BATCH_PREFIX_LEN)
+            .and_then(|field| <[u8; 4]>::try_from(field).ok())
+            .map(i32::from_be_bytes)
+            .filter(|length| *length > 0)
+        else {
+            return Ok(position);
+        };
+        let next = position + BATCH_PREFIX_LEN as u64 + u64::from(batch_length.unsigned_abs());
+        Ok(if next <= self.log_size {
+            next
+        } else {
+            position
+        })
     }
 
     /// Walk the fixed v2 batch headers from `start_pos` forward and hand each
@@ -106,12 +149,23 @@ mod tests {
         seg.append(&sample_batch(15, 5, 2_000), DENSE_INDEX)
             .unwrap();
 
-        // position_for uses the sparse offset index:
+        // position_for uses the sparse offset index, whose entries hold each
+        // batch's last offset (14 and 19): offset 15 sits after the first
+        // batch's entry, so the floor is that batch, and offset 19 lands on the
+        // second batch's own entry.
         let p1 = seg.position_for(Offset(10)).unwrap();
         let p2 = seg.position_for(Offset(15)).unwrap();
+        let p3 = seg.position_for(Offset(19)).unwrap();
         assert2::check!(p1 == 0);
-        assert2::check!(p2 == pos2);
-        assert2::check!(p2 > 0);
+        assert2::check!(p2 == 0);
+        assert2::check!(p3 == pos2);
+        assert2::check!(p3 > 0);
+
+        // A read starts at the batch after an indexed batch that ends below
+        // its offset, which is the second batch for offset 15.
+        assert2::check!(seg.read_start_position(5).unwrap() == pos2);
+        assert2::check!(seg.read_start_position(9).unwrap() == pos2);
+        assert2::check!(seg.read_start_position(4).unwrap() == 0);
 
         // walk from 0 visits both batches:
         let mut views = Vec::new();

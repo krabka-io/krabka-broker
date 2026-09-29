@@ -135,6 +135,21 @@ impl Log {
         Ok(())
     }
 
+    /// Move the log start down to `ceiling` when it sits above it. Truncation
+    /// is the one caller: Kafka's `UnifiedLog.truncateTo` sets
+    /// `logStartOffset = Math.min(targetOffset, logStartOffset)`, so a cut that
+    /// lands below a start `DeleteRecords` or retention had advanced pulls the
+    /// start back onto the retained data. The new value is checkpointed for
+    /// the same reason [`Log::set_log_start_offset`] checkpoints an advance.
+    pub(super) fn lower_log_start_offset(&mut self, ceiling: Offset) -> Result<(), LogError> {
+        if ceiling >= self.start_offset {
+            return Ok(());
+        }
+        log_start_offset_checkpoint::write(&*self.io, &self.dir, ceiling)?;
+        self.start_offset = ceiling;
+        Ok(())
+    }
+
     /// Reset the log to be empty at `new_base`.
     ///
     /// This method drops every segment and every on-disk file, then creates

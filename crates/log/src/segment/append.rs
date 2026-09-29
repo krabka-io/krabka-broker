@@ -63,43 +63,22 @@ impl Segment {
         let new_log_size = position
             .checked_add(appended_len)
             .ok_or_else(|| LogError::InvalidArgument("segment byte length overflow".into()))?;
-        let previous_last_offset = self.last_offset;
-        let previous_max_timestamp = self.max_timestamp;
-        let should_index = match self.offset_index.last_entry() {
-            None => true,
-            Some((_, last_pos)) => {
-                position.saturating_sub(u64::from(last_pos)) >= index_interval.bytes_u64()
-            }
-        };
-        let index_entry = if should_index {
-            let rel = u32::try_from(batch.base_offset - self.base_offset.0)
-                .map_err(|_| LogError::BadSegmentName("offset overflow in segment".into()))?;
-            let pos = u32::try_from(position)
-                .map_err(|_| LogError::BadSegmentName("position overflow in segment".into()))?;
-            Some((rel, pos))
-        } else {
-            None
-        };
+        let previous = self.write_snapshot();
+        let index_entry = self.index_entry_for(position, last_offset, index_interval)?;
         // The active file cursor is kept at log_size by open/recovery/truncate,
         // so the hot append path does not need an lseek before every write.
         if let Err(error) = write_all(&*self.io, &self.log_file, &bytes) {
-            self.rollback_failed_write(position, previous_last_offset, previous_max_timestamp)?;
+            self.rollback_failed_write(position, previous)?;
             return Err(error.into());
         }
         self.log_size = new_log_size;
 
-        self.last_offset = Offset(last_offset);
-        if batch.max_timestamp > self.max_timestamp {
-            self.max_timestamp = batch.max_timestamp;
-        }
+        self.record_batch(last_offset, batch.max_timestamp);
 
-        if let Some((rel, pos)) = index_entry
-            && let Err(error) = self
-                .offset_index
-                .append(rel, pos)
-                .and_then(|()| self.time_index.append(self.max_timestamp, rel))
+        if let Some(entry) = index_entry
+            && let Err(error) = self.append_index_entries(entry)
         {
-            self.rollback_failed_write(position, previous_last_offset, previous_max_timestamp)?;
+            self.rollback_failed_write(position, previous)?;
             return Err(error);
         }
 
@@ -136,13 +115,6 @@ impl Segment {
         ),
         err,
     )]
-    // cargo-mutants: the only mutant here flips the sparse-index `rel = batch_base - seg_base`
-    // to `+`, corrupting an OFFSET-INDEX hint only. Every read/truncate path
-    // treats the index as a lower-bound hint and re-scans + filters, so an
-    // inflated `rel` (seg_base > 0) resolves to the from-start fallback and
-    // yields identical output; the last_offset/index-presence effects are
-    // pinned by `append_verbatim_updates_index_and_last_offset`.
-    #[cfg_attr(test, mutants::skip)]
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub fn append_verbatim(
@@ -189,47 +161,82 @@ impl Segment {
         let new_log_size = position
             .checked_add(appended_len)
             .ok_or_else(|| LogError::InvalidArgument("segment byte length overflow".into()))?;
-        let previous_last_offset = self.last_offset;
-        let previous_max_timestamp = self.max_timestamp;
+        let previous = self.write_snapshot();
+        let index_entry = self.index_entry_for(position, last_offset, index_interval)?;
+        let mut bufs = [IoSlice::new(&header), IoSlice::new(&bytes[HEADER_LEN..])];
+        if let Err(error) = write_all_vectored(&*self.io, &self.log_file, &mut bufs) {
+            self.rollback_failed_write(position, previous)?;
+            return Err(error.into());
+        }
+        self.log_size = new_log_size;
+
+        self.record_batch(last_offset, max_timestamp);
+
+        if let Some(entry) = index_entry
+            && let Err(error) = self.append_index_entries(entry)
+        {
+            self.rollback_failed_write(position, previous)?;
+            return Err(error);
+        }
+
+        tracing::Span::current().record("position", position);
+        Ok(position)
+    }
+
+    /// Whether the batch about to be written at `position` gets a sparse-index
+    /// point, and if so its offset-index entry: the batch's **last** offset,
+    /// relative to the segment base, with the position where the batch starts.
+    /// Kafka indexes a batch by its last offset (`LogSegment.append` writes
+    /// `offsetIndex().append(batchLastOffset, physicalPosition)`), which is
+    /// what `kafka-dump-log` checks against the batch at that position.
+    ///
+    /// The conversions can fail, so they run before anything is written.
+    fn index_entry_for(
+        &self,
+        position: u64,
+        last_offset: i64,
+        index_interval: ByteSize,
+    ) -> Result<Option<(u32, u32)>, LogError> {
         let should_index = match self.offset_index.last_entry() {
             None => true,
             Some((_, last_pos)) => {
                 position.saturating_sub(u64::from(last_pos)) >= index_interval.bytes_u64()
             }
         };
-        let index_entry = if should_index {
-            let rel = u32::try_from(base_offset.0 - self.base_offset.0)
-                .map_err(|_| LogError::BadSegmentName("offset overflow in segment".into()))?;
-            let pos = u32::try_from(position)
-                .map_err(|_| LogError::BadSegmentName("position overflow in segment".into()))?;
-            Some((rel, pos))
-        } else {
-            None
-        };
-        let mut bufs = [IoSlice::new(&header), IoSlice::new(&bytes[HEADER_LEN..])];
-        if let Err(error) = write_all_vectored(&*self.io, &self.log_file, &mut bufs) {
-            self.rollback_failed_write(position, previous_last_offset, previous_max_timestamp)?;
-            return Err(error.into());
+        if !should_index {
+            return Ok(None);
         }
-        self.log_size = new_log_size;
+        let rel = u32::try_from(last_offset - self.base_offset.0)
+            .map_err(|_| LogError::BadSegmentName("offset overflow in segment".into()))?;
+        let pos = u32::try_from(position)
+            .map_err(|_| LogError::BadSegmentName("position overflow in segment".into()))?;
+        Ok(Some((rel, pos)))
+    }
 
+    /// Account for a batch just written: it moves the last offset, and it
+    /// becomes the running maximum timestamp's batch when its timestamp is
+    /// strictly higher, Kafka's `maxTimestampAndOffsetSoFar`.
+    fn record_batch(&mut self, last_offset: i64, max_timestamp: i64) {
         self.last_offset = Offset(last_offset);
         if max_timestamp > self.max_timestamp {
             self.max_timestamp = max_timestamp;
+            self.max_timestamp_offset = Offset(last_offset);
         }
+    }
 
-        if let Some((rel, pos)) = index_entry
-            && let Err(error) = self
-                .offset_index
-                .append(rel, pos)
-                .and_then(|()| self.time_index.append(self.max_timestamp, rel))
-        {
-            self.rollback_failed_write(position, previous_last_offset, previous_max_timestamp)?;
-            return Err(error);
-        }
-
-        tracing::Span::current().record("position", position);
-        Ok(position)
+    /// Write one sparse-index point. The time index gets the running maximum
+    /// timestamp with the last offset of the batch that set it, and only when
+    /// that timestamp is newer than its last entry, as Kafka's
+    /// `timeIndex().maybeAppend(maxTimestampSoFar(), shallowOffsetOfMaxTimestampSoFar())`.
+    fn append_index_entries(&mut self, (rel, pos): (u32, u32)) -> Result<(), LogError> {
+        self.offset_index.append(rel, pos)?;
+        let max_timestamp_rel = krabka_verified::truncation_relative_offset(
+            self.base_offset.0,
+            self.max_timestamp_offset.0,
+        )
+        .ok_or_else(|| LogError::BadSegmentName("offset overflow in segment".into()))?;
+        self.time_index
+            .maybe_append(self.max_timestamp, max_timestamp_rel)
     }
 }
 
