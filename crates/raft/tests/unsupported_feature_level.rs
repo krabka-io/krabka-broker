@@ -1,0 +1,148 @@
+//! A controller refuses to run at a feature level that it does not support.
+//!
+//! Kafka's `FeatureControlManager.replay(FeatureLevelRecord)` throws when a
+//! record's level lies outside the controller's supported range, so a node
+//! started with `unstable.feature.versions.enable` off never serves a log that
+//! was finalized at an unstable `metadata.version`. The tests finalize
+//! `4.4-IV2` (level 33), which is unstable in Kafka 4.3.
+
+use std::time::{Duration, Instant};
+
+use assert2::{assert, check};
+use krabka_metadata::{FeatureLevelRecord, MetadataRecord, NodeId, TopicRecord};
+use krabka_raft::{
+    BootstrapMode, Controller, ControllerConfig, ControllerHandle, RaftError,
+    UnstableFeatureVersions,
+};
+use krabka_units::prelude::{Time, millis};
+use tempfile::TempDir;
+use uuid::Uuid;
+
+/// Single-voter elections are instant, and a short timeout keeps each boot well
+/// inside the 30-second leader deadline.
+const FAST_ELECTION_TIMEOUT: Time = millis(200);
+
+const UNSTABLE_METADATA_VERSION: i16 = 33;
+
+const REFUSAL: &str = "Tried to apply FeatureLevelRecord \
+    FeatureLevelRecord(name='metadata.version', featureLevel=33), \
+    but this controller only supports versions 7-30";
+
+fn config(
+    dir: &TempDir,
+    cluster_id: Uuid,
+    mode: BootstrapMode,
+    unstable: UnstableFeatureVersions,
+) -> ControllerConfig {
+    let mut cfg = ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf());
+    cfg.election_timeout = FAST_ELECTION_TIMEOUT;
+    cfg.cluster_id = Some(cluster_id);
+    cfg.bootstrap_mode = mode;
+    cfg.unstable_feature_versions = unstable;
+    cfg
+}
+
+async fn wait_for_leader(controller: &ControllerHandle) {
+    let mut rx = controller.watch_leader();
+    tokio::time::timeout(Duration::from_secs(30), rx.wait_for(Option::is_some))
+        .await
+        .expect("no leader elected within 30s")
+        .expect("leader watch channel closed");
+}
+
+fn finalize_unstable_metadata_version() -> Vec<MetadataRecord> {
+    vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+        name: "metadata.version".into(),
+        level: UNSTABLE_METADATA_VERSION,
+    })]
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_log_finalized_at_an_unstable_level_starts_only_with_the_flag_on() {
+    let dir = TempDir::new().unwrap();
+    let cluster_id = Uuid::new_v4();
+
+    // The first boot has the flag on and finalizes the unstable level.
+    let controller = Controller::start(config(
+        &dir,
+        cluster_id,
+        BootstrapMode::Bootstrap,
+        UnstableFeatureVersions::Enabled,
+    ))
+    .await
+    .expect("first boot");
+    wait_for_leader(&controller).await;
+    controller
+        .submit_change(finalize_unstable_metadata_version())
+        .await
+        .expect("finalize the unstable level");
+    controller.shutdown().await;
+
+    // With the flag off the node refuses the log, with Kafka's message.
+    let Err(refused) = Controller::start(config(
+        &dir,
+        cluster_id,
+        BootstrapMode::Rejoin,
+        UnstableFeatureVersions::Disabled,
+    ))
+    .await
+    else {
+        panic!("a controller without the flag started over an unstable log");
+    };
+    check!(matches!(&refused, RaftError::Startup(message) if message == REFUSAL));
+
+    // The refusal changed nothing on disk: the same log starts with the flag on.
+    let controller = Controller::start(config(
+        &dir,
+        cluster_id,
+        BootstrapMode::Rejoin,
+        UnstableFeatureVersions::Enabled,
+    ))
+    .await
+    .expect("restart with the flag on");
+    wait_for_leader(&controller).await;
+    check!(controller.current_image().finalized_metadata_version() == Some(33));
+    controller.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_controller_stops_when_it_replays_a_level_it_does_not_support() {
+    let dir = TempDir::new().unwrap();
+    let controller = Controller::start(config(
+        &dir,
+        Uuid::new_v4(),
+        BootstrapMode::Bootstrap,
+        UnstableFeatureVersions::Disabled,
+    ))
+    .await
+    .expect("boot");
+    wait_for_leader(&controller).await;
+
+    // The level commits and applies, since the check reads the image the engine
+    // publishes. Then the controller stops, and no later change is accepted.
+    controller
+        .submit_change(finalize_unstable_metadata_version())
+        .await
+        .expect("commit the unsupported level");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    for probe in 0.. {
+        let topic = MetadataRecord::V1Topic(TopicRecord {
+            name: format!("probe-{probe}"),
+            topic_id: Uuid::new_v4(),
+            partitions: 1,
+            replication_factor: 1,
+        });
+        if let Err(error) = controller.submit_change(vec![topic]).await {
+            check!(matches!(error, RaftError::Shutdown), "{error}");
+            break;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "the controller kept accepting changes at an unsupported level"
+        );
+        // intentional: the stop follows the image publication on another task,
+        // and nothing but a refused submit says that it has happened.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    controller.shutdown().await;
+}

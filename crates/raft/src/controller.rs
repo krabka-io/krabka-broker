@@ -23,6 +23,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 mod checkpoint;
+mod feature_check;
 mod membership;
 mod metadata_fetch;
 mod startup;
