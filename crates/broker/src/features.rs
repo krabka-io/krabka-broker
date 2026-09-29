@@ -31,7 +31,7 @@ pub(crate) use krabka_metadata::metadata_version::STREAMS_VERSION_FEATURE as STR
 /// `krabka format` picks when no release is named, and the two must agree.
 ///
 /// The feature table also carries Kafka trunk's unstable `4.4-IV0` to
-/// `4.4-IV2`. A stock 4.3 node or tool does not know them, so a node supports
+/// `4.5-IV0`. A stock 4.3 node or tool does not know them, so a node supports
 /// them only under `unstable.feature.versions.enable`, and a cluster reaches
 /// them only through `UpdateFeatures` or `krabka format` with that set.
 pub(crate) const LATEST_PRODUCTION_METADATA_VERSION: i16 =

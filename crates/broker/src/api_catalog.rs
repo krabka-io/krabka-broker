@@ -633,7 +633,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/api_versions_features.rs",
             "crates/broker/tests/jvm_features.rs",
         ],
-        note: "The finalizable features are `metadata.version`, `group.version`, `transaction.version`, `share.version`, `streams.version`, `eligible.leader.replicas.version` and `kraft.version`, the last finalized by a KRaft control record rather than by `UpdateFeatures`. `metadata.version` is supported up to 4.3.1's latest production level, `4.3-IV0` (30), unless Kafka's `unstable.feature.versions.enable` is set, which raises it to trunk's `4.4-IV2` (33) in `ApiVersions`, node registration, `UpdateFeatures` and `krabka format` alike.",
+        note: "The finalizable features are `metadata.version`, `group.version`, `transaction.version`, `share.version`, `streams.version`, `eligible.leader.replicas.version` and `kraft.version`, the last finalized by a KRaft control record rather than by `UpdateFeatures`. `metadata.version` is supported up to 4.3.1's latest production level, `4.3-IV0` (30), unless Kafka's `unstable.feature.versions.enable` is set, which raises it to trunk's `4.5-IV0` (34), Kafka's `latestTesting`, in `ApiVersions`, node registration, `UpdateFeatures` and `krabka format` alike.",
     },
     KipAnnotation {
         key: "KIP-590",
@@ -1156,7 +1156,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/src/coordinator/unified/streams/actor/tests.rs::a_member_missing_a_rack_aware_tag_gets_missing_client_tags_at_version_1",
             "crates/broker/src/handlers/streams_group_topology_description_update/tests.rs::handle_answers_as_a_trunk_broker_without_a_plugin",
         ],
-        note: "Matches Kafka trunk, and served only under `unstable.api.versions.enable`: by default StreamsGroupHeartbeat and StreamsGroupDescribe are 4.3.1's v0, api key 93 is not advertised and closes the connection, and trunk's `streams.*` group keys are unknown group configs. krabka has no topology description plugin, as a Kafka broker has none by default: a heartbeat never sets TopologyDescriptionRequired, a describe that asks for the description answers NOT_STORED, and StreamsGroupTopologyDescriptionUpdate (93) answers UNSUPPORTED_VERSION with trunk's `The broker has no streams group topology description plugin configured.` once the streams protocol and group Read gates pass, so no description is ever stored. Heartbeat v1 carries MISSING_CLIENT_TAGS when a tag key named by the group's `streams.rack.aware.assignment.tags`, whose default is the broker's `group.streams.rack.aware.assignment.tags`, is missing from the member's client tags.",
+        note: "Matches Kafka trunk, and served only under `unstable.api.versions.enable`: by default StreamsGroupHeartbeat and StreamsGroupDescribe are 4.3.1's v0, api key 93 is not advertised and closes the connection, and trunk's `streams.*` group keys are unknown group configs. krabka has no topology description plugin, as a Kafka broker has none by default: a heartbeat never sets TopologyDescriptionRequired, a describe that asks for the description answers NOT_STORED, and StreamsGroupTopologyDescriptionUpdate (93) answers UNSUPPORTED_VERSION with trunk's `The broker has no streams group topology description plugin configured.` once the streams protocol and group Read gates pass, so no description is ever stored. Heartbeat v1 carries MISSING_CLIENT_TAGS when a tag key named by the group's `streams.rack.aware.assignment.tags`, whose default is the broker's `group.streams.rack.aware.assignment.tags`, is missing from the member's client tags. DeleteGroups v3, which adds a per-group ErrorMessage, is trunk's too and is advertised only under the same flag. krabka never answers GROUP_DELETION_FAILED, since it has no topology description plugin, so the message is always null.",
     },
     KipAnnotation {
         key: "KIP-1357",
@@ -2030,6 +2030,8 @@ mod tests {
             (18, Some((0, 4)), Some((0, 5))),
             (22, Some((0, 5)), Some((0, 6))),
             (28, Some((0, 5)), Some((0, 6))),
+            // KIP-1331's per-group `ErrorMessage`.
+            (42, Some((0, 2)), Some((0, 3))),
             (88, Some((0, 0)), Some((0, 1))),
             (89, Some((0, 0)), Some((0, 1))),
             (93, None, Some((0, 0))),
