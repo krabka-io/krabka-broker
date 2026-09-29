@@ -229,6 +229,13 @@ async fn refusals_follow_kafka_order_and_name_both_principals() {
 /// ceiling, and the first expiry is `issue + min(renew period, lifetime)`.
 #[tokio::test]
 async fn mints_for_the_resolved_owner_with_kafka_deadlines() {
+    // The `HmacSHA512` of Kafka's `DelegationTokenManager.createHmac`, the
+    // RFC 4231 test case 2 vector: the key is the UTF-8 secret and the data
+    // the token id.
+    let rfc_4231_case_2 = "164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea250554\
+                           9758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737";
+    assert!(hex::encode(token_hmac(b"Jefe", "what do ya want for nothing?")) == rfc_4231_case_2);
+
     let dir = TempDir::new().unwrap();
     let controller = test_controller(dir.path().into()).await;
     let secret = SecretBytes::new(b"master-key".to_vec());
@@ -376,10 +383,14 @@ async fn mints_for_the_resolved_owner_with_kafka_deadlines() {
             token_acl(&super_users),
         )
         .await;
-        // The token id is a random UUID and the HMAC-SHA-256 output is 32
+        // The token id is a random UUID and the HMAC-SHA-512 output is 64
         // bytes; the response carries both raw.
         assert!(
-            (resp.token_id.is_empty(), resp.hmac.len()) == (false, 32),
+            (resp.token_id.is_empty(), resp.hmac.len()) == (false, 64),
+            "{case}"
+        );
+        assert!(
+            resp.hmac == token_hmac(b"master-key", &resp.token_id),
             "{case}"
         );
         let expected = CreateDelegationTokenResponse {
