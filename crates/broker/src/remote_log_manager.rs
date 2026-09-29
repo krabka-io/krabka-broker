@@ -392,13 +392,23 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
     // list does.
     // The high watermark is read before the lock, because reading it awaits.
     let high_watermark = partition.high_watermark().await;
-    let (log_config, log_start_offset, deleted_below, local_exports, local_log_size, lso) = {
+    let (
+        log_config,
+        log_start_offset,
+        (deleted_below, earliest_epoch),
+        local_exports,
+        local_log_size,
+        lso,
+    ) = {
         let mut log = partition.log.lock().expect("log mutex poisoned");
         let cfg = log.config_snapshot();
         (
             cfg,
             log.log_start_offset(),
-            log.established_log_start(),
+            // What remote retention measures a segment against: the floor
+            // somebody established, and the epoch the epoch cache was cut to
+            // by it.
+            (log.established_log_start(), log.log_start_epoch()),
             log.tierable_segments(),
             log.size(),
             // Kafka's `UnifiedLog.lastStableOffset`, which bounds what the
@@ -489,6 +499,7 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
             log_config: &log_config,
             log_start_offset,
             deleted_below,
+            earliest_epoch,
             local: LocalLogFootprint {
                 sealed: &local_exports,
                 size: local_log_size,
@@ -511,6 +522,7 @@ struct RetentionPasses<'a> {
     log_config: &'a krabka_log::LogConfig,
     log_start_offset: krabka_log::Offset,
     deleted_below: Option<krabka_log::Offset>,
+    earliest_epoch: Option<krabka_ids::LeaderEpoch>,
     local: LocalLogFootprint<'a>,
     is_leader: bool,
     broker_id: i32,
@@ -525,6 +537,7 @@ async fn retention_passes(pass: RetentionPasses<'_>, tier: &RemoteTier<'_>) {
         log_config,
         log_start_offset,
         deleted_below,
+        earliest_epoch,
         local,
         is_leader,
         broker_id,
@@ -551,6 +564,7 @@ async fn retention_passes(pass: RetentionPasses<'_>, tier: &RemoteTier<'_>) {
             log_config,
             log_start_offset,
             deleted_below,
+            earliest_epoch,
             now_ms: now_ms(),
             local,
         },
@@ -606,6 +620,7 @@ mod tests {
     };
 
     mod concurrency;
+    mod epoch_cache;
     mod freeze;
     mod store_faults;
 
