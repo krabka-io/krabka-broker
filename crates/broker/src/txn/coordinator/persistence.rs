@@ -119,7 +119,11 @@ impl TxnCoordinator {
 
         // Byte-exact Kafka TransactionLogKey(v0) + TransactionLogValue(v0/v1).
         let key = crate::txn::log_record::encode_key(&tid);
-        let value = crate::txn::log_record::encode_value(&entry, format_txnv);
+        let value = crate::txn::log_record::encode_value(
+            &entry,
+            format_txnv,
+            self.persist_last_producer_epoch,
+        );
 
         let mut batch = RecordBatch::default();
         batch.records.push(Record {
@@ -234,7 +238,7 @@ impl TxnCoordinator {
 pub(super) fn replay_partition(
     part: &crate::partition::Partition,
     partition: PartitionIndex,
-    read_max: krabka_units::ByteSize,
+    (read_max, last_epoch_tag): (krabka_units::ByteSize, bool),
     partition_for: impl Fn(&str) -> PartitionIndex,
 ) -> Result<RecoveredTransactions, BrokerError> {
     let p = partition;
@@ -267,7 +271,7 @@ pub(super) fn replay_partition(
                     recovered.apply_tombstone(&tid);
                     continue;
                 };
-                let entry = crate::txn::log_record::decode_value(value_bytes, tid)?;
+                let entry = crate::txn::log_record::decode_value(value_bytes, tid, last_epoch_tag)?;
                 recovered.apply_value(entry, partition_matches)?;
             }
             offset = recovery_next_offset(batch.base_offset, batch.last_offset_delta)?;

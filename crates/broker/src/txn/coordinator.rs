@@ -81,6 +81,10 @@ pub(crate) struct TxnCoordinator {
     verification_connections:
         Mutex<std::collections::HashMap<krabka_metadata::NodeId, VerificationConnection>>,
     group_coordinator: Option<Arc<crate::coordinator::GroupCoordinator>>,
+    /// Whether `__transaction_state` values carry `LastProducerEpoch` (tag 4).
+    /// Kafka trunk persists it (KAFKA-20357); 4.3.1 keeps it in memory only, so
+    /// this is on only under `unstable.api.versions.enable`.
+    persist_last_producer_epoch: bool,
     /// Test gate in front of every transaction-marker fan-out.
     #[cfg(any(test, feature = "test-helpers"))]
     pub(crate) marker_fanout_gate: fanout_gate::MarkerFanoutGate,
@@ -129,9 +133,17 @@ impl TxnCoordinator {
             marker_transport: None,
             verification_connections: Mutex::new(std::collections::HashMap::new()),
             group_coordinator: None,
+            persist_last_producer_epoch: false,
             #[cfg(any(test, feature = "test-helpers"))]
             marker_fanout_gate: fanout_gate::MarkerFanoutGate::default(),
         }
+    }
+
+    /// Persist and reload `LastProducerEpoch` (tag 4 of `TransactionLogValue`),
+    /// as Kafka trunk does. `Broker::start` turns it on under
+    /// `unstable.api.versions.enable`.
+    pub(crate) fn set_persist_last_producer_epoch(&mut self, enabled: bool) {
+        self.persist_last_producer_epoch = enabled;
     }
 
     pub(crate) fn configure_marker_transport(
