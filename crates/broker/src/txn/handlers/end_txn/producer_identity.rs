@@ -120,6 +120,35 @@ pub(crate) async fn prepare_completion_identities(
     Ok(())
 }
 
+/// Prepares the abort that the coordinator itself runs on an `Ongoing`
+/// transaction: the timeout reaper, and the fence `InitProducerId` runs for a
+/// producer that re-initialises. Kafka's `prepareFenceProducerEpoch` followed by
+/// `endTransaction(isFromClient = false)` at the cluster's transaction version
+/// `server_version`, which is also the version the record carries.
+///
+/// - `TV_2`: the completion bump in [`prepare_completion_identities`] is the
+///   only epoch bump. The abort and its markers sit at `epoch + 1`, and
+///   `last_producer_epoch` names the epoch the producer still holds, so its
+///   retry of `InitProducerId` is recognised.
+/// - Below `TV_2`: nothing bumps at completion, so the fence raises the epoch
+///   itself, unless an earlier fence already did (`has_failed_epoch_fence`) or
+///   the epoch is `i16::MAX`, and no last epoch is kept. The timed-out producer
+///   is then fenced at its partitions.
+pub(crate) async fn prepare_server_abort_identities(
+    entry: &mut TxnEntry,
+    server_version: TxnVersion,
+    ids: &crate::producer_id_manager::ProducerIdManager,
+) -> Result<(), BrokerError> {
+    entry.client_transaction_version = server_version.level();
+    if !server_version.verified() {
+        entry.last_producer_epoch = -1;
+        if !entry.has_failed_epoch_fence && entry.producer_epoch < i16::MAX {
+            entry.producer_epoch += 1;
+        }
+    }
+    prepare_completion_identities(entry, server_version, ids).await
+}
+
 pub(crate) fn prepare_completion_identities_with_fresh(
     entry: &mut TxnEntry,
     txnv: TxnVersion,
@@ -138,7 +167,10 @@ pub(crate) fn prepare_completion_identities_with_fresh(
     };
 
     // The transaction marker fences the identity that wrote the transaction.
-    // i16::MAX is reserved for this final marker epoch.
+    // i16::MAX is reserved for this final marker epoch. Kafka's
+    // `prepareAbortOrCommit` records the epoch it leaves as the last epoch,
+    // which is how `InitProducerId` recognises a retry that names it.
+    entry.last_producer_epoch = entry.producer_epoch;
     entry.producer_epoch = entry.producer_epoch.saturating_add(1);
 
     if had_recovery_identity || completion_pid != entry.producer_id {

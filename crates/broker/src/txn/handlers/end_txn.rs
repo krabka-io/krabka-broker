@@ -55,7 +55,7 @@ pub(crate) use self::{
     markers::{MarkerDispatchContext, MarkerFanOut, dispatch_markers},
     producer_identity::{
         client_producer_identity, completion_producer_identity, next_producer_identity,
-        next_recovery_producer_identity, prepare_completion_identities,
+        next_recovery_producer_identity, prepare_server_abort_identities,
     },
     reacquire::{ReacquireDecision, validate_complete_reacquire},
 };

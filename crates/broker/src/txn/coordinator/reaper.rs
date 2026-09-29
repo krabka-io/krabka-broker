@@ -18,7 +18,7 @@ use super::{
     completion::{apply_completion, completion_decision},
 };
 use crate::txn::{
-    handlers::end_txn::{completion_producer_identity, prepare_completion_identities},
+    handlers::end_txn::{completion_producer_identity, prepare_server_abort_identities},
     marker::MarkerType,
     state::{TxnEntry, TxnState},
     two_pc::{NO_TIMEOUT_MS, should_abort_idle_txn},
@@ -185,8 +185,8 @@ impl TxnCoordinator {
     /// [`crate::txn::two_pc_model`].
     ///
     /// Each abort runs the same two-step transition + marker fan-out as an
-    /// `EndTxn(committed=false)` and bumps the producer epoch on completion (at
-    /// `TV >= 2`) so the timed-out producer is fenced. A marker failure leaves the
+    /// `EndTxn(committed=false)` and bumps the producer epoch, at every
+    /// transaction version, so the timed-out producer is fenced. A marker failure leaves the
     /// entry in `PrepareAbort`; the next sweep retries the fan-out. A concurrent
     /// caller that changed the entry out from under us aborts this reap of that
     /// tid (re-validated before the Complete write). Returns the tids it
@@ -242,17 +242,18 @@ impl ReaperBackend for TxnCoordinator {
         // live entry exactly as it was before this sweep.
         let mut prepared = entry.clone();
         apply_prepare_abort(&mut prepared, now_ms);
+        // Kafka `abortTimedOutTransactions`: `prepareFenceProducerEpoch`, then
+        // an abort at the cluster's transaction version. It fences the
+        // timed-out producer at every level: the completion bump at `TV_2`,
+        // the fence's own bump below it.
         if let Err(error) =
-            prepare_completion_identities(&mut prepared, txnv, &self.producer_ids).await
+            prepare_server_abort_identities(&mut prepared, txnv, &self.producer_ids).await
         {
             warn!(tid, %error, "txn reaper: failed to allocate completion identity");
             return None;
         }
-        // `put_under_state_partition_lock` stamps `client_transaction_version`
-        // on its own clone before it persists; the entry it returns, not
-        // `prepared`, is what publication actually holds. `complete_abort`
-        // compares its retained snapshot against the live entry by full
-        // equality, so a stale, unstamped `prepared` would reject there.
+        // `complete_abort` compares the snapshot this returns against the live
+        // entry by full equality, so it has to be the entry publication holds.
         match self.put_under_state_partition_lock(prepared, txnv).await {
             Ok(persisted) => Some(persisted),
             Err(e) => {
