@@ -17,6 +17,7 @@ use krabka_verified::stretch::{
 
 use crate::{
     config_keys::RecoveryStrategy,
+    elr::state::PartitionElr,
     leader_election::FailoverDecision,
     site_placement::{PlacementRng, SiteBrokerView, stretch_replicas},
 };
@@ -33,16 +34,16 @@ const MAX_IMPAIRED_SITES: usize = 2;
 /// real [`failover_one`](crate::leader_election::failover_one) under it. The
 /// RED witness runs [`legacy_elect`](super::red_witness::legacy_elect).
 ///
-/// The `&[i32]` is the partition's published eligible-leader-replica set. This
-/// model carries no ELR state, so it is always empty here: what it checks is
-/// the witness rule, and the KIP-966 rung is exercised in
+/// The [`PartitionElr`] is the partition's published eligible and last-known
+/// replicas. This model carries no ELR state, so it is always empty here: what
+/// it checks is the witness rule, and the KIP-966 rungs are exercised in
 /// `leader_election::policy`.
 pub type ElectFn = fn(
     &PartitionRecord,
     NodeId,
     &HashSet<NodeId>,
     &HashSet<NodeId>,
-    &[i32],
+    &PartitionElr,
     RecoveryStrategy,
     bool,
 ) -> FailoverDecision;

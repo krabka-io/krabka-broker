@@ -4,9 +4,11 @@
 //! ELR is the set of replicas that left the ISR while the partition still had
 //! `min.insync.replicas` members, so their logs are known to hold every
 //! committed record and the controller may elect one of them without
-//! accepting data loss. Last-known ELR is what an operator falls back to once
-//! the partition has no leader at all. Kafka keeps both on
-//! `PartitionRegistration` and reports them on
+//! accepting data loss. Last-known ELR, in Kafka 4.3.1, is the single replica
+//! that led the partition when it lost its leader, and it stays empty while
+//! the partition has one. When that replica comes back, the controller elects
+//! it as an unclean leader: Kafka's `canElectLastKnownLeader`. Kafka keeps both
+//! on `PartitionRegistration` and reports them on
 //! `DescribeTopicPartitionsResponsePartition`; `kafka-topics --describe`
 //! prints them as the `Elr:` and `LastKnownElr:` columns.
 //!
@@ -43,6 +45,18 @@
 //! `unclean.recovery.strategy`, which is Apache Kafka's
 //! `PartitionChangeBuilder.electAnyLeader`.
 //!
+//! ## A partition without a leader
+//!
+//! When nothing can be elected Kafka writes `leader = -1`. A krabka partition
+//! record always names a leader, so the scans leave it as it is and publish
+//! the last leader as the last-known ELR through [`ElrPublisher::leaderless`];
+//! [`state::is_leaderless`] reads that one-member set back, and `Metadata` and
+//! `DescribeTopicPartitions` report the partition as `leader = -1` with an ISR
+//! that has lost the last leader. The election that gives it a leader again is
+//! [`compute_unfence_changes`](crate::leader_election::compute_unfence_changes),
+//! which the `BrokerHeartbeat` that unfences a broker runs, as Kafka's
+//! `handleBrokerUnfenced` runs its election over `partitionsWithNoLeader`.
+//!
 //! That is also why the state has to be withdrawn when it stops being true.
 //! The one event that ends a membership without any partition changing is a
 //! broker coming back from a stop it cannot prove was clean, whose current log
@@ -54,10 +68,12 @@
 //! -- what the registration handler calls once the proof fails -- wraps the
 //! withdrawal with the matching ISR removals and runs [`ElrPublisher`] over
 //! the whole batch with the broker excluded, so the batch cannot re-derive
-//! what it just withdrew. A broker that *can* prove it -- the clean-shutdown
-//! record [`crate::clean_shutdown`] keeps, offered back as
-//! `previousBrokerEpoch` -- keeps its membership, because its log is still the
-//! log the claim was about.
+//! what it just withdrew. The withdrawal takes the broker out of the eligible
+//! sets and nothing else: it does not move into the last-known ELR, which
+//! belongs to the last leader of a partition that has none. A broker that
+//! *can* prove it -- the clean-shutdown record [`crate::clean_shutdown`]
+//! keeps, offered back as `previousBrokerEpoch` -- keeps its membership,
+//! because its log is still the log the claim was about.
 
 pub(crate) mod maintain;
 pub(crate) mod state;

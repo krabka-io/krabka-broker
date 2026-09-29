@@ -7,7 +7,7 @@ use krabka_metadata::{
     PartitionUpdateRecord, TopicConfigRecord, TopicRecord,
 };
 
-use super::{ElrPublisher, next_partition_elr};
+use super::{ElrPublisher, leaderless_partition_elr, next_partition_elr};
 use crate::{
     config_keys::{MIN_INSYNC_REPLICAS, RETENTION_MS},
     elr::state::{PartitionElr, TopicElr},
@@ -31,6 +31,15 @@ fn partition(leader: u64, replicas: &[u64], isr: &[u64]) -> PartitionRecord {
         removing_replicas: vec![],
         directories: vec![],
         partition_epoch: 4,
+    }
+}
+
+/// `record` under leader epoch `epoch`: the change that elects, as the
+/// scans bump the epoch on every election.
+fn at_epoch(record: PartitionRecord, epoch: i32) -> PartitionRecord {
+    PartitionRecord {
+        leader_epoch: LeaderEpoch(epoch),
+        ..record
     }
 }
 
@@ -147,21 +156,26 @@ fn the_elr_follows_the_isr_across_min_insync_replicas() {
             partition(1, &[1, 2, 3], &[1, 2]),
             elr(&[], &[]),
         ),
+        // krabka's own rule: a replica the partition no longer has cannot be
+        // elected, so it is not offered. Kafka's last-known set is not where it
+        // goes: that set holds the last leader of a leaderless partition.
         (
-            "an ELR replica dropped from the replica set becomes last-known",
+            "an ELR replica dropped from the replica set leaves the ELR",
             Some("3"),
             elr(&[2, 3], &[]),
             partition(1, &[1, 2, 3], &[1]),
             partition(1, &[1, 2], &[1]),
-            elr(&[2], &[3]),
+            elr(&[2], &[]),
         ),
+        // `maybeUpdateLastKnownLeader`: a partition that has a leader
+        // publishes `[]`, so a set left over from before is cleared.
         (
-            "a last-known replica stays last-known while the ISR is short",
+            "a change that leaves a leader clears the last-known ELR",
             Some("3"),
             elr(&[2], &[3]),
             partition(1, &[1, 2], &[1]),
             partition(1, &[1, 2], &[1]),
-            elr(&[2], &[3]),
+            elr(&[2], &[]),
         ),
         (
             "an unclean election clears both sets",
@@ -226,6 +240,228 @@ fn a_new_partition_starts_with_no_elr() {
     assert!(got == elr(&[], &[]));
 }
 
+/// The rows of `PartitionChangeBuilderTest` at Kafka 4.3.1 that describe a
+/// partition which keeps a leader, with `useLastKnownLeaderInBalancedRecovery`
+/// on, which is how the controller runs it (nothing in
+/// `ReplicationControlManager` turns it off). Min ISR is 3 in every test
+/// there, and replicas are `[1, 2, 3, 4]`.
+///
+/// With the flag on, `maybeUpdateRecordElr` never writes the multi-member set
+/// `maybePopulateTargetElr` computes, so the last-known ELR of a partition
+/// with a leader is empty in every row.
+#[test]
+fn the_rows_of_partition_change_builder_test_for_a_partition_with_a_leader() {
+    let replicas = [1, 2, 3, 4];
+    for (label, published, before, after, unclean_shutdown, want) in [
+        (
+            "IsrShrinkBelowMinISR: the dropped replicas are eligible, the last-known set stays empty",
+            elr(&[], &[]),
+            partition(1, &replicas, &[1, 2, 3, 4]),
+            partition(1, &replicas, &[1, 2]),
+            vec![],
+            elr(&[3, 4], &[]),
+        ),
+        (
+            "IsrExpandAboveMinISR: both sets end empty",
+            elr(&[3], &[4]),
+            partition(1, &replicas, &[1, 2]),
+            partition(1, &replicas, &[1, 2, 3]),
+            vec![],
+            elr(&[], &[]),
+        ),
+        (
+            "ElrCanBeElected: the replica that lost the leadership is eligible, the last-known set stays empty",
+            elr(&[3], &[]),
+            partition(1, &replicas, &[1]),
+            at_epoch(partition(3, &replicas, &[3]), 8),
+            vec![],
+            elr(&[1], &[]),
+        ),
+        (
+            "RemoveUncleanShutdownReplicasFromElr: the replica leaves the ELR and lands nowhere",
+            elr(&[2, 3], &[]),
+            partition(1, &replicas, &[1]),
+            partition(1, &replicas, &[1]),
+            vec![3],
+            elr(&[2], &[]),
+        ),
+        (
+            "IsrAddNewMemberNotInELR: an ISR that stays short changes nothing",
+            elr(&[3], &[]),
+            partition(1, &replicas, &[1]),
+            partition(1, &replicas, &[1, 4]),
+            vec![],
+            elr(&[3], &[]),
+        ),
+    ] {
+        let image = image(Some("3"), None, &before);
+        let got = next_partition_elr(
+            &image,
+            Some(&before),
+            &after,
+            &published,
+            &unclean_shutdown.into_iter().collect(),
+        );
+        assert!(got == want, "{label}");
+    }
+}
+
+/// The rows of `PartitionChangeBuilderTest` at 4.3.1 that leave a partition
+/// without a leader: `maybeUpdateLastKnownLeader` writes `[previous leader]`
+/// the first time, and `maybeUpdateRecordElr` keeps it while the partition
+/// stays that way.
+///
+/// The partition record is the one krabka keeps for it, which still names the
+/// last leader; `isr` is the ISR the change installs, which is Kafka's.
+#[test]
+fn the_rows_of_partition_change_builder_test_for_a_partition_without_a_leader() {
+    let replicas = [1, 2, 3, 4];
+    for (label, min_isr, published, before, isr, unclean_shutdown, want) in [
+        (
+            "IsrCanShrinkToZero: every replica is offline",
+            Some("3"),
+            elr(&[], &[]),
+            partition(1, &replicas, &[1, 2, 3, 4]),
+            vec![],
+            vec![],
+            elr(&[1, 2, 3, 4], &[1]),
+        ),
+        (
+            "IsrCanShrinkToZero: an unclean shutdown afterwards leaves the last leader alone",
+            Some("3"),
+            elr(&[1, 2, 3, 4], &[1]),
+            partition(1, &replicas, &[1]),
+            vec![],
+            vec![2],
+            elr(&[1, 3, 4], &[1]),
+        ),
+        (
+            "lastKnownElrShouldBePopulatedWhenNoLeader: nobody acceptable, the ISR unchanged",
+            Some("3"),
+            elr(&[2], &[]),
+            partition(1, &[1, 2, 3], &[1]),
+            vec![1],
+            vec![],
+            elr(&[2], &[1]),
+        ),
+        (
+            "a partition that stays without a leader keeps the value it has",
+            Some("3"),
+            elr(&[1, 2], &[1]),
+            partition(1, &[1, 2, 3], &[1]),
+            vec![],
+            vec![],
+            elr(&[1, 2], &[1]),
+        ),
+        (
+            "Kafka's default min ISR of 1 still records the last leader as eligible",
+            None,
+            elr(&[], &[]),
+            partition(1, &[1, 2, 3], &[1]),
+            vec![],
+            vec![],
+            elr(&[1], &[1]),
+        ),
+        (
+            "the last leader that shut down uncleanly is not eligible, but is still the last leader",
+            Some("2"),
+            elr(&[], &[]),
+            partition(1, &[1, 2, 3], &[1]),
+            vec![],
+            vec![1],
+            elr(&[], &[1]),
+        ),
+        (
+            "an ISR that still meets min ISR is enough on its own, and the last leader stays",
+            Some("1"),
+            elr(&[2], &[]),
+            partition(1, &[1, 2], &[1, 2]),
+            vec![2],
+            vec![],
+            elr(&[], &[1]),
+        ),
+    ] {
+        let image = image(min_isr, None, &before);
+        let got = leaderless_partition_elr(
+            &image,
+            &before,
+            &nodes(&isr),
+            &published,
+            &unclean_shutdown.into_iter().collect(),
+        );
+        assert!(got == want, "{label}");
+    }
+}
+
+/// A partition the image already records as leaderless -- a one-member
+/// last-known ELR naming its leader -- and the changes that reach it.
+///
+/// A change that keeps the leader under the same leader epoch elects nobody,
+/// so the marker stays. One that gives it a leader clears the marker, which is
+/// `maybeUpdateLastKnownLeader`'s `record.leader() >= 0` branch, and what the
+/// eligible set becomes reads the ISR the way Kafka holds it, without the last
+/// leader.
+#[test]
+fn a_change_that_gives_a_leaderless_partition_a_leader_clears_the_last_known_elr() {
+    let replicas = [1, 2, 3];
+    for (label, published, before, after, want) in [
+        (
+            "an ISR shrink for another replica keeps the marker",
+            elr(&[], &[1]),
+            partition(1, &replicas, &[1, 2]),
+            partition(1, &replicas, &[1]),
+            elr(&[2], &[1]),
+        ),
+        // The record keeps the last leader in its ISR, and Kafka's ISR has
+        // lost it: the last leader must stay eligible across the shrink.
+        (
+            "an ISR shrink for another replica keeps the last leader eligible",
+            elr(&[1], &[1]),
+            partition(1, &replicas, &[1, 2]),
+            partition(1, &replicas, &[1]),
+            elr(&[1, 2], &[1]),
+        ),
+        (
+            "electing another replica from the ELR clears it and keeps the rest eligible",
+            elr(&[1, 2, 3], &[1]),
+            partition(1, &replicas, &[1]),
+            at_epoch(partition(2, &replicas, &[2]), 8),
+            elr(&[1, 3], &[]),
+        ),
+        (
+            "electing the last leader from the ELR is clean",
+            elr(&[1, 2, 3], &[1]),
+            partition(1, &replicas, &[1]),
+            at_epoch(partition(1, &replicas, &[1]), 8),
+            elr(&[2, 3], &[]),
+        ),
+        (
+            "electing the last known leader is unclean, so both sets clear",
+            elr(&[], &[1]),
+            partition(1, &replicas, &[1]),
+            at_epoch(partition(1, &replicas, &[1]), 8),
+            elr(&[], &[]),
+        ),
+        (
+            "a partition with a leader publishes an empty last-known ELR",
+            elr(&[2], &[]),
+            partition(1, &replicas, &[1, 2]),
+            partition(1, &replicas, &[1]),
+            elr(&[2], &[]),
+        ),
+    ] {
+        let image = image(Some("3"), None, &before);
+        let got = next_partition_elr(
+            &image,
+            Some(&before),
+            &after,
+            &published,
+            &std::collections::BTreeSet::new(),
+        );
+        assert!(got == want, "{label}");
+    }
+}
+
 /// Kafka's `uncleanShutdownReplicas`, which the batch that reacts to a
 /// returning broker names it with.
 ///
@@ -235,11 +471,11 @@ fn a_new_partition_starts_with_no_elr() {
 /// eligible. The two rows are the same change; only the exclusion differs,
 /// and the second is the one the withdrawal survives.
 ///
-/// The excluded id still lands in the last-known set, because
-/// `PartitionChangeBuilder.maybePopulateTargetElr` subtracts
-/// `uncleanShutdownReplicas` from `targetElr` and from nothing else: broker 3
-/// *was* the last replica known to hold every committed record, whatever the
-/// process holding that node id now has on disk.
+/// The excluded id does not land in the last-known set: in Kafka 4.3.1 that
+/// set holds the last leader of a leaderless partition, and this partition has
+/// a leader. `PartitionChangeBuilder.maybePopulateTargetElr` subtracts
+/// `uncleanShutdownReplicas` from `targetElr` and from nothing else, so the
+/// second row publishes no record at all: both sets are what they were.
 #[test]
 fn an_unclean_shutdown_replica_is_not_re_derived_from_the_isr_it_is_leaving() {
     let before = partition(1, &[1, 2, 3], &[1, 2, 3]);
@@ -252,7 +488,128 @@ fn an_unclean_shutdown_replica_is_not_re_derived_from_the_isr_it_is_leaving() {
 
     let mut excluded = vec![shrink.clone()];
     ElrPublisher::after_unclean_shutdown(&image, NodeId(3)).extend(&mut excluded);
-    assert!(excluded == vec![update(partition(1, &[1, 2, 3], &[1, 2]), &[], &[3])]);
+    assert!(excluded == vec![shrink]);
+}
+
+/// The election that gives a leaderless partition back the leader its record
+/// names keeps the same leader under a higher leader epoch, which a
+/// `V1PartitionUpdate` cannot carry: it reaches the log as a
+/// `PartitionChangeRecord` that bumps the epoch only when the leader changes.
+/// So the partition record stays whole and the ELR and recovery records follow
+/// it, where an election of another replica folds all three into one update.
+#[test]
+fn an_election_of_the_named_leader_keeps_its_epoch_bump_out_of_a_partition_update() {
+    let before = partition(1, &[1, 2, 3], &[1]);
+    let image = image(Some("2"), Some("0::1"), &before);
+    let recovering =
+        MetadataRecord::V1PartitionRecovery(krabka_metadata::PartitionRecoveryRecord {
+            topic: TOPIC.into(),
+            partition: 0,
+            state: krabka_metadata::LeaderRecoveryState::Recovering,
+        });
+
+    let same_leader = at_epoch(partition(1, &[1, 2, 3], &[1]), 8);
+    let mut whole = vec![
+        MetadataRecord::V1Partition(same_leader.clone()),
+        recovering.clone(),
+    ];
+    ElrPublisher::new(&image).extend(&mut whole);
+    assert!(
+        whole
+            == vec![
+                MetadataRecord::V1Partition(same_leader),
+                MetadataRecord::V1PartitionElr(PartitionElrRecord {
+                    topic: TOPIC.into(),
+                    partition: 0,
+                    eligible_leader_replicas: vec![],
+                    last_known_elr: vec![],
+                }),
+                recovering.clone(),
+            ]
+    );
+
+    let other_leader = at_epoch(partition(2, &[1, 2, 3], &[2]), 8);
+    let mut folded = vec![
+        MetadataRecord::V1Partition(other_leader.clone()),
+        recovering,
+    ];
+    ElrPublisher::new(&image).extend(&mut folded);
+    assert!(
+        folded
+            == vec![MetadataRecord::V1PartitionUpdate(PartitionUpdateRecord {
+                partition: other_leader,
+                eligible_leader_replicas: Some(vec![]),
+                last_known_elr: Some(vec![]),
+                recovery_state: Some(krabka_metadata::LeaderRecoveryState::Recovering),
+            })]
+    );
+}
+
+/// A batch that leaves a partition without a leader carries no partition
+/// record for it, because a krabka partition record always names a leader, so
+/// the publisher takes the partition from [`ElrPublisher::leaderless`] and
+/// writes the ELR and the last leader.
+///
+/// This is the state Kafka writes for `leader = -1`, and it is what
+/// `is_leaderless` reads back: the last-known ELR names the recorded leader.
+/// Repeating the batch changes nothing, which is what lets the failover sweep
+/// re-drive a partition every tick.
+#[test]
+fn a_leaderless_partition_publishes_its_elr_and_its_last_leader_once() {
+    let before = partition(1, &[1, 2, 3], &[1]);
+    let mut image = image(Some("2"), Some("0:2,3:"), &before);
+
+    let mut first = Vec::new();
+    let mut publisher = ElrPublisher::new(&image);
+    publisher.leaderless(&before, vec![]);
+    publisher.extend(&mut first);
+    assert!(
+        first
+            == vec![MetadataRecord::V1PartitionElr(PartitionElrRecord {
+                topic: TOPIC.into(),
+                partition: 0,
+                eligible_leader_replicas: nodes(&[1, 2, 3]),
+                last_known_elr: nodes(&[1]),
+            })]
+    );
+
+    for record in &first {
+        image.apply(record);
+    }
+    let mut second = Vec::new();
+    let mut publisher = ElrPublisher::new(&image);
+    publisher.leaderless(&before, vec![]);
+    publisher.extend(&mut second);
+    assert!(second.is_empty());
+    assert!(crate::elr::state::is_leaderless(
+        &image,
+        image.partition(TOPIC, 0).expect("the partition")
+    ));
+}
+
+/// Kafka builds the recompute of an unclean shutdown with the broker in
+/// `uncleanShutdownReplicas`, so the last leader that restarted uncleanly is
+/// not eligible: the ELR is empty and the last-known ELR names it, which is
+/// the state `canElectLastKnownLeader` acts on.
+#[test]
+fn an_unclean_restart_of_the_last_leader_leaves_an_empty_elr_and_the_last_leader() {
+    let before = partition(1, &[1, 2, 3], &[1]);
+    let image = image(Some("2"), None, &before);
+
+    let mut changes = Vec::new();
+    let mut publisher = ElrPublisher::after_unclean_shutdown(&image, NodeId(1));
+    publisher.leaderless(&before, vec![]);
+    publisher.extend(&mut changes);
+
+    assert!(
+        changes
+            == vec![MetadataRecord::V1PartitionElr(PartitionElrRecord {
+                topic: TOPIC.into(),
+                partition: 0,
+                eligible_leader_replicas: vec![],
+                last_known_elr: nodes(&[1]),
+            })]
+    );
 }
 
 /// The published record replaces a topic's whole override map, so it has to

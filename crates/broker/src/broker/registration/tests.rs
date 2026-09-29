@@ -692,7 +692,7 @@ mod unclean_restart {
             published_elr(&broker)
                 == PartitionElr {
                     eligible_leader_replicas: vec![3],
-                    last_known_elr: vec![2],
+                    last_known_elr: vec![],
                 }
         );
 

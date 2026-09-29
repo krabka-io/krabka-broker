@@ -1,5 +1,17 @@
-//! The published ELR value: its grammar, the projection
-//! `DescribeTopicPartitions` reads, and the edit the controller applies to it.
+//! The published ELR value: its grammar, and the projection
+//! `DescribeTopicPartitions` reads out of it.
+//!
+//! ## What the last-known ELR holds
+//!
+//! Kafka 4.3.1 keeps the single replica that led the partition when it lost
+//! its leader in `lastKnownElr`, and clears it as soon as the partition has a
+//! leader again (`PartitionChangeBuilder.maybeUpdateLastKnownLeader`). So a
+//! one-member last-known ELR is also how a partition says it has no leader.
+//! krabka's partition record cannot say it itself, because
+//! `PartitionRecord::leader` always names a replica: a partition without a
+//! leader keeps its last leader in that field, and [`is_leaderless`] reads the
+//! one-member last-known ELR that names it as the marker. `Metadata` and
+//! `DescribeTopicPartitions` project such a partition as `leader = -1`.
 //!
 //! ## Nullable versus empty
 //!
@@ -17,7 +29,7 @@
 
 use std::collections::BTreeMap;
 
-use krabka_metadata::{MetadataImage, NodeId};
+use krabka_metadata::{MetadataImage, NodeId, PartitionRecord};
 
 const LEGACY_ELR_CONFIG: &str = "krabka.elr";
 
@@ -35,6 +47,18 @@ impl PartitionElr {
     /// partition is left out of the published value entirely.
     pub(crate) fn is_empty(&self) -> bool {
         self.eligible_leader_replicas.is_empty() && self.last_known_elr.is_empty()
+    }
+
+    /// Whether this state says the partition has no leader, its last leader
+    /// being `recorded_leader`: the last-known ELR holds exactly that one
+    /// replica. Kafka's controller writes it when the partition loses its
+    /// leader and clears it when a leader is elected, so it is never set while
+    /// one exists.
+    pub(crate) fn is_leaderless(&self, recorded_leader: NodeId) -> bool {
+        matches!(
+            self.last_known_elr.as_slice(),
+            [only] if u64::try_from(*only) == Ok(recorded_leader.0)
+        )
     }
 }
 
@@ -105,28 +129,6 @@ impl TopicElr {
         )
     }
 
-    /// Render the value back into the grammar [`Self::parse`] documents.
-    ///
-    /// The empty string is the value of a topic with no ELR state anywhere,
-    /// and [`ElrPublisher`](super::ElrPublisher) tombstones the key rather
-    /// than storing it. Entries come out in partition order because the map is
-    /// ordered, so one state renders to one string and a re-publication of
-    /// unchanged state compares equal to what the image already holds.
-    #[cfg(test)]
-    pub(crate) fn render(&self) -> String {
-        self.0
-            .iter()
-            .map(|(partition, elr)| {
-                format!(
-                    "{partition}:{}:{}",
-                    render_ids(&elr.eligible_leader_replicas),
-                    render_ids(&elr.last_known_elr),
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(";")
-    }
-
     /// The ELR state of one partition. Absent partitions project as two empty
     /// lists, which is the "no ELR" answer Kafka gives.
     pub(crate) fn partition(&self, partition: i32) -> PartitionElr {
@@ -148,33 +150,17 @@ impl TopicElr {
             })
             .collect()
     }
+}
 
-    /// Move `node` out of every partition's eligible set and into its
-    /// last-known set, and report whether anything moved.
-    ///
-    /// Eligibility is a claim about the log a replica held, and this is what
-    /// withdraws the claim while keeping what is still true: the node was the
-    /// last one known to be complete, which is what an operator reads when a
-    /// partition has no leader left at all. Kafka reaches the same pair of
-    /// sets through `uncleanShutdownReplicas`, which
-    /// `PartitionChangeBuilder.maybePopulateTargetElr` subtracts from
-    /// `targetElr` while `targetLastKnownElr` keeps it.
-    #[cfg(test)]
-    pub(crate) fn demote_node(&mut self, node: i32) -> bool {
-        let mut moved = false;
-        for elr in self.0.values_mut() {
-            if !elr.eligible_leader_replicas.contains(&node) {
-                continue;
-            }
-            elr.eligible_leader_replicas.retain(|id| *id != node);
-            if !elr.last_known_elr.contains(&node) {
-                elr.last_known_elr.push(node);
-                elr.last_known_elr.sort_unstable();
-            }
-            moved = true;
-        }
-        moved
-    }
+/// Whether `image` records `partition` as having no leader.
+///
+/// See [`PartitionElr::is_leaderless`]. The projections that answer for a
+/// partition -- `Metadata` and `DescribeTopicPartitions` -- read it here.
+pub(crate) fn is_leaderless(image: &MetadataImage, partition: &PartitionRecord) -> bool {
+    matches!(
+        image.partition_elr(&partition.topic, partition.partition).1,
+        [only] if *only == partition.leader
+    )
 }
 
 #[cfg(test)]
@@ -210,15 +196,6 @@ fn metadata_node_ids(ids: &[i32]) -> Vec<NodeId> {
     ids.iter()
         .filter_map(|id| u64::try_from(*id).ok().map(NodeId))
         .collect()
-}
-
-/// Render one node-id list.
-#[cfg(test)]
-fn render_ids(ids: &[i32]) -> String {
-    ids.iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(",")
 }
 
 /// Narrow metadata node ids to the wire type, dropping any that do not fit.

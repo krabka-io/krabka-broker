@@ -265,13 +265,17 @@ async fn advance_broker_state(
         BrokerControlState::ControlledShutdown => current != next || left.has_leaderships,
         BrokerControlState::Unfenced => false,
     };
-    let records = transition_records(
-        &image,
-        broker,
-        current,
-        next,
-        if leaves { left.changes } else { Vec::new() },
-    );
+    // `handleBrokerUnfenced` elects again for every partition with no leader,
+    // with the unfencing broker as an acceptable leader.
+    let unfences = current != next && next == BrokerControlState::Unfenced;
+    let partition_changes = if leaves {
+        left.changes
+    } else if unfences {
+        crate::leader_election::compute_unfence_changes(&image, broker, liveness, metrics).await
+    } else {
+        Vec::new()
+    };
+    let records = transition_records(&image, broker, current, next, partition_changes);
     let wrote = !records.is_empty();
     if wrote && let Err(error) = controller.submit_change(records).await {
         tracing::warn!(broker = broker.0, %error, ?next, "broker heartbeat: submit_change failed");
@@ -321,19 +325,20 @@ fn current_broker_state(
 }
 
 /// The records one heartbeat transition writes, in Kafka's order: the
-/// partition changes `leaving` takes the broker out of its ISRs with, and the
-/// registration change of the transition, if the registration does not
-/// already carry it.
+/// partition changes the transition brings -- the ones that take the broker
+/// out of its ISRs, or, when it unfences, the elections it makes possible --
+/// and the registration change of the transition, if the registration does
+/// not already carry it.
 fn transition_records(
     image: &krabka_metadata::MetadataImage,
     broker: NodeId,
     current: BrokerControlState,
     next: BrokerControlState,
-    mut leaving: Vec<krabka_metadata::MetadataRecord>,
+    mut partition_changes: Vec<krabka_metadata::MetadataRecord>,
 ) -> Vec<krabka_metadata::MetadataRecord> {
     use crate::heartbeat::fencing::{RegistrationChange, registration_change};
     if current == next {
-        return leaving;
+        return partition_changes;
     }
     let change = match next {
         BrokerControlState::Fenced | BrokerControlState::ShutdownNow => RegistrationChange::FENCE,
@@ -341,10 +346,16 @@ fn transition_records(
         BrokerControlState::ControlledShutdown => RegistrationChange::CONTROLLED_SHUTDOWN,
     };
     let registration = registration_change(image, broker, change);
-    if next == BrokerControlState::ControlledShutdown {
-        registration.into_iter().chain(leaving).collect()
+    // A fence follows the partition changes; controlled shutdown and unfence
+    // precede them, as `handleBrokerInControlledShutdown` and
+    // `handleBrokerUnfenced` write them.
+    if matches!(
+        next,
+        BrokerControlState::ControlledShutdown | BrokerControlState::Unfenced
+    ) {
+        registration.into_iter().chain(partition_changes).collect()
     } else {
-        leaving.extend(registration);
-        leaving
+        partition_changes.extend(registration);
+        partition_changes
     }
 }

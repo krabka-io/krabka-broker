@@ -575,3 +575,145 @@ async fn a_dead_eligible_leader_replica_leaves_the_unclean_election_to_decide() 
     assert!(pr.isr == vec![NodeId(3)]);
     assert!(metrics.unclean_leader_elections_total.get() == 1);
 }
+
+/// The value Kafka writes when the last ISR member of a partition dies and
+/// nothing can be elected: `leader = -1`, the ISR that lost it, the ELR that
+/// ISR implies, and the last leader as `lastKnownElr`
+/// (`PartitionChangeBuilder.maybeUpdateLastKnownLeader`).
+///
+/// The partition record is not rewritten -- a krabka record always names a
+/// leader -- so the scan publishes only the ELR, and the last-known ELR that
+/// names broker 1 is what says the partition has none. Every row is the state
+/// with ELR enabled; without the feature nothing is published (see
+/// `failover_leaves_partition_unavailable_when_unclean_disabled`).
+#[tokio::test]
+async fn a_partition_with_nothing_to_elect_publishes_the_last_leader_as_last_known() {
+    struct Case {
+        label: &'static str,
+        overrides: &'static [(&'static str, &'static str)],
+        alive: &'static [u64],
+        recoveries: Vec<(String, i32, RecoveryStrategy)>,
+    }
+    let cases = [
+        Case {
+            label: "ISR [1], ELR [2, 3], and 2 and 3 are down: ELR [1, 2, 3], last-known [1]",
+            overrides: &[
+                (ELIGIBLE_LEADER_REPLICAS, "0:2,3:"),
+                (MIN_INSYNC_REPLICAS, "2"),
+            ],
+            alive: &[],
+            recoveries: vec![],
+        },
+        Case {
+            label: "an alive replica outside the ISR and the ELR is not elected without the toggle",
+            overrides: &[(MIN_INSYNC_REPLICAS, "2")],
+            alive: &[2, 3],
+            recoveries: vec![],
+        },
+        Case {
+            label: "a partition handed to the offset-aware recovery has no leader either",
+            overrides: &[
+                (MIN_INSYNC_REPLICAS, "2"),
+                (UNCLEAN_RECOVERY_STRATEGY, "Balanced"),
+            ],
+            alive: &[2, 3],
+            recoveries: vec![("t".to_owned(), 0, RecoveryStrategy::Balanced)],
+        },
+    ];
+    for Case {
+        label,
+        overrides,
+        alive,
+        recoveries,
+    } in cases
+    {
+        let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1]);
+        crate::test_support::finalize_elr_version(&mut img);
+        set_topic_configs(&mut img, "t", overrides);
+        let l = ControllerLivenessState::new(krabka_units::secs(10));
+        for &n in alive {
+            l.record_heartbeat(n).await;
+        }
+        let published = TopicElr::of_topic(&img, "t").partition(0);
+        let eligible_before: Vec<u64> = published
+            .eligible_leader_replicas
+            .iter()
+            .map(|id| u64::try_from(*id).expect("a node id"))
+            .collect();
+        let mut expected_eligible = eligible_before;
+        expected_eligible.push(1);
+        expected_eligible.sort_unstable();
+
+        let plan = compute_failover_changes(
+            &img,
+            /*dead=*/ NodeId(1),
+            &l,
+            &crate::metrics::BrokerMetrics::new(),
+        )
+        .await;
+
+        assert!(
+            plan.changes
+                == vec![MetadataRecord::V1PartitionElr(
+                    krabka_metadata::PartitionElrRecord {
+                        topic: "t".into(),
+                        partition: 0,
+                        eligible_leader_replicas: expected_eligible
+                            .into_iter()
+                            .map(NodeId)
+                            .collect(),
+                        last_known_elr: vec![NodeId(1)],
+                    }
+                )],
+            "{label}"
+        );
+        assert!(plan.recoveries == recoveries, "{label}");
+        assert!(
+            plan.unavailable.is_empty() == !recoveries.is_empty(),
+            "{label}"
+        );
+
+        // Applying it and running the scan again -- the sweep does, every
+        // tick -- publishes nothing more.
+        for record in &plan.changes {
+            img.apply(record);
+        }
+        let again =
+            compute_failover_changes(&img, NodeId(1), &l, &crate::metrics::BrokerMetrics::new())
+                .await;
+        assert!(again.changes.is_empty(), "{label}: {:?}", again.changes);
+        assert!(
+            crate::elr::state::is_leaderless(&img, img.partition("t", 0).expect("partition")),
+            "{label}"
+        );
+    }
+}
+
+/// A partition that keeps a leader publishes an empty last-known ELR, so a
+/// shrink below min ISR does not fill it with the replicas it dropped, which is
+/// what the published value used to be.
+#[tokio::test]
+async fn a_failover_that_keeps_a_leader_leaves_the_last_known_elr_empty() {
+    let mut img = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
+    crate::test_support::finalize_elr_version(&mut img);
+    set_topic_config(&mut img, "t", MIN_INSYNC_REPLICAS, "3");
+    let l = ControllerLivenessState::new(krabka_units::secs(10));
+    for n in [1u64, 2] {
+        l.record_heartbeat(n).await;
+    }
+
+    let plan = compute_failover_changes(
+        &img,
+        /*dead=*/ NodeId(3),
+        &l,
+        &crate::metrics::BrokerMetrics::new(),
+    )
+    .await;
+
+    let [MetadataRecord::V1PartitionUpdate(update)] = plan.changes.as_slice() else {
+        panic!("expected one partition update, got {:?}", plan.changes)
+    };
+    assert!(update.partition.isr == vec![NodeId(1), NodeId(2)]);
+    assert!(update.eligible_leader_replicas == Some(vec![NodeId(3)]));
+    assert!(update.last_known_elr == Some(vec![]));
+}

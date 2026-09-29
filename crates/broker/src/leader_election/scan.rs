@@ -1,8 +1,15 @@
-//! The two controller failover scans. Both walk the metadata image once, ask
-//! [`failover_one`] about every partition they touch, and turn the answers
+//! The controller failover scans. Each walks the metadata image once, asks
+//! [`failover_one`] about every partition it touches, and turns the answers
 //! into a [`FailoverPlan`]. [`compute_failover_changes`] reacts to a dead
 //! broker; [`compute_offline_dir_failover_changes`] reacts to a live broker
-//! that lost a log directory (KIP-112).
+//! that lost a log directory (KIP-112); [`compute_unclean_restart_changes`]
+//! reacts to a broker that came back without proving it stopped cleanly.
+//!
+//! A partition none of them can elect is left as its record has it, and the
+//! scan tells its [`ElrPublisher`] that it has no leader, which publishes the
+//! last-known ELR that says so. [`compute_unfence_changes`] is the other half:
+//! it elects again for such a partition when a broker unfences, which is what
+//! Kafka's `handleBrokerUnfenced` does over `partitionsWithNoLeader`.
 
 use krabka_metadata::{
     LeaderRecoveryState, MetadataImage, MetadataRecord, PartitionRecord, PartitionRecoveryRecord,
@@ -10,13 +17,15 @@ use krabka_metadata::{
 use krabka_raft::NodeId;
 use tracing::warn;
 
-use super::policy::{FailoverDecision, FailoverPlan, failover_one, unclean_restart_one};
+use super::policy::{
+    FailoverDecision, FailoverPlan, elect_leaderless_one, failover_one, unclean_restart_one,
+};
 use crate::{
     config_keys::{
         RecoveryStrategy, resolve_recovery_strategy, resolve_unclean_leader_election_enabled,
         witness_node_ids,
     },
-    elr::{ElrPublisher, TopicElr},
+    elr::{ElrPublisher, TopicElr, state::PartitionElr},
     heartbeat::controller_state::ControllerLivenessState,
 };
 
@@ -26,9 +35,11 @@ mod dead_broker_tests;
 mod offline_dir_tests;
 #[cfg(test)]
 mod unclean_restart_tests;
+#[cfg(test)]
+mod unfence_tests;
 
-/// The published eligible-leader-replica sets a scan reads, parsed once per
-/// topic rather than once per partition.
+/// The published eligible and last-known replica sets a scan reads, parsed
+/// once per topic rather than once per partition.
 ///
 /// [`TopicElr::of_topic`] hits the topic's config map and parses the whole
 /// value, which holds every partition of the topic that carries ELR state. A
@@ -38,14 +49,22 @@ mod unclean_restart_tests;
 struct ScanElr(std::collections::HashMap<String, TopicElr>);
 
 impl ScanElr {
-    /// The eligible-leader-replica set `image` publishes for one partition.
-    fn eligible(&mut self, image: &MetadataImage, topic: &str, partition: i32) -> Vec<i32> {
+    /// The ELR state `image` publishes for one partition.
+    fn state(&mut self, image: &MetadataImage, topic: &str, partition: i32) -> PartitionElr {
         self.0
             .entry(topic.to_owned())
             .or_insert_with(|| TopicElr::of_topic(image, topic))
             .partition(partition)
-            .eligible_leader_replicas
     }
+}
+
+/// Tell `publisher` that the scan leaves `pr` without a leader once `gone`
+/// leaves its ISR, because no rung of the ladder could elect one.
+///
+/// Kafka writes `leader = -1` with that ISR for the same partition; see
+/// [`ElrPublisher::leaderless`].
+fn mark_leaderless(publisher: &mut ElrPublisher<'_>, pr: &PartitionRecord, gone: NodeId) {
+    publisher.leaderless(pr, pr.isr.iter().copied().filter(|n| *n != gone).collect());
 }
 
 /// Compute the failover `MetadataRecord` changes for `dead` against
@@ -75,6 +94,8 @@ pub(crate) async fn compute_failover_changes(
     // KIP-966: the replicas that are known to hold every committed record.
     // `failover_one` elects one of them, cleanly, when the live ISR empties.
     let mut elr = ScanElr::default();
+    // A partition with nothing to elect has no leader, which its ELR says.
+    let mut publisher = ElrPublisher::new(image);
     // Single O(P) walk over every partition in the image.
     for pr in image.all_partitions() {
         if !pr.replicas.contains(&dead) && !pr.isr.contains(&dead) {
@@ -82,13 +103,13 @@ pub(crate) async fn compute_failover_changes(
         }
         let strategy = resolve_recovery_strategy(image, &pr.topic);
         let unclean_enabled = resolve_unclean_leader_election_enabled(image, &pr.topic);
-        let eligible = elr.eligible(image, &pr.topic, pr.partition);
+        let elr_state = elr.state(image, &pr.topic, pr.partition);
         match failover_one(
             pr,
             dead,
             &alive,
             &witnesses,
-            &eligible,
+            &elr_state,
             strategy,
             unclean_enabled,
         ) {
@@ -192,9 +213,11 @@ pub(crate) async fn compute_failover_changes(
                 // KIP-966: defer to the offset-aware Unclean Recovery Manager —
                 // it polls surviving replicas and elects the most complete log.
                 recoveries.push((pr.topic.clone(), pr.partition, strategy));
+                mark_leaderless(&mut publisher, pr, dead);
             }
             FailoverDecision::Unavailable => {
                 unavailable.push((pr.topic.clone(), pr.partition));
+                mark_leaderless(&mut publisher, pr, dead);
             }
             FailoverDecision::NoChange => {}
         }
@@ -202,7 +225,7 @@ pub(crate) async fn compute_failover_changes(
     // KIP-966: a failover that shrinks the ISR below min ISR leaves the
     // replicas it dropped eligible to lead, and one that reaches min ISR
     // again clears them.
-    ElrPublisher::new(image).extend(&mut changes);
+    publisher.extend(&mut changes);
     FailoverPlan {
         changes,
         recoveries,
@@ -242,6 +265,7 @@ pub(crate) async fn compute_offline_dir_failover_changes(
         .collect();
     let witnesses = witness_node_ids(image);
     let mut elr = ScanElr::default();
+    let mut publisher = ElrPublisher::new(image);
     for pr in image.all_partitions() {
         let Some(slot) = pr.replicas.iter().position(|n| *n == broker) else {
             continue;
@@ -255,13 +279,13 @@ pub(crate) async fn compute_offline_dir_failover_changes(
         }
         let strategy = resolve_recovery_strategy(image, &pr.topic);
         let unclean_enabled = resolve_unclean_leader_election_enabled(image, &pr.topic);
-        let eligible = elr.eligible(image, &pr.topic, pr.partition);
+        let elr_state = elr.state(image, &pr.topic, pr.partition);
         match failover_one(
             pr,
             broker,
             &alive,
             &witnesses,
-            &eligible,
+            &elr_state,
             strategy,
             unclean_enabled,
         ) {
@@ -343,12 +367,14 @@ pub(crate) async fn compute_offline_dir_failover_changes(
             }
             FailoverDecision::Recover(strategy) => {
                 recoveries.push((pr.topic.clone(), pr.partition, strategy));
+                mark_leaderless(&mut publisher, pr, broker);
             }
             FailoverDecision::Unavailable => {
                 warn!(
                     topic = %pr.topic, partition = pr.partition,
                     "offline dir on leader, no live ISR replica; partition unavailable"
                 );
+                mark_leaderless(&mut publisher, pr, broker);
             }
             FailoverDecision::NoChange => {}
         }
@@ -356,7 +382,7 @@ pub(crate) async fn compute_offline_dir_failover_changes(
     // KIP-966: a failover that shrinks the ISR below min ISR leaves the
     // replicas it dropped eligible to lead, and one that reaches min ISR
     // again clears them.
-    ElrPublisher::new(image).extend(&mut changes);
+    publisher.extend(&mut changes);
     FailoverPlan {
         changes,
         recoveries,
@@ -409,19 +435,23 @@ pub(crate) async fn compute_unclean_restart_changes(
         .collect();
     let witnesses = witness_node_ids(image);
     let mut elr = ScanElr::default();
+    // The ISR removals below are the candidate set the next eligibility is
+    // derived from, so the broker they remove has to be excluded from that
+    // derivation too.
+    let mut publisher = ElrPublisher::after_unclean_shutdown(image, returning);
     for pr in image.all_partitions() {
         if pr.leader != returning && !pr.isr.contains(&returning) {
             continue;
         }
         let strategy = resolve_recovery_strategy(image, &pr.topic);
         let unclean_enabled = resolve_unclean_leader_election_enabled(image, &pr.topic);
-        let eligible = elr.eligible(image, &pr.topic, pr.partition);
+        let elr_state = elr.state(image, &pr.topic, pr.partition);
         match unclean_restart_one(
             pr,
             returning,
             &alive,
             &witnesses,
-            &eligible,
+            &elr_state,
             strategy,
             unclean_enabled,
         ) {
@@ -525,20 +555,131 @@ pub(crate) async fn compute_unclean_restart_changes(
             }
             FailoverDecision::Recover(strategy) => {
                 recoveries.push((pr.topic.clone(), pr.partition, strategy));
+                mark_leaderless(&mut publisher, pr, returning);
             }
             FailoverDecision::Unavailable => {
                 unavailable.push((pr.topic.clone(), pr.partition));
+                mark_leaderless(&mut publisher, pr, returning);
             }
             FailoverDecision::NoChange => {}
         }
     }
-    // KIP-966, and the reason this function exists: the ISR removals above
-    // are the candidate set the next eligibility is derived from, so the
-    // broker they remove has to be excluded from that derivation too.
-    ElrPublisher::after_unclean_shutdown(image, returning).extend(&mut changes);
+    // KIP-966, and the reason this function exists: see the publisher above.
+    publisher.extend(&mut changes);
     FailoverPlan {
         changes,
         recoveries,
         unavailable,
     }
+}
+
+/// The elections Kafka runs when `unfenced` unfences: every partition that has
+/// no leader takes the election ladder again with `unfenced` as an acceptable
+/// leader.
+///
+/// This is `ReplicationControlManager.handleBrokerUnfenced`, whose
+/// `generateLeaderAndIsrUpdates` call walks
+/// `brokersToIsrs.partitionsWithNoLeader()` and lets `brokerToAdd` lead
+/// although the cluster still shows it fenced. The partitions are the ones
+/// the ELR marks leaderless (see [`PartitionElr::is_leaderless`]), and the
+/// ladder is [`elect_leaderless_one`]'s: the last leader returns as a clean
+/// ELR election when the fence put it there, and as the last known leader --
+/// unclean, `RECOVERING` -- when an unclean restart kept it out. A partition
+/// nothing can elect is left as it is, and the scans that marked it and the
+/// heartbeat that brings the next broker back answer for it.
+///
+/// The caller submits the records after the registration change that unfences
+/// the broker, in Kafka's order.
+pub(crate) async fn compute_unfence_changes(
+    image: &MetadataImage,
+    unfenced: NodeId,
+    liveness: &ControllerLivenessState,
+    metrics: &crate::metrics::BrokerMetrics,
+) -> Vec<MetadataRecord> {
+    let mut alive: std::collections::HashSet<NodeId> = liveness
+        .alive_snapshot()
+        .await
+        .into_iter()
+        .map(NodeId)
+        .collect();
+    // The registry still holds the unfencing broker fenced.
+    alive.insert(unfenced);
+    let witnesses = witness_node_ids(image);
+    let mut elr = ScanElr::default();
+    let mut changes: Vec<MetadataRecord> = Vec::new();
+    for pr in image.all_partitions() {
+        let elr_state = elr.state(image, &pr.topic, pr.partition);
+        if !elr_state.is_leaderless(pr.leader) {
+            continue;
+        }
+        let strategy = resolve_recovery_strategy(image, &pr.topic);
+        let unclean_enabled = resolve_unclean_leader_election_enabled(image, &pr.topic);
+        let FailoverDecision::Elect {
+            leader,
+            isr,
+            unclean,
+        } = elect_leaderless_one(
+            pr,
+            &alive,
+            &witnesses,
+            &elr_state,
+            strategy,
+            unclean_enabled,
+        )
+        else {
+            continue;
+        };
+        let Some((partition_epoch, leader_epoch)) =
+            crate::metadata_epoch::next_partition_change(pr.partition_epoch, pr.leader_epoch, true)
+        else {
+            warn!(
+                topic = %pr.topic,
+                partition = pr.partition,
+                "election of a leaderless partition skipped because a metadata epoch is exhausted"
+            );
+            continue;
+        };
+        if unclean {
+            warn!(
+                topic = %pr.topic, partition = pr.partition, leader = leader.0,
+                "unclean leader election: the last known leader returned to a partition with no leader (possible data loss)"
+            );
+            metrics.record_unclean_leader_election();
+        }
+        tracing::info!(
+            topic = %pr.topic,
+            partition = pr.partition,
+            unfenced = unfenced.0,
+            new_leader = leader.0,
+            new_isr = ?isr,
+            new_leader_epoch = leader_epoch.0,
+            unclean,
+            "unfence: electing a leader for a partition with none"
+        );
+        changes.push(MetadataRecord::V1Partition(PartitionRecord {
+            topic: pr.topic.clone(),
+            partition: pr.partition,
+            leader,
+            replicas: pr.replicas.clone(),
+            isr,
+            leader_epoch,
+            adding_replicas: pr.adding_replicas.clone(),
+            removing_replicas: pr.removing_replicas.clone(),
+            directories: pr.directories.clone(),
+            partition_epoch,
+        }));
+        if unclean {
+            changes.push(MetadataRecord::V1PartitionRecovery(
+                PartitionRecoveryRecord {
+                    topic: pr.topic.clone(),
+                    partition: pr.partition,
+                    state: LeaderRecoveryState::Recovering,
+                },
+            ));
+        }
+    }
+    // A leader is what clears the last-known ELR, and the election it comes
+    // from settles the eligible set.
+    ElrPublisher::new(image).extend(&mut changes);
+    changes
 }

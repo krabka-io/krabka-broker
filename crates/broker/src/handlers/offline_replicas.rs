@@ -186,6 +186,13 @@ pub(crate) struct PartitionAvailability {
 /// and `replicationFactor - isr.size() > 0`, so a partition on a dead disk is
 /// invisible to both for as long as it reports a live leader and a full ISR,
 /// however faithfully the third column names the disk.
+///
+/// The same holds for a partition the controller left without a leader. Kafka
+/// writes `leader = -1` and an ISR that has lost the last leader; krabka's
+/// record names a leader whatever happens, so the controller publishes the
+/// last-known ELR that names it instead (see
+/// [`crate::elr::state::is_leaderless`]) and this projection reads it back:
+/// `Leader: none`, and the last leader is out of the ISR.
 pub(crate) fn partition_availability(
     image: &MetadataImage,
     partition: &PartitionRecord,
@@ -204,8 +211,10 @@ pub(crate) fn partition_availability(
         .map(|(_, &replica)| wire_id(replica))
         .collect();
     let leader = wire_id(partition.leader);
+    let leaderless = crate::elr::state::is_leaderless(image, partition);
     PartitionAvailability {
-        leader_id: if dead_dir.contains(&leader)
+        leader_id: if leaderless
+            || dead_dir.contains(&leader)
             || leader_endpoint_error(image, partition.leader, listener).is_some()
         {
             NO_LEADER_ID
@@ -218,6 +227,7 @@ pub(crate) fn partition_availability(
             .copied()
             .map(wire_id)
             .filter(|replica| !dead_dir.contains(replica))
+            .filter(|replica| !leaderless || *replica != leader)
             .collect(),
         offline_replicas: offline_replicas(image, partition, unavailable, listener),
     }
