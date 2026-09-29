@@ -453,6 +453,14 @@ mod tests {
                 Some((vec!["a", "b"], true)),
             ),
             (
+                "offset committed after the group emptied still expires from the emptying",
+                classic(ClassicGroupState::Empty, Some("consumer"), &[]),
+                vec![("a", FRESH_MS)],
+                vec![],
+                Some(OLD_MS),
+                Some((vec!["a"], true)),
+            ),
+            (
                 "open transaction keeps its offset and the group",
                 classic(ClassicGroupState::Empty, Some("consumer"), &[]),
                 vec![("a", OLD_MS), ("b", OLD_MS)],
