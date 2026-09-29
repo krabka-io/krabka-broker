@@ -36,14 +36,15 @@
 //!
 //! ```text
 //! targetElr = candidates − targetIsr − uncleanShutdownReplicas;
-//! targetLastKnownElr = (candidates ∪ lastKnownElr) − targetIsr − targetElr;
 //! ```
 //!
-//! So an unclean replica is struck from the ELR and lands in the last-known
-//! ELR: the controller stops offering it as a safe election and keeps
-//! reporting it as the last replica known to have been complete, which is what
-//! an operator falls back to when the partition has no leader at all. This
-//! module produces exactly that move.
+//! So an unclean replica is struck from the ELR and from nothing else: the
+//! controller stops offering it as a safe election, and it does not move into
+//! the last-known ELR. In Kafka 4.3.1 that set holds the single last leader of
+//! a partition that has none (`useLastKnownLeaderInBalancedRecovery` is always
+//! on, so `maybeUpdateRecordElr` never publishes the set
+//! `maybePopulateTargetElr` computes for it), and a partition that still has a
+//! leader publishes it empty. This module produces exactly that strike.
 //!
 //! ## The ISR half
 //!
@@ -110,10 +111,6 @@ pub(crate) fn withdraw_elr_membership(image: &MetadataImage, node: NodeId) -> Ve
             record
                 .eligible_leader_replicas
                 .retain(|candidate| *candidate != node);
-            if !record.last_known_elr.contains(&node) {
-                record.last_known_elr.push(node);
-                record.last_known_elr.sort_unstable();
-            }
             Some(MetadataRecord::V1PartitionElr(record))
         })
         .collect()

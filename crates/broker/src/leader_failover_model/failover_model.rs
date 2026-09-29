@@ -21,7 +21,10 @@ use super::{
     elr,
     failover_state::{FailoverAction, FailoverModel, FailoverState, pr_of},
 };
-use crate::leader_election::{FailoverDecision, failover_one};
+use crate::{
+    elr::state::PartitionElr,
+    leader_election::{FailoverDecision, failover_one},
+};
 
 impl FailoverModel {
     /// The ISR that re-admitting `follower` produces, or `None` when the
@@ -144,8 +147,12 @@ impl Model for FailoverModel {
                     &alive,
                     &self.witnesses,
                     // The published eligible-leader set, as the production
-                    // scan reads it out of the image.
-                    &state.elr,
+                    // scan reads it out of the image. The model carries no
+                    // last-known ELR, so no partition in it lacks a leader.
+                    &PartitionElr {
+                        eligible_leader_replicas: state.elr.clone(),
+                        last_known_elr: Vec::new(),
+                    },
                     self.strategy,
                     self.unclean_enabled,
                 );

@@ -7,7 +7,7 @@
 //! implemented.
 
 use assert2::assert;
-use krabka_metadata::{LeaderEpoch, PartitionElrRecord, PartitionUpdateRecord};
+use krabka_metadata::{LeaderEpoch, PartitionElrRecord};
 
 use super::*;
 use crate::{
@@ -43,7 +43,9 @@ async fn restart_batch(image: &MetadataImage, alive_nodes: &[u64]) -> FailoverPl
 /// ISR, and because the ISR that is left is under `min.insync.replicas`, the
 /// recompute that rides the same batch would hand broker 3 straight back as
 /// eligible if it were not named as the unclean-shutdown replica. It is named,
-/// so the published value puts it in the last-known column instead.
+/// so nothing is published for it: not as eligible, and not as last-known
+/// either, because the partition has a leader. The ISR shrink is the whole
+/// batch.
 #[tokio::test]
 async fn a_returning_broker_leaves_the_isr_and_does_not_re_enter_the_elr() {
     let mut image = img_with_partition("t", 0, /*leader*/ 1, &[1, 2, 3], &[1, 2, 3]);
@@ -56,23 +58,18 @@ async fn a_returning_broker_leaves_the_isr_and_does_not_re_enter_the_elr() {
     assert!(plan.unavailable.is_empty());
     assert!(
         plan.changes
-            == vec![MetadataRecord::V1PartitionUpdate(PartitionUpdateRecord {
-                partition: PartitionRecord {
-                    topic: "t".into(),
-                    partition: 0,
-                    leader: NodeId(1),
-                    replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
-                    isr: vec![NodeId(1), NodeId(2)],
-                    leader_epoch: LeaderEpoch(5),
-                    adding_replicas: vec![],
-                    removing_replicas: vec![],
-                    directories: vec![],
-                    partition_epoch: 1,
-                },
-                eligible_leader_replicas: Some(vec![]),
-                last_known_elr: Some(vec![NodeId(3)]),
-                recovery_state: None,
-            }),]
+            == vec![MetadataRecord::V1Partition(PartitionRecord {
+                topic: "t".into(),
+                partition: 0,
+                leader: NodeId(1),
+                replicas: vec![NodeId(1), NodeId(2), NodeId(3)],
+                isr: vec![NodeId(1), NodeId(2)],
+                leader_epoch: LeaderEpoch(5),
+                adding_replicas: vec![],
+                removing_replicas: vec![],
+                directories: vec![],
+                partition_epoch: 1,
+            })]
     );
 }
 
@@ -88,6 +85,31 @@ async fn a_published_membership_is_withdrawn_without_a_partition_change() {
 
     let plan = restart_batch(&image, &[1, 2]).await;
 
+    assert!(
+        plan.changes
+            == vec![MetadataRecord::V1PartitionElr(PartitionElrRecord {
+                topic: "t".into(),
+                partition: 0,
+                eligible_leader_replicas: vec![],
+                last_known_elr: vec![],
+            })]
+    );
+}
+
+/// The state Kafka's `ElectLastKnownLeader` acts on: the only ISR member
+/// restarts uncleanly, so the partition has no leader, nothing is eligible --
+/// `uncleanShutdownReplicas` keeps broker 3 out of the ELR -- and the
+/// last-known ELR names broker 3, the last leader. The partition record is not
+/// rewritten, because a krabka record always names a leader.
+#[tokio::test]
+async fn the_only_isr_member_restarting_uncleanly_leaves_the_partition_leaderless() {
+    let mut image = img_with_partition("t", 0, /*leader*/ 3, &[1, 2, 3], &[3]);
+    crate::test_support::finalize_elr_version(&mut image);
+
+    let plan = restart_batch(&image, &[1, 2]).await;
+
+    assert!(plan.recoveries.is_empty());
+    assert!(plan.unavailable == vec![("t".to_string(), 0)]);
     assert!(
         plan.changes
             == vec![MetadataRecord::V1PartitionElr(PartitionElrRecord {

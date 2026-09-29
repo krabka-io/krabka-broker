@@ -240,11 +240,15 @@ mod tests {
                 "0:3:",
                 None,
             ),
+            // The partition can no longer elect broker 3, so it leaves the ELR.
+            // Kafka's last-known set holds the last leader of a partition
+            // without one, so it does not go there: this partition has a
+            // leader.
             (
-                "a dropped replica leaves the ELR for the last-known set",
+                "a dropped replica leaves the ELR",
                 &[1u64][..],
                 "0:3:",
-                Some("0::3"),
+                None,
             ),
         ] {
             // replicas=[1,2,3], removing=[3]: the completion drops broker 3

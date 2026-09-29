@@ -310,7 +310,10 @@ async fn offline_log_dir_is_reported_as_an_offline_replica() {
     // not in-sync -- which is the shape Apache Kafka 4.3.1 answers for the
     // same cluster: `Leader: none  Replicas: 1  Isr:`. `Metadata` carries
     // `LEADER_NOT_AVAILABLE` beside the `-1`; `DescribeTopicPartitions` does
-    // not.
+    // not. Its ELR columns are what `PartitionChangeBuilder` writes when the
+    // last ISR member leaves: the replica is eligible, even at the default
+    // `min.insync.replicas` of 1, and it is the last-known leader, which is
+    // what `Leader: none` means to the controller.
     let metadata = metadata_partitions(addr).await;
     let expected_metadata: Vec<MetadataResponsePartition> = (0..PARTITIONS)
         .map(|partition| {
@@ -340,8 +343,8 @@ async fn offline_log_dir_is_reported_as_an_offline_replica() {
                 leader_epoch: leader_epoch(&handle, partition),
                 replica_nodes: vec![BROKER_ID],
                 isr_nodes: if doomed { vec![] } else { vec![BROKER_ID] },
-                eligible_leader_replicas: Some(vec![]),
-                last_known_elr: Some(vec![]),
+                eligible_leader_replicas: Some(if doomed { vec![BROKER_ID] } else { vec![] }),
+                last_known_elr: Some(if doomed { vec![BROKER_ID] } else { vec![] }),
                 offline_replicas: if doomed { vec![BROKER_ID] } else { vec![] },
                 ..Default::default()
             }

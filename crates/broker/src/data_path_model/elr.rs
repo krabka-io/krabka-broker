@@ -25,12 +25,15 @@
 //!
 //! [`DpState::elr`](super::state::DpState::elr) is the published
 //! eligible-leader set as a broker bitmask. The published *last-known* ELR is
-//! deliberately absent. Neither election reads it, and
+//! deliberately absent. It holds the last leader of a partition that has none,
+//! and this model's failover applies nothing to such a partition (`Unavailable`
+//! changes no state here), so the search never reaches the state in which an
+//! election reads it. While a partition has a leader,
 //! `next_partition_elr` derives the eligible set from `old_isr ∪ elr` alone,
-//! so the last-known half feeds nothing but itself: passing it back as empty
-//! yields the same eligible set on every call, at a fraction of the reachable
-//! states. It is a `DescribeTopicPartitions` field, and
-//! [`crate::elr::maintain`]'s own tests are where it is checked.
+//! so passing the last-known half back as empty yields the same eligible set
+//! on every call, at a fraction of the reachable states. It is a
+//! `DescribeTopicPartitions` field, and [`crate::elr::maintain`]'s own tests
+//! are where it is checked.
 
 use std::collections::BTreeSet;
 

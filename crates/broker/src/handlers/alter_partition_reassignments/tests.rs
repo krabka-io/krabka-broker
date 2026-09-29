@@ -160,10 +160,11 @@ async fn seed_cancellable_partition(broker: &Broker) {
 }
 
 /// KIP-966: a cancel reverts the replica set, so a replica the published ELR
-/// calls eligible can stop being a replica at all. It was last known to hold
-/// every committed record, but the partition can no longer elect it, so it
-/// lands in the last-known set instead -- and the batch that reverts the
-/// partition is the batch that says so.
+/// calls eligible can stop being a replica at all. The partition can no longer
+/// elect it, so it leaves the ELR -- and the batch that reverts the partition
+/// is the batch that says so. It does not land in the last-known set: that
+/// holds the last leader of a partition without one, and this partition has a
+/// leader.
 #[tokio::test]
 async fn a_cancel_publishes_the_eligible_leader_state_the_revert_implies() {
     let version = 1;
@@ -194,7 +195,7 @@ async fn a_cancel_publishes_the_eligible_leader_state_the_revert_implies() {
         crate::elr::TopicElr::of_topic(&image, "orders").partition(7)
             == crate::elr::state::PartitionElr {
                 eligible_leader_replicas: vec![2],
-                last_known_elr: vec![3],
+                last_known_elr: vec![],
             }
     );
     broker_handle.shutdown().await;

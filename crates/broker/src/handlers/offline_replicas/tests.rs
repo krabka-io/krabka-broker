@@ -322,3 +322,87 @@ fn an_unregistered_broker_is_never_electable() {
 
     assert!(electable(&img, &HashSet::new()) == HashSet::from([1]));
 }
+
+/// A partition the controller left without a leader keeps its last leader in
+/// its record and publishes a one-member last-known ELR that names it (see
+/// `crate::elr::state::is_leaderless`). Both APIs project it the way Kafka's
+/// `leader = -1` reads: no leader, and the last leader out of the ISR. The
+/// eligible set beside it does not change the answer, and a last-known ELR
+/// that does not name the leader is not a marker.
+#[test]
+fn a_leaderless_partition_projects_no_leader_and_an_isr_without_its_last_leader() {
+    let good = dir(0x600d);
+    let cases: [(&str, Vec<u64>, Vec<u64>, PartitionAvailability); 5] = [
+        (
+            "sole replica, last-known ELR names it",
+            vec![1],
+            vec![1],
+            PartitionAvailability {
+                leader_id: NO_LEADER_ID,
+                isr_nodes: vec![],
+                offline_replicas: vec![],
+            },
+        ),
+        (
+            "an ISR member other than the last leader stays",
+            vec![1, 2],
+            vec![1],
+            PartitionAvailability {
+                leader_id: NO_LEADER_ID,
+                isr_nodes: vec![2],
+                offline_replicas: vec![],
+            },
+        ),
+        (
+            "no last-known ELR",
+            vec![1, 2],
+            vec![],
+            PartitionAvailability {
+                leader_id: 1,
+                isr_nodes: vec![1, 2],
+                offline_replicas: vec![],
+            },
+        ),
+        (
+            "a last-known ELR that names another replica is no marker",
+            vec![1, 2],
+            vec![2],
+            PartitionAvailability {
+                leader_id: 1,
+                isr_nodes: vec![1, 2],
+                offline_replicas: vec![],
+            },
+        ),
+        (
+            "a multi-member last-known ELR is no marker",
+            vec![1, 2],
+            vec![1, 2],
+            PartitionAvailability {
+                leader_id: 1,
+                isr_nodes: vec![1, 2],
+                offline_replicas: vec![],
+            },
+        ),
+    ];
+    for (name, replicas, last_known, expected) in cases {
+        let mut img = image(
+            &[(1, vec![good]), (2, vec![good])],
+            &replicas,
+            &vec![good; replicas.len()],
+        );
+        img.apply(&MetadataRecord::V1PartitionElr(
+            krabka_metadata::PartitionElrRecord {
+                topic: "t".into(),
+                partition: 0,
+                eligible_leader_replicas: vec![NodeId(2)],
+                last_known_elr: last_known.into_iter().map(NodeId).collect(),
+            },
+        ));
+        let record = img.partition("t", 0).expect("partition in image");
+
+        assert!(
+            partition_availability(&img, record, &HashSet::new()) == expected,
+            "case {name}"
+        );
+    }
+}
