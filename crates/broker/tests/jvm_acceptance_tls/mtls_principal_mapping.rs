@@ -2,7 +2,7 @@
 //!
 //! The other TLS cases authenticate with SASL over the encrypted channel; this
 //! one authenticates with the certificate itself. The fixture client cert's
-//! Subject DN is `CN=test-client\,OU\=integration\,O\=crabka` (one CN whose
+//! Subject DN is `CN=test-client\,OU\=integration\,O\=krabka` (one CN whose
 //! value holds the commas), and the listener carries `RULE:^CN=(.*?),.*$/$1/`
 //! ahead of `DEFAULT`, so the broker has to resolve the connection to
 //! `test-client\`, the prefix up to the first comma.
@@ -40,7 +40,7 @@ use crate::jvm_acceptance::{
 /// `x509-parser` renders it, and the principal the listener's rule maps it to.
 /// The fixture's Subject is one CN whose value holds the commas, so its
 /// RFC 2253 form escapes them.
-const CLIENT_DN: &str = r"CN=test-client\,OU\=integration\,O\=crabka";
+const CLIENT_DN: &str = r"CN=test-client\,OU\=integration\,O\=krabka";
 /// What Kafka's `SslPrincipalMapper` makes of `CLIENT_DN` under
 /// `RULE:^CN=(.*?),.*$/$1/`: the lazy group stops at the first comma, which
 /// the escaping backslash precedes.
@@ -167,7 +167,7 @@ async fn start_mtls_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir)
     (handle, dir)
 }
 
-/// A JVM client that presents `CN=test-client\,OU\=integration\,O\=crabka` is
+/// A JVM client that presents `CN=test-client\,OU\=integration\,O\=krabka` is
 /// authorized as `test-client\`, the name the listener's rule maps that DN to.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]

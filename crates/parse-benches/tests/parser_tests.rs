@@ -165,7 +165,7 @@ fn fails_when_txt_files_contain_no_benchmark_lines() {
     let file_path = dir.path().join("empty.txt");
     fs::write(
         &file_path,
-        "Compiling crabka-log v0.4.0\nFinished bench profile\n",
+        "Compiling krabka-log v0.4.0\nFinished bench profile\n",
     )
     .unwrap();
 
@@ -255,7 +255,7 @@ fn resolves_commit_sha_appropriately() {
     assert!(resolve_commit_sha(None, Some("")) == "unknown");
     assert!(resolve_commit_sha(Some("   "), Some("   ")) == "unknown");
 
-    assert!(resolve_commit_sha(Some("🦀crabka123"), None) == "🦀crabka123");
+    assert!(resolve_commit_sha(Some("🦀krabka123"), None) == "🦀krabka123");
 }
 
 #[test]

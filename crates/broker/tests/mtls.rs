@@ -55,7 +55,7 @@ const DEV_CLIENT_KEY: &str = include_str!("fixtures/security/dev_client_key.pem"
 /// value holds the commas and equals signs, which the JDK escapes (openssl's
 /// RFC 2253 output leaves `=` bare). Operators pin this string in
 /// ACLs and `super_users`.
-const CLIENT_PRINCIPAL: &str = r"CN=test-client\,OU\=integration\,O\=crabka";
+const CLIENT_PRINCIPAL: &str = r"CN=test-client\,OU\=integration\,O\=krabka";
 
 fn write_fixture(dir: &std::path::Path, name: &str, contents: &str) -> std::path::PathBuf {
     let p = dir.join(name);
@@ -200,7 +200,7 @@ async fn mtls_principal_is_cert_dn_and_super_user_bypass_works() {
     let connector = TlsConnector::from(client_cfg);
 
     let tcp = TcpStream::connect(addr).await.expect("tcp connect");
-    let server_name = ServerName::try_from("crabka-dev").unwrap();
+    let server_name = ServerName::try_from("krabka-dev").unwrap();
     let mut tls = connector
         .connect(server_name, tcp)
         .await
@@ -345,7 +345,7 @@ async fn an_unmappable_certificate_dn_closes_the_connection() {
     ));
 
     let tcp = TcpStream::connect(addr).await.expect("tcp connect");
-    let server_name = ServerName::try_from("crabka-dev").unwrap();
+    let server_name = ServerName::try_from("krabka-dev").unwrap();
     // The handshake itself is fine: the cert chains to the configured client
     // CA. The refusal happens after it, when the DN meets the rule list.
     let mut tls = connector
@@ -438,7 +438,7 @@ async fn a_connection_with_no_certificate_is_served_rather_than_closed() {
     let connector = TlsConnector::from(Arc::new(client_cfg));
 
     let tcp = TcpStream::connect(addr).await.expect("tcp connect");
-    let server_name = ServerName::try_from("crabka-dev").unwrap();
+    let server_name = ServerName::try_from("krabka-dev").unwrap();
     let mut tls = connector
         .connect(server_name, tcp)
         .await

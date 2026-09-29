@@ -200,7 +200,7 @@ mod tests {
     fn initial_connection_auth_audits_the_mtls_binding_only() {
         let peer: std::net::SocketAddr = "192.0.2.7:9093".parse().expect("peer addr");
         let cert_dn = krabka_security::Principal {
-            name: "CN=test-client,OU=integration,O=crabka".to_string(),
+            name: "CN=test-client,OU=integration,O=krabka".to_string(),
             auth_method: krabka_security::AuthMethod::MTls,
             groups: vec![],
         };
@@ -218,7 +218,7 @@ mod tests {
         let auth = initial_connection_auth(false, Some(cert_dn), log.as_ref(), &peer);
         assert!(
             auth.principal().map(|p| p.name.as_str())
-                == Some("CN=test-client,OU=integration,O=crabka")
+                == Some("CN=test-client,OU=integration,O=krabka")
         );
 
         let event = rx.try_recv().expect("the mTLS authentication row");
@@ -231,7 +231,7 @@ mod tests {
                     outcome: krabka_audit::AuditOutcome::Success,
                     mechanism: "SSL".to_string(),
                     principal: krabka_audit::AuditPrincipal {
-                        name: "User:CN=test-client,OU=integration,O=crabka".to_string(),
+                        name: "User:CN=test-client,OU=integration,O=krabka".to_string(),
                         auth_method: "MTls".to_string(),
                     },
                     source: krabka_audit::AuditEndpoint {

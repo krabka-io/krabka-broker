@@ -58,10 +58,10 @@ fn renders_names_as_x500_principal_get_name() {
             "RDNs come out last first",
             &[
                 &[(C, PRINTABLE, b"US")],
-                &[(O, UTF8, b"crabka")],
+                &[(O, UTF8, b"krabka")],
                 &[(CN, UTF8, b"alice")],
             ],
-            "CN=alice,O=crabka,C=US",
+            "CN=alice,O=krabka,C=US",
         ),
         (
             "special characters are escaped",
@@ -76,10 +76,10 @@ fn renders_names_as_x500_principal_get_name() {
         (
             "multi-valued RDN joins with plus in encoding order",
             &[
-                &[(O, UTF8, b"crabka")],
+                &[(O, UTF8, b"krabka")],
                 &[(CN, UTF8, b"alice"), (UID, UTF8, b"42")],
             ],
-            "CN=alice+UID=42,O=crabka",
+            "CN=alice+UID=42,O=krabka",
         ),
         (
             "emailAddress has no RFC 2253 keyword",
@@ -118,23 +118,23 @@ fn renders_the_subject_of_a_certificate() {
         (
             &[
                 (DnType::CountryName, "US"),
-                (DnType::OrganizationName, "crabka"),
+                (DnType::OrganizationName, "krabka"),
                 (DnType::CommonName, "alice"),
             ],
-            "CN=alice,O=crabka,C=US",
+            "CN=alice,O=krabka,C=US",
         ),
         (
             &[
-                (DnType::OrganizationName, "crabka"),
+                (DnType::OrganizationName, "krabka"),
                 (DnType::OrganizationalUnitName, "integration"),
                 (DnType::CommonName, "test-client"),
             ],
-            "CN=test-client,OU=integration,O=crabka",
+            "CN=test-client,OU=integration,O=krabka",
         ),
         // One CN whose value holds commas is not a three-RDN DN.
         (
-            &[(DnType::CommonName, "test-client,OU=integration,O=crabka")],
-            "CN=test-client\\,OU\\=integration\\,O\\=crabka",
+            &[(DnType::CommonName, "test-client,OU=integration,O=krabka")],
+            "CN=test-client\\,OU\\=integration\\,O\\=krabka",
         ),
     ];
     let key = KeyPair::generate().expect("key pair");
