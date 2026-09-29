@@ -208,8 +208,6 @@ impl DirectoryKind {
 /// Validates the command line, reads the directories, and decides what to
 /// write.
 fn plan(args: FormatArgs, extra: Vec<MetadataRecord>) -> Result<Plan, Failure> {
-    let dynamic_format = is_dynamic_format(&args).map_err(|e| krabka(EXIT_INVALID_FEATURE, e))?;
-
     // KIP-584 / KIP-778 / KIP-1022 bootstrap: finalize each registered feature
     // at its `--feature` override, else its per-release default for the
     // resolved bootstrap metadata.version (`--feature metadata.version` >
@@ -225,6 +223,12 @@ fn plan(args: FormatArgs, extra: Vec<MetadataRecord>) -> Result<Plan, Failure> {
     .map_err(|e| krabka(EXIT_INVALID_FEATURE, e))?;
     let metadata_version = krabka_metadata::metadata_version::from_feature_level(bootstrap_mv)
         .map_or_else(|| bootstrap_mv.to_string(), |mv| mv.ivn().to_owned());
+
+    // The `kraft.version` rules come after the release and the feature names,
+    // as in `Formatter.run`: it resolves the release, then checks the names in
+    // `calculateEffectiveFeatureLevels`, which is where `kraft.version` is
+    // reconciled with the quorum flags.
+    let dynamic_format = is_dynamic_format(&args).map_err(|e| krabka(EXIT_INVALID_FEATURE, e))?;
 
     // KIP-853: this node's stable directory id for the metadata log
     // directory. The broker reads it back from `meta.properties.json` on
