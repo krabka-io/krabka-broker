@@ -12,6 +12,12 @@ use serde::Deserialize;
 /// Kafka protocol default for `sasl.kerberos.service.name`.
 pub(super) const DEFAULT_KERBEROS_SERVICE_NAME: &str = "kafka";
 
+/// Kafka's default `sasl.kerberos.principal.to.local.rules`, which is
+/// `KerberosShortNamer.fromUnparsedRules`'s answer to no rules at all.
+fn default_principal_to_local_rules() -> Vec<String> {
+    vec!["DEFAULT".to_owned()]
+}
+
 /// TOML shape of `[gssapi]`. Maps to
 /// [`crate::network::auth::GssapiConfig`]. `principal_to_local_rules`
 /// are parsed into `KerberosRule` at `apply_to` time.
@@ -23,8 +29,10 @@ pub struct FileGssapiConfig {
     pub keytab_path: std::path::PathBuf,
     /// `sasl.kerberos.service.name`. Defaults to `"kafka"` when omitted.
     pub service_name: Option<String>,
-    /// `auth_to_local` rule specs, applied in order (first match wins).
-    #[serde(default)]
+    /// `auth_to_local` rule specs, applied in order (first match wins). Kafka's
+    /// default for `sasl.kerberos.principal.to.local.rules` is `["DEFAULT"]`,
+    /// and an empty list maps no principal.
+    #[serde(default = "default_principal_to_local_rules")]
     pub principal_to_local_rules: Vec<String>,
     /// Default Kerberos realm, the only realm the `DEFAULT` rule accepts.
     /// Kafka reads it from `krb5.conf`; when it is omitted `DEFAULT` matches
@@ -115,6 +123,41 @@ principal_to_local_rules = ["DEFAULT"]
         let gssapi = cfg.gssapi.unwrap();
         assert!(gssapi.service_name == "kafka");
         assert!(gssapi.max_time_skew == krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW);
+    }
+
+    /// Kafka's `sasl.kerberos.principal.to.local.rules` defaults to
+    /// `["DEFAULT"]`, so a `[gssapi]` section with no rules maps a principal in
+    /// the default realm to its first component. An explicit empty list is
+    /// Kafka's empty rule list, which maps nothing.
+    #[test]
+    fn apply_to_gssapi_defaults_the_rules_to_default() {
+        let realm = "realm = \"EXAMPLE.COM\"\n";
+        // (rules line, kinds of the rules that result)
+        let cases = [
+            ("", vec!["DEFAULT"]),
+            ("principal_to_local_rules = []\n", vec![]),
+            (
+                "principal_to_local_rules = [\"RULE:[1:$1](.*)s/x/y/\"]\n",
+                vec!["RULE"],
+            ),
+        ];
+        for (rules, expected) in cases {
+            let src = format!("[gssapi]\nkeytab_path = \"/k/keytab\"\n{realm}{rules}");
+            let file: FileConfig = toml::from_str(&src).unwrap();
+            let mut cfg = crate::config::BrokerConfig::default();
+            file.apply_to(&mut cfg).unwrap();
+            let kinds: Vec<&str> = cfg
+                .gssapi
+                .unwrap()
+                .principal_to_local_rules
+                .iter()
+                .map(|rule| match rule {
+                    crate::network::auth::KerberosRule::Default => "DEFAULT",
+                    crate::network::auth::KerberosRule::Translate(_) => "RULE",
+                })
+                .collect();
+            check!(kinds == expected, "{rules:?}");
+        }
     }
 
     #[test]
