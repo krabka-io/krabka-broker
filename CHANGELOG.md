@@ -99,6 +99,14 @@ the `krabka-*` names to crates.io.
   API versions Kafka marks unstable on both listeners. Off, its default, the
   broker advertises only stable versions and closes a connection that sends
   an unstable one (#646).
+- The `share_group_enable` setting is removed. Share groups follow the finalized
+  `share.version`.
+- The private MetadataFetch (1004) request grew from 12 to 32 bytes, and the
+  delegation token metadata record gained a requester. Delete local data
+  directories, and use `krabka-protocol` from the commits named in
+  `Cargo.toml`.
+- `__remote_log_metadata` is created with `min.insync.replicas=2`; single-broker
+  setups set `[remote_storage.kafka_metadata] min_isr = 1`.
 
 ### Fixed
 
@@ -124,6 +132,110 @@ the `krabka-*` names to crates.io.
 - DescribeShareGroupOffsets answers an unknown topic, a failed share-state
   read and an explicit topic list as Kafka 4.3.1 does, and takes the lag's
   end offset from each partition's leader (#943).
+
+The rest of this section comes from the Kafka compatibility audit (#1248).
+It matches Kafka 4.3.1 by default and Kafka trunk under the unstable flags.
+
+- Next-generation consumer groups follow Kafka's revocation protocol: a joining
+  member gets a partition only after the incumbent reports it released, and a
+  member is told when its assignment shrank (#1178). `SubscribedTopicRegex`
+  must match a whole topic name, an empty pattern removes the subscription and
+  a heartbeat without a pattern keeps the stored one (#1179, #1204). The
+  resolved topics are persisted as `ConsumerGroupRegularExpression` records and
+  refreshed after a topic creation, an ACL change and every 10 minutes, so a
+  coordinator failover keeps them.
+- `ConsumerGroupHeartbeat` on a missing group or on a share or streams group
+  answers `GROUP_ID_NOT_FOUND` (#1205), and `ConsumerGroupDescribe` hides
+  topics the caller cannot describe (#1206). `group.consumer.max.size` defaults
+  to 2147483647 (#1207), and the server assignor is the one most members name
+  (#1208). `StreamsGroupHeartbeat` v0 refuses static membership, task offsets
+  and warm-up tasks unless `unstable.api.versions.enable` is on (#1209, #1247).
+- Group config alters accept every 4.3.1 `GroupConfig` key with Kafka's bounds,
+  and the consumer and share coordinators apply the per-group session,
+  heartbeat and assignment-interval overrides. A new target assignment waits
+  for `assignment.interval.ms` (#1186, #1236).
+- After a session expiry the survivors of a classic group get the group's
+  rebalance timeout. A member that never sends SyncGroup is removed, LeaveGroup
+  for a pending member id answers `NONE`, unloading a group answers parked
+  JoinGroup and SyncGroup with `NOT_COORDINATOR`, JoinGroup v0 uses the session
+  timeout as its rebalance timeout, and offsets of an empty group expire from
+  the moment it emptied (#1181, #1237). ListGroups answers
+  `COORDINATOR_LOAD_IN_PROGRESS` while an offsets partition loads (#1182).
+- The share APIs are gated on the finalized `share.version` and no longer on
+  `group.share.enable`, which is gone (#1226). `group.share.partition.max.record.locks`
+  caps the records in flight (#1224), a late acknowledgement or renewal gets
+  `INVALID_RECORD_STATE` (#1225), and the trunk-only share state rules apply
+  only under `unstable.api.versions.enable` (#1238). Under
+  `unstable.feature.versions.enable`, `share.version` 2 is advertised and
+  rejected or delivery-exhausted records go to the group's dead-letter topic
+  (KIP-1191, #1227).
+- Transactions choose their behavior from the request version, not the
+  cluster's `transaction.version`, so older EndTxn and AddPartitionsToTxn
+  clients can run consecutive transactions on one producer (#1180).
+  TxnOffsetCommit is verified with the transaction coordinator at every
+  version (#1228), a timed-out or re-initialised producer is fenced once at
+  every transaction version (#1229, #1230), and the trunk-only
+  `__transaction_state` tags are written only under
+  `unstable.api.versions.enable` (#1239).
+- Log compaction drops the records of aborted transactions and no longer lets
+  them win the dedup map, and markers expire per transaction (#1177, #1196).
+  `.index` and `.timeindex` files pass `kafka-dump-log` verification (#1198).
+  `Log::truncate_to` below the log start resets the log (#1197), tiered copy
+  stops at the last stable offset (#1200), `__remote_log_metadata` gets
+  `min.insync.replicas=2` (#1199), and `min.compaction.lag.ms` holds back the
+  oldest dirty segment (#1245).
+- Cluster-wide and per-broker dynamic defaults of topic keys reach Produce and
+  the partition log configuration (#1187), and a per-broker
+  `min.insync.replicas` governs `acks=all` on that broker. Broker config alters
+  refuse every non-dynamic `KafkaConfig` key and range-check every dynamic one
+  (#1183), and DescribeConfigs types every stored key and reports the static
+  layers as Kafka does (#1184, #1185). A config value above 32767 characters is
+  `INVALID_CONFIG` (#1236).
+- Disk errors answer `KAFKA_STORAGE_ERROR` per partition on Produce and Fetch
+  (#1188), a Fetch for a known but unhosted partition answers
+  `NOT_LEADER_OR_FOLLOWER` (#1189), a CRC mismatch answers `CORRUPT_MESSAGE`
+  (#1190), the fetch-session cache evicts by Kafka's rule (#1191), and
+  rack-aware replica selection prefers a leader in the client's rack and then
+  the most caught-up follower (#1192, #1234).
+- Metadata omits fenced brokers and brokers with no endpoint on the connection
+  listener and answers `LEADER_NOT_AVAILABLE` or `LISTENER_NOT_FOUND` for them
+  (#1202). Automatic placement starts at a random broker per topic and uses
+  fenced brokers last (#1201, #1203), and denied cluster-level shortcut probes
+  are no longer audited (#1235).
+- GSSAPI `auth_to_local` follows `KerberosShortNamer`: `DEFAULT` maps
+  `service/host@REALM`, `(match)` is a whole-string match and `/U` works
+  (#1220). `ssl.principal.mapping.rules` use `java.util.regex` semantics
+  (#1221). DescribeDelegationToken v3 reports the real requester, who can find
+  and see the token (#1222), and the delegation token HMAC is SHA-512 (#1240).
+  `allow.everyone.if.no.acl.found` covers non-transactional InitProducerId
+  (#1223). SASL_SSL listeners no longer map the client certificate, CreateAcls
+  and DeleteAcls have Kafka's 10000-ACL bound and message, and hosts are stored
+  as text below `metadata.version` 4.4-IV1 (#1240).
+- Quota buckets go into debt, so the throttled overage is not credited back
+  (#1212). A shared bucket is re-rated from its own entity (#1213), `ip`
+  entities match host names and non-canonical spellings (#1214), a null client
+  id draws no client-level quota, a rate change keeps the bucket's balance and
+  `throttle_time_ms` rounds to the nearest millisecond (#1241). A replication
+  throttle follows the broker's own id and exempts in-sync and caught-up
+  replicas (#1210, #1211).
+- A response frame is limited only by its size prefix (#1231). The controller
+  listener enforces the request-size, idle-timeout and connection limits
+  (#1232), and `sasl.server.max.receive.size` bounds a frame before a SASL
+  login completes (#1233). ApiVersions, UpdateFeatures and the KIP-590
+  envelope match Kafka on the eight smaller points of #1242.
+- DescribeQuorum lists every non-voter that fetches the metadata log, with real
+  timestamps, and drops an observer after five minutes of silence (#1193).
+  AddRaftVoter and the vote and pre-vote handlers follow `KafkaRaftClient`
+  (#1194, #1243). `LastKnownElr` holds the last leader of a leaderless
+  partition, and that leader is elected when it returns (#1195).
+- A follower truncates to the intersection with its own epoch history
+  (#1215), a reassignment that lowers the replication factor waits for the ISR
+  (#1216), ElectLeaders avoids a replica on a dead log directory (#1217), the
+  automatic leader rebalance repeats while it is capped (#1218), and a
+  truncation cuts an in-flight log-directory move (#1219, #1244).
+- KIP-714: a rejected terminating push locks the instance out, closing a
+  connection drops the instance it created, and `client_source_address` is the
+  JDK's text (#1246).
 
 ## [0.6.1] - 2026-09-26
 
