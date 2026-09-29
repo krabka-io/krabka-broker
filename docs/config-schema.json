@@ -478,6 +478,15 @@
           "description": "Explicit opt-out: run the non-durable in-memory RLMM instead of the\ntopic-backed default. Tests / single-node dev only.",
           "type": "boolean"
         },
+        "min_isr": {
+          "description": "`min.insync.replicas` for `__remote_log_metadata` on first creation.\nDefaults to 2 (Kafka's `remote.log.metadata.topic.min.isr`). Keep it at\nor below `replication`: a topic whose `min.insync.replicas` exceeds its\nreplica count rejects every `acks=all` write, so a single-broker setup\nthat sets `replication = 1` sets this to 1 as well.",
+          "format": "int32",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "num_partitions": {
           "description": "Partition count for `__remote_log_metadata` on first creation.\nDefaults to 50 (Kafka's\n`remote.log.metadata.topic.num.partitions`).",
           "format": "int32",

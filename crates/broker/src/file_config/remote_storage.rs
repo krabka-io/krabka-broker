@@ -100,6 +100,13 @@ pub struct FileKafkaRlmmConfig {
     /// creation. Defaults to 3 (Kafka's
     /// `remote.log.metadata.topic.replication.factor`).
     pub replication: Option<i32>,
+    /// `min.insync.replicas` for `__remote_log_metadata` on first creation.
+    /// Defaults to 2 (Kafka's `remote.log.metadata.topic.min.isr`). Keep it at
+    /// or below `replication`: a topic whose `min.insync.replicas` exceeds its
+    /// replica count rejects every `acks=all` write, so a single-broker setup
+    /// that sets `replication = 1` sets this to 1 as well.
+    #[schemars(range(min = 1))]
+    pub min_isr: Option<i32>,
     /// Timeout for provisioning each internal metadata topic.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
@@ -355,6 +362,9 @@ pub(super) fn apply_remote_storage(
                 replication: km
                     .and_then(|k| k.replication)
                     .unwrap_or(crate::config::DEFAULT_RLMM_TOPIC_REPLICATION_FACTOR),
+                min_isr: km
+                    .and_then(|k| k.min_isr)
+                    .unwrap_or(crate::config::DEFAULT_RLMM_TOPIC_MIN_ISR),
                 snapshot_dir: cfg.log_dir.join("remote-log-metadata"),
                 ..crate::config::KafkaRlmmConfig::default()
             };
@@ -438,6 +448,7 @@ bootstrap = "127.0.0.1:9092"
         check!(km.bootstrap.as_str() == "127.0.0.1:9092");
         check!(km.num_partitions == 50);
         check!(km.replication == 3);
+        check!(km.min_isr == 2);
         check!(km.topic_create_timeout == secs(30));
         check!(km.fetch_max_wait == millis(500));
         check!(km.fetch_max_bytes == mebibytes(1));
@@ -455,6 +466,7 @@ storage_dir = "/tmp/tier"
 bootstrap = "broker-0:9094"
 num_partitions = 8
 replication = 1
+min_isr = 1
 topic_create_timeout = "45s"
 fetch_max_wait = "750ms"
 fetch_max_bytes = "2MiB"
@@ -472,6 +484,7 @@ snapshot_interval = "90s"
         check!(km.bootstrap.as_str() == "broker-0:9094");
         check!(km.num_partitions == 8);
         check!(km.replication == 1);
+        check!(km.min_isr == 1);
         check!(km.topic_create_timeout == secs(45));
         check!(km.fetch_max_wait == millis(750));
         check!(km.fetch_max_bytes == mebibytes(2));
@@ -482,6 +495,7 @@ snapshot_interval = "90s"
     #[test]
     fn kafka_metadata_section_rejects_invalid_policy() {
         for (field, value) in [
+            ("min_isr", "0"),
             ("topic_create_timeout", "\"0ms\""),
             ("topic_create_timeout", "\"0.5ms\""),
             ("topic_create_timeout", "\"2147483648ms\""),

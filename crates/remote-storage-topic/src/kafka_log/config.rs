@@ -22,6 +22,11 @@ pub const DEFAULT_NUM_PARTITIONS: i32 = 50;
 /// Apache Kafka's `remote.log.metadata.topic.replication.factor`.
 pub const DEFAULT_REPLICATION: i32 = 3;
 
+/// Default `min.insync.replicas` for `__remote_log_metadata`, matching
+/// Apache Kafka's `remote.log.metadata.topic.min.isr`
+/// (`TopicBasedRemoteLogMetadataManagerConfig.DEFAULT_REMOTE_LOG_METADATA_TOPIC_MIN_ISR`).
+pub const DEFAULT_MIN_ISR: i32 = 2;
+
 /// How long `CreateTopics` may take to provision `__remote_log_metadata`
 /// before the broker abandons the round-trip.
 pub const DEFAULT_METADATA_TOPIC_CREATE_TIMEOUT: Time = secs(30);
@@ -91,6 +96,10 @@ pub struct KafkaMetadataLogConfig {
     /// Replication factor to create the topic with on first startup.
     /// The log ignores this value when the topic already exists.
     pub replication: i32,
+    /// `min.insync.replicas` to create the topic with on first startup.
+    /// `None` leaves the setting to the cluster default. The log ignores this
+    /// value when the topic already exists.
+    pub min_isr: Option<i32>,
     /// `client_id` for the producer and consumer. It is diagnostic only.
     pub client_id: String,
     /// Provision and maintain this internal topic with log compaction.
@@ -126,6 +135,7 @@ impl KafkaMetadataLogConfig {
             topic: METADATA_TOPIC.to_string(),
             num_partitions: DEFAULT_NUM_PARTITIONS,
             replication: DEFAULT_REPLICATION,
+            min_isr: Some(DEFAULT_MIN_ISR),
             client_id: "krabka-rlmm".to_string(),
             compacted: false,
             provision_topic: true,
@@ -145,8 +155,13 @@ impl KafkaMetadataLogConfig {
     /// # Errors
     ///
     /// Returns an error for non-positive, non-finite, fractional, or
-    /// out-of-range wire values.
+    /// out-of-range wire values, and for a `min_isr` below one, as Kafka's
+    /// `remote.log.metadata.topic.min.isr` does (`atLeast(1)`).
     pub fn validate(&self) -> Result<(), String> {
+        if let Some(min_isr) = self.min_isr {
+            refined_type::rule::GreaterI32::<0>::new(min_isr)
+                .map_err(|error| format!("min_isr: {error}"))?;
+        }
         validate_positive_whole_millis_i32("topic_create_timeout", self.topic_create_timeout)?;
         validate_positive_whole_millis_i32("fetch_max_wait", self.fetch_max_wait)?;
         validate_positive_whole_bytes_i32("fetch_max_bytes", self.fetch_max_bytes)?;
@@ -205,6 +220,7 @@ mod tests {
         check!(cfg.topic == METADATA_TOPIC);
         check!(cfg.num_partitions == 50);
         check!(cfg.replication == 3);
+        check!(cfg.min_isr == Some(2));
         check!(!cfg.compacted);
         check!(cfg.provision_topic);
         check!(cfg.bootstrap == "127.0.0.1:9092");
@@ -320,6 +336,29 @@ mod tests {
         for (field, cfg) in cases {
             let error = cfg.validate().expect_err("invalid policy must fail");
             assert!(error.contains(field), "field={field}, error={error}");
+        }
+    }
+
+    #[test]
+    fn min_isr_must_be_at_least_one() {
+        let cases = [
+            (Some(1), true),
+            (Some(2), true),
+            (Some(0), false),
+            (Some(-1), false),
+            // Unset leaves the cluster default, so nothing to check.
+            (None, true),
+        ];
+        for (min_isr, valid) in cases {
+            let cfg = KafkaMetadataLogConfig {
+                min_isr,
+                ..KafkaMetadataLogConfig::new("127.0.0.1:9092")
+            };
+            let result = cfg.validate();
+            assert!(result.is_ok() == valid, "min_isr={min_isr:?}: {result:?}");
+            if let Err(error) = result {
+                assert!(error.contains("min_isr"), "{error}");
+            }
         }
     }
 
