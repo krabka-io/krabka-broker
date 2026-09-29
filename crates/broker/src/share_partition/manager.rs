@@ -63,6 +63,10 @@ pub(crate) struct SharePartitionLeaderManager {
     /// Where the records of a group's dead-letter queue are written
     /// (KIP-1191).
     dlq: Arc<dyn DlqSink>,
+    /// The writes to the dead-letter queue that may run at once, across every
+    /// partition this broker leads: the writes that wait for a permit hold
+    /// their records in `Archiving`, and hold the SPSO with them.
+    dead_letter_writes: tokio::sync::Semaphore,
     /// This manager, for the tasks that finish a dead-letter write after the
     /// request that began it has answered.
     me: Weak<Self>,
@@ -96,6 +100,9 @@ impl SharePartitionLeaderManager {
             sessions: ShareSessionCache::new(session_max),
             leaders: DashMap::new(),
             dlq,
+            dead_letter_writes: tokio::sync::Semaphore::new(
+                dead_letter::MAX_CONCURRENT_DEAD_LETTER_WRITES,
+            ),
             me: me.clone(),
         })
     }

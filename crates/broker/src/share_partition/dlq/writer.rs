@@ -12,8 +12,14 @@
 //! Each request retries as Kafka's does: up to 5 attempts, backing off from
 //! 1 s to 30 s. A write that runs out of attempts, or that a broker refuses
 //! for good, fails, and the leader manager archives the records regardless.
+//!
+//! The produce requests to one leader share one connection, opened when the
+//! first needs it and kept for the ones after it, as Kafka's send thread keeps
+//! one `NetworkClient` for every dead-letter produce. A write that pays for a
+//! TCP, TLS and SASL setup each time would turn a consumer that rejects at a
+//! high rate into a storm of connections.
 
-use std::{future::Future, sync::Arc, time::Duration};
+use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use exponential_backoff::Backoff;
@@ -185,6 +191,57 @@ struct Transport {
     server_name: String,
 }
 
+/// A connection that a pool can tell has closed.
+trait Pooled: Clone {
+    fn is_open(&self) -> bool;
+}
+
+impl Pooled for krabka_client_core::Connection {
+    fn is_open(&self) -> bool {
+        !self.is_closed()
+    }
+}
+
+/// One connection for each leader, dialled when a write first needs it and
+/// shared by every write that follows, until it closes.
+///
+/// A [`krabka_client_core::Connection`] pipelines the requests of its clones,
+/// so writers that reach one leader at once use the one connection. Writers
+/// that need a leader with no open connection wait for a single dial.
+struct LeaderConnections<C> {
+    slots: std::sync::Mutex<HashMap<NodeId, Arc<tokio::sync::Mutex<Option<C>>>>>,
+}
+
+impl<C> Default for LeaderConnections<C> {
+    fn default() -> Self {
+        Self {
+            slots: std::sync::Mutex::default(),
+        }
+    }
+}
+
+impl<C: Pooled> LeaderConnections<C> {
+    /// The open connection to `leader`, dialled with `dial` when there is
+    /// none.
+    async fn get<F, Fut>(&self, leader: NodeId, dial: F) -> Result<C, String>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<C, String>>,
+    {
+        let slot = {
+            let mut slots = self.slots.lock().expect("connection pool lock");
+            Arc::clone(slots.entry(leader).or_default())
+        };
+        let mut held = slot.lock().await;
+        if let Some(open) = held.as_ref().filter(|connection| connection.is_open()) {
+            return Ok(open.clone());
+        }
+        let dialled = dial().await?;
+        *held = Some(dialled.clone());
+        Ok(dialled)
+    }
+}
+
 /// Writes dead-letter records: the [`DlqSink`] of a running broker.
 pub struct DlqWriter {
     node_id: NodeId,
@@ -193,6 +250,8 @@ pub struct DlqWriter {
     topics: Arc<AutoTopicCreation>,
     client: Arc<InterBrokerClient>,
     transport: Transport,
+    /// The connection to each leader that a produce goes to.
+    connections: LeaderConnections<krabka_client_core::Connection>,
     /// The static log settings, under the dynamic broker defaults: the
     /// `message.max.bytes` of a topic that sets no `max.message.bytes`.
     base_log: LogConfig,
@@ -219,6 +278,7 @@ impl DlqWriter {
                 listener_name: config.inter_broker_listener_name.clone(),
                 server_name: config.inter_broker_server_name.clone(),
             },
+            connections: LeaderConnections::default(),
             base_log: config.log_config.clone(),
             decompression: config.record_decompression_policy().unwrap_or_default(),
         }
@@ -304,8 +364,8 @@ impl DlqWriter {
         .await
     }
 
-    /// One produce request, over a connection that lasts for it alone. A
-    /// dead-letter write is rare, and Kafka keeps no more state for it.
+    /// One produce request, over the connection to the leader that the writes
+    /// share.
     async fn send_produce(
         &self,
         target: &Target,
@@ -327,21 +387,25 @@ impl DlqWriter {
                 || (broker.host.clone(), broker.port),
                 |endpoint| (endpoint.host.clone(), endpoint.port),
             );
-        let options = krabka_client_core::ConnectionOptions {
-            client_id: format!("krabka-broker-dlq-{}", self.node_id),
-            ..krabka_client_core::ConnectionOptions::default()
-        };
         let connection = self
-            .client
-            .connect_as_connection(
-                &host,
-                port,
-                self.transport.protocol,
-                &self.transport.server_name,
-                options,
-            )
-            .await
-            .map_err(|error| format!("connect to {host}:{port}: {error}"))?;
+            .connections
+            .get(leader, || async {
+                let options = krabka_client_core::ConnectionOptions {
+                    client_id: format!("krabka-broker-dlq-{}", self.node_id),
+                    ..krabka_client_core::ConnectionOptions::default()
+                };
+                self.client
+                    .connect_as_connection(
+                        &host,
+                        port,
+                        self.transport.protocol,
+                        &self.transport.server_name,
+                        options,
+                    )
+                    .await
+                    .map_err(|error| format!("connect to {host}:{port}: {error}"))
+            })
+            .await?;
         let request = ProduceRequest {
             transactional_id: None,
             acks: -1,
@@ -358,12 +422,12 @@ impl DlqWriter {
             }],
             ..Default::default()
         };
-        let response = connection
-            .send(request)
-            .await
-            .map_err(|error| format!("produce to {host}:{port}: {error}"));
-        connection.close();
-        response
+        connection.send(request).await.map_err(|error| {
+            // A connection that failed a request may be half dead: closing it
+            // makes the next attempt dial afresh.
+            connection.clone().close();
+            format!("produce to {host}:{port}: {error}")
+        })
     }
 }
 
@@ -564,6 +628,106 @@ mod tests {
                 .collect::<Vec<_>>()
                 == cases.iter().map(|(_, want)| *want).collect::<Vec<_>>()
         );
+    }
+
+    /// A connection that records whether it is open, and which dial made it.
+    #[derive(Clone)]
+    struct FakeConnection {
+        dial: usize,
+        open: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl Pooled for FakeConnection {
+        fn is_open(&self) -> bool {
+            self.open.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    /// A dialler that counts its dials, and lets other tasks run mid-dial.
+    #[derive(Default)]
+    struct Dialler {
+        dials: std::sync::atomic::AtomicUsize,
+        fail_first: bool,
+    }
+
+    impl Dialler {
+        async fn dial(&self) -> Result<FakeConnection, String> {
+            let dial = self.dials.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            tokio::task::yield_now().await;
+            if self.fail_first && dial == 0 {
+                return Err("connection refused".to_owned());
+            }
+            Ok(FakeConnection {
+                dial,
+                open: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            })
+        }
+
+        fn dials(&self) -> usize {
+            self.dials.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    /// The produce requests to one leader share a connection, another leader
+    /// has its own, and a connection that has closed is dialled again.
+    #[tokio::test]
+    async fn writes_to_one_leader_share_a_connection_until_it_closes() {
+        let pool = LeaderConnections::<FakeConnection>::default();
+        let dialler = Dialler::default();
+
+        let first = pool.get(NodeId(1), || dialler.dial()).await.unwrap();
+        let again = pool.get(NodeId(1), || dialler.dial()).await.unwrap();
+        let other = pool.get(NodeId(2), || dialler.dial()).await.unwrap();
+        first.open.store(false, std::sync::atomic::Ordering::SeqCst);
+        let redialled = pool.get(NodeId(1), || dialler.dial()).await.unwrap();
+
+        assert!(
+            (
+                first.dial,
+                again.dial,
+                other.dial,
+                redialled.dial,
+                dialler.dials()
+            ) == (0, 0, 1, 2, 3)
+        );
+    }
+
+    /// Writers that need a leader at the same moment wait for one dial rather
+    /// than each opening a connection, which is the storm a consumer that
+    /// rejects at a high rate would otherwise cause.
+    #[tokio::test]
+    async fn concurrent_writes_to_one_leader_dial_once() {
+        let pool = LeaderConnections::<FakeConnection>::default();
+        let dialler = Dialler::default();
+
+        let connections =
+            futures_util::future::join_all((0..16).map(|_| pool.get(NodeId(1), || dialler.dial())))
+                .await;
+
+        assert!(
+            (
+                connections
+                    .iter()
+                    .map(|connection| connection.as_ref().map(|c| c.dial))
+                    .collect::<Vec<_>>(),
+                dialler.dials(),
+            ) == (vec![Ok(0); 16], 1)
+        );
+    }
+
+    /// A dial that fails is not remembered: the next write dials again.
+    #[tokio::test]
+    async fn a_failed_dial_is_tried_again_by_the_next_write() {
+        let pool = LeaderConnections::<FakeConnection>::default();
+        let dialler = Dialler {
+            fail_first: true,
+            ..Dialler::default()
+        };
+
+        let failed = pool.get(NodeId(1), || dialler.dial()).await.map(|c| c.dial);
+        let retried = pool.get(NodeId(1), || dialler.dial()).await.map(|c| c.dial);
+
+        assert!((failed, retried) == (Err("connection refused".to_owned()), Ok(1)));
     }
 
     fn created(error_code: i16) -> CreateTopicsResponse {

@@ -12,9 +12,18 @@
 //! archives the run whether or not the write worked, because a record that
 //! cannot be dead-lettered must not hold the SPSO for ever. A failure is logged
 //! as an error.
+//!
+//! A consumer that rejects at a high rate leaves many runs `Archiving` at
+//! once, and each run holds the SPSO until its write ends. Kafka's
+//! `ShareGroupDLQStateManager` coalesces the produce requests for one
+//! destination, and sends them from one thread. Here the runs that one dispatch
+//! hands over are joined where a single write can carry them, they share one
+//! task, and at most [`MAX_CONCURRENT_DEAD_LETTER_WRITES`] writes run at once
+//! across every partition the broker leads.
 
 use std::sync::Arc;
 
+use futures_util::future::join_all;
 use krabka_log::Offset;
 use tokio::sync::Mutex;
 
@@ -25,26 +34,56 @@ use crate::share_partition::{
     state::{AcquisitionState, DlqCause, DlqRange},
 };
 
+/// The dead-letter writes that run at once on one broker.
+pub(super) const MAX_CONCURRENT_DEAD_LETTER_WRITES: usize = 8;
+
+/// Joins the runs that one write can carry: each run that begins where the one
+/// before it ends, with the same delivery count and cause, so that every
+/// record of the result has the headers its own run would have given it.
+fn coalesce(mut ranges: Vec<DlqRange>) -> Vec<DlqRange> {
+    ranges.sort_by_key(|range| range.first);
+    let mut joined: Vec<DlqRange> = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        match joined.last_mut() {
+            Some(previous)
+                if previous.last + 1 == range.first
+                    && previous.delivery_count == range.delivery_count
+                    && previous.cause == range.cause =>
+            {
+                previous.last = range.last;
+            }
+            _ => joined.push(range),
+        }
+    }
+    joined
+}
+
 impl SharePartitionLeaderManager {
-    /// Starts the second phase for each of `ranges`, each in a task of its
-    /// own, so a slow write does not hold up the others. It returns at once.
+    /// Starts the second phase for `ranges`, in one task that writes them
+    /// together, and returns at once. A slow write holds up only itself, since
+    /// the writes of the task run side by side, up to the limit of the broker.
     pub(super) fn dispatch_dead_letters(
         &self,
         key: &LeaderKey,
         cell: &Arc<Mutex<AcquisitionState>>,
         ranges: Vec<DlqRange>,
     ) {
+        let ranges = coalesce(ranges);
         if ranges.is_empty() {
             return;
         }
         let Some(manager) = self.me.upgrade() else {
             return;
         };
-        for range in ranges {
-            let manager = Arc::clone(&manager);
-            let (key, cell) = (key.clone(), Arc::clone(cell));
-            tokio::spawn(async move { manager.dead_letter(&key, &cell, range).await });
-        }
+        let (key, cell) = (key.clone(), Arc::clone(cell));
+        tokio::spawn(async move {
+            join_all(
+                ranges
+                    .into_iter()
+                    .map(|range| manager.dead_letter(&key, &cell, range)),
+            )
+            .await;
+        });
     }
 
     /// Writes `range` to the queue, then archives it and makes that durable.
@@ -71,7 +110,12 @@ impl SharePartitionLeaderManager {
                 .unwrap_or_else(|| DlqCause::inferred(range.delivery_count, limit)),
         };
         let (Offset(first), Offset(last)) = (range.first, range.last);
-        if let Err(error) = self.dlq.write(request).await {
+        let written = {
+            // The semaphore is never closed, so a permit is always granted.
+            let _permit = self.dead_letter_writes.acquire().await;
+            self.dlq.write(request).await
+        };
+        if let Err(error) = written {
             tracing::error!(
                 group,
                 %topic_id,
@@ -98,16 +142,42 @@ mod tests {
     use std::{sync::Arc, time::Instant};
 
     use assert2::assert;
+    use async_trait::async_trait;
     use krabka_log::Offset;
 
+    use super::{MAX_CONCURRENT_DEAD_LETTER_WRITES, coalesce};
     use crate::{
         codes,
         share_partition::{
-            dlq::{DlqError, DlqRequest, test_support::RecordingDlq},
+            dlq::{DlqError, DlqRequest, DlqSink, test_support::RecordingDlq},
             manager::test_support::{LOCK, manager_with_dlq},
-            state::{AckType, AcquisitionState, DlqCause, RecordState},
+            state::{AckType, AcquisitionState, DlqCause, DlqRange, RecordState},
         },
     };
+
+    /// A sink that keeps each write in flight for a few polls, and remembers
+    /// how many were in flight at once and what it was asked to write.
+    #[derive(Default)]
+    struct GaugeDlq {
+        in_flight: std::sync::atomic::AtomicUsize,
+        peak: std::sync::atomic::AtomicUsize,
+        written: std::sync::Mutex<Vec<DlqRequest>>,
+    }
+
+    #[async_trait]
+    impl DlqSink for GaugeDlq {
+        async fn write(&self, request: DlqRequest) -> Result<(), DlqError> {
+            use std::sync::atomic::Ordering::SeqCst;
+            let now = self.in_flight.fetch_add(1, SeqCst) + 1;
+            self.peak.fetch_max(now, SeqCst);
+            for _ in 0..10 {
+                tokio::task::yield_now().await;
+            }
+            self.in_flight.fetch_sub(1, SeqCst);
+            self.written.lock().expect("written lock").push(request);
+            Ok(())
+        }
+    }
 
     /// Records `0..records`, all acquired by `m1`, in a cell that has a
     /// dead-letter queue.
@@ -216,6 +286,136 @@ mod tests {
                     vec![request(0, 1, 1, DlqCause::ClientReject)],
                     Offset(2),
                 )
+        );
+    }
+
+    fn range(first: i64, last: i64, delivery_count: i16, cause: Option<DlqCause>) -> DlqRange {
+        DlqRange {
+            first: Offset(first),
+            last: Offset(last),
+            delivery_count,
+            cause,
+        }
+    }
+
+    /// Only neighbours join, and only when a record of the result would get
+    /// the same delivery count and cause header from its own run: a gap, a
+    /// different count, a different cause, or a cause that was not stored,
+    /// each keeps two runs apart. The input need not be in order.
+    #[test]
+    fn coalesce_joins_only_neighbours_with_one_count_and_cause() {
+        let reject = Some(DlqCause::ClientReject);
+        let exceeded = Some(DlqCause::DeliveryCountExceeded);
+        let cases = [
+            (vec![], vec![]),
+            (
+                vec![range(0, 0, 1, reject), range(1, 2, 1, reject)],
+                vec![range(0, 2, 1, reject)],
+            ),
+            (
+                vec![range(3, 3, 1, reject), range(0, 2, 1, reject)],
+                vec![range(0, 3, 1, reject)],
+            ),
+            (
+                vec![
+                    range(0, 0, 1, reject),
+                    range(1, 1, 1, reject),
+                    range(2, 2, 1, reject),
+                ],
+                vec![range(0, 2, 1, reject)],
+            ),
+            (
+                vec![range(0, 0, 1, reject), range(2, 2, 1, reject)],
+                vec![range(0, 0, 1, reject), range(2, 2, 1, reject)],
+            ),
+            (
+                vec![range(0, 0, 1, reject), range(1, 1, 2, reject)],
+                vec![range(0, 0, 1, reject), range(1, 1, 2, reject)],
+            ),
+            (
+                vec![range(0, 0, 5, reject), range(1, 1, 5, exceeded)],
+                vec![range(0, 0, 5, reject), range(1, 1, 5, exceeded)],
+            ),
+            (
+                vec![range(0, 0, 5, exceeded), range(1, 1, 5, None)],
+                vec![range(0, 0, 5, exceeded), range(1, 1, 5, None)],
+            ),
+        ];
+
+        for (input, expected) in cases {
+            assert!(coalesce(input.clone()) == expected, "{input:?}");
+        }
+    }
+
+    /// Neighbouring runs that a consumer rejected one after the other are one
+    /// write, and one dead-letter record for each offset still comes out.
+    #[tokio::test(start_paused = true)]
+    async fn neighbouring_rejects_are_written_together_and_archived() {
+        let dlq = Arc::new(RecordingDlq::default());
+        let mgr = manager_with_dlq(dlq.clone());
+        let tid = uuid::Uuid::from_bytes([61; 16]);
+        let cell = acquired_cell(&mgr, tid, 4).await;
+        let key = ("g1".to_owned(), tid, 0);
+        let ranges = {
+            let mut state = cell.lock().await;
+            for offset in 0..3 {
+                state
+                    .acknowledge("m1", Offset(offset), Offset(offset), AckType::Reject, 5)
+                    .unwrap();
+            }
+            state.take_pending_dlq()
+        };
+
+        mgr.dispatch_dead_letters(&key, &cell, ranges);
+        let states = wait_for(&cell, |states| states.len() == 1).await;
+
+        assert!(
+            (states, dlq.requests())
+                == (
+                    vec![(3, RecordState::Acquired)],
+                    vec![request(0, 2, 1, DlqCause::ClientReject)],
+                )
+        );
+    }
+
+    /// Many runs that cannot be joined are written side by side, but no more
+    /// than the broker's limit at once, so a consumer that rejects at a high
+    /// rate cannot open a write for each run while the queue is slow.
+    #[tokio::test(start_paused = true)]
+    async fn writes_run_side_by_side_up_to_the_broker_limit() {
+        let dlq = Arc::new(GaugeDlq::default());
+        let mgr = manager_with_dlq(dlq.clone());
+        let tid = uuid::Uuid::from_bytes([61; 16]);
+        let cell = acquired_cell(&mgr, tid, 40).await;
+        let key = ("g1".to_owned(), tid, 0);
+        // Every other record, so no two runs are neighbours.
+        let ranges = {
+            let mut state = cell.lock().await;
+            for offset in (0..40).step_by(2) {
+                state
+                    .acknowledge("m1", Offset(offset), Offset(offset), AckType::Reject, 5)
+                    .unwrap();
+            }
+            state.take_pending_dlq()
+        };
+        assert!(ranges.len() == 20);
+
+        mgr.dispatch_dead_letters(&key, &cell, ranges);
+        // The writes end before each run is archived and persisted, and the
+        // test manager's persister takes its time to fail, so the writes are
+        // what to wait for.
+        for _ in 0..10_000 {
+            if dlq.written.lock().expect("written lock").len() == 20 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+
+        assert!(
+            (
+                dlq.peak.load(std::sync::atomic::Ordering::SeqCst),
+                dlq.written.lock().expect("written lock").len(),
+            ) == (MAX_CONCURRENT_DEAD_LETTER_WRITES, 20)
         );
     }
 
