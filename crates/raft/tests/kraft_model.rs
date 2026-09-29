@@ -32,7 +32,7 @@ use stateright::{Checker, Model};
 /// true bounded count of each config, so it never truncates a real check. Such
 /// a truncation would spuriously fail a `sometimes` witness, or leave an
 /// `always` only partially verified.
-const MAX_STATES: usize = 6_000_000;
+const MAX_STATES: usize = 8_000_000;
 /// Depth backstop. It must exceed the reachable-graph diameter of each config,
 /// or the search is depth-truncated and therefore incomplete. The configs below
 /// are bounded, so their diameter sits well under this value.
@@ -71,10 +71,22 @@ const MAX_DEPTH: usize = 60;
 // stopped fetching from its leader. The election-safety config lost states (a
 // follower no longer grants while its leader is live) and the others gained the
 // epoch advance. The `always` properties are unchanged and still hold.
-const PINNED_UNIQUE_STATES_THREE_VOTERS_ELECTION_SAFETY: usize = 6_046;
+//
+// Three counts moved again, and the generated count of `three_voters_faults`
+// passed the old 6M cap, when a replica that follows the leader of its epoch
+// began to keep the vote it cast in that epoch, as Kafka's
+// `QuorumState.transitionToFollower` does, and a `Prospective` replica began to
+// remember the leader it abandoned. A replica that votes for one candidate and
+// then follows another used to forget the vote, and so it could vote twice in
+// one epoch after a fetch timeout. Every state in which a follower still holds
+// its vote is new, so the three-voter configs grew by 40 to 80 percent (the
+// cap rose from 6M to 8M with them). The two-voter configs never split a vote
+// from a leader, and did not move. The `always` properties, election safety
+// among them, still hold.
+const PINNED_UNIQUE_STATES_THREE_VOTERS_ELECTION_SAFETY: usize = 10_750;
 const PINNED_UNIQUE_STATES_TWO_VOTERS_LINEARIZABLE: usize = 46_521;
-const PINNED_UNIQUE_STATES_THREE_VOTERS_FAULTS: usize = 824_954;
-const PINNED_UNIQUE_STATES_THREE_VOTERS_APPEND: usize = 573_401;
+const PINNED_UNIQUE_STATES_THREE_VOTERS_FAULTS: usize = 1_128_704;
+const PINNED_UNIQUE_STATES_THREE_VOTERS_APPEND: usize = 839_339;
 const PINNED_UNIQUE_STATES_TWO_VOTERS_APPEND_VIA: usize = 256_973;
 
 fn run(model: ConsensusModel, label: &str, pinned_unique_states: usize) {
