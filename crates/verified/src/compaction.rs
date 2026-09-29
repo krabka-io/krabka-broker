@@ -33,15 +33,19 @@ pub struct BatchMeta {
     pub existing_horizon: Option<i64>,
 }
 
-/// Whether a producer's transactional DATA still survives compaction.
+/// Whether the cleaner read data of a control marker's own transaction in this
+/// pass. This is Kafka's per-transaction rule (`CleanedTransactionMetadata`),
+/// not a per-producer one.
 #[cfg_attr(creusot, derive(Clone, Copy, DeepModel))]
 #[cfg_attr(not(creusot), derive(Clone, Copy, Debug, PartialEq, Eq))]
 pub enum TxnDataState {
     /// `producer_id < 0`: not a transactional producer.
     NotTransactional,
-    /// At least one of this producer's data records survives compaction.
+    /// The pass read at least one batch of this marker's transaction, so the
+    /// marker stays.
     DataSurvives,
-    /// All of this producer's data records have been compacted away.
+    /// The pass read no batch of this marker's transaction, so the marker may
+    /// age out through the delete horizon.
     DataFullyGone,
 }
 
@@ -129,8 +133,8 @@ pub const fn compute_horizon(now_ms: i64, delete_retention_ms: i64) -> i64 {
 /// The single per-record KIP-534 retain decision.
 ///
 /// Control batches, that is transaction commit and abort markers, are retained
-/// as long as their transaction's data survives. After the data is fully
-/// compacted away, the marker ages out through the delete horizon. Data records
+/// as long as the pass reads data of their transaction. Once the pass finds no
+/// data of it, the marker ages out through the delete horizon. Data records
 /// dedup newest-wins. A tombstone, that is a record with a null value, ages out
 /// through the delete horizon after it becomes the newest entry for its key.
 #[ensures(batch.is_control && (txn == TxnDataState::DataSurvives || txn == TxnDataState::NotTransactional)

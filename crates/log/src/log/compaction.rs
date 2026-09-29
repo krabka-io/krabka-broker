@@ -380,19 +380,25 @@ impl Log {
         // segment's own handle, so this borrow does not itself hold anything
         // open across the swap below).
         //
-        // The offset map and the transaction metadata are built once over
-        // the whole consumed range: whether a record is the newest for its
-        // key, or which transaction it belongs to, is a fact about the full
+        // The offset map is built once over the whole consumed range:
+        // whether a record is the newest for its key is a fact about the full
         // dirty region, not about whichever output group a record lands in.
+        // The map skips the batches of aborted transactions, so it needs the
+        // aborted transactions of the range, wherever their abort marker sits.
         // The rewrite itself then runs once per size-bounded group, so no
         // output segment grows past `segment.bytes`, and every group's
-        // `.swap` files are written before any of them is promoted.
+        // `.swap` files are written before any of them is promoted. One
+        // transaction tracker walks all the groups in order, as a transaction
+        // can span two of them.
         let mut rewrites: Vec<(Vec<Offset>, crate::compact::RewriteOutput)> = Vec::new();
         {
             let sealed_refs: Vec<&Segment> = self.segments[..consumed].iter().collect();
-            let offset_map = crate::compact::build_offset_map(&sealed_refs)?;
-            let txn_meta =
-                crate::compact::CleanedTransactionMetadata::build(&sealed_refs, &offset_map)?;
+            let consumed_end = self.sealed_segment_end(consumed - 1);
+            let offset_map = crate::compact::build_offset_map(
+                &sealed_refs,
+                self.aborted_in_range(sealed_refs[0].base_offset(), consumed_end),
+            )?;
+            let mut txn_meta = crate::compact::CleanedTransactionMetadata::default();
             let sizes: Vec<ByteSize> = sealed_refs.iter().map(|segment| segment.size()).collect();
             let groups = Self::group_segments_by_size(&sizes, segment_bytes);
             rewrites.reserve_exact(groups.len());
@@ -404,12 +410,16 @@ impl Log {
                     .iter()
                     .map(|segment| segment.base_offset())
                     .collect();
+                txn_meta.add_aborted_transactions(self.aborted_in_range(
+                    group_refs[0].base_offset(),
+                    self.sealed_segment_end(start + group_len - 1),
+                ));
                 let rewrite = crate::compact::rewrite_segments(
                     &*self.io,
                     &self.dir,
                     group_refs,
                     &offset_map,
-                    &txn_meta,
+                    &mut txn_meta,
                     crate::compact::RewriteRetention {
                         now_ms,
                         delete_retention,
@@ -465,6 +475,9 @@ impl Log {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod transaction_tests;
 
 #[cfg(test)]
 mod tests {

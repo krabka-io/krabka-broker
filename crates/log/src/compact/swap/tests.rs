@@ -211,14 +211,14 @@ fn compactable(dir: &Path, survivor_txnindex: bool) -> RewriteOutput {
             vec![make_record(0, Some(b"k1"), Some(b"v3"))],
         ));
         let segments = vec![&first, &second];
-        let map = build_offset_map(&segments).unwrap();
-        let txn = CleanedTransactionMetadata::build(&segments, &map).unwrap();
+        let map = build_offset_map(&segments, vec![]).unwrap();
+        let mut txn = CleanedTransactionMetadata::default();
         rewrite_segments(
             &FileIo,
             dir,
             &segments,
             &map,
-            &txn,
+            &mut txn,
             RewriteRetention {
                 now_ms: 0,
                 delete_retention: RETENTION,

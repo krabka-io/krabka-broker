@@ -28,7 +28,7 @@ use crate::{
 
 mod append;
 mod compaction;
-mod control;
+pub(crate) mod control;
 mod delivery;
 #[cfg(test)]
 mod faults;

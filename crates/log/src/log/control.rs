@@ -412,7 +412,7 @@ mod tests {
         // The dedup map holds the data key only. `should_index_key` keeps the
         // marker key out of it, so no barrier can shadow another.
         let sealed: Vec<&Segment> = log.segments.iter().collect();
-        let mut indexed: Vec<Bytes> = crate::compact::build_offset_map(&sealed)
+        let mut indexed: Vec<Bytes> = crate::compact::build_offset_map(&sealed, vec![])
             .unwrap()
             .into_keys()
             .collect();

@@ -12,11 +12,11 @@ use crate::compact::{BatchMeta, ProducerId, RecordMeta, RetainDecision, TxnDataS
 
 /// Run one compaction pass of `cleaner` over `log` at `clock` and return the
 /// next log. This mirrors the production rewrite path: build the dedup map
-/// with the cleaner's filter, derive which producers' data survives, and then
+/// with the cleaner's filter, derive each marker's transaction state, and then
 /// apply the cleaner's retain decision to each entry in offset order.
 pub(super) fn compact_pass(log: &[Entry], clock: i64, cleaner: Cleaner) -> Vec<Entry> {
     let offset_map = cleaner.offset_map(log);
-    let data_survives = Cleaner::data_survives(log, &offset_map);
+    let marker_states = Cleaner::marker_states(log);
 
     let mut next: Vec<Entry> = Vec::with_capacity(log.len());
     for (idx, entry) in log.iter().enumerate() {
@@ -45,7 +45,7 @@ pub(super) fn compact_pass(log: &[Entry], clock: i64, cleaner: Cleaner) -> Vec<E
                     producer_id: ProducerId(i64::from(producer_id)),
                     existing_horizon: entry.horizon,
                 },
-                Cleaner::txn_state(producer_id, &data_survives),
+                marker_states[&idx],
             ),
         };
 

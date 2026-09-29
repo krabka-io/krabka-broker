@@ -28,9 +28,12 @@ pub(super) enum Invariant {
     /// input marker whose horizon has not elapsed is in the output. Markers
     /// are never deduped against one another by their shared control key.
     ControlNotDeduped,
-    /// A marker never leaves the log while its producer still has live data:
-    /// every input marker of a producer with live data in the output is in the
-    /// output, whether or not its horizon has elapsed.
+    /// A marker never leaves the log while a data entry of its transaction is
+    /// in the pass's input: every input marker with a data entry of its
+    /// producer in front of it, since that producer's previous marker, is in
+    /// the output, whether or not its horizon has elapsed. Kafka decides this
+    /// per transaction, so a marker whose transaction's data is gone ages out
+    /// even when the same producer has newer live data.
     MarkerDataPrecedence,
     /// A tombstone stays for `delete.retention.ms` and then goes. No output
     /// tombstone has an elapsed horizon, and every input tombstone that is the
@@ -63,12 +66,8 @@ impl Invariant {
                 matches!(e.kind, EntryKind::Marker { .. }) && !e.horizon_elapsed(clock)
             }),
             Self::MarkerDataPrecedence => {
-                let live = live_keys(output);
-                retains(
-                    input,
-                    output,
-                    |_, e| matches!(e.kind, EntryKind::Marker { producer_id, .. } if live.contains(&producer_id)),
-                )
+                let held = markers_behind_data(input);
+                retains(input, output, |idx, _| held.contains(&idx))
             }
             Self::TombstoneAging => {
                 let newest = newest_data_indices(input);
@@ -106,6 +105,31 @@ pub(super) fn live_keys(log: &[Entry]) -> HashSet<u8> {
         .into_iter()
         .filter_map(|(k, live)| live.then_some(k))
         .collect()
+}
+
+/// Indices of the commit markers that have a data entry of their producer in
+/// front of them, after that producer's previous marker. The model associates a
+/// producer with the data under the key equal to its id.
+fn markers_behind_data(log: &[Entry]) -> HashSet<usize> {
+    let mut with_data: HashSet<u8> = HashSet::new();
+    let mut held = HashSet::new();
+    for (idx, entry) in log.iter().enumerate() {
+        match entry.kind {
+            EntryKind::Data { .. } => {
+                with_data.extend(entry.key);
+            }
+            EntryKind::Marker {
+                producer_id,
+                commit: true,
+            } => {
+                if with_data.remove(&producer_id) {
+                    held.insert(idx);
+                }
+            }
+            EntryKind::Marker { commit: false, .. } => {}
+        }
+    }
+    held
 }
 
 /// Indices of the entries that are the newest data entry for their key.
@@ -209,6 +233,12 @@ mod tests {
                 vec![],
             ),
             (
+                "lawful: an aged marker leaves although its producer has newer live data",
+                vec![marker(0, Some(clock - 1)), data(0, Some(0), None)],
+                vec![data(0, Some(0), None)],
+                vec![],
+            ),
+            (
                 "legacy dedup: older marker dropped against the newer one",
                 vec![
                     data(0, Some(0), None),
@@ -227,7 +257,7 @@ mod tests {
                 ],
             ),
             (
-                "aged marker dropped while its producer's data is live",
+                "aged marker dropped while data of its transaction is in front of it",
                 vec![data(0, Some(0), None), marker(0, Some(clock))],
                 vec![data(0, Some(0), None)],
                 vec![Invariant::MarkerDataPrecedence],
