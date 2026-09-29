@@ -20,7 +20,7 @@ use krabka_metadata::MetadataImage;
 use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 use uuid::Uuid;
 
-use crate::codes;
+use crate::{api_catalog::UnstableApiVersions, codes};
 
 mod subscription;
 #[cfg(test)]
@@ -28,9 +28,12 @@ mod test_support;
 
 pub(crate) use self::subscription::{compute_subscription, subscription_id};
 
-/// Connection-derived attributes used for subscription matching.
+/// Connection-derived attributes: the ones subscription matching reads, and
+/// the id of the connection that carried the request, which
+/// [`ClientMetricsManager::connection_closed`] keys on.
 #[derive(Debug, Clone)]
 pub(crate) struct ClientAttributes {
+    pub connection_id: String,
     pub client_instance_id: Uuid,
     pub client_id: String,
     pub software_name: String,
@@ -76,13 +79,14 @@ impl ClientInstance {
     fn new(
         image: &MetadataImage,
         attrs: ClientAttributes,
+        default_interval_ms: i32,
         subscription_version: u64,
         now: Instant,
     ) -> Self {
-        let subscription = compute_subscription(image, &attrs);
+        let subscription = compute_subscription(image, &attrs, default_interval_ms);
         let subscription_id = subscription_id(&subscription, attrs.client_instance_id);
         // `interval.ms` is validated in [100, 3_600_000], and the default is
-        // 300_000, so the interval is always positive.
+        // positive, so the interval is always positive.
         let push_interval = Duration::from_millis(
             u64::try_from(subscription.push_interval_ms).expect("validated positive push interval"),
         );
@@ -151,6 +155,11 @@ pub(crate) struct PushCheck {
     pub terminating: bool,
     pub compression_supported: bool,
     pub payload_len: usize,
+    /// Kafka's `ClientMetricsManager` changed in trunk after 4.3.1 (KAFKA-20898
+    /// and KAFKA-21076), and neither change has a flag of its own, so
+    /// [`UnstableApiVersions::Enabled`] selects trunk's behavior. See
+    /// [`ClientMetricsManager::authorize_push`].
+    pub unstable: UnstableApiVersions,
 }
 
 /// The outcome of the `PushTelemetry` checks. A rejection carries no throttle
@@ -163,10 +172,16 @@ pub(crate) enum PushDecision {
 
 struct State {
     instances: HashMap<Uuid, ClientInstance>,
+    /// Kafka's `clientConnectionIdMap`: the instance that a connection created
+    /// or rebuilt. Closing the connection drops that instance.
+    connections: HashMap<String, Uuid>,
     /// The subscriptions last seen in the metadata image, and a version that
     /// moves on every change to them: Kafka's `subscriptionUpdateVersion`.
     subscriptions: HashMap<String, BTreeMap<String, String>>,
     subscription_version: u64,
+    /// The push interval of an instance that no subscription lowers, which is
+    /// what `interval.ms` reads as when no subscription sets it.
+    default_interval_ms: i32,
 }
 
 impl State {
@@ -195,15 +210,31 @@ impl State {
     ) -> &mut ClientInstance {
         self.observe_subscriptions(image);
         let version = self.subscription_version;
-        let inst = match self.instances.entry(attrs.client_instance_id) {
+        let default_interval_ms = self.default_interval_ms;
+        let id = attrs.client_instance_id;
+        let inst = match self.instances.entry(id) {
             Entry::Vacant(slot) => {
-                slot.insert(ClientInstance::new(image, attrs.clone(), version, now))
+                self.connections.insert(attrs.connection_id.clone(), id);
+                slot.insert(ClientInstance::new(
+                    image,
+                    attrs.clone(),
+                    default_interval_ms,
+                    version,
+                    now,
+                ))
             }
             Entry::Occupied(slot) => {
                 let inst = slot.into_mut();
                 if inst.subscription_version < version {
-                    let first_attrs = inst.attrs.clone();
-                    *inst = ClientInstance::new(image, first_attrs, version, now);
+                    // The rebuilt instance keeps the attributes of the first
+                    // request and belongs to the connection of this one.
+                    let first_attrs = ClientAttributes {
+                        connection_id: attrs.connection_id.clone(),
+                        ..inst.attrs.clone()
+                    };
+                    self.connections.insert(attrs.connection_id.clone(), id);
+                    *inst =
+                        ClientInstance::new(image, first_attrs, default_interval_ms, version, now);
                 }
                 inst
             }
@@ -230,12 +261,14 @@ fn is_reserved_instance_id(id: Uuid) -> bool {
 }
 
 impl ClientMetricsManager {
-    pub(crate) fn new(telemetry_max: ByteSize) -> Self {
+    pub(crate) fn new(telemetry_max: ByteSize, default_interval_ms: i32) -> Self {
         Self {
             state: Mutex::new(State {
                 instances: HashMap::new(),
+                connections: HashMap::new(),
                 subscriptions: HashMap::new(),
                 subscription_version: 0,
+                default_interval_ms,
             }),
             telemetry_max,
         }
@@ -306,8 +339,9 @@ impl ClientMetricsManager {
     }
 
     /// Kafka's `processPushTelemetryRequest` up to the export: the reserved
-    /// id check, then `validatePushRequest`, then the terminating flag of an
-    /// accepted push.
+    /// id check, then `validatePushRequest`, then the terminating flag. The
+    /// flag follows 4.3.1 (every push sets it) unless `push.unstable` is
+    /// enabled, which follows trunk (only an accepted push sets it).
     pub(crate) fn authorize_push(
         &self,
         image: &MetadataImage,
@@ -347,13 +381,19 @@ impl ClientMetricsManager {
             codes::NONE
         };
 
+        // Kafka 4.3.1 records the flag in a `finally` after the checks, so
+        // every push sets it, a rejected one included: a rejected terminating
+        // push locks the instance out until it expires, and a later push
+        // resets the flag to its own. Trunk (KAFKA-20898) records it only for
+        // a push that passes the checks, so that a rejected push cannot lock
+        // the client out.
+        if push.unstable == UnstableApiVersions::Disabled || error_code == codes::NONE {
+            inst.terminating = push.terminating;
+        }
         if error_code != codes::NONE {
             inst.last_error = error_code;
             return PushDecision::Reject { error_code };
         }
-        // Kafka records the flag only after the checks pass: a terminating
-        // push that fails them must not lock the instance out.
-        inst.terminating = push.terminating;
         // Kafka records the export's outcome as the last error. The only
         // errors the next `GetTelemetrySubscriptions` reads are the two the
         // checks above give, so an accepted push leaves none behind.
@@ -362,17 +402,39 @@ impl ClientMetricsManager {
     }
 
     /// Drops an instance that has been idle for longer than
-    /// `max(interval * factor, floor)`.
+    /// `max(interval * factor, floor)`: Kafka's expiration task, which is
+    /// re-armed by every request with `max(60 s, 3 * interval)`. A terminating
+    /// instance expires like any other, so it keeps refusing pushes until then.
+    ///
+    /// The caller sweeps on a tick, so an instance can outlive its expiry by
+    /// up to one tick where Kafka's timer wheel fires at the deadline.
     pub(crate) fn evict_stale(&self, factor: u32, floor: Duration) {
-        let now = Instant::now();
+        self.evict_stale_at(factor, floor, Instant::now());
+    }
+
+    fn evict_stale_at(&self, factor: u32, floor: Duration, now: Instant) {
         let mut state = self.state.lock().expect("client-metrics mutex poisoned");
-        state.instances.retain(|_, inst| {
-            if inst.terminating {
-                return false;
-            }
+        let State {
+            instances,
+            connections,
+            ..
+        } = &mut *state;
+        instances.retain(|_, inst| {
             let ttl = (inst.push_interval * factor).max(floor);
             now.duration_since(inst.last_seen) < ttl
         });
+        connections.retain(|_, id| instances.contains_key(id));
+    }
+
+    /// Kafka's `ClientConnectionDisconnectListener.onDisconnect`: closing the
+    /// connection that created an instance drops the instance, so a client
+    /// that reconnects starts from a new one and its first
+    /// `GetTelemetrySubscriptions` passes the throttle check.
+    pub(crate) fn connection_closed(&self, connection_id: &str) {
+        let mut state = self.state.lock().expect("client-metrics mutex poisoned");
+        if let Some(id) = state.connections.remove(connection_id) {
+            state.instances.remove(&id);
+        }
     }
 }
 
@@ -385,6 +447,11 @@ mod tests {
         test_support::{attrs, expect_assignment, img_with},
         *,
     };
+    use crate::client_metrics::config::INTERVAL_MS_DEFAULT;
+
+    fn manager() -> ClientMetricsManager {
+        ClientMetricsManager::new(krabka_units::kibibytes(1), INTERVAL_MS_DEFAULT)
+    }
 
     fn push(subscription_id: i32) -> PushCheck {
         PushCheck {
@@ -392,6 +459,7 @@ mod tests {
             terminating: false,
             compression_supported: true,
             payload_len: 10,
+            unstable: UnstableApiVersions::Disabled,
         }
     }
 
@@ -435,7 +503,7 @@ mod tests {
     /// push timestamp moves once the throttle check passes (#678).
     #[test]
     fn push_checks_follow_kafkas_order_and_timestamps() {
-        let m = ClientMetricsManager::new(krabka_units::kibibytes(1));
+        let m = manager();
         let img = img_with("all", &[("metrics", "*"), ("interval.ms", "60000")]);
         let attrs = attrs();
         let t = Instant::now();
@@ -520,31 +588,78 @@ mod tests {
         }
     }
 
-    /// Kafka records the terminating flag only when the push passes its
-    /// checks, so a rejected terminating push leaves the instance open. The
-    /// rejected push still moved the push timestamp, so the next one waits an
-    /// interval.
+    /// Where Kafka records the terminating flag (#1246). 4.3.1 records it in
+    /// a `finally`, after the checks read the old flag, on every push: a
+    /// rejected terminating push locks the instance out, and the push that the
+    /// lock refuses resets the flag to its own. Trunk (KAFKA-20898) records it
+    /// only for a push that passes the checks. A refused push does not move the
+    /// push timestamp, so the push after the lock waits from the last one that
+    /// passed the throttle.
     #[test]
-    fn a_rejected_terminating_push_does_not_terminate() {
-        let m = ClientMetricsManager::new(krabka_units::kibibytes(1));
+    fn the_terminating_flag_follows_the_target() {
+        use UnstableApiVersions::{Disabled, Enabled};
+
+        // (seconds after the get, terminating, compression supported, outcome)
+        type Move = (u64, bool, bool, Outcome);
+        let unsupported = || reject_push(codes::UNSUPPORTED_COMPRESSION_TYPE);
+        let locked = || reject_push(codes::INVALID_REQUEST);
+        let rows: [(&str, UnstableApiVersions, [Move; 3]); 4] = [
+            (
+                "4.3.1: a rejected terminating push locks the instance",
+                Disabled,
+                [
+                    (0, true, false, unsupported()),
+                    (60, false, true, locked()),
+                    (120, false, true, ACCEPT),
+                ],
+            ),
+            (
+                "trunk: a rejected terminating push leaves the instance open",
+                Enabled,
+                [
+                    (0, true, false, unsupported()),
+                    (60, false, true, ACCEPT),
+                    (120, false, true, ACCEPT),
+                ],
+            ),
+            (
+                "4.3.1: the push that the lock refuses resets the flag",
+                Disabled,
+                [
+                    (0, true, true, ACCEPT),
+                    (60, false, true, locked()),
+                    (120, false, true, ACCEPT),
+                ],
+            ),
+            (
+                "trunk: an accepted terminating push locks until expiry",
+                Enabled,
+                [
+                    (0, true, true, ACCEPT),
+                    (60, false, true, locked()),
+                    (120, false, true, locked()),
+                ],
+            ),
+        ];
         let img = img_with("all", &[("metrics", "*"), ("interval.ms", "60000")]);
         let attrs = attrs();
-        let t = Instant::now();
-        let id = expect_assignment(m.get_subscription_at(&img, &attrs, t)).subscription_id;
-        let steps = [
-            (
-                t,
-                PushCheck {
-                    terminating: true,
-                    compression_supported: false,
+        for (name, unstable, steps) in rows {
+            let m = manager();
+            let t = Instant::now();
+            let id = expect_assignment(m.get_subscription_at(&img, &attrs, t)).subscription_id;
+            for (secs, terminating, compression_supported, expected) in steps {
+                let check = PushCheck {
+                    terminating,
+                    compression_supported,
+                    unstable,
                     ..push(id)
-                },
-                reject_push(codes::UNSUPPORTED_COMPRESSION_TYPE),
-            ),
-            (t + Duration::from_secs(60), push(id), ACCEPT),
-        ];
-        for (at, check, expected) in steps {
-            assert!(run(&m, &img, &attrs, at, Step::Push(check)) == expected);
+                };
+                let at = t + Duration::from_secs(secs);
+                assert!(
+                    run(&m, &img, &attrs, at, Step::Push(check)) == expected,
+                    "row {name} at {secs} s"
+                );
+            }
         }
     }
 
@@ -556,7 +671,7 @@ mod tests {
         let img = img_with("all", &[("metrics", "*"), ("interval.ms", "60000")]);
         let attrs = attrs();
         let current = subscription_id(
-            &compute_subscription(&img, &attrs),
+            &compute_subscription(&img, &attrs, INTERVAL_MS_DEFAULT),
             attrs.client_instance_id,
         );
         let rows = [
@@ -587,7 +702,7 @@ mod tests {
             ),
         ];
         for (name, attrs, id, expected) in rows {
-            let m = ClientMetricsManager::new(krabka_units::kibibytes(1));
+            let m = manager();
             assert!(
                 run(&m, &img, &attrs, Instant::now(), Step::Push(push(id))) == expected,
                 "row {name}"
@@ -600,7 +715,7 @@ mod tests {
     /// the old interval gets the new subscription at once (#672, #673).
     #[test]
     fn a_subscription_change_rebuilds_the_instance() {
-        let m = ClientMetricsManager::new(krabka_units::kibibytes(1));
+        let m = manager();
         let before = img_with("all", &[("metrics", "*"), ("interval.ms", "60000")]);
         let after = img_with("all", &[("metrics", "*"), ("interval.ms", "30000")]);
         let attrs = attrs();
@@ -608,7 +723,7 @@ mod tests {
         let secs = |s| t + Duration::from_secs(s);
         let old = expect_assignment(m.get_subscription_at(&before, &attrs, t));
         let new_id = subscription_id(
-            &compute_subscription(&after, &attrs),
+            &compute_subscription(&after, &attrs, INTERVAL_MS_DEFAULT),
             attrs.client_instance_id,
         );
         let assignment = |push_interval_ms, subscription_id| {
@@ -666,7 +781,7 @@ mod tests {
     /// fetch again. A throttled get leaves the timestamps alone.
     #[test]
     fn get_throttle_follows_kafka() {
-        let m = ClientMetricsManager::new(krabka_units::kibibytes(1));
+        let m = manager();
         let img = img_with("all", &[("metrics", "*"), ("interval.ms", "100")]);
         let attrs = attrs();
         let t = Instant::now();
@@ -716,7 +831,7 @@ mod tests {
     /// A zero id asks for a new one, and any other id is kept (#665).
     #[test]
     fn get_answers_with_the_instance_id_it_used() {
-        let m = ClientMetricsManager::new(krabka_units::kibibytes(1));
+        let m = manager();
         let img = MetadataImage::new(Uuid::nil());
         let fresh = expect_assignment(m.get_subscription(
             &img,
@@ -736,5 +851,126 @@ mod tests {
             ));
             assert!(assigned.client_instance_id == id);
         }
+    }
+
+    fn attrs_on(connection_id: &str) -> ClientAttributes {
+        ClientAttributes {
+            connection_id: connection_id.into(),
+            ..attrs()
+        }
+    }
+
+    /// Kafka's `ClientConnectionDisconnectListener`: closing the connection
+    /// that created an instance drops it, so the client that reconnects gets
+    /// an assignment where the old instance would have throttled it. The
+    /// connection map is by creating connection, so a request on another
+    /// connection does not take the instance over (#1246).
+    #[test]
+    fn closing_the_connection_drops_the_instance() {
+        let m = manager();
+        let img = img_with("all", &[("metrics", "*"), ("interval.ms", "60000")]);
+        let t = Instant::now();
+        let get = |connection: &str, secs| {
+            m.get_subscription_at(&img, &attrs_on(connection), t + Duration::from_secs(secs))
+        };
+        let assigned = get("a", 0);
+        let SubscriptionDecision::Assign(_) = &assigned else {
+            panic!("the first get must be assigned");
+        };
+        let throttled = SubscriptionDecision::Reject {
+            error_code: codes::THROTTLING_QUOTA_EXCEEDED,
+        };
+
+        assert!(get("a", 1) == throttled, "early get");
+        m.connection_closed("b");
+        assert!(
+            get("b", 2) == throttled,
+            "a connection that created nothing owns nothing"
+        );
+        m.connection_closed("b");
+        assert!(get("a", 3) == throttled, "closing b did not drop it");
+        m.connection_closed("a");
+        assert!(get("b", 4) == assigned, "the reconnect is a new instance");
+        assert!(get("b", 5) == throttled, "b owns the new instance");
+        m.connection_closed("b");
+        assert!(get("c", 6) == assigned, "closing b dropped it again");
+    }
+
+    /// Kafka's expiration task is armed with `max(60 s, 3 * interval)` and the
+    /// sweep drops an instance idle for that long, whether or not it is
+    /// terminating. A terminating instance stays locked until then (#1246).
+    #[test]
+    fn an_idle_instance_expires_after_the_larger_of_a_minute_and_three_intervals() {
+        let floor = Duration::from_secs(60);
+        // (name, interval.ms, idle seconds, expired)
+        let rows = [
+            ("terminating, before the floor", "10000", 30, false),
+            ("just before the floor", "10000", 59, false),
+            ("at the floor", "10000", 60, true),
+            ("just before three intervals", "60000", 179, false),
+            ("at three intervals", "60000", 180, true),
+        ];
+        for (name, interval, idle, expired) in rows {
+            let m = manager();
+            let img = img_with("all", &[("metrics", "*"), ("interval.ms", interval)]);
+            let attrs = attrs();
+            let id = subscription_id(
+                &compute_subscription(&img, &attrs, INTERVAL_MS_DEFAULT),
+                attrs.client_instance_id,
+            );
+            let t = Instant::now();
+            let terminate = PushCheck {
+                terminating: true,
+                ..push(id)
+            };
+            assert!(run(&m, &img, &attrs, t, Step::Push(terminate)) == ACCEPT);
+
+            m.evict_stale_at(3, floor, t + Duration::from_secs(idle));
+
+            let next = run(
+                &m,
+                &img,
+                &attrs,
+                t + Duration::from_secs(idle),
+                Step::Push(push(id)),
+            );
+            let expected = if expired {
+                ACCEPT
+            } else {
+                reject_push(codes::INVALID_REQUEST)
+            };
+            assert!(next == expected, "row {name}");
+        }
+    }
+
+    /// An expired instance takes its connection entry with it, so closing the
+    /// old connection later does not drop the instance built since.
+    #[test]
+    fn an_expired_instances_connection_does_not_own_its_successor() {
+        let m = manager();
+        let img = img_with("all", &[("metrics", "*"), ("interval.ms", "60000")]);
+        let attrs = attrs();
+        let id = subscription_id(
+            &compute_subscription(&img, &attrs, INTERVAL_MS_DEFAULT),
+            attrs.client_instance_id,
+        );
+        let t = Instant::now();
+        let secs = |s| t + Duration::from_secs(s);
+        let terminate = PushCheck {
+            terminating: true,
+            ..push(id)
+        };
+        let push_on = |connection: &str, at, check| {
+            run(&m, &img, &attrs_on(connection), secs(at), Step::Push(check))
+        };
+
+        assert!(push_on("a", 0, terminate) == ACCEPT, "built on a");
+        m.evict_stale_at(3, Duration::from_secs(60), secs(200));
+        assert!(push_on("b", 200, terminate) == ACCEPT, "rebuilt on b");
+        m.connection_closed("a");
+        assert!(
+            push_on("b", 201, push(id)) == reject_push(codes::INVALID_REQUEST),
+            "the rebuilt instance is still locked after a closed"
+        );
     }
 }

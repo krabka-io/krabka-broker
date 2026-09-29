@@ -61,6 +61,7 @@ pub(crate) struct RequestContext<'a> {
 /// carries no principal. It carries only the wire-derived and
 /// connection-derived fields.
 pub(crate) struct TelemetryContext<'a> {
+    pub connection_id: &'a str,
     pub client_id: &'a str,
     pub peer: &'a std::net::SocketAddr,
     pub software_name: &'a str,
@@ -155,16 +156,36 @@ impl<'a> RequestContext<'a> {
 
 impl<'a> TelemetryContext<'a> {
     pub(crate) fn new(
+        connection_id: &'a str,
         peer: &'a SocketAddr,
         client_id: &'a str,
         software_name: &'a str,
         software_version: &'a str,
     ) -> Self {
         Self {
+            connection_id,
             client_id,
             peer,
             software_name,
             software_version,
+        }
+    }
+
+    /// The `client_source_address` a subscription matches against: Kafka's
+    /// `ClientMetricsInstanceMetadata` reads `InetAddress.getHostAddress()` of
+    /// the peer. That is the uncompressed hex groups of an IPv6 peer, with a
+    /// `%scope` suffix when the address carries a scope, and the dotted form of
+    /// an IPv4-mapped peer, which the JDK's socket layer hands out as an
+    /// `Inet4Address`.
+    pub(crate) fn source_address(&self) -> String {
+        let host = krabka_authz::jdk_host_address(self.peer.ip());
+        match self.peer {
+            SocketAddr::V6(peer)
+                if peer.scope_id() != 0 && peer.ip().to_ipv4_mapped().is_none() =>
+            {
+                format!("{host}%{}", peer.scope_id())
+            }
+            _ => host,
         }
     }
 }
@@ -235,11 +256,52 @@ mod tests {
     fn telemetry_context_new_preserves_client_identity_fields() {
         let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
 
-        let ctx = TelemetryContext::new(&peer, "client-a", "krabka-test", "1.2.3");
+        let ctx = TelemetryContext::new("connection-a", &peer, "client-a", "krabka-test", "1.2.3");
 
+        assert!(ctx.connection_id == "connection-a");
         assert!(ctx.peer == &peer);
         assert!(ctx.client_id == "client-a");
         assert!(ctx.software_name == "krabka-test");
         assert!(ctx.software_version == "1.2.3");
+    }
+
+    /// `client_source_address` is the JDK's `getHostAddress()` text (#1246).
+    #[test]
+    fn telemetry_source_address_uses_the_jdk_host_address() {
+        use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV6};
+
+        let v6 = |ip: Ipv6Addr, scope_id| SocketAddr::V6(SocketAddrV6::new(ip, 9092, 0, scope_id));
+        let rows = [
+            ("ipv4", SocketAddr::from(([10, 0, 0, 5], 9092)), "10.0.0.5"),
+            (
+                "ipv6 loopback",
+                v6(Ipv6Addr::LOCALHOST, 0),
+                "0:0:0:0:0:0:0:1",
+            ),
+            (
+                "ipv6 is not zero-compressed",
+                v6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 5), 0),
+                "2001:db8:0:0:0:0:0:5",
+            ),
+            (
+                "ipv6 with a scope",
+                v6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1), 4),
+                "fe80:0:0:0:0:0:0:1%4",
+            ),
+            (
+                "ipv4-mapped ipv6 is dotted ipv4",
+                v6(Ipv4Addr::new(1, 2, 3, 4).to_ipv6_mapped(), 0),
+                "1.2.3.4",
+            ),
+            (
+                "ipv4-mapped ipv6 has no scope",
+                v6(Ipv4Addr::new(1, 2, 3, 4).to_ipv6_mapped(), 4),
+                "1.2.3.4",
+            ),
+        ];
+        for (name, peer, expected) in rows {
+            let ctx = TelemetryContext::new("connection-a", &peer, "client-a", "sw", "1");
+            assert!(ctx.source_address() == expected, "row {name}");
+        }
     }
 }

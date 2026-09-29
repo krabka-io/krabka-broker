@@ -179,12 +179,15 @@ fn parse_list(value: &str) -> Vec<&str> {
 }
 
 /// Effective push interval for a subscription's override map. The function
-/// returns [`INTERVAL_MS_DEFAULT`] when the key is unset.
-pub(crate) fn effective_interval_ms(configs: &BTreeMap<String, String>) -> i32 {
+/// returns `default_interval_ms` when the key is unset.
+pub(crate) fn effective_interval_ms(
+    configs: &BTreeMap<String, String>,
+    default_interval_ms: i32,
+) -> i32 {
     configs
         .get(KEY_INTERVAL_MS)
         .and_then(|v| java_trim(v).parse::<i32>().ok())
-        .unwrap_or(INTERVAL_MS_DEFAULT)
+        .unwrap_or(default_interval_ms)
 }
 
 /// Parse the `metrics` value into prefixes, as `ConfigDef` parses a `LIST`.
@@ -493,9 +496,10 @@ mod tests {
     #[test]
     fn effective_interval_defaults_and_trims() {
         let mut m = BTreeMap::new();
-        check!(effective_interval_ms(&m) == 300_000);
+        check!(effective_interval_ms(&m, INTERVAL_MS_DEFAULT) == 300_000);
+        check!(effective_interval_ms(&m, 600_000) == 600_000);
         m.insert("interval.ms".to_string(), " 60000 ".to_string());
-        check!(effective_interval_ms(&m) == 60_000);
+        check!(effective_interval_ms(&m, INTERVAL_MS_DEFAULT) == 60_000);
     }
 
     #[test]

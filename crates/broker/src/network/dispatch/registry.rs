@@ -197,6 +197,7 @@ async fn dispatch_registered_bytes(
         }
         crate::handlers::DispatchKind::Telemetry(handler) => {
             let ctx = crate::handlers::TelemetryContext::new(
+                connection_id,
                 peer,
                 parsed.client_id.unwrap_or(""),
                 client_software_name,
