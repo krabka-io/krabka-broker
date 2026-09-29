@@ -908,6 +908,7 @@ async fn validate_only_answers_the_verdict_and_commits_nothing() {
         let configs = if expected_row.error_code == codes::NONE {
             Some(effective_topic_configs(
                 &broker_handle.controller_image_for_test(),
+                broker.config.node_id,
                 name,
                 &std::collections::BTreeMap::new(),
                 crate::api_catalog::UnstableApiVersions::Disabled,
@@ -1081,6 +1082,7 @@ async fn created_topic_configs_match_describe_configs_for_the_same_topic() {
     let described: Vec<CreatableTopicConfigs> =
         crate::handlers::describe_configs::effective_topic_configs(
             &image,
+            broker.config.node_id,
             "mirrored",
             image.topic_config("mirrored").expect("stored overrides"),
             crate::api_catalog::UnstableApiVersions::Disabled,

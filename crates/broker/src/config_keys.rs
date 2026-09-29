@@ -136,7 +136,7 @@ pub(crate) use self::{
     diskless::{DISKLESS, resolve_diskless, validate_diskless_unchanged},
     log_config::apply_to_log_config,
     message_size::resolve_max_message_bytes,
-    min_isr::{clear_elr_records, configured_min_insync_replicas, effective_min_insync_replicas},
+    min_isr::{clear_elr_records, effective_min_insync_replicas, node_min_insync_replicas},
     recovery::{
         RecoveryStrategy, UNCLEAN_LEADER_ELECTION_ENABLE, resolve_recovery_strategy,
         resolve_unclean_leader_election_enabled,

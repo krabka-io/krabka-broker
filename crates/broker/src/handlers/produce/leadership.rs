@@ -92,8 +92,12 @@ pub(super) fn validate_partition_gate(
             current_leader: None,
         });
     }
-    let effective_min_isr =
-        effective_min_isr_of(image, topic_name, record, default_min_insync_replicas);
+    let effective_min_isr = effective_min_isr_of(
+        image,
+        (this_node_id, default_min_insync_replicas),
+        topic_name,
+        record,
+    );
     if acks == ACKS_ALL && record.isr.len() < effective_min_isr {
         return Err(PartitionGateError {
             code: codes::NOT_ENOUGH_REPLICAS,
@@ -104,15 +108,16 @@ pub(super) fn validate_partition_gate(
 }
 
 /// Kafka's `Partition.effectiveMinIsr`: the `min.insync.replicas` that
-/// `image` resolves for `topic`, capped at the size of `record`'s replica
-/// assignment.
+/// `image` resolves for `topic` on `node`, capped at the size of `record`'s
+/// replica assignment. `node` is this broker's id and `default` its
+/// command-line `default_min_insync_replicas`, the last layer.
 fn effective_min_isr_of(
     image: &krabka_metadata::MetadataImage,
+    (node, default): (krabka_metadata::NodeId, i32),
     topic: &str,
     record: &krabka_metadata::PartitionRecord,
-    default_min_insync_replicas: i32,
 ) -> usize {
-    let configured_min_isr = topic_min_insync_replicas(image, topic, default_min_insync_replicas);
+    let configured_min_isr = topic_min_insync_replicas(image, node, topic, default);
     usize::try_from(configured_min_isr)
         .unwrap_or(0)
         .min(record.replicas.len())
@@ -139,7 +144,7 @@ pub(super) fn current_effective_min_isr(
     image: &krabka_metadata::MetadataImage,
     (topic, partition_index): (&str, i32),
     admitted_topic_id: Option<uuid::Uuid>,
-    default_min_insync_replicas: i32,
+    min_isr_layers: (krabka_metadata::NodeId, i32),
 ) -> Result<usize, i16> {
     let record = image
         .partition(topic, partition_index)
@@ -147,12 +152,7 @@ pub(super) fn current_effective_min_isr(
     if image.topic(topic).map(|topic| topic.topic_id) != admitted_topic_id {
         return Err(codes::NOT_LEADER_OR_FOLLOWER);
     }
-    Ok(effective_min_isr_of(
-        image,
-        topic,
-        record,
-        default_min_insync_replicas,
-    ))
+    Ok(effective_min_isr_of(image, min_isr_layers, topic, record))
 }
 
 pub(super) fn diskless_role_ready(
@@ -299,7 +299,12 @@ mod tests {
         for (name, image, want) in cases {
             actual.push((
                 name,
-                current_effective_min_isr(&image, ("orders", 0), Some(admitted), 2),
+                current_effective_min_isr(
+                    &image,
+                    ("orders", 0),
+                    Some(admitted),
+                    (krabka_audit::NodeId(1), 2),
+                ),
             ));
             expected.push((name, want));
         }
@@ -465,6 +470,78 @@ mod tests {
         // `acks=all` durability gate, not a partition-wide refusal.
         let admitted = gate_with_acks(&image, krabka_audit::NodeId(1), false, false, 1, 1);
         assert!(admitted.is_none(), "got {admitted:?}");
+    }
+
+    /// A per-node dynamic `min.insync.replicas` (`kafka-configs --entity-type
+    /// brokers --entity-name 1`) gates `acks=all` on that node and only on it,
+    /// and it outranks the cluster-wide default. Kafka pushes each node's
+    /// dynamic value into its own partitions' `LogConfig`, from which
+    /// `Partition.effectiveMinIsr` reads it.
+    #[tokio::test]
+    async fn acks_all_honours_this_nodes_own_min_isr_over_the_cluster_default() {
+        for (label, cluster_default, node_one, node_two, want_refused) in [
+            ("this node's value refuses", None, Some("2"), None, true),
+            (
+                "this node's value outranks a lower cluster default",
+                Some("1"),
+                Some("2"),
+                None,
+                true,
+            ),
+            (
+                "this node's value outranks a higher cluster default",
+                Some("2"),
+                Some("1"),
+                None,
+                false,
+            ),
+            (
+                "another node's value does not gate this one",
+                None,
+                None,
+                Some("2"),
+                false,
+            ),
+        ] {
+            let mut image = image_with_topic("orders", &[1, 2, 3]);
+            image.apply(&MetadataRecord::V1Partition(
+                krabka_metadata::PartitionRecord {
+                    topic: "orders".into(),
+                    partition: 0,
+                    leader: krabka_audit::NodeId(1),
+                    replicas: [1, 2, 3].map(krabka_audit::NodeId).to_vec(),
+                    isr: vec![krabka_audit::NodeId(1)],
+                    leader_epoch: krabka_metadata::LeaderEpoch(0),
+                    adding_replicas: vec![],
+                    removing_replicas: vec![],
+                    directories: vec![],
+                    partition_epoch: 1,
+                },
+            ));
+            for (node, value) in [
+                (
+                    krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
+                    cluster_default,
+                ),
+                (krabka_audit::NodeId(1), node_one),
+                (krabka_audit::NodeId(2), node_two),
+            ] {
+                if let Some(value) = value {
+                    image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+                        node_id: node,
+                        config_name: crate::config_keys::MIN_INSYNC_REPLICAS.into(),
+                        config_value: Some(value.into()),
+                    }));
+                }
+            }
+
+            let got = gate_with_acks(&image, krabka_audit::NodeId(1), false, false, -1, 1);
+
+            let refused = got
+                .as_ref()
+                .is_some_and(|(code, _)| *code == crate::codes::NOT_ENOUGH_REPLICAS);
+            assert!(refused == want_refused, "{label}: got {got:?}");
+        }
     }
 
     /// Kafka's `Partition.effectiveMinIsr` clamps `min.insync.replicas` to

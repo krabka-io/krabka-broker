@@ -6,18 +6,22 @@ use krabka_protocol::records::TimestampType;
 use crate::config_keys::{
     CLEANUP_POLICY, COMPRESSION_TYPE, DELIVERY_MODE, DELIVERY_MODE_SCHEDULED,
     MESSAGE_TIMESTAMP_AFTER_MAX_MS, MESSAGE_TIMESTAMP_BEFORE_MAX_MS, MESSAGE_TIMESTAMP_TYPE,
-    MESSAGE_TIMESTAMP_TYPE_LOG_APPEND, configured_min_insync_replicas, parse_cleanup_policy,
+    MESSAGE_TIMESTAMP_TYPE_LOG_APPEND, node_min_insync_replicas, parse_cleanup_policy,
     parse_compression_type,
 };
 
-/// Resolve `min.insync.replicas` for a topic from the metadata image.
+/// Resolve `min.insync.replicas` for a topic on broker `node` from the
+/// metadata image.
 ///
-/// The lookup is [`configured_min_insync_replicas`], the one the controller
-/// resolves KIP-966's ELR threshold through: the topic override, then the
-/// cluster-wide dynamic broker default. Reading only the topic override here
-/// would let a cluster-wide default that the controller honours govern the
-/// ELR while this gate ignored it, and the ELR would then name replicas that
-/// accepted writes had moved past.
+/// The lookup is [`node_min_insync_replicas`], Kafka's own order for a topic
+/// key (`KafkaConfigSchema.resolveEffectiveTopicConfig`): the topic override,
+/// then `node`'s per-broker dynamic config, then the cluster-wide dynamic
+/// broker default. Its cluster layer is the one the controller resolves
+/// KIP-966's ELR threshold through. Reading only the topic override here would
+/// let a default that the controller honours govern the ELR while this gate
+/// ignored it, and the ELR would then name replicas that accepted writes had
+/// moved past. The per-node layer is one the controller does not read, but it
+/// cannot be set while the ELR is on.
 ///
 /// `default_min_insync_replicas` is this broker's command-line value, the one
 /// layer the controller cannot see. It applies only when the image names
@@ -30,10 +34,11 @@ use crate::config_keys::{
 /// image.
 pub(super) fn topic_min_insync_replicas(
     image: &krabka_metadata::MetadataImage,
+    node: krabka_metadata::NodeId,
     topic: &str,
     default_min_insync_replicas: i32,
 ) -> i32 {
-    configured_min_insync_replicas(image, topic).unwrap_or(default_min_insync_replicas)
+    node_min_insync_replicas(image, node, topic).unwrap_or(default_min_insync_replicas)
 }
 
 /// Resolve a topic's broker-side `compression.type` from the metadata image.
@@ -327,6 +332,92 @@ mod tests {
         handlers::produce::test_support::{image_with_topic, set_min_isr},
     };
 
+    /// The node the gate runs on in these tests.
+    const NODE: krabka_metadata::NodeId = krabka_metadata::NodeId(1);
+
+    /// Seed a per-node dynamic `min.insync.replicas`, what
+    /// `kafka-configs --entity-type brokers --entity-name N` writes.
+    fn set_node_min_isr(img: &mut MetadataImage, node: krabka_metadata::NodeId, n: i32) {
+        img.apply(&MetadataRecord::V1BrokerConfig(
+            krabka_metadata::BrokerConfigRecord {
+                node_id: node,
+                config_name: MIN_INSYNC_REPLICAS.to_string(),
+                config_value: Some(n.to_string()),
+            },
+        ));
+    }
+
+    /// Kafka resolves a topic's `min.insync.replicas` as topic override, then
+    /// the node's own dynamic config, then the cluster-wide default, then the
+    /// static value (`KafkaConfigSchema.resolveEffectiveTopicConfig`), and the
+    /// `acks=all` gate reads it off the partition's `LogConfig`, which
+    /// `DynamicLogConfig` pushes the node's value into. A value set for another
+    /// node is not this node's.
+    #[test]
+    fn the_gate_reads_this_nodes_own_dynamic_min_isr() {
+        let other = krabka_metadata::NodeId(2);
+        for (label, topic_override, cluster_default, node_value, other_value, expected) in [
+            (
+                "this node's value beats the broker's own default",
+                None,
+                None,
+                Some(3),
+                None,
+                3,
+            ),
+            (
+                "this node's value beats the cluster default",
+                None,
+                Some(2),
+                Some(3),
+                None,
+                3,
+            ),
+            (
+                "the topic override beats this node's value",
+                Some(1),
+                Some(2),
+                Some(3),
+                None,
+                1,
+            ),
+            (
+                "another node's value is not this node's",
+                None,
+                Some(2),
+                None,
+                Some(3),
+                2,
+            ),
+            (
+                "another node's value is not this node's either",
+                None,
+                None,
+                None,
+                Some(3),
+                1,
+            ),
+        ] {
+            let mut img = image_with_topic("t", &[1, 2, 3]);
+            if let Some(value) = topic_override {
+                set_min_isr(&mut img, "t", value);
+            }
+            if let Some(value) = cluster_default {
+                set_cluster_default_min_isr(&mut img, value);
+            }
+            if let Some(value) = node_value {
+                set_node_min_isr(&mut img, NODE, value);
+            }
+            if let Some(value) = other_value {
+                set_node_min_isr(&mut img, other, value);
+            }
+
+            let got = topic_min_insync_replicas(&img, NODE, "t", 1);
+
+            assert!(got == expected, "{label}: got {got}");
+        }
+    }
+
     /// Seed a cluster-wide dynamic `min.insync.replicas` default, the layer
     /// Kafka resolves between the topic override and each node's static
     /// config, and the one the controller's ELR resolver reads.
@@ -378,7 +469,7 @@ mod tests {
                 set_cluster_default_min_isr(&mut img, value);
             }
 
-            let gate = topic_min_insync_replicas(&img, "t", broker_default);
+            let gate = topic_min_insync_replicas(&img, NODE, "t", broker_default);
             let controller = crate::config_keys::effective_min_insync_replicas(&img, "t", 3);
 
             assert!(gate == expected, "{label}: got {gate}");
@@ -392,14 +483,14 @@ mod tests {
     #[test]
     fn topic_min_isr_defaults_to_one_when_unset() {
         let img = image_with_topic("t", &[1, 2, 3]);
-        assert!(topic_min_insync_replicas(&img, "t", 1) == 1);
+        assert!(topic_min_insync_replicas(&img, NODE, "t", 1) == 1);
     }
 
     #[test]
     fn topic_min_isr_reads_override_when_set() {
         let mut img = image_with_topic("t", &[1, 2, 3]);
         set_min_isr(&mut img, "t", 3);
-        assert!(topic_min_insync_replicas(&img, "t", 1) == 3);
+        assert!(topic_min_insync_replicas(&img, NODE, "t", 1) == 3);
     }
 
     #[test]
@@ -412,7 +503,7 @@ mod tests {
                 set_min_isr(&mut img, "t", value);
             }
 
-            assert!(topic_min_insync_replicas(&img, "t", 2) == expected);
+            assert!(topic_min_insync_replicas(&img, NODE, "t", 2) == expected);
         }
     }
 
@@ -420,7 +511,7 @@ mod tests {
     fn topic_min_isr_default_one_on_unknown_topic() {
         let img = MetadataImage::new(Uuid::nil());
         assert!(
-            topic_min_insync_replicas(&img, "ghost", 1) == 1,
+            topic_min_insync_replicas(&img, NODE, "ghost", 1) == 1,
             "missing topic_config must default to 1, not crash"
         );
     }
@@ -435,7 +526,7 @@ mod tests {
             overrides: o,
         }));
         assert!(
-            topic_min_insync_replicas(&img, "t", 1) == 1,
+            topic_min_insync_replicas(&img, NODE, "t", 1) == 1,
             "unparseable value must fall back to permissive default 1"
         );
     }
@@ -451,7 +542,7 @@ mod tests {
             topic: "t".into(),
             overrides: o,
         }));
-        assert!(topic_min_insync_replicas(&img, "t", 1) == 1);
+        assert!(topic_min_insync_replicas(&img, NODE, "t", 1) == 1);
     }
 
     #[test]

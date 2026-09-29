@@ -135,13 +135,13 @@ impl LeaderPolicy {
         }
     }
 
-    /// The policy `image` gives partition `record`.
+    /// The policy `image` gives partition `record`, which broker `node` leads.
     ///
     /// `min.insync.replicas` resolves as Kafka's `Partition.effectiveMinIsr`
-    /// reads it out of the log config: the topic override, then the cluster's
-    /// dynamic default
-    /// ([`configured_min_insync_replicas`](crate::config_keys::configured_min_insync_replicas),
-    /// the lookup the
+    /// reads it out of the log config: the topic override, then `node`'s own
+    /// dynamic value, then the cluster's dynamic default
+    /// ([`node_min_insync_replicas`](crate::config_keys::node_min_insync_replicas),
+    /// the lookup the produce gate reads and whose cluster layer the
     /// controller maintains the KIP-966 eligible-leader set against), then
     /// `default_min_insync_replicas`, this broker's static value, capped by
     /// the replica count. It is the value the produce gate admits `acks=all`
@@ -149,6 +149,7 @@ impl LeaderPolicy {
     /// replica's fence and controlled shutdown are its registration's.
     pub(crate) fn from_image(
         image: &krabka_metadata::MetadataImage,
+        node: NodeId,
         record: &krabka_metadata::PartitionRecord,
         replica_lag_time_max: Duration,
         default_min_insync_replicas: i32,
@@ -172,7 +173,7 @@ impl LeaderPolicy {
                 )
             })
             .collect();
-        let configured = crate::config_keys::configured_min_insync_replicas(image, &record.topic)
+        let configured = crate::config_keys::node_min_insync_replicas(image, node, &record.topic)
             .unwrap_or(default_min_insync_replicas);
         Self {
             effective_min_isr: usize::try_from(configured)
@@ -1168,7 +1169,7 @@ mod tests {
         };
         let lag = Duration::from_secs(30);
         check!(
-            LeaderPolicy::from_image(&image, &record(&[1, 2, 3, 4]), lag, 1)
+            LeaderPolicy::from_image(&image, NodeId(1), &record(&[1, 2, 3, 4]), lag, 1)
                 == LeaderPolicy {
                     effective_min_isr: 2,
                     replica_lag_time_max: lag,
@@ -1183,7 +1184,8 @@ mod tests {
                 }
         );
         check!(
-            LeaderPolicy::from_image(&image, &record(&[1]), lag, 1).effective_min_isr == 1,
+            LeaderPolicy::from_image(&image, NodeId(1), &record(&[1]), lag, 1).effective_min_isr
+                == 1,
             "a single replica caps min ISR at one"
         );
     }
@@ -1211,12 +1213,47 @@ mod tests {
         }));
         let lag = Duration::from_secs(30);
         let min_isr = |replicas: &[u64], static_default| {
-            LeaderPolicy::from_image(&image, &record(replicas), lag, static_default)
+            LeaderPolicy::from_image(&image, NodeId(1), &record(replicas), lag, static_default)
                 .effective_min_isr
         };
         check!(min_isr(&[1, 2, 3], 2) == 2);
         check!(min_isr(&[1, 2, 3], 1) == 1);
         check!(min_isr(&[1], 2) == 1, "the replica count still caps it");
+    }
+
+    /// The leader's own per-node `min.insync.replicas` outranks the cluster
+    /// default, and another node's is not its own, as Kafka's per-node
+    /// `DynamicLogConfig` gives each broker its partitions' `LogConfig`.
+    #[test]
+    fn a_policy_reads_the_leaders_own_dynamic_min_isr() {
+        use krabka_metadata::{
+            BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataImage, MetadataRecord,
+            PartitionRecord,
+        };
+        let record = PartitionRecord {
+            topic: "t".into(),
+            partition: 0,
+            leader: NodeId(1),
+            replicas: [1, 2, 3].map(NodeId).to_vec(),
+            isr: [1, 2, 3].map(NodeId).to_vec(),
+            ..Default::default()
+        };
+        let mut image = MetadataImage::new(uuid::Uuid::nil());
+        for (node, value) in [(DEFAULT_BROKER_CONFIG_NODE_ID, "2"), (NodeId(1), "3")] {
+            image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+                node_id: node,
+                config_name: crate::config_keys::MIN_INSYNC_REPLICAS.to_string(),
+                config_value: Some(value.to_string()),
+            }));
+        }
+        let lag = Duration::from_secs(30);
+        for (leader, expected) in [(NodeId(1), 3), (NodeId(2), 2)] {
+            check!(
+                LeaderPolicy::from_image(&image, leader, &record, lag, 1).effective_min_isr
+                    == expected,
+                "leader {leader:?}"
+            );
+        }
     }
 }
 

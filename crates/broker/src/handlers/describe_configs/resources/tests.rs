@@ -538,6 +538,7 @@ fn an_internal_topic_key_is_reported_only_when_the_topic_sets_it() {
     // The KIP-525 list is the same computation.
     let created = effective_topic_configs(
         &MetadataImage::new(Uuid::nil()),
+        SERVING_NODE,
         "orders",
         &std::collections::BTreeMap::new(),
         crate::api_catalog::UnstableApiVersions::Enabled,
@@ -550,6 +551,7 @@ fn an_internal_topic_key_is_reported_only_when_the_topic_sets_it() {
     );
     let created = effective_topic_configs(
         &MetadataImage::new(Uuid::nil()),
+        SERVING_NODE,
         "orders",
         &maplit::btreemap! {
             config_keys::INTERNAL_SEGMENT_BYTES.to_string() => "4096".to_string(),
@@ -2237,6 +2239,7 @@ fn a_topic_reports_the_static_synonyms_the_broker_was_started_with() {
     // The KIP-525 list `CreateTopics` v5+ carries is the same computation.
     let created = effective_topic_configs(
         &MetadataImage::new(Uuid::nil()),
+        SERVING_NODE,
         "orders",
         &std::collections::BTreeMap::new(),
         crate::api_catalog::UnstableApiVersions::Disabled,
@@ -2257,6 +2260,101 @@ fn a_topic_reports_the_static_synonyms_the_broker_was_started_with() {
         created_entry("segment.bytes")
             == (Some("536870912".to_owned()), CONFIG_SOURCE_STATIC_BROKER)
     );
+}
+
+/// A topic's `min.insync.replicas` resolves, for the node that computes it,
+/// as the topic override, then that node's own dynamic broker config, then
+/// the cluster-wide default (`KafkaConfigSchema.resolveEffectiveTopicConfig`).
+/// `DescribeConfigs` computes it on the serving broker and `CreateTopics`
+/// (`computeEffectiveTopicConfigs`) on the controller, so both reach the
+/// node's own value at `DYNAMIC_BROKER_CONFIG` and never another node's.
+#[test]
+fn a_topic_reports_the_computing_nodes_own_min_insync_replicas() {
+    let mut image = MetadataImage::new(Uuid::nil());
+    for (node, value) in [
+        (krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID, "3"),
+        (krabka_metadata::NodeId(1), "2"),
+    ] {
+        image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
+            node_id: node,
+            config_name: "min.insync.replicas".into(),
+            config_value: Some(value.into()),
+        }));
+    }
+    let image = with_topic(&image, RESOURCE_TYPE_TOPIC, "orders");
+    let keys = Some(vec!["min.insync.replicas".to_owned()]);
+    let expected = |node_value: &str, node_source, synonyms| {
+        (Some(node_value.to_owned()), node_source, synonyms)
+    };
+
+    for (node, want) in [
+        (
+            krabka_metadata::NodeId(1),
+            expected(
+                "2",
+                CONFIG_SOURCE_DYNAMIC_BROKER,
+                vec![
+                    synonym("min.insync.replicas", "2", CONFIG_SOURCE_DYNAMIC_BROKER),
+                    synonym(
+                        "min.insync.replicas",
+                        "3",
+                        CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
+                    ),
+                    synonym("min.insync.replicas", "1", CONFIG_SOURCE_DEFAULT),
+                ],
+            ),
+        ),
+        (
+            krabka_metadata::NodeId(2),
+            expected(
+                "3",
+                CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
+                vec![
+                    synonym(
+                        "min.insync.replicas",
+                        "3",
+                        CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER,
+                    ),
+                    synonym("min.insync.replicas", "1", CONFIG_SOURCE_DEFAULT),
+                ],
+            ),
+        ),
+    ] {
+        let described = describe_at(
+            node,
+            &image,
+            RESOURCE_TYPE_TOPIC,
+            "orders",
+            keys.clone(),
+            EVERYTHING,
+        );
+        let entry = entry_named(&described, "min.insync.replicas");
+        check!(
+            (
+                entry.value.clone(),
+                entry.config_source,
+                entry.synonyms.clone()
+            ) == want,
+            "DescribeConfigs served by {node:?}"
+        );
+
+        let created = effective_topic_configs(
+            &image,
+            node,
+            "orders",
+            &std::collections::BTreeMap::new(),
+            crate::api_catalog::UnstableApiVersions::Disabled,
+            &std::collections::BTreeMap::new(),
+        );
+        let entry = created
+            .iter()
+            .find(|entry| entry.name == "min.insync.replicas")
+            .expect("a topic key");
+        check!(
+            (entry.value.clone(), entry.config_source) == (want.0, want.1),
+            "CreateTopics computed by {node:?}"
+        );
+    }
 }
 
 /// Kafka's `createGroupConfigEntry`: every `GroupConfig` key, with the group

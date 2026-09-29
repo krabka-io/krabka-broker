@@ -103,11 +103,9 @@ pub(super) fn spawn_broker_gauge_updater(
             let minimum_isr: std::collections::HashMap<&str, i32> = image
                 .topics()
                 .map(|topic| {
-                    let minimum = image
-                        .topic_config(&topic.name)
-                        .and_then(|config| config.get(crate::config_keys::MIN_INSYNC_REPLICAS))
-                        .and_then(|value| value.parse().ok())
-                        .unwrap_or(default_min_insync_replicas);
+                    let minimum =
+                        crate::config_keys::node_min_insync_replicas(&image, node_id, &topic.name)
+                            .unwrap_or(default_min_insync_replicas);
                     (topic.name.as_str(), minimum)
                 })
                 .collect();
