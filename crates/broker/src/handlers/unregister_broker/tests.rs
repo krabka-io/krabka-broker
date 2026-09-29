@@ -10,7 +10,8 @@ use std::{net::SocketAddr, sync::Arc};
 
 use assert2::{assert, check};
 use krabka_metadata::{
-    BreakGlassProposalRecord, MetadataImage, MetadataRecord, UnregisterBrokerRecord,
+    BreakGlassProposalRecord, MetadataImage, MetadataRecord, PartitionElrRecord,
+    UnregisterBrokerRecord,
 };
 use krabka_protocol::owned::unregister_broker_response::{self, UnregisterBrokerResponse};
 use krabka_security::Principal;
@@ -460,7 +461,15 @@ async fn a_node_that_is_not_the_controller_reads_the_active_brokers_from_the_ima
         6,
         1,
     ))];
-    for (fenced, expected) in [(false, elects_broker_2), (true, vec![])] {
+    // A fenced broker cannot lead, so the partition has no leader left and
+    // Kafka's `maybeUpdateLastKnownLeader` records the leaving leader.
+    let leaderless = vec![MetadataRecord::V1PartitionElr(PartitionElrRecord {
+        topic: "t".into(),
+        partition: 0,
+        eligible_leader_replicas: vec![],
+        last_known_elr: vec![NodeId(1)],
+    })];
+    for (fenced, expected) in [(false, elects_broker_2), (true, leaderless)] {
         broker
             .controller
             .submit_change(vec![registration(2, fenced)])
