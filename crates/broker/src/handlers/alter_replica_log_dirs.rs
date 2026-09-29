@@ -62,48 +62,54 @@ pub(crate) fn handle(
         let req = AlterReplicaLogDirsRequest::decode(&mut cur, version)?;
         let image = controller.current_image();
 
-        // (topic, partition) → error code. The wire format lets a
-        // client list the same partition under multiple target dirs;
-        // Apache Kafka treats the LAST occurrence as authoritative,
-        // so we overwrite as we iterate.
-        let mut per_partition: BTreeMap<(String, i32), i16> = BTreeMap::new();
-
+        // The wire format lets a client list the same partition under several
+        // target dirs. Kafka's `AlterReplicaLogDirsRequest.partitionDirs()`
+        // collects them into a map that keeps the LAST destination, and
+        // `ReplicaManager.alterReplicaLogDirs` handles each partition once, so
+        // a superseded destination is neither validated nor started.
+        let mut destinations: BTreeMap<(String, i32), PathBuf> = BTreeMap::new();
         for dir in req.dirs {
             let target_path = PathBuf::from(&dir.path);
             for topic in dir.topics {
                 for partition_index in topic.partitions {
-                    let code = match future_log::start_move(
-                        &partitions,
-                        &future_logs,
-                        &all_log_dirs,
-                        &log_dir_status,
-                        &log_config,
-                        (&topic.name, krabka_ids::PartitionIndex(partition_index)),
-                        image.topic(&topic.name).map(|topic| topic.topic_id),
-                        &target_path,
-                        move_policy.clone(),
-                    )
-                    .await
-                    {
-                        Ok(()) => codes::NONE,
-                        Err(MoveError::TopicNameTooLong) => codes::INVALID_TOPIC_EXCEPTION,
-                        Err(MoveError::LogDirNotFound) => codes::LOG_DIR_NOT_FOUND,
-                        Err(MoveError::Cordoned) => codes::INVALID_REPLICA_ASSIGNMENT,
-                        Err(MoveError::ReplicaNotAvailable) => codes::REPLICA_NOT_AVAILABLE,
-                        Err(MoveError::Storage(error)) => {
-                            tracing::warn!(
-                                topic = %topic.name,
-                                partition = partition_index,
-                                target = %target_path.display(),
-                                error = %error,
-                                "replica log-dir move failed"
-                            );
-                            codes::KAFKA_STORAGE_ERROR
-                        }
-                    };
-                    per_partition.insert((topic.name.clone(), partition_index), code);
+                    destinations.insert((topic.name.clone(), partition_index), target_path.clone());
                 }
             }
+        }
+
+        // (topic, partition) → error code.
+        let mut per_partition: BTreeMap<(String, i32), i16> = BTreeMap::new();
+        for ((topic, partition_index), target_path) in destinations {
+            let code = match future_log::start_move(
+                &partitions,
+                &future_logs,
+                &all_log_dirs,
+                &log_dir_status,
+                &log_config,
+                (&topic, krabka_ids::PartitionIndex(partition_index)),
+                image.topic(&topic).map(|topic| topic.topic_id),
+                &target_path,
+                move_policy.clone(),
+            )
+            .await
+            {
+                Ok(()) => codes::NONE,
+                Err(MoveError::TopicNameTooLong) => codes::INVALID_TOPIC_EXCEPTION,
+                Err(MoveError::LogDirNotFound) => codes::LOG_DIR_NOT_FOUND,
+                Err(MoveError::Cordoned) => codes::INVALID_REPLICA_ASSIGNMENT,
+                Err(MoveError::ReplicaNotAvailable) => codes::REPLICA_NOT_AVAILABLE,
+                Err(MoveError::Storage(error)) => {
+                    tracing::warn!(
+                        topic = %topic,
+                        partition = partition_index,
+                        target = %target_path.display(),
+                        error = %error,
+                        "replica log-dir move failed"
+                    );
+                    codes::KAFKA_STORAGE_ERROR
+                }
+            };
+            per_partition.insert((topic, partition_index), code);
         }
 
         // Group per-partition results back into the response's
@@ -201,6 +207,8 @@ mod tests {
     /// names a configured directory reaches the hosted-replica check, which
     /// answers `REPLICA_NOT_AVAILABLE` for a partition this broker does not
     /// host.
+    // The cases spell POSIX paths and one is a symbolic link.
+    #[cfg(unix)]
     #[tokio::test]
     async fn destination_and_topic_name_validation_matches_kafka() {
         let version = 2;
@@ -313,6 +321,112 @@ mod tests {
                 unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
             };
             assert!(decode_response(&bytes, version) == expected, "case {label}");
+        }
+        broker_handle.shutdown().await;
+    }
+
+    /// Kafka collects the request into `partitionDirs()`, a map that keeps the
+    /// LAST destination of a partition listed twice, and handles each
+    /// partition once. A superseded destination neither answers nor starts a
+    /// move, whatever the last one does.
+    #[tokio::test]
+    async fn a_partition_listed_twice_moves_to_its_last_destination_only() {
+        let version = 2;
+        let extra = tempfile::tempdir().expect("extra log dir");
+        let extra_dir = extra.path().to_path_buf();
+        let (broker_handle, _dir) = crate::test_support::start_broker_with({
+            let extra_dir = extra_dir.clone();
+            move |cfg| cfg.extra_log_dirs = vec![extra_dir]
+        })
+        .await;
+        let broker = broker_handle.broker_arc_for_test();
+        let primary = broker.config.log_dir.clone();
+        let partition_dir = crate::log_dir::partition_dir(&primary, "orders", 0);
+        std::fs::create_dir_all(&partition_dir).expect("partition dir");
+        let hosted = crate::broker::spawn_partition(
+            "orders".into(),
+            krabka_ids::PartitionIndex(0),
+            primary.clone(),
+            krabka_log::Log::open(&partition_dir, krabka_log::LogConfig::default())
+                .expect("open log"),
+            broker.log_dir_status.clone(),
+            std::sync::Arc::new(crate::producer_state::ProducerState::new()),
+            false,
+        );
+        broker.partitions.insert(
+            "orders".into(),
+            krabka_ids::PartitionIndex(0),
+            hosted.clone(),
+        );
+        let valid = extra_dir.display().to_string();
+        let unknown = "/krabka-missing-log-dir".to_string();
+
+        // (name, destinations in request order, expected code, whether the
+        // partition ends up in the extra directory)
+        let cases = [
+            (
+                "a valid destination superseded by an unknown one",
+                [valid.clone(), unknown.clone()],
+                codes::LOG_DIR_NOT_FOUND,
+                false,
+            ),
+            (
+                "an unknown destination superseded by a valid one",
+                [unknown, valid],
+                codes::NONE,
+                true,
+            ),
+        ];
+        for (name, destinations, error_code, moves) in cases {
+            let req = AlterReplicaLogDirsRequest {
+                dirs: destinations
+                    .into_iter()
+                    .map(|path| AlterReplicaLogDir {
+                        path,
+                        topics: vec![AlterReplicaLogDirTopic {
+                            name: "orders".into(),
+                            partitions: vec![0],
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            };
+
+            let bytes = handle(&broker, version, 1, &encode_request(&req, version))
+                .await
+                .expect("handle");
+
+            let expected = AlterReplicaLogDirsResponse {
+                throttle_time_ms: 0,
+                results: vec![AlterReplicaLogDirTopicResult {
+                    topic_name: "orders".to_string(),
+                    partitions: vec![AlterReplicaLogDirPartitionResult {
+                        partition_index: 0,
+                        error_code,
+                        unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+                    }],
+                    unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+                }],
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields(vec![]),
+            };
+            assert!(decode_response(&bytes, version) == expected, "{name}");
+            // An empty partition moves within milliseconds once a move starts,
+            // so a move that never starts is given a short look.
+            let wait = if moves {
+                std::time::Duration::from_secs(20)
+            } else {
+                std::time::Duration::from_millis(500)
+            };
+            let deadline = tokio::time::Instant::now() + wait;
+            let mut in_extra_dir = false;
+            while !in_extra_dir && tokio::time::Instant::now() < deadline {
+                in_extra_dir = std::fs::canonicalize(hosted.log_dir.load_full().as_path()).ok()
+                    == std::fs::canonicalize(&extra_dir).ok();
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            assert!(in_extra_dir == moves, "{name}");
         }
         broker_handle.shutdown().await;
     }

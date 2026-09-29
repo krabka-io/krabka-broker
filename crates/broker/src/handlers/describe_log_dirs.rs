@@ -1,7 +1,8 @@
 //! `DescribeLogDirs` (`api_key=35`, KIP-113).
 //!
 //! The handler reports, for each configured log directory, the partitions that
-//! the directory physically holds and their on-disk sizes. It backs the
+//! the directory physically holds and their log segment sizes, as Kafka's
+//! `UnifiedLog.size` counts them. It backs the
 //! `kafka-log-dirs --describe` admin tool.
 //!
 //! The handler reports both current logs and the future logs of in-progress
@@ -40,7 +41,7 @@ use self::{
     lag::{future_offset_lag, offset_lag_for},
 };
 use crate::{
-    broker::Broker, codes, disk_scanner::scan::sum_partition_dir, error::BrokerError, log_dir,
+    broker::Broker, codes, disk_scanner::scan::sum_log_segments, error::BrokerError, log_dir,
 };
 
 #[tracing::instrument(
@@ -110,7 +111,7 @@ pub(crate) async fn handle(
                     continue;
                 }
                 let part_dir = log_dir::partition_dir(dir, &topic, partition);
-                let size = sum_partition_dir(&part_dir).unwrap_or(0);
+                let size = sum_log_segments(&part_dir).unwrap_or(0);
                 let offset_lag = offset_lag_for(&partitions, &topic, partition).await;
                 by_topic
                     .entry(topic)
@@ -136,7 +137,7 @@ pub(crate) async fn handle(
                     continue;
                 }
                 let future_path = log_dir::future_partition_dir(dir, &topic, partition);
-                let size = sum_partition_dir(&future_path).unwrap_or(0);
+                let size = sum_log_segments(&future_path).unwrap_or(0);
                 let offset_lag = future_offset_lag(
                     &partitions,
                     &future_logs,
