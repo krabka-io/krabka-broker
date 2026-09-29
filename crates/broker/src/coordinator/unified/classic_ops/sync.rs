@@ -49,8 +49,10 @@ pub(crate) fn handle_sync(state: &mut ClassicState, req: &SyncGroupRequest) -> S
             SyncAction::Immediate(sync_err(codes::REBALANCE_IN_PROGRESS))
         }
         // Only the leader's `SyncGroup` in `CompletingRebalance` installs
-        // assignments. A follower waits for it.
+        // assignments. A follower waits for it. Either way the member has now
+        // sent its `SyncGroup`, which is Kafka's `removePendingSyncMember`.
         GroupState::CompletingRebalance => {
+            state.remove_pending_sync_member(&req.member_id);
             if state.leader_id.as_deref() == Some(&req.member_id) {
                 install_leader_assignments(state, req);
                 SyncAction::LeaderInstalled(read_current(state, &req.member_id))
@@ -60,7 +62,10 @@ pub(crate) fn handle_sync(state: &mut ClassicState, req: &SyncGroupRequest) -> S
         }
         // In `Stable` every member, the leader included, reads its current
         // assignment. A KIP-814 leader that skipped the assignment sends none.
-        GroupState::Stable => SyncAction::Immediate(read_current(state, &req.member_id)),
+        GroupState::Stable => {
+            state.remove_pending_sync_member(&req.member_id);
+            SyncAction::Immediate(read_current(state, &req.member_id))
+        }
     }
 }
 
@@ -480,6 +485,41 @@ mod tests {
         let _ = handle_sync(&mut g, &req);
         let r = read_sync_result(&g, &leader, None, None);
         assert!(r.error_code == codes::NONE);
+    }
+
+    /// Kafka's `removePendingSyncMember`: a member's own `SyncGroup` takes it
+    /// off the set of members that owe one, in `CompletingRebalance` and in
+    /// `Stable`, and the timer goes with the last of them. A `SyncGroup` that
+    /// only answers `REBALANCE_IN_PROGRESS` takes nobody off.
+    #[test]
+    fn sync_group_removes_the_member_from_the_pending_sync_set() {
+        let mut g = stable_two_member_group();
+        let generation = g.generation_id;
+        let pending = |g: &ClassicState| {
+            let mut ids: Vec<String> = g.pending_sync_members.iter().cloned().collect();
+            ids.sort_unstable();
+            ids
+        };
+        check!(pending(&g) == ["m1", "m2"]);
+        check!(g.sync_deadline.is_some());
+
+        // The leader installs the assignments and the group is `Stable`, but
+        // the follower still owes its `SyncGroup`, so the timer keeps running.
+        let _ = handle_sync(&mut g, &sync_req("m1", generation));
+        check!(g.state == GroupState::Stable);
+        check!(pending(&g) == ["m2"]);
+        check!(g.sync_deadline.is_some());
+
+        // The follower reads its assignment from the `Stable` group.
+        let _ = handle_sync(&mut g, &sync_req("m2", generation));
+        check!(pending(&g).is_empty());
+        check!(g.sync_deadline.is_none());
+
+        let mut g = group(Start::Preparing);
+        g.pending_sync_members.insert("m1".into());
+        let generation = g.generation_id;
+        let _ = handle_sync(&mut g, &sync_req("m1", generation));
+        check!(pending(&g) == ["m1"]);
     }
 
     /// KIP-814: a leader that rejoined a `Stable` group with

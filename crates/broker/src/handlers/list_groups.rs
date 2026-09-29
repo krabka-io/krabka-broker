@@ -21,6 +21,10 @@
 //! principal with `Describe` on the cluster sees every group, and any other
 //! principal sees only the groups it may `Describe`.
 //!
+//! While any `__consumer_offsets` partition this broker leads is still
+//! loading, the answer is `COORDINATOR_LOAD_IN_PROGRESS` and no groups, as in
+//! Kafka, so a client asks again instead of reading a partial list.
+//!
 //! The handler emits a `group_id` at most once. The registries are disjoint by
 //! `GroupType`, but the handler dedups defensively.
 
@@ -45,7 +49,9 @@ use crate::{
         share::actor::ShareGroupActorMessage, streams::actor::StreamsGroupActorMessage,
     },
     error::BrokerError,
-    handlers::{acl_denied, cluster_describe_denied},
+    handlers::{
+        acl_denied, cluster_describe_denied, coordinator_routing::any_group_partition_loading,
+    },
 };
 
 /// Wire `group_type` string for classic (pre-KIP-848) groups.
@@ -80,6 +86,15 @@ pub(crate) async fn handle(
 ) -> Result<Bytes, BrokerError> {
     let mut cur: &[u8] = req_bytes;
     let req = ListGroupsRequest::decode(&mut cur, version)?;
+    // Kafka's `GroupCoordinatorService.listGroups` reads every local shard and
+    // answers the load error of one that is still loading, with no groups.
+    if any_group_partition_loading(broker) {
+        let resp = ListGroupsResponse {
+            error_code: codes::COORDINATOR_LOAD_IN_PROGRESS,
+            ..Default::default()
+        };
+        return crate::handlers::encode_response(&resp, version);
+    }
     let candidates = collect_groups(broker).await;
 
     let image = broker.controller.current_image();

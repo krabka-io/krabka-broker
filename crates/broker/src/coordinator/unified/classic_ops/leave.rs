@@ -7,7 +7,7 @@
 //! does through `maybePrepareRebalanceOrCompleteJoin`. It returns the
 //! per-member responses in request order.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use krabka_protocol::owned::{
     leave_group_request::LeaveGroupRequest, leave_group_response::MemberResponse,
@@ -30,6 +30,7 @@ pub(crate) fn handle_leave(
     state: &mut ClassicState,
     req: &LeaveGroupRequest,
     version: i16,
+    initial_rebalance_delay: Duration,
 ) -> Vec<MemberResponse> {
     let inputs: Vec<MemberIdentityIn> = if version >= 3 {
         req.members
@@ -49,6 +50,19 @@ pub(crate) fn handle_leave(
     let mut member_responses: Vec<MemberResponse> = Vec::with_capacity(inputs.len());
     let mut any_removed = false;
     for ident in &inputs {
+        // Kafka checks `isPendingMember` before it validates the member: an id
+        // that a `JoinGroup` answered with `MEMBER_ID_REQUIRED` and that has
+        // not joined yet leaves cleanly, and counts as a valid leave below.
+        if !ident.member_id.is_empty() && state.pending_members.remove(&ident.member_id).is_some() {
+            any_removed = true;
+            member_responses.push(MemberResponse {
+                member_id: ident.member_id.clone(),
+                group_instance_id: ident.group_instance_id.clone(),
+                error_code: codes::NONE,
+                ..Default::default()
+            });
+            continue;
+        }
         let (resolved_id, code): (Option<String>, i16) =
             match (ident.group_instance_id.as_deref(), ident.member_id.as_str()) {
                 (Some(iid), "") => match state.current_member_id_for_instance(iid) {
@@ -86,19 +100,9 @@ pub(crate) fn handle_leave(
             GroupState::Stable | GroupState::CompletingRebalance
         )
     {
-        state.state = GroupState::PreparingRebalance;
         // A member left a live group: this is a membership-change rebalance,
         // not a start-from-empty herd, so the survivors eager-complete.
-        state.rebalance_from_empty = false;
-        state.rebalance_deadline = Some(
-            Instant::now()
-                + state
-                    .members
-                    .values()
-                    .map(|m| m.rebalance_timeout)
-                    .max()
-                    .expect("nonempty group has a rebalance timeout"),
-        );
+        state.prepare_rebalance(initial_rebalance_delay, Instant::now());
     }
     member_responses
 }
@@ -138,7 +142,7 @@ mod tests {
                 member_id: "m1".into(),
                 ..Default::default()
             };
-            let out = handle_leave(&mut g, &req, 2);
+            let out = handle_leave(&mut g, &req, 2, Duration::from_secs(3));
             check!(
                 out == vec![MemberResponse {
                     member_id: "m1".into(),
@@ -151,6 +155,62 @@ mod tests {
             check!(!g.members.contains_key("m1"), "{before:?}");
             check!(g.state == after, "{before:?}");
         }
+    }
+
+    /// Kafka's `classicGroupLeaveToClassicGroup` checks `isPendingMember`
+    /// before it validates the member: an id that a `JoinGroup` answered with
+    /// `MEMBER_ID_REQUIRED` leaves with `NONE` at every version and is
+    /// forgotten, and its leave counts as a valid one, so a `Stable` or
+    /// `CompletingRebalance` group prepares a rebalance for it.
+    #[test]
+    fn leave_of_a_pending_member_id_answers_none_and_forgets_the_id() {
+        for (version, state) in [
+            (2, GroupState::PreparingRebalance),
+            (3, GroupState::PreparingRebalance),
+            (3, GroupState::CompletingRebalance),
+            (3, GroupState::Stable),
+        ] {
+            let mut g = stable_two_member_group();
+            g.state = state;
+            g.add_pending_member("pending".into(), Instant::now() + Duration::from_mins(1));
+            let req = LeaveGroupRequest {
+                group_id: "g".into(),
+                member_id: "pending".into(),
+                members: vec![MemberIdentity {
+                    member_id: "pending".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+
+            let out = handle_leave(&mut g, &req, version, Duration::from_secs(3));
+
+            check!(
+                out == vec![MemberResponse {
+                    member_id: "pending".into(),
+                    group_instance_id: None,
+                    error_code: codes::NONE,
+                    ..Default::default()
+                }],
+                "v{version} {state:?}"
+            );
+            check!(g.pending_members.is_empty(), "v{version} {state:?}");
+            check!(g.members.len() == 2, "v{version} {state:?}");
+            check!(
+                g.state == GroupState::PreparingRebalance,
+                "v{version} {state:?}"
+            );
+        }
+        // An id that is neither a member nor pending is still unknown.
+        let mut g = stable_two_member_group();
+        let req = LeaveGroupRequest {
+            group_id: "g".into(),
+            member_id: "ghost".into(),
+            ..Default::default()
+        };
+        let out = handle_leave(&mut g, &req, 2, Duration::from_secs(3));
+        check!(out[0].error_code == codes::UNKNOWN_MEMBER_ID);
+        check!(g.state == GroupState::CompletingRebalance);
     }
 
     #[test]
@@ -173,7 +233,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let out = handle_leave(&mut g, &req, 3);
+        let out = handle_leave(&mut g, &req, 3, Duration::from_secs(3));
         assert!(out.len() == 2);
         check!(out[0].error_code == codes::NONE); // resolved via instance index
         check!(out[1].error_code == codes::UNKNOWN_MEMBER_ID);

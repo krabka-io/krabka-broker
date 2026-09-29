@@ -46,7 +46,12 @@ pub(super) async fn handle_classic_leave_message(
     if let Some(state) = group.as_classic_mut() {
         let previous = state.clone();
         let before_members: Vec<String> = state.members.keys().cloned().collect();
-        let responses = classic_ops::handle_leave(state, request, version);
+        let responses = classic_ops::handle_leave(
+            state,
+            request,
+            version,
+            services.config.classic_initial_rebalance_delay,
+        );
         let removed: Vec<String> = before_members
             .into_iter()
             .filter(|member_id| !state.members.contains_key(member_id))
