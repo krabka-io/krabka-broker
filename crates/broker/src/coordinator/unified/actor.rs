@@ -61,7 +61,9 @@ pub use self::{
     views::{ClassicMemberView, ClassicView, DescribeMember, DescribeView},
 };
 use self::{
-    dispatch::handle_actor_message, tick::handle_actor_tick, waiters::complete_classic_rebalance,
+    dispatch::handle_actor_message,
+    tick::{handle_actor_tick, handle_classic_sync_expiry},
+    waiters::complete_classic_rebalance,
 };
 use crate::{
     coordinator::unified::{
@@ -313,6 +315,16 @@ async fn run_actor(
                 };
                 handle_actor_tick(&mut group, &mut parked, services).await
             }
+            () = opt_sleep(classic_sync_deadline(&group)) => {
+                // Kafka's pending-sync timer: a member never sent SyncGroup.
+                let services = ActorServices {
+                    config: &config,
+                    metadata: &*metadata,
+                    offsets_log: &*offsets_log,
+                    coordinator: &coordinator,
+                };
+                handle_classic_sync_expiry(&mut group, &mut parked, services).await
+            }
             () = opt_sleep(deadline) => {
                 // Classic rebalance deadline fired: extend Kafka's initial
                 // delay, or complete with whoever is here.
@@ -353,6 +365,12 @@ async fn run_actor(
 /// The classic rebalance-completion deadline, if a rebalance is open.
 fn classic_deadline(group: &CoordinatorGroup) -> Option<Instant> {
     group.as_classic().and_then(|s| s.rebalance_deadline)
+}
+
+/// The classic pending-sync deadline, if a generation still awaits members'
+/// `SyncGroup`.
+fn classic_sync_deadline(group: &CoordinatorGroup) -> Option<Instant> {
+    group.as_classic().and_then(|s| s.sync_deadline)
 }
 
 /// A future that resolves at `deadline`, or never if `None`.

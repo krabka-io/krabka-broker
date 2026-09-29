@@ -11,11 +11,18 @@ use super::{
     downgrade::maybe_downgrade,
     member_state::run_reconcile,
     persistence::{flush_classic_metadata, flush_pending, snapshot_pending_after_change},
-    waiters::{drain_removed_classic_waiters, maybe_complete_classic},
+    waiters::{drain_followers_with, drain_removed_classic_waiters, maybe_complete_classic},
 };
-use crate::coordinator::unified::{
-    GroupCoordinator, config::NextGenConfig, consumer_state::GroupState, group::CoordinatorGroup,
-    offsets_log::OffsetsLog,
+use crate::{
+    codes,
+    coordinator::unified::{
+        GroupCoordinator,
+        classic_state::{ClassicGroup as ClassicState, GroupState as ClassicGroupState},
+        config::NextGenConfig,
+        consumer_state::GroupState,
+        group::CoordinatorGroup,
+        offsets_log::OffsetsLog,
+    },
 };
 
 pub(super) async fn handle_actor_tick(
@@ -52,32 +59,89 @@ pub(super) async fn handle_actor_tick(
         }
     } else if let Some(state) = group.as_classic_mut() {
         let previous = state.clone();
-        let dropped = state.expire_dead_members(
-            Instant::now(),
-            services.config.classic_initial_rebalance_delay,
-        );
-        if !dropped.is_empty() {
-            if state.members.is_empty() {
-                let Some(generation_id) = crate::metadata_epoch::next_i32(state.generation_id)
-                else {
-                    *state = previous;
-                    tracing::warn!(group = %group_id,
-                        "classic expiration stopped because the generation is exhausted");
-                    return false;
-                };
-                state.generation_id = generation_id;
-                if let Err(error) = flush_classic_metadata(state, services.offsets_log).await {
-                    *state = previous;
-                    tracing::warn!(group = %group_id, %error,
-                        "classic expiration log write failed; retrying on the next tick");
-                    return true;
-                }
-            }
-            tracing::info!(group = %group_id, ?dropped, "expired members; waking joiners");
-            drain_removed_classic_waiters(&dropped, &mut parked.joiners, &mut parked.followers);
-            maybe_complete_classic(state, &mut parked.joiners, &mut parked.followers);
+        let now = Instant::now();
+        let expired_pending = state.expire_pending_members(now);
+        let dropped =
+            state.expire_dead_members(now, services.config.classic_initial_rebalance_delay);
+        if !dropped.is_empty() || !expired_pending.is_empty() {
+            tracing::info!(group = %group_id, ?dropped, ?expired_pending,
+                "expired members; waking joiners");
+            return settle_classic_removal(state, previous, &dropped, parked, services).await;
         }
     }
+    true
+}
+
+/// Runs when a classic group's pending-sync timer fires: Kafka's
+/// `expirePendingSync`. Every member that still owes a `SyncGroup` is removed
+/// and the group prepares a rebalance for the rest. It returns the actor's
+/// keep-running flag.
+pub(super) async fn handle_classic_sync_expiry(
+    group: &mut CoordinatorGroup,
+    parked: &mut ParkedWaiters,
+    services: ActorServices<'_>,
+) -> bool {
+    let Some(state) = group.as_classic_mut() else {
+        return true;
+    };
+    let previous = state.clone();
+    let removed = state.expire_pending_sync(
+        services.config.classic_initial_rebalance_delay,
+        Instant::now(),
+    );
+    if removed.is_empty() {
+        return true;
+    }
+    tracing::info!(group = %state.group_id, ?removed,
+        "removed members that never sent SyncGroup; preparing a rebalance");
+    let keep_running = settle_classic_removal(state, previous, &removed, parked, services).await;
+    // A failed write restores the group with its timer already due. Retry on
+    // the session-expiry cadence instead of spinning on the log.
+    if let Some(state) = group.as_classic_mut()
+        && state.sync_deadline.is_some_and(|due| due <= Instant::now())
+    {
+        state.sync_deadline = Some(Instant::now() + services.config.session_expiry_tick);
+    }
+    keep_running
+}
+
+/// What a classic group owes after its timers removed `removed` members, in
+/// the order of Kafka's `removeMemberAndUpdateClassicGroup`. An emptied group
+/// persists its next generation first. The removed members' parked calls get
+/// `UNKNOWN_MEMBER_ID`, the followers parked in `SyncGroup` of a group that left
+/// `CompletingRebalance` get `REBALANCE_IN_PROGRESS` at once, as
+/// `prepareRebalance` answers them, and a join phase the survivors have all
+/// rejoined completes. `previous` is the group before the removal, which a
+/// failed write restores. It returns the actor's keep-running flag.
+async fn settle_classic_removal(
+    state: &mut ClassicState,
+    previous: ClassicState,
+    removed: &[String],
+    parked: &mut ParkedWaiters,
+    services: ActorServices<'_>,
+) -> bool {
+    if state.members.is_empty() && !removed.is_empty() {
+        let Some(generation_id) = crate::metadata_epoch::next_i32(state.generation_id) else {
+            *state = previous;
+            tracing::warn!(group = %state.group_id,
+                "classic expiration stopped because the generation is exhausted");
+            return false;
+        };
+        state.generation_id = generation_id;
+        if let Err(error) = flush_classic_metadata(state, services.offsets_log).await {
+            *state = previous;
+            tracing::warn!(group = %state.group_id, %error,
+                "classic expiration log write failed; retrying on the next tick");
+            return true;
+        }
+    }
+    drain_removed_classic_waiters(removed, &mut parked.joiners, &mut parked.followers);
+    if previous.state == ClassicGroupState::CompletingRebalance
+        && state.state == ClassicGroupState::PreparingRebalance
+    {
+        drain_followers_with(&mut parked.followers, codes::REBALANCE_IN_PROGRESS);
+    }
+    maybe_complete_classic(state, &mut parked.joiners, &mut parked.followers);
     true
 }
 
@@ -537,5 +601,149 @@ mod tests {
         .unwrap();
         assert!(reparked, "actor should re-park after processing the tick");
         assert!(!handle.tx.is_closed());
+    }
+
+    /// Kafka's `removeMemberAndUpdateClassicGroup` reaches `prepareRebalance`,
+    /// which answers every member waiting in `SyncGroup` with
+    /// `REBALANCE_IN_PROGRESS` at once and gives the survivors the whole group
+    /// rebalance timeout to rejoin. The tick used to leave the follower parked
+    /// and to wake the survivors after the initial rebalance delay instead.
+    #[tokio::test]
+    async fn leader_expiry_in_completing_rebalance_releases_followers_and_keeps_survivors() {
+        let (coord, log) = make_coordinator();
+        let mut group = completing_classic_group(&["m1", "m2"]);
+        let state = group.as_classic_mut().unwrap();
+        state.members.get_mut("m1").unwrap().session_timeout = Duration::ZERO;
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        let mut parked = ParkedWaiters::default();
+        parked.followers.insert("m2".into(), tx);
+        let services = ActorServices {
+            config: &coord.config,
+            metadata: coord.metadata.as_ref(),
+            offsets_log: log.as_ref(),
+            coordinator: &coord,
+        };
+        let before = Instant::now();
+
+        check!(handle_actor_tick(&mut group, &mut parked, services).await);
+
+        let state = group.as_classic().unwrap();
+        check!(
+            rx.try_recv().expect("the follower is answered by the tick")
+                == crate::coordinator::unified::actor::SyncResult {
+                    error_code: codes::REBALANCE_IN_PROGRESS,
+                    ..Default::default()
+                }
+        );
+        check!(state.state == ClassicGroupState::PreparingRebalance);
+        check!(state.members.keys().collect::<Vec<_>>() == vec!["m2"]);
+        // The survivor's 60 s rebalance timeout, not the 3 s initial delay.
+        check!(
+            state
+                .rebalance_deadline
+                .is_some_and(|deadline| deadline >= before + Duration::from_mins(1))
+        );
+    }
+
+    /// Kafka's `removePendingMemberAndUpdateClassicGroup`: a `MEMBER_ID_REQUIRED`
+    /// id that times out completes a join phase that it alone was holding up.
+    #[tokio::test]
+    async fn pending_member_expiry_completes_the_join_phase() {
+        let (coord, log) = make_coordinator();
+        let mut group = completing_classic_group(&["m1"]);
+        let state = group.as_classic_mut().unwrap();
+        let generation = state.generation_id;
+        state.state = ClassicGroupState::PreparingRebalance;
+        state.mark_awaiting_join("m1");
+        state.rebalance_deadline = Some(Instant::now() + Duration::from_hours(1));
+        state.add_pending_member(
+            "pending".into(),
+            Instant::now().checked_sub(Duration::from_secs(1)).unwrap(),
+        );
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        let mut parked = ParkedWaiters::default();
+        parked.joiners.insert("m1".into(), tx);
+        let services = ActorServices {
+            config: &coord.config,
+            metadata: coord.metadata.as_ref(),
+            offsets_log: log.as_ref(),
+            coordinator: &coord,
+        };
+
+        check!(handle_actor_tick(&mut group, &mut parked, services).await);
+
+        let joined = rx.try_recv().expect("the join phase completed");
+        check!(joined.error_code == codes::NONE);
+        check!(joined.generation_id == generation + 1);
+        let state = group.as_classic().unwrap();
+        check!(state.state == ClassicGroupState::CompletingRebalance);
+        check!(state.pending_members.is_empty());
+    }
+
+    /// Kafka's `expirePendingSync`: a leader that never sent `SyncGroup` is
+    /// removed when the timer fires, and the followers waiting for it are
+    /// answered `REBALANCE_IN_PROGRESS` as `prepareRebalance` does.
+    #[tokio::test]
+    async fn pending_sync_expiry_removes_the_silent_leader_and_releases_followers() {
+        let (coord, log) = make_coordinator();
+        let mut group = completing_classic_group(&["m1", "m2"]);
+        let state = group.as_classic_mut().unwrap();
+        state.arm_pending_sync(Instant::now());
+        // The follower synced and waits for the leader.
+        state.remove_pending_sync_member("m2");
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        let mut parked = ParkedWaiters::default();
+        parked.followers.insert("m2".into(), tx);
+        let services = ActorServices {
+            config: &coord.config,
+            metadata: coord.metadata.as_ref(),
+            offsets_log: log.as_ref(),
+            coordinator: &coord,
+        };
+
+        check!(handle_classic_sync_expiry(&mut group, &mut parked, services).await);
+
+        check!(
+            rx.try_recv()
+                .expect("the follower is answered at once")
+                .error_code
+                == codes::REBALANCE_IN_PROGRESS
+        );
+        let state = group.as_classic().unwrap();
+        check!(state.state == ClassicGroupState::PreparingRebalance);
+        check!(state.members.keys().collect::<Vec<_>>() == vec!["m2"]);
+        check!(state.sync_deadline.is_none());
+    }
+
+    /// The whole actor: a generation whose leader never syncs is torn down by
+    /// the pending-sync timer alone, although the leader's session is fine.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn actor_removes_a_member_that_never_syncs_after_the_rebalance_timeout() {
+        use crate::coordinator::unified::actor::test_support::rpc;
+
+        let (coord, _log) = make_coordinator();
+        let mut group = completing_classic_group(&["m1", "m2"]);
+        let state = group.as_classic_mut().unwrap();
+        state.arm_pending_sync(Instant::now());
+        state.remove_pending_sync_member("m2");
+        state.sync_deadline = Some(Instant::now() + Duration::from_millis(50));
+        coord.seed_classic("g", Box::new(group));
+        let handle = coord.find("g").unwrap();
+
+        let view = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let view = rpc::classic_inspect(&handle).await;
+                if view.state != ClassicGroupState::CompletingRebalance {
+                    break view;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the pending-sync timer must fire");
+
+        check!(view.state == ClassicGroupState::PreparingRebalance);
+        check!(view.members.len() == 1);
+        check!(view.members[0].member_id == "m2");
     }
 }

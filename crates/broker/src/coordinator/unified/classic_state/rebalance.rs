@@ -71,6 +71,9 @@ impl ClassicGroup {
     /// rebalance timeout. No member counts as joined until it calls
     /// [`Self::mark_awaiting_join`].
     pub fn prepare_rebalance(&mut self, initial_rebalance_delay: Duration, now: Instant) {
+        // Kafka's `removeSyncExpiration`: a new round cancels the wait for
+        // the previous generation's `SyncGroup`.
+        self.clear_sync_expiration();
         let initial = self.state == GroupState::Empty;
         if initial {
             self.initial_join = Some(InitialDelayedJoin {
@@ -88,6 +91,70 @@ impl ClassicGroup {
         self.rebalance_from_empty = initial;
         self.state = GroupState::PreparingRebalance;
         self.joined_this_round.clear();
+    }
+
+    /// Kafka's `schedulePendingSync`, with the `addPendingSyncMember` of every
+    /// member that `completeClassicGroupJoin` does first: each member now owes
+    /// a `SyncGroup`, and the ones that have not sent it when the group
+    /// rebalance timeout passes are removed by [`Self::expire_pending_sync`].
+    pub fn arm_pending_sync(&mut self, now: Instant) {
+        self.pending_sync_members = self.members.keys().cloned().collect();
+        self.sync_deadline = Some(now + self.rebalance_timeout());
+    }
+
+    /// Kafka's `removePendingSyncMember`: `member_id` sent its `SyncGroup`.
+    /// The timer goes when nobody owes a sync any more, or in a state where
+    /// none is awaited.
+    pub fn remove_pending_sync_member(&mut self, member_id: &str) {
+        self.pending_sync_members.remove(member_id);
+        if matches!(
+            self.state,
+            GroupState::Empty | GroupState::PreparingRebalance
+        ) || self.pending_sync_members.is_empty()
+        {
+            self.sync_deadline = None;
+        }
+    }
+
+    /// Kafka's `removeSyncExpiration`: nobody owes a sync and no timer runs.
+    pub fn clear_sync_expiration(&mut self) {
+        self.pending_sync_members.clear();
+        self.sync_deadline = None;
+    }
+
+    /// Kafka's `expirePendingSync`, run when [`Self::sync_deadline`] fires.
+    ///
+    /// In `CompletingRebalance` or `Stable`, every member that still owes a
+    /// `SyncGroup` is removed, the leader included and whether or not it still
+    /// heartbeats, and the group prepares a rebalance for the rest. It returns
+    /// the removed member ids. The group is `Empty` when it removed the last
+    /// member, and the caller then persists the empty generation as it does
+    /// after a session expiry. In any other state the timer had nothing to do.
+    pub fn expire_pending_sync(
+        &mut self,
+        initial_rebalance_delay: Duration,
+        now: Instant,
+    ) -> Vec<String> {
+        self.sync_deadline = None;
+        if !matches!(
+            self.state,
+            GroupState::CompletingRebalance | GroupState::Stable
+        ) {
+            self.pending_sync_members.clear();
+            return Vec::new();
+        }
+        let mut removed: Vec<String> = std::mem::take(&mut self.pending_sync_members)
+            .into_iter()
+            .filter(|id| self.members.contains_key(id))
+            .collect();
+        removed.sort_unstable();
+        for member_id in &removed {
+            self.remove_member(member_id);
+        }
+        if !removed.is_empty() && !self.members.is_empty() {
+            self.prepare_rebalance(initial_rebalance_delay, now);
+        }
+        removed
     }
 
     /// Kafka's `tryCompleteInitialRebalanceElseSchedule`, run when the
@@ -164,6 +231,10 @@ impl ClassicGroup {
         self.generation_id = generation_id;
         self.state = GroupState::CompletingRebalance;
         self.rebalance_deadline = None;
+        // Kafka's `initNextGeneration` clears `pendingSyncMembers`; the caller
+        // that completes a join phase arms them again with
+        // `arm_pending_sync`.
+        self.clear_sync_expiration();
         self.joined_this_round.clear();
         self.rebalance_from_empty = false;
         self.initial_join = None;
@@ -296,6 +367,144 @@ mod tests {
         g.members.insert("m1".into(), sample_member("m1"));
         g.prepare_rebalance(Duration::from_secs(3), Instant::now());
         check!(g.rebalance_deadline_fired(Duration::from_secs(3), Instant::now()));
+    }
+
+    /// A `CompletingRebalance` group of members `m1` (the leader, 10 s) and
+    /// `m2` (90 s) whose join phase just completed at `now`.
+    fn completed_round(now: Instant) -> ClassicGroup {
+        let mut g = ClassicGroup::new("g");
+        let mut m1 = sample_member("m1");
+        m1.rebalance_timeout = Duration::from_secs(10);
+        let mut m2 = sample_member("m2");
+        m2.rebalance_timeout = Duration::from_secs(90);
+        g.add_member(m1);
+        g.add_member(m2);
+        assert!(g.complete_rebalance("range"));
+        g.arm_pending_sync(now);
+        g
+    }
+
+    /// Kafka's `completeClassicGroupJoin` adds every member to
+    /// `pendingSyncMembers` and `schedulePendingSync` waits the group rebalance
+    /// timeout; each member's own `SyncGroup` removes it, and the timer goes
+    /// when the last one has synced.
+    #[test]
+    fn pending_sync_is_armed_per_generation_and_cleared_as_members_sync() {
+        let now = Instant::now();
+        let mut g = completed_round(now);
+        let both = std::collections::HashSet::from(["m1".to_string(), "m2".to_string()]);
+        check!(g.pending_sync_members == both);
+        check!(g.sync_deadline == Some(now + Duration::from_secs(90)));
+
+        g.remove_pending_sync_member("m1");
+        check!(g.pending_sync_members == std::collections::HashSet::from(["m2".to_string()]));
+        check!(g.sync_deadline.is_some());
+
+        g.remove_pending_sync_member("m2");
+        check!(g.pending_sync_members.is_empty());
+        check!(g.sync_deadline.is_none());
+    }
+
+    /// Kafka's `expirePendingSync`: in `CompletingRebalance` or `Stable` the
+    /// members that still owe a `SyncGroup` are removed, the leader included,
+    /// and the survivors get a new round. In any other state nothing happens.
+    #[test]
+    fn expire_pending_sync_removes_silent_members_and_prepares_a_rebalance() {
+        struct Row {
+            name: &'static str,
+            state: GroupState,
+            /// The members that already sent their `SyncGroup`.
+            synced: &'static [&'static str],
+            removed: &'static [&'static str],
+            state_after: GroupState,
+            members_after: &'static [&'static str],
+        }
+        let delay = Duration::from_secs(3);
+        let rows = [
+            Row {
+                name: "leader silent",
+                state: GroupState::CompletingRebalance,
+                synced: &["m2"],
+                removed: &["m1"],
+                state_after: GroupState::PreparingRebalance,
+                members_after: &["m2"],
+            },
+            Row {
+                name: "follower silent after the leader synced",
+                state: GroupState::Stable,
+                synced: &["m1"],
+                removed: &["m2"],
+                state_after: GroupState::PreparingRebalance,
+                members_after: &["m1"],
+            },
+            Row {
+                name: "everybody silent",
+                state: GroupState::CompletingRebalance,
+                synced: &[],
+                removed: &["m1", "m2"],
+                state_after: GroupState::Empty,
+                members_after: &[],
+            },
+            Row {
+                name: "everybody synced",
+                state: GroupState::Stable,
+                synced: &["m1", "m2"],
+                removed: &[],
+                state_after: GroupState::Stable,
+                members_after: &["m1", "m2"],
+            },
+            Row {
+                name: "a round already open",
+                state: GroupState::PreparingRebalance,
+                synced: &[],
+                removed: &[],
+                state_after: GroupState::PreparingRebalance,
+                members_after: &["m1", "m2"],
+            },
+        ];
+        for Row {
+            name,
+            state,
+            synced,
+            removed,
+            state_after,
+            members_after,
+        } in rows
+        {
+            let now = Instant::now();
+            let mut g = completed_round(now);
+            g.state = state;
+            for member_id in synced {
+                g.remove_pending_sync_member(member_id);
+            }
+
+            let got = g.expire_pending_sync(delay, now);
+
+            let mut members: Vec<&str> = g.members.keys().map(String::as_str).collect();
+            members.sort_unstable();
+            check!(got == removed, "{name}");
+            check!(g.state == state_after, "{name}");
+            check!(members == members_after, "{name}");
+            check!(g.sync_deadline.is_none(), "{name}");
+            check!(g.pending_sync_members.is_empty(), "{name}");
+            if state_after == GroupState::PreparingRebalance && !removed.is_empty() {
+                // The survivors get the whole group rebalance timeout.
+                check!(
+                    g.rebalance_deadline == Some(now + g.rebalance_timeout()),
+                    "{name}"
+                );
+            }
+        }
+    }
+
+    /// Kafka's `prepareRebalance` calls `removeSyncExpiration`.
+    #[test]
+    fn a_new_round_cancels_the_pending_sync() {
+        let now = Instant::now();
+        let mut g = completed_round(now);
+        g.prepare_rebalance(Duration::from_secs(3), now);
+        check!(g.pending_sync_members.is_empty());
+        check!(g.sync_deadline.is_none());
     }
 
     /// #790: Kafka's `maybeElectNewJoinedLeader`.

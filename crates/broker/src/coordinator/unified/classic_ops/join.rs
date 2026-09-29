@@ -427,7 +427,8 @@ pub(crate) enum CompleteError {
 pub(crate) enum Completion {
     /// The group was not in `PreparingRebalance`.
     NotPreparing,
-    /// A new generation started, in `CompletingRebalance`.
+    /// A new generation started, in `CompletingRebalance`, and every member
+    /// owes a `SyncGroup` before the group rebalance timeout runs out.
     Generation {
         /// The dynamic members that had not joined again, now removed.
         removed: Vec<String>,
@@ -496,6 +497,9 @@ pub(crate) fn try_complete(
         member.last_heartbeat = now;
         member.is_new = false;
     }
+    // Kafka's `addPendingSyncMember` and `schedulePendingSync`: every member
+    // owes a `SyncGroup` within the group rebalance timeout.
+    state.arm_pending_sync(now);
     Ok(Completion::Generation { removed })
 }
 
