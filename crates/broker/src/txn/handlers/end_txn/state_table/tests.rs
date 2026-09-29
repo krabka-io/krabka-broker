@@ -253,6 +253,67 @@ fn a_rotated_producer_id_retries_with_the_exhausted_epoch() {
     }
 }
 
+/// A `Prepare*` entry that rotates the producer id: Kafka holds `(old id,
+/// i16::MAX)` with the new id only pending, so a retry that names the old id at
+/// `i16::MAX - 1` is `retryOnEpochBump` and answers `CONCURRENT_TRANSACTIONS`
+/// (or `INVALID_TXN_STATE` for the other result), and any other epoch of the
+/// old id is fenced. Here the new id is staged for the client, and it must not
+/// hide the old one.
+#[test]
+fn a_retry_of_a_rotating_prepare_names_the_old_producer_id() {
+    const NEW_PID: ProducerId = ProducerId(11);
+    const OLD_EPOCH: i16 = i16::MAX - 1;
+    let rotating = |state| {
+        let mut rotating = entry(state);
+        rotating.producer_epoch = i16::MAX;
+        rotating.last_producer_epoch = OLD_EPOCH;
+        rotating.next_producer_id = NEW_PID;
+        rotating.next_producer_epoch = 0;
+        rotating
+    };
+    let concurrent = EndTxnDecision::Refuse(codes::CONCURRENT_TRANSACTIONS);
+    let invalid_state = EndTxnDecision::Refuse(codes::INVALID_TXN_STATE);
+    let fenced = EndTxnDecision::Refuse(codes::PRODUCER_FENCED);
+    let unknown = EndTxnDecision::Refuse(codes::INVALID_PRODUCER_ID_MAPPING);
+    // (state, result, request, decision)
+    let cases = [
+        (TxnState::PrepareCommit, true, (PID, OLD_EPOCH), concurrent),
+        (TxnState::PrepareAbort, false, (PID, OLD_EPOCH), concurrent),
+        (
+            TxnState::PrepareCommit,
+            false,
+            (PID, OLD_EPOCH),
+            invalid_state,
+        ),
+        (
+            TxnState::PrepareAbort,
+            true,
+            (PID, OLD_EPOCH),
+            invalid_state,
+        ),
+        (TxnState::PrepareCommit, true, (PID, OLD_EPOCH - 1), fenced),
+        (TxnState::PrepareCommit, true, (PID, i16::MAX), fenced),
+        (
+            TxnState::PrepareCommit,
+            true,
+            (ProducerId(PID.get() + 1), OLD_EPOCH),
+            unknown,
+        ),
+    ];
+    for (state, committed, request, expected) in cases {
+        assert!(
+            end_txn_decision(&rotating(state), request, committed, (true, false)) == expected,
+            "{state:?} committed={committed} {request:?}"
+        );
+    }
+
+    // A recovery identity holds epoch 1 or more in a `Prepare*` entry, so it is
+    // not a rotation: the identity from before the recovery stays fenced.
+    let mut recovered = rotating(TxnState::PrepareCommit);
+    recovered.next_producer_epoch = 1;
+    assert!(end_txn_decision(&recovered, (PID, OLD_EPOCH), true, (true, false)) == unknown);
+}
+
 /// A KIP-939 recovery stages a new identity on the entry. That identity is the
 /// one the recovered client holds, so it is the one that may end the
 /// transaction, and the identity from before the recovery is fenced.
