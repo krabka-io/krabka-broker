@@ -18,9 +18,12 @@ use std::collections::BTreeSet;
 use krabka_metadata::{MetadataImage, PartitionRecord};
 use krabka_raft::NodeId;
 
-use crate::codes::{
-    ELIGIBLE_LEADERS_NOT_AVAILABLE, INVALID_REPLICA_ASSIGNMENT, INVALID_REPLICATION_FACTOR,
-    INVALID_REQUEST, NO_REASSIGNMENT_IN_PROGRESS, POLICY_VIOLATION, UNKNOWN_TOPIC_OR_PARTITION,
+use crate::{
+    codes::{
+        ELIGIBLE_LEADERS_NOT_AVAILABLE, INVALID_REPLICA_ASSIGNMENT, INVALID_REPLICATION_FACTOR,
+        INVALID_REQUEST, NO_REASSIGNMENT_IN_PROGRESS, POLICY_VIOLATION, UNKNOWN_TOPIC_OR_PARTITION,
+    },
+    reassignment::{CompletedReassignment, maybe_complete_reassignment},
 };
 
 /// Per-row rejection: a Kafka wire error code and a readable message.
@@ -278,40 +281,18 @@ struct PartitionChange {
 }
 
 impl PartitionChange {
-    /// Kafka's `PartitionReassignmentReplicas.maybeCompleteReassignment`:
-    /// complete a reassignment in the same record when every adding replica
-    /// is in the ISR, the ISR keeps a member that is not being removed, and a
-    /// replication factor decrease would not shrink the ISR.
+    /// Complete a reassignment in the same record when
+    /// [`maybe_complete_reassignment`] allows it: the background completion
+    /// task applies the same predicate.
     fn complete_if_ready(self) -> Self {
-        if self.adding.is_empty() && self.removing.is_empty() {
-            return self;
-        }
-        let isr: Vec<NodeId> = self
-            .isr
-            .iter()
-            .filter(|n| !self.removing.contains(n))
-            .copied()
-            .collect();
-        let replicas: Vec<NodeId> = self
-            .replicas
-            .iter()
-            .filter(|n| !self.removing.contains(n))
-            .copied()
-            .collect();
-        if isr.is_empty() || replicas.is_empty() {
-            return self;
-        }
-        if !self.adding.iter().all(|n| isr.contains(n)) {
-            return self;
-        }
-        if self.adding.len() < self.removing.len() && !replicas.iter().all(|n| isr.contains(n)) {
-            return self;
-        }
-        Self {
-            replicas,
-            isr,
-            adding: vec![],
-            removing: vec![],
+        match maybe_complete_reassignment(&self.replicas, &self.isr, &self.adding, &self.removing) {
+            Some(CompletedReassignment { replicas, isr }) => Self {
+                replicas,
+                isr,
+                adding: vec![],
+                removing: vec![],
+            },
+            None => self,
         }
     }
 }

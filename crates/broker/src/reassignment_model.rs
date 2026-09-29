@@ -33,6 +33,8 @@ const MAX_DEPTH: usize = 80;
 const PINNED_UNIQUE_STATES_BASIC: usize = 21;
 const PINNED_UNIQUE_STATES_LEADER_HANDOFF: usize = 42;
 const PINNED_UNIQUE_STATES_WIDE: usize = 310;
+const PINNED_UNIQUE_STATES_RF_DECREASE: usize = 21;
+const PINNED_UNIQUE_STATES_RF_DECREASE_LEADER_REMOVED: usize = 120;
 
 /// Bounded config for the reassignment model. It lives here, not in the state.
 struct ReassignModel {
@@ -90,6 +92,42 @@ impl ReassignModel {
             removing: vec![krabka_audit::NodeId(2)],
             initial_isr: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
             leader: krabka_audit::NodeId(2), // in `removing` → handoff required before completion
+            max_epoch: 10,
+        }
+    }
+
+    /// A replication factor decrease with nothing to add: broker 2, a target
+    /// replica, is not in the ISR, and completing early would shrink the ISR.
+    fn rf_decrease() -> Self {
+        Self {
+            replicas: vec![
+                krabka_audit::NodeId(1),
+                krabka_audit::NodeId(2),
+                krabka_audit::NodeId(3),
+            ],
+            adding: vec![],
+            removing: vec![krabka_audit::NodeId(3)],
+            initial_isr: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(3)],
+            leader: krabka_audit::NodeId(1),
+            max_epoch: 10,
+        }
+    }
+
+    /// `[1,2,3,4] -> [3,4]` with broker 4 added and the leader removed. Kafka
+    /// hands off and completes only once broker 3 has caught up too, even
+    /// though broker 4 alone would already satisfy the additions.
+    fn rf_decrease_leader_removed() -> Self {
+        Self {
+            replicas: vec![
+                krabka_audit::NodeId(1),
+                krabka_audit::NodeId(2),
+                krabka_audit::NodeId(3),
+                krabka_audit::NodeId(4),
+            ],
+            adding: vec![krabka_audit::NodeId(4)],
+            removing: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+            initial_isr: vec![krabka_audit::NodeId(1), krabka_audit::NodeId(2)],
+            leader: krabka_audit::NodeId(1),
             max_epoch: 10,
         }
     }
@@ -163,6 +201,17 @@ fn assert_step(pre: &ReassignState, next: &PartitionRecord) {
         pre.isr
     );
     let target = target_of(pre);
+    // Kafka's `maybeCompleteReassignment`: a replication factor decrease waits
+    // until every target replica is in the ISR, so neither the completion nor
+    // the handoff that precedes it ever shrinks the ISR.
+    if pre.adding.len() < pre.removing.len() {
+        assert2::assert!(
+            target.iter().all(|n| pre.isr.contains(n)),
+            "replication factor decrease advanced with target replicas outside the ISR: \
+             target={target:?} isr={:?}",
+            pre.isr
+        );
+    }
     if next.leader != pre.leader {
         // Handoff.
         assert2::assert!(
@@ -339,7 +388,7 @@ impl Model for ReassignModel {
                 !m.removing.contains(&m.leader) || s.leader != m.leader
             }),
             Property::sometimes("can_wait", |_, s: &ReassignState| {
-                in_flight(s) && s.adding.iter().any(|n| !s.isr.contains(n))
+                in_flight(s) && target_of(s).iter().any(|n| !s.isr.contains(n))
             }),
         ]
     }
@@ -395,6 +444,28 @@ fn reassign_leader_handoff() {
         ReassignModel::leader_handoff(),
         "reassign_leader_handoff",
         PINNED_UNIQUE_STATES_LEADER_HANDOFF,
+    );
+}
+
+#[test]
+fn reassign_rf_decrease() {
+    // Nothing added, one replica removed: complete only once every target
+    // replica is in the ISR.
+    run(
+        ReassignModel::rf_decrease(),
+        "reassign_rf_decrease",
+        PINNED_UNIQUE_STATES_RF_DECREASE,
+    );
+}
+
+#[test]
+fn reassign_rf_decrease_leader_removed() {
+    // Two removed, one added, leader removed: the handoff also waits for every
+    // target replica.
+    run(
+        ReassignModel::rf_decrease_leader_removed(),
+        "reassign_rf_decrease_leader_removed",
+        PINNED_UNIQUE_STATES_RF_DECREASE_LEADER_REMOVED,
     );
 }
 

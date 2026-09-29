@@ -41,9 +41,58 @@ pub(crate) fn remap_directories(
         .collect()
 }
 
+/// The replicas and ISR a reassignment completes to.
+pub(crate) struct CompletedReassignment {
+    pub(crate) replicas: Vec<NodeId>,
+    pub(crate) isr: Vec<NodeId>,
+}
+
+/// Kafka's `PartitionReassignmentReplicas.maybeCompleteReassignment`: the
+/// replicas and ISR a reassignment completes to, or `None` while it must wait.
+///
+/// It waits when the ISR would keep no member outside `removing`, when no
+/// replica would remain, and until every adding replica is in the ISR, as new
+/// brokers may be unhealthy. It also waits when the replication factor
+/// shrinks (`adding` is smaller than `removing`) until every target replica
+/// is in the ISR: completing earlier would shrink the ISR needlessly, so that
+/// `[0,1,2,3,4] -> [2,3,4,5]` with only 0, 1 and 5 in sync would leave an ISR
+/// of `[5]`.
+pub(crate) fn maybe_complete_reassignment(
+    replicas: &[NodeId],
+    isr: &[NodeId],
+    adding: &[NodeId],
+    removing: &[NodeId],
+) -> Option<CompletedReassignment> {
+    if adding.is_empty() && removing.is_empty() {
+        return None;
+    }
+    let keep = |nodes: &[NodeId]| -> Vec<NodeId> {
+        nodes
+            .iter()
+            .filter(|n| !removing.contains(n))
+            .copied()
+            .collect()
+    };
+    let (replicas, isr) = (keep(replicas), keep(isr));
+    if isr.is_empty() || replicas.is_empty() {
+        return None;
+    }
+    if !adding.iter().all(|n| isr.contains(n)) {
+        return None;
+    }
+    if adding.len() < removing.len() && !replicas.iter().all(|n| isr.contains(n)) {
+        return None;
+    }
+    Some(CompletedReassignment { replicas, isr })
+}
+
 /// The pure per-partition reassignment decision. From a partition's current
 /// record and the alive set, it returns the next `PartitionRecord`, which is
 /// either a leader handoff or a completion. It returns `None` to wait.
+///
+/// Neither step runs before [`maybe_complete_reassignment`] holds, as in
+/// Kafka, where the same change that elects the new leader completes the
+/// reassignment.
 ///
 /// The function does no I/O. It is separate from
 /// `compute_reassignment_progress` so that a unit test and a model checker can
@@ -62,8 +111,14 @@ pub(crate) fn reassign_one(
         .iter()
         .map(|n| pr.isr.contains(n) && alive.contains(n))
         .collect();
+    let completed = maybe_complete_reassignment(
+        &pr.replicas,
+        &pr.isr,
+        &pr.adding_replicas,
+        &pr.removing_replicas,
+    );
     let action = reassignment_action(
-        pr.adding_replicas.iter().all(|n| pr.isr.contains(n)),
+        completed.is_some(),
         pr.removing_replicas.contains(&pr.leader),
         &eligible_handoffs,
     );
@@ -89,12 +144,10 @@ pub(crate) fn reassign_one(
         return None;
     }
     // Completion phase: switch to the target replica set.
-    let new_isr: Vec<NodeId> = pr
-        .isr
-        .iter()
-        .filter(|n| target.contains(n))
-        .copied()
-        .collect();
+    let CompletedReassignment {
+        replicas: target,
+        isr: new_isr,
+    } = completed?;
     let new_directories = remap_directories(&pr.replicas, &pr.directories, &target);
     let partition_epoch = crate::metadata_epoch::next_i32(pr.partition_epoch)?;
     Some(PartitionRecord {
@@ -191,6 +244,212 @@ mod tests {
         assert!(new == vec![da, uuid::Uuid::nil()]);
     }
 
+    /// One row per branch of Kafka's `maybeCompleteReassignment`. The
+    /// replicas are the union a reassignment in flight carries: the target
+    /// followed by the removing replicas.
+    #[test]
+    fn maybe_complete_reassignment_follows_kafka() {
+        struct Case {
+            name: &'static str,
+            replicas: &'static [u64],
+            isr: &'static [u64],
+            adding: &'static [u64],
+            removing: &'static [u64],
+            /// The replicas and ISR the reassignment completes to.
+            expected: Option<(&'static [u64], &'static [u64])>,
+        }
+        let case = |name, replicas, isr, adding, removing, expected| Case {
+            name,
+            replicas,
+            isr,
+            adding,
+            removing,
+            expected,
+        };
+        let cases = [
+            case("no reassignment", &[1, 2, 3], &[1, 2, 3], &[], &[], None),
+            case(
+                "the additions are in the ISR",
+                &[1, 2, 3],
+                &[1, 2, 3],
+                &[3],
+                &[2],
+                Some((&[1, 3], &[1, 3])),
+            ),
+            case(
+                "an addition is not in the ISR",
+                &[1, 2, 3],
+                &[1, 2],
+                &[3],
+                &[2],
+                None,
+            ),
+            case(
+                "the ISR would keep no member",
+                &[1, 2, 3],
+                &[3],
+                &[],
+                &[3],
+                None,
+            ),
+            case(
+                "a decrease with a target replica outside the ISR",
+                &[1, 2, 3],
+                &[1, 3],
+                &[],
+                &[3],
+                None,
+            ),
+            case(
+                "a decrease with every target replica in the ISR",
+                &[1, 2, 3],
+                &[1, 2, 3],
+                &[],
+                &[3],
+                Some((&[1, 2], &[1, 2])),
+            ),
+            case(
+                // [0,1,2,3,4] -> [2,3,4,5] with only 0, 1 and 5 in sync would
+                // complete to an ISR of [5].
+                "Kafka's example of a decrease that would shrink the ISR",
+                &[2, 3, 4, 5, 0, 1],
+                &[0, 1, 5],
+                &[5],
+                &[0, 1],
+                None,
+            ),
+            case(
+                "the same factor does not wait for the rest of the target",
+                &[2, 3, 4, 1],
+                &[1, 2, 3],
+                &[3],
+                &[1],
+                Some((&[2, 3, 4], &[2, 3])),
+            ),
+            case(
+                "an increase does not wait for the rest of the target",
+                &[1, 2, 3, 4],
+                &[1, 2, 3],
+                &[3],
+                &[],
+                Some((&[1, 2, 3, 4], &[1, 2, 3])),
+            ),
+        ];
+        for Case {
+            name,
+            replicas,
+            isr,
+            adding,
+            removing,
+            expected,
+        } in cases
+        {
+            let ids = |nodes: &[u64]| nodes.iter().copied().map(NodeId).collect::<Vec<_>>();
+            let got = maybe_complete_reassignment(
+                &ids(replicas),
+                &ids(isr),
+                &ids(adding),
+                &ids(removing),
+            )
+            .map(|done| (done.replicas, done.isr));
+            let expected = expected.map(|(replicas, isr)| (ids(replicas), ids(isr)));
+            assert!(got == expected, "{name}");
+        }
+    }
+
+    /// A replication factor decrease completes only once every target replica
+    /// is in the ISR, as in Kafka, where the change that completes it is the
+    /// change that elects the new leader.
+    #[tokio::test]
+    async fn a_replication_factor_decrease_waits_for_the_target_replicas() {
+        // Every case is one tick over an image with all brokers alive.
+        struct Case {
+            name: &'static str,
+            replicas: &'static [u64],
+            isr: &'static [u64],
+            adding: &'static [u64],
+            removing: &'static [u64],
+            leader: u64,
+            /// The leader and ISR of the record the tick submits, if any.
+            expected: Option<(u64, &'static [u64])>,
+        }
+        let case = |name, replicas, isr, adding, removing, leader, expected| Case {
+            name,
+            replicas,
+            isr,
+            adding,
+            removing,
+            leader,
+            expected,
+        };
+        let cases = [
+            case(
+                "broker 2 is a target replica outside the ISR",
+                &[1, 2, 3],
+                &[1, 3],
+                &[],
+                &[3],
+                1,
+                None,
+            ),
+            case(
+                "every target replica is in the ISR",
+                &[1, 2, 3],
+                &[1, 2, 3],
+                &[],
+                &[3],
+                1,
+                Some((1, &[1, 2])),
+            ),
+            case(
+                "the leader is removed and broker 3 is not in the ISR",
+                &[3, 4, 1, 2],
+                &[1, 2, 4],
+                &[4],
+                &[1, 2],
+                1,
+                None,
+            ),
+            case(
+                "the leader is removed and every target replica is in the ISR",
+                &[3, 4, 1, 2],
+                &[1, 3, 4],
+                &[4],
+                &[1, 2],
+                1,
+                // The handoff goes first; completion follows on the next tick.
+                Some((3, &[1, 3, 4])),
+            ),
+        ];
+        for Case {
+            name: case,
+            replicas,
+            isr,
+            adding,
+            removing,
+            leader,
+            expected,
+        } in cases
+        {
+            let image = img(replicas, isr, adding, removing, leader);
+            let l = liveness(&[1, 2, 3, 4]).await;
+
+            let updates = compute_reassignment_progress(&image, &l).await;
+
+            let got = match updates.as_slice() {
+                [] => None,
+                [update] => {
+                    let pr = first_partition(update);
+                    let isr: Vec<u64> = pr.isr.iter().map(|n| n.0).collect();
+                    Some((pr.leader.0, isr))
+                }
+                more => panic!("{case}: {more:?}"),
+            };
+            let expected = expected.map(|(leader, isr)| (leader, isr.to_vec()));
+            assert!(got == expected, "{case}: {updates:?}");
+        }
+    }
+
     #[tokio::test]
     async fn completion_preserves_directory_slot_alignment() {
         // replicas=[1,2,3], adding=[3], removing=[2], all in ISR.
@@ -233,15 +492,19 @@ mod tests {
     /// has would stay in the ELR `DescribeTopicPartitions` reports.
     #[tokio::test]
     async fn a_completion_republishes_the_eligible_leader_state() {
-        for (label, isr, published, want) in [
+        for (label, isr, adding, published, want) in [
             (
                 "a completion that reaches min ISR tombstones the key",
                 &[1u64, 2u64][..],
+                &[][..],
                 "0:3:",
                 None,
             ),
             (
+                // Broker 1 replaces broker 3, so the replication factor holds
+                // and the completion does not wait for broker 2.
                 "a dropped replica leaves the ELR for the last-known set",
+                &[1u64][..],
                 &[1u64][..],
                 "0:3:",
                 Some("0::3"),
@@ -249,7 +512,7 @@ mod tests {
         ] {
             // replicas=[1,2,3], removing=[3]: the completion drops broker 3
             // from the replica set, and the published ELR still names it.
-            let mut image = std::sync::Arc::try_unwrap(img(&[1, 2, 3], isr, &[], &[3], 1))
+            let mut image = std::sync::Arc::try_unwrap(img(&[1, 2, 3], isr, adding, &[3], 1))
                 .expect("the fixture holds the only reference");
             crate::test_support::finalize_elr_version(&mut image);
             image.apply(&MetadataRecord::V1TopicConfig(
