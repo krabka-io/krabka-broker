@@ -24,6 +24,24 @@ use crate::{
     },
 };
 
+/// A metadata image that holds each group config in `overrides`: a group id
+/// and its `share.*` entries.
+fn group_image(overrides: &[(&str, &[(&str, &str)])]) -> krabka_metadata::MetadataImage {
+    let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+    for (group_id, entries) in overrides {
+        image.apply(&krabka_metadata::MetadataRecord::V1GroupConfig(
+            krabka_metadata::GroupConfigRecord {
+                group_id: (*group_id).to_owned(),
+                configs: entries
+                    .iter()
+                    .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                    .collect(),
+            },
+        ));
+    }
+    image
+}
+
 /// A coordinator over topic `t` with four partitions, whose metadata image
 /// holds each group config in `overrides`: a group id and its `share.*`
 /// entries. It returns the id of `t`.
@@ -42,20 +60,41 @@ fn coordinator(
         Arc::new(InMemoryOffsetsLog::default()),
         StreamsGroupConfig::default(),
     ));
-    let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
-    for (group_id, entries) in overrides {
-        image.apply(&krabka_metadata::MetadataRecord::V1GroupConfig(
-            krabka_metadata::GroupConfigRecord {
-                group_id: (*group_id).to_owned(),
-                configs: entries
-                    .iter()
-                    .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-                    .collect(),
-            },
-        ));
-    }
-    coordinator.set_metadata_source(fixed_source(image));
+    coordinator.set_metadata_source(fixed_source(group_image(overrides)));
     (coordinator, topic_id)
+}
+
+/// A heartbeat is handled with the settings of the group config when it
+/// arrives, not with those the actor read before it began to wait for it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_heartbeat_runs_with_the_group_config_of_the_moment_it_arrives() {
+    let (metadata, _) = metadata_with_topic("t", 4);
+    let coordinator = Arc::new(GroupCoordinator::new(
+        NextGenConfig::assigning_at_once(),
+        ShareGroupConfig::assigning_at_once(),
+        metadata,
+        Arc::new(InMemoryOffsetsLog::default()),
+        StreamsGroupConfig::default(),
+    ));
+    let source = Arc::new(crate::test_support::FakeMetadataSource::builder().build());
+    coordinator.set_metadata_source(source.clone());
+    let handle = coordinator.get_or_create_share("g");
+    let joined = join(&handle, "m1", 0).await;
+    check!(joined.heartbeat_interval_ms == 5000);
+
+    // The override lands while the actor waits for its next message.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    source.set_image(group_image(&[(
+        "g",
+        &[("share.heartbeat.interval.ms", "7000")],
+    )]));
+
+    assert!(
+        join(&handle, "m1", joined.member_epoch)
+            .await
+            .heartbeat_interval_ms
+            == 7000
+    );
 }
 
 async fn join(
@@ -98,8 +137,14 @@ async fn a_group_reports_its_own_heartbeat_interval() {
 /// broker's 45 s.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_group_expires_a_member_by_its_own_session_timeout() {
+    // The broker's bounds admit the 1 ms and the 10 ms that the group asks for,
+    // which the group's own overrides are capped to.
     let (coordinator, _) = coordinator(
-        ShareGroupConfig::assigning_at_once(),
+        ShareGroupConfig {
+            min_session_timeout: Duration::from_millis(1),
+            min_heartbeat_interval: Duration::from_millis(10),
+            ..ShareGroupConfig::assigning_at_once()
+        },
         &[(
             "brief",
             &[

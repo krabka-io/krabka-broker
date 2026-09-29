@@ -1,7 +1,17 @@
 //! KIP-1071 Streams rebalance-protocol configuration.
 use std::{collections::BTreeMap, time::Duration};
 
-use crate::api_catalog::UnstableApiVersions;
+use crate::{
+    api_catalog::UnstableApiVersions,
+    coordinator::unified::config::{
+        MAX_ASSIGNMENT_INTERVAL, MIN_ASSIGNMENT_INTERVAL, clamp_to_range,
+    },
+};
+
+/// Kafka's `group.streams.max.standby.replicas` default, which krabka does not
+/// make configurable: the most standby replicas a group's
+/// `streams.num.standby.replicas` can ask for.
+const MAX_NUM_STANDBY_REPLICAS: i32 = 2;
 
 pub const KEY_SESSION_TIMEOUT_MS: &str = "streams.session.timeout.ms";
 pub const KEY_HEARTBEAT_INTERVAL_MS: &str = "streams.heartbeat.interval.ms";
@@ -361,9 +371,17 @@ impl StreamsGroupConfig {
     /// coordinators' among them, and reading one must not cost the group its
     /// streams overrides.
     ///
+    /// A value outside the broker's bounds is capped to them, as Kafka's
+    /// `GroupConfig.evaluate` caps a stored group config: the session
+    /// timeout, the heartbeat interval and the assignment interval to their
+    /// minimum and maximum, and the standby replicas to
+    /// `group.streams.max.standby.replicas`. The config RPCs refuse such a
+    /// value when they store it, so it is stored only when the broker's
+    /// bounds moved since, and the group must still run within them.
+    ///
     /// # Errors
     /// Returns a message suitable for `INVALID_CONFIG` when a value cannot be
-    /// parsed, or a timeout falls outside broker bounds.
+    /// parsed.
     pub fn with_group_overrides(
         &self,
         overrides: &BTreeMap<String, String>,
@@ -372,10 +390,20 @@ impl StreamsGroupConfig {
         for (key, value) in overrides {
             match key.as_str() {
                 KEY_SESSION_TIMEOUT_MS => {
-                    out.session_timeout = parse_positive_millis(key, value)?;
+                    out.session_timeout = parse_clamped_millis(
+                        key,
+                        value,
+                        self.min_session_timeout,
+                        self.max_session_timeout,
+                    )?;
                 }
                 KEY_HEARTBEAT_INTERVAL_MS => {
-                    out.heartbeat_interval = parse_positive_millis(key, value)?;
+                    out.heartbeat_interval = parse_clamped_millis(
+                        key,
+                        value,
+                        self.min_heartbeat_interval,
+                        self.max_heartbeat_interval,
+                    )?;
                 }
                 KEY_ACCEPTABLE_RECOVERY_LAG => {
                     out.acceptable_recovery_lag = parse_nonnegative(key, value)?;
@@ -384,7 +412,8 @@ impl StreamsGroupConfig {
                     out.num_warmup_replicas = parse_nonnegative(key, value)?;
                 }
                 KEY_NUM_STANDBY_REPLICAS => {
-                    out.num_standby_replicas = parse_nonnegative(key, value)?;
+                    out.num_standby_replicas =
+                        parse_nonnegative::<i32>(key, value)?.min(MAX_NUM_STANDBY_REPLICAS);
                 }
                 KEY_TASK_OFFSET_INTERVAL_MS => {
                     out.task_offset_interval = parse_positive_millis(key, value)?;
@@ -401,27 +430,15 @@ impl StreamsGroupConfig {
                         Duration::from_millis(parse_nonnegative::<u64>(key, value)?);
                 }
                 KEY_ASSIGNMENT_INTERVAL_MS => {
-                    out.assignment_interval =
-                        Duration::from_millis(parse_nonnegative::<u64>(key, value)?);
+                    out.assignment_interval = parse_clamped_millis(
+                        key,
+                        value,
+                        MIN_ASSIGNMENT_INTERVAL,
+                        MAX_ASSIGNMENT_INTERVAL,
+                    )?;
                 }
                 _ => {}
             }
-        }
-        if !(out.min_session_timeout..=out.max_session_timeout).contains(&out.session_timeout) {
-            return Err(format!(
-                "{KEY_SESSION_TIMEOUT_MS} must be between {} and {} ms",
-                out.min_session_timeout.as_millis(),
-                out.max_session_timeout.as_millis()
-            ));
-        }
-        if !(out.min_heartbeat_interval..=out.max_heartbeat_interval)
-            .contains(&out.heartbeat_interval)
-        {
-            return Err(format!(
-                "{KEY_HEARTBEAT_INTERVAL_MS} must be between {} and {} ms",
-                out.min_heartbeat_interval.as_millis(),
-                out.max_heartbeat_interval.as_millis()
-            ));
         }
         Ok(out)
     }
@@ -517,6 +534,25 @@ fn duplicate_tag_message(key: &str) -> String {
 /// `ValidList`'s message for an empty entry.
 fn empty_tag_message(key: &str) -> String {
     format!("Configuration '{key}' values must not be empty.")
+}
+
+/// The value of an `INT` millisecond key, capped to `min..=max` as Kafka's
+/// `GroupConfig.clampToRange` caps it. A negative value is below every bound.
+fn parse_clamped_millis(
+    key: &str,
+    value: &str,
+    min: Duration,
+    max: Duration,
+) -> Result<Duration, String> {
+    let millis = value
+        .trim()
+        .parse::<i32>()
+        .map_err(|_| format!("{key} must be an integer"))?;
+    Ok(clamp_to_range(
+        Duration::from_millis(u64::try_from(millis).unwrap_or(0)),
+        min,
+        max,
+    ))
 }
 
 fn parse_positive_millis(key: &str, value: &str) -> Result<Duration, String> {
@@ -731,12 +767,88 @@ mod tests {
         assert!(ShareAutoOffsetReset::from_group_overrides(&bogus) == ShareAutoOffsetReset::Latest);
     }
 
+    /// Kafka's `GroupConfig.evaluate` caps a stored group config to the
+    /// broker's bounds, and keeps every other override of the group. A
+    /// heartbeat interval of 0, which the actor's ticker cannot run, is capped
+    /// to the minimum like any other value below it.
     #[test]
-    fn group_overrides_reject_out_of_bounds_values() {
-        let too_short = maplit::btreemap! {KEY_SESSION_TIMEOUT_MS.into() => "1000".into()};
+    fn group_overrides_are_capped_to_the_broker_bounds() {
+        let broker = StreamsGroupConfig::default();
+        let rows = [
+            (
+                KEY_SESSION_TIMEOUT_MS,
+                "1000",
+                StreamsGroupConfig {
+                    session_timeout: broker.min_session_timeout,
+                    ..broker.clone()
+                },
+            ),
+            (
+                KEY_SESSION_TIMEOUT_MS,
+                "3600000",
+                StreamsGroupConfig {
+                    session_timeout: broker.max_session_timeout,
+                    ..broker.clone()
+                },
+            ),
+            (
+                KEY_HEARTBEAT_INTERVAL_MS,
+                "0",
+                StreamsGroupConfig {
+                    heartbeat_interval: broker.min_heartbeat_interval,
+                    ..broker.clone()
+                },
+            ),
+            (
+                KEY_HEARTBEAT_INTERVAL_MS,
+                "-1",
+                StreamsGroupConfig {
+                    heartbeat_interval: broker.min_heartbeat_interval,
+                    ..broker.clone()
+                },
+            ),
+            (
+                KEY_HEARTBEAT_INTERVAL_MS,
+                "60000",
+                StreamsGroupConfig {
+                    heartbeat_interval: broker.max_heartbeat_interval,
+                    ..broker.clone()
+                },
+            ),
+            (
+                KEY_ASSIGNMENT_INTERVAL_MS,
+                "3600000",
+                StreamsGroupConfig {
+                    assignment_interval: MAX_ASSIGNMENT_INTERVAL,
+                    ..broker.clone()
+                },
+            ),
+            (
+                KEY_NUM_STANDBY_REPLICAS,
+                "5",
+                StreamsGroupConfig {
+                    num_standby_replicas: MAX_NUM_STANDBY_REPLICAS,
+                    ..broker.clone()
+                },
+            ),
+        ];
+        for (key, value, expected) in rows {
+            let overrides = maplit::btreemap! {key.into() => value.into()};
+            assert!(
+                broker.with_group_overrides(&overrides) == Ok(expected),
+                "{key}={value}"
+            );
+        }
+    }
+
+    /// A stored value that is not a whole number of milliseconds is still
+    /// refused, where a bound only caps.
+    #[test]
+    fn group_overrides_refuse_a_value_that_does_not_parse() {
+        let overrides = maplit::btreemap! {KEY_SESSION_TIMEOUT_MS.into() => "soon".into()};
         assert!(
             StreamsGroupConfig::default()
-                .with_group_overrides(&too_short)
+                .with_group_overrides(&overrides)
                 .is_err()
         );
     }

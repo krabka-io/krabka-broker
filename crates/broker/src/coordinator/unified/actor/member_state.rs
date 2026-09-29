@@ -33,15 +33,33 @@ use crate::coordinator::unified::{
 /// list only when its assignment changed, so `None` means "unchanged", and the
 /// reconciler reads it as Kafka does: the member still owns everything it
 /// holds.
+///
+/// A request may list a topic more than once. Kafka's
+/// `ownsRevokedPartitions` reads every entry, so the partitions of the entries
+/// of one topic add up.
 pub(super) fn reported_owned(
     req: &ConsumerGroupHeartbeatRequest,
 ) -> Option<HashMap<Uuid, Vec<i32>>> {
     req.topic_partitions.as_ref().map(|tp| {
-        tp.iter()
-            .map(|t| (t.topic_id, t.partitions.clone()))
-            .collect()
+        let mut owned: HashMap<Uuid, Vec<i32>> = HashMap::new();
+        for topic in tp {
+            owned
+                .entry(topic.topic_id)
+                .or_default()
+                .extend(&topic.partitions);
+        }
+        owned
     })
 }
+
+/// The longest regular expression the coordinator can store, in UTF-8 bytes.
+///
+/// The group keeps the topics a pattern resolved to under a
+/// `ConsumerGroupRegularExpressionKey`, whose `RegularExpression` is a
+/// non-flexible string with an `i16` length prefix. Kafka's generated
+/// serializer throws for a longer one ("field is too long to be serialized"),
+/// so its regex resolution write fails and the pattern never resolves.
+const MAX_REGEX_BYTES: usize = i16::MAX as usize;
 
 /// Rejects a heartbeat whose `SubscribedTopicRegex` does not compile, with the
 /// message Kafka builds in
@@ -52,11 +70,24 @@ pub(super) fn reported_owned(
 /// 128) before it writes any member record, so the heartbeat that carries the
 /// bad pattern fails and the member is not admitted.
 ///
+/// A pattern longer than [`MAX_REGEX_BYTES`] is refused the same way. Kafka
+/// admits such a member and then cannot persist the resolution of the pattern,
+/// so the member would never receive a topic from it. Here the resolution is
+/// written with the heartbeat, and a key that cannot be encoded must not reach
+/// the log writer, so the heartbeat fails before it changes any state.
+///
 /// The pattern is compiled by [`crate::re2j`], which documents where its
 /// dialect and RE2J's differ. The pattern is only ever matched against Kafka
 /// topic names, whose legal alphabet is `[a-zA-Z0-9._-]`, so the ASCII and
 /// Unicode readings of `\d`, `\w`, `\s` and `\b` cannot differ here.
 pub(super) fn check_subscribed_topic_regex(pattern: &str) -> Result<(), String> {
+    if pattern.len() > MAX_REGEX_BYTES {
+        return Err(format!(
+            "SubscribedTopicRegex is {} bytes long, and the longest regular expression the \
+             group coordinator stores is {MAX_REGEX_BYTES} bytes.",
+            pattern.len()
+        ));
+    }
     crate::re2j::check(pattern).map_err(|detail| {
         format!("SubscribedTopicRegex `{pattern}` is not a valid regular expression: {detail}.")
     })
@@ -174,18 +205,24 @@ pub(super) fn update_member_state(
         state.dirty = true;
     }
     refresh_expired_metadata(state, metadata);
-    let was_dirty = state.dirty;
-    run_reconcile(state, config, metadata);
+    // A new target makes the log write the group epoch and the target records.
+    // A group that waits for its assignment interval stays dirty with nothing
+    // new to write, so its heartbeats write only what they change.
+    let target_recomputed = run_reconcile(state, config, metadata);
     // Kafka's `maybeReconcile`: reconcile this member's current assignment
     // against the (possibly new) target and what it reports owning, in this
     // heartbeat only. A heartbeat without `topic_partitions` reports no change,
     // so the member still owns what it holds.
     let owned = reported_owned(req);
-    let assignment_changed =
-        state.reconcile_member(&req.member_id, owned.as_ref(), subscription_changed);
+    let assignment_changed = state.reconcile_member(
+        &req.member_id,
+        owned.as_ref(),
+        subscription_changed,
+        metadata,
+    );
     Ok(MemberUpdate {
         changed: member_metadata_changed
-            || was_dirty
+            || target_recomputed
             || assignment_changed
             || !regex_records.is_empty(),
         regex_records,
@@ -206,30 +243,35 @@ pub(super) fn refresh_expired_metadata(state: &mut GroupState, metadata: &dyn Me
     reconciler::refresh_metadata(state, &metadata.snapshot());
 }
 
+/// Recomputes the target of a dirty group, and returns `true` when it did. A
+/// group that waits for its assignment interval keeps its target and stays
+/// dirty, so a later heartbeat computes it.
 pub(super) fn run_reconcile(
     state: &mut GroupState,
     config: &NextGenConfig,
     metadata: &dyn MetadataProvider,
-) {
+) -> bool {
     // `metadata.snapshot()` rebuilds HashMaps over every cluster topic /
     // partition — far too expensive to run on a steady-state no-op
     // heartbeat. `reconcile_if_dirty` early-returns when `!dirty`, so gate
     // the snapshot on the same condition: only pay for it when we will
     // actually recompute. Behavior when dirty is identical to before.
     if !state.dirty {
-        return;
+        return false;
     }
     // Kafka's `maybeUpdateTargetAssignment`: the target assignment waits for
-    // the group's assignment interval. The group stays dirty, so a later
-    // heartbeat computes it.
+    // the group's assignment interval.
     if state.assignment_delayed(config.assignment_interval, Instant::now()) {
-        return;
+        return false;
     }
     let input = metadata.snapshot();
     let assignor = pick_assignor(state, config);
-    if reconciler::reconcile_if_dirty(state, &input, &*assignor) == ReconcileOutcome::Recomputed {
+    let recomputed =
+        reconciler::reconcile_if_dirty(state, &input, &*assignor) == ReconcileOutcome::Recomputed;
+    if recomputed {
         state.record_assignment(Instant::now());
     }
+    recomputed
 }
 
 /// Kafka's `maybeUpdateTargetAssignment`: the group runs the assignor that the
@@ -398,6 +440,157 @@ mod tests {
         check!(step.pending.target_metadata.is_some());
         check!(target_ids == vec!["m1", "m2"]);
         assert!(current_ids == vec!["m1", "m2"]);
+    }
+
+    /// A heartbeat may list a topic twice. The partitions of its entries add
+    /// up, so a member that reports a partition it must revoke in any entry
+    /// still owns it, and a later entry of the same topic does not hide it.
+    #[test]
+    fn a_topic_listed_twice_reports_the_partitions_of_both_entries() {
+        use krabka_protocol::owned::consumer_group_heartbeat_request::TopicPartitions;
+
+        let topic = Uuid([1; 16]);
+        let other = Uuid([2; 16]);
+        let entry = |topic_id, partitions: &[i32]| TopicPartitions {
+            topic_id,
+            partitions: partitions.to_vec(),
+            ..Default::default()
+        };
+        let report = |entries| ConsumerGroupHeartbeatRequest {
+            topic_partitions: entries,
+            ..Default::default()
+        };
+        check!(reported_owned(&report(None)).is_none());
+        check!(
+            reported_owned(&report(Some(vec![
+                entry(topic, &[2]),
+                entry(other, &[1]),
+                entry(topic, &[0]),
+            ]))) == Some(HashMap::from([(topic, vec![2, 0]), (other, vec![1])]))
+        );
+
+        // A member at epoch 5 that must still revoke partition 2 stays there
+        // when it reports the partition in the first of two entries.
+        let config = NextGenConfig::assigning_at_once();
+        let metadata = StaticMetadata {
+            input: ReconcileInput {
+                topic_id_by_name: [("t".into(), topic)].into(),
+                partitions_per_topic: [(topic, 3)].into(),
+                ..Default::default()
+            },
+        };
+        let client = ClientIdentity {
+            id: "client",
+            host: "host",
+        };
+        let mut state = GroupState::new("g");
+        let mut member = build_member(
+            "m1",
+            &ConsumerGroupHeartbeatRequest {
+                subscribed_topic_names: Some(vec!["t".into()]),
+                rebalance_timeout_ms: 60_000,
+                ..Default::default()
+            },
+            client,
+            Instant::now(),
+        );
+        member.member_epoch = 5;
+        member.previous_member_epoch = 4;
+        member.assignment_state = MemberAssignmentState::UnrevokedPartitions;
+        member.assigned_partitions = [(topic, vec![0])].into();
+        member.partitions_pending_revocation = [(topic, vec![2])].into();
+        state.add_or_update_member(member);
+        state.group_epoch = 6;
+        state.dirty = false;
+        state.install_target([("m1".to_owned(), [(topic, vec![0])].into())].into());
+
+        let step = step_heartbeat(
+            &mut state,
+            &config,
+            &metadata,
+            &ConsumerGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: "m1".into(),
+                member_epoch: 5,
+                topic_partitions: Some(vec![entry(topic, &[2]), entry(topic, &[0])]),
+                ..Default::default()
+            },
+            client,
+            Instant::now(),
+            &RegexResolution::none(),
+        );
+
+        check!(step.response.error_code == 0);
+        let member = &state.members["m1"];
+        check!(member.member_epoch == 5);
+        check!(member.assignment_state == MemberAssignmentState::UnrevokedPartitions);
+        check!(member.partitions_pending_revocation == HashMap::from([(topic, vec![2])]));
+    }
+
+    /// A group that waits for its assignment interval stays dirty, because the
+    /// target that a member joined for is not computed yet. Its heartbeats that
+    /// change nothing write nothing, and a member that changes its
+    /// subscription writes only its own member record, until the heartbeat that
+    /// computes the target writes the group and target records.
+    #[test]
+    fn heartbeats_inside_the_assignment_interval_write_only_what_they_change() {
+        let config = NextGenConfig {
+            assignment_interval: Duration::from_mins(1),
+            ..NextGenConfig::default()
+        };
+        let metadata = orders_metadata();
+        let client = ClientIdentity {
+            id: "client",
+            host: "host",
+        };
+        let request =
+            |member_id: &str, member_epoch: i32, names: &[&str]| ConsumerGroupHeartbeatRequest {
+                group_id: "g".into(),
+                member_id: member_id.into(),
+                member_epoch,
+                subscribed_topic_names: Some(names.iter().map(|name| (*name).into()).collect()),
+                rebalance_timeout_ms: 60_000,
+                topic_partitions: Some(vec![]),
+                ..Default::default()
+            };
+        let mut state = GroupState::new("g");
+        let mut heartbeat = |member_id: &str, names: &[&str]| {
+            let epoch = state.members.get(member_id).map_or(0, |m| m.member_epoch);
+            step_heartbeat(
+                &mut state,
+                &config,
+                &metadata,
+                &request(member_id, epoch, names),
+                client,
+                Instant::now(),
+                &RegexResolution::none(),
+            )
+        };
+
+        // The first member computes the first target. The second joins inside
+        // the interval, and the group waits to compute for it.
+        check!(
+            heartbeat("m1", &["orders-eu"])
+                .pending
+                .group_metadata
+                .is_some()
+        );
+        heartbeat("m2", &["orders-eu"]);
+
+        let unchanged = heartbeat("m1", &["orders-eu"]);
+        check!(unchanged.response.error_code == 0);
+        check!(unchanged.pending.is_empty());
+        let resubscribed = heartbeat("m1", &["orders-eu", "other"]);
+        check!(resubscribed.response.error_code == 0);
+        check!(resubscribed.pending.target_metadata.is_none());
+        check!(resubscribed.pending.target_per_member.is_empty());
+        let written: Vec<&str> = resubscribed
+            .pending
+            .member_metadata
+            .iter()
+            .map(|(member_id, _)| member_id.as_str())
+            .collect();
+        check!(written == vec!["m1"]);
     }
 
     /// A group holding one member subscribed by regex, already reconciled and

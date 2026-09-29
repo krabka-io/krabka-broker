@@ -57,6 +57,13 @@ impl MetadataProvider for ImageMetadataProvider {
             partition_racks,
         }
     }
+
+    fn topic_name(&self, topic_id: &krabka_protocol::primitives::uuid::Uuid) -> Option<String> {
+        self.controller
+            .current_image()
+            .topic_name_by_id(&uuid::Uuid::from_bytes(topic_id.0))
+            .map(str::to_owned)
+    }
 }
 
 #[cfg(test)]

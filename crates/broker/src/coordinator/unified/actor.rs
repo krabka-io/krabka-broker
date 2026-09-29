@@ -160,6 +160,20 @@ impl GroupActorHandle {
 
 pub trait MetadataProvider: Send + Sync + std::fmt::Debug {
     fn snapshot(&self) -> ReconcileInput;
+
+    /// The name of the topic with `topic_id`, or `None` when no such topic
+    /// exists: Kafka's `TopicIds.TopicResolver.name`.
+    ///
+    /// A member's reconciliation asks it once per topic of the member's target
+    /// and assignment, so the broker's provider answers from the image
+    /// directly. This default builds a whole [`snapshot`](Self::snapshot),
+    /// which only the static providers of the tests use.
+    fn topic_name(&self, topic_id: &krabka_protocol::primitives::uuid::Uuid) -> Option<String> {
+        self.snapshot()
+            .topic_id_by_name
+            .into_iter()
+            .find_map(|(name, id)| (id == *topic_id).then_some(name))
+    }
 }
 
 /// Parked classic-protocol waiters for one group.

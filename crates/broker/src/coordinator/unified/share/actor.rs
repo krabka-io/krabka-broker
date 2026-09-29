@@ -141,12 +141,12 @@ async fn actor_loop(
     let mut tick = tokio::time::interval(tick_period);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
-        // The settings this group runs with now: a `share.*` override in its
-        // group config takes effect at the next message or tick, and the
-        // session-expiry tick follows the group's heartbeat interval.
-        let effective = effective_config(&config, &coordinator, &state.group_id);
-        if effective.heartbeat_interval != tick_period {
-            tick_period = effective.heartbeat_interval;
+        // The session-expiry tick follows the group's heartbeat interval, so a
+        // `share.heartbeat.interval.ms` override takes effect at the next turn.
+        let heartbeat_interval =
+            effective_config(&config, &coordinator, &state.group_id).heartbeat_interval;
+        if heartbeat_interval != tick_period {
+            tick_period = heartbeat_interval;
             tick = tokio::time::interval(tick_period);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         }
@@ -155,6 +155,11 @@ async fn actor_loop(
                 let Some(msg) = msg else { break };
                 match msg {
                     ShareGroupActorMessage::Heartbeat { request, client_id, client_host, reply } => {
+                        // The settings this group runs with when the heartbeat
+                        // arrives, not those of the turn before: a `share.*`
+                        // override in its group config takes effect at the
+                        // next message or tick.
+                        let effective = effective_config(&config, &coordinator, &state.group_id);
                         match handle_heartbeat(
                             &mut state,
                             &effective,
@@ -215,6 +220,7 @@ async fn actor_loop(
                 }
             }
             _ = tick.tick() => {
+                let effective = effective_config(&config, &coordinator, &state.group_id);
                 if handle_session_tick(&mut state, &effective, &*metadata, &*offsets_log, &coordinator).await.is_err() {
                     break;
                 }
