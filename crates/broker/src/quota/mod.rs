@@ -10,6 +10,7 @@ use num_traits::cast::{NumCast, ToPrimitive as _};
 mod buckets;
 mod controller_mutation;
 mod expiry;
+mod ip_names;
 mod lookup;
 mod producer;
 mod request;
@@ -18,6 +19,7 @@ mod throttle_slot;
 pub use buckets::QuotaBuckets;
 pub use controller_mutation::consume_controller_mutation_quota;
 pub(crate) use controller_mutation::{ControllerMutationQuota, QuotaRequest};
+pub use ip_names::{IpNames, parse_ip_literal};
 pub use lookup::{lookup_ip_quota, lookup_ip_quota_with_key, lookup_quota, lookup_quota_with_key};
 pub use producer::consume_producer_quota;
 pub use request::consume_request_quota;
@@ -101,12 +103,21 @@ struct QuotaConsumption<'a> {
 }
 
 /// Charges `request.amount` tokens to the bucket of the quota entity the
-/// request resolves to, and returns the throttle for the part the bucket could
-/// not cover.
+/// request resolves to, and returns the throttle for the debt the charge
+/// leaves.
+///
+/// Kafka records the whole value on the entity's `Rate` sensor and checks the
+/// quota after (`ClientQuotaManager.recordAndGetThrottleTimeMs` calls
+/// `quotaSensor().record(value, timeMs, true)`), so a request over the quota
+/// is charged in full and the next request on the entity, on any connection,
+/// still pays for it. The bucket does the same: [`TokenBucket::record`] takes
+/// the charge and reports the debt (#1212).
 ///
 /// `token_rate` turns the configured rate into the bucket's tokens per second,
-/// fractional or not. `delay_for_overage` gets the tokens the bucket could not
-/// cover, part token included, the configured rate, and the token rate.
+/// fractional or not. `delay_for_overage` gets the tokens of debt, part token
+/// included, the configured rate, and the token rate.
+///
+/// [`TokenBucket::record`]: crate::throttle::TokenBucket::record
 fn consume_configured_quota(
     request: QuotaConsumption<'_>,
     token_rate: impl FnOnce(f64) -> f64,
@@ -136,17 +147,12 @@ fn consume_configured_quota(
         .find(|(k, _)| k == "client-id")
         .and_then(|(_, v)| v.clone());
 
-    let bucket = request.buckets.get_or_create(
-        request.quota_key,
-        &entity_key,
-        request.principal,
-        request.client_id,
-        token_rate,
-    );
-    // Kafka holds the quota as a double, so the bucket grants a part token
-    // too and the overage is the exact shortfall under a fractional rate.
-    let granted_micros = bucket.try_consume_micros(request.amount);
-    let Some(overage) = overage_tokens(request.amount, granted_micros) else {
+    let bucket = request
+        .buckets
+        .get_or_create(request.quota_key, &entity_key, token_rate);
+    // Kafka holds the quota as a double, so the bucket keeps a part token in
+    // its debt and the throttle is exact under a fractional rate.
+    let Some(overage) = debt_tokens(bucket.record(request.amount)) else {
         return QuotaDelay::zero();
     };
     // Kafka bounds only the request quota's throttle (`ClientRequestQuotaManager`
@@ -156,27 +162,23 @@ fn consume_configured_quota(
     QuotaDelay::new(delay, user, client_id)
 }
 
-/// The part of a `requested`-token charge that a grant of `granted_micros`
-/// micro-tokens did not cover, in tokens with its fractional part, or `None`
-/// when the grant covered it all.
-pub(crate) fn overage_tokens(requested: u64, granted_micros: u64) -> Option<f64> {
-    let micros_per_token = crate::throttle::MICROS_PER_TOKEN;
-    // The bucket's micro-token grant saturates the same way.
-    let requested_micros = requested.saturating_mul(micros_per_token);
-    let short = requested_micros.checked_sub(granted_micros)?;
-    (short > 0).then(|| u64_to_f64(short) / u64_to_f64(micros_per_token))
+/// The debt a bucket reports, in tokens with its fractional part, or `None`
+/// when the bucket owes nothing.
+pub(crate) fn debt_tokens(debt_micros: u64) -> Option<f64> {
+    (debt_micros > 0)
+        .then(|| u64_to_f64(debt_micros) / u64_to_f64(crate::throttle::MICROS_PER_TOKEN))
 }
 
-/// A quota delay as Kafka's `throttle_time_ms` wire field.
+/// A quota delay as Kafka's `throttle_time_ms` wire field: the delay in
+/// milliseconds, rounded to the nearest.
 ///
-/// The conversion truncates toward zero and does not round to the nearest
-/// value. It reports a 1.6 ms delay as `1`. A client reads `throttle_time_ms`
-/// back and sleeps on it, so the byte on the wire must not change because the
-/// code carries the delay as a [`Time`]. A delay beyond `i32::MAX`
-/// milliseconds saturates.
+/// Kafka's `QuotaUtils.throttleTime` and `ControllerMutationQuotaManager
+/// .throttleTimeMs` both return `Math.round(...)` of the millisecond value, so
+/// a 1.6 ms delay is reported as `2` and a 0.6 ms one as `1` (#1241). A delay
+/// beyond `i32::MAX` milliseconds saturates.
 #[must_use]
 pub(crate) fn throttle_time_ms(delay: Time) -> i32 {
-    i32::try_from(delay.millis_i64_trunc()).unwrap_or(i32::MAX)
+    i32::try_from(delay.millis_i64()).unwrap_or(i32::MAX)
 }
 
 /// A raw quota rate as the [`TokenBucket`](crate::throttle::TokenBucket)'s
@@ -263,17 +265,22 @@ mod tests {
 
     use super::{test_support::image_with_quota, *};
 
-    /// `throttle_time_ms` truncates: a sub-millisecond delay reports `0`, and
-    /// a 1.6 ms delay reports `1`, not `2`.
+    /// `throttle_time_ms` rounds to the nearest millisecond, half up, as
+    /// Kafka's `Math.round` does: 0.4 ms reports `0`, 0.6 ms and 1.6 ms report
+    /// `1` and `2` (#1241).
     #[test]
-    fn throttle_time_ms_truncates_toward_zero() {
+    fn throttle_time_ms_rounds_to_the_nearest_millisecond() {
         let cases = [
             (krabka_units::micros(0), 0),
             (krabka_units::micros(400), 0),
-            (krabka_units::micros(999), 0),
+            (krabka_units::micros(500), 1),
+            (krabka_units::micros(600), 1),
+            (krabka_units::micros(999), 1),
             (krabka_units::millis(1), 1),
-            (krabka_units::micros(1_600), 1),
-            (krabka_units::micros(1_999), 1),
+            (krabka_units::micros(1_400), 1),
+            (krabka_units::micros(1_500), 2),
+            (krabka_units::micros(1_600), 2),
+            (krabka_units::micros(1_999), 2),
             (secs(1), 1_000),
         ];
         for (delay, want) in cases {
@@ -310,24 +317,22 @@ mod tests {
         }
     }
 
-    /// The overage keeps the part token a micro-token grant leaves short, and
-    /// a grant that covers the request leaves none.
+    /// The overage keeps the part token a bucket's debt holds, and a bucket
+    /// that owes nothing has none.
     #[test]
-    fn overage_tokens_is_the_exact_shortfall() {
+    fn debt_tokens_is_the_exact_debt() {
         let m = crate::throttle::MICROS_PER_TOKEN;
         let cases = [
-            (0, 0, None),
-            (1, m, None),
-            (1, 2 * m, None),
-            (1, m / 2, Some(0.5)),
-            (1, 0, Some(1.0)),
-            (100, m / 2, Some(99.5)),
-            (3, 2 * m + m / 4, Some(0.75)),
+            (0, None),
+            (1, Some(0.000_001)),
+            (m / 2, Some(0.5)),
+            (m, Some(1.0)),
+            (99 * m + m / 2, Some(99.5)),
         ];
-        for (requested, granted_micros, want) in cases {
+        for (debt_micros, want) in cases {
             check!(
-                overage_tokens(requested, granted_micros) == want,
-                "{requested} tokens, {granted_micros} micro-tokens granted"
+                debt_tokens(debt_micros) == want,
+                "{debt_micros} micro-tokens of debt"
             );
         }
     }

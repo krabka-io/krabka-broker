@@ -177,7 +177,11 @@ impl BrokerMetrics {
             client_id: None,
         };
         let winning = applied.unwrap_or(&fallback);
-        let delay = winning.delay;
+        // Kafka's throttle time is a whole number of milliseconds
+        // (`QuotaUtils.throttleTime` returns `Math.round`), and it mutes the
+        // channel only when that is above zero. A sub-half-millisecond delay
+        // is therefore no throttle at all, on the wire and on the socket.
+        let delay = <Time as TimeExt>::from_millis(winning.delay.millis_i64());
         self.observe_request_throttle_duration(api_key, delay.secs_f64());
         if delay > <Time as TimeExt>::ZERO {
             self.observe_quota_throttle(winning.quota_type, delay.secs_f64());
@@ -242,7 +246,7 @@ fn krabka_private_api_key_label_name(api_key: crate::handlers::ApiKeyCode) -> &'
 #[cfg(test)]
 mod tests {
     use assert2::assert;
-    use krabka_units::millis;
+    use krabka_units::{micros, millis};
 
     use super::*;
 
@@ -292,6 +296,18 @@ mod tests {
                 vec![(QuotaType::ControllerMutation, millis(750))],
                 millis(750),
                 Some(QuotaType::ControllerMutation),
+            ),
+            (
+                "the delay is rounded to the nearest millisecond, as Kafka's throttle time is",
+                vec![(QuotaType::Produce, micros(1_600))],
+                millis(2),
+                Some(QuotaType::Produce),
+            ),
+            (
+                "a delay under half a millisecond rounds to no throttle",
+                vec![(QuotaType::Produce, micros(400))],
+                <Time as TimeExt>::ZERO,
+                None,
             ),
         ];
 

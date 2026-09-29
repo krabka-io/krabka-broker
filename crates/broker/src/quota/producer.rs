@@ -69,6 +69,29 @@ mod tests {
         check!(buckets.len() == 1);
     }
 
+    /// Kafka records the whole request on the entity's `Rate` before it checks
+    /// the quota (`ClientQuotaManager.recordAndGetThrottleTimeMs`), so the
+    /// overage of a throttled request stays charged: the next request on the
+    /// entity, from any connection, is throttled for the debt of both (#1212).
+    /// Before, the bucket kept only what it held, the refill of the mute paid
+    /// the overage back, and a producer sent about twice its quota.
+    #[test]
+    fn the_overage_of_a_throttled_request_stays_charged() {
+        let img = img_with_quota(vec![("user", Some("alice"))], 1_000.0);
+        let buckets = QuotaBuckets::with_window(secs(1));
+
+        // 500 bytes over the one-second burst, then 1000 more on the same
+        // entity from another client: the debt is 1500 bytes.
+        let first = consume_producer_quota(&img, &buckets, "alice", "app", 1_500);
+        let second = consume_producer_quota(&img, &buckets, "alice", "other-app", 1_000);
+
+        check!(first > millis(490) && first <= millis(500), "{first:?}");
+        check!(
+            second > millis(1_490) && second <= millis(1_500),
+            "{second:?}"
+        );
+    }
+
     #[test]
     fn producer_quota_uses_client_id_entity_precedence() {
         let img = img_with_quota(

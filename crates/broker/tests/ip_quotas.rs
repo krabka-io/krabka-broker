@@ -104,12 +104,30 @@ async fn ip_quota_alter_then_describe_round_trip() {
 /// | from `127.0.0.2`, while the second is held | served with no added delay |
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn connection_creation_rate_closes_the_throttled_connection() {
+    closes_the_second_connection_from_loopback("127.0.0.1").await;
+}
+
+/// Test 2, for an entity that spells the loopback address another way.
+/// Kafka resolves an `ip` entity's name to an `InetAddress` when it applies the
+/// record and matches it with the connection's address, so an IPv4-mapped IPv6
+/// literal, and `127.1`, which Java reads as `127.0.0.1`, throttle `127.0.0.1`
+/// as the canonical spelling does (#1214).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn connection_creation_rate_matches_another_spelling_of_the_address() {
+    closes_the_second_connection_from_loopback("::ffff:127.0.0.1").await;
+    closes_the_second_connection_from_loopback("127.1").await;
+}
+
+/// Sets `connection_creation_rate=1` on the `ip` entity `entity_name`, and
+/// checks that a second connection from `127.0.0.1` is closed without a
+/// response while one from `127.0.0.2` is served.
+async fn closes_the_second_connection_from_loopback(entity_name: &str) {
     let (handle, _dir, addr) = start_single_broker_plaintext().await;
 
     let rec = krabka_metadata::MetadataRecord::V1ClientQuota(krabka_metadata::ClientQuotaRecord {
         entity: vec![krabka_metadata::QuotaEntity {
             entity_type: "ip".into(),
-            entity_name: Some("127.0.0.1".into()),
+            entity_name: Some(entity_name.into()),
         }],
         config_key: "connection_creation_rate".into(),
         config_value: Some(1.0),
@@ -120,7 +138,7 @@ async fn connection_creation_rate_closes_the_throttled_connection() {
         .expect("seed quota");
     handle
         .wait_for_image(|img| {
-            let key: krabka_metadata::EntityKey = vec![("ip".into(), Some("127.0.0.1".into()))];
+            let key: krabka_metadata::EntityKey = vec![("ip".into(), Some(entity_name.to_owned()))];
             img.client_quotas()
                 .get(&key)
                 .and_then(|m| m.get("connection_creation_rate"))
@@ -183,7 +201,7 @@ async fn connection_creation_rate_closes_the_throttled_connection() {
             error.kind(),
             std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
         )),
-        "the throttled connection closes without a response: {refused:?}"
+        "the throttled connection closes without a response under ip={entity_name}: {refused:?}"
     );
     drop((first, other));
 }

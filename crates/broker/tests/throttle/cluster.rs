@@ -171,3 +171,30 @@ pub async fn add_follower(handle: &BrokerHandle, topic: &str, follower: u64) {
         })
         .await;
 }
+
+/// Add `follower` to the replicas of partition 0 of `topic` and to its ISR, as
+/// a follower that has caught up.
+pub async fn add_follower_in_isr(handle: &BrokerHandle, topic: &str, follower: u64) {
+    let follower = krabka_metadata::NodeId(follower);
+    let mut record = handle
+        .controller_image_for_test()
+        .partition(topic, 0)
+        .expect("the partition is in the image")
+        .clone();
+    if record.directories.len() == record.replicas.len() {
+        record.directories.push(uuid::Uuid::nil());
+    }
+    record.replicas.push(follower);
+    record.isr.push(follower);
+    record.partition_epoch += 1;
+    handle
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Partition(record))
+        .await
+        .expect("submit the partition record");
+    handle
+        .wait_for_image(|img| {
+            img.partition(topic, 0)
+                .is_some_and(|partition| partition.isr.contains(&follower))
+        })
+        .await;
+}

@@ -6,6 +6,8 @@ use krabka_verified::{
     ip_quota_precedence, user_client_quota_precedence,
 };
 
+use super::IpNames;
+
 /// Return the configured value for `quota_key` under the most-specific
 /// matching entity for `(principal, client_id)`. First match wins, in the
 /// order of Kafka's `ClientQuotaManager.DefaultQuotaCallback`:
@@ -39,6 +41,12 @@ pub fn lookup_quota(
 /// The bucket key follows Kafka's metric tags: levels 1, 2, 4 and 5 share one
 /// sensor per `(user, client-id)`, levels 3 and 6 one per `user`, and levels
 /// 7 and 8 one per `client-id`.
+///
+/// An empty client id skips every level with a client-id component, and an
+/// empty principal every level with a user component, as Kafka's
+/// `DefaultQuotaCallback.findQuota` does: with no client id only the user
+/// levels 3 and 6 can match, so a default client quota never throttles a
+/// client that sends no `client.id` (#1241). With neither, nothing matches.
 #[must_use]
 pub fn lookup_quota_with_key(
     image: &MetadataImage,
@@ -46,6 +54,76 @@ pub fn lookup_quota_with_key(
     client_id: &str,
     quota_key: &str,
 ) -> Option<(EntityKey, f64)> {
+    let levels = match (!principal.is_empty(), !client_id.is_empty()) {
+        (true, true) => Levels::ALL,
+        (true, false) => Levels::USER,
+        (false, true) => Levels::CLIENT,
+        (false, false) => return None,
+    };
+    let (selected, rate) = resolve_levels(image, (principal, client_id), quota_key, levels)?;
+    Some((bucket_key(selected, principal, client_id), rate))
+}
+
+/// The rate the image configures for the quota sensor a bucket key names.
+///
+/// Kafka re-rates each sensor from its own metric tags
+/// (`ClientQuotaManager.updateQuotaMetricConfigs` calls `quotaLimit` on the
+/// sensor's tags), and `findQuota` resolves a `(user, client-id)` sensor
+/// against the four pair levels only, a `user` sensor against the two user
+/// levels and a `client-id` sensor against the two client levels. A bucket
+/// keyed `[user=alice]` that the client `(alice, app1)` created is therefore
+/// re-rated by the user levels, whatever quota `(alice, app1)` itself has now
+/// (#1213). A key that is none of the three shapes has no quota.
+#[must_use]
+pub(super) fn lookup_bucket_rate(
+    image: &MetadataImage,
+    entity_key: &EntityKey,
+    quota_key: &str,
+) -> Option<f64> {
+    let (principal, client_id, levels) = match entity_key.as_slice() {
+        [(client_type, Some(client_id)), (user_type, Some(principal))]
+            if client_type == "client-id" && user_type == "user" =>
+        {
+            (principal.as_str(), client_id.as_str(), Levels::PAIR)
+        }
+        [(user_type, Some(principal))] if user_type == "user" => {
+            (principal.as_str(), "", Levels::USER)
+        }
+        [(client_type, Some(client_id))] if client_type == "client-id" => {
+            ("", client_id.as_str(), Levels::CLIENT)
+        }
+        _ => return None,
+    };
+    resolve_levels(image, (principal, client_id), quota_key, levels).map(|(_, rate)| rate)
+}
+
+/// Which of the eight levels of [`lookup_quota_with_key`] a lookup consults,
+/// by the level's index in its candidate list.
+#[derive(Clone, Copy)]
+struct Levels([bool; 8]);
+
+impl Levels {
+    /// Every level: a request that has both a user and a client id. Kafka
+    /// picks its sensor by the highest level that is set, then resolves the
+    /// limit from that sensor's tags, which is this precedence.
+    const ALL: Self = Self([true; 8]);
+    /// `findUserClientQuota`: `(user, client-id)`, `(user, <default>)`,
+    /// `(<default>, client-id)` and `(<default>, <default>)`.
+    const PAIR: Self = Self([true, true, false, true, true, false, false, false]);
+    /// `findUserQuota`: `user` and `<default>` user.
+    const USER: Self = Self([false, false, true, false, false, true, false, false]);
+    /// `findClientQuota`: `client-id` and `<default>` client-id.
+    const CLIENT: Self = Self([false, false, false, false, false, false, true, true]);
+}
+
+/// The highest-precedence level of `levels` that has `quota_key` set for
+/// `(principal, client_id)`, with its value.
+fn resolve_levels(
+    image: &MetadataImage,
+    (principal, client_id): (&str, &str),
+    quota_key: &str,
+    levels: Levels,
+) -> Option<(UserClientQuotaPrecedence, f64)> {
     let candidates: [EntityKey; 8] = [
         vec![
             ("client-id".into(), Some(client_id.into())),
@@ -65,9 +143,14 @@ pub fn lookup_quota_with_key(
         vec![("client-id".into(), Some(client_id.into()))],
         vec![("client-id".into(), None)],
     ];
-    let matches = candidates.map(|key| quota_for_key(image, key, quota_key));
+    let mut values: [Option<f64>; 8] = [None; 8];
+    for (index, key) in candidates.into_iter().enumerate() {
+        if levels.0[index] {
+            values[index] = quota_for_key(image, key, quota_key).map(|(_, rate)| rate);
+        }
+    }
     let present = |index: usize| {
-        if matches[index].is_some() {
+        if values[index].is_some() {
             QuotaCandidatePresence::Present
         } else {
             QuotaCandidatePresence::Absent
@@ -94,8 +177,12 @@ pub fn lookup_quota_with_key(
         UserClientQuotaPrecedence::DefaultClient => 7,
         UserClientQuotaPrecedence::None => return None,
     };
-    let (_, rate) = matches[index].clone()?;
-    let bucket_key = match selected {
+    values[index].map(|rate| (selected, rate))
+}
+
+/// The bucket key of the sensor a matched level charges.
+fn bucket_key(selected: UserClientQuotaPrecedence, principal: &str, client_id: &str) -> EntityKey {
+    match selected {
         UserClientQuotaPrecedence::ExactPair
         | UserClientQuotaPrecedence::ExactUserDefaultClient
         | UserClientQuotaPrecedence::DefaultUserExactClient
@@ -109,17 +196,20 @@ pub fn lookup_quota_with_key(
         UserClientQuotaPrecedence::ExactClient | UserClientQuotaPrecedence::DefaultClient => {
             vec![("client-id".into(), Some(client_id.into()))]
         }
-        UserClientQuotaPrecedence::None => return None,
-    };
-    Some((bucket_key, rate))
+        UserClientQuotaPrecedence::None => Vec::new(),
+    }
 }
 
 /// Lookup an `ip`-scoped quota for `peer_ip`. Priority order:
-///   1. (ip = `Some(peer_ip)`): specific
+///   1. (ip = an entity that stands for `peer_ip`): specific
 ///   2. (ip = None): default
 ///
-/// This accepts both IPv4 and IPv6 peers. Kafka keys IP quotas by the IP's
-/// string form for either family, so the same two-priority match applies.
+/// Kafka keys an IP quota by the `InetAddress` its entity name resolves to,
+/// and reads it with the connection's `socket.getInetAddress` (#1214). An
+/// entity therefore stands for `peer_ip` when its name is any spelling of the
+/// address, or a host name that resolved to it (see [`IpNames`]), and an
+/// IPv4-mapped IPv6 peer is the IPv4 address it maps to. Both IPv4 and IPv6
+/// peers match this way.
 ///
 /// It is disjoint from `lookup_quota`, which checks only `("user", *)` and
 /// `("client-id", *)` candidates. KIP-612 `connection_creation_rate`
@@ -127,31 +217,43 @@ pub fn lookup_quota_with_key(
 #[must_use]
 pub fn lookup_ip_quota(
     image: &MetadataImage,
+    names: &IpNames,
     peer_ip: std::net::IpAddr,
     quota_key: &str,
 ) -> Option<f64> {
-    lookup_ip_quota_with_key(image, peer_ip, quota_key).map(|(_, v)| v)
+    lookup_ip_quota_with_key(image, names, peer_ip, quota_key).map(|(_, v)| v)
 }
 
+/// Like [`lookup_ip_quota`], and it also returns the bucket key: the peer's
+/// canonical address, whichever entity name matched, because Kafka's
+/// per-address rate sensor belongs to the address and not to the name.
 #[must_use]
 pub fn lookup_ip_quota_with_key(
     image: &MetadataImage,
+    names: &IpNames,
     peer_ip: std::net::IpAddr,
     quota_key: &str,
 ) -> Option<(EntityKey, f64)> {
-    let candidates: [EntityKey; 2] = [
-        vec![("ip".into(), Some(peer_ip.to_string()))],
-        vec![("ip".into(), None)],
-    ];
-    let matches = candidates.map(|key| quota_for_key(image, key, quota_key));
-    match ip_quota_precedence(matches[0].is_some(), matches[1].is_some()) {
-        IpQuotaPrecedence::Exact => matches[0].clone(),
-        IpQuotaPrecedence::Default => {
-            let (_, rate) = matches[1].clone()?;
-            Some((vec![("ip".into(), Some(peer_ip.to_string()))], rate))
-        }
+    let peer = peer_ip.to_canonical();
+    let bucket_key: EntityKey = vec![("ip".into(), Some(peer.to_string()))];
+    let ip_entity = |name: Option<String>| -> EntityKey { vec![("ip".into(), name)] };
+    // The entity named by the peer's own spelling, or else one whose name
+    // resolves to the peer.
+    let exact = quota_for_key(image, bucket_key.clone(), quota_key)
+        .or_else(|| {
+            names
+                .entity_names(peer)
+                .into_iter()
+                .find_map(|name| quota_for_key(image, ip_entity(Some(name)), quota_key))
+        })
+        .map(|(_, rate)| rate);
+    let default = quota_for_key(image, ip_entity(None), quota_key).map(|(_, rate)| rate);
+    match ip_quota_precedence(exact.is_some(), default.is_some()) {
+        IpQuotaPrecedence::Exact => exact,
+        IpQuotaPrecedence::Default => default,
         IpQuotaPrecedence::None => None,
     }
+    .map(|rate| (bucket_key, rate))
 }
 
 fn quota_for_key(
@@ -168,7 +270,7 @@ fn quota_for_key(
 
 #[cfg(test)]
 mod tests {
-    use assert2::assert;
+    use assert2::{assert, check};
     use krabka_metadata::{ClientQuotaRecord, MetadataImage};
 
     use super::*;
@@ -268,6 +370,201 @@ mod tests {
         assert!(lookup_quota(&img, "alice", "app1", "producer_byte_rate") == Some(512.0));
     }
 
+    type Level = Vec<(&'static str, Option<&'static str>)>;
+
+    fn user_key(user: &str) -> EntityKey {
+        vec![("user".into(), Some(user.into()))]
+    }
+
+    fn client_key(client_id: &str) -> EntityKey {
+        vec![("client-id".into(), Some(client_id.into()))]
+    }
+
+    fn pair_key(user: &str, client_id: &str) -> EntityKey {
+        vec![
+            ("client-id".into(), Some(client_id.into())),
+            ("user".into(), Some(user.into())),
+        ]
+    }
+
+    /// Kafka's `findQuota` skips every level with a component the request does
+    /// not have (#1241): with no client id only the two user levels can match,
+    /// so a default client, a `(user, <default>)` or a `(<default>,
+    /// <default>)` quota never reaches a client that sends none. With no
+    /// principal the user levels are skipped, and with neither nothing
+    /// matches. Each row configures some levels at 64 (the level itself is the
+    /// bucket key's owner) and looks one request up.
+    #[test]
+    fn a_missing_client_id_or_principal_skips_the_levels_that_need_it() {
+        /// A label, the configured levels, the principal, the client id and
+        /// the expected bucket key and rate.
+        type Row = (
+            &'static str,
+            Vec<Level>,
+            &'static str,
+            &'static str,
+            Option<(EntityKey, f64)>,
+        );
+        let default_client: Level = vec![("client-id", None)];
+        let user_default_client: Level = vec![("user", Some("alice")), ("client-id", None)];
+        let default_pair: Level = vec![("user", None), ("client-id", None)];
+        let alice: Level = vec![("user", Some("alice"))];
+        let default_user: Level = vec![("user", None)];
+        let app: Level = vec![("client-id", Some("app"))];
+        let default_user_app: Level = vec![("user", None), ("client-id", Some("app"))];
+        let cases: Vec<Row> = vec![
+            (
+                "a default client quota does not throttle a client with no id",
+                vec![default_client.clone()],
+                "alice",
+                "",
+                None,
+            ),
+            (
+                "a client id makes the same default client quota apply",
+                vec![default_client.clone()],
+                "alice",
+                "app",
+                Some((client_key("app"), 64.0)),
+            ),
+            (
+                "a (user, default client) quota needs a client id",
+                vec![user_default_client],
+                "alice",
+                "",
+                None,
+            ),
+            (
+                "a (default, default) quota needs a client id",
+                vec![default_pair],
+                "alice",
+                "",
+                None,
+            ),
+            (
+                "the user quota applies without a client id",
+                vec![alice.clone(), default_client.clone()],
+                "alice",
+                "",
+                Some((user_key("alice"), 64.0)),
+            ),
+            (
+                "the default user quota applies without a client id",
+                vec![default_user.clone(), default_client.clone()],
+                "alice",
+                "",
+                Some((user_key("alice"), 64.0)),
+            ),
+            (
+                "the client quota applies without a principal",
+                vec![app.clone(), alice.clone()],
+                "",
+                "app",
+                Some((client_key("app"), 64.0)),
+            ),
+            (
+                "the user levels are skipped without a principal",
+                vec![default_user.clone(), default_user_app, default_client],
+                "",
+                "app",
+                Some((client_key("app"), 64.0)),
+            ),
+            (
+                "neither a principal nor a client id matches nothing",
+                vec![alice, default_user, app],
+                "",
+                "",
+                None,
+            ),
+        ];
+        for (label, configured, principal, client_id, expected) in cases {
+            let img = img_with(
+                configured
+                    .into_iter()
+                    .map(|entity| rec(entity, "producer_byte_rate", 64.0))
+                    .collect(),
+            );
+            check!(
+                lookup_quota_with_key(&img, principal, client_id, "producer_byte_rate") == expected,
+                "{label}"
+            );
+        }
+    }
+
+    /// A bucket is re-rated from its own entity key, as Kafka re-rates each
+    /// sensor from its own metric tags (#1213). The pair `(alice, app1)`
+    /// having a quota of its own does not change the rate of the `[user=alice]`
+    /// bucket that the client `(alice, app2)` still draws on.
+    #[test]
+    fn a_bucket_is_rated_by_its_own_key_levels() {
+        let img = img_with(vec![
+            rec(vec![("user", Some("alice"))], "producer_byte_rate", 1_000.0),
+            rec(
+                vec![("user", Some("alice")), ("client-id", Some("app1"))],
+                "producer_byte_rate",
+                5_000.0,
+            ),
+            rec(
+                vec![("client-id", Some("app1"))],
+                "producer_byte_rate",
+                200.0,
+            ),
+            rec(vec![("user", None)], "producer_byte_rate", 700.0),
+            rec(vec![("client-id", None)], "producer_byte_rate", 300.0),
+            rec(vec![("ip", Some("10.0.0.1"))], "producer_byte_rate", 9.0),
+        ]);
+        // (label, bucket key, expected rate)
+        let cases: [(&str, EntityKey, Option<f64>); 9] = [
+            (
+                "the user bucket keeps the user quota",
+                user_key("alice"),
+                Some(1_000.0),
+            ),
+            (
+                "a user with no quota falls to the default user",
+                user_key("bob"),
+                Some(700.0),
+            ),
+            (
+                "the pair bucket has the pair quota",
+                pair_key("alice", "app1"),
+                Some(5_000.0),
+            ),
+            (
+                "a pair with no pair level has no quota, not the user's",
+                pair_key("alice", "app2"),
+                None,
+            ),
+            (
+                "the client bucket keeps the client quota",
+                client_key("app1"),
+                Some(200.0),
+            ),
+            (
+                "a client with no quota falls to the default client",
+                client_key("app2"),
+                Some(300.0),
+            ),
+            (
+                "an ip key is not a user or client bucket",
+                vec![("ip".into(), Some("10.0.0.1".into()))],
+                None,
+            ),
+            (
+                "a user bucket with no name has no quota",
+                vec![("user".into(), None)],
+                None,
+            ),
+            ("an empty key has no quota", vec![], None),
+        ];
+        for (label, key, expected) in cases {
+            check!(
+                lookup_bucket_rate(&img, &key, "producer_byte_rate") == expected,
+                "{label}"
+            );
+        }
+    }
+
     fn rec_ip(ip: Option<&str>, key: &str, value: f64) -> ClientQuotaRecord {
         quota_record(vec![("ip", ip)], key, value)
     }
@@ -284,14 +581,18 @@ mod tests {
             1.0,
         )]);
         let ip: std::net::IpAddr = "127.0.0.1".parse().unwrap();
-        assert!(lookup_ip_quota(&img, ip, "connection_creation_rate") == Some(1.0));
+        assert!(
+            lookup_ip_quota(&img, &IpNames::default(), ip, "connection_creation_rate") == Some(1.0)
+        );
     }
 
     #[test]
     fn ip_default_fallback() {
         let img = img_with_ip(vec![rec_ip(None, "connection_creation_rate", 2.0)]);
         let ip: std::net::IpAddr = "10.0.0.7".parse().unwrap();
-        assert!(lookup_ip_quota(&img, ip, "connection_creation_rate") == Some(2.0));
+        assert!(
+            lookup_ip_quota(&img, &IpNames::default(), ip, "connection_creation_rate") == Some(2.0)
+        );
     }
 
     #[test]
@@ -301,14 +602,101 @@ mod tests {
             rec_ip(Some("127.0.0.1"), "connection_creation_rate", 1.0),
         ]);
         let ip: std::net::IpAddr = "127.0.0.1".parse().unwrap();
-        assert!(lookup_ip_quota(&img, ip, "connection_creation_rate") == Some(1.0));
+        assert!(
+            lookup_ip_quota(&img, &IpNames::default(), ip, "connection_creation_rate") == Some(1.0)
+        );
     }
 
     #[test]
     fn ip_no_match_returns_none() {
         let img = img_with_ip(vec![]);
         let ip: std::net::IpAddr = "127.0.0.1".parse().unwrap();
-        assert!(lookup_ip_quota(&img, ip, "connection_creation_rate").is_none());
+        assert!(
+            lookup_ip_quota(&img, &IpNames::default(), ip, "connection_creation_rate").is_none()
+        );
+    }
+
+    /// Kafka resolves an ip entity's name to an `InetAddress` and matches it
+    /// with the connection's address, so the entity stands for every spelling
+    /// of its address (#1214). The bucket key is the peer's canonical address
+    /// whichever entity matched.
+    #[test]
+    fn an_ip_entity_stands_for_every_spelling_of_its_address() {
+        // (label, entity name, peer address, whether the entity matches it)
+        let cases = [
+            ("the canonical literal", "127.0.0.1", "127.0.0.1", true),
+            (
+                "an IPv6 spelling with no zero compression",
+                "0:0:0:0:0:0:0:1",
+                "::1",
+                true,
+            ),
+            (
+                "an upper-case IPv6 literal",
+                "2001:DB8::A",
+                "2001:db8::a",
+                true,
+            ),
+            ("a bracketed IPv6 literal", "[::1]", "::1", true),
+            (
+                "an IPv4-mapped peer is its IPv4 address",
+                "10.1.2.3",
+                "::ffff:10.1.2.3",
+                true,
+            ),
+            (
+                "an IPv4-mapped entity is its IPv4 address",
+                "::ffff:10.1.2.3",
+                "10.1.2.3",
+                true,
+            ),
+            ("another address", "10.1.2.4", "10.1.2.3", false),
+            (
+                "a host name that has no address yet",
+                "db",
+                "10.1.2.3",
+                false,
+            ),
+        ];
+        for (label, entity, peer, matches) in cases {
+            let img = img_with_ip(vec![rec_ip(Some(entity), "connection_creation_rate", 7.0)]);
+            let names = IpNames::default();
+            let _ = names.update(&img);
+            let peer: std::net::IpAddr = peer.parse().unwrap();
+
+            let got = lookup_ip_quota_with_key(&img, &names, peer, "connection_creation_rate");
+
+            let want = matches.then(|| {
+                (
+                    vec![("ip".into(), Some(peer.to_canonical().to_string()))],
+                    7.0,
+                )
+            });
+            check!(got == want, "{label}");
+        }
+    }
+
+    /// A host name stands for the address it resolved to, ahead of the default
+    /// `ip` quota; an address it did not resolve to falls to the default.
+    #[test]
+    fn a_resolved_host_name_stands_for_its_address() {
+        let img = img_with_ip(vec![
+            rec_ip(Some("db"), "connection_creation_rate", 9.0),
+            rec_ip(None, "connection_creation_rate", 2.0),
+        ]);
+        let names = IpNames::default();
+        let db: std::net::IpAddr = "10.0.0.9".parse().unwrap();
+        let other: std::net::IpAddr = "10.0.0.1".parse().unwrap();
+        let rate =
+            |names: &IpNames, peer| lookup_ip_quota(&img, names, peer, "connection_creation_rate");
+
+        let before = rate(&names, db);
+        names.insert_host("db", db);
+        let _ = names.update(&img);
+
+        check!(
+            (before, rate(&names, db), rate(&names, other)) == (Some(2.0), Some(9.0), Some(2.0))
+        );
     }
 
     #[test]
@@ -317,7 +705,9 @@ mod tests {
         // IPv6 peer keyed by its canonical string form, not just IPv4.
         let img = img_with_ip(vec![rec_ip(Some("::1"), "connection_creation_rate", 3.0)]);
         let ip: std::net::IpAddr = "::1".parse().unwrap();
-        assert!(lookup_ip_quota(&img, ip, "connection_creation_rate") == Some(3.0));
+        assert!(
+            lookup_ip_quota(&img, &IpNames::default(), ip, "connection_creation_rate") == Some(3.0)
+        );
     }
 
     #[test]
@@ -326,7 +716,9 @@ mod tests {
         // default, proving IPv6 is no longer skipped by the quota path.
         let img = img_with_ip(vec![rec_ip(None, "connection_creation_rate", 5.0)]);
         let ip: std::net::IpAddr = "2001:db8::42".parse().unwrap();
-        assert!(lookup_ip_quota(&img, ip, "connection_creation_rate") == Some(5.0));
+        assert!(
+            lookup_ip_quota(&img, &IpNames::default(), ip, "connection_creation_rate") == Some(5.0)
+        );
     }
 
     // ── precedence verification: exhaustive enumeration + proptest ────────────
@@ -483,7 +875,8 @@ mod tests {
                 .map(|(i, c)| rec(c.clone(), "connection_creation_rate", CAND_VALS[i]))
                 .collect();
             let img = img_with(records);
-            let got = lookup_ip_quota_with_key(&img, ip, "connection_creation_rate");
+            let got =
+                lookup_ip_quota_with_key(&img, &IpNames::default(), ip, "connection_creation_rate");
             match (0..2usize).find(|i| mask & (1 << i) != 0) {
                 None => assert!(got.is_none(), "mask {mask:#04b}: expected None"),
                 Some(j) => {
@@ -549,7 +942,7 @@ mod tests {
             // A user/client entry must not leak into the IP path.
             records.push(rec(vec![("user", Some("u"))], "connection_creation_rate", 50.0));
             let img = img_with(records);
-            let got = lookup_ip_quota_with_key(&img, ip, "connection_creation_rate");
+            let got = lookup_ip_quota_with_key(&img, &IpNames::default(), ip, "connection_creation_rate");
             if specific {
                 proptest::prop_assert_eq!(got.expect("specific present").1.to_bits(), 1.0_f64.to_bits());
             } else if default {

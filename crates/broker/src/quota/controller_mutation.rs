@@ -118,18 +118,16 @@ impl ControllerMutationQuota {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let now = std::time::Instant::now();
-        let capacity = limit.rate * limit.window_secs;
-        if bucket.rate.to_bits() != limit.rate.to_bits()
-            || bucket.window_secs.to_bits() != limit.window_secs.to_bits()
-        {
-            bucket.rate = limit.rate;
-            bucket.window_secs = limit.window_secs;
-            bucket.tokens = capacity;
-        } else {
-            bucket.tokens = (bucket.tokens
-                + now.duration_since(bucket.updated_at).as_secs_f64() * limit.rate)
-                .min(capacity);
-        }
+        // The time since the last charge refills at the rate the bucket had
+        // then, and a change of rate or window keeps that balance, capped at
+        // the new capacity: Kafka's `TokenBucket` keeps its `tokens` when the
+        // quota changes, so a bucket in debt stays in debt (#1241).
+        let refilled = (bucket.tokens
+            + now.duration_since(bucket.updated_at).as_secs_f64() * bucket.rate)
+            .min(bucket.rate * bucket.window_secs);
+        bucket.tokens = refilled.min(limit.rate * limit.window_secs);
+        bucket.rate = limit.rate;
+        bucket.window_secs = limit.window_secs;
         bucket.updated_at = now;
 
         let refill = |tokens: f64| Time::from_secs_f64((-tokens / limit.rate).max(0.0));
@@ -235,6 +233,41 @@ mod tests {
             delay.delay > secs(59) && delay.delay <= secs(60),
             "{delay:?}"
         );
+    }
+
+    /// A change of rate keeps the balance of the bucket, as Kafka's
+    /// `TokenBucket` keeps its tokens when the quota changes: a client that
+    /// ran up 60 seconds of debt at 1 mutation per second is still in debt
+    /// after its quota goes to 2, and owes it at the new rate (#1241). Before,
+    /// the change refilled the bucket.
+    #[test]
+    fn a_rate_change_keeps_the_debt_of_the_bucket() {
+        let buckets = QuotaBuckets::new();
+        let before = img_with_quota(vec![("user", Some("alice"))], 1.0);
+        let after = img_with_quota(vec![("user", Some("alice"))], 2.0);
+
+        // A one-mutation bucket and 61 mutations: 60 in debt.
+        let _ = consume_controller_mutation_quota(&before, &buckets, "alice", "", 61);
+        let delay = consume_controller_mutation_quota(&after, &buckets, "alice", "", 1);
+
+        check!(
+            delay.delay > secs(30) && delay.delay <= millis(30_500),
+            "{delay:?}"
+        );
+    }
+
+    /// A balance the bucket holds above the new capacity is cut down to it.
+    #[test]
+    fn a_smaller_capacity_caps_the_kept_balance() {
+        let buckets = QuotaBuckets::new();
+        let before = img_with_quota(vec![("user", Some("alice"))], 10.0);
+        let after = img_with_quota(vec![("user", Some("alice"))], 1.0);
+
+        // Ten tokens held, then a capacity of one: nine mutations are 8 over.
+        let _ = consume_controller_mutation_quota(&before, &buckets, "alice", "", 0);
+        let delay = consume_controller_mutation_quota(&after, &buckets, "alice", "", 9);
+
+        check!(delay.delay > secs(7) && delay.delay <= secs(8), "{delay:?}");
     }
 
     /// Kafka's examples for `controller_mutation_rate = 10` with the default

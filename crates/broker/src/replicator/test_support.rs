@@ -104,6 +104,7 @@ pub(super) fn test_config(image: MetadataImage) -> (Config, tempfile::TempDir) {
         log_dir_status: crate::log_dir_status::LogDirRegistry::default(),
         producer_state: Arc::new(crate::producer_state::ProducerState::new()),
         metrics: crate::metrics::BrokerMetrics::default(),
+        lag: super::ReplicaLag::default(),
     };
     (cfg, log_dir)
 }

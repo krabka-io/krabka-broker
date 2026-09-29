@@ -122,6 +122,25 @@ mod tests {
         assert!(delay == millis(25));
     }
 
+    /// The overage of one request stays charged for the next (#1212), as it
+    /// does for a byte rate: Kafka records the handler time before it checks
+    /// the request quota, so a client that keeps overrunning it is throttled
+    /// for everything it has overrun, not for its last request alone.
+    #[test]
+    fn overage_stays_charged_for_the_next_request() {
+        // rate=100% gives a 1_000_000 us/sec budget and a one-second window a
+        // one-second burst: 1_500_000 us is 500_000 over, and 500_000 more
+        // leaves 1_000_000 of debt.
+        let img = img_with_quota(vec![("user", Some("alice"))], 100.0);
+        let buckets = QuotaBuckets::with_window(secs(1));
+
+        let first = consume_request_quota(&img, &buckets, "alice", "", 1_500_000, secs(10));
+        let second = consume_request_quota(&img, &buckets, "alice", "", 500_000, secs(10));
+
+        assert!(first > millis(490) && first <= millis(500), "{first:?}");
+        assert!(second > millis(990) && second <= secs(1), "{second:?}");
+    }
+
     #[test]
     fn overage_returns_scaled_uncapped_delay() {
         // rate=100% gives a 1_000_000 us/sec budget. A one-second window
