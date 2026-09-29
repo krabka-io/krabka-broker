@@ -10,8 +10,7 @@ use std::{net::SocketAddr, sync::Arc};
 
 use assert2::{assert, check};
 use krabka_metadata::{
-    BreakGlassProposalRecord, MetadataImage, MetadataRecord, PartitionElrRecord,
-    UnregisterBrokerRecord,
+    BreakGlassProposalRecord, MetadataImage, MetadataRecord, UnregisterBrokerRecord,
 };
 use krabka_protocol::owned::unregister_broker_response::{self, UnregisterBrokerResponse};
 use krabka_security::Principal;
@@ -436,51 +435,76 @@ async fn handle_removes_the_broker_from_every_isr_in_the_unregistering_append() 
     broker_handle.shutdown().await;
 }
 
-/// A node that is not the active controller keeps no liveness registry, so it
-/// reads the brokers that may lead from the image: Kafka's
-/// `ClusterControlManager.isActive`, a registered broker that is not fenced.
+/// The partition records of an unregistration are built from the image of the
+/// node that runs it, and only the active controller's image is current. Any
+/// other node answers `NOT_CONTROLLER` with Kafka's wrong-controller message
+/// and appends nothing, so a follower or an observer whose image trails cannot
+/// roll back the leader, epoch and ISR that the controller committed since.
+#[test]
+fn a_node_that_is_not_the_active_controller_refuses_with_kafkas_message() {
+    let node = NodeId(1);
+    let not_controller = |message: &str| {
+        Some(UnregisterBrokerResponse {
+            error_code: codes::NOT_CONTROLLER,
+            error_message: Some(message.to_owned()),
+            ..Default::default()
+        })
+    };
+    for (what, leader, expected) in [
+        ("this node leads", Some(NodeId(1)), None),
+        (
+            "another node leads",
+            Some(NodeId(3)),
+            not_controller("The active controller appears to be node 3."),
+        ),
+        (
+            "no leader is known",
+            None,
+            not_controller("No controller appears to be active."),
+        ),
+    ] {
+        check!(
+            wire::not_controller_refusal(leader, node) == expected,
+            "{what}"
+        );
+    }
+}
+
+/// A request that arrives on the controller listener, or inside an `Envelope`,
+/// is already at the active controller and is never forwarded again.
 #[tokio::test]
-async fn a_node_that_is_not_the_controller_reads_the_active_brokers_from_the_image() {
+async fn a_request_on_the_controller_listener_is_answered_in_place() {
+    let version = unregister_broker_response::MAX_VERSION;
     let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
     let broker = broker_handle.broker_arc_for_test();
     wait_for_leader(&broker).await;
-    broker
-        .controller
-        .submit_change(vec![
-            topic(1),
-            MetadataRecord::V1Partition(replicated_partition(0, 1, &[1, 2], 5, 0)),
-        ])
+    let principal = principal();
+    let peer: SocketAddr = "127.0.0.1:9093".parse().unwrap();
+    let ctx = crate::handlers::RequestContext::new(
+        &principal,
+        &peer,
+        "unregister-client",
+        CONTROLLER_ADMIN_CONNECTION_ID,
+        false,
+        "CONTROLLER",
+    );
+    let req = UnregisterBrokerRequest {
+        broker_id: 999,
+        ..Default::default()
+    };
+
+    let resp = handle(&broker, version, 1, &encode_request(&req, version), &ctx)
         .await
-        .expect("seed the partition");
+        .expect("handle");
 
-    // Broker 2 never heartbeated this node, whose registry is empty.
-    let elects_broker_2 = vec![MetadataRecord::V1Partition(replicated_partition(
-        0,
-        2,
-        &[2],
-        6,
-        1,
-    ))];
-    // A fenced broker cannot lead, so the partition has no leader left and
-    // Kafka's `maybeUpdateLastKnownLeader` records the leaving leader.
-    let leaderless = vec![MetadataRecord::V1PartitionElr(PartitionElrRecord {
-        topic: "t".into(),
-        partition: 0,
-        eligible_leader_replicas: vec![],
-        last_known_elr: vec![NodeId(1)],
-    })];
-    for (fenced, expected) in [(false, elects_broker_2), (true, leaderless)] {
-        broker
-            .controller
-            .submit_change(vec![registration(2, fenced)])
-            .await
-            .expect("register broker 2");
-        let image = broker.controller.current_image();
-
-        let leaves = leave::leave_isrs_as(&broker, &image, NodeId(1), false).await;
-
-        check!(leaves == expected, "broker 2 fenced: {fenced}");
-    }
+    check!(
+        decode_response(&resp)
+            == UnregisterBrokerResponse {
+                error_code: codes::BROKER_ID_NOT_REGISTERED,
+                error_message: Some("Broker ID 999 is not currently registered".to_owned()),
+                ..Default::default()
+            }
+    );
     broker_handle.shutdown().await;
 }
 

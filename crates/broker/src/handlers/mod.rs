@@ -53,6 +53,9 @@ pub(crate) mod registry;
 pub(crate) use registry::{DispatchEntry, DispatchKind, DispatchRegistry, RequestQuotaPolicy};
 
 pub(crate) mod acl_wire;
+// KIP-590 forwarding of an admin RPC to the active controller, for the handlers
+// that must run there (`KafkaApis.forwardToController`).
+pub(crate) mod forward_to_controller;
 // KIP-853 dynamic-quorum reconfiguration (api_keys 80/81/82).
 pub(crate) mod add_raft_voter;
 pub(crate) mod allocate_producer_ids;
