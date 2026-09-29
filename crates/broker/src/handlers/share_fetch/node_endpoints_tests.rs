@@ -267,7 +267,7 @@ async fn share_fetch_sends_the_endpoint_of_each_remote_leader_once() {
 }
 
 #[tokio::test]
-async fn share_acknowledge_sends_the_endpoint_of_each_remote_leader_once() {
+async fn share_acknowledge_on_a_remote_leader_answers_unknown_partition_without_a_hint() {
     let (broker, _dir) = start().await;
     let local = create_local_topic(&broker).await;
     seed_remote_leaders(&broker).await;
@@ -327,38 +327,29 @@ async fn share_acknowledge_sends_the_endpoint_of_each_remote_leader_once() {
     .expect("handle share acknowledge");
     let response: ShareAcknowledgeResponse = decode_response(&response, version);
 
-    let row =
-        |partition_index, leader_id, leader_epoch| share_acknowledge_response::PartitionData {
-            partition_index,
-            error_code: codes::NOT_LEADER_OR_FOLLOWER,
-            current_leader: share_acknowledge_response::LeaderIdAndEpoch {
-                leader_id,
-                leader_epoch,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+    // Kafka's `SharePartitionManager.acknowledge` has no leadership check: a
+    // broker that does not lead the partition holds no share partition for
+    // it, so the row answers UNKNOWN_TOPIC_OR_PARTITION with no leader hint,
+    // and there is no endpoint to send.
+    let row = |partition_index| share_acknowledge_response::PartitionData {
+        partition_index,
+        error_code: codes::UNKNOWN_TOPIC_OR_PARTITION,
+        ..Default::default()
+    };
     let expected = ShareAcknowledgeResponse {
         acquisition_lock_timeout_ms: 30_000,
         responses: vec![
             share_acknowledge_response::ShareAcknowledgeTopicResponse {
                 topic_id: REMOTE,
-                partitions: vec![row(0, REMOTE_NODE, 4), row(1, REMOTE_NODE, 4)],
+                partitions: vec![row(0), row(1)],
                 ..Default::default()
             },
             share_acknowledge_response::ShareAcknowledgeTopicResponse {
                 topic_id: ORPHAN,
-                partitions: vec![row(0, UNREGISTERED_NODE, 1)],
+                partitions: vec![row(0)],
                 ..Default::default()
             },
         ],
-        node_endpoints: vec![share_acknowledge_response::NodeEndpoint {
-            node_id: REMOTE_NODE,
-            host: "remote-2".into(),
-            port: 9192,
-            rack: Some("rack-2".into()),
-            ..Default::default()
-        }],
         ..Default::default()
     };
     assert!(response == expected);

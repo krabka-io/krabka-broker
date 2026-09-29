@@ -8,7 +8,9 @@
 //! [`AcquisitionState`] machine, and persists the result. Accept advances the
 //! SPSO, Release offers the records again, and Reject and Gap archive them.
 //!
-//! A partition that this broker does not lead gets `NOT_LEADER_OR_FOLLOWER`.
+//! A partition that this broker does not lead gets
+//! `UNKNOWN_TOPIC_OR_PARTITION` and no leader hint, as Kafka answers for a
+//! partition with no share partition in its cache.
 //! An acknowledge that targets records the member does not currently hold
 //! fails that partition row with `INVALID_RECORD_STATE`.
 //!
@@ -273,22 +275,17 @@ async fn process_topics(context: &AcknowledgeContext<'_>) -> Vec<ShareAcknowledg
                 continue;
             }
 
-            if !mgr.topic_leader_is_self(topic_id, ap.partition_index) {
-                let (leader_id, leader_epoch) = mgr.current_leader_of(topic_id, ap.partition_index);
-                out.error_code = codes::NOT_LEADER_OR_FOLLOWER;
-                out.current_leader = LeaderIdAndEpoch {
-                    leader_id,
-                    leader_epoch,
-                    ..Default::default()
-                };
-                parts.push(out);
-                continue;
-            }
-
-            // Kafka's `SharePartitionManager.acknowledge` answers
-            // UNKNOWN_TOPIC_OR_PARTITION for a share partition that no fetch on
-            // this broker loaded, and reads no state for it.
-            let Some(cell) = mgr.cached(group, topic_id, ap.partition_index) else {
+            // Kafka's `SharePartitionManager.acknowledge` has no leadership
+            // check: a broker that does not lead the partition holds no share
+            // partition for it, so the row answers UNKNOWN_TOPIC_OR_PARTITION
+            // with no leader hint, exactly as for a share partition that no
+            // fetch on this broker loaded. It reads no state for it.
+            let cell = if mgr.topic_leader_is_self(topic_id, ap.partition_index) {
+                mgr.cached(group, topic_id, ap.partition_index)
+            } else {
+                None
+            };
+            let Some(cell) = cell else {
                 out.error_code = codes::UNKNOWN_TOPIC_OR_PARTITION;
                 parts.push(out);
                 continue;
