@@ -97,6 +97,13 @@ pub trait MetadataSource: Send + Sync {
             current_leader: None,
         })
     }
+    /// Run the leader-side checks of [`Self::finalize_kraft_version`] and write
+    /// nothing: the `validate_only` half of a `kraft.version` upgrade.
+    async fn validate_kraft_version(&self, _version: u16) -> Result<ReconfigOutcome, RaftError> {
+        Err(RaftError::NotLeader {
+            current_leader: None,
+        })
+    }
     /// Forward a raw Kafka protocol request to the active controller if this
     /// node is a broker-only observer. Controller and combined nodes return
     /// `None` so the caller handles the request locally.

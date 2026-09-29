@@ -33,6 +33,10 @@ pub enum VoterChange {
     Remove(RemoveVoter),
     Update(UpdateVoter),
     FinalizeKraftVersion(u16),
+    /// Run every check [`VoterChange::FinalizeKraftVersion`] runs, and write
+    /// nothing. Kafka's `LeaderState.maybeAppendUpgradedKRaftVersion` runs its
+    /// checks whatever `validateOnly` says, and skips only the append.
+    ValidateKraftVersion(u16),
 }
 
 /// Outcome shared by all three operations.
