@@ -520,3 +520,53 @@ async fn a_healthy_partition_in_the_same_request_is_unaffected() {
     );
     broker.shutdown().await;
 }
+
+/// Kafka's `SharePartition` stops taking records once the window from the SPSO
+/// to the SPEO reaches `group.share.partition.max.record.locks`, until an
+/// acknowledgement, a release or a lock timeout moves the SPSO. A member that
+/// fetches again without acknowledging must not get another limit's worth of
+/// records each time.
+#[tokio::test]
+async fn a_member_that_does_not_acknowledge_gets_no_more_than_the_record_lock_limit() {
+    let (broker, _dir) = start_broker_with(|cfg| {
+        cfg.audit_enabled = false;
+        cfg.authorizer = Arc::new(AllowAllAuthorizer);
+        cfg.share_group.max_inflight_records = 100;
+    })
+    .await;
+    let topic = "record-lock-limit";
+    let group = "g-record-lock-limit";
+    let topic_id = create_topic(&broker, topic, 1).await;
+    initialize_share_state(&broker, group, topic_uuid(topic_id), 0).await;
+    let opened = share_fetch_one(&broker, group, 0, topic_id, 0).await;
+    assert!(opened.error_code == codes::NONE, "{opened:?}");
+    produce_records(&broker, topic, 0, 250).await;
+
+    let mut per_fetch = Vec::new();
+    for epoch in 1..=3 {
+        let row = share_fetch_one(&broker, group, epoch, topic_id, 0).await;
+        per_fetch.push((row.error_code, acquired(&row)));
+    }
+    let end_offset = broker
+        .broker_arc_for_test()
+        .share_partition_leaders
+        .peek_for_test(group, topic_uuid(topic_id), 0)
+        .expect("a cached share-partition leader")
+        .lock()
+        .await
+        .end_offset
+        .0;
+
+    assert!(
+        (per_fetch, end_offset)
+            == (
+                vec![
+                    (codes::NONE, vec![(0, 99)]),
+                    (codes::NONE, vec![]),
+                    (codes::NONE, vec![]),
+                ],
+                100
+            )
+    );
+    broker.shutdown().await;
+}
