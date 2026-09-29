@@ -20,7 +20,7 @@ use krabka_protocol::owned::{
     },
 };
 
-use super::integration_tests::{log_holds_key, seed_topic_a, topic};
+use super::integration_tests::{log_holds_key, open_transaction_for_group, seed_topic_a, topic};
 use crate::{
     authorizer::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer},
     codes,
@@ -303,6 +303,12 @@ async fn per_topic_codes_survive_every_exit_and_gate_the_coordinator_call() {
         }
         if case.staged {
             stage_producer_identity(&broker, &transactional_id, producer_id).await;
+        } else {
+            // KIP-890 verifies the producer against an open transaction that
+            // holds the group's offsets partition before it validates the
+            // group.
+            open_transaction_for_group(&broker, &transactional_id, (producer_id, 0), &group_id)
+                .await;
         }
         let (member_id, generation_id) = match case.member {
             Member::Simple => (String::new(), -1),
