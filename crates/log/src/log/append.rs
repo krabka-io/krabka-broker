@@ -446,11 +446,16 @@ impl Log {
         // boundary snapshot.
         self.active_segment_flush()?;
         producer_snapshot::write(&*self.io, &self.dir, new_base, &self.producer_state)?;
-        let mut old = self
+        // Sealing writes the segment's last time-index entry, which can fail,
+        // so it runs before the segment leaves `self.active`.
+        self.active
+            .as_mut()
+            .expect("active segment must exist before rolling")
+            .seal()?;
+        let old = self
             .active
             .take()
             .expect("active segment must exist before rolling");
-        old.seal();
         let old_base = old.base_offset();
         self.segments.push(old);
         let mut new_seg = Segment::create(&self.dir, new_base)?;

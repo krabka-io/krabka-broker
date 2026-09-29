@@ -42,7 +42,7 @@ pub(super) fn write_sealed_segment(dir: &Path, base_offset: i64, records: Vec<Re
         ..RecordBatch::default()
     };
     seg.append(&batch, INDEX_INTERVAL).unwrap();
-    seg.seal();
+    seg.seal().unwrap();
     seg
 }
 
@@ -55,7 +55,7 @@ pub(super) fn write_sealed_batches(dir: &Path, batches: &[RecordBatch]) -> Segme
     for batch in batches {
         seg.append(batch, INDEX_INTERVAL).unwrap();
     }
-    seg.seal();
+    seg.seal().unwrap();
     seg
 }
 
