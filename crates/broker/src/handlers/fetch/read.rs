@@ -4,7 +4,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use krabka_log::{Log, Offset};
+use krabka_log::{Log, LogError, Offset};
 use krabka_protocol::{
     owned::fetch_response::{AbortedTransaction, PartitionData},
     records::RecordsPayload,
@@ -12,7 +12,7 @@ use krabka_protocol::{
 use krabka_units::{ByteSize, convert::ByteSizeExt as _};
 
 use super::{FetchWatermarks, VisibilityWindow, compute_visibility_window, plan::refused_read};
-use crate::{codes, error::BrokerError, partition::Partition};
+use crate::{codes, error::BrokerError, log_dir_status::LogDirRegistry, partition::Partition};
 
 /// Hold the partition's log mutex for a short time to read the offsets, and
 /// optionally the verbatim on-disk batch bytes through `Log::read_raw`.
@@ -62,7 +62,77 @@ pub(super) struct ReadRequest {
     pub(super) sendfile_min_bytes: usize,
 }
 
+/// Read one partition's local log into `out`, and return the bytes it served.
+///
+/// A failed read never fails the fetch. Kafka's `ReplicaManager.readFromLog`
+/// catches whatever one partition's read throws and answers that partition's
+/// row with the error, so the other partitions of the request are still
+/// served; [`settle_failed_read`] is that catch.
 pub(super) async fn do_read(
+    part: &Partition,
+    request: ReadRequest,
+    log_dir_status: &LogDirRegistry,
+    out: &mut PartitionData,
+) -> usize {
+    match read_local_log(part, request, out).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            *out = settle_failed_read(part, out.partition_index, &error, log_dir_status);
+            0
+        }
+    }
+}
+
+/// The row of a read that failed, and the log-dir bookkeeping that goes with it.
+///
+/// The catch arms of Kafka's `ReplicaManager.readFromLog.read`:
+///   * an `IOException`, which `LocalLog.maybeHandleIOException` has already
+///     turned into `KafkaStorageException` after it took the dir offline, is
+///     `KAFKA_STORAGE_ERROR`. The dir goes offline here as well, so the next
+///     fetch reaches the offline-dir refusal and the controller moves
+///     leadership away, instead of the same read failing on every retry;
+///   * `OffsetOutOfRangeException` is `OFFSET_OUT_OF_RANGE`. The log raises
+///     [`LogError::OffsetTooLow`] when retention or `DeleteRecords` moved the
+///     log start between `plan_read` and the read, and
+///     [`LogError::OffsetBelowLocalStart`] when tiering did. The row has the
+///     shape `plan_read` gives the same answer, so the cold-tier fallback
+///     treats both alike;
+///   * `CorruptRecordException` is `CORRUPT_MESSAGE`;
+///   * anything else is the generic row `Errors.forException` gives it.
+fn settle_failed_read(
+    part: &Partition,
+    partition_index: i32,
+    error: &BrokerError,
+    log_dir_status: &LogDirRegistry,
+) -> PartitionData {
+    if let BrokerError::Log(LogError::Io(io_error)) = error {
+        log_dir_status.mark_offline(
+            &part.log_dir.load(),
+            &format!("partition read failed: {io_error}"),
+        );
+    }
+    let code = match error {
+        BrokerError::Log(
+            LogError::OffsetTooLow { .. } | LogError::OffsetBelowLocalStart { .. },
+        ) => codes::OFFSET_OUT_OF_RANGE,
+        BrokerError::Log(LogError::CrcMismatch { .. } | LogError::Corrupt(_)) => {
+            codes::CORRUPT_MESSAGE
+        }
+        other => codes::from_broker_error(other),
+    };
+    if code != codes::OFFSET_OUT_OF_RANGE {
+        tracing::error!(
+            topic = %part.topic,
+            partition = part.index.0,
+            error_code = code,
+            %error,
+            "fetch: local log read failed",
+        );
+    }
+    refused_read(partition_index, code)
+}
+
+async fn read_local_log(
     part: &Partition,
     request: ReadRequest,
     out: &mut PartitionData,
@@ -552,12 +622,15 @@ mod tests {
 
     use assert2::assert;
     use bytes::Bytes;
-    use krabka_log::{DeliveryPolicy, Log, LogConfig, Offset};
+    use krabka_log::{DeliveryPolicy, Log, LogConfig, LogError, Offset};
     use krabka_protocol::{
         owned::fetch_response::{AbortedTransaction, PartitionData},
         records::{Attributes, Record, RecordBatch, RecordsPayload},
     };
     use krabka_units::prelude::{ByteSizeExt as _, mebibytes};
+
+    use super::read_task_panicked;
+    use crate::{error::BrokerError, log_dir_status::LogDirRegistry};
 
     /// The read budget for the hand-off test: larger than the log it reads, so
     /// the served bytes are the whole batch under either runtime flavor.
@@ -940,9 +1013,13 @@ mod tests {
 
         for (name, fetch_offset, expected_bytes, expected) in cases {
             let mut out = PartitionData::default();
-            let bytes = super::do_read(&partition, consumer_request(fetch_offset), &mut out)
-                .await
-                .expect("the read succeeds");
+            let bytes = super::do_read(
+                &partition,
+                consumer_request(fetch_offset),
+                &LogDirRegistry::default(),
+                &mut out,
+            )
+            .await;
             assert!(bytes == expected_bytes, "{name}");
             assert!(out == expected, "{name}");
         }
@@ -1009,10 +1086,10 @@ mod tests {
                     read_committed: true,
                     ..consumer_request(1)
                 },
+                &LogDirRegistry::default(),
                 &mut out,
             )
-            .await
-            .expect("the read succeeds");
+            .await;
             assert!(out == expected, "{name}");
         }
     }
@@ -1078,9 +1155,8 @@ mod tests {
                 aborted_transactions: Some(Vec::new()),
                 ..PartitionData::default()
             };
-            let bytes = super::do_read(&partition, request, &mut out)
-                .await
-                .expect("the read succeeds");
+            let bytes =
+                super::do_read(&partition, request, &LogDirRegistry::default(), &mut out).await;
 
             assert!(bytes == 0, "{name}");
             assert!(out == refused, "{name}");
@@ -1128,9 +1204,13 @@ mod tests {
         partition.replica_state.lock().await.hw = Offset(2);
 
         let mut local = PartitionData::default();
-        super::do_read(&partition, consumer_request(0), &mut local)
-            .await
-            .expect("the read succeeds");
+        super::do_read(
+            &partition,
+            consumer_request(0),
+            &LogDirRegistry::default(),
+            &mut local,
+        )
+        .await;
         let mut reported = PartitionData::default();
         super::LiveOffsets::of(&partition)
             .await
@@ -1170,6 +1250,113 @@ mod tests {
                 .expect("append a batch");
         }
         (dir, log)
+    }
+
+    /// A read that throws answers its own partition's row, the one Kafka's
+    /// `ReplicaManager.readFromLog.read` gives that exception, and an I/O
+    /// failure takes the partition's log dir offline so the next fetch is
+    /// refused at the gate instead of failing the same read again. Only the
+    /// `IOException` flips the dir: retention racing a read and a panic in
+    /// the read task are not a disk fault.
+    #[tokio::test]
+    async fn a_failed_read_answers_the_row_kafka_gives_its_error() {
+        struct Case {
+            name: &'static str,
+            error: BrokerError,
+            error_code: i16,
+            dir_offline: bool,
+        }
+        let cases = [
+            Case {
+                name: "an I/O failure",
+                error: BrokerError::Log(LogError::Io(std::io::Error::other("EIO"))),
+                error_code: crate::codes::KAFKA_STORAGE_ERROR,
+                dir_offline: true,
+            },
+            Case {
+                name: "retention moved the log start past the fetch offset",
+                error: BrokerError::Log(LogError::OffsetTooLow {
+                    requested: Offset(0),
+                    log_start: Offset(5),
+                }),
+                error_code: crate::codes::OFFSET_OUT_OF_RANGE,
+                dir_offline: false,
+            },
+            Case {
+                name: "tiering moved the local log start past the fetch offset",
+                error: BrokerError::Log(LogError::OffsetBelowLocalStart {
+                    requested: Offset(0),
+                    local_log_start: Offset(5),
+                }),
+                error_code: crate::codes::OFFSET_OUT_OF_RANGE,
+                dir_offline: false,
+            },
+            Case {
+                name: "a corrupt batch",
+                error: BrokerError::Log(LogError::Corrupt("record batch header".into())),
+                error_code: crate::codes::CORRUPT_MESSAGE,
+                dir_offline: false,
+            },
+            Case {
+                name: "a panic in the read task",
+                error: read_task_panicked(&"boom"),
+                error_code: crate::codes::UNKNOWN_SERVER_ERROR,
+                dir_offline: false,
+            },
+        ];
+        for case in cases {
+            let (partition, dir) = crate::partition::test_support::test_partition(Arc::new(
+                tokio::sync::Notify::new(),
+            ));
+            let log_dirs = LogDirRegistry::probe(&[dir.path().to_path_buf()]);
+
+            let row = super::settle_failed_read(&partition, 4, &case.error, &log_dirs);
+
+            assert!(
+                row == super::refused_read(4, case.error_code),
+                "{}",
+                case.name
+            );
+            assert!(
+                log_dirs.is_offline(dir.path()) == case.dir_offline,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    /// Retention or `DeleteRecords` can move the log start between `plan_read`
+    /// and the second log lock. The read then fails with `OffsetTooLow`, and
+    /// that is `OFFSET_OUT_OF_RANGE` for the one row, with the dir still
+    /// online, and not an error that fails the whole fetch.
+    #[tokio::test]
+    async fn a_read_that_loses_the_race_with_retention_is_out_of_range() {
+        let (partition, dir) =
+            crate::partition::test_support::test_partition(Arc::new(tokio::sync::Notify::new()));
+        let limit = {
+            let mut log = partition.log.lock().expect("log mutex poisoned");
+            log.append(&mut RecordBatch {
+                records: vec![Record {
+                    offset_delta: 0,
+                    value: Some(Bytes::from_static(b"deleted by retention")),
+                    ..Record::default()
+                }],
+                ..RecordBatch::default()
+            })
+            .expect("append the batch retention then deletes");
+            let limit = log.log_end_offset();
+            log.trim_to_offset(limit)
+                .expect("advance the log start past the fetch offset");
+            limit
+        };
+        let log_dirs = LogDirRegistry::probe(&[dir.path().to_path_buf()]);
+
+        let error = super::read_records(&partition.log, &whole_log_read(limit))
+            .expect_err("the fetch offset is below the log start");
+        let row = super::settle_failed_read(&partition, 0, &error, &log_dirs);
+
+        assert!(row == super::refused_read(0, crate::codes::OFFSET_OUT_OF_RANGE));
+        assert!(!log_dirs.is_offline(dir.path()));
     }
 
     #[test]

@@ -17,7 +17,7 @@ use super::{
     request::EffectivePartition,
     response::group_into_topic_responses,
 };
-use crate::{broker::Broker, codes, error::BrokerError, partition::Partition};
+use crate::{broker::Broker, codes, partition::Partition};
 
 type WaitFut = std::pin::Pin<Box<dyn std::future::Future<Output = Woken> + Send>>;
 
@@ -203,7 +203,7 @@ pub(super) async fn execute_pending_reads(
     max_wait_ms: i32,
     sendfile_capable: bool,
     phases: &crate::metrics::RequestPhases,
-) -> Result<(Vec<FetchableTopicResponse>, Vec<Vec<u64>>), BrokerError> {
+) -> (Vec<FetchableTopicResponse>, Vec<Vec<u64>>) {
     let mut state = LongPollState {
         // Kafka's `fetchMinBytes = min(minBytes, fetchMaxBytes)`: a floor the
         // response's own cap could never clear is not a floor at all.
@@ -262,9 +262,10 @@ pub(super) async fn execute_pending_reads(
                 sendfile_capable,
                 sendfile_min_bytes: broker.config.sendfile_min.bytes_usize(),
             },
+            &broker.log_dir_status,
             &mut read.out,
         )
-        .await?;
+        .await;
         if metadata_only {
             // The response's one-batch progress exception already went to an
             // earlier partition. `Log::read_raw` still serves at least one
@@ -308,9 +309,9 @@ pub(super) async fn execute_pending_reads(
         .iter()
         .any(|read| read.out.preferred_read_replica >= 0);
     if state.total() < state.min_bytes && max_wait_ms > 0 && !has_preferred_read_replica {
-        long_poll_then_reread(broker, &mut pending, waits, &mut state, phases).await?;
+        long_poll_then_reread(broker, &mut pending, waits, &mut state, phases).await;
     }
-    Ok(group_into_topic_responses(pending))
+    group_into_topic_responses(pending)
 }
 
 /// Park on the armed waiters until the fetch has `min_bytes` to answer with,
@@ -333,7 +334,7 @@ async fn long_poll_then_reread(
     mut waits: Vec<WaitFut>,
     state: &mut LongPollState,
     phases: &crate::metrics::RequestPhases,
-) -> Result<(), BrokerError> {
+) {
     let max_wait = Duration::from_millis(u64::from(u32::try_from(state.max_wait_ms).unwrap_or(0)));
     let deadline = tokio::time::Instant::now() + max_wait;
     loop {
@@ -341,10 +342,10 @@ async fn long_poll_then_reread(
             || has_read_error(pending)
             || state.total() >= state.min_bytes
         {
-            return Ok(());
+            return;
         }
         if waits.is_empty() {
-            return Ok(());
+            return;
         }
         // The park is the Fetch remote phase: this broker has read everything
         // it holds and is waiting for someone else to append, so the time
@@ -365,7 +366,7 @@ async fn long_poll_then_reread(
         // `arm_wait` gives: an append landing while this read runs would
         // otherwise leave nothing registered to catch it.
         waits.push(arm_wait(woken.pending, woken.notify));
-        reread_woken(broker, pending, woken.pending, state, phases).await?;
+        reread_woken(broker, pending, woken.pending, state, phases).await;
     }
 }
 
@@ -456,19 +457,19 @@ async fn reread_woken(
     index: usize,
     state: &mut LongPollState,
     phases: &crate::metrics::RequestPhases,
-) -> Result<(), BrokerError> {
+) {
     let Some(read) = pending.get_mut(index) else {
-        return Ok(());
+        return;
     };
     let Some(part) = read.partition.clone() else {
-        return Ok(());
+        return;
     };
     // A partition the cold tier already answered keeps that answer. The local
     // log does not hold the offset -- that is what sent it to the tier in the
     // first place -- so a re-read would trade a served batch for another
     // object-store round trip.
     if state.cold_served[index] {
-        return Ok(());
+        return;
     }
     // `do_read` fills `aborted_transactions` only for a `read_committed`
     // consumer. Every other re-read leaves it null, as Kafka's `LocalLog.read`
@@ -503,9 +504,10 @@ async fn reread_woken(
             sendfile_capable: state.sendfile_capable,
             sendfile_min_bytes: broker.config.sendfile_min.bytes_usize(),
         },
+        &broker.log_dir_status,
         &mut read.out,
     )
-    .await?;
+    .await;
     if metadata_only {
         // See the first-pass comment: the progress exception already went to
         // an earlier partition in this response, so a batch this re-read got
@@ -532,7 +534,6 @@ async fn reread_woken(
     state.cold_served[index] = cold > 0;
     state.bytes[index] = bytes + cold;
     state.charge(state.bytes[index]);
-    Ok(())
 }
 
 /// Serve `read`'s offset out of the cold tier when the local log no longer
@@ -815,9 +816,7 @@ mod tests {
         // the first partition's read still serves it whole, which alone
         // spends the entire budget before the second partition is read.
         let (topics, _cpu) =
-            super::execute_pending_reads(&broker, pending, 0, 8, 0, false, &phases)
-                .await
-                .expect("fetch");
+            super::execute_pending_reads(&broker, pending, 0, 8, 0, false, &phases).await;
 
         let served_a = &topics[0].partitions[0];
         let served_b = &topics[1].partitions[0];
@@ -951,9 +950,7 @@ mod tests {
 
             let phases = RequestPhases::default();
             let (topics, _cpu) =
-                super::execute_pending_reads(&broker, pending, 0, 8, 0, false, &phases)
-                    .await
-                    .expect("fetch");
+                super::execute_pending_reads(&broker, pending, 0, 8, 0, false, &phases).await;
 
             assert!(
                 served_base_offsets(&topics[0].partitions[0]) == vec![0],
@@ -1164,9 +1161,7 @@ mod tests {
         // A response budget smaller than partition A's own cold batch: A's
         // read alone spends it, leaving B with nothing.
         let (topics, _cpu) =
-            super::execute_pending_reads(&broker, pending, 0, 1, 0, false, &phases)
-                .await
-                .expect("fetch");
+            super::execute_pending_reads(&broker, pending, 0, 1, 0, false, &phases).await;
 
         let served_a = &topics[0].partitions[0];
         let served_b = &topics[1].partitions[0];
@@ -1362,9 +1357,7 @@ mod tests {
 
         let phases = crate::metrics::RequestPhases::default();
         let mut state = state_for(&pending, 0, 0);
-        super::long_poll_then_reread(&broker, &mut pending, Vec::new(), &mut state, &phases)
-            .await
-            .expect("re-read");
+        super::long_poll_then_reread(&broker, &mut pending, Vec::new(), &mut state, &phases).await;
 
         assert!(pending[0].out.error_code == crate::codes::FENCED_LEADER_EPOCH);
         // A fenced-epoch row never touches the log, so it carries the -1
@@ -1434,13 +1427,12 @@ mod tests {
         let waits = super::arm_waits(&pending);
         let phases = RequestPhases::default();
         let mut state = state_for(&pending, 4096, 30_000);
-        let completed = tokio::time::timeout(
+        tokio::time::timeout(
             std::time::Duration::from_secs(2),
             super::long_poll_then_reread(&broker, &mut pending, waits, &mut state, &phases),
         )
         .await
         .expect("the error completes the long poll");
-        completed.expect("long poll");
 
         assert!(pending[0].out.error_code == crate::codes::OFFSET_OUT_OF_RANGE);
         broker_handle.shutdown().await;
@@ -1504,13 +1496,12 @@ mod tests {
                 .install_replication_target(None, node_id + 1, 0)
                 .await;
         });
-        let completed = tokio::time::timeout(
+        tokio::time::timeout(
             std::time::Duration::from_secs(2),
             super::long_poll_then_reread(&broker, &mut pending, waits, &mut state, &phases),
         )
         .await
         .expect("the leader change completes the long poll");
-        completed.expect("long poll");
         demote.await.expect("demote task");
 
         assert!(
@@ -1545,9 +1536,7 @@ mod tests {
             let mut pending = [consumer_read("reread", &part, read_committed)];
             let phases = RequestPhases::default();
             let mut state = state_for(&pending, 0, 0);
-            super::reread_woken(&broker, &mut pending, 0, &mut state, &phases)
-                .await
-                .expect("re-read");
+            super::reread_woken(&broker, &mut pending, 0, &mut state, &phases).await;
 
             assert!(
                 pending[0].out
@@ -1757,8 +1746,7 @@ mod tests {
             false,
             &phases,
         )
-        .await
-        .expect("fetch");
+        .await;
 
         appends.await.expect("producer task");
         let served = &topics[0].partitions[0];
@@ -1836,8 +1824,7 @@ mod tests {
             super::long_poll_then_reread(&broker, &mut pending, waits, &mut state, &phases),
         )
         .await
-        .expect("the fetch answers on the append it raced")
-        .expect("re-read");
+        .expect("the fetch answers on the append it raced");
 
         assert!(served_base_offsets(&pending[0].out) == vec![0]);
         broker_handle.shutdown().await;
