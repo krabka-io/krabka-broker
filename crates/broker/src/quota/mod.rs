@@ -100,6 +100,9 @@ struct QuotaConsumption<'a> {
     client_id: Option<&'a str>,
     quota_key: &'a str,
     amount: u64,
+    /// The most debt to keep, as the wait it takes the refill to repay it, for
+    /// a quota whose throttle Kafka bounds, and `None` for one it does not.
+    max_debt_wait: Option<Time>,
 }
 
 /// Charges `request.amount` tokens to the bucket of the quota entity the
@@ -151,8 +154,15 @@ fn consume_configured_quota(
         .buckets
         .get_or_create(request.quota_key, &entity_key, token_rate);
     // Kafka holds the quota as a double, so the bucket keeps a part token in
-    // its debt and the throttle is exact under a fractional rate.
-    let Some(overage) = debt_tokens(bucket.record(request.amount)) else {
+    // its debt and the throttle is exact under a fractional rate. A quota
+    // whose throttle is bounded keeps no more debt than the bound repays:
+    // Kafka forgets a sample after its quota window, so debt past the bound
+    // would throttle a client that has stopped overrunning for minutes.
+    let debt = match request.max_debt_wait {
+        Some(wait) => bucket.record_bounded(request.amount, wait),
+        None => bucket.record(request.amount),
+    };
+    let Some(overage) = debt_tokens(debt) else {
         return QuotaDelay::zero();
     };
     // Kafka bounds only the request quota's throttle (`ClientRequestQuotaManager`
@@ -352,6 +362,7 @@ mod tests {
                 client_id: Some(""),
                 quota_key: "request_percentage",
                 amount: 0,
+                max_debt_wait: None,
             },
             {
                 let called = Arc::clone(&initial_rate_called);
@@ -390,6 +401,7 @@ mod tests {
                     client_id: Some(""),
                     quota_key: "producer_byte_rate",
                     amount: 1,
+                    max_debt_wait: None,
                 },
                 {
                     let called = Arc::clone(&initial_rate_called);
@@ -422,6 +434,7 @@ mod tests {
                 client_id: Some(""),
                 quota_key: "producer_byte_rate",
                 amount: 10,
+                max_debt_wait: None,
             },
             |rate| rate,
             |overage, rate, token_rate| {

@@ -40,6 +40,7 @@ pub fn consume_request_quota(
             client_id,
             quota_key: "request_percentage",
             amount: elapsed_micros,
+            max_debt_wait: Some(maximum_delay),
         },
         request_percentage_token_rate,
         |overage_micros, _, rate_micros_per_sec| {
@@ -120,6 +121,26 @@ mod tests {
         let delay = consume_request_quota(&img, &buckets, "alice", Some(""), 1_000_000, millis(25));
 
         assert!(delay == millis(25));
+    }
+
+    /// Kafka's quota window forgets what a client recorded more than
+    /// `quota.window.num * quota.window.size.seconds` ago, so a client that
+    /// stops overrunning is not throttled for the size of the overrun. The
+    /// throttle is capped at `maximum_delay`, so debt past what `maximum_delay`
+    /// repays only kept the cap in force after the overload had ended.
+    #[test]
+    fn an_overload_is_forgotten_once_the_maximum_delay_has_repaid_it() {
+        let img = img_with_quota(vec![("user", Some("alice"))], 100.0);
+        let buckets = QuotaBuckets::with_window(secs(1));
+        let bound = millis(20);
+
+        // 1000 seconds of handler time in one request: the throttle is capped.
+        let during = consume_request_quota(&img, &buckets, "alice", Some(""), 1_000_000_000, bound);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let after = consume_request_quota(&img, &buckets, "alice", Some(""), 1_000, bound);
+
+        assert!(during == bound, "{during:?}");
+        assert!(after == <Time as TimeExt>::ZERO, "{after:?}");
     }
 
     /// The overage of one request stays charged for the next (#1212), as it

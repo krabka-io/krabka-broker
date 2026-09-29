@@ -343,8 +343,10 @@
           ]
         },
         "principal_to_local_rules": {
-          "default": [],
-          "description": "`auth_to_local` rule specs, applied in order (first match wins).",
+          "default": [
+            "DEFAULT"
+          ],
+          "description": "`auth_to_local` rule specs, applied in order (first match wins). Kafka's\ndefault for `sasl.kerberos.principal.to.local.rules` is `[\"DEFAULT\"]`,\nand an empty list maps no principal.",
           "items": {
             "type": "string"
           },

@@ -45,7 +45,12 @@ pub(super) fn throttle_follower_responses(
 /// The out-of-sync partitions share what the bucket holds, and a partition
 /// past it is answered without records. The in-sync bytes are recorded after
 /// that, so a burst of them leaves the bucket in debt and the next fetch of an
-/// out-of-sync replica finds nothing to draw.
+/// out-of-sync replica finds nothing to draw. The debt is kept for one
+/// replication quota window at most ([`REPLICATION_QUOTA_WINDOW`]), as Kafka's
+/// quota forgets a sample that leaves its window, so the replica is starved for
+/// that long and not for as long as the burst was big.
+///
+/// [`REPLICATION_QUOTA_WINDOW`]: crate::throttle::REPLICATION_QUOTA_WINDOW
 fn throttle_replica_traffic(
     leader_out: &crate::throttle::TokenBucket,
     metrics: &crate::metrics::BrokerMetrics,
@@ -91,7 +96,7 @@ fn throttle_replica_traffic(
             metrics.record_replication_throttle_sleep();
         }
     }
-    leader_out.record(in_sync_bytes);
+    leader_out.record_bounded(in_sync_bytes, crate::throttle::REPLICATION_QUOTA_WINDOW);
     // KIP-73: the measured leader-side throttled-replication rate, which
     // Kafka publishes as
     // `kafka.server:type=LeaderReplication,name=byte-rate`. It is what
@@ -581,6 +586,28 @@ mod tests {
         let next = throttle_leader_fetch(&bucket, "*", &[(600, false)]);
 
         check!((mixed, next) == (vec![4_000, 600], vec![0]));
+    }
+
+    /// The debt an in-sync burst leaves is kept for one replication quota
+    /// window at most, as Kafka's quota forgets a sample that leaves its
+    /// window. Without the bound a lagging follower on a throttled partition
+    /// is starved for as long as the burst was big, drops out of the ISR, and
+    /// `acks=all` produces fail with `NOT_ENOUGH_REPLICAS`. The burst here is
+    /// `100_000` bytes on a `1_000` B/s quota: 99 s of debt unbounded, 11 s bounded.
+    #[test]
+    fn an_in_sync_burst_is_forgotten_after_the_replication_window() {
+        let clock = qubit_clock::ManualMonotonicClock::new_shared();
+        let bucket = crate::throttle::TokenBucket::with_clock(clock.clone());
+        bucket.set_byte_rate(krabka_units::bytes_per_sec(1_000));
+
+        throttle_leader_fetch(&bucket, "*", &[(100_000, true)]);
+        let during = throttle_leader_fetch(&bucket, "*", &[(600, false)]);
+        clock
+            .advance(std::time::Duration::from_secs(12))
+            .expect("manual time moves forward");
+        let after = throttle_leader_fetch(&bucket, "*", &[(600, false)]);
+
+        check!((during, after) == (vec![0], vec![600]));
     }
 
     /// A partition that does not fit the budget goes back to the bucket

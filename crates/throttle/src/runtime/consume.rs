@@ -8,9 +8,11 @@
 //! [`BucketState::record`] are the whole step on the locked group, so they can
 //! be tested without threads.
 
+use krabka_units::prelude::{Time, TimeExt as _};
 use krabka_verified::throttle::{
     AvailableTokens, BurstCapacity, RefillTokens, RequestedTokens, plan_consume,
 };
+use num_traits::ToPrimitive as _;
 
 use super::{BucketState, MICROS_PER_TOKEN, TokenBucket};
 
@@ -82,16 +84,45 @@ impl TokenBucket {
     ///
     /// A rate-0 bucket has no limit, records nothing and reports no debt.
     ///
+    /// The debt is not capped, which is right for a byte-rate client quota:
+    /// its throttle is exactly `debt / rate`. A quota whose throttle is
+    /// bounded, or whose debt only ever starves a consumer of the bucket,
+    /// uses [`Self::record_bounded`].
+    ///
     /// # Panics
     /// Panics if the injected clock reads more than `u64::MAX` nanoseconds
     /// since its origin, about 584 years.
     pub fn record(&self, tokens: u64) -> u64 {
+        self.record_capped(tokens, None)
+    }
+
+    /// Charges `tokens` as [`Self::record`] does, and keeps at most `max_wait`
+    /// of debt: the debt the refill repays in `max_wait` at the current rate.
+    ///
+    /// Kafka's quota sample window forgets what a client recorded about
+    /// `quota.window.num * quota.window.size.seconds` ago (`SampledStat` purges
+    /// an expired sample), so the debt of an overload does not outlast the
+    /// window. A debt that grows without a bound outlasts it: a client whose
+    /// throttle is capped at `max_wait` would be throttled at the cap on every
+    /// request until the whole uncapped debt was repaid, and a bucket that
+    /// grants nothing while in debt would starve its other consumers for as
+    /// long. The cap leaves the throttle a caller derives from the debt, when
+    /// that throttle is itself bounded by `max_wait`, unchanged.
+    ///
+    /// # Panics
+    /// Panics if the injected clock reads more than `u64::MAX` nanoseconds
+    /// since its origin, about 584 years.
+    pub fn record_bounded(&self, tokens: u64, max_wait: Time) -> u64 {
+        self.record_capped(tokens, Some(max_wait))
+    }
+
+    fn record_capped(&self, tokens: u64, max_wait: Option<Time>) -> u64 {
         if self.fast_path_rate() == 0 {
             return 0;
         }
         let mut state = self.lock_state();
         let now = self.now_nanos();
-        state.record(now, tokens).unwrap_or(0)
+        state.record(now, tokens, max_wait).unwrap_or(0)
     }
 
     /// Gives back `tokens` that an earlier charge took and the caller did not
@@ -199,9 +230,10 @@ impl BucketState {
 
     /// Refills the bucket for the time elapsed up to `now`, then charges
     /// `tokens` whole tokens: the balance pays what it can, and the rest is
-    /// debt. Returns the debt after the charge in micro-tokens, or `None` when
-    /// the bucket has no limit.
-    fn record(&mut self, now: u64, tokens: u64) -> Option<u64> {
+    /// debt, at most what the refill repays in `max_wait` when there is one.
+    /// Returns the debt after the charge in micro-tokens, or `None` when the
+    /// bucket has no limit.
+    fn record(&mut self, now: u64, tokens: u64, max_wait: Option<Time>) -> Option<u64> {
         if self.micro_rate_per_sec == 0 {
             return None;
         }
@@ -213,9 +245,22 @@ impl BucketState {
             BurstCapacity(self.micro_burst),
             RequestedTokens(request),
         );
-        let debt = refilled.debt.saturating_add(request - grant.0);
+        let debt = refilled
+            .debt
+            .saturating_add(request - grant.0)
+            .min(self.debt_cap(max_wait));
         self.store(refilled, new_available.0, debt);
         Some(debt)
+    }
+
+    /// The most debt, in micro-tokens, that the refill repays in `max_wait`,
+    /// or no cap without one.
+    fn debt_cap(&self, max_wait: Option<Time>) -> u64 {
+        max_wait.map_or(u64::MAX, |wait| {
+            let micros = self.micro_rate_per_sec.to_f64().unwrap_or(f64::INFINITY)
+                * wait.secs_f64().max(0.0);
+            micros.round().to_u64().unwrap_or(u64::MAX)
+        })
     }
 
     /// Adds `micros` back to the balance, capped at the burst, after it has
@@ -246,7 +291,7 @@ mod tests {
 
     use assert2::check;
     use krabka_units::prelude::{
-        ByteRate, ByteRateExt as _, ByteSize, ByteSizeExt as _, bytes, bytes_per_sec,
+        ByteRate, ByteRateExt as _, ByteSize, ByteSizeExt as _, bytes, bytes_per_sec, secs,
     };
     use qubit_clock::ManualMonotonicClock;
 
@@ -681,9 +726,56 @@ mod tests {
 
         for (label, before, now, tokens, debt, after) in cases {
             let mut state = before;
-            let reported = state.record(now, tokens);
+            let reported = state.record(now, tokens, None);
             check!((reported, state) == (debt, after), "{label}");
         }
+    }
+
+    /// A bounded charge keeps at most what the refill repays in `max_wait`, so
+    /// an overload that ends is forgotten after that wait, as a sample that
+    /// leaves Kafka's quota window is, instead of throttling the bucket for
+    /// its whole size. Each row charges a thousand seconds of a `1_000` token/s
+    /// bucket, then reads the debt and what the bucket grants three seconds
+    /// later.
+    #[test]
+    fn bounded_debt_is_repaid_within_the_wait() {
+        // (label, max wait, debt after the charge in tokens, grant after 3 s)
+        let cases = [
+            ("an unbounded charge keeps its whole size", None, 999_000, 0),
+            (
+                "a two second bound keeps two seconds of debt",
+                Some(secs(2)),
+                2_000,
+                1_000,
+            ),
+            ("a zero bound keeps no debt", Some(secs(0)), 0, 1_000),
+        ];
+        for (label, max_wait, debt, grant) in cases {
+            let (b, clock) = manual_bucket();
+            b.set_token_rate_with_burst(1_000, 1_000);
+
+            let reported = b.record_capped(1_000_000, max_wait) / MICROS_PER_TOKEN;
+            clock
+                .advance(Duration::from_secs(3))
+                .expect("manual time moves forward");
+            let granted = b.try_consume(u64::MAX);
+
+            check!((reported, granted) == (debt, grant), "{label}");
+        }
+    }
+
+    /// The bound follows the rate the bucket has when it is charged: a rate
+    /// change keeps the balance, and the next bounded charge trims the debt to
+    /// the new rate's wait.
+    #[test]
+    fn the_bound_follows_the_current_rate() {
+        let (b, _clock) = manual_bucket();
+        b.set_token_rate_with_burst(1_000, 1_000);
+        check!(b.record_bounded(10_000, secs(5)) == 5_000 * MICROS_PER_TOKEN);
+
+        b.set_token_rate_with_burst(100, 100);
+
+        check!(b.record_bounded(0, secs(5)) == 500 * MICROS_PER_TOKEN);
     }
 
     /// A bucket at half a token per second admits half a token per second:

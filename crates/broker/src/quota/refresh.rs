@@ -4,7 +4,7 @@
 //! The subscription itself is [`watch_image_loop`], shared with
 //! `throttle::refresh`; only the per-image work differs.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use krabka_metadata::{EntityKey, MetadataImage};
 use krabka_units::convert::ByteRateExt as _;
@@ -24,14 +24,17 @@ pub async fn run(
     watch_image_loop(images, "quota refresh", shutdown, |image| {
         // Kafka resolves an `ip` entity's name when it applies the record
         // (#1214). Literals resolve here, and a host name is looked up off
-        // this loop and applied to the buckets when it has an address.
+        // this loop and applied to the buckets when it has an address. A name
+        // that a lookup is running for, or that failed a moment ago, is not
+        // looked up again by this image.
         let unresolved = buckets.ip_names().update(image);
         refresh_buckets(image, &buckets);
-        if !unresolved.is_empty() {
+        let due = buckets.ip_names().claim(unresolved, Instant::now());
+        if !due.is_empty() {
             let buckets = Arc::clone(&buckets);
             let latest = latest.clone();
             tokio::spawn(async move {
-                buckets.ip_names().resolve(&unresolved).await;
+                buckets.ip_names().resolve(&due).await;
                 let image = Arc::clone(&latest.borrow());
                 buckets.ip_names().update(&image);
                 refresh_buckets(&image, &buckets);

@@ -170,7 +170,7 @@ TOML shape of `[gssapi]`. Maps to [`crate::network::auth::GssapiConfig`]. `princ
 | `kdc` | string | broker default |  | KDC endpoint (e.g. `tcp://kdc:88`) that bypasses krb5.conf discovery; falls back to krb5.conf when omitted. |
 | `keytab_path` | string | required |  | Keytab that holds this broker's Kerberos service key. The SASL/GSSAPI accept path reads it to answer a client's ticket. |
 | `max_time_skew` | string | broker default | duration | Maximum tolerated difference between client and broker clocks. |
-| `principal_to_local_rules` | array of string | `[]` |  | `auth_to_local` rule specs, applied in order (first match wins). |
+| `principal_to_local_rules` | array of string | `["DEFAULT"]` |  | `auth_to_local` rule specs, applied in order (first match wins). Kafka's default for `sasl.kerberos.principal.to.local.rules` is `["DEFAULT"]`, and an empty list maps no principal. |
 | `realm` | string | broker default |  | Default Kerberos realm, the only realm the `DEFAULT` rule accepts. Kafka reads it from `krb5.conf`; when it is omitted `DEFAULT` matches no principal and the rules have to name the realm. |
 | `service_name` | string | broker default |  | `sasl.kerberos.service.name`. Defaults to `"kafka"` when omitted. |
 

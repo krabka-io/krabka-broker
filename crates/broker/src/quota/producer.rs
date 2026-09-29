@@ -28,6 +28,7 @@ pub fn consume_producer_quota(
             client_id,
             quota_key: "producer_byte_rate",
             amount: bytes,
+            max_debt_wait: None,
         },
         |rate| rate,
         // Kafka's `ClientQuotaManager.throttleTime` does not bound a

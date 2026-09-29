@@ -34,7 +34,8 @@ struct Compiled {
 }
 
 /// A replacement string Java's `Matcher.appendReplacement` refuses, which
-/// Java reports as `IllegalArgumentException` or `IndexOutOfBoundsException`.
+/// Java reports as `IllegalArgumentException` or `IndexOutOfBoundsException`,
+/// or a search the engine gave up on at its backtrack limit.
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub(super) struct ReplacementError(pub(super) String);
@@ -64,14 +65,31 @@ impl JavaPattern {
         self.0.search.captures_len() - 1
     }
 
-    /// `Matcher.matches()`. A search that runs past the engine's backtrack
-    /// limit counts as no match.
-    pub(super) fn matches(&self, input: &str) -> bool {
-        self.0.whole.is_match(input).unwrap_or(false)
+    /// `Matcher.matches()`.
+    ///
+    /// # Errors
+    ///
+    /// A search that runs past the engine's backtrack limit is an error and
+    /// not a no match. Java answers such a pattern, however slowly, so
+    /// reading the limit as "does not match" would let a rule that Java
+    /// applies fall through to the next rule, or to `DEFAULT`, and map the
+    /// principal to a name the operator never meant for it. A caller rejects
+    /// the name instead.
+    pub(super) fn matches(&self, input: &str) -> Result<bool, ReplacementError> {
+        self.0
+            .whole
+            .is_match(input)
+            .map_err(|error| ReplacementError(error.to_string()))
     }
 
     /// `input.replaceAll(pattern, replacement)` when `all`, and
     /// `input.replaceFirst(pattern, replacement)` when not.
+    ///
+    /// The matches are `Matcher.find`'s, not the `regex` crate's iterator's.
+    /// After a match that is not empty, `find` may match the empty string at
+    /// the very position the match ended, and the crate's iterator does not:
+    /// `"alice".replaceAll("(.*)", "$1x")` is `alicexx` in Java. After an empty
+    /// match `find` starts one character on.
     pub(super) fn replace(
         &self,
         input: &str,
@@ -80,8 +98,14 @@ impl JavaPattern {
     ) -> Result<String, ReplacementError> {
         let mut out = String::with_capacity(input.len());
         let mut copied = 0;
-        for captures in self.0.search.captures_iter(input) {
-            let captures = captures.map_err(|error| ReplacementError(error.to_string()))?;
+        let mut search_from = 0;
+        while search_from <= input.len() {
+            let captures = self
+                .0
+                .search
+                .captures_from_pos(input, search_from)
+                .map_err(|error| ReplacementError(error.to_string()))?;
+            let Some(captures) = captures else { break };
             let Some(whole) = captures.get(0) else { break };
             out.push_str(&input[copied..whole.start()]);
             self.append_replacement(&mut out, replacement, &captures)?;
@@ -89,6 +113,14 @@ impl JavaPattern {
             if !all {
                 break;
             }
+            search_from = if whole.start() == whole.end() {
+                input[whole.end()..]
+                    .chars()
+                    .next()
+                    .map_or(input.len() + 1, |next| whole.end() + next.len_utf8())
+            } else {
+                whole.end()
+            };
         }
         out.push_str(&input[copied..]);
         Ok(out)
@@ -187,8 +219,131 @@ mod tests {
         ];
         for (source, input, expected) in cases {
             check!(
-                pattern(source).matches(input) == expected,
+                pattern(source).matches(input).ok() == Some(expected),
                 "{source} against {input}"
+            );
+        }
+    }
+
+    /// A search that runs past the engine's backtrack limit is an error. Java
+    /// answers the same pattern, slowly, so "no match" would send a rule that
+    /// Java applies on to the next rule, or to `DEFAULT`.
+    #[test]
+    fn matches_reports_a_search_the_engine_gave_up_on() {
+        let hostile = format!("{}b", "a".repeat(40));
+
+        let result = pattern("^(a|aa)+\\1$").matches(&hostile);
+
+        assert!(result.is_err());
+    }
+
+    /// `Matcher.find` may match the empty string at the position a non-empty
+    /// match ended, which the `regex` crate's iterator does not, and starts
+    /// one character on after an empty match. Each row is the result of
+    /// `input.replaceAll(pattern, replacement)` on JDK 21.
+    #[test]
+    fn replace_all_finds_an_empty_match_after_a_non_empty_one() {
+        // (pattern, input, replacement, result)
+        let cases = [
+            ("(.*)", "alice", "$1x", "alicexx"),
+            ("a*", "baaac", "-", "-b--c-"),
+            ("x*", "abc", "-", "-a-b-c-"),
+            ("\\w*", "ab cd", "[$0]", "[ab][] [cd][]"),
+            ("(?:)", "é!", "|", "|é|!|"),
+            ("", "", "|", "|"),
+            ("a", "", "|", ""),
+            ("b*", "aé", "-", "-a-é-"),
+        ];
+        for (source, input, replacement, expected) in cases {
+            check!(
+                pattern(source)
+                    .replace(input, replacement, true)
+                    .ok()
+                    .as_deref()
+                    == Some(expected),
+                "{source} on {input}"
+            );
+        }
+    }
+
+    /// `replaceFirst` stops after the first match, an empty one included.
+    #[test]
+    fn replace_first_stops_after_the_first_match_even_when_it_is_empty() {
+        // (pattern, input, replacement, result)
+        for (source, input, replacement, expected) in [
+            ("(.*)", "alice", "$1x", "alicex"),
+            ("b*", "abc", "-", "-abc"),
+        ] {
+            check!(
+                pattern(source)
+                    .replace(input, replacement, false)
+                    .ok()
+                    .as_deref()
+                    == Some(expected),
+                "{source} on {input}"
+            );
+        }
+    }
+
+    /// Java reads `\w`, `\d`, `\s` and `\b` as ASCII unless `(?U)` asks for
+    /// Unicode, and `.` stops at every line terminator unless `(?s)` or `(?d)`
+    /// says otherwise. Each row is `Pattern.matches` on JDK 21, except `\b`,
+    /// which reads ASCII from JDK 19.
+    #[test]
+    fn matches_reads_classes_as_ascii_and_dot_as_java_does() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            ("\\w+", "abc_09", true),
+            ("\\w+", "é", false),
+            ("\\W", "é", true),
+            ("\\d", "٣", false),
+            ("\\D", "٣", true),
+            ("\\s", " \t\u{0B}", false),
+            ("\\s+", " \t\u{0B}", true),
+            ("\\s", "\u{a0}", false),
+            ("\\s", "\u{2003}", false),
+            ("\\S", "\u{a0}", true),
+            ("[\\w.]+", "a.b", true),
+            ("[\\w.]+", "é", false),
+            ("[^\\w]", "é", true),
+            ("[\\W]+", "é!", true),
+            ("[\\d-]+", "1-2", true),
+            ("[\\s]", "\u{a0}", false),
+            ("(?U)\\w+", "é", true),
+            ("(?U)\\d", "٣", true),
+            ("(?U)\\s", "\u{a0}", true),
+            ("(?U:\\w)\\w", "éa", true),
+            ("(?U:\\w)\\w", "éé", false),
+            ("(?:(?U)\\w)\\w", "éé", false),
+            ("(?U)(?-U)\\w", "é", false),
+            ("\\bfoo", "foo", true),
+            ("a\\b", "a", true),
+            ("\\Bfoo", "foo", false),
+            ("a\\bé", "aé", true),
+            ("\\bé", "é", false),
+            ("a\\Bé", "aé", false),
+            ("a.b", "axb", true),
+            ("a.b", "a\nb", false),
+            ("a.b", "a\rb", false),
+            ("a.b", "a\u{85}b", false),
+            ("a.b", "a\u{2028}b", false),
+            ("a.b", "a\u{2029}b", false),
+            (".*", "abc\rdef", false),
+            ("(?s)a.b", "a\rb", true),
+            ("(?s)a.b", "a\nb", true),
+            ("(?d)a.b", "a\rb", true),
+            ("(?d)a.b", "a\u{85}b", true),
+            ("(?d)a.b", "a\nb", false),
+            ("(?s:a.)b.", "a\nbx", true),
+            ("(?s:a.)b.", "a\nb\r", false),
+            ("(?s)(?-s).", "\n", false),
+            ("a[.]b", "a.b", true),
+            ("a\\.b", "axb", false),
+        ];
+        for (source, input, expected) in cases {
+            check!(
+                pattern(source).matches(input).ok() == Some(expected),
+                "{source:?} against {input:?}"
             );
         }
     }

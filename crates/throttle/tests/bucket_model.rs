@@ -72,8 +72,9 @@
 //! capped, a reset shrinks the burst, the bucket drains, and a reset keeps a
 //! balance under the new burst. Debt is outside the model: `try_consume`
 //! never creates it, and `record` differs from a consume only in what it does
-//! with the part it cannot grant, which the unit tests in `src/runtime/consume.rs`
-//! cover.
+//! with the part it cannot grant, which it keeps as debt, at most what the
+//! refill repays in `max_wait` for `record_bounded`. The unit tests in
+//! `src/runtime/consume.rs` cover both.
 //!
 //! # Runs
 //!

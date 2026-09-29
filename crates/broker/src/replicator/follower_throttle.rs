@@ -99,7 +99,9 @@ pub(super) fn record_replicated(cfg: &Config, bytes: u64) {
         && cfg.throttle_state.follower_in.byte_rate() != <ByteRate as ByteRateExt>::ZERO
         && follower_partition_throttled(cfg)
     {
-        cfg.throttle_state.follower_in.record(bytes);
+        cfg.throttle_state
+            .follower_in
+            .record_bounded(bytes, crate::throttle::REPLICATION_QUOTA_WINDOW);
         cfg.metrics.record_replication_throttled_in(bytes);
     }
 }
@@ -312,6 +314,28 @@ mod tests {
                     FetchThrottleDecision::Sleep
                 )
         );
+    }
+
+    /// The debt a caught-up follower's bytes leave is kept for one
+    /// replication quota window at most, as Kafka's quota forgets a sample
+    /// that leaves its window. A burst of `100_000` bytes on a `1_000` B/s quota
+    /// is 99 s of debt unbounded, and a lagging partition of the same broker
+    /// would sit out all of it; bounded, it sits out 11 s at most.
+    #[test]
+    fn a_caught_up_follower_keeps_one_window_of_debt_at_most() {
+        let (cfg, _log_dir) = test_config(image_with_follower_throttle("*"));
+        cfg.throttle_state
+            .follower_in
+            .set_byte_rate_with_burst(bytes_per_sec(1000), bytes(1000));
+        cfg.lag.note_appended(1);
+        cfg.lag.update(10, 10);
+
+        record_replicated(&cfg, 100_000);
+
+        // The refill between the charge and the read repays a few micro-tokens.
+        let debt_tokens =
+            cfg.throttle_state.follower_in.record(0) / crate::throttle::MICROS_PER_TOKEN;
+        check!((10_900..=11_000).contains(&debt_tokens), "{debt_tokens}");
     }
 
     /// A partition that is not in sync drew its budget when the round was
