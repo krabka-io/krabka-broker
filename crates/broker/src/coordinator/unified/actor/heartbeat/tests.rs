@@ -118,8 +118,9 @@ async fn member_limit_rejects_only_new_members() {
 
 /// A consumer actor exists from its first heartbeat, but the group only from
 /// its first join. Kafka's `getOrMaybeCreateConsumerGroup` and
-/// `consumerGroupLeave` answer GROUP_ID_NOT_FOUND to any other epoch while the
-/// group is missing, and UNKNOWN_MEMBER_ID once it exists and lacks the member.
+/// `consumerGroupLeave` answer `GROUP_ID_NOT_FOUND` to any other epoch while
+/// the group is missing, and `UNKNOWN_MEMBER_ID` once it exists and lacks the
+/// member.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_actor_holds_no_consumer_group_before_the_first_join() {
     let (coord, _log) = make_coordinator();
