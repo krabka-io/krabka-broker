@@ -15,30 +15,60 @@ use crate::{
     txn_index::AbortedTxn,
 };
 
-/// Truncating to the log start is allowed; below it is not.
+/// Kafka's `UnifiedLog.truncateTo` never refuses a target below the log start.
+/// When a local segment reaches down to the target, the log is cut there and
+/// the log start moves down onto it (`logStartOffset = min(target,
+/// logStartOffset)`); the checkpoint follows, so a reopen agrees.
 ///
-/// The bound is what stops a truncation erasing the boundary the log
-/// promises readers -- a fetch below `log_start` is already refused, so a
-/// truncation past it would leave the two disagreeing.
+/// A follower whose start sits above the leader's divergence point, after
+/// retention or an unclean election, would otherwise fail the same truncation
+/// on every fetch and never rejoin the ISR.
 #[test]
-fn a_truncation_may_reach_the_log_start_but_not_pass_it() {
+fn a_truncation_below_the_log_start_lowers_the_start_to_the_target() {
     let dir = tempdir().unwrap();
     let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
     for _ in 0..4 {
         let mut batch = sample_batch(2);
         log.append(&mut batch).expect("append");
     }
-    log.set_log_start_offset(Offset(2)).expect("set log start");
+    log.set_log_start_offset(Offset(4)).expect("set log start");
 
+    log.truncate_to(Offset(4)).unwrap();
     check!(
-        log.truncate_to(Offset(2)).is_ok(),
-        "truncating to the log start itself"
+        log.log_start_offset() == Offset(4),
+        "a cut at the log start leaves it"
     );
-    let below = log.truncate_to(Offset(1));
-    check!(
-        matches!(below, Err(LogError::OffsetTooLow { .. })),
-        "below the log start is refused, got {below:?}"
-    );
+    log.truncate_to(Offset(2)).unwrap();
+    check!(log.log_end_offset() == Offset(2));
+    check!(log.log_start_offset() == Offset(2));
+
+    let reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
+    check!(reopened.log_start_offset() == Offset(2));
+    check!(reopened.log_end_offset() == Offset(2));
+}
+
+/// Kafka's `UnifiedLog.truncateTo` resets the log at the target when no local
+/// segment reaches down to it (`truncateFullyAndStartAt`): the log is empty,
+/// starts and ends at the target, and appends continue from there.
+#[test]
+fn a_truncation_below_every_local_segment_resets_the_log_at_the_target() {
+    let dir = tempdir().unwrap();
+    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    log.reset_to(Offset(20)).unwrap();
+    for _ in 0..3 {
+        let mut batch = sample_batch(2);
+        log.append(&mut batch).expect("append");
+    }
+    check!(log.log_start_offset() == Offset(20));
+    check!(log.log_end_offset() == Offset(26));
+
+    log.truncate_to(Offset(10)).unwrap();
+
+    check!(log.log_start_offset() == Offset(10));
+    check!(log.log_end_offset() == Offset(10));
+    let mut batch = sample_batch(2);
+    let (first_offset, _) = log.append(&mut batch).unwrap();
+    check!(first_offset == Offset(10));
 }
 
 #[test]
