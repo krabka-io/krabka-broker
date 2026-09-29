@@ -20,6 +20,10 @@ use krabka_protocol::{
 /// `message.max.bytes`, which a topic that sets neither inherits.
 pub(super) const MAX_MESSAGE_BYTES: &str = "max.message.bytes";
 
+/// Kafka's `segment.bytes`, which `UnifiedLog.append` holds a whole record set
+/// to no matter how large `max.message.bytes` is.
+pub(super) const SEGMENT_BYTES: &str = "segment.bytes";
+
 /// Kafka's `compression.type`, whose non-`producer` values make the broker
 /// re-encode a batch whose codec differs before it stores it.
 pub(super) const COMPRESSION_TYPE: &str = "compression.type";
@@ -207,9 +211,20 @@ pub(super) fn accepted(base_offset: i64, log_start_offset: i64) -> PartitionProd
 /// `base_offset=-1`, `log_append_time_ms=-1`, `log_start_offset=-1`, no record
 /// errors and no error message.
 pub(super) fn too_large() -> PartitionProduceResponse {
+    refused_before_append(codes::MESSAGE_TOO_LARGE)
+}
+
+/// The partition row a record set larger than `segment.bytes` answers with:
+/// `RECORD_LIST_TOO_LARGE` (18), Kafka's `RecordBatchTooLargeException`, with
+/// the same no-append offsets and no message as [`too_large`].
+pub(super) fn record_list_too_large() -> PartitionProduceResponse {
+    refused_before_append(codes::RECORD_LIST_TOO_LARGE)
+}
+
+fn refused_before_append(error_code: i16) -> PartitionProduceResponse {
     PartitionProduceResponse {
         index: 0,
-        error_code: codes::MESSAGE_TOO_LARGE,
+        error_code,
         base_offset: -1,
         log_append_time_ms: -1,
         log_start_offset: -1,

@@ -150,6 +150,20 @@ impl PreparedBatch {
         }
     }
 
+    /// Wire length of the record set the writer appends: the producer's own
+    /// bytes on the verbatim path, and the measure [`Self::stored_len`] takes
+    /// on the owned one. What Kafka's `UnifiedLog.append` holds against the
+    /// topic's `segment.bytes`.
+    pub(super) fn appended_len(
+        &self,
+        topic_compression: Option<krabka_compression::CompressionType>,
+    ) -> usize {
+        match &self.source {
+            PreparedSource::Verbatim(bytes) => bytes.len(),
+            PreparedSource::Owned(_) => self.stored_len(topic_compression).unwrap_or(0),
+        }
+    }
+
     /// Wire length of this batch as the writer will store it, when storing it
     /// means encoding it afresh.
     ///

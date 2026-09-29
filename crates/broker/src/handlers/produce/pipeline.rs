@@ -606,6 +606,21 @@ pub(super) async fn admit_partition(
     })))
 }
 
+/// Whether the batch, as the writer will store it, is larger than the
+/// partition's `segment.bytes`.
+///
+/// The limit is read off the partition's own log config, which is what the log
+/// rolls segments by, so it is the topic's effective `segment.bytes`
+/// whether the topic set it or inherited the broker's.
+fn exceeds_segment_size(prepared: &PreparedBatch, part: &crate::partition::Partition) -> bool {
+    let Ok(log) = part.log.lock() else {
+        return false;
+    };
+    let config = log.config_snapshot();
+    drop(log);
+    prepared.appended_len(config.compression_type) > config.segment_size.bytes_usize()
+}
+
 /// The coordinator's answer applied to an admitted batch, then every stage
 /// from the dedup gate to the append.
 ///
@@ -662,6 +677,21 @@ pub(super) async fn complete_partition(
     let leader_epoch = part
         .current_leader_epoch
         .load(std::sync::atomic::Ordering::Acquire);
+
+    // ── segment.bytes ────────────────────────────────────────────────
+    // Kafka's `UnifiedLog.append` refuses a record set larger than the topic's
+    // `segment.bytes` with `RecordBatchTooLargeException`, which is
+    // `RECORD_LIST_TOO_LARGE`, and it does so ahead of the producer-state
+    // analysis: a duplicate that is too large is refused too. A batch is never
+    // split across segments, so the cap that keeps it out of a segment's
+    // roll decision is the segment's own size, and `max.message.bytes` above
+    // `segment.bytes` does not lift it. The log measures the whole record set
+    // it appends, and `out` already carries the -1 `base_offset` of a row that
+    // appended nothing.
+    if exceeds_segment_size(&prepared, &part) {
+        out.error_code = codes::RECORD_LIST_TOO_LARGE;
+        return Ok(PartitionOutcome::Done(out));
+    }
 
     // ── idempotent-producer dedup gate ───────────────────────
     match handle_duplicate(

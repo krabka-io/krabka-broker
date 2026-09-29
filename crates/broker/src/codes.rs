@@ -85,6 +85,10 @@ kafka_codes! {
     /// `message.max.bytes`. The JVM maps it to `RecordTooLargeException`,
     /// which no producer retries.
     MESSAGE_TOO_LARGE = 10;
+    /// `RECORD_LIST_TOO_LARGE` (18): a produced record set is larger than the
+    /// topic's `segment.bytes`. Kafka's `RecordBatchTooLargeException`, which a
+    /// JVM producer does not retry.
+    RECORD_LIST_TOO_LARGE = 18;
     /// `OFFSET_METADATA_TOO_LARGE` (12): an `OffsetCommit` partition row
     /// carries committed metadata longer than `offset.metadata.max.bytes`.
     OFFSET_METADATA_TOO_LARGE = 12;
@@ -639,10 +643,6 @@ pub fn from_broker_error(err: &crate::error::BrokerError) -> i16 {
         // fault: the produce row carries the same code the produce-side
         // `delivery.max.delay.ms` bound answers with.
         BrokerError::Log(krabka_log::LogError::ScheduleRunsBackwards { .. }) => INVALID_TIMESTAMP,
-        BrokerError::UnsupportedApi { .. } => UNSUPPORTED_VERSION,
-        // A raft write that reached a node which is no longer the leader is
-        // the same answer to a client as a partition whose writer is gone:
-        // retry, after refreshing metadata.
         // Kafka's `LocalLog.maybeHandleIOException` turns every `IOException`
         // of an append or a read into `KafkaStorageException`, which
         // `Errors.forException` answers with `KAFKA_STORAGE_ERROR`: retriable,
@@ -650,6 +650,10 @@ pub fn from_broker_error(err: &crate::error::BrokerError) -> i16 {
         // below, a disk fault is `UNKNOWN_SERVER_ERROR`, which the JVM
         // producer never retries.
         BrokerError::Log(krabka_log::LogError::Io(_)) => KAFKA_STORAGE_ERROR,
+        BrokerError::UnsupportedApi { .. } => UNSUPPORTED_VERSION,
+        // A raft write that reached a node which is no longer the leader is
+        // the same answer to a client as a partition whose writer is gone:
+        // retry, after refreshing metadata.
         BrokerError::PartitionWriterDied { .. }
         | BrokerError::Raft(krabka_raft::RaftError::NotLeader { .. }) => NOT_LEADER_OR_FOLLOWER,
         BrokerError::Raft(krabka_raft::RaftError::Network(_)) => REQUEST_TIMED_OUT,
