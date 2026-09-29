@@ -647,6 +647,48 @@ async fn add_voter_admits_a_candidate_by_kafkas_caught_up_rule() {
     }
 }
 
+/// Kafka drops an observer that has been silent for five minutes in
+/// `observerStates()`, which only `DescribeQuorum` calls, while
+/// `isReplicaCaughtUp` reads the same map with a window of an hour. A fetch by
+/// another observer must not forget a candidate that fetched to the log end six
+/// minutes ago: `DescribeQuorum` no longer lists it, and `AddRaftVoter` still
+/// admits it.
+#[tokio::test]
+async fn an_observer_that_dropped_out_of_describe_quorum_can_still_be_added() {
+    use crate::reconfig::{ReconfigOutcome, VoterChange};
+
+    let (mut leader, _dir) = kraft_version_one_leader();
+    let candidate = ReplicaKey {
+        id: NodeId(4),
+        directory_id: uuid::Uuid::from_u128(7),
+    };
+    let bystander = ReplicaKey {
+        id: NodeId(9),
+        directory_id: uuid::Uuid::from_u128(9),
+    };
+    let end = leader.log.log_end_offset().0;
+    leader.clock_base -= Duration::from_millis(10);
+    leader.record_observer_fetch(candidate, end);
+    leader.clock_base -= Duration::from_secs(360);
+    leader.record_observer_fetch(bystander, end);
+
+    let listed: Vec<NodeId> = leader
+        .quorum_state_snapshot()
+        .observers
+        .iter()
+        .map(|observer| observer.id)
+        .collect();
+    check!(listed == vec![NodeId(9)], "the five minutes hide it");
+    let (reply, mut rx) = oneshot::channel();
+    leader.on_reconfigure(VoterChange::Add(add_request(4, 7)), reply);
+    let appended = leader.log.log_end_offset();
+    leader.advance_and_apply(appended);
+    check!(
+        matches!(rx.try_recv(), Ok(Ok(ReconfigOutcome::Committed))),
+        "the hour keeps it caught up"
+    );
+}
+
 /// `AddVoterHandler` answers from the leader's own state before it contacts the
 /// candidate: a candidate the leader has never seen fetch still gets the
 /// pending-change, duplicate-id and `kraft.version` answers, and a request that
