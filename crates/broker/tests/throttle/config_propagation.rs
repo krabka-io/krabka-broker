@@ -56,7 +56,7 @@ async fn broker_scoped_alter_persists_in_image() {
 
 /// Test 2: `IncrementalAlterConfigs` with `resource_type=Topic` sets
 /// `leader.replication.throttled.replicas`. `TopicThrottle::for_topic`
-/// returns the correct throttled-replica entries.
+/// returns the partitions the list throttles on each broker.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn topic_throttle_config_propagates() {
     let (handle, _dir, addr) =
@@ -82,12 +82,20 @@ async fn topic_throttle_config_propagates() {
     .await;
     assert!(err == 0, "topic alter should succeed; got error_code={err}");
 
-    // Allow raft commit to propagate.
+    // Allow raft commit to propagate. Each broker keeps the entries that name
+    // it: brokers 1 and 2 throttle partition 0, and broker 3 does not.
     handle
         .wait_for_image(|img| {
-            let throttle = krabka_broker::throttle::TopicThrottle::for_topic(img, "foo");
-            throttle.leader.contains(0, krabka_broker::NodeId(1))
-                && throttle.leader.contains(0, krabka_broker::NodeId(2))
+            let throttles_partition_0 = |broker| {
+                krabka_broker::throttle::TopicThrottle::for_topic(
+                    img,
+                    "foo",
+                    krabka_broker::NodeId(broker),
+                )
+                .leader
+                .contains(0)
+            };
+            throttles_partition_0(1) && throttles_partition_0(2) && !throttles_partition_0(3)
         })
         .await;
     handle.shutdown().await;

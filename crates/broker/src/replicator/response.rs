@@ -27,7 +27,9 @@ use krabka_verified::{ReplicaFetchMutation, broker::ReplicaFetchFacts};
 use tracing::{info, warn};
 
 use super::{
-    Config, FollowedKey, replication_target_changed, task_replication_target,
+    Config, FollowedKey,
+    follower_throttle::record_replicated,
+    replication_target_changed, task_replication_target,
     truncation::{
         handle_epoch_fence, handle_offset_moved_to_tiered_storage, handle_offset_out_of_range,
     },
@@ -242,11 +244,7 @@ pub(super) async fn handle_partition_response(
                             "replicator: replicate_batch failed");
                             break;
                         }
-                        cfg.metrics.record_replication_in(
-                            &cfg.topic,
-                            cfg.partition.get(),
-                            u64::try_from(batch_bytes).unwrap_or(0),
-                        );
+                        record_replicated(cfg, u64::try_from(batch_bytes).unwrap_or(0));
                     }
                 }
                 _ => {}
@@ -258,6 +256,10 @@ pub(super) async fn handle_partition_response(
                 return RowAction::Drop;
             }
             part.set_follower_hw(Offset(part_resp.high_watermark)).await;
+            // KIP-73: the lag behind the leader's high watermark decides
+            // whether the follower throttle applies to this partition.
+            cfg.lag
+                .update(part_resp.high_watermark, part.log_end_offset().0);
             follow_leader_log_start(&part, cfg, part_resp.log_start_offset).await;
             RowAction::Continue
         }
@@ -382,11 +384,7 @@ async fn replicate_raw_batches(
                 "replicator: append failed");
             break;
         }
-        cfg.metrics.record_replication_in(
-            &cfg.topic,
-            cfg.partition.get(),
-            u64::try_from(batch_len).unwrap_or(0),
-        );
+        record_replicated(cfg, u64::try_from(batch_len).unwrap_or(0));
         remaining.advance(batch_len);
     }
     RowAction::Continue

@@ -51,6 +51,7 @@ mod test_support;
 mod truncation;
 
 use self::fetch_loop::run_fetcher_loop;
+pub(crate) use self::follower_throttle::ReplicaLag;
 use crate::{
     broker::spawn_partition_with_replication_target, config::ReplicationRuntimeConfig,
     partition::ReplicationTarget, partition_registry::PartitionRegistry, throttle::ThrottleState,
@@ -128,6 +129,10 @@ pub(crate) struct Config {
     /// The replicator increments `replication_bytes_in` after a successful
     /// follower-side append.
     pub metrics: crate::metrics::BrokerMetrics,
+    /// How far this partition trails the leader's high watermark, which decides
+    /// whether the KIP-73 follower throttle applies to it: a follower that has
+    /// caught up is never throttled.
+    pub lag: ReplicaLag,
 }
 
 /// A `(topic, partition)` pair, as the fetcher's partition map keys it.
