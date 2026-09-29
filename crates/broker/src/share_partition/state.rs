@@ -7,10 +7,13 @@
 //! `expire_locks` queries. Bytes, logs, locks, and persistence live elsewhere.
 //!
 //! Delivery-state codes match Kafka's on-the-wire values: `DS_AVAILABLE=0`,
-//! `DS_ACQUIRED=1`, `DS_ACKNOWLEDGED=2`, and `DS_ARCHIVED=4`. `Acquired` is
-//! transient, and the machine persists it back as `Available(0)`. `Deferred`
-//! is KFC-1's refinement of `Available` and persists as `Available(0)` too, so
-//! scheduled delivery adds no code to the wire encoding.
+//! `DS_ACQUIRED=1`, `DS_ACKNOWLEDGED=2`, `DS_ARCHIVING=3` and
+//! `DS_ARCHIVED=4`. `Acquired` is transient, and the machine persists it back
+//! as `Available(0)`. `Deferred` is KFC-1's refinement of `Available` and
+//! persists as `Available(0)` too, so scheduled delivery adds no code to the
+//! wire encoding. `Archiving` is KIP-1191's first phase of the dead-letter
+//! queue: a record that a `Reject` or the delivery limit would archive waits
+//! there, not terminal, until its dead-letter record is written.
 //!
 //! This file holds the types and the constructor. The transitions sit in one
 //! module per concern: `acquire` grows the window and hands records out,
@@ -26,6 +29,7 @@ use krabka_log::Offset;
 mod acknowledge;
 mod acquire;
 mod deferral;
+mod dlq;
 mod locks;
 mod persistence;
 mod window;
@@ -43,6 +47,7 @@ fn clamp_i32(n: i64) -> i32 {
 pub const DS_AVAILABLE: i8 = 0;
 pub const DS_ACQUIRED: i8 = 1;
 pub const DS_ACKNOWLEDGED: i8 = 2;
+pub const DS_ARCHIVING: i8 = 3;
 pub const DS_ARCHIVED: i8 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -50,6 +55,10 @@ pub enum RecordState {
     Available,
     Acquired,
     Acknowledged,
+    /// KIP-1191: on its way to `Archived` through the dead-letter queue. It is
+    /// not terminal, so the SPSO waits behind it until the queue write is
+    /// done.
+    Archiving,
     Archived,
     /// KFC-1: `Available`, but the record's delivery time has not arrived.
     ///
@@ -81,7 +90,10 @@ impl AckType {
     }
 }
 
-pub use self::acquire::AcquireShape;
+pub use self::{
+    acquire::AcquireShape,
+    dlq::{DlqCause, DlqRange},
+};
 
 /// A contiguous run of offsets acquired by a single `acquire` call.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,6 +155,13 @@ pub struct AcquisitionState {
     /// moved past (`numInFlightRecordsInBatch`) arise here.
     delivery_complete_count: i32,
     batches: Vec<InFlightBatch>,
+    /// KIP-1191: whether a record that a `Reject` or the delivery limit would
+    /// archive waits in `Archiving` for the dead-letter queue first. It
+    /// follows the group's config, so the owner of the state sets it with
+    /// [`AcquisitionState::set_dlq_enabled`] before each operation.
+    dlq_enabled: bool,
+    /// The `Archiving` runs whose dead-letter write has not started.
+    pending_dlq: Vec<DlqRange>,
 }
 
 impl AcquisitionState {
@@ -156,6 +175,8 @@ impl AcquisitionState {
             dirty: false,
             delivery_complete_count: 0,
             batches: Vec::new(),
+            dlq_enabled: false,
+            pending_dlq: Vec::new(),
         }
     }
 }

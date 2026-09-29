@@ -100,15 +100,22 @@ pub(super) async fn start_coordinators(
     );
     group_coordinator.set_share_persister(Arc::clone(&share_persister));
     group_coordinator.set_metadata_source(Arc::clone(controller));
-    let share_partition_leaders = Arc::new(
-        crate::share_partition::manager::SharePartitionLeaderManager::new(
-            config.node_id,
-            Arc::clone(partitions),
-            Arc::clone(controller),
-            Arc::clone(&share_persister),
-            Arc::new((*config.share_group).clone()),
-            config.share_session_cache_max_when_unlimited,
-        ),
+    let dead_letters = Arc::new(crate::share_partition::dlq::DlqWriter::new(
+        config,
+        Arc::clone(controller),
+        Arc::clone(partitions),
+        Arc::clone(auto_topic_creation),
+        Arc::clone(inter_broker_client),
+        listener_protocol,
+    ));
+    let share_partition_leaders = crate::share_partition::manager::SharePartitionLeaderManager::new(
+        config.node_id,
+        Arc::clone(partitions),
+        Arc::clone(controller),
+        Arc::clone(&share_persister),
+        Arc::new((*config.share_group).clone()),
+        config.share_session_cache_max_when_unlimited,
+        dead_letters,
     );
     share_partition_leaders.spawn_lock_sweeper();
     share_partition_leaders.spawn_share_version_watcher();

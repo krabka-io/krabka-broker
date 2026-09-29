@@ -60,6 +60,9 @@ use crate::{
     broker::Broker,
     codes,
     config::BrokerConfig,
+    config_keys::{
+        ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, MESSAGE_TIMESTAMP_TYPE, MESSAGE_TIMESTAMP_TYPE_CREATE,
+    },
     coordinator::bootstrap::OFFSETS_TOPIC,
     topic_creator::{ForwardedIdentity, TopicCreator, TopicCreatorError},
 };
@@ -256,6 +259,32 @@ impl AutoTopicCreation {
         drop(self.create_topics(&broker, &[name], None));
     }
 
+    /// KIP-1191: creates the share-group dead-letter topic `name` as this
+    /// broker, and waits for the controller's answer.
+    ///
+    /// It sends what Kafka's `ShareGroupDLQStateManager.createTopicBuilder`
+    /// sends: the cluster's default partition count and replication factor,
+    /// `errors.deadletterqueue.group.enable=true`, which marks the topic as
+    /// one a group may write to, and `message.timestamp.type=CreateTime`. The
+    /// dead-letter records carry the time of the write, and a cluster-wide
+    /// `LogAppendTime` default would overwrite it.
+    ///
+    /// # Errors
+    ///
+    /// [`TopicCreatorError`] when no broker is bound yet, or the controller
+    /// gave no answer.
+    pub(crate) async fn create_dead_letter_topic(
+        &self,
+        name: &str,
+    ) -> Result<CreateTopicsResponse, TopicCreatorError> {
+        let broker = self.broker.get().and_then(Weak::upgrade).ok_or_else(|| {
+            TopicCreatorError::Protocol("auto topic creation is not bound".into())
+        })?;
+        TopicCreator::new(&broker)
+            .create_topic_without_principal(create_topics_request(vec![dead_letter_topic(name)]))
+            .await
+    }
+
     /// Kafka's `createTopics`: sends one `CreateTopics` request for the names
     /// that can be created, and answers a `Metadata` row for each of `names`.
     ///
@@ -445,6 +474,30 @@ impl AutoTopicCreation {
         now_ms: i64,
     ) -> BTreeMap<String, String> {
         self.errors.errors_for_topics(names, now_ms)
+    }
+}
+
+/// KIP-1191: the `CreateTopics` row for the dead-letter topic `name`, as
+/// Kafka's `ShareGroupDLQStateManager.createTopicBuilder` builds it. The
+/// cluster's defaults give the partition count and the replication factor
+/// (-1), and two configs are set: `errors.deadletterqueue.group.enable=true`
+/// opts the topic in, and `message.timestamp.type=CreateTime` keeps the
+/// timestamp of each dead-letter record against a `LogAppendTime` default.
+fn dead_letter_topic(name: &str) -> CreatableTopic {
+    let config = |name: &str, value: &str| CreatableTopicConfig {
+        name: name.to_owned(),
+        value: Some(value.to_owned()),
+        ..Default::default()
+    };
+    CreatableTopic {
+        name: name.to_owned(),
+        num_partitions: -1,
+        replication_factor: -1,
+        configs: vec![
+            config(ERRORS_DEADLETTERQUEUE_GROUP_ENABLE, "true"),
+            config(MESSAGE_TIMESTAMP_TYPE, MESSAGE_TIMESTAMP_TYPE_CREATE),
+        ],
+        ..Default::default()
     }
 }
 

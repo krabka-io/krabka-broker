@@ -9,7 +9,7 @@
 
 use krabka_log::Offset;
 
-use super::{AckType, AcquisitionState, RecordState, clamp_i32, window::give_back};
+use super::{AckType, AcquisitionState, RecordState, clamp_i32, dlq::DlqCause, window::give_back};
 
 impl AcquisitionState {
     /// Acknowledges the offset range `[first, last]` that `member` acquired
@@ -23,7 +23,9 @@ impl AcquisitionState {
     /// Available, clears the lock and the owner, and keeps `delivery_count`
     /// for redelivery, unless the count has reached `max_attempts`: then the
     /// records are archived at once, as Kafka's `InFlightState.tryUpdateState`
-    /// does. `Reject` and `Gap` give Archived. The method then advances the
+    /// does. `Reject` and `Gap` give Archived. With a dead-letter queue
+    /// ([`AcquisitionState::set_dlq_enabled`]), a `Reject` and a `Release` at
+    /// the limit give `Archiving` instead. The method then advances the
     /// SPSO over any new terminal prefix and marks the state dirty.
     ///
     /// # Errors
@@ -51,7 +53,8 @@ impl AcquisitionState {
         // Carve the range out at its boundaries.
         self.split_at_offset(first);
         self.split_at_offset(last + 1);
-        for b in &mut self.batches {
+        let (batches, mut archive) = self.runs_and_sink();
+        for b in batches {
             if b.first_offset < first || b.last_offset > last {
                 continue;
             }
@@ -64,17 +67,20 @@ impl AcquisitionState {
                     b.state = RecordState::Acknowledged;
                     b.acquired_by = None;
                     b.lock_deadline = None;
-                    self.delivery_complete_count += n;
+                    *archive.delivery_complete_count += n;
                 }
                 AckType::Release => {
                     // delivery_count retained: next acquire redelivers at +1.
-                    give_back(b, max_attempts, &mut self.delivery_complete_count);
+                    give_back(b, max_attempts, &mut archive);
                 }
-                AckType::Reject | AckType::Gap => {
+                // Kafka's `recordStateWithDlq`: only a `Reject` goes through
+                // the dead-letter queue. A gap has no record to send.
+                AckType::Reject => archive.archive(b, DlqCause::ClientReject),
+                AckType::Gap => {
                     b.state = RecordState::Archived;
                     b.acquired_by = None;
                     b.lock_deadline = None;
-                    self.delivery_complete_count += n;
+                    *archive.delivery_complete_count += n;
                 }
             }
         }

@@ -21,10 +21,11 @@ use crate::{
         config::ShareCoordinatorConfig, coordinator::ShareCoordinator,
         persister_client::SharePersister,
     },
+    share_partition::dlq::{DlqSink, test_support::RecordingDlq},
     test_support::FakeMetadataSource,
 };
 
-pub(super) const LOCK: Duration = Duration::from_secs(30);
+pub(crate) const LOCK: Duration = Duration::from_secs(30);
 
 /// A metadata source over `image`, with this node reported as the
 /// controller leader.
@@ -76,34 +77,39 @@ pub(super) fn manager_over(
     controller: Arc<dyn MetadataSource>,
     reg: Arc<PartitionRegistry>,
 ) -> Arc<SharePartitionLeaderManager> {
-    let coord = Arc::new(ShareCoordinator::new(
-        krabka_audit::NodeId(1),
-        reg.clone(),
-        ShareCoordinatorConfig::default(),
-    ));
-    let client = Arc::new(InterBrokerClient::new(None, None));
-    let persister = Arc::new(SharePersister::new(
-        krabka_audit::NodeId(1),
-        coord,
-        controller.clone(),
-        Arc::default(),
-        client,
-        ListenerProtocol::Plaintext,
-        "INTERNAL".to_string(),
-    ));
-    Arc::new(SharePartitionLeaderManager::new(
-        krabka_audit::NodeId(1),
-        reg,
+    build(
         controller,
-        persister,
-        Arc::new(ShareGroupConfig::default()),
+        reg,
         crate::config::BrokerConfig::default().share_session_cache_max_when_unlimited,
-    ))
+        Arc::new(RecordingDlq::default()),
+    )
 }
 
 pub(super) fn manager_with_unlimited_fallback(fallback: usize) -> Arc<SharePartitionLeaderManager> {
-    let reg = Arc::new(PartitionRegistry::new());
-    let controller = fake_source(Arc::new(MetadataImage::new(uuid::Uuid::nil())));
+    build(
+        fake_source(Arc::new(MetadataImage::new(uuid::Uuid::nil()))),
+        Arc::new(PartitionRegistry::new()),
+        fallback,
+        Arc::new(RecordingDlq::default()),
+    )
+}
+
+/// A manager whose dead-letter records go to `dlq`.
+pub(super) fn manager_with_dlq(dlq: Arc<dyn DlqSink>) -> Arc<SharePartitionLeaderManager> {
+    build(
+        fake_source(Arc::new(MetadataImage::new(uuid::Uuid::nil()))),
+        Arc::new(PartitionRegistry::new()),
+        crate::config::BrokerConfig::default().share_session_cache_max_when_unlimited,
+        dlq,
+    )
+}
+
+fn build(
+    controller: Arc<dyn MetadataSource>,
+    reg: Arc<PartitionRegistry>,
+    session_max: usize,
+    dlq: Arc<dyn DlqSink>,
+) -> Arc<SharePartitionLeaderManager> {
     let coord = Arc::new(ShareCoordinator::new(
         krabka_audit::NodeId(1),
         reg.clone(),
@@ -119,14 +125,15 @@ pub(super) fn manager_with_unlimited_fallback(fallback: usize) -> Arc<ShareParti
         ListenerProtocol::Plaintext,
         "INTERNAL".to_string(),
     ));
-    Arc::new(SharePartitionLeaderManager::new(
+    SharePartitionLeaderManager::new(
         krabka_audit::NodeId(1),
         reg,
         controller,
         persister,
         Arc::new(ShareGroupConfig::default()),
-        fallback,
-    ))
+        session_max,
+        dlq,
+    )
 }
 
 /// Opens a real data partition under `log_dir`, appends `batches`, publishes
@@ -134,7 +141,7 @@ pub(super) fn manager_with_unlimited_fallback(fallback: usize) -> Arc<ShareParti
 ///
 /// Each batch is `(timestamp_ms, values)`, and every record in it carries that
 /// timestamp, which is what a `by_duration` strategy resolves against.
-pub(super) async fn open_data_partition(
+pub(crate) async fn open_data_partition(
     reg: &PartitionRegistry,
     log_dir: &Path,
     topic: &str,

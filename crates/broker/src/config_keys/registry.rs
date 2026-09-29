@@ -547,7 +547,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
         ConfigScope::Topic,
         ConfigType::Boolean,
         Some("false"),
-        "Whether share groups may write undeliverable records to this topic as their dead-letter queue. Kafka trunk key, served only with unstable.api.versions.enable=true. Stored and reported only: krabka's share groups have no dead-letter queue.",
+        "Whether share groups may write undeliverable records to this topic as their dead-letter queue (KIP-1191). A share group that names the topic in errors.deadletterqueue.topic.name writes a record for each rejected or delivery-exhausted offset to it, and a write to a topic where this is false is refused. Kafka trunk key, served only with unstable.api.versions.enable=true; the dead-letter queue itself needs share.version 2, so unstable.feature.versions.enable=true too.",
         ValueCheck::Bool,
     ),
     ConfigKey {

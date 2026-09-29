@@ -364,6 +364,7 @@ async fn acquire_pass(
             }
         };
         let mut st = cell.lock().await;
+        st.set_dlq_enabled(settings.dlq_enabled);
 
         // Apply piggybacked acknowledgements (first pass only), all or
         // nothing. The type Renew renews the lock of its offsets, and the

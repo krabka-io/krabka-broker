@@ -9,7 +9,10 @@
 
 use krabka_log::Offset;
 
-use super::{AcquisitionState, InFlightBatch, RecordState, clamp_i32};
+use super::{
+    AcquisitionState, InFlightBatch, RecordState, clamp_i32,
+    dlq::{ArchiveSink, DlqCause},
+};
 
 /// Gives an acquired run back: Kafka's `InFlightState.tryUpdateState` to
 /// `AVAILABLE`, which archives the run instead when its delivery count has
@@ -18,19 +21,19 @@ use super::{AcquisitionState, InFlightBatch, RecordState, clamp_i32};
 /// It returns whether the run was archived. An archived run has moved from a
 /// non-terminal state to a terminal one inside the window, so its offsets are
 /// added to `delivery_complete_count`, as Kafka's `releaseAcquiredRecords` and
-/// `releaseAcquisitionLockOnTimeout` add them.
+/// `releaseAcquisitionLockOnTimeout` add them. With a dead-letter queue the
+/// run waits in `Archiving` instead, and counts when the queue is done with it.
 pub(super) fn give_back(
     batch: &mut InFlightBatch,
     max_attempts: i16,
-    delivery_complete_count: &mut i32,
+    archive: &mut ArchiveSink<'_>,
 ) -> bool {
-    batch.acquired_by = None;
-    batch.lock_deadline = None;
     if batch.delivery_count >= max_attempts {
-        batch.state = RecordState::Archived;
-        *delivery_complete_count = delivery_complete_count.saturating_add(clamp_i32(batch.len()));
+        archive.archive(batch, DlqCause::DeliveryCountExceeded);
         true
     } else {
+        batch.acquired_by = None;
+        batch.lock_deadline = None;
         batch.state = RecordState::Available;
         false
     }

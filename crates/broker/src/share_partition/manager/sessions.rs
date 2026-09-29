@@ -63,9 +63,8 @@ impl SharePartitionLeaderManager {
         member: &str,
         partitions: &HashSet<SharePartitionKey>,
     ) {
-        let limit =
-            GroupShareSettings::resolve(&self.controller.current_image(), group, &self.config)
-                .delivery_count_limit;
+        let settings =
+            GroupShareSettings::resolve(&self.controller.current_image(), group, &self.config);
         for &(topic_id, partition) in partitions {
             let cell = self
                 .leaders
@@ -75,7 +74,8 @@ impl SharePartitionLeaderManager {
                 continue;
             };
             let mut state = cell.lock().await;
-            state.release_member(member, limit);
+            state.set_dlq_enabled(settings.dlq_enabled);
+            state.release_member(member, settings.delivery_count_limit);
             // Best-effort: a failed write keeps the state dirty for a retry.
             let _ = self
                 .persist_if_dirty(group, topic_id, partition, Some(&cell), &mut state)

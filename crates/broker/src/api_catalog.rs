@@ -1069,6 +1069,20 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         note: "",
     },
     KipAnnotation {
+        key: "KIP-1191",
+        claim: "Share-group dead-letter queue: a record that a member rejects, or that uses up the delivery count limit, is written to the group's dead-letter topic before it is archived",
+        status: KipStatus::Partial,
+        module: "crates/broker/src/share_partition/dlq.rs",
+        tests: &[
+            "crates/broker/src/share_partition/state/dlq.rs",
+            "crates/broker/src/share_partition/dlq/record.rs",
+            "crates/broker/src/share_partition/dlq/validate.rs",
+            "crates/broker/src/share_partition/manager/dead_letter.rs",
+            "crates/broker/tests/share_consume/dead_letter_queue.rs",
+        ],
+        note: "Kafka trunk's `share.version` 2, which a node supports only under `unstable.feature.versions.enable`; the topic key `errors.deadletterqueue.group.enable` and the group keys `errors.deadletterqueue.topic.name` and `errors.deadletterqueue.copy.record.enable` need `unstable.api.versions.enable` too, so trunk mode is both switches. At `share.version` 1, the level a default node runs, a group's dead-letter keys change nothing and a reject archives at once. A group with a topic name gets one record for each offset that is rejected or reaches `share.delivery.count.limit`, with Kafka's six `__dlq.errors.*` headers and, with `errors.deadletterqueue.copy.record.enable`, the source key and value. It is an acks=all produce to the leader of the topic partition that the source partition maps to, as Kafka's `ShareGroupDLQStateManager` sends it, over the inter-broker listener, and it retries five times from 1 s to 30 s. The record is persisted as delivery state `ARCHIVING` (3) first and as `ARCHIVED` (4) when the write ends, whatever its result, and a leader that finds `ARCHIVING` after a restart writes the record again, as `SharePartition.initiateDLQAndArchive` and `maybeResumeDlqArchiving` do. The topic has to have `errors.deadletterqueue.group.enable=true`, a name that starts with `errors.deadletterqueue.topic.name.prefix` (default `dlq.`) and not with `__`, and a missing topic is created only when `errors.deadletterqueue.auto.create.topics.enable` is true. Both cluster keys are read from the dynamic broker config, per broker and then cluster-wide, and neither is in the `DescribeConfigs` key roster of a broker yet. The `DeadLetterQueue*` meters of Kafka's `ShareGroupMetrics` are not exported, and `group.share.dlq.manager.class.name`, a JVM class name, has no counterpart.",
+    },
+    KipAnnotation {
         key: "KIP-1222",
         claim: "Share acquisition lock renewal: the Renew acknowledge type and IsRenewAck on ShareFetch and ShareAcknowledge v2",
         status: KipStatus::Partial,

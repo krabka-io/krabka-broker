@@ -254,9 +254,11 @@ pub(crate) const REMOTE_COPY_LAG_BYTES: &str = "remote.copy.lag.bytes";
 /// decompressed size. Stored and reported only, and served only under
 /// `unstable.api.versions.enable`.
 pub(crate) const MAX_DECOMPRESSED_MESSAGE_BYTES: &str = "max.decompressed.message.bytes";
-/// Kafka trunk's `errors.deadletterqueue.group.enable`: whether share groups
-/// may write undeliverable records to this topic. Stored and reported only,
-/// and served only under `unstable.api.versions.enable`.
+/// Kafka trunk's `errors.deadletterqueue.group.enable` (KIP-1191): whether
+/// share groups may write undeliverable records to this topic. A share
+/// partition at `share.version` 2 writes a group's dead-letter records only
+/// to a topic that has it on. It is served only under
+/// `unstable.api.versions.enable`.
 pub(crate) const ERRORS_DEADLETTERQUEUE_GROUP_ENABLE: &str = "errors.deadletterqueue.group.enable";
 /// The topic keys Kafka trunk's `LogConfig` defines and Kafka 4.3.1's does
 /// not. A broker serves them only under `unstable.api.versions.enable`;

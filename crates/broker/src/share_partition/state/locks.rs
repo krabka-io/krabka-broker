@@ -68,12 +68,13 @@ impl AcquisitionState {
     /// something changed.
     pub fn expire_locks(&mut self, now: Instant, max_attempts: i16) {
         let mut changed = false;
-        for b in &mut self.batches {
+        let (batches, mut archive) = self.runs_and_sink();
+        for b in batches {
             if b.state == RecordState::Acquired
                 && let Some(deadline) = b.lock_deadline
                 && now >= deadline
             {
-                give_back(b, max_attempts, &mut self.delivery_complete_count);
+                give_back(b, max_attempts, &mut archive);
                 changed = true;
             }
         }
@@ -92,10 +93,11 @@ impl AcquisitionState {
     /// not remain locked until their timeout after the consumer is gone.
     pub fn release_member(&mut self, member: &str, max_attempts: i16) {
         let mut changed = false;
-        for batch in &mut self.batches {
+        let (batches, mut archive) = self.runs_and_sink();
+        for batch in batches {
             if batch.state == RecordState::Acquired && batch.acquired_by.as_deref() == Some(member)
             {
-                give_back(batch, max_attempts, &mut self.delivery_complete_count);
+                give_back(batch, max_attempts, &mut archive);
                 changed = true;
             }
         }

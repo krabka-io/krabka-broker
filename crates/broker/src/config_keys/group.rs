@@ -10,8 +10,9 @@
 //! An alter accepts and validates every key the broker serves, as Kafka's
 //! `ControllerConfigurationValidator` does: it has no filter for the keys a
 //! coordinator applies. krabka's streams coordinator applies the `streams.*`
-//! keys it runs with, its share partitions apply `share.auto.offset.reset`
-//! and four other `share.*` keys, and the rest are stored and reported, and
+//! keys it runs with, its share partitions apply `share.auto.offset.reset`,
+//! four other `share.*` keys and, at `share.version` 2, the two
+//! `errors.deadletterqueue.*` keys, and the rest are stored and reported, and
 //! not applied yet (see `docs/KIP_MATRIX.md`). Each coordinator reads the keys
 //! it applies out of the group's stored override map and ignores the others.
 
@@ -254,10 +255,13 @@ pub(crate) fn kafka_group_key(
 }
 
 /// The group keys krabka's coordinators apply and that carry no registry row
-/// of their own: `GroupShareSettings` reads these `share.*` keys, and the
-/// streams coordinator reads the two `streams.*` keys of Kafka's
+/// of their own: `GroupShareSettings` reads these `share.*` keys, the share
+/// dead-letter queue (KIP-1191) reads the two `errors.deadletterqueue.*`
+/// keys, and the streams coordinator reads the two `streams.*` keys of Kafka's
 /// `GroupConfig` that the registry does not describe.
 const APPLIED_WITHOUT_ROW: &[&str] = &[
+    "errors.deadletterqueue.copy.record.enable",
+    "errors.deadletterqueue.topic.name",
     "share.delivery.count.limit",
     "share.isolation.level",
     "share.partition.max.record.locks",

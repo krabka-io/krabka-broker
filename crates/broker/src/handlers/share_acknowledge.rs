@@ -292,6 +292,7 @@ async fn process_topics(context: &AcknowledgeContext<'_>) -> Vec<ShareAcknowledg
                 continue;
             };
             let mut st = cell.lock().await;
+            st.set_dlq_enabled(settings.dlq_enabled);
             // The batches apply as one unit. The acknowledgement is durable
             // before the answer, or it is rolled back and the write error is
             // the partition error, as Kafka's

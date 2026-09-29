@@ -131,7 +131,18 @@ impl SharePartitionLeaderManager {
         }
         let cell = Arc::new(Mutex::new(loaded));
         // Adopt the winner if another task loaded the same key concurrently.
-        Ok(self.leaders.entry(key).or_insert(cell).value().clone())
+        let cell = self
+            .leaders
+            .entry(key.clone())
+            .or_insert(cell)
+            .value()
+            .clone();
+        // A run that the last leader left in `Archiving` resumes its
+        // dead-letter write here (KIP-1191). Whichever loader takes the runs
+        // first starts them, so a race starts each once.
+        let resumed = cell.lock().await.take_pending_dlq();
+        self.dispatch_dead_letters(&key, &cell, resumed);
+        Ok(cell)
     }
 
     /// Where a share partition with no persisted state starts.

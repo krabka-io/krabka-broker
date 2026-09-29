@@ -170,6 +170,38 @@ async fn an_unbound_request_creates_nothing() {
     check!(!creation.is_in_flight(crate::coordinator::bootstrap::OFFSETS_TOPIC));
 }
 
+/// KIP-1191: the dead-letter topic asks for the cluster's default partition
+/// count and replication factor, opts itself in, and pins `CreateTime`.
+#[test]
+fn the_dead_letter_topic_is_created_as_kafka_creates_it() {
+    check!(
+        dead_letter_topic("dlq.orders")
+            == topic(
+                "dlq.orders",
+                -1,
+                -1,
+                configs(&[
+                    ("errors.deadletterqueue.group.enable", "true"),
+                    ("message.timestamp.type", "CreateTime"),
+                ]),
+            )
+    );
+}
+
+/// An unbound component cannot create the dead-letter topic: the write
+/// fails, and the leader archives the record regardless.
+#[tokio::test]
+async fn an_unbound_component_cannot_create_the_dead_letter_topic() {
+    let creation = AutoTopicCreation::default();
+
+    check!(
+        creation
+            .create_dead_letter_topic("dlq.orders")
+            .await
+            .is_err()
+    );
+}
+
 /// Kafka's `ExpiringErrorCache`: an entry counts until its expiry time, a new
 /// `put` replaces the entry of the same topic, and a full cache drops the
 /// entry that expires first, not the one written first.
