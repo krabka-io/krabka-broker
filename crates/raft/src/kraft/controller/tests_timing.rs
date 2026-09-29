@@ -116,6 +116,7 @@ fn following_leader_for_role_reports_followed_leader_only() {
             Role::Follower {
                 leader_id: NodeId(7),
                 fetch_deadline: SimInstant(10),
+                has_fetched_from_leader: false,
             },
             Some(NodeId(7)),
         ),

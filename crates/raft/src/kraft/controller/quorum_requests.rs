@@ -23,7 +23,7 @@ use super::{Engine, checkpoint::load_checkpoint_by_id, checkpoint_dir};
 use crate::kraft::{
     event::{Event, LogEnd, SuccessorRank},
     transport::wire,
-    types::{Epoch, NodeId},
+    types::{Epoch, NodeId, ReplicaKey},
 };
 
 const UNKNOWN_TOPIC_OR_PARTITION: i16 = 3;
@@ -220,6 +220,20 @@ impl Engine {
         }
         let voter_directory_id = uuid::Uuid::from_bytes(partition.voter_directory_id.0);
         if !self.is_valid_voter_key(request.voter_id, voter_directory_id) {
+            // Kafka moves to the request's epoch before it checks the voter key,
+            // so the refusal names the epoch this replica is at afterwards.
+            if let (Ok(candidate), Ok(epoch)) = (
+                u64::try_from(partition.replica_id),
+                Epoch::try_from(partition.replica_epoch),
+            ) {
+                self.advance_epoch_for_vote(
+                    ReplicaKey {
+                        id: NodeId(candidate),
+                        directory_id: uuid::Uuid::from_bytes(partition.replica_directory_id.0),
+                    },
+                    epoch,
+                );
+            }
             return refuse(self, 0, INVALID_VOTER_KEY);
         }
         // Every field below passed the checks above, so the conversions hold.

@@ -16,7 +16,7 @@ use crate::{
     action::{Action, TimerKind},
     event::LogEnd,
     role::Role,
-    types::{LogView, ReplicaKey, SimInstant},
+    types::{Epoch, LogView, ReplicaKey, SimInstant},
 };
 
 #[cfg(test)]
@@ -104,23 +104,13 @@ impl QuorumStateMachine {
             });
             return actions;
         }
-        // A standard vote at a higher epoch first advances us to that epoch
-        // (Unattached), clearing any prior vote. Pre-vote never changes epoch.
-        if !pre_vote && candidate_epoch > self.state.leader_epoch {
-            self.transition_to_unattached(candidate_epoch, now, &mut actions);
-        }
+        // A vote or a pre-vote from a higher epoch first advances us to that
+        // epoch (Unattached), clearing any prior vote and stepping a stale
+        // leader or follower down. Kafka does this for both rounds, before it
+        // looks at the grant rule of the state it lands in.
+        actions.extend(self.advance_epoch_for_vote(candidate_key, candidate_epoch, now));
         let up_to_date = Self::log_is_up_to_date(log, cand_log);
-        let granted = if pre_vote {
-            // Non-binding: grant if log is up to date and we don't already
-            // follow a leader in this (or a higher) epoch.
-            up_to_date && self.state.leader_id.is_none()
-        } else {
-            let not_voted_other = match self.state.voted_key {
-                None => true,
-                Some(key) => self.same_voter(key, candidate_key),
-            };
-            up_to_date && not_voted_other && self.state.leader_id.is_none()
-        };
+        let granted = self.can_grant_vote(candidate_key, up_to_date, pre_vote);
         if granted && !pre_vote {
             // Binding: persist the vote, become Voted.
             self.state.voted_key = Some(candidate_key);
@@ -143,5 +133,61 @@ impl QuorumStateMachine {
             granted,
         });
         actions
+    }
+
+    /// Kafka's `transitionToUnattached` on seeing a vote or pre-vote from
+    /// `candidate` at an epoch above ours: adopt that epoch as an unattached
+    /// replica with no leader and no vote. A request at our own epoch, or below
+    /// it, changes nothing, and neither does one between replicas that are not
+    /// both voters, which this replica denies without acting on its epoch.
+    ///
+    /// `KafkaRaftClient.handleVoteRequest` makes this transition before it checks
+    /// the voter key the request names, so the engine calls it for a request it
+    /// will refuse for its key, and the response then carries the new epoch.
+    pub fn advance_epoch_for_vote(
+        &mut self,
+        candidate: ReplicaKey,
+        epoch: Epoch,
+        now: SimInstant,
+    ) -> Vec<Action> {
+        let mut actions = Vec::new();
+        if epoch > self.state.leader_epoch
+            && self.is_voter()
+            && self.current_or_adjacent_voter_key(candidate)
+        {
+            self.transition_to_unattached(epoch, self.election_deadline(now), &mut actions);
+        }
+        actions
+    }
+
+    /// Whether this replica, in its current state, grants a vote to
+    /// `candidate`: Kafka's `EpochState.canGrantVote` of that state.
+    ///
+    /// A leader grants nothing. A follower grants only a pre-vote, and only
+    /// while it has not yet fetched from its leader, so a follower cut off from
+    /// its leader lets an election proceed at once, and one that hears from the
+    /// leader does not disturb it. A candidate or a resigned leader grants a
+    /// pre-vote on log recency alone and never a binding vote. An unattached,
+    /// prospective or voted replica grants a pre-vote on log recency, and a
+    /// binding vote only to the candidate it already voted for, or, having voted
+    /// for nobody and followed nobody, to one whose log is up to date.
+    fn can_grant_vote(&self, candidate: ReplicaKey, up_to_date: bool, pre_vote: bool) -> bool {
+        match &self.role {
+            Role::Leader { .. } | Role::Observer { .. } => false,
+            Role::Follower {
+                has_fetched_from_leader,
+                ..
+            } => pre_vote && !has_fetched_from_leader && up_to_date,
+            Role::Candidate { .. } | Role::Resigned => pre_vote && up_to_date,
+            Role::Unattached { .. } | Role::Prospective { .. } | Role::Voted { .. } => {
+                if pre_vote {
+                    up_to_date
+                } else if let Some(voted) = self.state.voted_key {
+                    self.same_voter(voted, candidate)
+                } else {
+                    self.state.leader_id.is_none() && up_to_date
+                }
+            }
+        }
     }
 }

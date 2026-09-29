@@ -69,6 +69,11 @@ pub enum Role {
     Follower {
         leader_id: NodeId,
         fetch_deadline: SimInstant,
+        /// Whether a Fetch to `leader_id` has been answered successfully since
+        /// this replica began following it: Kafka's
+        /// `FollowerState.hasFetchedFromLeader`. Until then the leader may be
+        /// unreachable from here, so the follower grants a pre-vote.
+        has_fetched_from_leader: bool,
     },
     /// KIP-996 pre-vote candidate that collects non-binding grants.
     Prospective {

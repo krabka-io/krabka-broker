@@ -462,6 +462,20 @@ impl Engine {
         actions
     }
 
+    /// Adopt the epoch of a vote or pre-vote from `candidate` that this replica
+    /// is about to refuse for the voter key it names. Kafka's `handleVoteRequest`
+    /// makes the higher-epoch transition before it checks that key, so the
+    /// refusal steps a stale leader or follower down and carries the new epoch.
+    pub(super) fn advance_epoch_for_vote(&mut self, candidate: ReplicaKey, epoch: Epoch) {
+        let prev_role = self.core.role().name();
+        let actions = self
+            .core
+            .advance_epoch_for_vote(candidate, epoch, self.now());
+        self.execute_local_only(actions);
+        self.reconcile_timers(prev_role);
+        self.publish_leader();
+    }
+
     /// Run an inbound `ReceiveVoteRequest` and return whether the vote was
     /// granted. The loop side effects of the other actions apply as well.
     pub fn run_vote_request(&mut self, event: Event) -> bool {

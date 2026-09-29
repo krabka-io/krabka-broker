@@ -315,6 +315,17 @@ impl QuorumStateMachine {
         diverging: Option<LogOffsetMetadata>,
         now: SimInstant,
     ) -> Vec<Action> {
+        // Kafka's `resetFetchTimeoutForSuccessfulFetch` also records that this
+        // follower has now heard from its leader.
+        if let Role::Follower {
+            leader_id: following,
+            has_fetched_from_leader,
+            ..
+        } = &mut self.role
+            && *following == leader_id
+        {
+            *has_fetched_from_leader = true;
+        }
         // The truncation comes first: the Fetch after it is built from the
         // truncated log end, as executors apply actions in order.
         let mut actions: Vec<Action> = diverging
