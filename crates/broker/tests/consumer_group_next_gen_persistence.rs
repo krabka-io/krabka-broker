@@ -185,3 +185,103 @@ async fn next_gen_state_cleared_after_leave_then_restart() {
         assert!(resp.error_code == krabka_broker::codes::UNKNOWN_MEMBER_ID);
     }
 }
+
+/// Kafka persists the topics that a `SubscribedTopicRegex` resolved to
+/// (`ConsumerGroupRegularExpression`) and replays them, so a coordinator
+/// restart keeps the member's topics. The Java client sends its pattern only
+/// when it changes, so the heartbeats after the restart carry none, and the
+/// group resolves the pattern again by itself: a topic created after the
+/// restart reaches the member too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replay_keeps_the_topics_a_regex_resolved_to_and_finds_new_ones() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let log_dir = dir.path().to_path_buf();
+
+    let member_id;
+    let initial_epoch;
+    {
+        let broker = Broker::start(BrokerConfig::for_tests(log_dir.clone()))
+            .await
+            .unwrap();
+        broker.wait_until_group_coordinator_ready().await;
+        let bootstrap = broker.listen_addr().to_string();
+        let client = Arc::new(
+            Client::builder()
+                .bootstrap(bootstrap.as_str())
+                .client_id("c")
+                .build()
+                .await
+                .unwrap(),
+        );
+        create_topic(&client, "orders-eu", 2).await;
+        let resp = client
+            .send(ConsumerGroupHeartbeatRequest {
+                group_id: "gre".into(),
+                member_id: uuid::Uuid::new_v4().to_string(),
+                member_epoch: 0,
+                topic_partitions: Some(vec![]),
+                subscribed_topic_regex: Some("orders-.*".into()),
+                rebalance_timeout_ms: 60_000,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(resp.error_code == 0, "{resp:?}");
+        assert!(
+            resp.assignment
+                .as_ref()
+                .is_some_and(|assignment| assignment.topic_partitions.len() == 1)
+        );
+        member_id = resp.member_id.unwrap();
+        initial_epoch = resp.member_epoch;
+        broker.wait_until_group_member_count("gre", 1).await;
+        broker.shutdown().await;
+    }
+
+    let broker = Broker::start(rejoin_config(log_dir)).await.unwrap();
+    broker.wait_until_group_coordinator_ready().await;
+    let bootstrap = broker.listen_addr().to_string();
+    let client = Arc::new(
+        Client::builder()
+            .bootstrap(bootstrap.as_str())
+            .client_id("c")
+            .build()
+            .await
+            .unwrap(),
+    );
+    create_topic(&client, "orders-us", 2).await;
+
+    // The member heartbeats without its pattern until it holds both topics.
+    let mut held = std::collections::HashSet::new();
+    let mut member_epoch = initial_epoch;
+    for _ in 0..200 {
+        let resp = client
+            .send(ConsumerGroupHeartbeatRequest {
+                group_id: "gre".into(),
+                member_id: member_id.clone(),
+                member_epoch,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(resp.error_code == 0, "{resp:?}");
+        member_epoch = resp.member_epoch;
+        if let Some(assignment) = resp.assignment {
+            held = assignment
+                .topic_partitions
+                .into_iter()
+                .map(|topic| topic.topic_id)
+                .collect();
+        }
+        if held.len() == 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        held.len() == 2,
+        "the member holds {} topics after the restart",
+        held.len()
+    );
+    broker.shutdown().await;
+}

@@ -615,3 +615,47 @@ async fn a_topic_created_after_the_member_joined_reaches_its_next_heartbeat() {
             }
     );
 }
+
+/// Kafka's `consumerGroupHeartbeatIntervalMs`: a group's
+/// `consumer.heartbeat.interval.ms` replaces the broker's
+/// `group.consumer.heartbeat.interval.ms` in the heartbeat response of that
+/// group only.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_group_config_overrides_the_heartbeat_interval_of_its_group() {
+    let (broker, bootstrap, _dir) = boot().await;
+    let client = Arc::new(
+        Client::builder()
+            .bootstrap(bootstrap.as_str())
+            .client_id("c")
+            .build()
+            .await
+            .unwrap(),
+    );
+    broker
+        .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1GroupConfig(
+            krabka_metadata::GroupConfigRecord {
+                group_id: "g-tuned".into(),
+                configs: [
+                    (
+                        "consumer.heartbeat.interval.ms".to_owned(),
+                        "7000".to_owned(),
+                    ),
+                    ("consumer.session.timeout.ms".to_owned(), "50000".to_owned()),
+                ]
+                .into(),
+            },
+        ))
+        .await
+        .expect("set the group config");
+
+    let mut intervals = Vec::new();
+    for group in ["g-tuned", "g-plain"] {
+        let mut join = heartbeat(group, "", 0);
+        join.subscribed_topic_names = Some(vec![]);
+        let answer = client.send(join).await.unwrap();
+        check!(answer.error_code == 0, "{group}: {answer:?}");
+        intervals.push((group, answer.heartbeat_interval_ms));
+    }
+
+    check!(intervals == [("g-tuned", 7_000), ("g-plain", 5_000)]);
+}
