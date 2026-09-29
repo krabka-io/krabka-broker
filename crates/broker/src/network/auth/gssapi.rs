@@ -9,14 +9,41 @@ use krabka_protocol::owned::{
     sasl_authenticate_request::SaslAuthenticateRequest,
     sasl_authenticate_response::SaslAuthenticateResponse,
 };
-pub use krabka_security::gssapi::{GssapiConfig, server::GssapiServerExchange};
+pub use krabka_security::gssapi::server::GssapiServerExchange;
 use krabka_security::{Principal, SaslMechanism};
 use krabka_units::{ByteSize, Time, kibibytes};
 
 use super::{
+    kerberos_name::{KerberosNameError, KerberosRule, short_name},
     response::fail_authenticate,
     state::{ConnectionAuth, SaslExchange, begin_reauth, finish_reauth, session_expiry},
 };
+
+/// Broker-side SASL/GSSAPI configuration.
+///
+/// The fields are those of `krabka_security::gssapi::GssapiConfig`, except
+/// that the `auth_to_local` rules are Kafka's [`KerberosRule`]s. The
+/// `krabka-security` rule type follows Hadoop's grammar and gives different
+/// short names than Kafka's `KerberosShortNamer`.
+#[derive(Debug, Clone)]
+pub struct GssapiConfig {
+    /// Path to the broker's service keytab.
+    pub keytab_path: std::path::PathBuf,
+    /// Kafka `sasl.kerberos.service.name`, the SPN's first component.
+    pub service_name: String,
+    /// Parsed `auth_to_local` rules. The broker applies them in order, and the
+    /// first match wins.
+    pub principal_to_local_rules: Vec<KerberosRule>,
+    /// The default realm, the one the `DEFAULT` rule accepts. Kafka reads it
+    /// from the JVM's `krb5.conf`, and when it cannot find one `DEFAULT`
+    /// matches nothing, as it does here when this is `None`.
+    pub realm: Option<String>,
+    /// KDC host:port for the initiate path. When `None`, the path falls back
+    /// to krb5.conf discovery.
+    pub kdc: Option<String>,
+    /// Maximum tolerated difference between client and broker clocks.
+    pub max_time_skew: Time,
+}
 
 /// RFC 4752 server "maximum message size" advertised in the auth-only
 /// security-layer offer. 64 KiB matches the JVM broker's default SASL receive
@@ -61,7 +88,7 @@ const GSSAPI_MAX_RECV: ByteSize = kibibytes(64);
 pub fn handle_authenticate_gssapi(
     req: &SaslAuthenticateRequest,
     auth: &mut ConnectionAuth,
-    config: &krabka_security::gssapi::GssapiConfig,
+    config: &GssapiConfig,
     max_reauth: Option<Time>,
 ) -> SaslAuthenticateResponse {
     let Some(previous) = begin_reauth(auth) else {
@@ -74,7 +101,7 @@ pub fn handle_authenticate_gssapi(
 fn authenticate_gssapi(
     req: &SaslAuthenticateRequest,
     auth: &mut ConnectionAuth,
-    config: &krabka_security::gssapi::GssapiConfig,
+    config: &GssapiConfig,
     max_reauth: Option<Time>,
 ) -> SaslAuthenticateResponse {
     use krabka_security::gssapi::server::{GssapiServerExchange, ServerStep};
@@ -175,7 +202,7 @@ fn gssapi_challenge_response(token: Vec<u8>) -> SaslAuthenticateResponse {
 fn finish_gssapi(
     raw_principal: &str,
     mech: SaslMechanism,
-    config: &krabka_security::gssapi::GssapiConfig,
+    config: &GssapiConfig,
     auth: &mut ConnectionAuth,
     max_reauth: Option<Time>,
 ) -> SaslAuthenticateResponse {
@@ -214,23 +241,21 @@ fn finish_gssapi(
 /// `alice@krabka.test`. This function canonicalises the realm back to upper
 /// case before it matches, because Kerberos realms are conventionally upper
 /// case, and because both the configured default realm and the
-/// `auth_to_local` rules are written in the upper-case form. When no default
-/// realm is configured, the function falls back to the principal's own realm.
-/// A single-component principal in its own realm then maps to its primary
-/// through the implicit `DEFAULT` rule.
-fn map_gssapi_principal(
-    raw: &str,
-    config: &krabka_security::gssapi::GssapiConfig,
-) -> Result<String, krabka_security::gssapi::name::NameError> {
-    let (head, realm_raw) = raw.rsplit_once('@').unwrap_or((raw, ""));
-    let realm = realm_raw.to_uppercase();
-    let components: Vec<&str> = head.split('/').collect();
-    let default_realm = config.realm.as_deref().unwrap_or(&realm);
-    krabka_security::gssapi::name::apply(
+/// `auth_to_local` rules are written in the upper-case form.
+///
+/// The `DEFAULT` rule accepts only the configured default realm, so when none
+/// is configured it matches nothing and a rule has to name the realm itself.
+/// The principal's own realm is never taken as the default: it would let
+/// `alice@OTHER.REALM` pass for the local `alice`.
+fn map_gssapi_principal(raw: &str, config: &GssapiConfig) -> Result<String, KerberosNameError> {
+    let principal = match raw.rsplit_once('@') {
+        Some((head, realm)) => format!("{head}@{}", realm.to_uppercase()),
+        None => raw.to_owned(),
+    };
+    short_name(
         &config.principal_to_local_rules,
-        &realm,
-        &components,
-        default_realm,
+        &principal,
+        config.realm.as_deref().unwrap_or_default(),
     )
 }
 
@@ -251,10 +276,10 @@ mod tests {
 
     #[test]
     fn finish_gssapi_maps_principal_and_returns_empty_success() {
-        let config = krabka_security::gssapi::GssapiConfig {
+        let config = GssapiConfig {
             keytab_path: std::path::PathBuf::from("/unused.keytab"),
             service_name: "kafka".to_string(),
-            principal_to_local_rules: vec![krabka_security::gssapi::name::Rule::Default],
+            principal_to_local_rules: vec![KerberosRule::Default],
             realm: Some("KRABKA.TEST".to_string()),
             kdc: None,
             max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
@@ -293,10 +318,10 @@ mod tests {
 
     #[test]
     fn finish_gssapi_mapping_error_returns_auth_failure() {
-        let config = krabka_security::gssapi::GssapiConfig {
+        let config = GssapiConfig {
             keytab_path: std::path::PathBuf::from("/unused.keytab"),
             service_name: "kafka".to_string(),
-            principal_to_local_rules: vec![krabka_security::gssapi::name::Rule::Default],
+            principal_to_local_rules: vec![KerberosRule::Default],
             realm: Some("OTHER.REALM".to_string()),
             kdc: None,
             max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
@@ -321,10 +346,10 @@ mod tests {
 
     #[test]
     fn handle_authenticate_gssapi_round1_bad_keytab_fails_and_leaves_state_untouched() {
-        let config = krabka_security::gssapi::GssapiConfig {
+        let config = GssapiConfig {
             keytab_path: std::path::PathBuf::from("/nonexistent.keytab"),
             service_name: "kafka".to_string(),
-            principal_to_local_rules: vec![krabka_security::gssapi::name::Rule::Default],
+            principal_to_local_rules: vec![KerberosRule::Default],
             realm: Some("KRABKA.TEST".to_string()),
             kdc: None,
             max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
@@ -383,10 +408,10 @@ mod tests {
     fn handle_authenticate_gssapi_subsequent_round_completes_and_authenticates() {
         use krabka_security::gssapi::server::{GssapiServerExchange, ServerStep};
 
-        let config = krabka_security::gssapi::GssapiConfig {
+        let config = GssapiConfig {
             keytab_path: std::path::PathBuf::from("/unused.keytab"),
             service_name: "kafka".to_string(),
-            principal_to_local_rules: vec![krabka_security::gssapi::name::Rule::Default],
+            principal_to_local_rules: vec![KerberosRule::Default],
             realm: Some("KRABKA.TEST".to_string()),
             kdc: None,
             max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
@@ -430,12 +455,81 @@ mod tests {
         }
     }
 
+    /// Kafka's `KerberosShortNamer` on what `sspi` hands the broker: `DEFAULT`
+    /// takes the first component of a service principal, and only in the
+    /// configured realm.
     #[test]
-    fn map_gssapi_principal_uppercases_realm_before_default_rule() {
-        let config = krabka_security::gssapi::GssapiConfig {
+    fn map_gssapi_principal_follows_kafkas_short_namer() {
+        let config = |rules: &[&str], realm: Option<&str>| GssapiConfig {
             keytab_path: std::path::PathBuf::from("/unused.keytab"),
             service_name: "kafka".to_string(),
-            principal_to_local_rules: vec![krabka_security::gssapi::name::Rule::Default],
+            principal_to_local_rules: rules
+                .iter()
+                .map(|rule| KerberosRule::parse(rule).expect("rule parses"))
+                .collect(),
+            realm: realm.map(str::to_owned),
+            kdc: None,
+            max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
+        };
+        // (rules, configured realm, principal from sspi, short name)
+        let cases = [
+            (
+                &["DEFAULT"][..],
+                Some("REALM.COM"),
+                "alice@realm.com",
+                Some("alice"),
+            ),
+            (
+                &["DEFAULT"][..],
+                Some("REALM.COM"),
+                "kafka/host.example.com@realm.com",
+                Some("kafka"),
+            ),
+            // A principal from another realm is not the local user.
+            (
+                &["DEFAULT"][..],
+                Some("REALM.COM"),
+                "alice@other.realm",
+                None,
+            ),
+            // No configured realm: `DEFAULT` matches nothing, not the
+            // principal's own realm.
+            (&["DEFAULT"][..], None, "alice@other.realm", None),
+            (&["DEFAULT"][..], None, "alice@realm.com", None),
+            // A rule can still name the realm itself.
+            (
+                &["RULE:[1:$1@$0](.*@OTHER.REALM)s/@.*//"][..],
+                None,
+                "alice@other.realm",
+                Some("alice"),
+            ),
+            // `(match)` is a whole-string match and `/U` upper-cases.
+            (
+                &["RULE:[1:$1](ali)s/^/x/", "RULE:[1:$1]/U"][..],
+                None,
+                "alice@realm.com",
+                Some("ALICE"),
+            ),
+            // Kafka's short namer does not know a third component.
+            (&["DEFAULT"][..], Some("REALM.COM"), "a/b/c@realm.com", None),
+        ];
+        for (rules, realm, principal, expected) in cases {
+            check!(
+                map_gssapi_principal(principal, &config(rules, realm))
+                    .ok()
+                    .as_deref()
+                    == expected,
+                "{rules:?} realm {realm:?} on {principal}"
+            );
+        }
+    }
+
+    #[test]
+    fn map_gssapi_principal_uppercases_realm_before_default_rule() {
+        let config = GssapiConfig {
+            keytab_path: std::path::PathBuf::from("/unused.keytab"),
+            service_name: "kafka".to_string(),
+            principal_to_local_rules: vec![KerberosRule::Default],
             realm: Some("KRABKA.TEST".to_string()),
             kdc: None,
             max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,

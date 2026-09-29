@@ -14,7 +14,7 @@
 //! capture groups as `$1`, and the trailing `L` or `U` lowercases or
 //! uppercases the result. The first rule that matches wins.
 
-use regex::Regex;
+use super::java_regex::{JavaPattern, ReplacementError};
 
 /// Why a rule spec is not a rule.
 #[derive(Debug, thiserror::Error)]
@@ -25,7 +25,7 @@ pub enum SslPrincipalRuleError {
     /// The `pattern` between the first two slashes is not a regular
     /// expression.
     #[error("invalid pattern: {0}")]
-    Pattern(#[from] regex::Error),
+    Pattern(String),
     /// The text after the second slash is not one of `L`, `U` or nothing.
     #[error("unknown case flag `{0}`, expected `L`, `U` or nothing")]
     CaseFlag(String),
@@ -46,38 +46,43 @@ enum Rule {
     Default,
     /// `RULE:pattern/replacement/[L|U]`.
     Mapping {
-        pattern: Regex,
+        pattern: JavaPattern,
         replacement: String,
         case: Case,
     },
 }
 
 impl Rule {
-    /// The principal `distinguished_name` maps to, or `None` when this rule
-    /// does not match and the next one should be tried.
-    fn apply(&self, distinguished_name: &str) -> Option<String> {
+    /// The principal `distinguished_name` maps to, `None` when this rule does
+    /// not match and the next one should be tried, or an error when Java
+    /// would throw while it rewrites the name.
+    fn apply(&self, distinguished_name: &str) -> Result<Option<String>, ReplacementError> {
         match self {
-            Self::Default => Some(distinguished_name.to_owned()),
+            Self::Default => Ok(Some(distinguished_name.to_owned())),
             Self::Mapping {
                 pattern,
                 replacement,
                 case,
             } => {
-                // Kafka checks `Matcher.matches()`, a whole-input match, before
-                // it rewrites, so a pattern that only matches part of the DN
-                // falls through to the next rule.
-                let found = pattern.find(distinguished_name)?;
-                if found.start() != 0 || found.end() != distinguished_name.len() {
-                    return None;
+                // Kafka checks `Matcher.matches()`, a whole-input match that
+                // backtracks to find one, before it rewrites, so a pattern
+                // that cannot span the DN falls through to the next rule.
+                if !pattern.matches(distinguished_name) {
+                    return Ok(None);
                 }
-                let mapped = pattern
-                    .replace_all(distinguished_name, replacement.as_str())
-                    .into_owned();
-                Some(match case {
+                // The rewrite is then `String.replaceAll` with the pattern as
+                // written, so a lazy or alternating pattern replaces its
+                // leftmost matches, not the whole-DN match.
+                let mapped = pattern.replace(
+                    distinguished_name,
+                    &escape_literal_back_references(replacement, pattern.group_count())?,
+                    true,
+                )?;
+                Ok(Some(match case {
                     Case::Preserve => mapped,
                     Case::Lower => mapped.to_lowercase(),
                     Case::Upper => mapped.to_uppercase(),
-                })
+                }))
             }
         }
     }
@@ -98,14 +103,61 @@ impl Rule {
             other => return Err(SslPrincipalRuleError::CaseFlag(other.to_owned())),
         };
         Ok(Self::Mapping {
-            // Kafka's grammar escapes a literal slash as `\/`, which Java's
-            // regex engine accepts and the `regex` crate rejects, so the
-            // escape is undone here rather than passed through.
-            pattern: Regex::new(&pattern.replace("\\/", "/"))?,
-            replacement: replacement.replace("\\/", "/"),
+            // Kafka's grammar escapes a literal slash as `\/`. The engine
+            // reads that as a plain slash, so the escape is undone here. The
+            // replacement keeps it, because `replaceAll` takes `\/` as `/`.
+            pattern: JavaPattern::compile(&pattern.replace("\\/", "/"))
+                .map_err(SslPrincipalRuleError::Pattern)?,
+            replacement: replacement.to_owned(),
             case,
         })
     }
+}
+
+/// Kafka's `SslPrincipalMapper.Rule.escapeLiteralBackReferences`: a `$n` that
+/// names no group of a pattern with `groups` groups becomes a literal `$n`,
+/// after `n` is cut back one digit at a time to a group that exists.
+///
+/// The port keeps Kafka's arithmetic, including its use of offsets in the
+/// unescaped text to edit the text that already carries earlier escapes. Two
+/// stray references in one replacement therefore escape the wrong character
+/// and leave the second one to throw, exactly as they do on Kafka. The error
+/// is the `NumberFormatException` Kafka throws for a reference too long to
+/// be a number.
+fn escape_literal_back_references(
+    unescaped: &str,
+    groups: usize,
+) -> Result<String, ReplacementError> {
+    if groups == 0 {
+        return Ok(unescaped.to_owned());
+    }
+    let groups = i32::try_from(groups).unwrap_or(i32::MAX);
+    let original: Vec<char> = unescaped.chars().collect();
+    let mut value = original.clone();
+    let mut at = 0;
+    while let Some(dollar) = (at..original.len()).find(|&index| original[index] == '$') {
+        let digits = original[dollar + 1..]
+            .iter()
+            .take_while(|character| character.is_ascii_digit())
+            .count();
+        at = dollar + 1 + digits;
+        let reference = &original[dollar + 1..at];
+        if reference.is_empty() || reference[0] == '0' {
+            continue;
+        }
+        let mut index = reference
+            .iter()
+            .collect::<String>()
+            .parse::<i32>()
+            .map_err(|error| ReplacementError(error.to_string()))?;
+        while index > groups && index >= 10 {
+            index /= 10;
+        }
+        if index > groups {
+            value.insert(dollar, '\\');
+        }
+    }
+    Ok(value.into_iter().collect())
 }
 
 /// Splits a `RULE:` body into `pattern`, `replacement` and the case flag at
@@ -176,11 +228,21 @@ impl SslPrincipalMapper {
     /// `DEFAULT` rule's job. An operator whose rule list is exhaustive by
     /// design therefore gets a rejected connection, not a peer authenticated
     /// under its full DN.
+    ///
+    /// A replacement that Java refuses to expand, such as `$1` in a pattern
+    /// with no groups, ends the mapping with no principal. It does not fall
+    /// through to the next rule, because Kafka's `getName` propagates the
+    /// exception and the connection fails.
     #[must_use]
     pub fn apply(&self, distinguished_name: &str) -> Option<String> {
-        self.rules
-            .iter()
-            .find_map(|rule| rule.apply(distinguished_name))
+        for rule in &self.rules {
+            match rule.apply(distinguished_name) {
+                Ok(None) => {}
+                Ok(mapped) => return mapped,
+                Err(_) => return None,
+            }
+        }
+        None
     }
 }
 
@@ -238,6 +300,56 @@ mod tests {
             // An explicitly empty list has no rule to match, so it maps
             // nothing.
             (&[][..], "CN=alice,OU=x,O=y", None),
+        ];
+        for (specs, distinguished_name, expected) in cases {
+            let mapper =
+                SslPrincipalMapper::parse(specs).unwrap_or_else(|_| panic!("{specs:?} parses"));
+            check!(
+                mapper.apply(distinguished_name).as_deref() == expected,
+                "{specs:?} against {distinguished_name}"
+            );
+        }
+    }
+
+    /// `Matcher.matches()` and `String.replaceAll`, which the `regex` crate
+    /// reads differently: `$1_$2` is group 1, an underscore and group 2, a
+    /// reference to no group stays literal, and a pattern that only spans the
+    /// DN by backtracking still matches.
+    #[test]
+    fn java_match_and_replacement_semantics() {
+        // (rules, distinguished name, principal)
+        let cases = [
+            (
+                &["RULE:^CN=(.*),OU=(.*)$/$1_$2/"][..],
+                "CN=alice,OU=admin",
+                Some("alice_admin"),
+            ),
+            (
+                &["RULE:^CN=(.*),OU=.*$/$1suffix/"][..],
+                "CN=alice,OU=admin",
+                Some("alicesuffix"),
+            ),
+            (
+                &["RULE:^CN=(.*),OU=(.*)$/$1@$4/"][..],
+                "CN=alice,OU=admin",
+                Some("alice@$4"),
+            ),
+            (
+                &["RULE:^CN=(.*),OU=(.*)$/$1@$22/"][..],
+                "CN=alice,OU=admin",
+                Some("alice@admin2"),
+            ),
+            // A lazy pattern with no anchors spans the DN by backtracking,
+            // and `replaceAll` then rewrites its leftmost matches.
+            (&["RULE:CN=(.*?)/$1/"][..], "CN=abc", Some("abc")),
+            (&["RULE:a|ab/x/"][..], "ab", Some("xb")),
+            (&["RULE:a|ab/x/"][..], "abc", None),
+            // `$1` where the pattern has no group is Java's
+            // `IndexOutOfBoundsException`: no principal, and no fall-through.
+            (&["RULE:^CN=.*$/$1/", "DEFAULT"][..], "CN=alice", None),
+            // Kafka's literal-escape edit lands on the wrong character when
+            // two references are stray, so the second one throws.
+            (&["RULE:^(.*),(.*),(.*)$/$4@$5/"][..], "a,b,c", None),
         ];
         for (specs, distinguished_name, expected) in cases {
             let mapper =

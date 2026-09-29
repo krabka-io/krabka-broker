@@ -48,7 +48,7 @@ async fn gssapi_handshake_advertised_when_enabled() {
     }];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Gssapi];
-    cfg.gssapi = Some(krabka_security::gssapi::GssapiConfig {
+    cfg.gssapi = Some(krabka_broker::GssapiConfig {
         // Points at the committed fixture, but the handshake path never reads
         // it (the acceptor is built lazily on the first SaslAuthenticate).
         keytab_path: manifest_dir().join("tests/fixtures/security/kdc/kafka.keytab"),
@@ -138,12 +138,12 @@ async fn gssapi_inter_broker_client_authenticates_from_keytab() {
     }];
     cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Gssapi];
-    cfg.gssapi = Some(krabka_security::gssapi::GssapiConfig {
+    cfg.gssapi = Some(krabka_broker::GssapiConfig {
         keytab_path: fixtures.join("kafka.keytab"),
         service_name: "kafka".to_string(),
         // DEFAULT rule + matching default realm maps alice@CRABKA.TEST to
         // the short name "alice".
-        principal_to_local_rules: vec![krabka_security::gssapi::name::Rule::Default],
+        principal_to_local_rules: vec![krabka_broker::KerberosRule::Default],
         realm: Some("CRABKA.TEST".to_string()),
         kdc: Some(kdc_url.clone()),
         max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,

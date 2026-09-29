@@ -240,7 +240,7 @@ fn parse_match_patterns(patterns: &[&str]) -> Result<Vec<MatchRule>, ConfigError
 /// `(?>`, `(?<=`, `(?<!`, `(?<name>` with an ASCII-letter-then-alphanumeric
 /// name, or inline flags from `idmsuxU-`. Java's `\Q...\E` quoting, which
 /// `fancy_regex` lacks, becomes escaped literals.
-fn java_to_fancy(pattern: &str) -> Option<String> {
+pub(crate) fn java_to_fancy(pattern: &str) -> Option<String> {
     let chars: Vec<char> = pattern.chars().collect();
     let mut out = String::with_capacity(pattern.len());
     let mut class_depth = 0usize;
