@@ -12,7 +12,9 @@ use std::time::{Duration, Instant};
 
 use krabka_log::Offset;
 
-use super::{AcquiredRange, AcquisitionState, InFlightBatch, RecordState, clamp_i32};
+use super::{
+    AcquiredRange, AcquisitionState, InFlightBatch, RecordState, clamp_i32, dlq::DlqCause,
+};
 
 /// The smallest delivery count at which Kafka throttles a run:
 /// `SharePartition.MINIMUM_THROTTLE_RECORDS_DELIVERY_LIMIT`.
@@ -195,14 +197,10 @@ impl AcquisitionState {
     /// and archive it.
     pub fn archive_exhausted(&mut self, max_attempts: i16) {
         let mut changed = false;
-        for batch in &mut self.batches {
+        let (batches, mut archive) = self.runs_and_sink();
+        for batch in batches {
             if batch.state == RecordState::Available && batch.delivery_count >= max_attempts {
-                self.delivery_complete_count = self
-                    .delivery_complete_count
-                    .saturating_add(clamp_i32(batch.len()));
-                batch.state = RecordState::Archived;
-                batch.acquired_by = None;
-                batch.lock_deadline = None;
+                archive.archive(batch, DlqCause::DeliveryCountExceeded);
                 changed = true;
             }
         }
@@ -309,11 +307,8 @@ impl AcquisitionState {
             }
             // Poison pill: archive without handing out.
             if self.batches[i].delivery_count >= max_attempts {
-                let n = clamp_i32(self.batches[i].len());
-                self.batches[i].state = RecordState::Archived;
-                self.batches[i].acquired_by = None;
-                self.batches[i].lock_deadline = None;
-                self.delivery_complete_count += n;
+                let (batches, mut archive) = self.runs_and_sink();
+                archive.archive(&mut batches[i], DlqCause::DeliveryCountExceeded);
                 any_change = true;
                 i += 1;
                 continue;

@@ -1070,15 +1070,20 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
     },
     KipAnnotation {
         key: "KIP-1191",
-        claim: "share.version 2, trunk's SV_2, the feature level that gates share-group dead-letter queues",
+        claim: "Share-group dead-letter queue: a record that a member rejects, or that uses up the delivery count limit, is written to the group's dead-letter topic before it is archived",
         status: KipStatus::Partial,
-        module: "crates/broker/src/features.rs",
+        module: "crates/broker/src/share_partition/dlq.rs",
         tests: &[
             "crates/broker/src/features.rs::share_version_two_is_advertised_only_under_unstable_feature_versions",
             "crates/broker/src/handlers/update_features/preconditions.rs::share_version_two_needs_unstable_feature_versions",
             "crates/format/src/format/features.rs::share_version_two_is_trunks_level",
+            "crates/broker/src/share_partition/state/dlq.rs",
+            "crates/broker/src/share_partition/dlq/record.rs",
+            "crates/broker/src/share_partition/dlq/validate.rs",
+            "crates/broker/src/share_partition/manager/dead_letter.rs",
+            "crates/broker/tests/share_consume/dead_letter_queue.rs",
         ],
-        note: "Kafka trunk's share.version level 2, served only under `unstable.feature.versions.enable`. By default the supported range is 0-1, as on 4.3.1, and a finalization of 2 is refused. With the flag on, ApiVersions advertises 0-2, UpdateFeatures finalizes level 2, and `krabka format` seeds it at 4.4-IV0. Level 2 changes nothing at runtime, because krabka's share groups have no dead-letter queue.",
+        note: "Kafka trunk's `share.version` 2, which a node supports only under `unstable.feature.versions.enable`; the topic key `errors.deadletterqueue.group.enable` and the group keys `errors.deadletterqueue.topic.name` and `errors.deadletterqueue.copy.record.enable` need `unstable.api.versions.enable` too, so trunk mode is both switches. At `share.version` 1, the level a default node runs, a group's dead-letter keys change nothing and a reject archives at once. A group with a topic name gets one record for each offset that is rejected or reaches `share.delivery.count.limit`, with Kafka's six `__dlq.errors.*` headers and, with `errors.deadletterqueue.copy.record.enable`, the source key and value. It is an acks=all produce to the leader of the topic partition that the source partition maps to, as Kafka's `ShareGroupDLQStateManager` sends it, over the inter-broker listener, and it retries five times from 1 s to 30 s. The record is persisted as delivery state `ARCHIVING` (3) first and as `ARCHIVED` (4) when the write ends, whatever its result, and a leader that finds `ARCHIVING` after a restart writes the record again, as `SharePartition.initiateDLQAndArchive` and `maybeResumeDlqArchiving` do. The topic has to have `errors.deadletterqueue.group.enable=true`, a name that starts with `errors.deadletterqueue.topic.name.prefix` (default `dlq.`) and not with `__`, and a missing topic is created only when `errors.deadletterqueue.auto.create.topics.enable` is true. Both cluster keys are read from the dynamic broker config, per broker and then cluster-wide, and neither is in the `DescribeConfigs` key roster of a broker yet. The `DeadLetterQueue*` meters of Kafka's `ShareGroupMetrics` are not exported, and `group.share.dlq.manager.class.name`, a JVM class name, has no counterpart.",
     },
     KipAnnotation {
         key: "KIP-1222",

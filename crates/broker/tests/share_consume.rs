@@ -30,6 +30,8 @@
 
 #[path = "share_consume/acknowledgements.rs"]
 mod acknowledgements;
+#[path = "share_consume/dead_letter_queue.rs"]
+mod dead_letter_queue;
 #[path = "share_consume/harness.rs"]
 mod harness;
 #[path = "share_consume/isolation_level.rs"]

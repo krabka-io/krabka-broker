@@ -92,6 +92,12 @@ impl SharePartitionLeaderManager {
         match result {
             Ok(()) => {
                 st.dirty = false;
+                // The runs that went to `Archiving` are durable now, so their
+                // dead-letter writes may start (KIP-1191).
+                if let Some(cell) = cell {
+                    let key = (group.to_owned(), topic_id, partition);
+                    self.dispatch_dead_letters(&key, cell, st.take_pending_dlq());
+                }
                 Ok(())
             }
             Err(e) => {

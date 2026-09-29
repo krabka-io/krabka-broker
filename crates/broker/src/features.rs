@@ -152,6 +152,15 @@ pub(crate) fn share_groups_enabled(image: &krabka_metadata::MetadataImage) -> bo
     feature_enabled(image, SHARE_VERSION, 1)
 }
 
+/// KIP-1191: whether `image` finalizes `share.version` at 2 or more, the
+/// level that turns on the share-group dead-letter queue. It is Kafka's
+/// `ShareVersion.supportsShareGroupDLQ`, which `BrokerServer` hands to every
+/// `SharePartition`. A node reaches level 2 only under
+/// `unstable.feature.versions.enable`, so this is false for a default node.
+pub(crate) fn share_dlq_supported(image: &krabka_metadata::MetadataImage) -> bool {
+    feature_enabled(image, SHARE_VERSION, 2)
+}
+
 #[cfg(test)]
 mod tests {
     use assert2::assert;
@@ -190,6 +199,28 @@ mod tests {
                 }));
             }
             assert!(share_groups_enabled(&image) == want, "{finalized:?}");
+        }
+    }
+
+    /// Kafka's `supportsShareGroupDLQ`: the dead-letter queue is on from a
+    /// finalized `share.version` of 2, and off below it or with no level.
+    #[test]
+    fn the_share_dlq_follows_the_finalized_share_version() {
+        use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
+        for (finalized, want) in [
+            (None, false),
+            (Some(0), false),
+            (Some(1), false),
+            (Some(2), true),
+        ] {
+            let mut image = MetadataImage::new(uuid::Uuid::nil());
+            if let Some(level) = finalized {
+                image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+                    name: SHARE_VERSION.into(),
+                    level,
+                }));
+            }
+            assert!(share_dlq_supported(&image) == want, "{finalized:?}");
         }
     }
 

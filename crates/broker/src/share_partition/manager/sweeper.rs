@@ -40,10 +40,10 @@ impl SharePartitionLeaderManager {
                 let now = std::time::Instant::now();
                 let image = mgr.controller.current_image();
                 for ((group, topic_id, partition), cell) in cells {
-                    let limit = GroupShareSettings::resolve(&image, &group, &mgr.config)
-                        .delivery_count_limit;
+                    let settings = GroupShareSettings::resolve(&image, &group, &mgr.config);
                     let mut st = cell.lock().await;
-                    st.expire_locks(now, limit);
+                    st.set_dlq_enabled(settings.dlq_enabled);
+                    st.expire_locks(now, settings.delivery_count_limit);
                     if st.dirty {
                         // A failed write keeps the state dirty for the next tick.
                         let _ = mgr
