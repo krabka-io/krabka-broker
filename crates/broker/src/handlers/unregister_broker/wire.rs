@@ -8,9 +8,10 @@
 //! outcome gets.
 
 use bytes::Bytes;
+use krabka_metadata::NodeId;
 use krabka_protocol::owned::unregister_broker_response::UnregisterBrokerResponse;
 
-use crate::error::BrokerError;
+use crate::{error::BrokerError, handlers::forward_to_controller::wrong_controller_message};
 
 pub(super) fn response(error_code: i16, error_message: Option<String>) -> UnregisterBrokerResponse {
     UnregisterBrokerResponse {
@@ -18,6 +19,24 @@ pub(super) fn response(error_code: i16, error_message: Option<String>) -> Unregi
         error_message,
         ..Default::default()
     }
+}
+
+/// The refusal of a node that is not the active controller, or `None` when
+/// `node` leads. `leader` is the node that this one believes leads.
+///
+/// Kafka's `ControllerWriteEvent.run` throws the wrong-controller exception
+/// before it reads any state, and `UnregisterBrokerRequest.getErrorResponse`
+/// copies its code and message.
+pub(super) fn not_controller_refusal(
+    leader: Option<NodeId>,
+    node: NodeId,
+) -> Option<UnregisterBrokerResponse> {
+    (leader != Some(node)).then(|| {
+        response(
+            crate::codes::NOT_CONTROLLER,
+            Some(wrong_controller_message(leader)),
+        )
+    })
 }
 
 pub(super) fn encode_resp(

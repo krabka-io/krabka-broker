@@ -170,7 +170,9 @@ impl QuorumStateMachine {
     /// pre-vote on log recency alone and never a binding vote. An unattached,
     /// prospective or voted replica grants a pre-vote on log recency, and a
     /// binding vote only to the candidate it already voted for, or, having voted
-    /// for nobody and followed nobody, to one whose log is up to date.
+    /// for nobody and followed nobody in this epoch, to one whose log is up to
+    /// date. A prospective replica counts the leader it abandoned as one it
+    /// followed, as Kafka's `ProspectiveState` keeps that `leaderId`.
     fn can_grant_vote(&self, candidate: ReplicaKey, up_to_date: bool, pre_vote: bool) -> bool {
         match &self.role {
             Role::Leader { .. } | Role::Observer { .. } => false,
@@ -180,12 +182,20 @@ impl QuorumStateMachine {
             } => pre_vote && !has_fetched_from_leader && up_to_date,
             Role::Candidate { .. } | Role::Resigned => pre_vote && up_to_date,
             Role::Unattached { .. } | Role::Prospective { .. } | Role::Voted { .. } => {
+                let leader_known = self.state.leader_id.is_some()
+                    || matches!(
+                        &self.role,
+                        Role::Prospective {
+                            abandoned_leader: Some(_),
+                            ..
+                        }
+                    );
                 if pre_vote {
                     up_to_date
                 } else if let Some(voted) = self.state.voted_key {
                     self.same_voter(voted, candidate)
                 } else {
-                    self.state.leader_id.is_none() && up_to_date
+                    !leader_known && up_to_date
                 }
             }
         }

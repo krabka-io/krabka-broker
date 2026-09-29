@@ -13,8 +13,18 @@
 //! not advertise. That is what protects a cluster whose log finalized an
 //! unstable `metadata.version` from a node that started with
 //! `unstable.feature.versions.enable` off. A feature the controller does not
-//! know is accepted, as `QuorumFeatures.localSupportedFeature` answers
-//! `VersionRange.ALL` for it.
+//! know is supported at level 0 only, as `QuorumFeatures.localSupportedFeature`
+//! answers `DISABLED`, the range `0-0`, for it: a log that finalized a feature
+//! from a newer release at any level above 0 is refused, and the message names
+//! the range as `0`.
+//!
+//! Kafka's fatal fault halts the process. Here a controller that starts over
+//! such a log refuses to start with a [`RaftError::Startup`](crate::RaftError),
+//! and one that applies such a level from its leader stops itself: it cancels
+//! the listener and the engine, and every later submit fails with
+//! [`RaftError::Shutdown`](crate::RaftError). A combined broker that hosts that
+//! controller keeps its process alive without a controller, which is a
+//! divergence from Kafka's halt.
 //!
 //! The engine applies a record and publishes the resulting image, so the guard
 //! reads the finalized levels of a published image: the one the engine
@@ -36,6 +46,10 @@ fn range_text(min: i16, max: i16) -> String {
     }
 }
 
+/// Kafka's `QuorumFeatures.DISABLED`, the range of a feature that the
+/// controller does not support.
+const UNKNOWN_FEATURE_RANGE: (i16, i16) = (0, 0);
+
 /// The refusal for the first finalized feature of `image` whose level this
 /// controller does not support under `unstable`, or `None` when it supports
 /// them all.
@@ -44,8 +58,11 @@ pub(super) fn unsupported_feature_level(
     unstable: UnstableFeatureVersions,
 ) -> Option<String> {
     image.finalized_features().iter().find_map(|(name, level)| {
-        let feature = krabka_metadata::feature(name)?;
-        let (min, max) = crate::supported_feature_range(feature, unstable);
+        // `QuorumFeatures.localSupportedFeature`: a feature this controller
+        // does not know is `DISABLED`, supported at level 0 only.
+        let (min, max) = krabka_metadata::feature(name).map_or(UNKNOWN_FEATURE_RANGE, |feature| {
+            crate::supported_feature_range(feature, unstable)
+        });
         (!(min..=max).contains(level)).then(|| {
             format!(
                 "Tried to apply FeatureLevelRecord FeatureLevelRecord(name='{name}', \
@@ -130,7 +147,19 @@ mod tests {
                 "a feature this controller does not know",
                 vec![("some.future.feature", 9)],
                 Disabled,
-                None,
+                Some(refusal("some.future.feature", 9, "0")),
+            ),
+            (
+                "a feature this controller does not know, with the flag on",
+                vec![("some.future.feature", 1)],
+                Enabled,
+                Some(refusal("some.future.feature", 1, "0")),
+            ),
+            (
+                "a known feature at a level it supports beside an unknown one",
+                vec![("metadata.version", 30), ("some.future.feature", 2)],
+                Disabled,
+                Some(refusal("some.future.feature", 2, "0")),
             ),
             ("no finalized feature", vec![], Disabled, None),
         ] {

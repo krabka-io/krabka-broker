@@ -35,7 +35,7 @@ const OBSERVER_SESSION_TIMEOUT_MS: u64 = 300_000;
 
 /// Kafka's `clearInactiveObservers` test: the observer has not fetched for
 /// [`OBSERVER_SESSION_TIMEOUT_MS`], or the leader never saw it fetch.
-pub(super) fn observer_session_expired(progress: &ReplicaProgress, now: SimInstant) -> bool {
+fn observer_session_expired(progress: &ReplicaProgress, now: SimInstant) -> bool {
     progress.last_fetch.0 == 0
         || now.0.saturating_sub(progress.last_fetch.0) >= OBSERVER_SESSION_TIMEOUT_MS
 }

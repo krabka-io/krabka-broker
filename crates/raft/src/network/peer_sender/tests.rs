@@ -443,3 +443,58 @@ async fn a_peer_stays_reachable_after_it_leaves_the_voter_set() {
     server.await.expect("fake peer");
     assert2::assert!(response.unwrap() == Bytes::from_static(b"fetch-response"));
 }
+
+/// A follower-to-follower link that carried nothing closes on the client's
+/// idle timeout, and a vote goes out once with no retry. The sender must dial
+/// again when it finds the cached connection closed, or the first vote of an
+/// election that follows a quiet spell goes into a dead link.
+#[tokio::test]
+async fn a_send_dials_again_when_the_cached_connection_has_closed() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        for answer in [&b"first"[..], &b"second"[..]] {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let api_versions = read_frame(&mut stream).await;
+            let (_, _, corr, _, _) = parse_request_header(&api_versions);
+            write_response_frame(&mut stream, corr, false, &api_versions_response_v0()).await;
+            let request = read_frame(&mut stream).await;
+            let (_, _, corr, _, _) = parse_request_header(&request);
+            write_response_frame(&mut stream, corr, true, answer).await;
+            // The stream drops here: the peer closes the link.
+        }
+    });
+    let sender = RealPeerSender::new(
+        voter_set_with_controller(NodeId(2), &addr.ip().to_string(), addr.port()),
+        &[],
+        "raft-client".into(),
+        Arc::new(PlaintextDialer),
+        krabka_client_core::ConnectionDispatchQueueCapacity::default(),
+        krabka_client_core::ClientFrameMax::default(),
+    );
+
+    let first = sender
+        .send(NodeId(2), api_key::VOTE, Bytes::from_static(b"vote-body"))
+        .await
+        .expect("first send");
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !sender
+            .connections
+            .get(&NodeId(2))
+            .is_some_and(|cached| cached.is_closed())
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the client notices that the peer closed the link");
+    let second = sender
+        .send(NodeId(2), api_key::VOTE, Bytes::from_static(b"vote-body"))
+        .await
+        .expect("second send dials a fresh connection");
+
+    assert2::assert!(
+        (first, second) == (Bytes::from_static(b"first"), Bytes::from_static(b"second"))
+    );
+    server.await.expect("fake peer");
+}

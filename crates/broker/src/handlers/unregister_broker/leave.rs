@@ -7,18 +7,26 @@
 //! broker loses it, and every partition it leads elects another acceptable
 //! replica. That is what the dead-broker failover scan computes, so this
 //! module asks it about the broker.
-
-use std::sync::Arc;
+//!
+//! Only the active controller may call this. Its image is the one that the
+//! partition records are built from, and any other node's image can trail the
+//! controller's, so the handler forwards the request to the active controller
+//! and refuses it anywhere else.
 
 use krabka_metadata::{MetadataImage, MetadataRecord, NodeId};
 
-use crate::{
-    broker::Broker,
-    heartbeat::controller_state::{ControllerLivenessState, replicated_registrations},
-};
+use crate::{broker::Broker, heartbeat::controller_state::replicated_registrations};
 
 /// The partition changes that make `node_id` leave every ISR and every
-/// leadership another replica can take, as `image` holds them.
+/// leadership another replica can take, as `image` holds them, on the active
+/// controller.
+///
+/// Who may take over is Kafka's `ClusterControlManager.isActive`: a registered
+/// broker that is neither fenced nor in controlled shutdown. The controller
+/// answers that from its liveness registry, which also knows the brokers that
+/// stopped heartbeating. The registry of this controller term is the one
+/// `AlterPartition` reads, so a request served right after a failover does not
+/// read the registry that an earlier term left.
 ///
 /// A partition that no other replica can lead is left alone, as it is when the
 /// broker is fenced. The liveness sweep hands it to the offset-aware recovery
@@ -28,45 +36,19 @@ pub(super) async fn leave_isrs(
     image: &MetadataImage,
     node_id: NodeId,
 ) -> Vec<MetadataRecord> {
-    let is_controller_leader =
-        *broker.controller.watch_leader().borrow() == Some(broker.config.node_id);
-    leave_isrs_as(broker, image, node_id, is_controller_leader).await
-}
-
-/// [`leave_isrs`] for a node that is, or is not, the active controller.
-///
-/// Who may take over is Kafka's `ClusterControlManager.isActive`: a registered
-/// broker that is neither fenced nor in controlled shutdown. The active
-/// controller answers that from its liveness registry, which also knows the
-/// brokers that stopped heartbeating. Any other node, a broker-only one
-/// included, keeps no such registry, so it reads the fence and the controlled
-/// shutdown from the image's registrations.
-pub(super) async fn leave_isrs_as(
-    broker: &Broker,
-    image: &MetadataImage,
-    node_id: NodeId,
-    is_controller_leader: bool,
-) -> Vec<MetadataRecord> {
-    let liveness = if is_controller_leader {
-        // The registry of this controller term, as `AlterPartition` reads it,
-        // so a request served right after a failover does not read the
-        // registry that an earlier term left.
-        broker
-            .liveness
-            .seed_term(
-                broker.controller.current_controller_epoch(),
-                replicated_registrations(image),
-            )
-            .await;
-        Arc::clone(&broker.liveness)
-    } else {
-        let registrations = ControllerLivenessState::new(broker.config.heartbeat_timeout);
-        registrations
-            .seed_brokers(replicated_registrations(image))
-            .await;
-        Arc::new(registrations)
-    };
-    crate::leader_election::compute_failover_changes(image, node_id, &liveness, &broker.metrics)
-        .await
-        .changes
+    broker
+        .liveness
+        .seed_term(
+            broker.controller.current_controller_epoch(),
+            replicated_registrations(image),
+        )
+        .await;
+    crate::leader_election::compute_failover_changes(
+        image,
+        node_id,
+        &broker.liveness,
+        &broker.metrics,
+    )
+    .await
+    .changes
 }

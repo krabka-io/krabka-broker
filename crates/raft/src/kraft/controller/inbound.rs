@@ -8,7 +8,6 @@ use tokio::{sync::oneshot, time::Instant};
 
 use super::{
     Engine,
-    queries::observer_session_expired,
     quorum_requests::{INCONSISTENT_CLUSTER_ID, INVALID_REQUEST, NOT_LEADER_OR_FOLLOWER},
     replication::should_serve_fetch_records,
 };
@@ -396,8 +395,17 @@ impl Engine {
 
     /// Record a valid fetch by the observer `key` at `fetch_offset`, as
     /// `LeaderState.updateReplicaState` does for a replica that is not a voter,
-    /// and drop the observers that have gone quiet. Only the leader tracks
-    /// observers.
+    /// and forget the observers that can no longer matter. Only the leader
+    /// tracks observers.
+    ///
+    /// Kafka drops an observer that has been silent for five minutes in
+    /// `observerStates()`, which only `DescribeQuorum` calls, and
+    /// `isReplicaCaughtUp` reads the same map with a window of an hour. So the
+    /// five minutes hide an observer from `DescribeQuorum`
+    /// (`queries::observer_session_expired`, applied when the snapshot is taken), and
+    /// a fetch prunes only what neither one can see again: an observer that
+    /// has been silent for the hour. Pruning at five minutes here would refuse
+    /// a candidate that `AddRaftVoter` finds caught up.
     pub(super) fn record_observer_fetch(&mut self, key: ReplicaKey, fetch_offset: i64) {
         if !self.core.role().is_leader() {
             return;
@@ -409,7 +417,7 @@ impl Engine {
             .or_default()
             .record_fetch(now, fetch_offset, leader_log_end);
         self.observers
-            .retain(|_, progress| !observer_session_expired(progress, now));
+            .retain(|_, progress| progress.fetched_within_caught_up_window(now));
     }
 
     /// Track a broker-only observer's `MetadataFetch` (1004) as the Fetch it

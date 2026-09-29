@@ -3,7 +3,7 @@ use assert2::check;
 use super::*;
 use crate::{
     core::test_support::{FakeLog, TEST_ELECTION_TIMEOUT, machine, voters},
-    event::Event,
+    event::{Event, SuccessorRank},
     types::{NodeId, QuorumState},
 };
 
@@ -478,6 +478,148 @@ fn a_vote_is_granted_again_only_to_the_candidate_it_went_to() {
             .any(|action| matches!(action, Action::ReplyVote { granted: false, .. })),
         "another candidate"
     );
+}
+
+/// Whether `m` grants a binding vote from `candidate` at `epoch`, with the
+/// candidate's log level with ours.
+fn grants_vote_to(m: &mut QuorumStateMachine, candidate: NodeId, epoch: u32) -> bool {
+    m.on_event(
+        vote_event(candidate, epoch, false, 1, 5),
+        &OUR_LOG,
+        SimInstant(0),
+    )
+    .iter()
+    .find_map(|action| match action {
+        Action::ReplyVote { granted, .. } => Some(*granted),
+        _ => None,
+    })
+    .expect("a vote request is answered")
+}
+
+/// A vote belongs to its epoch. A replica that votes for node 2, and then hears
+/// that node 3 won the same epoch, keeps its vote as Kafka's
+/// `QuorumState.transitionToFollower` does, so it grants no other candidate a
+/// binding vote at that epoch however it later loses the leader. Without it,
+/// voter 1 would count once for node 2 and once for node 3 in epoch 4, and two
+/// leaders could hold that epoch.
+#[test]
+fn a_vote_survives_following_the_leader_of_its_epoch() {
+    let end_epoch = SuccessorRank {
+        position: 1,
+        successors: 1,
+    };
+    let cases: Vec<(&str, Event)> = vec![
+        (
+            "the leader resigns",
+            Event::ReceiveEndQuorumEpoch {
+                leader_id: NodeId(3),
+                leader_epoch: 4,
+                successor_rank: end_epoch,
+            },
+        ),
+        ("the fetch times out", Event::FetchTimeout),
+    ];
+    for (label, event) in cases {
+        let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+        check!(vote_answer(&mut m, 4, false, true) == (true, 4), "{label}");
+        m.on_event(
+            Event::ReceiveBeginQuorumEpoch {
+                leader_id: NodeId(3),
+                leader_epoch: 4,
+            },
+            &OUR_LOG,
+            SimInstant(10),
+        );
+        check!(
+            (
+                matches!(m.role(), Role::Follower { .. }),
+                m.quorum_state().voted_key.map(|key| key.id),
+            ) == (true, Some(NodeId(2))),
+            "{label}: following node 3 at epoch 4"
+        );
+
+        m.on_event(event, &OUR_LOG, SimInstant(20));
+
+        check!(
+            m.quorum_state().voted_key.map(|key| key.id) == Some(NodeId(2)),
+            "{label}: still voted for node 2"
+        );
+        check!(!grants_vote_to(&mut m, NodeId(3), 4), "{label}: node 3");
+        check!(
+            grants_vote_to(&mut m, NodeId(2), 4),
+            "{label}: node 2 again"
+        );
+    }
+}
+
+/// A newer epoch is a new ballot: the replica that followed node 3 at epoch 4
+/// has no vote left at epoch 5.
+#[test]
+fn a_vote_does_not_outlive_its_epoch() {
+    let mut m = machine(NodeId(1), &[NodeId(1), NodeId(2), NodeId(3)]);
+    check!(vote_answer(&mut m, 4, false, true) == (true, 4));
+    m.on_event(
+        Event::ReceiveBeginQuorumEpoch {
+            leader_id: NodeId(3),
+            leader_epoch: 5,
+        },
+        &OUR_LOG,
+        SimInstant(10),
+    );
+
+    check!(m.quorum_state().voted_key.is_none());
+}
+
+/// A replica that followed the leader of an epoch, and then stopped, knows a
+/// leader for that epoch, so it grants no binding vote in it: Kafka's
+/// `ProspectiveState` keeps the `leaderId` of the follower it came from, and
+/// `unattachedOrProspectiveCanGrantVote` refuses when one is known. It still
+/// grants a pre-vote, or a cluster that lost its leader could not elect a new
+/// one, and it still attaches to a leader announced for its epoch, because
+/// `leader_id` in the quorum state is `None` while it prospects.
+#[test]
+fn a_prospective_replica_that_followed_a_leader_grants_no_binding_vote_in_that_epoch() {
+    let mut m = follower_of_three(false);
+
+    m.on_event(Event::FetchTimeout, &OUR_LOG, SimInstant(30));
+
+    check!(
+        (
+            matches!(
+                m.role(),
+                Role::Prospective {
+                    abandoned_leader: Some(NodeId(3)),
+                    ..
+                }
+            ),
+            m.quorum_state().leader_id,
+            m.quorum_state().voted_key,
+        ) == (true, None, None)
+    );
+    check!(!grants_vote_to(&mut m, NodeId(2), 4), "binding vote");
+    check!(vote_answer(&mut m, 4, true, true) == (true, 4), "pre-vote");
+}
+
+/// The belief is not lost when the election timer starts the round again.
+#[test]
+fn a_second_pre_vote_round_still_remembers_the_abandoned_leader() {
+    let mut m = follower_of_three(false);
+    m.on_event(Event::FetchTimeout, &OUR_LOG, SimInstant(30));
+
+    m.on_event(Event::ElectionTimeout, &OUR_LOG, SimInstant(60));
+
+    check!(
+        matches!(
+            m.role(),
+            Role::Prospective {
+                abandoned_leader: Some(NodeId(3)),
+                ..
+            }
+        ),
+        "{:?}",
+        m.role()
+    );
+    check!(!grants_vote_to(&mut m, NodeId(2), 4));
 }
 
 #[test]

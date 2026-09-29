@@ -48,9 +48,15 @@ impl QuorumStateMachine {
         if !accept {
             return Vec::new();
         }
+        // A vote belongs to its epoch, so only a newer epoch clears it. Kafka's
+        // `QuorumState.transitionToFollower` keeps the voted key of the same
+        // epoch: a replica that voted for one candidate and then follows the
+        // leader that won must not vote again in that epoch after it times out.
+        if leader_epoch > self.state.leader_epoch {
+            self.state.voted_key = None;
+        }
         self.state.leader_epoch = leader_epoch;
         self.state.leader_id = Some(leader_id);
-        self.state.voted_key = None;
         let fetch_deadline = now.saturating_add_ms(self.election_timeout_ms);
         self.role = if self.is_voter() {
             Role::Follower {

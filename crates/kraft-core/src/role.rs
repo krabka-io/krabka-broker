@@ -53,8 +53,16 @@ impl ReplicaProgress {
     /// at some point and fetched within the last hour.
     #[must_use]
     pub fn is_caught_up(&self, now: SimInstant) -> bool {
-        self.last_caught_up > SimInstant(0)
-            && self.last_fetch > SimInstant(0)
+        self.last_caught_up > SimInstant(0) && self.fetched_within_caught_up_window(now)
+    }
+
+    /// Whether the replica fetched within the hour that
+    /// [`Self::is_caught_up`] allows. A replica that has been quiet for longer
+    /// can never count as caught up until it fetches again, so a leader may
+    /// forget its progress.
+    #[must_use]
+    pub fn fetched_within_caught_up_window(&self, now: SimInstant) -> bool {
+        self.last_fetch > SimInstant(0)
             && self.last_fetch.0 > now.0.saturating_sub(CAUGHT_UP_FETCH_WINDOW_MS)
     }
 }
@@ -79,6 +87,13 @@ pub enum Role {
     Prospective {
         granted: BTreeSet<NodeId>,
         election_deadline: SimInstant,
+        /// The leader of this epoch that the replica gave up on when it began
+        /// the round, if it had one. Kafka's `ProspectiveState` keeps the
+        /// `leaderId` of the `FollowerState` it came from, and a replica that
+        /// knows a leader for its epoch grants no binding vote in it.
+        /// `QuorumState::leader_id` is `None` meanwhile, so that the replica
+        /// still attaches to a leader announced at this epoch.
+        abandoned_leader: Option<NodeId>,
     },
     /// Real candidacy: the epoch is bumped and the replica voted for itself.
     Candidate {
@@ -267,6 +282,30 @@ mod tests {
         ];
         for (label, progress, expected) in cases {
             assert2::assert!(progress.is_caught_up(now) == expected, "{label}");
+        }
+    }
+
+    /// A leader forgets an observer that has been silent for the hour, and no
+    /// sooner: until then `is_caught_up` may still read it.
+    #[test]
+    fn a_replica_is_forgotten_only_after_an_hour_of_silence() {
+        const HOUR: u64 = 3_600_000;
+        let now = SimInstant(10 * HOUR);
+        let fetched_at = |last_fetch: u64| ReplicaProgress {
+            last_fetch: SimInstant(last_fetch),
+            ..Default::default()
+        };
+        for (label, progress, expected) in [
+            ("never fetched", fetched_at(0), false),
+            ("fetched a moment ago", fetched_at(now.0 - 1), true),
+            ("silent for six minutes", fetched_at(now.0 - 360_000), true),
+            ("just inside the hour", fetched_at(now.0 - HOUR + 1), true),
+            ("exactly an hour ago", fetched_at(now.0 - HOUR), false),
+        ] {
+            assert2::assert!(
+                progress.fetched_within_caught_up_window(now) == expected,
+                "{label}"
+            );
         }
     }
 

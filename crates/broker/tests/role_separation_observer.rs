@@ -652,7 +652,9 @@ async fn broker_only_nodes_are_described_as_quorum_observers() {
         ..Default::default()
     };
 
-    // The observers appear once each has completed a fetch, so poll for them.
+    // The observers appear once each has completed a fetch, and their caught-up
+    // time is set once each has fetched to the end of a log that nothing is
+    // appending to any more, so poll for both.
     let deadline = Instant::now() + Duration::from_secs(30);
     let observers = loop {
         let resp = client.send(request()).await.unwrap();
@@ -662,7 +664,13 @@ async fn broker_only_nodes_are_described_as_quorum_observers() {
             .iter()
             .map(|observer| observer.replica_id)
             .collect();
-        if partition.error_code == 0 && listed == broker_ids {
+        if partition.error_code == 0
+            && listed == broker_ids
+            && partition
+                .observers
+                .iter()
+                .all(|observer| observer.last_caught_up_timestamp > 0)
+        {
             break partition.observers.clone();
         }
         assert!(
@@ -680,12 +688,118 @@ async fn broker_only_nodes_are_described_as_quorum_observers() {
             observer.replica_id,
             observer.last_fetch_timestamp
         );
+        // Issue #1193's main complaint: an observer that had caught up read -1.
+        assert!(
+            observer.last_caught_up_timestamp > 1_700_000_000_000,
+            "observer {} has a real caught-up time, got {}",
+            observer.replica_id,
+            observer.last_caught_up_timestamp
+        );
+        assert!(
+            observer.last_caught_up_timestamp <= observer.last_fetch_timestamp,
+            "observer {} caught up at {}, after its last fetch at {}",
+            observer.replica_id,
+            observer.last_caught_up_timestamp,
+            observer.last_fetch_timestamp
+        );
         assert!(
             observer.log_end_offset >= 0,
             "observer {} has a fetch offset",
             observer.replica_id
         );
     }
+
+    cluster.shutdown().await;
+}
+
+/// `UnregisterBroker` builds partition records from the image of the node that
+/// runs it, so Kafka runs it only on the active controller: `KafkaApis`
+/// forwards it. A broker-only node's image can trail the controller's, and a
+/// record built from a trailing image would roll back what the controller
+/// committed since.
+///
+/// The controller alone names break-glass approvers here, so a broker-only node
+/// that ran the request itself would let it through. The controller refuses it,
+/// which shows that the controller decided.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unregister_broker_sent_to_a_broker_only_node_is_decided_by_the_controller() {
+    use krabka_protocol::owned::unregister_broker_request::UnregisterBrokerRequest;
+
+    support::init_tracing();
+
+    let cluster = start_role_separated_with(2, |index, cfg| {
+        if index == 0 {
+            cfg.break_glass.approvers = vec!["User:alice".into(), "User:bob".into()];
+        }
+    })
+    .await;
+    let client = Client::builder()
+        .bootstrap(cluster.brokers[0].listen_addr().to_string())
+        .build()
+        .await
+        .unwrap();
+    let doomed = i32::try_from(cluster.brokers[1].node_id()).expect("small node id");
+
+    let resp = client
+        .send(UnregisterBrokerRequest {
+            broker_id: doomed,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    assert!(
+        resp.error_code == 44,
+        "the controller's two-person rule refuses it: {resp:?}"
+    );
+    assert!(
+        resp.error_message
+            == Some(format!(
+                "break-glass refused unregister_broker on {doomed}: no approved proposal covers the request"
+            ))
+    );
+    assert!(
+        cluster
+            .controller
+            .controller_image_for_test()
+            .broker(krabka_broker::NodeId(u64::try_from(doomed).unwrap()))
+            .is_some(),
+        "the refused unregistration left the registration alone"
+    );
+
+    cluster.shutdown().await;
+}
+
+/// The same request against a cluster that gates nothing is forwarded through
+/// the `Envelope` and answered by the controller, and it drops the
+/// registration from the controller's image.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unregister_broker_sent_to_a_broker_only_node_reaches_the_controller() {
+    use krabka_protocol::owned::unregister_broker_request::UnregisterBrokerRequest;
+
+    support::init_tracing();
+
+    let cluster = start_role_separated(2).await;
+    let client = Client::builder()
+        .bootstrap(cluster.brokers[0].listen_addr().to_string())
+        .build()
+        .await
+        .unwrap();
+    let doomed = cluster.brokers[1].node_id();
+
+    let resp = client
+        .send(UnregisterBrokerRequest {
+            broker_id: i32::try_from(doomed).expect("small node id"),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    assert!(resp.error_code == 0, "{resp:?}");
+    cluster
+        .controller
+        .wait_for_image(|image| image.broker(krabka_broker::NodeId(doomed)).is_none())
+        .await;
 
     cluster.shutdown().await;
 }
