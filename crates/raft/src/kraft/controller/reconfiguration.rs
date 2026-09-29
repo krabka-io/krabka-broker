@@ -126,6 +126,87 @@ impl Engine {
         Ok(base)
     }
 
+    /// What a change names: its kind, the voter it targets, the facts the
+    /// decision reads about that voter, and how far the voter's observer
+    /// trails the leader.
+    fn reconfiguration_target(
+        &self,
+        change: &crate::reconfig::VoterChange,
+        current: &VoterSet,
+        current_version: u16,
+        check_only: bool,
+    ) -> (VoterChangeKind, Option<NodeId>, TargetVoter, u64) {
+        use crate::reconfig::VoterChange;
+
+        match change {
+            VoterChange::Add(request) | VoterChange::CheckAdd(request) => {
+                let leader_end = self.log.log_end_offset().0;
+                // Kafka's `isReplicaCaughtUp` reads the observer state of this
+                // exact `(id, directory id)` key. It is the last of the checks,
+                // so a check-only request skips it and the range check.
+                let progress = self.observers.get(&ReplicaKey {
+                    id: request.voter.id,
+                    directory_id: request.voter.directory_id,
+                });
+                let observer_end = progress.map_or(0, |progress| progress.fetch_offset);
+                (
+                    VoterChangeKind::Add,
+                    Some(request.voter.id),
+                    TargetVoter {
+                        membership: target_membership(
+                            current,
+                            request.voter.id,
+                            request.voter.directory_id,
+                        ),
+                        version_compatible: check_only
+                            || voter_supports_version(&request.voter, current_version),
+                        caught_up: check_only
+                            || progress.is_some_and(|progress| progress.is_caught_up(self.now())),
+                    },
+                    u64::try_from(leader_end.saturating_sub(observer_end)).unwrap_or(u64::MAX),
+                )
+            }
+            VoterChange::Remove(request) => (
+                VoterChangeKind::Remove,
+                Some(request.id),
+                // A removal reads only the voter key; the range and catch-up
+                // facts are not consulted.
+                TargetVoter {
+                    membership: target_membership(current, request.id, request.directory_id),
+                    version_compatible: true,
+                    caught_up: true,
+                },
+                0,
+            ),
+            VoterChange::Update(request) => (
+                VoterChangeKind::Update,
+                Some(request.voter.id),
+                TargetVoter {
+                    membership: target_membership(
+                        current,
+                        request.voter.id,
+                        request.voter.directory_id,
+                    ),
+                    version_compatible: voter_supports_version(&request.voter, current_version),
+                    // An update is not gated on catch-up.
+                    caught_up: true,
+                },
+                0,
+            ),
+            // A finalization names no voter; the kernel does not read these.
+            VoterChange::FinalizeKraftVersion(_) | VoterChange::ValidateKraftVersion(_) => (
+                VoterChangeKind::FinalizeKraftVersion,
+                None,
+                TargetVoter {
+                    membership: TargetMembership::Absent,
+                    version_compatible: true,
+                    caught_up: true,
+                },
+                0,
+            ),
+        }
+    }
+
     /// Validate and append one KIP-853 control operation. The voter set is
     /// applied to the core immediately after append; completion waits for the
     /// resulting batch to cross the HWM unless `AddRaftVoter` v1 requested an
@@ -169,73 +250,8 @@ impl Engine {
                 .iter()
                 .all(|voter| voter_supports_version(voter, requested_version)),
         };
-        let (kind, target_id, target, lag) = match &change {
-            VoterChange::Add(request) | VoterChange::CheckAdd(request) => {
-                let leader_end = self.log.log_end_offset().0;
-                // Kafka's `isReplicaCaughtUp` reads the observer state of this
-                // exact `(id, directory id)` key. It is the last of the checks,
-                // so a check-only request skips it and the range check.
-                let progress = self.observers.get(&ReplicaKey {
-                    id: request.voter.id,
-                    directory_id: request.voter.directory_id,
-                });
-                let observer_end = progress.map_or(0, |progress| progress.fetch_offset);
-                (
-                    VoterChangeKind::Add,
-                    Some(request.voter.id),
-                    TargetVoter {
-                        membership: target_membership(
-                            &current,
-                            request.voter.id,
-                            request.voter.directory_id,
-                        ),
-                        version_compatible: check_only
-                            || voter_supports_version(&request.voter, current_version),
-                        caught_up: check_only
-                            || progress.is_some_and(|progress| progress.is_caught_up(self.now())),
-                    },
-                    u64::try_from(leader_end.saturating_sub(observer_end)).unwrap_or(u64::MAX),
-                )
-            }
-            VoterChange::Remove(request) => (
-                VoterChangeKind::Remove,
-                Some(request.id),
-                // A removal reads only the voter key; the range and catch-up
-                // facts are not consulted.
-                TargetVoter {
-                    membership: target_membership(&current, request.id, request.directory_id),
-                    version_compatible: true,
-                    caught_up: true,
-                },
-                0,
-            ),
-            VoterChange::Update(request) => (
-                VoterChangeKind::Update,
-                Some(request.voter.id),
-                TargetVoter {
-                    membership: target_membership(
-                        &current,
-                        request.voter.id,
-                        request.voter.directory_id,
-                    ),
-                    version_compatible: voter_supports_version(&request.voter, current_version),
-                    // An update is not gated on catch-up.
-                    caught_up: true,
-                },
-                0,
-            ),
-            // A finalization names no voter; the kernel does not read these.
-            VoterChange::FinalizeKraftVersion(_) | VoterChange::ValidateKraftVersion(_) => (
-                VoterChangeKind::FinalizeKraftVersion,
-                None,
-                TargetVoter {
-                    membership: TargetMembership::Absent,
-                    version_compatible: true,
-                    caught_up: true,
-                },
-                0,
-            ),
-        };
+        let (kind, target_id, target, lag) =
+            self.reconfiguration_target(&change, &current, current_version, check_only);
 
         let decision = voter_reconfiguration_decision(
             leadership,

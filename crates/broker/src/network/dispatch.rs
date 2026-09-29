@@ -346,6 +346,23 @@ where
     AfterResponse::Mute(response.throttle)
 }
 
+/// KIP scope check (#683): `crate::api_catalog::INTER_BROKER_ONLY_APIS` is
+/// tagged `controller`-only by its request schema, so no Kafka broker listener
+/// ever routes it to a handler.
+/// `ApiVersionManager.isApiEnabled` closes the connection before the request is
+/// even parsed further; krabka does the same on a pure `ListenerKind::Client`
+/// listener, and accepts these keys on `InterBroker` and
+/// `ClientAndInterBroker` alike, where krabka's own peers send them and the
+/// per-handler `ClusterAction` check applies.
+fn is_inter_broker_api_on_client_listener(
+    broker: &Broker,
+    spec: &crate::config::ListenerSpec,
+    api_key: i16,
+) -> bool {
+    crate::api_catalog::INTER_BROKER_ONLY_APIS.contains(&api_key)
+        && broker.config.listener_kind(&spec.name) == crate::api_catalog::ListenerKind::Client
+}
+
 /// Generic per-connection request loop.
 ///
 /// `S` is the post-handshake byte stream: `TcpStream` for plaintext listeners,
@@ -522,17 +539,7 @@ async fn serve_connection_stream<S>(
             );
             break;
         };
-        // KIP scope check (#683): `crate::api_catalog::INTER_BROKER_ONLY_APIS`
-        // is tagged `controller`-only by its request schema, so no Kafka
-        // broker listener ever routes it to a handler.
-        // `ApiVersionManager.isApiEnabled` closes the connection before the
-        // request is even parsed further; krabka does the same on a pure
-        // `ListenerKind::Client` listener, and accepts these keys on
-        // `InterBroker` and `ClientAndInterBroker` alike, where krabka's own
-        // peers send them and the per-handler `ClusterAction` check applies.
-        if crate::api_catalog::INTER_BROKER_ONLY_APIS.contains(&parsed.api_key)
-            && broker.config.listener_kind(&spec.name) == crate::api_catalog::ListenerKind::Client
-        {
+        if is_inter_broker_api_on_client_listener(&broker, &spec, parsed.api_key) {
             broker.metrics.record_api_request(parsed.api_key);
             tracing::warn!(
                 api_key = parsed.api_key,
