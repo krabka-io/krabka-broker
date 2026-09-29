@@ -243,11 +243,27 @@ fn parse_match_patterns(patterns: &[&str]) -> Result<Vec<MatchRule>, ConfigError
 /// `(?>`, `(?<=`, `(?<!`, `(?<name>` with an ASCII-letter-then-alphanumeric
 /// name, or inline flags from `idmsuxU-`. Java's `\Q...\E` quoting, which
 /// `fancy_regex` lacks, becomes escaped literals.
+///
+/// Three things read differently by default, and the rewrite gives the Java
+/// reading, following the flags in force at each place (`(?s)`, `(?d)` and
+/// `(?U)`, alone or scoped to a group):
+///
+/// - `\w`, `\d`, `\s`, `\b` and their negations are ASCII, where
+///   `fancy_regex`'s are Unicode, until `(?U)` (`UNICODE_CHARACTER_CLASS`)
+///   asks for the Unicode ones.
+/// - `.` does not match `\n`, `\r`, U+0085, U+2028 or U+2029, where
+///   `fancy_regex`'s stops at `\n` only, until `(?s)` (`DOTALL`) lets it match
+///   any, or `(?d)` (`UNIX_LINES`) leaves `\n` the only line terminator.
+///
+/// Case folding is not one of them: see [`java_flag_group`].
 pub(crate) fn java_to_fancy(pattern: &str) -> Option<String> {
     let chars: Vec<char> = pattern.chars().collect();
     let mut out = String::with_capacity(pattern.len());
     let mut class_depth = 0usize;
     let mut quoted = false;
+    // The Java flags in force here, and those of the groups around it.
+    let mut scope = Scope::default();
+    let mut outer = Vec::new();
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
@@ -266,10 +282,13 @@ pub(crate) fn java_to_fancy(pattern: &str) -> Option<String> {
         } else if c == '\\' {
             match chars.get(i + 1) {
                 Some('Q') => quoted = true,
-                Some(&next) => {
-                    out.push(c);
-                    out.push(next);
-                }
+                Some(&next) => match ascii_shorthand(next, class_depth > 0) {
+                    Some(ascii) if !scope.unicode_classes => out.push_str(ascii),
+                    _ => {
+                        out.push(c);
+                        out.push(next);
+                    }
+                },
                 None => out.push(c),
             }
             i += 1;
@@ -291,14 +310,26 @@ pub(crate) fn java_to_fancy(pattern: &str) -> Option<String> {
                         _ => false,
                     },
                     Some(_) => {
-                        let (flags, len) = java_flag_group(rest)?;
+                        let group = java_flag_group(rest)?;
+                        let len = group.len;
                         // Java refuses `(?i)*` as a dangling quantifier;
                         // an emptied group must not hand it to the atom
                         // before it.
-                        if flags.is_empty() && matches!(rest.get(len), Some('*' | '+' | '?')) {
+                        if group.translation.is_empty()
+                            && matches!(rest.get(len), Some('*' | '+' | '?'))
+                        {
                             return None;
                         }
-                        out.push_str(&flags);
+                        // `(?flags:x)` is a group the flags last to the end
+                        // of, `(?flags)` lasts to the end of the group it is
+                        // in.
+                        if rest[len - 1] == ':' {
+                            outer.push(scope);
+                        }
+                        for (flag, on) in group.changes {
+                            scope.set(flag, on);
+                        }
+                        out.push_str(&group.translation);
                         i += 2 + len;
                         continue;
                     }
@@ -307,18 +338,79 @@ pub(crate) fn java_to_fancy(pattern: &str) -> Option<String> {
                 if !ok {
                     return None;
                 }
+                outer.push(scope);
+            } else if c == '(' && class_depth == 0 {
+                outer.push(scope);
+            } else if c == ')' && class_depth == 0 {
+                scope = outer.pop().unwrap_or(scope);
             }
-            out.push(c);
+            if c == '.' && class_depth == 0 && !scope.dotall && !scope.unix_lines {
+                out.push_str(JAVA_DOT);
+            } else {
+                out.push(c);
+            }
         }
         i += 1;
     }
     Some(out)
 }
 
+/// The Java flags that change what [`java_to_fancy`] writes for a construct.
+#[derive(Debug, Clone, Copy, Default)]
+struct Scope {
+    /// `s` (`DOTALL`): `.` matches a line terminator.
+    dotall: bool,
+    /// `d` (`UNIX_LINES`): `\n` is the only line terminator.
+    unix_lines: bool,
+    /// `U` (`UNICODE_CHARACTER_CLASS`): `\w`, `\d`, `\s` and `\b` are Unicode.
+    unicode_classes: bool,
+}
+
+impl Scope {
+    fn set(&mut self, flag: char, on: bool) {
+        match flag {
+            's' => self.dotall = on,
+            'd' => self.unix_lines = on,
+            'U' => self.unicode_classes = on,
+            _ => {}
+        }
+    }
+}
+
+/// What Java's `.` matches by default: anything but the line terminators
+/// `\n`, `\r`, U+0085, U+2028 and U+2029 (`Pattern.Dot`, without `DOTALL`
+/// or `UNIX_LINES`).
+const JAVA_DOT: &str = "[^\\n\\r\\x{85}\\x{2028}\\x{2029}]";
+
+/// The ASCII form of a Java shorthand class, or word boundary, which is what
+/// Java reads without `(?U)`: `\w` is `[a-zA-Z_0-9]`, `\d` is `[0-9]`, `\s` is
+/// `[ \t\n\x0B\f\r]`, and `\b` is the edge of a run of `\w` (as of JDK 19,
+/// where it stopped reading Unicode letters and digits).
+///
+/// `escape` is the character after the backslash. Inside a character class
+/// the positive forms are the bare members, and the negations are a nested
+/// negated class. `None` for anything else, and for a boundary in a class.
+fn ascii_shorthand(escape: char, in_class: bool) -> Option<&'static str> {
+    Some(match (escape, in_class) {
+        ('w', false) => "[0-9A-Za-z_]",
+        ('w', true) => "0-9A-Za-z_",
+        ('W', _) => "[^0-9A-Za-z_]",
+        ('d', false) => "[0-9]",
+        ('d', true) => "0-9",
+        ('D', _) => "[^0-9]",
+        ('s', false) => "[ \\t\\n\\x0B\\x0C\\r]",
+        ('s', true) => " \\t\\n\\x0B\\x0C\\r",
+        ('S', _) => "[^ \\t\\n\\x0B\\x0C\\r]",
+        ('b', false) => "(?:(?<=[0-9A-Za-z_])(?![0-9A-Za-z_])|(?<![0-9A-Za-z_])(?=[0-9A-Za-z_]))",
+        ('B', false) => "(?:(?<=[0-9A-Za-z_])(?=[0-9A-Za-z_])|(?<![0-9A-Za-z_])(?![0-9A-Za-z_]))",
+        _ => return None,
+    })
+}
+
 /// Translate a Java inline flag group, `rest` starting just after its `(?`,
-/// into `fancy_regex` syntax. Returns the translation and the chars consumed
-/// through the closing `)` or `:`, or `None` where `Pattern.compile` answers
-/// "Unknown inline modifier".
+/// into `fancy_regex` syntax. Returns the translation, the chars consumed
+/// through the closing `)` or `:`, and the flags [`Scope`] follows; or `None`
+/// where `Pattern.compile` answers "Unknown inline modifier".
 ///
 /// Java's `Pattern.addFlag` takes `idmsuxcU`, then optionally one `-` and
 /// the same letters to clear, then `)` or `:`; an empty group such as `(?)`
@@ -327,21 +419,24 @@ pub(crate) fn java_to_fancy(pattern: &str) -> Option<String> {
 ///
 /// - `i`, `m`, `s` and `x` (`CASE_INSENSITIVE`, `MULTILINE`, `DOTALL`,
 ///   `COMMENTS`) pass through. `fancy_regex`'s `i` folds Unicode case, which
-///   is Java's `i` with `u`; Java's `i` alone folds ASCII only, and
-///   `fancy_regex` cannot turn Unicode folding off.
-/// - `d` (`UNIX_LINES`) is dropped: `fancy_regex` already treats `\n` as the
-///   only line terminator for `.`, `^` and `$`.
+///   is Java's `i` with `u`. Java's `i` alone folds ASCII only, and
+///   `fancy_regex` cannot turn Unicode folding off, so `(?i)` without `u`
+///   still matches `É` for `é`, where Java does not.
+/// - `d` (`UNIX_LINES`) is dropped from the output, and read by
+///   [`java_to_fancy`] to translate `.`.
 /// - `u` (`UNICODE_CASE`) is dropped: its effect, Unicode folding under `i`,
 ///   is how `fancy_regex`'s `i` always folds.
-/// - `U` (`UNICODE_CHARACTER_CLASS`) is dropped: `fancy_regex`'s `\w`, `\d`,
-///   `\s` and `\b` are always Unicode, and it implies `u`, which already
-///   holds. Passing it through would swap greediness in `fancy_regex`.
+/// - `U` (`UNICODE_CHARACTER_CLASS`) is dropped from the output, and read by
+///   [`java_to_fancy`] to keep `\w`, `\d`, `\s` and `\b` Unicode where it
+///   otherwise makes them ASCII. Passing it through would swap greediness in
+///   `fancy_regex`.
 /// - `c` (`CANON_EQ`) is dropped: canonical-equivalence matching has no
 ///   `fancy_regex` form, and it changes nothing for text already in one
 ///   normalization form.
-fn java_flag_group(rest: &[char]) -> Option<(String, usize)> {
+fn java_flag_group(rest: &[char]) -> Option<FlagGroup> {
     let mut on = String::new();
     let mut off = String::new();
+    let mut changes = Vec::new();
     let mut clearing = false;
     for (n, &c) in rest.iter().enumerate() {
         match c {
@@ -351,8 +446,12 @@ fn java_flag_group(rest: &[char]) -> Option<(String, usize)> {
                 } else {
                     on.push(c);
                 }
+                if c == 's' {
+                    changes.push((c, !clearing));
+                }
             }
-            'd' | 'u' | 'c' | 'U' => {}
+            'd' | 'U' => changes.push((c, !clearing)),
+            'u' | 'c' => {}
             '-' if !clearing => clearing = true,
             ')' | ':' => {
                 let scoped = c == ':';
@@ -362,12 +461,27 @@ fn java_flag_group(rest: &[char]) -> Option<(String, usize)> {
                     (false, _) if off.is_empty() => format!("(?{on}{c}"),
                     (false, _) => format!("(?{on}-{off}{c}"),
                 };
-                return Some((flags, n + 1));
+                return Some(FlagGroup {
+                    translation: flags,
+                    len: n + 1,
+                    changes,
+                });
             }
             _ => return None,
         }
     }
     None
+}
+
+/// A Java inline flag group, as [`java_flag_group`] reads it.
+struct FlagGroup {
+    /// The `fancy_regex` text for it, empty for a `(?flags)` group whose flags
+    /// `fancy_regex` has no letter for.
+    translation: String,
+    /// The chars of the group after its `(?`, through the closing `)` or `:`.
+    len: usize,
+    /// The `s`, `d` and `U` flags it sets (`true`) or clears (`false`).
+    changes: Vec<(char, bool)>,
 }
 
 #[cfg(test)]
@@ -519,6 +633,33 @@ mod tests {
             check!(
                 quoted[0].pattern.is_match(input).unwrap() == expected,
                 "{input}"
+            );
+        }
+    }
+
+    /// A selector pattern reads as `java.util.regex.Pattern` does by default:
+    /// `\w`, `\d` and `\s` are ASCII, and `.` stops at every line terminator.
+    /// The flags that change that are `(?U)`, `(?s)` and `(?d)`.
+    #[test]
+    fn match_patterns_read_ascii_classes_and_a_dot_that_stops_at_a_terminator() {
+        // (pattern, input, whole input matches)
+        let cases = [
+            ("\\w+", "app_1", true),
+            ("\\w+", "appé", false),
+            ("(?U)\\w+", "appé", true),
+            ("\\d+", "١٢٣", false),
+            ("app\\s1", "app\u{a0}1", false),
+            ("app.1", "app\r1", false),
+            ("app.1", "app\u{2028}1", false),
+            ("(?s)app.1", "app\r1", true),
+            ("(?d)app.1", "app\r1", true),
+            ("[.]", "\r", false),
+        ];
+        for (pattern, input, expected) in cases {
+            let rules = parse_match_rules(&format!("client_id={pattern}")).unwrap();
+            check!(
+                rules[0].pattern.is_match(input).unwrap() == expected,
+                "{pattern:?} on {input:?}"
             );
         }
     }

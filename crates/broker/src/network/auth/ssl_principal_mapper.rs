@@ -67,7 +67,11 @@ impl Rule {
                 // Kafka checks `Matcher.matches()`, a whole-input match that
                 // backtracks to find one, before it rewrites, so a pattern
                 // that cannot span the DN falls through to the next rule.
-                if !pattern.matches(distinguished_name) {
+                // A search that hits the engine's backtrack limit is an error
+                // here, and not a no match: Java answers it, so falling
+                // through to the next rule could map the DN to a name the
+                // rules never gave it.
+                if !pattern.matches(distinguished_name)? {
                     return Ok(None);
                 }
                 // The rewrite is then `String.replaceAll` with the pattern as
@@ -378,6 +382,35 @@ mod tests {
         let mapper =
             SslPrincipalMapper::parse(&["RULE:^CN=(.*?)\\/svc$/$1/"]).expect("escaped rule parses");
         assert!(mapper.apply("CN=alice/svc") == Some("alice".to_owned()));
+    }
+
+    /// A DN that drives a rule's search past the engine's backtrack limit is
+    /// refused. Reading it as "the rule does not match" would hand the DN to
+    /// the `DEFAULT` rule after it, and Java, which does answer the search,
+    /// would have applied the rule it never got to.
+    #[test]
+    fn a_dn_that_defeats_a_rule_is_not_passed_on_to_the_next_rule() {
+        let hostile = format!("{}b", "a".repeat(40));
+        let mapper = SslPrincipalMapper::parse(&["RULE:^(a|aa)+\\1$/x/", "DEFAULT"])
+            .expect("the rules parse");
+
+        assert!(mapper.apply(&hostile).is_none());
+    }
+
+    /// The pattern reads a DN as Java does: `\w` is ASCII, so a rule built
+    /// on it does not take a name with a letter it does not list, and `.`
+    /// stops at a line terminator, so a DN with one is not one the rule
+    /// covers.
+    #[test]
+    fn a_rule_reads_the_dn_with_javas_ascii_classes_and_dot() {
+        let mapper = SslPrincipalMapper::parse(&["RULE:^CN=(\\w+),.*$/$1/", "DEFAULT"])
+            .expect("the rules parse");
+
+        check!(mapper.apply("CN=alice,OU=x") == Some("alice".to_owned()));
+        // `é` is not `\w`, so the rule does not match and DEFAULT does.
+        check!(mapper.apply("CN=alicé,OU=x") == Some("CN=alicé,OU=x".to_owned()));
+        // `.` stops at `\r`, so `.*$` cannot span it.
+        check!(mapper.apply("CN=alice,OU=x\r,O=y") == Some("CN=alice,OU=x\r,O=y".to_owned()));
     }
 
     #[test]

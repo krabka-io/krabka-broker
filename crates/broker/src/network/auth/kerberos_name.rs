@@ -172,7 +172,9 @@ impl Translation {
         }
         let base = replace_parameters(&self.format, params)?;
         if let Some(guard) = &self.guard
-            && !guard.matches(&base)
+            && !guard
+                .matches(&base)
+                .map_err(|error| KerberosNameError::Format(error.to_string()))?
         {
             return Ok(None);
         }
