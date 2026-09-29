@@ -1,10 +1,11 @@
 //! KIP-455 reassignment-completion background task.
 //!
 //! This task runs on the controller leader and watches the metadata image.
-//! When every one of a reassignment's `adding_replicas` is in the ISR, the
-//! task moves atomically to the target replica set. When the current leader is
-//! in `removing_replicas`, the task first hands leadership to a target replica
-//! that is in the ISR.
+//! When Kafka's completion predicate holds for a reassignment, the task moves
+//! atomically to the target replica set. Every one of its `adding_replicas`
+//! must be in the ISR, and a replication factor decrease must not shrink the
+//! ISR. When the current leader is in `removing_replicas`, the task first hands
+//! leadership to a target replica that is in the ISR.
 //!
 //! The pure per-partition decision that the task applies lives in
 //! [`self::policy`].
@@ -30,7 +31,10 @@ mod tests;
 /// `stateright` model checker, which drives the decision directly.
 #[cfg(test)]
 pub(crate) use self::policy::reassign_one;
-pub(crate) use self::policy::{compute_reassignment_progress, remap_directories};
+pub(crate) use self::policy::{
+    CompletedReassignment, compute_reassignment_progress, maybe_complete_reassignment,
+    remap_directories,
+};
 
 /// Minimal trait for the controller surface that this task needs. It lets a
 /// unit test inject a mock without a real raft cluster.

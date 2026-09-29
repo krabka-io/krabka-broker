@@ -29,7 +29,8 @@ use tracing::{info, warn};
 use super::{
     Config, FollowedKey, replication_target_changed, task_replication_target,
     truncation::{
-        handle_epoch_fence, handle_offset_moved_to_tiered_storage, handle_offset_out_of_range,
+        diverging_epoch_truncation_target, handle_epoch_fence,
+        handle_offset_moved_to_tiered_storage, handle_offset_out_of_range,
     },
 };
 use crate::codes;
@@ -115,7 +116,7 @@ pub(super) async fn handle_partition_response(
         target_matches,
         reported_target_matches,
         error_code: part_resp.error_code,
-        diverging_end_offset: part_resp.diverging_epoch.end_offset,
+        diverging_epoch: part_resp.diverging_epoch.epoch,
     });
 
     if mutation == ReplicaFetchMutation::Reject {
@@ -135,9 +136,12 @@ pub(super) async fn handle_partition_response(
     match mutation {
         ReplicaFetchMutation::Truncate => {
             // KIP-320: an in-band divergence signal. The leader served no
-            // records and told us the epoch/offset our log must truncate to.
-            // `EpochEndOffset` defaults to (epoch:-1, end_offset:-1); a
-            // populated `end_offset >= 0` means "truncate here".
+            // records and named the largest epoch it has that is at or below
+            // our last fetched epoch, and where that epoch ends. That is
+            // the leader's history, not our truncation point: Kafka's
+            // `getOffsetTruncationState` intersects it with our own epoch
+            // history first. `EpochEndOffset` defaults to (epoch:-1,
+            // end_offset:-1); a populated `epoch >= 0` marks a divergence.
             // Recheck immediately before mutating: metadata may have
             // changed since the response-level guard above.
             if replication_target_changed(cfg) {
@@ -145,7 +149,6 @@ pub(super) async fn handle_partition_response(
                     "replicator: skipping diverging_epoch truncation from stale target");
                 return RowAction::Drop;
             }
-            let end_offset = part_resp.diverging_epoch.end_offset;
             if let Some(part) = cfg.partitions.get(&cfg.topic, cfg.partition) {
                 let _target_guard = match part
                     .lock_replication_target(task_replication_target(cfg))
@@ -158,7 +161,9 @@ pub(super) async fn handle_partition_response(
                         return RowAction::Drop;
                     }
                 };
-                // Wrap the wire `i64` into `Offset` for the log-layer call.
+                let leader_end_offset = part_resp.diverging_epoch.end_offset;
+                let end_offset =
+                    diverging_epoch_truncation_target(&part, &part_resp.diverging_epoch).0;
                 match part.truncate_to(Offset(end_offset)).await {
                     Ok(()) => {
                         // Drop idempotent-producer dedup entries for the
@@ -171,6 +176,8 @@ pub(super) async fn handle_partition_response(
                         info!(
                             topic = %cfg.topic,
                             partition = cfg.partition.get(),
+                            leader_epoch = part_resp.diverging_epoch.epoch,
+                            leader_end_offset,
                             end_offset,
                             "replicator: truncated to diverging_epoch (KIP-320 in-band)"
                         );
@@ -758,6 +765,134 @@ mod tests {
 
         assert!(handle_response(resp, &cfg, cfg.leader_epoch.0 - 1).await == RowAction::Drop);
         assert!(part.log_end_offset() == Offset(1));
+    }
+
+    /// KIP-320 follower side, `AbstractFetcherThread.getOffsetTruncationState`:
+    /// the follower intersects the leader's `(epoch, end offset)` with its own
+    /// epoch history. Each case is a follower log, written as runs of
+    /// `(leader epoch, record count)`, and the diverging row the leader
+    /// answered its Fetch with.
+    #[tokio::test]
+    async fn diverging_epoch_truncates_to_the_intersection_with_the_local_epochs() {
+        struct Case {
+            name: &'static str,
+            /// The follower log as runs of `(leader epoch, record count)`.
+            runs: &'static [(i32, usize)],
+            /// The leader's diverging epoch and its end offset.
+            diverging: (i32, i64),
+            /// The log end offset after the truncation.
+            expected_end: i64,
+            /// The `(epoch, start offset)` entries left in the epoch history.
+            expected_epochs: &'static [(i32, i64)],
+        }
+        let case = |name, runs, diverging, expected_end, expected_epochs| Case {
+            name,
+            runs,
+            diverging,
+            expected_end,
+            expected_epochs,
+        };
+        let cases = [
+            case(
+                // The leader went 4 -> 5 -> 7 while this follower went 4 -> 6:
+                // it does not know epoch 5, so it keeps only what epoch 4
+                // ended with, not the leader's end for epoch 5.
+                "two elections: the follower does not know the leader's epoch",
+                &[(4, 10), (6, 5)],
+                (5, 12),
+                10,
+                &[(4, 0)],
+            ),
+            case(
+                // The leader's epoch 5 is longer than this whole log: the
+                // leader's end offset cannot be a truncation point, or the
+                // same row would come back on every Fetch.
+                "the leader's end offset is past the log end",
+                &[(4, 10), (6, 2)],
+                (5, 20),
+                10,
+                &[(4, 0)],
+            ),
+            case(
+                "a known epoch that the leader ended earlier than the follower",
+                &[(4, 13)],
+                (4, 8),
+                8,
+                &[(4, 0)],
+            ),
+            case(
+                "a known epoch that the leader ended later than the follower",
+                &[(4, 10), (6, 5)],
+                (4, 12),
+                10,
+                &[(4, 0)],
+            ),
+            case(
+                "the leader's epoch is below every epoch the follower recorded",
+                &[(6, 5)],
+                (5, 3),
+                0,
+                &[],
+            ),
+            case(
+                "no leader end offset leaves the log alone",
+                &[(4, 5)],
+                (4, -1),
+                5,
+                &[(4, 0)],
+            ),
+        ];
+        for Case {
+            name,
+            runs,
+            diverging: (epoch, end_offset),
+            expected_end,
+            expected_epochs,
+        } in cases
+        {
+            let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
+            ensure_local_partition(&cfg).unwrap();
+            let part = cfg.partitions.get(&cfg.topic, cfg.partition).unwrap();
+            for &(leader_epoch, count) in runs {
+                for _ in 0..count {
+                    let mut batch = RecordBatch {
+                        partition_leader_epoch: leader_epoch,
+                        records: vec![Record::default()],
+                        ..RecordBatch::default()
+                    };
+                    part.log.lock().unwrap().append(&mut batch).unwrap();
+                }
+            }
+            let resp = fetch_response(
+                TOPIC,
+                WIRE_TOPIC_ID,
+                PartitionData {
+                    partition_index: PARTITION,
+                    error_code: codes::NONE,
+                    diverging_epoch: EpochEndOffset {
+                        epoch,
+                        end_offset,
+                        ..EpochEndOffset::default()
+                    },
+                    ..PartitionData::default()
+                },
+            );
+
+            let action = handle_response(resp, &cfg, cfg.leader_epoch.0).await;
+
+            assert!(action == RowAction::Continue, "{name}");
+            assert!(part.log_end_offset() == Offset(expected_end), "{name}");
+            let epochs: Vec<(i32, i64)> = part
+                .log
+                .lock()
+                .unwrap()
+                .epoch_checkpoint()
+                .entries()
+                .iter()
+                .map(|entry| (entry.epoch.0, entry.start_offset.0))
+                .collect();
+            assert!(epochs == expected_epochs, "{name}");
+        }
     }
 
     #[tokio::test]

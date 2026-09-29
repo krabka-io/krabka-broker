@@ -88,7 +88,9 @@ pub fn log_start_offset_checkpoint_path(dir: &Path) -> PathBuf {
 
 /// Suffix that the broker appends to a future-log partition directory while a KIP-113 intra-broker move runs.
 ///
-/// The directory at `<target_log_dir>/<topic>-<partition><FUTURE_SUFFIX>` collects copied batches. When the future log catches up, the broker renames it in place to `<topic>-<partition>`. The suffix mirrors Apache Kafka's `LogManager.FutureDirSuffix`, so what cp-kafka tooling such as `kafka-log-dirs` expects matches the bytes on disk.
+/// The directory at `<target_log_dir>/<topic>-<partition><FUTURE_SUFFIX>` collects copied batches. When the future log catches up, the broker renames it in place to `<topic>-<partition>`.
+///
+/// This is not the name that Apache Kafka gives the directory. Kafka writes `<topic>-<partition>.<32-hex-uuid>-future` (`LocalLog.logFutureDirName`, `LogFileUtils.FUTURE_DIR_SUFFIX`), and a JVM broker cannot parse the name without the unique id. A partition has at most one move, and only the krabka broker reads the name, so the unique id is left out. `docs/format-divergences.md` lists the difference.
 pub const FUTURE_SUFFIX: &str = "-future";
 
 /// Builds the directory path for a (topic, partition).

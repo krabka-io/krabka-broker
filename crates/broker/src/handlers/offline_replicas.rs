@@ -241,5 +241,26 @@ fn has_online_dir(registration: &BrokerRegistrationRecord, directory: Option<uui
     directory.is_nil() || registration.log_dirs.contains(&directory)
 }
 
+/// The directory half of Kafka's `LeaderAcceptor`:
+/// `clusterControl.hasOnlineDir(replica, partition.directory(replica))`.
+///
+/// A replica whose broker has no registration in `image` has no directory
+/// list to blame, so it passes: the election's liveness set already refuses an
+/// unregistered broker.
+pub(crate) fn replica_dir_online(
+    image: &MetadataImage,
+    partition: &PartitionRecord,
+    replica: NodeId,
+) -> bool {
+    let directory = partition
+        .replicas
+        .iter()
+        .position(|&candidate| candidate == replica)
+        .and_then(|slot| partition.directories.get(slot).copied());
+    image
+        .broker(replica)
+        .is_none_or(|registration| has_online_dir(registration, directory))
+}
+
 #[cfg(test)]
 mod tests;

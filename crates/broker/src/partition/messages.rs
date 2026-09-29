@@ -225,6 +225,20 @@ pub enum WriterMessage {
         target_partition_path: PathBuf,
         ack: oneshot::Sender<Result<SwapOutcome, BrokerError>>,
     },
+    /// Report and forget the lowest offset that a [`WriterMessage::Truncate`]
+    /// or [`WriterMessage::ResetTo`] cut the log to since the last such
+    /// report, or `None` when the log was not cut.
+    ///
+    /// The KIP-113 move task sends it before each catch-up pass and cuts its
+    /// future log to the answer, so the moved copy never keeps records that
+    /// the current log dropped. It is Kafka's
+    /// `ReplicaFetcherThread.truncate`, which calls
+    /// `replicaAlterLogDirsManager.markPartitionsForTruncation` after it
+    /// truncates the current log. A [`WriterMessage::SwapFutureLog`] answers
+    /// `NotCaughtUp` while a cut is unreported, whatever the log ends say.
+    TakeFutureTruncation {
+        ack: oneshot::Sender<Option<Offset>>,
+    },
 }
 
 /// Result of a [`WriterMessage::SwapFutureLog`] handling cycle.

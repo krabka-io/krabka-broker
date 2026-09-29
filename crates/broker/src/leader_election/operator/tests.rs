@@ -9,7 +9,8 @@ use uuid::Uuid;
 
 use super::*;
 use crate::leader_election::test_support::{
-    alive_set, img_with_partition, no_witnesses, witnesses,
+    alive_set, img_with_dirs, img_with_partition, no_witnesses, register_broker_with_dirs,
+    witnesses,
 };
 
 #[tokio::test]
@@ -206,4 +207,114 @@ async fn operator_unclean_election_skips_a_witness_replica() {
         partition_epoch: 1,
     };
     assert!(new_pr == expected);
+}
+
+/// Kafka's `LeaderAcceptor` asks `hasOnlineDir` beside `isActive`, so a
+/// replica on a dead disk neither leads nor keeps the partition led. Replicas
+/// are `[1, 2, 3]` on directories `d1, d2, d3`; every broker is alive.
+#[tokio::test]
+async fn elections_skip_a_replica_on_a_dead_log_dir() {
+    struct Case {
+        name: &'static str,
+        election: ElectionType,
+        leader: u64,
+        isr: &'static [u64],
+        /// The brokers whose directory of this partition is offline.
+        dead_dirs: &'static [u64],
+        /// The new leader and ISR.
+        expected: Result<(u64, Vec<u64>), ElectError>,
+    }
+    let case = |name, election, leader, isr, dead_dirs, expected| Case {
+        name,
+        election,
+        leader,
+        isr,
+        dead_dirs,
+        expected,
+    };
+    let cases = [
+        case(
+            "unclean: the only in-sync replica is on a dead disk",
+            ElectionType::Unclean,
+            1,
+            &[1],
+            &[1],
+            Ok((2, vec![2])),
+        ),
+        case(
+            "unclean: nothing is on a dead disk",
+            ElectionType::Unclean,
+            1,
+            &[1],
+            &[],
+            Err(ElectError::ElectionNotNeeded),
+        ),
+        case(
+            "unclean: another in-sync replica still has its disk",
+            ElectionType::Unclean,
+            1,
+            &[1, 2],
+            &[1],
+            Err(ElectError::ElectionNotNeeded),
+        ),
+        case(
+            "unclean: every replica is on a dead disk",
+            ElectionType::Unclean,
+            1,
+            &[1],
+            &[1, 2, 3],
+            Err(ElectError::NoEligibleReplica),
+        ),
+        case(
+            "preferred: the leader is the preferred replica on a dead disk",
+            ElectionType::Preferred,
+            1,
+            &[1, 2],
+            &[1],
+            Err(ElectError::PreferredNotAlive),
+        ),
+        case(
+            "preferred: the preferred replica is on a dead disk",
+            ElectionType::Preferred,
+            2,
+            &[1, 2],
+            &[1],
+            Err(ElectError::PreferredNotAlive),
+        ),
+        case(
+            "preferred: the preferred replica has its disk",
+            ElectionType::Preferred,
+            2,
+            &[1, 2],
+            &[3],
+            Ok((1, vec![1, 2])),
+        ),
+    ];
+    for Case {
+        name,
+        election,
+        leader,
+        isr,
+        dead_dirs,
+        expected,
+    } in cases
+    {
+        let dirs: Vec<Uuid> = (1..=3).map(Uuid::from_u128).collect();
+        let mut img = img_with_dirs("foo", leader, &[1, 2, 3], isr, &dirs);
+        for (id, dir) in (1..=3).zip(&dirs) {
+            let online = if dead_dirs.contains(&id) {
+                Uuid::from_u128(99)
+            } else {
+                *dir
+            };
+            register_broker_with_dirs(&mut img, id, vec![online]);
+        }
+        let alive = alive_set(&[1, 2, 3]);
+
+        let got =
+            select_new_leader_for_partition(&img, &alive, &no_witnesses(), "foo", 0, election)
+                .map(|pr| (pr.leader.0, pr.isr.iter().map(|n| n.0).collect::<Vec<_>>()));
+
+        assert!(got == expected, "{name}");
+    }
 }

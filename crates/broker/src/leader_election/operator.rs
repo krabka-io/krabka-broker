@@ -7,6 +7,8 @@ use std::collections::HashSet;
 use krabka_metadata::PartitionRecord;
 use krabka_raft::NodeId;
 
+use crate::handlers::offline_replicas::replica_dir_online;
+
 #[cfg(test)]
 mod tests;
 
@@ -53,6 +55,10 @@ pub(crate) enum ElectError {
 /// [`live_brokers`](crate::handlers::offline_replicas::live_brokers) instead,
 /// which every node computes the same way.
 ///
+/// A replica must also sit on an online log directory of its broker, as in
+/// Kafka's `LeaderAcceptor`. A partition whose only in-sync replica is on a
+/// dead disk is leaderless, so an UNCLEAN election runs over it.
+///
 /// Pure: no I/O, no panics. The caller must submit the returned record
 /// through the controller.
 pub(crate) fn select_new_leader_for_partition(
@@ -66,6 +72,12 @@ pub(crate) fn select_new_leader_for_partition(
     let pr = image
         .partition(topic, partition)
         .ok_or(ElectError::UnknownTopicOrPartition)?;
+    // Kafka's `LeaderAcceptor`: an active broker whose replica of this
+    // partition is on an online directory. A replica on a dead disk cannot
+    // lead, and does not count as the partition's leader either: the
+    // controller cannot record leader -1, so the record keeps naming it.
+    let acceptable =
+        |replica: NodeId| alive.contains(&replica.0) && replica_dir_online(image, pr, replica);
     match election {
         ElectionType::Preferred => {
             let preferred = *pr
@@ -78,13 +90,13 @@ pub(crate) fn select_new_leader_for_partition(
             if witnesses.contains(&preferred) {
                 return Err(ElectError::PreferredIsWitness);
             }
-            if pr.leader == preferred {
+            if pr.leader == preferred && acceptable(preferred) {
                 return Err(ElectError::PreferredAlreadyLeader);
             }
             if !pr.isr.contains(&preferred) {
                 return Err(ElectError::PreferredNotInIsr);
             }
-            if !alive.contains(&preferred.0) {
+            if !acceptable(preferred) {
                 return Err(ElectError::PreferredNotAlive);
             }
             let (partition_epoch, leader_epoch) = crate::metadata_epoch::next_partition_change(
@@ -113,14 +125,14 @@ pub(crate) fn select_new_leader_for_partition(
             // partition available, and it must not block the operator who
             // accepts the data loss.
             for &n in &pr.isr {
-                if !witnesses.contains(&n) && alive.contains(&n.0) {
+                if !witnesses.contains(&n) && acceptable(n) {
                     return Err(ElectError::ElectionNotNeeded);
                 }
             }
             // Find the first alive replica that can serve clients, in or out
             // of ISR.
             for &n in &pr.replicas {
-                if !witnesses.contains(&n) && alive.contains(&n.0) {
+                if !witnesses.contains(&n) && acceptable(n) {
                     let (partition_epoch, leader_epoch) =
                         crate::metadata_epoch::next_partition_change(
                             pr.partition_epoch,
