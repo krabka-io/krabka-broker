@@ -338,6 +338,7 @@ pub(crate) async fn handle(
         metrics: &broker.metrics,
         phases: &phases,
         schema_validator: broker.config.schema_validator.as_ref(),
+        unstable_api_versions: broker.config.features.unstable_api_versions,
     };
 
     for topic in req.topic_data {

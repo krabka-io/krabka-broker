@@ -56,8 +56,9 @@ pub(super) fn effective_topic_configs(
     image: &krabka_metadata::MetadataImage,
     topic: &str,
     overrides: &std::collections::BTreeMap<String, String>,
+    unstable: crate::api_catalog::UnstableApiVersions,
 ) -> Vec<CreatableTopicConfigs> {
-    crate::handlers::describe_configs::effective_topic_configs(image, topic, overrides)
+    crate::handlers::describe_configs::effective_topic_configs(image, topic, overrides, unstable)
         .into_iter()
         .map(|entry| CreatableTopicConfigs {
             name: entry.name,

@@ -141,8 +141,9 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/jvm_streams_app.rs",
             "crates/broker/tests/jvm_connect_distributed.rs",
             "crates/broker/tests/librdkafka_conformance.rs::next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x",
+            "crates/broker/src/handlers/produce/producer_checks.rs::a_producer_with_no_state_on_a_never_appended_partition_starts_at_zero_under_trunk",
         ],
-        note: "",
+        note: "The idempotent-producer sequence check is Kafka 4.3.1's: a producer with no state may start at any sequence. Kafka trunk's KAFKA-15591 rule, which answers OUT_OF_ORDER_SEQUENCE_NUMBER to a non-zero first sequence from a producer with no state on a partition that has never held a record, applies only under `unstable.api.versions.enable`.",
     },
     KipAnnotation {
         key: "KIP-101",
@@ -399,7 +400,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         tests: &[
             "crates/broker/tests/mirror_maker2.rs::mirror_maker2_migrates_a_kafka_cluster_onto_krabka",
         ],
-        note: "The stock `connect-mirror-maker.sh` of `apache/kafka:4.3.1` mirrors a broker of that release onto krabka: records with their headers, MM2's compacted `heartbeats`, checkpoints and offset-syncs topics, a consumer group's translated position, and a `retention.ms` carried over by `sync.topic.configs`. `sync.topic.acls` is left at its default; because neither cluster in the suite has an authorizer, MM2 skips the sync at the source, and the target-side `CreateAcls` krabka would answer `SECURITY_DISABLED` is asserted directly. `docs/operations/migrate-from-kafka.md` is the cutover procedure.",
+        note: "The stock `connect-mirror-maker.sh` of `apache/kafka:4.3.1` mirrors a broker of that release onto krabka: records with their headers, MM2's compacted `heartbeats`, checkpoints and offset-syncs topics, a consumer group's translated position, and a `retention.ms` carried over by `sync.topic.configs`. `sync.topic.acls` is left at its default; because neither cluster in the suite has an authorizer, MM2 skips the sync at the source, and the target-side `CreateAcls` krabka would answer `SECURITY_DISABLED` is asserted directly. `docs/operations/migrate-from-kafka.md` is the cutover procedure. Kafka trunk's four newest topic keys (`remote.copy.lag.ms`, `remote.copy.lag.bytes`, `max.decompressed.message.bytes`, `errors.deadletterqueue.group.enable`) are unknown topic configs by default, as they are on 4.3.1, so a replay from a trunk cluster that sets one fails as it does against a 4.3.1 broker; `unstable.api.versions.enable` accepts and describes them.",
     },
     KipAnnotation {
         key: "KIP-392",

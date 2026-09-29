@@ -106,6 +106,9 @@ pub(super) struct PartitionServices<'a> {
     /// section", and a topic that asks for validation on such a broker is
     /// rejected rather than admitted unchecked.
     pub(super) schema_validator: Option<&'a Arc<SchemaValidator>>,
+    /// Kafka's `unstable.api.versions.enable`, which decides whether the
+    /// idempotent-producer check applies Kafka trunk's empty-log sequence rule.
+    pub(super) unstable_api_versions: crate::api_catalog::UnstableApiVersions,
 }
 
 /// What one partition's pipeline produced: a finished response row, or the
@@ -632,6 +635,7 @@ pub(super) async fn complete_partition(
         producer_state,
         image,
         phases,
+        unstable_api_versions,
         ..
     } = services;
     let topic_name: &str = &shared_topic;
@@ -665,7 +669,16 @@ pub(super) async fn complete_partition(
         .load(std::sync::atomic::Ordering::Acquire);
 
     // ── idempotent-producer dedup gate ───────────────────────
-    match handle_duplicate(&prepared, producer_state, &part, topic_name, idx, acks).await {
+    match handle_duplicate(
+        &prepared,
+        producer_state,
+        &part,
+        (topic_name, idx),
+        acks,
+        unstable_api_versions,
+    )
+    .await
+    {
         DedupOutcome::Append => {}
         DedupOutcome::Answered(response) => return Ok(PartitionOutcome::Done(response)),
         DedupOutcome::AwaitDurability { response, target } => {

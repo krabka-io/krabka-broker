@@ -45,6 +45,12 @@ fn expected_configs(overrides: &[(&str, &str)]) -> Vec<CreatableTopicConfigs> {
     use crate::config_keys::registry::{self, ConfigScope};
 
     let mut configs: Vec<CreatableTopicConfigs> = registry::keys_in(ConfigScope::Topic)
+        .filter(|row| {
+            crate::config_keys::serves_topic_key(
+                row.name,
+                crate::api_catalog::UnstableApiVersions::Disabled,
+            )
+        })
         .map(|row| {
             let stored = overrides
                 .iter()
@@ -904,6 +910,7 @@ async fn validate_only_answers_the_verdict_and_commits_nothing() {
                 &broker_handle.controller_image_for_test(),
                 name,
                 &std::collections::BTreeMap::new(),
+                crate::api_catalog::UnstableApiVersions::Disabled,
             ))
         } else {
             expected_row.configs.clone()
@@ -1075,6 +1082,7 @@ async fn created_topic_configs_match_describe_configs_for_the_same_topic() {
             &image,
             "mirrored",
             image.topic_config("mirrored").expect("stored overrides"),
+            crate::api_catalog::UnstableApiVersions::Disabled,
         )
         .into_iter()
         .map(|entry| CreatableTopicConfigs {

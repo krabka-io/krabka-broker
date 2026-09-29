@@ -75,7 +75,8 @@ pub(super) struct ServingBroker<'a> {
     /// topic reports as its static broker layer.
     pub(super) static_min_insync_replicas: i32,
     /// Kafka's `unstable.api.versions.enable`, which decides whether a group
-    /// resource carries Kafka trunk's group keys.
+    /// resource carries Kafka trunk's group keys, a topic resource Kafka
+    /// trunk's topic keys, and a broker resource their broker synonyms.
     pub(super) unstable_api_versions: crate::api_catalog::UnstableApiVersions,
 }
 
@@ -129,6 +130,7 @@ pub(super) fn describe_one(
         let broker = TopicBrokerLayers {
             node: serving.node,
             static_min_insync_replicas: serving.static_min_insync_replicas,
+            unstable: serving.unstable_api_versions,
         };
         return ok(topic_configs(
             image,
@@ -170,14 +172,7 @@ pub(super) fn describe_one(
             // configuration, so Kafka refuses to answer for any other node.
             Some(node_id)
         };
-        return ok(broker_configs(
-            image,
-            node_id,
-            serving.static_broker,
-            serving.static_min_insync_replicas,
-            &wanted,
-            options,
-        ));
+        return ok(broker_configs(image, node_id, serving, &wanted, options));
     }
 
     if r.resource_type == RESOURCE_TYPE_BROKER_LOGGER {
@@ -250,16 +245,20 @@ pub(super) fn describe_one(
 /// `computeEffectiveTopicConfigs(creationConfigs)` and discards only the
 /// *records*, so a dry run reports what the topic would be created as instead
 /// of the bare cluster defaults a lookup of an absent topic would give.
+///
+/// `unstable` is Kafka's `unstable.api.versions.enable`, which decides
+/// whether Kafka trunk's topic keys are on the row.
 pub(crate) fn effective_topic_configs(
     image: &krabka_metadata::MetadataImage,
     topic: &str,
     overrides: &std::collections::BTreeMap<String, String>,
+    unstable: crate::api_catalog::UnstableApiVersions,
 ) -> Vec<DescribeConfigsResourceResult> {
     topic_configs_with_overrides(
         image,
-        topic,
-        Some(overrides),
+        (topic, Some(overrides)),
         None,
+        unstable,
         &|_| true,
         EntryOptions {
             include_synonyms: false,
@@ -282,9 +281,9 @@ fn topic_configs(
 ) -> Vec<DescribeConfigsResourceResult> {
     topic_configs_with_overrides(
         image,
-        topic,
-        image.topic_config(topic),
+        (topic, image.topic_config(topic)),
         Some(broker),
+        broker.unstable,
         wanted,
         options,
     )
@@ -296,6 +295,7 @@ fn topic_configs(
 struct TopicBrokerLayers {
     node: krabka_metadata::NodeId,
     static_min_insync_replicas: i32,
+    unstable: crate::api_catalog::UnstableApiVersions,
 }
 
 /// [`topic_configs`] against a caller-supplied override map, which is what a
@@ -306,11 +306,15 @@ struct TopicBrokerLayers {
 /// broker's `DYNAMIC_BROKER_CONFIG`, the `DYNAMIC_DEFAULT_BROKER_CONFIG`, the
 /// `STATIC_BROKER_CONFIG` and the `DEFAULT_CONFIG`), each under the broker
 /// key's name. The value and `config_source` are the head of that chain.
+///
+/// The keys are the ones the broker serves under `unstable`: Kafka 4.3.1's
+/// `LogConfig` and krabka's own by default, and Kafka trunk's too under
+/// `unstable.api.versions.enable`.
 fn topic_configs_with_overrides(
     image: &krabka_metadata::MetadataImage,
-    topic: &str,
-    overrides: Option<&std::collections::BTreeMap<String, String>>,
+    (topic, overrides): (&str, Option<&std::collections::BTreeMap<String, String>>),
     broker: Option<TopicBrokerLayers>,
+    unstable: crate::api_catalog::UnstableApiVersions,
     wanted: &impl Fn(&str) -> bool,
     options: EntryOptions,
 ) -> Vec<DescribeConfigsResourceResult> {
@@ -325,7 +329,7 @@ fn topic_configs_with_overrides(
         .map(|value| value.to_string());
 
     let mut configs: Vec<DescribeConfigsResourceResult> = registry::keys_in(ConfigScope::Topic)
-        .filter(|row| wanted(row.name))
+        .filter(|row| wanted(row.name) && config_keys::serves_topic_key(row.name, unstable))
         .map(|row| {
             let stored = if row.name == config_keys::WRITE_FREEZE {
                 freeze.as_deref()
@@ -435,11 +439,16 @@ fn topic_configs_with_overrides(
 fn broker_configs(
     image: &krabka_metadata::MetadataImage,
     node_id: Option<krabka_metadata::NodeId>,
-    static_broker: StaticBrokerConfigs<'_>,
-    static_min_insync_replicas: i32,
+    serving: ServingBroker<'_>,
     wanted: &impl Fn(&str) -> bool,
     options: EntryOptions,
 ) -> Vec<DescribeConfigsResourceResult> {
+    let ServingBroker {
+        static_broker,
+        static_min_insync_replicas,
+        unstable_api_versions: unstable,
+        ..
+    } = serving;
     let defaults = image.default_broker_config();
     let per_broker = node_id.and_then(|node_id| image.broker_config(node_id));
     let mut keys: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
@@ -458,11 +467,9 @@ fn broker_configs(
     // A named broker reports every topic-default broker key it runs with,
     // set or not, the way Kafka reports each `KafkaConfig` key.
     if node_id.is_some() {
-        keys.extend(
-            broker_dynamic::TOPIC_DEFAULT_SYNONYMS
-                .iter()
-                .map(|(broker, _)| *broker),
-        );
+        for name in broker_dynamic::served_topic_default_synonyms(unstable) {
+            keys.insert(name);
+        }
     }
     let static_min_isr =
         (static_min_insync_replicas != 1).then(|| static_min_insync_replicas.to_string());
@@ -502,12 +509,12 @@ fn broker_configs(
                     value,
                 });
             }
-            let row = broker_dynamic::broker_key_row(key);
+            let row = broker_dynamic::broker_key_row(key, unstable);
             // Kafka filters the cluster-default resource's chain to its
             // `DYNAMIC_DEFAULT_BROKER_CONFIG` entries, so only a named broker
             // shows the default beneath them.
             let default = if node_id.is_some() {
-                broker_default(key)
+                broker_default(key, unstable)
                     .map(|value| DefaultLayer {
                         value: Some(value),
                         name: Some(key),
@@ -545,14 +552,18 @@ fn broker_configs(
 }
 
 /// Kafka's `KafkaConfig` default of a broker key krabka reports: its own
-/// registry row's, or the one its topic-key synonym family gives it.
-fn broker_default(key: &str) -> Option<&'static str> {
+/// registry row's, or the one its topic-key synonym family gives it on a
+/// broker serving `unstable`.
+fn broker_default(
+    key: &str,
+    unstable: crate::api_catalog::UnstableApiVersions,
+) -> Option<&'static str> {
     if let Some(row) = registry::lookup(ConfigScope::Broker, key) {
         return row.default;
     }
     broker_dynamic::TOPIC_DEFAULT_SYNONYMS
         .iter()
-        .find(|(broker, _)| *broker == key)
+        .find(|(broker, topic)| *broker == key && config_keys::serves_topic_key(topic, unstable))
         .and_then(|(_, topic)| {
             broker_dynamic::topic_broker_synonyms(topic)
                 .into_iter()

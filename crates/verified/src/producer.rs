@@ -159,10 +159,16 @@ fn sequence_decision(
     entry: Option<ProducerEntryFacts>,
     producer_epoch: i16,
     base_sequence: i32,
+    log_empty: bool,
+    trunk_rules: bool,
 ) -> ProducerDecision {
     pearlite! {
         match entry {
-            None => ProducerDecision::Append,
+            None => if trunk_rules && log_empty && base_sequence@ != 0 {
+                ProducerDecision::OutOfOrder
+            } else {
+                ProducerDecision::Append
+            },
             Some(tracked) => if producer_epoch@ < tracked.epoch@ {
                 ProducerDecision::Fenced
             } else if producer_epoch@ > tracked.epoch@ {
@@ -188,11 +194,20 @@ fn sequence_decision(
 /// batch goes on to `ProducerAppendInfo.checkProducerEpoch` and
 /// `checkSequence`:
 ///
-/// - a producer with no entry can start at any sequence;
+/// - a producer with no entry can start at any sequence, except that under
+///   `trunk_rules` it must start at sequence 0 on a partition whose log is
+///   empty (`log_empty`) and is otherwise out of order;
 /// - a lower epoch is fenced;
 /// - a higher epoch must start at sequence 0 and is otherwise out of order;
 /// - the same epoch must continue at the last sequence plus one modulo `2^31`
 ///   and is otherwise out of order.
+///
+/// The empty-log rule is Kafka trunk's (KAFKA-15591, in
+/// `ProducerAppendInfo.checkSequence`); Kafka 4.3.1 does not have it.
+/// `log_empty` is Kafka's `ProducerStateManager.mapEndOffset() == 0`: no
+/// record has ever been appended to the partition, so no producer state can
+/// have been lost, and `trunk_rules` says whether the host serves Kafka
+/// trunk's behaviour.
 ///
 /// The host supplies the retained batches at the entry's epoch; a batch at
 /// any other epoch never matches them.
@@ -201,7 +216,8 @@ fn sequence_decision(
         entry, retained@, producer_epoch, base_sequence, last_offset_delta, index@),
     _ => !retained_duplicate_exists(
             entry, retained@, producer_epoch, base_sequence, last_offset_delta)
-        && result == sequence_decision(entry, producer_epoch, base_sequence),
+        && result == sequence_decision(
+            entry, producer_epoch, base_sequence, log_empty, trunk_rules),
 })]
 #[must_use]
 pub fn producer_decision(
@@ -210,8 +226,13 @@ pub fn producer_decision(
     producer_epoch: i16,
     base_sequence: i32,
     last_offset_delta: i32,
+    log_empty: bool,
+    trunk_rules: bool,
 ) -> ProducerDecision {
     let Some(tracked) = entry else {
+        if trunk_rules && log_empty && base_sequence != 0 {
+            return ProducerDecision::OutOfOrder;
+        }
         return ProducerDecision::Append;
     };
     if producer_epoch == tracked.epoch {
@@ -409,7 +430,88 @@ mod tests {
         ];
         for (label, entry, epoch, base_sequence, delta, expected) in cases {
             assert!(
-                producer_decision(entry, &RETAINED, epoch, base_sequence, delta) == expected,
+                producer_decision(entry, &RETAINED, epoch, base_sequence, delta, false, false)
+                    == expected,
+                "case: {label}"
+            );
+        }
+    }
+
+    /// Kafka trunk's KAFKA-15591 rule, which Kafka 4.3.1 does not have: a
+    /// producer with no entry must start at sequence 0 on a partition that has
+    /// never held a record. Every other input keeps the 4.3.1 decision.
+    #[test]
+    fn a_producer_with_no_state_on_an_empty_log_starts_at_zero_under_trunk_rules() {
+        // (label, entry, base sequence, log empty, trunk rules, decision)
+        let cases = [
+            (
+                "never appended, no entry, sequence 0",
+                None,
+                0,
+                true,
+                true,
+                ProducerDecision::Append,
+            ),
+            (
+                "never appended, no entry, sequence 7",
+                None,
+                7,
+                true,
+                true,
+                ProducerDecision::OutOfOrder,
+            ),
+            (
+                "has records, no entry, sequence 7",
+                None,
+                7,
+                false,
+                true,
+                ProducerDecision::Append,
+            ),
+            (
+                "has records, entry expired, sequence 0",
+                None,
+                0,
+                false,
+                true,
+                ProducerDecision::Append,
+            ),
+            (
+                "never appended, no entry, sequence 7, Kafka 4.3.1",
+                None,
+                7,
+                true,
+                false,
+                ProducerDecision::Append,
+            ),
+            (
+                "never appended, an entry continues its sequence",
+                Some(ENTRY),
+                7,
+                true,
+                true,
+                ProducerDecision::Append,
+            ),
+            (
+                "never appended, an entry at a gap",
+                Some(ENTRY),
+                9,
+                true,
+                true,
+                ProducerDecision::OutOfOrder,
+            ),
+        ];
+        for (label, entry, base_sequence, log_empty, trunk_rules, expected) in cases {
+            assert!(
+                producer_decision(
+                    entry,
+                    &RETAINED,
+                    ENTRY.epoch,
+                    base_sequence,
+                    0,
+                    log_empty,
+                    trunk_rules,
+                ) == expected,
                 "case: {label}"
             );
         }
@@ -425,13 +527,17 @@ mod tests {
             base_sequence: i32::MAX - 1,
             last_sequence: i32::MAX,
         })];
-        assert!(producer_decision(Some(entry), &retained, 0, 0, 3) == ProducerDecision::Append);
         assert!(
-            producer_decision(Some(entry), &retained, 0, i32::MAX - 1, 1)
+            producer_decision(Some(entry), &retained, 0, 0, 3, false, false)
+                == ProducerDecision::Append
+        );
+        assert!(
+            producer_decision(Some(entry), &retained, 0, i32::MAX - 1, 1, false, false)
                 == ProducerDecision::Duplicate { retained: 0 }
         );
         assert!(
-            producer_decision(Some(entry), &[], 0, i32::MAX - 1, 1) == ProducerDecision::OutOfOrder
+            producer_decision(Some(entry), &[], 0, i32::MAX - 1, 1, false, false)
+                == ProducerDecision::OutOfOrder
         );
     }
 }

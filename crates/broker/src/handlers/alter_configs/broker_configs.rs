@@ -16,6 +16,7 @@ use krabka_metadata::{BrokerConfigRecord, MetadataRecord, NodeId};
 use krabka_protocol::owned::alter_configs_request::AlterConfigsResource;
 
 use crate::{
+    api_catalog::UnstableApiVersions,
     codes,
     config_keys::{
         self,
@@ -34,6 +35,7 @@ pub(super) fn broker_config_records(
     image: &krabka_metadata::MetadataImage,
     serving: NodeId,
     log_dirs: &[std::path::PathBuf],
+    unstable: UnstableApiVersions,
 ) -> Result<Vec<MetadataRecord>, (i16, String)> {
     let node_id = broker_resource_node(&resource.resource_name, serving)?;
     let per_broker = node_id != krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID;
@@ -63,7 +65,7 @@ pub(super) fn broker_config_records(
             config.value.clone().unwrap_or_default(),
         );
     }
-    let replacement = canonical_dynamic_broker_configs(&replacement, per_broker)?;
+    let replacement = canonical_dynamic_broker_configs(&replacement, per_broker, unstable)?;
     if per_broker {
         cordoned_log_dirs_error(&replacement, log_dirs)?;
     }
@@ -145,6 +147,7 @@ mod tests {
             &image,
             SERVING,
             &[],
+            UnstableApiVersions::Disabled,
         )
         .expect("valid broker replacement");
 
@@ -243,7 +246,13 @@ mod tests {
             ),
         ];
         for (name, configs, want) in cases {
-            let got = broker_config_records(&broker_resource(name, &configs), &image, SERVING, &[]);
+            let got = broker_config_records(
+                &broker_resource(name, &configs),
+                &image,
+                SERVING,
+                &[],
+                UnstableApiVersions::Disabled,
+            );
             let want = want.map_err(|(code, message)| (code, message.to_owned()));
             check!(got == want, "{name:?} {configs:?}");
         }
@@ -260,6 +269,7 @@ mod tests {
                         &image,
                         SERVING,
                         &[],
+                        UnstableApiVersions::Disabled,
                     ) == Err((
                         codes::INVALID_CONFIG,
                         format!("broker config {key} is controller-managed and read-only"),
@@ -289,6 +299,7 @@ mod tests {
             &image,
             SERVING,
             &[],
+            UnstableApiVersions::Disabled,
         )
         .expect("valid broker replacement");
 
@@ -317,6 +328,7 @@ mod tests {
             &image,
             SERVING,
             &[],
+            UnstableApiVersions::Disabled,
         )
         .expect_err("per-broker recovery setting must be rejected");
 
@@ -333,7 +345,13 @@ mod tests {
             Some("2"),
         ));
 
-        let error = broker_config_records(&broker_resource("", &[]), &image, SERVING, &[]);
+        let error = broker_config_records(
+            &broker_resource("", &[]),
+            &image,
+            SERVING,
+            &[],
+            UnstableApiVersions::Disabled,
+        );
 
         assert!(
             error

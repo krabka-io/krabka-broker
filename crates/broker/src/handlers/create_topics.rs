@@ -397,6 +397,7 @@ fn disclose_created_topic(
                 &created.controller.current_image(),
                 &result.name,
                 created.overrides,
+                broker.config.features.unstable_api_versions,
             ));
         }
     } else {

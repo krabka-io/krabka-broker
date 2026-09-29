@@ -17,6 +17,7 @@ use krabka_protocol::owned::{
 
 use super::{OP_APPEND, OP_DELETE, OP_SET, OP_SUBTRACT};
 use crate::{
+    api_catalog::UnstableApiVersions,
     codes,
     config_keys::{
         self,
@@ -30,14 +31,10 @@ use crate::{
 
 /// The default a `LIST` broker key starts from when the resource does not
 /// hold it, as Kafka's `prepareIncrementalConfigs` reads it from
-/// `ConfigKey.defaultValue`.
+/// `ConfigKey.defaultValue`. Only a `LIST` key reaches here, and every
+/// topic key typed `LIST` is one Kafka 4.3.1 has.
 fn list_default(name: &str) -> &'static str {
-    config_keys::broker_dynamic::TOPIC_DEFAULT_SYNONYMS
-        .iter()
-        .find(|(broker, _)| *broker == name)
-        .and_then(|(_, topic)| {
-            config_keys::registry::lookup(config_keys::registry::ConfigScope::Topic, topic)
-        })
+    config_keys::broker_dynamic::broker_key_row(name, UnstableApiVersions::Disabled)
         .and_then(|row| row.default)
         .unwrap_or("")
 }
@@ -47,6 +44,7 @@ fn list_default(name: &str) -> &'static str {
 fn apply_operations(
     resource: &AlterConfigsResource,
     props: &mut BTreeMap<String, String>,
+    unstable: UnstableApiVersions,
 ) -> Result<(), (i16, String)> {
     for cfg in &resource.configs {
         let name = cfg.name.as_str();
@@ -64,7 +62,7 @@ fn apply_operations(
                 } else {
                     "subtract"
                 };
-                match broker_key_kind(name) {
+                match broker_key_kind(name, unstable) {
                     BrokerKeyKind::Unknown => {
                         return Err((
                             codes::INVALID_CONFIG,
@@ -109,6 +107,7 @@ fn broker_records(
     image: &MetadataImage,
     serving: NodeId,
     log_dirs: &[std::path::PathBuf],
+    unstable: UnstableApiVersions,
 ) -> Result<Vec<MetadataRecord>, (i16, String)> {
     let node_id = broker_resource_node(&resource.resource_name, serving)?;
     if let Some(cfg) = resource.configs.iter().find(|cfg| {
@@ -152,9 +151,9 @@ fn broker_records(
         .filter(|(name, _)| !config_keys::is_controller_managed_broker_config(name))
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect();
-    apply_operations(resource, &mut props)?;
+    apply_operations(resource, &mut props, unstable)?;
     let per_broker = node_id != krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID;
-    let canonical = canonical_dynamic_broker_configs(&props, per_broker)?;
+    let canonical = canonical_dynamic_broker_configs(&props, per_broker, unstable)?;
     if per_broker {
         cordoned_log_dirs_error(&canonical, log_dirs)?;
     }
@@ -183,11 +182,11 @@ pub(super) fn handle_broker_scoped(
     resource: &AlterConfigsResource,
     image: &MetadataImage,
     serving: NodeId,
-    log_dirs: &[std::path::PathBuf],
+    (log_dirs, unstable): (&[std::path::PathBuf], UnstableApiVersions),
     out: &mut AlterConfigsResourceResponse,
     to_submit: &mut Vec<MetadataRecord>,
 ) {
-    match broker_records(resource, image, serving, log_dirs) {
+    match broker_records(resource, image, serving, log_dirs, unstable) {
         Ok(records) => to_submit.extend(records),
         Err((code, message)) => {
             out.error_code = code;
@@ -422,7 +421,13 @@ mod tests {
         ];
         for (name, image, configs, want) in cases {
             let resource = make_resource(name, configs.clone());
-            let got = broker_records(&resource, &image, SERVING, &[]);
+            let got = broker_records(
+                &resource,
+                &image,
+                SERVING,
+                &[],
+                UnstableApiVersions::Disabled,
+            );
             let want = want.map_err(|(code, message)| (code, message.to_owned()));
             check!(got == want, "{name:?} {configs:?}");
         }
@@ -434,11 +439,16 @@ mod tests {
             for cfg in [make_set_cfg(key, "true"), make_del_cfg(key)] {
                 let resource = make_resource("1", vec![cfg]);
                 check!(
-                    broker_records(&resource, &image_with(&[], false), SERVING, &[])
-                        == Err((
-                            codes::INVALID_CONFIG,
-                            format!("broker config {key} is controller-managed and read-only"),
-                        )),
+                    broker_records(
+                        &resource,
+                        &image_with(&[], false),
+                        SERVING,
+                        &[],
+                        UnstableApiVersions::Disabled,
+                    ) == Err((
+                        codes::INVALID_CONFIG,
+                        format!("broker config {key} is controller-managed and read-only"),
+                    )),
                     "key {key}"
                 );
             }
@@ -551,7 +561,13 @@ mod tests {
         ];
         for (name, image, configs, want) in cases {
             let resource = make_resource(name, configs.clone());
-            let got = broker_records(&resource, &image, SERVING, &log_dirs);
+            let got = broker_records(
+                &resource,
+                &image,
+                SERVING,
+                &log_dirs,
+                UnstableApiVersions::Disabled,
+            );
             let want = want.map_err(|(code, message)| (code, message.to_owned()));
             check!(got == want, "{name:?} {configs:?}");
         }
