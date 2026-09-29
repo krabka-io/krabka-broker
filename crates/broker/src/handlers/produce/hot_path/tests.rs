@@ -106,20 +106,35 @@ fn seam_reproduces_the_pipeline_decision_and_appends_on_both_paths() {
     }
 }
 
+/// A malformed records field answers the code Kafka gives it and appends
+/// nothing. The 18 bytes of text carry a magic byte no batch has, which
+/// `ByteBufferLogInputStream.nextBatchSize` raises as `CorruptRecordException`,
+/// where a field that stops before the first size field holds no batch at all,
+/// which `ProduceRequest.validateRecords` calls an `InvalidRecordException`.
 #[test]
 fn a_malformed_records_field_returns_the_response_error_code() {
-    let metrics = crate::metrics::BrokerMetrics::new();
-    let dir = tempdir().unwrap();
-    let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
+    let cases = [
+        (
+            "a magic byte no batch has",
+            &b"not a record batch"[..],
+            codes::CORRUPT_MESSAGE,
+        ),
+        ("no first batch", &b"not a batch"[..], codes::INVALID_RECORD),
+    ];
+    for (name, records, want) in cases {
+        let metrics = crate::metrics::BrokerMetrics::new();
+        let dir = tempdir().unwrap();
+        let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
 
-    let error = append_one_batch(
-        Bytes::from_static(b"not a record batch"),
-        PathChoice::Dispatch,
-        &settings(&metrics, None),
-        &mut log,
-    )
-    .unwrap_err();
+        let error = append_one_batch(
+            Bytes::copy_from_slice(records),
+            PathChoice::Dispatch,
+            &settings(&metrics, None),
+            &mut log,
+        )
+        .unwrap_err();
 
-    assert!(error == codes::INVALID_RECORD);
-    assert!(log.log_end_offset().0 == 0);
+        assert!(error == want, "{name}");
+        assert!(log.log_end_offset().0 == 0, "{name}");
+    }
 }

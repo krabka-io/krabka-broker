@@ -158,7 +158,53 @@ const MAGIC_OFFSET: usize = 16;
 /// itself counts. Kafka calls the pair `Records.LOG_OVERHEAD`.
 const LOG_OVERHEAD: usize = 12;
 /// Bytes in a complete v2 batch header.
-const V2_HEADER_LEN: usize = 61;
+pub(super) const V2_HEADER_LEN: usize = 61;
+
+/// What Kafka's `ByteBufferLogInputStream.nextBatch` finds at the front of a
+/// records field.
+pub(super) enum NextBatch {
+    /// No whole batch is there: the field is empty, ends inside a header, or
+    /// claims more bytes than it holds. Kafka's iteration ends, and
+    /// `ProduceRequest.validateRecords` calls a field with no first batch an
+    /// `InvalidRecordException`.
+    Incomplete,
+    /// A size field or a magic byte that no batch can have: Kafka throws
+    /// `CorruptRecordException`, out of the very `hasNext()` that looks for
+    /// the batch.
+    Corrupt,
+    /// A whole batch: its length in bytes, header included, and its magic.
+    Batch { len: usize, magic: u8 },
+}
+
+/// Kafka's `LegacyRecord.RECORD_OVERHEAD_V0`: the smallest size field
+/// `ByteBufferLogInputStream.nextBatchSize` accepts.
+const MIN_RECORD_SIZE: i32 = 14;
+
+/// Frame the first batch of `buf` from its size and magic bytes alone, in
+/// Kafka's own order: no CRC, no compression, no record.
+pub(super) fn next_batch(buf: &[u8]) -> NextBatch {
+    let Some(size) = buf.get(8..LOG_OVERHEAD) else {
+        return NextBatch::Incomplete;
+    };
+    let size = i32::from_be_bytes([size[0], size[1], size[2], size[3]]);
+    if size < MIN_RECORD_SIZE {
+        return NextBatch::Corrupt;
+    }
+    let Some(&magic) = buf.get(MAGIC_OFFSET) else {
+        return NextBatch::Incomplete;
+    };
+    // Kafka reads the magic as a signed byte, so a high bit is negative.
+    if magic > 2 {
+        return NextBatch::Corrupt;
+    }
+    match usize::try_from(size)
+        .ok()
+        .and_then(|size| size.checked_add(LOG_OVERHEAD))
+    {
+        Some(len) if len <= buf.len() => NextBatch::Batch { len, magic },
+        _ => NextBatch::Incomplete,
+    }
+}
 
 /// Length of the largest v2 batch in `buf`, header included.
 ///
