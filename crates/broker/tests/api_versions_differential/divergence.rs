@@ -109,6 +109,17 @@ const RANGE_DIVERGENCE_INTENTS: &[(i16, &str)] = &[
          change before Kafka ships it lands here as a wire break.",
     ),
     (
+        28, // TxnOffsetCommit
+        "Intended. krabka serves TxnOffsetCommit v6 from Kafka trunk \
+         (KIP-1319), which 4.3.1 predates: the request and the response name \
+         each topic by its topic id, an id the metadata image does not hold \
+         answers UNKNOWN_TOPIC_ID, and a missing group or a refused member \
+         epoch answers GROUP_ID_NOT_FOUND or STALE_MEMBER_EPOCH where v5 \
+         answers ILLEGAL_GENERATION. krabka-client-rs' producer sends v6 when \
+         every topic of the commit has an id under transaction.version 2. A \
+         4.3 client negotiates v5 and sees no difference.",
+    ),
+    (
         88, // StreamsGroupHeartbeat
         "Intended. krabka serves StreamsGroupHeartbeat v1 from Kafka trunk \
          (KIP-1331), which 4.3.1 predates: the response carries the group's \

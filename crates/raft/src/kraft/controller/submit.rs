@@ -316,9 +316,14 @@ impl Engine {
                         )));
                     }
                 }
-                MetadataRecord::V1BrokerRegistration(change)
-                    if change.broker_epoch >= 0
-                        && self.registration_change_must_wait(change.node_id) =>
+                MetadataRecord::V1BrokerRegistration(amend)
+                    if amend.broker_epoch >= 0
+                        && self.registration_change_must_wait(amend.node_id) =>
+                {
+                    return Err(RaftError::UncommittedTail);
+                }
+                MetadataRecord::V1BrokerRegistrationChange(change)
+                    if self.registration_change_must_wait(change.node_id) =>
                 {
                     return Err(RaftError::UncommittedTail);
                 }
@@ -538,13 +543,15 @@ impl Engine {
             let rebased = rebase_partition_directories(&scratch, r);
             let r = rebased.as_ref().unwrap_or(r);
             // A new registration carries no epoch (-1) and is stamped with
-            // its committed offset. Anything else is a change to the
-            // registration at the epoch it names, and applies only while the
-            // broker is registered at that epoch, as Kafka's
-            // `ClusterControlManager.replayRegistrationChange` requires of a
-            // `BrokerRegistrationChangeRecord`. A change built from a
-            // registration that has since been replaced is dropped: it must
-            // neither overwrite the new registration nor register again.
+            // its committed offset. An amend of the registration (a
+            // `RegisterBrokerRecord` at the epoch it already holds) and a
+            // `BrokerRegistrationChangeRecord` apply only while the broker is
+            // registered at the epoch they name, as Kafka's
+            // `ClusterControlManager.replayRegistrationChange` requires. One
+            // built from a registration that has since been replaced is
+            // dropped rather than failing its batch: it must neither
+            // overwrite the new registration nor register again, and the
+            // partition changes it travels with still hold.
             let stamped;
             let r: &MetadataRecord = match r {
                 MetadataRecord::V1BrokerRegistration(b) if b.broker_epoch < 0 => {
@@ -556,18 +563,7 @@ impl Engine {
                     &stamped
                 }
                 MetadataRecord::V1BrokerRegistration(b) => {
-                    let registered_at_epoch = scratch.broker(b.node_id).is_some_and(|existing| {
-                        existing.incarnation_id == b.incarnation_id
-                            && existing.broker_epoch == b.broker_epoch
-                    });
-                    if !registered_at_epoch {
-                        tracing::warn!(
-                            broker = b.node_id.0,
-                            broker_epoch = b.broker_epoch,
-                            registered_epoch = ?scratch.broker_epoch(b.node_id),
-                            "dropping a broker registration change for an epoch the broker is no \
-                             longer registered at"
-                        );
+                    if !registered_at(&scratch, b.node_id, b.broker_epoch, Some(b.incarnation_id)) {
                         continue;
                     }
                     registration_nodes.push(b.node_id);
@@ -578,6 +574,9 @@ impl Engine {
                     r
                 }
                 MetadataRecord::V1BrokerRegistrationChange(change) => {
+                    if !registered_at(&scratch, change.node_id, change.broker_epoch, None) {
+                        continue;
+                    }
                     registration_nodes.push(change.node_id);
                     r
                 }
@@ -855,6 +854,32 @@ fn created_topic_names(image: &MetadataImage, records: &[MetadataRecord]) -> Vec
 ///
 /// Returns [`RaftError::ChangeRejected`] for the first blob that does not
 /// decode.
+/// Whether `node_id` is registered in `image` at `broker_epoch`, and, when
+/// `incarnation_id` is given, as that incarnation: the condition under which
+/// an amend or a `BrokerRegistrationChangeRecord` still applies. A change that
+/// fails it is logged, and the caller drops it.
+fn registered_at(
+    image: &MetadataImage,
+    node_id: krabka_metadata::NodeId,
+    broker_epoch: i64,
+    incarnation_id: Option<uuid::Uuid>,
+) -> bool {
+    let registered = image.broker(node_id).is_some_and(|existing| {
+        existing.broker_epoch == broker_epoch
+            && incarnation_id.is_none_or(|incarnation| existing.incarnation_id == incarnation)
+    });
+    if !registered {
+        tracing::warn!(
+            broker = node_id.0,
+            broker_epoch,
+            registered_epoch = ?image.broker_epoch(node_id),
+            "dropping a broker registration change for an epoch the broker is no longer \
+             registered at"
+        );
+    }
+    registered
+}
+
 fn replay_value_blobs(blobs: &[bytes::Bytes], image: &mut MetadataImage) -> Result<(), RaftError> {
     for blob in blobs {
         let decoded = from_kraft_value(blob, image).map_err(|e| {

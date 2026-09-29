@@ -34,14 +34,14 @@ pub(crate) async fn failover_offline_dirs(
     plan.recoveries
 }
 
-/// The registration record that drops `offline` from `broker`'s online log
-/// dirs, or `None` when the registration already lists none of them.
+/// The `BrokerRegistrationChangeRecord` that drops `offline` from `broker`'s
+/// online log dirs, at its broker epoch, or `None` when the registration
+/// already lists none of them.
 ///
 /// This is Kafka's `ReplicationControlManager.handleDirectoriesOffline`: it
-/// rewrites the registration with the *surviving* directories, so a later
-/// `Metadata` or `DescribeTopicPartitions` served by any node can tell that a
-/// replica sits on a dead disk. Rewriting a registration whose incarnation and
-/// epoch are unchanged preserves the KIP-903 broker epoch, so the update never
+/// writes the *surviving* directories, so a later `Metadata` or
+/// `DescribeTopicPartitions` served by any node can tell that a replica sits
+/// on a dead disk. The change keeps the KIP-903 broker epoch, so it never
 /// looks like a re-registration to the fencing paths. The intersection test
 /// makes it idempotent: a broker repeats its offline dirs on every heartbeat,
 /// and only the first one writes a record.
@@ -54,15 +54,25 @@ fn retire_offline_dirs(
     if !registration.log_dirs.iter().any(|d| offline.contains(d)) {
         return None;
     }
-    let mut projected = registration.clone();
-    projected.log_dirs.retain(|d| !offline.contains(d));
+    let online: Vec<uuid::Uuid> = registration
+        .log_dirs
+        .iter()
+        .copied()
+        .filter(|d| !offline.contains(d))
+        .collect();
     tracing::warn!(
         broker = broker.0,
-        remaining_log_dirs = projected.log_dirs.len(),
+        remaining_log_dirs = online.len(),
         "log dirs reported offline; retiring them from the broker registration",
     );
-    Some(krabka_metadata::MetadataRecord::V1BrokerRegistration(
-        projected,
+    Some(krabka_metadata::MetadataRecord::V1BrokerRegistrationChange(
+        krabka_metadata::BrokerRegistrationChangeRecord {
+            log_dirs: online,
+            ..krabka_metadata::BrokerRegistrationChangeRecord::no_change(
+                broker,
+                registration.broker_epoch,
+            )
+        },
     ))
 }
 
@@ -206,12 +216,18 @@ mod tests {
         )
         .await;
 
-        // The surviving dir is all that is left, and the KIP-903 epoch and the
-        // incarnation are carried over so the rewrite is not a re-registration.
-        let expected = vec![MetadataRecord::V1BrokerRegistration(registration(
-            1,
-            &[good],
-        ))];
+        // Kafka's `handleDirectoriesOffline` change: the surviving dir, at the
+        // KIP-903 epoch the broker is registered at.
+        let expected = vec![MetadataRecord::V1BrokerRegistrationChange(
+            krabka_metadata::BrokerRegistrationChangeRecord {
+                node_id: krabka_audit::NodeId(1),
+                broker_epoch: 11,
+                fenced: krabka_metadata::FencingChange::None,
+                in_controlled_shutdown: false,
+                log_dirs: vec![good],
+                cordoned_log_dirs: None,
+            },
+        )];
         assert!(source.submitted_records() == expected);
     }
 

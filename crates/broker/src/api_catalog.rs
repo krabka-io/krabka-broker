@@ -1129,14 +1129,15 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
     },
     KipAnnotation {
         key: "KIP-1319",
-        claim: "Transactions v2 producer-id rotation and verification on Produce",
+        claim: "TxnOffsetCommit v6: topics by id, GROUP_ID_NOT_FOUND and STALE_MEMBER_EPOCH",
         status: KipStatus::Implemented,
-        module: "crates/broker/src/txn/coordinator/pid_index.rs",
+        module: "crates/broker/src/txn/handlers/txn_offset_commit.rs",
         tests: &[
-            "crates/broker/tests/transaction_version.rs",
-            "crates/broker/tests/transactions.rs",
+            "crates/broker/src/txn/handlers/txn_offset_commit/integration_tests.rs::v6_resolves_topic_ids_before_the_read_gate_and_the_existence_check",
+            "crates/broker/src/txn/handlers/txn_offset_commit/integration_tests.rs::v6_answers_group_id_not_found_where_older_versions_answer_illegal_generation",
+            "crates/broker/tests/transactions/txn_offset_commit_topic_ids.rs::send_offsets_to_transaction_commits_by_topic_id",
         ],
-        note: "",
+        note: "Kafka trunk's TxnOffsetCommit v6, which Kafka 4.3.1 predates.",
     },
     KipAnnotation {
         key: "KIP-1331",
@@ -1527,11 +1528,8 @@ fn admin_apis() -> Vec<CatalogApi> {
         v!(add_offsets_to_txn_request),
         v!(end_txn_request),
         v!(write_txn_markers_request),
-        // Version 6 (KIP-1319, topic ids; Kafka trunk, not 4.3) is handled but
-        // not advertised: krabka-client-rs' producer would negotiate it and
-        // send topic names, which v6 does not carry. See
-        // `txn::handlers::txn_offset_commit`.
-        v!(txn_offset_commit_request, max = 5),
+        // Version 6 (KIP-1319, topic ids) is Kafka trunk's; 4.3.1 stops at 5.
+        v!(txn_offset_commit_request),
         v!(describe_configs_request),
         v!(alter_replica_log_dirs_request),
         v!(describe_log_dirs_request),

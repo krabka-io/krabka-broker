@@ -19,6 +19,7 @@ mod publish_race {
         AddVoter, Node, QuorumState, RaftError, ReconfigOutcome, RemoveVoter, SnapshotRange,
         SubmitChangeResult, UpdateVoter,
     };
+    use tempfile::tempdir;
     use tokio::sync::watch;
 
     use super::{super::register_broker, self_registration_record};
@@ -87,9 +88,12 @@ mod publish_race {
     /// and the one a `CreateTopics` run in that same window sees.
     #[tokio::test(start_paused = true)]
     async fn register_broker_waits_for_the_image_to_publish_the_registration() {
+        // `register_broker` mints and persists a directory id in each log
+        // dir, so the config needs a real one, not the working directory.
+        let log_dir = tempdir().expect("tempdir");
         let config = BrokerConfig {
             node_id: NodeId(9),
-            ..BrokerConfig::for_tests(std::path::PathBuf::new())
+            ..BrokerConfig::for_tests(log_dir.path().to_path_buf())
         };
         // The controller stamps the offset the registration commits at.
         let mut registration = self_registration_record(&config);
@@ -138,9 +142,12 @@ mod publish_race {
     /// `BrokerRegistration` response (krabka-io/krabka-broker#1014).
     #[tokio::test(start_paused = true)]
     async fn register_broker_on_restart_waits_for_the_new_epoch_not_the_stale_one() {
+        // `register_broker` mints and persists a directory id in each log
+        // dir, so the config needs a real one, not the working directory.
+        let log_dir = tempdir().expect("tempdir");
         let config = BrokerConfig {
             node_id: NodeId(9),
-            ..BrokerConfig::for_tests(std::path::PathBuf::new())
+            ..BrokerConfig::for_tests(log_dir.path().to_path_buf())
         };
         let mut stale = self_registration_record(&config);
         stale.broker_epoch = 3;
@@ -199,9 +206,12 @@ mod publish_race {
     /// `startup_leader_wait_timeout` elapses and reports a startup error.
     #[tokio::test(start_paused = true)]
     async fn register_broker_gives_up_once_the_startup_deadline_elapses() {
+        // `register_broker` mints and persists a directory id in each log
+        // dir, so the config needs a real one, not the working directory.
+        let log_dir = tempdir().expect("tempdir");
         let config = BrokerConfig {
             node_id: NodeId(9),
-            ..BrokerConfig::for_tests(std::path::PathBuf::new())
+            ..BrokerConfig::for_tests(log_dir.path().to_path_buf())
         };
         let (image_tx, _keep_alive) =
             watch::channel(Arc::new(MetadataImage::new(uuid::Uuid::nil())));
@@ -234,7 +244,13 @@ protocol = "Plaintext"
 "#,
     )
     .expect("parse file config");
-    let mut config = BrokerConfig::default();
+    // `self_registration_record` mints and persists a directory id in the
+    // log dir, so point the default config's `./krabka-data` somewhere real.
+    let log_dir = tempdir().expect("tempdir");
+    let mut config = BrokerConfig {
+        log_dir: log_dir.path().to_path_buf(),
+        ..BrokerConfig::default()
+    };
     assert!(
         config.listen_addr.port() == 9092,
         "preserve CLI default precondition"
