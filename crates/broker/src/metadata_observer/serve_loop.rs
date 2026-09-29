@@ -264,10 +264,21 @@ mod tests {
         high_watermark: i64,
         quorum_high_watermark: i64,
     ) -> Vec<u8> {
+        metadata_fetch_response_naming(1, records, high_watermark, quorum_high_watermark)
+    }
+
+    /// [`metadata_fetch_response_body`] from a controller that believes
+    /// `leader_hint` leads.
+    fn metadata_fetch_response_naming(
+        leader_hint: i64,
+        records: Bytes,
+        high_watermark: i64,
+        quorum_high_watermark: i64,
+    ) -> Vec<u8> {
         let mut out = vec![0u8]; // flexible ResponseHeader v1 tagged-fields
         krabka_raft::KrabkaMetadataFetchResponse {
             error_code: 0,
-            leader_hint: 1,
+            leader_hint,
             leader_epoch: 3,
             log_start_offset: 0,
             high_watermark,
@@ -603,6 +614,77 @@ mod tests {
         assert!(*observer.watch_leader().borrow() == Some(NodeId(1)));
         assert!(timer.registrations() == 1);
         mock.stop();
+    }
+
+    /// A broker-only node that landed on a follower moves to the leader that
+    /// follower names, because only the leader records the observers it sees
+    /// for `DescribeQuorum`, and it identifies itself to that leader in every
+    /// fetch.
+    #[tokio::test]
+    async fn the_loop_moves_to_the_leader_a_follower_names_and_names_itself_there() {
+        use std::sync::Mutex;
+
+        // The fetches each controller was sent, as (node id, directory id).
+        type Seen = Arc<Mutex<Vec<(i32, Uuid)>>>;
+        let serve = |seen: Seen| {
+            move |api_key: i16, _version: i16, _corr_id: i32, body: &[u8]| {
+                if api_key == api_versions_request::API_KEY {
+                    return Some(api_versions_response_v0());
+                }
+                if api_key == krabka_raft::API_KEY_METADATA_FETCH {
+                    // The request header precedes the fixed 32-byte payload.
+                    let payload = &body[body.len() - 32..];
+                    let request =
+                        krabka_raft::KrabkaMetadataFetchRequest::decode_v0(&mut &payload[..])
+                            .expect("a metadata fetch request");
+                    seen.lock()
+                        .unwrap()
+                        .push((request.replica_id, request.replica_directory_id));
+                    // Both controllers name node 2 as the leader.
+                    return Some(metadata_fetch_response_naming(2, Bytes::new(), 5, 5));
+                }
+                None
+            }
+        };
+        let (follower_seen, leader_seen) = (Seen::default(), Seen::default());
+        let follower =
+            krabka_client_core::MockBroker::start(serve(Arc::clone(&follower_seen))).await;
+        let leader = krabka_client_core::MockBroker::start(serve(Arc::clone(&leader_seen))).await;
+        let dir = tempfile::tempdir().unwrap();
+        let observer = MetadataObserver::start(ObserverConfig {
+            voters: vec![
+                (krabka_raft::NodeId(1), follower.addr.to_string()),
+                (krabka_raft::NodeId(2), leader.addr.to_string()),
+            ],
+            client_id: "follow-test".into(),
+            // Real time, so the parked poll wakes and the loop goes on to the
+            // leader.
+            poll_interval: millis(10),
+            ..observer_config(Uuid::nil(), dir.path().to_path_buf())
+        });
+
+        // The first fetch goes to the first voter. From then on the loop stays
+        // on the leader it names.
+        for _ in 0..100_000 {
+            if !leader_seen.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        observer.cancel().await;
+        follower.stop();
+        leader.stop();
+
+        let identity = (2, Uuid::from_u128(2));
+        let (follower_seen, leader_seen) = (
+            follower_seen.lock().unwrap().clone(),
+            leader_seen.lock().unwrap().clone(),
+        );
+        assert!(
+            follower_seen == vec![identity],
+            "follower {follower_seen:?}, leader {leader_seen:?}"
+        );
+        assert!(leader_seen.first() == Some(&identity));
     }
 
     /// The observer records the *quorum's* committed offset, not the watermark
