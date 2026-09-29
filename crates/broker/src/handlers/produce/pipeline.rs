@@ -24,6 +24,7 @@ use super::{
         DedupOutcome, TransactionRequest, Verification, handle_duplicate,
         produce_verification_code, verify_transactional_produce, verify_with_coordinator,
     },
+    record_limit::exceeds_decompressed_limit,
     schema::{SCHEMA_REJECTION_MESSAGE, validate_batch_schemas},
     topic_settings::TimestampPolicy,
 };
@@ -358,6 +359,7 @@ pub(super) async fn admit_partition(
         record_decompression_policy,
         metrics,
         schema_validator,
+        unstable_api_versions,
         ..
     } = services;
     let idx = part_data.index;
@@ -477,6 +479,23 @@ pub(super) async fn admit_partition(
             return Ok(Admission::Done(out));
         }
     };
+
+    // ── max.decompressed.message.bytes (Kafka trunk) ─────────────────
+    // A compressed batch with a record whose decompressed body is larger than
+    // the topic's limit is `INVALID_RECORD`, with no per-record errors, as
+    // `LogValidator` answers it when `DefaultRecord.readFrom` throws while the
+    // batch is iterated. Kafka 4.3.1 has no such limit, so only a broker
+    // serving trunk's keys reads it, and only a compressed batch pays for the
+    // lookup.
+    if exceeds_decompressed_limit(
+        &prepared,
+        (image, broker_policy.node_id, topic_name),
+        unstable_api_versions,
+        record_decompression_policy,
+    ) {
+        out.error_code = codes::INVALID_RECORD;
+        return Ok(Admission::Done(out));
+    }
 
     // ── max.message.bytes, again, on the re-encoded batch ────────────
     // The check above measured the bytes the producer sent. Those are the

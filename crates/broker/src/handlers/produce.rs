@@ -58,6 +58,7 @@ mod owned_decode;
 mod pipeline;
 mod prepare;
 mod producer_checks;
+mod record_limit;
 mod response;
 mod schema;
 mod throttle;

@@ -400,7 +400,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         tests: &[
             "crates/broker/tests/mirror_maker2.rs::mirror_maker2_migrates_a_kafka_cluster_onto_krabka",
         ],
-        note: "The stock `connect-mirror-maker.sh` of `apache/kafka:4.3.1` mirrors a broker of that release onto krabka: records with their headers, MM2's compacted `heartbeats`, checkpoints and offset-syncs topics, a consumer group's translated position, and a `retention.ms` carried over by `sync.topic.configs`. `sync.topic.acls` is left at its default; because neither cluster in the suite has an authorizer, MM2 skips the sync at the source, and the target-side `CreateAcls` krabka would answer `SECURITY_DISABLED` is asserted directly. `docs/operations/migrate-from-kafka.md` is the cutover procedure. Kafka trunk's four newest topic keys (`remote.copy.lag.ms`, `remote.copy.lag.bytes`, `max.decompressed.message.bytes`, `errors.deadletterqueue.group.enable`) are unknown topic configs by default, as they are on 4.3.1, so a replay from a trunk cluster that sets one fails as it does against a 4.3.1 broker; `unstable.api.versions.enable` accepts and describes them. With the flag on, `remote.copy.lag.ms` and `remote.copy.lag.bytes` are stored and reported and do not delay a segment's copy to the remote tier, and `max.decompressed.message.bytes` is stored and reported and is not enforced on produce, compaction or ListOffsets, where the broker-wide decompression bound applies to every topic. `errors.deadletterqueue.topic.name`, `errors.deadletterqueue.copy.record.enable` and the three `*.assignor.offload.enable` group keys are accepted on a group with trunk's validation and stored, and nothing reads them yet.",
+        note: "The stock `connect-mirror-maker.sh` of `apache/kafka:4.3.1` mirrors a broker of that release onto krabka: records with their headers, MM2's compacted `heartbeats`, checkpoints and offset-syncs topics, a consumer group's translated position, and a `retention.ms` carried over by `sync.topic.configs`. `sync.topic.acls` is left at its default; because neither cluster in the suite has an authorizer, MM2 skips the sync at the source, and the target-side `CreateAcls` krabka would answer `SECURITY_DISABLED` is asserted directly. `docs/operations/migrate-from-kafka.md` is the cutover procedure. Kafka trunk's four newest topic keys (`remote.copy.lag.ms`, `remote.copy.lag.bytes`, `max.decompressed.message.bytes`, `errors.deadletterqueue.group.enable`) are unknown topic configs by default, as they are on 4.3.1, so a replay from a trunk cluster that sets one fails as it does against a 4.3.1 broker; `unstable.api.versions.enable` accepts and describes them. With the flag on, `remote.copy.lag.ms` and `remote.copy.lag.bytes` hold a sealed segment back from the remote tier (KIP-1241), and `max.decompressed.message.bytes` refuses a compressed record above it on produce with `INVALID_RECORD`; it is not enforced on compaction or by-timestamp offset lookups, where the broker-wide decompression bound applies to every topic. `errors.deadletterqueue.topic.name`, `errors.deadletterqueue.copy.record.enable` and the three `*.assignor.offload.enable` group keys are accepted on a group with trunk's validation and stored, and nothing reads them yet.",
     },
     KipAnnotation {
         key: "KIP-392",
@@ -1079,6 +1079,18 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/share_consume/lock_lifetime.rs::renew_extends_lock_not_redelivered",
         ],
         note: "IncrementalAlterConfigs does not accept share.renew.acknowledge.enable yet (#758).",
+    },
+    KipAnnotation {
+        key: "KIP-1241",
+        claim: "Delayed remote copy: remote.copy.lag.ms and remote.copy.lag.bytes hold a sealed segment back from the remote tier",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/remote_log_manager/copy.rs",
+        tests: &[
+            "crates/broker/src/remote_log_manager/copy.rs::a_sealed_segment_waits_out_its_copy_lag",
+            "crates/broker/src/remote_log_manager/copy.rs::a_derived_copy_lag_is_the_effective_local_retention",
+            "crates/broker/src/remote_log_manager.rs::tick_all_honours_the_remote_copy_lag_on_a_trunk_broker",
+        ],
+        note: "Kafka trunk's topic keys and their `log.remote.copy.lag.ms` and `log.remote.copy.lag.bytes` broker defaults, served only under `unstable.api.versions.enable`. By default they are unknown configs, as on 4.3.1, and a sealed segment is copied as soon as it is sealed. With the flag on, the copy pass stops at the first sealed segment that is neither old enough by its newest record nor far enough behind newer local data, as `RLMCopyTask.candidateLogSegments` does.",
     },
     KipAnnotation {
         key: "KIP-1242",
