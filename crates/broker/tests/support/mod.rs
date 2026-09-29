@@ -64,7 +64,7 @@ pub use self::{
         broker_config, start_n_node, start_n_node_with_retry, start_reusing_addrs,
         wait_for_all_brokers_registered,
     },
-    containers::{JvmListeners, free_port, manifest_dir, unique_container_name},
+    containers::{JvmListeners, fixture_cache_dir, free_port, manifest_dir, unique_container_name},
     coordinator::{KEY_TYPE_GROUP, KEY_TYPE_SHARE, KEY_TYPE_TRANSACTION, find_coordinator},
     operator_keys::{
         ANONYMOUS, OperatorKey, mint_operator_key, sasl_client, sasl_plain_security,

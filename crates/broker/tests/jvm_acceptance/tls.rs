@@ -115,7 +115,7 @@ pub(crate) async fn start_ssl_broker() -> (krabka_broker::BrokerHandle, tempfile
 /// path to a `ts.jks` file, chmod `0644` so the non-root user of the
 /// cp-kafka container can read it once it is bind-mounted.
 ///
-/// The result is cached under `<tmp>/krabka-jvm-truststore/ts.jks`, so later
+/// The result is cached under `<tmp>/krabka-jvm-truststore-<fixture digest>/ts.jks`, so later
 /// calls from this test and from the `SASL_SSL` test skip the keytool
 /// round-trip.
 ///
@@ -124,7 +124,7 @@ pub(crate) async fn start_ssl_broker() -> (krabka_broker::BrokerHandle, tempfile
 /// `openjdk:17`. The image is always on disk, because the SSL test itself
 /// runs `kafka-broker-api-versions` from the same image.
 pub(crate) fn prepare_jks_truststore() -> std::path::PathBuf {
-    let cache_dir = std::env::temp_dir().join("krabka-jvm-truststore");
+    let cache_dir = crate::support::fixture_cache_dir("krabka-jvm-truststore", &["dev_cert.pem"]);
     std::fs::create_dir_all(&cache_dir).expect("mkdir truststore cache");
     let ts_path = cache_dir.join("ts.jks");
 

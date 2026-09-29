@@ -489,7 +489,7 @@ const DEV_CLIENT_KEY: &str = include_str!("fixtures/security/dev_client_key.pem"
 
 /// The Subject DN of the fixture client certificate, which Kafka's `DEFAULT`
 /// mapping rule keeps as the principal name.
-const CLIENT_PRINCIPAL: &str = r"CN=test-client\,OU\=integration\,O\=crabka";
+const CLIENT_PRINCIPAL: &str = r"CN=test-client\,OU\=integration\,O\=krabka";
 
 /// Accepts exactly the broker's fixture certificate. The fixture is a
 /// self-issued CA certificate, which rustls refuses as an end entity.
@@ -595,7 +595,7 @@ async fn an_ssl_controller_listener_authorizes_each_request_for_the_certificate_
         .expect("connect controller listener");
     let mut stream = tokio_rustls::TlsConnector::from(std::sync::Arc::new(client))
         .connect(
-            ServerName::try_from("crabka-dev").expect("server name"),
+            ServerName::try_from("krabka-dev").expect("server name"),
             tcp,
         )
         .await

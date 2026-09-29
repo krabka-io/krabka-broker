@@ -83,7 +83,7 @@ async fn tls_listener_accepts_tls_handshake_only() {
         .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(client_cfg));
     let tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
-    let server_name = ServerName::try_from("crabka-dev").unwrap();
+    let server_name = ServerName::try_from("krabka-dev").unwrap();
     let _tls = connector
         .connect(server_name, tcp)
         .await

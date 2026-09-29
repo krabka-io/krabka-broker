@@ -149,7 +149,7 @@ async fn tls_connect_without_client_cert(
         .with_no_client_auth();
     let tcp = TcpStream::connect(addr).await.expect("TCP connect");
     TlsConnector::from(Arc::new(client_cfg))
-        .connect(ServerName::try_from("crabka-dev").unwrap(), tcp)
+        .connect(ServerName::try_from("krabka-dev").unwrap(), tcp)
         .await
         .expect("TLS handshake must succeed without a client certificate")
 }
