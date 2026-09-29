@@ -441,6 +441,46 @@ mod tests {
         }
     }
 
+    /// Kafka 4.3.1's `kafka-storage format` messages, word for word: the
+    /// unknown-feature list is its production features in name order, and a
+    /// level a feature does not define is `Feature.fromFeatureLevel`'s refusal.
+    #[test]
+    fn feature_refusals_use_kafkas_messages() {
+        for (feature, expected) in [
+            (
+                ("bogus.version", 1),
+                "Unsupported feature: bogus.version. Supported features are: \
+                 eligible.leader.replicas.version, group.version, kraft.version, \
+                 share.version, streams.version, transaction.version",
+            ),
+            (
+                ("transaction.version", 9),
+                "No feature:transaction.version with feature level 9",
+            ),
+            (
+                ("group.version", 5),
+                "No feature:group.version with feature level 5",
+            ),
+        ] {
+            let err = resolve_format_features(None, &[(feature.0.into(), feature.1)], STRICT)
+                .unwrap_err();
+            assert2::assert!(err == expected, "{feature:?}");
+        }
+    }
+
+    #[test]
+    fn resolve_features_rejects_out_of_range_level() {
+        for (name, level) in [
+            ("group.version", 5),     // group.version supports 0..=1
+            ("metadata.version", 99), // metadata.version supports 7..=25
+            ("metadata.version", 1),
+        ] {
+            assert2::assert!(
+                resolve_format_features(None, &[(name.into(), level)], STRICT).is_err()
+            );
+        }
+    }
+
     /// `--release-version 4.3.1` reaches the bootstrap `metadata.version`
     /// through the whole feature resolution, not only the release lookup.
     #[test]
