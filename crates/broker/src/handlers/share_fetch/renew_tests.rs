@@ -62,7 +62,6 @@ async fn start() -> (BrokerHandle, tempfile::TempDir) {
     start_broker_with(|cfg| {
         cfg.audit_enabled = false;
         cfg.authorizer = Arc::new(AllowAllAuthorizer);
-        cfg.share_group.enable = true;
     })
     .await
 }
@@ -495,7 +494,6 @@ async fn a_renew_fetch_answers_a_denied_topic_as_an_acknowledge_error() {
     let (broker, _dir) = start_broker_with(|cfg| {
         cfg.audit_enabled = false;
         cfg.authorizer = Arc::new(DenyTopicReadToOne);
-        cfg.share_group.enable = true;
     })
     .await;
     let topic_id = create_topic(&broker, "renew-denied").await;

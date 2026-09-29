@@ -520,6 +520,22 @@ pub(crate) fn start_broker_with(
     })
 }
 
+/// Finalizes `share.version` at `level` on a started broker: the feature that
+/// turns the share-group APIs on (1) or off (0), as Kafka's
+/// `isShareGroupProtocolEnabled` reads it.
+pub(crate) async fn finalize_share_version(broker: &Broker, level: i16) {
+    broker
+        .controller
+        .submit_change(vec![MetadataRecord::V1FeatureLevel(
+            krabka_metadata::FeatureLevelRecord {
+                name: krabka_metadata::metadata_version::SHARE_VERSION_FEATURE.into(),
+                level,
+            },
+        )])
+        .await
+        .expect("finalize share.version");
+}
+
 /// Start an in-process broker with only its authorizer swapped in.
 ///
 /// This is the most common `start_broker` shape across handler test modules;

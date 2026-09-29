@@ -41,7 +41,6 @@ pub(crate) async fn handle(
     req_bytes: &[u8],
     ctx: &crate::handlers::RequestContext<'_>,
 ) -> Result<Bytes, BrokerError> {
-    let share_enabled = broker.config.share_group.enable;
     let ng = broker.group_coordinator.clone();
     {
         let mut cur: &[u8] = req_bytes;
@@ -51,8 +50,9 @@ pub(crate) async fn handle(
         // Kafka's `handleShareGroupHeartbeat` checks whether share groups are
         // enabled BEFORE any ACL check, so a disabled feature answers
         // `UNSUPPORTED_VERSION` even to a caller with no ACLs on the group at
-        // all.
-        if !share_enabled {
+        // all. They are enabled by a finalized `share.version` of 1.
+        let image = broker.controller.current_image();
+        if !crate::features::share_groups_enabled(&image) {
             return crate::handlers::encode_response(&error(codes::UNSUPPORTED_VERSION), version);
         }
 
@@ -60,7 +60,6 @@ pub(crate) async fn handle(
         // KIP-932 share groups still gate membership on `Read` on
         // `Group(group_id)`. On Deny → whole-response
         // `error_code = GROUP_AUTHORIZATION_FAILED (30)`.
-        let image = broker.controller.current_image();
         if group_read_denied(
             broker.config.authorizer.as_ref(),
             &image,
@@ -425,10 +424,10 @@ mod tests {
     async fn handle_disabled_feature_returns_unsupported_version() {
         let version = share_group_heartbeat_response::MAX_VERSION;
         let dir = tempfile::TempDir::new().expect("tempdir");
-        let mut cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
-        cfg.share_group.enable = false;
+        let cfg = crate::config::BrokerConfig::for_tests(dir.path().to_path_buf());
         let broker_handle = Broker::start(cfg).await.expect("start broker");
         let broker = broker_handle.broker_arc_for_test();
+        crate::test_support::finalize_share_version(&broker, 0).await;
         let principal = anonymous_principal();
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
@@ -453,8 +452,8 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    /// The protocol gate -- `UNSUPPORTED_VERSION` when `share_group.enable`
-    /// is off -- runs BEFORE the group ACL check, matching Kafka's
+    /// The protocol gate -- `UNSUPPORTED_VERSION` when `share.version` is
+    /// finalized at 0 -- runs BEFORE the group ACL check, matching Kafka's
     /// `handleShareGroupHeartbeat`. A principal denied `Read` on the group
     /// still gets `UNSUPPORTED_VERSION`, not `GROUP_AUTHORIZATION_FAILED`,
     /// when the protocol itself is unavailable.
@@ -464,10 +463,10 @@ mod tests {
             cfg.authorizer = Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
                 std::collections::HashSet::new(),
             ));
-            cfg.share_group.enable = false;
         })
         .await;
         let broker = broker_handle.broker_arc_for_test();
+        crate::test_support::finalize_share_version(&broker, 0).await;
         let principal = anonymous_principal();
         let peer: SocketAddr = "127.0.0.1:9092".parse().unwrap();
         let ctx = test_context(&principal, &peer);
@@ -495,7 +494,6 @@ mod tests {
             cfg.authorizer = Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
                 std::collections::HashSet::new(),
             ));
-            cfg.share_group.enable = true;
         })
         .await;
         let broker = broker_handle.broker_arc_for_test();
@@ -534,7 +532,6 @@ mod tests {
             cfg.authorizer = Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
                 std::collections::HashSet::new(),
             ));
-            cfg.share_group.enable = true;
         })
         .await;
         let broker = broker_handle.broker_arc_for_test();
@@ -580,7 +577,6 @@ mod tests {
         let version = share_group_heartbeat_response::MAX_VERSION;
         let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
             cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
-            cfg.share_group.enable = true;
         })
         .await;
         let broker = broker_handle.broker_arc_for_test();
@@ -759,7 +755,6 @@ mod tests {
             cfg.authorizer = Arc::new(crate::authorizer::SimpleAclAuthorizer::new(
                 std::collections::HashSet::new(),
             ));
-            cfg.share_group.enable = true;
         })
         .await;
         let broker = broker_handle.broker_arc_for_test();
@@ -813,7 +808,6 @@ mod tests {
             cfg.authorizer = Arc::new(crate::test_support::ControllerPeerAllowed(
                 crate::authorizer::SimpleAclAuthorizer::new(std::collections::HashSet::new()),
             ));
-            cfg.share_group.enable = true;
         })
         .await;
         broker_handle.wait_until_group_coordinator_ready().await;
@@ -865,7 +859,6 @@ mod tests {
         let version = share_group_heartbeat_response::MAX_VERSION;
         let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
             cfg.authorizer = std::sync::Arc::new(crate::authorizer::AllowAllAuthorizer);
-            cfg.share_group.enable = true;
         })
         .await;
         broker_handle.wait_until_group_coordinator_ready().await;
@@ -939,7 +932,6 @@ mod tests {
         let version = share_group_heartbeat_response::MAX_VERSION;
         let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
             cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
-            cfg.share_group.enable = true;
         })
         .await;
         broker_handle.wait_until_group_coordinator_ready().await;

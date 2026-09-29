@@ -309,7 +309,6 @@ impl Broker {
         crate::share_coordinator::coordinator::jobs::spawn(
             Arc::clone(&share_coordinator),
             controller.watch_image(),
-            config.share_group.enable,
             runtime.supervisor_shutdown.child_token(),
         );
 

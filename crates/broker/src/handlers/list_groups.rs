@@ -171,27 +171,25 @@ async fn collect_groups(broker: &Broker) -> Vec<ListedGroup> {
     }
 
     // ── KIP-932 share groups (group_type "share") ───────────────────────
-    if broker.config.share_group.enable {
-        for gid in coordinator.share_group_ids() {
-            let Some(handle) = coordinator.find_share(&gid) else {
-                continue;
-            };
-            let (tx, rx) = oneshot::channel();
-            if handle
-                .tx
-                .send(ShareGroupActorMessage::Describe { reply: tx })
-                .await
-                .is_ok()
-                && let Ok(view) = rx.await
-            {
-                let group = listed(
-                    gid,
-                    SHARE_PROTOCOL_TYPE.into(),
-                    view.group_state,
-                    GROUP_TYPE_SHARE,
-                );
-                push_once(&mut groups, &mut emitted, group);
-            }
+    for gid in coordinator.share_group_ids() {
+        let Some(handle) = coordinator.find_share(&gid) else {
+            continue;
+        };
+        let (tx, rx) = oneshot::channel();
+        if handle
+            .tx
+            .send(ShareGroupActorMessage::Describe { reply: tx })
+            .await
+            .is_ok()
+            && let Ok(view) = rx.await
+        {
+            let group = listed(
+                gid,
+                SHARE_PROTOCOL_TYPE.into(),
+                view.group_state,
+                GROUP_TYPE_SHARE,
+            );
+            push_once(&mut groups, &mut emitted, group);
         }
     }
 
@@ -329,7 +327,6 @@ mod tests {
         let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
             cfg.audit_enabled = false;
             cfg.authorizer = Arc::new(crate::authorizer::AllowAllAuthorizer);
-            cfg.share_group.enable = true;
         })
         .await;
         let broker = broker_handle.broker_arc_for_test();

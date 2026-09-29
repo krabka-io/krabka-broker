@@ -245,6 +245,18 @@ impl SharePartitionLeaderManager {
             });
     }
 
+    /// Drops every share session and every cached acquisition-state cell.
+    ///
+    /// Kafka's `SharePartitionManager.onShareVersionToggle` does this when the
+    /// finalized `share.version` drops below 1: it removes all sessions and
+    /// all cached share partitions. Acquired records need no release, because
+    /// the durable state stores them as available, and a later load reads the
+    /// SPSO again.
+    pub(crate) fn clear(&self) {
+        self.sessions.clear();
+        self.leaders.clear();
+    }
+
     /// Test-only: caches `state` as the live cell, with no persister read.
     #[cfg(test)]
     pub(crate) fn insert_for_test(

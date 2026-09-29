@@ -12,8 +12,6 @@ use std::time::Duration;
 /// ranges and the order within each triple at startup.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShareGroupConfig {
-    /// Kafka's `group.share.enable`.
-    pub enable: bool,
     /// Kafka's `group.share.session.timeout.ms`.
     pub session_timeout: Duration,
     /// Kafka's `group.share.heartbeat.interval.ms`.
@@ -59,7 +57,6 @@ pub struct ShareGroupConfig {
 impl Default for ShareGroupConfig {
     fn default() -> Self {
         Self {
-            enable: true,
             session_timeout: Duration::from_secs(45),
             heartbeat_interval: Duration::from_secs(5),
             min_session_timeout: Duration::from_secs(45),
@@ -94,7 +91,6 @@ mod tests {
     #[test]
     fn defaults_are_kafkas() {
         let expected = ShareGroupConfig {
-            enable: true,
             session_timeout: Duration::from_secs(45),
             heartbeat_interval: Duration::from_secs(5),
             min_session_timeout: Duration::from_secs(45),

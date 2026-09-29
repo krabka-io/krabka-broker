@@ -108,6 +108,7 @@ pub(super) async fn start_coordinators(
         ),
     );
     share_partition_leaders.spawn_lock_sweeper();
+    share_partition_leaders.spawn_share_version_watcher();
     let mut barrier_coordinator = crate::barrier::coordinator::BarrierCoordinator::new(
         config.node_id,
         Arc::clone(partitions),

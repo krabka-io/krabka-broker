@@ -283,8 +283,6 @@ pub struct RuntimeArgs {
     #[arg(long, env = "KRABKA_TRANSACTION_MAX_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub transaction_max_timeout: Option<Time>,
 
-    #[arg(long, env = "KRABKA_SHARE_GROUP_ENABLE", action = clap::ArgAction::Set)]
-    pub share_group_enable: Option<bool>,
     #[arg(long, env = "KRABKA_SHARE_GROUP_SESSION_TIMEOUT", value_parser = krabka_units::parse::positive_time)]
     pub share_group_session_timeout: Option<Time>,
     #[arg(long, env = "KRABKA_SHARE_GROUP_HEARTBEAT_INTERVAL", value_parser = krabka_units::parse::positive_time)]

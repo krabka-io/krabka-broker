@@ -282,6 +282,13 @@ impl ShareSessionCache {
         Ok(HashSet::new())
     }
 
+    /// Removes every session, as Kafka's `ShareSessionCache.removeAllSessions`.
+    pub(crate) fn clear(&self) {
+        let mut inner = self.inner.lock().expect("share-session mutex poisoned");
+        inner.sessions.clear();
+        inner.connections.clear();
+    }
+
     /// Remove the session owned by a closing client connection.
     pub(crate) fn disconnect(&self, connection_id: &str) -> Option<ClosedShareSession> {
         let mut inner = self.inner.lock().expect("share-session mutex poisoned");

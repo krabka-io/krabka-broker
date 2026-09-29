@@ -56,12 +56,13 @@ pub(crate) async fn handle(
     let mut cur: &[u8] = req_bytes;
     let req = DeleteShareGroupOffsetsRequest::decode(&mut cur, version)?;
 
-    // Feature gate: a broker with share groups disabled does not implement the RPC.
-    if !broker.config.share_group.enable {
+    // Feature gate: share groups are on from a finalized `share.version` of 1,
+    // and below it the RPC is unsupported.
+    let image = broker.controller.current_image();
+    if !crate::features::share_groups_enabled(&image) {
         return encode_top_level(version, codes::UNSUPPORTED_VERSION, None);
     }
 
-    let image = broker.controller.current_image();
     let coordinator = &broker.group_coordinator;
     let gid = req.group_id;
 
@@ -372,11 +373,13 @@ mod tests {
     ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
         let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
             cfg.authorizer = authorizer;
-            cfg.share_group.enable = share_enabled;
         })
         .await;
         handle.wait_until_group_coordinator_ready().await;
         handle.wait_until_share_coordinator_ready().await;
+        if !share_enabled {
+            crate::test_support::finalize_share_version(&handle.broker_arc_for_test(), 0).await;
+        }
         (handle, dir)
     }
 

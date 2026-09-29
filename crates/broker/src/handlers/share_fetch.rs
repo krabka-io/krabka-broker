@@ -142,7 +142,9 @@ pub(crate) async fn handle(
 
     let cfg = broker.config.share_group.clone();
 
-    if !cfg.enable {
+    // Kafka's `isShareGroupProtocolEnabled`: a finalized `share.version` of 1.
+    let image = broker.controller.current_image();
+    if !crate::features::share_groups_enabled(&image) {
         return encode_error_response(version, codes::UNSUPPORTED_VERSION);
     }
     // Kafka's `KafkaApis.handleShareFetchRequest` refuses a null group id
@@ -153,7 +155,6 @@ pub(crate) async fn handle(
     let Some(group) = req.group_id.clone() else {
         return encode_error_response(version, codes::INVALID_REQUEST);
     };
-    let image = broker.controller.current_image();
     if group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &group) {
         return encode_error_response(version, codes::GROUP_AUTHORIZATION_FAILED);
     }

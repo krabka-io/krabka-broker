@@ -67,7 +67,9 @@ pub(crate) async fn handle(
 
     let cfg = broker.config.share_group.clone();
 
-    if !cfg.enable {
+    // Kafka's `isShareGroupProtocolEnabled`: a finalized `share.version` of 1.
+    let image = broker.controller.current_image();
+    if !crate::features::share_groups_enabled(&image) {
         return encode_error_response(version, codes::UNSUPPORTED_VERSION);
     }
 
@@ -77,7 +79,6 @@ pub(crate) async fn handle(
     let Some(group) = req.group_id.clone() else {
         return encode_error_response(version, codes::INVALID_REQUEST);
     };
-    let image = broker.controller.current_image();
     if group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &group) {
         return encode_error_response(version, codes::GROUP_AUTHORIZATION_FAILED);
     }
@@ -390,10 +391,11 @@ mod tests {
     }
 
     async fn start_broker(share_enabled: bool) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-        crate::test_support::start_broker_with(|cfg| {
-            cfg.share_group.enable = share_enabled;
-        })
-        .await
+        let (handle, dir) = crate::test_support::start_broker_with(|_cfg| {}).await;
+        if !share_enabled {
+            crate::test_support::finalize_share_version(&handle.broker_arc_for_test(), 0).await;
+        }
+        (handle, dir)
     }
 
     fn principal() -> Principal {
@@ -623,7 +625,6 @@ mod tests {
     #[tokio::test]
     async fn unresolved_id_answers_before_topic_authorization() {
         let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-            cfg.share_group.enable = true;
             cfg.authorizer = std::sync::Arc::new(DenyTopicRead);
         })
         .await;

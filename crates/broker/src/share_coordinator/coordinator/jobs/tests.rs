@@ -138,14 +138,10 @@ fn with_share_version(mut image: MetadataImage, level: i16) -> Arc<MetadataImage
 }
 
 #[test]
-fn periodic_jobs_follow_share_version_or_config() {
-    let rows = [(0, false, false), (1, false, true), (0, true, true)];
-    for (level, by_config, expected) in rows {
+fn periodic_jobs_follow_share_version() {
+    for (level, expected) in [(0, false), (1, true)] {
         let image = with_share_version(image_with_topics(&[]), level);
-        check!(
-            periodic_jobs_enabled(&image, by_config) == expected,
-            "{level} {by_config}"
-        );
+        check!(periodic_jobs_enabled(&image) == expected, "{level}");
     }
 }
 
@@ -179,7 +175,7 @@ async fn run_loop_reacts_to_images_and_timers() {
         let both = with_share_version(image_with_topics(&[(T1, 1), (T2, 1)]), level);
         let (images, receiver) = watch::channel(both);
         let shutdown = CancellationToken::new();
-        spawn(Arc::clone(&coord), receiver, false, shutdown.clone());
+        spawn(Arc::clone(&coord), receiver, shutdown.clone());
 
         images
             .send(with_share_version(image_with_topics(&[(T2, 1)]), level))

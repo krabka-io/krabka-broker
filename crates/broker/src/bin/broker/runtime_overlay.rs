@@ -203,7 +203,6 @@ impl RuntimeArgs {
         copy_plain_runtime!(
             self,
             runtime,
-            share_group_enable,
             share_group_delivery_count_limit,
             share_group_min_delivery_count_limit,
             share_group_max_delivery_count_limit,

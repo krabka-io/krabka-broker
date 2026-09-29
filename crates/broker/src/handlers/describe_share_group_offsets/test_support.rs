@@ -17,11 +17,13 @@ pub(super) async fn start_broker(
 ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
     let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
         cfg.authorizer = authorizer;
-        cfg.share_group.enable = share_enabled;
     })
     .await;
     handle.wait_until_group_coordinator_ready().await;
     handle.wait_until_share_coordinator_ready().await;
+    if !share_enabled {
+        crate::test_support::finalize_share_version(&handle.broker_arc_for_test(), 0).await;
+    }
     (handle, dir)
 }
 

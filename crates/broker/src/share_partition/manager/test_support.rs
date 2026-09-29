@@ -67,7 +67,15 @@ pub(super) fn manager_with_image_and_partitions(
     image: Arc<MetadataImage>,
     reg: Arc<PartitionRegistry>,
 ) -> Arc<SharePartitionLeaderManager> {
-    let controller = fake_source(image);
+    manager_over(fake_source(image), reg)
+}
+
+/// A manager over `source` and `reg`, for a test that publishes images to the
+/// source after the manager exists.
+pub(super) fn manager_over(
+    controller: Arc<dyn MetadataSource>,
+    reg: Arc<PartitionRegistry>,
+) -> Arc<SharePartitionLeaderManager> {
     let coord = Arc::new(ShareCoordinator::new(
         krabka_audit::NodeId(1),
         reg.clone(),

@@ -691,9 +691,6 @@ pub struct RuntimeFileConfig {
     #[schemars(with = "Option<crate::file_config::schema_units::Duration>")]
     pub remote_log_manager_interval: Option<Time>,
 
-    /// Whether the broker serves KIP-932 share groups, Kafka's
-    /// `group.share.enable`.
-    pub share_group_enable: Option<bool>,
     /// Default share-group session timeout, Kafka's
     /// `group.share.session.timeout.ms`.
     #[serde(default, with = "krabka_units::serde_units::human::option_time")]
