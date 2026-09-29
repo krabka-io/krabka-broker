@@ -59,11 +59,19 @@ pub(super) async fn handle_transactional(
             let entry = TxnEntry::new_empty(tid.to_string(), pid, epoch, txn_timeout, now_ms);
             // Kafka's `putTransactionStateIfNotExists` creates the metadata
             // under the state lock and hands a racing caller the winner's
-            // object, which it finds mid-transition and answers
-            // `CONCURRENT_TRANSACTIONS`. `allocate` yields, so another first
-            // `InitProducerId` for this id can create the entry meanwhile;
-            // recheck under the partition's write lock, which every append
-            // takes, so the two never persist two identities for one id.
+            // object. That caller runs `prepareInitProducerIdTransit` on it:
+            // `CONCURRENT_TRANSACTIONS` while the winner's transit is pending,
+            // and an epoch bump once the winner's append has completed.
+            // `allocate` yields, so another first `InitProducerId` for this id
+            // can create the entry meanwhile; recheck under the partition's
+            // write lock, which every append takes, so the two never persist
+            // two identities for one id. The winner publishes only after its
+            // append, so a loser here would find it completed and Kafka would
+            // bump at once. It answers `CONCURRENT_TRANSACTIONS` instead, and
+            // the client's retry finds the winner's entry and takes that bump.
+            // The id ends at the same identity and timeout either way, one
+            // round trip later, so this does not run the reuse path below
+            // from here.
             let _state_partition_write = coord.lock_state_partition_for(tid).await;
             if coord.get(tid).is_some() {
                 return Ok(concurrent_transactions_response());
@@ -248,6 +256,9 @@ pub(super) async fn handle_transactional(
                     completed.producer_epoch = completed_epoch;
                     completed.next_producer_id = krabka_log::ProducerId(-1);
                     completed.next_producer_epoch = -1;
+                    // Kafka's `prepareComplete`: the abort of a failed epoch
+                    // fence has now been written.
+                    completed.has_failed_epoch_fence = false;
                     completed.partitions.clear();
                     if let Err(error) = coord.put(completed, txnv).await {
                         tracing::warn!(
@@ -1201,6 +1212,11 @@ mod tests {
                     == crate::txn::coordinator::completion::CompletionAttempt::Completed,
                 "{txnv:?}"
             );
+
+            // Kafka's `prepareComplete` clears the failed fence, so a later
+            // fence of this transactional id raises the epoch again.
+            let completed = coordinator.get(TID).expect("entry").lock().await.clone();
+            check!(!completed.has_failed_epoch_fence, "{txnv:?}");
 
             check!(
                 init((1000, 2)).await.error_code == codes::PRODUCER_FENCED,

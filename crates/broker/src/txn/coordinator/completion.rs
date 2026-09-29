@@ -56,7 +56,8 @@ pub(crate) fn completion_for(prepare: TxnState) -> Option<(MarkerType, TxnState)
 
 /// Apply `Prepare* → complete` with the new identity `(new_pid, new_epoch)`.
 /// The prior producer ID is recorded only when the identity rotated to a new
-/// producer ID.
+/// producer ID. Kafka's `prepareComplete` also clears `hasFailedEpochFence`,
+/// because the abort that fence prepared has now been written.
 pub(crate) fn apply_completion(
     entry: &mut TxnEntry,
     complete: TxnState,
@@ -71,6 +72,7 @@ pub(crate) fn apply_completion(
     entry.producer_epoch = new_epoch;
     entry.next_producer_id = ProducerId(-1);
     entry.next_producer_epoch = -1;
+    entry.has_failed_epoch_fence = false;
     entry.partitions.clear();
     entry.last_update_ms = now_ms;
 }

@@ -121,10 +121,11 @@ pub struct TxnEntry {
     /// request's API version: `2` for `EndTxn` v5 and `AddPartitionsToTxn` v4
     /// and later (completion bumps the epoch under KIP-890's version-2 rule),
     /// `0` for every earlier version and for `AddOffsetsToTxn`. A server-side
-    /// abort (the timeout reaper, the `InitProducerId` fence) stamps the
-    /// cluster's level. The transition that completes a transaction keeps the
-    /// stamp of the one that prepared it, and the `WriteTxnMarkers`
-    /// `transaction_version` reads it.
+    /// abort (the timeout reaper, the `InitProducerId` fence) stamps `2` on a
+    /// `transaction.version` 2 cluster and `0` below it, since
+    /// `endTransactionWithTV1` stamps `TV_0`. The transition that completes a
+    /// transaction keeps the stamp of the one that prepared it, and the
+    /// `WriteTxnMarkers` `transaction_version` reads it.
     pub client_transaction_version: i16,
 }
 
