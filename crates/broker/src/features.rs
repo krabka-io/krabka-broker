@@ -253,6 +253,24 @@ mod tests {
         );
     }
 
+    /// KIP-1191: level 2 is trunk's `SV_2`, so `ApiVersions` advertises it
+    /// only under `unstable.feature.versions.enable`.
+    #[test]
+    fn share_version_two_is_advertised_only_under_unstable_feature_versions() {
+        let advertised = |unstable| {
+            supported_features(unstable)
+                .into_iter()
+                .find(|f| f.name == SHARE_VERSION)
+                .map(|f| (f.min_version, f.max_version))
+        };
+        assert!(
+            (
+                advertised(krabka_raft::UnstableFeatureVersions::Disabled),
+                advertised(krabka_raft::UnstableFeatureVersions::Enabled),
+            ) == (Some((0, 1)), Some((0, 2)))
+        );
+    }
+
     #[test]
     fn streams_version_is_supported() {
         let expected = SupportedFeature {
