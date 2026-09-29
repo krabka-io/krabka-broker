@@ -161,16 +161,15 @@ async fn the_heartbeat_after_a_metadata_update_refreshes_the_assignment() {
             update: &["orders"],
             expected: answer(2, Some(vec![(1, vec![0, 1, 2])])),
         },
-        // The target loses the partitions. Krabka moves the member to the new
-        // epoch at once. Kafka's `CurrentAssignmentBuilder` keeps it at epoch
-        // 1 until the member acknowledges the revocation, which is outside the
-        // refresh.
+        // The target loses the partitions. Kafka's `CurrentAssignmentBuilder`
+        // keeps the member at epoch 1 until it acknowledges the revocation, and
+        // its heartbeat answer already carries the smaller assignment.
         Row {
             name: "the subscribed topic is deleted",
             before: snapshot_of(&[("orders", 1, 2)]),
             after: snapshot_of(&[]),
             update: &["orders"],
-            expected: answer(2, Some(vec![])),
+            expected: answer(1, Some(vec![])),
         },
         // The update names `payments` only. The group does not read the
         // metadata again, so it does not see that `orders` grew in the same

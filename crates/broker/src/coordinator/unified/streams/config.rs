@@ -1,6 +1,8 @@
 //! KIP-1071 Streams rebalance-protocol configuration.
 use std::{collections::BTreeMap, time::Duration};
 
+use crate::api_catalog::UnstableApiVersions;
+
 pub const KEY_SESSION_TIMEOUT_MS: &str = "streams.session.timeout.ms";
 pub const KEY_HEARTBEAT_INTERVAL_MS: &str = "streams.heartbeat.interval.ms";
 pub const KEY_ACCEPTABLE_RECOVERY_LAG: &str = "streams.acceptable.recovery.lag";
@@ -319,6 +321,14 @@ pub struct StreamsGroupConfig {
     /// KIP-932 share-partition start strategy for a group with no persisted
     /// share state.
     pub share_auto_offset_reset: ShareAutoOffsetReset,
+    /// Kafka's internal `unstable.api.versions.enable`. While it is
+    /// [`Disabled`][UnstableApiVersions::Disabled], the default, the group
+    /// answers as Kafka 4.3.1 does: a heartbeat response leaves
+    /// `TaskOffsetIntervalMs` at 0, `partitionsByUserEndpoint` follows 4.3.1's
+    /// `EndpointToPartitionsManager`, and a join at a full group is refused even
+    /// for a member already in it. [`Enabled`][UnstableApiVersions::Enabled]
+    /// serves Kafka trunk's behavior for those.
+    pub unstable_api_versions: UnstableApiVersions,
     pub actor_mailbox_capacity: usize,
 }
 
@@ -344,6 +354,7 @@ impl Default for StreamsGroupConfig {
             assignor: StreamsAssignorKind::Auto,
             rack_aware_assignment_tags: Vec::new(),
             share_auto_offset_reset: ShareAutoOffsetReset::Latest,
+            unstable_api_versions: UnstableApiVersions::Disabled,
             actor_mailbox_capacity: 64,
         }
     }
@@ -554,6 +565,7 @@ mod tests {
                     assignor: StreamsAssignorKind::Auto,
                     rack_aware_assignment_tags: Vec::new(),
                     share_auto_offset_reset: ShareAutoOffsetReset::Latest,
+                    unstable_api_versions: UnstableApiVersions::Disabled,
                     actor_mailbox_capacity: 64,
                 }
         );

@@ -16,7 +16,7 @@ use super::{
     MAX_OFFSET,
     commit::do_commit,
     config::{CgcModel, config},
-    heartbeat::{advertised_of, hb_request},
+    heartbeat::{advertised_of, hb_request, keepalive_request},
     projection::{assert_epoch_monotonic, project, rebuild_group},
     state::{
         CgcAction, CgcState, EpochKind, advertised_for, advertised_map, committed_map,
@@ -54,6 +54,7 @@ impl Model for CgcModel {
             if under_cap {
                 actions.push(CgcAction::Leave(m.id.clone()));
                 actions.push(CgcAction::Heartbeat(m.id.clone()));
+                actions.push(CgcAction::Keepalive(m.id.clone()));
             }
             let advertised = advertised_for(state, &m.id);
             let owned: BTreeSet<i32> = state
@@ -129,7 +130,7 @@ impl Model for CgcModel {
                 );
                 assert_epoch_monotonic(last, &g);
                 owned.entry(id.clone()).or_default();
-                adv.insert(id, advertised_of(&step));
+                adv.insert(id, advertised_of(&step).unwrap_or_default());
                 Some(project(&g, &owned, &adv, &committed))
             }
             CgcAction::Leave(id) => {
@@ -165,7 +166,28 @@ impl Model for CgcModel {
                     &HashSet::new(),
                 );
                 assert_epoch_monotonic(last, &g);
-                adv.insert(id, advertised_of(&step));
+                adv.insert(id, advertised_of(&step).unwrap_or_default());
+                Some(project(&g, &owned, &adv, &committed))
+            }
+            CgcAction::Keepalive(id) => {
+                let epoch = member(last, &id)?.member_epoch;
+                let mut g = rebuild_group(last);
+                let req = keepalive_request(&id, epoch);
+                let step = step_heartbeat(
+                    &mut g,
+                    &config(),
+                    &self.metadata(),
+                    &req,
+                    ClientIdentity { id: "", host: "" },
+                    Instant::now(),
+                    &HashSet::new(),
+                );
+                assert_epoch_monotonic(last, &g);
+                // Without an assignment in the answer, the member keeps the one
+                // it was last told.
+                if let Some(assignment) = advertised_of(&step) {
+                    adv.insert(id, assignment);
+                }
                 Some(project(&g, &owned, &adv, &committed))
             }
             CgcAction::Commit(id, part, kind) => do_commit(last, &id, part, kind),

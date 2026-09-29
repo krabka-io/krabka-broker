@@ -409,7 +409,7 @@ mod tests {
         let named = |topics: &[&str]| {
             SubscribedTopics::Named(topics.iter().map(|topic| (*topic).to_string()).collect())
         };
-        let rows: [(&str, Option<Heartbeat>, SubscribedTopics); 3] = [
+        let rows: [(&str, Option<Heartbeat>, SubscribedTopics); 4] = [
             ("replayed and unresolved", None, SubscribedTopics::All),
             (
                 "a heartbeat carrying the pattern resolves it",
@@ -417,8 +417,13 @@ mod tests {
                 named(&["orders", "payments"]),
             ),
             (
-                "a heartbeat without the pattern drops the regex",
+                "a heartbeat without the pattern leaves it unresolved",
                 Some((None, &[])),
+                SubscribedTopics::All,
+            ),
+            (
+                "a heartbeat with the empty pattern drops the regex",
+                Some((Some(""), &[])),
                 named(&["orders"]),
             ),
         ];

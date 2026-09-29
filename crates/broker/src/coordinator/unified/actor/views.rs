@@ -234,8 +234,9 @@ pub(super) fn build_describe(state: &GroupState) -> DescribeView {
 
 /// The server assignor the most members name, as Kafka's
 /// `ConsumerGroup.preferredServerAssignor` counts them. A tie goes to the
-/// smallest name, so the answer does not depend on map order.
-fn preferred_server_assignor(state: &GroupState) -> Option<String> {
+/// smallest name, so the answer does not depend on map order. It is the
+/// assignor that computes the group's target, and the one `Describe` reports.
+pub(super) fn preferred_server_assignor(state: &GroupState) -> Option<String> {
     let mut votes: HashMap<&str, usize> = HashMap::new();
     for name in state
         .members

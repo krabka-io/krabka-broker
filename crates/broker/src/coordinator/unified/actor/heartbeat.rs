@@ -139,6 +139,24 @@ pub(super) async fn handle_actor_heartbeat(
         });
         return true;
     };
+    // A consumer group exists once its first join bumped the group epoch, and
+    // it keeps that epoch after its members left. An actor that never got a
+    // member, such as one left by a join that Kafka refused before it wrote
+    // anything, holds no group, and Kafka answers any other epoch with
+    // GROUP_ID_NOT_FOUND.
+    if request.member_epoch != 0 && state.group_epoch == 0 && state.members.is_empty() {
+        let _ = reply.send(ConsumerGroupHeartbeatResponse {
+            error_code: codes::GROUP_ID_NOT_FOUND,
+            error_message: Some(
+                crate::coordinator::unified::registry::consumer_group_not_found(
+                    &state.group_id,
+                    request.member_epoch,
+                ),
+            ),
+            ..Default::default()
+        });
+        return true;
+    }
     match handle_heartbeat(state, services, &request, client, regex_authorized_topics).await {
         Ok(response) => {
             let _ = reply.send(response);
@@ -178,7 +196,7 @@ pub(crate) struct HeartbeatStep {
 
 /// The pure, synchronous heartbeat decision core: assignor selection and epoch
 /// validation, member upsert or leave, `update_member_state`, `run_reconcile`,
-/// `advance_member_epoch`, and the response build.
+/// `reconcile_member`, and the response build.
 ///
 /// This function holds no `.await` and does no I/O. `handle_heartbeat` calls
 /// it, then flushes `pending` to the log. It is a separate function so that
@@ -250,11 +268,11 @@ pub(crate) fn step_heartbeat(
         };
         state.add_or_update_member(m);
         run_reconcile(state, config, metadata);
-        state.advance_member_epoch(&member_id);
         // Compute the new member's current assignment (grants free target
-        // partitions, withholds those still held by others) before responding.
+        // partitions, withholds those still held by others) and move it to the
+        // target epoch before responding.
         let owned = reported_owned(req);
-        state.reconcile_member(&member_id, &owned);
+        state.reconcile_member(&member_id, owned.as_ref(), true);
         state.track_rebalance_timeout(&member_id, now);
         let pending = snapshot_pending_after_change(state, std::slice::from_ref(&member_id), true);
         let response = build_assignment_resp(state, &member_id, config, true);

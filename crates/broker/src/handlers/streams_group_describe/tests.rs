@@ -349,7 +349,14 @@ async fn ready_group_describes_the_configured_topology_and_every_member_field() 
 
     use super::test_support::{create_topic, expected_task_ids, heartbeat};
 
-    let (broker_handle, _dir) = start_broker(true).await;
+    // The member reports task offsets, which Kafka 4.3.1 refuses and trunk
+    // takes.
+    let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
+        cfg.streams_group.enable = true;
+        cfg.features.unstable_api_versions = crate::api_catalog::UnstableApiVersions::Enabled;
+    })
+    .await;
+    broker_handle.wait_until_group_coordinator_ready().await;
     let broker = broker_handle.broker_arc_for_test();
     finalize_streams_version(&broker).await;
     create_topic(&broker, "in", 2).await;

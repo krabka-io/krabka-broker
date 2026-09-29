@@ -189,9 +189,10 @@ pub const DEFAULT_CLASSIC_MAX_SESSION_TIMEOUT: Duration = Duration::from_mins(30
 /// `group.max.size`.
 pub const DEFAULT_CLASSIC_MAX_SIZE: usize = 2_147_483_647;
 
-/// Krabka's default cap on consumer-group membership
-/// (`group.consumer.max.size`).
-pub const DEFAULT_MAX_GROUP_SIZE: usize = 200;
+/// Default cap on consumer-group membership: `Integer.MAX_VALUE`, Kafka's
+/// `group.consumer.max.size` (`CONSUMER_GROUP_MAX_SIZE_DEFAULT`), so no
+/// practical limit.
+pub const DEFAULT_MAX_GROUP_SIZE: usize = 2_147_483_647;
 
 impl Default for NextGenConfig {
     fn default() -> Self {
@@ -320,6 +321,17 @@ mod tests {
         for name in ["uniform", "range", "y", "ghost"] {
             assert!(cfg.assignor_enabled(name) == cfg.find_assignor(name).is_some());
         }
+    }
+
+    /// Kafka's `group.consumer.max.size` defaults to `Integer.MAX_VALUE`
+    /// (`CONSUMER_GROUP_MAX_SIZE_DEFAULT`), so a group of 201 members, or a
+    /// classic group of that size that upgrades, is not refused.
+    #[test]
+    fn default_member_cap_is_kafkas_integer_max() {
+        let max_size = NextGenConfig::default().max_size;
+
+        assert!(max_size == usize::try_from(i32::MAX).unwrap());
+        assert!(max_size > 200);
     }
 
     #[test]
