@@ -18,8 +18,11 @@ use krabka_units::Time;
 use tokio::sync::{Notify, mpsc};
 
 use crate::{
-    delivery::DeliveryHandles, log_dir_status::LogDirRegistry, partition::WriterMessage,
-    producer_state::ProducerState, replica_state::ReplicaState,
+    delivery::DeliveryHandles,
+    log_dir_status::LogDirRegistry,
+    partition::{SwapOutcome, WriterMessage},
+    producer_state::ProducerState,
+    replica_state::ReplicaState,
 };
 
 mod append;
@@ -119,6 +122,10 @@ pub async fn run_with_sequencer(
     // the next iteration so control messages are never reordered ahead of the
     // produces that preceded them in the channel.
     let mut pending: Option<WriterMessage> = None;
+    // The lowest offset a truncation or reset cut the log to since the KIP-113
+    // move task last asked. A future log must be cut to it before it may
+    // replace the current log.
+    let mut unreported_cut: Option<krabka_log::Offset> = None;
     loop {
         let msg = match pending.take() {
             Some(m) => m,
@@ -202,7 +209,7 @@ pub async fn run_with_sequencer(
                 .await;
             }
             WriterMessage::Truncate { offset, ack } => {
-                handle_truncate(
+                if handle_truncate(
                     &log,
                     (&log_dir, &log_dir_status),
                     &replica_state,
@@ -210,10 +217,13 @@ pub async fn run_with_sequencer(
                     offset,
                     ack,
                 )
-                .await;
+                .await
+                {
+                    unreported_cut = Some(unreported_cut.map_or(offset, |cut| cut.min(offset)));
+                }
             }
             WriterMessage::ResetTo { new_base, ack } => {
-                handle_reset(
+                if handle_reset(
                     &log,
                     (&log_dir, &log_dir_status),
                     &replica_state,
@@ -221,7 +231,13 @@ pub async fn run_with_sequencer(
                     new_base,
                     ack,
                 )
-                .await;
+                .await
+                {
+                    unreported_cut = Some(unreported_cut.map_or(new_base, |cut| cut.min(new_base)));
+                }
+            }
+            WriterMessage::TakeFutureTruncation { ack } => {
+                let _ = ack.send(unreported_cut.take());
             }
             WriterMessage::TrimToOffset { new_start, ack } => {
                 handle_trim(
@@ -265,14 +281,21 @@ pub async fn run_with_sequencer(
                 target_partition_path,
                 ack,
             } => {
-                let result = swap_future_log(
-                    &log,
-                    &log_dir,
-                    target_log_dir,
-                    &future_log,
-                    &future_path,
-                    &target_partition_path,
-                );
+                // Equal log ends do not make the two logs equal once the
+                // current log was cut: it may have grown back with records
+                // the future log lacks.
+                let result = if unreported_cut.is_some() {
+                    Ok(SwapOutcome::NotCaughtUp)
+                } else {
+                    swap_future_log(
+                        &log,
+                        &log_dir,
+                        target_log_dir,
+                        &future_log,
+                        &future_path,
+                        &target_partition_path,
+                    )
+                };
                 let _ = ack.send(result);
                 // No `append_notify` — swap doesn't deliver new data,
                 // and consumers re-read from the swapped `log` against

@@ -129,6 +129,8 @@ pub(super) async fn handle_replicate_verbatim(
     }
 }
 
+/// Truncates the log at `offset` and answers `ack`. Returns whether the log was
+/// cut.
 pub(super) async fn handle_truncate(
     log: &Arc<Mutex<Log>>,
     storage_status: (&Arc<ArcSwap<PathBuf>>, &LogDirRegistry),
@@ -136,7 +138,7 @@ pub(super) async fn handle_truncate(
     wal: Option<&crate::wal::SharedWal>,
     offset: Offset,
     ack: tokio::sync::oneshot::Sender<Result<(), crate::error::BrokerError>>,
-) {
+) -> bool {
     let log_for_blocking = Arc::clone(log);
     let result = run_log_mutation(
         move || {
@@ -160,8 +162,11 @@ pub(super) async fn handle_truncate(
             .recompute_hw_for_leader_append(new_leo);
     }
     let _ = ack.send(result);
+    succeeded
 }
 
+/// Resets the log to start at `new_base` and answers `ack`. Returns whether the
+/// log was reset.
 pub(super) async fn handle_reset(
     log: &Arc<Mutex<Log>>,
     storage_status: (&Arc<ArcSwap<PathBuf>>, &LogDirRegistry),
@@ -169,7 +174,7 @@ pub(super) async fn handle_reset(
     wal: Option<&crate::wal::SharedWal>,
     new_base: Offset,
     ack: tokio::sync::oneshot::Sender<Result<(), crate::error::BrokerError>>,
-) {
+) -> bool {
     let log_for_blocking = Arc::clone(log);
     let result = run_log_mutation(
         move || {
@@ -193,6 +198,7 @@ pub(super) async fn handle_reset(
             .recompute_hw_for_leader_append(new_leo);
     }
     let _ = ack.send(result);
+    succeeded
 }
 
 pub(super) async fn handle_trim(

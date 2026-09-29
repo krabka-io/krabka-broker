@@ -136,6 +136,20 @@ impl Partition {
             .map_err(|_| BrokerError::Replication("ack dropped".into()))?
     }
 
+    /// The lowest offset the log was cut to by [`Self::truncate_to`] or
+    /// [`Self::reset_to`] since the last call, which the KIP-113 move task
+    /// applies to its future log. See [`WriterMessage::TakeFutureTruncation`].
+    pub(crate) async fn take_future_truncation(&self) -> Result<Option<Offset>, BrokerError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.writer_tx
+            .send(WriterMessage::TakeFutureTruncation { ack: ack_tx })
+            .await
+            .map_err(|_| BrokerError::Replication("partition writer dead".into()))?;
+        ack_rx
+            .await
+            .map_err(|_| BrokerError::Replication("ack dropped".into()))
+    }
+
     /// Drop every segment and recreate the active segment at `new_base`.
     /// The request goes through the writer task, so it stays ordered with
     /// appends.
