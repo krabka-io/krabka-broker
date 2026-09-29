@@ -269,7 +269,10 @@ fn metadata_version_downgrades_follow_did_metadata_change() {
             Err(invalid(
                 "metadata.version",
                 6,
-                "Local controller 1 only supports versions 7-32",
+                &format!(
+                    "Local controller 1 only supports versions 7-{}",
+                    crate::features::METADATA_VERSION_MAX
+                ),
             )),
         ),
     ];
