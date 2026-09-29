@@ -841,6 +841,7 @@ impl RuntimeFileConfig {
         mut self,
         cfg: &mut crate::config::BrokerConfig,
     ) -> Result<(), FileConfigError> {
+        self.record_supplied_kafka_keys(cfg);
         self.apply_core(cfg)?;
         self.apply_replication(cfg)?;
         self.apply_coordinators(cfg)?;
@@ -851,6 +852,27 @@ impl RuntimeFileConfig {
         self.apply_broker_policy(cfg)?;
         self.apply_share_group(cfg)?;
         self.apply_streams_group(cfg)
+    }
+
+    /// Records, in [`crate::config::StaticConfigOrigins`], the Kafka keys of
+    /// [`crate::config::KAFKA_STATIC_KEYS`] whose `[runtime]` field is set.
+    /// The presence of the field is the provenance: a value equal to Kafka's
+    /// default still reports at `STATIC_BROKER_CONFIG`.
+    ///
+    /// The overlay of a command line or the environment applies through this
+    /// too, after the file, so it adds to what the file recorded.
+    fn record_supplied_kafka_keys(&self, cfg: &mut crate::config::BrokerConfig) {
+        let Ok(serde_json::Value::Object(fields)) = serde_json::to_value(self) else {
+            return;
+        };
+        let supplied = crate::config::KAFKA_STATIC_KEYS.iter().filter(|key| {
+            key.runtime_field
+                .and_then(|field| fields.get(field))
+                .is_some_and(|value| !value.is_null())
+        });
+        cfg.static_config_origins
+            .supplied_kafka_keys
+            .extend(supplied.map(|key| key.name));
     }
 }
 

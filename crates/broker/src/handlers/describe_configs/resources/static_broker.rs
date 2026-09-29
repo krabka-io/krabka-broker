@@ -149,6 +149,16 @@ pub(in crate::handlers::describe_configs) struct StaticBrokerConfigs<'a> {
 /// `connection.failed.authentication.delay.ms`. `broker.rack` and
 /// `cordoned.log.dirs` are named when the node has a value.
 ///
+/// The keys of [`crate::config::KAFKA_STATIC_KEYS`] -- the coordinators'
+/// `group.*` settings, the internal topics' geometry, the socket and queue
+/// limits, and the rest that a `[runtime]` field sets -- are here when the
+/// operator named them, which the loader records in
+/// [`crate::config::StaticConfigOrigins::supplied_kafka_keys`], or when the
+/// node runs a value other than Kafka's default, whatever put it there. The
+/// value is the one the node runs with, so `group.consumer.session.timeout.ms`
+/// answers 60000 on a node that grants 60 s, on the broker resource and, as the
+/// synonym of `consumer.session.timeout.ms`, on a group resource.
+///
 /// A key absent here is reported at its Kafka default, which is what an
 /// operator who never wrote it gets from Kafka too.
 pub(crate) fn static_settings(
@@ -233,6 +243,11 @@ pub(crate) fn static_settings(
                 .to_string(),
         );
     }
+    settings.extend(
+        crate::config::KAFKA_STATIC_KEYS
+            .iter()
+            .filter_map(|key| key.static_value(config).map(|value| (key.name, value))),
+    );
     settings
 }
 

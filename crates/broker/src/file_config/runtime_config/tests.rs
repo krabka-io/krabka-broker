@@ -269,3 +269,50 @@ fn the_sasl_receive_limit_and_failed_authentication_delay_follow_kafka() {
             .contains("connection_failed_authentication_delay")
     );
 }
+
+/// The loader records which Kafka keys the `[runtime]` table named, whatever
+/// their values, so `DescribeConfigs` reports a supplied setting at
+/// `STATIC_BROKER_CONFIG` even at Kafka's default. A table that names none
+/// records none, a field that is not a Kafka key records nothing, and a second
+/// table applied afterwards, as the command-line overlay is, adds to the first.
+#[test]
+fn the_runtime_table_records_the_kafka_keys_it_named() {
+    let recorded = |sources: &[&str]| -> Vec<&'static str> {
+        let mut cfg = crate::config::BrokerConfig::default();
+        for source in sources {
+            let file: FileConfig = toml::from_str(source).expect("parse runtime config");
+            file.apply_to(&mut cfg).expect("apply runtime config");
+        }
+        cfg.static_config_origins
+            .supplied_kafka_keys
+            .into_iter()
+            .collect()
+    };
+
+    assert!(
+        (
+            recorded(&["[runtime]\n"]),
+            recorded(&["[runtime]\ncleaner_interval = \"7s\"\n"]),
+            recorded(&[
+                "[runtime]\nconsumer_group_session_timeout = \"45s\"\nshare_group_max_size = 200\n\
+                 streams_group_rack_aware_assignment_tags = [\"rack\"]\n"
+            ]),
+            recorded(&[
+                "[runtime]\nconsumer_group_session_timeout = \"45s\"\n",
+                "[runtime]\nsocket_send_buffer = \"1MiB\"\n",
+            ]),
+        ) == (
+            Vec::new(),
+            Vec::new(),
+            vec![
+                "group.consumer.session.timeout.ms",
+                "group.share.max.size",
+                "group.streams.rack.aware.assignment.tags",
+            ],
+            vec![
+                "group.consumer.session.timeout.ms",
+                "socket.send.buffer.bytes"
+            ],
+        )
+    );
+}

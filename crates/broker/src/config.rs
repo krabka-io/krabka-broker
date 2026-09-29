@@ -11,6 +11,7 @@ mod broker_config;
 mod defaults;
 mod feature_flags;
 mod freeze;
+mod kafka_static_keys;
 mod leader_rebalance;
 mod listener;
 mod log_storage;
@@ -27,6 +28,7 @@ mod test_support;
 mod tiered_storage;
 mod validate;
 
+pub(crate) use self::kafka_static_keys::KAFKA_STATIC_KEYS;
 pub use self::{
     break_glass::{BackgroundUncleanRecovery, BreakGlassConfig},
     broker_config::{BrokerConfig, PlainCredentials},

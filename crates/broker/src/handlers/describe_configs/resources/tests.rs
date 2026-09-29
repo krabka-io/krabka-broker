@@ -126,7 +126,6 @@ fn describe_at(
             unstable_api_versions: crate::api_catalog::UnstableApiVersions::Enabled,
         },
         300_000,
-        &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
         options,
     )
 }
@@ -180,7 +179,6 @@ fn describe_with_loggers(
             unstable_api_versions: crate::api_catalog::UnstableApiVersions::Enabled,
         },
         300_000,
-        &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
         options,
     )
 }
@@ -214,7 +212,6 @@ fn describe_with_static(
             unstable_api_versions: crate::api_catalog::UnstableApiVersions::Enabled,
         },
         300_000,
-        &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
         options,
     )
 }
@@ -1321,7 +1318,20 @@ fn every_key_a_group_or_a_subscription_answers_with_is_typed_and_disclosed() {
     // broker itself supplies: Kafka's `GroupConfig` decides which group keys a
     // response holds, and each one must come back typed and with a value.
     let image = MetadataImage::new(Uuid::nil());
-    let group = describe(&image, RESOURCE_TYPE_GROUP, "streams-1", None, EVERYTHING);
+    // A running broker states the streams assignor it runs, which Kafka's
+    // `GroupConfig` has no default for.
+    let settings = static_settings(&crate::config::BrokerConfig::default());
+    let group = describe_with_static(
+        &image,
+        RESOURCE_TYPE_GROUP,
+        "streams-1",
+        None,
+        EVERYTHING,
+        StaticBrokerConfigs {
+            settings: &settings,
+            ..untuned()
+        },
+    );
     let subscription = describe(
         &image,
         RESOURCE_TYPE_CLIENT_METRICS,
@@ -1368,7 +1378,6 @@ fn a_group_lists_kafka_4_3_1s_keys_unless_unstable_api_versions_are_enabled() {
             unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
         },
         300_000,
-        &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
         EVERYTHING,
     );
     let reported: Vec<&str> = group.configs.iter().map(|e| e.name.as_str()).collect();
@@ -1428,7 +1437,6 @@ fn trunk_topic_keys_are_described_only_under_unstable_api_versions() {
                 unstable_api_versions: unstable,
             },
             300_000,
-            &crate::coordinator::unified::streams::config::StreamsGroupConfig::default(),
             EVERYTHING,
         )
         .configs
@@ -2438,6 +2446,147 @@ fn a_topic_reports_the_computing_nodes_own_min_insync_replicas() {
             "CreateTopics computed by {node:?}"
         );
     }
+}
+
+/// Kafka's `extractGroupConfigMap` and `createGroupConfigEntry`: a group
+/// reports, beneath its own override, the value the coordinators run with, at
+/// `STATIC_BROKER_CONFIG` when the operator named the broker synonym (even at
+/// Kafka's default) or the coordinator runs another value, and the same key on
+/// a named broker reports the same value with the same source. A node that
+/// named nothing reports Kafka's defaults.
+#[test]
+fn a_group_and_a_named_broker_report_the_values_the_coordinators_run_with() {
+    let file: crate::file_config::FileConfig = toml::from_str(
+        "[runtime]\nconsumer_group_session_timeout = \"60s\"\n\
+         consumer_group_heartbeat_interval = \"5s\"\n\
+         share_group_record_lock_duration = \"45s\"\n\
+         streams_group_num_standby_replicas = 1\n\
+         socket_send_buffer = \"1MiB\"\n",
+    )
+    .expect("parse runtime config");
+    let mut config = crate::config::BrokerConfig::default();
+    file.apply_to(&mut config).expect("apply runtime config");
+    let settings = static_settings(&config);
+    let mut image = MetadataImage::new(Uuid::nil());
+    image.apply(&MetadataRecord::V1GroupConfig(
+        krabka_metadata::GroupConfigRecord {
+            group_id: "g".into(),
+            configs: maplit::btreemap! {
+                "share.record.lock.duration.ms".to_owned() => "20000".to_owned(),
+            },
+        },
+    ));
+    let described = |resource_type, name: &str| {
+        describe_with_static(
+            &with_topic(&image, resource_type, name),
+            resource_type,
+            name,
+            None,
+            EVERYTHING,
+            StaticBrokerConfigs {
+                settings: &settings,
+                ..untuned()
+            },
+        )
+    };
+    let group = described(RESOURCE_TYPE_GROUP, "g");
+    let broker = described(RESOURCE_TYPE_BROKER, "1");
+    let chain = |result: &DescribeConfigsResult, key: &str| {
+        let entry = entry_named(result, key);
+        (
+            entry.value.clone(),
+            entry.config_source,
+            entry.synonyms.clone(),
+        )
+    };
+    let named = |key: &str, value: &str, default: &str| {
+        (
+            Some(value.to_owned()),
+            CONFIG_SOURCE_STATIC_BROKER,
+            vec![
+                synonym(key, value, CONFIG_SOURCE_STATIC_BROKER),
+                synonym(key, default, CONFIG_SOURCE_DEFAULT),
+            ],
+        )
+    };
+    let untouched = |key: &str, default: &str| {
+        (
+            Some(default.to_owned()),
+            CONFIG_SOURCE_DEFAULT,
+            vec![synonym(key, default, CONFIG_SOURCE_DEFAULT)],
+        )
+    };
+
+    // A group's own key, over the broker synonym that the coordinator's
+    // settings state.
+    check!(
+        chain(&group, "consumer.session.timeout.ms")
+            == named("group.consumer.session.timeout.ms", "60000", "45000")
+    );
+    // Named at Kafka's own default: still the static layer.
+    check!(
+        chain(&group, "consumer.heartbeat.interval.ms")
+            == named("group.consumer.heartbeat.interval.ms", "5000", "5000")
+    );
+    check!(
+        chain(&group, "consumer.assignment.interval.ms")
+            == untouched("group.consumer.assignment.interval.ms", "1000")
+    );
+    check!(
+        chain(&group, "streams.num.standby.replicas")
+            == named("group.streams.num.standby.replicas", "1", "0")
+    );
+    // The group's override is above the value the coordinator runs.
+    check!(
+        chain(&group, "share.record.lock.duration.ms")
+            == (
+                Some("20000".to_owned()),
+                CONFIG_SOURCE_DYNAMIC_GROUP,
+                vec![
+                    synonym(
+                        "share.record.lock.duration.ms",
+                        "20000",
+                        CONFIG_SOURCE_DYNAMIC_GROUP
+                    ),
+                    synonym(
+                        "group.share.record.lock.duration.ms",
+                        "45000",
+                        CONFIG_SOURCE_STATIC_BROKER
+                    ),
+                    synonym(
+                        "group.share.record.lock.duration.ms",
+                        "30000",
+                        CONFIG_SOURCE_DEFAULT
+                    ),
+                ],
+            )
+    );
+
+    // The broker resource names the same keys and agrees with the group.
+    check!(
+        chain(&broker, "group.consumer.session.timeout.ms")
+            == named("group.consumer.session.timeout.ms", "60000", "45000")
+    );
+    check!(
+        chain(&broker, "group.consumer.heartbeat.interval.ms")
+            == named("group.consumer.heartbeat.interval.ms", "5000", "5000")
+    );
+    check!(
+        chain(&broker, "group.share.record.lock.duration.ms")
+            == named("group.share.record.lock.duration.ms", "45000", "30000")
+    );
+    check!(
+        chain(&broker, "group.consumer.assignment.interval.ms")
+            == untouched("group.consumer.assignment.interval.ms", "1000")
+    );
+    // Kafka's `socket.send.buffer.bytes` is 100 KiB and this node runs 1 MiB,
+    // which the operator named, and a key the operator left alone stays at
+    // Kafka's default.
+    check!(
+        chain(&broker, "socket.send.buffer.bytes")
+            == named("socket.send.buffer.bytes", "1048576", "102400")
+    );
+    check!(chain(&broker, "queued.max.requests") == untouched("queued.max.requests", "500"));
 }
 
 /// Kafka's `createGroupConfigEntry`: every `GroupConfig` key, with the group
