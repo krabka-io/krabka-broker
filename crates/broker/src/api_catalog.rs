@@ -859,7 +859,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
             "crates/broker/tests/transaction_version.rs",
             "crates/broker/tests/transaction_version/txnver_verify_only.rs",
         ],
-        note: "",
+        note: "What a request may do follows its API version, as in Kafka, whatever `transaction.version` the cluster finalized: EndTxn v5 and AddPartitionsToTxn v4 and later are TV_2 and bump the epoch, and older versions and AddOffsetsToTxn are TV_0. The cluster level picks the `__transaction_state` value format and the rules of a server-initiated abort. Two answers follow Kafka trunk only under `unstable.api.versions.enable`: an EndTxn v5 commit at the pre-abort epoch after CompleteAbort answers PRODUCER_FENCED (KAFKA-20785, where 4.3.1 answers INVALID_TXN_STATE), and `LastProducerEpoch` (tag 4) is written to and read from `__transaction_state` (KAFKA-20357, where 4.3.1 keeps it in memory). A transactional offset commit records the topic id only from TxnOffsetCommit v6 and under that flag.",
     },
     KipAnnotation {
         key: "KIP-903",

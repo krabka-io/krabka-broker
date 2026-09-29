@@ -35,14 +35,14 @@ impl TxnCoordinator {
     /// Persists `entry` to the matching `__transaction_state` partition log,
     /// then updates the in-memory map. The partition's writer task appends the
     /// batch, in order with all other produce appends. Returns the entry as
-    /// persisted, with its stamped `client_transaction_version`: a caller that
-    /// retains its own pre-append snapshot for a later comparison, such as the
-    /// reaper's `prepare_abort`/`complete_abort` pair, must use this one
-    /// instead, since it is the value publication actually holds.
+    /// persisted.
     ///
-    /// `txnv` is the finalized `transaction.version` that the caller resolved
-    /// from the live metadata image. It selects the byte-exact Kafka
-    /// `TransactionLogValue` format: v0 for `TV_0`, and v1 for `TV >= 1`.
+    /// `format_txnv` is the finalized `transaction.version` that the caller
+    /// resolved from the live metadata image. It selects the byte-exact Kafka
+    /// `TransactionLogValue` format: v0 for `TV_0`, and v1 for `TV >= 1`. It
+    /// does not decide what a request may do, and it does not stamp the
+    /// record: `entry.client_transaction_version` goes to the log as the caller
+    /// set it.
     ///
     /// # Errors
     ///
@@ -58,52 +58,32 @@ impl TxnCoordinator {
     pub(crate) async fn put(
         &self,
         entry: TxnEntry,
-        txnv: crate::txn::version::TxnVersion,
+        format_txnv: crate::txn::version::TxnVersion,
     ) -> Result<TxnEntry, BrokerError> {
         let _state_partition_write = self.lock_state_partition_for(&entry.transactional_id).await;
-        self.put_under_state_partition_lock(entry, txnv).await
+        self.put_under_state_partition_lock(entry, format_txnv)
+            .await
     }
 
     /// Persists one entry while the caller holds its state-partition write
-    /// lock. The reaper uses this form to make its exact recheck and append one
-    /// serialized operation.
-    pub(crate) async fn put_under_state_partition_lock(
-        &self,
-        mut entry: TxnEntry,
-        txnv: crate::txn::version::TxnVersion,
-    ) -> Result<TxnEntry, BrokerError> {
-        // Kafka writes the client's transaction version with the record
-        // (`TransactionLogValue.ClientTransactionVersion`). It is `TV_2` for a
-        // client on the version-2 protocol, where completion bumps the epoch,
-        // and `TV_0` otherwise.
-        entry.client_transaction_version = if txnv.verified() {
-            crate::txn::version::TxnVersion::Verified.level()
-        } else {
-            0
-        };
-        self.append_and_publish(entry, txnv).await
-    }
-
-    /// Appends `entry` exactly as given, at the wire format `format_txnv`
-    /// selects, and publishes it. Every other append derives both `entry`'s
-    /// `client_transaction_version` stamp and the wire format from the same
-    /// live `transaction.version`, which [`Self::put_under_state_partition_lock`]
-    /// does above. Completing a previously prepared transaction is the one
-    /// exception: `client_transaction_version` must stay the value the
-    /// `Prepare*` record already stamped, since it is what recovery
-    /// completes under (`Self::put_under_state_partition_lock`'s caller in
-    /// [`crate::txn::coordinator::completion`] sets it before calling this),
-    /// while the wire format still follows the broker's current
-    /// `transaction.version`: format capability is not part of what a
-    /// specific transaction negotiated, and completing under a stale, lower
-    /// format would drop `TransactionLogValue`'s v1-only tagged fields, such
-    /// as `LastProducerEpoch`, that a live append would otherwise carry.
+    /// lock, and publishes it. The reaper uses this form to make its exact
+    /// recheck and append one serialized operation.
+    ///
+    /// `entry.client_transaction_version` is the version Kafka records with
+    /// the transition (`TransactionLogValue.ClientTransactionVersion`), which
+    /// only the transition knows. `AddPartitionsToTxn` and `EndTxn` stamp the
+    /// version of their own request, a server-initiated abort stamps the
+    /// cluster's level, and every other transition, `Complete*` included,
+    /// keeps what the previous record stamped, as Kafka's `TransitionData`
+    /// defaults to. The wire format, by contrast, follows the cluster's
+    /// current `transaction.version`: completing under a stale, lower format
+    /// would drop `TransactionLogValue`'s v1-only tagged fields.
     ///
     /// # Errors
     ///
     /// Returns [`BrokerError::Txn`] if the partition is not locally held
     /// or the append fails.
-    pub(crate) async fn append_and_publish(
+    pub(crate) async fn put_under_state_partition_lock(
         &self,
         entry: TxnEntry,
         format_txnv: crate::txn::version::TxnVersion,

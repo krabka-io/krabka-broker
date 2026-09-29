@@ -29,10 +29,12 @@ use crate::{
 /// The `AddPartitionsToTxn` request version to use for a registration that
 /// does not come from a client's own `AddPartitionsToTxn` request: the
 /// `Produce`-path partition check below, and the KIP-890 server-side
-/// `TxnOffsetCommit` partition enrollment. Both apply only once the cluster
-/// has moved to `transaction.version` 2 or later, so no request ever needs
-/// the legacy `INVALID_PRODUCER_EPOCH` downgrade below that version.
-pub(crate) const INTERNAL_REGISTRATION_VERSION: i16 = 2;
+/// `TxnOffsetCommit` partition enrollment. Kafka's `AddPartitionsToTxnManager`
+/// sends both to the coordinator as an `AddPartitionsToTxn` request of its
+/// latest version, which is above 3, so the coordinator records `TV_2` for the
+/// transition (`transactionVersionForAddPartitionsToTxn`) and no answer needs
+/// the legacy `INVALID_PRODUCER_EPOCH` downgrade.
+pub(crate) const INTERNAL_REGISTRATION_VERSION: i16 = 4;
 
 /// The partitions one transactional producer asks its coordinator to add or
 /// verify: Kafka's `AddPartitionsToTxnTransaction`.
@@ -283,6 +285,11 @@ impl TxnCoordinator {
         check: &TransactionCheck<'_>,
         partition: &TopicPartition,
     ) -> i16 {
+        // Kafka's `handleVerifyPartitionsInTransaction` refuses a null or empty
+        // transactional id first.
+        if check.transactional_id.is_empty() {
+            return codes::INVALID_REQUEST;
+        }
         if let Some(code) = self.coordinator_error(check.transactional_id).await {
             return code;
         }

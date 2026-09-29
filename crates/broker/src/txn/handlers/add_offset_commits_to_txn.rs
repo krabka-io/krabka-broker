@@ -206,13 +206,15 @@ async fn add_offsets_partition(
     // still see the entry as it was.
     let mut staged = entry.clone();
     add_partition(&mut staged, offsets_partition, now_millis());
+    // Kafka's `handleAddOffsetsToTxnRequest` passes `TV_0` whatever the
+    // cluster's level: the request always comes from a client that does not
+    // use `TV_2`.
+    staged.client_transaction_version = TxnVersion::Classic.level();
     match coord.put_under_state_partition_lock(staged, txnv).await {
         Ok(persisted) => {
             // The append published a new handle. A caller that already waits
             // on this one, such as AddPartitionsToTxn's register_partitions,
-            // sees the durable state too, not the pre-append snapshot. Use
-            // what publication actually holds, since it stamped
-            // `client_transaction_version` on its own clone of `staged`.
+            // sees the durable state too, not the pre-append snapshot.
             *entry = persisted;
             codes::NONE
         }

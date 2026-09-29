@@ -2,11 +2,8 @@
 //!
 //! The module holds the `AddPartitionsToTxn` transition that validates the
 //! producer identity, moves the entry to `Ongoing`, and records the partitions
-//! the transaction writes. It also holds the KIP-890 path that routes an
-//! offsets-partition enrollment to the broker that coordinates the
-//! `transactional_id`, over the inter-broker client when that broker is remote.
+//! the transaction writes.
 
-use krabka_ids::PartitionIndex;
 use krabka_log::ProducerId;
 use krabka_verified::transaction::{
     TransactionRegistrationDecision, TransactionRegistrationFacts,
@@ -15,32 +12,31 @@ use krabka_verified::transaction::{
     transaction_partition_registration,
 };
 
-use super::{TxnCoordinator, produce_verification::INTERNAL_REGISTRATION_VERSION};
-use crate::{
-    coordinator::bootstrap::OFFSETS_TOPIC,
-    txn::{state::TxnState, version::TxnVersion},
-};
+use super::TxnCoordinator;
+use crate::txn::{state::TxnState, version::TxnVersion};
 
 /// `AddPartitionsToTxn` request version at and above which the wire protocol
 /// carries `PRODUCER_FENCED` (90, KIP-360). Below it, Kafka's `KafkaApis`
 /// downgrades that answer to the legacy `INVALID_PRODUCER_EPOCH` (47).
-const PRODUCER_FENCED_MIN_VERSION: i16 = INTERNAL_REGISTRATION_VERSION;
+const PRODUCER_FENCED_MIN_VERSION: i16 = 2;
 
 impl TxnCoordinator {
     /// Add partitions to the locally-coordinated transaction after validating
     /// its producer identity. This is shared by client `AddPartitionsToTxn` and
     /// the KIP-890 server-side `TxnOffsetCommit` path.
     ///
-    /// `version` is the `AddPartitionsToTxn` request version, which selects
+    /// `version` is the `AddPartitionsToTxn` request version. It selects
     /// between `PRODUCER_FENCED` and the legacy `INVALID_PRODUCER_EPOCH` on a
-    /// producer-epoch mismatch.
+    /// producer-epoch mismatch, and it decides the transaction version that
+    /// the transition records (Kafka's `transactionVersionForAddPartitionsToTxn`).
+    /// `format_txnv` is the cluster's level, which only picks the log format.
     pub(crate) async fn register_partitions(
         &self,
         tid: &str,
         producer_id: ProducerId,
         producer_epoch: i16,
         partitions: Vec<crate::txn::state::TopicPartition>,
-        txnv: TxnVersion,
+        format_txnv: TxnVersion,
         version: i16,
     ) -> i16 {
         if tid.is_empty() {
@@ -146,13 +142,20 @@ impl TxnCoordinator {
         }
         snapshot.partitions.extend(partitions);
         snapshot.last_update_ms = crate::txn::util::now_millis();
+        // Kafka `prepareAddPartitions` stamps the request's transaction
+        // version, whatever level the cluster has finalized.
+        snapshot.client_transaction_version =
+            TxnVersion::for_add_partitions_to_txn(version).level();
 
         // Still holding both the entry lock and the state-partition write
         // lock acquired above: a second concurrent caller for this tid blocks
         // on the entry lock until this whole read-modify-persist sequence
         // finishes, so it always rereads the just-published state rather than
         // cloning the same stale snapshot this call started from.
-        match self.put_under_state_partition_lock(snapshot, txnv).await {
+        match self
+            .put_under_state_partition_lock(snapshot, format_txnv)
+            .await
+        {
             Ok(persisted) => {
                 *entry = persisted;
                 crate::codes::NONE
@@ -161,43 +164,6 @@ impl TxnCoordinator {
                 tracing::error!(tid, %error, "failed to persist registered transaction partitions");
                 self.append_error_code(tid).await
             }
-        }
-    }
-
-    /// KIP-890: route the offsets partition enrollment to the transaction
-    /// coordinator before a v5+ `TxnOffsetCommit` append.
-    pub(crate) async fn register_offsets_partition(
-        self: &std::sync::Arc<Self>,
-        tid: &str,
-        producer_id: ProducerId,
-        producer_epoch: i16,
-        offsets_partition: PartitionIndex,
-        txnv: TxnVersion,
-    ) -> i16 {
-        let code = self
-            .add_or_verify_partitions(
-                super::produce_verification::TransactionCheck {
-                    transactional_id: tid,
-                    producer_id,
-                    producer_epoch,
-                    partitions: vec![crate::txn::state::TopicPartition {
-                        topic: OFFSETS_TOPIC.to_string(),
-                        partition: offsets_partition,
-                    }],
-                    verify_only: false,
-                },
-                txnv,
-                INTERNAL_REGISTRATION_VERSION,
-            )
-            .await
-            .first()
-            .map_or(crate::codes::UNKNOWN_SERVER_ERROR, |(_, code)| *code);
-        // `TxnOffsetCommit` has answered a coordinator it cannot reach with
-        // COORDINATOR_NOT_AVAILABLE, which its clients retry.
-        if code == crate::codes::NETWORK_EXCEPTION {
-            crate::codes::COORDINATOR_NOT_AVAILABLE
-        } else {
-            code
         }
     }
 }
