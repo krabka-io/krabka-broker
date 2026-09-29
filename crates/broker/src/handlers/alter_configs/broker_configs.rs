@@ -21,8 +21,8 @@ use crate::{
     config_keys::{
         self,
         broker_dynamic::{
-            CLUSTER_DEFAULT_ONLY, broker_resource_node, canonical_dynamic_broker_configs,
-            cordoned_log_dirs_disabled_error, cordoned_log_dirs_error, elr_min_isr_error,
+            CLUSTER_DEFAULT_ONLY, broker_resource_node, cordoned_log_dirs_disabled_error,
+            cordoned_log_dirs_error, elr_min_isr_error, validate_dynamic_broker_configs,
         },
     },
 };
@@ -65,7 +65,9 @@ pub(super) fn broker_config_records(
             config.value.clone().unwrap_or_default(),
         );
     }
-    let replacement = canonical_dynamic_broker_configs(&replacement, per_broker, unstable)?;
+    // The records carry the client's strings, as Kafka's do: validation
+    // parses a value and keeps nothing of the parse.
+    validate_dynamic_broker_configs(&replacement, per_broker, unstable)?;
     if per_broker {
         cordoned_log_dirs_error(&replacement, log_dirs)?;
     }
@@ -280,10 +282,29 @@ mod tests {
                     "Invalid value abc for configuration num.io.threads: Not a number of type INT",
                 )),
             ),
+            // The record carries the string the client sent, as Kafka's does
+            // (`ConfigurationControlManager` stores the value it is given and
+            // `DynamicConfig.Broker.validate` drops the parse): a padded
+            // `INT`, a `DOUBLE` that prints as `1.0`, a `LONG` that
+            // `Double.toString` would print as `1.048576E8`, a spaced list.
             (
                 "",
-                vec![("max.connections", " 100 ")],
-                Ok(vec![record(cluster, "max.connections", Some("100"))]),
+                vec![
+                    ("max.connections", " 100 "),
+                    ("log.cleaner.min.cleanable.ratio", "1"),
+                    ("log.cleaner.io.max.bytes.per.second", "104857600"),
+                    ("log.cleanup.policy", "compact , delete"),
+                ],
+                Ok(vec![
+                    record(
+                        cluster,
+                        "log.cleaner.io.max.bytes.per.second",
+                        Some("104857600"),
+                    ),
+                    record(cluster, "log.cleaner.min.cleanable.ratio", Some("1")),
+                    record(cluster, "log.cleanup.policy", Some("compact , delete")),
+                    record(cluster, "max.connections", Some(" 100 ")),
+                ]),
             ),
         ];
         for (name, configs, want) in cases {

@@ -23,8 +23,8 @@ use crate::{
         self,
         broker_dynamic::{
             BrokerKeyKind, CLUSTER_DEFAULT_ONLY, broker_key_kind, broker_resource_node,
-            canonical_dynamic_broker_configs, cordoned_log_dirs_disabled_error,
-            cordoned_log_dirs_error, elr_min_isr_error,
+            cordoned_log_dirs_disabled_error, cordoned_log_dirs_error, elr_min_isr_error,
+            validate_dynamic_broker_configs,
         },
     },
 };
@@ -153,16 +153,18 @@ fn broker_records(
         .collect();
     apply_operations(resource, &mut props, unstable)?;
     let per_broker = node_id != krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID;
-    let canonical = canonical_dynamic_broker_configs(&props, per_broker, unstable)?;
+    // The records carry the client's strings, as Kafka's do: validation
+    // parses a value and keeps nothing of the parse.
+    validate_dynamic_broker_configs(&props, per_broker, unstable)?;
     if per_broker {
-        cordoned_log_dirs_error(&canonical, log_dirs)?;
+        cordoned_log_dirs_error(&props, log_dirs)?;
     }
 
     // Kafka writes a record for every key the request names, changed or not
     // (KAFKA-14136), and checks the ELR rules on each.
     let mut records = Vec::with_capacity(resource.configs.len());
     for cfg in &resource.configs {
-        let value = canonical.get(&cfg.name).cloned();
+        let value = props.get(&cfg.name).cloned();
         if let Some(error) = elr_min_isr_error(image, node_id, &cfg.name, value.as_deref()) {
             return Err(error);
         }
@@ -462,6 +464,46 @@ mod tests {
             let want = want.map_err(|(code, message)| (code, message.to_owned()));
             check!(got == want, "{name:?} {configs:?}");
         }
+    }
+
+    /// Kafka stores the string the client sent
+    /// (`ConfigurationControlManager.incrementalAlterConfigResource` takes the
+    /// operation's value as it is, and `DynamicConfig.Broker.validate` drops
+    /// the parse), so a describe returns what the alter wrote and a tool that
+    /// diffs the two does not loop: a `DOUBLE` that `Double.toString` prints as
+    /// `1.0`, a `LONG` it prints as `1.048576E8`, a padded `INT`, and a list
+    /// with spaces are all kept as they came.
+    #[test]
+    fn a_broker_resource_stores_the_string_the_client_sent() {
+        let cluster = krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID;
+        let sent = [
+            ("log.cleaner.min.cleanable.ratio", "1"),
+            ("log.cleaner.io.max.bytes.per.second", "104857600"),
+            ("num.io.threads", " 16 "),
+            ("log.cleanup.policy", "compact , delete"),
+        ];
+        let resource = make_resource(
+            "",
+            sent.iter()
+                .map(|(key, value)| make_set_cfg(key, value))
+                .collect(),
+        );
+
+        let records = broker_records(
+            &resource,
+            &image_with(&[], false),
+            SERVING,
+            &[],
+            UnstableApiVersions::Disabled,
+        );
+
+        check!(
+            records
+                == Ok(sent
+                    .iter()
+                    .map(|(key, value)| record(cluster, key, Some(value)))
+                    .collect())
+        );
     }
 
     #[test]

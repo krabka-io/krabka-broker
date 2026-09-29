@@ -301,54 +301,59 @@ fn invalid_props(message: &str, names: &[&str]) -> (i16, String) {
     )
 }
 
-/// Validate one value of a dynamic broker key krabka knows, and return it in
-/// its canonical form. A key krabka does not know, or does not serve under
-/// `unstable`, passes unchanged, as Kafka's `DynamicConfig.Broker.validate`
-/// passes a key it does not define.
-fn canonical_broker_value(
+/// Validate one value of a dynamic broker key krabka knows. A key krabka does
+/// not know, or does not serve under `unstable`, passes, as Kafka's
+/// `DynamicConfig.Broker.validate` passes a key it does not define.
+///
+/// The parsed value is dropped: Kafka stores the string the client sent
+/// (`ConfigurationControlManager.incrementalAlterConfigResource` takes the
+/// operation's value as it is, and `DynamicConfig.Broker.validate` discards
+/// the parse), so a describe returns what an alter wrote.
+fn check_broker_value(
     name: &str,
     value: &str,
     unstable: UnstableApiVersions,
-) -> Result<String, String> {
+) -> Result<(), String> {
     if THROTTLE_RATES.contains(&name) {
-        return check_range(name, parse_long(name, value)?, Some(0), None).map(|v| v.to_string());
+        return check_range(name, parse_long(name, value)?, Some(0), None).map(drop);
     }
     if name == crate::cordoned_log_dirs::CORDONED_LOG_DIRS {
-        return crate::cordoned_log_dirs::validate_value_type(value).map(|()| value.to_owned());
+        return crate::cordoned_log_dirs::validate_value_type(value);
     }
     if name == UNCLEAN_RECOVERY_STRATEGY {
         return registry::lookup(ConfigScope::Broker, name)
-            .map_or_else(|| Ok(value.to_owned()), |row| canonical_value(row, value));
+            .map_or(Ok(()), |row| canonical_value(row, value).map(drop));
     }
     let topic_key = served_topic_default(name, unstable);
     if let Some(row) = topic_key.and_then(|key| registry::lookup(ConfigScope::Topic, key)) {
         // The topic key's validator, under the broker key's name.
-        return canonical_value(row, value).map_err(|message| message.replacen(row.name, name, 2));
+        return canonical_value(row, value)
+            .map(drop)
+            .map_err(|message| message.replacen(row.name, name, 2));
     }
     // A `KafkaConfig` key is parsed by `DynamicConfig.Broker.validate`, and a
     // listener override is checked as the key it overrides, under that key's
     // name. A key that is not dynamic never gets here.
     let checked = listener_override_base(name).unwrap_or(name);
-    match kafka_broker::lookup(checked).filter(|row| row.dynamic != Dynamic::ReadOnly) {
-        Some(row) => row.canonical(value),
-        None => Ok(value.to_owned()),
-    }
+    kafka_broker::lookup(checked)
+        .filter(|row| row.dynamic != Dynamic::ReadOnly)
+        .map_or(Ok(()), |row| row.canonical(value).map(drop))
 }
 
 /// Kafka's `DynamicBrokerConfig.validateConfigs`, over the whole set of
-/// dynamic configs the resource ends up with, returning that set with each
-/// value in its canonical form. `per_broker` is `true` for a named broker, and
-/// `unstable` decides which topic keys' broker synonyms the broker defines.
+/// dynamic configs the resource ends up with. `per_broker` is `true` for a
+/// named broker, and `unstable` decides which topic keys' broker synonyms the
+/// broker defines. The caller stores `props` as it is.
 ///
 /// # Errors
 /// Returns `INVALID_REQUEST` with Kafka's message, in Kafka's order: a
 /// non-dynamic key, then an unprefixed SSL key, then a bad value, then a
 /// per-broker key on the cluster-default resource.
-pub(crate) fn canonical_dynamic_broker_configs(
+pub(crate) fn validate_dynamic_broker_configs(
     props: &BTreeMap<String, String>,
     per_broker: bool,
     unstable: UnstableApiVersions,
-) -> Result<BTreeMap<String, String>, (i16, String)> {
+) -> Result<(), (i16, String)> {
     let names = |test: &dyn Fn(&str) -> bool| -> Vec<&str> {
         props
             .keys()
@@ -373,14 +378,10 @@ pub(crate) fn canonical_dynamic_broker_configs(
             &unprefixed,
         ));
     }
-    let canonical = props
-        .iter()
-        .map(|(name, value)| {
-            canonical_broker_value(name, value, unstable)
-                .map(|value| (name.clone(), value))
-                .map_err(|message| (codes::INVALID_REQUEST, message))
-        })
-        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    props.iter().try_for_each(|(name, value)| {
+        check_broker_value(name, value, unstable)
+            .map_err(|message| (codes::INVALID_REQUEST, message))
+    })?;
     if !per_broker {
         let per_broker_keys = names(&is_per_broker);
         if !per_broker_keys.is_empty() {
@@ -391,7 +392,7 @@ pub(crate) fn canonical_dynamic_broker_configs(
             ));
         }
     }
-    Ok(canonical)
+    Ok(())
 }
 
 /// Kafka's `ConfigurationControlManager` ELR rules for one broker config
@@ -436,10 +437,10 @@ pub(crate) fn elr_min_isr_error(
 /// # Errors
 /// Returns `INVALID_REQUEST` with Kafka's message.
 pub(crate) fn cordoned_log_dirs_error(
-    canonical: &BTreeMap<String, String>,
+    props: &BTreeMap<String, String>,
     log_dirs: &[std::path::PathBuf],
 ) -> Result<(), (i16, String)> {
-    match canonical.get(crate::cordoned_log_dirs::CORDONED_LOG_DIRS) {
+    match props.get(crate::cordoned_log_dirs::CORDONED_LOG_DIRS) {
         Some(value) if !log_dirs.is_empty() => crate::cordoned_log_dirs::resolve(value, log_dirs)
             .map(drop)
             .map_err(|message| (codes::INVALID_REQUEST, message)),
@@ -521,11 +522,7 @@ mod tests {
     #[test]
     fn dynamic_broker_configs_follow_kafkas_validate_configs() {
         let cases = [
-            (
-                map(&[("plugin.custom.key", "x")]),
-                false,
-                Ok(map(&[("plugin.custom.key", "x")])),
-            ),
+            (map(&[("plugin.custom.key", "x")]), false, Ok(())),
             (
                 map(&[("log.dirs", "/tmp")]),
                 false,
@@ -550,18 +547,10 @@ mod tests {
             (
                 map(&[("listener.name.client.ssl.keystore.location", "/k")]),
                 true,
-                Ok(map(&[("listener.name.client.ssl.keystore.location", "/k")])),
+                Ok(()),
             ),
-            (
-                map(&[("log.retention.ms", " 86400000 ")]),
-                false,
-                Ok(map(&[("log.retention.ms", "86400000")])),
-            ),
-            (
-                map(&[("num.io.threads", "16")]),
-                false,
-                Ok(map(&[("num.io.threads", "16")])),
-            ),
+            (map(&[("log.retention.ms", " 86400000 ")]), false, Ok(())),
+            (map(&[("num.io.threads", "16")]), false, Ok(())),
             (
                 map(&[(crate::throttle::LEADER_THROTTLED_RATE_KEY, "-1")]),
                 true,
@@ -622,7 +611,7 @@ mod tests {
             (
                 map(&[("follower.fetch.last.tiered.offset.enable", " TRUE ")]),
                 false,
-                Ok(map(&[("follower.fetch.last.tiered.offset.enable", "true")])),
+                Ok(()),
             ),
             // A listener override is checked as the key it overrides, under
             // that key's name.
@@ -644,16 +633,12 @@ mod tests {
                      specified: [sasl.enabled.mechanisms]",
                 ),
             ),
-            (
-                map(&[("sasl.enabled.mechanisms", "PLAIN")]),
-                true,
-                Ok(map(&[("sasl.enabled.mechanisms", "PLAIN")])),
-            ),
+            (map(&[("sasl.enabled.mechanisms", "PLAIN")]), true, Ok(())),
         ];
         for (props, per_broker, want) in cases {
             let want = want.map_err(|message| (codes::INVALID_REQUEST, message.to_owned()));
             check!(
-                canonical_dynamic_broker_configs(&props, per_broker, UnstableApiVersions::Enabled)
+                validate_dynamic_broker_configs(&props, per_broker, UnstableApiVersions::Enabled)
                     == want,
                 "{props:?} per_broker={per_broker}"
             );
@@ -668,11 +653,10 @@ mod tests {
     fn trunk_topic_keys_broker_synonyms_need_unstable_api_versions() {
         let props = map(&[("log.remote.copy.lag.ms", "-2")]);
         check!(
-            canonical_dynamic_broker_configs(&props, false, UnstableApiVersions::Disabled)
-                == Ok(props.clone())
+            validate_dynamic_broker_configs(&props, false, UnstableApiVersions::Disabled) == Ok(())
         );
         check!(
-            canonical_dynamic_broker_configs(&props, false, UnstableApiVersions::Enabled)
+            validate_dynamic_broker_configs(&props, false, UnstableApiVersions::Enabled)
                 == Err((
                     codes::INVALID_REQUEST,
                     "Invalid value -2 for configuration log.remote.copy.lag.ms: Value must be at \
