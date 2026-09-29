@@ -411,6 +411,7 @@ fn disclose_created_topic(
             // discards the records alone.
             result.configs = Some(effective_topic_configs(
                 &created.controller.current_image(),
+                broker.config.node_id,
                 &result.name,
                 created.overrides,
                 broker.config.features.unstable_api_versions,

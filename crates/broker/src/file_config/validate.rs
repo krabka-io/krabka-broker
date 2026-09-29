@@ -348,6 +348,7 @@ mod tests {
                     topic_creation: crate::config::TopicCreationOrigins::default(),
                     log: crate::config::LogOrigins::default(),
                     topic_admin: crate::config::TopicAdminOrigins::default(),
+                    authentication: crate::config::AuthenticationOrigins::default(),
                 },
             ),
             (
@@ -359,6 +360,7 @@ mod tests {
                     topic_creation: crate::config::TopicCreationOrigins::default(),
                     log: crate::config::LogOrigins::default(),
                     topic_admin: crate::config::TopicAdminOrigins::default(),
+                    authentication: crate::config::AuthenticationOrigins::default(),
                 },
             ),
             (
@@ -371,6 +373,7 @@ mod tests {
                     topic_creation: crate::config::TopicCreationOrigins::default(),
                     log: crate::config::LogOrigins::default(),
                     topic_admin: crate::config::TopicAdminOrigins::default(),
+                    authentication: crate::config::AuthenticationOrigins::default(),
                 },
             ),
             (
@@ -385,6 +388,7 @@ mod tests {
                     },
                     log: crate::config::LogOrigins::default(),
                     topic_admin: crate::config::TopicAdminOrigins::default(),
+                    authentication: crate::config::AuthenticationOrigins::default(),
                 },
             ),
             (
@@ -401,6 +405,23 @@ mod tests {
                         min_insync_replicas: true,
                     },
                     topic_admin: crate::config::TopicAdminOrigins::default(),
+                    authentication: crate::config::AuthenticationOrigins::default(),
+                },
+            ),
+            (
+                "the authentication limits supplied, at Kafka's own default value",
+                "[runtime]\nsasl_server_max_receive = \"524288B\"\n\
+                 connection_failed_authentication_delay = \"100ms\"\n",
+                crate::config::StaticConfigOrigins {
+                    txn_id_expiration: false,
+                    txn_id_expiration_cleanup_interval: false,
+                    topic_creation: crate::config::TopicCreationOrigins::default(),
+                    log: crate::config::LogOrigins::default(),
+                    topic_admin: crate::config::TopicAdminOrigins::default(),
+                    authentication: crate::config::AuthenticationOrigins {
+                        sasl_server_max_receive: true,
+                        connection_failed_authentication_delay: true,
+                    },
                 },
             ),
         ] {

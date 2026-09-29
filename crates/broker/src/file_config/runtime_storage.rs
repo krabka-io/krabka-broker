@@ -183,6 +183,12 @@ impl RuntimeFileConfig {
             cfg.socket_request_max,
             whole_bytes_u32
         );
+        // Neither authentication limit is dynamic, so a named broker reports
+        // one at `STATIC_BROKER_CONFIG` when the operator named it.
+        let authentication = &mut cfg.static_config_origins.authentication;
+        authentication.sasl_server_max_receive |= runtime.sasl_server_max_receive.is_some();
+        authentication.connection_failed_authentication_delay |=
+            runtime.connection_failed_authentication_delay.is_some();
         set_runtime_size_bytes!(
             runtime,
             sasl_server_max_receive,

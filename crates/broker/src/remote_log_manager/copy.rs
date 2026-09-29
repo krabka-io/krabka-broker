@@ -3,8 +3,8 @@
 
 use krabka_log::SegmentExport;
 use krabka_remote_storage::{RemoteLogSegmentState, TopicIdPartition};
-use krabka_units::convert::ByteSizeExt as _;
-use tracing::warn;
+use krabka_units::convert::{ByteSizeExt, TimeExt};
+use tracing::{debug, warn};
 
 use super::{
     RemoteTier,
@@ -12,6 +12,98 @@ use super::{
     copy_segment::{CopyOutcome, copy_one},
     local_retention::remote_covered_through,
 };
+
+/// KIP-1241's delayed copy: how long a sealed segment may wait before this
+/// pass copies it.
+///
+/// This is Kafka trunk's `RLMCopyTask.isEligibleForUpload`, which
+/// `candidateLogSegments` asks of each sealed segment in order and stops at the
+/// first that says no. A segment is eligible when the topic's effective
+/// `remote.copy.lag.ms` or `remote.copy.lag.bytes` is `0`, or when it is at
+/// least that old by its newest record's timestamp, or when at least that many
+/// bytes of newer local data sit after it. A limit of `-1` is derived from the
+/// effective local retention (`LogConfig.remoteCopyLagMs()`), and one that
+/// stays negative, because that retention is unlimited, does not apply.
+///
+/// The defaults are `0` and `-1`, and `0` wins, so a topic that sets neither
+/// copies a segment as soon as it is sealed. Only a broker serving trunk's keys
+/// resolves anything else; see [`CopyDelay::resolve`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CopyDelay {
+    /// The effective `remote.copy.lag.ms`: `0` copies at once, a positive value
+    /// waits, and a negative one is no time check.
+    lag_ms: i64,
+    /// The effective `remote.copy.lag.bytes`, read the same way.
+    lag_bytes: i64,
+    /// The clock the age of a segment is measured against.
+    now_ms: i64,
+    /// The size of the active segment, which is newer than every sealed one and
+    /// so counts toward the bytes sitting after each of them.
+    active_bytes: u64,
+}
+
+impl CopyDelay {
+    /// No delay: every sealed segment is eligible.
+    pub(crate) const IMMEDIATE: Self = Self {
+        lag_ms: 0,
+        lag_bytes: 0,
+        now_ms: 0,
+        active_bytes: 0,
+    };
+
+    /// The delay `lag` and `log_config` give a partition at `now_ms`, whose
+    /// active segment is `active_bytes` long. Kafka's `LogConfig.remoteCopyLagMs()`
+    /// and `remoteCopyLagBytes()` turn a `-1` into the effective
+    /// `local.retention.ms` / `local.retention.bytes`, which is `retention.*`
+    /// unless the topic sets its own, and `-1` again when that is unlimited.
+    pub(crate) fn resolve(
+        lag: crate::config_keys::RemoteCopyLag,
+        log_config: &krabka_log::LogConfig,
+        now_ms: i64,
+        active_bytes: u64,
+    ) -> Self {
+        let derive = |configured: i64, effective_local: Option<i64>| {
+            if configured == -1 {
+                effective_local.unwrap_or(-1)
+            } else {
+                configured
+            }
+        };
+        let local_ms = log_config
+            .local_retention
+            .or(log_config.retention)
+            .map(TimeExt::millis_i64);
+        let local_bytes = log_config
+            .local_retention_size
+            .or(log_config.retention_size)
+            .map(ByteSizeExt::bytes_i64);
+        Self {
+            lag_ms: derive(lag.ms, local_ms),
+            lag_bytes: derive(lag.bytes, local_bytes),
+            now_ms,
+            active_bytes,
+        }
+    }
+
+    /// Whether a sealed segment whose newest record is stamped
+    /// `max_timestamp_ms`, with `sealed_after` bytes of sealed segments after
+    /// it, may be copied.
+    fn allows(self, max_timestamp_ms: i64, sealed_after: u64) -> bool {
+        if self.lag_ms == 0 || self.lag_bytes == 0 {
+            return true;
+        }
+        // A segment stamped in the future has a negative age, which Kafka
+        // reads as eligible.
+        if self.lag_ms > 0 {
+            let age_ms = self.now_ms.saturating_sub(max_timestamp_ms);
+            if age_ms < 0 || age_ms >= self.lag_ms {
+                return true;
+            }
+        }
+        u64::try_from(self.lag_bytes)
+            .is_ok_and(|lag| lag > 0 && self.active_bytes.saturating_add(sealed_after) >= lag)
+    }
+}
 
 /// The offset this copy pass resumes at: one past the offset through which the
 /// remote tier holds an unbroken copy, or the partition's oldest local offset
@@ -112,6 +204,7 @@ pub(crate) async fn copy_eligible(
 /// The copy lag still counts the segments the last stable offset holds back:
 /// they are sealed local segments the tier does not hold, as Kafka's
 /// `recordLagStats` counts them.
+#[cfg(test)]
 pub(crate) async fn copy_eligible_below(
     tier: &RemoteTier<'_>,
     tp: &TopicIdPartition,
@@ -119,6 +212,31 @@ pub(crate) async fn copy_eligible_below(
     leader_epoch: krabka_ids::LeaderEpoch,
     exports: Vec<SegmentExport>,
     last_stable_offset: krabka_log::Offset,
+) -> usize {
+    copy_eligible_delayed(
+        tier,
+        tp,
+        (broker_id, leader_epoch),
+        exports,
+        (last_stable_offset, CopyDelay::IMMEDIATE),
+    )
+    .await
+}
+
+/// The copy pass for a partition whose last stable offset is
+/// `last_stable_offset` and whose topic's copy lag is `delay`: a segment is
+/// copied only when it ends below the last stable offset, which is Kafka's
+/// `RLMCopyTask.candidateLogSegments` rule (`nextSegmentBaseOffset <=
+/// lastStableOffset`), and only when [`CopyDelay`] says it is eligible. The
+/// pass copies the sealed segments in order and stops at the first that is
+/// held back, as `candidateLogSegments` does. A held segment is still local and
+/// uncopied, so the copy lag counts it.
+pub(crate) async fn copy_eligible_delayed(
+    tier: &RemoteTier<'_>,
+    tp: &TopicIdPartition,
+    (broker_id, leader_epoch): (i32, krabka_ids::LeaderEpoch),
+    exports: Vec<SegmentExport>,
+    (last_stable_offset, delay): (krabka_log::Offset, CopyDelay),
 ) -> usize {
     let listed = match tier.rlmm.list_remote_log_segments(tp) {
         Ok(list) => list,
@@ -208,7 +326,11 @@ pub(crate) async fn copy_eligible_below(
 
     let mut chain = ChainPosition::seed(tier.archive, &listed);
     let mut copied = 0;
+    // The bytes of sealed segments after the one in hand, which with the active
+    // segment are the local data newer than it.
+    let mut sealed_after: u64 = exports.iter().map(|ex| ex.size.bytes_u64()).sum();
     for ex in exports {
+        sealed_after = sealed_after.saturating_sub(ex.size.bytes_u64());
         // Everything this segment holds is already in the tier.
         if !wanted(&ex) {
             continue;
@@ -216,6 +338,13 @@ pub(crate) async fn copy_eligible_below(
         // The segment ends at or above the last stable offset, so part of it
         // is not committed yet. The segments after it end above it as well.
         if ex.last_offset >= last_stable_offset {
+            break;
+        }
+        // Kafka trunk's `remote.copy.lag.*`: this segment is too young or has
+        // too little after it, and so is every segment after it.
+        if !delay.allows(ex.max_timestamp, sealed_after) {
+            debug!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                   "remote-log-manager: segment is within its remote copy lag; not copying yet");
             break;
         }
         if chain == ChainPosition::Exhausted {
@@ -365,6 +494,137 @@ mod tests {
             check!(
                 metrics.remote_copy_lag_segments.get_or_create(&topic).get() == 3,
                 "last stable offset {last_stable_offset}: the lag counts every uncopied segment"
+            );
+        }
+    }
+
+    /// Kafka trunk's `remote.copy.lag.ms` and `remote.copy.lag.bytes`
+    /// (KIP-1241) hold a sealed segment back until it is old enough by its
+    /// newest record, or enough newer local data sits after it, and a held
+    /// segment holds every one after it too. Three sealed segments stamped 100,
+    /// 200 and 300 with 64 bytes each and a 64-byte active segment, at a clock of
+    /// 1000: the segments are 900, 800 and 700 ms old with 192, 128 and 64 bytes
+    /// after them.
+    #[tokio::test]
+    async fn a_sealed_segment_waits_out_its_copy_lag() {
+        use crate::config_keys::RemoteCopyLag;
+
+        let unlimited = krabka_log::LogConfig {
+            retention: None,
+            retention_size: None,
+            ..Default::default()
+        };
+        // `(lag.ms, lag.bytes, segments copied)`.
+        for (label, ms, bytes, want) in [
+            ("no lag copies every sealed segment", 0, -1, 3),
+            (
+                "a zero size lag copies at once whatever the time lag",
+                10_000,
+                0,
+                3,
+            ),
+            (
+                "both derived from unlimited retention never apply",
+                -1,
+                -1,
+                0,
+            ),
+            ("a time lag nothing has reached", 10_000, -1, 0),
+            ("a time lag only the oldest has reached", 900, -1, 1),
+            ("a time lag all have reached", 700, -1, 3),
+            ("a size lag two segments have reached", 10_000, 100, 2),
+            ("a size lag the newest sealed segment lacks", 10_000, 192, 1),
+            ("a size lag nothing has reached", 10_000, 193, 0),
+            ("either check is enough", 700, 10_000, 3),
+        ] {
+            let rsm: Arc<dyn RemoteStorageManager> = Arc::new(AcceptingRsm { receipt: None });
+            let rlmm: Arc<dyn RemoteLogMetadataManager> =
+                Arc::new(InmemoryRemoteLogMetadataManager::new());
+            let metrics = BrokerMetrics::new();
+            let index_cache = Arc::new(krabka_remote_storage::RemoteIndexCache::disabled());
+            let tier = RemoteTier {
+                archive: ArchiveMode::Mutable,
+                rsm: &rsm,
+                rlmm: &rlmm,
+                metrics: &metrics,
+                index_cache: &index_cache,
+                copy_timeout: crate::remote_log_manager::test_support::TEST_COPY_TIMEOUT,
+                unstable_api_versions: crate::api_catalog::UnstableApiVersions::Enabled,
+            };
+            let exports = vec![
+                synth_export(0, 9, 100, 64),
+                synth_export(10, 19, 200, 64),
+                synth_export(20, 29, 300, 64),
+            ];
+            let delay = CopyDelay::resolve(RemoteCopyLag { ms, bytes }, &unlimited, 1000, 64);
+
+            let copied = copy_eligible_delayed(
+                &tier,
+                &tp(),
+                (1, LeaderEpoch(0)),
+                exports,
+                (krabka_log::Offset(i64::MAX), delay),
+            )
+            .await;
+
+            check!(copied == want, "{label}");
+            let topic = crate::metrics::TopicLabel {
+                topic: std::sync::Arc::from(tp().topic.as_str()),
+            };
+            check!(
+                metrics.remote_copy_lag_segments.get_or_create(&topic).get() == 3,
+                "{label}: a held segment is still lag"
+            );
+        }
+    }
+
+    /// A `-1` lag is the effective local retention (`LogConfig.remoteCopyLagMs()`
+    /// and `remoteCopyLagBytes()`): `retention.*` until the topic sets a
+    /// `local.retention.*` of its own, and no check at all when that is
+    /// unlimited.
+    #[test]
+    fn a_derived_copy_lag_is_the_effective_local_retention() {
+        use krabka_units::{bytes, millis};
+
+        use crate::config_keys::RemoteCopyLag;
+
+        let derived = RemoteCopyLag { ms: -1, bytes: -1 };
+        let config = |retention, local: Option<u32>| krabka_log::LogConfig {
+            retention,
+            retention_size: retention.map(|_| bytes(4096)),
+            local_retention: local.map(millis),
+            local_retention_size: local.map(|_| bytes(1024)),
+            ..Default::default()
+        };
+        // A segment stamped 0 at a clock of 5000, with 100 bytes after it.
+        let eligible = |delay: CopyDelay| delay.allows(0, 100 - 64);
+        for (label, config, want) in [
+            (
+                "inherits a 4 s retention, and 5 s is over it",
+                config(Some(millis(4000)), None),
+                true,
+            ),
+            (
+                "inherits a 6 s retention, and 5 s is under it",
+                config(Some(millis(6000)), None),
+                false,
+            ),
+            (
+                "a 1 s local retention wins over a 6 s retention",
+                config(Some(millis(6000)), Some(1000)),
+                true,
+            ),
+            (
+                "unlimited retention applies no time check",
+                config(None, None),
+                false,
+            ),
+        ] {
+            // Only the time lag is in play: the size lag derives a 4096 or 1024
+            // byte lag that 100 bytes never reach, or none at all.
+            check!(
+                eligible(CopyDelay::resolve(derived, &config, 5000, 64)) == want,
+                "{label}"
             );
         }
     }

@@ -131,6 +131,7 @@ async fn without_principal_creates_a_topic_and_then_reports_that_it_exists() {
     let image = broker.controller.current_image();
     let configs = crate::handlers::describe_configs::effective_topic_configs(
         &image,
+        broker.config.node_id,
         "fresh",
         &std::collections::BTreeMap::new(),
         crate::api_catalog::UnstableApiVersions::Disabled,

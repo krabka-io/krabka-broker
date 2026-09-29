@@ -516,7 +516,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Topic,
             ConfigType::Long,
             Some("0"),
-            "How old a sealed segment may get before it is copied to the remote tier; -1 derives the lag from the effective local retention. On a tiered topic it must not exceed the effective local.retention.ms. Kafka trunk key, served only with unstable.api.versions.enable=true. Stored and reported only: krabka copies a segment once it is sealed.",
+            "How old a sealed segment may get before it is copied to the remote tier; -1 derives the lag from the effective local.retention.ms. On a tiered topic it must not exceed the effective local.retention.ms. Kafka trunk key, served only with unstable.api.versions.enable=true. A sealed segment waits until it is this old by its newest record or until `remote.copy.lag.bytes` of newer local data sits after it, whichever comes first; 0 copies it at once.",
             ValueCheck::I64AtLeast(-1),
         )
     },
@@ -527,7 +527,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Topic,
             ConfigType::Long,
             Some("-1"),
-            "How many newer local bytes a sealed segment may sit behind before it is copied to the remote tier; -1 derives the lag from the effective local retention. On a tiered topic it must not exceed the effective local.retention.bytes. Kafka trunk key, served only with unstable.api.versions.enable=true. Stored and reported only: krabka copies a segment once it is sealed.",
+            "How many newer local bytes a sealed segment may sit behind before it is copied to the remote tier; -1 derives the lag from the effective local.retention.bytes. On a tiered topic it must not exceed the effective local.retention.bytes. Kafka trunk key, served only with unstable.api.versions.enable=true. A sealed segment waits until this many bytes of newer local data sit after it or until `remote.copy.lag.ms` has passed since its newest record, whichever comes first; 0 copies it at once.",
             ValueCheck::I64AtLeast(-1),
         )
     },
@@ -538,7 +538,7 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
             ConfigScope::Topic,
             ConfigType::Int,
             Some("2147483639"),
-            "Largest decompressed size one record may have. Kafka trunk key, served only with unstable.api.versions.enable=true. Stored and reported only: krabka does not yet check it on produce or compaction.",
+            "Largest decompressed size one record may have. Kafka trunk key, served only with unstable.api.versions.enable=true. A compressed batch on produce with a record whose decompressed body is larger is refused with INVALID_RECORD; an uncompressed record is bounded by max.message.bytes alone. Not yet checked on compaction or on by-timestamp offset lookups, where the broker-wide decompression bound applies.",
             ValueCheck::I32Between(1, SOFT_MAX_ARRAY_LENGTH),
         )
     },

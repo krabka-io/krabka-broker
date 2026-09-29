@@ -115,6 +115,7 @@ mod recovery;
 pub(crate) mod registry;
 mod schema;
 mod topic_scope;
+mod trunk_log;
 mod validation;
 
 #[cfg(test)]
@@ -136,7 +137,7 @@ pub(crate) use self::{
     diskless::{DISKLESS, resolve_diskless, validate_diskless_unchanged},
     log_config::apply_to_log_config,
     message_size::resolve_max_message_bytes,
-    min_isr::{clear_elr_records, configured_min_insync_replicas, effective_min_insync_replicas},
+    min_isr::{clear_elr_records, effective_min_insync_replicas, node_min_insync_replicas},
     recovery::{
         RecoveryStrategy, UNCLEAN_LEADER_ELECTION_ENABLE, resolve_recovery_strategy,
         resolve_unclean_leader_election_enabled,
@@ -145,6 +146,7 @@ pub(crate) use self::{
     topic_scope::{
         WRITE_FREEZE, controller_managed_topic_config_message, is_controller_managed_topic_config,
     },
+    trunk_log::{RemoteCopyLag, resolve_max_decompressed_record_bytes, resolve_remote_copy_lag},
     validation::{
         TopicDefaults, canonical_topic_config, canonical_topic_config_map, parse_cleanup_policy,
         parse_compression_type, validate_config_combination, validate_remote_storage_disable,
@@ -243,16 +245,16 @@ pub(crate) const LOCAL_RETENTION_MS: &str = "local.retention.ms";
 /// KIP-405: per-topic local-retention size budget for tiered partitions.
 pub(crate) const LOCAL_RETENTION_BYTES: &str = "local.retention.bytes";
 /// Kafka trunk's `remote.copy.lag.ms`: how old a sealed segment may get before
-/// it is copied to the remote tier. Stored and reported only, and served
-/// only under `unstable.api.versions.enable`.
+/// it is copied to the remote tier. The copy pass holds a segment back for it,
+/// and it is served only under `unstable.api.versions.enable`.
 pub(crate) const REMOTE_COPY_LAG_MS: &str = "remote.copy.lag.ms";
 /// Kafka trunk's `remote.copy.lag.bytes`: how many newer local bytes a sealed
-/// segment may sit behind before it is copied. Stored and reported only, and
-/// served only under `unstable.api.versions.enable`.
+/// segment may sit behind before it is copied. The copy pass holds a segment
+/// back for it, and it is served only under `unstable.api.versions.enable`.
 pub(crate) const REMOTE_COPY_LAG_BYTES: &str = "remote.copy.lag.bytes";
 /// Kafka trunk's `max.decompressed.message.bytes`: the cap on one record's
-/// decompressed size. Stored and reported only, and served only under
-/// `unstable.api.versions.enable`.
+/// decompressed size. Produce enforces it on a compressed batch, and it is
+/// served only under `unstable.api.versions.enable`.
 pub(crate) const MAX_DECOMPRESSED_MESSAGE_BYTES: &str = "max.decompressed.message.bytes";
 /// Kafka trunk's `errors.deadletterqueue.group.enable`: whether share groups
 /// may write undeliverable records to this topic. Stored and reported only,

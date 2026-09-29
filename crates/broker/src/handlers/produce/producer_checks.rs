@@ -672,7 +672,7 @@ mod tests {
                             &image,
                             (&partition.topic, partition.index.0),
                             admitted_topic_id,
-                            1,
+                            (krabka_audit::NodeId(1), 1),
                         )
                     },
                 )

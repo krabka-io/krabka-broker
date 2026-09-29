@@ -126,7 +126,7 @@ pub(super) fn describe_one(
             return failed(codes::UNKNOWN_TOPIC_OR_PARTITION, None);
         }
         let broker = TopicBrokerLayers {
-            node: Some(serving.node),
+            node: serving.node,
             statics: serving.static_broker.settings,
             unstable: serving.unstable_api_versions,
         };
@@ -248,13 +248,17 @@ pub(super) fn describe_one(
 /// *records*, so a dry run reports what the topic would be created as instead
 /// of the bare cluster defaults a lookup of an absent topic would give.
 ///
-/// `unstable` is Kafka's `unstable.api.versions.enable`, which decides
-/// whether Kafka trunk's topic keys are on the row. `statics` are the static
-/// settings of the node answering, which a key's broker synonym reports at
-/// `STATIC_BROKER_CONFIG`; Kafka's `resolveEffectiveTopicConfigs` reads them
-/// from `staticNodeConfig`.
+/// `node` is the node computing the answer and `statics` its static settings.
+/// Kafka's `ConfigurationControlManager.computeEffectiveTopicConfigs` hands
+/// `resolveEffectiveTopicConfigs` the active controller's own per-node
+/// dynamic configs (`currentControllerConfig()`) and its `staticNodeConfig`,
+/// so a key's broker synonym reports at `DYNAMIC_BROKER_CONFIG` when `node`
+/// sets it and at `STATIC_BROKER_CONFIG` when `statics` does. `unstable` is
+/// Kafka's `unstable.api.versions.enable`, which decides whether Kafka
+/// trunk's topic keys are on the row.
 pub(crate) fn effective_topic_configs(
     image: &krabka_metadata::MetadataImage,
+    node: krabka_metadata::NodeId,
     topic: &str,
     overrides: &std::collections::BTreeMap<String, String>,
     unstable: crate::api_catalog::UnstableApiVersions,
@@ -264,7 +268,7 @@ pub(crate) fn effective_topic_configs(
         image,
         (topic, Some(overrides)),
         TopicBrokerLayers {
-            node: None,
+            node,
             statics,
             unstable,
         },
@@ -301,9 +305,10 @@ fn topic_configs(
 /// per-broker dynamic configs and its static settings.
 #[derive(Debug, Clone, Copy)]
 struct TopicBrokerLayers<'a> {
-    /// The node whose per-broker dynamic configs are a layer. `None` is a
-    /// `CreateTopics` answer, which Kafka's controller computes without any.
-    node: Option<krabka_metadata::NodeId>,
+    /// The node whose per-broker dynamic configs are a layer: the one that
+    /// answers a `DescribeConfigs`, or the controller that computes a
+    /// `CreateTopics` row.
+    node: krabka_metadata::NodeId,
     /// The static settings of the answering node, by broker key: a topic key
     /// reports its broker synonym here at `STATIC_BROKER_CONFIG`.
     statics: &'a std::collections::BTreeMap<&'static str, String>,
@@ -331,7 +336,7 @@ fn topic_configs_with_overrides(
 ) -> Vec<DescribeConfigsResourceResult> {
     let unstable = broker.unstable;
     let cluster_defaults = image.default_broker_config();
-    let per_broker = broker.node.and_then(|node| image.broker_config(node));
+    let per_broker = image.broker_config(broker.node);
     let freeze = write_freeze_override(image, topic);
 
     let mut configs: Vec<DescribeConfigsResourceResult> = registry::keys_in(ConfigScope::Topic)

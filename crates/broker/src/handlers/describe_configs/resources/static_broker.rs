@@ -145,8 +145,9 @@ pub(in crate::handlers::describe_configs) struct StaticBrokerConfigs<'a> {
 /// `message.max.bytes`, `log.segment.bytes` and `min.insync.replicas` are
 /// named only when the operator supplied them, which
 /// [`crate::config::StaticConfigOrigins`] records, so an inherited default
-/// stays at `DEFAULT_CONFIG`. `broker.rack` and `cordoned.log.dirs` are named
-/// when the node has a value.
+/// stays at `DEFAULT_CONFIG`, and so do `sasl.server.max.receive.size` and
+/// `connection.failed.authentication.delay.ms`. `broker.rack` and
+/// `cordoned.log.dirs` are named when the node has a value.
 ///
 /// A key absent here is reported at its Kafka default, which is what an
 /// operator who never wrote it gets from Kafka too.
@@ -214,6 +215,22 @@ pub(crate) fn static_settings(
         settings.insert(
             config_keys::MIN_INSYNC_REPLICAS,
             config.default_min_insync_replicas.to_string(),
+        );
+    }
+    let authentication = config.static_config_origins.authentication;
+    if authentication.sasl_server_max_receive {
+        settings.insert(
+            "sasl.server.max.receive.size",
+            config.sasl_server_max_receive.bytes_u64().to_string(),
+        );
+    }
+    if authentication.connection_failed_authentication_delay {
+        settings.insert(
+            "connection.failed.authentication.delay.ms",
+            config
+                .connection_failed_authentication_delay
+                .millis_i64()
+                .to_string(),
         );
     }
     settings

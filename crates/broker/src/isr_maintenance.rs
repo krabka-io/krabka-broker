@@ -81,6 +81,7 @@ pub(crate) async fn run(cfg: Config) {
             };
             let policy = crate::replica_state::LeaderPolicy::from_image(
                 &image,
+                cfg.node_id,
                 record,
                 cfg.replica_lag_time_max.to_std(),
                 cfg.default_min_insync_replicas,
