@@ -27,9 +27,12 @@
 //! `CreateDelegationTokenResponse.prepareResponse` writes them.
 //!
 //! The HMAC-SHA-512 of `(secret_key, token_id)`, 64 bytes as in Kafka's
-//! `DelegationTokenManager.createHmac`, becomes the token's password
-//! equivalent. Clients re-authenticate with the `token_id` as the SCRAM
-//! username and the HMAC bytes as the password.
+//! `DelegationTokenManager.createHmac` and computed by
+//! `krabka_security::compute_token_hmac`, becomes the token's password
+//! equivalent. The metadata record carries no HMAC, as Kafka's
+//! `DelegationTokenRecord` has none: every use recomputes it from the secret
+//! key. Clients re-authenticate with the `token_id` as the SCRAM username and
+//! the HMAC bytes as the password.
 //!
 //! This file holds the request flow itself. Owner resolution and its
 //! authorization live in `owner`, the deadline arithmetic in `lifetime`, and
@@ -37,15 +40,13 @@
 
 use std::net::SocketAddr;
 
-use hmac::{Hmac, KeyInit, Mac};
 use krabka_metadata::{AclOperation, DelegationTokenRecord, MetadataRecord, ResourceType};
 use krabka_protocol::owned::{
     create_delegation_token_request::CreateDelegationTokenRequest,
     create_delegation_token_response::CreateDelegationTokenResponse,
 };
-use krabka_security::{KafkaPrincipal, SecretBytes};
+use krabka_security::{KafkaPrincipal, SecretBytes, compute_token_hmac};
 use krabka_verified::delegation_token::{TokenApi, TokenApiAdmission};
-use sha2::Sha512;
 
 use crate::{
     authorizer::{AuthorizationRequest, AuthorizationResult, Authorizer},
@@ -82,15 +83,6 @@ pub(crate) type DurationMs = i64;
 
 /// Kafka's `KafkaPrincipal.USER_TYPE`, the only renewer type Kafka accepts.
 const USER_PRINCIPAL_TYPE: &str = "User";
-
-/// Kafka's `DelegationTokenManager.createHmac`: the HMAC-SHA-512 of the token
-/// id, keyed with the secret key, is the token's 64-byte password equivalent.
-fn token_hmac(secret_key: &[u8], token_id: &str) -> Vec<u8> {
-    let mut mac =
-        <Hmac<Sha512>>::new_from_slice(secret_key).expect("HMAC accepts a key of any length");
-    mac.update(token_id.as_bytes());
-    mac.finalize().into_bytes().to_vec()
-}
 
 /// Kafka's `KafkaPrincipal.ANONYMOUS`, the requester of a connection that has
 /// not authenticated.
@@ -195,7 +187,7 @@ pub(crate) async fn handle(
         }
     };
     let token_id = uuid::Uuid::new_v4().to_string();
-    let hmac = token_hmac(secret_key.as_bytes(), &token_id);
+    let hmac = compute_token_hmac(secret_key.as_bytes(), &token_id);
 
     let renewers: Vec<KafkaPrincipal> = req
         .renewers
@@ -210,7 +202,6 @@ pub(crate) async fn handle(
         token_id: token_id.clone(),
         owner: owner.clone(),
         requester: requester.clone(),
-        hmac: hmac.clone(),
         issue_timestamp_ms: now,
         expiry_timestamp_ms: deadlines.initial_expiry_ms,
         max_timestamp_ms: deadlines.max_timestamp_ms,

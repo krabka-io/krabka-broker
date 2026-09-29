@@ -15,7 +15,8 @@ use krabka_protocol::owned::{
     sasl_authenticate_response::SaslAuthenticateResponse,
 };
 use krabka_security::{
-    AuthMethod, KafkaPrincipal, Principal, SaslMechanism, scram::hash_scram_password_with_salt,
+    AuthMethod, KafkaPrincipal, Principal, SaslMechanism, SecretBytes, compute_token_hmac,
+    scram::hash_scram_password_with_salt,
 };
 use pbkdf2::{
     hmac::{Hmac, KeyInit, Mac},
@@ -32,8 +33,13 @@ use crate::{
 };
 
 const USER_PASSWORD: &str = "user-password";
-const TOKEN_HMAC: [u8; 32] = [0x42; 32];
+/// The broker's `delegation.token.secret.key` in these tests.
+const TOKEN_SECRET_KEY: &[u8] = b"token-secret-key";
 const TOKEN_OWNER: &str = "owner";
+
+fn token_secret() -> SecretBytes {
+    SecretBytes::new(TOKEN_SECRET_KEY.to_vec())
+}
 
 /// A SCRAM client that writes the messages Kafka's `ScramSaslClient` writes.
 struct KafkaScramClient {
@@ -143,7 +149,6 @@ fn token(token_id: &str, expiry_timestamp_ms: i64) -> MetadataRecord {
             principal_type: "User".into(),
             name: TOKEN_OWNER.into(),
         },
-        hmac: TOKEN_HMAC.to_vec(),
         issue_timestamp_ms: 0,
         expiry_timestamp_ms,
         max_timestamp_ms: expiry_timestamp_ms,
@@ -151,12 +156,20 @@ fn token(token_id: &str, expiry_timestamp_ms: i64) -> MetadataRecord {
     })
 }
 
-fn token_password() -> Vec<u8> {
-    B64.encode(TOKEN_HMAC).into_bytes()
+/// A token's password: the base64 of its HMAC under `secret_key`, which
+/// `CreateDelegationToken` hands to the client as raw HMAC bytes.
+fn token_password_under(secret_key: &[u8], token_id: &str) -> Vec<u8> {
+    B64.encode(compute_token_hmac(secret_key, token_id))
+        .into_bytes()
+}
+
+fn token_password(token_id: &str) -> Vec<u8> {
+    token_password_under(TOKEN_SECRET_KEY, token_id)
 }
 
 fn authenticate(
     source: &FakeMetadataSource,
+    secret_key: Option<&SecretBytes>,
     auth: &mut ConnectionAuth,
     auth_bytes: Vec<u8>,
 ) -> SaslAuthenticateResponse {
@@ -167,6 +180,7 @@ fn authenticate(
         },
         auth,
         source,
+        secret_key,
         None,
     )
 }
@@ -189,6 +203,7 @@ enum Outcome {
 /// Drives both rounds, stopping at the first failure.
 fn exchange(
     source: &FakeMetadataSource,
+    secret_key: Option<&SecretBytes>,
     mechanism: SaslMechanism,
     authorization_id: Option<&str>,
     sasl_name: &str,
@@ -202,12 +217,17 @@ fn exchange(
     };
     let (client, first) =
         KafkaScramClient::first(mechanism, authorization_id, sasl_name, extensions, password);
-    let round1 = authenticate(source, &mut auth, first);
+    let round1 = authenticate(source, secret_key, &mut auth, first);
     if round1.error_code != 0 {
         assert_failed_authenticate_response(&round1, round1.error_message.as_deref());
         return Outcome::FirstRoundFailed(round1.error_message);
     }
-    let round2 = authenticate(source, &mut auth, client.last(&round1.auth_bytes));
+    let round2 = authenticate(
+        source,
+        secret_key,
+        &mut auth,
+        client.last(&round1.auth_bytes),
+    );
     if round2.error_code != 0 {
         assert_failed_authenticate_response(&round2, None);
         return Outcome::ProofRefused;
@@ -268,7 +288,10 @@ fn tokenauth_extension_selects_the_credential_store() {
             ])
             .build();
         let user = USER_PASSWORD.as_bytes();
-        let token_pw = token_password();
+        let secret = token_secret();
+        let token_pw = token_password("tok");
+        let shared_pw = token_password("shared");
+        let expired_pw = token_password("expired");
         let owner = Outcome::Authenticated {
             principal: principal(TOKEN_OWNER, mechanism),
             via_token: true,
@@ -335,7 +358,7 @@ fn tokenauth_extension_selects_the_credential_store() {
                 None,
                 "shared",
                 TOKEN_AUTH,
-                &token_pw,
+                &shared_pw,
                 Outcome::Authenticated {
                     principal: principal(TOKEN_OWNER, mechanism),
                     via_token: true,
@@ -365,7 +388,7 @@ fn tokenauth_extension_selects_the_credential_store() {
                 None,
                 "expired",
                 TOKEN_AUTH,
-                &token_pw,
+                &expired_pw,
                 Outcome::FirstRoundFailed(None),
             ),
             (
@@ -434,6 +457,7 @@ fn tokenauth_extension_selects_the_credential_store() {
             check!(
                 exchange(
                     &source,
+                    Some(&secret),
                     mechanism,
                     authorization_id,
                     sasl_name,
@@ -463,9 +487,9 @@ fn token_round_one_threads_the_token_expiry() {
         None,
         "tok",
         ",tokenauth=true",
-        &token_password(),
+        &token_password("tok"),
     );
-    let round1 = authenticate(&source, &mut auth, first);
+    let round1 = authenticate(&source, Some(&token_secret()), &mut auth, first);
     assert!(round1.error_code == 0);
     let ConnectionAuth::Negotiating {
         pending_token_expiry_ms,
@@ -475,6 +499,59 @@ fn token_round_one_threads_the_token_expiry() {
         panic!("round 1 must keep negotiating, got {auth:?}");
     };
     assert!(pending_token_expiry_ms == Some(expiry));
+}
+
+/// The image keeps no token HMAC, as Kafka's metadata does not: a token's
+/// SCRAM password is recomputed from the broker's secret key, so with no key
+/// configured no token authenticates, and a password computed under another
+/// key fails the proof.
+#[test]
+fn token_password_is_recomputed_from_the_secret_key() {
+    let expiry = crate::time_util::now_ms() + 60_000;
+    let source = FakeMetadataSource::builder()
+        .records(&[token("tok", expiry)])
+        .build();
+    let secret = token_secret();
+    for mechanism in [SaslMechanism::ScramSha256, SaslMechanism::ScramSha512] {
+        // (case, broker secret key, key the client's HMAC came from, expected)
+        let cases = [
+            (
+                "matching key",
+                Some(&secret),
+                TOKEN_SECRET_KEY,
+                Outcome::Authenticated {
+                    principal: principal(TOKEN_OWNER, mechanism),
+                    via_token: true,
+                },
+            ),
+            (
+                "no secret key configured",
+                None,
+                TOKEN_SECRET_KEY,
+                Outcome::FirstRoundFailed(None),
+            ),
+            (
+                "password computed under another key",
+                Some(&secret),
+                b"another-secret-key".as_slice(),
+                Outcome::ProofRefused,
+            ),
+        ];
+        for (case, broker_key, client_key, expected) in cases {
+            check!(
+                exchange(
+                    &source,
+                    broker_key,
+                    mechanism,
+                    None,
+                    "tok",
+                    ",tokenauth=true",
+                    &token_password_under(client_key, "tok"),
+                ) == expected,
+                "{mechanism:?}: {case}"
+            );
+        }
+    }
 }
 
 /// `ClientFirst::parse` follows Kafka's `ClientFirstMessage` pattern.

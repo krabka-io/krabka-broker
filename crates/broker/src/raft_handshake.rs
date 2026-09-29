@@ -72,6 +72,9 @@ pub struct BrokerRaftHandshake {
     pub oauthbearer_validator: krabka_security::OAuthBearerValidator,
     pub protocol: ListenerProtocol,
     pub controller: ControllerHandleArc,
+    /// Kafka's `delegation.token.secret.key`: the key that recomputes a
+    /// delegation token's SCRAM password. Without one no token authenticates.
+    pub delegation_token_secret_key: Option<krabka_security::SecretBytes>,
     /// Audit sink for the controller listener's own credential presentations.
     pub audit_log: AuditLogArc,
     /// Kafka's `sasl.server.max.receive.size`: the largest frame the SASL
@@ -227,6 +230,7 @@ mod tests {
             oauthbearer_validator: krabka_security::OAuthBearerValidator::default(),
             protocol: ListenerProtocol::Plaintext,
             controller: Arc::new(OnceCell::new()),
+            delegation_token_secret_key: None,
             audit_log: Arc::new(OnceCell::new()),
             sasl_max_receive_bytes: 4096,
             failed_authentication_delay: std::time::Duration::ZERO,

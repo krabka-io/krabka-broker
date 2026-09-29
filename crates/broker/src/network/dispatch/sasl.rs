@@ -443,6 +443,7 @@ async fn run_authenticate(
             req,
             auth,
             &*broker.controller,
+            broker.config.delegation_token_secret_key.as_ref(),
             max_reauth,
         ),
         Some(krabka_security::SaslMechanism::OAuthBearer) => {

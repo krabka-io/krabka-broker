@@ -55,7 +55,7 @@ pub(crate) async fn sweep(controller: &dyn DelegationTokenController) {
         .current_image()
         .all_delegation_tokens()
         .filter(|t| t.expiry_timestamp_ms <= now)
-        .map(token_to_record)
+        .map(DelegationToken::to_record)
         .collect();
     if expired.is_empty() {
         return;
@@ -76,19 +76,6 @@ pub(crate) async fn sweep(controller: &dyn DelegationTokenController) {
         for token in &expired {
             debug!(token_id = %token.token_id, "delegation token expired and tombstoned");
         }
-    }
-}
-
-fn token_to_record(token: &DelegationToken) -> DelegationTokenRecord {
-    DelegationTokenRecord {
-        token_id: token.token_id.clone(),
-        owner: token.owner.clone(),
-        requester: token.requester.clone(),
-        hmac: token.hmac.clone(),
-        issue_timestamp_ms: token.issue_timestamp_ms,
-        expiry_timestamp_ms: token.expiry_timestamp_ms,
-        max_timestamp_ms: token.max_timestamp_ms,
-        renewers: token.renewers.clone(),
     }
 }
 
@@ -148,7 +135,6 @@ mod tests {
             token_id: token_id.into(),
             owner: principal("User", "alice"),
             requester: principal("User", "alice"),
-            hmac: vec![0xAB; 32],
             issue_timestamp_ms: 0,
             expiry_timestamp_ms: expiry_ms,
             max_timestamp_ms: i64::MAX,

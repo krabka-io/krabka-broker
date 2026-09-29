@@ -60,6 +60,7 @@ fn prepare_raft_transport(
         oauthbearer_validator: config.oauthbearer_validator.clone(),
         protocol: config.controller_listener_protocol,
         controller: Arc::clone(&controller_cell),
+        delegation_token_secret_key: config.delegation_token_secret_key.clone(),
         audit_log: Arc::clone(&audit_cell),
         sasl_max_receive_bytes: config.sasl_server_max_receive.bytes_usize(),
         failed_authentication_delay: config.failed_authentication_delay(),

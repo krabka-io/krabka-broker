@@ -9,8 +9,15 @@
 use krabka_protocol::owned::describe_delegation_token_response::{
     DescribeDelegationTokenResponse, DescribedDelegationToken, DescribedDelegationTokenRenewer,
 };
+use krabka_security::{SecretBytes, compute_token_hmac};
 
-pub(super) fn describe_token(t: krabka_metadata::DelegationToken) -> DescribedDelegationToken {
+/// The wire form of one visible token. The stored token has no HMAC, as in
+/// Kafka's metadata, so it is recomputed under `secret_key`, as Kafka's
+/// `DelegationTokenManager` does when it builds a `DelegationToken`.
+pub(super) fn describe_token(
+    t: krabka_metadata::DelegationToken,
+    secret_key: &SecretBytes,
+) -> DescribedDelegationToken {
     DescribedDelegationToken {
         principal_type: t.owner.principal_type.clone(),
         principal_name: t.owner.name.clone(),
@@ -22,8 +29,8 @@ pub(super) fn describe_token(t: krabka_metadata::DelegationToken) -> DescribedDe
         issue_timestamp: t.issue_timestamp_ms,
         expiry_timestamp: t.expiry_timestamp_ms,
         max_timestamp: t.max_timestamp_ms,
+        hmac: bytes::Bytes::from(compute_token_hmac(secret_key.as_bytes(), &t.token_id)),
         token_id: t.token_id,
-        hmac: bytes::Bytes::from(t.hmac),
         renewers: t
             .renewers
             .into_iter()

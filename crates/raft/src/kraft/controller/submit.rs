@@ -24,19 +24,6 @@ use crate::{
 };
 
 impl Engine {
-    fn delegation_token_record(token: &DelegationToken) -> DelegationTokenRecord {
-        DelegationTokenRecord {
-            token_id: token.token_id.clone(),
-            owner: token.owner.clone(),
-            requester: token.requester.clone(),
-            hmac: token.hmac.clone(),
-            issue_timestamp_ms: token.issue_timestamp_ms,
-            expiry_timestamp_ms: token.expiry_timestamp_ms,
-            max_timestamp_ms: token.max_timestamp_ms,
-            renewers: token.renewers.clone(),
-        }
-    }
-
     /// Epoch milliseconds. Delegation-token deadlines are wall-clock by
     /// definition, and so is the create-time stamped on every batch the leader
     /// appends: `Engine::now` is monotonic from this process's own start, and
@@ -59,7 +46,6 @@ impl Engine {
         expected.token_id == replacement.token_id
             && expected.owner == replacement.owner
             && expected.requester == replacement.requester
-            && expected.hmac == replacement.hmac
             && expected.issue_timestamp_ms == replacement.issue_timestamp_ms
             && expected.max_timestamp_ms == replacement.max_timestamp_ms
             && expected.renewers == replacement.renewers
@@ -94,7 +80,7 @@ impl Engine {
         };
         let stored = image
             .delegation_token_by_id(&expected.token_id)
-            .map(Self::delegation_token_record);
+            .map(DelegationToken::to_record);
         let generation_matches = replacement
             .is_none_or(|replacement| Self::token_generation_matches(expected, replacement));
         let state = match (&stored, replacement, generation_matches) {
@@ -919,7 +905,6 @@ mod tests {
             token_id: "tok1".into(),
             owner: principal("alice"),
             requester: principal("alice"),
-            hmac: vec![1, 2, 3],
             issue_timestamp_ms: 100,
             max_timestamp_ms: 200,
             expiry_timestamp_ms: 150,
@@ -937,10 +922,6 @@ mod tests {
         t2 = t1.clone();
 
         t2.requester = principal("admin");
-        assert2::check!(!Engine::token_generation_matches(&t1, &t2));
-        t2 = t1.clone();
-
-        t2.hmac = vec![4, 5, 6];
         assert2::check!(!Engine::token_generation_matches(&t1, &t2));
         t2 = t1.clone();
 
@@ -962,7 +943,6 @@ mod tests {
             token_id: "my-token".into(),
             owner: principal("alice"),
             requester: principal("alice"),
-            hmac: vec![],
             issue_timestamp_ms: 0,
             max_timestamp_ms: 0,
             expiry_timestamp_ms: 0,
@@ -1079,7 +1059,6 @@ mod tests {
             token_id: "tok1".into(),
             owner: principal("alice"),
             requester: principal("alice"),
-            hmac: vec![1, 2, 3],
             issue_timestamp_ms: 100,
             max_timestamp_ms: 200,
             expiry_timestamp_ms: 150,
@@ -1109,7 +1088,6 @@ mod tests {
             token_id: "tok2".into(),
             owner: principal("bob"),
             requester: principal("bob"),
-            hmac: vec![],
             issue_timestamp_ms: 0,
             max_timestamp_ms: 0,
             expiry_timestamp_ms: 0,

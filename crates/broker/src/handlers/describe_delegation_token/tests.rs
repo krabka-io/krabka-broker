@@ -140,7 +140,6 @@ async fn seed_token_requested_by(
         token_id: token_id.into(),
         owner,
         requester,
-        hmac: vec![0u8; 32],
         issue_timestamp_ms: 1_000,
         expiry_timestamp_ms: 2_000,
         max_timestamp_ms: 3_000,
@@ -587,7 +586,7 @@ async fn describe_response_reports_the_requester_that_created_the_token() {
                 expiry_timestamp: 2_000,
                 max_timestamp: 3_000,
                 token_id: "t-minted".into(),
-                hmac: bytes::Bytes::from(vec![0u8; 32]),
+                hmac: bytes::Bytes::from(krabka_security::compute_token_hmac(b"k", "t-minted")),
                 renewers: vec![DescribedDelegationTokenRenewer {
                     principal_type: "User".into(),
                     principal_name: "bob".into(),

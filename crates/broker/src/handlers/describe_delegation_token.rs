@@ -73,9 +73,9 @@ pub(crate) fn handle(
     if auth.token_api_admission(TokenApi::Describe) == TokenApiAdmission::Reject {
         return err_response(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
     }
-    if secret_key.is_none() {
+    let Some(secret_key) = secret_key else {
         return err_response(crate::codes::DELEGATION_TOKEN_AUTH_DISABLED);
-    }
+    };
     let ConnectionAuth::Authenticated { principal, .. } = auth else {
         return err_response(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
     };
@@ -107,7 +107,7 @@ pub(crate) fn handle(
             // renewer, not only its owner.
             let owner_filter_matches = candidate_owners
                 .as_ref()
-                .is_none_or(|owners| owners.iter().any(|o| owner_or_renewer(t, o)));
+                .is_none_or(|owners| owners.iter().any(|o| t.owner_or_renewer(o)));
             let caller_is_owner = t.owner == caller;
             let caller_is_requester = t.requester == caller;
             let caller_is_renewer = t.renewers.contains(&caller);
@@ -151,14 +151,11 @@ pub(crate) fn handle(
 
     DescribeDelegationTokenResponse {
         error_code: 0,
-        tokens: tokens.into_iter().map(describe_token).collect(),
+        tokens: tokens
+            .into_iter()
+            .map(|token| describe_token(token, secret_key))
+            .collect(),
         throttle_time_ms: 0,
         ..Default::default()
     }
-}
-
-/// Kafka's `TokenInformation.ownerOrRenewer`: `principal` is the token's
-/// owner, the requester that created it, or a listed renewer.
-fn owner_or_renewer(token: &krabka_metadata::DelegationToken, principal: &KafkaPrincipal) -> bool {
-    token.owner == *principal || token.requester == *principal || token.renewers.contains(principal)
 }

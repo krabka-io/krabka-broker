@@ -22,7 +22,7 @@
 //!     `DELEGATION_TOKEN_EXPIRED` (66), and a live one gets `now + period`,
 //!     saturated at `i64::MAX` and capped at its `max_timestamp_ms`.
 
-use krabka_metadata::{DelegationToken, DelegationTokenRecord};
+use krabka_metadata::DelegationTokenRecord;
 use krabka_protocol::owned::{
     expire_delegation_token_request::ExpireDelegationTokenRequest,
     expire_delegation_token_response::ExpireDelegationTokenResponse,
@@ -65,9 +65,9 @@ pub(crate) async fn handle(
             ..err_response(crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED)
         };
     };
-    if secret_key.is_none() {
+    let Some(secret_key) = secret_key else {
         return err_response(crate::codes::DELEGATION_TOKEN_AUTH_DISABLED);
-    }
+    };
     let caller = principal.to_kafka();
 
     let image = controller.current_image();
@@ -81,7 +81,10 @@ pub(crate) async fn handle(
     {
         return err_response(crate::codes::UNSUPPORTED_VERSION);
     }
-    let Some(token) = image.delegation_token_by_hmac(req.hmac.as_ref()).cloned() else {
+    let Some(token) = image
+        .delegation_token_by_hmac(secret_key.as_bytes(), req.hmac.as_ref())
+        .cloned()
+    else {
         return err_response(crate::codes::DELEGATION_TOKEN_NOT_FOUND);
     };
 
@@ -90,7 +93,7 @@ pub(crate) async fn handle(
     }
 
     let now = now_ms();
-    let expected = token_to_record(&token);
+    let expected = token.to_record();
     let (mutation, new_expiry) = match expire_token_deadline(
         now,
         req.expiry_time_period_ms,
@@ -135,22 +138,6 @@ fn err_response(code: i16) -> ExpireDelegationTokenResponse {
     ExpireDelegationTokenResponse {
         error_code: code,
         ..Default::default()
-    }
-}
-
-/// Projects an image-level [`DelegationToken`] back into a
-/// [`DelegationTokenRecord`], so that struct-update syntax can express a
-/// partial update in which only the `expiry_*` fields change.
-fn token_to_record(t: &DelegationToken) -> DelegationTokenRecord {
-    DelegationTokenRecord {
-        token_id: t.token_id.clone(),
-        owner: t.owner.clone(),
-        requester: t.requester.clone(),
-        hmac: t.hmac.clone(),
-        issue_timestamp_ms: t.issue_timestamp_ms,
-        expiry_timestamp_ms: t.expiry_timestamp_ms,
-        max_timestamp_ms: t.max_timestamp_ms,
-        renewers: t.renewers.clone(),
     }
 }
 
@@ -210,11 +197,16 @@ mod tests {
         }
     }
 
+    /// The HMAC the tests' secret key `k` gives `token_id`, which a client
+    /// presents to name the token.
+    fn hmac_for(token_id: &str) -> Vec<u8> {
+        krabka_security::compute_token_hmac(b"k", token_id)
+    }
+
     /// Seeds a token owned by `alice` with renewer `bob`.
     async fn seed_token(
         controller: &ControllerHandle,
         token_id: &str,
-        hmac: Vec<u8>,
         expiry_ms: i64,
         max_ms: i64,
     ) {
@@ -222,7 +214,6 @@ mod tests {
             token_id: token_id.into(),
             owner: kp("alice"),
             requester: kp("minter"),
-            hmac,
             issue_timestamp_ms: 0,
             expiry_timestamp_ms: expiry_ms,
             max_timestamp_ms: max_ms,
@@ -251,10 +242,10 @@ mod tests {
         let controller = test_controller(dir.path().into()).await;
         let secret = SecretBytes::new(b"k".to_vec());
         let now = now_ms();
-        let live = (vec![0xA1; 32], now + 60_000);
-        let expired = (vec![0xA2; 32], now - 1);
-        for (token_id, (hmac, expiry)) in [("live", &live), ("expired", &expired)] {
-            seed_token(&controller, token_id, hmac.clone(), *expiry, now + DAY_MS).await;
+        let live = (hmac_for("live"), now + 60_000);
+        let expired = (hmac_for("expired"), now - 1);
+        for (token_id, (_, expiry)) in [("live", &live), ("expired", &expired)] {
+            seed_token(&controller, token_id, *expiry, now + DAY_MS).await;
         }
 
         // (case, caller, secret configured, hmac, period, error code, expiry)
@@ -291,6 +282,17 @@ mod tests {
                 authed("alice"),
                 true,
                 &vec![0xFF; 32],
+                -1,
+                crate::codes::DELEGATION_TOKEN_NOT_FOUND,
+                0,
+            ),
+            // The image keeps no HMAC, so a token is found only under the
+            // secret key that computed the HMAC the client holds.
+            (
+                "hmac computed under another secret key",
+                authed("alice"),
+                true,
+                &krabka_security::compute_token_hmac(b"other", "live"),
                 -1,
                 crate::codes::DELEGATION_TOKEN_NOT_FOUND,
                 0,
@@ -454,14 +456,13 @@ mod tests {
         for (index, (case, caller, period, expiry_delta, max_delta, expected_delta, deleted)) in
             cases.into_iter().enumerate()
         {
-            let hmac = vec![u8::try_from(index).unwrap(); 32];
             let token_id = format!("tok-{index}");
+            let hmac = hmac_for(&token_id);
             let seeded_at = now_ms();
             let max_timestamp_ms = seeded_at + max_delta;
             seed_token(
                 &controller,
                 &token_id,
-                hmac.clone(),
                 seeded_at + expiry_delta,
                 max_timestamp_ms,
             )

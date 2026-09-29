@@ -57,7 +57,6 @@ fancy-regex = "0.19"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 futures-util = { version = "0.3", features = ["sink"] }
 hex = "0.4"
-hmac = "0.13"
 # KIP-664's ListTransactions filter accepts the full java.util.regex Pattern
 # grammar (including lookaround and backreferences).
 jsonpath-rust = "1.0"

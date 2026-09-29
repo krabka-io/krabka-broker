@@ -212,6 +212,7 @@ pub(super) async fn run_inbound_sasl(
                             &req,
                             &mut auth,
                             controller.as_ref(),
+                            cfg.delegation_token_secret_key.as_ref(),
                             CONTROLLER_MAX_REAUTH,
                         )
                     }

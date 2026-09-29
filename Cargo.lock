@@ -3219,7 +3219,6 @@ dependencies = [
  "fancy-regex",
  "futures-util",
  "hex",
- "hmac",
  "jsonpath-rust",
  "jsonschema",
  "krabka-audit",

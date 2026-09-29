@@ -443,7 +443,6 @@ mod tests {
                     principal_type: "User".into(),
                     name: "alice".into(),
                 },
-                hmac: vec![0; 32],
                 issue_timestamp_ms: 0,
                 expiry_timestamp_ms: 0,
                 max_timestamp_ms: 0,

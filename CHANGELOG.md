@@ -206,8 +206,11 @@ It matches Kafka 4.3.1 by default and Kafka trunk under the unstable flags.
   `service/host@REALM`, `(match)` is a whole-string match and `/U` works
   (#1220). `ssl.principal.mapping.rules` use `java.util.regex` semantics
   (#1221). DescribeDelegationToken v3 reports the real requester, who can find
-  and see the token (#1222), and the delegation token HMAC is SHA-512 (#1240).
-  `allow.everyone.if.no.acl.found` covers non-transactional InitProducerId
+  and see the token (#1222). The token record holds the requester and no HMAC,
+  as Kafka's `DelegationTokenRecord` does. Every use recomputes the HMAC-SHA-512
+  from `delegation.token.secret.key` with `krabka-security`, so the token
+  password is base64 of that HMAC and no token authenticates without a secret
+  key (#1240). `allow.everyone.if.no.acl.found` covers non-transactional InitProducerId
   (#1223). SASL_SSL listeners no longer map the client certificate, CreateAcls
   and DeleteAcls have Kafka's 10000-ACL bound and message, and hosts are stored
   as text below `metadata.version` 4.4-IV1 (#1240).
