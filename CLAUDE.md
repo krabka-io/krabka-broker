@@ -102,6 +102,11 @@ AXL is Starlark: no regular expressions, no `while`, no recursion. A port from
 `re` or `awk` becomes explicit string scanning, and the unit tests are what say
 it still means the same thing.
 
+The `rustdoc-site` task comes from the krabka-io/tooling AXL module that
+`MODULE.aspect` pins. Do not add a local copy of it. To change it, change
+krabka-io/tooling. Then bump the `axl_archive_dep` revision and integrity in
+`MODULE.aspect`.
+
 ## Code & Documentation Style
 
 Follow the style guides in [`docs/style_guides/`](docs/style_guides/README.md):
