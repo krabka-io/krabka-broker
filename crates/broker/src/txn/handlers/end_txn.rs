@@ -48,9 +48,11 @@ mod validation;
 #[cfg(test)]
 mod test_support;
 
-// Only the #[cfg(test)] stateright models in txn/ reach this variant.
+// Only the #[cfg(test)] stateright models in txn/ reach these variants.
 #[cfg(test)]
-pub(crate) use self::producer_identity::prepare_completion_identities_with_fresh;
+pub(crate) use self::producer_identity::{
+    prepare_completion_identities_with_fresh, prepare_server_abort_identities_with_fresh,
+};
 pub(crate) use self::{
     markers::{MarkerDispatchContext, MarkerFanOut, dispatch_markers},
     producer_identity::{
@@ -235,6 +237,9 @@ pub(crate) async fn handle(
             staged.producer_epoch = new_epoch;
             staged.next_producer_id = ProducerId(-1);
             staged.next_producer_epoch = -1;
+            // Kafka's `prepareComplete`: the abort of a failed epoch fence has
+            // now been written.
+            staged.has_failed_epoch_fence = false;
             staged.partitions.clear();
             (staged, new_pid, new_epoch)
         }

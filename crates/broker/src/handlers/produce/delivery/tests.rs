@@ -307,6 +307,7 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
                     transactional_id: None,
                     version: 9,
                     producer_id_expiration_ms: 86_400_000,
+                    verification_enabled: true,
                 },
                 acks: 1,
             },

@@ -72,8 +72,9 @@ impl TxnCoordinator {
     /// `entry.client_transaction_version` is the version Kafka records with
     /// the transition (`TransactionLogValue.ClientTransactionVersion`), which
     /// only the transition knows. `AddPartitionsToTxn` and `EndTxn` stamp the
-    /// version of their own request, a server-initiated abort stamps the
-    /// cluster's level, and every other transition, `Complete*` included,
+    /// version of their own request, a server-initiated abort stamps `2` on a
+    /// `TV_2` cluster and `0` below it, and every other transition, `Complete*`
+    /// included,
     /// keeps what the previous record stamped, as Kafka's `TransitionData`
     /// defaults to. The wire format, by contrast, follows the cluster's
     /// current `transaction.version`: completing under a stale, lower format

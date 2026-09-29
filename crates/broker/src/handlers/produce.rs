@@ -14,7 +14,6 @@ use std::{sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use krabka_protocol::owned::produce_response::{PartitionProduceResponse, TopicProduceResponse};
-use krabka_units::convert::TimeExt as _;
 use krabka_verified::FreezeMutationKind;
 
 use self::{
@@ -325,11 +324,8 @@ pub(crate) async fn handle(
     // The partitions that passed every gate before the transaction check, in
     // request order, with the rows they reserved.
     let mut admitted: Vec<AdmittedPartition> = Vec::new();
-    let transaction = TransactionRequest {
-        transactional_id: req.transactional_id.as_deref(),
-        version,
-        producer_id_expiration_ms: broker.config.producer_id_expiration.millis_i64(),
-    };
+    let transaction =
+        TransactionRequest::new(broker, &image, (req.transactional_id.as_deref(), version));
     let services = PartitionServices {
         partitions: &partitions,
         txn_coordinator: &txn_coordinator,

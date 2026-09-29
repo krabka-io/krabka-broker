@@ -68,6 +68,9 @@ fn completion_adopts_the_staged_identity_and_clears_the_transaction() {
     ];
     for (label, identity, prev_producer_id) in cases {
         let mut entry = prepared_entry(TxnState::PrepareCommit);
+        // Kafka's `prepareComplete` clears the flag of a failed epoch fence,
+        // which the expected entry below holds unset.
+        entry.has_failed_epoch_fence = true;
         apply_completion(&mut entry, TxnState::CompleteCommit, identity, 77);
         let expected = TxnEntry {
             producer_id: identity.0,

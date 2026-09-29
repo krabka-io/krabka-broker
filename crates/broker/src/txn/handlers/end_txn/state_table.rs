@@ -54,9 +54,7 @@ pub(super) fn end_txn_decision(
     committed: bool,
     (verified, trunk_rules): (bool, bool),
 ) -> EndTxnDecision {
-    // The identity a client holds is the staged KIP-939 recovery identity when
-    // the entry has one, and the live identity otherwise.
-    let (entry_pid, entry_epoch) = client_producer_identity(entry);
+    let (entry_pid, entry_epoch) = compared_identity(entry, request_pid);
     let retry_on_epoch_bump =
         entry_pid == request_pid && request_epoch.checked_add(1) == Some(entry_epoch);
     let retry_on_overflow =
@@ -85,6 +83,36 @@ pub(super) fn end_txn_decision(
         verified_state_decision(entry.state, committed, is_retry, trunk_rules)
     } else {
         classic_state_decision(entry.state, committed)
+    }
+}
+
+/// The identity `request_pid` is compared with.
+///
+/// The identity a client holds is the staged one when the entry has one (a
+/// KIP-939 recovery identity, or the identity a rotation hands out), and the
+/// live one otherwise.
+///
+/// Kafka has no staged identity to compare with: it holds a `Prepare*` entry
+/// that rotates the producer id at `(old id, i16::MAX)`, the producer that ends
+/// the transaction at the epoch its marker reserves, with the new id only in
+/// `nextProducerId`. A retry that names `(old id, i16::MAX - 1)` is
+/// `retryOnEpochBump` there and gets `CONCURRENT_TRANSACTIONS`, and any other
+/// epoch of the old id is `PRODUCER_FENCED`, as `endTransaction` in
+/// `TransactionCoordinator.scala` decides. So a request that names the old id
+/// of such an entry is compared with the live identity. A recovery identity
+/// that a `Prepare*` entry holds is one epoch past its first, so a new
+/// producer id at epoch 0 marks the rotation.
+fn compared_identity(entry: &TxnEntry, request_pid: ProducerId) -> (ProducerId, i16) {
+    let rotating_prepare = matches!(
+        entry.state,
+        TxnState::PrepareCommit | TxnState::PrepareAbort
+    ) && entry.has_staged_producer_identity()
+        && entry.next_producer_epoch == 0
+        && entry.next_producer_id != entry.producer_id;
+    if rotating_prepare && entry.producer_id == request_pid {
+        (entry.producer_id, entry.producer_epoch)
+    } else {
+        client_producer_identity(entry)
     }
 }
 
