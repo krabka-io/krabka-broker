@@ -139,6 +139,24 @@ pub(super) async fn handle_actor_heartbeat(
         });
         return true;
     };
+    // A consumer group exists once its first join bumped the group epoch, and
+    // it keeps that epoch after its members left. An actor that never got a
+    // member, such as one left by a join that Kafka refused before it wrote
+    // anything, holds no group, and Kafka answers any other epoch with
+    // GROUP_ID_NOT_FOUND.
+    if request.member_epoch != 0 && state.group_epoch == 0 && state.members.is_empty() {
+        let _ = reply.send(ConsumerGroupHeartbeatResponse {
+            error_code: codes::GROUP_ID_NOT_FOUND,
+            error_message: Some(
+                crate::coordinator::unified::registry::consumer_group_not_found(
+                    &state.group_id,
+                    request.member_epoch,
+                ),
+            ),
+            ..Default::default()
+        });
+        return true;
+    }
     match handle_heartbeat(state, services, &request, client, regex_authorized_topics).await {
         Ok(response) => {
             let _ = reply.send(response);

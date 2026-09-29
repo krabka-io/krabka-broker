@@ -119,6 +119,22 @@ pub(crate) async fn handle(
             return crate::handlers::encode_response(&error(error_code), version);
         }
 
+        // Kafka creates a consumer group only on a join, and answers
+        // GROUP_ID_NOT_FOUND for a missing group on any other epoch and for a
+        // share or streams group, without touching any group.
+        if let Some(message) =
+            coordinator.consumer_group_lookup_error(&req.group_id, req.member_epoch)
+        {
+            return crate::handlers::encode_response(
+                &ConsumerGroupHeartbeatResponse {
+                    error_code: codes::GROUP_ID_NOT_FOUND,
+                    error_message: Some(message),
+                    ..Default::default()
+                },
+                version,
+            );
+        }
+
         // Route to the one actor for this id, spawning a consumer-kind actor if
         // the id is brand-new. Both RPC families reach the same actor; a classic
         // group rejects a next-gen heartbeat from inside the actor's `Heartbeat`
@@ -927,6 +943,108 @@ mod tests {
         assert!(view.members[0].client_id == "consumer-client-b");
         assert!(view.members[0].client_host == "/127.0.0.2");
 
+        broker_handle.shutdown().await;
+    }
+
+    /// Kafka's `getOrMaybeCreateConsumerGroup` and `consumerGroupLeave`: only a
+    /// join creates a consumer group, a missing group answers
+    /// `GROUP_ID_NOT_FOUND` on any other epoch, and a share or streams group is
+    /// not a consumer group. Each row sends one heartbeat for its own group id
+    /// and compares the whole response; `None` expects an accepted join.
+    #[tokio::test]
+    async fn handle_creates_consumer_group_only_on_join_as_kafka_does() {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let broker = broker_handle.broker_arc_for_test();
+        finalize_group_version(&broker).await;
+        let coordinator = &broker.group_coordinator;
+        coordinator.mark_share("share");
+        coordinator.mark_streams("streams");
+        let _share_actor = coordinator.get_or_create_share("share-actor");
+        let principal = anonymous_principal();
+        let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9092));
+        let ctx = test_context(&principal, &peer);
+        let not_found = |message: &str| {
+            Some(ConsumerGroupHeartbeatResponse {
+                error_code: codes::GROUP_ID_NOT_FOUND,
+                error_message: Some(message.into()),
+                ..Default::default()
+            })
+        };
+        // (group id, member epoch, expected response)
+        let rows = [
+            (
+                "absent-heartbeat",
+                3,
+                not_found("Consumer group absent-heartbeat not found."),
+            ),
+            (
+                "absent-leave",
+                -1,
+                not_found("Group absent-leave not found."),
+            ),
+            (
+                "absent-static-leave",
+                -2,
+                not_found("Group absent-static-leave not found."),
+            ),
+            (
+                "share",
+                0,
+                not_found("Group share is not a consumer group."),
+            ),
+            (
+                "share-actor",
+                0,
+                not_found("Group share-actor is not a consumer group."),
+            ),
+            (
+                "streams",
+                3,
+                not_found("Group streams is not a consumer group."),
+            ),
+            (
+                "streams",
+                -1,
+                not_found("Group streams is not a consumer group."),
+            ),
+            ("joined", 0, None),
+        ];
+
+        for (group_id, member_epoch, expected) in rows {
+            let req = crate::test_support::encode_request(
+                &ConsumerGroupHeartbeatRequest {
+                    group_id: group_id.into(),
+                    member_id: "m1".into(),
+                    instance_id: (member_epoch == -2).then(|| "i1".into()),
+                    member_epoch,
+                    rebalance_timeout_ms: if member_epoch == 0 { 30_000 } else { -1 },
+                    topic_partitions: (member_epoch == 0).then(Vec::new),
+                    subscribed_topic_names: Some(vec!["topic-a".into()]),
+                    ..Default::default()
+                },
+                VERSION,
+            );
+            let bytes = handle(&broker, VERSION, 1, &req, &ctx)
+                .await
+                .expect("ConsumerGroupHeartbeat handler");
+            let resp = decode_response(&bytes);
+            match expected {
+                Some(expected) => assert!(resp == expected, "{group_id}: {resp:?}"),
+                None => assert!(resp.error_code == codes::NONE, "{group_id}: {resp:?}"),
+            }
+        }
+
+        // Only the join left a consumer group behind.
+        assert!(coordinator.find("joined").is_some());
+        for group_id in [
+            "absent-heartbeat",
+            "absent-leave",
+            "absent-static-leave",
+            "share",
+        ] {
+            assert!(coordinator.find(group_id).is_none(), "{group_id}");
+        }
         broker_handle.shutdown().await;
     }
 

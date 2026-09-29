@@ -116,6 +116,43 @@ async fn member_limit_rejects_only_new_members() {
     check!(existing.member_epoch == joined.member_epoch);
 }
 
+/// A consumer actor exists from its first heartbeat, but the group only from
+/// its first join. Kafka's `getOrMaybeCreateConsumerGroup` and
+/// `consumerGroupLeave` answer GROUP_ID_NOT_FOUND to any other epoch while the
+/// group is missing, and UNKNOWN_MEMBER_ID once it exists and lacks the member.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_actor_holds_no_consumer_group_before_the_first_join() {
+    let (coord, _log) = make_coordinator();
+    let handle = coord.get_or_create_consumer("g");
+
+    let mut answers = Vec::new();
+    for (member_id, epoch) in [("m1", 3), ("m1", -1), ("m1", 0), ("m2", 3), ("m1", -1)] {
+        let answer = rpc::consumer_heartbeat(&handle, member_id, epoch, Some("t")).await;
+        answers.push((answer.error_code, answer.error_message));
+    }
+
+    check!(
+        answers
+            == vec![
+                (
+                    codes::GROUP_ID_NOT_FOUND,
+                    Some("Consumer group g not found.".to_string())
+                ),
+                (
+                    codes::GROUP_ID_NOT_FOUND,
+                    Some("Group g not found.".to_string())
+                ),
+                (codes::NONE, None),
+                // The group exists now.
+                (
+                    codes::UNKNOWN_MEMBER_ID,
+                    Some("Member m2 is not a member of group g.".to_string())
+                ),
+                (codes::NONE, None),
+            ]
+    );
+}
+
 const IDENTITY_TOPIC: Uuid = Uuid([9; 16]);
 
 /// The one topic `t`, with two partitions, of the handoff test.

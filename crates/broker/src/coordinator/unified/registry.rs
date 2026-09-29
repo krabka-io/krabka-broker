@@ -11,10 +11,22 @@ use std::sync::Arc;
 use super::{
     actor::{self, GroupActorHandle, GroupActorMessage, GroupKindTag},
     group::CoordinatorGroup,
-    group_coordinator::GroupCoordinator,
+    group_coordinator::{GroupCoordinator, GroupType},
     share::actor::{ShareGroupActorHandle, ShareGroupActorMessage},
     streams::actor::{StreamsGroupActorHandle, StreamsGroupActorMessage},
 };
+
+/// The `GROUP_ID_NOT_FOUND` message of a `ConsumerGroupHeartbeat` that names a
+/// group that does not exist: Kafka's `getOrMaybeCreateConsumerGroup` says
+/// `Consumer group <id> not found.`, and `consumerGroupLeave` reaches the
+/// generic `Group <id> not found.` through `consumerGroup`.
+pub(crate) fn consumer_group_not_found(group_id: &str, member_epoch: i32) -> String {
+    if member_epoch < 0 {
+        format!("Group {group_id} not found.")
+    } else {
+        format!("Consumer group {group_id} not found.")
+    }
+}
 
 impl GroupCoordinator {
     /// Get the one actor for `group_id`, and spawn it with `initial_kind` when
@@ -197,6 +209,36 @@ impl GroupCoordinator {
     /// out once as `group_type="classic"` and not again here.
     pub fn consumer_group_ids(&self) -> Vec<String> {
         self.groups.iter().map(|e| e.key().clone()).collect()
+    }
+
+    /// `true` when `group_id` names a share or streams group, which is never a
+    /// consumer group.
+    #[must_use]
+    pub fn is_share_or_streams_group(&self, group_id: &str) -> bool {
+        matches!(
+            self.group_type(group_id),
+            Some(GroupType::Share | GroupType::Streams)
+        ) || self.find_share(group_id).is_some()
+            || self.find_streams(group_id).is_some()
+    }
+
+    /// The `error_message` of the `GROUP_ID_NOT_FOUND` answer to a
+    /// `ConsumerGroupHeartbeat` for `group_id`, or `None` when the heartbeat
+    /// may go to the consumer-group actor.
+    ///
+    /// It follows Kafka's `GroupMetadataManager`: `getOrMaybeCreateConsumerGroup`
+    /// creates a missing group only when `member_epoch == 0` and refuses a
+    /// share or streams group, and `consumerGroupLeave` looks the group up
+    /// through `consumerGroup`, which refuses a missing group with the generic
+    /// message. A classic group is the actor's to judge, because a join may
+    /// convert an empty one.
+    #[must_use]
+    pub fn consumer_group_lookup_error(&self, group_id: &str, member_epoch: i32) -> Option<String> {
+        if self.is_share_or_streams_group(group_id) {
+            return Some(format!("Group {group_id} is not a consumer group."));
+        }
+        (member_epoch != 0 && self.find(group_id).is_none())
+            .then(|| consumer_group_not_found(group_id, member_epoch))
     }
 
     /// Spawn a classic actor seeded with a fully-replayed `Group` at
