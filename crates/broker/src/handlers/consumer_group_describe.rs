@@ -20,11 +20,14 @@
 //!   row with `error_code == NONE` carries the bitfield of group operations
 //!   the principal holds. Every other row keeps the wire-default `i32::MIN`
 //!   "not present" sentinel.
+//! - Clients may not see topics they cannot `Describe`: a group whose
+//!   assignment or target assignment names one is replaced by a
+//!   `TOPIC_AUTHORIZATION_FAILED` row with no members.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bytes::Bytes;
-use krabka_metadata::MetadataImage;
+use krabka_metadata::{AclOperation, MetadataImage};
 use krabka_protocol::{
     Decode,
     owned::{
@@ -39,6 +42,7 @@ use krabka_protocol::{
 use tokio::sync::oneshot;
 
 use crate::{
+    authorizer::{AuthorizationResult, Authorizer, authorize_topics},
     broker::Broker,
     codes,
     coordinator::unified::actor::{DescribeMember, DescribeView, GroupActorMessage},
@@ -117,6 +121,13 @@ pub(crate) async fn handle(
         // replies ONLY for a consumer-kind group and drops the sender
         // otherwise, so an upgraded group is reachable and a classic group
         // is not.
+        // A share or streams group is another type's group, which Kafka's
+        // `consumerGroup` lookup refuses whether or not an actor holds its
+        // offsets.
+        if coordinator.is_share_or_streams_group(group_id) {
+            described.push(not_found_row(group_id, "is not a consumer group"));
+            continue;
+        }
         let Some(handle) = coordinator.find(group_id) else {
             described.push(not_found_row(group_id, "not found"));
             continue;
@@ -160,8 +171,66 @@ pub(crate) async fn handle(
     }
 
     denied.extend(described);
+    hide_undescribable_topics(broker.config.authorizer.as_ref(), &image, ctx, &mut denied);
     let resp = response(denied);
     crate::handlers::encode_response(&resp, version)
+}
+
+/// The message of the row Kafka substitutes for a group whose assignment names
+/// a topic the caller cannot `Describe`.
+const UNAUTHORIZED_TOPICS_MESSAGE: &str =
+    "The group has described topic(s) that the client is not authorized to describe.";
+
+/// Kafka's `handleConsumerGroupDescribe`: "Clients are not allowed to see
+/// topics that are not authorized for Describe". A group with a topic in the
+/// assignment or target assignment of any member that the caller cannot
+/// `Describe` is replaced by a `TOPIC_AUTHORIZATION_FAILED` row with no members,
+/// so the topic names, ids and partition ownership stay hidden.
+fn hide_undescribable_topics(
+    authorizer: &dyn Authorizer,
+    image: &MetadataImage,
+    ctx: &crate::handlers::RequestContext<'_>,
+    groups: &mut [DescribedGroup],
+) {
+    fn topics(group: &DescribedGroup) -> impl Iterator<Item = &str> {
+        group
+            .members
+            .iter()
+            .flat_map(|member| {
+                member
+                    .assignment
+                    .topic_partitions
+                    .iter()
+                    .chain(&member.target_assignment.topic_partitions)
+            })
+            .map(|topic| topic.topic_name.as_str())
+    }
+
+    let named: HashSet<&str> = groups.iter().flat_map(topics).collect();
+    let undescribable: HashSet<String> = authorize_topics(
+        authorizer,
+        image,
+        ctx.principal,
+        ctx.peer,
+        AclOperation::Describe,
+        named,
+    )
+    .into_iter()
+    .filter(|(_, result)| *result == AuthorizationResult::Deny)
+    .map(|(name, _)| name.to_owned())
+    .collect();
+    if undescribable.is_empty() {
+        return;
+    }
+    for group in groups {
+        if topics(group).any(|topic| undescribable.contains(topic)) {
+            *group = error_row(
+                &group.group_id,
+                codes::TOPIC_AUTHORIZATION_FAILED,
+                Some(UNAUTHORIZED_TOPICS_MESSAGE.to_owned()),
+            );
+        }
+    }
 }
 
 fn error_row(group_id: &str, error_code: i16, error_message: Option<String>) -> DescribedGroup {
@@ -551,6 +620,74 @@ mod tests {
         assert!(resp == expected, "{resp:?}");
     }
 
+    /// Kafka's `handleConsumerGroupDescribe` checks `Describe` on every topic
+    /// in the assignment and the target assignment of every member: a group
+    /// that names one the caller cannot describe becomes a
+    /// `TOPIC_AUTHORIZATION_FAILED` row with no members, and the other groups
+    /// stay whole.
+    #[test]
+    fn a_group_naming_an_undescribable_topic_is_replaced_by_an_error_row() {
+        let mut image = image_with_topics();
+        image.apply(&MetadataRecord::V1AccessControlEntry(
+            krabka_metadata::AclEntry {
+                resource_type: krabka_metadata::ResourceType::Topic,
+                resource_name: "orders".into(),
+                pattern_type: krabka_metadata::PatternType::Literal,
+                principal: "User:alice".into(),
+                host: "*".into(),
+                operation: AclOperation::Describe,
+                permission_type: krabka_metadata::PermissionType::Allow,
+            },
+        ));
+        let authorizer = crate::authorizer::SimpleAclAuthorizer::new(HashSet::new());
+        let principal = crate::test_support::principal("alice");
+        let peer = crate::test_support::peer();
+        let ctx = crate::test_support::request_context(&principal, &peer, "alice-client");
+
+        let orders = || topic(ORDERS, "orders", &[0]);
+        let payments = || topic(PAYMENTS, "payments", &[0]);
+        let member = |assignment: Vec<TopicPartitions>, target: Vec<TopicPartitions>| {
+            let mut member = wire_member("m");
+            member.assignment = assigned(assignment);
+            member.target_assignment = assigned(target);
+            member
+        };
+        let group = |group_id: &str, members: Vec<Member>| DescribedGroup {
+            group_id: group_id.into(),
+            ..wire_group("Stable", "uniform", members)
+        };
+        let hidden = |group_id: &str| DescribedGroup {
+            group_id: group_id.into(),
+            error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+            error_message: Some(UNAUTHORIZED_TOPICS_MESSAGE.into()),
+            ..Default::default()
+        };
+        let mut groups = vec![
+            group("describable", vec![member(vec![orders()], vec![orders()])]),
+            group("assigned", vec![member(vec![payments()], vec![])]),
+            group("targeted", vec![member(vec![orders()], vec![payments()])]),
+            group(
+                "second-member",
+                vec![
+                    member(vec![orders()], vec![]),
+                    member(vec![payments()], vec![]),
+                ],
+            ),
+            group("empty", vec![]),
+        ];
+        let expected = vec![
+            groups[0].clone(),
+            hidden("assigned"),
+            hidden("targeted"),
+            hidden("second-member"),
+            groups[4].clone(),
+        ];
+
+        hide_undescribable_topics(&authorizer, &image, &ctx, &mut groups);
+
+        assert!(groups == expected, "{groups:?}");
+    }
+
     /// A group Kafka's `consumerGroup` lookup rejects is `GROUP_ID_NOT_FOUND`
     /// with the lookup's message, and an empty id is `INVALID_GROUP_ID`.
     #[tokio::test]
@@ -560,6 +697,9 @@ mod tests {
         let _ = broker
             .group_coordinator
             .get_or_create_classic("classic-group");
+        broker.group_coordinator.mark_share("share-group");
+        broker.group_coordinator.mark_streams("streams-group");
+        let _share_actor = broker.group_coordinator.get_or_create_share("share-actor");
         let principal = crate::test_support::principal("admin");
         let peer = crate::test_support::peer();
         let ctx = crate::test_support::request_context(&principal, &peer, "admin-client");
@@ -591,6 +731,30 @@ mod tests {
                     "classic-group",
                     codes::GROUP_ID_NOT_FOUND,
                     Some("Group classic-group is not a consumer group."),
+                ),
+            ),
+            (
+                "share-group",
+                row(
+                    "share-group",
+                    codes::GROUP_ID_NOT_FOUND,
+                    Some("Group share-group is not a consumer group."),
+                ),
+            ),
+            (
+                "share-actor",
+                row(
+                    "share-actor",
+                    codes::GROUP_ID_NOT_FOUND,
+                    Some("Group share-actor is not a consumer group."),
+                ),
+            ),
+            (
+                "streams-group",
+                row(
+                    "streams-group",
+                    codes::GROUP_ID_NOT_FOUND,
+                    Some("Group streams-group is not a consumer group."),
                 ),
             ),
             ("", row("", codes::INVALID_GROUP_ID, None)),
