@@ -1088,14 +1088,14 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
     KipAnnotation {
         key: "KIP-1222",
         claim: "Share acquisition lock renewal: the Renew acknowledge type and IsRenewAck on ShareFetch and ShareAcknowledge v2",
-        status: KipStatus::Partial,
+        status: KipStatus::Implemented,
         module: "crates/broker/src/handlers/share_fetch/acknowledge.rs",
         tests: &[
             "crates/broker/src/handlers/share_fetch/renew_tests.rs::renew_acknowledgements_renew_only_the_renew_offsets",
             "crates/broker/src/handlers/share_fetch/renew_tests.rs::a_renew_fetch_answers_a_denied_topic_as_an_acknowledge_error",
             "crates/broker/tests/share_consume/lock_lifetime.rs::renew_extends_lock_not_redelivered",
         ],
-        note: "IncrementalAlterConfigs does not accept share.renew.acknowledge.enable yet (#758).",
+        note: "`share.renew.acknowledge.enable` (default true) is a `GroupConfig` key that `AlterConfigs` and `IncrementalAlterConfigs` accept on a `GROUP` resource and that the share partitions apply: a group that sets it to false answers a Renew acknowledgement with INVALID_RECORD_STATE, and a Renew type without IsRenewAck is INVALID_REQUEST.",
     },
     KipAnnotation {
         key: "KIP-1241",
