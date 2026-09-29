@@ -9,7 +9,7 @@
 use assert2::assert;
 use krabka_client_core::Client;
 use krabka_protocol::owned::{
-    create_topics_request::{CreatableTopic, CreateTopicsRequest},
+    create_topics_request::CreateTopicsRequest,
     produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
 };
 
@@ -44,8 +44,8 @@ async fn follower_truncates_in_band_on_diverging_epoch() {
     let cluster = support::start_n_node_with_retry(3).await;
     support::wait_for_all_brokers_registered(&cluster, 3).await;
 
-    // cluster[0] is node 1; rf=3 round-robin makes it the leader for
-    // partition 0 (same placement the replication tests rely on).
+    // cluster[0] is node 1, and the topic pins it as the leader of partition 0
+    // (the same placement the replication tests use).
     let leader_addr = cluster[0].1.listen_addr.to_string();
     let admin = Client::builder()
         .bootstrap(leader_addr.clone())
@@ -54,12 +54,7 @@ async fn follower_truncates_in_band_on_diverging_epoch() {
         .unwrap();
     let resp = admin
         .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "divtrunc".into(),
-                num_partitions: 1,
-                replication_factor: 3,
-                ..Default::default()
-            }],
+            topics: vec![support::topic_on("divtrunc", &[&[1, 2, 3]])],
             timeout_ms: 5_000,
             ..Default::default()
         })

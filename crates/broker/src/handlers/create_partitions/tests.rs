@@ -460,6 +460,120 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
     }
 }
 
+/// #1201: Kafka's `createPartitions` gives the placer every registered broker
+/// that is not in controlled shutdown, fenced ones included. The placer takes a
+/// fenced broker last and never first, the ISR keeps the active replicas, and
+/// the placer's refusal reaches the row as it is, with no "Unable to replicate"
+/// prefix, because `createPartitions` does not wrap it as `createTopic` does.
+///
+/// Topic `grow` has replication factor 2. The cluster is the local broker 1
+/// and the remote brokers 3 and 4.
+#[tokio::test]
+async fn automatic_growth_takes_fenced_brokers_last_and_words_refusals_like_the_placer() {
+    /// One row: the fenced brokers, the brokers in controlled shutdown, and
+    /// either how many replicas of each new partition are fenced, or the
+    /// refusal message.
+    type Row = (&'static [u64], &'static [u64], Result<usize, &'static str>);
+    let rows: [Row; 3] = [
+        (&[4], &[], Ok(0)),
+        (&[3, 4], &[], Ok(1)),
+        (
+            &[],
+            &[3, 4],
+            Err(
+                "The target replication factor of 2 cannot be reached because only 1 broker(s) \
+                 are registered or some brokers have all their log directories cordoned.",
+            ),
+        ),
+    ];
+
+    for (fenced, shutting_down, outcome) in rows {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        for node_id in [3, 4] {
+            crate::test_support::seed_remote_broker(&broker_handle, node_id).await;
+        }
+        seed_remote_topic(&broker_handle).await;
+        for &node_id in fenced {
+            crate::test_support::fence_remote_broker(&broker_handle, node_id).await;
+        }
+        for &node_id in shutting_down {
+            crate::test_support::begin_controlled_shutdown(&broker_handle, node_id).await;
+        }
+        let broker = broker_handle.broker_arc_for_test();
+
+        let resp = drive(
+            &broker,
+            &request(vec![topic_req("grow", 5, None)], false),
+            &principal("admin"),
+            &peer(),
+        )
+        .await;
+
+        let image = broker_handle.controller_image_for_test();
+        let added = (1..)
+            .map_while(|index| image.partition("grow", index).cloned())
+            .collect::<Vec<_>>();
+        let label = format!("fenced {fenced:?}, shutting down {shutting_down:?}");
+        let (error_code, error_message) = match outcome {
+            Ok(_) => (codes::NONE, None),
+            Err(message) => (codes::INVALID_REPLICATION_FACTOR, Some(message.to_owned())),
+        };
+        let expected = CreatePartitionsResponse {
+            throttle_time_ms: 0,
+            results: vec![CreatePartitionsTopicResult {
+                name: "grow".into(),
+                error_code,
+                error_message,
+                unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+            }],
+            unknown_tagged_fields: krabka_protocol::UnknownTaggedFields::default(),
+        };
+        check!(resp == expected, "{label}");
+        let Ok(fenced_replicas) = outcome else {
+            check!(added.is_empty(), "{label}");
+            broker_handle.shutdown().await;
+            continue;
+        };
+        check!(added.len() == 4, "{label}");
+        for record in &added {
+            let replicas = &record.replicas;
+            let fenced_flags = replicas
+                .iter()
+                .map(|node| fenced.contains(&node.0))
+                .collect::<Vec<_>>();
+            let isr = replicas
+                .iter()
+                .copied()
+                .filter(|node| !fenced.contains(&node.0))
+                .collect::<Vec<_>>();
+            check!(
+                replicas.len() == 2
+                    && fenced_flags.iter().filter(|flag| **flag).count() == fenced_replicas
+                    && fenced_flags.is_sorted(),
+                "{label}, {replicas:?}"
+            );
+            check!(
+                *record
+                    == krabka_metadata::PartitionRecord {
+                        topic: "grow".into(),
+                        partition: record.partition,
+                        leader: isr[0],
+                        replicas: replicas.clone(),
+                        isr,
+                        leader_epoch: krabka_metadata::LeaderEpoch(0),
+                        adding_replicas: vec![],
+                        removing_replicas: vec![],
+                        directories: vec![],
+                        partition_epoch: 0,
+                    },
+                "{label}"
+            );
+        }
+        broker_handle.shutdown().await;
+    }
+}
+
 /// #744: Kafka's `ControllerApis.createPartitions` answers a duplicated name
 /// once with `INVALID_REQUEST` and grows none of its rows, and the
 /// controller's count checks answer with Kafka's messages. Topic `t` has 2

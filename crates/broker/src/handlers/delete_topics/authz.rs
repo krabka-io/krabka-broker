@@ -34,7 +34,9 @@ fn cluster_delete_denied(
     image: &krabka_metadata::MetadataImage,
     context: &crate::handlers::RequestContext<'_>,
 ) -> bool {
-    broker.config.authorizer.authorize(
+    // Kafka makes this shortcut check with `logIfDenied = false`: a Deny falls
+    // back to the per-topic checks, so it is no refusal to audit.
+    broker.config.authorizer.authorize_quiet(
         image,
         &AuthorizationRequest {
             principal: context.principal,

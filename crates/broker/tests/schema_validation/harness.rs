@@ -195,12 +195,40 @@ pub async fn create_topic_rf(
     configs: &[(&str, &str)],
     replication_factor: i16,
 ) -> WireUuid {
+    let topic = CreatableTopic {
+        name: name.into(),
+        num_partitions: 1,
+        replication_factor,
+        ..Default::default()
+    };
+    create_topic_from(broker, client, topic, configs).await
+}
+
+/// Create `name` with one partition on `replicas`, in that order, so the first
+/// one leads. An automatic placement starts at a random broker, and a test
+/// that stops the leader needs to know which broker that is.
+pub async fn create_topic_on(
+    broker: &BrokerHandle,
+    client: &Client,
+    name: &str,
+    configs: &[(&str, &str)],
+    replicas: &[i32],
+) -> WireUuid {
+    let topic = crate::support::topic_on(name, &[replicas]);
+    create_topic_from(broker, client, topic, configs).await
+}
+
+async fn create_topic_from(
+    broker: &BrokerHandle,
+    client: &Client,
+    topic: CreatableTopic,
+    configs: &[(&str, &str)],
+) -> WireUuid {
+    let name = topic.name.clone();
+    let name = name.as_str();
     let resp = client
         .send(CreateTopicsRequest {
             topics: vec![CreatableTopic {
-                name: name.into(),
-                num_partitions: 1,
-                replication_factor,
                 configs: configs
                     .iter()
                     .map(|(k, v)| CreatableTopicConfig {
@@ -209,7 +237,7 @@ pub async fn create_topic_rf(
                         ..Default::default()
                     })
                     .collect(),
-                ..Default::default()
+                ..topic
             }],
             timeout_ms: 5_000,
             ..Default::default()

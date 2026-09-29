@@ -75,12 +75,38 @@ pub(crate) fn canonical_topic_config(
     value: &str,
     unstable: UnstableApiVersions,
 ) -> Result<String, String> {
+    check_value_size(value)?;
     let Some(row) = registry::lookup(ConfigScope::Topic, key)
         .filter(|row| row.is_alterable() && serves_topic_key(row.name, unstable))
     else {
         return Err(format!("Unknown topic config name: {key}"));
     };
     canonical_value(row, value)
+}
+
+/// Kafka's `Short.MAX_VALUE`: the longest config value that
+/// `ConfigurationControlManager.validateAlterConfig` accepts, counted as Java's
+/// `String.length()` counts it, in UTF-16 code units.
+const MAX_CONFIG_VALUE_LEN: usize = 32_767;
+
+/// Kafka's `DISALLOWED_CONFIG_VALUE_SIZE_ERROR` message.
+const CONFIG_VALUE_SIZE_MESSAGE: &str = "The configuration value cannot be added because it \
+                                         exceeds the maximum value size of 32767 bytes.";
+
+/// Refuse a config value that is longer than Kafka's `Short.MAX_VALUE`.
+///
+/// `validateAlterConfig` makes this check on each value a request writes
+/// before any per-key validation, and `createTopics` reaches it through
+/// `incrementalAlterConfig` for the configs of a new topic. A `KRaft`
+/// `ConfigRecord` cannot carry a longer value.
+pub(crate) fn check_value_size(value: &str) -> Result<(), String> {
+    // UTF-8 never takes fewer bytes than UTF-16 takes code units, so a value
+    // that fits in bytes fits in units too and needs no count.
+    if value.len() <= MAX_CONFIG_VALUE_LEN || value.encode_utf16().count() <= MAX_CONFIG_VALUE_LEN {
+        Ok(())
+    } else {
+        Err(CONFIG_VALUE_SIZE_MESSAGE.to_owned())
+    }
 }
 
 /// The value check a row carries, over one value.
@@ -162,6 +188,10 @@ pub(crate) fn canonical_topic_config_map(
     remote_storage_system_enabled: bool,
     unstable: UnstableApiVersions,
 ) -> Result<BTreeMap<String, String>, String> {
+    // Kafka checks every value's size before it validates any key.
+    overrides
+        .values()
+        .try_for_each(|value| check_value_size(value))?;
     let canonical = overrides
         .iter()
         .map(|(key, value)| Ok((key.clone(), canonical_topic_config(key, value, unstable)?)))

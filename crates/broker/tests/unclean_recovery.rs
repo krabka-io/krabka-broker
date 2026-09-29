@@ -138,24 +138,17 @@ async fn round_trip(
 
 /// Creates a topic on a PLAINTEXT broker. The authorizer compat shim, with no
 /// `super_users` and no ACLs, lets the request through.
-async fn create_topic_plaintext(
-    addr: SocketAddr,
-    name: &str,
-    partitions: i32,
-    replication_factor: i16,
-) {
+///
+/// The topic has one partition on `replicas`, in that order, so the tests
+/// know which broker leads it: an automatic placement starts at a random
+/// broker.
+async fn create_topic_plaintext(addr: SocketAddr, name: &str, replicas: &[i32]) {
     use krabka_protocol::owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
-        create_topics_response::CreateTopicsResponse,
+        create_topics_request::CreateTopicsRequest, create_topics_response::CreateTopicsResponse,
     };
 
     let req = CreateTopicsRequest {
-        topics: vec![CreatableTopic {
-            name: name.to_string(),
-            num_partitions: partitions,
-            replication_factor,
-            ..Default::default()
-        }],
+        topics: vec![support::topic_on(name, &[replicas])],
         timeout_ms: 5_000,
         ..Default::default()
     };
@@ -329,9 +322,9 @@ async fn offline_partition_with_diverged_logs(
     handles: [&BrokerHandle; 3],
 ) {
     let [h1, h2, h3] = handles;
-    // ── Create the RF=3 topic. With 3 registered brokers, partition 0's
-    //    replica assignment is [1, 2, 3]; broker 1 is the preferred/first. ──
-    create_topic_plaintext(addr, topic, 1, 3).await;
+    // ── Create the RF=3 topic. Partition 0's replica assignment is
+    //    [1, 2, 3]; broker 1 is the preferred/first. ──
+    create_topic_plaintext(addr, topic, &[1, 2, 3]).await;
     wait_partition_hosted(h1, topic, 0).await;
     wait_partition_hosted(h2, topic, 0).await;
     wait_partition_hosted(h3, topic, 0).await;

@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use super::{
     THROTTLING_QUOTA_EXCEEDED_MESSAGE, automatic_leaderships, diskless_wal_placement_error,
-    invalid_topic_shape, manual_leaderships,
+    inactive_brokers, invalid_topic_shape, manual_leaderships,
     materialize::{TopicMaterialization, materialize_topic},
     name::topic_name_error,
     placement::{automatic_placement_exclusions, resolve_assignments},
@@ -32,6 +32,7 @@ use crate::{
     codes,
     config_keys::{self, resolve_preferred_leader_site},
     quota::ControllerMutationQuota,
+    site_placement::PlacementRng,
 };
 
 /// A topic that passed every check, and was committed unless the request is
@@ -195,22 +196,31 @@ impl<'a> TopicCreation<'a> {
         // site and the witness role of each broker. `site_broker_views` sorts
         // by node id for determinism, and it covers the race in which the
         // self-registration record has not reached the local image yet.
-        // The automatic placement never picks an unavailable broker, nor one
-        // whose log directories are all cordoned (KIP-1066). A manual
-        // assignment may name either, because Kafka 4.3.1 checks only that the
-        // broker is registered, and the ISR below leaves an unavailable one out.
+        // The automatic placement leaves out a broker in controlled shutdown
+        // and one whose log directories are all cordoned (KIP-1066). It takes
+        // a fenced broker only as a last resort, as Kafka's placer does, and
+        // the ISR below leaves that broker out. A manual assignment may name
+        // any registered broker, because Kafka 4.3.1 checks only that the
+        // broker is registered, and the ISR again leaves out the inactive ones.
         let unavailable =
             crate::handlers::offline_replicas::unavailable_brokers(broker, image).await;
+        let inactive = inactive_brokers(image, &unavailable);
         let manual = !topic_req.assignments.is_empty();
         let no_exclusion = std::collections::HashSet::new();
-        let unusable = automatic_placement_exclusions(image, &unavailable);
+        let unusable = automatic_placement_exclusions(image);
         let brokers = site_broker_views(
             image,
             broker.config.is_broker().then_some(node_id),
             if manual { &no_exclusion } else { &unusable },
+            &unavailable,
         );
 
-        let assignments = match resolve_assignments(&topic_req, &brokers, self.preferred_site) {
+        let assignments = match resolve_assignments(
+            &topic_req,
+            &brokers,
+            self.preferred_site,
+            &mut PlacementRng::from_entropy(),
+        ) {
             Ok(assignments) => assignments,
             Err((code, message)) => {
                 return Err(Box::new(topic_error_result(name, code, Some(message))));
@@ -219,14 +229,15 @@ impl<'a> TopicCreation<'a> {
 
         if assignments.is_empty() {
             // The placement cannot satisfy the request. RF above the broker
-            // count is the common cause. Surface INVALID_REPLICATION_FACTOR
+            // count, fenced brokers included, and a cluster with no unfenced
+            // broker are the common causes. Surface INVALID_REPLICATION_FACTOR
             // with the message of Kafka's replica placer.
             return Err(Box::new(topic_error_result(
                 name,
                 codes::INVALID_REPLICATION_FACTOR,
                 Some(placement_failure_message(
                     topic_req.replication_factor,
-                    brokers.len(),
+                    &brokers,
                 )),
             )));
         }
@@ -234,7 +245,7 @@ impl<'a> TopicCreation<'a> {
         let leaderships = if manual {
             match manual_leaderships(
                 &assignments,
-                &unavailable,
+                &inactive,
                 &config_keys::witness_node_ids(image),
                 0,
             ) {
@@ -248,7 +259,7 @@ impl<'a> TopicCreation<'a> {
                 }
             }
         } else {
-            automatic_leaderships(&assignments)
+            automatic_leaderships(&assignments, &inactive)
         };
 
         if diskless
@@ -291,7 +302,8 @@ impl<'a> TopicCreation<'a> {
             )));
         }
 
-        let topic_id = Uuid::new_v4();
+        // Kafka's `Uuid.randomUuid`: never a leading dash.
+        let topic_id = krabka_format::random_uuid();
 
         // A validate-only request has now passed every check the committing
         // path runs, and commits nothing.

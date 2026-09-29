@@ -29,7 +29,7 @@ use krabka_broker::{BrokerConfig, BrokerHandle, replica_selector::ReplicaSelecto
 use krabka_client_core::Client;
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
+        create_topics_request::CreateTopicsRequest,
         fetch_request::{FetchPartition, FetchRequest, FetchTopic},
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
     },
@@ -208,12 +208,9 @@ async fn rack_aware_consumer_is_redirected_to_same_rack_follower() {
         .unwrap();
     let resp = admin
         .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "t".into(),
-                num_partitions: 1,
-                replication_factor: 2,
-                ..Default::default()
-            }],
+            // Node 1 leads and node 2 follows. An automatic placement over the
+            // two racks would pick either one as the leader.
+            topics: vec![support::topic_on("t", &[&[1, 2]])],
             timeout_ms: 5_000,
             ..Default::default()
         })
@@ -224,10 +221,10 @@ async fn rack_aware_consumer_is_redirected_to_same_rack_follower() {
 
     wait_for_partition_on_all(&cluster, "t", 0).await;
 
-    // With rf=2 / partition 0, round-robin placement makes node 1 the
-    // leader. Wait until leader == 1 and ISR == {1,2} from the leader's
-    // own image; fail fast if the cluster assigned differently so the
-    // step-5 leader fetch genuinely goes to the leader.
+    // The assignment above makes node 1 the leader. Wait until leader == 1
+    // and ISR == {1,2} from the leader's own image; fail fast if the cluster
+    // assigned differently so the step-5 leader fetch genuinely goes to the
+    // leader.
     wait_leader_and_isr(leader_handle, "t", 0, 1, &[1, 2]).await;
     let leader_id = leader_handle.partition_leader_for_test("t", 0).unwrap();
     let isr = leader_handle.partition_isr_for_test("t", 0).unwrap();

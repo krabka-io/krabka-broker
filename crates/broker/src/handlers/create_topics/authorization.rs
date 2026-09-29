@@ -22,7 +22,9 @@ pub(super) fn cluster_create_denied(
     image: &krabka_metadata::MetadataImage,
     context: &crate::handlers::RequestContext<'_>,
 ) -> bool {
-    broker.config.authorizer.authorize(
+    // Kafka makes this shortcut check with `logIfDenied = false`: a Deny falls
+    // back to the per-topic checks, so it is no refusal to audit.
+    broker.config.authorizer.authorize_quiet(
         image,
         &AuthorizationRequest {
             principal: context.principal,
@@ -80,7 +82,9 @@ pub(super) fn describe_configs_denied(
     context: &crate::handlers::RequestContext<'_>,
     topic: &str,
 ) -> bool {
-    broker.config.authorizer.authorize(
+    // Kafka makes this check with `logIfDenied = false`: the topic exists
+    // either way, and only the disclosure is withheld.
+    broker.config.authorizer.authorize_quiet(
         image,
         &AuthorizationRequest {
             principal: context.principal,

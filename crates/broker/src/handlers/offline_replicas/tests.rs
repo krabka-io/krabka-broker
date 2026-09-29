@@ -1,19 +1,28 @@
 //! Table-driven coverage of the offline-replica projection: an unregistered
-//! broker, a fenced broker, a replica on a directory the registration no
-//! longer lists, a registration left with no online directory at all, and the
-//! two "online" sentinels.
+//! broker, a fenced broker, a broker without the request's listener, a replica
+//! on a directory the registration no longer lists, a registration left with
+//! no online directory at all, and the two "online" sentinels.
 
 use assert2::assert;
-use krabka_metadata::{LeaderEpoch, MetadataRecord, TopicRecord};
+use krabka_metadata::{BrokerEndpoint, LeaderEpoch, MetadataRecord, TopicRecord};
 use uuid::Uuid;
 
 use super::*;
+
+/// The listener that the requests in these tests arrive on, and that every
+/// registration lists unless a test says otherwise.
+const LISTENER: &str = "PLAINTEXT";
 
 fn dir(n: u128) -> Uuid {
     Uuid::from_u128(n)
 }
 
 fn registration(node_id: u64, log_dirs: Vec<Uuid>) -> MetadataRecord {
+    registration_on(node_id, log_dirs, LISTENER)
+}
+
+/// A registration whose only endpoint is on `listener`.
+fn registration_on(node_id: u64, log_dirs: Vec<Uuid>, listener: &str) -> MetadataRecord {
     MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
         fenced: false,
         in_controlled_shutdown: false,
@@ -24,7 +33,12 @@ fn registration(node_id: u64, log_dirs: Vec<Uuid>) -> MetadataRecord {
         host: format!("broker-{node_id}"),
         port: 9092,
         rack: None,
-        endpoints: vec![],
+        endpoints: vec![BrokerEndpoint {
+            name: listener.to_owned(),
+            host: format!("broker-{node_id}"),
+            port: 9092,
+            protocol: krabka_security::ListenerProtocol::Plaintext,
+        }],
         log_dirs,
         features: std::collections::BTreeMap::new(),
     })
@@ -161,7 +175,7 @@ fn offline_replicas_matches_kafka_replica_state_rules() {
         let record = img.partition("t", 0).expect("partition in image");
         let unavailable: HashSet<u64> = case.unavailable.iter().copied().collect();
 
-        let actual = offline_replicas(&img, record, &unavailable);
+        let actual = offline_replicas(&img, record, &unavailable, LISTENER);
 
         assert!(actual == case.expected, "case {}", case.name);
     }
@@ -274,10 +288,76 @@ fn a_replica_on_a_dead_log_dir_neither_leads_nor_stays_in_the_isr() {
         let record = img.partition("t", 0).expect("partition in image");
         let unavailable: HashSet<u64> = case.unavailable.iter().copied().collect();
 
-        let actual = partition_availability(&img, record, &unavailable);
+        let actual = partition_availability(&img, record, &unavailable, LISTENER);
 
         assert!(actual == case.expected, "case {}", case.name);
     }
+}
+
+/// Kafka's `KRaftMetadataCache` finds a leader's endpoint with
+/// `getAliveEndpoint`, which is empty for a broker with no registration and
+/// for one with no endpoint on the request's listener, and it reports a
+/// replica on such a broker offline (`isReplicaOffline`). The leader is then
+/// `-1`, and the ISR and the replica list are left as they are.
+#[test]
+fn a_broker_without_the_request_listener_is_offline_and_cannot_be_the_leader() {
+    let good = dir(0x600d);
+    // Node 1 lists `PLAINTEXT`, node 2 lists only `EXTERNAL`, and node 3 has
+    // no registration.
+    let mut img = image(&[(1, vec![good]), (2, vec![good])], &[1, 2], &[good, good]);
+    img.apply(&registration_on(2, vec![good], "EXTERNAL"));
+    let cases = [
+        (
+            "the leader lists the listener and the follower does not",
+            vec![1, 2],
+            PartitionAvailability {
+                leader_id: 1,
+                isr_nodes: vec![1, 2],
+                offline_replicas: vec![2],
+            },
+        ),
+        (
+            "the leader does not list the listener",
+            vec![2, 1],
+            PartitionAvailability {
+                leader_id: NO_LEADER_ID,
+                isr_nodes: vec![2, 1],
+                offline_replicas: vec![2],
+            },
+        ),
+        (
+            "the leader has no registration",
+            vec![3, 1],
+            PartitionAvailability {
+                leader_id: NO_LEADER_ID,
+                isr_nodes: vec![3, 1],
+                offline_replicas: vec![3],
+            },
+        ),
+    ];
+
+    for (name, replicas, expected) in cases {
+        let mut img = img.clone();
+        img.apply(&MetadataRecord::V1Partition(partition(
+            &replicas,
+            &[good, good],
+        )));
+        let record = img.partition("t", 0).expect("partition in image");
+
+        let actual = partition_availability(&img, record, &HashSet::new(), LISTENER);
+
+        assert!(actual == expected, "case {name}");
+    }
+    // The same partition on the other listener: node 2 is the one in place.
+    let record = img.partition("t", 0).expect("partition in image");
+    assert!(
+        partition_availability(&img, record, &HashSet::new(), "EXTERNAL")
+            == PartitionAvailability {
+                leader_id: NO_LEADER_ID,
+                isr_nodes: vec![1, 2],
+                offline_replicas: vec![1],
+            }
+    );
 }
 
 /// The set an operator election may elect from, which every node computes the

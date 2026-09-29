@@ -18,7 +18,7 @@ use krabka_verified::stretch::{
 use crate::{
     config_keys::RecoveryStrategy,
     leader_election::FailoverDecision,
-    site_placement::{SiteBrokerView, stretch_replicas},
+    site_placement::{PlacementRng, SiteBrokerView, stretch_replicas},
 };
 
 /// The one topic of the model. Every action works on partition 0 of it.
@@ -135,6 +135,7 @@ impl StretchModel {
                 node_id: NodeId(node_id),
                 site: Some(sites[site].name.to_string()),
                 is_witness,
+                fenced: false,
             })
             .collect();
         let site_of: BTreeMap<NodeId, u8> = brokers
@@ -159,6 +160,8 @@ impl StretchModel {
             1,
             replication_factor,
             Some(sites[preferred_site as usize].name),
+            // A fixed seed keeps the model check reproducible.
+            &mut PlacementRng::seeded(0),
         );
         assert!(
             placement.len() == 1,

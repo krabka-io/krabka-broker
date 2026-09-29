@@ -155,11 +155,17 @@ pub(crate) async fn partition_view(client: &Client) -> PartitionView {
         .find(|t| t.name.as_deref() == Some(TOPIC))
         .and_then(|t| t.partitions.first())
         .expect("the topic has partition 0");
+    // Placement starts at a random site, as Kafka's does, so the order of the
+    // replicas after the first one, the preferred leader, is not fixed.
+    let mut replica_nodes = partition.replica_nodes.clone();
+    if let Some((_, followers)) = replica_nodes.split_first_mut() {
+        followers.sort_unstable();
+    }
     PartitionView {
         error_code: partition.error_code,
         partition_index: partition.partition_index,
         leader_id: partition.leader_id,
-        replica_nodes: partition.replica_nodes.clone(),
+        replica_nodes,
         isr_nodes: partition.isr_nodes.iter().copied().collect(),
         offline_replicas: partition.offline_replicas.clone(),
     }

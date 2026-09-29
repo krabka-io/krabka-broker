@@ -14,7 +14,7 @@ use krabka_client_core::Client;
 use krabka_metadata::{LeaderRecoveryState, MetadataRecord, TopicConfigRecord};
 use krabka_protocol::{
     owned::{
-        create_topics_request::{CreatableTopic, CreateTopicsRequest},
+        create_topics_request::CreateTopicsRequest,
         metadata_request::{MetadataRequest, MetadataRequestTopic},
         produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
     },
@@ -39,20 +39,19 @@ async fn find_controller_leader(cluster: &[(BrokerHandle, BrokerConfig, TempDir)
     panic!("a leader was elected but no handle self-identifies as leader");
 }
 
+/// Creates `name` with one partition on nodes `1..=rf`, node 1 leading. The
+/// tests kill or truncate nodes by id, so they need to know who leads: an
+/// automatic placement starts at a random broker.
 async fn create_topic(broker: &BrokerHandle, bootstrap: &str, name: &str, rf: i16) {
     let client = Client::builder()
         .bootstrap(bootstrap.to_string())
         .build()
         .await
         .unwrap();
+    let replicas: Vec<i32> = (1..=i32::from(rf)).collect();
     let resp = client
         .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.into(),
-                num_partitions: 1,
-                replication_factor: rf,
-                ..Default::default()
-            }],
+            topics: vec![support::topic_on(name, &[&replicas])],
             timeout_ms: 5_000,
             ..Default::default()
         })

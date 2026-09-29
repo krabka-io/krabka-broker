@@ -61,17 +61,14 @@ pub async fn bootstrap_audit_topic(
     brokers.sort_unstable();
 
     let num_partitions = i32::try_from(brokers.len()).unwrap_or(1);
-    // RF=1: partition i → brokers[i % len] as sole replica/leader.
-    // Use the crate-internal round_robin helper; falls back to explicit
-    // per-broker assignment when brokers.len() == num_partitions (the common
-    // single-broker test case also satisfies this).
-    let assignments =
-        crate::handlers::create_topics::round_robin_replicas(&brokers, num_partitions, 1);
+    // RF=1: partition i has broker i as its sole replica and leader.
+    let assignments: Vec<Vec<krabka_raft::NodeId>> =
+        brokers.iter().map(|broker| vec![*broker]).collect();
 
     let mut records = Vec::with_capacity(1 + usize::try_from(num_partitions).unwrap_or(0));
     records.push(MetadataRecord::V1Topic(TopicRecord {
         name: config.audit_topic.clone(),
-        topic_id: uuid::Uuid::new_v4(),
+        topic_id: krabka_format::random_uuid(),
         partitions: num_partitions,
         replication_factor: 1,
     }));

@@ -8,42 +8,11 @@ use krabka_protocol::owned::create_topics_request::CreatableTopic;
 use crate::{
     codes,
     config_keys::resolve_broker_witness,
-    site_placement::{SiteBrokerView, stretch_replicas},
+    site_placement::{PlacementRng, SiteBrokerView, placement_failure_reason, stretch_replicas},
 };
 
 #[cfg(test)]
 mod tests;
-
-/// Round-robin replica placement.
-///
-/// Given a sorted broker set `bs = [b0, b1, …, bk-1]` and a partition
-/// count `P`, this returns a `Vec<Vec<NodeId>>` of length `P`, where each
-/// inner vec is `R = replication_factor` long. Partition `p`'s leader
-/// is `bs[(p) % k]`, and the remaining replicas are `bs[(p + i) % k]` for
-/// `i in 1..R`. The caller must guarantee `R <= k`. Otherwise this returns an
-/// empty outer vec, and the caller reports `INVALID_REPLICATION_FACTOR`.
-///
-/// This is the placement of a cluster that declares no site. The site-aware
-/// [`stretch_replicas`] calls it for such a cluster, so the two agree there.
-pub(crate) fn round_robin_replicas(
-    sorted_brokers: &[krabka_raft::NodeId],
-    num_partitions: i32,
-    replication_factor: i16,
-) -> Vec<Vec<krabka_raft::NodeId>> {
-    let k = sorted_brokers.len();
-    let r = usize::try_from(replication_factor).unwrap_or(0);
-    if r == 0 || r > k {
-        return Vec::new();
-    }
-    let p_count = usize::try_from(num_partitions).unwrap_or(0);
-    (0..p_count)
-        .map(|p| {
-            (0..r)
-                .map(|i| sorted_brokers[(p + i) % k])
-                .collect::<Vec<_>>()
-        })
-        .collect()
-}
 
 /// Kafka's `ReplicationControlManager.validateManualPartitionAssignment` on
 /// one partition's replica list: the replicas in the order the client sent
@@ -153,20 +122,22 @@ fn manual_replicas(
     Ok(by_partition.into_values().collect())
 }
 
-/// The `INVALID_REPLICATION_FACTOR` message of a placement that cannot put
-/// `replication_factor` replicas on the `usable` brokers, as Kafka's
-/// `createTopic` wraps the `StripedReplicaPlacer` refusal.
-pub(crate) fn placement_failure_message(replication_factor: i16, usable: usize) -> String {
-    let reason = if usable == 0 {
-        "All brokers are currently fenced, or have all their log directories cordoned.".to_owned()
-    } else {
-        format!(
-            "The target replication factor of {replication_factor} cannot be reached because \
-             only {usable} broker(s) are registered or some brokers have all their log \
-             directories cordoned."
-        )
-    };
-    format!("Unable to replicate the partition {replication_factor} time(s): {reason}")
+/// The `INVALID_REPLICATION_FACTOR` message of `CreateTopics` for a placement
+/// that cannot put `replication_factor` replicas on `brokers`, as Kafka's
+/// `createTopic` wraps the `StripedReplicaPlacer` refusal. `brokers` is what
+/// the placement got: fenced brokers included.
+///
+/// `CreatePartitions` does not wrap it: Kafka's `createPartitions` lets the
+/// placer's exception through, so its row carries [`placement_failure_reason`]
+/// alone.
+pub(crate) fn placement_failure_message(
+    replication_factor: i16,
+    brokers: &[SiteBrokerView],
+) -> String {
+    format!(
+        "Unable to replicate the partition {replication_factor} time(s): {}",
+        placement_failure_reason(replication_factor, brokers)
+    )
 }
 
 /// The leader and the ISR a new partition starts with.
@@ -178,18 +149,49 @@ pub(crate) struct InitialLeadership {
 
 /// The starting leadership of each partition an automatic placement made.
 ///
-/// The placement picks no unavailable broker and never puts a witness first,
-/// so the whole replica list is the ISR and its first replica leads.
+/// Kafka's `ReplicationControlManager.createTopic` builds the ISR from the
+/// replicas that pass `ClusterControlManager.isActive`, so a fenced replica
+/// stays in the replica list and out of the ISR. The placement never puts a
+/// fenced broker or a witness first, so the first replica leads. `inactive` is
+/// [`inactive_brokers`].
 pub(crate) fn automatic_leaderships(
     assignments: &[Vec<krabka_raft::NodeId>],
+    inactive: &std::collections::HashSet<u64>,
 ) -> Vec<InitialLeadership> {
     assignments
         .iter()
         .map(|replicas| InitialLeadership {
             leader: replicas[0],
-            isr: replicas.clone(),
+            isr: replicas
+                .iter()
+                .copied()
+                .filter(|replica| !inactive.contains(&replica.0))
+                .collect(),
         })
         .collect()
+}
+
+/// The brokers that Kafka's `ClusterControlManager.isActive` refuses: the
+/// `unavailable` ones (fenced or past their heartbeat deadline) and the ones in
+/// controlled shutdown. `unavailable` is
+/// [`crate::handlers::offline_replicas::unavailable_brokers`].
+pub(crate) fn inactive_brokers(
+    image: &krabka_metadata::MetadataImage,
+    unavailable: &std::collections::HashSet<u64>,
+) -> std::collections::HashSet<u64> {
+    let mut inactive = unavailable.clone();
+    inactive.extend(controlled_shutdown_brokers(image));
+    inactive
+}
+
+/// The brokers whose registration says they are in controlled shutdown.
+fn controlled_shutdown_brokers(
+    image: &krabka_metadata::MetadataImage,
+) -> impl Iterator<Item = u64> {
+    image
+        .brokers()
+        .filter(|registration| registration.in_controlled_shutdown)
+        .map(|registration| registration.node_id.0)
 }
 
 /// The starting leadership of each partition of a manual assignment.
@@ -198,8 +200,8 @@ pub(crate) fn automatic_leaderships(
 /// partition from the listed brokers that are active (registered, not fenced
 /// and not in controlled shutdown), in the listed order, and
 /// `buildPartitionRegistration` makes the first of them the leader. The
-/// replica list stays as the client sent it. `unavailable` is
-/// [`crate::handlers::offline_replicas::unavailable_brokers`].
+/// replica list stays as the client sent it. `inactive` is
+/// [`inactive_brokers`].
 ///
 /// A krabka witness replicates but never leads (see
 /// [`crate::site_placement`]), so the leader is the first active replica that
@@ -212,7 +214,7 @@ pub(crate) fn automatic_leaderships(
 /// that may lead.
 pub(crate) fn manual_leaderships(
     assignments: &[Vec<krabka_raft::NodeId>],
-    unavailable: &std::collections::HashSet<u64>,
+    inactive: &std::collections::HashSet<u64>,
     witnesses: &std::collections::HashSet<krabka_raft::NodeId>,
     first_partition: i32,
 ) -> Result<Vec<InitialLeadership>, String> {
@@ -222,7 +224,7 @@ pub(crate) fn manual_leaderships(
         let isr = replicas
             .iter()
             .copied()
-            .filter(|replica| !unavailable.contains(&replica.0))
+            .filter(|replica| !inactive.contains(&replica.0))
             .collect::<Vec<_>>();
         if isr.is_empty() {
             return Err(format!(
@@ -246,21 +248,31 @@ pub(crate) fn manual_leaderships(
     Ok(leaderships)
 }
 
-/// The brokers automatic placement leaves out: the `unavailable` ones and, as
-/// Kafka's `ClusterControlManager.usableBrokers` filters on
+/// The brokers automatic placement leaves out, as Kafka's
+/// `BrokerHeartbeatManager.UsableBrokerIterator` skips them: the ones in
+/// controlled shutdown (`BrokerControlStates.shuttingDown`) and, as
+/// `ClusterControlManager.usableBrokers` filters on
 /// `BrokerRegistration.hasUncordonedDirs`, every broker whose log directories
 /// are all cordoned (KIP-1066).
+///
+/// A fenced broker is not left out. Kafka hands it to the placer as a last
+/// resort, and [`site_broker_views`] marks it as fenced.
 pub(crate) fn automatic_placement_exclusions(
     image: &krabka_metadata::MetadataImage,
-    unavailable: &std::collections::HashSet<u64>,
 ) -> std::collections::HashSet<u64> {
     let mut excluded = crate::cordoned_log_dirs::fully_cordoned_brokers(image);
-    excluded.extend(unavailable);
+    excluded.extend(controlled_shutdown_brokers(image));
     excluded
 }
 
 /// The registered brokers as the site-aware placement sees them, in node-id
 /// order.
+///
+/// `excluded` brokers are left out ([`automatic_placement_exclusions`] for an
+/// automatic placement, nothing for a manual assignment, which needs only the
+/// registrations). A broker in `fenced` stays in, tagged so the placement
+/// takes it last and never puts it first. `fenced` is
+/// [`crate::handlers::offline_replicas::unavailable_brokers`].
 ///
 /// The list keeps the race tolerance of the plain broker list. On a cluster
 /// that just started, the image may not hold the self-registration record
@@ -280,16 +292,18 @@ pub(crate) fn automatic_placement_exclusions(
 pub(crate) fn site_broker_views(
     image: &krabka_metadata::MetadataImage,
     local_broker: Option<krabka_raft::NodeId>,
-    unavailable: &std::collections::HashSet<u64>,
+    excluded: &std::collections::HashSet<u64>,
+    fenced: &std::collections::HashSet<u64>,
 ) -> Vec<SiteBrokerView> {
     let has_registrations = image.brokers().next().is_some();
     let mut views = image
         .brokers()
-        .filter(|broker| !unavailable.contains(&broker.node_id.0))
+        .filter(|broker| !excluded.contains(&broker.node_id.0))
         .map(|broker| SiteBrokerView {
             node_id: broker.node_id,
             site: broker.rack.clone(),
             is_witness: resolve_broker_witness(image, broker.node_id),
+            fenced: fenced.contains(&broker.node_id.0),
         })
         .collect::<Vec<_>>();
     if let (false, true, Some(node_id)) = (has_registrations, views.is_empty(), local_broker) {
@@ -297,6 +311,7 @@ pub(crate) fn site_broker_views(
             node_id,
             site: None,
             is_witness: false,
+            fenced: false,
         });
     }
     views.sort_by_key(|view| view.node_id);
@@ -318,6 +333,7 @@ pub(super) fn resolve_assignments(
     topic: &CreatableTopic,
     brokers: &[SiteBrokerView],
     preferred_site: Option<&str>,
+    rng: &mut PlacementRng,
 ) -> Result<Vec<Vec<krabka_raft::NodeId>>, (i16, String)> {
     if topic.assignments.is_empty() {
         return Ok(stretch_replicas(
@@ -325,6 +341,7 @@ pub(super) fn resolve_assignments(
             topic.num_partitions,
             topic.replication_factor,
             preferred_site,
+            rng,
         ));
     }
     let node_ids = brokers

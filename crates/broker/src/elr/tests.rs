@@ -105,6 +105,19 @@ fn seed_records_with_min_isr(min_isr: &str) -> Vec<MetadataRecord> {
     ]
 }
 
+/// The endpoint list of a remote broker at `port`: the `PLAINTEXT` listener that
+/// the requests of these tests arrive on. A broker with no endpoint on that
+/// listener is offline in `Metadata` and `DescribeTopicPartitions`, as it is in
+/// Kafka's `KRaftMetadataCache`.
+fn plaintext_endpoints(port: u16) -> Vec<krabka_metadata::BrokerEndpoint> {
+    vec![krabka_metadata::BrokerEndpoint {
+        name: "PLAINTEXT".into(),
+        host: "127.0.0.1".into(),
+        port,
+        protocol: krabka_security::ListenerProtocol::Plaintext,
+    }]
+}
+
 /// The registration record that puts broker 3 in the image under
 /// `incarnation`. Without one, the registration handler reads the broker as
 /// new rather than as one that has come back.
@@ -119,7 +132,7 @@ fn registration_record(incarnation: u128) -> MetadataRecord {
         host: "127.0.0.1".into(),
         port: 9094,
         rack: None,
-        endpoints: vec![],
+        endpoints: plaintext_endpoints(9094),
         log_dirs: vec![],
         features: std::collections::BTreeMap::new(),
     })
@@ -185,7 +198,9 @@ async fn activate_followers(broker: &Broker) {
                         host: "127.0.0.1".into(),
                         port: 9092 + u16::try_from(node).expect("a small node id"),
                         rack: None,
-                        endpoints: vec![],
+                        endpoints: plaintext_endpoints(
+                            9092 + u16::try_from(node).expect("a small node id"),
+                        ),
                         log_dirs: vec![],
                         features: std::collections::BTreeMap::new(),
                     })

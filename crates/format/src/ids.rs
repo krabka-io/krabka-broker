@@ -74,7 +74,7 @@ impl ClusterId {
     /// an option.
     #[must_use]
     pub fn random() -> Self {
-        Self(first_accepted(|id| is_reserved(id) || starts_with_dash(id)))
+        Self(random_uuid())
     }
 
     /// Parses a command-line value: the Kafka form, or the hyphenated form.
@@ -117,6 +117,17 @@ impl DirectoryId {
     pub fn parse_cli(input: &str) -> Result<Self, KafkaUuidError> {
         parse_kafka_or_hyphenated(input).map(Self)
     }
+}
+
+/// Returns a random id, as Kafka's `Uuid.randomUuid` does: never the zero id
+/// or the id with value one, and never one whose string form starts with `-`,
+/// which a command-line parser would read as an option.
+///
+/// [`ClusterId::random`] uses it. So does the broker for a new topic id, which
+/// Kafka's `ReplicationControlManager.createTopic` draws the same way.
+#[must_use]
+pub fn random_uuid() -> Uuid {
+    first_accepted(|id| is_reserved(id) || starts_with_dash(id))
 }
 
 /// Kafka's `Uuid.RESERVED`: the zero id and the id with value one.
@@ -485,6 +496,13 @@ mod tests {
     /// The generators skip what Kafka's generators skip.
     #[test]
     fn random_ids_obey_kafka_generation_rules() {
+        // One draw in 64 starts with a dash before the rule applies, so
+        // 5000 draws would miss a missing rule with a chance of e^-78.
+        for _ in 0..5000 {
+            let plain = random_uuid();
+            check!(!is_reserved(plain));
+            check!(!encode(plain).starts_with('-'));
+        }
         for _ in 0..500 {
             let cluster = ClusterId::random();
             check!(!is_reserved(cluster.0));

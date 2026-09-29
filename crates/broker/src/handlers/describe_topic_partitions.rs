@@ -234,7 +234,13 @@ pub(crate) async fn handle(
                 next_partition_index = p.partition;
                 break;
             }
-            row_partitions.push(partition_response(&image, p, &unavailable, &topic_elr));
+            row_partitions.push(partition_response(
+                &image,
+                p,
+                &unavailable,
+                ctx.connection_listener_name,
+                &topic_elr,
+            ));
             emitted_partitions += 1;
         }
 
@@ -286,6 +292,7 @@ fn partition_response(
     image: &krabka_metadata::MetadataImage,
     partition: &krabka_metadata::PartitionRecord,
     unavailable: &std::collections::HashSet<u64>,
+    listener: &str,
     topic_elr: &TopicElr,
 ) -> DescribeTopicPartitionsResponsePartition {
     let elr = topic_elr.partition(partition.partition);
@@ -293,9 +300,14 @@ fn partition_response(
     // `crate::handlers::offline_replicas::partition_availability`. Kafka's
     // `KRaftMetadataCache.partitionMetadataForDescribeTopicResponse` leaves
     // `error_code` alone for a `-1` leader here -- only `Metadata` carries
-    // `LEADER_NOT_AVAILABLE` beside it -- so this row stays `NONE`.
-    let availability =
-        crate::handlers::offline_replicas::partition_availability(image, partition, unavailable);
+    // `LEADER_NOT_AVAILABLE` beside it -- so this row stays `NONE`. A leader
+    // with no endpoint on the request's listener is `-1` as well.
+    let availability = crate::handlers::offline_replicas::partition_availability(
+        image,
+        partition,
+        unavailable,
+        listener,
+    );
     DescribeTopicPartitionsResponsePartition {
         error_code: codes::NONE,
         partition_index: partition.partition,
