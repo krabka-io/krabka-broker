@@ -244,6 +244,7 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
                     transactional_id: None,
                     version: 9,
                     producer_id_expiration_ms: 86_400_000,
+                    verification_enabled: true,
                 },
                 acks: 1,
             },

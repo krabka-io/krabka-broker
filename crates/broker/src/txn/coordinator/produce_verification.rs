@@ -36,6 +36,53 @@ use crate::{
 /// the legacy `INVALID_PRODUCER_EPOCH` downgrade.
 pub(crate) const INTERNAL_REGISTRATION_VERSION: i16 = 4;
 
+/// Kafka's `TransactionLogConfig.TRANSACTION_PARTITION_VERIFICATION_ENABLE_CONFIG`,
+/// a dynamic cluster-wide broker config that defaults to `true`.
+const PARTITION_VERIFICATION_ENABLE: &str = "transaction.partition.verification.enable";
+
+/// Whether `node` verifies that a transaction contains a partition before it
+/// appends transactional records to it, as of `image`: the value of the
+/// dynamic per-broker config, else the cluster-wide one, else Kafka's default
+/// `true`. A value that is not a boolean does not apply, as Kafka refuses to
+/// set it.
+///
+/// This is read for each request, so a change takes effect for the next one.
+pub(crate) fn partition_verification_enabled(
+    image: &krabka_metadata::MetadataImage,
+    node: krabka_metadata::NodeId,
+) -> bool {
+    image
+        .broker_config(node)
+        .and_then(|configs| configs.get(PARTITION_VERIFICATION_ENABLE))
+        .or_else(|| {
+            image
+                .default_broker_config()?
+                .get(PARTITION_VERIFICATION_ENABLE)
+        })
+        .and_then(|value| match value.trim().to_ascii_lowercase().as_str() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        })
+        .unwrap_or(true)
+}
+
+/// Whether the leader skips the coordinator call of a transactional append.
+///
+/// Kafka's `ReplicaManager.maybeSendPartitionsToTransactionCoordinator` skips
+/// it when `transaction.partition.verification.enable` is `false` and the
+/// operation only verifies (`Produce` below v12, `TxnOffsetCommit` below v5).
+/// An operation that adds the partition still asks the coordinator, because
+/// the add is what registers the partition, not a check on top of it. With no
+/// call, `UnifiedLog.batchMissingRequiredVerification` does not refuse the
+/// append either, whatever the log holds.
+pub(crate) fn skips_coordinator_verification(
+    supports_epoch_bump: bool,
+    verification_enabled: bool,
+) -> bool {
+    !supports_epoch_bump && !verification_enabled
+}
+
 /// The partitions one transactional producer asks its coordinator to add or
 /// verify: Kafka's `AddPartitionsToTxnTransaction`.
 #[derive(Debug, Clone)]

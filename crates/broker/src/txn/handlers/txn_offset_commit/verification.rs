@@ -27,7 +27,10 @@ use crate::{
     error::BrokerError,
     partition::ProducerAppendCheck,
     txn::{
-        coordinator::produce_verification::{INTERNAL_REGISTRATION_VERSION, TransactionCheck},
+        coordinator::produce_verification::{
+            INTERNAL_REGISTRATION_VERSION, TransactionCheck, partition_verification_enabled,
+            skips_coordinator_verification,
+        },
         state::TopicPartition,
     },
 };
@@ -95,6 +98,16 @@ pub(super) async fn verify_producer(
         })?;
     let check = ProducerAppendCheck { batch, guard };
     if guard == VerificationGuard::SENTINEL {
+        return Ok(check);
+    }
+    // `transaction.partition.verification.enable=false`: Kafka's
+    // `maybeSendPartitionsToTransactionCoordinator` asks the coordinator only
+    // to add the partition, never to verify it, and the log appends without a
+    // verified guard. The check presents the guard the log just started.
+    if skips_coordinator_verification(
+        supports_epoch_bump,
+        partition_verification_enabled(&broker.controller.current_image(), broker.config.node_id),
+    ) {
         return Ok(check);
     }
     let answers = broker

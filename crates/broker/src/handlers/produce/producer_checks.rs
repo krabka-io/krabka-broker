@@ -4,9 +4,15 @@
 
 use krabka_log::Offset;
 use krabka_protocol::owned::produce_response::PartitionProduceResponse;
+use krabka_units::convert::TimeExt as _;
 
 use super::{ACKS_ALL, INVALID_OFFSET, durability_frontier, prepare::PreparedBatch};
-use crate::codes;
+use crate::{
+    codes,
+    txn::coordinator::produce_verification::{
+        partition_verification_enabled, skips_coordinator_verification,
+    },
+};
 
 /// What the idempotent-producer dedup gate decided for one batch.
 pub(super) enum DedupOutcome {
@@ -37,6 +43,26 @@ pub(super) struct TransactionRequest<'a> {
     /// `producer.id.expiration.ms`, which also bounds unused verification
     /// state.
     pub(super) producer_id_expiration_ms: i64,
+    /// `transaction.partition.verification.enable` on this broker. When it is
+    /// off, a `Produce` below v12 is appended without the coordinator's check.
+    pub(super) verification_enabled: bool,
+}
+
+impl<'a> TransactionRequest<'a> {
+    /// The fields of a `Produce` request that `broker` reads from its own
+    /// configuration and from `image`.
+    pub(super) fn new(
+        broker: &crate::broker::Broker,
+        image: &krabka_metadata::MetadataImage,
+        (transactional_id, version): (Option<&'a str>, i16),
+    ) -> Self {
+        Self {
+            transactional_id,
+            version,
+            producer_id_expiration_ms: broker.config.producer_id_expiration.millis_i64(),
+            verification_enabled: partition_verification_enabled(image, broker.config.node_id),
+        }
+    }
 }
 
 /// The first `Produce` version of transaction version 2. Kafka's
@@ -141,12 +167,17 @@ pub(super) async fn verify_transactional_produce(
         // the append then refuses the batch with INVALID_TXN_STATE.
         return Ok(Verification::Settled(Some(unverified)));
     }
-    Ok(Verification::Coordinator(
-        crate::partition::ProducerAppendCheck {
-            batch: transactional_batch,
-            guard,
-        },
-    ))
+    let check = crate::partition::ProducerAppendCheck {
+        batch: transactional_batch,
+        guard,
+    };
+    if skips_coordinator_verification(supports_epoch_bump, request.verification_enabled) {
+        // `transaction.partition.verification.enable=false`: Kafka asks nobody,
+        // and the log appends the batch without a verified guard. This check
+        // presents the guard the log just started, which it accepts.
+        return Ok(Verification::Settled(Some(check)));
+    }
+    Ok(Verification::Coordinator(check))
 }
 
 /// Ask the coordinator of the request's `transactional_id` about every
@@ -413,10 +444,128 @@ mod tests {
                     transactional_id: Some("tid"),
                     version: 11,
                     producer_id_expiration_ms: 86_400_000,
+                    verification_enabled: true,
                 },
             )
             .await;
             check!(refused == Err((codes::INVALID_PRODUCER_ID_MAPPING, None)));
+        }
+    }
+
+    /// Kafka's `ReplicaManager.maybeSendPartitionsToTransactionCoordinator`
+    /// asks the coordinator to verify a `Produce` below v12 only while
+    /// `transaction.partition.verification.enable` is on, and then
+    /// `UnifiedLog.batchMissingRequiredVerification` lets the log append the
+    /// batch without a verified guard. From v12 the coordinator adds the
+    /// partition, so the knob changes nothing. The coordinator here knows no
+    /// transaction, so a produce that asks it is refused.
+    #[tokio::test]
+    async fn the_verification_knob_decides_whether_a_verify_only_produce_asks_the_coordinator() {
+        // (produce version, verification enabled, whether the batch appends)
+        let cases = [
+            (11, true, false),
+            (11, false, true),
+            (12, true, false),
+            (12, false, false),
+        ];
+        for (version, verification_enabled, appends) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let image = Arc::new(image_with_topic("orders", &[1]));
+            let partitions = Arc::new(crate::partition_registry::PartitionRegistry::new());
+            let txn_coordinator = Arc::new(crate::txn::coordinator::TxnCoordinator::new(
+                krabka_audit::NodeId(1),
+                Arc::clone(&partitions),
+                Arc::new(crate::producer_id_manager::ProducerIdManager::new()),
+                50,
+                krabka_units::mebibytes(1),
+            ));
+            let producer_state = Arc::new(crate::producer_state::ProducerState::new());
+            let log_dir_status = crate::log_dir_status::LogDirRegistry::default();
+            let metrics = crate::metrics::BrokerMetrics::new();
+            let part_dir = crate::log_dir::partition_dir(dir.path(), "orders", 0);
+            std::fs::create_dir_all(&part_dir).unwrap();
+            let part = crate::broker::spawn_partition(
+                "orders".to_string(),
+                krabka_ids::PartitionIndex(0),
+                dir.path().to_path_buf(),
+                krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).unwrap(),
+                log_dir_status.clone(),
+                Arc::clone(&producer_state),
+                false,
+            );
+            let record = image.partition("orders", 0).expect("partition");
+            part.install_replication_target(
+                Some(Uuid::nil()),
+                record.leader.0,
+                record.leader_epoch.0,
+            )
+            .await;
+            part.install_isr(&record.isr, &record.replicas, record.leader)
+                .await;
+            partitions.insert("orders".into(), krabka_ids::PartitionIndex(0), part);
+
+            let payload = encode_batch(&RecordBatch {
+                attributes: krabka_protocol::records::Attributes::default()
+                    .with_transactional(true),
+                producer_id: 4242,
+                producer_epoch: 0,
+                base_sequence: 0,
+                last_offset_delta: 0,
+                records: vec![Record {
+                    offset_delta: 0,
+                    value: Some(Bytes::from_static(b"v")),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+            let row = process_partition(
+                PartitionInput {
+                    schema: None,
+                    part_data: FramedPartition {
+                        index: 0,
+                        payload: PartitionPayload::Slice(payload),
+                    },
+                    topic_compression: None,
+                    timestamps: TimestampPolicy::default(),
+                    compacted_topic: false,
+                    max_message_bytes: krabka_log::DEFAULT_MAX_MESSAGE_SIZE,
+                    delivery: None,
+                    topic_name: "orders".into(),
+                    freeze: crate::freeze::resolve::FreezeMutationResolution::Admit,
+                    internal_topic_denied: false,
+                    transaction: super::TransactionRequest {
+                        transactional_id: Some("tid"),
+                        version,
+                        producer_id_expiration_ms: 86_400_000,
+                        verification_enabled,
+                    },
+                    acks: 1,
+                },
+                PartitionServices {
+                    schema_validator: None,
+                    partitions: &partitions,
+                    txn_coordinator: &txn_coordinator,
+                    producer_state: &producer_state,
+                    log_dir_status: &log_dir_status,
+                    image: &image,
+                    broker_policy: BrokerProducePolicy {
+                        node_id: krabka_audit::NodeId(1),
+                        default_min_insync_replicas: 1,
+                        is_witness: false,
+                    },
+                    record_decompression_policy: RecordDecompressionPolicy::default(),
+                    metrics: &metrics,
+                    phases: &crate::metrics::RequestPhases::default(),
+                    unstable_api_versions: crate::api_catalog::UnstableApiVersions::Disabled,
+                },
+            )
+            .await
+            .expect("process partition")
+            .expect_done();
+            check!(
+                (row.error_code == codes::NONE) == appends,
+                "v{version} verification_enabled={verification_enabled}: {row:?}"
+            );
         }
     }
 
@@ -636,6 +785,7 @@ mod tests {
                     transactional_id: None,
                     version: 9,
                     producer_id_expiration_ms: 86_400_000,
+                    verification_enabled: true,
                 },
                 acks: -1,
             },
@@ -779,6 +929,7 @@ mod tests {
                             transactional_id: None,
                             version: 9,
                             producer_id_expiration_ms: 86_400_000,
+                            verification_enabled: true,
                         },
                         acks: 1,
                     },
@@ -998,6 +1149,7 @@ mod tests {
                                 transactional_id: None,
                                 version: 9,
                                 producer_id_expiration_ms: 86_400_000,
+                                verification_enabled: true,
                             },
                             acks: 1,
                         },
