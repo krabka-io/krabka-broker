@@ -54,7 +54,6 @@ async fn start_with_delivery_attempts(attempts: i16) -> (BrokerHandle, tempfile:
     start_broker_with(|cfg| {
         cfg.audit_enabled = false;
         cfg.authorizer = Arc::new(AllowAllAuthorizer);
-        cfg.share_group.enable = true;
         cfg.share_group.max_delivery_attempts = attempts;
     })
     .await

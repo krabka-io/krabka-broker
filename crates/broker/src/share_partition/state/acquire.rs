@@ -40,25 +40,30 @@ impl AcquisitionState {
     ///
     /// When no `Available` record remains in the window and the log has
     /// advanced past `end_offset`, this method appends one `Available` batch
-    /// that spans `[end_offset, min(hwm-1, end_offset + max_inflight - 1)]`
-    /// and advances `end_offset`. `max_inflight` caps how many records can be
-    /// in flight at once. The machine approximates that cap as a record
-    /// count.
+    /// that spans `[end_offset, min(hwm-1, end_offset + room - 1)]` and
+    /// advances `end_offset`. `room` is what is left of `max_record_locks`,
+    /// the group's `share.partition.max.record.locks`, once the records that
+    /// are in flight are counted: Kafka's `SharePartition.numInFlightRecords`
+    /// is `endOffset - startOffset + 1`, and `canAcquireRecords` and
+    /// `lastOffsetAndMaxRecordsToAcquire` stop the partition from taking
+    /// records once it reaches the limit. With no room, the window does not
+    /// grow until an acknowledgement, a release or a lock timeout moves the
+    /// SPSO.
     ///
     /// A `Deferred` record is not `Available`, so a window that holds only
     /// records the schedule has not released yet does not block this method.
     /// That is what lets a share group reach a due record sitting behind a
     /// waiting one. The caller bounds how far it goes, because a deferred run
     /// is not in flight and so does not spend the in-flight budget itself.
-    pub fn materialize(&mut self, hwm: Offset, max_inflight: i32) {
+    pub fn materialize(&mut self, hwm: Offset, max_record_locks: i32) {
         if self.has_available() || self.end_offset >= hwm {
             return;
         }
-        let max_inflight = i64::from(max_inflight.max(1));
-        let last = (hwm - 1).min(self.end_offset + max_inflight - 1);
-        if last < self.end_offset {
+        let room = i64::from(max_record_locks.max(1)) - self.in_flight_records();
+        if room <= 0 {
             return;
         }
+        let last = (hwm - 1).min(self.end_offset + room - 1);
         self.batches.push(InFlightBatch {
             first_offset: self.end_offset,
             last_offset: last,
@@ -69,6 +74,13 @@ impl AcquisitionState {
         });
         self.end_offset = last + 1;
         self.coalesce();
+    }
+
+    /// The records that count against the record lock limit: the whole window
+    /// `[start_offset, end_offset)` except the runs that the schedule holds
+    /// back, which no member holds a lock on.
+    fn in_flight_records(&self) -> i64 {
+        self.end_offset.0 - self.start_offset.0 - self.deferred_records()
     }
 
     /// True when the window holds an `Available` record.
@@ -361,7 +373,10 @@ mod tests {
     use assert2::{assert, check};
 
     use super::*;
-    use crate::share_partition::state::test_support::{LOCK, t0};
+    use crate::share_partition::state::{
+        AckType,
+        test_support::{LOCK, t0},
+    };
 
     #[test]
     fn delivery_limit_archives_poison_pill() {
@@ -417,6 +432,51 @@ mod tests {
         let acq = s.acquire("m1", 100, krabka_log::Offset(i64::MAX), t0(), LOCK, 5);
         assert!(acq[0].first == 0);
         assert!(acq[0].last == 9);
+    }
+
+    /// Kafka's `SharePartition.numInFlightRecords` counts the window from the
+    /// SPSO to the SPEO, and a partition at the limit takes no new records
+    /// until an acknowledgement moves the SPSO.
+    #[test]
+    fn materialize_stops_at_the_record_lock_limit_until_the_spso_moves() {
+        let mut s = AcquisitionState::new(Offset(0));
+        let mut window_ends = Vec::new();
+
+        s.materialize(Offset(100), 10);
+        window_ends.push(s.end_offset.0);
+        let _ = s.acquire("m1", 100, Offset(i64::MAX), t0(), LOCK, 5);
+        // Every record is locked and the log has more: the window stays put,
+        // however many times the member fetches again without acknowledging.
+        for _ in 0..3 {
+            s.materialize(Offset(100), 10);
+            window_ends.push(s.end_offset.0);
+        }
+        // Releasing a record keeps it in the window: still full.
+        s.acknowledge("m1", Offset(3), Offset(3), AckType::Release, 5)
+            .unwrap();
+        let _ = s.acquire("m1", 100, Offset(i64::MAX), t0(), LOCK, 5);
+        s.materialize(Offset(100), 10);
+        window_ends.push(s.end_offset.0);
+        // An acknowledgement of the prefix moves the SPSO and makes room for
+        // exactly the records it freed.
+        s.acknowledge("m1", Offset(0), Offset(3), AckType::Accept, 5)
+            .unwrap();
+        s.materialize(Offset(100), 10);
+        window_ends.push(s.end_offset.0);
+
+        assert!(window_ends == vec![10, 10, 10, 10, 10, 14]);
+        assert!(s.start_offset == Offset(4));
+    }
+
+    #[test]
+    fn a_deferred_run_does_not_spend_the_record_lock_limit() {
+        let mut s = AcquisitionState::new(Offset(0));
+        s.materialize(Offset(100), 10);
+        s.defer_internal(Offset(0), Offset(9));
+
+        s.materialize(Offset(100), 10);
+
+        assert!(s.end_offset == Offset(20));
     }
 
     #[test]

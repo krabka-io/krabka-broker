@@ -129,8 +129,7 @@ diskless_wal_hot_tail_max_size = "64MiB"
 diskless_wal_local_replica_count = 3
 diskless_wal_trim_safety_lag = 1000
 diskless_wal_index_projection_timeout = "5s"
-# KIP-932 share groups and KIP-1071 streams groups.
-share_group_enable = true
+# KIP-1071 streams groups. Share groups follow the finalized share.version feature.
 streams_group_enable = true
 streams_group_assignor = "sticky"
 

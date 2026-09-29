@@ -85,6 +85,13 @@ pub(crate) struct AckApplication<'a> {
 /// of one partition, as `(first_offset, last_offset, acknowledge_types)`, as
 /// one unit.
 ///
+/// It first expires every lock whose deadline has passed. Kafka arms a timer
+/// on each acquired batch (`releaseAcquisitionLockOnTimeout`), so at the
+/// deadline the record is `AVAILABLE` (or `ARCHIVED` at the delivery limit)
+/// and a later acknowledgement or renewal of it is `INVALID_RECORD_STATE`.
+/// The expiry stays even when an acknowledgement fails, because the timer
+/// fires whatever a member sends.
+///
 /// It stops at the first batch that fails and restores the state that `st`
 /// held before the first batch, so nothing of a failed acknowledgement stays
 /// or is persisted, as `rollbackOrProcessStateUpdates` does. It returns that
@@ -94,6 +101,7 @@ pub(crate) fn apply_acknowledgements<'b>(
     application: &AckApplication<'_>,
     batches: impl IntoIterator<Item = (i64, i64, &'b [i8])>,
 ) -> i16 {
+    st.expire_locks(application.now, application.max_attempts);
     let before = st.clone();
     for (first, last, types) in batches {
         if let Err(code) = apply_one_ack(st, application, first, last, types) {
@@ -400,6 +408,88 @@ mod tests {
             );
             actual.push((row.name, error, state.start_offset.0, state.record_states()));
             expected.push((row.name, row.error, row.spso, row.states));
+        }
+        assert!(actual == expected);
+    }
+
+    /// Kafka's lock timer fires at the deadline, so an acknowledgement or a
+    /// renewal that arrives after it finds the records `AVAILABLE`, or
+    /// `ARCHIVED` at the delivery limit, and no sweep has to run first.
+    #[test]
+    fn an_acknowledgement_after_the_lock_deadline_is_refused() {
+        use RecordState::Available;
+        const RENEW: i8 = 4;
+        // (name, setup, seconds after the acquisition, renew request,
+        // acknowledge type, error, SPSO, states)
+        type Case = (
+            &'static str,
+            Setup,
+            u64,
+            bool,
+            i8,
+            i16,
+            i64,
+            Vec<(i64, RecordState)>,
+        );
+        let rows: Vec<Case> = vec![
+            (
+                "an acknowledgement inside the lock",
+                Setup::Acquired,
+                29,
+                false,
+                ACCEPT,
+                codes::NONE,
+                10,
+                Vec::new(),
+            ),
+            (
+                "an acknowledgement past the lock",
+                Setup::Acquired,
+                31,
+                false,
+                ACCEPT,
+                codes::INVALID_RECORD_STATE,
+                0,
+                states(0, 9, Available),
+            ),
+            (
+                "a renewal past the lock",
+                Setup::Acquired,
+                31,
+                true,
+                RENEW,
+                codes::INVALID_RECORD_STATE,
+                0,
+                states(0, 9, Available),
+            ),
+            (
+                "an acknowledgement past a lock at the delivery limit",
+                Setup::AtTheLimit,
+                31,
+                false,
+                ACCEPT,
+                codes::NONE,
+                10,
+                Vec::new(),
+            ),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for (name, setup, after, requested, ack_type, error, spso, want) in rows {
+            let mut state = start(setup);
+            let application = AckApplication {
+                member: "member",
+                now: Instant::now() + Duration::from_secs(after),
+                renewal: Renewal {
+                    requested,
+                    enabled: true,
+                    lock_duration: Duration::from_secs(30),
+                },
+                max_attempts: LIMIT,
+            };
+            let got = apply_acknowledgements(&mut state, &application, [(0, 9, &[ack_type][..])]);
+            actual.push((name, got, state.start_offset.0, state.record_states()));
+            expected.push((name, error, spso, want));
         }
         assert!(actual == expected);
     }

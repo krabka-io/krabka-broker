@@ -316,6 +316,19 @@ impl Model for ShareModel {
                 s.sm.delivery_complete_count > 0
             }),
         ];
+        if !self.allow_defer {
+            // Kafka's `numInFlightRecords` never passes the record lock limit
+            // (`group.share.partition.max.record.locks`): the window is at most
+            // `max_inflight` long. A deferred run is not in flight and is
+            // promoted into the window later, so the claim is for the models
+            // without deferral.
+            properties.push(Property::always(
+                "window_within_record_lock_limit",
+                |m: &ShareModel, s: &ShareState| {
+                    s.sm.end_offset.0 - s.sm.start_offset.0 <= i64::from(m.max_inflight)
+                },
+            ));
+        }
         if self.allow_log_start_advance {
             // The log start offset never runs ahead of what was produced: it
             // can only move over records that exist.

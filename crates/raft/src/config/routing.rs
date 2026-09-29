@@ -97,22 +97,53 @@ impl From<bool> for UnstableFeatureVersions {
 pub const LATEST_PRODUCTION_METADATA_VERSION: i16 =
     krabka_metadata::metadata_version::CORDONED_LOG_DIRS_MIN_LEVEL;
 
-/// The supported range of `feature` under `unstable`: the
-/// `krabka_metadata` registry's range, with `metadata.version` capped at
-/// [`LATEST_PRODUCTION_METADATA_VERSION`] unless unstable feature versions are
-/// enabled.
+/// The latest production level of each feature that has levels past it, as
+/// Kafka's `Feature.latestProduction` gives it: what a node supports unless
+/// [`UnstableFeatureVersions`] is [`Enabled`][UnstableFeatureVersions::Enabled].
+/// A feature that is not listed has no such level.
+///
+/// In Kafka 4.3.1 that is `metadata.version`, whose trunk levels are `4.4-IV0`
+/// and above, and `share.version`, whose level 2 is trunk's `SV_2`
+/// (KIP-1191).
+const LATEST_PRODUCTION_LEVELS: [(&str, i16); 2] = [
+    (
+        krabka_metadata::metadata_version::METADATA_VERSION_FEATURE,
+        LATEST_PRODUCTION_METADATA_VERSION,
+    ),
+    (krabka_metadata::metadata_version::SHARE_VERSION_FEATURE, 1),
+];
+
+/// The highest level of a feature that Kafka trunk defines and that the
+/// `krabka_metadata` registry does not list yet: `share.version` 2, trunk's
+/// `SV_2` (KIP-1191, dead-letter queues). A node supports it only under
+/// [`UnstableFeatureVersions::Enabled`]. Drop the row once the registry's own
+/// range reaches that level.
+const LEVELS_BEYOND_THE_REGISTRY: [(&str, i16); 1] =
+    [(krabka_metadata::metadata_version::SHARE_VERSION_FEATURE, 2)];
+
+/// The supported range of `feature` under `unstable`: the `krabka_metadata`
+/// registry's range, raised to the trunk levels that the registry does not
+/// list yet, and capped at the feature's latest production level (see
+/// [`LATEST_PRODUCTION_LEVELS`]) unless unstable feature versions are
+/// enabled. A default node therefore advertises the ranges of Kafka 4.3.1.
 #[must_use]
 pub fn supported_feature_range(
     feature: &dyn krabka_metadata::Feature,
     unstable: UnstableFeatureVersions,
 ) -> (i16, i16) {
-    let (min, max) = feature.supported_range();
-    if unstable == UnstableFeatureVersions::Disabled
-        && feature.name() == krabka_metadata::metadata_version::METADATA_VERSION_FEATURE
-    {
-        (min, max.min(LATEST_PRODUCTION_METADATA_VERSION))
-    } else {
-        (min, max)
+    let (min, registry_max) = feature.supported_range();
+    let level_of = |table: &[(&str, i16)]| {
+        table
+            .iter()
+            .find(|(name, _)| *name == feature.name())
+            .map(|&(_, level)| level)
+    };
+    let max = level_of(&LEVELS_BEYOND_THE_REGISTRY).map_or(registry_max, |l| registry_max.max(l));
+    match level_of(&LATEST_PRODUCTION_LEVELS) {
+        Some(production) if unstable == UnstableFeatureVersions::Disabled => {
+            (min, max.min(production))
+        }
+        _ => (min, max),
     }
 }
 
@@ -203,4 +234,65 @@ pub type ControllerAdminRouteFuture<'a> =
 pub trait ControllerAdminRouter: Send + Sync {
     fn api_versions(&self) -> &[ControllerApiVersion];
     fn route(&self, request: ControllerAdminRequest) -> ControllerAdminRouteFuture<'_>;
+}
+
+#[cfg(test)]
+mod tests {
+    use assert2::assert;
+
+    use super::*;
+
+    /// A registry feature with a chosen name and range.
+    struct Listed(&'static str, (i16, i16));
+
+    impl krabka_metadata::Feature for Listed {
+        fn name(&self) -> &'static str {
+            self.0
+        }
+
+        fn supported_range(&self) -> (i16, i16) {
+            self.1
+        }
+
+        fn default_level(&self, _bootstrap_mv: i16) -> i16 {
+            self.1.0
+        }
+    }
+
+    /// The range each node advertises: Kafka 4.3.1's by default, and trunk's
+    /// under `unstable.feature.versions.enable`. `share.version` 2 is trunk's
+    /// `SV_2` (KIP-1191), which the registry may not list yet, so a registry
+    /// range of both 0-1 and 0-2 must give the same answers.
+    #[test]
+    fn a_default_node_advertises_the_latest_production_ranges() {
+        use UnstableFeatureVersions::{Disabled, Enabled};
+        use krabka_metadata::metadata_version::{METADATA_VERSION_FEATURE, SHARE_VERSION_FEATURE};
+
+        // (feature, registry range, unstable, expected range)
+        let rows = [
+            (SHARE_VERSION_FEATURE, (0, 1), Disabled, (0, 1)),
+            (SHARE_VERSION_FEATURE, (0, 1), Enabled, (0, 2)),
+            (SHARE_VERSION_FEATURE, (0, 2), Disabled, (0, 1)),
+            (SHARE_VERSION_FEATURE, (0, 2), Enabled, (0, 2)),
+            (METADATA_VERSION_FEATURE, (7, 33), Disabled, (7, 30)),
+            (METADATA_VERSION_FEATURE, (7, 33), Enabled, (7, 33)),
+            ("group.version", (0, 1), Disabled, (0, 1)),
+            ("group.version", (0, 1), Enabled, (0, 1)),
+        ];
+        let actual: Vec<_> = rows
+            .iter()
+            .map(|&(name, range, unstable, _)| {
+                (
+                    name,
+                    unstable,
+                    supported_feature_range(&Listed(name, range), unstable),
+                )
+            })
+            .collect();
+        let expected: Vec<_> = rows
+            .iter()
+            .map(|&(name, _, unstable, want)| (name, unstable, want))
+            .collect();
+        assert!(actual == expected);
+    }
 }

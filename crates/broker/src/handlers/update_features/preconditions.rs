@@ -161,6 +161,39 @@ mod tests {
         }
     }
 
+    /// KIP-1191: `share.version` 2 is Kafka trunk's `SV_2`, so a controller
+    /// supports it only with `unstable.feature.versions.enable`, and answers
+    /// as a 4.3.1 controller does without it.
+    #[test]
+    fn share_version_two_needs_unstable_feature_versions() {
+        let local = |unstable| LocalController {
+            node_id: NodeId(1),
+            unstable_features: unstable,
+        };
+        let image = MetadataImage::new(uuid::Uuid::nil());
+        let rows = [
+            (1, krabka_raft::UnstableFeatureVersions::Disabled, None),
+            (
+                2,
+                krabka_raft::UnstableFeatureVersions::Disabled,
+                Some("Local controller 1 only supports versions 0-1"),
+            ),
+            (2, krabka_raft::UnstableFeatureVersions::Enabled, None),
+            (
+                3,
+                krabka_raft::UnstableFeatureVersions::Enabled,
+                Some("Local controller 1 only supports versions 0-2"),
+            ),
+        ];
+        for (level, unstable, want) in rows {
+            assert!(
+                reason_not_supported(&image, local(unstable), "share.version", level).as_deref()
+                    == want,
+                "{level} {unstable:?}"
+            );
+        }
+    }
+
     fn image(metadata_version: i16) -> MetadataImage {
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {

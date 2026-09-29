@@ -2596,13 +2596,6 @@
             "null"
           ]
         },
-        "share_group_enable": {
-          "description": "Whether the broker serves KIP-932 share groups, Kafka's\n`group.share.enable`.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
         "share_group_heartbeat_interval": {
           "default": null,
           "description": "Default share-group heartbeat interval, Kafka's\n`group.share.heartbeat.interval.ms`.",

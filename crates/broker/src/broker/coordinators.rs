@@ -68,6 +68,12 @@ pub(super) async fn start_coordinators(
     }
     let mut share_coordinator_config = (*config.share_coordinator).clone();
     share_coordinator_config.load_buffer_size = config.share_coordinator_load_buffer_size;
+    // Kafka trunk's newer `ShareCoordinatorShard` rules are what
+    // `unstable.api.versions.enable` unlocks; 4.3.1 has none of them.
+    share_coordinator_config.trunk_rules = matches!(
+        config.features.unstable_api_versions,
+        crate::api_catalog::UnstableApiVersions::Enabled
+    );
     let share_coordinator = Arc::new(
         crate::share_coordinator::coordinator::ShareCoordinator::new(
             config.node_id,
@@ -102,6 +108,7 @@ pub(super) async fn start_coordinators(
         ),
     );
     share_partition_leaders.spawn_lock_sweeper();
+    share_partition_leaders.spawn_share_version_watcher();
     let mut barrier_coordinator = crate::barrier::coordinator::BarrierCoordinator::new(
         config.node_id,
         Arc::clone(partitions),

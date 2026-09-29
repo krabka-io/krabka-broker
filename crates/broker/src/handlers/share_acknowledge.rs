@@ -8,7 +8,9 @@
 //! [`AcquisitionState`] machine, and persists the result. Accept advances the
 //! SPSO, Release offers the records again, and Reject and Gap archive them.
 //!
-//! A partition that this broker does not lead gets `NOT_LEADER_OR_FOLLOWER`.
+//! A partition that this broker does not lead gets
+//! `UNKNOWN_TOPIC_OR_PARTITION` and no leader hint, as Kafka answers for a
+//! partition with no share partition in its cache.
 //! An acknowledge that targets records the member does not currently hold
 //! fails that partition row with `INVALID_RECORD_STATE`.
 //!
@@ -65,7 +67,9 @@ pub(crate) async fn handle(
 
     let cfg = broker.config.share_group.clone();
 
-    if !cfg.enable {
+    // Kafka's `isShareGroupProtocolEnabled`: a finalized `share.version` of 1.
+    let image = broker.controller.current_image();
+    if !crate::features::share_groups_enabled(&image) {
         return encode_error_response(version, codes::UNSUPPORTED_VERSION);
     }
 
@@ -75,7 +79,6 @@ pub(crate) async fn handle(
     let Some(group) = req.group_id.clone() else {
         return encode_error_response(version, codes::INVALID_REQUEST);
     };
-    let image = broker.controller.current_image();
     if group_read_denied(broker.config.authorizer.as_ref(), &image, ctx, &group) {
         return encode_error_response(version, codes::GROUP_AUTHORIZATION_FAILED);
     }
@@ -273,22 +276,17 @@ async fn process_topics(context: &AcknowledgeContext<'_>) -> Vec<ShareAcknowledg
                 continue;
             }
 
-            if !mgr.topic_leader_is_self(topic_id, ap.partition_index) {
-                let (leader_id, leader_epoch) = mgr.current_leader_of(topic_id, ap.partition_index);
-                out.error_code = codes::NOT_LEADER_OR_FOLLOWER;
-                out.current_leader = LeaderIdAndEpoch {
-                    leader_id,
-                    leader_epoch,
-                    ..Default::default()
-                };
-                parts.push(out);
-                continue;
-            }
-
-            // Kafka's `SharePartitionManager.acknowledge` answers
-            // UNKNOWN_TOPIC_OR_PARTITION for a share partition that no fetch on
-            // this broker loaded, and reads no state for it.
-            let Some(cell) = mgr.cached(group, topic_id, ap.partition_index) else {
+            // Kafka's `SharePartitionManager.acknowledge` has no leadership
+            // check: a broker that does not lead the partition holds no share
+            // partition for it, so the row answers UNKNOWN_TOPIC_OR_PARTITION
+            // with no leader hint, exactly as for a share partition that no
+            // fetch on this broker loaded. It reads no state for it.
+            let cell = if mgr.topic_leader_is_self(topic_id, ap.partition_index) {
+                mgr.cached(group, topic_id, ap.partition_index)
+            } else {
+                None
+            };
+            let Some(cell) = cell else {
                 out.error_code = codes::UNKNOWN_TOPIC_OR_PARTITION;
                 parts.push(out);
                 continue;
@@ -393,10 +391,11 @@ mod tests {
     }
 
     async fn start_broker(share_enabled: bool) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
-        crate::test_support::start_broker_with(|cfg| {
-            cfg.share_group.enable = share_enabled;
-        })
-        .await
+        let (handle, dir) = crate::test_support::start_broker_with(|_cfg| {}).await;
+        if !share_enabled {
+            crate::test_support::finalize_share_version(&handle.broker_arc_for_test(), 0).await;
+        }
+        (handle, dir)
     }
 
     fn principal() -> Principal {
@@ -626,7 +625,6 @@ mod tests {
     #[tokio::test]
     async fn unresolved_id_answers_before_topic_authorization() {
         let (broker_handle, _dir) = crate::test_support::start_broker_with(|cfg| {
-            cfg.share_group.enable = true;
             cfg.authorizer = std::sync::Arc::new(DenyTopicRead);
         })
         .await;

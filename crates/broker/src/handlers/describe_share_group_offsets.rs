@@ -56,10 +56,11 @@ pub(crate) async fn handle(
     let mut cur: &[u8] = req_bytes;
     let req = DescribeShareGroupOffsetsRequest::decode(&mut cur, version)?;
 
-    // Feature gate: a broker with share groups disabled does not implement the
-    // RPC. The response has no top-level error code, so mark every requested
-    // group with UNSUPPORTED_VERSION.
-    if !broker.config.share_group.enable {
+    // Feature gate: share groups are on from a finalized `share.version` of 1,
+    // and below it the RPC is unsupported. The response has no top-level error
+    // code, so mark every requested group with UNSUPPORTED_VERSION.
+    let image = broker.controller.current_image();
+    if !crate::features::share_groups_enabled(&image) {
         let groups = req
             .groups
             .iter()
@@ -76,7 +77,6 @@ pub(crate) async fn handle(
         return crate::handlers::encode_response(&resp, version);
     }
 
-    let image = broker.controller.current_image();
     let ng_opt = Some(broker.group_coordinator.clone());
 
     let mut groups: Vec<DescribeShareGroupOffsetsResponseGroup> =

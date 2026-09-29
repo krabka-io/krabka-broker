@@ -15,9 +15,7 @@
 //!   partition (`performRecordPruning`).
 //!
 //! Kafka runs the two timers only while share groups are enabled
-//! (`isShareGroupsEnabled`: `share.version` 1 or more in the image). krabka
-//! also enables share groups with the broker's `group.share.enable`, so the
-//! timers run when either says so.
+//! (`isShareGroupsEnabled`: `share.version` 1 or more in the image).
 
 use std::{collections::HashSet, sync::Arc};
 
@@ -28,9 +26,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use super::{LoadStatus, ShareCoordinator, state_machine::StateRecord};
-
-/// The share-version feature level from which Kafka enables share groups.
-const SHARE_GROUPS_FEATURE_LEVEL: i16 = 1;
 
 impl ShareCoordinator {
     /// The state partitions that this broker leads and has loaded.
@@ -182,15 +177,10 @@ impl ShareCoordinator {
     }
 }
 
-/// Whether the timers run for `image`: `share.version` 1 or more, or share
-/// groups enabled by the broker config.
-pub(crate) fn periodic_jobs_enabled(image: &MetadataImage, enabled_by_config: bool) -> bool {
-    enabled_by_config
-        || crate::features::feature_enabled(
-            image,
-            krabka_metadata::metadata_version::SHARE_VERSION_FEATURE,
-            SHARE_GROUPS_FEATURE_LEVEL,
-        )
+/// Whether the timers run for `image`: a finalized `share.version` of 1 or
+/// more.
+pub(crate) fn periodic_jobs_enabled(image: &MetadataImage) -> bool {
+    crate::features::share_groups_enabled(image)
 }
 
 /// The topic ids of `previous` that `next` does not hold.
@@ -208,16 +198,10 @@ fn deleted_topic_ids(previous: &MetadataImage, next: &MetadataImage) -> HashSet<
 pub(crate) fn spawn(
     coordinator: Arc<ShareCoordinator>,
     mut images: watch::Receiver<Arc<MetadataImage>>,
-    enabled_by_config: bool,
     shutdown: CancellationToken,
 ) {
     let baseline = images.borrow_and_update().clone();
-    tokio::spawn(run(
-        coordinator,
-        (baseline, images),
-        enabled_by_config,
-        shutdown,
-    ));
+    tokio::spawn(run(coordinator, (baseline, images), shutdown));
 }
 
 /// Watches `images`, a baseline image and the channel of the later ones, and
@@ -231,13 +215,12 @@ pub(crate) fn spawn(
 async fn run(
     coordinator: Arc<ShareCoordinator>,
     images: (Arc<MetadataImage>, watch::Receiver<Arc<MetadataImage>>),
-    enabled_by_config: bool,
     shutdown: CancellationToken,
 ) {
     let (mut previous, mut images) = images;
     let prune_interval = coordinator.config.state_topic_prune_interval;
     let cold_interval = coordinator.config.cold_partition_snapshot_interval;
-    let mut enabled = periodic_jobs_enabled(&previous, enabled_by_config);
+    let mut enabled = periodic_jobs_enabled(&previous);
     let schedule = |enabled: bool, interval| enabled.then(|| Instant::now() + interval);
     let mut next_prune = schedule(enabled, prune_interval);
     let mut next_cold = schedule(enabled, cold_interval);
@@ -251,7 +234,7 @@ async fn run(
                 let image = images.borrow_and_update().clone();
                 let deleted = deleted_topic_ids(&previous, &image);
                 coordinator.cleanup_deleted_topics(&deleted).await;
-                let now_enabled = periodic_jobs_enabled(&image, enabled_by_config);
+                let now_enabled = periodic_jobs_enabled(&image);
                 if now_enabled != enabled {
                     enabled = now_enabled;
                     next_prune = schedule(enabled, prune_interval);

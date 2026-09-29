@@ -51,8 +51,10 @@ pub(crate) async fn handle(
     let req = ShareGroupDescribeRequest::decode(&mut cur, version)?;
 
     // Kafka's `isShareGroupProtocolEnabled` gate comes before any ACL check,
-    // and `getErrorResponse` answers every requested group.
-    if !broker.config.share_group.enable {
+    // and `getErrorResponse` answers every requested group. Share groups are
+    // on from a finalized `share.version` of 1.
+    let image = broker.controller.current_image();
+    if !crate::features::share_groups_enabled(&image) {
         let groups = req
             .group_ids
             .iter()
@@ -61,7 +63,6 @@ pub(crate) async fn handle(
         return crate::handlers::encode_response(&response(groups), version);
     }
 
-    let image = broker.controller.current_image();
     let authorizer = broker.config.authorizer.as_ref();
     let coordinator = &broker.group_coordinator;
     // Kafka adds the GROUP_AUTHORIZATION_FAILED rows first, then the
@@ -245,11 +246,13 @@ mod tests {
     ) -> (crate::broker::BrokerHandle, tempfile::TempDir) {
         let (handle, dir) = crate::test_support::start_broker_with(|cfg| {
             cfg.authorizer = crate::test_support::controller_peer_allowed(authorizer);
-            cfg.share_group.enable = share_enabled;
         })
         .await;
         handle.wait_until_group_coordinator_ready().await;
         handle.wait_until_share_coordinator_ready().await;
+        if !share_enabled {
+            crate::test_support::finalize_share_version(&handle.broker_arc_for_test(), 0).await;
+        }
         (handle, dir)
     }
 

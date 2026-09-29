@@ -49,7 +49,6 @@ async fn start(session_max: usize) -> (BrokerHandle, tempfile::TempDir) {
     start_broker_with(move |cfg| {
         cfg.audit_enabled = false;
         cfg.authorizer = Arc::new(AllowAllAuthorizer);
-        cfg.share_group.enable = true;
         cfg.share_session_cache_max_when_unlimited = session_max;
     })
     .await

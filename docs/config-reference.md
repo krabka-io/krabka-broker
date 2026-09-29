@@ -496,7 +496,6 @@ Validated operational policy loaded from `[runtime]`.
 | `share_coordinator_write_timeout` | string | broker default | duration | How long an append to `__share_group_state` may take before the share coordinator answers `COORDINATOR_NOT_AVAILABLE`, Kafka's `share.coordinator.write.timeout.ms`. |
 | `share_group_backlog_poll_interval` | string | broker default | duration | Cadence of the share-group backlog poll. |
 | `share_group_delivery_count_limit` | integer (int16) | broker default |  | The delivery count at which a share record is archived, Kafka's `group.share.delivery.count.limit`: from 2 to 10, within the minimum and maximum below. |
-| `share_group_enable` | boolean | broker default |  | Whether the broker serves KIP-932 share groups, Kafka's `group.share.enable`. |
 | `share_group_heartbeat_interval` | string | broker default | duration | Default share-group heartbeat interval, Kafka's `group.share.heartbeat.interval.ms`. |
 | `share_group_max_delivery_count_limit` | integer (int16) | broker default |  | Upper bound on the delivery count limit, and on a group's `share.delivery.count.limit`, Kafka's `group.share.max.delivery.count.limit`: from 5 to 25. |
 | `share_group_max_heartbeat_interval` | string | broker default | duration | Upper bound on the share-group heartbeat interval, and on a group's `share.heartbeat.interval.ms`, Kafka's `group.share.max.heartbeat.interval.ms`. |

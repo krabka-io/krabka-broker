@@ -15,8 +15,9 @@
 //! and the release path a disconnect takes, `metadata_lookup` answers the
 //! topic, leader, and epoch questions against the metadata image, `cells` owns
 //! the lazily loaded per-partition machines, `persistence` writes a dirty
-//! machine back to the persister, and `sweeper` runs the background
-//! acquisition-lock timeout.
+//! machine back to the persister, `sweeper` runs the background
+//! acquisition-lock timeout, and `toggle` clears the manager when the
+//! finalized `share.version` drops to 0.
 
 use std::sync::Arc;
 
@@ -37,6 +38,7 @@ mod metadata_lookup;
 pub(crate) mod persistence;
 mod sessions;
 mod sweeper;
+mod toggle;
 
 #[cfg(test)]
 mod test_support;

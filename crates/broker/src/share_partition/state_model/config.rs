@@ -29,7 +29,8 @@ pub(super) struct ShareModel {
     pub(super) max_tick: u8,
     /// Delivery-attempt limit before a record is archived as a poison pill.
     pub(super) max_attempts: i16,
-    /// Max records `materialize` pulls into the window at once.
+    /// The record lock limit: the most records the window holds, that
+    /// `materialize` grows it up to.
     pub(super) max_inflight: i32,
     /// Whether the model generates the leader-failover `Reload` action
     /// (Task 3).

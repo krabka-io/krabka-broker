@@ -17,9 +17,8 @@ pub(crate) use krabka_metadata::metadata_version::METADATA_VERSION_FEATURE as ME
 pub(crate) use krabka_metadata::metadata_version::METADATA_VERSION_MAX;
 #[cfg(test)]
 pub(crate) use krabka_metadata::metadata_version::METADATA_VERSION_MIN;
-/// The `share.version` feature name (KIP-932). Only the `#[cfg(test)]`
-/// module that asserts share.version is advertised uses it.
-#[cfg(test)]
+/// The `share.version` feature name (KIP-932). The share-group APIs are on
+/// only while it is finalized at 1 or more, see [`share_groups_enabled`].
 pub(crate) use krabka_metadata::metadata_version::SHARE_VERSION_FEATURE as SHARE_VERSION;
 /// The `streams.version` feature name (KIP-1071). It gates
 /// `StreamsGroupHeartbeat` and `StreamsGroupDescribe`. Those handlers read it
@@ -143,6 +142,16 @@ pub(crate) fn feature_enabled(
     image.finalized_features().get(name).copied().unwrap_or(0) >= level
 }
 
+/// KIP-932: whether `image` finalizes `share.version` at 1 or more, the level
+/// that turns on share groups. It is Kafka's
+/// `KafkaApis.isShareGroupProtocolEnabled` (`ShareVersion.supportsShareGroups`),
+/// the gate of `ShareGroupHeartbeat`, `ShareGroupDescribe`, `ShareFetch`,
+/// `ShareAcknowledge` and the three `*ShareGroupOffsets` APIs. Kafka 4.3.1 has
+/// no broker config for it.
+pub(crate) fn share_groups_enabled(image: &krabka_metadata::MetadataImage) -> bool {
+    feature_enabled(image, SHARE_VERSION, 1)
+}
+
 #[cfg(test)]
 mod tests {
     use assert2::assert;
@@ -159,6 +168,29 @@ mod tests {
             level: 1,
         }));
         assert!(feature_enabled(&image, "group.version", 1)); // present at 1 → enabled
+    }
+
+    /// Kafka's `isShareGroupProtocolEnabled`: share groups are on from a
+    /// finalized `share.version` of 1, and an image without the feature has
+    /// them off.
+    #[test]
+    fn share_groups_follow_the_finalized_share_version() {
+        use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
+        for (finalized, want) in [
+            (None, false),
+            (Some(0), false),
+            (Some(1), true),
+            (Some(2), true),
+        ] {
+            let mut image = MetadataImage::new(uuid::Uuid::nil());
+            if let Some(level) = finalized {
+                image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+                    name: SHARE_VERSION.into(),
+                    level,
+                }));
+            }
+            assert!(share_groups_enabled(&image) == want, "{finalized:?}");
+        }
     }
 
     /// KIP-1276's gate: an image with no `metadata.version` is judged against
@@ -250,6 +282,24 @@ mod tests {
             supported_features(krabka_raft::UnstableFeatureVersions::Disabled)
                 .iter()
                 .any(|f| f.name == SHARE_VERSION && f.min_version == 0 && f.max_version == 1)
+        );
+    }
+
+    /// KIP-1191: level 2 is trunk's `SV_2`, so `ApiVersions` advertises it
+    /// only under `unstable.feature.versions.enable`.
+    #[test]
+    fn share_version_two_is_advertised_only_under_unstable_feature_versions() {
+        let advertised = |unstable| {
+            supported_features(unstable)
+                .into_iter()
+                .find(|f| f.name == SHARE_VERSION)
+                .map(|f| (f.min_version, f.max_version))
+        };
+        assert!(
+            (
+                advertised(krabka_raft::UnstableFeatureVersions::Disabled),
+                advertised(krabka_raft::UnstableFeatureVersions::Enabled),
+            ) == (Some((0, 1)), Some((0, 2)))
         );
     }
 
