@@ -2,13 +2,18 @@
 //! site-aware placement of the new partitions, and the validation of an
 //! explicit `assignments` list.
 
+use std::collections::BTreeSet;
+
 use assert2::assert;
 
 use super::*;
 use crate::handlers::create_partitions::test_support::assn;
 
-/// Brokers that declare no site. The placement of such a cluster is the
-/// plain Kafka round-robin.
+/// The seeds that a test runs the placement with.
+const SEEDS: std::ops::Range<u64> = 0..64;
+
+/// Brokers that declare no site. The placement of such a cluster is Kafka's
+/// striped placement.
 fn plain_brokers(node_ids: &[u64]) -> Vec<SiteBrokerView> {
     node_ids
         .iter()
@@ -16,6 +21,7 @@ fn plain_brokers(node_ids: &[u64]) -> Vec<SiteBrokerView> {
             node_id: NodeId(*node_id),
             site: None,
             is_witness: false,
+            fenced: false,
         })
         .collect()
 }
@@ -29,12 +35,9 @@ fn site_brokers(brokers: &[(u64, &str)], witnesses: &[u64]) -> Vec<SiteBrokerVie
             node_id: NodeId(*node_id),
             site: Some((*site).to_string()),
             is_witness: witnesses.contains(node_id),
+            fenced: false,
         })
         .collect()
-}
-
-fn node_ids(brokers: &[SiteBrokerView]) -> Vec<NodeId> {
-    brokers.iter().map(|broker| broker.node_id).collect()
 }
 
 fn site_of(brokers: &[(u64, &str)], node_id: NodeId) -> String {
@@ -56,16 +59,55 @@ fn sites_of(brokers: &[(u64, &str)], replicas: &[NodeId]) -> Vec<String> {
     sites
 }
 
+/// The automatic placement of `new_partitions` partitions that `seed` gives.
+fn automatic(
+    brokers: &[SiteBrokerView],
+    new_partitions: usize,
+    rf: i16,
+    preferred_site: Option<&str>,
+    seed: u64,
+) -> Result<Vec<Vec<NodeId>>, (i16, String)> {
+    resolve_new_partition_assignments(
+        None,
+        brokers,
+        new_partitions,
+        rf,
+        preferred_site,
+        &mut PlacementRng::seeded(seed),
+    )
+}
+
+/// The explicit assignments `provided`, resolved.
+fn explicit(
+    provided: &[CreatePartitionsAssignment],
+    brokers: &[SiteBrokerView],
+    rf: i16,
+    preferred_site: Option<&str>,
+) -> Result<Vec<Vec<NodeId>>, (i16, String)> {
+    resolve_new_partition_assignments(
+        Some(&provided.to_vec()),
+        brokers,
+        provided.len(),
+        rf,
+        preferred_site,
+        &mut PlacementRng::seeded(0),
+    )
+}
+
 #[test]
-fn a_cluster_without_sites_places_like_round_robin() {
+fn a_cluster_without_sites_stripes_the_new_partitions() {
     let brokers = plain_brokers(&[0, 1, 2]);
-    let out = resolve_new_partition_assignments(None, &brokers, 0, 3, 2, None)
-        .expect("round-robin should succeed");
-    assert!(out.len() == 3);
-    for r in &out {
-        assert!(r.len() == 2, "each replica list must be rf=2");
-        for b in r {
-            assert!(brokers.iter().any(|known| known.node_id == *b));
+
+    for seed in SEEDS {
+        let out = automatic(&brokers, 3, 2, None, seed).expect("striped placement should succeed");
+
+        assert!(out.len() == 3);
+        for r in &out {
+            assert!(r.len() == 2, "each replica list must be rf=2");
+            assert!(r[0] != r[1]);
+            for b in r {
+                assert!(brokers.iter().any(|known| known.node_id == *b));
+            }
         }
     }
 }
@@ -77,21 +119,23 @@ fn a_mixed_rack_cluster_keeps_the_unracked_broker_placeable() {
             node_id: NodeId(1),
             site: Some("a".into()),
             is_witness: false,
+            fenced: false,
         },
         SiteBrokerView {
             node_id: NodeId(2),
             site: Some("b".into()),
             is_witness: false,
+            fenced: false,
         },
         SiteBrokerView {
             node_id: NodeId(3),
             site: None,
             is_witness: false,
+            fenced: false,
         },
     ];
 
-    let assignments = resolve_new_partition_assignments(None, &brokers, 0, 3, 3, None)
-        .expect("mixed-rack automatic placement");
+    let assignments = automatic(&brokers, 3, 3, None, 0).expect("mixed-rack automatic placement");
 
     assert!(
         assignments
@@ -100,16 +144,19 @@ fn a_mixed_rack_cluster_keeps_the_unracked_broker_placeable() {
     );
 }
 
+/// Kafka's `createPartitions` places `additional` partitions with a placer
+/// that starts at a random broker and ignores the index of the first new
+/// partition. The new partitions of a topic that has two thus lead anywhere,
+/// and do not continue the rotation of the two it has.
 #[test]
-fn placement_continues_rotation_from_existing() {
+fn new_partitions_start_at_a_fresh_random_broker() {
     let brokers = plain_brokers(&[0, 1, 2]);
-    // Topic already has 2 partitions; adding 2 more (so partitions 2..4).
-    // Helper must return the *tail* of `round_robin_replicas(...,4,2)`,
-    // i.e. the assignments for indices 2 and 3 — not start from rotation 0.
-    let new_tail = resolve_new_partition_assignments(None, &brokers, 2, 2, 2, None)
-        .expect("round-robin tail should succeed");
-    let full = crate::handlers::create_topics::round_robin_replicas(&node_ids(&brokers), 4, 2);
-    assert!(new_tail == full[2..]);
+
+    let firsts = SEEDS
+        .map(|seed| automatic(&brokers, 2, 1, None, seed).expect("striped placement")[0][0])
+        .collect::<BTreeSet<_>>();
+
+    assert!(firsts == BTreeSet::from([NodeId(0), NodeId(1), NodeId(2)]));
 }
 
 #[test]
@@ -117,20 +164,18 @@ fn three_sites_hold_one_replica_of_every_new_partition() {
     const SITES: [(u64, &str); 3] = [(1, "a"), (2, "b"), (3, "c")];
     let brokers = site_brokers(&SITES, &[]);
 
-    let new_tail = resolve_new_partition_assignments(None, &brokers, 0, 4, 3, None)
-        .expect("site placement should succeed");
+    for seed in SEEDS {
+        let new_tail =
+            automatic(&brokers, 4, 3, None, seed).expect("site placement should succeed");
 
-    // Every list holds one broker of each site, and the leader rotates
-    // over the sites.
-    assert!(
-        new_tail
-            == vec![
-                vec![NodeId(1), NodeId(2), NodeId(3)],
-                vec![NodeId(2), NodeId(3), NodeId(1)],
-                vec![NodeId(3), NodeId(1), NodeId(2)],
-                vec![NodeId(1), NodeId(2), NodeId(3)],
-            ]
-    );
+        assert!(new_tail.len() == 4);
+        for replicas in &new_tail {
+            assert!(sites_of(&SITES, replicas) == vec!["a", "b", "c"]);
+        }
+        // The leader moves one site on with each partition.
+        assert!(new_tail[3][0] == new_tail[0][0]);
+        assert!(new_tail[1][0] != new_tail[0][0]);
+    }
 }
 
 #[test]
@@ -138,20 +183,22 @@ fn the_preferred_site_leads_every_new_partition() {
     const SITES: [(u64, &str); 6] = [(1, "a"), (2, "b"), (3, "c"), (4, "a"), (5, "b"), (6, "c")];
     let brokers = site_brokers(&SITES, &[]);
 
-    // The topic already has two partitions and grows to six.
-    let new_tail = resolve_new_partition_assignments(None, &brokers, 2, 4, 3, Some("b"))
-        .expect("site placement should succeed");
+    for seed in SEEDS {
+        // The topic already has two partitions and grows to six.
+        let new_tail =
+            automatic(&brokers, 4, 3, Some("b"), seed).expect("site placement should succeed");
 
-    let leader_sites = new_tail
-        .iter()
-        .map(|replicas| site_of(&SITES, replicas[0]))
-        .collect::<Vec<_>>();
-    assert!(leader_sites == vec!["b"; 4]);
-    let spread = new_tail
-        .iter()
-        .map(|replicas| sites_of(&SITES, replicas))
-        .collect::<Vec<_>>();
-    assert!(spread == vec![vec!["a", "b", "c"]; 4]);
+        let leader_sites = new_tail
+            .iter()
+            .map(|replicas| site_of(&SITES, replicas[0]))
+            .collect::<Vec<_>>();
+        assert!(leader_sites == vec!["b"; 4]);
+        let spread = new_tail
+            .iter()
+            .map(|replicas| sites_of(&SITES, replicas))
+            .collect::<Vec<_>>();
+        assert!(spread == vec![vec!["a", "b", "c"]; 4]);
+    }
 }
 
 #[test]
@@ -159,44 +206,39 @@ fn a_witness_replicates_new_partitions_but_leads_none() {
     const SITES: [(u64, &str); 3] = [(1, "a"), (2, "b"), (3, "w")];
     let brokers = site_brokers(&SITES, &[3]);
 
-    let new_tail = resolve_new_partition_assignments(None, &brokers, 0, 6, 3, None)
-        .expect("site placement should succeed");
+    for seed in SEEDS {
+        let new_tail =
+            automatic(&brokers, 6, 3, None, seed).expect("site placement should succeed");
 
-    let holds_witness = new_tail
-        .iter()
-        .map(|replicas| replicas.contains(&NodeId(3)))
-        .collect::<Vec<_>>();
-    assert!(holds_witness == vec![true; 6]);
-    let leaders = new_tail
-        .iter()
-        .map(|replicas| replicas[0])
-        .collect::<Vec<_>>();
-    assert!(
-        leaders
-            == vec![
-                NodeId(1),
-                NodeId(2),
-                NodeId(1),
-                NodeId(2),
-                NodeId(1),
-                NodeId(2),
-            ]
-    );
+        assert!(
+            new_tail
+                .iter()
+                .all(|replicas| replicas.contains(&NodeId(3)) && replicas[0] != NodeId(3))
+        );
+    }
 }
 
 #[test]
-fn site_placement_continues_rotation_from_existing() {
-    const SITES: [(u64, &str); 3] = [(1, "a"), (2, "b"), (3, "c")];
-    let brokers = site_brokers(&SITES, &[]);
+fn a_fenced_broker_takes_a_new_partition_only_as_a_last_resort() {
+    let mut brokers = plain_brokers(&[0, 1, 2]);
+    brokers[1].fenced = true;
 
-    // The topic already has 2 partitions and grows to 5. The helper must
-    // return the tail of the full five-partition placement, so the new
-    // partitions do not restart the rotation.
-    let new_tail = resolve_new_partition_assignments(None, &brokers, 2, 3, 3, None)
-        .expect("site placement should succeed");
-
-    let full = stretch_replicas(&brokers, 5, 3, None);
-    assert!(new_tail == full[2..]);
+    for seed in SEEDS {
+        // Kafka's placer counts the fenced broker: rf=3 on three brokers
+        // places, with the fenced broker last and never leading.
+        let full = automatic(&brokers, 3, 3, None, seed).expect("rf=3 fits three brokers");
+        assert!(
+            full.iter()
+                .all(|replicas| replicas.len() == 3 && replicas[2] == NodeId(1))
+        );
+        // rf=2 has enough unfenced brokers and leaves it out.
+        let partial = automatic(&brokers, 3, 2, None, seed).expect("rf=2 fits two brokers");
+        assert!(
+            partial
+                .iter()
+                .all(|replicas| !replicas.contains(&NodeId(1)))
+        );
+    }
 }
 
 #[test]
@@ -205,15 +247,14 @@ fn a_manual_assignment_overrides_the_site_placement() {
     let brokers = site_brokers(&SITES, &[]);
     let provided = vec![assn(&[2, 3])];
 
-    let manual = resolve_new_partition_assignments(Some(&provided), &brokers, 1, 1, 2, Some("a"))
+    let manual = explicit(&provided, &brokers, 2, Some("a"))
         .expect("explicit assignments should pass validation");
 
     assert!(manual == vec![vec![NodeId(2), NodeId(3)]]);
     // The automatic placement of the same cluster leads in site `a`, so
     // the manual list really did override it.
-    let automatic = resolve_new_partition_assignments(None, &brokers, 1, 1, 2, Some("a"))
-        .expect("site placement should succeed");
-    assert!(automatic == vec![vec![NodeId(1), NodeId(2)]]);
+    let placed = automatic(&brokers, 1, 2, Some("a"), 0).expect("site placement should succeed");
+    assert!(site_of(&SITES, placed[0][0]) == "a");
 }
 
 #[test]
@@ -221,7 +262,7 @@ fn a_cluster_of_witnesses_returns_invalid_rf() {
     const SITES: [(u64, &str); 3] = [(1, "a"), (2, "b"), (3, "c")];
     let brokers = site_brokers(&SITES, &[1, 2, 3]);
 
-    let err = resolve_new_partition_assignments(None, &brokers, 0, 1, 3, None)
+    let err = automatic(&brokers, 1, 3, None, 0)
         .expect_err("a cluster that can lead no partition must fail");
 
     assert!(err.0 == codes::INVALID_REPLICATION_FACTOR);
@@ -230,8 +271,7 @@ fn a_cluster_of_witnesses_returns_invalid_rf() {
 #[test]
 fn rf_exceeds_broker_count_returns_invalid_rf() {
     let brokers = plain_brokers(&[0, 1]);
-    let err = resolve_new_partition_assignments(None, &brokers, 0, 1, 3, None)
-        .expect_err("rf=3 against 2 brokers must fail");
+    let err = automatic(&brokers, 1, 3, None, 0).expect_err("rf=3 against 2 brokers must fail");
     assert!(err.0 == codes::INVALID_REPLICATION_FACTOR);
 }
 
@@ -239,7 +279,7 @@ fn rf_exceeds_broker_count_returns_invalid_rf() {
 fn honored_assignments_pass_through_verbatim() {
     let brokers = plain_brokers(&[0, 1, 2, 3]);
     let provided = vec![assn(&[3, 1]), assn(&[2, 0]), assn(&[1, 3])];
-    let out = resolve_new_partition_assignments(Some(&provided), &brokers, 0, 3, 2, None)
+    let out = explicit(&provided, &brokers, 2, None)
         .expect("explicit assignments should pass validation");
     assert!(
         out == vec![
@@ -287,14 +327,7 @@ fn invalid_explicit_assignments_answer_kafkas_messages() {
             let provided: Vec<CreatePartitionsAssignment> =
                 lists.iter().map(|list| assn(list)).collect();
             (
-                resolve_new_partition_assignments(
-                    Some(&provided),
-                    &brokers,
-                    0,
-                    provided.len(),
-                    2,
-                    None,
-                ),
+                explicit(&provided, &brokers, 2, None),
                 Err((codes::INVALID_REPLICA_ASSIGNMENT, message.to_owned())),
             )
         })
@@ -303,20 +336,36 @@ fn invalid_explicit_assignments_answer_kafkas_messages() {
 }
 
 /// An automatic placement that cannot put `rf` replicas on the brokers
-/// answers Kafka's `INVALID_REPLICATION_FACTOR` message.
+/// answers the message of Kafka's placer. `createPartitions` lets that
+/// message through as it is, where `createTopic` wraps it in "Unable to
+/// replicate the partition", so the row carries no prefix. Fenced brokers
+/// count toward the total, and a cluster with none unfenced says so.
 #[test]
-fn an_unplaceable_rf_answers_kafkas_message() {
+fn an_unplaceable_rf_answers_the_placers_message() {
     let brokers = plain_brokers(&[0, 1]);
+    let mut fenced = plain_brokers(&[0, 1]);
+    for broker in &mut fenced {
+        broker.fenced = true;
+    }
 
-    let err = resolve_new_partition_assignments(None, &brokers, 0, 1, 3, None);
+    let too_many = automatic(&brokers, 1, 3, None, 0);
+    let none_unfenced = automatic(&fenced, 1, 1, None, 0);
 
     assert!(
-        err == Err((
-            codes::INVALID_REPLICATION_FACTOR,
-            "Unable to replicate the partition 3 time(s): The target replication factor of 3 \
-             cannot be reached because only 2 broker(s) are registered or some brokers have \
-             all their log directories cordoned."
-                .to_owned(),
-        ))
+        too_many
+            == Err((
+                codes::INVALID_REPLICATION_FACTOR,
+                "The target replication factor of 3 cannot be reached because only 2 broker(s) \
+                 are registered or some brokers have all their log directories cordoned."
+                    .to_owned(),
+            ))
+    );
+    assert!(
+        none_unfenced
+            == Err((
+                codes::INVALID_REPLICATION_FACTOR,
+                "All brokers are currently fenced, or have all their log directories cordoned."
+                    .to_owned(),
+            ))
     );
 }

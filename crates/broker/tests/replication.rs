@@ -43,12 +43,11 @@ async fn replication_factor_three_propagates_to_all_followers() {
     }
 
     // `start_n_node_with_retry` binds brokers in order, so cluster[0]
-    // is node 1; with rf=3 / partition_index=0 the round-robin placement
-    // chooses node 1 as the partition leader. We use it as the
-    // CreateTopics + Produce target.
+    // is node 1. The topic below pins node 1 as the leader of partition 0,
+    // and we use it as the CreateTopics + Produce target.
     let leader_addr = cluster[0].1.listen_addr.to_string();
 
-    // CreateTopics("repl", num_partitions=1, replication_factor=3).
+    // CreateTopics("repl"): one partition on nodes 1, 2 and 3, led by node 1.
     let admin = Client::builder()
         .bootstrap(leader_addr.clone())
         .build()
@@ -56,12 +55,7 @@ async fn replication_factor_three_propagates_to_all_followers() {
         .unwrap();
     let resp = admin
         .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "repl".into(),
-                num_partitions: 1,
-                replication_factor: 3,
-                ..Default::default()
-            }],
+            topics: vec![support::topic_on("repl", &[&[1, 2, 3]])],
             timeout_ms: 5_000,
             ..Default::default()
         })
@@ -139,8 +133,8 @@ async fn out_of_range_truncates_and_recovers() {
         h.wait_until_brokers_registered(3).await;
     }
 
-    // CreateTopics("oor", num_partitions=1, replication_factor=3) against
-    // cluster[0] (= node 1 = round-robin leader for partition 0).
+    // CreateTopics("oor") against cluster[0] (= node 1), with partition 0 on
+    // nodes 1, 2 and 3 and node 1 leading.
     let leader_addr = cluster[0].1.listen_addr.to_string();
     let admin = Client::builder()
         .bootstrap(leader_addr.clone())
@@ -149,12 +143,7 @@ async fn out_of_range_truncates_and_recovers() {
         .unwrap();
     let resp = admin
         .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "oor".into(),
-                num_partitions: 1,
-                replication_factor: 3,
-                ..Default::default()
-            }],
+            topics: vec![support::topic_on("oor", &[&[1, 2, 3]])],
             timeout_ms: 5_000,
             ..Default::default()
         })
@@ -267,7 +256,7 @@ async fn delete_records_moves_every_replica_log_start_before_it_answers() {
         h.wait_until_brokers_registered(3).await;
     }
 
-    // cluster[0] is node 1, the round-robin leader of partition 0.
+    // cluster[0] is node 1, and the topic pins it as the leader of partition 0.
     let leader_addr = cluster[0].1.listen_addr.to_string();
     let client = Client::builder()
         .bootstrap(leader_addr)
@@ -276,12 +265,7 @@ async fn delete_records_moves_every_replica_log_start_before_it_answers() {
         .unwrap();
     let resp = client
         .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: "trimmed".into(),
-                num_partitions: 1,
-                replication_factor: 3,
-                ..Default::default()
-            }],
+            topics: vec![support::topic_on("trimmed", &[&[1, 2, 3]])],
             timeout_ms: 5_000,
             ..Default::default()
         })

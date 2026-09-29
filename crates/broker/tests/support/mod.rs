@@ -90,6 +90,37 @@ pub fn init_tracing() {
         .try_init();
 }
 
+/// A `CreateTopics` row that pins partition `p` to the brokers `replicas[p]`,
+/// the first of them leading.
+///
+/// Automatic placement starts at a random broker, as Kafka's
+/// `StripedReplicaPlacer` does, so a test that needs to know which broker
+/// leads or replicates a partition names the brokers itself.
+pub fn topic_on(
+    name: &str,
+    replicas: &[&[i32]],
+) -> krabka_protocol::owned::create_topics_request::CreatableTopic {
+    use krabka_protocol::owned::create_topics_request::{
+        CreatableReplicaAssignment, CreatableTopic,
+    };
+
+    CreatableTopic {
+        name: name.into(),
+        num_partitions: -1,
+        replication_factor: -1,
+        assignments: replicas
+            .iter()
+            .enumerate()
+            .map(|(partition, broker_ids)| CreatableReplicaAssignment {
+                partition_index: i32::try_from(partition).expect("partition index"),
+                broker_ids: broker_ids.to_vec(),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }
+}
+
 /// Fetch all records from `AUDIT_TOPIC` partition 0, JSON-decode each
 /// record value, and return the decoded objects. Mirrors the
 /// `broker_started_event_is_written_to_audit_topic` fetch pattern.

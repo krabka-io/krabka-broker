@@ -1512,6 +1512,167 @@ async fn manual_assignment_leaves_unavailable_brokers_out_of_the_isr() {
     }
 }
 
+/// #1201: Kafka's `ClusterControlManager.usableBrokers` hands the placer every
+/// registered broker that is not in controlled shutdown, fenced ones included.
+/// `StripedReplicaPlacer` takes a fenced broker last and never first, and
+/// refuses only when the replication factor exceeds that count, or when no
+/// broker is unfenced. `createTopic` then sets the ISR to the replicas that
+/// pass `isActive`, and the first of them leads.
+///
+/// The cluster is the local broker 1 and the remote brokers 2 and 3.
+#[tokio::test]
+async fn automatic_placement_takes_fenced_brokers_last_and_shrinks_the_isr() {
+    /// One row: the fenced brokers, the brokers in controlled shutdown, the
+    /// replication factor, and either the brokers every replica list holds or
+    /// the refusal message.
+    type Row = (
+        &'static [u64],
+        &'static [u64],
+        i16,
+        Result<&'static [u64], &'static str>,
+    );
+    let rows: [Row; 6] = [
+        (&[3], &[], 3, Ok(&[1, 2, 3])),
+        (&[2, 3], &[], 3, Ok(&[1, 2, 3])),
+        (&[2, 3], &[], 1, Ok(&[1])),
+        (&[2], &[3], 2, Ok(&[1, 2])),
+        (
+            &[3],
+            &[],
+            4,
+            Err(
+                "Unable to replicate the partition 4 time(s): The target replication factor of 4 \
+                 cannot be reached because only 3 broker(s) are registered or some brokers have \
+                 all their log directories cordoned.",
+            ),
+        ),
+        (
+            &[],
+            &[3],
+            3,
+            Err(
+                "Unable to replicate the partition 3 time(s): The target replication factor of 3 \
+                 cannot be reached because only 2 broker(s) are registered or some brokers have \
+                 all their log directories cordoned.",
+            ),
+        ),
+    ];
+
+    for (fenced, shutting_down, rf, outcome) in rows {
+        let (broker_handle, _dir) =
+            start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+        let broker = broker_handle.broker_arc_for_test();
+        for node_id in [2, 3] {
+            crate::test_support::seed_remote_broker(&broker_handle, node_id).await;
+        }
+        for &node_id in fenced {
+            crate::test_support::fence_remote_broker(&broker_handle, node_id).await;
+        }
+        for &node_id in shutting_down {
+            crate::test_support::begin_controlled_shutdown(&broker_handle, node_id).await;
+        }
+        let p = principal("admin");
+        let peer = peer();
+
+        let resp = drive(&broker, &request(vec![topic("auto", 4, rf)]), &p, &peer).await;
+
+        let image = broker_handle.controller_image_for_test();
+        let committed = (0..4)
+            .filter_map(|index| image.partition("auto", index).cloned())
+            .collect::<Vec<_>>();
+        let label = format!("fenced {fenced:?}, shutting down {shutting_down:?}, rf {rf}");
+        match outcome {
+            Err(message) => {
+                let expected = CreatableTopicResult {
+                    name: "auto".into(),
+                    topic_id: ProtoUuid([0; 16]),
+                    error_code: codes::INVALID_REPLICATION_FACTOR,
+                    error_message: Some(message.into()),
+                    num_partitions: -1,
+                    replication_factor: -1,
+                    configs: Some(Vec::new()),
+                    topic_config_error_code: 0,
+                    unknown_tagged_fields: UnknownTaggedFields::default(),
+                };
+                check!(resp.topics == vec![expected], "{label}");
+                check!(committed.is_empty(), "{label}");
+            }
+            Ok(brokers) => {
+                check!(resp.topics[0].error_code == codes::NONE, "{label}");
+                check!(committed.len() == 4, "{label}");
+                for (index, record) in committed.iter().enumerate() {
+                    let replicas = &record.replicas;
+                    let mut held = replicas.iter().map(|node| node.0).collect::<Vec<_>>();
+                    held.sort_unstable();
+                    // A fenced replica comes after every unfenced one.
+                    let fenced_flags = replicas
+                        .iter()
+                        .map(|node| fenced.contains(&node.0))
+                        .collect::<Vec<_>>();
+                    let isr = replicas
+                        .iter()
+                        .copied()
+                        .filter(|node| !fenced.contains(&node.0))
+                        .collect::<Vec<_>>();
+                    check!(held == brokers, "{label}, partition {index}");
+                    check!(fenced_flags.is_sorted(), "{label}, partition {index}");
+                    check!(
+                        *record
+                            == krabka_metadata::PartitionRecord {
+                                topic: "auto".into(),
+                                partition: i32::try_from(index).expect("index"),
+                                leader: isr[0],
+                                replicas: replicas.clone(),
+                                isr,
+                                leader_epoch: krabka_metadata::LeaderEpoch(INITIAL_LEADER_EPOCH),
+                                adding_replicas: vec![],
+                                removing_replicas: vec![],
+                                directories: vec![],
+                                partition_epoch: 0,
+                            },
+                        "{label}, partition {index}"
+                    );
+                }
+            }
+        }
+        broker_handle.shutdown().await;
+    }
+}
+
+/// #1235: Kafka's `Uuid.randomUuid` never returns an id whose base64url form
+/// starts with a dash, and `createTopic` draws the topic id with it. One id in
+/// 64 would start with one otherwise, so a request of 2500 topics misses a
+/// missing check with a chance of e^-39. A validate-only request runs the same
+/// checks and mints the same ids without committing.
+#[tokio::test]
+async fn topic_ids_never_start_with_a_dash() {
+    let (broker_handle, _dir) = start_broker(Arc::new(crate::authorizer::AllowAllAuthorizer)).await;
+    let broker = broker_handle.broker_arc_for_test();
+    let p = principal("admin");
+    let peer = peer();
+    let mut req = request(
+        (0..2500)
+            .map(|n| topic(&format!("topic-{n}"), 1, 1))
+            .collect(),
+    );
+    req.validate_only = true;
+
+    let resp = drive(&broker, &req, &p, &peer).await;
+
+    check!(resp.topics.len() == 2500);
+    for row in &resp.topics {
+        check!(row.error_code == codes::NONE, "{}", row.name);
+        let id = uuid::Uuid::from_bytes(row.topic_id.0);
+        check!(!id.is_nil() && id.as_u128() != 1);
+        check!(
+            !krabka_format::ClusterId(id).to_string().starts_with('-'),
+            "{}",
+            row.name
+        );
+    }
+    broker_handle.shutdown().await;
+}
+
 /// #698 / #1058: Kafka's `Create` decision for a `CreateTopics` request,
 /// table-driven over which ACL `alice` holds.
 ///

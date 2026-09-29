@@ -33,7 +33,7 @@ async fn preferred_election_via_wire_returns_success() {
 
     // Create a rf=2 topic. With 3 registered brokers the scheduler assigns
     // replicas [1, 2]; broker 1 is the preferred (first) replica.
-    create_topic_plaintext(broker1_addr, "foo-preferred", 1, 2).await;
+    create_topic_plaintext(broker1_addr, "foo-preferred", &[1, 2]).await;
 
     // Wait for all rf brokers to see the partition in their image.
     wait_partition_exists(&cluster[0].0, "foo-preferred", 0).await;
@@ -147,7 +147,7 @@ async fn electing_every_partition_omits_the_ones_already_on_their_preferred_lead
 
     // Nothing has failed over, so every partition is already led by its
     // preferred replica and no election is needed anywhere.
-    create_topic_plaintext(broker1_addr, "foo-all-partitions", 1, 2).await;
+    create_topic_plaintext(broker1_addr, "foo-all-partitions", &[1, 2]).await;
     wait_partition_exists(&cluster[0].0, "foo-all-partitions", 0).await;
 
     let rows = drive_elect_all_partitions(broker1_addr, 0).await;

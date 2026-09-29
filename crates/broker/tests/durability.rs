@@ -75,20 +75,19 @@ async fn boot_single() -> (BrokerHandle, String, TempDir) {
     (broker, bootstrap, dir)
 }
 
+/// Creates `name` with one partition on nodes `1..=rf`, node 1 leading. The
+/// cluster tests produce to node 1 and stop node 3, so they need to know who
+/// leads: an automatic placement starts at a random broker.
 async fn create_topic(broker: &BrokerHandle, bootstrap: &str, name: &str, rf: i16) {
     let client = Client::builder()
         .bootstrap(bootstrap.to_string())
         .build()
         .await
         .unwrap();
+    let replicas: Vec<i32> = (1..=i32::from(rf)).collect();
     let resp = client
         .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: name.into(),
-                num_partitions: 1,
-                replication_factor: rf,
-                ..Default::default()
-            }],
+            topics: vec![support::topic_on(name, &[&replicas])],
             timeout_ms: 5_000,
             ..Default::default()
         })

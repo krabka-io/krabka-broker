@@ -47,7 +47,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     harness::{
-        INVALID_RECORD, batch_with_value, create_topic_rf, framed, order_avro_body, produce,
+        INVALID_RECORD, batch_with_value, create_topic_on, create_topic_rf, framed,
+        order_avro_body, produce,
     },
     support,
 };
@@ -498,7 +499,17 @@ async fn rf_three_validation_survives_registry_and_broker_failover() {
         ("schema.validation.value", "true"),
         ("schema.validation.mode", "full"),
     ];
-    let avro_topic = create_topic_rf(&cluster[0].0, &bootstrap_client, "avro", validation, 3).await;
+    // Node 1 leads `avro`, and the test stops the leader later on: the
+    // registries' seed broker, node 2, must stay up to follow the failover. An
+    // automatic placement would pick a random leader.
+    let avro_topic = create_topic_on(
+        &cluster[0].0,
+        &bootstrap_client,
+        "avro",
+        validation,
+        &[1, 2, 3],
+    )
+    .await;
     let json_topic = create_topic_rf(&cluster[0].0, &bootstrap_client, "json", validation, 3).await;
     let protobuf_topic =
         create_topic_rf(&cluster[0].0, &bootstrap_client, "protobuf", validation, 3).await;

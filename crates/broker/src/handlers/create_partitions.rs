@@ -48,8 +48,9 @@ use crate::{
     error::BrokerError,
     handlers::create_topics::{
         automatic_leaderships, automatic_placement_exclusions, diskless_wal_placement_error,
-        manual_leaderships, site_broker_views,
+        inactive_brokers, manual_leaderships, site_broker_views,
     },
+    site_placement::PlacementRng,
 };
 
 #[tracing::instrument(
@@ -161,14 +162,17 @@ pub(crate) async fn handle(
         let new_partition_indices: Vec<i32> = (existing..t.count).collect();
         let new_partition_count = new_partition_indices.len();
 
-        // The automatic placement never picks an unavailable broker, nor one
-        // whose log directories are all cordoned (KIP-1066). A manual
-        // assignment may name either, because Kafka 4.3.1 checks only that the
-        // broker is registered, and the ISR below leaves an unavailable one out.
+        // The automatic placement leaves out a broker in controlled shutdown
+        // and one whose log directories are all cordoned (KIP-1066). It takes
+        // a fenced broker only as a last resort, as Kafka's placer does, and
+        // the ISR below leaves that broker out. A manual assignment may name
+        // any registered broker, because Kafka 4.3.1 checks only that the
+        // broker is registered, and the ISR again leaves out the inactive ones.
         let unavailable =
             crate::handlers::offline_replicas::unavailable_brokers(broker, &image).await;
+        let inactive = inactive_brokers(&image, &unavailable);
         let no_exclusion = std::collections::HashSet::new();
-        let unusable = automatic_placement_exclusions(&image, &unavailable);
+        let unusable = automatic_placement_exclusions(&image);
         let brokers = site_broker_views(
             &image,
             broker.config.is_broker().then_some(node_id),
@@ -177,15 +181,16 @@ pub(crate) async fn handle(
             } else {
                 &unusable
             },
+            &unavailable,
         );
         let rf = topic_rec.replication_factor;
         let new_assignments = match resolve_new_partition_assignments(
             t.assignments.as_ref(),
             &brokers,
-            existing,
             new_partition_count,
             rf,
             preferred_site,
+            &mut PlacementRng::from_entropy(),
         ) {
             Ok(a) => a,
             Err((code, msg)) => {
@@ -199,7 +204,7 @@ pub(crate) async fn handle(
         let leaderships = if t.assignments.is_some() {
             match manual_leaderships(
                 &new_assignments,
-                &unavailable,
+                &inactive,
                 &crate::config_keys::witness_node_ids(&image),
                 existing,
             ) {
@@ -212,7 +217,7 @@ pub(crate) async fn handle(
                 }
             }
         } else {
-            automatic_leaderships(&new_assignments)
+            automatic_leaderships(&new_assignments, &inactive)
         };
 
         if diskless

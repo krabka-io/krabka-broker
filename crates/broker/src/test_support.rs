@@ -352,6 +352,22 @@ pub(crate) async fn make_witness(handle: &BrokerHandle, node_id: u64) {
         .expect("publish the witness role");
 }
 
+/// Put `node_id` in controlled shutdown, the way the controller's heartbeat
+/// state machine does: its registration says so, and it stays unfenced.
+pub(crate) async fn begin_controlled_shutdown(handle: &BrokerHandle, node_id: u64) {
+    let broker = handle.broker_arc_for_test();
+    let change = crate::heartbeat::fencing::registration_change(
+        &broker.controller.current_image(),
+        krabka_raft::NodeId(node_id),
+        crate::heartbeat::fencing::RegistrationChange::CONTROLLED_SHUTDOWN,
+    );
+    broker
+        .controller
+        .submit_change(change.into_iter().collect())
+        .await
+        .expect("publish controlled shutdown");
+}
+
 /// Build a [`RequestContext`] over the given principal, peer, and client id.
 ///
 /// The remaining fields are the plaintext, non-sendfile defaults that every

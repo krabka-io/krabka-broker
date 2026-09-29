@@ -29,7 +29,7 @@ pub use format::{
     FAIL_AFTER_ENV, FormatArgs, LATEST_PRODUCTION_METADATA_VERSION, META_PROPERTIES_VERSION,
     ScramSpec, run, run_with_records,
 };
-pub use ids::{ClusterId, DirectoryId, KafkaUuidError};
+pub use ids::{ClusterId, DirectoryId, KafkaUuidError, random_uuid};
 /// The seed record type [`run_with_records`] accepts, re-exported so a caller
 /// building a bootstrap stream does not have to name [`krabka_metadata`]
 /// itself.

@@ -26,15 +26,22 @@ pub struct PartitionView {
 }
 
 pub fn partition_view(handle: &BrokerHandle) -> Option<PartitionView> {
-    handle
-        .partition_record_for_test(TOPIC, 0)
-        .map(|record| PartitionView {
+    handle.partition_record_for_test(TOPIC, 0).map(|record| {
+        // Placement starts at a random site, as Kafka's does, so the order
+        // of the replicas after the first one, the preferred leader, is
+        // not fixed.
+        let mut replicas: Vec<u64> = record.replicas.iter().map(|n| n.0).collect();
+        if let Some((_, followers)) = replicas.split_first_mut() {
+            followers.sort_unstable();
+        }
+        PartitionView {
             leader: record.leader.0,
-            replicas: record.replicas.iter().map(|n| n.0).collect(),
+            replicas,
             isr: record.isr.iter().map(|n| n.0).collect(),
             adding_replicas: record.adding_replicas.iter().map(|n| n.0).collect(),
             removing_replicas: record.removing_replicas.iter().map(|n| n.0).collect(),
-        })
+        }
+    })
 }
 
 /// Poll `handle`'s image until the partition has `leader` and exactly `isr`,

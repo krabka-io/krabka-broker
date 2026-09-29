@@ -287,9 +287,10 @@ async fn reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool
             "--if-not-exists",
             "--topic",
             TOPIC,
-            "--partitions",
-            "1",
-            "--replication-factor",
+            // One partition on broker 1, the bootstrap broker: an automatic
+            // placement would pick a random broker, and the test needs a
+            // non-bootstrap broker that hosts nothing.
+            "--replica-assignment",
             "1",
             "--command-config",
             CLIENT_PROPS,

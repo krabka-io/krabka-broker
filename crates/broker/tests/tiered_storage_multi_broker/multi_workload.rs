@@ -126,10 +126,10 @@ pub(crate) async fn await_follower_local_eviction(log_dir: &std::path::Path) {
 pub(crate) async fn create_tiered_topic(admin: &Client, b1: &BrokerHandle, b2: &BrokerHandle) {
     let response = admin
         .send(CreateTopicsRequest {
+            // Broker 1 leads and broker 2 follows: the tests produce to 1 and
+            // read the follower's log on 2. An automatic placement would pick
+            // either as the leader.
             topics: vec![CreatableTopic {
-                name: TOPIC.into(),
-                num_partitions: 1,
-                replication_factor: 2,
                 configs: vec![
                     CreatableTopicConfig {
                         name: "remote.storage.enable".into(),
@@ -157,7 +157,7 @@ pub(crate) async fn create_tiered_topic(admin: &Client, b1: &BrokerHandle, b2: &
                         ..Default::default()
                     },
                 ],
-                ..Default::default()
+                ..crate::support::topic_on(TOPIC, &[&[1, 2]])
             }],
             timeout_ms: 10_000,
             ..Default::default()
