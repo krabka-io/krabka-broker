@@ -18,9 +18,12 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
-use super::{FutureLogState, MovePolicy, catch_up::catch_up};
+use super::{
+    FutureLogState, MovePolicy,
+    catch_up::catch_up,
+    truncation::{cut_future_log, truncate_to_current_epochs},
+};
 use crate::{
-    error::BrokerError,
     partition::{Partition, SwapOutcome, WriterMessage},
     partition_registry::PartitionRegistry,
 };
@@ -39,20 +42,6 @@ pub(super) struct ReplicatorTask {
     pub(super) topic: String,
     pub(super) partition: PartitionIndex,
     pub(super) policy: MovePolicy,
-}
-
-/// Cut the future log to `offset`, or to nothing when `offset` lies below its
-/// log start, as the current log did.
-fn cut_future_log(future_log: &Mutex<Log>, offset: Offset) -> Result<(), BrokerError> {
-    let mut future = future_log
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if offset < future.log_start_offset() {
-        future.reset_to(offset)?;
-    } else {
-        future.truncate_to(offset)?;
-    }
-    Ok(())
 }
 
 pub(super) async fn replicator_loop(task: ReplicatorTask) {
@@ -77,6 +66,12 @@ pub(super) async fn replicator_loop(task: ReplicatorTask) {
     // The lowest offset that the current log was cut to and that the future
     // log has not been cut to yet.
     let mut owed_cut: Option<Offset> = None;
+    // Whether the future log still has to be compared with the current log by
+    // leader epoch: Kafka's `ReplicaAlterLogDirsThread` does that for a
+    // partition it starts to fetch, and again after each mark for truncation.
+    // A future log that a restart left on disk may hold a tail the current log
+    // dropped while no task ran, which no in-memory mark tells of.
+    let mut owes_epoch_check = true;
     loop {
         if cancel.is_cancelled() {
             break;
@@ -95,8 +90,12 @@ pub(super) async fn replicator_loop(task: ReplicatorTask) {
                 break;
             }
         }
-        if let Some(offset) = owed_cut {
-            if let Err(e) = cut_future_log(&future_log, offset) {
+        owes_epoch_check |= owed_cut.is_some();
+        if owes_epoch_check {
+            let truncated = owed_cut
+                .map_or(Ok(()), |offset| cut_future_log(&future_log, offset))
+                .and_then(|()| truncate_to_current_epochs(&part.log, &future_log));
+            if let Err(e) = truncated {
                 warn!(
                     topic = %topic, partition = partition.get(),
                     error = %e,
@@ -108,6 +107,7 @@ pub(super) async fn replicator_loop(task: ReplicatorTask) {
                 }
             }
             owed_cut = None;
+            owes_epoch_check = false;
         }
         // Read whatever is missing from the future log up to the source's
         // current LEO, bounded by the broker-wide log-directory copy budget.
@@ -206,7 +206,8 @@ mod tests {
         future_log::{
             canonicalize_or_self, resume_move,
             test_support::{
-                TestStampSource, append_records, append_value_batch, fixture_partition, test_policy,
+                TestStampSource, append_epoch_batch, append_records, append_value_batch,
+                fixture_partition, test_policy,
             },
         },
         log_dir,
@@ -362,6 +363,51 @@ mod tests {
         }
         assert!(part.log_end_offset() == Offset(5));
         assert!(value_sizes(&part.log) == [10, 10, 10, 20, 20]);
+
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            replicator_loop(ReplicatorTask {
+                part: Arc::clone(&part),
+                future_log,
+                target_partition_path: log_dir::partition_dir(target.path(), "t", 0),
+                future_path,
+                target_log_dir: target.path().to_path_buf(),
+                cancel: CancellationToken::new(),
+                _partitions: Arc::new(PartitionRegistry::new()),
+                future_logs: Arc::new(DashMap::new()),
+                topic: "t".into(),
+                partition: PartitionIndex(0),
+                policy: test_policy(),
+            }),
+        )
+        .await
+        .expect("the move should finish");
+
+        assert!(
+            canonicalize_or_self(&part.log_dir.load_full()) == canonicalize_or_self(target.path())
+        );
+        assert!(value_sizes(&part.log) == [10, 10, 10, 20, 20]);
+    }
+
+    /// The truncation mark is in memory, so a move that resumes after a restart
+    /// cannot know the current log was cut while no task ran. Kafka's
+    /// `ReplicaAlterLogDirsThread` compares the two logs by leader epoch when
+    /// it starts, and so does the replicator: the future log's epoch 1 ends at
+    /// 5 in the future log and at 3 in the current log, which took epoch 2
+    /// records from 3 on and grew back to the same log end (#1219).
+    #[tokio::test]
+    async fn a_resumed_move_cuts_a_future_log_that_kept_what_the_current_log_dropped() {
+        let primary = tempdir().unwrap();
+        let target = tempdir().unwrap();
+        let (part, future_log, future_path) =
+            partition_with_copied_future_log(primary.path(), target.path());
+        part.truncate_to(Offset(3)).await.unwrap();
+        // The restart: nothing remembers the cut.
+        assert!(part.take_future_truncation().await.unwrap() == Some(Offset(3)));
+        for _ in 0..2 {
+            append_epoch_batch(&part, 20, 2);
+        }
+        assert!(part.log_end_offset() == future_log.lock().unwrap().log_end_offset());
 
         tokio::time::timeout(
             Duration::from_secs(10),

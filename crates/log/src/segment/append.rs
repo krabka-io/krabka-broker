@@ -24,7 +24,8 @@ impl Segment {
     /// Side effects:
     /// - Updates `log_size`, `max_timestamp`, and `last_offset`.
     /// - Adds sparse index entries when the byte count since the last entry
-    ///   exceeds `index_interval`, and for the first batch.
+    ///   exceeds `index_interval`, which Kafka's `LogSegment.append` does not
+    ///   do for the first batch either.
     #[instrument(
         level = "debug",
         skip(self, batch),
@@ -197,12 +198,16 @@ impl Segment {
         last_offset: i64,
         index_interval: ByteSize,
     ) -> Result<Option<(u32, u32)>, LogError> {
-        let should_index = match self.offset_index.last_entry() {
-            None => true,
-            Some((_, last_pos)) => {
-                position.saturating_sub(u64::from(last_pos)) >= index_interval.bytes_u64()
-            }
-        };
+        // Kafka's `bytesSinceLastIndexEntry > indexIntervalBytes`: the bytes
+        // written since the last entry, counted from that entry's batch (or
+        // from the segment start while there is none), must exceed the
+        // interval. So the first batch of a segment is never indexed, and a
+        // batch exactly one interval past the last entry is not either.
+        let last_indexed = self
+            .offset_index
+            .last_entry()
+            .map_or(0, |(_, last_pos)| u64::from(last_pos));
+        let should_index = position.saturating_sub(last_indexed) > index_interval.bytes_u64();
         if !should_index {
             return Ok(None);
         }

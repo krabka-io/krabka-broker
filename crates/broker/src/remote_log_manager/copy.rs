@@ -798,11 +798,13 @@ mod tests {
         let listed = rlmm.list_remote_log_segments(&tp()).unwrap();
         assert!(listed.len() == exports.len());
         for md in &listed {
-            // The data + offset/leader-epoch indexes are fetchable (non-empty)
-            // from the remote store.
+            // The data and the indexes are fetchable from the remote store.
             check!(md.state() == RemoteLogSegmentState::CopySegmentFinished);
             check!(!rsm.fetch_log_segment(md, 0, None).unwrap().is_empty());
-            check!(!rsm.fetch_index(md, IndexType::Offset).unwrap().is_empty());
+            // A segment of one batch has an empty offset index, as in Kafka:
+            // `LogSegment.append` indexes a batch only once more than
+            // `index.interval.bytes` were written before it.
+            check!(rsm.fetch_index(md, IndexType::Offset).is_ok());
             check!(
                 !rsm.fetch_index(md, IndexType::ProducerSnapshot)
                     .unwrap()

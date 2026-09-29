@@ -195,13 +195,13 @@ impl Segment {
                 max_timestamp = batch.max_timestamp;
                 max_timestamp_offset = last_offset;
             }
-            let should_index = match index_points.last() {
-                None => true,
-                Some(previous) => {
-                    batch_position.saturating_sub(u64::from(previous.position))
-                        >= index_interval.bytes_u64()
-                }
-            };
+            // Kafka's `LogSegment.recover`: `validBytes - lastIndexEntry >
+            // indexIntervalBytes`, the last entry starting at zero.
+            let last_indexed = index_points
+                .last()
+                .map_or(0, |previous| u64::from(previous.position));
+            let should_index =
+                batch_position.saturating_sub(last_indexed) > index_interval.bytes_u64();
             if should_index {
                 let relative = |offset: Offset| {
                     krabka_verified::truncation_relative_offset(self.base_offset.0, offset.0)
@@ -330,8 +330,11 @@ mod tests {
         assert2::assert!(seg.last_offset() == Offset(4));
         assert2::assert!(seg.log_size == valid_size);
         assert2::assert!(std::fs::metadata(&log_path).unwrap().len() == valid_size);
-        assert2::assert!(seg.offset_index.entry_count() == 2);
-        assert2::assert!(seg.time_index.entry_count() == 2);
+        // The first batch takes no entry (Kafka's `LogSegment.recover` indexes
+        // a batch once more than the interval lies between it and the last
+        // entry, which starts at zero), so the second batch's is the one.
+        assert2::assert!(seg.offset_index.entry_count() == 1);
+        assert2::assert!(seg.time_index.entry_count() == 1);
         assert2::assert!(u64::from(seg.offset_index.lookup(999)) < valid_size);
         assert2::assert!(seg.time_index.last_entry().unwrap().1 < 999);
         drop(seg);
@@ -344,8 +347,8 @@ mod tests {
         assert2::assert!(retry.last_offset() == Offset(4));
         assert2::assert!(retry.log_size == valid_size);
         assert2::assert!(std::fs::metadata(&log_path).unwrap().len() == valid_size);
-        assert2::assert!(retry.offset_index.entry_count() == 2);
-        assert2::assert!(retry.time_index.entry_count() == 2);
+        assert2::assert!(retry.offset_index.entry_count() == 1);
+        assert2::assert!(retry.time_index.entry_count() == 1);
     }
 
     #[test]

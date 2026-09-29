@@ -22,7 +22,7 @@ use crate::{
     compact::{
         CleanedTransactionMetadata, RewriteOutput, RewriteRetention, build_offset_map,
         rewrite_segments,
-        test_support::{RETENTION, make_record, write_sealed_segment},
+        test_support::{RETENTION, make_record, round_over, write_sealed_segment},
     },
     error::LogError,
     io::{FileIo, IoTarget, LogIo},
@@ -223,7 +223,7 @@ fn compactable(dir: &Path, survivor_txnindex: bool) -> RewriteOutput {
                 now_ms: 0,
                 delete_retention: RETENTION,
             },
-            &HashMap::new(),
+            round_over(&segments, &HashMap::new()),
         )
         .unwrap()
     };

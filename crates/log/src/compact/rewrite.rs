@@ -52,6 +52,60 @@ pub struct RewriteRetention {
     pub delete_retention: Time,
 }
 
+/// What the log's producer state says about an active producer's last record:
+/// Kafka's `LastRecord`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProducerLastRecord {
+    /// The last offset of the producer's last *data* batch, or `None` when it
+    /// has written no data batch on the partition, only transaction markers.
+    pub last_data_offset: Option<Offset>,
+    /// The producer's current epoch, which fences a zombie.
+    pub producer_epoch: i16,
+}
+
+/// The last absolute offset `batch` spans.
+fn last_offset_of(batch: &RecordBatch) -> i64 {
+    batch.base_offset + i64::from(batch.last_offset_delta)
+}
+
+/// What one cleaning round knows about the log beyond the segments a
+/// [`rewrite_segments`] call gets. A round can rewrite several size-bounded
+/// groups, one call each, and both facts are about the whole round.
+#[derive(Debug, Clone, Copy)]
+pub struct CleaningRound<'a> {
+    /// Kafka's `lastRecordsOfActiveProducers`: each active producer's last
+    /// record. A producer that is not in the map is not active.
+    pub active_producers: &'a HashMap<ProducerId, ProducerLastRecord>,
+    /// Kafka's `upperBoundOffsetOfCleaningRound`: the offset after the last
+    /// batch the round rewrites.
+    pub upper_bound: Offset,
+}
+
+impl CleaningRound<'_> {
+    /// Kafka's `isBatchLastRecordOfProducer` in `Cleaner.cleanInto`: whether
+    /// `batch` is the record that keeps its producer's state alive. It is the
+    /// producer's last data batch, or, for a producer that wrote only
+    /// transaction markers, a marker of its current epoch.
+    fn is_last_record_of_producer(&self, batch: &RecordBatch) -> bool {
+        let Some(last) = self.active_producers.get(&ProducerId(batch.producer_id)) else {
+            return false;
+        };
+        match last.last_data_offset {
+            Some(last_data_offset) => last_offset_of(batch) == last_data_offset.0,
+            None => {
+                batch.attributes.is_control_batch() && batch.producer_epoch == last.producer_epoch
+            }
+        }
+    }
+
+    /// Kafka's `batch.nextOffset() == upperBoundOffsetOfCleaningRound`: the
+    /// last batch of the round, kept even when empty so that the last offset is
+    /// not lost.
+    fn is_last_batch_of_round(&self, batch: &RecordBatch) -> bool {
+        last_offset_of(batch) + 1 == self.upper_bound.0
+    }
+}
+
 /// Stream `segments`, oldest to newest, into new `.cleaned` files and apply the
 /// KIP-534 per-record [`retain_decision`].
 ///
@@ -75,10 +129,13 @@ pub struct RewriteRetention {
 ///
 /// `RETAIN_EMPTY`: this function normally skips a batch that ends up with no
 /// kept records. It writes such a batch again as a bare header with no records
-/// in two cases: when the batch is the last batch of an active producer in
-/// `active_producers`, and when it is the last batch of the consolidated
-/// output. The producer sequence, the producer epoch, and the log-end offset
-/// therefore survive. This is Kafka's `retainEmpty`.
+/// in two cases, both Kafka's `Cleaner.cleanInto`: when the batch is the
+/// record that keeps an active producer's state alive
+/// ([`CleaningRound::active_producers`]: the producer's last data batch, or a
+/// marker of its current epoch when it wrote no data batch), and when it is the
+/// last batch of the whole round ([`CleaningRound::upper_bound`]), not of each
+/// output group. The producer sequence, the producer epoch, and the log-end
+/// offset therefore survive.
 ///
 /// This function writes the `.cleaned` files to the segments' shared directory.
 /// The caller must fsync them and promote them through [`atomic_swap`].
@@ -100,7 +157,7 @@ pub fn rewrite_segments(
     offset_map: &HashMap<Bytes, Offset>,
     txn_meta: &mut CleanedTransactionMetadata,
     retention: RewriteRetention,
-    active_producers: &HashMap<ProducerId, Offset>,
+    round: CleaningRound<'_>,
 ) -> Result<RewriteOutput, LogError> {
     // The Creusot-verified retain kernel is stated over integer milliseconds,
     // and the horizon it computes is stamped into an on-disk `base_timestamp`,
@@ -139,25 +196,14 @@ pub fn rewrite_segments(
         .truncate(true)
         .open(&timeindex_swap)?;
 
-    // Flatten all batches across all segments so we can identify the last
-    // batch (for RETAIN_EMPTY) and the last batch per active producer.
     let mut all_batches: Vec<RecordBatch> = Vec::new();
     for seg in segments {
         all_batches.extend(read_all_batches(seg)?);
     }
-    let last_batch_index = all_batches.len().saturating_sub(1);
-    // The index of each active producer's last batch in `all_batches`.
-    let mut producer_last_batch: HashMap<ProducerId, usize> = HashMap::new();
-    for (i, batch) in all_batches.iter().enumerate() {
-        let pid = ProducerId(batch.producer_id);
-        if active_producers.contains_key(&pid) {
-            producer_last_batch.insert(pid, i);
-        }
-    }
 
     let mut last_kept_offset = new_base - 1;
 
-    for (batch_idx, batch) in all_batches.iter().enumerate() {
+    for batch in &all_batches {
         let is_control = batch.attributes.is_control_batch();
         let producer_id = ProducerId(batch.producer_id);
         // The pass reads the batch before it filters its records, as Kafka's
@@ -225,14 +271,13 @@ pub fn rewrite_segments(
         }
 
         if kept.is_empty() {
-            // RETAIN_EMPTY: re-emit a bare header for an emptied batch when
-            // it is the last batch of an active producer or the last batch
-            // of the consolidated output, so producer sequence/epoch and the
-            // log-end offset survive.
-            let is_producer_last =
-                producer_last_batch.get(&producer_id).copied() == Some(batch_idx);
-            let is_output_last = batch_idx == last_batch_index;
-            if !(is_producer_last || is_output_last) {
+            // RETAIN_EMPTY: re-emit a bare header for an emptied batch that
+            // keeps a producer's state alive, or that is the last batch of
+            // the round, so the producer sequence and epoch and the log-end
+            // offset survive.
+            let keeps_producer_state =
+                batch.producer_id >= 0 && round.is_last_record_of_producer(batch);
+            if !(keeps_producer_state || round.is_last_batch_of_round(batch)) {
                 continue;
             }
             let out_batch = RecordBatch {

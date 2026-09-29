@@ -53,7 +53,7 @@ pub(crate) struct QuotaRequest<'a> {
     pub(crate) image: &'a MetadataImage,
     pub(crate) buckets: &'a QuotaBuckets,
     pub(crate) principal: &'a str,
-    pub(crate) client_id: &'a str,
+    pub(crate) client_id: Option<&'a str>,
     /// `controller.quota.window.num x controller.quota.window.size.seconds`.
     pub(crate) window: Time,
     /// Whether the request version refuses a mutation over the quota.
@@ -173,7 +173,7 @@ pub fn consume_controller_mutation_quota(
     image: &MetadataImage,
     buckets: &QuotaBuckets,
     principal: &str,
-    client_id: &str,
+    client_id: Option<&str>,
     mutations: u64,
 ) -> super::QuotaDelay {
     let mut quota = ControllerMutationQuota::new(&QuotaRequest {
@@ -205,7 +205,7 @@ mod tests {
     fn zero_mutations_returns_zero_delay() {
         let img = img_with_quota(vec![("user", Some("alice"))], 1.0);
         let buckets = QuotaBuckets::new();
-        let delay = consume_controller_mutation_quota(&img, &buckets, "alice", "", 0);
+        let delay = consume_controller_mutation_quota(&img, &buckets, "alice", Some(""), 0);
         let expected =
             crate::quota::QuotaDelay::new(<Time as TimeExt>::ZERO, Some("alice".into()), None);
         assert!(delay == expected);
@@ -217,7 +217,7 @@ mod tests {
         // 5 mutations consumed → bucket has 5 left → no overage.
         let img = img_with_quota(vec![("user", Some("alice"))], 10.0);
         let buckets = QuotaBuckets::new();
-        let delay = consume_controller_mutation_quota(&img, &buckets, "alice", "", 5);
+        let delay = consume_controller_mutation_quota(&img, &buckets, "alice", Some(""), 5);
         assert!(delay.delay == <Time as TimeExt>::ZERO);
     }
 
@@ -228,7 +228,7 @@ mod tests {
     fn overage_delay_is_not_capped() {
         let img = img_with_quota(vec![("user", Some("alice"))], 1.0);
         let buckets = QuotaBuckets::new();
-        let delay = consume_controller_mutation_quota(&img, &buckets, "alice", "", 61);
+        let delay = consume_controller_mutation_quota(&img, &buckets, "alice", Some(""), 61);
         check!(
             delay.delay > secs(59) && delay.delay <= secs(60),
             "{delay:?}"
@@ -247,8 +247,8 @@ mod tests {
         let after = img_with_quota(vec![("user", Some("alice"))], 2.0);
 
         // A one-mutation bucket and 61 mutations: 60 in debt.
-        let _ = consume_controller_mutation_quota(&before, &buckets, "alice", "", 61);
-        let delay = consume_controller_mutation_quota(&after, &buckets, "alice", "", 1);
+        let _ = consume_controller_mutation_quota(&before, &buckets, "alice", Some(""), 61);
+        let delay = consume_controller_mutation_quota(&after, &buckets, "alice", Some(""), 1);
 
         check!(
             delay.delay > secs(30) && delay.delay <= millis(30_500),
@@ -264,8 +264,8 @@ mod tests {
         let after = img_with_quota(vec![("user", Some("alice"))], 1.0);
 
         // Ten tokens held, then a capacity of one: nine mutations are 8 over.
-        let _ = consume_controller_mutation_quota(&before, &buckets, "alice", "", 0);
-        let delay = consume_controller_mutation_quota(&after, &buckets, "alice", "", 9);
+        let _ = consume_controller_mutation_quota(&before, &buckets, "alice", Some(""), 0);
+        let delay = consume_controller_mutation_quota(&after, &buckets, "alice", Some(""), 9);
 
         check!(delay.delay > secs(7) && delay.delay <= secs(8), "{delay:?}");
     }
@@ -320,7 +320,7 @@ mod tests {
                         image: &img,
                         buckets: &buckets,
                         principal: "alice",
-                        client_id: "",
+                        client_id: Some(""),
                         window: secs(11),
                         strict: true,
                     });
@@ -351,7 +351,7 @@ mod tests {
                 image: &img,
                 buckets: &buckets,
                 principal: "alice",
-                client_id: "",
+                client_id: Some(""),
                 window: secs(11),
                 strict: true,
             })
@@ -379,7 +379,7 @@ mod tests {
             image: &img,
             buckets: &buckets,
             principal: "alice",
-            client_id: "",
+            client_id: Some(""),
             window: secs(1),
             strict: true,
         });
@@ -402,7 +402,7 @@ mod tests {
             image: &img,
             buckets: &buckets,
             principal: "alice",
-            client_id: "",
+            client_id: Some(""),
             window: secs(2_000),
             strict: true,
         });
@@ -433,7 +433,7 @@ mod tests {
         }));
         let throttled = ["app-x", "other"].map(|client_id| {
             let buckets = QuotaBuckets::new();
-            consume_controller_mutation_quota(&img, &buckets, "alice", client_id, 10).delay
+            consume_controller_mutation_quota(&img, &buckets, "alice", Some(client_id), 10).delay
                 > <Time as TimeExt>::ZERO
         });
 
@@ -449,7 +449,7 @@ mod tests {
             image: &img,
             buckets: &buckets,
             principal: "alice",
-            client_id: "",
+            client_id: Some(""),
             window: secs(11),
             strict: true,
         });

@@ -135,7 +135,7 @@ pub(crate) async fn handle(
             .tx
             .send(ShareGroupActorMessage::Heartbeat {
                 request: req,
-                client_id: ctx.client_id.to_owned(),
+                client_id: ctx.client_id.unwrap_or_default().to_owned(),
                 client_host: ctx.client_host(),
                 reply: tx,
             })

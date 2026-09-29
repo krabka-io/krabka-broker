@@ -119,7 +119,7 @@ async fn dispatch_registered_bytes(
             let ctx = crate::handlers::RequestContext::new(
                 principal_or_anonymous(auth),
                 peer,
-                parsed.client_id.unwrap_or(""),
+                parsed.client_id,
                 connection_id,
                 false,
                 listener_name,
@@ -157,7 +157,7 @@ async fn dispatch_registered_bytes(
             let ctx = crate::handlers::RequestContext::new(
                 principal_or_anonymous(auth),
                 peer,
-                parsed.client_id.unwrap_or(""),
+                parsed.client_id,
                 connection_id,
                 false,
                 "",

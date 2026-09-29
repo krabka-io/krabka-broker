@@ -4,6 +4,7 @@
 //!
 //! A write-once archive evicts nothing, so the pass ends before it lists.
 
+use krabka_ids::LeaderEpoch;
 use krabka_log::{LogConfig, Offset, SegmentExport};
 use krabka_remote_storage::{RemoteLogSegmentMetadata, RemoteLogSegmentState, TopicIdPartition};
 use krabka_units::{
@@ -103,6 +104,35 @@ pub(crate) fn remote_retention_eviction_set(
     finished.iter().take(len).cloned().collect()
 }
 
+/// Kafka's `deleteLogSegmentsDueToLeaderEpochCacheTruncation`: the segments
+/// whose leader epochs all lie below `earliest_epoch`, in the order given.
+///
+/// Such a segment lies outside the leader's epoch lineage, so no offset the
+/// log serves is in it. Kafka's comment names the case that leaves them
+/// behind, an unclean leader election that puts a leader with a later earliest
+/// epoch in charge of a tier an earlier leader filled.
+///
+/// `earliest_epoch` is [`krabka_log::Log::log_start_epoch`]: `None`, which
+/// disables the rule, unless the epoch cache was cut from an established log
+/// start.
+pub(crate) fn epoch_cache_eviction_set(
+    segments: &[RemoteLogSegmentMetadata],
+    earliest_epoch: Option<LeaderEpoch>,
+) -> Vec<RemoteLogSegmentMetadata> {
+    let Some(earliest_epoch) = earliest_epoch else {
+        return Vec::new();
+    };
+    segments
+        .iter()
+        .filter(|md| {
+            md.segment_leader_epochs()
+                .keys()
+                .all(|epoch| *epoch < earliest_epoch)
+        })
+        .cloned()
+        .collect()
+}
+
 /// The remote metadata's `segment_size_in_bytes` (a wire `int32`) as a
 /// quantity. Negative sizes are impossible but cheap to clamp.
 fn segment_size(md: &RemoteLogSegmentMetadata) -> ByteSize {
@@ -165,6 +195,10 @@ pub(crate) struct RemoteRetentionBounds<'a> {
     /// any: the log-start breach axis measures against this and nothing else.
     /// See [`remote_retention_eviction_set`].
     pub deleted_below: Option<Offset>,
+    /// The epoch the leader-epoch cache was cut to by an established log
+    /// start, which the epoch-cache-truncation axis measures against. See
+    /// [`epoch_cache_eviction_set`].
+    pub earliest_epoch: Option<LeaderEpoch>,
     pub now_ms: i64,
     /// The local log whose not-yet-copied bytes count toward
     /// `retention.bytes`.
@@ -212,6 +246,7 @@ pub(crate) async fn remote_retention_pass(
         log_config,
         log_start_offset,
         deleted_below,
+        earliest_epoch,
         now_ms,
         local,
     } = bounds;
@@ -262,15 +297,20 @@ pub(crate) async fn remote_retention_pass(
         now_ms,
         local.only_local_size(highest_offset_in_remote_storage),
     );
+    // Kafka runs the epoch-cache-truncation cleanup after the retention
+    // deletes, over what they leave (`cleanupExpiredRemoteLogSegments`).
+    let scheduled = evict.len();
+    let outside_lineage = epoch_cache_eviction_set(&finished[scheduled..], earliest_epoch);
     // KIP-405's `RemoteDeleteLagSegments` / `RemoteDeleteLagBytes`, recorded
     // before the round the way `RLMExpirationTask` does: the remote segments
     // this pass has decided to remove and has not removed yet. A tier whose
     // deletes are failing shows a lag that climbs.
     tier.metrics.set_remote_delete_lag(
         &tp.topic,
-        u64::try_from(evict.len()).unwrap_or(u64::MAX),
+        u64::try_from(scheduled + outside_lineage.len()).unwrap_or(u64::MAX),
         evict
             .iter()
+            .chain(&outside_lineage)
             .map(|md| u64::try_from(md.segment_size_in_bytes().max(0)).unwrap_or(0))
             .sum(),
     );
@@ -304,8 +344,48 @@ pub(crate) async fn remote_retention_pass(
     if floor > log_start_offset {
         outcome.log_start = Some(floor);
     }
+    // A failed retention delete ends the pass, as it always did. These
+    // segments hold offsets in no lineage the log serves, so Kafka does not
+    // move the log start for them either.
+    if outcome.deleted == scheduled {
+        outcome.deleted += delete_outside_lineage(tp, broker_id, &outside_lineage, tier).await;
+    }
     outcome
 }
 
+/// Deletes `segments`, oldest first, until one fails, and returns how many
+/// went. The lifecycle and the metrics are the retention loop's.
+async fn delete_outside_lineage(
+    tp: &TopicIdPartition,
+    broker_id: i32,
+    segments: &[RemoteLogSegmentMetadata],
+    tier: &super::RemoteTier<'_>,
+) -> usize {
+    let mut deleted = 0;
+    for md in segments {
+        tier.metrics
+            .record_remote_request(RemoteTierPath::Delete, &tp.topic);
+        if !delete_one_segment(
+            tp,
+            broker_id,
+            md,
+            tier.archive,
+            tier.rsm,
+            tier.rlmm,
+            tier.index_cache,
+        )
+        .await
+        {
+            tier.metrics
+                .record_remote_error(RemoteTierPath::Delete, &tp.topic);
+            break;
+        }
+        deleted += 1;
+    }
+    deleted
+}
+
+#[cfg(test)]
+mod epoch_tests;
 #[cfg(test)]
 mod tests;

@@ -69,7 +69,7 @@ pub(super) fn build(
         api_key: DESCRIBE_QUORUM_API_KEY,
         api_version: version,
         correlation_id: 0,
-        client_id: Some(ctx.client_id.to_owned()),
+        client_id: ctx.client_id.map(ToOwned::to_owned),
         body: Bytes::copy_from_slice(req_bytes),
         body_flexible: broker
             .handlers()

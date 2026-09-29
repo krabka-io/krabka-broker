@@ -11,11 +11,12 @@ use krabka_security::Principal;
 pub(crate) struct RequestContext<'a> {
     pub principal: &'a Principal,
     pub peer: &'a SocketAddr,
-    /// Frame's `client_id` header. It is an empty string when the wire field
-    /// is null (`-1` length) or zero-length. This matches the existing
-    /// `peek_client_id(frame).unwrap_or("")` convention that the dispatch loop
-    /// uses for the `request_percentage` quota.
-    pub client_id: &'a str,
+    /// Frame's `client_id` header: `None` when the wire field is null (`-1`
+    /// length), `Some("")` when it is zero-length. Kafka's quota callback tells
+    /// the two apart (a null client id resolves to no client-id quota at all,
+    /// an empty one to the user levels), so the quota paths read this field
+    /// as is. Every other reader treats a null id as an empty one.
+    pub client_id: Option<&'a str>,
     /// Unique identifier for the live network connection. Share sessions use
     /// it to release acquisitions when the connection closes.
     pub connection_id: &'a str,
@@ -78,7 +79,7 @@ impl<'a> RequestContext<'a> {
     pub(crate) fn new(
         principal: &'a Principal,
         peer: &'a SocketAddr,
-        client_id: &'a str,
+        client_id: impl Into<Option<&'a str>>,
         connection_id: &'a str,
         sendfile_capable: bool,
         connection_listener_name: &'a str,
@@ -86,7 +87,7 @@ impl<'a> RequestContext<'a> {
         Self {
             principal,
             peer,
-            client_id,
+            client_id: client_id.into(),
             connection_id,
             sendfile_capable,
             connection_listener_name,
@@ -236,13 +237,27 @@ mod tests {
 
         assert!(ctx.principal.name == "alice");
         assert!(ctx.peer == &peer);
-        assert!(ctx.client_id == "client-a");
+        assert!(ctx.client_id == Some("client-a"));
         assert!(ctx.connection_id == "connection-a");
         assert!(ctx.sendfile_capable);
         assert!(ctx.connection_listener_name == "SASL_SSL");
         assert!(ctx.client_host() == "/127.0.0.1");
         assert!(ctx.request_size == 0);
         assert!(ctx.with_request_size(8_300).request_size == 8_300);
+    }
+
+    /// A null client id and an empty one are different requests to Kafka's
+    /// quota callback (#1241), so the context keeps them apart.
+    #[test]
+    fn request_context_keeps_a_null_client_id_apart_from_an_empty_one() {
+        let principal = principal();
+        let peer = SocketAddr::from(([127, 0, 0, 1], 9092));
+
+        let client_ids = [None, Some(""), Some("client-a")].map(|client_id| {
+            RequestContext::new(&principal, &peer, client_id, "connection-a", false, "").client_id
+        });
+
+        assert!(client_ids == [None, Some(""), Some("client-a")]);
     }
 
     #[test]

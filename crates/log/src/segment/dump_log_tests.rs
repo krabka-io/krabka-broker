@@ -165,6 +165,12 @@ fn write_all_verbatim(segment: &mut Segment, interval: ByteSize) {
 /// and `.timeindex` entries are `(running maximum, last offset of the batch
 /// that set it)` that strictly increase in timestamp. The last offsets are 2,
 /// 3, 5, 6 and 7, and the maximum is set by the batches ending at 2, 5 and 7.
+///
+/// The first batch takes no `.index` entry: Kafka's `LogSegment.append`
+/// indexes a batch once more than `index.interval.bytes` were written since
+/// the last entry, and nothing was written before the first. The second
+/// batch's entry carries the maximum the first one set, so the time index
+/// still names the batch ending at 2.
 #[test]
 fn the_append_paths_write_the_indexes_kafka_dump_log_verifies() {
     let expected_time_entries = vec![(102, 2), (201, 5), (300, 7)];
@@ -181,7 +187,7 @@ fn the_append_paths_write_the_indexes_kafka_dump_log_verifies() {
             .iter()
             .map(|(relative, _)| *relative)
             .collect();
-        assert2::assert!(offsets == vec![2, 3, 5, 6, 7], "{label}");
+        assert2::assert!(offsets == vec![3, 5, 6, 7], "{label}");
         assert2::assert!(
             time_entries(dir.path(), 0) == expected_time_entries,
             "{label}"
@@ -225,6 +231,65 @@ fn recovery_rebuilds_the_indexes_the_append_wrote() {
     assert2::assert!(std::fs::read(name::timeindex_path(dir.path(), 0)).unwrap() == time_index);
     assert2::assert!(dump_log_problems(dir.path(), 0) == Vec::<String>::new());
     assert2::assert!(recovered.max_timestamp() == 300);
+}
+
+/// Kafka's `LogSegment.append` indexes a batch when `bytesSinceLastIndexEntry >
+/// indexIntervalBytes`, a strict comparison over the bytes written since the
+/// last entry, which start at zero: the first batch takes no entry, and a batch
+/// exactly one interval past the last one takes none either (#1198). The
+/// recovery a reopen runs applies the same rule (`LogSegment.recover`). Each
+/// case is `(label, the interval in batch sizes and bytes, the relative last
+/// offsets that get an entry)`, over five one-record batches of one size.
+#[test]
+fn the_index_takes_an_entry_only_once_more_than_the_interval_was_written() {
+    let size = u64::try_from(sample_batch(0, 1, 100).encoded_len()).unwrap();
+    let cases: [(&str, u64, Vec<u32>); 4] = [
+        (
+            "an interval of one batch skips a batch exactly that far",
+            size,
+            vec![2, 4],
+        ),
+        (
+            "an interval a byte short of a batch indexes the next batch",
+            size - 1,
+            vec![1, 2, 3, 4],
+        ),
+        (
+            "an interval past every batch indexes nothing",
+            10 * size,
+            vec![],
+        ),
+        (
+            "a zero interval indexes every batch but the first",
+            0,
+            vec![1, 2, 3, 4],
+        ),
+    ];
+    for (label, interval, expected) in cases {
+        let dir = tempdir().unwrap();
+        let interval = bytes(u32::try_from(interval).unwrap());
+        {
+            let mut segment = Segment::create(dir.path(), Offset(0)).unwrap();
+            for offset in 0..5 {
+                segment
+                    .append(&sample_batch(offset, 1, 100 + offset), interval)
+                    .unwrap();
+            }
+        }
+        let entries = |dir: &Path| -> Vec<u32> {
+            offset_entries(dir, 0)
+                .iter()
+                .map(|(relative, _)| *relative)
+                .collect()
+        };
+
+        assert2::assert!(entries(dir.path()) == expected, "append: {label}");
+
+        // The reopen rebuilds the index from the log.
+        std::fs::write(name::index_path(dir.path(), 0), []).unwrap();
+        Segment::open_active_with_index_interval(dir.path(), Offset(0), true, interval).unwrap();
+        assert2::assert!(entries(dir.path()) == expected, "recovery: {label}");
+    }
 }
 
 /// A truncation drops the entries of the batches it removes, and an append

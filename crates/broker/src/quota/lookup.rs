@@ -28,7 +28,7 @@ use super::IpNames;
 pub fn lookup_quota(
     image: &MetadataImage,
     principal: &str,
-    client_id: &str,
+    client_id: Option<&str>,
     quota_key: &str,
 ) -> Option<f64> {
     lookup_quota_with_key(image, principal, client_id, quota_key).map(|(_, v)| v)
@@ -47,13 +47,19 @@ pub fn lookup_quota(
 /// `DefaultQuotaCallback.findQuota` does: with no client id only the user
 /// levels 3 and 6 can match, so a default client quota never throttles a
 /// client that sends no `client.id` (#1241). With neither, nothing matches.
+///
+/// `client_id` is `None` when the request header's client id is null, which is
+/// not an empty client id: see [`lookup_null_client_quota`].
 #[must_use]
 pub fn lookup_quota_with_key(
     image: &MetadataImage,
     principal: &str,
-    client_id: &str,
+    client_id: Option<&str>,
     quota_key: &str,
 ) -> Option<(EntityKey, f64)> {
+    let Some(client_id) = client_id else {
+        return lookup_null_client_quota(image, principal, quota_key);
+    };
     let levels = match (!principal.is_empty(), !client_id.is_empty()) {
         (true, true) => Levels::ALL,
         (true, false) => Levels::USER,
@@ -62,6 +68,45 @@ pub fn lookup_quota_with_key(
     };
     let (selected, rate) = resolve_levels(image, (principal, client_id), quota_key, levels)?;
     Some((bucket_key(selected, principal, client_id), rate))
+}
+
+/// The quota of a request whose client id is null, as Kafka resolves it.
+///
+/// `DefaultQuotaCallback.quotaMetricTags` walks the levels from the most
+/// specific and takes the tags of the first one that has a quota. A `user`
+/// level (3 or 6) takes an empty client-id tag, which `quotaLimit` resolves
+/// through the user levels. A pair level (2 or 5) keeps the client id, and
+/// `quotaLimit` returns no quota for a null client-id tag. So the first
+/// configured level of `(user, <default>)`, `user`, `(<default>, <default>)`
+/// and `<default>` user decides, and only a user level throttles. The levels
+/// that name a client id never match a null one. An empty principal has no
+/// user level either (#1241).
+fn lookup_null_client_quota(
+    image: &MetadataImage,
+    principal: &str,
+    quota_key: &str,
+) -> Option<(EntityKey, f64)> {
+    if principal.is_empty() {
+        return None;
+    }
+    let pair = |user: Option<&str>| -> EntityKey {
+        vec![
+            ("client-id".into(), None),
+            ("user".into(), user.map(Into::into)),
+        ]
+    };
+    let user = |user: Option<&str>| -> EntityKey { vec![("user".into(), user.map(Into::into))] };
+    let (throttles, rate) = [
+        (pair(Some(principal)), false),
+        (user(Some(principal)), true),
+        (pair(None), false),
+        (user(None), true),
+    ]
+    .into_iter()
+    .find_map(|(key, throttles)| {
+        quota_for_key(image, key, quota_key).map(|(_, rate)| (throttles, rate))
+    })?;
+    throttles.then(|| (user(Some(principal)), rate))
 }
 
 /// The rate the image configures for the quota sensor a bucket key names.
@@ -291,7 +336,7 @@ mod tests {
             "producer_byte_rate",
             1024.0,
         )]);
-        assert!(lookup_quota(&img, "alice", "app1", "producer_byte_rate") == Some(1024.0));
+        assert!(lookup_quota(&img, "alice", Some("app1"), "producer_byte_rate") == Some(1024.0));
     }
 
     #[test]
@@ -302,7 +347,7 @@ mod tests {
             "producer_byte_rate",
             1024.0,
         )]);
-        assert!(lookup_quota(&img, "alice", "app1", "producer_byte_rate") == Some(1024.0));
+        assert!(lookup_quota(&img, "alice", Some("app1"), "producer_byte_rate") == Some(1024.0));
     }
 
     #[test]
@@ -312,7 +357,9 @@ mod tests {
             "producer_byte_rate",
             2048.0,
         )]);
-        assert!(lookup_quota(&img, "alice", "anyclient", "producer_byte_rate") == Some(2048.0));
+        assert!(
+            lookup_quota(&img, "alice", Some("anyclient"), "producer_byte_rate") == Some(2048.0)
+        );
     }
 
     #[test]
@@ -322,7 +369,7 @@ mod tests {
             "producer_byte_rate",
             512.0,
         )]);
-        assert!(lookup_quota(&img, "anyuser", "app1", "producer_byte_rate") == Some(512.0));
+        assert!(lookup_quota(&img, "anyuser", Some("app1"), "producer_byte_rate") == Some(512.0));
     }
 
     #[test]
@@ -332,13 +379,13 @@ mod tests {
             "producer_byte_rate",
             256.0,
         )]);
-        assert!(lookup_quota(&img, "alice", "app1", "producer_byte_rate") == Some(256.0));
+        assert!(lookup_quota(&img, "alice", Some("app1"), "producer_byte_rate") == Some(256.0));
     }
 
     #[test]
     fn default_user_alone() {
         let img = img_with(vec![rec(vec![("user", None)], "producer_byte_rate", 128.0)]);
-        assert!(lookup_quota(&img, "alice", "app1", "producer_byte_rate") == Some(128.0));
+        assert!(lookup_quota(&img, "alice", Some("app1"), "producer_byte_rate") == Some(128.0));
     }
 
     #[test]
@@ -348,13 +395,13 @@ mod tests {
             "producer_byte_rate",
             64.0,
         )]);
-        assert!(lookup_quota(&img, "alice", "app1", "producer_byte_rate") == Some(64.0));
+        assert!(lookup_quota(&img, "alice", Some("app1"), "producer_byte_rate") == Some(64.0));
     }
 
     #[test]
     fn no_match_returns_none() {
         let img = img_with(vec![]);
-        assert!(lookup_quota(&img, "alice", "app1", "producer_byte_rate") == None);
+        assert!(lookup_quota(&img, "alice", Some("app1"), "producer_byte_rate") == None);
     }
 
     #[test]
@@ -367,7 +414,7 @@ mod tests {
                 512.0,
             ),
         ]);
-        assert!(lookup_quota(&img, "alice", "app1", "producer_byte_rate") == Some(512.0));
+        assert!(lookup_quota(&img, "alice", Some("app1"), "producer_byte_rate") == Some(512.0));
     }
 
     type Level = Vec<(&'static str, Option<&'static str>)>;
@@ -485,8 +532,111 @@ mod tests {
                     .collect(),
             );
             check!(
-                lookup_quota_with_key(&img, principal, client_id, "producer_byte_rate") == expected,
+                lookup_quota_with_key(&img, principal, Some(client_id), "producer_byte_rate")
+                    == expected,
                 "{label}"
+            );
+        }
+    }
+
+    /// A null client id is not an empty one (#1241). Kafka's
+    /// `quotaMetricTags` takes the tags of the first configured level of
+    /// `(user, <default>)`, `user`, `(<default>, <default>)` and `<default>`
+    /// user, and `quotaLimit` finds no quota for a pair level's null client-id
+    /// tag. So a pair level shadows the user level below it, where an empty
+    /// client id would have skipped the pair level and reached the user one.
+    /// Each row configures some levels at 64 and looks up one request.
+    #[test]
+    fn a_null_client_id_meets_only_the_user_levels_a_pair_level_does_not_shadow() {
+        /// A label, the configured levels, the principal and the expected
+        /// bucket key and rate for a null client id and for an empty one.
+        type Row = (
+            &'static str,
+            Vec<Level>,
+            &'static str,
+            Option<(EntityKey, f64)>,
+            Option<(EntityKey, f64)>,
+        );
+        let default_client: Level = vec![("client-id", None)];
+        let app: Level = vec![("client-id", Some("app"))];
+        let user_default_client: Level = vec![("user", Some("alice")), ("client-id", None)];
+        let default_pair: Level = vec![("user", None), ("client-id", None)];
+        let default_user_app: Level = vec![("user", None), ("client-id", Some("app"))];
+        let alice: Level = vec![("user", Some("alice"))];
+        let default_user: Level = vec![("user", None)];
+        let cases: Vec<Row> = vec![
+            (
+                "client-id levels never match a null client id",
+                vec![default_client.clone(), app],
+                "alice",
+                None,
+                None,
+            ),
+            (
+                "the user quota applies to a null client id",
+                vec![alice.clone(), default_client.clone()],
+                "alice",
+                Some((user_key("alice"), 64.0)),
+                Some((user_key("alice"), 64.0)),
+            ),
+            (
+                "the default user quota applies to a null client id",
+                vec![default_user.clone(), default_client],
+                "alice",
+                Some((user_key("alice"), 64.0)),
+                Some((user_key("alice"), 64.0)),
+            ),
+            (
+                "a (user, default client) quota shadows the user quota",
+                vec![user_default_client.clone(), alice.clone()],
+                "alice",
+                None,
+                Some((user_key("alice"), 64.0)),
+            ),
+            (
+                "a (default, default) quota shadows the default user quota",
+                vec![default_pair.clone(), default_user.clone()],
+                "alice",
+                None,
+                Some((user_key("alice"), 64.0)),
+            ),
+            (
+                "the user quota comes before a (default, default) quota",
+                vec![default_pair, alice.clone(), default_user.clone()],
+                "alice",
+                Some((user_key("alice"), 64.0)),
+                Some((user_key("alice"), 64.0)),
+            ),
+            (
+                "another user's pair level shadows nothing",
+                vec![user_default_client, default_user_app, default_user],
+                "bob",
+                Some((user_key("bob"), 64.0)),
+                Some((user_key("bob"), 64.0)),
+            ),
+            (
+                "a null client id and no principal match nothing",
+                vec![alice],
+                "",
+                None,
+                None,
+            ),
+        ];
+        for (label, configured, principal, null_expected, empty_expected) in cases {
+            let img = img_with(
+                configured
+                    .into_iter()
+                    .map(|entity| rec(entity, "producer_byte_rate", 64.0))
+                    .collect(),
+            );
+            check!(
+                lookup_quota_with_key(&img, principal, None, "producer_byte_rate") == null_expected,
+                "null: {label}"
+            );
+            check!(
+                lookup_quota_with_key(&img, principal, Some(""), "producer_byte_rate")
+                    == empty_expected,
+                "empty: {label}"
             );
         }
     }
@@ -812,7 +962,7 @@ mod tests {
                     .map(|(entity, value)| rec(entity, "producer_byte_rate", value))
                     .collect(),
             );
-            let got = lookup_quota_with_key(&img, "alice", "app", "producer_byte_rate");
+            let got = lookup_quota_with_key(&img, "alice", Some("app"), "producer_byte_rate");
             assert2::check!(got == Some(expected), "{name}");
         }
     }
@@ -840,7 +990,7 @@ mod tests {
                 .map(|(i, c)| rec(c.clone(), "k", CAND_VALS[i]))
                 .collect();
             let img = img_with(records);
-            let got = lookup_quota_with_key(&img, "u", "c", "k");
+            let got = lookup_quota_with_key(&img, "u", Some("c"), "k");
             match (0..8usize).find(|i| mask & (1 << i) != 0) {
                 None => assert!(
                     got.is_none(),
@@ -858,7 +1008,7 @@ mod tests {
                 }
             }
             // A quota_key no candidate carries never resolves.
-            assert!(lookup_quota_with_key(&img, "u", "c", "absent_key").is_none());
+            assert!(lookup_quota_with_key(&img, "u", Some("c"), "absent_key").is_none());
         }
     }
 
@@ -917,7 +1067,7 @@ mod tests {
                 records.push(rec(vec![("user", Some("ZZZ"))], qkey, 9998.0));
             }
             let img = img_with(records);
-            let got = lookup_quota_with_key(&img, &principal, &client_id, qkey);
+            let got = lookup_quota_with_key(&img, &principal, Some(&client_id), qkey);
             match (0..8usize).find(|i| present[*i]) {
                 None => proptest::prop_assert!(got.is_none(), "no candidate present, got {got:?}"),
                 Some(j) => {

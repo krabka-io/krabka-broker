@@ -455,7 +455,9 @@ pub(crate) async fn handle(
         // is its own admin tooling's `"__admin_client"`.
         let internal_topic_denied =
             crate::internal_topics::is_internal_topic(&broker.config, &topic_name)
-                && !crate::internal_topics::produce_internal_topics_allowed(ctx.client_id);
+                && !crate::internal_topics::produce_internal_topics_allowed(
+                    ctx.client_id.unwrap_or_default(),
+                );
 
         for part_data in topic.partition_data {
             let idx = part_data.index;
